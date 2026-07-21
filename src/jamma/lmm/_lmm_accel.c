@@ -815,81 +815,13 @@ static double golden_section_lambda_ncvt1(
  * ========================================================================= */
 
 /* Pre-computed invariant dot products for one coarse grid point.
- * Memory: n_grid * sizeof(grid_invariant_t) ~ 50 * 48 = 2.4 KB (fits L1). */
+ * Memory: n_grid * sizeof(grid_invariant_t) ~ 50 * 32 = 1.6 KB (fits L1). */
 typedef struct {
     double s_ww;       /* sum of hi * ww */
     double s_wy;       /* sum of hi * wy */
     double s_yy;       /* sum of hi * yy */
     double log_s_ww;   /* log(s_ww) if > 0, else 0 */
-    double inv_s_ww;   /* 1/s_ww if != 0, else 0 */
-    double pab1_5;     /* s_yy - s_wy^2/s_ww — completely SNP-invariant */
 } grid_invariant_t;
-
-/* Find the REML and MLE coarse-grid brackets in one pass over each cached
- * weight vector. Both likelihoods use the same three SNP-varying reductions;
- * only their likelihood tails differ. A result of -1 means every grid point
- * was degenerate for that likelihood. */
-static void coarse_grid_mode4_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    int n_samples,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    int n_grid,
-    double logdet_iab,
-    int df,
-    double reml_const,
-    double mle_const,
-    int *best_reml_idx,
-    int *best_mle_idx
-)
-{
-    double best_reml = REML_SENTINEL;
-    double best_mle = REML_SENTINEL;
-    *best_reml_idx = -1;
-    *best_mle_idx = -1;
-
-    for (int g = 0; g < n_grid; g++) {
-        const double *h_grid = hi_eval_grid + (size_t)g * n_samples;
-        double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
-        #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
-        for (int i = 0; i < n_samples; i++) {
-            double h = h_grid[i];
-            s_wx += h * var_wx[i];
-            s_xx += h * var_xx[i];
-            s_xy += h * var_xy[i];
-        }
-
-        const grid_invariant_t *ginv = &grid_inv[g];
-        double p1_xx = s_xx - s_wx * s_wx * ginv->inv_s_ww;
-        double p1_xy = s_xy - s_wx * ginv->s_wy * ginv->inv_s_ww;
-        double inv_xx = (p1_xx != 0.0) ? 1.0 / p1_xx : 0.0;
-        double p_yy = ginv->pab1_5 - p1_xy * p1_xy * inv_xx;
-
-        if (p_yy >= 0.0) {
-            if (p_yy < P_YY_MIN) p_yy = P_YY_MIN;
-
-            double logdet_pab = ginv->log_s_ww;
-            if (p1_xx > 0.0) logdet_pab += log(p1_xx);
-            double logdet_hiw = logdet_pab - logdet_iab;
-            double reml_logl = reml_const - 0.5 * logdet_h_grid[g]
-                                - 0.5 * logdet_hiw - 0.5 * df * log(p_yy);
-            double mle_logl = mle_const - 0.5 * logdet_h_grid[g]
-                              - 0.5 * n_samples * log(p_yy);
-
-            if (reml_logl > best_reml) {
-                best_reml = reml_logl;
-                *best_reml_idx = g;
-            }
-            if (mle_logl > best_mle) {
-                best_mle = mle_logl;
-                *best_mle_idx = g;
-            }
-        }
-    }
-}
 
 /* -------------------------------------------------------------------------
  * calc_pab_ncvt1_split
@@ -922,6 +854,59 @@ static void calc_pab_ncvt1_split(
     pab[2][5] = pab[1][5] - pab[1][4] * pab[1][4] * inv_xx;
 }
 
+/* Accumulate the three SNP-varying coarse-grid reductions and combine them
+ * with the precomputed invariant reductions into the canonical Pab layout. */
+static inline void calc_pab_ncvt1_cached_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    const double * restrict cached_hi_eval,
+    const grid_invariant_t *ginv,
+    int n_samples,
+    double pab[3][6]
+)
+{
+    double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
+    #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
+    for (int i = 0; i < n_samples; i++) {
+        double h = cached_hi_eval[i];
+        s_wx += h * var_wx[i];
+        s_xx += h * var_xx[i];
+        s_xy += h * var_xy[i];
+    }
+
+    calc_pab_ncvt1_split(
+        ginv->s_ww, s_wx, ginv->s_wy,
+        s_xx, s_xy, ginv->s_yy, pab
+    );
+}
+
+/* Cached split REML tail. The invariant W determinant was precomputed with
+ * the coarse-grid weights, so only the SNP-specific X term needs a log. */
+static inline double reml_finish_cached_split(
+    const double pab[3][6],
+    double cached_logdet_h,
+    double logdet_iab,
+    const grid_invariant_t *ginv,
+    int df,
+    double reml_const
+)
+{
+    double logdet_pab = ginv->log_s_ww;
+    if (pab[1][3] > 0.0) logdet_pab += log(pab[1][3]);
+    double logdet_hiw = logdet_pab - logdet_iab;
+
+    double P_yy = pab[2][5];
+    if (P_yy < 0.0) {
+        P_yy = (double)NAN;
+    } else if (P_yy < P_YY_MIN) {
+        P_yy = P_YY_MIN;
+    }
+
+    return reml_const - 0.5 * cached_logdet_h - 0.5 * logdet_hiw
+           - 0.5 * df * log(P_yy);
+}
+
 /* -------------------------------------------------------------------------
  * reml_logl_ncvt1_cached_split
  *
@@ -948,45 +933,13 @@ static double reml_logl_ncvt1_cached_split(
     double reml_const
 )
 {
-    /* Only 3 varying reductions — invariant sums precomputed per grid point */
-    double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
-    #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
-    for (int i = 0; i < n_samples; i++) {
-        double h = cached_hi_eval[i];
-        s_wx += h * var_wx[i];
-        s_xx += h * var_xx[i];
-        s_xy += h * var_xy[i];
-    }
-
-    /* Combine with precomputed invariant sums */
-    double s_ww = ginv->s_ww;
-    double inv_ww = ginv->inv_s_ww;
-    double s_wy = ginv->s_wy;
-
-    /* Pab row 1 */
-    double p1_xx = s_xx - s_wx * s_wx * inv_ww;
-    double p1_xy = s_xy - s_wx * s_wy * inv_ww;
-    /* p1_yy = ginv->pab1_5 is completely invariant */
-    double p1_yy = ginv->pab1_5;
-
-    /* Pab row 2 */
-    double inv_xx = (p1_xx != 0.0) ? 1.0 / p1_xx : 0.0;
-    double P_yy = p1_yy - p1_xy * p1_xy * inv_xx;
-
-    /* logdet_hiw */
-    double logdet_pab = ginv->log_s_ww;
-    if (p1_xx > 0.0) logdet_pab += log(p1_xx);
-    double logdet_hiw = logdet_pab - logdet_iab;
-
-    /* P_yy guard */
-    if (P_yy < 0.0) {
-        P_yy = (double)NAN;
-    } else if (P_yy < P_YY_MIN) {
-        P_yy = P_YY_MIN;
-    }
-
-    return reml_const - 0.5 * cached_logdet_h - 0.5 * logdet_hiw
-           - 0.5 * df * log(P_yy);
+    double pab[3][6];
+    calc_pab_ncvt1_cached_split(
+        var_wx, var_xx, var_xy, cached_hi_eval, ginv, n_samples, pab
+    );
+    return reml_finish_cached_split(
+        pab, cached_logdet_h, logdet_iab, ginv, df, reml_const
+    );
 }
 
 /* -------------------------------------------------------------------------
@@ -1049,19 +1002,49 @@ static double reml_logl_ncvt1_split(
     return reml_finish(pab, logdet_h, logdet_iab, df, reml_const);
 }
 
+/* Return the best REML coarse-grid index, or -1 when every point is degenerate. */
+static int coarse_grid_reml_ncvt1_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    int n_samples,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    const grid_invariant_t *grid_inv,
+    int n_grid,
+    double logdet_iab,
+    int df,
+    double reml_const
+)
+{
+    double best_logl = REML_SENTINEL;
+    int best_idx = -1;
+    for (int g = 0; g < n_grid; g++) {
+        double logl = reml_logl_ncvt1_cached_split(
+            var_wx, var_xx, var_xy,
+            hi_eval_grid + (size_t)g * n_samples,
+            logdet_h_grid[g], logdet_iab, &grid_inv[g],
+            n_samples, df, reml_const
+        );
+        if (!isnan(logl) && logl > best_logl) {
+            best_logl = logl;
+            best_idx = g;
+        }
+    }
+    return best_idx;
+}
+
 /* -------------------------------------------------------------------------
- * golden_section_lambda_ncvt1_split
+ * refine_lambda_ncvt1_split
  *
- * Grid search + golden section refinement using split Uab arrays.
- * Coarse search uses cached_split (3 varying reductions + precomputed
- * invariants). Refinement uses fused reml_logl_ncvt1_split.
+ * Golden section refinement using a caller-selected split-Uab coarse bracket.
  *
  * SoA layout: var_wx/xx/xy and inv_ww/wy/yy are contiguous (stride-1).
  *
  * The final evaluation fuses REML logl + Wald stats in a single pass,
  * eliminating a redundant n_samples traversal per SNP.
  * ------------------------------------------------------------------------- */
-static double golden_section_lambda_ncvt1_split(
+static double refine_lambda_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -1072,12 +1055,9 @@ static double golden_section_lambda_ncvt1_split(
     double logdet_iab,
     int n_samples,
     const double *lambda_grid,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
     double log_l_min, double step,
     int n_grid, int n_refine,
-    const int *coarse_best_idx,
+    int best_idx,
     int df, double reml_const,
     double *logl_out,
     double *beta_out, double *se_out, double *f_stat_out,
@@ -1085,32 +1065,6 @@ static double golden_section_lambda_ncvt1_split(
 )
 {
     const double phi = 0.6180339887498949;
-
-    /* Stage 1: coarse grid search using cached split.
-     * Degenerate grid points return NaN from reml_logl_ncvt1_cached_split
-     * (P_yy < 0); map NaN → REML_SENTINEL so > comparison skips them. */
-    int best_idx = 0;
-    if (coarse_best_idx != NULL) {
-        best_idx = *coarse_best_idx;
-    } else {
-        double best_logl = REML_SENTINEL;
-        for (int g = 0; g < n_grid; g++) {
-            double logl = reml_logl_ncvt1_cached_split(
-                var_wx, var_xx, var_xy,
-                hi_eval_grid + (size_t)g * n_samples,
-                logdet_h_grid[g],
-                logdet_iab,
-                &grid_inv[g],
-                n_samples, df, reml_const
-            );
-            if (isnan(logl)) logl = REML_SENTINEL;
-            if (logl > best_logl) {
-                best_logl = logl;
-                best_idx = g;
-            }
-        }
-        if (best_logl == REML_SENTINEL) best_idx = -1;
-    }
 
     /* Every grid point produced NaN — fully degenerate SNP. */
     if (best_idx < 0) {
@@ -1192,6 +1146,43 @@ static double golden_section_lambda_ncvt1_split(
     }
 
     return lambda_opt;
+}
+
+/* Full REML optimization for callers that do not share the coarse-grid pass. */
+static double golden_section_lambda_ncvt1_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    const double * restrict inv_ww,
+    const double * restrict inv_wy,
+    const double * restrict inv_yy,
+    const double * restrict eigenvalues,
+    double logdet_iab,
+    int n_samples,
+    const double *lambda_grid,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    const grid_invariant_t *grid_inv,
+    double log_l_min, double step,
+    int n_grid, int n_refine,
+    int df, double reml_const,
+    double *logl_out,
+    double *beta_out, double *se_out, double *f_stat_out,
+    int *is_valid_out
+)
+{
+    int best_idx = coarse_grid_reml_ncvt1_split(
+        var_wx, var_xx, var_xy, n_samples,
+        hi_eval_grid, logdet_h_grid, grid_inv, n_grid,
+        logdet_iab, df, reml_const
+    );
+    return refine_lambda_ncvt1_split(
+        var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
+        eigenvalues, logdet_iab, n_samples, lambda_grid,
+        log_l_min, step, n_grid, n_refine, best_idx,
+        df, reml_const, logl_out, beta_out, se_out, f_stat_out,
+        is_valid_out
+    );
 }
 
 /* =========================================================================
@@ -1410,8 +1401,6 @@ static PyObject *create_workspace_split_c_py(
         ws->grid_inv[g].s_wy    = swy;
         ws->grid_inv[g].s_yy    = sy;
         ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
-        ws->grid_inv[g].inv_s_ww = (sw != 0.0) ? 1.0 / sw : 0.0;
-        ws->grid_inv[g].pab1_5   = sy - swy * swy * ws->grid_inv[g].inv_s_ww;
     }
 
     /* Wrap in PyCapsule; destructor frees ws on GC */
@@ -1635,8 +1624,6 @@ static PyObject *create_workspace_mode4_split_c_py(
         ws->grid_inv[g].s_wy    = swy;
         ws->grid_inv[g].s_yy    = sy;
         ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
-        ws->grid_inv[g].inv_s_ww = (sw != 0.0) ? 1.0 / sw : 0.0;
-        ws->grid_inv[g].pab1_5   = sy - swy * swy * ws->grid_inv[g].inv_s_ww;
     }
 
     /* --- Mode-4 specific fields --- */
@@ -1825,7 +1812,7 @@ static PyObject *compute_lmm_chunk_split_c_py(
             ws->eigenvalues, logdet_iab,
             n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            NULL, df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
+            df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -3140,8 +3127,6 @@ static PyObject *compute_lmm_batch_split_c(
         grid_inv[g].s_wy = swy;
         grid_inv[g].s_yy = sy;
         grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
-        grid_inv[g].inv_s_ww = (sw != 0.0) ? 1.0 / sw : 0.0;
-        grid_inv[g].pab1_5 = sy - swy * swy * grid_inv[g].inv_s_ww;
     }
 
     /* Thread setup — no per-thread hi_eval buffers needed for split path
@@ -3175,7 +3160,7 @@ static PyObject *compute_lmm_batch_split_c(
             eigenvalues_data, logdet_iab,
             n_samples, lambda_grid, hi_eval_grid, logdet_h_grid,
             grid_inv, log_l_min, step, n_grid, n_refine,
-            NULL, df, reml_const, &logl_opt,
+            df, reml_const, &logl_opt,
             &beta, &se, &f_stat, &is_valid
         );
 
@@ -3673,21 +3658,91 @@ static double mle_logl_ncvt1_cached_split(
     double mle_const
 )
 {
-    double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
-    #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
-    for (int i = 0; i < n_samples; i++) {
-        double h = cached_hi_eval[i];
-        s_wx += h * var_wx[i];
-        s_xx += h * var_xx[i];
-        s_xy += h * var_xy[i];
-    }
-
-    /* Combine with precomputed invariant sums */
     double pab[3][6];
-    calc_pab_ncvt1_split(ginv->s_ww, s_wx, ginv->s_wy,
-                          s_xx, s_xy, ginv->s_yy, pab);
-
+    calc_pab_ncvt1_cached_split(
+        var_wx, var_xx, var_xy, cached_hi_eval, ginv, n_samples, pab
+    );
     return mle_finish(pab, cached_logdet_h, n_samples, mle_const);
+}
+
+/* Return the best MLE coarse-grid index, or -1 when every point is degenerate. */
+static int coarse_grid_mle_ncvt1_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    int n_samples,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    const grid_invariant_t *grid_inv,
+    int n_grid,
+    double mle_const
+)
+{
+    double best_logl = REML_SENTINEL;
+    int best_idx = -1;
+    for (int g = 0; g < n_grid; g++) {
+        double logl = mle_logl_ncvt1_cached_split(
+            var_wx, var_xx, var_xy,
+            hi_eval_grid + (size_t)g * n_samples,
+            logdet_h_grid[g], &grid_inv[g], n_samples, mle_const
+        );
+        if (!isnan(logl) && logl > best_logl) {
+            best_logl = logl;
+            best_idx = g;
+        }
+    }
+    return best_idx;
+}
+
+/* Find the REML and MLE coarse brackets together. Both likelihoods consume
+ * one canonical Pab calculation per grid point and differ only in the tail. */
+static void coarse_grid_mode4_ncvt1_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    int n_samples,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    const grid_invariant_t *grid_inv,
+    int n_grid,
+    double logdet_iab,
+    int df,
+    double reml_const,
+    double mle_const,
+    int *best_reml_idx,
+    int *best_mle_idx
+)
+{
+    double best_reml = REML_SENTINEL;
+    double best_mle = REML_SENTINEL;
+    *best_reml_idx = -1;
+    *best_mle_idx = -1;
+
+    for (int g = 0; g < n_grid; g++) {
+        const grid_invariant_t *ginv = &grid_inv[g];
+        double pab[3][6];
+        calc_pab_ncvt1_cached_split(
+            var_wx, var_xx, var_xy,
+            hi_eval_grid + (size_t)g * n_samples,
+            ginv, n_samples, pab
+        );
+
+        double reml_logl = reml_finish_cached_split(
+            pab, logdet_h_grid[g], logdet_iab, ginv, df, reml_const
+        );
+        double mle_logl = mle_finish(
+            pab, logdet_h_grid[g], n_samples, mle_const
+        );
+
+        if (!isnan(reml_logl) && reml_logl > best_reml) {
+            best_reml = reml_logl;
+            *best_reml_idx = g;
+        }
+        if (!isnan(mle_logl) && mle_logl > best_mle) {
+            best_mle = mle_logl;
+            *best_mle_idx = g;
+        }
+    }
 }
 
 /* -------------------------------------------------------------------------
@@ -3740,16 +3795,14 @@ static double mle_logl_ncvt1_split(
 }
 
 /* -------------------------------------------------------------------------
- * golden_section_lambda_mle_ncvt1_split
+ * refine_lambda_mle_ncvt1_split
  *
- * Grid search + golden section refinement for MLE lambda using SoA split
- * data. Structurally identical to golden_section_lambda_mle_ncvt1 but
- * uses split cached/refinement evaluators.
+ * Golden section refinement for MLE using a caller-selected coarse bracket.
  *
  * Returns optimal MLE lambda; writes log-likelihood to *logl_out.
  * hi_eval is a caller-provided scratch buffer of size (n_samples,).
  * ------------------------------------------------------------------------- */
-static double golden_section_lambda_mle_ncvt1_split(
+static double refine_lambda_mle_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -3759,41 +3812,15 @@ static double golden_section_lambda_mle_ncvt1_split(
     const double * restrict eigenvalues,
     int n_samples,
     const double *lambda_grid,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
     double log_l_min, double step,
     int n_grid, int n_refine,
-    const int *coarse_best_idx,
+    int best_idx,
     double mle_const,
     double * restrict hi_eval,
     double *logl_out
 )
 {
     const double phi = 0.6180339887498949;
-
-    /* Stage 1: coarse grid search using cached split */
-    int best_idx = 0;
-    if (coarse_best_idx != NULL) {
-        best_idx = *coarse_best_idx;
-    } else {
-        double best_logl = REML_SENTINEL;
-        for (int g = 0; g < n_grid; g++) {
-            double logl = mle_logl_ncvt1_cached_split(
-                var_wx, var_xx, var_xy,
-                hi_eval_grid + (size_t)g * n_samples,
-                logdet_h_grid[g],
-                &grid_inv[g],
-                n_samples, mle_const
-            );
-            if (isnan(logl)) logl = REML_SENTINEL;
-            if (logl > best_logl) {
-                best_logl = logl;
-                best_idx = g;
-            }
-        }
-        if (best_logl == REML_SENTINEL) best_idx = -1;
-    }
 
     /* Fully degenerate SNP */
     if (best_idx < 0) {
@@ -3840,6 +3867,38 @@ static double golden_section_lambda_mle_ncvt1_split(
                                       n_samples, lambda_opt, mle_const, hi_eval);
 
     return lambda_opt;
+}
+
+/* Full MLE optimization for callers that do not share the coarse-grid pass. */
+static double golden_section_lambda_mle_ncvt1_split(
+    const double * restrict var_wx,
+    const double * restrict var_xx,
+    const double * restrict var_xy,
+    const double * restrict inv_ww,
+    const double * restrict inv_wy,
+    const double * restrict inv_yy,
+    const double * restrict eigenvalues,
+    int n_samples,
+    const double *lambda_grid,
+    const double *hi_eval_grid,
+    const double *logdet_h_grid,
+    const grid_invariant_t *grid_inv,
+    double log_l_min, double step,
+    int n_grid, int n_refine,
+    double mle_const,
+    double * restrict hi_eval,
+    double *logl_out
+)
+{
+    int best_idx = coarse_grid_mle_ncvt1_split(
+        var_wx, var_xx, var_xy, n_samples,
+        hi_eval_grid, logdet_h_grid, grid_inv, n_grid, mle_const
+    );
+    return refine_lambda_mle_ncvt1_split(
+        var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
+        eigenvalues, n_samples, lambda_grid, log_l_min, step,
+        n_grid, n_refine, best_idx, mle_const, hi_eval, logl_out
+    );
 }
 
 /* =========================================================================
@@ -5420,12 +5479,12 @@ static PyObject *compute_mode4_chunk_split_c_py(
         /* ---- (c) Wald: REML refinement from the shared coarse grid ---- */
         double logl_reml, wald_beta, wald_se, wald_f;
         int wald_valid;
-        double lambda_reml = golden_section_lambda_ncvt1_split(
+        double lambda_reml = refine_lambda_ncvt1_split(
             vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
             ws->eigenvalues, logdet_iab,
-            n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
-            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            &best_reml_idx, df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
+            n_samples, ws->lambda_grid, ws->log_l_min, ws->step,
+            n_grid, n_refine, best_reml_idx,
+            df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
             &wald_valid
         );
 
@@ -5439,12 +5498,11 @@ static PyObject *compute_mode4_chunk_split_c_py(
 
         /* ---- (d) LRT: MLE optimization ---- */
         double logl_H1;
-        double lambda_mle = golden_section_lambda_mle_ncvt1_split(
+        double lambda_mle = refine_lambda_mle_ncvt1_split(
             vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
-            ws->eigenvalues, n_samples,
-            ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
-            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            &best_mle_idx, ws->mle_const, hi_eval_local, &logl_H1
+            ws->eigenvalues, n_samples, ws->lambda_grid,
+            ws->log_l_min, ws->step, n_grid, n_refine,
+            best_mle_idx, ws->mle_const, hi_eval_local, &logl_H1
         );
 
         out_lambdas_mle[snp] = lambda_mle;
@@ -5671,8 +5729,6 @@ static PyObject *create_workspace_fused_c_py(
         ws->grid_inv[g].s_wy    = swy;
         ws->grid_inv[g].s_yy    = sy;
         ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
-        ws->grid_inv[g].inv_s_ww = (sw != 0.0) ? 1.0 / sw : 0.0;
-        ws->grid_inv[g].pab1_5   = sy - swy * swy * ws->grid_inv[g].inv_s_ww;
     }
 
     /* Wrap in PyCapsule */
@@ -5859,7 +5915,7 @@ static PyObject *compute_lmm_chunk_fused_c_py(
             ws->eigenvalues, logdet_iab,
             n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            NULL, df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
+            df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
         );
 
         lambdas[snp] = lambda_opt;
@@ -6122,8 +6178,6 @@ static PyObject *create_workspace_mode4_fused_c_py(
         ws->grid_inv[g].s_wy    = swy;
         ws->grid_inv[g].s_yy    = sy;
         ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
-        ws->grid_inv[g].inv_s_ww = (sw != 0.0) ? 1.0 / sw : 0.0;
-        ws->grid_inv[g].pab1_5   = sy - swy * swy * ws->grid_inv[g].inv_s_ww;
     }
 
     /* Mode-4 specific fields */
@@ -6384,12 +6438,12 @@ static PyObject *compute_mode4_chunk_fused_c_py(
         /* ---- (c) Wald: REML refinement from the shared coarse grid ---- */
         double logl_reml, wald_beta, wald_se, wald_f;
         int wald_valid;
-        double lambda_reml = golden_section_lambda_ncvt1_split(
+        double lambda_reml = refine_lambda_ncvt1_split(
             vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
             ws->eigenvalues, logdet_iab,
-            n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
-            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            &best_reml_idx, df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
+            n_samples, ws->lambda_grid, ws->log_l_min, ws->step,
+            n_grid, n_refine, best_reml_idx,
+            df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
             &wald_valid
         );
 
@@ -6403,12 +6457,11 @@ static PyObject *compute_mode4_chunk_fused_c_py(
 
         /* ---- (d) LRT: MLE optimization ---- */
         double logl_H1;
-        double lambda_mle = golden_section_lambda_mle_ncvt1_split(
+        double lambda_mle = refine_lambda_mle_ncvt1_split(
             vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
-            ws->eigenvalues, n_samples,
-            ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
-            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            &best_mle_idx, ws->mle_const, hi_eval_local, &logl_H1
+            ws->eigenvalues, n_samples, ws->lambda_grid,
+            ws->log_l_min, ws->step, n_grid, n_refine,
+            best_mle_idx, ws->mle_const, hi_eval_local, &logl_H1
         );
 
         out_lambdas_mle[snp] = lambda_mle;
@@ -8654,8 +8707,6 @@ static PyObject *compute_lrt_split_c(PyObject *self, PyObject *args)
         grid_inv[g].s_wy = gs_wy;
         grid_inv[g].s_yy = gs_yy;
         grid_inv[g].log_s_ww = (gs_ww > 0.0) ? log(gs_ww) : 0.0;
-        grid_inv[g].inv_s_ww = (gs_ww != 0.0) ? 1.0 / gs_ww : 0.0;
-        grid_inv[g].pab1_5 = gs_yy - gs_wy * gs_wy * grid_inv[g].inv_s_ww;
     }
 
     /* Pre-allocate per-thread hi_eval buffers */
@@ -8705,7 +8756,7 @@ static PyObject *compute_lrt_split_c(PyObject *self, PyObject *args)
             eigenvalues, n_samples,
             lambda_grid, hi_eval_grid, logdet_h_grid,
             grid_inv, log_l_min, step, n_grid, n_refine,
-            NULL, mle_const, hi_eval_local, &logl_H1
+            mle_const, hi_eval_local, &logl_H1
         );
         out_lambdas_mle[s] = lam_mle;
 
@@ -9456,8 +9507,6 @@ static PyObject *compute_lrt_fused_c(PyObject *self, PyObject *args)
         grid_inv[g].s_wy = gs_wy;
         grid_inv[g].s_yy = gs_yy;
         grid_inv[g].log_s_ww = (gs_ww > 0.0) ? log(gs_ww) : 0.0;
-        grid_inv[g].inv_s_ww = (gs_ww != 0.0) ? 1.0 / gs_ww : 0.0;
-        grid_inv[g].pab1_5 = gs_yy - gs_wy * gs_wy * grid_inv[g].inv_s_ww;
     }
 
     /* Pre-allocate per-thread hi_eval buffers and scratch for vwx/vxx/vxy */
@@ -9519,7 +9568,7 @@ static PyObject *compute_lrt_fused_c(PyObject *self, PyObject *args)
             eigenvalues, n_samples,
             lambda_grid, hi_eval_grid, logdet_h_grid,
             grid_inv, log_l_min, step, n_grid, n_refine,
-            NULL, mle_const, hi_eval_local, &logl_H1
+            mle_const, hi_eval_local, &logl_H1
         );
         out_lambdas_mle[s] = lam_mle;
 
@@ -9766,8 +9815,6 @@ static PyObject *create_workspace_lrt_fused_c_py(
         ws->grid_inv[g].s_wy = gs_wy;
         ws->grid_inv[g].s_yy = gs_yy;
         ws->grid_inv[g].log_s_ww = (gs_ww > 0.0) ? log(gs_ww) : 0.0;
-        ws->grid_inv[g].inv_s_ww = (gs_ww != 0.0) ? 1.0 / gs_ww : 0.0;
-        ws->grid_inv[g].pab1_5 = gs_yy - gs_wy * gs_wy * ws->grid_inv[g].inv_s_ww;
     }
 
     /* n_threads is accepted for API symmetry but not stored — scratch buffers
@@ -9923,7 +9970,7 @@ static PyObject *compute_lrt_fused_ws_c_py(PyObject *self, PyObject *args)
             ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
             ws->grid_inv, ws->log_l_min, ws->step,
             ws->n_grid, ws->n_refine,
-            NULL, ws->mle_const, hi_eval_local, &logl_H1
+            ws->mle_const, hi_eval_local, &logl_H1
         );
         out_lambdas_mle[s] = lam_mle;
 

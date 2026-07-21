@@ -106,8 +106,8 @@ def _dsyrk_numpy(
     return _dsyrk_numpy_impl(X, out=out, beta=beta)
 
 
-# Default binding; a usable native implementation replaces it during import.
-dsyrk = _dsyrk_numpy_impl
+# Default backend; a usable native implementation replaces it during import.
+_dsyrk_backend = _dsyrk_numpy_impl
 
 
 # Phase 116.1: ASAN/UBSAN sanitizer workflow needs a way to skip the
@@ -144,13 +144,15 @@ else:
             blas_is_ilp64,
             compute_snp_stats_chunk,
             dgemm,
-            dsyrk,
             eigh,
             get_n_threads,
             jlinalg_isa,
             qr,
             set_n_threads,
             svd,
+        )
+        from jamma.jlinalg._jlinalg import (
+            dsyrk as _dsyrk_native,
         )
 
         if ABI_VERSION != _EXPECTED_JLINALG_ABI:
@@ -163,9 +165,7 @@ else:
         HAS_C_EXTENSION: bool = True
 
         # C extension loaded, but vendor BLAS/LAPACK may not be available.
-        # Replace C functions with NumPy fallbacks for unavailable operations.
-        if not blas_has_dsyrk:
-            dsyrk = _dsyrk_numpy_impl  # type: ignore[misc]
+        _dsyrk_backend = _dsyrk_native if blas_has_dsyrk else _dsyrk_numpy_impl
 
         if not blas_has_dsyevd and not blas_has_dsyevr:
 
@@ -242,13 +242,15 @@ else:
                     blas_is_ilp64,
                     compute_snp_stats_chunk,
                     dgemm,
-                    dsyrk,
                     eigh,
                     get_n_threads,
                     jlinalg_isa,
                     qr,
                     set_n_threads,
                     svd,
+                )
+                from jamma.jlinalg._jlinalg import (
+                    dsyrk as _dsyrk_native,
                 )
 
                 if ABI_VERSION != _EXPECTED_JLINALG_ABI:
@@ -260,6 +262,7 @@ else:
                     )
 
                 HAS_C_EXTENSION: bool = True
+                _dsyrk_backend = _dsyrk_native if blas_has_dsyrk else _dsyrk_numpy_impl
             except (ImportError, OSError) as _retry_exc:
                 warnings.warn(
                     f"jlinalg recompiled but import still failed: "
@@ -425,7 +428,7 @@ if not HAS_C_EXTENSION:
             dtype=_np.float64,
         )
 
-    dsyrk = _dsyrk_numpy_impl
+    _dsyrk_backend = _dsyrk_numpy_impl
 
     def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarray]:
         """Compute eigenvalues and eigenvectors of a symmetric matrix.
@@ -527,12 +530,6 @@ if not HAS_C_EXTENSION:
         max_threads = _os.cpu_count() or 1
         _fallback_thread_state[0] = min(n, max_threads)
         return old
-
-
-# Capture the selected implementation, then expose one validated public
-# boundary for both the native and NumPy paths. The C extension retains
-# defensive checks because its internal module remains directly importable.
-_dsyrk_backend = dsyrk
 
 
 def dsyrk(

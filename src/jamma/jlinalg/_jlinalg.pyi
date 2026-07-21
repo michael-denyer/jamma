@@ -80,7 +80,8 @@ def dsyrk(
 
     Args:
         X: Input matrix, shape (N, K), float64, C-contiguous.
-        out: Optional writable output buffer, shape (N, N), float64.
+        out: Optional writable, aligned, C-contiguous output buffer, shape
+            (N, N), float64.
         beta: Scale applied to the existing output. Requires out when nonzero.
 
     Returns:

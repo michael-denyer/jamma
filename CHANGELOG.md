@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.6.1] - 2026-07-21
+
 ### Fixed
 
 - **Kinship-only runs are no longer refused for memory an eigendecomposition

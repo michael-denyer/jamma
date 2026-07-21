@@ -221,13 +221,10 @@ class TestLmmConfigValidation:
         with pytest.raises(ValueError, match=r"l_max.*must be greater than l_min"):
             LmmConfig(l_min=1.0, l_max=1.0)
 
-    def test_n_grid_zero_raises(self):
-        with pytest.raises(ValueError, match="n_grid must be >= 1"):
-            LmmConfig(n_grid=0)
-
-    def test_n_grid_negative_raises(self):
-        with pytest.raises(ValueError, match="n_grid must be >= 1"):
-            LmmConfig(n_grid=-5)
+    @pytest.mark.parametrize("n_grid", [-5, 0, 1])
+    def test_n_grid_below_two_raises(self, n_grid):
+        with pytest.raises(ValueError, match="n_grid must be >= 2"):
+            LmmConfig(n_grid=n_grid)
 
     def test_valid_l_range(self):
         config = LmmConfig(l_min=1e-5, l_max=1e5)

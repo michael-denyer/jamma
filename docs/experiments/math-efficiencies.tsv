@@ -1,0 +1,5 @@
+ts	phase	decision	why	evidence	result
+2026-07-21T09:04:35Z	correctness	reproduced the single-point grid mismatch before changing production code	the public config accepted a value rejected by the native kernel	commit 4f9d960	red test confirmed
+2026-07-21T09:06:55Z	correctness	opened the grid-validation fix separately from all optimisations	keeps a correctness fix reviewable and keeps numerical experiments off trunk	PR 78	all checks green and mergeable
+2026-07-21T09:19:13Z	baseline	captured best-of-three end-to-end timings before optimisation code	every performance claim needs a pre-change comparator	docs/experiments/math-efficiencies.md	baseline saved
+2026-07-21T09:19:13Z	workflow	ordered four independent experiments from low-risk allocation removal to high-risk representation changes	each unit can be measured and rejected without carrying it into the next one	docs/experiments/math-efficiencies.md	open

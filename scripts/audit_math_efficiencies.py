@@ -75,7 +75,8 @@ def verify_block_projection(rng: np.random.Generator, trials: int) -> float:
 
 
 def verify_low_rank_inverse(rng: np.random.Generator, trials: int) -> float:
-    worst = 0.0
+    worst_backward_error = 0.0
+    eps = np.finfo(np.float64).eps
     for n_samples, n_markers in ((64, 12), (96, 40), (128, 80)):
         for _ in range(trials):
             genotypes = rng.standard_normal((n_samples, n_markers))
@@ -85,17 +86,38 @@ def verify_low_rank_inverse(rng: np.random.Generator, trials: int) -> float:
             u, singular_values, _ = np.linalg.svd(genotypes, full_matrices=False)
             eigenvalues = singular_values * singular_values / n_markers
             for lambda_value in (1e-5, 10.0 ** rng.uniform(-5.0, 5.0), 1e5):
-                expected = np.linalg.solve(
-                    np.eye(n_samples) + lambda_value * kinship, vectors
-                )
-                correction = (1.0 / (1.0 + lambda_value * eigenvalues)) - 1.0
+                system = np.eye(n_samples) + lambda_value * kinship
+                expected = np.linalg.solve(system, vectors)
+                scaled_eigenvalues = lambda_value * eigenvalues
+                correction = -scaled_eigenvalues / (1.0 + scaled_eigenvalues)
                 actual = vectors + u @ (correction[:, None] * (u.T @ vectors))
-                scaled_error = np.abs(expected - actual) / np.maximum(
-                    1.0, np.abs(expected)
+                forward_error = np.linalg.norm(actual - expected, ord=np.inf) / max(
+                    1.0, np.linalg.norm(expected, ord=np.inf)
                 )
-                worst = max(worst, float(scaled_error.max()))
-                np.testing.assert_allclose(actual, expected, rtol=2e-10, atol=2e-10)
-    return worst
+                condition = np.linalg.cond(system, p=np.inf)
+                forward_limit = 8.0 * condition * eps
+                if forward_error > forward_limit:
+                    raise AssertionError(
+                        f"low-rank forward error {forward_error:.3e} exceeds "
+                        f"condition-scaled limit {forward_limit:.3e}"
+                    )
+
+                residual = system @ actual - vectors
+                backward_denominator = np.linalg.norm(
+                    system, ord=np.inf
+                ) * np.linalg.norm(actual, ord=np.inf) + np.linalg.norm(
+                    vectors, ord=np.inf
+                )
+                backward_error = (
+                    np.linalg.norm(residual, ord=np.inf) / backward_denominator
+                )
+                worst_backward_error = max(worst_backward_error, float(backward_error))
+                if backward_error > 32.0 * eps:
+                    raise AssertionError(
+                        f"low-rank backward error {backward_error:.3e} exceeds "
+                        f"limit {32.0 * eps:.3e}"
+                    )
+    return worst_backward_error
 
 
 def _pab_entries(n_cvt: int) -> int:
@@ -143,9 +165,9 @@ def main() -> None:
 
     rng = np.random.default_rng(20260721)
     block_error = verify_block_projection(rng, args.trials)
-    low_rank_error = verify_low_rank_inverse(rng, args.trials)
+    low_rank_backward_error = verify_low_rank_inverse(rng, args.trials)
     print(f"block_vs_packed=PASS worst_scaled_error={block_error:.3e}")
-    print(f"low_rank_inverse=PASS worst_scaled_error={low_rank_error:.3e}")
+    print(f"low_rank_inverse=PASS worst_backward_error={low_rank_backward_error:.3e}")
     report_scale(args.samples, args.kinship_snps, args.grid, args.refine, args.threads)
 
 

@@ -85,9 +85,11 @@ runner integration.
 The block Gram/Schur formulation matches packed Pab across 1, 2, 4, 8, and 16
 covariates. The exact thin spectral inverse matches a dense solve at both lambda
 endpoints, `1e-5` and `1e5`, plus random interior values, using rank-deficient
-genotype matrices. These probes now run in pytest as well as the standalone
-audit. Neither candidate changes a production runner on this branch because an
-end-to-end memory layout and performance gate has not yet been cleared.
+genotype matrices. Its forward-error bound scales with the system's condition
+number, and its normalized backward error must remain within 32 machine epsilons.
+These probes now run in pytest as well as the standalone audit. Neither candidate
+changes a production runner on this branch because an end-to-end memory layout
+and performance gate has not yet been cleared.
 
 ## Units
 

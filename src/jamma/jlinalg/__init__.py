@@ -49,7 +49,66 @@ import numpy as _np
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
 
-_EXPECTED_JLINALG_ABI = 12  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+_EXPECTED_JLINALG_ABI = 13  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+
+
+def _validate_dsyrk(X: _np.ndarray, out: _np.ndarray | None, beta: float) -> None:
+    """Validate the public dsyrk contract before backend dispatch."""
+    if X.ndim != 2:
+        raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
+    if out is None:
+        if beta != 0.0:
+            raise ValueError("dsyrk: beta requires out")
+    else:
+        if not isinstance(out, _np.ndarray):
+            raise TypeError("dsyrk: out must be a numpy array")
+        if out.dtype != _np.float64:
+            raise ValueError(f"dsyrk: out must be float64, got {out.dtype}")
+        if not out.flags["C_CONTIGUOUS"]:
+            raise ValueError("dsyrk: out must be C-contiguous")
+        if not out.flags["ALIGNED"]:
+            raise ValueError("dsyrk: out must be aligned")
+        if not out.flags["WRITEABLE"]:
+            raise ValueError("dsyrk: out must be writeable")
+        if out.ndim != 2:
+            raise ValueError(f"dsyrk: out must be 2-D, got {out.ndim}-D")
+        expected = (X.shape[0], X.shape[0])
+        if out.shape != expected:
+            raise ValueError(
+                f"dsyrk: out shape {out.shape} doesn't match result shape {expected}"
+            )
+
+
+def _dsyrk_numpy_impl(
+    X: _np.ndarray, *, out: _np.ndarray | None = None, beta: float = 0.0
+) -> _np.ndarray:
+    """Unchecked NumPy implementation of C = X @ X.T + beta*C."""
+    X64 = _np.ascontiguousarray(X, dtype=_np.float64)
+    if out is None:
+        result = _np.dot(X64, X64.T)
+    else:
+        result = out
+        if beta == 0.0:
+            _np.dot(X64, X64.T, out=result)
+        else:
+            result *= beta
+            result += _np.dot(X64, X64.T)
+    il = _np.tril_indices_from(result, -1)
+    result.T[il] = result[il]
+    return result
+
+
+def _dsyrk_numpy(
+    X: _np.ndarray, *, out: _np.ndarray | None = None, beta: float = 0.0
+) -> _np.ndarray:
+    """Validated NumPy implementation, exposed for backend-specific tests."""
+    _validate_dsyrk(X, out, beta)
+    return _dsyrk_numpy_impl(X, out=out, beta=beta)
+
+
+# Default backend; a usable native implementation replaces it during import.
+_dsyrk_backend = _dsyrk_numpy_impl
+
 
 # Phase 116.1: ASAN/UBSAN sanitizer workflow needs a way to skip the
 # _jlinalg.so import entirely. RESEARCH §"Pitfall 4" — ASAN + dlopen(...,
@@ -85,13 +144,15 @@ else:
             blas_is_ilp64,
             compute_snp_stats_chunk,
             dgemm,
-            dsyrk,
             eigh,
             get_n_threads,
             jlinalg_isa,
             qr,
             set_n_threads,
             svd,
+        )
+        from jamma.jlinalg._jlinalg import (
+            dsyrk as _dsyrk_native,
         )
 
         if ABI_VERSION != _EXPECTED_JLINALG_ABI:
@@ -104,18 +165,7 @@ else:
         HAS_C_EXTENSION: bool = True
 
         # C extension loaded, but vendor BLAS/LAPACK may not be available.
-        # Replace C functions with NumPy fallbacks for unavailable operations.
-        if not blas_has_dsyrk:
-
-            def dsyrk(X: _np.ndarray) -> _np.ndarray:  # type: ignore[misc]
-                """NumPy fallback: K = X @ X.T."""
-                if X.ndim != 2:
-                    raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
-                X64 = _np.ascontiguousarray(X, dtype=_np.float64)
-                result = _np.dot(X64, X64.T)
-                il = _np.tril_indices_from(result, -1)
-                result.T[il] = result[il]
-                return result
+        _dsyrk_backend = _dsyrk_native if blas_has_dsyrk else _dsyrk_numpy_impl
 
         if not blas_has_dsyevd and not blas_has_dsyevr:
 
@@ -192,13 +242,15 @@ else:
                     blas_is_ilp64,
                     compute_snp_stats_chunk,
                     dgemm,
-                    dsyrk,
                     eigh,
                     get_n_threads,
                     jlinalg_isa,
                     qr,
                     set_n_threads,
                     svd,
+                )
+                from jamma.jlinalg._jlinalg import (
+                    dsyrk as _dsyrk_native,
                 )
 
                 if ABI_VERSION != _EXPECTED_JLINALG_ABI:
@@ -210,6 +262,7 @@ else:
                     )
 
                 HAS_C_EXTENSION: bool = True
+                _dsyrk_backend = _dsyrk_native if blas_has_dsyrk else _dsyrk_numpy_impl
             except (ImportError, OSError) as _retry_exc:
                 warnings.warn(
                     f"jlinalg recompiled but import still failed: "
@@ -375,25 +428,7 @@ if not HAS_C_EXTENSION:
             dtype=_np.float64,
         )
 
-    def dsyrk(X: _np.ndarray) -> _np.ndarray:
-        """Compute symmetric rank-k update: K = X @ X.T.
-
-        Args:
-            X: Input matrix, shape (N, K), float64.
-
-        Returns:
-            Symmetric result matrix K, shape (N, N), float64.
-
-        Raises:
-            ValueError: If X is not 2-D.
-        """
-        if X.ndim != 2:
-            raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
-        X64 = _np.ascontiguousarray(X, dtype=_np.float64)
-        result = _np.dot(X64, X64.T)
-        il = _np.tril_indices_from(result, -1)
-        result.T[il] = result[il]
-        return result
+    _dsyrk_backend = _dsyrk_numpy_impl
 
     def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarray]:
         """Compute eigenvalues and eigenvectors of a symmetric matrix.
@@ -495,6 +530,15 @@ if not HAS_C_EXTENSION:
         max_threads = _os.cpu_count() or 1
         _fallback_thread_state[0] = min(n, max_threads)
         return old
+
+
+def dsyrk(
+    X: _np.ndarray, *, out: _np.ndarray | None = None, beta: float = 0.0
+) -> _np.ndarray:
+    """Compute ``X @ X.T + beta * out`` with a shared backend contract."""
+    _validate_dsyrk(X, out, beta)
+    return _dsyrk_backend(X, out=out, beta=beta)
+
 
 # ---------------------------------------------------------------------------
 # NumPy-only BLAS functions (always use NumPy, never from C extension)

@@ -31,7 +31,7 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `dgemm` | `(A, B, transa='N', transb='N') -> ndarray` | Matrix multiply op(A) @ op(B) |
-| `dsyrk` | `(X) -> ndarray` | Symmetric rank-k update X @ X.T |
+| `dsyrk` | `(X, *, out=None, beta=0.0) -> ndarray` | Symmetric rank-k update X @ X.T + beta*out |
 
 ### LAPACK (vendor dispatch)
 

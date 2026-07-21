@@ -20,7 +20,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * structs, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 12
+#define JLINALG_ABI_VERSION 13
 
 /* ---------------------------------------------------------------------------
  * External BLAS dispatch (vendor BLAS / LAPACK discovery)
@@ -207,12 +207,12 @@ void blas_dispatch_reset_lp64_overflow(void);
  * ---------------------------------------------------------------------------
  */
 
-/* Vendor-dispatch dsyrk: C = X @ X.T (lower triangle + mirror).
+/* Vendor-dispatch dsyrk: C = X @ X.T + beta*C (lower triangle + mirror).
  * Routes to vendor cblas_dsyrk when available, else returns without computing
  * (caller must use numpy fallback). */
 void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
                      const double *X, npy_intp ldx,
-                     double *C, npy_intp ldc);
+                     double *C, npy_intp ldc, double beta);
 
 /* Returns 1 if vendor dsyrk is available (cblas_dsyrk resolved), 0 otherwise. */
 int blas_has_dsyrk(void);

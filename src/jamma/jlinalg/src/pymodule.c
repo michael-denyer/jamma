@@ -182,14 +182,23 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
 /* ---------------------------------------------------------------------------
  * py_dsyrk -- symmetric rank-k update K = X @ X.T
  *
- * Signature: dsyrk(X: ndarray) -> ndarray
+ * Signature: dsyrk(X: ndarray, *, out=None, beta=0.0) -> ndarray
  * X must be 2-D C-contiguous float64 of shape (N, K).
- * Returns a new 2-D float64 array of shape (N, N), bitwise symmetric.
+ * out, when provided, must be writable, aligned, C-contiguous float64 of shape (N, N).
+ * Computes out = X @ X.T + beta*out and returns the output, bitwise symmetric.
  * ---------------------------------------------------------------------------
  */
-static PyObject *py_dsyrk(PyObject *self, PyObject *args) {
+static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
+    static char *kwlist[] = {"X", "out", "beta", NULL};
     PyObject *oX;
-    if (!PyArg_ParseTuple(args, "O", &oX)) return NULL;
+    PyObject *oOut = Py_None;
+    double beta = 0.0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|$Od", kwlist, &oX, &oOut, &beta)) return NULL;
+
+    if (oOut == Py_None && beta != 0.0) {
+        PyErr_SetString(PyExc_ValueError, "dsyrk: beta requires out");
+        return NULL;
+    }
 
     /* Guard: vendor BLAS must be available for dsyrk */
     if (!blas_has_dsyrk()) {
@@ -210,17 +219,62 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args) {
     npy_intp N = PyArray_DIM(aX, 0);
     npy_intp K = PyArray_DIM(aX, 1);
 
-    npy_intp dims[2] = {N, N};
-    PyArrayObject *aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);
-    if (!aC) {
-        Py_DECREF(aX);
-        return NULL;
+    PyArrayObject *aC;
+    if (oOut != Py_None) {
+        if (!PyArray_Check(oOut)) {
+            PyErr_SetString(PyExc_TypeError, "dsyrk: out must be a numpy array");
+            Py_DECREF(aX);
+            return NULL;
+        }
+        PyArrayObject *out = (PyArrayObject *)oOut;
+        if (PyArray_TYPE(out) != NPY_DOUBLE) {
+            PyErr_SetString(PyExc_ValueError, "dsyrk: out must be float64");
+            Py_DECREF(aX);
+            return NULL;
+        }
+        if (!PyArray_IS_C_CONTIGUOUS(out)) {
+            PyErr_SetString(PyExc_ValueError, "dsyrk: out must be C-contiguous");
+            Py_DECREF(aX);
+            return NULL;
+        }
+        if (!PyArray_ISALIGNED(out)) {
+            PyErr_SetString(PyExc_ValueError, "dsyrk: out must be aligned");
+            Py_DECREF(aX);
+            return NULL;
+        }
+        if (!PyArray_ISWRITEABLE(out)) {
+            PyErr_SetString(PyExc_ValueError, "dsyrk: out must be writeable");
+            Py_DECREF(aX);
+            return NULL;
+        }
+        if (PyArray_NDIM(out) != 2) {
+            PyErr_Format(PyExc_ValueError, "dsyrk: out must be 2-D, got %d-D", PyArray_NDIM(out));
+            Py_DECREF(aX);
+            return NULL;
+        }
+        if (PyArray_DIM(out, 0) != N || PyArray_DIM(out, 1) != N) {
+            PyErr_Format(PyExc_ValueError,
+                         "dsyrk: out shape (%zd, %zd) doesn't match result shape (%zd, %zd)",
+                         (Py_ssize_t)PyArray_DIM(out, 0), (Py_ssize_t)PyArray_DIM(out, 1),
+                         (Py_ssize_t)N, (Py_ssize_t)N);
+            Py_DECREF(aX);
+            return NULL;
+        }
+        Py_INCREF(oOut);
+        aC = (PyArrayObject *)oOut;
+    } else {
+        npy_intp dims[2] = {N, N};
+        aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);
+        if (!aC) {
+            Py_DECREF(aX);
+            return NULL;
+        }
     }
 
     const double *pX = (const double *)PyArray_DATA(aX);
     double *pC = (double *)PyArray_DATA(aC);
 
-    Py_BEGIN_ALLOW_THREADS jlinalg_dsyrk_ext(N, K, pX, K, pC, N);
+    Py_BEGIN_ALLOW_THREADS jlinalg_dsyrk_ext(N, K, pX, K, pC, N, beta);
     Py_END_ALLOW_THREADS
 
         Py_DECREF(aX);
@@ -877,9 +931,9 @@ static PyMethodDef JlinalgMethods[] = {
     {"dgemm", (PyCFunction)py_dgemm, METH_VARARGS | METH_KEYWORDS,
      "dgemm(A, B, transa='N', transb='N') -> ndarray\n"
      "Matrix-matrix product C = op(A) @ op(B) via vendor BLAS."},
-    {"dsyrk", py_dsyrk, METH_VARARGS,
-     "dsyrk(X) -> ndarray\n"
-     "Symmetric rank-k update: K = X @ X.T (float64) via vendor BLAS."},
+    {"dsyrk", (PyCFunction)py_dsyrk, METH_VARARGS | METH_KEYWORDS,
+     "dsyrk(X, *, out=None, beta=0.0) -> ndarray\n"
+     "Symmetric rank-k update: K = X @ X.T + beta*K via vendor BLAS."},
     {"eigh", (PyCFunction)py_eigh, METH_VARARGS | METH_KEYWORDS,
      "eigh(K, inplace=False) -> (eigenvalues, eigenvectors)\n"
      "Compute all eigenvalues and eigenvectors of symmetric K.\n"

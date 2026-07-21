@@ -124,6 +124,37 @@ def test_force_numpy_fallback_functions_callable(
     X = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
     K2 = j.dsyrk(X)
     np.testing.assert_allclose(K2, X @ X.T)
+    out = np.eye(3)
+    returned = j.dsyrk(X, out=out, beta=2.0)
+    assert returned is out
+    np.testing.assert_allclose(out, X @ X.T + 2.0 * np.eye(3))
+
+
+def test_force_numpy_dsyrk_output_validation(monkeypatch, reload_jlinalg_after_test):
+    """The NumPy DSYRK path enforces the same output contract as C."""
+    monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
+    j = _reload_jlinalg()
+    X = np.ones((3, 2))
+
+    with pytest.raises(ValueError, match="2-D"):
+        j.dsyrk(np.ones(3))
+    with pytest.raises(ValueError, match="beta requires out"):
+        j.dsyrk(X, beta=1.0)
+    with pytest.raises(ValueError, match="shape"):
+        j.dsyrk(X, out=np.empty((3, 4)))
+    with pytest.raises(ValueError, match="float64"):
+        j.dsyrk(X, out=np.empty((3, 3), dtype=np.float32))
+    with pytest.raises(ValueError, match="C-contiguous"):
+        j.dsyrk(X, out=np.empty((3, 6))[:, ::2])
+
+    readonly = np.empty((3, 3))
+    readonly.flags.writeable = False
+    with pytest.raises(ValueError, match="writeable"):
+        j.dsyrk(X, out=readonly)
+
+    out = np.full((3, 3), np.nan)
+    assert j.dsyrk(X, out=out) is out
+    np.testing.assert_allclose(out, X @ X.T)
 
 
 def test_natural_fallback_blas_backend_value(monkeypatch, reload_jlinalg_after_test):

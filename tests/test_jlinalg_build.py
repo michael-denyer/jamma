@@ -154,10 +154,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 12 (bumped for vendor-only dispatch, own-BLAS removed)."""
+    """ABI_VERSION is 13 after adding caller-owned DSYRK output."""
     from jamma.jlinalg import ABI_VERSION
 
-    assert ABI_VERSION == 12, f"Expected ABI_VERSION=12, got {ABI_VERSION}"
+    assert ABI_VERSION == 13, f"Expected ABI_VERSION=13, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

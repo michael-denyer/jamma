@@ -43,9 +43,17 @@ class TestEighInplaceCorrectness:
         w_inplace, v_inplace = jlinalg.eigh(K, inplace=True)
         w_ref, _ = np.linalg.eigh(K_ref)
 
-        # rtol=5e-12: jlinalg DSYEVD vs Accelerate DSYEVD differ by up to ~3e-12
-        # due to different FP accumulation in tridiagonal reduction (DSYTRD).
-        np.testing.assert_allclose(w_inplace, w_ref, rtol=5e-12, atol=1e-14)
+        # Eigenvalue accuracy is bounded by Weyl's theorem at O(eps * ||K||_2):
+        # the absolute error scales with the largest eigenvalue, not each
+        # eigenvalue's own magnitude. jlinalg DSYEVD and numpy differ only in FP
+        # accumulation in the tridiagonal reduction (DSYTRD), so the smallest
+        # eigenvalues cannot meet a tight per-element rtol (a ~5e-13 absolute
+        # slip at lambda~4e-3 is a ~1e-11 relative slip) even though the
+        # decomposition is correct to ~eps * lambda_max. Compare against an
+        # absolute tolerance scaled by the spectral norm, which is the
+        # numerically well-posed metric for eigenvalue agreement.
+        scale = float(np.abs(w_ref).max())
+        np.testing.assert_allclose(w_inplace, w_ref, rtol=0, atol=1e-12 * scale)
 
         # Eigenvector orthogonality: V.T @ V = I
         eye_check = v_inplace.T @ v_inplace
@@ -54,7 +62,9 @@ class TestEighInplaceCorrectness:
         # Reconstruction: K_ref @ V ~= V @ diag(w)
         lhs = K_ref @ v_inplace
         rhs = v_inplace * w_inplace[np.newaxis, :]
-        np.testing.assert_allclose(lhs, rhs, atol=1e-10 * np.linalg.norm(K_ref), rtol=0)
+        np.testing.assert_allclose(
+            lhs, rhs, atol=1e-10 * float(np.linalg.norm(K_ref)), rtol=0
+        )
 
 
 @_skip_no_dsyevd

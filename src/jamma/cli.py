@@ -411,22 +411,23 @@ def _run_gk(
         )
 
     # Delegate the compute/write orchestration to the pipeline, mirroring how
-    # _run_lmm delegates to PipelineRunner.run().
-    pipeline_config = PipelineConfig(
-        bfile=bfile,
-        maf=maf,
-        miss=miss,
-        output_dir=config.outdir,
-        output_prefix=config.prefix,
-        check_memory=check_memory,
-        show_progress=True,
-        loco=loco,
-        write_eigen=write_eigen,
-        ksnps_file=ksnps_file,
-        legacy_text=legacy_text,
-    )
-
+    # _run_lmm delegates to PipelineRunner.run(). Construction is inside the
+    # try because PipelineConfig validates its knobs in __post_init__, and a
+    # bad value should read as a CLI error rather than a traceback.
     try:
+        pipeline_config = PipelineConfig(
+            bfile=bfile,
+            maf=maf,
+            miss=miss,
+            output_dir=config.outdir,
+            output_prefix=config.prefix,
+            check_memory=check_memory,
+            show_progress=True,
+            loco=loco,
+            write_eigen=write_eigen,
+            ksnps_file=ksnps_file,
+            legacy_text=legacy_text,
+        )
         result = PipelineRunner(pipeline_config).compute_kinship(mode)
     except (FileNotFoundError, ValueError, MemoryError, OSError) as e:
         logger.debug("Kinship computation failed with traceback:", exc_info=True)
@@ -513,38 +514,39 @@ def _run_lmm(
     if write_eigen and loco and eigen_dir is None:
         eigen_dir = config.outdir
 
-    # Build pipeline config
-    pipeline_config = PipelineConfig(
-        bfile=bfile,
-        kinship_file=kinship_file,
-        covariate_file=covariate_file,
-        lmm_mode=mode,
-        maf=maf,
-        miss=miss,
-        output_dir=config.outdir,
-        output_prefix=config.prefix,
-        check_memory=check_memory,
-        show_progress=True,
-        mem_budget=mem_budget,
-        loco=loco,
-        eigenvalue_file=eigenvalue_file,
-        eigenvector_file=eigenvector_file,
-        write_eigen=write_eigen,
-        eigen_dir=eigen_dir,
-        phenotype_columns=phenotype_columns,
-        snps_file=snps_file,
-        ksnps_file=ksnps_file,
-        hwe_threshold=hwe_threshold,
-        l_min=l_min,
-        l_max=l_max,
-        weight_file=weight_file,
-        cat_columns=cat_columns,
-        backend=backend,
-        legacy_text=legacy_text,
-    )
-
-    # Run pipeline, converting exceptions to CLI-friendly errors
+    # Build and run the pipeline, converting exceptions to CLI-friendly errors.
+    # Construction is inside the try because PipelineConfig validates its knobs
+    # in __post_init__, and a bad value (-lmm 99) should read as a CLI error
+    # rather than a traceback.
     try:
+        pipeline_config = PipelineConfig(
+            bfile=bfile,
+            kinship_file=kinship_file,
+            covariate_file=covariate_file,
+            lmm_mode=mode,
+            maf=maf,
+            miss=miss,
+            output_dir=config.outdir,
+            output_prefix=config.prefix,
+            check_memory=check_memory,
+            show_progress=True,
+            mem_budget=mem_budget,
+            loco=loco,
+            eigenvalue_file=eigenvalue_file,
+            eigenvector_file=eigenvector_file,
+            write_eigen=write_eigen,
+            eigen_dir=eigen_dir,
+            phenotype_columns=phenotype_columns,
+            snps_file=snps_file,
+            ksnps_file=ksnps_file,
+            hwe_threshold=hwe_threshold,
+            l_min=l_min,
+            l_max=l_max,
+            weight_file=weight_file,
+            cat_columns=cat_columns,
+            backend=backend,
+            legacy_text=legacy_text,
+        )
         if check_memory:
             click.echo("Checking memory requirements...")
         result = PipelineRunner(pipeline_config).run()

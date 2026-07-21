@@ -217,6 +217,23 @@ def test_lmax_validation():
 
 
 @pytest.mark.tier1
+def test_invalid_lmm_mode_reports_cli_error():
+    """A knob rejected at config construction still reads as a CLI error.
+
+    PipelineConfig validates its knobs in __post_init__, so -lmm 99 raises
+    before the runner starts. The construction must sit inside the handler
+    that turns ValueError into 'Error: ...', or the user gets a traceback.
+    """
+    result = runner.invoke(
+        main,
+        ["-bfile", str(EXAMPLE_BFILE), "-lmm", "99", "-k", "fake.txt"],
+    )
+    assert result.exit_code == 1
+    assert "lmm_mode must be" in result.output
+    assert not isinstance(result.exception, ValueError)
+
+
+@pytest.mark.tier1
 def test_cli_help_shows_lmin_lmax():
     """CLI --help shows -lmin and -lmax flags with defaults."""
     result = runner.invoke(main, ["--help"])

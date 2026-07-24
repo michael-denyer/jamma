@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-07-24
+
+### Changed
+
+- **BREAKING: the LMM runner entry points take an `LmmConfig` and nothing
+  else.** `run_lmm_association_numpy`, `run_lmm_association_numpy_streaming`,
+  and `run_lmm` each accepted an optional `config` *and* nine flat keyword
+  overrides of the same values, then unpacked one over the other in three
+  separate places. Pass `config=LmmConfig(...)` instead of
+  `maf_threshold=`, `miss_threshold=`, `l_min=`, `l_max=`, `n_grid=`,
+  `n_refine=`, `check_memory=`, `show_progress=`, or `lmm_mode=`.
+  `LmmConfig.as_kwargs()` existed only to service that round trip and is
+  removed.
+
+  This also closes a validation hole: `LmmConfig.__post_init__` bounds-checks
+  every knob, but the flat path bypassed it entirely, so callers could pass a
+  `maf_threshold` of 0.99 even though MAF is `min(af, 1-af)` and never exceeds
+  0.5. Such calls now raise `ValueError`.
+
+### Fixed
+
+- **The NumPy `dsyrk` fallback no longer exceeds the memory the kinship
+  pre-flight budgets.** It allocated a full N x N `np.dot` result plus the
+  N^2/2 index arrays a whole-matrix mirror needs, none of it declared, so
+  `_preflight_kinship_memory` could approve a run that then OOMed.
+  Accumulation now walks the lower triangle in row blocks (halving the
+  fallback's GEMM work as well as its peak) and the mirror tiles both axes.
+  `jlinalg.dsyrk_scratch_bytes()` reports the bound and
+  `StreamingMemoryBreakdown` gained `dsyrk_scratch_gb`.
+
+### Internal
+
+- The LMM dispatch path is resolved directly instead of deriving eight
+  intermediate booleans and collapsing them through a priority ladder. The
+  eleven `c_*_available` parameters became one `KernelCaps` record. Verified
+  equivalent to the previous selector across all 24,576
+  `(n_cvt, lmm_mode, availability)` combinations.
+- LOCO chooses its eigen source once and iterates `(chr_name, eigenvalues, U)`,
+  rather than testing "is the cache present" at six points inside the
+  chromosome loop. `run_lmm_loco` drops from 476 lines and 57 branches to 399
+  and 40.
+- The batch and streaming runners share `prepare_lmm_run()` for the
+  eigendecompose/rotate/null-model/PVE prologue they previously each inlined.
+- Eighteen hand-written "C symbol is None" guards collapse into one helper.
+  Six were `assert`, which `python -O` strips.
+
 ## [5.6.1] - 2026-07-21
 
 ### Fixed

@@ -283,6 +283,14 @@ class LmmConfig:
         }
 
 
+DEFAULT_LMM_CONFIG = LmmConfig()
+"""The all-defaults config, shared as the runners' default argument.
+
+LmmConfig is frozen, so one instance is safe to share; naming it keeps the
+constructor out of a function signature's default.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class LmmRunResult:
     """Return type for LMM runner functions.

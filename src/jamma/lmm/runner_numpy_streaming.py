@@ -24,26 +24,18 @@ from jamma.core.snp_stats import (
     collect_streamed_snp_stats,
     filter_snp_stats,
 )
-from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
-    _compute_null_model_common,
-    _eigendecompose_or_reuse,
-    compute_and_log_pve,
+    prepare_lmm_run,
     validate_runner_inputs,
 )
 from jamma.lmm.results import make_result_list_sink, make_writer_sink
 from jamma.lmm.schema import (
-    DEFAULT_L_MAX,
-    DEFAULT_L_MIN,
-    DEFAULT_MAF,
-    DEFAULT_MISS,
-    DEFAULT_N_GRID,
-    DEFAULT_N_REFINE,
+    DEFAULT_LMM_CONFIG,
     LmmConfig,
     LmmRunResult,
     RunnerTiming,
@@ -76,21 +68,12 @@ def run_lmm_association_numpy_streaming(
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
     eigenvectors: np.ndarray | None = None,
-    maf_threshold: float = DEFAULT_MAF,
-    miss_threshold: float = DEFAULT_MISS,
-    l_min: float = DEFAULT_L_MIN,
-    l_max: float = DEFAULT_L_MAX,
-    n_grid: int = DEFAULT_N_GRID,
-    n_refine: int = DEFAULT_N_REFINE,
     chunk_size: int = 10_000,
-    check_memory: bool = True,
-    show_progress: bool = True,
     output_path: Path | None = None,
-    lmm_mode: int = 1,
     snps_indices: np.ndarray | None = None,
     hwe_threshold: float = 0.0,
     validate_genotypes: bool = True,
-    config: LmmConfig | None = None,
+    config: LmmConfig = DEFAULT_LMM_CONFIG,
 ) -> tuple[LmmRunResult, int]:
     """Run LMM association tests by streaming genotypes from disk (NumPy/C path).
 
@@ -132,15 +115,16 @@ def run_lmm_association_numpy_streaming(
         PVE from null model. n_tested is the number of SNPs that passed
         filtering and were tested.
     """
-    # Unpack config if provided (config takes precedence over individual kwargs).
-    if config is not None:
-        kw = config.as_kwargs()
-        maf_threshold = kw["maf_threshold"]
-        miss_threshold = kw["miss_threshold"]
-        l_min, l_max = kw["l_min"], kw["l_max"]
-        n_grid, n_refine = kw["n_grid"], kw["n_refine"]
-        check_memory = kw["check_memory"]
-        show_progress, lmm_mode = kw["show_progress"], kw["lmm_mode"]
+    # One source for every knob. The runner reads locals rather than config.x
+    # at forty-odd sites; the dual surface this replaced let a caller pass both
+    # a config and a contradicting keyword.
+    maf_threshold = config.maf_threshold
+    miss_threshold = config.miss_threshold
+    l_min, l_max = config.l_min, config.l_max
+    n_grid, n_refine = config.n_grid, config.n_refine
+    check_memory = config.check_memory
+    show_progress = config.show_progress
+    lmm_mode = config.lmm_mode
 
     start_time = time.perf_counter()
 
@@ -241,42 +225,27 @@ def run_lmm_association_numpy_streaming(
     # === Eigendecomp + rotation + null model ===
     t_eigen_start = time.perf_counter()
 
-    eigenvalues_np, U = _eigendecompose_or_reuse(
-        kinship,
-        eigenvalues,
-        eigenvectors,
-        show_progress,
-        "lmm_numpy_streaming",
+    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
+
+    prepared = prepare_lmm_run(
+        kinship=kinship,
+        eigenvalues=eigenvalues,
+        eigenvectors=eigenvectors,
+        phenotypes=phenotypes,
+        W=W,
+        n_cvt=n_cvt,
+        lmm_mode=lmm_mode,
+        l_min=l_min,
+        l_max=l_max,
+        show_progress=show_progress,
         check_memory=check_memory,
+        label="lmm_numpy_streaming",
     )
     if kinship is not None:
         del kinship
     gc.collect()
 
-    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
-
-    # Use all physical cores for BLAS rotation
-    rotation_threads = get_physical_core_count()
-
-    with blas_threads(rotation_threads):
-        UtW = U.T @ W
-        Uty = U.T @ phenotypes
-
-    # Null model for Score/LRT/All
-    logl_H0, lambda_null_mle, Hi_eval_null = _compute_null_model_common(
-        lmm_mode,
-        eigenvalues_np,
-        UtW,
-        Uty,
-        n_cvt,
-        show_progress,
-        l_min=l_min,
-        l_max=l_max,
-    )
-
     t_eigen_end = time.perf_counter()
-
-    pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
     # === PASS 2: Compute per chunk (float64) ===
     last_run_timing.clear()
@@ -332,12 +301,12 @@ def run_lmm_association_numpy_streaming(
         chunk_stats = run_lmm_chunk_source_numpy(
             raw_chunk_source_factory=_make_stream_source,
             chunk_sink=_sink,
-            U=U,
-            eigenvalues_np=eigenvalues_np,
-            UtW=UtW,
-            Uty=Uty,
-            Hi_eval_null=Hi_eval_null,
-            logl_H0=logl_H0,
+            U=prepared.U,
+            eigenvalues_np=prepared.eigenvalues,
+            UtW=prepared.UtW,
+            Uty=prepared.Uty,
+            Hi_eval_null=prepared.Hi_eval_null,
+            logl_H0=prepared.logl_H0,
             n_samples=n_samples,
             n_filtered=n_filtered,
             n_cvt=n_cvt,
@@ -402,8 +371,8 @@ def run_lmm_association_numpy_streaming(
         return (
             LmmRunResult(
                 associations=[] if output_path is not None else all_results,
-                pve=pve,
-                pve_se=pve_se,
+                pve=prepared.pve,
+                pve_se=prepared.pve_se,
                 n_tested=n_tested if output_path is not None else None,
             ),
             n_tested,

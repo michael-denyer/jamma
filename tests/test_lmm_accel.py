@@ -34,7 +34,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
     golden_section_optimize_lambda_numpy,
 )
-from jamma.lmm.schema import MIN_N_GRID
+from jamma.lmm.schema import MIN_N_GRID, LmmConfig
 
 
 @pytest.fixture
@@ -1002,12 +1002,14 @@ def test_pipeline_multi_chunk_correctness():
         snp_info=snp_info,
         eigenvalues=eigenvalues,
         eigenvectors=U,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=1,
-        n_refine=20,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=1,
+            n_refine=20,
+        ),
     )
     results_pipeline = run_result.associations
 
@@ -1031,12 +1033,14 @@ def test_pipeline_multi_chunk_correctness():
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=U,
-            maf_threshold=0.0,
-            miss_threshold=1.0,
-            check_memory=False,
-            show_progress=False,
-            lmm_mode=1,
-            n_refine=20,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=1,
+                n_refine=20,
+            ),
         )
         results_sequential = run_result.associations
     finally:
@@ -1528,8 +1532,7 @@ def test_general_ncvt_gemma_covariate_match():
         kinship=kinship,
         snp_info=snp_info,
         covariates=covariates,
-        lmm_mode=1,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=1, show_progress=False),
     )
     results = run_result.associations
 
@@ -4830,12 +4833,14 @@ def test_runner_fused_general_ncvt2_dispatch():
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=U,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=1,
-        n_refine=20,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=1,
+            n_refine=20,
+        ),
     )
 
     # Run with fused general disabled → falls back to non-fused general path.
@@ -4851,12 +4856,14 @@ def test_runner_fused_general_ncvt2_dispatch():
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=U,
-            maf_threshold=0.0,
-            miss_threshold=1.0,
-            check_memory=False,
-            show_progress=False,
-            lmm_mode=1,
-            n_refine=20,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=1,
+                n_refine=20,
+            ),
         )
 
     assoc_fused = result_fused.associations
@@ -5394,12 +5401,14 @@ def test_runner_fused_score_dispatch():
                 snp_info=snp_info,
                 eigenvalues=eigenvalues,
                 eigenvectors=U,
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=3,
-                n_refine=20,
+                config=LmmConfig(
+                    maf_threshold=0.0,
+                    miss_threshold=1.0,
+                    check_memory=False,
+                    show_progress=False,
+                    lmm_mode=3,
+                    n_refine=20,
+                ),
             )
         assert mock_fused.called, "Fused Score WS C function was not called"
     else:
@@ -5414,12 +5423,14 @@ def test_runner_fused_score_dispatch():
                 snp_info=snp_info,
                 eigenvalues=eigenvalues,
                 eigenvectors=U,
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=3,
-                n_refine=20,
+                config=LmmConfig(
+                    maf_threshold=0.0,
+                    miss_threshold=1.0,
+                    check_memory=False,
+                    show_progress=False,
+                    lmm_mode=3,
+                    n_refine=20,
+                ),
             )
         assert mock_fused.called, "Fused Score C function was not called"
 
@@ -5435,12 +5446,14 @@ def test_runner_fused_score_dispatch():
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=U,
-            maf_threshold=0.0,
-            miss_threshold=1.0,
-            check_memory=False,
-            show_progress=False,
-            lmm_mode=3,
-            n_refine=20,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=3,
+                n_refine=20,
+            ),
         )
 
     fused = result_fused.associations
@@ -5492,12 +5505,14 @@ def test_runner_fused_lrt_dispatch():
                 snp_info=snp_info,
                 eigenvalues=eigenvalues,
                 eigenvectors=U,
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=2,
-                n_refine=20,
+                config=LmmConfig(
+                    maf_threshold=0.0,
+                    miss_threshold=1.0,
+                    check_memory=False,
+                    show_progress=False,
+                    lmm_mode=2,
+                    n_refine=20,
+                ),
             )
         assert mock_fused.called, "Fused LRT WS C function was not called"
     else:
@@ -5512,12 +5527,14 @@ def test_runner_fused_lrt_dispatch():
                 snp_info=snp_info,
                 eigenvalues=eigenvalues,
                 eigenvectors=U,
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=2,
-                n_refine=20,
+                config=LmmConfig(
+                    maf_threshold=0.0,
+                    miss_threshold=1.0,
+                    check_memory=False,
+                    show_progress=False,
+                    lmm_mode=2,
+                    n_refine=20,
+                ),
             )
         assert mock_fused.called, "Fused LRT C function was not called"
 
@@ -5533,12 +5550,14 @@ def test_runner_fused_lrt_dispatch():
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=U,
-            maf_threshold=0.0,
-            miss_threshold=1.0,
-            check_memory=False,
-            show_progress=False,
-            lmm_mode=2,
-            n_refine=20,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=2,
+                n_refine=20,
+            ),
         )
 
     fused = result_fused.associations

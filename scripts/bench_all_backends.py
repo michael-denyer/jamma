@@ -149,6 +149,7 @@ def _bench_numpy_inner(
     """Benchmark NumPy backend with or without C acceleration."""
     import jamma.lmm.compute_numpy as cn
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
+    from jamma.lmm.schema import LmmConfig
 
     results: dict[str, float] = {}
 
@@ -180,9 +181,9 @@ def _bench_numpy_inner(
                     kinship=kinship.copy(),
                     snp_info=snp_info,
                     covariates=covars,
-                    show_progress=False,
-                    check_memory=False,
-                    lmm_mode=mode,
+                    config=LmmConfig(
+                        show_progress=False, check_memory=False, lmm_mode=mode
+                    ),
                 )
                 elapsed = time.perf_counter() - t0
                 best = min(best, elapsed)
@@ -219,6 +220,7 @@ def bench_numpy_streaming(
 ) -> dict[str, float]:
     """Benchmark NumPy streaming backend (disk I/O + C extension)."""
     from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
+    from jamma.lmm.schema import LmmConfig
 
     results: dict[str, float] = {}
 
@@ -238,9 +240,9 @@ def bench_numpy_streaming(
                 phenotypes=phenotypes,
                 kinship=kinship.copy(),
                 covariates=covars,
-                show_progress=False,
-                check_memory=False,
-                lmm_mode=mode,
+                config=LmmConfig(
+                    show_progress=False, check_memory=False, lmm_mode=mode
+                ),
             )
             elapsed = time.perf_counter() - t0
             best = min(best, elapsed)

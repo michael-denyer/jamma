@@ -14,6 +14,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.constants import PHENOTYPE_MISSING
+from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     compute_null_model_lambda,
@@ -332,6 +333,108 @@ def _compute_null_model_common(
             )
 
     return logl_H0, lambda_null_mle, Hi_eval_null_np
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedLmmRun:
+    """The rotated, null-model-solved state every NumPy LMM runner starts from.
+
+    Attributes:
+        eigenvalues: Kinship eigenvalues, ascending.
+        U: Kinship eigenvectors.
+        UtW: Rotated covariates (n_samples, n_cvt).
+        Uty: Rotated phenotype (n_samples,).
+        logl_H0: Null-model MLE log-likelihood, or None for Wald.
+        Hi_eval_null: Null-model Hi_eval, or None outside Score/All.
+        pve: Proportion of variance explained, from the null REML lambda.
+        pve_se: Standard error of PVE, or None on a flat likelihood surface.
+    """
+
+    eigenvalues: np.ndarray
+    U: np.ndarray
+    UtW: np.ndarray
+    Uty: np.ndarray
+    logl_H0: float | None
+    Hi_eval_null: np.ndarray | None
+    pve: float
+    pve_se: float | None
+
+
+def prepare_lmm_run(
+    *,
+    kinship: np.ndarray | None,
+    eigenvalues: np.ndarray | None,
+    eigenvectors: np.ndarray | None,
+    phenotypes: np.ndarray,
+    W: np.ndarray,
+    n_cvt: int,
+    lmm_mode: int,
+    l_min: float,
+    l_max: float,
+    show_progress: bool,
+    check_memory: bool,
+    label: str,
+) -> PreparedLmmRun:
+    """Eigendecompose, rotate, solve the null model, and estimate PVE.
+
+    The batch and streaming runners ran this same sequence with only a memory
+    label differing between them. Sharing it means their setup cannot drift,
+    which matters because a divergence here moves every downstream statistic.
+
+    The caller keeps ownership of ``kinship`` and should drop its reference
+    once this returns; the eigendecomposition may reuse that buffer for the
+    eigenvectors, so holding it pins a second n-by-n matrix.
+
+    Args:
+        kinship: Kinship matrix, or None when eigenpairs are supplied.
+        eigenvalues: Pre-computed eigenvalues, or None to decompose.
+        eigenvectors: Pre-computed eigenvectors, or None to decompose.
+        phenotypes: Phenotype vector, already filtered to valid samples.
+        W: Covariate matrix from ``_build_covariate_matrix``.
+        n_cvt: Number of covariates, including the intercept.
+        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+        l_min: Minimum lambda for optimization.
+        l_max: Maximum lambda for optimization.
+        show_progress: Whether to log memory and null-model diagnostics.
+        check_memory: Whether to gate the eigendecomposition on memory.
+        label: Memory-log label identifying the calling runner.
+    """
+    eigenvalues_np, U = _eigendecompose_or_reuse(
+        kinship,
+        eigenvalues,
+        eigenvectors,
+        show_progress,
+        label,
+        check_memory=check_memory,
+    )
+
+    # Rotation is pure BLAS — use all physical cores.
+    with blas_threads(get_physical_core_count()):
+        UtW = U.T @ W
+        Uty = U.T @ phenotypes
+
+    logl_H0, _lambda_null_mle, Hi_eval_null = _compute_null_model_common(
+        lmm_mode,
+        eigenvalues_np,
+        UtW,
+        Uty,
+        n_cvt,
+        show_progress,
+        l_min=l_min,
+        l_max=l_max,
+    )
+    pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
+
+    return PreparedLmmRun(
+        eigenvalues=eigenvalues_np,
+        U=U,
+        UtW=UtW,
+        Uty=Uty,
+        logl_H0=logl_H0,
+        Hi_eval_null=Hi_eval_null,
+        pve=pve,
+        pve_se=pve_se,
+    )
 
 
 def compute_and_log_pve(

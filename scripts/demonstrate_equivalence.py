@@ -34,13 +34,14 @@ from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship import compute_centered_kinship  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
 from jamma.lmm.runner_numpy import run_lmm_association_numpy  # noqa: E402
+from jamma.lmm.schema import LmmConfig  # noqa: E402
 from jamma.validation import (  # noqa: E402
     load_gemma_assoc,
     load_gemma_kinship,
 )
 
-# Common runner kwargs
-RUNNER_KWARGS = {
+# Common runner config knobs, merged with each spec's mode at the call site.
+RUNNER_CONFIG_KWARGS = {
     "n_grid": 50,
     "n_refine": 20,
     "show_progress": False,
@@ -457,8 +458,7 @@ def run_dataset(
             kinship=ref_kinship,
             snp_info=snp_info,
             covariates=covar,
-            lmm_mode=spec.lmm_mode,
-            **RUNNER_KWARGS,
+            config=LmmConfig(lmm_mode=spec.lmm_mode, **RUNNER_CONFIG_KWARGS),
         )
         jamma_results = run_result.associations
         t_elapsed = time.perf_counter() - t0

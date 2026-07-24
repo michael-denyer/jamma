@@ -24,6 +24,7 @@ from jamma.lmm.runner_numpy_streaming import (
     get_last_run_timing,
     run_lmm_association_numpy_streaming,
 )
+from jamma.lmm.schema import LmmConfig
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     ToleranceConfig,
@@ -226,10 +227,10 @@ class TestNumpyStreamingGemmaParity:
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
-            lmm_mode=lmm_mode,
+            config=LmmConfig(
+                lmm_mode=lmm_mode, show_progress=False, check_memory=False
+            ),
             chunk_size=200,  # Force multi-chunk (500 SNPs total)
-            show_progress=False,
-            check_memory=False,
         )
         results = run_result.associations
         assert len(results) > 0, "Expected results"
@@ -266,9 +267,7 @@ class TestBatchEquivalence:
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
-            show_progress=False,
-            check_memory=False,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
         batch_assoc = batch_result.associations
 
@@ -279,10 +278,8 @@ class TestBatchEquivalence:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=200,
-            show_progress=False,
-            check_memory=False,
         )
         stream_assoc = stream_result.associations
 
@@ -313,9 +310,7 @@ class TestBatchEquivalence:
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=4,
-            show_progress=False,
-            check_memory=False,
+            config=LmmConfig(lmm_mode=4, show_progress=False, check_memory=False),
         )
         batch_assoc = batch_result.associations
 
@@ -325,10 +320,8 @@ class TestBatchEquivalence:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=4,
+            config=LmmConfig(lmm_mode=4, show_progress=False, check_memory=False),
             chunk_size=200,
-            show_progress=False,
-            check_memory=False,
         )
         stream_assoc = stream_result.associations
 
@@ -371,9 +364,7 @@ class TestStreamingCovariates:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
-            show_progress=False,
-            check_memory=False,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
         batch_assoc = batch_result.associations
 
@@ -385,10 +376,8 @@ class TestStreamingCovariates:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=200,
-            show_progress=False,
-            check_memory=False,
         )
         stream_assoc = stream_result.associations
 
@@ -417,10 +406,8 @@ class TestStreamingCovariates:
             phenotypes=phenotypes,
             kinship=kinship.copy(),
             covariates=covariates,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=200,
-            show_progress=False,
-            check_memory=False,
         )
         results = stream_result.associations
         assert len(results) > 0, "Expected results"
@@ -447,10 +434,8 @@ class TestStreamingCovariates:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=50,
-            show_progress=False,
-            check_memory=False,
         )
 
         # Single chunk
@@ -461,10 +446,8 @@ class TestStreamingCovariates:
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=100_000,
-            show_progress=False,
-            check_memory=False,
         )
 
         assert n_small == n_big, f"Count mismatch: {n_small} vs {n_big}"
@@ -498,10 +481,8 @@ class TestStreamingMechanics:
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=200,
-            show_progress=False,
-            check_memory=False,
             output_path=out_file,
         )
 
@@ -528,10 +509,8 @@ class TestStreamingMechanics:
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=200,
-            show_progress=False,
-            check_memory=False,
         )
 
         assert len(result.associations) == n_tested
@@ -547,10 +526,8 @@ class TestStreamingMechanics:
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=200,
-            show_progress=False,
-            check_memory=False,
         )
 
         timing = get_last_run_timing()
@@ -570,10 +547,8 @@ class TestStreamingMechanics:
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=200,
-            show_progress=False,
-            check_memory=False,
         )
 
         assert result.pve is not None
@@ -605,9 +580,7 @@ class TestChunkingEdgeCases:
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
-            show_progress=False,
-            check_memory=False,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
 
         stream_result, _n = run_lmm_association_numpy_streaming(
@@ -616,10 +589,8 @@ class TestChunkingEdgeCases:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=100_000,  # Larger than total SNPs
-            show_progress=False,
-            check_memory=False,
         )
 
         batch_p = np.array([r.p_wald for r in batch_result.associations])
@@ -638,9 +609,7 @@ class TestChunkingEdgeCases:
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
-            show_progress=False,
-            check_memory=False,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
 
         stream_result, _n = run_lmm_association_numpy_streaming(
@@ -649,10 +618,8 @@ class TestChunkingEdgeCases:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=50,  # Many small chunks
-            show_progress=False,
-            check_memory=False,
         )
 
         batch_p = np.array([r.p_wald for r in batch_result.associations])
@@ -663,14 +630,14 @@ class TestChunkingEdgeCases:
         """All SNPs filtered out returns empty result."""
         plink, kinship, phenotypes = synthetic_data
 
+        # An empty -snps restriction leaves nothing to test. MAF cannot express
+        # this: it is min(af, 1-af) and so never exceeds 0.5.
         result, n_tested = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
-            maf_threshold=0.99,  # Filters everything
-            lmm_mode=1,
-            show_progress=False,
-            check_memory=False,
+            snps_indices=np.array([], dtype=np.int64),
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
 
         assert result.associations == []
@@ -704,10 +671,8 @@ class TestStreamingPipeline:
                 kinship=None,
                 eigenvalues=eigenvalues,
                 eigenvectors=eigenvectors,
-                lmm_mode=1,
+                config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
                 chunk_size=1,
-                show_progress=False,
-                check_memory=False,
             )
         finally:
             _logger.remove(sink_id)
@@ -729,10 +694,8 @@ class TestStreamingPipeline:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors.copy(),
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=100_000,
-            show_progress=False,
-            check_memory=False,
         )
 
         # Pipeline: many chunks
@@ -742,10 +705,8 @@ class TestStreamingPipeline:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors.copy(),
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=1,
-            show_progress=False,
-            check_memory=False,
         )
 
         assert n_seq == n_pipe, f"Count mismatch: {n_seq} vs {n_pipe}"
@@ -773,10 +734,8 @@ class TestStreamingPipeline:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=10_000,
-            show_progress=False,
-            check_memory=False,
         )
 
         assert n_tested > 0
@@ -793,10 +752,8 @@ class TestStreamingPipeline:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors.copy(),
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=100_000,
-            show_progress=False,
-            check_memory=False,
             output_path=seq_file,
         )
 
@@ -808,10 +765,8 @@ class TestStreamingPipeline:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors.copy(),
-            lmm_mode=1,
+            config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
             chunk_size=1,
-            show_progress=False,
-            check_memory=False,
             output_path=pipe_file,
         )
 
@@ -845,10 +800,8 @@ class TestStreamingPipeline:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors.copy(),
-            lmm_mode=4,
+            config=LmmConfig(lmm_mode=4, show_progress=False, check_memory=False),
             chunk_size=100_000,
-            show_progress=False,
-            check_memory=False,
         )
 
         # Pipeline: many chunks
@@ -858,10 +811,8 @@ class TestStreamingPipeline:
             kinship=None,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors.copy(),
-            lmm_mode=4,
+            config=LmmConfig(lmm_mode=4, show_progress=False, check_memory=False),
             chunk_size=1,
-            show_progress=False,
-            check_memory=False,
         )
 
         assert n_seq == n_pipe, f"Count mismatch: {n_seq} vs {n_pipe}"
@@ -916,10 +867,10 @@ class TestStreamingFusedScoreDispatch:
                     kinship=None,
                     eigenvalues=eigenvalues,
                     eigenvectors=eigenvectors.copy(),
-                    lmm_mode=3,
+                    config=LmmConfig(
+                        lmm_mode=3, show_progress=False, check_memory=False
+                    ),
                     chunk_size=200,
-                    show_progress=False,
-                    check_memory=False,
                 )
             assert mock_fused.called, (
                 "Fused Score WS C function was not called (streaming)"
@@ -935,10 +886,10 @@ class TestStreamingFusedScoreDispatch:
                     kinship=None,
                     eigenvalues=eigenvalues,
                     eigenvectors=eigenvectors.copy(),
-                    lmm_mode=3,
+                    config=LmmConfig(
+                        lmm_mode=3, show_progress=False, check_memory=False
+                    ),
                     chunk_size=200,
-                    show_progress=False,
-                    check_memory=False,
                 )
             assert mock_fused.called, (
                 "Fused Score C function was not called (streaming)"
@@ -961,10 +912,8 @@ class TestStreamingFusedScoreDispatch:
                 kinship=None,
                 eigenvalues=eigenvalues,
                 eigenvectors=eigenvectors.copy(),
-                lmm_mode=3,
+                config=LmmConfig(lmm_mode=3, show_progress=False, check_memory=False),
                 chunk_size=200,
-                show_progress=False,
-                check_memory=False,
             )
 
         assert n_fused == n_split, f"Count mismatch: {n_fused} vs {n_split}"
@@ -1013,10 +962,10 @@ class TestStreamingFusedLrtDispatch:
                     kinship=None,
                     eigenvalues=eigenvalues,
                     eigenvectors=eigenvectors.copy(),
-                    lmm_mode=2,
+                    config=LmmConfig(
+                        lmm_mode=2, show_progress=False, check_memory=False
+                    ),
                     chunk_size=200,
-                    show_progress=False,
-                    check_memory=False,
                 )
             assert mock_fused.called, (
                 "Fused LRT WS C function was not called (streaming)"
@@ -1032,10 +981,10 @@ class TestStreamingFusedLrtDispatch:
                     kinship=None,
                     eigenvalues=eigenvalues,
                     eigenvectors=eigenvectors.copy(),
-                    lmm_mode=2,
+                    config=LmmConfig(
+                        lmm_mode=2, show_progress=False, check_memory=False
+                    ),
                     chunk_size=200,
-                    show_progress=False,
-                    check_memory=False,
                 )
             assert mock_fused.called, "Fused LRT C function was not called (streaming)"
 
@@ -1056,10 +1005,8 @@ class TestStreamingFusedLrtDispatch:
                 kinship=None,
                 eigenvalues=eigenvalues,
                 eigenvectors=eigenvectors.copy(),
-                lmm_mode=2,
+                config=LmmConfig(lmm_mode=2, show_progress=False, check_memory=False),
                 chunk_size=200,
-                show_progress=False,
-                check_memory=False,
             )
 
         assert n_fused == n_split, f"Count mismatch: {n_fused} vs {n_split}"

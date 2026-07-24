@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from jamma.core.memory import StreamingMemoryBreakdown, check_memory_available
+from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
@@ -247,8 +248,7 @@ class TestBatchPreflightThreadsNcvt:
                     kinship=kinship,
                     snp_info=snp_info,
                     covariates=covariates,
-                    check_memory=True,
-                    show_progress=False,
+                    config=LmmConfig(check_memory=True, show_progress=False),
                 )
 
         assert captured_calls, (

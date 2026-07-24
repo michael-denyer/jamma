@@ -48,6 +48,7 @@ BASELINE_SOURCES: tuple[str, ...] = (
 LMM_ACCEL_SOURCES: tuple[str, ...] = (
     "_lmm_accel.c",
     "_lmm_support.c",
+    "_lmm_stats.c",
 )
 
 # LAPACK sources require strict IEEE 754 (-O2 -fno-fast-math) — no unrolling,

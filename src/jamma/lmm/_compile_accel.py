@@ -45,6 +45,7 @@ from pathlib import Path
 #      ``compile_extension()`` from this module.
 from jamma._build_support.compile_and_link import (
     LINK_FLAGS_BY_PLATFORM,
+    LMM_ACCEL_SOURCES,
     apply_sanitizer_overrides,
     compile_jlinalg,
 )
@@ -75,7 +76,7 @@ def compile_extension(
     """Compile _lmm_accel.c into a shared library in the installed package.
 
     Routes through ``jamma._build_support.compile_and_link.compile_jlinalg``
-    with a single source (``_lmm_accel.c``) and no LAPACK sources.
+    with ``LMM_ACCEL_SOURCES`` and no LAPACK sources.
     Dev-mode-only flags (``-march=native``, vectorization-report flags) are
     supplied via ``extra_cflags`` so they do not leak into the portable
     wheel-build path in ``hatch_build.py``.
@@ -117,11 +118,13 @@ def compile_extension(
         else:
             _print(msg)
 
-    # Locate source
+    # Locate sources
     lmm_dir = Path(__file__).parent
-    src = lmm_dir / "_lmm_accel.c"
-    if not src.exists():
-        _print(f"ERROR: {src} not found — package may be incomplete")
+    sources = [lmm_dir / name for name in LMM_ACCEL_SOURCES]
+    missing = [s for s in sources if not s.exists()]
+    if missing:
+        names = ", ".join(str(s) for s in missing)
+        _print(f"ERROR: {names} not found — package may be incomplete")
         return False
 
     # Numpy
@@ -244,7 +247,7 @@ def compile_extension(
     tmp_dir = Path(tempfile.mkdtemp(prefix="lmm_accel_compile_"))
     try:
         result = compile_jlinalg(
-            sources=[src],
+            sources=sources,
             lapack_sources=[],
             include_dirs=[python_inc, numpy_inc],
             cc_cmd=cc_cmd,

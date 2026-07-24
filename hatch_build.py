@@ -67,6 +67,7 @@ _omp = _load_build_support_module(
 
 BASELINE_SOURCES = _cal.BASELINE_SOURCES
 LAPACK_SOURCES = _cal.LAPACK_SOURCES
+LMM_ACCEL_SOURCES = _cal.LMM_ACCEL_SOURCES
 LINK_FLAGS_BY_PLATFORM = _cal.LINK_FLAGS_BY_PLATFORM
 compile_jlinalg = _cal.compile_jlinalg
 # Phase 116.1: sanitizer flag injection seam. Wheel builds normally have
@@ -207,9 +208,9 @@ class CustomBuildHook(BuildHookInterface):
         return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
 
     def _compile_c_extension(self, build_data):
-        """Compile _lmm_accel.c -> _lmm_accel{EXT_SUFFIX} via the shared helper.
+        """Compile LMM_ACCEL_SOURCES -> _lmm_accel{EXT_SUFFIX} via the shared helper.
 
-        Single-source compile + link (no LAPACK split) routed through
+        Compile + link (no LAPACK split) routed through
         jamma._build_support.compile_jlinalg. On any failure, logs a warning and
         returns without raising — a pure-Python wheel is produced instead.
 
@@ -222,10 +223,13 @@ class CustomBuildHook(BuildHookInterface):
             return
         cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
 
-        src = Path(self.root) / "src" / "jamma" / "lmm" / "_lmm_accel.c"
-        if not src.exists():
+        lmm_dir = Path(self.root) / "src" / "jamma" / "lmm"
+        sources = [lmm_dir / name for name in LMM_ACCEL_SOURCES]
+        missing = [s for s in sources if not s.exists()]
+        if missing:
+            names = ", ".join(str(s) for s in missing)
             print(
-                f"WARNING: C source {src} not found — skipping C extension "
+                f"WARNING: C source {names} not found — skipping C extension "
                 "compilation (pure-Python fallback). If building from sdist, "
                 "verify the archive is complete.",
                 file=sys.stderr,
@@ -263,7 +267,7 @@ class CustomBuildHook(BuildHookInterface):
         tmp_dir = Path(tempfile.mkdtemp(prefix="lmm_accel_build_"))
         try:
             result = compile_jlinalg(
-                sources=[src],
+                sources=sources,
                 lapack_sources=[],  # _lmm_accel has no LAPACK source.
                 include_dirs=[python_inc, numpy_inc],
                 cc_cmd=cc_cmd,

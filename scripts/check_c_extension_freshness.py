@@ -3,7 +3,7 @@
 
 JAMMA ships two C extensions built from `src/jamma/**/*.c` and `*.h`:
 
-  - src/jamma/lmm/_lmm_accel.<EXT_SUFFIX>  <- src/jamma/lmm/_lmm_accel.c
+  - src/jamma/lmm/_lmm_accel.<EXT_SUFFIX>  <- src/jamma/lmm/_lmm_*.c + _lmm_*.h
   - src/jamma/jlinalg/_jlinalg.<EXT_SUFFIX> <- src/jamma/jlinalg/src/*.c + include/*.h
 
 Editable installs (``uv sync``) build these once. Python source edits are
@@ -65,7 +65,10 @@ def _discover_extensions() -> list[ExtensionSpec]:
         ExtensionSpec(
             label="_lmm_accel",
             so_path=root / f"src/jamma/lmm/_lmm_accel{ext}",
-            source_globs=((root / "src/jamma/lmm", "_lmm_accel.c"),),
+            source_globs=(
+                (root / "src/jamma/lmm", "_lmm_*.c"),
+                (root / "src/jamma/lmm", "_lmm_*.h"),
+            ),
             rebuild_command="uv run python -m jamma.lmm._compile_accel",
         ),
         ExtensionSpec(

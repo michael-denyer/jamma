@@ -455,7 +455,10 @@ def run_dataset(
         run_result = run_lmm_association_numpy(
             genotypes=plink_data.genotypes,
             phenotypes=phenotypes,
-            kinship=ref_kinship,
+            # eigendecompose_kinship consumes its input, reusing the buffer for
+            # the eigenvectors, so each section needs its own copy. Sharing one
+            # array made every section after the first decompose eigenvectors.
+            kinship=ref_kinship.copy(),
             snp_info=snp_info,
             covariates=covar,
             config=LmmConfig(lmm_mode=spec.lmm_mode, **RUNNER_CONFIG_KWARGS),

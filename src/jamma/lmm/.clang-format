@@ -1,0 +1,23 @@
+# src/jamma/lmm/ is hand-formatted. clang-format is a no-op here on purpose.
+#
+# The repo-root .clang-format applies to any directory without its own, so
+# without this file `clang-format src/jamma/lmm/_lmm_accel.c` silently rewrites
+# over half the file. The pre-commit hook's `files:` pattern used to be the only
+# thing preventing that, which is a guard nobody sees until they run the tool by
+# hand.
+#
+# Adopting a style here was measured and rejected. A grid search over 48
+# configurations found the best achievable diff was 22% of _lmm_stats.c, 48% of
+# _lmm_support.c and 52% of _lmm_accel.c, and the config that suited one file
+# was not the config that suited the other two. The sources use manual column
+# alignment and hand-chosen operator break points that clang-format cannot
+# reproduce, so there is no single house style for it to match. Reformatting
+# would rewrite ~5,100 lines of numerical kernel code, destroying git blame over
+# the code with the tightest correctness requirements in the tree, in exchange
+# for a consistency the tool cannot actually deliver.
+#
+# cppcheck DOES run over this directory and is clean. Static analysis is the
+# half of the lint gap worth closing; whitespace is not.
+#
+# If you want to revisit this, run the grid search before writing any config.
+DisableFormat: true

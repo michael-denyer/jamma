@@ -49,7 +49,7 @@ uv run python -c "from jamma.jlinalg._compile_jlinalg import compile_extension; 
 | `uv run python -m jamma.lmm._compile_accel` | Compile the LMM C extension |
 | `uv run python -m jamma.jlinalg._compile_jlinalg` | Compile the jlinalg BLAS extension |
 | `uv run python scripts/bench_all_backends.py` | End-to-end backend comparison benchmark |
-| `uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/test_lmm_accel.py -v -n0 --benchmark-only -m benchmark` | Microbenchmarks (no parallelism) |
+| `uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/lmm_accel/ -v -n0 --benchmark-only -m benchmark` | Microbenchmarks (no parallelism) |
 
 ## Code Style
 
@@ -141,7 +141,7 @@ Use `--runs N` for best-of-N timing and `--gemma-path` to specify a custom GEMMA
 For per-stage microbenchmarks, always use `-n0` to disable pytest-xdist:
 
 ```bash
-uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/test_lmm_accel.py -v -n0 --benchmark-only -m benchmark
+uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/lmm_accel/ -v -n0 --benchmark-only -m benchmark
 ```
 
 ## Publishing

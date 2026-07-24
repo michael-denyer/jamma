@@ -144,7 +144,7 @@ Always `-n0` to avoid cross-test timing interference.
 
 ```bash
 # Microbenchmarks
-uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/test_lmm_accel.py \
+uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/lmm_accel/ \
   -v -n0 --benchmark-only -m benchmark
 
 # End-to-end backend comparison (vs GEMMA on mouse_hs1940)
@@ -437,7 +437,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 | Subsystem | Test files | What's covered |
 |---|---|---|
-| **LMM core** | `test_lmm_accel.py`, `test_lmm_unit.py`, `test_lmm_score.py`, `test_lmm_dispatch.py`, `test_lmm_audit.py`, `test_lmm_io_validation.py`, `test_likelihood_numpy.py`, `test_likelihood_derivatives.py` | C accelerator parity vs NumPy reference; Pab/Uab math; Wald/score/LRT statistics; dispatch routing; numerical guards; assoc-line/dispatch-table validation; REML 2nd/3rd derivatives |
+| **LMM core** | `lmm_accel/` (11 per-kernel-family modules), `test_lmm_unit.py`, `test_lmm_score.py`, `test_lmm_dispatch.py`, `test_lmm_audit.py`, `test_lmm_io_validation.py`, `test_likelihood_numpy.py`, `test_likelihood_derivatives.py` | C accelerator parity vs NumPy reference; Pab/Uab math; Wald/score/LRT statistics; dispatch routing; numerical guards; assoc-line/dispatch-table validation; REML 2nd/3rd derivatives |
 | **LMM runners** | `test_runner_numpy.py`, `test_runner_dispatch.py`, `test_numpy_streaming.py`, `test_compute_numpy.py`, `test_pipeline.py`, `test_pipeline_helpers.py`, `test_pipeline_banner.py` | Batch + streaming runners; shared chunk runner; backend selection; pipeline orchestration; CLI banner |
 | **Kinship** | `test_kinship_numpy.py`, `test_kinship_io.py`, `test_kinship_validation.py` | DSYRK-based kinship computation; .cXX.txt I/O; GEMMA parity |
 | **jlinalg (BLAS dispatch)** | `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py`, `test_jlinalg_lapack.py`, `test_jlinalg_level1.py`, `test_jlinalg_dispatch.py`, `test_jlinalg_unity.py`, `test_jlinalg_build.py`, `test_eigh_inplace.py` | DGEMM/DSYRK/eigh wrappers; LP64 vs ILP64 dispatch; AVX2 microkernel guards; build artefact sanity |
@@ -469,7 +469,8 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 ### 3.4 Suite-wide stats (snapshot)
 
 - 85 test files, ~39k lines.
-- Largest: `test_lmm_accel.py` (~6,240 lines) — should be split by tier and concern.
+- Largest: `test_likelihood_numpy.py` (~2,100 lines). `test_lmm_accel.py` was
+  split into `tests/lmm_accel/`, eleven modules by kernel family, in 6.0.0.
 - ~178 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
 - 8 files use `@patch`/`MagicMock` (~31 occurrences). Most are at allowed boundaries; the violations called out in §3.2 are the exceptions.
 - `inspect.getsource()`: zero uses. The ban holds.

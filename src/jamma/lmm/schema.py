@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TypedDict
+from typing import TypedDict, overload
 
 # LmmMode type alias (kept local to avoid circular imports with compute_numpy)
 LmmMode = int
@@ -360,6 +360,12 @@ class LazySnpMeta:
 
     def __len__(self) -> int:
         return len(self._rs)
+
+    @overload
+    def __getitem__(self, i: int) -> dict: ...
+
+    @overload
+    def __getitem__(self, i: slice) -> list[dict]: ...
 
     def __getitem__(self, i: int | slice) -> dict | list[dict]:
         if isinstance(i, slice):

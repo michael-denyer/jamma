@@ -17,6 +17,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
+from jamma.lmm.schema import LazySnpMeta
 from jamma.lmm.stats import AssocResult
 
 if TYPE_CHECKING:
@@ -57,7 +58,7 @@ def _build_results(
     snp_indices: np.ndarray,
     filtered_afs: np.ndarray,
     filtered_miss: np.ndarray,
-    snp_info: list,
+    snp_info: LazySnpMeta | list,
     arrays: dict[str, np.ndarray],
 ) -> list[AssocResult]:
     """Build AssocResult objects for any LMM test mode.
@@ -113,7 +114,7 @@ def _build_results(
 def make_writer_sink(
     writer: IncrementalAssocWriter,
     lmm_mode: int,
-    snp_info: list,
+    snp_info: LazySnpMeta | list,
     snp_indices: np.ndarray,
     filtered_afs: np.ndarray,
     filtered_miss: np.ndarray,
@@ -145,7 +146,7 @@ def make_writer_sink(
 def make_result_list_sink(
     results: list[AssocResult],
     lmm_mode: int,
-    snp_info: list,
+    snp_info: LazySnpMeta | list,
     snp_indices: np.ndarray,
     filtered_afs: np.ndarray,
     filtered_miss: np.ndarray,

@@ -15,7 +15,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
-from dataclasses import dataclass
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -215,6 +215,161 @@ def _find_loco_eigen_cache(
         cache[ch] = (d_path, u_path)
 
     return cache
+
+
+def _save_loco_kinship(
+    K_loco: np.ndarray,
+    chr_name: str,
+    *,
+    output_dir: Path,
+    prefix: str,
+    legacy_text: bool,
+    show_progress: bool,
+) -> None:
+    """Write one chromosome's LOCO kinship before it is discarded."""
+    suffix = ".txt" if legacy_text else ".npy"
+    kinship_path = output_dir / f"{prefix}.loco.cXX.chr{chr_name}{suffix}"
+    try:
+        actual_path = write_kinship_matrix(
+            K_loco, kinship_path, legacy_text=legacy_text
+        )
+    except OSError as e:
+        raise OSError(
+            f"Failed to save LOCO kinship for chromosome {chr_name} "
+            f"to {kinship_path}: {e}"
+        ) from e
+    if show_progress:
+        logger.info(f"  Saved LOCO kinship to {actual_path}")
+
+
+def _write_loco_eigen(
+    eigenvalues: np.ndarray,
+    U: np.ndarray,
+    chr_name: str,
+    *,
+    eigen_dir: Path,
+    prefix: str,
+    legacy_text: bool,
+) -> None:
+    """Persist one chromosome's eigenpair to the LOCO eigen cache."""
+    try:
+        write_eigen_files(
+            eigenvalues,
+            U,
+            eigen_dir,
+            prefix=f"{prefix}.loco.chr{chr_name}",
+            legacy_text=legacy_text,
+        )
+    except OSError as e:
+        raise OSError(
+            f"Failed to write LOCO eigen for chromosome {chr_name} to {eigen_dir}: {e}"
+        ) from e
+    logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
+
+
+def _cached_eigen_pairs(
+    eigen_cache: dict[str, tuple[Path, Path]],
+    chr_names: list[str],
+    *,
+    n_valid: int,
+    partitions: dict[str, np.ndarray],
+    show_progress: bool,
+) -> Iterator[tuple[str, np.ndarray, np.ndarray]]:
+    """Yield per-chromosome eigenpairs read from a complete eigen cache.
+
+    No kinship is computed on this path: the cache was written by an earlier
+    run and validated by the caller before the loop starts.
+    """
+    for chr_idx, chr_name in enumerate(chr_names):
+        d_path, u_path = eigen_cache[chr_name]
+        if show_progress:
+            logger.info(
+                f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
+                f"{len(partitions[chr_name])} SNPs, loading cached eigen..."
+            )
+        try:
+            eigenvalues, U = read_eigen_files(d_path, u_path, n_samples=n_valid)
+        except (ValueError, FileNotFoundError) as e:
+            raise type(e)(f"LOCO eigen cache for chromosome {chr_name}: {e}") from e
+        yield chr_name, eigenvalues, U
+
+
+def _computed_eigen_pairs(
+    loco_iter: Iterator[tuple[str, np.ndarray]],
+    chr_names: list[str],
+    *,
+    valid_mask: np.ndarray,
+    n_valid: int,
+    pre_subset: bool,
+    all_samples_valid: bool,
+    partitions: dict[str, np.ndarray],
+    check_memory: bool,
+    show_progress: bool,
+    save_kinship: bool,
+    kinship_output_dir: Path | None,
+    kinship_output_prefix: str,
+    write_eigen: bool,
+    eigen_dir: Path | None,
+    eigen_prefix: str,
+    legacy_text: bool,
+) -> Iterator[tuple[str, np.ndarray, np.ndarray]]:
+    """Yield per-chromosome eigenpairs by eigendecomposing streamed LOCO kinship.
+
+    Each K_loco is optionally saved, subset to the analysed samples,
+    eigendecomposed, optionally written to the eigen cache, then dropped before
+    the next chromosome is pulled, so only one lives at a time.
+
+    ``pre_subset`` records that the kinship streamer already accumulated at
+    n_valid x n_valid, which lets the subset step skip a post-hoc np.ix_ copy.
+    """
+    for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):
+        if show_progress:
+            logger.info(
+                f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
+                f"{len(partitions[chr_name])} SNPs, eigendecomposing..."
+            )
+
+        if save_kinship and kinship_output_dir is not None:
+            _save_loco_kinship(
+                K_loco,
+                chr_name,
+                output_dir=kinship_output_dir,
+                prefix=kinship_output_prefix,
+                legacy_text=legacy_text,
+                show_progress=show_progress,
+            )
+
+        if pre_subset:
+            if K_loco.shape != (n_valid, n_valid):
+                raise RuntimeError(
+                    f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
+                    f"subsetting, got {K_loco.shape}"
+                )
+            K_loco_valid = K_loco
+            del K_loco
+        elif all_samples_valid:
+            K_loco_valid = K_loco
+            del K_loco
+        else:
+            K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
+            del K_loco
+            gc.collect()
+
+        eigenvalues, U = eigendecompose_kinship(K_loco_valid, check_memory=check_memory)
+        del K_loco_valid
+        gc.collect()
+
+        if write_eigen and eigen_dir is not None:
+            _write_loco_eigen(
+                eigenvalues,
+                U,
+                chr_name,
+                eigen_dir=eigen_dir,
+                prefix=eigen_prefix,
+                legacy_text=legacy_text,
+            )
+
+        yield chr_name, eigenvalues, U
 
 
 def run_lmm_loco(
@@ -456,21 +611,27 @@ def run_lmm_loco(
                     "compute run."
                 )
 
-        # Initialise to None; reassigned inside the compute block when
-        # eigen_cache is None and we actually stream kinship.
+        # Where eigenpairs come from is settled once, here, rather than being
+        # re-tested at every step of the chromosome loop.
         snp_stats_cache = None
-        loco_iter = None
-        # When save_kinship=False and some samples are invalid, pass
-        # valid_indices so kinship is accumulated at n_valid x n_valid size,
-        # avoiding full n_samples^2 materialisation for post-hoc subsetting.
-        kinship_valid_indices = (
-            None if all_samples_valid or save_kinship else np.where(valid_mask)[0]
-        )
-
-        if eigen_cache is None:
+        if eigen_cache is not None:
+            eigen_pairs = _cached_eigen_pairs(
+                eigen_cache,
+                unique_chrs,
+                n_valid=n_valid,
+                partitions=partitions,
+                show_progress=show_progress,
+            )
+        else:
+            # When save_kinship=False and some samples are invalid, pass
+            # valid_indices so kinship is accumulated at n_valid x n_valid size,
+            # avoiding full n_samples^2 materialisation for post-hoc subsetting.
+            kinship_valid_indices = (
+                None if all_samples_valid or save_kinship else np.where(valid_mask)[0]
+            )
             # Stream LOCO kinship matrices one at a time (pure NumPy), reusing
             # the shared kinship streamer and its PASS-1 SNP statistics.
-            loco_iter, snp_stats_cache = compute_loco_kinship_streaming(
+            loco_stream, snp_stats_cache = compute_loco_kinship_streaming(
                 bed_path,
                 maf_threshold=maf_threshold,
                 miss_threshold=miss_threshold,
@@ -483,8 +644,6 @@ def run_lmm_loco(
             )
 
             # Create eigen output directory before the loop (once, not per-chr).
-            # (eigen_dir is guaranteed non-None when write_eigen is True
-            # by the early guard at the top of this function.)
             if write_eigen:
                 # write_eigen guarantees eigen_dir (entry guard at top of function).
                 assert eigen_dir is not None
@@ -500,113 +659,32 @@ def run_lmm_loco(
                 # trusting a half-rewritten cache.
                 invalidate_eigen_cache_manifest(eigen_dir, eigen_prefix)
 
+            eigen_pairs = _computed_eigen_pairs(
+                # The streamer's return type is overloaded on return_snp_stats;
+                # with it set we always get the (iterator, cache) pair.
+                cast(Iterator[tuple[str, np.ndarray]], loco_stream),
+                unique_chrs,
+                valid_mask=valid_mask,
+                n_valid=n_valid,
+                pre_subset=kinship_valid_indices is not None,
+                all_samples_valid=all_samples_valid,
+                partitions=partitions,
+                check_memory=check_memory,
+                show_progress=show_progress,
+                save_kinship=save_kinship,
+                kinship_output_dir=kinship_output_dir,
+                kinship_output_prefix=kinship_output_prefix,
+                write_eigen=write_eigen,
+                eigen_dir=eigen_dir,
+                eigen_prefix=eigen_prefix,
+                legacy_text=legacy_text,
+            )
+
         first_chr_pve: float | None = None
         first_chr_pve_se: float | None = None
 
-        # Iterate: either from cached eigen files or kinship stream.
-        if eigen_cache is not None:
-            chr_iterator = ((chr_name, None) for chr_name in unique_chrs)
-        else:
-            if loco_iter is None:
-                raise RuntimeError(
-                    "LOCO kinship iterator was not initialized. "
-                    "Expected streaming kinship computation when eigen_cache "
-                    "is None, but loco_iter is still None. This is an internal "
-                    "error — please report it."
-                )
-            chr_iterator = loco_iter  # type: ignore[assignment]
-
-        for chr_idx, (chr_name, K_loco) in enumerate(chr_iterator):
+        for chr_idx, (chr_name, eigenvalues_np, U) in enumerate(eigen_pairs):
             chr_snp_indices = partitions[chr_name]
-
-            if eigen_cache is not None:
-                # Load cached eigen directly — no kinship or eigendecomp.
-                d_path, u_path = eigen_cache[chr_name]
-                if show_progress:
-                    logger.info(
-                        f"LOCO: chromosome {chr_name} "
-                        f"({chr_idx + 1}/{len(unique_chrs)}), "
-                        f"{len(chr_snp_indices)} SNPs, "
-                        f"loading cached eigen..."
-                    )
-                try:
-                    eigenvalues_np, U = read_eigen_files(
-                        d_path, u_path, n_samples=n_valid
-                    )
-                except (ValueError, FileNotFoundError) as e:
-                    raise type(e)(
-                        f"LOCO eigen cache for chromosome {chr_name}: {e}"
-                    ) from e
-            else:
-                # Standard path: kinship -> eigendecomp
-                if show_progress:
-                    logger.info(
-                        f"LOCO: chromosome {chr_name} "
-                        f"({chr_idx + 1}/{len(unique_chrs)}), "
-                        f"{len(chr_snp_indices)} SNPs, "
-                        f"eigendecomposing..."
-                    )
-
-                if save_kinship and kinship_output_dir is not None:
-                    kinship_suffix = ".txt" if legacy_text else ".npy"
-                    kinship_stem = f"{kinship_output_prefix}.loco.cXX.chr{chr_name}"
-                    kinship_path = (
-                        kinship_output_dir / f"{kinship_stem}{kinship_suffix}"
-                    )
-                    try:
-                        actual_path = write_kinship_matrix(
-                            K_loco, kinship_path, legacy_text=legacy_text
-                        )
-                    except OSError as e:
-                        raise OSError(
-                            f"Failed to save LOCO kinship for chromosome "
-                            f"{chr_name} to {kinship_path}: {e}"
-                        ) from e
-                    if show_progress:
-                        logger.info(f"  Saved LOCO kinship to {actual_path}")
-
-                # K_loco is already n_valid x n_valid from early subsetting
-                # (the numpy backend passes valid_indices to the
-                # kinship streamer) — skip post-hoc np.ix_ copy.
-                if kinship_valid_indices is not None:
-                    if K_loco.shape != (n_valid, n_valid):
-                        raise RuntimeError(
-                            f"Expected K_loco shape ({n_valid}, {n_valid}) "
-                            f"from early subsetting, got {K_loco.shape}"
-                        )
-                    K_loco_valid = K_loco
-                    del K_loco
-                elif all_samples_valid:
-                    K_loco_valid = K_loco
-                    del K_loco
-                else:
-                    K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-                    del K_loco
-                    gc.collect()
-
-                eigenvalues_np, U = eigendecompose_kinship(
-                    K_loco_valid, check_memory=check_memory
-                )
-                del K_loco_valid
-                gc.collect()
-
-            # Write eigen files if requested (skip for cache-loaded eigen).
-            if write_eigen and eigen_cache is None:
-                try:
-                    write_eigen_files(
-                        eigenvalues_np,
-                        U,
-                        eigen_dir,
-                        prefix=f"{eigen_prefix}.loco.chr{chr_name}",
-                        legacy_text=legacy_text,
-                    )
-                except OSError as e:
-                    raise OSError(
-                        f"Failed to write LOCO eigen for chromosome "
-                        f"{chr_name} to {eigen_dir}: {e}"
-                    ) from e
-                logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
-
             logger.debug(
                 f"  chr {chr_name}: numpy backend, {len(chr_snp_indices)} SNPs"
             )
@@ -695,75 +773,67 @@ def run_lmm_loco(
         )
 
 
-@dataclass
-class _LocoChrContext:
-    """Shared context from PASS 1 + covariate/rotation setup for a single chromosome.
-
-    Holds the results of the common prefix shared by the NumPy chromosome
-    runner: SNP statistics collection, filtering, covariate matrix
-    construction, eigenrotation, and optional PVE computation.
-    """
-
-    global_filtered_indices: np.ndarray
-    filtered_afs: np.ndarray
-    filtered_miss: np.ndarray
-    filtered_means_all: np.ndarray
-    n_filtered: int
-    valid_indices: np.ndarray
-    W: np.ndarray
-    n_cvt: int
-    UtW: np.ndarray
-    Uty: np.ndarray
-    rotation_threads: int
-    chr_pve: float | None
-    chr_pve_se: float | None
-
-
-def _loco_chr_common(
+def _run_lmm_for_chromosome_numpy(
     bed_path: Path,
     chr_snp_indices: np.ndarray,
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None,
+    snp_info: LazySnpMeta | list,
     maf_threshold: float,
     miss_threshold: float,
+    lmm_mode: int,
     valid_mask: np.ndarray,
-    show_progress: bool,
-    l_min: float,
-    l_max: float,
-    snps_global_mask: np.ndarray | None,
-    col_chunk_size: int,
-    compute_pve: bool,
+    show_progress: bool = True,
+    l_min: float = DEFAULT_L_MIN,
+    l_max: float = DEFAULT_L_MAX,
+    n_grid: int = DEFAULT_N_GRID,
+    n_refine: int = DEFAULT_N_REFINE,
+    snps_global_mask: np.ndarray | None = None,
+    col_chunk_size: int = 5_000,
+    writer: IncrementalAssocWriter | None = None,
+    chr_name: str = "",
     snp_stats_cache: SnpStatsCache | None = None,
-) -> _LocoChrContext | None:
-    """Run PASS 1 (SNP stats + filtering) and covariate/rotation setup.
+    compute_pve: bool = False,
+) -> tuple[list[AssocResult], float | None, float | None]:
+    """Run NumPy LMM association on a single chromosome's SNPs.
 
-    Extracts the shared prefix for the NumPy chromosome runner.
-    Returns None if all SNPs are filtered out (caller should return early).
+    Two passes over the chromosome's columns: statistics for filtering, then
+    association through the shared chunk engine. The full chromosome genotype
+    matrix is never materialised.
 
     Args:
         bed_path: PLINK file prefix.
         chr_snp_indices: Column indices for this chromosome's SNPs.
         eigenvalues: Eigenvalues from LOCO kinship eigendecomp.
         eigenvectors: Eigenvectors from LOCO kinship eigendecomp.
-        phenotypes: Phenotype vector (n_valid_samples,).
-        covariates: Covariate matrix or None.
+        phenotypes: Phenotype vector (n_valid_samples,), already filtered.
+        covariates: Covariate matrix (n_valid_samples, n_cvt) or None.
+        snp_info: Full SNP metadata view (indexed by global SNP index).
         maf_threshold: Minimum MAF for SNP inclusion.
         miss_threshold: Maximum missing rate for SNP inclusion.
-        valid_mask: Boolean mask for valid samples.
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
+        valid_mask: Boolean mask for valid samples (for genotype subsetting).
         show_progress: Whether to log progress.
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
-        snps_global_mask: Boolean mask over all SNPs or None.
+        n_grid: Grid search resolution.
+        n_refine: Golden section iterations (clamped to min 20 internally).
+        snps_global_mask: Boolean mask over all SNPs (True = included by -snps),
+            or None. Pre-indexed, so no per-chromosome np.isin is needed.
         col_chunk_size: Number of SNP columns per disk read chunk.
-        compute_pve: If True, compute PVE from null model REML lambda.
-        snp_stats_cache: Optional cached global SNP statistics (NumPy path).
-            When provided, per-chromosome stats are sliced from the cache
-            instead of re-reading the BED file.
+        writer: Optional incremental writer. When provided, results stream to
+            disk and an empty list is returned.
+        chr_name: Chromosome label, used in progress output.
+        snp_stats_cache: Global SNP statistics from kinship PASS 1. Sliced per
+            chromosome when every sample is analysed, avoiding a BED re-read.
+        compute_pve: If True, compute PVE from the null model REML lambda.
 
     Returns:
-        _LocoChrContext with shared setup results, or None if no SNPs pass filters.
+        Tuple of (results, pve, pve_se). ``results`` is empty when ``writer``
+        is used; ``pve``/``pve_se`` are None unless ``compute_pve`` is set and
+        the likelihood surface is not flat.
     """
     n_samples = phenotypes.shape[0]
     valid_indices = np.where(valid_mask)[0]
@@ -780,8 +850,8 @@ def _loco_chr_common(
         all_samples_valid=bool(valid_mask.all()),
         col_chunk_size=col_chunk_size,
     )
-
     _warn_if_loco_stats_invalid(chr_stats)
+
     snp_selection = filter_snp_stats(
         chr_stats,
         SnpFilterSpec(
@@ -802,163 +872,42 @@ def _loco_chr_common(
             f"  Chromosome ({len(chr_snp_indices)} SNPs) has no SNPs after "
             f"filtering, skipping"
         )
-        return None
+        return [], None, None
 
     global_filtered_indices = snp_selection.indices
-    filtered_afs = snp_selection.filtered_afs
-    filtered_miss = snp_selection.filtered_miss
-    filtered_means_all = snp_selection.filtered_means
 
     # === Covariate matrix + eigenrotation ===
     W, n_cvt = _build_covariate_matrix(covariates, n_samples)
 
     # Rotation is pure BLAS — use all physical cores.
-    rotation_threads = get_physical_core_count()
-
-    with blas_threads(rotation_threads):
+    with blas_threads(get_physical_core_count()):
         UtW = eigenvectors.T @ W
         Uty = eigenvectors.T @ phenotypes
 
-    # === PVE computation (optional) ===
-    chr_pve = None
-    chr_pve_se = None
+    chr_pve: float | None = None
+    chr_pve_se: float | None = None
     if compute_pve:
         chr_pve, chr_pve_se = compute_and_log_pve(
             eigenvalues, UtW, Uty, n_cvt, l_min, l_max
         )
 
-    return _LocoChrContext(
-        global_filtered_indices=global_filtered_indices,
-        filtered_afs=filtered_afs,
-        filtered_miss=filtered_miss,
-        filtered_means_all=filtered_means_all,
-        n_filtered=n_filtered,
-        valid_indices=valid_indices,
-        W=W,
-        n_cvt=n_cvt,
-        UtW=UtW,
-        Uty=Uty,
-        rotation_threads=rotation_threads,
-        chr_pve=chr_pve,
-        chr_pve_se=chr_pve_se,
-    )
-
-
-def _run_lmm_for_chromosome_numpy(
-    bed_path: Path,
-    chr_snp_indices: np.ndarray,
-    eigenvalues: np.ndarray,
-    eigenvectors: np.ndarray,
-    phenotypes: np.ndarray,
-    covariates: np.ndarray | None,
-    snp_info: list,
-    maf_threshold: float,
-    miss_threshold: float,
-    lmm_mode: int,
-    valid_mask: np.ndarray,
-    show_progress: bool = True,
-    l_min: float = DEFAULT_L_MIN,
-    l_max: float = DEFAULT_L_MAX,
-    n_grid: int = DEFAULT_N_GRID,
-    n_refine: int = DEFAULT_N_REFINE,
-    snps_global_mask: np.ndarray | None = None,
-    col_chunk_size: int = 5_000,
-    writer: IncrementalAssocWriter | None = None,
-    chr_name: str = "",
-    snp_stats_cache: SnpStatsCache | None = None,
-    compute_pve: bool = False,
-) -> tuple[list[AssocResult], float | None, float | None]:
-    """Run NumPy LMM association on a single chromosome's SNPs.
-
-    Pure-NumPy implementation. Reads the chromosome's SNPs from the BED
-    file in column chunks (two-pass: statistics, then association).
-
-    Reads the chromosome's SNPs from the BED file in column chunks
-    (two-pass: statistics, then association), never allocating the full
-    chromosome genotype matrix.
-
-    Args:
-        bed_path: PLINK file prefix.
-        chr_snp_indices: Column indices for this chromosome's SNPs.
-        eigenvalues: Eigenvalues from LOCO kinship eigendecomp.
-        eigenvectors: Eigenvectors from LOCO kinship eigendecomp.
-        phenotypes: Phenotype vector (n_valid_samples,), already filtered.
-        covariates: Covariate matrix (n_valid_samples, n_cvt) or None.
-        snp_info: Full SNP metadata list (indexed by global SNP index).
-        maf_threshold: Minimum MAF for SNP inclusion.
-        miss_threshold: Maximum missing rate for SNP inclusion.
-        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
-        valid_mask: Boolean mask for valid samples (for genotype subsetting).
-        show_progress: Whether to log progress.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution.
-        n_refine: Golden section iterations (clamped to min 20 internally).
-        snps_global_mask: Boolean mask over all SNPs (True = included by -snps), or
-            None. Pre-indexed: `snps_global_mask[chr_snp_indices]` gives the
-            per-chromosome mask. Avoids per-chromosome np.isin computation.
-        col_chunk_size: Number of SNP columns per disk read chunk.
-        writer: Optional incremental writer for streaming results to disk.
-            When provided, results are written directly and an empty list
-            is returned. When None, results are accumulated and returned.
-        compute_pve: If True, compute PVE from null model REML lambda.
-            Set for each chromosome until PVE is successfully computed
-            (typically the first chromosome with passing SNPs).
-        snp_stats_cache: Global SNP statistics from kinship PASS 1.
-            When provided, per-chromosome stats are extracted by slicing
-            cache.col_means[chr_snp_indices] — eliminates a BED re-read.
-            Filtering uses cache.n_samples (all-sample count) as denominator.
-            When None, falls back to _collect_chr_snp_stats (legacy behavior).
-
-    Returns:
-        Tuple of (results, pve, pve_se) where results is a list of AssocResult
-        (empty if writer used), pve is the PVE estimate (None unless
-        compute_pve=True), and pve_se is the standard error of PVE (None
-        unless compute_pve=True and likelihood surface is not flat).
-    """
-    # === Shared PASS 1 + covariate/rotation setup ===
-    ctx = _loco_chr_common(
-        bed_path=bed_path,
-        chr_snp_indices=chr_snp_indices,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
-        phenotypes=phenotypes,
-        covariates=covariates,
-        maf_threshold=maf_threshold,
-        miss_threshold=miss_threshold,
-        valid_mask=valid_mask,
-        show_progress=show_progress,
-        l_min=l_min,
-        l_max=l_max,
-        snps_global_mask=snps_global_mask,
-        col_chunk_size=col_chunk_size,
-        compute_pve=compute_pve,
-        snp_stats_cache=snp_stats_cache,
-    )
-    if ctx is None:
-        return [], None, None
-
-    n_samples = phenotypes.shape[0]
-
     # === PASS 2: Chunked NumPy association ===
-    # Compute null model (NumPy version, returns plain numpy arrays)
     logl_H0, _lambda_null_mle, Hi_eval_null = _compute_null_model_common(
         lmm_mode,
         eigenvalues,
-        ctx.UtW,
-        ctx.Uty,
-        ctx.n_cvt,
+        UtW,
+        Uty,
+        n_cvt,
         show_progress=False,
         l_min=l_min,
         l_max=l_max,
     )
 
     results: list[AssocResult] = []
-    bed_file = Path(f"{bed_path}.bed")
-    with open_bed(bed_file) as bed:
+    with open_bed(Path(f"{bed_path}.bed")) as bed:
 
         def _make_loco_source(source_chunk_size: int):
-            chunk_offsets = iter(range(0, ctx.n_filtered, source_chunk_size))
+            chunk_offsets = iter(range(0, n_filtered, source_chunk_size))
 
             def _next_chunk() -> RawLmmChunk | None:
                 try:
@@ -966,10 +915,10 @@ def _run_lmm_for_chromosome_numpy(
                 except StopIteration:
                     return None
 
-                chunk_end = min(chunk_start + source_chunk_size, ctx.n_filtered)
-                disk_col_indices = ctx.global_filtered_indices[chunk_start:chunk_end]
+                chunk_end = min(chunk_start + source_chunk_size, n_filtered)
+                disk_col_indices = global_filtered_indices[chunk_start:chunk_end]
                 geno_chunk = bed.read(
-                    index=np.s_[ctx.valid_indices, disk_col_indices],
+                    index=np.s_[valid_indices, disk_col_indices],
                     dtype=np.float64,
                 )
                 return RawLmmChunk(
@@ -978,39 +927,33 @@ def _run_lmm_for_chromosome_numpy(
 
             return _next_chunk
 
-        if writer is not None:
-            _sink = make_writer_sink(
-                writer,
-                lmm_mode,
-                snp_info,
-                ctx.global_filtered_indices,
-                ctx.filtered_afs,
-                ctx.filtered_miss,
-            )
-        else:
-            _sink = make_result_list_sink(
-                results,
-                lmm_mode,
-                snp_info,
-                ctx.global_filtered_indices,
-                ctx.filtered_afs,
-                ctx.filtered_miss,
-            )
+        sink_args = (
+            lmm_mode,
+            snp_info,
+            global_filtered_indices,
+            snp_selection.filtered_afs,
+            snp_selection.filtered_miss,
+        )
+        _sink = (
+            make_writer_sink(writer, *sink_args)
+            if writer is not None
+            else make_result_list_sink(results, *sink_args)
+        )
 
         run_lmm_chunk_source_numpy(
             raw_chunk_source_factory=_make_loco_source,
             chunk_sink=_sink,
             U=eigenvectors,
             eigenvalues_np=eigenvalues,
-            UtW=ctx.UtW,
-            Uty=ctx.Uty,
+            UtW=UtW,
+            Uty=Uty,
             Hi_eval_null=Hi_eval_null,
             logl_H0=logl_H0,
             n_samples=n_samples,
-            n_filtered=ctx.n_filtered,
-            n_cvt=ctx.n_cvt,
+            n_filtered=n_filtered,
+            n_cvt=n_cvt,
             lmm_mode=cast(LmmMode, lmm_mode),
-            filtered_means=ctx.filtered_means_all,
+            filtered_means=snp_selection.filtered_means,
             l_min=l_min,
             l_max=l_max,
             n_grid=n_grid,
@@ -1022,4 +965,4 @@ def _run_lmm_for_chromosome_numpy(
             lambda_warning_prefix="LOCO ",
         )
 
-    return results, ctx.chr_pve, ctx.chr_pve_se
+    return results, chr_pve, chr_pve_se

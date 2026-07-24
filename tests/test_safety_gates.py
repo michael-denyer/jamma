@@ -269,70 +269,24 @@ class TestLP64OverflowWarning:
             )
 
 
-def _find_loco_iter_guard(tree: ast.AST) -> ast.If | None:
-    """Walk the AST and return the ``if loco_iter is None:`` guard, if present."""
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        test = node.test
-        if not isinstance(test, ast.Compare):
-            continue
-        if not (isinstance(test.left, ast.Name) and test.left.id == "loco_iter"):
-            continue
-        if not (len(test.ops) == 1 and isinstance(test.ops[0], ast.Is)):
-            continue
-        if not (
-            len(test.comparators) == 1
-            and isinstance(test.comparators[0], ast.Constant)
-            and test.comparators[0].value is None
-        ):
-            continue
-        return node
-    return None
+LOCO_BFILE = Path(__file__).parent / "fixtures" / "gemma_loco" / "test"
 
 
 class TestLOCOIteratorRuntimeError:
-    """SAFE-02: LOCO iterator None raises RuntimeError, not bare assert.
+    """SAFE-02: LOCO must not rely on assertions stripped by ``python -O``.
 
-    Bare ``assert`` is stripped by ``python -O`` and would let ``loco_iter=None``
-    fall through into the iteration loop, producing a cryptic ``TypeError``
-    instead of a clear diagnostic. The two tests below verify (a) structurally
-    that the guard is ``raise RuntimeError`` (AST inspection — robust to
-    whitespace/line-continuation refactors that a regex would miss), and
-    (b) that the same guard is intact when ``loco.py`` is byte-compiled under
-    ``python -O`` (which strips ``assert`` statements).
+    This once guarded a ``loco_iter=None`` fall-through with an explicit
+    ``raise``, and was pinned by inspecting loco.py's AST for that ``if``.
+    The eigen source is now chosen once and its iterator is built and consumed
+    inside the same branch, so the variable never crosses a branch boundary and
+    there is no None state left to guard. The structural test went with the
+    structure it described; what remains is the behaviour that mattered, run
+    under ``-O`` where any surviving ``assert`` is stripped.
     """
 
     def _loco_source_path(self) -> Path:
         return (
             Path(__file__).resolve().parent.parent / "src" / "jamma" / "lmm" / "loco.py"
-        )
-
-    def test_loco_iter_none_guard_is_raise_runtime_error(self) -> None:
-        """AST inspection: the loco_iter=None guard raises RuntimeError."""
-        tree = ast.parse(self._loco_source_path().read_text())
-        guard = _find_loco_iter_guard(tree)
-        assert guard is not None, (
-            "loco.py is missing the 'if loco_iter is None:' guard entirely"
-        )
-
-        # Body must raise, and the raised type must be RuntimeError.
-        raise_nodes = [n for n in guard.body if isinstance(n, ast.Raise)]
-        assert raise_nodes, "loco_iter=None guard body has no 'raise' statement"
-        exc = raise_nodes[0].exc
-        assert isinstance(exc, ast.Call), (
-            "loco_iter=None guard must raise a constructed exception"
-        )
-        assert isinstance(exc.func, ast.Name), (
-            "loco_iter=None guard must raise via a bare name (e.g. RuntimeError(...))"
-        )
-        assert exc.func.id == "RuntimeError", (
-            f"loco_iter=None guard raises {exc.func.id!r}, expected 'RuntimeError'"
-        )
-
-        # And the body must NOT contain an Assert (which python -O would strip).
-        assert not any(isinstance(n, ast.Assert) for n in guard.body), (
-            "loco_iter=None guard body uses 'assert' — python -O would strip it"
         )
 
     def test_loco_module_imports_cleanly_under_optimisation(self) -> None:
@@ -354,6 +308,40 @@ class TestLOCOIteratorRuntimeError:
             f"`python -O -c 'import jamma.lmm.loco'` failed:\n"
             f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
         )
+
+    def test_loco_runs_end_to_end_under_optimisation(self, tmp_path: Path) -> None:
+        """A real LOCO run completes under ``-O``, where asserts are stripped.
+
+        The import check alone would miss an assertion used as a runtime
+        invariant inside ``run_lmm_loco``. Driving an actual two-chromosome
+        analysis exercises the eigen-source setup and the chromosome loop with
+        every ``assert`` removed, which is the failure SAFE-02 exists to catch.
+        """
+        script = (
+            "from pathlib import Path\n"
+            "import numpy as np\n"
+            "from jamma.lmm.loco import run_lmm_loco\n"
+            f"bfile = Path({str(LOCO_BFILE)!r})\n"
+            "fam = np.loadtxt(bfile.with_suffix('.fam'), dtype=str, ndmin=2)\n"
+            "pheno = fam[:, 5].astype(np.float64)\n"
+            f"out = Path({str(tmp_path)!r}) / 'o.assoc.txt'\n"
+            "r = run_lmm_loco(bed_path=bfile, phenotypes=pheno,\n"
+            "                 output_path=out, show_progress=False,\n"
+            "                 check_memory=False)\n"
+            "assert r.n_tested > 0\n"
+            "print('TESTED', r.n_tested)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-O", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        assert result.returncode == 0, (
+            f"LOCO run under `python -O` failed:\n"
+            f"stdout={result.stdout!r}\nstderr={result.stderr[-3000:]!r}"
+        )
+        assert "TESTED" in result.stdout
 
 
 class TestJlinalgABIValidation:

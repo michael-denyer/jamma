@@ -18,14 +18,18 @@ class TestCExtensionPerformance:
     invariant and is checked unconditionally.
     """
 
-    def test_c_faster_than_python(self, monkeypatch, benchmark):
+    def test_c_faster_than_python(self, benchmark):
         """Benchmark C-accelerated Wald; verify numerical parity vs Python."""
         from jamma.core.threading import get_physical_core_count
         from jamma.lmm.compute_numpy import (
             _C_ACCEL_AVAILABLE,
             _compute_wald_numpy,
         )
-        from jamma.lmm.likelihood_numpy import batch_compute_iab_numpy
+        from jamma.lmm.likelihood_numpy import (
+            batch_calc_wald_stats_from_pab_numpy,
+            batch_compute_iab_numpy,
+            golden_section_optimize_lambda_numpy,
+        )
 
         if not _C_ACCEL_AVAILABLE:
             pytest.skip("C extension not compiled")
@@ -37,63 +41,82 @@ class TestCExtensionPerformance:
         rng = np.random.default_rng(42)
         n_samples, n_snps = 500, 2000
         eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
-        Uab_batch = rng.standard_normal((n_snps, n_samples, 6))
-        Uab_batch[:, :, 0] = np.abs(Uab_batch[:, :, 0]) + 0.1
+
+        # Uab columns are cross-products of (w, x, y), so each SNP's row is a
+        # Gram matrix. Drawing the six columns independently instead breaks
+        # Cauchy-Schwarz on about half the SNPs, driving P_xx/P_yy negative;
+        # the two paths then disagree about which SNPs are degenerate and
+        # return different NaN sets. Same construction as the shared fixtures.
+        w = np.abs(rng.standard_normal((n_snps, n_samples))) + 1.0
+        x = np.abs(rng.standard_normal((n_snps, n_samples))) + 0.5
+        y = rng.standard_normal((n_snps, n_samples))
+        Uab_batch = np.stack([w * w, w * x, w * y, x * x, x * y, y * y], axis=2)
         Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
-        import jamma.lmm.compute_numpy as cn
+        wald_kwargs = {"l_min": 1e-5, "l_max": 1e5, "n_grid": 50, "n_refine": 20}
 
         # Warmup: amortise OpenMP thread-pool startup before timing
-        monkeypatch.setattr(cn, "_C_ACCEL_AVAILABLE", True)
         _compute_wald_numpy(
             1,
             eigenvalues,
             Uab_batch[:50],
             n_samples,
-            l_min=1e-5,
-            l_max=1e5,
-            n_grid=50,
-            n_refine=20,
+            **wald_kwargs,
             Iab_batch=Iab_batch[:50],
             n_threads=n_threads,
         )
 
         # pytest-benchmark times the C path; speedup vs the Python path is
         # tracked over time as benchmark history rather than asserted.
-        monkeypatch.setattr(cn, "_C_ACCEL_AVAILABLE", True)
         result_c = benchmark(
             _compute_wald_numpy,
             1,
             eigenvalues,
             Uab_batch,
             n_samples,
-            l_min=1e-5,
-            l_max=1e5,
-            n_grid=50,
-            n_refine=20,
+            **wald_kwargs,
             Iab_batch=Iab_batch,
             n_threads=n_threads,
         )
 
-        # Numerical parity is the actual correctness invariant. The C and
-        # Python golden-section paths can produce slightly different optima
-        # on flat likelihood landscapes (FP ordering); 5e-5 rtol is the
-        # documented bound for 2000-SNP batches.
-        monkeypatch.setattr(cn, "_C_ACCEL_AVAILABLE", False)
-        result_py = _compute_wald_numpy(
+        # Numerical parity is the actual correctness invariant. Build the
+        # reference from the generic optimizer rather than by disabling
+        # _C_ACCEL_AVAILABLE: that flag routes n_cvt=1 to the split-Uab
+        # optimizer, a different algorithm from the C batch path, so the
+        # comparison would not be like-for-like. Same approach and same
+        # calibrated tolerances as test_c_vs_python_parity_synthetic, where
+        # atol carries lambdas that converge to the l_min boundary from
+        # opposite sides.
+        lambdas_py, logls_py, pab_py = golden_section_optimize_lambda_numpy(
             1,
             eigenvalues,
             Uab_batch,
-            n_samples,
+            Iab_batch,
             l_min=1e-5,
             l_max=1e5,
             n_grid=50,
-            n_refine=20,
-            Iab_batch=Iab_batch,
+            n_iter=20,
+            return_pab=True,
         )
-        np.testing.assert_allclose(
-            result_c["lambdas"], result_py["lambdas"], rtol=5e-5, atol=1e-14
+        betas_py, ses_py, pwalds_py = batch_calc_wald_stats_from_pab_numpy(
+            1, pab_py, n_samples
         )
+        expected = {
+            "lambdas": lambdas_py,
+            "logls": logls_py,
+            "betas": betas_py,
+            "ses": ses_py,
+            "pwalds": pwalds_py,
+        }
+        for field, want in expected.items():
+            np.testing.assert_allclose(
+                result_c[field],
+                want,
+                rtol=1e-6,
+                atol=1e-4,
+                equal_nan=True,
+                err_msg=f"{field}: C vs Python mismatch",
+            )
 
 
 class TestBuildPabTableForC:

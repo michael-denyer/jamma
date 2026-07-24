@@ -19,7 +19,7 @@ All operations are vectorized over SNPs using NumPy broadcasting.
 from __future__ import annotations
 
 import threading
-from typing import NamedTuple
+from typing import Literal, NamedTuple, overload
 
 import numpy as np
 from loguru import logger
@@ -1155,6 +1155,36 @@ def _batch_golden_section_numpy(
     return np.exp(log_opt), opt_logl
 
 
+@overload
+def golden_section_optimize_lambda_numpy(
+    n_cvt: int,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+    Iab_batch: np.ndarray,
+    l_min: float = ...,
+    l_max: float = ...,
+    n_grid: int = ...,
+    n_iter: int = ...,
+    *,
+    return_pab: Literal[False] = ...,
+) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+@overload
+def golden_section_optimize_lambda_numpy(
+    n_cvt: int,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+    Iab_batch: np.ndarray,
+    l_min: float = ...,
+    l_max: float = ...,
+    n_grid: int = ...,
+    n_iter: int = ...,
+    *,
+    return_pab: Literal[True],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+
+
 def golden_section_optimize_lambda_numpy(
     n_cvt: int,
     eigenvalues: np.ndarray,
@@ -1164,6 +1194,7 @@ def golden_section_optimize_lambda_numpy(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_iter: int = 20,
+    *,
     return_pab: bool = False,
 ) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Optimize REML lambda using grid search + golden section refinement.

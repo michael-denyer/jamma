@@ -288,7 +288,7 @@ def run_lmm_chunk_source_numpy(
     uab_invariant_soa = (
         compute_uab_invariant_soa(UtW, Uty, n_cvt) if use_split else None
     )
-    w = UtW[:, 0].copy() if dispatch.uses_fused_score_or_lrt else None
+    w = UtW[:, 0].copy() if dispatch.needs_null_w else None
 
     lmm_workspace, score_fused_workspace, lrt_fused_workspace = _create_workspaces(
         dispatch,

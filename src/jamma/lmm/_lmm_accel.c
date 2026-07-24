@@ -60,8 +60,16 @@
  *   df = n_samples - 2 (n_cvt=1)
  */
 
-#include "_lmm_stats.h"
+/* _lmm_support.h must stay first: it is what pulls in <Python.h>, and CPython
+ * requires that before any standard header. The concrete failure here is M_PI,
+ * which is not C11 — glibc's <math.h> only defines it under __USE_XOPEN, set by
+ * the _XOPEN_SOURCE that Python.h defines. Let another header reach <math.h>
+ * first and the include guard blocks the later expansion, so every M_PI below
+ * fails to compile on Linux while macOS, whose libc defines it
+ * unconditionally, builds clean. */
 #include "_lmm_support.h"
+
+#include "_lmm_stats.h"
 #include <assert.h>
 #include <limits.h>
 #include <math.h>

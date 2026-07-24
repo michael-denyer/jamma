@@ -16,6 +16,7 @@ from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
+from jamma.lmm.schema import LmmConfig
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     ToleranceConfig,
@@ -144,7 +145,7 @@ def mouse_hs1940_data_with_covariates(mouse_hs1940_data):
 
 def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
     """Type check: NumPy runner returns LmmRunResult with AssocResult items."""
-    from jamma.lmm.schema import LmmRunResult
+    from jamma.lmm.schema import LmmConfig, LmmRunResult
 
     plink, kinship, phenotypes, snp_info = synthetic_data
     run_result = run_lmm_association_numpy(
@@ -152,8 +153,7 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        lmm_mode=1,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=1, show_progress=False),
     )
     results = run_result.associations
     assert isinstance(run_result, LmmRunResult), (
@@ -174,14 +174,16 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
 def test_numpy_runner_empty_after_filter(synthetic_data):
     """Edge case: returns LmmRunResult with empty associations."""
     plink, kinship, phenotypes, snp_info = synthetic_data
+    # Constant genotypes are non-polymorphic, so the variance filter drops every
+    # SNP whatever the thresholds are. A MAF threshold cannot express this: MAF
+    # is min(af, 1-af) and so never exceeds 0.5.
+    constant_genotypes = np.full_like(plink.genotypes, 2.0)
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=constant_genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        maf_threshold=0.99,  # Filters everything
-        lmm_mode=1,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=1, show_progress=False),
     )
     results = run_result.associations
     assert len(results) == 0, f"Expected empty results, got {len(results)} results"
@@ -383,11 +385,13 @@ def test_runner_mode4_uses_fused_dispatch():
             phenotypes=phenotypes,
             kinship=kinship,
             snp_info=snp_info,
-            maf_threshold=0.0,
-            miss_threshold=1.0,
-            check_memory=False,
-            show_progress=False,
-            lmm_mode=4,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=4,
+            ),
         )
         assert mock_compose.call_count == 0, (
             "Fused mode-4 should not fall back to _compose_mode4_from_split"
@@ -417,8 +421,7 @@ def test_numpy_runner_synthetic(synthetic_data, lmm_mode, reference_path):
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        lmm_mode=lmm_mode,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=lmm_mode, show_progress=False),
     )
     results = run_result.associations
     reference = load_gemma_assoc(reference_path)
@@ -447,8 +450,7 @@ def test_numpy_runner_mouse_hs1940(mouse_hs1940_data, lmm_mode, reference_path):
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        lmm_mode=lmm_mode,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=lmm_mode, show_progress=False),
     )
     results = run_result.associations
     reference = load_gemma_assoc(reference_path)
@@ -496,8 +498,7 @@ def test_numpy_runner_covar_synthetic(
         kinship=kinship,
         snp_info=snp_info,
         covariates=covariates,
-        lmm_mode=lmm_mode,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=lmm_mode, show_progress=False),
     )
     results = run_result.associations
     reference = load_gemma_assoc(reference_path)
@@ -534,8 +535,7 @@ def test_numpy_runner_covar_mouse_hs1940(
         kinship=kinship,
         snp_info=snp_info,
         covariates=covariates,
-        lmm_mode=lmm_mode,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=lmm_mode, show_progress=False),
     )
     results = run_result.associations
     reference = load_gemma_assoc(reference_path)
@@ -612,9 +612,7 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
         "snp_info": snp_info,
         "eigenvalues": eigenvalues,
         "eigenvectors": eigenvectors,
-        "lmm_mode": 1,
-        "check_memory": False,
-        "show_progress": False,
+        "config": LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
         "output_path": None,
     }
 
@@ -748,11 +746,13 @@ def test_imputation_skipped_on_clean_data():
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=1,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=1,
+        ),
     )
     results = run_result.associations
 
@@ -787,11 +787,13 @@ def test_imputation_applies_on_missing_data():
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=1,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=1,
+        ),
     )
     results = run_result.associations
 
@@ -832,11 +834,13 @@ def test_inplace_imputation_does_not_corrupt_source():
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=1,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=1,
+        ),
     )
 
     # Source array must be untouched — NaNs still present
@@ -935,11 +939,13 @@ def test_split_uab_all_modes(lmm_mode):
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=lmm_mode,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=lmm_mode,
+        ),
     )
     results = run_result.associations
 
@@ -1115,11 +1121,13 @@ def test_runner_lrt_mode_c_vs_python():
         "phenotypes": phenotypes,
         "kinship": kinship.copy(),
         "snp_info": snp_info,
-        "maf_threshold": 0.0,
-        "miss_threshold": 1.0,
-        "check_memory": False,
-        "show_progress": False,
-        "lmm_mode": 2,
+        "config": LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=2,
+        ),
     }
 
     # Run with C extension
@@ -1155,11 +1163,13 @@ def test_runner_score_mode_c_vs_python():
         "phenotypes": phenotypes,
         "kinship": kinship.copy(),
         "snp_info": snp_info,
-        "maf_threshold": 0.0,
-        "miss_threshold": 1.0,
-        "check_memory": False,
-        "show_progress": False,
-        "lmm_mode": 3,
+        "config": LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=3,
+        ),
     }
 
     # Run with C extension
@@ -1191,11 +1201,13 @@ def test_runner_all_mode_c_path():
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=4,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=4,
+        ),
     )
 
     assert len(result.associations) > 0
@@ -1232,11 +1244,13 @@ def test_runner_pipeline_enabled_for_non_wald_modes():
                 phenotypes=phenotypes,
                 kinship=kinship.copy(),
                 snp_info=snp_info * 4,  # 800 SNPs worth of info
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=mode,
+                config=LmmConfig(
+                    maf_threshold=0.0,
+                    miss_threshold=1.0,
+                    check_memory=False,
+                    show_progress=False,
+                    lmm_mode=mode,
+                ),
                 # Force small chunk size via explicit budget
             )
             assert len(result.associations) > 0, f"Mode {mode} should produce results"
@@ -1257,11 +1271,13 @@ def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
         "genotypes": genotypes,
         "phenotypes": phenotypes,
         "snp_info": snp_info,
-        "maf_threshold": 0.0,
-        "miss_threshold": 1.0,
-        "check_memory": False,
-        "show_progress": False,
-        "lmm_mode": lmm_mode,
+        "config": LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=lmm_mode,
+        ),
     }
 
     # In-memory run
@@ -1347,16 +1363,18 @@ def test_output_path_streaming_all_filtered(tmp_path):
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
     output_file = tmp_path / "filtered.assoc.txt"
 
+    # Constant genotypes fail the polymorphism check, so nothing survives.
     result = run_lmm_association_numpy(
-        genotypes=genotypes,
+        genotypes=np.full_like(genotypes, 2.0),
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
-        maf_threshold=0.99,  # Filters everything
-        miss_threshold=1.0,
-        check_memory=False,
-        show_progress=False,
-        lmm_mode=1,
+        config=LmmConfig(
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=1,
+        ),
         output_path=output_file,
     )
 
@@ -1558,8 +1576,7 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
         kinship=kinship,
         snp_info=snp_info,
         covariates=covariates,
-        lmm_mode=2,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=2, show_progress=False),
     )
     results = run_result.associations
     assert len(results) > 0, "Expected at least one LRT result with n_cvt=2"
@@ -1600,8 +1617,7 @@ def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
         kinship=kinship,
         snp_info=snp_info,
         covariates=covariates,
-        lmm_mode=3,
-        show_progress=False,
+        config=LmmConfig(lmm_mode=3, show_progress=False),
     )
     results = run_result.associations
     assert len(results) > 0, "Expected at least one Score result with n_cvt=2"

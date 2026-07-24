@@ -9,7 +9,7 @@ per-chunk dispatch and the loop driver.
 
 from __future__ import annotations
 
-from typing import NamedTuple, assert_never, cast
+from typing import Any, NamedTuple, assert_never, cast
 
 import numpy as np
 from loguru import logger
@@ -143,6 +143,14 @@ def _create_workspaces(
     score_fused_workspace = None
     lrt_fused_workspace = None
 
+    # Only the mode-4 constructors take the null model; their Wald twins reject
+    # these names. Building the pair once keeps each family to a single call.
+    # Typed dict[str, Any] because pyrefly cannot map ** spread keys to params,
+    # so a narrower type would union with the pab_* arrays at the call site.
+    null_model_kwargs: dict[str, Any] = (
+        {"hi_eval_null": Hi_eval_null, "logl_H0": logl_H0} if lmm_mode == 4 else {}
+    )
+
     match dispatch:
         case DispatchPath.FUSED_GENERAL:
             # Fused general workspace: UtW + Uty for on-the-fly dot products.
@@ -167,68 +175,47 @@ def _create_workspaces(
                     "var_b_cols",
                 ]
             }
-            if lmm_mode == 4:
-                lmm_workspace = create_lmm_workspace_mode4_fused_general(
-                    eigenvalues_np,
-                    uab_invariant,
-                    UtW,
-                    Uty,
-                    n_samples,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                    n_threads,
-                    n_cvt=n_cvt,
-                    **pab_kwargs,
-                    hi_eval_null=Hi_eval_null,
-                    logl_H0=logl_H0,
-                )
-            else:
-                lmm_workspace = create_lmm_workspace_fused_general(
-                    eigenvalues_np,
-                    uab_invariant,
-                    UtW,
-                    Uty,
-                    n_samples,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                    n_threads,
-                    n_cvt=n_cvt,
-                    **pab_kwargs,
-                )
+            create = (
+                create_lmm_workspace_mode4_fused_general
+                if lmm_mode == 4
+                else create_lmm_workspace_fused_general
+            )
+            lmm_workspace = create(
+                eigenvalues_np,
+                uab_invariant,
+                UtW,
+                Uty,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                n_threads,
+                n_cvt=n_cvt,
+                **pab_kwargs,
+                **null_model_kwargs,
+            )
         case DispatchPath.FUSED:
-            w_fused = UtW[:, 0].copy()
-            if lmm_mode == 4:
-                lmm_workspace = create_lmm_workspace_mode4_fused(
-                    eigenvalues_np,
-                    uab_invariant,
-                    w_fused,
-                    Uty,
-                    n_samples,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                    n_threads,
-                    hi_eval_null=Hi_eval_null,
-                    logl_H0=logl_H0,
-                )
-            else:
-                lmm_workspace = create_lmm_workspace_fused(
-                    eigenvalues_np,
-                    uab_invariant,
-                    w_fused,
-                    Uty,
-                    n_samples,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                    n_threads,
-                )
+            create = (
+                create_lmm_workspace_mode4_fused
+                if lmm_mode == 4
+                else create_lmm_workspace_fused
+            )
+            if w is None:
+                raise RuntimeError("fused Wald dispatch requires the null-model w")
+            lmm_workspace = create(
+                eigenvalues_np,
+                uab_invariant,
+                w,
+                Uty,
+                n_samples,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                n_threads,
+                **null_model_kwargs,
+            )
         case DispatchPath.SOA_SPLIT_MODE4:
             lmm_workspace = create_lmm_workspace_mode4(
                 eigenvalues_np,

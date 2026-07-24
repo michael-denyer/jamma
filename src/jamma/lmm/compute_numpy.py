@@ -17,12 +17,12 @@ The caller is responsible for:
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict
 
 import numpy as np
 
+from jamma.core.constants import env_flag
 from jamma.lmm.likelihood_numpy import (
     _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
@@ -35,7 +35,7 @@ from jamma.lmm.likelihood_numpy import (
 )
 
 if TYPE_CHECKING:
-    from jamma.lmm.dispatch import DispatchPath
+    from jamma.lmm.dispatch import DispatchPath, KernelCaps
 
 _EXPECTED_ABI_VERSION = 11  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
@@ -270,7 +270,7 @@ def _try_import_accel() -> AccelImport:
     """
     # Phase 116.1: same convention as jamma.jlinalg.__init__ — truthy values
     # are anything other than "", "0".
-    if os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK", "").strip() not in ("", "0"):
+    if env_flag("JAMMA_FORCE_NUMPY_FALLBACK"):
         return _ACCEL_UNAVAILABLE
 
     try:
@@ -343,9 +343,7 @@ def _auto_recompile() -> bool:
     )
 
 
-_FORCE_NUMPY_FALLBACK = os.environ.get(
-    "JAMMA_FORCE_NUMPY_FALLBACK", ""
-).strip() not in ("", "0")
+_FORCE_NUMPY_FALLBACK = env_flag("JAMMA_FORCE_NUMPY_FALLBACK")
 
 # Auto-recompile and retry once if the C extension is unavailable. Phase 116.1:
 # when JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry — auto_recompile would
@@ -433,21 +431,54 @@ def select_current_dispatch_path(
     from jamma.lmm.dispatch import select_dispatch_path
 
     return select_dispatch_path(
-        n_cvt,
-        lmm_mode,
-        c_split_available=_C_SPLIT_AVAILABLE,
-        c_general_available=_C_GENERAL_AVAILABLE,
-        c_fused_available=_C_FUSED_AVAILABLE,
-        c_fused_general_available=_C_FUSED_GENERAL_AVAILABLE,
-        c_mode4_available=_C_MODE4_AVAILABLE,
-        c_mode4_fused_available=_C_MODE4_FUSED_AVAILABLE,
-        c_mode4_fused_general_available=_C_MODE4_FUSED_GENERAL_AVAILABLE,
-        c_score_fused_available=_C_SCORE_FUSED_AVAILABLE,
-        c_score_fused_ws_available=_C_SCORE_FUSED_WS_AVAILABLE,
-        c_lrt_fused_available=_C_LRT_FUSED_AVAILABLE,
-        c_lrt_fused_ws_available=_C_LRT_FUSED_WS_AVAILABLE,
-        log_choices=log_choices,
+        n_cvt, lmm_mode, current_kernel_caps(), log_choices=log_choices
     )
+
+
+def current_kernel_caps() -> KernelCaps:
+    """Snapshot which optional C kernels the loaded build exports.
+
+    Read at call time, not import time, so tests that toggle the
+    ``_C_*_AVAILABLE`` flags to drive a dispatch path take effect.
+    """
+    from jamma.lmm.dispatch import KernelCaps  # deferred: circular dep
+
+    return KernelCaps(
+        split=_C_SPLIT_AVAILABLE,
+        general=_C_GENERAL_AVAILABLE,
+        fused=_C_FUSED_AVAILABLE,
+        fused_general=_C_FUSED_GENERAL_AVAILABLE,
+        mode4=_C_MODE4_AVAILABLE,
+        mode4_fused=_C_MODE4_FUSED_AVAILABLE,
+        mode4_fused_general=_C_MODE4_FUSED_GENERAL_AVAILABLE,
+        score_fused=_C_SCORE_FUSED_AVAILABLE,
+        score_fused_ws=_C_SCORE_FUSED_WS_AVAILABLE,
+        lrt_fused=_C_LRT_FUSED_AVAILABLE,
+        lrt_fused_ws=_C_LRT_FUSED_WS_AVAILABLE,
+    )
+
+
+def _require(
+    symbol: Callable[..., Any] | None, what: str, abi: int
+) -> Callable[..., Any]:
+    """Return a bound C symbol, or raise naming what is missing and how to fix it.
+
+    Every kernel entry point below needs the same guard, and hand-writing it
+    each time drifted: some sites raised while others asserted, and an assert
+    vanishes under ``python -O``, turning a clear diagnostic into a
+    ``NoneType is not callable`` from inside the C call.
+
+    Args:
+        symbol: The module-level C symbol, or None when the build omits it.
+        what: Human name of the capability, used in the error message.
+        abi: Minimum ``_lmm_accel`` ABI version that exports the symbol.
+    """
+    if symbol is None:
+        raise RuntimeError(
+            f"{what} requires the _lmm_accel C extension with ABI version "
+            f"{abi}+. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return symbol
 
 
 class WaldResult(TypedDict):
@@ -490,8 +521,7 @@ def _compute_wald_c(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
-    assert _compute_lmm_batch_c is not None  # guarded at dispatch site
-    return _compute_lmm_batch_c(
+    return _require(_compute_lmm_batch_c, "Batch Wald C compute", 11)(
         eigenvalues,
         Uab_batch,
         Iab_batch,
@@ -537,8 +567,7 @@ def _compute_wald_split_c(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
-    assert _compute_lmm_batch_split_c is not None  # guarded at dispatch site
-    return _compute_lmm_batch_split_c(
+    return _require(_compute_lmm_batch_split_c, "Batch split Wald C compute", 11)(
         eigenvalues,
         uab_varying_soa,
         uab_invariant_soa,
@@ -583,8 +612,7 @@ def create_lmm_workspace(
     Returns:
         PyCapsule wrapping lmm_workspace_t (opaque; pass to compute_wald_split_c_ws).
     """
-    assert _create_workspace_split_c is not None  # guarded at dispatch site
-    return _create_workspace_split_c(
+    return _require(_create_workspace_split_c, "Split C workspace", 11)(
         eigenvalues,
         uab_invariant_soa,
         n_samples,
@@ -615,8 +643,9 @@ def compute_wald_split_c_ws(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
-    assert _compute_lmm_chunk_split_c is not None  # guarded at dispatch site
-    return _compute_lmm_chunk_split_c(workspace, uab_varying_soa, n_threads)
+    return _require(_compute_lmm_chunk_split_c, "Split Wald C compute", 11)(
+        workspace, uab_varying_soa, n_threads
+    )
 
 
 def create_lmm_workspace_mode4(
@@ -652,12 +681,7 @@ def create_lmm_workspace_mode4(
     Returns:
         PyCapsule wrapping mode-4 lmm_workspace_t.
     """
-    if _create_workspace_mode4_split_c is None:
-        raise RuntimeError(
-            "Fused mode-4 C workspace requires the _lmm_accel C extension "
-            "with ABI version 6+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _create_workspace_mode4_split_c(
+    return _require(_create_workspace_mode4_split_c, "Fused mode-4 C workspace", 6)(
         eigenvalues,
         uab_invariant_soa,
         n_samples,
@@ -690,12 +714,9 @@ def compute_mode4_split_c_ws(
         Dict with keys: lambdas, logls, betas, ses, pwalds,
         p_scores, lambdas_mle, p_lrts.
     """
-    if _compute_mode4_chunk_split_c is None:
-        raise RuntimeError(
-            "Fused mode-4 C compute requires the _lmm_accel C extension "
-            "with ABI version 6+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _compute_mode4_chunk_split_c(workspace, uab_varying_soa, n_threads)
+    return _require(_compute_mode4_chunk_split_c, "Fused mode-4 C compute", 6)(
+        workspace, uab_varying_soa, n_threads
+    )
 
 
 def create_lmm_workspace_fused(
@@ -727,12 +748,7 @@ def create_lmm_workspace_fused(
     Returns:
         PyCapsule wrapping lmm_workspace_t (fused).
     """
-    if _create_workspace_fused_c is None:
-        raise RuntimeError(
-            "Fused C workspace requires the _lmm_accel C extension "
-            "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _create_workspace_fused_c(
+    return _require(_create_workspace_fused_c, "Fused C workspace", 8)(
         eigenvalues,
         uab_invariant_soa,
         w,
@@ -761,12 +777,9 @@ def compute_wald_fused_c_ws(
     Returns:
         WaldResult dict with lambdas, logls, betas, ses, pwalds.
     """
-    if _compute_lmm_chunk_fused_c is None:
-        raise RuntimeError(
-            "Fused C compute requires the _lmm_accel C extension "
-            "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _compute_lmm_chunk_fused_c(workspace, utg_t, n_threads)
+    return _require(_compute_lmm_chunk_fused_c, "Fused C compute", 8)(
+        workspace, utg_t, n_threads
+    )
 
 
 def create_lmm_workspace_mode4_fused(
@@ -803,12 +816,7 @@ def create_lmm_workspace_mode4_fused(
     Returns:
         PyCapsule wrapping lmm_workspace_t (mode=4, fused).
     """
-    if _create_workspace_mode4_fused_c is None:
-        raise RuntimeError(
-            "Fused mode-4 C workspace requires the _lmm_accel C extension "
-            "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _create_workspace_mode4_fused_c(
+    return _require(_create_workspace_mode4_fused_c, "Fused mode-4 C workspace", 8)(
         eigenvalues,
         uab_invariant_soa,
         w,
@@ -840,12 +848,9 @@ def compute_mode4_fused_c_ws(
         Dict with lambdas, logls, betas, ses, pwalds, p_scores,
         lambdas_mle, p_lrts.
     """
-    if _compute_mode4_chunk_fused_c is None:
-        raise RuntimeError(
-            "Fused mode-4 C compute requires the _lmm_accel C extension "
-            "with ABI version 8+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
+    return _require(_compute_mode4_chunk_fused_c, "Fused mode-4 C compute", 8)(
+        workspace, utg_t, n_threads
+    )
 
 
 def create_lmm_workspace_fused_general(
@@ -907,12 +912,7 @@ def create_lmm_workspace_fused_general(
     Returns:
         PyCapsule wrapping lmm_workspace_general_t (fused).
     """
-    if _create_workspace_fused_general_c is None:
-        raise RuntimeError(
-            "Fused general C workspace requires the _lmm_accel C extension "
-            "with ABI version 9+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _create_workspace_fused_general_c(
+    return _require(_create_workspace_fused_general_c, "Fused general C workspace", 9)(
         eigenvalues,
         uab_invariant_soa,
         UtW,
@@ -954,12 +954,9 @@ def compute_wald_fused_general_c_ws(
     Returns:
         WaldResult dict with lambdas, logls, betas, ses, pwalds.
     """
-    if _compute_lmm_chunk_fused_general_c is None:
-        raise RuntimeError(
-            "Fused general C compute requires the _lmm_accel C extension "
-            "with ABI version 9+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _compute_lmm_chunk_fused_general_c(workspace, utg_t, n_threads)
+    return _require(_compute_lmm_chunk_fused_general_c, "Fused general C compute", 9)(
+        workspace, utg_t, n_threads
+    )
 
 
 def create_lmm_workspace_mode4_fused_general(
@@ -1022,12 +1019,9 @@ def create_lmm_workspace_mode4_fused_general(
     Returns:
         PyCapsule wrapping lmm_workspace_general_t (mode=4, fused).
     """
-    if _create_workspace_mode4_fused_general_c is None:
-        raise RuntimeError(
-            "Fused general mode-4 C workspace requires the _lmm_accel C extension "
-            "with ABI version 9+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _create_workspace_mode4_fused_general_c(
+    return _require(
+        _create_workspace_mode4_fused_general_c, "Fused general mode-4 C workspace", 9
+    )(
         eigenvalues,
         uab_invariant_soa,
         UtW,
@@ -1072,12 +1066,9 @@ def compute_mode4_fused_general_c_ws(
         Dict with lambdas, logls, betas, ses, pwalds, p_scores,
         lambdas_mle, p_lrts.
     """
-    if _compute_mode4_chunk_fused_general_c is None:
-        raise RuntimeError(
-            "Fused general mode-4 C compute requires the _lmm_accel C extension "
-            "with ABI version 9+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _compute_mode4_chunk_fused_general_c(workspace, utg_t, n_threads)
+    return _require(
+        _compute_mode4_chunk_fused_general_c, "Fused general mode-4 C compute", 9
+    )(workspace, utg_t, n_threads)
 
 
 def create_lmm_workspace_general(
@@ -1110,17 +1101,13 @@ def create_lmm_workspace_general(
     Returns:
         PyCapsule wrapping lmm_workspace_general_t.
     """
-    if _create_workspace_general_c is None:
-        raise RuntimeError(
-            "General n_cvt C workspace requires the _lmm_accel C extension "
-            "with ABI version 4+. Recompile: python -m jamma.lmm._compile_accel"
-        )
+    create = _require(_create_workspace_general_c, "General n_cvt C workspace", 4)
 
     from jamma.lmm.likelihood import build_pab_table_for_c
 
     table = build_pab_table_for_c(n_cvt)
 
-    return _create_workspace_general_c(
+    return create(
         eigenvalues,
         uab_invariant_soa,
         n_samples,
@@ -1158,12 +1145,9 @@ def compute_wald_general_c_ws(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
-    if _compute_lmm_chunk_general_c is None:
-        raise RuntimeError(
-            "General n_cvt C chunk compute requires the _lmm_accel C extension "
-            "with ABI version 4+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _compute_lmm_chunk_general_c(workspace, uab_varying_soa, n_threads)
+    return _require(_compute_lmm_chunk_general_c, "General n_cvt C chunk compute", 4)(
+        workspace, uab_varying_soa, n_threads
+    )
 
 
 def _compute_score_c(
@@ -1185,8 +1169,7 @@ def _compute_score_c(
     Returns:
         Dict with keys: betas, ses, p_scores.
     """
-    assert _compute_score_batch_c is not None  # guarded at dispatch site
-    return _compute_score_batch_c(
+    return _require(_compute_score_batch_c, "Batch Score C compute", 11)(
         eigenvalues,
         Uab_batch,
         Hi_eval_null,
@@ -1222,8 +1205,7 @@ def _compute_lrt_c(
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
     """
-    assert _compute_lrt_batch_c is not None  # guarded at dispatch site
-    return _compute_lrt_batch_c(
+    return _require(_compute_lrt_batch_c, "Batch LRT C compute", 11)(
         eigenvalues,
         Uab_batch,
         n_samples,

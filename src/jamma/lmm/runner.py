@@ -29,12 +29,7 @@ from loguru import logger
 from jamma.core.memory import estimate_lmm_memory
 from jamma.lmm._compile_utils import is_c_extension_usable
 from jamma.lmm.schema import (
-    DEFAULT_L_MAX,
-    DEFAULT_L_MIN,
-    DEFAULT_MAF,
-    DEFAULT_MISS,
-    DEFAULT_N_GRID,
-    DEFAULT_N_REFINE,
+    DEFAULT_LMM_CONFIG,
     LmmConfig,
     LmmRunResult,
 )
@@ -231,17 +226,7 @@ def run_lmm(
     hwe_threshold: float = 0.0,
     chunk_size: int = 10_000,
     validate_genotypes: bool = True,
-    config: LmmConfig | None = None,
-    # Flat config overrides (used when config is None):
-    maf_threshold: float = DEFAULT_MAF,
-    miss_threshold: float = DEFAULT_MISS,
-    l_min: float = DEFAULT_L_MIN,
-    l_max: float = DEFAULT_L_MAX,
-    n_grid: int = DEFAULT_N_GRID,
-    n_refine: int = DEFAULT_N_REFINE,
-    check_memory: bool = True,
-    show_progress: bool = True,
-    lmm_mode: int = 1,
+    config: LmmConfig = DEFAULT_LMM_CONFIG,
 ) -> tuple[LmmRunResult, int]:
     """Unified LMM entry point that dispatches to the correct runner.
 
@@ -264,16 +249,7 @@ def run_lmm(
         hwe_threshold: HWE p-value threshold (streaming only).
         chunk_size: SNPs per disk chunk (streaming only).
         validate_genotypes: Whether to validate genotypes (streaming only).
-        config: LmmConfig instance, or None to use flat kwargs.
-        maf_threshold: Minimum MAF for SNP inclusion.
-        miss_threshold: Maximum missing rate for SNP inclusion.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution.
-        n_refine: Golden section iterations (clamped to min 20 internally).
-        check_memory: Check available memory before workflow.
-        show_progress: Show progress bars.
-        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+        config: LmmConfig carrying every threshold and mode knob.
 
     Returns:
         Tuple of (LmmRunResult, n_tested) regardless of which runner is used.
@@ -325,22 +301,6 @@ def run_lmm(
     if _n_for_warning is not None:
         warn_if_small_sample(_n_for_warning)
 
-    # Build common kwargs from config or flat args
-    if config is not None:
-        common_kwargs = config.as_kwargs()
-    else:
-        common_kwargs = {
-            "maf_threshold": maf_threshold,
-            "miss_threshold": miss_threshold,
-            "l_min": l_min,
-            "l_max": l_max,
-            "n_grid": n_grid,
-            "n_refine": n_refine,
-            "check_memory": check_memory,
-            "show_progress": show_progress,
-            "lmm_mode": lmm_mode,
-        }
-
     # Dispatch based on execution mode
     if execution_plan.mode == "batch":
         if genotypes is None:
@@ -359,7 +319,6 @@ def run_lmm(
             eigenvectors=eigenvectors,
             config=config,
             output_path=output_path,
-            **common_kwargs if config is None else {},
         )
         return result, result.snp_count
 
@@ -373,7 +332,6 @@ def run_lmm(
             run_lmm_association_numpy_streaming,
         )
 
-        streaming_kwargs = common_kwargs if config is None else {}
         result, n_tested = run_lmm_association_numpy_streaming(
             bed_path=bed_path,
             phenotypes=phenotypes,
@@ -388,7 +346,6 @@ def run_lmm(
             chunk_size=chunk_size,
             validate_genotypes=validate_genotypes,
             config=config,
-            **streaming_kwargs,
         )
         return result, n_tested
 

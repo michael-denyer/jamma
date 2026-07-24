@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, get_spec
+from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, LazySnpMeta, get_spec
 from jamma.lmm.stats import AssocResult
 
 # Retry backoff schedule (seconds) for transient write failures
@@ -249,7 +249,7 @@ class IncrementalAssocWriter:
         self,
         lmm_mode: int,
         snp_indices: np.ndarray,
-        snp_info: list,
+        snp_info: LazySnpMeta | list,
         afs: np.ndarray,
         miss_counts: np.ndarray,
         arrays: dict[str, np.ndarray],

@@ -16,6 +16,7 @@ from jamma.lmm.prepare_common import (
     _compute_null_model_common,
     _eigendecompose_or_reuse,
 )
+from jamma.lmm.schema import LmmConfig
 
 
 @pytest.mark.tier0
@@ -349,6 +350,5 @@ def test_eigenvector_shape_mismatch_raises():
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors_wrong,
-            check_memory=False,
-            show_progress=False,
+            config=LmmConfig(check_memory=False, show_progress=False),
         )

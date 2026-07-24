@@ -50,6 +50,7 @@ from jamma._build_support.compile_and_link import (
 )
 from jamma._build_support.find_compiler import find_c_compiler
 from jamma._build_support.openmp_detect import detect_openmp_flags
+from jamma.core.constants import env_flag
 
 # Phase 116.1: dev-mode + sanitizer-workflow sentinel macro. Toggled by the
 # JAMMA_SENTINEL_UB env var; when set, _lmm_accel.c's gated heap-OOB function
@@ -218,7 +219,7 @@ def compile_extension(
     # JAMMA_FORCE_NUMPY_FALLBACK (plan 02): "" and "0" are off, anything else
     # is on. Orthogonal to JAMMA_SANITIZE — either, both, or neither can
     # be set.
-    if os.environ.get("JAMMA_SENTINEL_UB", "").strip() not in ("", "0"):
+    if env_flag("JAMMA_SENTINEL_UB"):
         extra_cflags.append(_SENTINEL_UB_DEFINE)
         _detail(f"sentinel: appended {_SENTINEL_UB_DEFINE} (JAMMA_SENTINEL_UB env set)")
 

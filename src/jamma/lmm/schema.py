@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TypedDict
+from typing import TypedDict, overload
 
 # LmmMode type alias (kept local to avoid circular imports with compute_numpy)
 LmmMode = int
@@ -211,7 +211,7 @@ class LmmConfig:
 
     Groups the common parameters shared by all runner entry points.
     Frozen to prevent accidental mutation — runners clamp values (e.g.,
-    n_refine >= 20) on local variables after unpacking via as_kwargs().
+    n_refine >= 20) on locals after reading them off the config.
 
     Attributes:
         maf_threshold: Minimum MAF for SNP inclusion.
@@ -261,26 +261,13 @@ class LmmConfig:
         if self.n_grid < MIN_N_GRID:
             raise ValueError(f"n_grid must be >= {MIN_N_GRID}, got {self.n_grid}")
 
-    def as_kwargs(self) -> dict:
-        """Return config fields as a dict suitable for unpacking into runner kwargs.
 
-        Maps config field names to the parameter names used by runner functions.
-        This eliminates the duplicated 10-line unpacking blocks in each runner.
+DEFAULT_LMM_CONFIG = LmmConfig()
+"""The all-defaults config, shared as the runners' default argument.
 
-        Returns:
-            Dict with keys matching runner function parameters.
-        """
-        return {
-            "maf_threshold": self.maf_threshold,
-            "miss_threshold": self.miss_threshold,
-            "l_min": self.l_min,
-            "l_max": self.l_max,
-            "n_grid": self.n_grid,
-            "n_refine": self.n_refine,
-            "check_memory": self.check_memory,
-            "show_progress": self.show_progress,
-            "lmm_mode": self.lmm_mode,
-        }
+LmmConfig is frozen, so one instance is safe to share; naming it keeps the
+constructor out of a function signature's default.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +347,12 @@ class LazySnpMeta:
 
     def __len__(self) -> int:
         return len(self._rs)
+
+    @overload
+    def __getitem__(self, i: int) -> dict: ...
+
+    @overload
+    def __getitem__(self, i: slice) -> list[dict]: ...
 
     def __getitem__(self, i: int | slice) -> dict | list[dict]:
         if isinstance(i, slice):

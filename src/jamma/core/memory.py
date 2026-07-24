@@ -5,11 +5,12 @@ Also provides cleanup utilities for freeing memory between benchmark runs.
 """
 
 import gc
-import os
 from typing import Literal, NamedTuple
 
 import psutil
 from loguru import logger
+
+from jamma.core.constants import env_flag
 
 
 def forced_numpy_fallback() -> bool:
@@ -27,7 +28,7 @@ def forced_numpy_fallback() -> bool:
     LAPACK is bypassed — otherwise a forced-numpy run could pass pre-flight on a
     smaller vendor estimate and then OOM.
     """
-    return os.environ.get("JLINALG_NO_VENDOR_LAPACK", "").strip() not in ("", "0")
+    return env_flag("JLINALG_NO_VENDOR_LAPACK")
 
 
 def _dsyevd_workspace_gb(n: int) -> float:

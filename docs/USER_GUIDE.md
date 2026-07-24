@@ -520,6 +520,7 @@ K = compute_centered_kinship(data.genotypes)
 ```python
 from jamma.lmm import run_lmm_association_numpy
 from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.schema import LmmConfig
 
 eigenvalues, eigenvectors = eigendecompose_kinship(K)
 
@@ -531,7 +532,7 @@ run_result = run_lmm_association_numpy(
     snp_info=snp_info,  # list of dicts with chr, rs, pos, a1, a0
     eigenvalues=eigenvalues,
     eigenvectors=eigenvectors,
-    lmm_mode=1,  # 1=Wald, 2=LRT, 3=Score, 4=All
+    config=LmmConfig(lmm_mode=1),  # 1=Wald, 2=LRT, 3=Score, 4=All
 )
 results = run_result.associations  # list[AssocResult]
 pve = run_result.pve               # heritability estimate

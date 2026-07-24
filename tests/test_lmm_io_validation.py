@@ -23,7 +23,7 @@ from jamma.lmm.io import (
     format_assoc_line,
 )
 from jamma.lmm.results import _build_results
-from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, RESULT_FIELDS
+from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, RESULT_FIELDS, LmmConfig
 from jamma.lmm.stats import AssocResult
 
 # ---------------------------------------------------------------------------
@@ -342,8 +342,7 @@ class TestNumpyRunnerValidation:
                 snp_info=[{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}] * 5,
                 eigenvalues=np.ones(10),
                 eigenvectors=None,
-                check_memory=False,
-                show_progress=False,
+                config=LmmConfig(check_memory=False, show_progress=False),
             )
 
     def test_invalid_lmm_mode_raises(self) -> None:
@@ -356,9 +355,7 @@ class TestNumpyRunnerValidation:
                 phenotypes=np.ones(10),
                 kinship=np.eye(10),
                 snp_info=[{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}] * 5,
-                lmm_mode=5,
-                check_memory=False,
-                show_progress=False,
+                config=LmmConfig(lmm_mode=5, check_memory=False, show_progress=False),
             )
 
 

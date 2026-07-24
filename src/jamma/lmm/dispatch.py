@@ -8,24 +8,47 @@ present at import time.
 from __future__ import annotations
 
 from enum import Enum
+from typing import NamedTuple
 
 from loguru import logger
 
 from jamma.lmm.schema import LmmMode
 
 
+class KernelCaps(NamedTuple):
+    """Which optional C kernels the loaded ``_lmm_accel`` build exports.
+
+    Built once from the module-level ``_C_*_AVAILABLE`` flags in
+    ``compute_numpy`` (the seam tests toggle) and handed to
+    ``select_dispatch_path`` as one value, so the selector's signature states
+    "the build's capabilities" rather than eleven positional booleans whose
+    order a caller can silently transpose.
+    """
+
+    split: bool
+    general: bool
+    fused: bool
+    fused_general: bool
+    mode4: bool
+    mode4_fused: bool
+    mode4_fused_general: bool
+    score_fused: bool
+    score_fused_ws: bool
+    lrt_fused: bool
+    lrt_fused_ws: bool
+
+
 class DispatchPath(Enum):
     """The one authoritative C-kernel dispatch decision for an LMM run.
 
-    Derived once by ``select_dispatch_path`` from ``(n_cvt, lmm_mode, C-kernel
-    availability)`` and consulted per chunk. Exactly one member is active, so the
-    contradictory flag combinations the old 8-boolean form admitted are
+    Derived once by ``select_dispatch_path`` from ``(n_cvt, lmm_mode,
+    KernelCaps)`` and consulted per chunk. Exactly one member is active, so the
+    contradictory flag combinations a multi-boolean form admits are
     unrepresentable and need no runtime guard. Wald-vs-mode-4 for the FUSED and
     SOA_SPLIT families is resolved from ``lmm_mode`` at the call site;
-    ``SOA_SPLIT_MODE4`` is the one mode-4 kernel not recoverable from ``lmm_mode``
-    (a distinct split entrypoint and workspace), so it is its own member. The
-    properties reproduce the old ``LmmDispatch`` fields/properties by the same
-    names, so consumer read sites are unchanged.
+    ``SOA_SPLIT_MODE4`` is the one mode-4 kernel not recoverable from
+    ``lmm_mode`` (a distinct split entrypoint and workspace), so it is its own
+    member.
     """
 
     NUMPY_FALLBACK = "numpy_fallback"  # not split: pure-NumPy full-Uab path
@@ -40,17 +63,12 @@ class DispatchPath(Enum):
 
     @property
     def use_split(self) -> bool:
-        """False only for the NumPy fallback (was the ``use_split`` flag)."""
+        """False only for the NumPy fallback, which takes the full-Uab path."""
         return self is not DispatchPath.NUMPY_FALLBACK
 
     @property
-    def use_fused(self) -> bool:
-        """True for the fused-Uab Wald family (was the ``use_fused`` flag)."""
-        return self in _FUSED_FAMILY
-
-    @property
     def use_fused_general(self) -> bool:
-        """True for the n_cvt>=2 fused path (was the ``use_fused_general`` flag)."""
+        """True for the n_cvt>=2 fused path, which sizes chunks differently."""
         return self is DispatchPath.FUSED_GENERAL
 
     @property
@@ -62,6 +80,16 @@ class DispatchPath(Enum):
         materializes ``w = UtW[:, 0]`` only for this family.
         """
         return self in _SCORE_LRT_FAMILY
+
+    @property
+    def needs_null_w(self) -> bool:
+        """True when the run needs the null-model ``w = UtW[:, 0]`` vector.
+
+        The fused Wald/mode-4 workspace packs it in at construction; the fused
+        Score/LRT kernels take it per call. Both consumers read the same vector,
+        so the chunk runner materialises it once for either.
+        """
+        return self is DispatchPath.FUSED or self in _SCORE_LRT_FAMILY
 
     @property
     def feeds_raw_utg(self) -> bool:
@@ -88,190 +116,128 @@ _SCORE_LRT_FAMILY = frozenset(
 def select_dispatch_path(
     n_cvt: int,
     lmm_mode: LmmMode,
+    caps: KernelCaps,
     *,
-    c_split_available: bool,
-    c_general_available: bool,
-    c_fused_available: bool,
-    c_fused_general_available: bool,
-    c_mode4_available: bool,
-    c_mode4_fused_available: bool,
-    c_mode4_fused_general_available: bool,
-    c_score_fused_available: bool,
-    c_score_fused_ws_available: bool,
-    c_lrt_fused_available: bool,
-    c_lrt_fused_ws_available: bool,
     log_choices: bool = True,
 ) -> DispatchPath:
-    """Derive the C kernel dispatch flags for this run.
+    """Derive the single active C kernel path for this run.
 
-    The branching matrix:
-
-    * ``use_split``: SoA-native C split dispatch. Available when n_cvt=1
-      with the basic split kernel, or n_cvt>1 with the general split
-      kernel.
-    * ``use_fused_mode4``: single-pass Wald/Score/LRT from SoA data, no
-      Uab reconstruction. n_cvt=1 + mode-4 + mode-4 kernel.
-    * ``use_fused``: skip uab_varying_soa entirely; pass utg_t to the
-      C workspace which computes wx/xx/xy on the fly. n_cvt=1 (ABI v8)
-      or n_cvt>=2 (ABI v9 general). Modes 2/3 don't use workspace, so
-      they don't get this path here — see the dedicated score/lrt
-      flags below.
-    * ``use_fused_general``: implies use_fused with n_cvt>=2.
-    * ``use_fused_score_ws`` / ``use_fused_lrt_ws``: workspace-based
-      Score/LRT (n_cvt=1 only). Created once, reused across chunks —
-      eliminates per-chunk malloc + grid precompute.
-    * ``use_fused_score`` / ``use_fused_lrt``: stateless fallback when
-      the WS variant isn't available. Only one of (ws, stateless) per
-      mode is True at a time.
+    Resolved directly: each branch returns the path it selects rather than
+    setting a flag for a later ladder to re-interpret. Reading top to bottom
+    gives the whole decision, and the priorities (fused beats the split mode-4
+    kernel; a workspace Score/LRT variant beats its stateless twin) are the
+    order of the returns.
 
     Args:
         n_cvt: Number of covariates (intercept counts as 1).
         lmm_mode: 1=Wald, 2=LRT, 3=Score, 4=All.
-        c_*_available: Per-feature C kernel availability flags pulled
-            from jamma.lmm.compute_numpy at import time.
-        log_choices: If True, emit debug logs describing which paths
-            were chosen. Off in unit tests to keep output clean.
+        caps: Which optional C kernels the loaded build exports.
+        log_choices: If True, emit debug logs describing the chosen path. Off
+            in unit tests to keep output clean.
 
     Returns:
         The single active ``DispatchPath`` for this run.
     """
-    use_split = (c_split_available and n_cvt == 1) or (
-        c_general_available and n_cvt > 1
-    )
-
-    use_fused_mode4 = use_split and lmm_mode == 4 and n_cvt == 1 and c_mode4_available
-
-    use_fused = use_split and (
-        (
-            n_cvt == 1
-            and c_fused_available
-            and (lmm_mode == 1 or (lmm_mode == 4 and c_mode4_fused_available))
-        )
-        or (n_cvt >= 2 and c_fused_general_available and lmm_mode == 1)
-        or (n_cvt >= 2 and c_mode4_fused_general_available and lmm_mode == 4)
-    )
-    use_fused_general = use_fused and n_cvt >= 2
-
-    use_fused_score_ws = (
-        use_split and n_cvt == 1 and lmm_mode == 3 and c_score_fused_ws_available
-    )
-    use_fused_lrt_ws = (
-        use_split and n_cvt == 1 and lmm_mode == 2 and c_lrt_fused_ws_available
-    )
-    use_fused_score = (
-        use_split
-        and n_cvt == 1
-        and lmm_mode == 3
-        and c_score_fused_available
-        and not use_fused_score_ws
-    )
-    use_fused_lrt = (
-        use_split
-        and n_cvt == 1
-        and lmm_mode == 2
-        and c_lrt_fused_available
-        and not use_fused_lrt_ws
-    )
-
+    path = _resolve_dispatch_path(n_cvt, lmm_mode, caps)
     if log_choices:
-        _log_dispatch_choices(
-            n_cvt,
-            lmm_mode,
-            use_fused=use_fused,
-            use_fused_general=use_fused_general,
-            use_fused_mode4=use_fused_mode4,
-            use_fused_score=use_fused_score,
-            use_fused_score_ws=use_fused_score_ws,
-            use_fused_lrt=use_fused_lrt,
-            use_fused_lrt_ws=use_fused_lrt_ws,
-            c_mode4_available=c_mode4_available,
-        )
+        _log_dispatch_choice(path, n_cvt, lmm_mode, caps)
+    return path
 
-    # Resolve to the single active path in the consumer priority order (the
-    # _dispatch_compute ladder in chunk_dispatch.py): fused-general, fused,
-    # score-WS, lrt-WS, score, lrt, then SoA-split. use_fused wins over
-    # use_fused_mode4 (matching that ladder), so the mode-4 split path is
-    # reached only when use_fused is False.
-    if not use_split:
+
+def _resolve_dispatch_path(
+    n_cvt: int, lmm_mode: LmmMode, caps: KernelCaps
+) -> DispatchPath:
+    """Map ``(n_cvt, lmm_mode, caps)`` to a path. Pure, no logging."""
+    # SoA-native split dispatch is the gate on every C path: n_cvt=1 needs the
+    # basic split kernel, n_cvt>1 the general one. Without it, nothing below
+    # is reachable.
+    if not ((caps.split and n_cvt == 1) or (caps.general and n_cvt > 1)):
         return DispatchPath.NUMPY_FALLBACK
-    if use_fused:
-        return DispatchPath.FUSED_GENERAL if use_fused_general else DispatchPath.FUSED
-    if use_fused_score_ws:
-        return DispatchPath.FUSED_SCORE_WS
-    if use_fused_lrt_ws:
-        return DispatchPath.FUSED_LRT_WS
-    if use_fused_score:
-        return DispatchPath.FUSED_SCORE
-    if use_fused_lrt:
-        return DispatchPath.FUSED_LRT
-    if use_fused_mode4:
-        return DispatchPath.SOA_SPLIT_MODE4
-    return DispatchPath.SOA_SPLIT
 
+    if n_cvt >= 2:
+        # The general fused path is wired for Wald and mode 4 only; modes 2/3
+        # do not use its workspace and fall to the split path.
+        if lmm_mode == 1 and caps.fused_general:
+            return DispatchPath.FUSED_GENERAL
+        if lmm_mode == 4 and caps.mode4_fused_general:
+            return DispatchPath.FUSED_GENERAL
+        return DispatchPath.SOA_SPLIT
 
-def _log_dispatch_choices(
-    n_cvt: int,
-    lmm_mode: LmmMode,
-    *,
-    use_fused: bool,
-    use_fused_general: bool,
-    use_fused_mode4: bool,
-    use_fused_score: bool,
-    use_fused_score_ws: bool,
-    use_fused_lrt: bool,
-    use_fused_lrt_ws: bool,
-    c_mode4_available: bool,
-) -> None:
-    """Debug-log which dispatch paths the runner picked. Pure side-effect."""
-    if use_fused and not use_fused_general:
-        logger.debug(
-            "Fused Uab path active: utg_t passed directly to C workspace "
-            f"(mode={lmm_mode}, eliminates uab_varying_soa buffer)"
-        )
-    elif use_fused_general:
-        logger.debug(
-            "Fused general Uab path active: utg_t passed directly to C workspace "
-            f"(n_cvt={n_cvt}, n_var={n_cvt + 2})"
-        )
+    if lmm_mode == 1:
+        return DispatchPath.FUSED if caps.fused else DispatchPath.SOA_SPLIT
 
     if lmm_mode == 4:
-        if use_fused:
-            variant = "fused general" if use_fused_general else "fused"
-            logger.debug(
-                f"Mode-4 dispatch: {variant} Uab kernel (Wald/Score/LRT single pass)"
-            )
-        elif use_fused_mode4:
-            # Reached when mode-4 C kernel is available but its fused variant
-            # is not (e.g. partial extension rebuild). Independent from the
-            # use_fused branch above so the log faithfully reports the path.
-            logger.debug("Mode-4 dispatch: fused kernel (Wald/Score/LRT single pass)")
-        else:
-            reason = (
-                "fused general kernel unavailable"
-                if n_cvt > 1
-                else "fused kernel unavailable"
-                if not c_mode4_available
-                else "C split extension unavailable"
-            )
-            logger.debug(f"Mode-4 dispatch: compose fallback ({reason})")
+        if caps.fused and caps.mode4_fused:
+            return DispatchPath.FUSED
+        # Single-pass mode-4 split kernel, reached only when fused is out.
+        return DispatchPath.SOA_SPLIT_MODE4 if caps.mode4 else DispatchPath.SOA_SPLIT
 
-    if use_fused_score_ws:
-        logger.debug(
-            "Fused Score workspace path active: workspace created once, "
-            "utg_t passed per-chunk (eliminates per-chunk malloc)"
+    if lmm_mode == 3:
+        if caps.score_fused_ws:
+            return DispatchPath.FUSED_SCORE_WS
+        return DispatchPath.FUSED_SCORE if caps.score_fused else DispatchPath.SOA_SPLIT
+
+    if lmm_mode == 2:
+        if caps.lrt_fused_ws:
+            return DispatchPath.FUSED_LRT_WS
+        return DispatchPath.FUSED_LRT if caps.lrt_fused else DispatchPath.SOA_SPLIT
+
+    raise ValueError(
+        f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
+    )
+
+
+_PATH_LOG_MESSAGES = {
+    DispatchPath.FUSED: (
+        "Fused Uab path active: utg_t passed directly to C workspace "
+        "(eliminates uab_varying_soa buffer)"
+    ),
+    DispatchPath.FUSED_GENERAL: (
+        "Fused general Uab path active: utg_t passed directly to C workspace"
+    ),
+    DispatchPath.FUSED_SCORE_WS: (
+        "Fused Score workspace path active: workspace created once, "
+        "utg_t passed per-chunk (eliminates per-chunk malloc)"
+    ),
+    DispatchPath.FUSED_SCORE: (
+        "Fused Score path active: utg_t passed directly to C "
+        "(eliminates uab_varying_soa buffer for mode 3)"
+    ),
+    DispatchPath.FUSED_LRT_WS: (
+        "Fused LRT workspace path active: workspace created once, "
+        "utg_t passed per-chunk (eliminates per-chunk malloc/grid precompute)"
+    ),
+    DispatchPath.FUSED_LRT: (
+        "Fused LRT path active: utg_t passed directly to C "
+        "(eliminates uab_varying_soa buffer for mode 2)"
+    ),
+    DispatchPath.SOA_SPLIT_MODE4: (
+        "Mode-4 dispatch: fused kernel (Wald/Score/LRT single pass)"
+    ),
+}
+
+
+def _log_dispatch_choice(
+    path: DispatchPath, n_cvt: int, lmm_mode: LmmMode, caps: KernelCaps
+) -> None:
+    """Debug-log the chosen path. Pure side-effect."""
+    message = _PATH_LOG_MESSAGES.get(path)
+    if message is not None:
+        logger.debug(f"{message} (n_cvt={n_cvt}, mode={lmm_mode})")
+
+    if lmm_mode != 4:
+        return
+
+    if path is DispatchPath.FUSED_GENERAL:
+        logger.debug("Mode-4 dispatch: fused general Uab kernel (single pass)")
+    elif path is DispatchPath.FUSED:
+        logger.debug("Mode-4 dispatch: fused Uab kernel (single pass)")
+    elif path is DispatchPath.SOA_SPLIT:
+        reason = (
+            "fused general kernel unavailable"
+            if n_cvt > 1
+            else "fused kernel unavailable"
+            if not caps.mode4
+            else "C split extension unavailable"
         )
-    elif use_fused_score:
-        logger.debug(
-            "Fused Score path active: utg_t passed directly to C "
-            "(eliminates uab_varying_soa buffer for mode 3)"
-        )
-    if use_fused_lrt_ws:
-        logger.debug(
-            "Fused LRT workspace path active: workspace created once, "
-            "utg_t passed per-chunk (eliminates per-chunk malloc/grid precompute)"
-        )
-    elif use_fused_lrt:
-        logger.debug(
-            "Fused LRT path active: utg_t passed directly to C "
-            "(eliminates uab_varying_soa buffer for mode 2)"
-        )
+        logger.debug(f"Mode-4 dispatch: compose fallback ({reason})")

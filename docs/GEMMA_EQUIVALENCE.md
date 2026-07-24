@@ -301,7 +301,7 @@ versus mixed OpenBLAS/MKL at 85k.
 | `tests/test_kinship_validation.py::TestKinshipValidation` | Kinship matrix vs GEMMA |
 | `tests/test_runner_numpy.py` (tier0/tier1/tier2) | Wald/Score/LRT vs GEMMA (synthetic + mouse_hs1940) |
 | `tests/test_numpy_streaming.py::TestNumpyStreamingGemmaParity` (tier1) | Streaming runner vs GEMMA (all modes + covariates) |
-| `tests/test_lmm_accel.py` (tier0/tier1/tier2) | C extension Wald+covariate vs GEMMA |
+| `tests/lmm_accel/` (tier0/tier1/tier2) | C extension Wald+covariate vs GEMMA |
 
 Run kinship validation:
 
@@ -313,7 +313,7 @@ Run all GEMMA parity tests (spans tier0/tier1/tier2):
 
 ```bash
 # -m '' overrides the default tier filter from addopts
-uv run pytest tests/test_runner_numpy.py tests/test_numpy_streaming.py tests/test_lmm_accel.py -v -n0 -m ''
+uv run pytest tests/test_runner_numpy.py tests/test_numpy_streaming.py tests/lmm_accel/ -v -n0 -m ''
 ```
 
 Comprehensive formal validation across all 8 test configurations:

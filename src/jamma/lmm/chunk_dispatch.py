@@ -28,6 +28,22 @@ from jamma.lmm.compute_numpy import (
 )
 from jamma.lmm.dispatch import DispatchPath
 
+# The fused Wald/mode-4 kernels, keyed by (path, is mode 4). A table rather than
+# nested conditionals: the two axes are independent, so adding a fused variant is
+# a row here instead of another branch inside the dispatch match.
+_FUSED_KERNELS: dict[tuple[DispatchPath, bool], tuple[Callable[..., Any], str]] = {
+    (DispatchPath.FUSED, False): (compute_wald_fused_c_ws, "Fused Uab dispatch"),
+    (DispatchPath.FUSED, True): (compute_mode4_fused_c_ws, "Fused Uab dispatch"),
+    (DispatchPath.FUSED_GENERAL, False): (
+        compute_wald_fused_general_c_ws,
+        "Fused general Uab dispatch",
+    ),
+    (DispatchPath.FUSED_GENERAL, True): (
+        compute_mode4_fused_general_c_ws,
+        "Fused general mode-4 Uab dispatch",
+    ),
+}
+
 _ALL_RESULT_KEYS = (
     "lambdas",
     "logls",
@@ -278,20 +294,7 @@ def _dispatch_compute(
     """
     match ctx.dispatch:
         case DispatchPath.FUSED | DispatchPath.FUSED_GENERAL:
-            if ctx.dispatch is DispatchPath.FUSED_GENERAL:
-                if ctx.lmm_mode == 4:
-                    fused_fn = compute_mode4_fused_general_c_ws
-                    op_label = "Fused general mode-4 Uab dispatch"
-                else:
-                    fused_fn = compute_wald_fused_general_c_ws
-                    op_label = "Fused general Uab dispatch"
-            else:
-                fused_fn = (
-                    compute_mode4_fused_c_ws
-                    if ctx.lmm_mode == 4
-                    else compute_wald_fused_c_ws
-                )
-                op_label = "Fused Uab dispatch"
+            fused_fn, op_label = _FUSED_KERNELS[ctx.dispatch, ctx.lmm_mode == 4]
             return _guarded_compute(
                 fused_fn,
                 ctx.lmm_workspace,

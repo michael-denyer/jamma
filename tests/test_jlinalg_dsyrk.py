@@ -515,6 +515,28 @@ class TestDsyrkFallback:
         assert result is out
         npt.assert_allclose(out, X @ X.T + 0.5 * initial, rtol=1e-14, atol=0.0)
 
+    @pytest.mark.parametrize("n", [1, 2, 511, 512, 513, 1100])
+    def test_production_fallback_accumulation_spans_tiles(self, n: int) -> None:
+        """Row-block accumulation and tiled mirror agree with the reference.
+
+        The accumulating path fills only the lower triangle and mirrors it up,
+        both in tiles. These sizes straddle the mirror tile edge (512) and the
+        row-block divisor, so a tile boundary that dropped or double-counted a
+        strip would show up as an asymmetry or a wrong entry here.
+        """
+        from jamma.jlinalg import _dsyrk_numpy
+
+        rng = np.random.default_rng(1234 + n)
+        X = np.ascontiguousarray(rng.standard_normal((n, 7)))
+        initial = rng.standard_normal((n, n))
+        initial = initial + initial.T  # dsyrk's out contract assumes symmetry
+
+        out = initial.copy()
+        result = _dsyrk_numpy(X, out=out, beta=1.0)
+
+        npt.assert_allclose(result, initial + X @ X.T, rtol=1e-12, atol=1e-14)
+        npt.assert_array_equal(result, result.T)
+
     def test_fallback_1d_raises(self) -> None:
         """Fallback raises ValueError on 1-D input."""
         fb = self._get_fallback_dsyrk()

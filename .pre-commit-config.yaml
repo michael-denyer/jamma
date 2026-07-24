@@ -128,12 +128,15 @@ repos:
       - id: typos
   - repo: local
     hooks:
+      # Covers both C trees. The flags live in the script because this entry is
+      # split into arguments without a shell, which would strip the quotes the
+      # NPY_INTP_FMT define needs.
       - id: cppcheck
         name: cppcheck
-        entry: cppcheck --std=c11 --suppress=missingIncludeSystem --enable=warning --error-exitcode=1
-        language: system
+        entry: scripts/run-cppcheck.sh
+        language: script
         types: [c]
-        files: ^src/jamma/jlinalg/src/
+        files: ^src/jamma/(jlinalg/src|lmm)/
   - repo: local
     hooks:
       - id: uv-lock-sync

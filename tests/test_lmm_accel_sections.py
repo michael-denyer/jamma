@@ -131,6 +131,34 @@ def test_code_after_a_block_comment_closes_is_still_counted(
     assert _static(report, "helper")["ref_count"] == 2
 
 
+def test_module_registration_block_is_not_coupling(sections_module, capsys, tmp_path):
+    """A PyMethodDef entry is the module naming itself, not a family dependency.
+
+    The table sits at the end of the file, so without its own banner it is
+    attributed to whichever section precedes it and every entry point in the
+    module reads as shared with that one section.
+    """
+    source = tmp_path / "registered.c"
+    source.write_text(
+        TWO_SECTIONS
+        + f"""
+{BANNER}
+ * MODULE REGISTRATION — methods[]
+{BANNER} */
+static PyMethodDef methods[] = {{
+    {{"helper", (PyCFunction)helper, METH_VARARGS, "doc"}},
+    {{NULL, NULL, 0, NULL}},
+}};
+"""
+    )
+
+    report = _analyse(sections_module, capsys, source)
+
+    helper = _static(report, "helper")
+    assert helper["ref_count"] == 1, "method-table entries were counted as calls"
+    assert helper["ref_sections"] == [_static(report, "caller")["section"]]
+
+
 def test_line_comment_is_stripped(sections_module, capsys, tmp_path):
     source = tmp_path / "line_comment.c"
     source.write_text(TWO_SECTIONS + "\n// helper is documented here\n")

@@ -84,6 +84,19 @@ def _section_of(line: int, sections: list[Section]) -> int:
     return 0
 
 
+#: Section whose references are the module naming its own entry points rather
+#: than one family depending on another. Counting it makes every entry point
+#: look shared with whichever section happens to precede the table.
+_REGISTRATION_TITLE = "MODULE REGISTRATION"
+
+
+def _registration_span(sections: list[Section]) -> tuple[int, int] | None:
+    for section in sections:
+        if section.title.startswith(_REGISTRATION_TITLE):
+            return section.start, section.end
+    return None
+
+
 _SIGNATURE_SPAN = 40
 
 
@@ -176,7 +189,10 @@ def _strip_comments(lines: list[str]) -> list[str]:
 def _resolve_refs(lines: list[str], funcs: list[Func], sections: list[Section]) -> None:
     """Attribute every identifier occurrence outside a function's own body."""
     by_name = {f.name: f for f in funcs}
+    registration = _registration_span(sections)
     for lineno, code in enumerate(_strip_comments(lines), start=1):
+        if registration and registration[0] <= lineno <= registration[1]:
+            continue
         for ident in _IDENT.findall(code):
             func = by_name.get(ident)
             if func is None or func.line <= lineno <= func.end:

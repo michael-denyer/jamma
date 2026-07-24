@@ -498,10 +498,32 @@ class StreamingMemoryBreakdown(NamedTuple):
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
     rotation_buffer_gb: float  # n * chunk_size * 8 * pipeline_buffers bytes for UtG
     grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate
-    peak_kinship_gb: float  # Kinship phase alone (accumulator + genotype chunk)
+    dsyrk_scratch_gb: float  # Scratch the active dsyrk backend holds (0 when native)
+    peak_kinship_gb: float  # Kinship phase (accumulator + chunk + dsyrk scratch)
     total_peak_gb: float  # Max of phases (eigendecomp typically peak)
     available_gb: float  # Current available system memory
     sufficient: bool  # Whether available exceeds total plus margin (10% capped at 10GB)
+
+
+def _dsyrk_scratch_gb(n_samples: int) -> float:
+    """Scratch the active dsyrk backend holds during kinship accumulation.
+
+    Zero on the native path, which accumulates in place. The NumPy fallback
+    blocks its accumulation and holds one block-by-n product, so budgeting only
+    the accumulator would approve a run the fallback then OOMs. jlinalg owns the
+    block size, so it reports the figure rather than this module re-deriving it.
+
+    Zero too when jlinalg will not import: kinship accumulation goes through
+    ``jlinalg.dsyrk``, so there is no dsyrk phase left to budget for. The
+    pre-flight must still produce an estimate rather than raise.
+    """
+    try:
+        from jamma.jlinalg import dsyrk_scratch_bytes  # deferred: jlinalg is heavy
+    except ImportError:
+        logger.debug("Could not import jlinalg; assuming no dsyrk scratch.")
+        return 0.0
+
+    return dsyrk_scratch_bytes(n_samples) / 1e9
 
 
 def _streaming_component_sizes(
@@ -615,7 +637,8 @@ def estimate_streaming_memory(
     uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt, use_fused=False)
 
     # Peak memory calculation by workflow phase
-    peak_kinship = kinship_gb + chunk_gb
+    dsyrk_scratch_gb = _dsyrk_scratch_gb(n_samples)
+    peak_kinship = kinship_gb + chunk_gb + dsyrk_scratch_gb
     # Eigendecomp: conservative non-inplace estimate (K + U + workspace).
     # Inplace DSYEVD saves one N×N matrix but requires vendor detection at
     # runtime — check_memory_before_run() uses the tighter
@@ -635,6 +658,7 @@ def estimate_streaming_memory(
         chunk_gb=chunk_gb,
         rotation_buffer_gb=rotation_buffer_gb,
         grid_reml_gb=grid_reml_gb,
+        dsyrk_scratch_gb=dsyrk_scratch_gb,
         peak_kinship_gb=peak_kinship,
         total_peak_gb=total_peak_gb,
         available_gb=available_gb,
@@ -707,6 +731,7 @@ def estimate_lmm_streaming_memory(
         chunk_gb=chunk_gb,
         rotation_buffer_gb=rotation_buffer_gb,
         grid_reml_gb=grid_reml_gb,
+        dsyrk_scratch_gb=0.0,  # dsyrk runs in the kinship phase, which is skipped
         peak_kinship_gb=0.0,  # kinship supplied by the caller; no kinship phase
         total_peak_gb=total_peak_gb,
         available_gb=available_gb,

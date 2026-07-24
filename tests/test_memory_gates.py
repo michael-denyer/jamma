@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from jamma.core.memory import StreamingMemoryBreakdown, check_memory_available
@@ -280,7 +281,9 @@ class TestKinshipOnlyPreflight:
 
         est = estimate_streaming_memory(50_000, chunk_size=10_000)
 
-        assert est.peak_kinship_gb == pytest.approx(est.kinship_gb + est.chunk_gb)
+        assert est.peak_kinship_gb == pytest.approx(
+            est.kinship_gb + est.chunk_gb + est.dsyrk_scratch_gb
+        )
         assert est.peak_kinship_gb < est.total_peak_gb, (
             "eigendecomp phase should dominate the workflow max at this scale"
         )
@@ -315,3 +318,115 @@ class TestKinshipOnlyPreflight:
         with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
             with pytest.raises(MemoryError, match="Insufficient memory"):
                 _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
+
+
+@pytest.mark.tier0
+class TestNumpyFallbackKinshipMemory:
+    """The NumPy DSYRK fallback must hold no more than it declares.
+
+    ``_preflight_kinship_memory`` budgets the accumulator, one genotype chunk,
+    and whatever ``jlinalg.dsyrk_scratch_bytes`` declares. The fallback once
+    allocated a full N x N ``np.dot`` result plus the N^2/2 index arrays a
+    whole-matrix mirror needs, none of it declared, so the gate could approve a
+    run that then OOMs. These tests pin the declaration to the real allocation.
+
+    Measured with ``tracemalloc`` because the claim is about numpy allocations.
+    RSS is the wrong instrument: the first matmul faults in ~115 MB of one-time
+    Accelerate thread-pool state that no later call repeats, which swamps the
+    per-call scratch at these sizes and scales with nothing in the estimate.
+    """
+
+    # Python object headers on the transient arrays. Measured at 1416 bytes and
+    # flat in n; the budget it guards is expressed in GB.
+    _HEADER_SLACK_BYTES = 64 << 10
+
+    @staticmethod
+    def _fallback_peak_bytes(monkeypatch, n: int, batch: int) -> tuple[int, int]:
+        """Return (measured peak, declared bound) for one fallback accumulation.
+
+        Forces the fallback by swapping the resolved backend, which is BLAS
+        detection state rather than numerical behaviour.
+        """
+        import gc
+        import tracemalloc
+
+        from jamma import jlinalg
+        from jamma.kinship.compute import _accumulate_kinship
+
+        monkeypatch.setattr(
+            jlinalg,
+            "_dsyrk_backend",
+            jlinalg._dsyrk_numpy_impl,
+            # allow-patch: forces the dispatch fallback. _dsyrk_backend is
+            # resolved from blas_has_dsyrk at import time, so toggling that
+            # flag afterwards would not redirect dispatch.
+        )
+
+        K = np.zeros((n, n))
+        X = np.ascontiguousarray(np.random.default_rng(1).standard_normal((n, batch)))
+        _accumulate_kinship(K, X)  # warm BLAS so its one-time state is excluded
+
+        gc.collect()
+        tracemalloc.start()
+        try:
+            before = tracemalloc.get_traced_memory()[0]
+            _accumulate_kinship(K, X)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        return peak - before, jlinalg.dsyrk_scratch_bytes(n)
+
+    @pytest.mark.parametrize("n", [1000, 3000])
+    def test_fallback_holds_no_more_than_it_declares(self, monkeypatch, n):
+        """Whatever the fallback allocates must be covered by its declaration."""
+        measured, declared = self._fallback_peak_bytes(monkeypatch, n, 200)
+
+        assert declared > 0, "fallback must declare a non-zero scratch bound"
+        assert measured <= declared + self._HEADER_SLACK_BYTES, (
+            f"n={n}: fallback held {measured / 1e6:.2f} MB but declares "
+            f"{declared / 1e6:.2f} MB; the kinship pre-flight budgets the "
+            f"declared figure, so the gate would approve a run that OOMs"
+        )
+
+    def test_fallback_scratch_stays_far_below_the_accumulator(self, monkeypatch):
+        """The declared bound must be a fraction of the matrix, not a multiple."""
+        n = 3000
+        _measured, declared = self._fallback_peak_bytes(monkeypatch, n, 200)
+
+        assert declared < n * n * 8 // 4, (
+            f"fallback declares {declared / 1e6:.2f} MB against a "
+            f"{n * n * 8 / 1e6:.0f} MB accumulator; blocking should keep the "
+            f"scratch well under a quarter of the output"
+        )
+
+    def test_estimator_budgets_the_declared_scratch(self, monkeypatch):
+        """The kinship phase peak must include the fallback's declaration."""
+        from jamma import jlinalg
+        from jamma.core.memory import estimate_streaming_memory
+
+        monkeypatch.setattr(
+            jlinalg,
+            "_dsyrk_backend",
+            jlinalg._dsyrk_numpy_impl,
+            # allow-patch: forces the dispatch fallback. _dsyrk_backend is
+            # resolved from blas_has_dsyrk at import time, so toggling that
+            # flag afterwards would not redirect dispatch.
+        )
+
+        est = estimate_streaming_memory(50_000, chunk_size=10_000)
+
+        assert est.dsyrk_scratch_gb == pytest.approx(
+            jlinalg.dsyrk_scratch_bytes(50_000) / 1e9
+        )
+        assert est.peak_kinship_gb == pytest.approx(
+            est.kinship_gb + est.chunk_gb + est.dsyrk_scratch_gb
+        )
+
+    def test_native_backend_declares_no_scratch(self):
+        """The native path accumulates in place, so it budgets nothing extra."""
+        from jamma import jlinalg
+
+        if jlinalg._dsyrk_backend is jlinalg._dsyrk_numpy_impl:
+            pytest.skip("no native dsyrk on this build")
+
+        assert jlinalg.dsyrk_scratch_bytes(50_000) == 0

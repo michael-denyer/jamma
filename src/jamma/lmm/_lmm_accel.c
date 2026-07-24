@@ -60,7 +60,16 @@
  *   df = n_samples - 2 (n_cvt=1)
  */
 
+/* _lmm_support.h must stay first: it is what pulls in <Python.h>, and CPython
+ * requires that before any standard header. The concrete failure here is M_PI,
+ * which is not C11 — glibc's <math.h> only defines it under __USE_XOPEN, set by
+ * the _XOPEN_SOURCE that Python.h defines. Let another header reach <math.h>
+ * first and the include guard blocks the later expansion, so every M_PI below
+ * fails to compile on Linux while macOS, whose libc defines it
+ * unconditionally, builds clean. */
 #include "_lmm_support.h"
+
+#include "_lmm_stats.h"
 #include <assert.h>
 #include <limits.h>
 #include <math.h>
@@ -80,11 +89,6 @@
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
 #define ABI_VERSION 11  /* v11: Persistent Score/LRT workspaces (eliminate per-chunk malloc) */
-
-/* Betainc continued fraction constants — matches special.py */
-#define CF_TINY     1.0e-30
-#define CF_STOP     1.0e-14
-#define CF_MAX_ITER 200
 
 /* REML sentinel: replaces NaN log-likelihood from degenerate P_yy.
  * reml_finish returns NaN when P_yy < 0; the golden section callers
@@ -252,114 +256,6 @@ static inline int score_from_pab(
     }
 
     return 1;  /* valid */
-}
-
-/* -------------------------------------------------------------------------
- * betainc_cf
- *
- * Lentz continued fraction for regularized incomplete beta I_x(a, b).
- * Based on special.py _betainc_cf / codeplea incbeta (zlib license).
- * Differs: takes precomputed lbeta_ab to avoid per-call lgamma;
- * returns NaN (not exception) on non-convergence.
- * Caller guarantees x < (a+1)/(a+b+2) (symmetry threshold).
- * ------------------------------------------------------------------------- */
-static double betainc_cf(double a, double b, double x, double lbeta_ab)
-{
-    double front = exp(log(x) * a + log(1.0 - x) * b - lbeta_ab) / a;
-
-    double f = 1.0, c = 1.0, d = 0.0;
-
-    for (int i = 0; i <= CF_MAX_ITER; i++) {
-        int m = i / 2;
-        double numerator;
-        if (i == 0) {
-            numerator = 1.0;
-        } else if (i % 2 == 0) {
-            double mf = (double)m;
-            numerator = (mf * (b - mf) * x) /
-                        ((a + 2.0 * mf - 1.0) * (a + 2.0 * mf));
-        } else {
-            double mf = (double)m;
-            numerator = -((a + mf) * (a + b + mf) * x) /
-                         ((a + 2.0 * mf) * (a + 2.0 * mf + 1.0));
-        }
-
-        d = 1.0 + numerator * d;
-        if (fabs(d) < CF_TINY) d = CF_TINY;
-        d = 1.0 / d;
-
-        c = 1.0 + numerator / c;
-        if (fabs(c) < CF_TINY) c = CF_TINY;
-
-        double cd = c * d;
-        f *= cd;
-
-        if (fabs(1.0 - cd) < CF_STOP) {
-            return front * (f - 1.0);
-        }
-    }
-    return (double)NAN;  /* non-convergence */
-}
-
-/* -------------------------------------------------------------------------
- * betainc
- *
- * Regularized incomplete beta I_z(a, b) with symmetry relation.
- * Matches special.py betainc() scalar interface.
- *
- * complement_z is the algebraically exact 1-z, used for precision near z=1.
- * ------------------------------------------------------------------------- */
-static double betainc(
-    double a,
-    double b,
-    double z,
-    double complement_z,
-    double lbeta_ab
-)
-{
-    if (z <= 0.0) return 0.0;
-    if (z >= 1.0) return 1.0;
-
-    double threshold = (a + 1.0) / (a + b + 2.0);
-    if (z <= threshold) {
-        return betainc_cf(a, b, z, lbeta_ab);
-    } else {
-        return 1.0 - betainc_cf(b, a, complement_z, lbeta_ab);
-    }
-}
-
-/* -------------------------------------------------------------------------
- * f_to_pvalue
- *
- * Convert F-statistic to p-value via regularized incomplete beta.
- * Matches _f_to_pvalue in likelihood_numpy.py.
- * Returns NaN if is_valid is false (degenerate SNP).
- * ------------------------------------------------------------------------- */
-static double f_to_pvalue(
-    double f_stat,
-    int df,
-    int is_valid,
-    double a,
-    double b,
-    double lbeta_ab
-)
-{
-    if (!is_valid) return (double)NAN;
-    if (f_stat <= 0.0) return 1.0;
-
-    double f_safe = (f_stat > 1e-10) ? f_stat : 1e-10;
-    double denom = (double)df + f_safe;
-    double z = (double)df / denom;
-    double complement_z = f_safe / denom;  /* algebraically exact 1-z */
-
-    if (z < 0.0) z = 0.0;
-    if (z > 1.0) z = 1.0;
-
-    double p = betainc(a, b, z, complement_z, lbeta_ab);
-    /* Clamp to [0, 1] — continued fraction FP accumulation can overshoot. */
-    if (p < 0.0) p = 0.0;
-    if (p > 1.0) p = 1.0;
-    return p;
 }
 
 /* -------------------------------------------------------------------------
@@ -3235,21 +3131,6 @@ err_input:
  *   - Uses n_samples instead of df = n_samples - n_cvt - 1
  *   - MLE constant: 0.5 * n * (log(n) - log(2*pi) - 1)
  * ========================================================================= */
-
-/* -------------------------------------------------------------------------
- * chi2_sf_c
- *
- * Chi-squared survival function for df=1: P(X > x) = erfc(sqrt(x/2)).
- * Uses C99 erfc() from math.h — no custom implementation needed.
- * Matches special.py chi2_sf exactly.
- * ------------------------------------------------------------------------- */
-static inline double chi2_sf_c(double x)
-{
-    if (isnan(x)) return x;          /* NaN propagation */
-    if (x <= 0.0) return 1.0;
-    if (!isfinite(x)) return 0.0;   /* +inf → 0 */
-    return erfc(sqrt(x / 2.0));
-}
 
 /* -------------------------------------------------------------------------
  * mle_finish

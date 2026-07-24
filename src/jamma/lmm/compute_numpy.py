@@ -17,12 +17,12 @@ The caller is responsible for:
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict
 
 import numpy as np
 
+from jamma.core.constants import env_flag
 from jamma.lmm.likelihood_numpy import (
     _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
@@ -270,7 +270,7 @@ def _try_import_accel() -> AccelImport:
     """
     # Phase 116.1: same convention as jamma.jlinalg.__init__ — truthy values
     # are anything other than "", "0".
-    if os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK", "").strip() not in ("", "0"):
+    if env_flag("JAMMA_FORCE_NUMPY_FALLBACK"):
         return _ACCEL_UNAVAILABLE
 
     try:
@@ -343,9 +343,7 @@ def _auto_recompile() -> bool:
     )
 
 
-_FORCE_NUMPY_FALLBACK = os.environ.get(
-    "JAMMA_FORCE_NUMPY_FALLBACK", ""
-).strip() not in ("", "0")
+_FORCE_NUMPY_FALLBACK = env_flag("JAMMA_FORCE_NUMPY_FALLBACK")
 
 # Auto-recompile and retry once if the C extension is unavailable. Phase 116.1:
 # when JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry — auto_recompile would

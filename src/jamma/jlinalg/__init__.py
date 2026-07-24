@@ -41,10 +41,11 @@ Env vars:
 from __future__ import annotations
 
 import importlib.util
-import os
 import warnings
 
 import numpy as _np
+
+from jamma.core.constants import env_flag
 
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
@@ -193,10 +194,7 @@ _dsyrk_backend = _dsyrk_numpy_impl
 # than disabling downstream calls) means dlopen never runs, so ASAN's
 # interceptors never see the unowned BLAS-internal pointers. Truthy
 # values: anything other than "", "0".
-_FORCE_NUMPY = os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK", "").strip() not in (
-    "",
-    "0",
-)
+_FORCE_NUMPY = env_flag("JAMMA_FORCE_NUMPY_FALLBACK")
 
 if _FORCE_NUMPY:
     # Skip the _jlinalg.so import entirely. HAS_C_EXTENSION stays False; the

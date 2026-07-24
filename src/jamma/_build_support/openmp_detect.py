@@ -37,6 +37,17 @@ from collections.abc import Callable
 from pathlib import Path
 
 
+def openmp_disabled_by_env() -> bool:
+    """Return whether JAMMA_NO_OPENMP disables OpenMP.
+
+    Applies the same presence-based rule as ``jamma.core.constants.env_flag``,
+    spelled out here because ``_build_support`` runs under PEP 517 build
+    isolation with no runtime jamma module importable. Named rather than inline
+    so a test can hold the two spellings against each other.
+    """
+    return os.environ.get("JAMMA_NO_OPENMP", "").strip() not in ("", "0")
+
+
 def detect_openmp_flags(
     cc_cmd: str,
     system: str,
@@ -60,7 +71,7 @@ def detect_openmp_flags(
     """
     if _warn is None:
         _warn = _print
-    if os.environ.get("JAMMA_NO_OPENMP", "").strip() not in ("", "0"):
+    if openmp_disabled_by_env():
         _print(
             "OpenMP disabled (JAMMA_NO_OPENMP set). "
             "C extensions will be single-threaded."

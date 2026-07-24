@@ -522,3 +522,49 @@ def test_write_arrays_batch_with_lazy_snp_meta(tmp_path: Path) -> None:
     assert first_data[0] == "1"  # chr
     assert first_data[1] == "rs100"  # rs
     assert first_data[2] == "1000"  # pos
+
+
+@pytest.mark.tier0
+class TestEnvFlag:
+    """Every JAMMA toggle shares one truthiness rule.
+
+    The rule was re-spelled at six call sites across five environment
+    variables, so the accepted values could drift apart. These pin the
+    documented behaviour: presence-based, with only unset/""/"0" meaning off.
+    """
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (None, False),
+            ("", False),
+            ("0", False),
+            ("  0  ", False),
+            ("1", True),
+            ("yes", True),
+            # Deliberate: presence-based, so these read as ON. Documented in
+            # docs/CONFIGURATION.md and in env_flag's own docstring.
+            ("false", True),
+            ("off", True),
+            ("no", True),
+        ],
+    )
+    def test_truthiness(self, monkeypatch, value, expected):
+        from jamma.core.constants import env_flag
+
+        name = "JAMMA_TEST_FLAG"
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+        assert env_flag(name) is expected
+
+    def test_build_support_copy_matches(self, monkeypatch):
+        """openmp_detect cannot import env_flag; its inline rule must agree."""
+        from jamma._build_support.openmp_detect import openmp_disabled_by_env
+        from jamma.core.constants import env_flag
+
+        for value in ("", "0", "1", "false", "off"):
+            monkeypatch.setenv("JAMMA_NO_OPENMP", value)
+            assert openmp_disabled_by_env() == env_flag("JAMMA_NO_OPENMP"), value

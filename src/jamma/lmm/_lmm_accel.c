@@ -9476,6 +9476,16 @@ static PyObject *jamma_sentinel_oob(PyObject *self, PyObject *args)
 }
 #endif
 
+/* =========================================================================
+ * MODULE REGISTRATION — methods[], PyModuleDef, PyInit__lmm_accel
+ *
+ * Every entry point in the file is named here.  That is the module defining
+ * itself, not a family depending on another family, so scripts/
+ * lmm_accel_sections.py excludes this block when it counts cross-section
+ * coupling.  Without the banner the whole table reads as part of whichever
+ * section precedes it, and 28 entry points look shared when none are.
+ * ========================================================================= */
+
 static PyMethodDef methods[] = {
     {
         "compute_lmm_batch_c",

@@ -84,6 +84,19 @@ def _section_of(line: int, sections: list[Section]) -> int:
     return 0
 
 
+#: Section whose references are the module naming its own entry points rather
+#: than one family depending on another. Counting it makes every entry point
+#: look shared with whichever section happens to precede the table.
+_REGISTRATION_TITLE = "MODULE REGISTRATION"
+
+
+def _registration_span(sections: list[Section]) -> tuple[int, int] | None:
+    for section in sections:
+        if section.title.startswith(_REGISTRATION_TITLE):
+            return section.start, section.end
+    return None
+
+
 _SIGNATURE_SPAN = 40
 
 
@@ -138,11 +151,48 @@ def _typedefs(lines: list[str]) -> list[str]:
     return sorted({m.group(1) for line in lines if (m := _TYPEDEF_END.match(line))})
 
 
+def _strip_comments(lines: list[str]) -> list[str]:
+    """Blank out comment text, keeping one output line per input line.
+
+    Block comments span lines, so their interior carries no ``/*`` to split on.
+    Stripping line by line reads that prose as code and reports references that
+    do not exist.
+    """
+    out: list[str] = []
+    in_block = False
+    for line in lines:
+        code: list[str] = []
+        i = 0
+        while i < len(line):
+            if in_block:
+                close = line.find("*/", i)
+                if close < 0:
+                    break
+                in_block = False
+                i = close + 2
+                continue
+            block = line.find("/*", i)
+            inline = line.find("//", i)
+            if inline >= 0 and (block < 0 or inline < block):
+                code.append(line[i:inline])
+                break
+            if block < 0:
+                code.append(line[i:])
+                break
+            code.append(line[i:block])
+            in_block = True
+            i = block + 2
+        out.append("".join(code))
+    return out
+
+
 def _resolve_refs(lines: list[str], funcs: list[Func], sections: list[Section]) -> None:
     """Attribute every identifier occurrence outside a function's own body."""
     by_name = {f.name: f for f in funcs}
-    for lineno, line in enumerate(lines, start=1):
-        code = line.split("/*")[0].split("//")[0]
+    registration = _registration_span(sections)
+    for lineno, code in enumerate(_strip_comments(lines), start=1):
+        if registration and registration[0] <= lineno <= registration[1]:
+            continue
         for ident in _IDENT.findall(code):
             func = by_name.get(ident)
             if func is None or func.line <= lineno <= func.end:

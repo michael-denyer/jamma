@@ -37,6 +37,19 @@ BASELINE_SOURCES: tuple[str, ...] = (
     "snp_stats.c",
 )
 
+# LMM accelerator sources — callers supply their own source directory.
+# _lmm_accel.c owns import_array(); every other unit here must define
+# NO_IMPORT_ARRAY before including _lmm_support.h, or its NumPy C-API pointer
+# stays NULL and the first PyArray_* call segfaults. Both entry points that
+# build the accelerator (hatch_build.py, _compile_accel.py) read this tuple, so
+# a new source lands in the wheel and the dev rebuild together. macOS links
+# with -undefined dynamic_lookup, so a source missing from here does NOT fail
+# the link — it fails at import, or silently much later.
+LMM_ACCEL_SOURCES: tuple[str, ...] = (
+    "_lmm_accel.c",
+    "_lmm_support.c",
+)
+
 # LAPACK sources require strict IEEE 754 (-O2 -fno-fast-math) — no unrolling,
 # no fast-math — to match vendor LAPACK's numerical guarantees. Relaxing the
 # split (e.g. moving eigh.c into BASELINE_SOURCES or loosening LAPACK_CFLAGS)

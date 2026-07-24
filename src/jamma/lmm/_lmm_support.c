@@ -1,0 +1,467 @@
+/*
+ * _lmm_support.c — see _lmm_support.h for what lives here and why.
+ *
+ * NO_IMPORT_ARRAY: _lmm_accel.c owns import_array(); this unit shares its
+ * PyArray_API through PY_ARRAY_UNIQUE_SYMBOL. See the header.
+ */
+
+#define NO_IMPORT_ARRAY
+#include "_lmm_support.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+double *alloc_aligned_doubles(size_t n)
+{
+    if (n == 0) return NULL;
+    size_t raw = n * sizeof(double);
+    if (raw / sizeof(double) != n) return NULL;  /* overflow check */
+    size_t bytes = (raw + 31) & ~(size_t)31;
+    return (double *)aligned_alloc(32, bytes);
+}
+
+double **alloc_thread_scratch(int n_threads, size_t n)
+{
+    /* calloc'd so a partial failure leaves unfilled slots NULL. */
+    double **bufs = (double **)calloc((size_t)n_threads, sizeof(double *));
+    if (!bufs) return NULL;
+    for (int t = 0; t < n_threads; t++) {
+        bufs[t] = alloc_aligned_doubles(n);
+        if (!bufs[t]) {
+            for (int u = 0; u < n_threads; u++) free(bufs[u]);
+            free(bufs);
+            return NULL;
+        }
+    }
+    return bufs;
+}
+
+void free_thread_scratch(double **bufs, int n_threads)
+{
+    if (!bufs) return;
+    for (int t = 0; t < n_threads; t++) free(bufs[t]);
+    free(bufs);
+}
+
+int validate_eigenvalues(const double *data, int n_samples)
+{
+    for (int i = 0; i < n_samples; i++) {
+        if (!isfinite(data[i])) {
+            /* PyErr_Format doesn't support %g — use snprintf + %s instead */
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", data[i]);
+            PyErr_Format(PyExc_ValueError,
+                "eigenvalues[%d] = %s is not finite. "
+                "Check kinship matrix and eigendecomposition quality.", i, buf);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int validate_batch_params(int n_samples, double l_min, double l_max,
+                          int n_grid, int n_refine)
+{
+    if (n_samples < 3) {
+        PyErr_SetString(PyExc_ValueError, "n_samples must be >= 3");
+        return -1;
+    }
+    if (!(l_min > 0.0 && l_max > l_min)) {
+        PyErr_SetString(PyExc_ValueError, "Require 0 < l_min < l_max");
+        return -1;
+    }
+    if (n_grid < 2) {
+        PyErr_SetString(PyExc_ValueError, "n_grid must be >= 2");
+        return -1;
+    }
+    if (n_refine < 1) {
+        PyErr_SetString(PyExc_ValueError, "n_refine must be >= 1");
+        return -1;
+    }
+    return 0;
+}
+
+int warn_betainc_convergence(
+    const double *betas, const double *pvalues, int n_snps)
+{
+    int n_betainc_nan = 0;
+    for (int i = 0; i < n_snps; i++) {
+        if (isfinite(betas[i]) && !isfinite(pvalues[i]))
+            n_betainc_nan++;
+    }
+    if (n_betainc_nan > 0) {
+        if (PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
+                "%d SNPs have NaN p-values despite finite beta/SE — "
+                "betainc continued fraction did not converge "
+                "(extreme F-statistics). Consider checking these SNPs manually.",
+                n_betainc_nan) < 0) {
+            return -1;  /* warning promoted to exception */
+        }
+    }
+    return 0;
+}
+
+int alloc_output_arrays(output_arrays_t *out, npy_intp n_snps)
+{
+    npy_intp dims[1] = { n_snps };
+    out->lambdas = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->logls   = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->betas   = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->ses     = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->pwalds  = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+
+    if (!out->lambdas || !out->logls || !out->betas || !out->ses || !out->pwalds) {
+        Py_XDECREF(out->lambdas);
+        Py_XDECREF(out->logls);
+        Py_XDECREF(out->betas);
+        Py_XDECREF(out->ses);
+        Py_XDECREF(out->pwalds);
+        return -1;
+    }
+    return 0;
+}
+
+void decref_output_arrays(output_arrays_t *out)
+{
+    Py_DECREF(out->lambdas);
+    Py_DECREF(out->logls);
+    Py_DECREF(out->betas);
+    Py_DECREF(out->ses);
+    Py_DECREF(out->pwalds);
+}
+
+PyObject *build_result_dict(output_arrays_t *out)
+{
+    PyObject *result = PyDict_New();
+    if (!result) {
+        decref_output_arrays(out);
+        return NULL;
+    }
+
+    if (PyDict_SetItemString(result, "lambdas",  (PyObject *)out->lambdas)  < 0 ||
+        PyDict_SetItemString(result, "logls",    (PyObject *)out->logls)    < 0 ||
+        PyDict_SetItemString(result, "betas",    (PyObject *)out->betas)    < 0 ||
+        PyDict_SetItemString(result, "ses",      (PyObject *)out->ses)      < 0 ||
+        PyDict_SetItemString(result, "pwalds",   (PyObject *)out->pwalds)   < 0) {
+        Py_DECREF(result);
+        decref_output_arrays(out);
+        return NULL;
+    }
+
+    decref_output_arrays(out);
+    return result;
+}
+
+int alloc_score_output(score_output_t *out, npy_intp n_snps)
+{
+    npy_intp dims[1] = { n_snps };
+    out->betas    = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->ses      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->p_scores = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+
+    if (!out->betas || !out->ses || !out->p_scores) {
+        Py_XDECREF(out->betas);
+        Py_XDECREF(out->ses);
+        Py_XDECREF(out->p_scores);
+        return -1;
+    }
+    return 0;
+}
+
+void decref_score_output(score_output_t *out)
+{
+    Py_DECREF(out->betas);
+    Py_DECREF(out->ses);
+    Py_DECREF(out->p_scores);
+}
+
+PyObject *build_score_result_dict(score_output_t *out)
+{
+    PyObject *result = PyDict_New();
+    if (!result) {
+        decref_score_output(out);
+        return NULL;
+    }
+
+    if (PyDict_SetItemString(result, "betas",    (PyObject *)out->betas)    < 0 ||
+        PyDict_SetItemString(result, "ses",      (PyObject *)out->ses)      < 0 ||
+        PyDict_SetItemString(result, "p_scores", (PyObject *)out->p_scores) < 0) {
+        Py_DECREF(result);
+        decref_score_output(out);
+        return NULL;
+    }
+
+    decref_score_output(out);
+    return result;
+}
+
+int alloc_lrt_output(lrt_output_t *out, npy_intp n_snps)
+{
+    npy_intp dims[1] = { n_snps };
+    out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+
+    if (!out->lambdas_mle || !out->p_lrts) {
+        Py_XDECREF(out->lambdas_mle);
+        Py_XDECREF(out->p_lrts);
+        return -1;
+    }
+    return 0;
+}
+
+void decref_lrt_output(lrt_output_t *out)
+{
+    Py_DECREF(out->lambdas_mle);
+    Py_DECREF(out->p_lrts);
+}
+
+PyObject *build_lrt_result_dict(lrt_output_t *out)
+{
+    PyObject *result = PyDict_New();
+    if (!result) {
+        decref_lrt_output(out);
+        return NULL;
+    }
+
+    if (PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
+        PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0) {
+        Py_DECREF(result);
+        decref_lrt_output(out);
+        return NULL;
+    }
+
+    decref_lrt_output(out);
+    return result;
+}
+
+int alloc_mode4_output(mode4_output_t *out, npy_intp n_snps)
+{
+    npy_intp dims[1] = { n_snps };
+    out->lambdas     = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->logls       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->betas       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->ses         = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->pwalds      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->p_scores    = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+
+    if (!out->lambdas || !out->logls || !out->betas || !out->ses ||
+        !out->pwalds || !out->p_scores || !out->lambdas_mle || !out->p_lrts) {
+        Py_XDECREF(out->lambdas);
+        Py_XDECREF(out->logls);
+        Py_XDECREF(out->betas);
+        Py_XDECREF(out->ses);
+        Py_XDECREF(out->pwalds);
+        Py_XDECREF(out->p_scores);
+        Py_XDECREF(out->lambdas_mle);
+        Py_XDECREF(out->p_lrts);
+        return -1;
+    }
+    return 0;
+}
+
+void decref_mode4_output(mode4_output_t *out)
+{
+    Py_XDECREF(out->lambdas);
+    Py_XDECREF(out->logls);
+    Py_XDECREF(out->betas);
+    Py_XDECREF(out->ses);
+    Py_XDECREF(out->pwalds);
+    Py_XDECREF(out->p_scores);
+    Py_XDECREF(out->lambdas_mle);
+    Py_XDECREF(out->p_lrts);
+}
+
+PyObject *build_mode4_result_dict(mode4_output_t *out)
+{
+    PyObject *result = PyDict_New();
+    if (!result) {
+        decref_mode4_output(out);
+        return NULL;
+    }
+
+    if (PyDict_SetItemString(result, "lambdas",     (PyObject *)out->lambdas)     < 0 ||
+        PyDict_SetItemString(result, "logls",       (PyObject *)out->logls)       < 0 ||
+        PyDict_SetItemString(result, "betas",       (PyObject *)out->betas)       < 0 ||
+        PyDict_SetItemString(result, "ses",         (PyObject *)out->ses)         < 0 ||
+        PyDict_SetItemString(result, "pwalds",      (PyObject *)out->pwalds)      < 0 ||
+        PyDict_SetItemString(result, "p_scores",    (PyObject *)out->p_scores)    < 0 ||
+        PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
+        PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0) {
+        Py_DECREF(result);
+        decref_mode4_output(out);
+        return NULL;
+    }
+
+    decref_mode4_output(out);
+    return result;
+}
+
+int *parse_int32_array(PyObject *obj, int expected_len, const char *name)
+{
+    PyArrayObject *arr = (PyArrayObject *)PyArray_FROM_OTF(
+        obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
+    if (!arr) return NULL;
+    if (PyArray_SIZE(arr) != expected_len) {
+        PyErr_Format(PyExc_ValueError, "%s must have %d elements", name, expected_len);
+        Py_DECREF(arr);
+        return NULL;
+    }
+    int *copy = (int *)malloc((size_t)expected_len * sizeof(int));
+    if (!copy) { Py_DECREF(arr); PyErr_NoMemory(); return NULL; }
+    memcpy(copy, PyArray_DATA(arr), (size_t)expected_len * sizeof(int));
+    Py_DECREF(arr);
+    return copy;
+}
+
+int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples)
+{
+    /* Read scalar integers from dict */
+#define GETINT(key, field) do { \
+    PyObject *v = PyDict_GetItemString(dict, key); \
+    if (!v) { PyErr_Format(PyExc_KeyError, "pab_table_dict missing key '%s'", key); return -1; } \
+    (field) = (int)PyLong_AsLong(v); \
+    if (PyErr_Occurred()) { PyErr_Format(PyExc_TypeError, "pab_table_dict key '%s' must be int", key); return -1; } \
+} while(0)
+
+    GETINT("n_cvt",   t->n_cvt);
+    GETINT("n_index", t->n_index);
+    GETINT("n_rows",  t->n_rows);
+    GETINT("n_inv",   t->n_inv);
+    GETINT("n_var",   t->n_var);
+    GETINT("idx_xx",  t->idx_xx);
+    GETINT("idx_xy",  t->idx_xy);
+    GETINT("idx_yy",  t->idx_yy);
+#undef GETINT
+
+    t->df = n_samples - t->n_cvt - 1;
+
+    /* Validate basic integrity */
+    if (t->n_cvt < 1 || t->n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, t->n_cvt);
+        return -1;
+    }
+    if (t->n_rows < 1 || t->n_rows > MAX_N_ROWS) {
+        PyErr_Format(PyExc_ValueError, "n_rows must be 1..%d, got %d", MAX_N_ROWS, t->n_rows);
+        return -1;
+    }
+    if (t->n_inv + t->n_var != t->n_index) {
+        PyErr_Format(PyExc_ValueError, "n_inv (%d) + n_var (%d) != n_index (%d)",
+                     t->n_inv, t->n_var, t->n_index);
+        return -1;
+    }
+    if (t->idx_xx < 0 || t->idx_xx >= t->n_index ||
+        t->idx_xy < 0 || t->idx_xy >= t->n_index ||
+        t->idx_yy < 0 || t->idx_yy >= t->n_index) {
+        PyErr_Format(PyExc_ValueError,
+            "idx_xx/xy/yy out of range [0, %d): got %d, %d, %d",
+            t->n_index, t->idx_xx, t->idx_xy, t->idx_yy);
+        return -1;
+    }
+
+    /* Initialise all pointer fields to NULL so free_pab_table is safe on partial init */
+    t->invariant_indices = NULL;
+    t->varying_indices   = NULL;
+    t->logdet_diag_rows  = NULL;
+    t->logdet_diag_cols  = NULL;
+    t->level_offsets     = NULL;
+    t->level_counts      = NULL;
+    t->entries           = NULL;
+
+    /* Parse array fields — free_pab_table on failure (safe: pointers NULL-init'd) */
+#define GETARR(key, field, len) do { \
+    PyObject *obj = PyDict_GetItemString(dict, key); \
+    if (!obj) { PyErr_Format(PyExc_KeyError, "pab_table_dict missing key '%s'", key); free_pab_table(t); return -1; } \
+    (field) = parse_int32_array(obj, (len), key); \
+    if (!(field)) { free_pab_table(t); return -1; } \
+} while(0)
+
+    GETARR("invariant_indices", t->invariant_indices, t->n_inv);
+    GETARR("varying_indices",   t->varying_indices,   t->n_var);
+    GETARR("logdet_diag_rows",  t->logdet_diag_rows,  t->n_cvt + 1);
+    GETARR("logdet_diag_cols",  t->logdet_diag_cols,  t->n_cvt + 1);
+    GETARR("level_offsets",     t->level_offsets,      t->n_rows);
+    GETARR("level_counts",      t->level_counts,       t->n_rows);
+#undef GETARR
+
+    /* Parse entries (stride-4 flat int32 array) */
+    {
+        PyObject *entries_obj = PyDict_GetItemString(dict, "entries");
+        if (!entries_obj) {
+            PyErr_SetString(PyExc_KeyError, "pab_table_dict missing key 'entries'");
+            free_pab_table(t);
+            return -1;
+        }
+        PyArrayObject *entries_arr = (PyArrayObject *)PyArray_FROM_OTF(
+            entries_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
+        if (!entries_arr) { free_pab_table(t); return -1; }
+        int entries_len = (int)PyArray_SIZE(entries_arr);
+        Py_DECREF(entries_arr);
+        if (entries_len % 4 != 0) {
+            PyErr_Format(PyExc_ValueError,
+                "entries length (%d) not a multiple of 4", entries_len);
+            free_pab_table(t);
+            return -1;
+        }
+        t->n_entries = entries_len / 4;
+
+        int *raw = parse_int32_array(entries_obj, entries_len, "entries");
+        if (!raw) { free_pab_table(t); return -1; }
+        t->entries = (pab_entry_t *)malloc((size_t)t->n_entries * sizeof(pab_entry_t));
+        if (!t->entries) {
+            free(raw);
+            PyErr_NoMemory();
+            free_pab_table(t);
+            return -1;
+        }
+        for (int i = 0; i < t->n_entries; i++) {
+            t->entries[i].index_ab = raw[i * 4 + 0];
+            t->entries[i].index_aw = raw[i * 4 + 1];
+            t->entries[i].index_bw = raw[i * 4 + 2];
+            t->entries[i].index_ww = raw[i * 4 + 3];
+        }
+        free(raw);
+
+        /* Validate entry indices are in range [0, n_index) */
+        for (int i = 0; i < t->n_entries; i++) {
+            if (t->entries[i].index_ab < 0 || t->entries[i].index_ab >= t->n_index ||
+                t->entries[i].index_aw < 0 || t->entries[i].index_aw >= t->n_index ||
+                t->entries[i].index_bw < 0 || t->entries[i].index_bw >= t->n_index ||
+                t->entries[i].index_ww < 0 || t->entries[i].index_ww >= t->n_index) {
+                PyErr_Format(PyExc_ValueError,
+                    "entries[%d] has out-of-range index (n_index=%d)", i, t->n_index);
+                free_pab_table(t);
+                return -1;
+            }
+        }
+
+        /* Validate level_offsets/level_counts don't exceed n_entries */
+        for (int p = 0; p < t->n_rows; p++) {
+            if (t->level_offsets[p] < 0 ||
+                t->level_counts[p] < 0 ||
+                t->level_offsets[p] + t->level_counts[p] > t->n_entries) {
+                PyErr_Format(PyExc_ValueError,
+                    "level_offsets[%d]=%d + level_counts[%d]=%d exceeds n_entries=%d",
+                    p, t->level_offsets[p], p, t->level_counts[p], t->n_entries);
+                free_pab_table(t);
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+void free_pab_table(pab_table_t *t)
+{
+    free(t->invariant_indices);
+    free(t->varying_indices);
+    free(t->logdet_diag_rows);
+    free(t->logdet_diag_cols);
+    free(t->level_offsets);
+    free(t->level_counts);
+    free(t->entries);
+}

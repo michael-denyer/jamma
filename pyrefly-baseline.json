@@ -229,18 +229,6 @@
       "severity": "error"
     },
     {
-      "line": 1346,
-      "column": 9,
-      "stop_line": 1346,
-      "stop_column": 34,
-      "path": "src/jamma/lmm/compute_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "severity": "error"
-    },
-    {
       "line": 1740,
       "column": 22,
       "stop_line": 1752,
@@ -421,9 +409,9 @@
       "severity": "error"
     },
     {
-      "line": 1213,
+      "line": 1244,
       "column": 16,
-      "stop_line": 1215,
+      "stop_line": 1246,
       "stop_column": 10,
       "path": "src/jamma/lmm/likelihood_numpy.py",
       "code": -2,
@@ -433,9 +421,9 @@
       "severity": "error"
     },
     {
-      "line": 1223,
+      "line": 1254,
       "column": 20,
-      "stop_line": 1231,
+      "stop_line": 1262,
       "stop_column": 14,
       "path": "src/jamma/lmm/likelihood_numpy.py",
       "code": -2,
@@ -445,9 +433,9 @@
       "severity": "error"
     },
     {
-      "line": 1283,
+      "line": 1314,
       "column": 12,
-      "stop_line": 1285,
+      "stop_line": 1316,
       "stop_column": 6,
       "path": "src/jamma/lmm/likelihood_numpy.py",
       "code": -2,
@@ -457,9 +445,9 @@
       "severity": "error"
     },
     {
-      "line": 1572,
+      "line": 1603,
       "column": 16,
-      "stop_line": 1582,
+      "stop_line": 1613,
       "stop_column": 10,
       "path": "src/jamma/lmm/likelihood_numpy.py",
       "code": -2,
@@ -469,9 +457,9 @@
       "severity": "error"
     },
     {
-      "line": 1589,
+      "line": 1620,
       "column": 20,
-      "stop_line": 1600,
+      "stop_line": 1631,
       "stop_column": 14,
       "path": "src/jamma/lmm/likelihood_numpy.py",
       "code": -2,
@@ -1114,18 +1102,6 @@
       "name": "bad-argument-type",
       "description": "Argument `object` is not assignable to parameter `obj` with type `(...) -> Any` in function `inspect.signature`",
       "concise_description": "Argument `object` is not assignable to parameter `obj` with type `(...) -> Any` in function `inspect.signature`",
-      "severity": "error"
-    },
-    {
-      "line": 69,
-      "column": 5,
-      "stop_line": 69,
-      "stop_column": 33,
-      "path": "tests/lmm_accel/test_lmm_accel_core.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
       "severity": "error"
     },
     {
@@ -2365,34 +2341,10 @@
       "severity": "error"
     },
     {
-      "line": 496,
-      "column": 5,
-      "stop_line": 496,
-      "stop_column": 27,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
       "line": 666,
       "column": 5,
       "stop_line": 666,
       "stop_column": 31,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 676,
-      "column": 5,
-      "stop_line": 676,
-      "stop_column": 29,
       "path": "tests/test_likelihood_numpy.py",
       "code": -2,
       "name": "bad-unpacking",
@@ -2413,82 +2365,10 @@
       "severity": "error"
     },
     {
-      "line": 721,
-      "column": 5,
-      "stop_line": 721,
-      "stop_column": 22,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "severity": "error"
-    },
-    {
-      "line": 884,
-      "column": 5,
-      "stop_line": 884,
-      "stop_column": 20,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 892,
-      "column": 5,
-      "stop_line": 892,
-      "stop_column": 33,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "severity": "error"
-    },
-    {
-      "line": 1052,
-      "column": 5,
-      "stop_line": 1052,
-      "stop_column": 36,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 2) into 3 values",
-      "severity": "error"
-    },
-    {
       "line": 1170,
       "column": 5,
       "stop_line": 1170,
       "stop_column": 27,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 1215,
-      "column": 5,
-      "stop_line": 1215,
-      "stop_column": 19,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 1263,
-      "column": 5,
-      "stop_line": 1263,
-      "stop_column": 19,
       "path": "tests/test_likelihood_numpy.py",
       "code": -2,
       "name": "bad-unpacking",
@@ -2514,66 +2394,6 @@
       "stop_line": 1404,
       "stop_column": 19,
       "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 1464,
-      "column": 5,
-      "stop_line": 1464,
-      "stop_column": 19,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 1522,
-      "column": 5,
-      "stop_line": 1522,
-      "stop_column": 21,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 1554,
-      "column": 5,
-      "stop_line": 1554,
-      "stop_column": 21,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 1624,
-      "column": 5,
-      "stop_line": 1624,
-      "stop_column": 31,
-      "path": "tests/test_likelihood_numpy.py",
-      "code": -2,
-      "name": "bad-unpacking",
-      "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "concise_description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",
-      "severity": "error"
-    },
-    {
-      "line": 263,
-      "column": 9,
-      "stop_line": 263,
-      "stop_column": 19,
-      "path": "tests/test_lmm_io_validation.py",
       "code": -2,
       "name": "bad-unpacking",
       "description": "Cannot unpack tuple[ndarray, ndarray] | tuple[ndarray, ndarray, ndarray] (of size 3) into 2 values",

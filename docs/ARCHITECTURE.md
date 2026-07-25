@@ -110,7 +110,7 @@ src/jamma/
 │   ├── stats.py            # Wald/LRT/Score test statistic computation
 │   ├── eigen.py            # Kinship eigendecomposition via jlinalg.eigh
 │   ├── eigen_io.py         # Read/write eigenvalue and eigenvector files (.npy / .txt)
-│   ├── runner.py           # ExecutionPlan; select_execution_mode(); run_lmm() dispatch
+│   ├── runner.py           # ExecutionPlan; select_execution_mode()
 │   ├── runner_numpy.py     # Batch runner: full genotype matrix in RAM + C extension
 │   ├── runner_numpy_streaming.py  # Streaming runner: two-pass disk I/O + C extension
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO

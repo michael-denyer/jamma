@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`LocoConfig` now owns the naming of every LOCO artifact.** The
+  `.txt`-vs-`.npy` branch was written twice and the `{prefix}.loco.chr{chr}`
+  convention three times, once per helper that built a filename.
+  `artifact_suffix`, `eigen_stem()`, `eigen_paths()` and `kinship_path()`
+  replace them, so the writer and the cache reader compose names from one
+  place. `_computed_eigen_pairs` drops seven parameters as a result.
+
+- **`save_kinship=True` without `kinship_output_dir` now raises**, matching
+  `write_eigen`/`eigen_dir`. The docstring already called the directory
+  required; nothing enforced it, and the write was silently skipped.
+
+- **`loco.py` split into three modules.** It had reached 1000 lines.
+  `LocoConfig` and `DEFAULT_LOCO_CONFIG` move to `jamma.lmm.loco_config`, the
+  eigenpair sources and artifact writers to `jamma.lmm.loco_eigen`, leaving
+  `loco.py` as the orchestrator. `jamma.lmm.loco` re-exports both public
+  names, so no import changes.
+
+- **The LOCO pipeline branch builds its `LmmConfig` via
+  `PipelineConfig.lmm_config()`** instead of writing the nine fields out by
+  hand, which had made a second copy of that projection. `lmm_config()` takes
+  `check_memory` as a keyword for the LOCO path, which returns before
+  `_memory_preflight` and owns its own memory gate.
+
+### Removed
+
+- **Dead validation in `run_lmm_loco`.** Its own docstring already said
+  invalid `lmm_mode` and `write_eigen` without `eigen_dir` are rejected when
+  `LmmConfig` and `LocoConfig` are constructed; the body still checked both,
+  with an error message that had drifted from `LocoConfig`'s. Two tests hid
+  this by wrapping a call in `pytest.raises` where the raise actually fired on
+  a config in the argument list.
+
+- **Unreachable defaults on `_run_lmm_for_chromosome_numpy`.** It is private
+  with one caller that passes all of them, and its `col_chunk_size = 5_000`
+  was a second copy of `LocoConfig`'s default. Now keyword-only with `config`,
+  `col_chunk_size` and `chr_name` required.
+
 ## [7.0.0] - 2026-07-25
 
 ### Changed
@@ -29,8 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   `LocoConfig` validates at construction, so `write_eigen=True` without
-  `eigen_dir` now fails before the first chromosome is eigendecomposed rather
-  than partway through. `col_chunk_size <= 0` is rejected too.
+  `eigen_dir` now fails where the config is built rather than where it is
+  used — which matters when the two are far apart, as they are in the CLI.
+  `run_lmm_loco` already rejected that pair at function entry, so nothing was
+  ever eigendecomposed first either way. `col_chunk_size <= 0` is new.
 
   `LocoConfig` and `DEFAULT_LOCO_CONFIG` are exported from `jamma.lmm`.
 

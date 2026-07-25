@@ -345,18 +345,10 @@ class TestNumpyRunnerValidation:
                 config=LmmConfig(check_memory=False, show_progress=False),
             )
 
-    def test_invalid_lmm_mode_raises(self) -> None:
-        """Invalid lmm_mode raises ValueError."""
-        from jamma.lmm.runner_numpy import run_lmm_association_numpy
-
-        with pytest.raises(ValueError, match="lmm_mode must be"):
-            run_lmm_association_numpy(
-                genotypes=np.ones((10, 5)),
-                phenotypes=np.ones(10),
-                kinship=np.eye(10),
-                snp_info=[{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}] * 5,
-                config=LmmConfig(lmm_mode=5, check_memory=False, show_progress=False),
-            )
+    # No invalid-lmm_mode test here. It read as runner validation but the raise
+    # came from LmmConfig(lmm_mode=5) while the argument list was evaluated, so
+    # the runner was never entered. LmmConfig owns the rule and
+    # test_validate_runner_inputs.py::TestLmmConfigValidation covers 0, -1, 5, 99.
 
 
 @pytest.mark.tier0

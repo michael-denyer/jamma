@@ -44,10 +44,7 @@ from jamma.kinship import (
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
-from jamma.lmm.schema import (
-    LmmConfig,
-    LmmRunResult,
-)
+from jamma.lmm.schema import LmmRunResult
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import (
     KinshipResult,
@@ -1324,17 +1321,10 @@ class PipelineRunner:
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
             covariates=covariates,
-            config=LmmConfig(
-                maf_threshold=self.config.maf,
-                miss_threshold=self.config.miss,
-                lmm_mode=self.config.lmm_mode,
-                check_memory=self.config.check_memory,
-                show_progress=self.config.show_progress,
-                l_min=self.config.l_min,
-                l_max=self.config.l_max,
-                n_grid=self.config.n_grid,
-                n_refine=self.config.n_refine,
-            ),
+            # check_memory passed through rather than forced off: this branch
+            # returns from _run_inner before _memory_preflight, so run_lmm_loco
+            # owns the only memory gate on the LOCO path.
+            config=self.config.lmm_config(check_memory=self.config.check_memory),
             loco=LocoConfig(
                 save_kinship=self.config.save_kinship,
                 kinship_output_dir=self.config.output_dir,

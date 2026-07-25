@@ -277,7 +277,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:43](../src/jamma/lmm/schema.py#L43) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:55](../src/jamma/lmm/results.py#L55) |
 | 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:187](../src/jamma/lmm/results.py#L187) |
-| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:175](../src/jamma/lmm/loco.py#L175) |
+| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:176](../src/jamma/lmm/loco.py#L176) |
 
 ---
 
@@ -572,6 +572,8 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Special functions | [special.py](../src/jamma/lmm/special.py) |
 | Backend info | [backend.py](../src/jamma/core/backend.py) |
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
+| LOCO config and artifact naming | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
+| LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
 | Result writer | [lmm/io.py:99](../src/jamma/lmm/io.py#L99) |
 | Memory estimation | [memory.py:197](../src/jamma/core/memory.py#L197) |
 | Threading | [threading.py:30](../src/jamma/core/threading.py#L30) |

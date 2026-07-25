@@ -169,12 +169,23 @@ class PipelineConfig:
         if self.loco and self.write_eigen and self.eigen_dir is None:
             self.eigen_dir = self.output_dir
 
-    def lmm_config(self) -> LmmConfig:
+    def lmm_config(self, *, check_memory: bool = False) -> LmmConfig:
         """Project the LMM knobs onto the config the runners take.
 
+        The one place these nine fields are mapped onto LmmConfig — every
+        dispatch path goes through here, so a knob added to LmmConfig cannot
+        reach one runner and miss another.
+
         Built fresh on each call so a field edited after construction is still
-        picked up. check_memory is forced off: the pipeline runs its own memory
-        gate before dispatch, and re-checking inside the runner would double-count.
+        picked up.
+
+        Args:
+            check_memory: Whether the runner should run its own memory gate.
+                Defaults to False for the batch and streaming paths, where
+                PipelineRunner._memory_preflight has already gated and
+                re-checking would double-count. The LOCO path returns before
+                that preflight and owns its per-chromosome estimate, so it
+                passes the caller's flag through.
 
         Returns:
             LmmConfig carrying this config's optimizer and filter knobs.
@@ -189,7 +200,7 @@ class PipelineConfig:
             l_max=self.l_max,
             n_grid=self.n_grid,
             n_refine=self.n_refine,
-            check_memory=False,
+            check_memory=check_memory,
             show_progress=self.show_progress,
             lmm_mode=self.lmm_mode,
         )

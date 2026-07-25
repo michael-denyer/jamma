@@ -7,6 +7,10 @@
  * and it is plain C data with no CPython in it, so it lives here rather than
  * in _lmm_support.h. A kernel that needs the layout should not have to include
  * <Python.h> to get it.
+ *
+ * grid_invariant_t is here for the same reason: the workspace creators and
+ * batch entry points in _lmm_accel.c fill it, the ncvt1 kernels read it, so it
+ * spans the same boundary in the opposite direction.
  */
 
 #ifndef JAMMA_LMM_TYPES_H
@@ -38,6 +42,15 @@
  * Here rather than in _lmm_support.h for the same reason as P_YY_MIN: the
  * lambda optimizers read it and must not need <Python.h> to do so. */
 #define REML_SENTINEL (-INFINITY)
+
+/* Pre-computed invariant dot products for one coarse grid point.
+ * Memory: n_grid * sizeof(grid_invariant_t) ~ 50 * 32 = 1.6 KB (fits L1). */
+typedef struct {
+    double s_ww;       /* sum of hi * ww */
+    double s_wy;       /* sum of hi * wy */
+    double s_yy;       /* sum of hi * yy */
+    double log_s_ww;   /* log(s_ww) if > 0, else 0 */
+} grid_invariant_t;
 
 typedef struct {
     int index_ab, index_aw, index_bw, index_ww;

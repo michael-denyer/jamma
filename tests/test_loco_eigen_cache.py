@@ -56,6 +56,86 @@ def _dummy_components(maf_threshold: float = 0.01) -> EigenCacheComponents:
 # ---------------------------------------------------------------------------
 
 
+def _write_cache_entries(
+    loco: LocoConfig, chr_names: list[str], *, n: int = 10
+) -> None:
+    """Populate the eigen cache for the given chromosomes.
+
+    Names the files via ``loco.eigen_stem()`` — the method the production writer
+    uses — so a test cannot pass by re-encoding the naming convention the reader
+    is supposed to agree with.
+    """
+    assert loco.eigen_dir is not None
+    for ch in chr_names:
+        write_eigen_files(
+            np.random.default_rng(42).random(n),
+            np.eye(n),
+            loco.eigen_dir,
+            prefix=loco.eigen_stem(ch),
+            legacy_text=loco.legacy_text,
+        )
+
+
+class TestLocoConfigArtifactNaming:
+    """LocoConfig owns the on-disk names for LOCO kinship and eigen artifacts.
+
+    Pinned literally rather than derived, because these filenames are the
+    contract with the CLI's -eigen-dir cache and with GEMMA's .cXX.txt layout.
+    Building them from the config under test would assert nothing.
+    """
+
+    def test_eigen_paths_npy(self, tmp_path: Path) -> None:
+        loco = LocoConfig(eigen_dir=tmp_path, eigen_prefix="study")
+        d_path, u_path = loco.eigen_paths("7")
+        assert d_path == tmp_path / "study.loco.chr7.eigenD.npy"
+        assert u_path == tmp_path / "study.loco.chr7.eigenU.npy"
+
+    def test_eigen_paths_legacy_text(self, tmp_path: Path) -> None:
+        loco = LocoConfig(eigen_dir=tmp_path, eigen_prefix="study", legacy_text=True)
+        d_path, u_path = loco.eigen_paths("X")
+        assert d_path == tmp_path / "study.loco.chrX.eigenD.txt"
+        assert u_path == tmp_path / "study.loco.chrX.eigenU.txt"
+
+    def test_eigen_stem_is_the_write_prefix(self, tmp_path: Path) -> None:
+        """eigen_stem() feeds write_eigen_files(prefix=), so the writer's output
+        must land exactly on the paths eigen_paths() looks for."""
+        loco = LocoConfig(eigen_dir=tmp_path, eigen_prefix="study")
+        write_eigen_files(
+            np.arange(4, dtype=np.float64),
+            np.eye(4),
+            tmp_path,
+            prefix=loco.eigen_stem("21"),
+        )
+        for path in loco.eigen_paths("21"):
+            assert path.exists(), f"writer and reader disagree on {path.name}"
+
+    def test_kinship_path(self, tmp_path: Path) -> None:
+        loco = LocoConfig(
+            save_kinship=True,
+            kinship_output_dir=tmp_path,
+            kinship_output_prefix="study",
+        )
+        assert loco.kinship_path("3") == tmp_path / "study.loco.cXX.chr3.npy"
+
+    def test_kinship_path_legacy_text(self, tmp_path: Path) -> None:
+        loco = LocoConfig(
+            save_kinship=True,
+            kinship_output_dir=tmp_path,
+            kinship_output_prefix="study",
+            legacy_text=True,
+        )
+        assert loco.kinship_path("3") == tmp_path / "study.loco.cXX.chr3.txt"
+
+    def test_paths_raise_without_their_directory(self) -> None:
+        """Both path builders name their missing field rather than returning a
+        path rooted at the process cwd."""
+        loco = LocoConfig()
+        with pytest.raises(ValueError, match=r"eigen_paths\(\) requires eigen_dir"):
+            loco.eigen_paths("1")
+        with pytest.raises(ValueError, match="requires kinship_output_dir"):
+            loco.kinship_path("1")
+
+
 class TestFindLocoEigenCache:
     """Tests for _find_loco_eigen_cache helper function."""
 
@@ -63,27 +143,20 @@ class TestFindLocoEigenCache:
         """Passing a file path instead of directory returns None."""
         fake_file = tmp_path / "not_a_dir.txt"
         fake_file.write_text("hello")
-        result = _find_loco_eigen_cache(fake_file, "result", ["1", "2"])
+        result = _find_loco_eigen_cache(LocoConfig(eigen_dir=fake_file), ["1", "2"])
         assert result is None
+
+    def test_no_eigen_dir_returns_none(self) -> None:
+        """An unset eigen_dir means "compute from scratch", not a raise."""
+        assert _find_loco_eigen_cache(LocoConfig(), ["1", "2"]) is None
 
     def test_complete_cache_returns_dict(self, tmp_path: Path) -> None:
         """When all per-chr .npy files exist, returns dict mapping chr -> (d, u)."""
-        n = 10
         chr_names = ["1", "2", "3"]
-        prefix = "result"
+        loco = LocoConfig(eigen_dir=tmp_path)
+        _write_cache_entries(loco, chr_names)
 
-        # Write per-chr eigen files
-        for ch in chr_names:
-            eigenvalues = np.random.default_rng(42).random(n)
-            eigenvectors = np.eye(n)
-            write_eigen_files(
-                eigenvalues,
-                eigenvectors,
-                tmp_path,
-                prefix=f"{prefix}.loco.chr{ch}",
-            )
-
-        result = _find_loco_eigen_cache(tmp_path, prefix, chr_names)
+        result = _find_loco_eigen_cache(loco, chr_names)
         assert result is not None
         assert set(result.keys()) == set(chr_names)
         for ch in chr_names:
@@ -93,49 +166,43 @@ class TestFindLocoEigenCache:
 
     def test_partial_cache_returns_none(self, tmp_path: Path) -> None:
         """When some chromosomes are missing, returns None."""
-        n = 10
-        chr_names = ["1", "2", "3"]
-        prefix = "result"
+        loco = LocoConfig(eigen_dir=tmp_path)
+        _write_cache_entries(loco, ["1", "2"])
 
-        # Only write files for chr 1 and 2
-        for ch in ["1", "2"]:
-            eigenvalues = np.random.default_rng(42).random(n)
-            eigenvectors = np.eye(n)
-            write_eigen_files(
-                eigenvalues,
-                eigenvectors,
-                tmp_path,
-                prefix=f"{prefix}.loco.chr{ch}",
-            )
-
-        result = _find_loco_eigen_cache(tmp_path, prefix, chr_names)
-        assert result is None
+        assert _find_loco_eigen_cache(loco, ["1", "2", "3"]) is None
 
     def test_legacy_text_fallback(self, tmp_path: Path) -> None:
         """When legacy_text=True, checks for .txt files instead of .npy."""
-        n = 10
         chr_names = ["1", "2"]
-        prefix = "result"
+        loco = LocoConfig(eigen_dir=tmp_path, legacy_text=True)
+        _write_cache_entries(loco, chr_names)
 
-        # Write as legacy text
-        for ch in chr_names:
-            eigenvalues = np.random.default_rng(42).random(n)
-            eigenvectors = np.eye(n)
-            write_eigen_files(
-                eigenvalues,
-                eigenvectors,
-                tmp_path,
-                prefix=f"{prefix}.loco.chr{ch}",
-                legacy_text=True,
-            )
-
-        result = _find_loco_eigen_cache(tmp_path, prefix, chr_names, legacy_text=True)
+        result = _find_loco_eigen_cache(loco, chr_names)
         assert result is not None
         assert set(result.keys()) == set(chr_names)
 
+    def test_binary_cache_does_not_satisfy_text_lookup(self, tmp_path: Path) -> None:
+        """A .npy-only cache must not answer a legacy_text lookup.
+
+        Only one direction holds. legacy_text=True writes the GEMMA .txt files
+        *and* a .npy sidecar, so a binary lookup over a text-written cache does
+        find its files — deliberately. A binary-only write leaves no .txt, so
+        the text reader must miss and recompute.
+        """
+        _write_cache_entries(LocoConfig(eigen_dir=tmp_path), ["1"])
+
+        text_lookup = LocoConfig(eigen_dir=tmp_path, legacy_text=True)
+        assert _find_loco_eigen_cache(text_lookup, ["1"]) is None
+
+    def test_text_cache_also_satisfies_binary_lookup(self, tmp_path: Path) -> None:
+        """The .npy sidecar written alongside GEMMA text is a usable cache."""
+        _write_cache_entries(LocoConfig(eigen_dir=tmp_path, legacy_text=True), ["1"])
+
+        assert _find_loco_eigen_cache(LocoConfig(eigen_dir=tmp_path), ["1"]) is not None
+
     def test_empty_dir_returns_none(self, tmp_path: Path) -> None:
         """Empty directory returns None (no cache found)."""
-        result = _find_loco_eigen_cache(tmp_path, "result", ["1", "2"])
+        result = _find_loco_eigen_cache(LocoConfig(eigen_dir=tmp_path), ["1", "2"])
         assert result is None
 
 
@@ -387,6 +454,16 @@ class TestLocoEigenCacheValidation:
         """
         with pytest.raises(ValueError, match="write_eigen=True requires eigen_dir"):
             LocoConfig(write_eigen=True, eigen_dir=None)
+
+    def test_save_kinship_without_output_dir_raises(self) -> None:
+        """save_kinship=True with kinship_output_dir=None raises.
+
+        The docstring called the directory required, but nothing enforced it:
+        _computed_eigen_pairs checked ``save_kinship and kinship_output_dir is
+        not None`` and silently wrote nothing when the pair was half-set.
+        """
+        with pytest.raises(ValueError, match="save_kinship=True requires"):
+            LocoConfig(save_kinship=True, kinship_output_dir=None)
 
     def test_dimension_mismatch_on_cached_eigen_raises(self, tmp_path: Path) -> None:
         """Cached eigen with wrong n_samples raises ValueError with chr context."""

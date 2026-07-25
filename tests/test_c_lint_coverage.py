@@ -118,6 +118,40 @@ def test_ci_does_not_install_cppcheck_from_apt():
     )
 
 
+def test_no_bare_file_scope_inline():
+    """A file-scope ``inline`` with no ``static`` emits no external symbol.
+
+    C99/C11 treat ``inline void f(...) {...}`` as an *inline definition*: the
+    translation unit may use it, but no external symbol is emitted unless some
+    other unit provides an ``extern`` declaration. A caller the compiler
+    chooses not to inline then fails to link, or loads and dies with
+    ``undefined symbol``.
+
+    This is invisible on macOS. Every call inside the defining unit gets
+    inlined, nothing references the missing symbol, ``nm -u`` reports it clean
+    and the module imports — all verified. GCC at -O3 on Linux declines to
+    inline one call site and the loader fails. So the local build and the ARM
+    Mac CI job both pass while the Linux jobs fail, which is the same asymmetry
+    as the ``M_PI`` include-order trap and costs the same CI round trip.
+
+    It reached CI once, from a mechanical extraction that stripped ``static``
+    from ``static inline`` definitions to give them external linkage.
+    """
+    offenders = []
+    for tree in _C_TREES:
+        for path in sorted((_REPO_ROOT / tree).glob("*.[ch]")):
+            for lineno, line in enumerate(path.read_text().splitlines(), 1):
+                if re.match(r"^inline\s", line):
+                    rel = path.relative_to(_REPO_ROOT)
+                    offenders.append(f"{rel}:{lineno}: {line.strip()[:60]}")
+    assert not offenders, (
+        "file-scope `inline` without `static` emits no external symbol:\n  "
+        + "\n  ".join(offenders)
+        + "\nUse `static inline` for a unit-local helper, or a plain "
+        "definition with no `inline` for one other units call."
+    )
+
+
 def test_lmm_opts_out_of_clang_format_explicitly():
     """Without this file the repo-root config silently rewrites half of lmm/."""
     opt_out = _REPO_ROOT / "src/jamma/lmm/.clang-format"

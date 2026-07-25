@@ -1,0 +1,111 @@
+name: Fingerprint
+
+# Bit-exactness gate for the LMM accelerator.
+#
+# Tolerance-based tests do not catch last-bit drift: a -ffp-contract=off
+# mutation once changed 21 of 22 compute entry points while all 133 accel tests
+# still passed. scripts/lmm_accel_fingerprint.py exists to catch exactly that,
+# but until this workflow it only ever ran because someone remembered to.
+#
+# There is no committed baseline to compare against, and there cannot be: the
+# digests depend on the compiler and the CPU, and dev builds use -march=native.
+# So the job builds both sides itself on one runner, where the only variable
+# left is the source.
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "src/jamma/lmm/_lmm_*.c"
+      - "src/jamma/lmm/_lmm_*.h"
+      - "src/jamma/_build_support/**"
+      - "scripts/lmm_accel_fingerprint.py"
+      - "scripts/compare_fingerprints.py"
+      - "scripts/run-fingerprint.sh"
+      - ".github/workflows/fingerprint.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bit-exactness:
+    name: Bit-exactness vs merge base
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          # merge-base needs the full history of both sides.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3  # v8.3.0
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Resolve the merge base
+        id: base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          base_sha=$(git merge-base "origin/${BASE_REF}" HEAD)
+          echo "head=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "base=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "Comparing ${head_sha} against merge base ${base_sha}"
+          if ! git cat-file -e "${base_sha}:scripts/lmm_accel_fingerprint.py" 2>/dev/null; then
+            echo "::error::The merge base predates the fingerprint harness, so there is nothing to compare against. Rebase onto a commit that has scripts/lmm_accel_fingerprint.py."
+            exit 1
+          fi
+
+      # Both runs go through one copy of the runner, kept outside the worktree
+      # so the base checkout cannot swap it for an older version. Identical
+      # pytest arguments on both sides is what makes the record keys line up.
+      - name: Stage the fingerprint runner
+        run: install -m 755 scripts/run-fingerprint.sh "${RUNNER_TEMP}/run-fingerprint.sh"
+
+      # HEAD first, so a build failure lands against the code under review
+      # rather than against the base.
+      - name: Fingerprint the PR head
+        run: |
+          set -euo pipefail
+          uv sync
+          uv run python -m jamma.lmm._compile_accel
+          "${RUNNER_TEMP}/run-fingerprint.sh" "${RUNNER_TEMP}/head.txt"
+
+      - name: Fingerprint the merge base
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "${BASE_SHA}"
+          uv sync
+          uv run python -m jamma.lmm._compile_accel
+          "${RUNNER_TEMP}/run-fingerprint.sh" "${RUNNER_TEMP}/base.txt"
+
+      - name: Compare
+        env:
+          HEAD_SHA: ${{ steps.base.outputs.head }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "${HEAD_SHA}"
+          uv run python scripts/compare_fingerprints.py \
+            "${RUNNER_TEMP}/base.txt" "${RUNNER_TEMP}/head.txt"
+
+      - name: Keep the fingerprints for inspection
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: fingerprints
+          path: |
+            ${{ runner.temp }}/base.txt
+            ${{ runner.temp }}/head.txt
+          if-no-files-found: warn
+          retention-days: 14

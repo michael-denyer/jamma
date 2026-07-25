@@ -149,6 +149,7 @@ def bench_jamma_loco(
 ) -> dict[str, float]:
     """Benchmark JAMMA LOCO (all chromosomes in one call)."""
     from jamma.lmm.loco import run_lmm_loco
+    from jamma.lmm.schema import LmmConfig
 
     best = float("inf")
     for _ in range(runs):
@@ -158,10 +159,8 @@ def bench_jamma_loco(
                 bed_path=_MOUSE_PREFIX,
                 phenotypes=phenotypes,
                 covariates=covariates,
-                lmm_mode=1,
+                config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=True),
                 output_path=Path(tmpdir) / "loco_results.assoc.txt",
-                check_memory=False,
-                show_progress=True,
             )
         elapsed = time.perf_counter() - t0
         best = min(best, elapsed)

@@ -16,7 +16,7 @@
 
 - **Drop-in GEMMA replacement**: Same CLI flags, same file formats, same results. Change one word in your pipeline.
 - **Numerical equivalence**: Validated against GEMMA -- 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 30x faster than GEMMA 0.98.5 (LOCO mode); 12-17x on single-pass LMM
+- **Fast**: Up to 41x faster than GEMMA 0.98.5 (LOCO mode); 16-32x on single-pass LMM. Against a GEMMA built with Apple Accelerate rather than OpenBLAS, 25x and 10-14x
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows with NumPy and vendor BLAS
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
@@ -164,18 +164,23 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples x 12,226 SNPs), Apple M2, GEMMA 0.98.5.
-Best-of runs, end-to-end wall clock:
+JAMMA v6.0.0 on mouse_hs1940 (1,940 samples x 12,226 SNPs), Apple M5 Pro
+(18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best observed across 3 rounds of
+best-of-3, end-to-end wall clock:
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 2.1s | 1.7s | 262ms | 262ms | -- | 1.0x | **8.0x** | **6.5x** |
-| LMM Wald (`-lmm 1`) | 11.0s | 7.6s | 4.1s | 879ms | 1.1s | 4.7x | **12.5x** | **8.7x** |
-| LMM All (`-lmm 4`) | 20.5s | 13.9s | 6.0s | 1.3s | 1.4s | 4.7x | **16.0x** | **10.9x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 40.8s | 18.8s | 9.1s | 2.4s | 2.6s | 3.8x | **17.0x** | **7.8x** |
-| LOCO Wald (`-loco`) | 3m30s | 2m26s | -- | **7.1s** | -- | -- | **29.6x** | **20.6x** |
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 195ms | 195ms | -- | 1.0x | **5.6x** | **6.2x** |
+| LMM Wald (`-lmm 1`) | 7.1s | 4.2s | 2.4s | 430ms | 541ms | 5.6x | **16.5x** | **9.8x** |
+| LMM All (`-lmm 4`) | 13.0s | 7.4s | 3.6s | 580ms | 695ms | 6.2x | **22.4x** | **12.8x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 26.9s | 11.4s | 5.8s | 836ms | 945ms | 6.9x | **32.2x** | **13.6x** |
+| LOCO Wald (`-loco`) | 2m14s | 1m21s | -- | **3.3s** | -- | -- | **~41x** | **~25x** |
 
-See [Performance](docs/PERFORMANCE.md) for benchmark methodology and large-scale (125k) results.
+v6.0.0 measures within +/-2% of v5.6.0 on every row here, so the version change
+carries no performance cost.
+
+See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the v6.0.0
+against v5.6.0 comparison, and large-scale (125k) results.
 
 ## Supported Features
 

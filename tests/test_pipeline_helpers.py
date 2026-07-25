@@ -485,6 +485,67 @@ class TestRunLoco:
         assert result.timing["lmm_s"] >= 0.0
         assert result.timing["total_s"] >= 0.0
 
+    def test_lmm_config_handed_to_runner_is_the_shared_projection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_run_loco must build its LmmConfig via PipelineConfig.lmm_config().
+
+        Regression guard for config drift. _run_loco once wrote the nine
+        LmmConfig fields out by hand, because LOCO needs check_memory passed
+        through where the batch and streaming paths force it off. That left two
+        copies of one projection, so a field added to LmmConfig could reach
+        _run_batch and miss LOCO.
+
+        Asserted by dataclass equality rather than field by field: a tenth
+        LmmConfig field that a re-inlined literal forgot to set would take its
+        default and break equality here.
+        """
+        from jamma.lmm.schema import LocoResult
+
+        captured: dict[str, object] = {}
+        phenos = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+
+        def _capturing_loco(**kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            return LocoResult(associations=[], n_tested=0)
+
+        # Every knob off its default, so a projection that dropped one shows up.
+        runner = _make_runner(
+            tmp_path,
+            check_memory=True,
+            maf=0.02,
+            miss=0.1,
+            lmm_mode=4,
+            show_progress=False,
+            l_min=1e-4,
+            l_max=1e4,
+            n_grid=17,
+            n_refine=23,
+            loco=True,
+        )
+        monkeypatch.setattr(runner, "parse_phenotypes", lambda: (phenos, 3))
+        monkeypatch.setattr(runner, "load_covariates", lambda _n: None)
+        monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
+
+        from jamma import lmm as lmm_pkg
+
+        monkeypatch.setattr(lmm_pkg, "run_lmm_loco", _capturing_loco)
+
+        runner._run_loco(
+            t_start=0.0,
+            plan=ExecutionPlan(backend="numpy", mode="batch", reason="loco"),
+            n_samples=3,
+            n_snps=0,
+            assoc_path=tmp_path / "out.assoc.txt",
+            snps_indices=None,
+            ksnps_indices=None,
+        )
+
+        assert captured["config"] == runner.config.lmm_config(check_memory=True)
+        # The distinguishing field: LOCO returns before _memory_preflight, so
+        # unlike _run_batch it must not force the runner's memory gate off.
+        assert captured["config"].check_memory is True  # type: ignore[union-attr]
+
     def test_propagates_loco_runner_exception(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

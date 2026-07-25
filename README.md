@@ -164,10 +164,8 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-Benchmark on mouse_hs1940 (1,940 samples x 12,226 SNPs), GEMMA 0.98.5.
-Best-of runs, end-to-end wall clock.
-
-### Apple M2
+Benchmark on mouse_hs1940 (1,940 samples x 12,226 SNPs), Apple M2, GEMMA 0.98.5.
+Best-of runs, end-to-end wall clock:
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
@@ -176,24 +174,6 @@ Best-of runs, end-to-end wall clock.
 | LMM All (`-lmm 4`) | 20.5s | 13.9s | 6.0s | 1.3s | 1.4s | 4.7x | **16.0x** | **10.9x** |
 | LMM Wald+4cov (`-lmm 1 -c`) | 40.8s | 18.8s | 9.1s | 2.4s | 2.6s | 3.8x | **17.0x** | **7.8x** |
 | LOCO Wald (`-loco`) | 3m30s | 2m26s | -- | **7.1s** | -- | -- | **29.6x** | **20.6x** |
-
-### Apple M5 Pro (18 cores)
-
-| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
-|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.0s | 1.2s | 192ms | 192ms | -- | 1.0x | **5.3x** | **6.3x** |
-| LMM Wald (`-lmm 1`) | 7.2s | 4.3s | 2.4s | 427ms | 535ms | 5.5x | **16.9x** | **10.0x** |
-| LMM All (`-lmm 4`) | 13.0s | 7.6s | 3.6s | 569ms | 691ms | 6.3x | **22.8x** | **13.4x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 26.6s | 12.4s | 5.9s | 828ms | 928ms | 7.1x | **32.2x** | **15.0x** |
-| LOCO Wald (`-loco`) | 2m29s | 1m21s | -- | **3.4s** | -- | -- | **43.8x** | **24.0x** |
-
-JAMMA's lead over GEMMA widens on the newer chip everywhere except kinship,
-which falls from 8.0x to 5.3x. Kinship spends 60% of its wall clock in a single
-Accelerate DSYRK call running at roughly 430 GFLOP/s, so JAMMA has little
-headroom left, while GEMMA's slower OpenBLAS baseline had a lot to gain. The
-remaining 40% is PLINK reading and centering, which are bound by I/O and memory
-bandwidth rather than cores. The LMM path is the opposite case: JAMMA's OpenMP C
-kernels scale across the extra cores and GEMMA's scalar loops do not.
 
 See [Performance](docs/PERFORMANCE.md) for benchmark methodology and large-scale (125k) results.
 

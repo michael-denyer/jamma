@@ -409,49 +409,29 @@ class PipelineRunner:
                 "Both -d (eigenvalues) and -u (eigenvectors) must be provided together"
             )
 
-        if has_eigen:
-            if self.config.loco:
-                raise ValueError(
-                    "-d/-u (pre-computed eigen) not supported with -loco mode. "
-                    "Use --eigen-dir for per-chromosome eigen caching."
-                )
-            if not self.config.eigenvalue_file.exists():
-                raise FileNotFoundError(
-                    f"Eigenvalue file not found: {self.config.eigenvalue_file}"
-                )
-            if not self.config.eigenvector_file.exists():
-                raise FileNotFoundError(
-                    f"Eigenvector file not found: {self.config.eigenvector_file}"
-                )
-
-        if (
-            self.config.kinship_file is not None
-            and not self.config.kinship_file.exists()
-        ):
-            raise FileNotFoundError(
-                f"Kinship matrix file not found: {self.config.kinship_file}"
+        if has_eigen and self.config.loco:
+            raise ValueError(
+                "-d/-u (pre-computed eigen) not supported with -loco mode. "
+                "Use --eigen-dir for per-chromosome eigen caching."
             )
 
-        if (
-            self.config.covariate_file is not None
-            and not self.config.covariate_file.exists()
-        ):
-            raise FileNotFoundError(
-                f"Covariate file not found: {self.config.covariate_file}"
-            )
+        # Every option that names an input file gets the same check, so they
+        # share one. The order is part of the contract: a config naming two
+        # missing files reports the earlier one, and
+        # tests/test_pipeline_validation_order.py pins that.
+        required_files: tuple[tuple[Path | None, str], ...] = (
+            (self.config.eigenvalue_file, "Eigenvalue file"),
+            (self.config.eigenvector_file, "Eigenvector file"),
+            (self.config.kinship_file, "Kinship matrix file"),
+            (self.config.covariate_file, "Covariate file"),
+            (self.config.snps_file, "SNP list file"),
+            (self.config.ksnps_file, "Kinship SNP list file"),
+            (self.config.weight_file, "Weight file"),
+        )
+        for path, label in required_files:
+            if path is not None and not path.exists():
+                raise FileNotFoundError(f"{label} not found: {path}")
 
-        # SNP list file validation
-        if self.config.snps_file is not None and not self.config.snps_file.exists():
-            raise FileNotFoundError(f"SNP list file not found: {self.config.snps_file}")
-
-        if self.config.ksnps_file is not None and not self.config.ksnps_file.exists():
-            raise FileNotFoundError(
-                f"Kinship SNP list file not found: {self.config.ksnps_file}"
-            )
-
-        # Weight file validation
-        if self.config.weight_file is not None and not self.config.weight_file.exists():
-            raise FileNotFoundError(f"Weight file not found: {self.config.weight_file}")
         if self.config.weight_file is not None and self.config.loco:
             raise ValueError(
                 "-widv (individual weights) is not yet supported with -loco mode. "

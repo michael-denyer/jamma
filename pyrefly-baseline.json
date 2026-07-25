@@ -601,33 +601,9 @@
       "severity": "error"
     },
     {
-      "line": 418,
-      "column": 20,
-      "stop_line": 418,
-      "stop_column": 54,
-      "path": "src/jamma/pipeline.py",
-      "code": -2,
-      "name": "missing-attribute",
-      "description": "Object of class `NoneType` has no attribute `exists`",
-      "concise_description": "Object of class `NoneType` has no attribute `exists`",
-      "severity": "error"
-    },
-    {
-      "line": 422,
-      "column": 20,
-      "stop_line": 422,
-      "stop_column": 55,
-      "path": "src/jamma/pipeline.py",
-      "code": -2,
-      "name": "missing-attribute",
-      "description": "Object of class `NoneType` has no attribute `exists`",
-      "concise_description": "Object of class `NoneType` has no attribute `exists`",
-      "severity": "error"
-    },
-    {
-      "line": 936,
+      "line": 916,
       "column": 23,
-      "stop_line": 936,
+      "stop_line": 916,
       "stop_column": 32,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -637,9 +613,9 @@
       "severity": "error"
     },
     {
-      "line": 942,
+      "line": 922,
       "column": 47,
-      "stop_line": 942,
+      "stop_line": 922,
       "stop_column": 56,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -649,9 +625,9 @@
       "severity": "error"
     },
     {
-      "line": 986,
+      "line": 966,
       "column": 17,
-      "stop_line": 986,
+      "stop_line": 966,
       "stop_column": 26,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -661,9 +637,9 @@
       "severity": "error"
     },
     {
-      "line": 1239,
+      "line": 1219,
       "column": 13,
-      "stop_line": 1239,
+      "stop_line": 1219,
       "stop_column": 26,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -673,9 +649,9 @@
       "severity": "error"
     },
     {
-      "line": 1248,
+      "line": 1228,
       "column": 30,
-      "stop_line": 1248,
+      "stop_line": 1228,
       "stop_column": 43,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -685,9 +661,9 @@
       "severity": "error"
     },
     {
-      "line": 1446,
+      "line": 1426,
       "column": 24,
-      "stop_line": 1446,
+      "stop_line": 1426,
       "stop_column": 37,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -697,9 +673,9 @@
       "severity": "error"
     },
     {
-      "line": 1466,
+      "line": 1446,
       "column": 20,
-      "stop_line": 1466,
+      "stop_line": 1446,
       "stop_column": 33,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -709,9 +685,9 @@
       "severity": "error"
     },
     {
-      "line": 1517,
+      "line": 1497,
       "column": 29,
-      "stop_line": 1517,
+      "stop_line": 1497,
       "stop_column": 48,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -721,9 +697,9 @@
       "severity": "error"
     },
     {
-      "line": 1525,
+      "line": 1505,
       "column": 17,
-      "stop_line": 1525,
+      "stop_line": 1505,
       "stop_column": 31,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -733,9 +709,9 @@
       "severity": "error"
     },
     {
-      "line": 1526,
+      "line": 1506,
       "column": 20,
-      "stop_line": 1526,
+      "stop_line": 1506,
       "stop_column": 37,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -745,9 +721,9 @@
       "severity": "error"
     },
     {
-      "line": 1645,
+      "line": 1625,
       "column": 21,
-      "stop_line": 1645,
+      "stop_line": 1625,
       "stop_column": 41,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -757,9 +733,9 @@
       "severity": "error"
     },
     {
-      "line": 1648,
+      "line": 1628,
       "column": 71,
-      "stop_line": 1648,
+      "stop_line": 1628,
       "stop_column": 88,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -769,9 +745,9 @@
       "severity": "error"
     },
     {
-      "line": 1653,
+      "line": 1633,
       "column": 28,
-      "stop_line": 1653,
+      "stop_line": 1633,
       "stop_column": 49,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -781,9 +757,9 @@
       "severity": "error"
     },
     {
-      "line": 1654,
+      "line": 1634,
       "column": 23,
-      "stop_line": 1654,
+      "stop_line": 1634,
       "stop_column": 37,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -793,9 +769,9 @@
       "severity": "error"
     },
     {
-      "line": 1655,
+      "line": 1635,
       "column": 28,
-      "stop_line": 1655,
+      "stop_line": 1635,
       "stop_column": 50,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -805,9 +781,9 @@
       "severity": "error"
     },
     {
-      "line": 1656,
+      "line": 1636,
       "column": 23,
-      "stop_line": 1656,
+      "stop_line": 1636,
       "stop_column": 42,
       "path": "src/jamma/pipeline.py",
       "code": -2,
@@ -817,9 +793,9 @@
       "severity": "error"
     },
     {
-      "line": 1657,
+      "line": 1637,
       "column": 23,
-      "stop_line": 1657,
+      "stop_line": 1637,
       "stop_column": 42,
       "path": "src/jamma/pipeline.py",
       "code": -2,

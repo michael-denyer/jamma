@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [6.0.0] - 2026-07-24
+## [6.0.0] - 2026-07-25
 
 ### Changed
 
@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `maf_threshold` of 0.99 even though MAF is `min(af, 1-af)` and never exceeds
   0.5. Such calls now raise `ValueError`.
 
+- **The p-value layer moved into its own translation unit.** `betainc_cf`,
+  `betainc`, `f_to_pvalue` and the continued-fraction constants now live in
+  `_lmm_stats.c`, with `chi2_sf_c` inline in `_lmm_stats.h`. `f_to_pvalue` was
+  the most-referenced static in `_lmm_accel.c` (18 references from 12
+  sections) and `chi2_sf_c` the third. Every remaining shared static is now an
+  FP kernel or a workspace destructor. All 139 bit-exact fingerprint records
+  are unchanged, and GEMMA parity is unaffected.
+- **`PipelineRunner.validate_inputs` folds its seven file-existence checks
+  into one ordered table**, 124 lines and 23 branches down to 104 and 17. The
+  order in which the checks fire is part of the contract, since a config
+  naming two missing files reports the earlier one, and it is now pinned by
+  `tests/test_pipeline_validation_order.py`.
+
 ### Fixed
 
 - **The NumPy `dsyrk` fallback no longer exceeds the memory the kinship
@@ -36,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback's GEMM work as well as its peak) and the mirror tiles both axes.
   `jlinalg.dsyrk_scratch_bytes()` reports the bound and
   `StreamingMemoryBreakdown` gained `dsyrk_scratch_gb`.
+
+- **The `_lmm_accel.c` coupling census counted things that were not
+  references.** `scripts/lmm_accel_sections.py` reports which static functions
+  are shared across section boundaries, and that list is the worklist for any
+  extraction. It stripped a comment only when `/*` appeared on the same line,
+  so the interior of every multi-line block comment was read as code: the
+  file header alone manufactured cross-section references for
+  `compute_lrt_batch_c`, `compute_score_batch_c` and `jamma_sentinel_oob`.
+  Separately, the 616-line `PyMethodDef` block carried no section banner, so
+  it was attributed to whichever section preceded it and every entry point
+  registered there read as coupled to that one section. Real coupling was 24
+  statics, not 58, and 28 of the difference was the method table alone.
 
 ### Internal
 
@@ -52,6 +77,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eigendecompose/rotate/null-model/PVE prologue they previously each inlined.
 - Eighteen hand-written "C symbol is None" guards collapse into one helper.
   Six were `assert`, which `python -O` strips.
+
+- **cppcheck now runs over `src/jamma/lmm`.** The hook was scoped to
+  `^src/jamma/jlinalg/src/` from the day it was added, so the LMM accelerator
+  had never been statically analysed. All five sources pass. `NPY_INTP_FMT`
+  has to be defined for the run: undefined, cppcheck reports `unknownMacro`
+  and stops analysing `_lmm_accel.c`, which then reads as clean because
+  nothing was checked.
+- **clang-format is explicitly disabled for `src/jamma/lmm`.** A grid search
+  over 48 configurations found the best achievable diff was 22% of
+  `_lmm_stats.c`, 48% of `_lmm_support.c` and 52% of `_lmm_accel.c`, with no
+  single configuration suiting all three. The sources use manual column
+  alignment the tool cannot reproduce. Without the opt-out the repo-root
+  config applies, so running clang-format by hand rewrote 5,567 lines.
+- 15 stale pyrefly baseline suppressions dropped, 289 entries to 272.
 
 ## [5.6.1] - 2026-07-21
 

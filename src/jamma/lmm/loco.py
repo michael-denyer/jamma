@@ -8,6 +8,10 @@ Memory profile (sequential processing):
     At any point holds S_full (n^2*8) from the LOCO kinship generator,
     plus one K_loco (n^2*8) during eigendecomp, plus LMM working set.
     Each K_loco is discarded after eigendecomp.
+
+``LocoConfig`` lives in ``loco_config`` and the eigenpair sources in
+``loco_eigen``; both are re-exported here, so ``from jamma.lmm.loco import
+LocoConfig`` keeps working.
 """
 
 from __future__ import annotations
@@ -16,7 +20,6 @@ import contextlib
 import gc
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -42,11 +45,9 @@ from jamma.io.plink import (
 from jamma.kinship import (
     SnpStatsCache,
     compute_loco_kinship_streaming,
-    write_kinship_matrix,
 )
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.compute_numpy import LmmMode
-from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_cache import (
     EigenCacheComponents,
     compute_eigen_cache_key,
@@ -54,8 +55,13 @@ from jamma.lmm.eigen_cache import (
     invalidate_eigen_cache_manifest,
     write_eigen_cache_manifest,
 )
-from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import IncrementalAssocWriter
+from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig
+from jamma.lmm.loco_eigen import (
+    _cached_eigen_pairs,
+    _computed_eigen_pairs,
+    _find_loco_eigen_cache,
+)
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
@@ -71,6 +77,12 @@ from jamma.lmm.schema import (
 )
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
+
+__all__ = [
+    "DEFAULT_LOCO_CONFIG",
+    "LocoConfig",
+    "run_lmm_loco",
+]
 
 
 def _collect_chr_snp_stats(
@@ -159,306 +171,6 @@ def _warn_if_loco_stats_invalid(stats: SnpStats) -> None:
             f"LOCO chr genotype validation: {stats.n_unexpected} values outside "
             f"expected range {{0, 1, 2, NaN}}"
         )
-
-
-def _find_loco_eigen_cache(
-    loco: LocoConfig,
-    chr_names: list[str],
-) -> dict[str, tuple[Path, Path]] | None:
-    """Check for a complete set of per-chromosome cached eigen files.
-
-    File naming comes from ``loco.eigen_paths()``, the same method the writer
-    builds its names with, so the two cannot drift.
-
-    Dimension validation is deferred to the per-chromosome load in
-    ``run_lmm_loco``, where ``read_eigen_files(n_samples=...)`` raises
-    ``ValueError`` on mismatch. This avoids loading all eigen data
-    eagerly just to check dimensions.
-
-    Args:
-        loco: LOCO config supplying eigen_dir, eigen_prefix and legacy_text.
-        chr_names: List of chromosome names to check.
-
-    Returns:
-        Dict mapping chr_name -> (eigenD_path, eigenU_path) if ALL chromosomes
-        have both files. None if ANY chromosome is missing either file, or if
-        no eigen_dir was configured — all three mean "compute from scratch".
-    """
-    if loco.eigen_dir is None:
-        return None
-
-    if not loco.eigen_dir.is_dir():
-        logger.warning(
-            f"eigen_dir is not a directory: {loco.eigen_dir}. "
-            f"Will compute from scratch."
-        )
-        return None
-
-    cache: dict[str, tuple[Path, Path]] = {}
-
-    for ch in chr_names:
-        d_path, u_path = loco.eigen_paths(ch)
-
-        if not d_path.exists() or not u_path.exists():
-            missing = d_path if not d_path.exists() else u_path
-            logger.info(
-                f"LOCO eigen cache incomplete: missing {missing}. "
-                f"Will compute from scratch."
-            )
-            return None
-
-        cache[ch] = (d_path, u_path)
-
-    return cache
-
-
-def _save_loco_kinship(
-    K_loco: np.ndarray,
-    chr_name: str,
-    *,
-    loco: LocoConfig,
-    show_progress: bool,
-) -> None:
-    """Write one chromosome's LOCO kinship before it is discarded."""
-    kinship_path = loco.kinship_path(chr_name)
-    try:
-        actual_path = write_kinship_matrix(
-            K_loco, kinship_path, legacy_text=loco.legacy_text
-        )
-    except OSError as e:
-        raise OSError(
-            f"Failed to save LOCO kinship for chromosome {chr_name} "
-            f"to {kinship_path}: {e}"
-        ) from e
-    if show_progress:
-        logger.info(f"  Saved LOCO kinship to {actual_path}")
-
-
-def _write_loco_eigen(
-    eigenvalues: np.ndarray,
-    U: np.ndarray,
-    chr_name: str,
-    *,
-    loco: LocoConfig,
-    eigen_dir: Path,
-) -> None:
-    """Persist one chromosome's eigenpair to the LOCO eigen cache.
-
-    ``eigen_dir`` is passed separately because the caller has already narrowed
-    it out of ``LocoConfig.eigen_dir | None``.
-    """
-    try:
-        write_eigen_files(
-            eigenvalues,
-            U,
-            eigen_dir,
-            prefix=loco.eigen_stem(chr_name),
-            legacy_text=loco.legacy_text,
-        )
-    except OSError as e:
-        raise OSError(
-            f"Failed to write LOCO eigen for chromosome {chr_name} to {eigen_dir}: {e}"
-        ) from e
-    logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
-
-
-def _cached_eigen_pairs(
-    eigen_cache: dict[str, tuple[Path, Path]],
-    chr_names: list[str],
-    *,
-    n_valid: int,
-    partitions: dict[str, np.ndarray],
-    show_progress: bool,
-) -> Iterator[tuple[str, np.ndarray, np.ndarray]]:
-    """Yield per-chromosome eigenpairs read from a complete eigen cache.
-
-    No kinship is computed on this path: the cache was written by an earlier
-    run and validated by the caller before the loop starts.
-    """
-    for chr_idx, chr_name in enumerate(chr_names):
-        d_path, u_path = eigen_cache[chr_name]
-        if show_progress:
-            logger.info(
-                f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
-                f"{len(partitions[chr_name])} SNPs, loading cached eigen..."
-            )
-        try:
-            eigenvalues, U = read_eigen_files(d_path, u_path, n_samples=n_valid)
-        except (ValueError, FileNotFoundError) as e:
-            raise type(e)(f"LOCO eigen cache for chromosome {chr_name}: {e}") from e
-        yield chr_name, eigenvalues, U
-
-
-def _computed_eigen_pairs(
-    loco_iter: Iterator[tuple[str, np.ndarray]],
-    chr_names: list[str],
-    *,
-    valid_mask: np.ndarray,
-    n_valid: int,
-    pre_subset: bool,
-    all_samples_valid: bool,
-    partitions: dict[str, np.ndarray],
-    check_memory: bool,
-    show_progress: bool,
-    loco: LocoConfig,
-) -> Iterator[tuple[str, np.ndarray, np.ndarray]]:
-    """Yield per-chromosome eigenpairs by eigendecomposing streamed LOCO kinship.
-
-    Each K_loco is optionally saved, subset to the analysed samples,
-    eigendecomposed, optionally written to the eigen cache, then dropped before
-    the next chromosome is pulled, so only one lives at a time.
-
-    ``pre_subset`` records that the kinship streamer already accumulated at
-    n_valid x n_valid, which lets the subset step skip a post-hoc np.ix_ copy.
-    """
-    for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):
-        if show_progress:
-            logger.info(
-                f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
-                f"{len(partitions[chr_name])} SNPs, eigendecomposing..."
-            )
-
-        if loco.save_kinship:
-            _save_loco_kinship(K_loco, chr_name, loco=loco, show_progress=show_progress)
-
-        if pre_subset:
-            if K_loco.shape != (n_valid, n_valid):
-                raise RuntimeError(
-                    f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
-                    f"subsetting, got {K_loco.shape}"
-                )
-            K_loco_valid = K_loco
-            del K_loco
-        elif all_samples_valid:
-            K_loco_valid = K_loco
-            del K_loco
-        else:
-            K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-            del K_loco
-            gc.collect()
-
-        eigenvalues, U = eigendecompose_kinship(K_loco_valid, check_memory=check_memory)
-        del K_loco_valid
-        gc.collect()
-
-        if loco.write_eigen and loco.eigen_dir is not None:
-            _write_loco_eigen(
-                eigenvalues, U, chr_name, loco=loco, eigen_dir=loco.eigen_dir
-            )
-
-        yield chr_name, eigenvalues, U
-
-
-@dataclass(frozen=True)
-class LocoConfig:
-    """LOCO-specific options for :func:`run_lmm_loco`.
-
-    The nine numerical knobs shared with every other runner live in
-    ``LmmConfig``; these are the ones only LOCO has — where kinship and eigen
-    artefacts are written, which SNPs take part, and the streaming chunk width.
-
-    Frozen to match ``LmmConfig``. The ndarray fields are frozen by reference
-    only, as usual for a dataclass: callers must not mutate an array after
-    handing it over.
-
-    Attributes:
-        save_kinship: Write each chromosome's K_loco to disk.
-        kinship_output_dir: Directory for K_loco files. Required when
-            save_kinship is set.
-        kinship_output_prefix: Filename prefix for K_loco files.
-        snps_indices: Global indices of SNPs to test. None tests all.
-        ksnps_indices: Global indices of SNPs used to build kinship. None
-            uses all.
-        col_chunk_size: Columns per streaming chunk when building kinship.
-        write_eigen: Write per-chromosome eigenvalues and eigenvectors.
-        eigen_dir: Directory for eigen files. Required when write_eigen is set.
-        eigen_prefix: Filename prefix for eigen files.
-        legacy_text: Write kinship and eigen files as GEMMA text rather than
-            .npy.
-    """
-
-    save_kinship: bool = False
-    kinship_output_dir: Path | None = None
-    kinship_output_prefix: str = "result"
-    snps_indices: np.ndarray | None = None
-    ksnps_indices: np.ndarray | None = None
-    col_chunk_size: int = 5_000
-    write_eigen: bool = False
-    eigen_dir: Path | None = None
-    eigen_prefix: str = "result"
-    legacy_text: bool = False
-
-    def __post_init__(self) -> None:
-        # Checked here rather than partway through the run: the caller learns
-        # at construction, before any chromosome has been eigendecomposed.
-        if self.write_eigen and self.eigen_dir is None:
-            raise ValueError(
-                "write_eigen=True requires eigen_dir to be set. "
-                "Pass eigen_dir=<directory> alongside write_eigen=True."
-            )
-        if self.save_kinship and self.kinship_output_dir is None:
-            raise ValueError(
-                "save_kinship=True requires kinship_output_dir to be set. "
-                "Pass kinship_output_dir=<directory> alongside save_kinship=True."
-            )
-        if self.col_chunk_size <= 0:
-            raise ValueError(
-                f"col_chunk_size must be positive, got {self.col_chunk_size}"
-            )
-
-    @property
-    def artifact_suffix(self) -> str:
-        """Extension for kinship and eigen artifacts: .txt for GEMMA, else .npy."""
-        return ".txt" if self.legacy_text else ".npy"
-
-    def eigen_stem(self, chr_name: str) -> str:
-        """Filename stem for one chromosome's eigenpair, extension excluded.
-
-        ``write_eigen_files`` appends ``.eigenD``/``.eigenU`` and the extension
-        itself, so this is what it takes as ``prefix=`` — and what
-        :meth:`eigen_paths` composes the read-side names from, which is how the
-        writer and the cache reader stay in step.
-        """
-        return f"{self.eigen_prefix}.loco.chr{chr_name}"
-
-    def eigen_paths(self, chr_name: str) -> tuple[Path, Path]:
-        """``(eigenD, eigenU)`` paths for one chromosome's cache entry.
-
-        Raises:
-            ValueError: If ``eigen_dir`` is None — there is no directory to
-                name the files under. Cache readers check ``eigen_dir`` before
-                asking; on the write side ``__post_init__`` has it covered.
-        """
-        if self.eigen_dir is None:
-            raise ValueError("eigen_paths() requires eigen_dir, which is None")
-        stem = self.eigen_stem(chr_name)
-        return (
-            self.eigen_dir / f"{stem}.eigenD{self.artifact_suffix}",
-            self.eigen_dir / f"{stem}.eigenU{self.artifact_suffix}",
-        )
-
-    def kinship_path(self, chr_name: str) -> Path:
-        """Path for one chromosome's LOCO kinship matrix.
-
-        Raises:
-            ValueError: If ``kinship_output_dir`` is None, which
-                ``__post_init__`` rules out whenever ``save_kinship`` is set.
-        """
-        if self.kinship_output_dir is None:
-            raise ValueError(
-                "kinship_path() requires kinship_output_dir, which is None"
-            )
-        name = (
-            f"{self.kinship_output_prefix}.loco.cXX.chr{chr_name}{self.artifact_suffix}"
-        )
-        return self.kinship_output_dir / name
-
-
-DEFAULT_LOCO_CONFIG = LocoConfig()
-"""The all-defaults LOCO config, shared as run_lmm_loco's default argument.
-
-LocoConfig is frozen, so one instance is safe to share.
-"""
 
 
 def run_lmm_loco(

@@ -119,6 +119,8 @@ src/jamma/
 │   ├── chunk_dispatch.py   # Per-chunk C/Python kernel dispatch ladder
 │   ├── chunk_pipeline.py   # Rotation/compute thread split + overlapped pipeline driver
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
+│   ├── loco_config.py      # LocoConfig: LOCO-only knobs and artifact naming
+│   ├── loco_eigen.py       # LOCO eigenpair sources (cache / compute) + artifact writes
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
 │   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)
 │   └── _lmm_accel.c        # C extension: per-SNP REML/Wald pipeline with OpenMP

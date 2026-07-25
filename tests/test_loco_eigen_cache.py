@@ -76,6 +76,24 @@ def _write_cache_entries(
         )
 
 
+def test_loco_config_still_importable_from_jamma_lmm_loco() -> None:
+    """LocoConfig moved to ``loco_config`` but the old path stays.
+
+    ``from jamma.lmm.loco import LocoConfig`` is what ``jamma.pipeline`` and
+    ``jamma.lmm.__init__`` use, and LocoConfig is public API as of 7.0.0.
+
+    Identity rather than importability: a second class definition with the same
+    name would satisfy an import check while breaking ``isinstance``.
+    """
+    from jamma.lmm import loco, loco_config
+
+    for name in ("LocoConfig", "DEFAULT_LOCO_CONFIG"):
+        assert getattr(loco, name) is getattr(loco_config, name), (
+            f"jamma.lmm.loco.{name} is not the same object as "
+            f"jamma.lmm.loco_config.{name}"
+        )
+
+
 class TestLocoConfigArtifactNaming:
     """LocoConfig owns the on-disk names for LOCO kinship and eigen artifacts.
 
@@ -1077,7 +1095,7 @@ class TestLocoEigenCacheStaleDetection:
         manifest must already be gone (invalidated before the loop), so a later
         read with the maf=0.01 inputs cannot validate the half-rewritten cache.
         """
-        import jamma.lmm.loco as loco_mod
+        import jamma.lmm.loco_eigen as loco_eigen_mod
         from jamma.lmm.eigen_cache import eigen_cache_manifest_path
         from jamma.lmm.loco import run_lmm_loco
         from tests.conftest import load_phenotypes_from_fam
@@ -1107,7 +1125,7 @@ class TestLocoEigenCacheStaleDetection:
         manifest = eigen_cache_manifest_path(eigen_dir, "result")
         assert manifest.exists()
 
-        real_write_eigen_files = loco_mod.write_eigen_files
+        real_write_eigen_files = loco_eigen_mod.write_eigen_files
         calls = {"n": 0}
 
         def interrupting_write_eigen_files(
@@ -1130,7 +1148,7 @@ class TestLocoEigenCacheStaleDetection:
             raise RuntimeError("simulated interruption")
 
         monkeypatch.setattr(
-            loco_mod, "write_eigen_files", interrupting_write_eigen_files
+            loco_eigen_mod, "write_eigen_files", interrupting_write_eigen_files
         )
 
         with pytest.raises(RuntimeError, match="simulated interruption"):

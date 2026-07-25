@@ -16,6 +16,7 @@ import contextlib
 import gc
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -62,14 +63,10 @@ from jamma.lmm.prepare_common import (
 )
 from jamma.lmm.results import make_result_list_sink, make_writer_sink
 from jamma.lmm.schema import (
-    DEFAULT_L_MAX,
-    DEFAULT_L_MIN,
-    DEFAULT_MAF,
-    DEFAULT_MISS,
-    DEFAULT_N_GRID,
-    DEFAULT_N_REFINE,
+    DEFAULT_LMM_CONFIG,
     TEST_TYPE_MAP,
     LazySnpMeta,
+    LmmConfig,
     LocoResult,
 )
 from jamma.lmm.stats import AssocResult
@@ -372,30 +369,73 @@ def _computed_eigen_pairs(
         yield chr_name, eigenvalues, U
 
 
+@dataclass(frozen=True)
+class LocoConfig:
+    """LOCO-specific options for :func:`run_lmm_loco`.
+
+    The nine numerical knobs shared with every other runner live in
+    ``LmmConfig``; these are the ones only LOCO has — where kinship and eigen
+    artefacts are written, which SNPs take part, and the streaming chunk width.
+
+    Frozen to match ``LmmConfig``. The ndarray fields are frozen by reference
+    only, as usual for a dataclass: callers must not mutate an array after
+    handing it over.
+
+    Attributes:
+        save_kinship: Write each chromosome's K_loco to disk.
+        kinship_output_dir: Directory for K_loco files. Required when
+            save_kinship is set.
+        kinship_output_prefix: Filename prefix for K_loco files.
+        snps_indices: Global indices of SNPs to test. None tests all.
+        ksnps_indices: Global indices of SNPs used to build kinship. None
+            uses all.
+        col_chunk_size: Columns per streaming chunk when building kinship.
+        write_eigen: Write per-chromosome eigenvalues and eigenvectors.
+        eigen_dir: Directory for eigen files. Required when write_eigen is set.
+        eigen_prefix: Filename prefix for eigen files.
+        legacy_text: Write kinship and eigen files as GEMMA text rather than
+            .npy.
+    """
+
+    save_kinship: bool = False
+    kinship_output_dir: Path | None = None
+    kinship_output_prefix: str = "result"
+    snps_indices: np.ndarray | None = None
+    ksnps_indices: np.ndarray | None = None
+    col_chunk_size: int = 5_000
+    write_eigen: bool = False
+    eigen_dir: Path | None = None
+    eigen_prefix: str = "result"
+    legacy_text: bool = False
+
+    def __post_init__(self) -> None:
+        # Checked here rather than partway through the run: the caller learns
+        # at construction, before any chromosome has been eigendecomposed.
+        if self.write_eigen and self.eigen_dir is None:
+            raise ValueError(
+                "write_eigen=True requires eigen_dir to be set. "
+                "Pass eigen_dir=<directory> alongside write_eigen=True."
+            )
+        if self.col_chunk_size <= 0:
+            raise ValueError(
+                f"col_chunk_size must be positive, got {self.col_chunk_size}"
+            )
+
+
+DEFAULT_LOCO_CONFIG = LocoConfig()
+"""The all-defaults LOCO config, shared as run_lmm_loco's default argument.
+
+LocoConfig is frozen, so one instance is safe to share.
+"""
+
+
 def run_lmm_loco(
     bed_path: Path,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None = None,
-    maf_threshold: float = DEFAULT_MAF,
-    miss_threshold: float = DEFAULT_MISS,
-    lmm_mode: int = 1,
+    config: LmmConfig = DEFAULT_LMM_CONFIG,
+    loco: LocoConfig = DEFAULT_LOCO_CONFIG,
     output_path: Path | None = None,
-    check_memory: bool = True,
-    show_progress: bool = True,
-    save_kinship: bool = False,
-    kinship_output_dir: Path | None = None,
-    kinship_output_prefix: str = "result",
-    snps_indices: np.ndarray | None = None,
-    ksnps_indices: np.ndarray | None = None,
-    col_chunk_size: int = 5_000,
-    l_min: float = DEFAULT_L_MIN,
-    l_max: float = DEFAULT_L_MAX,
-    write_eigen: bool = False,
-    eigen_dir: Path | None = None,
-    eigen_prefix: str = "result",
-    legacy_text: bool = False,
-    n_grid: int = DEFAULT_N_GRID,
-    n_refine: int = DEFAULT_N_REFINE,
 ) -> LocoResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -416,35 +456,12 @@ def run_lmm_loco(
         bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
         phenotypes: Phenotype vector (n_samples_total,) with NaN for missing.
         covariates: Covariate matrix (n_samples_total, n_cvt) or None.
-        maf_threshold: Minimum MAF for SNP inclusion.
-        miss_threshold: Maximum missing rate for SNP inclusion.
-        lmm_mode: LMM test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+        config: Numerical settings shared with every other runner — MAF and
+            missingness thresholds, lambda bounds and grid, test type,
+            memory check and progress. See :class:`LmmConfig`.
+        loco: LOCO-only settings — kinship and eigen output, SNP restriction,
+            chunk width, text vs binary artifacts. See :class:`LocoConfig`.
         output_path: Path for incremental result writing, or None for in-memory.
-        check_memory: If True, check available memory before computation.
-        show_progress: If True, show progress bars and log messages.
-        save_kinship: If True, save each K_loco to disk before discarding.
-        kinship_output_dir: Directory for kinship output files.
-        kinship_output_prefix: Prefix for kinship output filenames.
-        snps_indices: Pre-resolved column indices for -snps restriction, or None.
-        ksnps_indices: Pre-resolved column indices for -ksnps restriction, or
-            None. When provided, only these SNPs are used for LOCO kinship
-            computation. Passed through to compute_loco_kinship_streaming().
-        col_chunk_size: Number of SNP columns per disk read chunk. Controls
-            peak memory: n_valid * col_chunk_size * 8 bytes per chunk.
-        l_min: Minimum lambda for optimization (default 1e-5).
-        l_max: Maximum lambda for optimization (default 1e5).
-        write_eigen: If True, write per-chromosome eigen files after
-            eigendecomp. Raises ValueError if eigen_dir is None.
-        eigen_dir: Directory for reading/writing per-chromosome eigen cache.
-            When set, checks for cached files before computing. Combined
-            with write_eigen, writes new files here.
-        eigen_prefix: Prefix for eigen filenames (default "result").
-        legacy_text: If True, write (and look up) per-chromosome kinship and
-            eigen artifacts as GEMMA-compatible text files (.cXX.txt,
-            .eigenD.txt, .eigenU.txt) instead of binary .npy.
-        n_grid: Grid search resolution for lambda bracketing.
-        n_refine: Golden section iterations for lambda refinement (clamped to
-            min 20 internally for ~1e-5 tolerance).
 
     Returns:
         LocoResult with associations in biological chromosome order
@@ -452,10 +469,30 @@ def run_lmm_loco(
         is set (results written to disk).
 
     Raises:
-        ValueError: If fewer than two chromosomes are present, if lmm_mode is
-            not in {1, 2, 3, 4}, if no samples have valid phenotypes, or if
-            write_eigen=True but eigen_dir is None.
+        ValueError: If fewer than two chromosomes are present or if no samples
+            have valid phenotypes. Invalid lmm_mode and write_eigen without
+            eigen_dir are rejected earlier, when LmmConfig and LocoConfig are
+            constructed.
     """
+    # Unpacked to locals the way run_lmm_association_numpy does, so the body
+    # below reads the same as it did when these were 23 flat parameters.
+    maf_threshold = config.maf_threshold
+    miss_threshold = config.miss_threshold
+    lmm_mode = config.lmm_mode
+    check_memory = config.check_memory
+    show_progress = config.show_progress
+
+    save_kinship = loco.save_kinship
+    kinship_output_dir = loco.kinship_output_dir
+    kinship_output_prefix = loco.kinship_output_prefix
+    snps_indices = loco.snps_indices
+    ksnps_indices = loco.ksnps_indices
+    col_chunk_size = loco.col_chunk_size
+    write_eigen = loco.write_eigen
+    eigen_dir = loco.eigen_dir
+    eigen_prefix = loco.eigen_prefix
+    legacy_text = loco.legacy_text
+
     start_time = time.perf_counter()
 
     if lmm_mode not in (1, 2, 3, 4):
@@ -697,15 +734,8 @@ def run_lmm_loco(
                 phenotypes=phenotypes_valid,
                 covariates=covariates_valid,
                 snp_info=snp_info,
-                maf_threshold=maf_threshold,
-                miss_threshold=miss_threshold,
-                lmm_mode=lmm_mode,
                 valid_mask=valid_mask,
-                show_progress=show_progress,
-                l_min=l_min,
-                l_max=l_max,
-                n_grid=n_grid,
-                n_refine=n_refine,
+                config=config,
                 snps_global_mask=snps_global_mask,
                 col_chunk_size=col_chunk_size,
                 writer=writer,
@@ -781,15 +811,8 @@ def _run_lmm_for_chromosome_numpy(
     phenotypes: np.ndarray,
     covariates: np.ndarray | None,
     snp_info: LazySnpMeta | list,
-    maf_threshold: float,
-    miss_threshold: float,
-    lmm_mode: int,
     valid_mask: np.ndarray,
-    show_progress: bool = True,
-    l_min: float = DEFAULT_L_MIN,
-    l_max: float = DEFAULT_L_MAX,
-    n_grid: int = DEFAULT_N_GRID,
-    n_refine: int = DEFAULT_N_REFINE,
+    config: LmmConfig = DEFAULT_LMM_CONFIG,
     snps_global_mask: np.ndarray | None = None,
     col_chunk_size: int = 5_000,
     writer: IncrementalAssocWriter | None = None,
@@ -835,6 +858,15 @@ def _run_lmm_for_chromosome_numpy(
         is used; ``pve``/``pve_se`` are None unless ``compute_pve`` is set and
         the likelihood surface is not flat.
     """
+    maf_threshold = config.maf_threshold
+    miss_threshold = config.miss_threshold
+    lmm_mode = config.lmm_mode
+    show_progress = config.show_progress
+    l_min = config.l_min
+    l_max = config.l_max
+    n_grid = config.n_grid
+    n_refine = config.n_refine
+
     n_samples = phenotypes.shape[0]
     valid_indices = np.where(valid_mask)[0]
 

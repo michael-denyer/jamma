@@ -18,7 +18,8 @@ import pytest
 
 from jamma.lmm.eigen_cache import EigenCacheComponents
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-from jamma.lmm.loco import _find_loco_eigen_cache
+from jamma.lmm.loco import LocoConfig, _find_loco_eigen_cache
+from jamma.lmm.schema import LmmConfig
 
 # ---------------------------------------------------------------------------
 # Fixture paths
@@ -169,13 +170,11 @@ class TestLocoWriteEigen:
         result = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
-            lmm_mode=1,
             output_path=tmp_path / "result.assoc.txt",
-            check_memory=False,
-            show_progress=False,
-            write_eigen=True,
-            eigen_dir=tmp_path,
-            eigen_prefix="result",
+            config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
+            loco=LocoConfig(
+                write_eigen=True, eigen_dir=tmp_path, eigen_prefix="result"
+            ),
         )
         assert result.n_tested > 0
 
@@ -227,13 +226,11 @@ class TestLocoEigenCacheIntegration:
         run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
-            lmm_mode=1,
             output_path=out1,
-            check_memory=False,
-            show_progress=False,
-            write_eigen=True,
-            eigen_dir=eigen_dir,
-            eigen_prefix="result",
+            config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
+            loco=LocoConfig(
+                write_eigen=True, eigen_dir=eigen_dir, eigen_prefix="result"
+            ),
         )
 
         # Run 2: read cache (no kinship/eigendecomp). Capture INFO so we can
@@ -249,12 +246,9 @@ class TestLocoEigenCacheIntegration:
             run_lmm_loco(
                 bed_path=MOUSE_HS1940_BFILE,
                 phenotypes=phenotypes,
-                lmm_mode=1,
                 output_path=out2,
-                check_memory=False,
-                show_progress=False,
-                eigen_dir=eigen_dir,
-                eigen_prefix="result",
+                config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
+                loco=LocoConfig(eigen_dir=eigen_dir, eigen_prefix="result"),
             )
         finally:
             logger.remove(handler_id)
@@ -333,12 +327,9 @@ class TestLocoEigenCacheFallback:
         result = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
-            lmm_mode=1,
             output_path=tmp_path / "result.assoc.txt",
-            check_memory=False,
-            show_progress=False,
-            eigen_dir=empty_dir,
-            eigen_prefix="result",
+            config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
+            loco=LocoConfig(eigen_dir=empty_dir, eigen_prefix="result"),
         )
         assert result.n_tested > 0
 
@@ -360,13 +351,11 @@ class TestLocoEigenCacheFallback:
         run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
-            lmm_mode=1,
             output_path=tmp_path / "full.assoc.txt",
-            check_memory=False,
-            show_progress=False,
-            write_eigen=True,
-            eigen_dir=eigen_dir,
-            eigen_prefix="result",
+            config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
+            loco=LocoConfig(
+                write_eigen=True, eigen_dir=eigen_dir, eigen_prefix="result"
+            ),
         )
 
         # Delete one chromosome's files to simulate partial cache
@@ -378,12 +367,9 @@ class TestLocoEigenCacheFallback:
         result = run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
-            lmm_mode=1,
             output_path=tmp_path / "partial.assoc.txt",
-            check_memory=False,
-            show_progress=False,
-            eigen_dir=eigen_dir,
-            eigen_prefix="result",
+            config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
+            loco=LocoConfig(eigen_dir=eigen_dir, eigen_prefix="result"),
         )
         assert result.n_tested > 0
 
@@ -405,9 +391,8 @@ class TestLocoEigenCacheValidation:
             run_lmm_loco(
                 bed_path=MOUSE_HS1940_BFILE,
                 phenotypes=phenotypes,
-                lmm_mode=1,
-                write_eigen=True,
-                eigen_dir=None,
+                config=LmmConfig(lmm_mode=1),
+                loco=LocoConfig(write_eigen=True, eigen_dir=None),
             )
 
     def test_dimension_mismatch_on_cached_eigen_raises(self, tmp_path: Path) -> None:
@@ -580,17 +565,17 @@ class TestLocoLegacyText:
         run_lmm_loco(
             bed_path=MOUSE_HS1940_BFILE,
             phenotypes=phenotypes,
-            lmm_mode=1,
             output_path=tmp_path / "result.assoc.txt",
-            check_memory=False,
-            show_progress=False,
-            save_kinship=True,
-            kinship_output_dir=tmp_path,
-            kinship_output_prefix="result",
-            write_eigen=True,
-            eigen_dir=tmp_path,
-            eigen_prefix="result",
-            legacy_text=True,
+            config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
+            loco=LocoConfig(
+                save_kinship=True,
+                kinship_output_dir=tmp_path,
+                kinship_output_prefix="result",
+                write_eigen=True,
+                eigen_dir=tmp_path,
+                eigen_prefix="result",
+                legacy_text=True,
+            ),
         )
 
         for ch in unique_chrs:
@@ -963,6 +948,8 @@ class TestLocoEigenCacheStaleDetection:
         common = {
             "bed_path": MOUSE_HS1940_BFILE,
             "phenotypes": phenotypes,
+        }
+        common_lmm = {
             "lmm_mode": 1,
             "check_memory": False,
             "show_progress": False,
@@ -970,22 +957,25 @@ class TestLocoEigenCacheStaleDetection:
         }
 
         out_fresh = tmp_path / "fresh.assoc.txt"
-        run_lmm_loco(**common, maf_threshold=0.05, output_path=out_fresh)
+        run_lmm_loco(
+            **common,
+            config=LmmConfig(**common_lmm, maf_threshold=0.05),
+            output_path=out_fresh,
+        )
 
         run_lmm_loco(
             **common,
-            maf_threshold=0.01,
+            config=LmmConfig(**common_lmm, maf_threshold=0.01),
+            loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir),
             output_path=tmp_path / "populate.assoc.txt",
-            write_eigen=True,
-            eigen_dir=eigen_dir,
         )
 
         out_cached = tmp_path / "cached.assoc.txt"
         run_lmm_loco(
             **common,
-            maf_threshold=0.05,
+            config=LmmConfig(**common_lmm, maf_threshold=0.05),
+            loco=LocoConfig(eigen_dir=eigen_dir),
             output_path=out_cached,
-            eigen_dir=eigen_dir,
         )
 
         fresh = {r.rs: r for r in load_gemma_assoc(out_fresh)}
@@ -1030,6 +1020,8 @@ class TestLocoEigenCacheStaleDetection:
         common = {
             "bed_path": MOUSE_HS1940_BFILE,
             "phenotypes": phenotypes,
+        }
+        common_lmm = {
             "lmm_mode": 1,
             "check_memory": False,
             "show_progress": False,
@@ -1038,10 +1030,9 @@ class TestLocoEigenCacheStaleDetection:
 
         run_lmm_loco(
             **common,
-            maf_threshold=0.01,
+            config=LmmConfig(**common_lmm, maf_threshold=0.01),
+            loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir),
             output_path=tmp_path / "populate.assoc.txt",
-            write_eigen=True,
-            eigen_dir=eigen_dir,
         )
         manifest = eigen_cache_manifest_path(eigen_dir, "result")
         assert manifest.exists()
@@ -1075,10 +1066,9 @@ class TestLocoEigenCacheStaleDetection:
         with pytest.raises(RuntimeError, match="simulated interruption"):
             run_lmm_loco(
                 **common,
-                maf_threshold=0.05,
+                config=LmmConfig(**common_lmm, maf_threshold=0.05),
+                loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir),
                 output_path=tmp_path / "interrupted.assoc.txt",
-                write_eigen=True,
-                eigen_dir=eigen_dir,
             )
 
         assert calls["n"] >= 2, "interruption did not run the real writer first"

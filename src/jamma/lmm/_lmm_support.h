@@ -33,6 +33,10 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
+/* REML_SENTINEL below expands to -INFINITY. Included here rather than left to
+ * the includer so the macro cannot compile in one unit and fail in the next. */
+#include <math.h>
+
 /* Table-driven Pab bounds. MAX_N_CVT=100 -> MAX_N_INDEX=5253 (~42KB per
  * array); functions holding two such arrays peak at ~84KB, well inside an
  * OpenMP thread stack (2-4MB). */
@@ -40,6 +44,20 @@
 #define MAX_N_INDEX  ((MAX_N_CVT + 3) * (MAX_N_CVT + 2) / 2)  /* 5253 */
 #define MAX_N_ROWS   (MAX_N_CVT + 2)                          /* 102 */
 #define MAX_PAB_SIZE (MAX_N_ROWS * MAX_N_INDEX)               /* 535806 */
+
+/* Numerical guards shared by every kernel family. They live here rather than
+ * in _lmm_accel.c because the kernels that read them now span translation
+ * units, and a per-unit copy is a silent divergence waiting to happen. */
+
+/* Minimum P_yy guard — matches _P_YY_MIN in likelihood.py */
+#define P_YY_MIN 1e-8
+
+/* REML sentinel: replaces NaN log-likelihood from degenerate P_yy.
+ * reml_finish returns NaN when P_yy < 0; the golden section callers
+ * map NaN -> REML_SENTINEL so the > comparison skips degenerate points
+ * without needing an isnan() guard on every iteration.
+ * Matches the Python path's np.where(isnan, -inf, logl). */
+#define REML_SENTINEL (-INFINITY)
 
 /* ---------------------------------------------------------------------------
  * Result shapes. One struct per set of output arrays a kernel family returns,

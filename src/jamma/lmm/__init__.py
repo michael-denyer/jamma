@@ -26,22 +26,23 @@ from jamma.lmm.chunk import auto_tune_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import write_assoc_results
-from jamma.lmm.loco import run_lmm_loco
-from jamma.lmm.runner import ExecutionPlan, run_lmm, select_execution_mode
+from jamma.lmm.loco import DEFAULT_LOCO_CONFIG, LocoConfig, run_lmm_loco
+from jamma.lmm.runner import ExecutionPlan, select_execution_mode
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
 from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.lmm.stats import AssocResult
 
 __all__ = [
+    "DEFAULT_LOCO_CONFIG",
     "AssocResult",
     "ExecutionPlan",
     "LmmConfig",
     "LmmRunResult",
+    "LocoConfig",
     "auto_tune_chunk_size",
     "eigendecompose_kinship",
     "read_eigen_files",
-    "run_lmm",
     "run_lmm_association_numpy",
     "run_lmm_association_numpy_streaming",
     "run_lmm_loco",

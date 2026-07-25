@@ -51,6 +51,7 @@ LMM_ACCEL_SOURCES: tuple[str, ...] = (
     "_lmm_stats.c",
     "_lmm_tests.c",
     "_lmm_kernels_general.c",
+    "_lmm_kernels_ncvt1.c",
 )
 
 # LAPACK sources require strict IEEE 754 (-O2 -fno-fast-math) — no unrolling,

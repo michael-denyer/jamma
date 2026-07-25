@@ -17,6 +17,33 @@ FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
 
 
+@pytest.mark.tier0
+def test_data_classes_still_importable_from_jamma_pipeline():
+    """The three data classes moved to ``pipeline_config`` but the old path stays.
+
+    ``from jamma.pipeline import PipelineConfig`` is not a courtesy re-export.
+    It is what ``jamma.cli`` and ``jamma.gwas`` use, and it is also the import
+    the jamma-databricks notebooks use
+    (``databricks_jamma_vs_gemma_numpy.py`` builds a ``PipelineConfig`` and
+    hands it to ``PipelineRunner``). That consumer lives outside this repo, so
+    nothing here would fail if the re-export were dropped during a later tidy-up.
+
+    Identity rather than importability: a second class definition with the same
+    name would satisfy an import check while breaking ``isinstance``.
+    """
+    from jamma import pipeline, pipeline_config
+
+    for name in ("PipelineConfig", "PipelineResult", "KinshipResult"):
+        assert hasattr(pipeline, name), (
+            f"jamma.pipeline.{name} disappeared; jamma-databricks imports it"
+        )
+        assert getattr(pipeline, name) is getattr(pipeline_config, name), (
+            f"jamma.pipeline.{name} is not the same object as "
+            f"jamma.pipeline_config.{name}; isinstance checks across the two "
+            "import paths would silently disagree"
+        )
+
+
 @pytest.mark.tier1
 class TestPipelineConfig:
     """Tests for PipelineConfig defaults."""

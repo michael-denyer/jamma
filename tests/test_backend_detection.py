@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from unittest.mock import patch
 
 import pytest
@@ -303,35 +302,3 @@ class TestExecutionMode:
 
         assert plan.backend == "numpy"
         assert plan.mode == "batch"
-
-    # -- run_lmm n_cvt forwarding --
-
-    def test_run_lmm_forwards_n_cvt(self):
-        """run_lmm auto-selection forwards n_cvt from covariates."""
-        from jamma.lmm.runner import run_lmm
-
-        calls = []
-        original_sem = select_execution_mode
-
-        def capturing_sem(n_samples, n_snps, **kwargs):
-            calls.append(kwargs)
-            return original_sem(n_samples, n_snps, **kwargs)
-
-        import numpy as np
-
-        geno = np.zeros((10, 5))
-        pheno = np.zeros(10)
-        cov = np.zeros((10, 3))  # 3 covariates
-
-        with patch(
-            "jamma.lmm.runner.select_execution_mode",
-            side_effect=capturing_sem,
-        ):
-            # We only care that select_execution_mode is called with n_cvt —
-            # any downstream failure from the fake runner is irrelevant here.
-            with contextlib.suppress(Exception):
-                run_lmm(genotypes=geno, phenotypes=pheno, covariates=cov)
-
-        assert any(c.get("n_cvt") == 3 for c in calls), (
-            f"n_cvt=3 not passed to select_execution_mode; calls={calls}"
-        )

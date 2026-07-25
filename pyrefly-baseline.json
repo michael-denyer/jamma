@@ -589,11 +589,11 @@
       "severity": "error"
     },
     {
-      "line": 256,
+      "line": 227,
       "column": 30,
-      "stop_line": 256,
+      "stop_line": 227,
       "stop_column": 57,
-      "path": "src/jamma/pipeline.py",
+      "path": "src/jamma/pipeline_config.py",
       "code": -2,
       "name": "bad-assignment",
       "description": "`dict[Unknown, Unknown]` is not assignable to `PipelineTiming`",

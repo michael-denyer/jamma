@@ -16,7 +16,7 @@
 
 - **Drop-in GEMMA replacement**: Same CLI flags, same file formats, same results. Change one word in your pipeline.
 - **Numerical equivalence**: Validated against GEMMA -- 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 41x faster than GEMMA 0.98.5 (LOCO mode); 16-32x on single-pass LMM. Against a GEMMA built with Apple Accelerate rather than OpenBLAS, 25x and 10-14x
+- **Fast**: Up to 41x faster than GEMMA 0.98.5 (LOCO mode); 16-32x on single-pass LMM. Against a GEMMA built with Apple Accelerate rather than OpenBLAS, roughly 25x and 9.8-13.6x
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows with NumPy and vendor BLAS
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization

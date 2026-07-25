@@ -198,3 +198,57 @@ int score_from_pab_general(
 
     return 1;
 }
+
+/* -------------------------------------------------------------------------
+ * wald_from_pab_general — Extract Wald stats from general-n_cvt Pab.
+ *
+ * P_XX = Pab[n_cvt, idx_xx], P_XY = Pab[n_cvt, idx_xy],
+ * P_YY = Pab[n_cvt, idx_yy] (pre-genotype-projection),
+ * Px_YY = Pab[n_cvt+1, idx_yy] (fully projected).
+ * Same Wald formula as existing wald_from_pab.
+ * Returns 1 if valid, 0 if degenerate.
+ * ------------------------------------------------------------------------- */
+int wald_from_pab_general(
+    const double *pab,
+    const pab_table_t *t,
+    double *beta_out, double *se_out, double *f_stat_out
+)
+{
+    int ni = t->n_index;
+    int df = t->df;
+    int nc = t->n_cvt;
+
+    double P_XX  = pab[nc * ni + t->idx_xx];
+    double P_XY  = pab[nc * ni + t->idx_xy];
+    double P_YY  = pab[nc * ni + t->idx_yy];
+    double Px_YY = pab[(nc + 1) * ni + t->idx_yy];
+
+    if (Px_YY < 0.0) {
+        *beta_out = *se_out = *f_stat_out = (double)NAN;
+        return 0;
+    }
+    if (Px_YY < P_YY_MIN) Px_YY = P_YY_MIN;
+
+    if (P_XX <= 0.0) {
+        *beta_out = *se_out = *f_stat_out = (double)NAN;
+        return 0;
+    }
+
+    double beta = P_XY / P_XX;
+    double tau = (double)df / Px_YY;
+    double variance_beta = 1.0 / (tau * P_XX);
+    double variance_safe = (fabs(variance_beta) < 0.001)
+                            ? fabs(variance_beta)
+                            : variance_beta;
+    double se = sqrt(variance_safe);
+    double f_stat = (P_YY - Px_YY) * tau;
+
+    *beta_out   = beta;
+    *se_out     = se;
+    *f_stat_out = f_stat;
+
+    if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se))
+        return 0;
+
+    return 1;
+}

@@ -52,4 +52,19 @@ int score_from_pab_general(
     double *beta_out, double *se_out, double *f_stat_out
 );
 
+/* -------------------------------------------------------------------------
+ * wald_from_pab_general — Extract Wald stats from general-n_cvt Pab.
+ *
+ * P_XX = Pab[n_cvt, idx_xx], P_XY = Pab[n_cvt, idx_xy],
+ * P_YY = Pab[n_cvt, idx_yy] (pre-genotype-projection),
+ * Px_YY = Pab[n_cvt+1, idx_yy] (fully projected).
+ * Same Wald formula as existing wald_from_pab.
+ * Returns 1 if valid, 0 if degenerate.
+ * ------------------------------------------------------------------------- */
+int wald_from_pab_general(
+    const double *pab,
+    const pab_table_t *t,
+    double *beta_out, double *se_out, double *f_stat_out
+);
+
 #endif /* JAMMA_LMM_TESTS_H */

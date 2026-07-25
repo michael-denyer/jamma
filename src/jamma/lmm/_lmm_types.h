@@ -12,6 +12,10 @@
 #ifndef JAMMA_LMM_TYPES_H
 #define JAMMA_LMM_TYPES_H
 
+/* REML_SENTINEL expands to -INFINITY. Included here rather than left to the
+ * includer so the macro cannot compile in one unit and fail in the next. */
+#include <math.h>
+
 /* Table-driven Pab bounds. MAX_N_CVT=100 -> MAX_N_INDEX=5253 (~42KB per
  * array); functions holding two such arrays peak at ~84KB, well inside an
  * OpenMP thread stack (2-4MB). */
@@ -25,6 +29,15 @@
  * near-degenerate SNPs. Shared here because the likelihood kernels and the
  * test statistics both clamp against it. */
 #define P_YY_MIN 1e-8
+
+/* REML sentinel: replaces NaN log-likelihood from degenerate P_yy.
+ * reml_finish returns NaN when P_yy < 0; the golden section callers
+ * map NaN -> REML_SENTINEL so the > comparison skips degenerate points
+ * without needing an isnan() guard on every iteration.
+ * Matches the Python path's np.where(isnan, -inf, logl).
+ * Here rather than in _lmm_support.h for the same reason as P_YY_MIN: the
+ * lambda optimizers read it and must not need <Python.h> to do so. */
+#define REML_SENTINEL (-INFINITY)
 
 typedef struct {
     int index_ab, index_aw, index_bw, index_ww;

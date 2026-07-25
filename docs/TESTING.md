@@ -389,7 +389,7 @@ issue. Include the issue ID in the reason string.
 Use `ToleranceConfig` from
 [`src/jamma/validation/tolerances.py`](../src/jamma/validation/tolerances.py).
 The defaults are calibrated from formal error propagation analysis (see
-`docs/EQUIVALENCE.md`):
+[`docs/GEMMA_EQUIVALENCE.md`](GEMMA_EQUIVALENCE.md)):
 
 ```python
 from jamma.validation import ToleranceConfig
@@ -399,8 +399,8 @@ np.testing.assert_allclose(result, reference, rtol=config.pvalue_rtol, atol=conf
 ```
 
 Do not relax tolerances to make tests pass. If a tolerance is too tight,
-either fix the algorithm or update `docs/EQUIVALENCE.md` *and*
-`ToleranceConfig` in one PR.
+either fix the algorithm or update [`docs/GEMMA_EQUIVALENCE.md`](GEMMA_EQUIVALENCE.md)
+*and* `ToleranceConfig` in one PR.
 
 ### 2.11 Shared fixtures
 

@@ -2,7 +2,7 @@
   <a href="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml"><img src="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://pypi.org/project/jamma/"><img src="https://img.shields.io/pypi/v/jamma.svg?color=orange" alt="PyPI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white" alt="Python 3.11+"></a>
-  <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-2.0+-013243.svg?logo=numpy&logoColor=white" alt="NumPy"></a>
+  <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-2.4.6+-013243.svg?logo=numpy&logoColor=white" alt="NumPy"></a>
   <a href="https://hypothesis.readthedocs.io/"><img src="https://img.shields.io/badge/tested%20with-Hypothesis-BD1C2B.svg" alt="Hypothesis"></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-green.svg" alt="License: GPL-3.0"></a>
   <a href="https://buymeacoffee.com/codenyer"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
@@ -21,7 +21,7 @@
 - **Cross-platform**: Runs on Linux, macOS, and Windows with NumPy and vendor BLAS
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
 - **Pure Python + C extensions (OpenMP SIMD)**: NumPy stack with vendor BLAS dispatch (MKL-ILP64, Accelerate-ILP64) via jlinalg C layer for eigendecomposition and OpenMP-parallel Wald tests
-- **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.4) for >46k sample eigendecomposition
+- **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.6+) for >46k sample eigendecomposition
 
 ## Installation
 
@@ -197,7 +197,7 @@ See [Performance](docs/PERFORMANCE.md) for benchmark methodology and large-scale
 - [x] Pre-computed kinship input (`-k`)
 - [x] Covariate support (`-c`)
 - [x] PLINK binary format (`.bed/.bim/.fam`) with input dimension validation
-- [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) -- numpy 2.4.4)
+- [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) -- numpy 2.4.6+)
 - [x] Lambda optimization bounds (`-lmin`/`-lmax`)
 - [x] Individual weights for kinship (`-widv`)
 - [x] Categorical covariates with one-hot encoding (`-cat`)
@@ -301,7 +301,7 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 ## Requirements
 
 - Python 3.11+
-- NumPy 2.0+
+- NumPy 2.4.6+
 
 ## License
 

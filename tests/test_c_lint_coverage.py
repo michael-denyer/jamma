@@ -18,6 +18,7 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CONFIG = _REPO_ROOT / ".pre-commit-config.yaml"
+_CI_WORKFLOW = _REPO_ROOT / ".github/workflows/ci.yml"
 _C_TREES = ("src/jamma/lmm", "src/jamma/jlinalg/src")
 
 pytestmark = pytest.mark.tier0
@@ -65,6 +66,55 @@ def test_cppcheck_defines_the_numpy_format_macro():
         "_lmm_accel.c, which then looks clean because nothing was checked. "
         "Define it rather than suppressing the id, which would also hide real "
         "parse failures."
+    )
+
+
+def test_ci_pins_an_exact_cppcheck_version():
+    """CI and the hook have to run the same linter, deterministically.
+
+    The bare ``apt-get install -y cppcheck`` this replaced resolved to
+    whatever the runner image shipped — 2.13.0, against the 2.21.0 the hook
+    runs locally. That is two failure modes at once: the lint job can start
+    failing on an image bump with no code change, and a CI linter eight
+    releases behind the gating hook can never catch what the hook missed.
+    """
+    lint_env = yaml.safe_load(_CI_WORKFLOW.read_text())["jobs"]["lint"].get("env", {})
+    version = str(lint_env.get("CPPCHECK_VERSION", ""))
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version), (
+        f"the lint job pins CPPCHECK_VERSION to {version!r}. It must be an "
+        "exact X.Y.Z so the linter's check set does not move with the runner "
+        "image."
+    )
+    assert re.fullmatch(r"[0-9a-f]{40}", str(lint_env.get("CPPCHECK_COMMIT", ""))), (
+        "CPPCHECK_COMMIT must be a full 40-character SHA. Tags are mutable, "
+        "so the version alone does not pin what gets built."
+    )
+
+
+def test_ci_does_not_install_cppcheck_from_apt():
+    """A package-manager install reintroduces the drift the pin removes.
+
+    Reads the parsed ``run:`` blocks with shell comments stripped, not raw
+    file lines: prose mentioning apt is not an apt install, and a scan that
+    cannot tell them apart is the defect PR #92 fixed in the section parser.
+    """
+    jobs = yaml.safe_load(_CI_WORKFLOW.read_text())["jobs"].values()
+    commands = [
+        line.strip()
+        for job in jobs
+        for step in job.get("steps", [])
+        for line in str(step.get("run", "")).splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    offenders = [
+        line
+        for line in commands
+        if "cppcheck" in line and re.search(r"\b(apt-get|apt|snap)\b", line)
+    ]
+    assert not offenders, (
+        f"cppcheck is installed by package manager in ci.yml: {offenders}. "
+        "Build it from the pinned source instead; the resolved version "
+        "otherwise tracks the runner image rather than the hook."
     )
 
 

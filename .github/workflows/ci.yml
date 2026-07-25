@@ -19,14 +19,56 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    env:
+      # cppcheck is built from source rather than installed from apt. The
+      # bare `apt-get install -y cppcheck` this replaces had two defects:
+      # it resolved to whatever the runner image carried (2.13.0), so an
+      # image bump could start failing the lint job with no code change;
+      # and 2.13.0 is eight releases behind the 2.21.0 the local prek hook
+      # runs, so CI's linter could never catch anything the hook missed.
+      # Bumping means updating both values below together.
+      CPPCHECK_VERSION: "2.21.0"
+      CPPCHECK_COMMIT: e73bf44c3e49686b7495fab352d03a6c6075516b
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3  # v8.3.0
 
-      - name: Install cppcheck
-        run: sudo apt-get update && sudo apt-get install -y cppcheck
+      - name: Cache cppcheck ${{ env.CPPCHECK_VERSION }}
+        id: cppcheck-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          # Spelled literally rather than shared with the run steps below:
+          # actions/cache expands a leading ~ itself, bash needs $HOME.
+          path: ~/.local/cppcheck
+          key: cppcheck-${{ env.CPPCHECK_VERSION }}-${{ env.CPPCHECK_COMMIT }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build cppcheck ${{ env.CPPCHECK_VERSION }}
+        if: steps.cppcheck-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$CPPCHECK_VERSION" \
+            https://github.com/danmar/cppcheck.git /tmp/cppcheck-src
+          # Tags are mutable. The commit is what we agreed to build.
+          test "$(git -C /tmp/cppcheck-src rev-parse HEAD)" = "$CPPCHECK_COMMIT"
+          cmake -S /tmp/cppcheck-src -B /tmp/cppcheck-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/.local/cppcheck"
+          cmake --build /tmp/cppcheck-build -j "$(nproc)"
+          cmake --install /tmp/cppcheck-build
+
+      - name: Verify cppcheck
+        run: |
+          echo "$HOME/.local/cppcheck/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/cppcheck/bin:$PATH"
+          # Exact match. A cache restored under a stale key, or an upstream
+          # re-tag, has to fail here rather than silently lint with the
+          # wrong check set.
+          test "$(cppcheck --version)" = "Cppcheck $CPPCHECK_VERSION"
+          # Loads the bundled cfg/ from share/Cppcheck/. A cache that lost
+          # that directory still answers --version, then fails much later
+          # with a message buried in the hook output.
+          cppcheck --errorlist > /dev/null
 
       - name: Set up Python 3.12
         run: uv python install 3.12

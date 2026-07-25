@@ -15,7 +15,7 @@
 #include <string.h>
 
 
-inline double reml_finish(
+static inline double reml_finish(
     const double pab[3][6],
     double logdet_h,
     double logdet_iab,
@@ -266,7 +266,7 @@ double golden_section_lambda_ncvt1(
 
 
 
-inline void calc_pab_ncvt1_cached_split(
+static inline void calc_pab_ncvt1_cached_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -292,7 +292,7 @@ inline void calc_pab_ncvt1_cached_split(
 }
 
 
-inline double reml_finish_cached_split(
+static inline double reml_finish_cached_split(
     const double pab[3][6],
     double cached_logdet_h,
     double logdet_iab,
@@ -603,7 +603,7 @@ double golden_section_lambda_ncvt1_split(
  * P_yy at level nc_total = n_cvt+1 = 2 (pab[2][5]) — same index as REML.
  * Uses n_samples (not df).
  * ------------------------------------------------------------------------- */
-inline double mle_finish(
+static inline double mle_finish(
     const double pab[3][6],
     double logdet_h,
     int n_samples,

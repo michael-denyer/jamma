@@ -25,13 +25,6 @@
 #include <math.h>
 
 
-inline double reml_finish(
-    const double pab[3][6],
-    double logdet_h,
-    double logdet_iab,
-    int df,
-    double reml_const
-);
 
 /* -------------------------------------------------------------------------
  * calc_pab_ncvt1
@@ -117,25 +110,8 @@ double golden_section_lambda_ncvt1(
 
 
 
-inline void calc_pab_ncvt1_cached_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict cached_hi_eval,
-    const grid_invariant_t *ginv,
-    int n_samples,
-    double pab[3][6]
-);
 
 
-inline double reml_finish_cached_split(
-    const double pab[3][6],
-    double cached_logdet_h,
-    double logdet_iab,
-    const grid_invariant_t *ginv,
-    int df,
-    double reml_const
-);
 
 /* -------------------------------------------------------------------------
  * reml_logl_ncvt1_cached_split
@@ -256,21 +232,6 @@ double golden_section_lambda_ncvt1_split(
     int *is_valid_out
 );
 
-/* -------------------------------------------------------------------------
- * mle_finish
- *
- * MLE log-likelihood tail (simpler than REML — no logdet_hiw, no Iab).
- * logl = mle_const - 0.5 * logdet_h - 0.5 * n * log(P_yy)
- *
- * P_yy at level nc_total = n_cvt+1 = 2 (pab[2][5]) — same index as REML.
- * Uses n_samples (not df).
- * ------------------------------------------------------------------------- */
-inline double mle_finish(
-    const double pab[3][6],
-    double logdet_h,
-    int n_samples,
-    double mle_const
-);
 
 /* -------------------------------------------------------------------------
  * mle_logl_ncvt1

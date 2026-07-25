@@ -28,8 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING: `run_lmm_loco()` takes `LmmConfig` and `LocoConfig` instead of 23
   flat parameters.** Nine of those 23 were exactly `LmmConfig`'s fields, which
   6.0.0 had already made the only way to configure every other runner; LOCO was
-  the last entry point still taking them loose. Eleven more are LOCO-only and
-  now live in the new `LocoConfig`.
+  the last entry point still taking them loose. Ten more are LOCO-only and now
+  live in the new `LocoConfig`; the remaining four (`bed_path`, `phenotypes`,
+  `covariates`, `output_path`) stay direct parameters.
 
   ```python
   # before

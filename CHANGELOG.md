@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-07-25
+
+### Removed
+
+- **BREAKING: `jamma.lmm.run_lmm()` is gone.** It was a second dispatcher that
+  routed pre-loaded arrays to the batch or streaming runner. `PipelineRunner`
+  never used it — it calls `select_execution_mode()` and dispatches through its
+  own `_run_batch`/`_run_streaming`, which also handle PLINK loading,
+  incremental writing and timing — so the two routing paths had to be kept in
+  step by hand for no benefit.
+
+  Before removing it we checked: no callers in `src/` or `scripts/`, not in
+  `jamma.__init__.__all__`, absent from the README and USER_GUIDE examples, and
+  unreferenced by the one known downstream consumer.
+
+  `select_execution_mode()` and `ExecutionPlan` are unchanged and still public.
+  Programmatic callers should use `PipelineRunner`, or call
+  `run_lmm_association_numpy()` / `run_lmm_association_numpy_streaming()`
+  directly after picking a mode with `select_execution_mode()`.
+
 ## [6.0.0] - 2026-07-25
 
 ### Changed

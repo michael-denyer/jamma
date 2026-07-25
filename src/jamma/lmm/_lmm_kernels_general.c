@@ -1,12 +1,15 @@
 /*
  * _lmm_kernels_general.c — see _lmm_kernels_general.h.
  *
- * NO_IMPORT_ARRAY: _lmm_accel.c owns import_array(); this unit shares its
- * PyArray_API through PY_ARRAY_UNIQUE_SYMBOL. See _lmm_support.h.
+ * Pure arithmetic — see the header. Nothing here touches CPython, so it
+ * needs none of _lmm_support.h's import_array() handling.
  */
 
-#define NO_IMPORT_ARRAY
 #include "_lmm_kernels_general.h"
+
+/* wald_from_pab_general lives with the other statistic extractors in the
+ * tests unit; the fused-general REML path calls it once per SNP. */
+#include "_lmm_tests.h"
 
 #include <math.h>
 #include <string.h>
@@ -184,59 +187,6 @@ double reml_logl_general_fresh(
     return reml_finish_general(pab_scratch, t, logdet_h, logdet_iab, reml_const);
 }
 
-/* -------------------------------------------------------------------------
- * wald_from_pab_general — Extract Wald stats from general-n_cvt Pab.
- *
- * P_XX = Pab[n_cvt, idx_xx], P_XY = Pab[n_cvt, idx_xy],
- * P_YY = Pab[n_cvt, idx_yy] (pre-genotype-projection),
- * Px_YY = Pab[n_cvt+1, idx_yy] (fully projected).
- * Same Wald formula as existing wald_from_pab.
- * Returns 1 if valid, 0 if degenerate.
- * ------------------------------------------------------------------------- */
-int wald_from_pab_general(
-    const double *pab,
-    const pab_table_t *t,
-    double *beta_out, double *se_out, double *f_stat_out
-)
-{
-    int ni = t->n_index;
-    int df = t->df;
-    int nc = t->n_cvt;
-
-    double P_XX  = pab[nc * ni + t->idx_xx];
-    double P_XY  = pab[nc * ni + t->idx_xy];
-    double P_YY  = pab[nc * ni + t->idx_yy];
-    double Px_YY = pab[(nc + 1) * ni + t->idx_yy];
-
-    if (Px_YY < 0.0) {
-        *beta_out = *se_out = *f_stat_out = (double)NAN;
-        return 0;
-    }
-    if (Px_YY < P_YY_MIN) Px_YY = P_YY_MIN;
-
-    if (P_XX <= 0.0) {
-        *beta_out = *se_out = *f_stat_out = (double)NAN;
-        return 0;
-    }
-
-    double beta = P_XY / P_XX;
-    double tau = (double)df / Px_YY;
-    double variance_beta = 1.0 / (tau * P_XX);
-    double variance_safe = (fabs(variance_beta) < 0.001)
-                            ? fabs(variance_beta)
-                            : variance_beta;
-    double se = sqrt(variance_safe);
-    double f_stat = (P_YY - Px_YY) * tau;
-
-    *beta_out   = beta;
-    *se_out     = se;
-    *f_stat_out = f_stat;
-
-    if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se))
-        return 0;
-
-    return 1;
-}
 
 /* -------------------------------------------------------------------------
  * golden_section_lambda_general — Grid + golden section for general n_cvt.
@@ -373,65 +323,6 @@ double golden_section_lambda_general(
     return lambda_opt;
 }
 
-/* -------------------------------------------------------------------------
- * score_from_pab_general — Score statistics from general-n_cvt Pab.
- *
- * Score differs from Wald:
- *   - F = n_samples * P_xy^2 / (P_yy * P_xx)  [not (P_yy - Px_yy) * tau]
- *   - Degenerate guard checks P_XX <= 0 || P_YY < 0 || Px_YY < 0
- *   - Px_yy at level n_cvt+1 used only for beta/se, not F-stat
- *
- * Returns 1 if valid, 0 if degenerate.
- * ------------------------------------------------------------------------- */
-int score_from_pab_general(
-    const double *pab,
-    const pab_table_t *t,
-    int n_samples,
-    double *beta_out, double *se_out, double *f_stat_out
-)
-{
-    int ni = t->n_index;
-    int df = t->df;
-    int nc = t->n_cvt;
-
-    /* Score: extract at level n_cvt (row nc), NOT n_cvt+1 */
-    double P_XX  = pab[nc * ni + t->idx_xx];
-    double P_XY  = pab[nc * ni + t->idx_xy];
-    double P_YY  = pab[nc * ni + t->idx_yy];
-    /* Px_yy at level n_cvt+1 for beta/se */
-    double Px_YY = pab[(nc + 1) * ni + t->idx_yy];
-
-    if (P_XX <= 0.0 || P_YY < 0.0 || Px_YY < 0.0) {
-        *beta_out = *se_out = *f_stat_out = (double)NAN;
-        return 0;
-    }
-
-    /* Clamp for numerical stability */
-    if (P_YY < P_YY_MIN) P_YY = P_YY_MIN;
-    if (Px_YY < P_YY_MIN) Px_YY = P_YY_MIN;
-
-    double beta = P_XY / P_XX;
-    double tau = (double)df / Px_YY;
-    double variance_beta = 1.0 / (tau * P_XX);
-    double variance_safe = (fabs(variance_beta) < 0.001)
-                            ? fabs(variance_beta)
-                            : variance_beta;
-    double se = sqrt(variance_safe);
-
-    /* Score F-statistic: uses n_samples (not df) in numerator */
-    double f_stat = (double)n_samples * (P_XY * P_XY) / (P_YY * P_XX);
-
-    *beta_out   = beta;
-    *se_out     = se;
-    *f_stat_out = f_stat;
-
-    if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se)) {
-        *beta_out = *se_out = *f_stat_out = (double)NAN;
-        return 0;
-    }
-
-    return 1;
-}
 
 /* -------------------------------------------------------------------------
  * mle_logl_general — MLE log-likelihood for one SNP at one lambda (general n_cvt).

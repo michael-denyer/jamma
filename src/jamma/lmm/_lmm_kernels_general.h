@@ -12,15 +12,16 @@
  * LRT paths and the fused-Uab chunk functions. They keep the workspace structs
  * and all CPython marshalling; only the arithmetic moved.
  *
- * This header reaches _lmm_support.h for pab_table_t, so it carries the
- * CPython API with it. A unit including this one must define NO_IMPORT_ARRAY
- * first unless it owns import_array() — see _lmm_support.h.
+ * Pure double arithmetic over the Pab layout: no CPython, no NumPy, no
+ * OpenMP, no workspace state. It needs only the table shape from
+ * _lmm_types.h, so unlike _lmm_support.h it carries no import_array()
+ * handling.
  */
 
 #ifndef JAMMA_LMM_KERNELS_GENERAL_H
 #define JAMMA_LMM_KERNELS_GENERAL_H
 
-#include "_lmm_support.h"
+#include "_lmm_types.h"
 
 #include <math.h>
 
@@ -89,20 +90,6 @@ double reml_logl_general_fresh(
     double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 );
 
-/* -------------------------------------------------------------------------
- * wald_from_pab_general — Extract Wald stats from general-n_cvt Pab.
- *
- * P_XX = Pab[n_cvt, idx_xx], P_XY = Pab[n_cvt, idx_xy],
- * P_YY = Pab[n_cvt, idx_yy] (pre-genotype-projection),
- * Px_YY = Pab[n_cvt+1, idx_yy] (fully projected).
- * Same Wald formula as existing wald_from_pab.
- * Returns 1 if valid, 0 if degenerate.
- * ------------------------------------------------------------------------- */
-int wald_from_pab_general(
-    const double *pab,
-    const pab_table_t *t,
-    double *beta_out, double *se_out, double *f_stat_out
-);
 
 /* -------------------------------------------------------------------------
  * golden_section_lambda_general — Grid + golden section for general n_cvt.
@@ -132,22 +119,6 @@ double golden_section_lambda_general(
     double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 );
 
-/* -------------------------------------------------------------------------
- * score_from_pab_general — Score statistics from general-n_cvt Pab.
- *
- * Score differs from Wald:
- *   - F = n_samples * P_xy^2 / (P_yy * P_xx)  [not (P_yy - Px_yy) * tau]
- *   - Degenerate guard checks P_XX <= 0 || P_YY < 0 || Px_YY < 0
- *   - Px_yy at level n_cvt+1 used only for beta/se, not F-stat
- *
- * Returns 1 if valid, 0 if degenerate.
- * ------------------------------------------------------------------------- */
-int score_from_pab_general(
-    const double *pab,
-    const pab_table_t *t,
-    int n_samples,
-    double *beta_out, double *se_out, double *f_stat_out
-);
 
 /* -------------------------------------------------------------------------
  * mle_logl_general — MLE log-likelihood for one SNP at one lambda (general n_cvt).

@@ -70,6 +70,7 @@
 #include "_lmm_support.h"
 
 #include "_lmm_stats.h"
+#include "_lmm_tests.h"
 #include "_lmm_kernels_general.h"
 #include <assert.h>
 #include <limits.h>
@@ -120,136 +121,6 @@ static inline double reml_finish(
     }
 
     return reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * log(P_yy);
-}
-
-/* Wald statistics from a populated pab array.
- * Shared by golden_section_lambda_ncvt1 and golden_section_lambda_ncvt1_split.
- *
- * Returns 1 if the SNP is valid (P_XX > 0), 0 if degenerate (P_XX <= 0).
- * Degenerate SNPs get beta = se = f_stat = NaN.
- *
- * The return value (not isnan(beta)) is used for validity checks — this is
- * more robust than relying on NaN propagation through comparisons. */
-static inline int wald_from_pab(
-    const double pab[3][6],
-    int df,
-    double *beta_out, double *se_out, double *f_stat_out
-)
-{
-    double P_XX  = pab[1][3];
-    double P_XY  = pab[1][4];
-    double P_YY  = pab[1][5];
-    double Px_YY = pab[2][5];
-
-    if (Px_YY < 0.0) {
-        /* Schur complement went negative — degenerate SNP. Without this
-         * guard, small negative Px_YY passes through variance_safe's fabs
-         * branch and produces a fabricated positive SE with is_valid=1. */
-        *beta_out   = (double)NAN;
-        *se_out     = (double)NAN;
-        *f_stat_out = (double)NAN;
-        return 0;  /* degenerate */
-    }
-    if (Px_YY < P_YY_MIN) {
-        Px_YY = P_YY_MIN;
-    }
-
-    if (P_XX <= 0.0) {
-        *beta_out   = (double)NAN;
-        *se_out     = (double)NAN;
-        *f_stat_out = (double)NAN;
-        return 0;  /* degenerate */
-    }
-
-    double beta = P_XY / P_XX;
-
-    /* SE via JAMMA's corrected safe_sqrt (see GEMMA_DIVERGENCES.md section 1):
-     * if |var| < 0.001, use fabs(var) instead of var to avoid sqrt of tiny
-     * negative FP rounding artifacts. */
-    double tau = (double)df / Px_YY;
-    double variance_beta = 1.0 / (tau * P_XX);
-    double variance_safe = (fabs(variance_beta) < 0.001)
-                            ? fabs(variance_beta)
-                            : variance_beta;
-    double se = sqrt(variance_safe);
-
-    double f_stat = (P_YY - Px_YY) * tau;
-
-    *beta_out   = beta;
-    *se_out     = se;
-    *f_stat_out = f_stat;
-
-    /* Guard against non-finite results from pathological Px_YY / tau.
-     * Without this, NaN f_stat passes is_valid=1 to f_to_pvalue, which
-     * clamps NaN to 1e-10 and returns a bogus near-1 p-value. */
-    if (!isfinite(f_stat) || !isfinite(beta) || !isfinite(se))
-        return 0;
-
-    return 1;  /* valid */
-}
-
-/* -------------------------------------------------------------------------
- * score_from_pab
- *
- * Score test statistics from a populated pab array (n_cvt=1).
- *
- * Reads from two pab levels:
- *   - Level 1 (pab[1]): P_yy, P_xx, P_xy for Score F-statistic
- *   - Level 2 (pab[2]): Px_yy for beta/SE computation (same as Wald)
- *
- * Key differences from Wald:
- *   - F = n_samples * P_xy^2 / (P_yy * P_xx) — uses n_samples, not df
- *   - No per-SNP lambda optimization (uses null-model Hi_eval)
- *
- * Returns 1 if valid, 0 if degenerate (P_xx <= 0 or P_yy < 0 or Px_yy < 0
- * or any output non-finite).
- * ------------------------------------------------------------------------- */
-static inline int score_from_pab(
-    const double pab[3][6],
-    int n_samples,
-    int df,
-    double *beta_out, double *se_out, double *f_stat_out
-)
-{
-    /* Score extracts at level n_cvt=1 (row 1), NOT n_cvt+1=2 */
-    double P_yy = pab[1][5];
-    double P_xx = pab[1][3];
-    double P_xy = pab[1][4];
-    /* Px_yy at level n_cvt+1=2 for beta/se computation */
-    double Px_yy = pab[2][5];
-
-    if (P_xx <= 0.0 || P_yy < 0.0 || Px_yy < 0.0) {
-        *beta_out   = (double)NAN;
-        *se_out     = (double)NAN;
-        *f_stat_out = (double)NAN;
-        return 0;  /* degenerate */
-    }
-
-    /* Clamp P_yy for F-stat denominator */
-    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
-    /* Clamp Px_yy for beta/se */
-    if (Px_yy < P_YY_MIN) Px_yy = P_YY_MIN;
-
-    *beta_out = P_xy / P_xx;
-
-    double tau = (double)df / Px_yy;
-    double variance_beta = 1.0 / (tau * P_xx);
-    double variance_safe = (fabs(variance_beta) < 0.001)
-                            ? fabs(variance_beta)
-                            : variance_beta;
-    *se_out = sqrt(variance_safe);
-
-    /* Score F-statistic: uses n_samples (not df) in numerator */
-    *f_stat_out = (double)n_samples * (P_xy * P_xy) / (P_yy * P_xx);
-
-    if (!isfinite(*f_stat_out) || !isfinite(*beta_out) || !isfinite(*se_out)) {
-        *beta_out   = (double)NAN;
-        *se_out     = (double)NAN;
-        *f_stat_out = (double)NAN;
-        return 0;
-    }
-
-    return 1;  /* valid */
 }
 
 /* -------------------------------------------------------------------------
@@ -3545,7 +3416,6 @@ err_input:
  * Score test for arbitrary n_cvt using table-driven Pab recursion.
  * Mirrors compute_score_batch_c (n_cvt=1) but uses calc_pab_general.
  * ========================================================================= */
-
 
 
 /* -------------------------------------------------------------------------

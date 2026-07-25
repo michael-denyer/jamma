@@ -33,13 +33,9 @@
 #include <Python.h>
 #include <numpy/arrayobject.h>
 
-/* Table-driven Pab bounds. MAX_N_CVT=100 -> MAX_N_INDEX=5253 (~42KB per
- * array); functions holding two such arrays peak at ~84KB, well inside an
- * OpenMP thread stack (2-4MB). */
-#define MAX_N_CVT    100
-#define MAX_N_INDEX  ((MAX_N_CVT + 3) * (MAX_N_CVT + 2) / 2)  /* 5253 */
-#define MAX_N_ROWS   (MAX_N_CVT + 2)                          /* 102 */
-#define MAX_PAB_SIZE (MAX_N_ROWS * MAX_N_INDEX)               /* 535806 */
+/* Pab bounds and the table layout live in _lmm_types.h: the numerical
+ * kernels read them and must not need <Python.h> to do it. */
+#include "_lmm_types.h"
 
 /* ---------------------------------------------------------------------------
  * Result shapes. One struct per set of output arrays a kernel family returns,
@@ -84,23 +80,6 @@ typedef struct {
  * Pab recursion table, parsed from the dict build_pab_table_for_c() returns.
  * ------------------------------------------------------------------------- */
 
-typedef struct {
-    int index_ab, index_aw, index_bw, index_ww;
-} pab_entry_t;
-
-typedef struct {
-    int n_cvt, n_index, n_rows, n_inv, n_var;
-    int idx_xx, idx_xy, idx_yy;
-    int df;  /* n_samples - n_cvt - 1 */
-    int *invariant_indices;  /* (n_inv,) */
-    int *varying_indices;    /* (n_var,) */
-    int *logdet_diag_rows;   /* (n_cvt+1,) */
-    int *logdet_diag_cols;   /* (n_cvt+1,) */
-    int *level_offsets;      /* (n_rows,) — offset into entries per level */
-    int *level_counts;       /* (n_rows,) — count per level */
-    pab_entry_t *entries;    /* all entries concatenated */
-    int n_entries;
-} pab_table_t;
 
 /* ---------------------------------------------------------------------------
  * Allocation

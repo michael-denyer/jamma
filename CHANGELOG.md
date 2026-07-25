@@ -7,20 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation
-
-- **Benchmarked v6.0.0 against v5.6.0 on mouse_hs1940.** Three interleaved
-  rounds of best-of-3 per version, both built from clean worktrees with
-  identical compiler flags and the same pinned numpy. Every operation lands
-  within +/-2%, so the `LmmConfig` consolidation and the C translation-unit
-  split cost nothing at small scale. `docs/PERFORMANCE.md` gains the comparison,
-  the GEMMA 0.98.5 table, and reproduction steps.
-
-- **Refreshed the README performance table** from Apple M2 to Apple M5 Pro on
-  v6.0.0. The superseded M2 numbers are preserved in `docs/PERFORMANCE.md`. The
-  currency note there now separates small-scale currency (current as of
-  2026-07-25) from large-scale, which is still v4.2.0 and unchanged.
-
 ## [7.0.0] - 2026-07-25
 
 ### Changed
@@ -68,6 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Programmatic callers should use `PipelineRunner`, or call
   `run_lmm_association_numpy()` / `run_lmm_association_numpy_streaming()`
   directly after picking a mode with `select_execution_mode()`.
+
+### Documentation
+
+- **Benchmarked v6.0.0 against v5.6.0 on mouse_hs1940.** Three interleaved
+  rounds of best-of-3 per version, both built from clean worktrees with
+  identical compiler flags and the same pinned numpy. Every operation lands
+  within +/-2%, so the `LmmConfig` consolidation and the C translation-unit
+  split cost nothing at small scale. `docs/PERFORMANCE.md` gains the comparison,
+  the GEMMA 0.98.5 table, and reproduction steps.
+
+- **Refreshed the README performance table** from Apple M2 to Apple M5 Pro on
+  v6.0.0. The superseded M2 numbers are preserved in `docs/PERFORMANCE.md`. The
+  currency note there now separates small-scale currency (current as of
+  2026-07-25) from large-scale, which is still v4.2.0 and unchanged.
 
 ## [6.0.0] - 2026-07-25
 

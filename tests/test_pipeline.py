@@ -424,10 +424,13 @@ class TestPipelineConfigLambdaBounds:
 class TestPipelineConfigGridResolution:
     """Tests for PipelineConfig n_grid validation.
 
-    Regression: LmmConfig rejected n_grid < 2, but the LOCO branch forwards
-    PipelineConfig.n_grid to run_lmm_loco without ever building an LmmConfig,
-    so a one-point grid reached the kernel — after kinship and eigendecomposition
-    on the C path, and silently as lambda = l_min on the NumPy path.
+    Regression: LmmConfig rejected n_grid < 2, but the LOCO branch used to
+    forward PipelineConfig.n_grid to run_lmm_loco without ever building an
+    LmmConfig, so a one-point grid reached the kernel — after kinship and
+    eigendecomposition on the C path, and silently as lambda = l_min on the
+    NumPy path. Both branches now build one; PipelineConfig.__post_init__
+    builds a throwaway too, which is what makes the failure land here at
+    construction rather than mid-run.
     """
 
     @pytest.mark.parametrize("n_grid", [-5, 0, 1])

@@ -378,22 +378,15 @@ class TestLocoEigenCacheValidation:
     """Validation and error tests for LOCO eigen cache."""
 
     def test_write_eigen_without_eigen_dir_raises(self) -> None:
-        """write_eigen=True with eigen_dir=None raises ValueError."""
-        from jamma.lmm.loco import run_lmm_loco
-        from tests.conftest import load_phenotypes_from_fam
+        """write_eigen=True with eigen_dir=None raises at LocoConfig construction.
 
-        fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-        if not fam_path.exists():
-            pytest.skip("mouse_hs1940 fixture not available")
-        phenotypes = load_phenotypes_from_fam(fam_path)
-
+        The raise is on the config, not on run_lmm_loco. Wrapping the call
+        instead would still pass — the ValueError fires while the argument list
+        is evaluated, so the runner is never entered — but it would hide which
+        object enforces the rule, and needs a PLINK fixture to assert nothing.
+        """
         with pytest.raises(ValueError, match="write_eigen=True requires eigen_dir"):
-            run_lmm_loco(
-                bed_path=MOUSE_HS1940_BFILE,
-                phenotypes=phenotypes,
-                config=LmmConfig(lmm_mode=1),
-                loco=LocoConfig(write_eigen=True, eigen_dir=None),
-            )
+            LocoConfig(write_eigen=True, eigen_dir=None)
 
     def test_dimension_mismatch_on_cached_eigen_raises(self, tmp_path: Path) -> None:
         """Cached eigen with wrong n_samples raises ValueError with chr context."""

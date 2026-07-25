@@ -29,8 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   `LocoConfig` validates at construction, so `write_eigen=True` without
-  `eigen_dir` now fails before the first chromosome is eigendecomposed rather
-  than partway through. `col_chunk_size <= 0` is rejected too.
+  `eigen_dir` now fails where the config is built rather than where it is
+  used — which matters when the two are far apart, as they are in the CLI.
+  `run_lmm_loco` already rejected that pair at function entry, so nothing was
+  ever eigendecomposed first either way. `col_chunk_size <= 0` is new.
 
   `LocoConfig` and `DEFAULT_LOCO_CONFIG` are exported from `jamma.lmm`.
 

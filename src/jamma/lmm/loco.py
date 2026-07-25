@@ -495,16 +495,9 @@ def run_lmm_loco(
 
     start_time = time.perf_counter()
 
-    if lmm_mode not in (1, 2, 3, 4):
-        raise ValueError(
-            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
-        )
-
-    if write_eigen and eigen_dir is None:
-        raise ValueError(
-            "write_eigen=True requires eigen_dir to be set. "
-            "Pass eigen_dir or use --eigen-dir on the CLI."
-        )
+    # No lmm_mode or write_eigen/eigen_dir guard here: LmmConfig and LocoConfig
+    # reject both at construction, as the other runners have relied on since
+    # 6.0.0. Re-checking would be dead code with a second, divergable message.
 
     # Read LOCO worker count and log configuration
     loco_workers = get_loco_worker_count()

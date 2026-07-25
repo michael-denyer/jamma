@@ -115,10 +115,10 @@ use `uv` which handles version selection automatically.
 
 ### NumPy version too old
 
-JAMMA requires NumPy 2.0 or newer. If you see import errors about missing symbols, upgrade:
+JAMMA requires NumPy 2.4.6 or newer. If you see import errors about missing symbols, upgrade:
 
 ```bash
-pip install "numpy>=2.0.0" --upgrade
+pip install "numpy>=2.4.6" --upgrade
 ```
 
 ### ILP64 overwritten after pip install

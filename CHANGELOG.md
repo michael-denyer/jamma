@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [7.0.0] - 2026-07-25
 
+### Changed
+
+- **BREAKING: `run_lmm_loco()` takes `LmmConfig` and `LocoConfig` instead of 23
+  flat parameters.** Nine of those 23 were exactly `LmmConfig`'s fields, which
+  6.0.0 had already made the only way to configure every other runner; LOCO was
+  the last entry point still taking them loose. Eleven more are LOCO-only and
+  now live in the new `LocoConfig`.
+
+  ```python
+  # before
+  run_lmm_loco(bed_path=..., phenotypes=..., maf_threshold=0.05, lmm_mode=1,
+               save_kinship=True, kinship_output_dir=d, show_progress=False)
+  # after
+  run_lmm_loco(bed_path=..., phenotypes=...,
+               config=LmmConfig(maf_threshold=0.05, lmm_mode=1, show_progress=False),
+               loco=LocoConfig(save_kinship=True, kinship_output_dir=d))
+  ```
+
+  `LocoConfig` validates at construction, so `write_eigen=True` without
+  `eigen_dir` now fails before the first chromosome is eigendecomposed rather
+  than partway through. `col_chunk_size <= 0` is rejected too.
+
+  `LocoConfig` and `DEFAULT_LOCO_CONFIG` are exported from `jamma.lmm`.
+
+  The private `_run_lmm_for_chromosome_numpy` drops from 22 parameters to 15
+  by the same route.
+
 ### Removed
 
 - **BREAKING: `jamma.lmm.run_lmm()` is gone.** It was a second dispatcher that

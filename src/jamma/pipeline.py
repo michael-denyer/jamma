@@ -45,6 +45,7 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
 from jamma.lmm.schema import (
+    LmmConfig,
     LmmRunResult,
 )
 from jamma.lmm.stats import AssocResult
@@ -1301,6 +1302,7 @@ class PipelineRunner:
         PipelineConfig.__post_init__.
         """
         from jamma.lmm import run_lmm_loco
+        from jamma.lmm.loco import LocoConfig
 
         phenotypes, n_analyzed = self.parse_phenotypes()
         n_filtered = len(phenotypes) - n_analyzed
@@ -1322,25 +1324,29 @@ class PipelineRunner:
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
             covariates=covariates,
-            maf_threshold=self.config.maf,
-            miss_threshold=self.config.miss,
-            lmm_mode=self.config.lmm_mode,
+            config=LmmConfig(
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
+                lmm_mode=self.config.lmm_mode,
+                check_memory=self.config.check_memory,
+                show_progress=self.config.show_progress,
+                l_min=self.config.l_min,
+                l_max=self.config.l_max,
+                n_grid=self.config.n_grid,
+                n_refine=self.config.n_refine,
+            ),
+            loco=LocoConfig(
+                save_kinship=self.config.save_kinship,
+                kinship_output_dir=self.config.output_dir,
+                kinship_output_prefix=self.config.output_prefix,
+                snps_indices=snps_indices,
+                ksnps_indices=ksnps_indices,
+                write_eigen=self.config.write_eigen,
+                eigen_dir=self.config.eigen_dir,
+                eigen_prefix=self.config.output_prefix,
+                legacy_text=self.config.legacy_text,
+            ),
             output_path=assoc_path,
-            check_memory=self.config.check_memory,
-            show_progress=self.config.show_progress,
-            save_kinship=self.config.save_kinship,
-            kinship_output_dir=self.config.output_dir,
-            kinship_output_prefix=self.config.output_prefix,
-            snps_indices=snps_indices,
-            ksnps_indices=ksnps_indices,
-            l_min=self.config.l_min,
-            l_max=self.config.l_max,
-            n_grid=self.config.n_grid,
-            n_refine=self.config.n_refine,
-            write_eigen=self.config.write_eigen,
-            eigen_dir=self.config.eigen_dir,
-            eigen_prefix=self.config.output_prefix,
-            legacy_text=self.config.legacy_text,
         )
         loco_s = time.perf_counter() - t_loco
         total_s = time.perf_counter() - t_start

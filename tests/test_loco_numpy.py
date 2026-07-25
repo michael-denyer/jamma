@@ -15,6 +15,7 @@ import pytest
 
 from jamma.io.plink import get_plink_metadata
 from jamma.lmm.loco import run_lmm_loco
+from jamma.lmm.schema import LmmConfig
 from jamma.validation.compare import compare_assoc_results, load_gemma_assoc
 from jamma.validation.tolerances import ToleranceConfig
 from tests.conftest import load_phenotypes_from_fam
@@ -248,8 +249,7 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
         loco = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
-            check_memory=False,
-            show_progress=False,
+            config=LmmConfig(check_memory=False, show_progress=False),
         )
 
     meta = get_plink_metadata(_LOCO_BFILE)
@@ -301,10 +301,9 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
     loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
-        n_grid=7,
-        n_refine=25,
-        check_memory=False,
-        show_progress=False,
+        config=LmmConfig(
+            n_grid=7, n_refine=25, check_memory=False, show_progress=False
+        ),
     )
     assert loco.n_tested > 0, "Expected SNPs to be tested with an explicit grid"
     assert captured, "chunk runner was never called — cannot verify forwarding"
@@ -344,8 +343,7 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
         loco = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
-            check_memory=False,
-            show_progress=False,
+            config=LmmConfig(check_memory=False, show_progress=False),
         )
 
     assert any("JAMMA_LOCO_WORKERS=4" in msg for msg in logged_warnings), (
@@ -375,8 +373,7 @@ def test_loco_numpy_multipass_equivalence():
     loco_single = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
-        check_memory=False,
-        show_progress=False,
+        config=LmmConfig(check_memory=False, show_progress=False),
     )
 
     # Multi-pass: force batch_size_chrs=1 via debug override (_max_batch_chrs).
@@ -401,8 +398,7 @@ def test_loco_numpy_multipass_equivalence():
         loco_multi = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
-            check_memory=False,
-            show_progress=False,
+            config=LmmConfig(check_memory=False, show_progress=False),
         )
     results_single = loco_single.associations
     results_multi = loco_multi.associations
@@ -449,15 +445,13 @@ def test_loco_numpy_covariates_threaded_and_effective():
     baseline = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
-        check_memory=False,
-        show_progress=False,
+        config=LmmConfig(check_memory=False, show_progress=False),
     )
     with_covar = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
         covariates=covariates,
-        check_memory=False,
-        show_progress=False,
+        config=LmmConfig(check_memory=False, show_progress=False),
     )
 
     assert with_covar.n_tested == baseline.n_tested > 0
@@ -600,8 +594,7 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
     loco_cache = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=pheno,
-        check_memory=False,
-        show_progress=False,
+        config=LmmConfig(check_memory=False, show_progress=False),
     )
 
     original = compute_loco_kinship_streaming
@@ -620,8 +613,7 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
         loco_nocache = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=pheno,
-            check_memory=False,
-            show_progress=False,
+            config=LmmConfig(check_memory=False, show_progress=False),
         )
 
     assert loco_cache.n_tested == loco_nocache.n_tested > 0
@@ -748,9 +740,7 @@ def test_loco_numpy_show_progress_true():
     loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
-        lmm_mode=1,
-        show_progress=True,
-        check_memory=False,
+        config=LmmConfig(lmm_mode=1, show_progress=True, check_memory=False),
     )
 
     assert loco.n_tested > 0, "Expected at least one SNP to be tested"
@@ -781,8 +771,7 @@ def test_loco_gemma_equivalence():
     loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
-        check_memory=False,
-        show_progress=False,
+        config=LmmConfig(check_memory=False, show_progress=False),
     )
 
     assert loco.n_tested > 0, "Expected SNPs to be tested"

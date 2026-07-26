@@ -202,6 +202,36 @@ ignore = [
 # Scripts are ad-hoc tooling, not library code.
 "scripts/**" = ["PERF401", "SIM117", "PTH"]
 
+[tool.refurb]
+# refurb overlaps ruff, so where the two rules are the same rule, the decision
+# must live in one place or the tools contradict each other — the same failure
+# mode as the one-lychee-config note in CLAUDE.md.
+#
+# Suppressions go here rather than as inline `# noqa: FURB…`, because ruff
+# flags an unrecognised code in a noqa it does not own (RUF100/RUF102) and
+# would need `lint.external` to stay quiet. One config beats two.
+ignore = [
+    # FURB117 rewrites `open(path)` to `path.open()`. That is exactly ruff's
+    # PTH123, which [tool.ruff.lint].ignore already turns off as "idiomatic
+    # open() is perfectly fine and the rewrite just adds verbosity". Keeping
+    # FURB117 on would have refurb demanding what ruff declines to ask for.
+    "FURB117",
+]
+
+[[tool.refurb.amend]]
+# _EIGEN_ALPHA = 2.7152 is a fitted power-law exponent, not Euler's number.
+# FURB152 pattern-matches any float near 2.718; applying it would swap a
+# calibrated constant for math.e and silently move every eigendecomp estimate.
+path = "src/jamma/core/estimates.py"
+ignore = ["FURB152"]
+
+[[tool.refurb.amend]]
+# `if gk is None and lmm is None` sits directly below its mirror image,
+# `if gk is not None and lmm is not None`. Chaining one and not the other
+# makes the pair harder to read than either form alone.
+path = "src/jamma/cli.py"
+ignore = ["FURB124"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",

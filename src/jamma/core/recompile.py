@@ -40,7 +40,9 @@ def _lock_path_for(sys_module_key: str) -> Path:
     tempdir-based path keyed on the module name if the package directory
     can't be located (defensive — should not happen in normal installs).
     """
-    try:
+    # Any of these means "the package directory could not be located", which
+    # the tempdir path below already handles.
+    with contextlib.suppress(ImportError, ValueError, OSError, StopIteration):
         package_name, _, mod_name = sys_module_key.rpartition(".")
         if package_name:
             spec = importlib.util.find_spec(package_name)
@@ -48,8 +50,6 @@ def _lock_path_for(sys_module_key: str) -> Path:
                 pkg_dir = Path(next(iter(spec.submodule_search_locations)))
                 ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
                 return pkg_dir / f"{mod_name}{ext_suffix}.lock"
-    except (ImportError, ValueError, OSError, StopIteration):
-        pass
     safe_key = sys_module_key.replace(".", "_").replace("/", "_")
     return Path(tempfile.gettempdir()) / f"jamma_{safe_key}.lock"
 

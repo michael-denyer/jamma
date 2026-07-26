@@ -284,7 +284,7 @@ def _batch_compute_uab_varying_general_numpy(
             continue  # invariant column, skip
         row = var_index_to_row[linear_idx]
 
-        if a_col == genotype_col and b_col == genotype_col:
+        if a_col == b_col == genotype_col:
             # xx case: genotype * genotype
             result[:, row, :] = utg_t * utg_t
         elif a_col == genotype_col:

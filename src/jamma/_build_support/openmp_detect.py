@@ -206,7 +206,7 @@ def _find_libiomp5(
         )
 
     # Check well-known system paths for libiomp5
-    for search_dir in [Path("/usr/lib"), Path("/usr/lib64"), Path("/usr/local/lib")]:
+    for search_dir in (Path("/usr/lib"), Path("/usr/lib64"), Path("/usr/local/lib")):
         if not search_dir.is_dir():
             continue
         for lib in search_dir.iterdir():

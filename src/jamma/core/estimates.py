@@ -110,6 +110,10 @@ _KINSHIP_B = 1.975440  # n_k coefficient (SNP stats + I/O scaling)
 # varies with matrix size (cache-bound at small n, BW-bound at large n),
 # giving an effective exponent of ~2.72 instead of the theoretical 3.0.
 _EIGEN_COEFF = 0.012007  # coefficient
+# Not math.e, despite the resemblance. This is the exponent the log-linear OLS
+# fit produced on measured timings; swapping in e (2.718281828...) would
+# silently recalibrate every eigendecomp estimate. refurb's FURB152 flags it
+# anyway, so it is silenced for this file in pyproject.toml.
 _EIGEN_ALPHA = 2.7152  # exponent
 
 # LMM: a*n_k^2 + b*n_k (SNP-normalized)

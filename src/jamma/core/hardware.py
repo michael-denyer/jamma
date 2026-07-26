@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import platform
+from contextlib import suppress
 
 import numpy as np
 import psutil
@@ -60,17 +61,15 @@ def _get_cpu_model() -> str:
     Returns:
         Non-empty CPU model string.
     """
-    # Try /proc/cpuinfo on Linux
-    try:
-        with open("/proc/cpuinfo") as f:
-            for line in f:
-                if line.startswith("model name"):
-                    _, _, value = line.partition(":")
-                    model = value.strip()
-                    if model:
-                        return model
-    except OSError:
-        pass
+    # Try /proc/cpuinfo on Linux. Absent on macOS and unreadable in some
+    # containers, so an OSError just means "fall through to the next source".
+    with suppress(OSError), open("/proc/cpuinfo") as f:
+        for line in f:
+            if line.startswith("model name"):
+                _, _, value = line.partition(":")
+                model = value.strip()
+                if model:
+                    return model
 
     # Fall back to platform.processor() (useful on macOS, returns "arm" or "i386")
     model = platform.processor()

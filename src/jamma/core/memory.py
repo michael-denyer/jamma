@@ -801,8 +801,7 @@ def get_memory_snapshot() -> MemorySnapshot:
         >>> snap = get_memory_snapshot()
         >>> print(f"Using {snap.rss_gb:.1f}GB of {snap.total_gb:.1f}GB")
     """
-    process = psutil.Process()
-    mem_info = process.memory_info()
+    mem_info = psutil.Process().memory_info()
     vm = psutil.virtual_memory()
 
     return MemorySnapshot(

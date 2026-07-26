@@ -332,8 +332,8 @@ def compile_test_harness(verbose: bool = True) -> Path:
         ldflags.extend([f"-L{python_libdir}", f"-lpython{python_version}"])
         ldflags.append(f"-Wl,-rpath,{python_libdir}")
     if platform.system() == "Linux":
-        ldflags.append("-ldl")
-        ldflags.append("-lpthread")  # snp_stats.c uses pthreads directly
+        # snp_stats.c uses pthreads directly, hence -lpthread alongside -ldl.
+        ldflags.extend(("-ldl", "-lpthread"))
 
     # OpenMP detection (same as compile_extension — split compile/link).
     # _warn is always-visible so the GCC-libiomp5 downgrade and GNU-libgomp
@@ -388,7 +388,7 @@ def compile_test_harness(verbose: bool = True) -> Path:
             extra_lapack_cflags=extra_lapack_cflags,
             extra_source_includes=extra_source_includes,
             link_shared=False,
-            on_retry=lambda msg: _warn(msg),
+            on_retry=_warn,
             verbose_print=_print,
             error_print=_warn,
         )

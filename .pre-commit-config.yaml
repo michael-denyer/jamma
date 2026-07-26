@@ -40,9 +40,10 @@ repos:
     rev: v1.24.1
     hooks:
       - id: zizmor
-        # Start with high-severity only; lower bars come once the
-        # existing low/medium findings are triaged. See .zizmor.yml.
-        args: ["--min-severity", "high", "--config", ".zizmor.yml"]
+        # Default severity, not `--min-severity high`: the pre-existing
+        # high and medium findings are fixed, so there is no bar to raise
+        # and no ignore rule left. See .zizmor.yml.
+        args: ["--config", ".zizmor.yml"]
   # Standalone shellcheck for shell scripts under scripts/. The
   # actionlint integration above covers `run:` blocks inside workflow
   # YAML; this hook catches `scripts/*.sh` files that aren't part of

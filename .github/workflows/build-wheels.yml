@@ -19,6 +19,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
 
       - name: Build wheels
         uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55  # v4.1.0
@@ -67,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
 
       - name: Build AVX2-optimized wheels
         uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55  # v4.1.0
@@ -154,9 +158,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3  # v8.3.0
+        with:
+          # Disable setup-uv's default cache, matching publish.yml. This job
+          # builds the sdist that gets published to PyPI, and cache contents
+          # are user-controlled across runs, so a poisoned entry could reach
+          # a release artifact. The sdist build is seconds; the cache buys
+          # nothing here.
+          enable-cache: false
 
       - name: Build sdist
         run: uv build --sdist

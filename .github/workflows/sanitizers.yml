@@ -19,9 +19,11 @@ on:
     - cron: '0 6 * * 3'
   workflow_dispatch:
 
+# Default for every job. issues: write is granted to issue-on-failure alone,
+# the only job that files anything, so the jobs that build and run
+# sanitizer-instrumented C hold a read-only token.
 permissions:
   contents: read
-  issues: write  # to file a triage issue on sanitizer detection (mirrors flaky-detect)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -63,6 +65,8 @@ jobs:
         suppressions=${{ github.workspace }}/scripts/asan-suppressions.txt:print_suppressions=0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3  # v8.3.0
@@ -169,6 +173,8 @@ jobs:
         halt_on_error=1:print_stacktrace=1:symbolize=1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3  # v8.3.0
       - run: uv python install 3.12
       - run: uv sync
@@ -288,6 +294,9 @@ jobs:
       (needs.asan-ubsan.result == 'failure' ||
        needs.asan-sentinel-meta-test.result == 'failure')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write  # to file a triage issue on sanitizer detection
     steps:
       - name: Open or update sanitizer-triage issue
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v8.0.0

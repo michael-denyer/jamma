@@ -61,6 +61,10 @@ class TestScoreWorkspaceParity:
         """Workspace creation returns a non-None PyCapsule."""
         from jamma.lmm.compute_numpy import _create_workspace_score_fused_c
 
+        assert (
+            _create_workspace_score_fused_c is not None
+        )  # narrowed: skipif gates this
+
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
@@ -88,6 +92,10 @@ class TestScoreWorkspaceParity:
             _compute_score_fused_ws_c,
             _create_workspace_score_fused_c,
         )
+
+        assert _compute_score_fused_c is not None
+        assert _compute_score_fused_ws_c is not None
+        assert _create_workspace_score_fused_c is not None
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
@@ -138,6 +146,10 @@ class TestScoreWorkspaceParity:
             _compute_score_fused_ws_c,
             _create_workspace_score_fused_c,
         )
+
+        assert _compute_score_fused_c is not None
+        assert _compute_score_fused_ws_c is not None
+        assert _create_workspace_score_fused_c is not None
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
@@ -209,6 +221,8 @@ class TestScoreWorkspaceParity:
             create_lmm_workspace,
         )
 
+        assert _compute_score_fused_ws_c is not None
+
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
@@ -273,6 +287,8 @@ class TestLrtWorkspaceParity:
         """Workspace creation returns a non-None PyCapsule."""
         from jamma.lmm.compute_numpy import _create_workspace_lrt_fused_c
 
+        assert _create_workspace_lrt_fused_c is not None  # narrowed: skipif gates this
+
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
         ws = _create_workspace_lrt_fused_c(
@@ -302,6 +318,10 @@ class TestLrtWorkspaceParity:
             _compute_lrt_fused_ws_c,
             _create_workspace_lrt_fused_c,
         )
+
+        assert _compute_lrt_fused_c is not None
+        assert _compute_lrt_fused_ws_c is not None
+        assert _create_workspace_lrt_fused_c is not None
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
@@ -360,6 +380,10 @@ class TestLrtWorkspaceParity:
             _compute_lrt_fused_ws_c,
             _create_workspace_lrt_fused_c,
         )
+
+        assert _compute_lrt_fused_c is not None
+        assert _compute_lrt_fused_ws_c is not None
+        assert _create_workspace_lrt_fused_c is not None
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
@@ -441,6 +465,9 @@ class TestLrtWorkspaceParity:
             _compute_lrt_fused_ws_c,
             _create_workspace_score_fused_c,
         )
+
+        assert _compute_lrt_fused_ws_c is not None
+        assert _create_workspace_score_fused_c is not None
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 

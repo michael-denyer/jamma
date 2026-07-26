@@ -19,7 +19,6 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
-from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -432,9 +431,7 @@ def run_lmm_loco(
                 invalidate_eigen_cache_manifest(eigen_dir, eigen_prefix)
 
             eigen_pairs = _computed_eigen_pairs(
-                # The streamer's return type is overloaded on return_snp_stats;
-                # with it set we always get the (iterator, cache) pair.
-                cast(Iterator[tuple[str, np.ndarray]], loco_stream),
+                loco_stream,
                 unique_chrs,
                 valid_mask=valid_mask,
                 n_valid=n_valid,

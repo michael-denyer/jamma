@@ -26,7 +26,7 @@ import time
 import warnings
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import Literal, NamedTuple, overload
 
 import numpy as np
 import psutil
@@ -889,6 +889,7 @@ def _validate_valid_indices(valid_indices: np.ndarray, n_samples: int) -> None:
         )
 
 
+@overload
 def _stream_s_full_and_chr(
     bed_path: Path,
     n_samples: int,
@@ -899,6 +900,40 @@ def _stream_s_full_and_chr(
     chunk_size: int,
     show_progress: bool,
     desc: str,
+    *,
+    S_full_accum: Literal[True] = ...,
+    valid_indices: np.ndarray | None = ...,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]: ...
+
+
+@overload
+def _stream_s_full_and_chr(
+    bed_path: Path,
+    n_samples: int,
+    n_snps: int,
+    snp_indices: np.ndarray,
+    chromosomes: np.ndarray,
+    chr_subset: list[str],
+    chunk_size: int,
+    show_progress: bool,
+    desc: str,
+    *,
+    S_full_accum: Literal[False],
+    valid_indices: np.ndarray | None = ...,
+) -> tuple[None, dict[str, np.ndarray]]: ...
+
+
+def _stream_s_full_and_chr(
+    bed_path: Path,
+    n_samples: int,
+    n_snps: int,
+    snp_indices: np.ndarray,
+    chromosomes: np.ndarray,
+    chr_subset: list[str],
+    chunk_size: int,
+    show_progress: bool,
+    desc: str,
+    *,
     S_full_accum: bool = True,
     valid_indices: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, dict[str, np.ndarray]]:
@@ -1072,6 +1107,39 @@ def _decide_loco_passes(
         min_required_gb=min_required_gb,
         eigendecomp_min_gb=eigendecomp_min_gb,
     )
+
+
+@overload
+def compute_loco_kinship_streaming(
+    bed_path: Path,
+    chunk_size: int = ...,
+    maf_threshold: float = ...,
+    miss_threshold: float = ...,
+    check_memory: bool = ...,
+    show_progress: bool = ...,
+    ksnps_indices: np.ndarray | None = ...,
+    valid_indices: np.ndarray | None = ...,
+    _copy_yielded_matrices: bool = ...,
+    return_snp_stats: Literal[False] = ...,
+    _max_batch_chrs: int | None = ...,
+) -> Iterator[tuple[str, np.ndarray]]: ...
+
+
+@overload
+def compute_loco_kinship_streaming(
+    bed_path: Path,
+    chunk_size: int = ...,
+    maf_threshold: float = ...,
+    miss_threshold: float = ...,
+    check_memory: bool = ...,
+    show_progress: bool = ...,
+    ksnps_indices: np.ndarray | None = ...,
+    valid_indices: np.ndarray | None = ...,
+    _copy_yielded_matrices: bool = ...,
+    *,
+    return_snp_stats: Literal[True],
+    _max_batch_chrs: int | None = ...,
+) -> tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]: ...
 
 
 def compute_loco_kinship_streaming(
@@ -1405,6 +1473,9 @@ def compute_loco_kinship_streaming(
                 f"{n_batches} passes over {n_chr_with_snps} chromosomes"
             )
 
-    if return_snp_stats:
+    # Narrowing on the cache rather than on return_snp_stats: the two are
+    # equivalent by construction above, and this form carries the non-None
+    # through to the overload's declared return type.
+    if snp_stats_cache is not None:
         return _generate(), snp_stats_cache
     return _generate()

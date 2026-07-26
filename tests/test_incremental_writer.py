@@ -1,6 +1,7 @@
 """Tests for incremental association result writer."""
 
 import errno
+from io import TextIOWrapper
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,19 @@ import pytest
 
 from jamma.lmm.io import IncrementalAssocWriter, write_assoc_results
 from jamma.lmm.stats import AssocResult
+
+
+def open_handle(writer: IncrementalAssocWriter) -> TextIOWrapper:
+    """Return an open writer's file handle, for injecting I/O failures.
+
+    The tests below drive the retry and rollback paths by replacing methods on
+    the live handle, which means reaching past the public API. ``_file`` is
+    None until ``__enter__`` runs, so going through here asserts the writer is
+    open once instead of at every call site.
+    """
+    handle = writer._file
+    assert handle is not None, "writer must be open before patching its handle"
+    return handle
 
 
 @pytest.fixture
@@ -135,7 +149,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with IncrementalAssocWriter(output_path) as writer:
-            original_flush = writer._file.flush
+            original_flush = open_handle(writer).flush
             flush_count = 0
 
             def counting_flush():
@@ -143,7 +157,7 @@ class TestIncrementalAssocWriter:
                 flush_count += 1
                 return original_flush()
 
-            writer._file.flush = counting_flush
+            open_handle(writer).flush = counting_flush
             writer.write_batch(sample_results)
             # Count flushes only during write_batch, not __exit__
             batch_flush_count = flush_count
@@ -208,7 +222,7 @@ class TestIncrementalAssocWriter:
         call_count = 0
 
         with IncrementalAssocWriter(output_path) as writer:
-            original_write = writer._file.write
+            original_write = open_handle(writer).write
 
             def flaky_write(data):
                 nonlocal call_count
@@ -219,7 +233,7 @@ class TestIncrementalAssocWriter:
                     raise OSError("Disk full")
                 return original_write(data)
 
-            writer._file.write = flaky_write
+            open_handle(writer).write = flaky_write
 
             with patch("jamma.lmm.io.time.sleep") as mock_sleep:
                 writer.write(sample_result)
@@ -238,14 +252,14 @@ class TestIncrementalAssocWriter:
             with pytest.raises(OSError):
                 with IncrementalAssocWriter(output_path) as writer:
                     # Make every write after header fail
-                    original_write = writer._file.write
+                    original_write = open_handle(writer).write
 
                     def always_fail(data):
                         if "\t" in data:  # data lines have tabs
                             raise OSError("Disk full")
                         return original_write(data)
 
-                    writer._file.write = always_fail
+                    open_handle(writer).write = always_fail
                     writer.write(sample_result)
 
         # Partial file should be cleaned up
@@ -277,14 +291,14 @@ class TestIncrementalAssocWriter:
         with patch("jamma.lmm.io.time.sleep"):
             with pytest.raises(OSError):
                 with IncrementalAssocWriter(output_path) as writer:
-                    original_write = writer._file.write
+                    original_write = open_handle(writer).write
 
                     def always_fail(data):
                         if "\t" in data:
                             raise OSError("Disk full")
                         return original_write(data)
 
-                    writer._file.write = always_fail
+                    open_handle(writer).write = always_fail
                     writer.write(sample_result)
 
         # File should be cleaned up by __exit__
@@ -345,7 +359,7 @@ class TestIncrementalAssocWriter:
         call_count = 0
 
         with IncrementalAssocWriter(output_path) as writer:
-            original_write = writer._file.write
+            original_write = open_handle(writer).write
 
             def flaky_write(data):
                 nonlocal call_count
@@ -355,7 +369,7 @@ class TestIncrementalAssocWriter:
                     raise OSError("Transient I/O error")
                 return original_write(data)
 
-            writer._file.write = flaky_write
+            open_handle(writer).write = flaky_write
 
             with patch("jamma.lmm.io.time.sleep") as mock_sleep:
                 writer.write_batch(sample_results)
@@ -390,7 +404,7 @@ class TestIncrementalAssocWriter:
         call_count = 0
 
         with IncrementalAssocWriter(output_path) as writer:
-            original_write = writer._file.write
+            original_write = open_handle(writer).write
 
             def eio_write(data):
                 nonlocal call_count
@@ -401,7 +415,7 @@ class TestIncrementalAssocWriter:
                     raise err
                 return original_write(data)
 
-            writer._file.write = eio_write
+            open_handle(writer).write = eio_write
 
             with patch("jamma.lmm.io.time.sleep") as mock_sleep:
                 writer.write(sample_result)
@@ -427,7 +441,7 @@ class TestIncrementalAssocWriter:
         with patch("jamma.lmm.io.time.sleep") as mock_sleep:
             with pytest.raises(OSError):
                 with IncrementalAssocWriter(output_path) as writer:
-                    original_write = writer._file.write
+                    original_write = open_handle(writer).write
 
                     def eacces_write(data):
                         if "\t" in data:
@@ -436,7 +450,7 @@ class TestIncrementalAssocWriter:
                             raise err
                         return original_write(data)
 
-                    writer._file.write = eacces_write
+                    open_handle(writer).write = eacces_write
                     writer.write(sample_result)
 
             # No retry sleeps should have occurred
@@ -470,7 +484,7 @@ class TestIncrementalAssocWriter:
                         write_call_count += 1
                         raise OSError("Disk full")
 
-                    writer._file.write = fail_after_first
+                    open_handle(writer).write = fail_after_first
                     # This should fail after retries and clean up
                     writer.write(sample_results[1])
 
@@ -522,7 +536,7 @@ class TestIncrementalAssocWriter:
                 def failing_flush():
                     raise OSError("Disk full")
 
-                writer._file.flush = failing_flush
+                open_handle(writer).flush = failing_flush
 
         # Partial file should be cleaned up
         assert not output_path.exists(), (
@@ -538,13 +552,13 @@ class TestIncrementalAssocWriter:
         with pytest.raises(KeyboardInterrupt):
             with IncrementalAssocWriter(output_path) as writer:
                 writer.write(sample_result)
-                original_close = writer._file.close
+                original_close = open_handle(writer).close
 
                 def failing_close():
                     original_close()
                     raise OSError("Stale NFS file handle")
 
-                writer._file.close = failing_close
+                open_handle(writer).close = failing_close
                 raise KeyboardInterrupt()
 
     @pytest.mark.tier0
@@ -568,7 +582,7 @@ class TestIncrementalAssocWriter:
         failed_once = False
 
         with IncrementalAssocWriter(output_path) as writer:
-            original_flush = writer._file.flush
+            original_flush = open_handle(writer).flush
 
             def flaky_flush():
                 nonlocal flush_call_count, failed_once
@@ -583,7 +597,7 @@ class TestIncrementalAssocWriter:
                     raise err
                 return original_flush()
 
-            writer._file.flush = flaky_flush
+            open_handle(writer).flush = flaky_flush
 
             with patch("jamma.lmm.io.time.sleep") as mock_sleep:
                 writer.write(sample_result)
@@ -609,7 +623,7 @@ class TestIncrementalAssocWriter:
         with patch("jamma.lmm.io.time.sleep"):
             with pytest.raises(OSError):
                 with IncrementalAssocWriter(output_path) as writer:
-                    original_write = writer._file.write
+                    original_write = open_handle(writer).write
 
                     def eperm_write(data):
                         # Only fail on data lines (which contain tabs), not the header
@@ -619,13 +633,13 @@ class TestIncrementalAssocWriter:
                             raise err
                         return original_write(data)
 
-                    writer._file.write = eperm_write
+                    open_handle(writer).write = eperm_write
 
                     # Also make seek fail to trigger _cleanup_partial
-                    def failing_seek(pos):
+                    def failing_seek(cookie: int, whence: int = 0) -> int:
                         raise OSError("Seek failed")
 
-                    writer._file.seek = failing_seek
+                    open_handle(writer).seek = failing_seek
 
                     writer.write(sample_result)
 
@@ -657,9 +671,7 @@ class TestIncrementalAssocWriter:
                         err.errno = errno.ESPIPE
                         raise err
 
-                    handle = writer._file
-                    assert handle is not None
-                    handle.tell = failing_tell
+                    open_handle(writer).tell = failing_tell
 
                     writer.write(sample_result)
 

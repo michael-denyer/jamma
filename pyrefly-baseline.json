@@ -1069,6 +1069,18 @@
       "severity": "error"
     },
     {
+      "line": 221,
+      "column": 38,
+      "stop_line": 221,
+      "stop_column": 51,
+      "path": "tests/lmm_accel/test_lmm_accel_general.py",
+      "code": -2,
+      "name": "no-matching-overload",
+      "description": "No matching overload found for function `numpy._typing._ufunc._UFunc_Nin1_Nout1.__call__` called with arguments: (ndarray | None)\n  Possible overloads:\n    (x1: _ScalarLike_co, /, ..., *, ...) -> Any [closest match]\n    (x1: ArrayLike, /, ..., *, ...) -> ndarray\n    (x1: _SupportsArrayUFunc, /, ..., *, ...) -> Any\n  Argument `ndarray | None` is not assignable to parameter `x1` with type `bytes | complex | generic | str` in function `numpy._typing._ufunc._UFunc_Nin1_Nout1.__call__`",
+      "concise_description": "No matching overload found for function `numpy._typing._ufunc._UFunc_Nin1_Nout1.__call__` called with arguments: (ndarray | None)",
+      "severity": "error"
+    },
+    {
       "line": 48,
       "column": 16,
       "stop_line": 48,
@@ -1669,6 +1681,30 @@
       "severity": "error"
     },
     {
+      "line": 75,
+      "column": 12,
+      "stop_line": 75,
+      "stop_column": 17,
+      "path": "tests/test_jlinalg_eigh.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `floating` is not assignable to declared return type `float`",
+      "concise_description": "Returned type `floating` is not assignable to declared return type `float`",
+      "severity": "error"
+    },
+    {
+      "line": 99,
+      "column": 12,
+      "stop_line": 99,
+      "stop_column": 20,
+      "path": "tests/test_jlinalg_eigh.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `floating` is not assignable to declared return type `float`",
+      "concise_description": "Returned type `floating` is not assignable to declared return type `float`",
+      "severity": "error"
+    },
+    {
       "line": 363,
       "column": 24,
       "stop_line": 363,
@@ -1856,7 +1892,7 @@
       "path": "tests/test_loco_eigen_cache.py",
       "code": -2,
       "name": "no-matching-overload",
-      "description": "No matching overload found for function `numpy.testing._private.utils.assert_allclose` called with arguments: (float | None, float | None, rtol=float, atol=float, err_msg=str)\n  Possible overloads:\n    (actual: _ArrayLikeTD64_co, desired: _ArrayLikeTD64_co, rtol: float = 1e-7, atol: float | timedelta64 = 0, ..., err_msg: object = '', ..., *, ...) -> None [closest match]\n    (actual: _NumericArrayLike, desired: _NumericArrayLike, rtol: float = 1e-7, atol: float = 0, ..., err_msg: object = '', ..., *, ...) -> None\n  Argument `float | None` is not assignable to parameter `actual` with type `_NestedSequence[_SupportsArray[dtype[numpy.bool | integer | timedelta64]]] | _NestedSequence[int] | _SupportsArray[dtype[numpy.bool | integer | timedelta64]] | int` in function `numpy.testing._private.utils.assert_allclose`\n  Argument `float | None` is not assignable to parameter `desired` with type `_NestedSequence[_SupportsArray[dtype[numpy.bool | integer | timedelta64]]] | _NestedSequence[int] | _SupportsArray[dtype[numpy.bool | integer | timedelta64]] | int` in function `numpy.testing._private.utils.assert_allclose`",
+      "description": "No matching overload found for function `numpy.testing._private.utils.assert_allclose` called with arguments: (float | None, float | None, rtol=float, atol=float, err_msg=str)\n  Possible overloads:\n    (actual: _ArrayLikeTD64_co, desired: _ArrayLikeTD64_co, rtol: float = 1e-7, atol: float = 0, ..., err_msg: object = '', ..., *, ...) -> None [closest match]\n    (actual: _NumericArrayLike, desired: _NumericArrayLike, rtol: float = 1e-7, atol: float = 0, ..., err_msg: object = '', ..., *, ...) -> None\n  Argument `float | None` is not assignable to parameter `actual` with type `_NestedSequence[_SupportsArray[dtype[numpy.bool | integer | timedelta64]]] | _NestedSequence[int] | _SupportsArray[dtype[numpy.bool | integer | timedelta64]] | int` in function `numpy.testing._private.utils.assert_allclose`\n  Argument `float | None` is not assignable to parameter `desired` with type `_NestedSequence[_SupportsArray[dtype[numpy.bool | integer | timedelta64]]] | _NestedSequence[int] | _SupportsArray[dtype[numpy.bool | integer | timedelta64]] | int` in function `numpy.testing._private.utils.assert_allclose`",
       "concise_description": "No matching overload found for function `numpy.testing._private.utils.assert_allclose` called with arguments: (float | None, float | None, rtol=float, atol=float, err_msg=str)",
       "severity": "error"
     },
@@ -1880,7 +1916,7 @@
       "path": "tests/test_loco_numpy.py",
       "code": -2,
       "name": "no-matching-overload",
-      "description": "No matching overload found for function `numpy.testing._private.utils.assert_allclose` called with arguments: (ndarray | str | Any, Unknown, atol=float)\n  Possible overloads:\n    (actual: _ArrayLikeTD64_co, desired: _ArrayLikeTD64_co, ..., atol: float | timedelta64 = 0, ..., *, ...) -> None [closest match]\n    (actual: _NumericArrayLike, desired: _NumericArrayLike, ..., atol: float = 0, ..., *, ...) -> None\n  Argument `ndarray | str | Any` is not assignable to parameter `actual` with type `_NestedSequence[_SupportsArray[dtype[numpy.bool | integer | timedelta64]]] | _NestedSequence[int] | _SupportsArray[dtype[numpy.bool | integer | timedelta64]] | int` in function `numpy.testing._private.utils.assert_allclose`",
+      "description": "No matching overload found for function `numpy.testing._private.utils.assert_allclose` called with arguments: (ndarray | str | Any, Unknown, atol=float)\n  Possible overloads:\n    (actual: _ArrayLikeTD64_co, desired: _ArrayLikeTD64_co, ..., atol: float = 0, ..., *, ...) -> None [closest match]\n    (actual: _NumericArrayLike, desired: _NumericArrayLike, ..., atol: float = 0, ..., *, ...) -> None\n  Argument `ndarray | str | Any` is not assignable to parameter `actual` with type `_NestedSequence[_SupportsArray[dtype[numpy.bool | integer | timedelta64]]] | _NestedSequence[int] | _SupportsArray[dtype[numpy.bool | integer | timedelta64]] | int` in function `numpy.testing._private.utils.assert_allclose`",
       "concise_description": "No matching overload found for function `numpy.testing._private.utils.assert_allclose` called with arguments: (ndarray | str | Any, Unknown, atol=float)",
       "severity": "error"
     },

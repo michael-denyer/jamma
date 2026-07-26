@@ -170,21 +170,34 @@ class IncrementalAssocWriter:
             count: Number of logical results in the buffer.
 
         Raises:
-            OSError: After exhausting retries on write failure.
+            RuntimeError: If the writer is not open.
+            OSError: After exhausting retries on write failure, or immediately
+                if the rollback position cannot be read.
         """
+        handle = self._file
+        if handle is None:
+            raise RuntimeError("Writer not opened. Use as context manager.")
+
+        # Read the rollback position once, outside the retry loop. It is the
+        # same on every attempt, since a failed write is truncated back to it.
+        # Taking it inside the try left `pos` unbound whenever tell() itself
+        # raised, so the rollback below raised UnboundLocalError instead --
+        # not an OSError, so it bypassed the retry, the rollback and the
+        # partial-file cleanup, and escaped this method's documented contract.
+        pos = handle.tell()
+
         last_error: OSError | None = None
         for attempt in range(1 + len(_RETRY_BACKOFF)):
             try:
-                pos = self._file.tell()
-                self._file.write(buf)
-                self._file.flush()
+                handle.write(buf)
+                handle.flush()
                 self._count += count
                 return
             except OSError as e:
                 last_error = e
                 try:
-                    self._file.seek(pos)
-                    self._file.truncate()
+                    handle.seek(pos)
+                    handle.truncate()
                 except OSError as seek_err:
                     logger.warning(
                         f"Failed to rollback partial write at position "

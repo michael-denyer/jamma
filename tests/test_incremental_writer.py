@@ -633,3 +633,36 @@ class TestIncrementalAssocWriter:
         assert not output_path.exists(), (
             "Partial output file should be deleted when EPERM + rollback both fail"
         )
+
+    @pytest.mark.tier0
+    def test_write_buf_tell_failure_surfaces_as_oserror(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """An OSError from tell() propagates as OSError, not UnboundLocalError.
+
+        tell() supplies the rollback position. Reading it inside the retry
+        try-block left the position unbound when tell() itself failed, so the
+        rollback in the except-handler raised UnboundLocalError -- which is not
+        an OSError, so it escaped write()'s documented contract and skipped the
+        partial-file cleanup entirely.
+        """
+        output_path = tmp_path / "test.assoc.txt"
+
+        with patch("jamma.lmm.io.time.sleep"):
+            with pytest.raises(OSError, match="Illegal seek"):
+                with IncrementalAssocWriter(output_path) as writer:
+
+                    def failing_tell():
+                        err = OSError("Illegal seek")
+                        err.errno = errno.ESPIPE
+                        raise err
+
+                    handle = writer._file
+                    assert handle is not None
+                    handle.tell = failing_tell
+
+                    writer.write(sample_result)
+
+        assert not output_path.exists(), (
+            "Partial output file should be deleted when tell() fails"
+        )

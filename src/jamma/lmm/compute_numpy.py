@@ -18,7 +18,7 @@ The caller is responsible for:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict, TypeVar
 
 import numpy as np
 
@@ -1679,6 +1679,54 @@ def _compute_lrt_split_numpy(
     )
 
 
+_LOGL_H0_REQUIRED = "logl_H0 is required for LRT (mode 2) and All (mode 4)"
+_HI_EVAL_NULL_REQUIRED = "Hi_eval_null is required for Score (mode 3) and All (mode 4)"
+
+_ModeInput = TypeVar("_ModeInput")
+
+
+def _require_mode_input(value: _ModeInput | None, message: str) -> _ModeInput:
+    """Return a mode-specific input, or raise naming which mode needed it.
+
+    Only some LMM modes take logl_H0 / Hi_eval_null, so both arrive optional.
+    Checking them at the point of use ties the guard to the branch that reads
+    the value, which a mode check made up front cannot express.
+
+    Args:
+        value: The optional input.
+        message: Error text naming the input and the modes that require it.
+
+    Returns:
+        The value, known to be present.
+
+    Raises:
+        ValueError: If the value is None.
+    """
+    if value is None:
+        raise ValueError(message)
+    return value
+
+
+def _store_wald(result: dict[str, np.ndarray | None], wald: WaldResult) -> None:
+    """Copy a WaldResult's five arrays into the mode-agnostic result dict.
+
+    Spelled out per key rather than ``result.update(wald)`` because a TypedDict
+    is not a ``Mapping[str, ndarray | None]`` — its value types are per-key, so
+    the update overloads reject it.
+
+    Args:
+        result: The chunk result dict to populate.
+        wald: Wald statistics for the chunk.
+    """
+    result.update(
+        lambdas=wald["lambdas"],
+        logls=wald["logls"],
+        betas=wald["betas"],
+        ses=wald["ses"],
+        pwalds=wald["pwalds"],
+    )
+
+
 def compute_lmm_chunk_numpy(
     lmm_mode: LmmMode,
     n_cvt: int,
@@ -1720,11 +1768,6 @@ def compute_lmm_chunk_numpy(
     """
     n_refine = max(n_refine, 20)
 
-    if lmm_mode in (2, 4) and logl_H0 is None:
-        raise ValueError("logl_H0 is required for LRT (mode 2) and All (mode 4)")
-    if lmm_mode in (3, 4) and Hi_eval_null is None:
-        raise ValueError("Hi_eval_null is required for Score (mode 3) and All (mode 4)")
-
     result: dict[str, np.ndarray | None] = {
         "lambdas": None,
         "logls": None,
@@ -1737,7 +1780,8 @@ def compute_lmm_chunk_numpy(
     }
 
     if lmm_mode == 1:
-        result.update(
+        _store_wald(
+            result,
             _compute_wald_numpy(
                 n_cvt,
                 eigenvalues,
@@ -1748,7 +1792,7 @@ def compute_lmm_chunk_numpy(
                 n_grid,
                 n_refine,
                 n_threads=n_threads,
-            )
+            ),
         )
 
     elif lmm_mode == 2:
@@ -1761,7 +1805,7 @@ def compute_lmm_chunk_numpy(
                 l_max,
                 n_grid,
                 n_refine,
-                logl_H0,
+                _require_mode_input(logl_H0, _LOGL_H0_REQUIRED),
                 n_threads=n_threads,
             )
         )
@@ -1771,7 +1815,7 @@ def compute_lmm_chunk_numpy(
             _compute_score_numpy(
                 n_cvt,
                 eigenvalues,
-                Hi_eval_null,
+                _require_mode_input(Hi_eval_null, _HI_EVAL_NULL_REQUIRED),
                 Uab_batch,
                 n_samples,
                 n_threads=n_threads,
@@ -1779,12 +1823,18 @@ def compute_lmm_chunk_numpy(
         )
 
     elif lmm_mode == 4:
+        # Both mode-4 inputs are checked before any compute runs, so an omitted
+        # one still fails before the Score step rather than partway through.
+        # logl_H0 first: with both absent that is the one reported, which is
+        # the order the previous up-front guards established.
+        null_logl = _require_mode_input(logl_H0, _LOGL_H0_REQUIRED)
+        hi_eval_null = _require_mode_input(Hi_eval_null, _HI_EVAL_NULL_REQUIRED)
         # Compose all three tests; only take p_scores from Score —
         # Wald provides REML-optimized beta/SE below
         score_result = _compute_score_numpy(
             n_cvt,
             eigenvalues,
-            Hi_eval_null,
+            hi_eval_null,
             Uab_batch,
             n_samples,
             n_threads=n_threads,
@@ -1799,13 +1849,14 @@ def compute_lmm_chunk_numpy(
                 l_max,
                 n_grid,
                 n_refine,
-                logl_H0,
+                null_logl,
                 n_threads=n_threads,
             )
         )
         # Pre-compute Iab once for Wald (lambda-independent)
         Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
-        result.update(
+        _store_wald(
+            result,
             _compute_wald_numpy(
                 n_cvt,
                 eigenvalues,
@@ -1817,7 +1868,7 @@ def compute_lmm_chunk_numpy(
                 n_refine,
                 Iab_batch=Iab_batch,
                 n_threads=n_threads,
-            )
+            ),
         )
 
     else:

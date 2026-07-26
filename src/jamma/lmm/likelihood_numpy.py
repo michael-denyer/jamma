@@ -19,6 +19,7 @@ All operations are vectorized over SNPs using NumPy broadcasting.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Literal, NamedTuple, overload
 
 import numpy as np
@@ -26,6 +27,12 @@ from loguru import logger
 
 from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
+
+# Batch evaluators passed into the golden-section refinement: both take
+# per-SNP log-lambdas (n_snps,); the Pab variant also returns the Pab batch
+# at those lambdas, so the caller avoids reconstructing it afterwards.
+_BatchLoglFn = Callable[[np.ndarray], np.ndarray]
+_BatchLoglPabFn = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]
 
 
 class SplitUab(NamedTuple):
@@ -838,6 +845,32 @@ def compute_iab_invariant_scalars_ncvt1(
 # ---------------------------------------------------------------------------
 
 
+@overload
+def _batch_reml_at_lambda_numpy(
+    n_cvt: int,
+    lambda_vals: np.ndarray,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+    Iab_batch: np.ndarray,
+    reml_const: float | None = ...,
+    *,
+    return_pab: Literal[False] = ...,
+) -> np.ndarray: ...
+
+
+@overload
+def _batch_reml_at_lambda_numpy(
+    n_cvt: int,
+    lambda_vals: np.ndarray,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+    Iab_batch: np.ndarray,
+    reml_const: float | None = ...,
+    *,
+    return_pab: Literal[True],
+) -> tuple[np.ndarray, np.ndarray]: ...
+
+
 def _batch_reml_at_lambda_numpy(
     n_cvt: int,
     lambda_vals: np.ndarray,
@@ -845,6 +878,7 @@ def _batch_reml_at_lambda_numpy(
     Uab_batch: np.ndarray,
     Iab_batch: np.ndarray,
     reml_const: float | None = None,
+    *,
     return_pab: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Evaluate REML log-likelihood for each SNP at its own lambda value.
@@ -1078,12 +1112,32 @@ def _batch_grid_mle_numpy(
 # ---------------------------------------------------------------------------
 
 
+@overload
 def _batch_golden_section_numpy(
-    compute_batch_fn,
+    compute_batch_fn: _BatchLoglFn,
     grid_logls: np.ndarray,
     log_lambdas: np.ndarray,
     n_iter: int,
-    compute_batch_with_pab_fn=None,
+    compute_batch_with_pab_fn: None = ...,
+) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+@overload
+def _batch_golden_section_numpy(
+    compute_batch_fn: _BatchLoglFn,
+    grid_logls: np.ndarray,
+    log_lambdas: np.ndarray,
+    n_iter: int,
+    compute_batch_with_pab_fn: _BatchLoglPabFn,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+
+
+def _batch_golden_section_numpy(
+    compute_batch_fn: _BatchLoglFn,
+    grid_logls: np.ndarray,
+    log_lambdas: np.ndarray,
+    n_iter: int,
+    compute_batch_with_pab_fn: _BatchLoglPabFn | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Grid-to-golden-section refinement for lambda optimization.
 
@@ -1433,6 +1487,7 @@ def _batch_grid_reml_split_ncvt1_numpy(
     )
 
 
+@overload
 def _batch_reml_at_lambda_split_ncvt1_numpy(
     lambda_vals: np.ndarray,
     eigenvalues: np.ndarray,
@@ -1443,6 +1498,38 @@ def _batch_reml_at_lambda_split_ncvt1_numpy(
     iab_p1_xx: np.ndarray,
     iab_logdet_var: np.ndarray,
     reml_const: float,
+    *,
+    return_pab: Literal[False] = ...,
+) -> np.ndarray: ...
+
+
+@overload
+def _batch_reml_at_lambda_split_ncvt1_numpy(
+    lambda_vals: np.ndarray,
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    iab_logdet: float,
+    iab_inv_s_ww: float,
+    iab_p1_xx: np.ndarray,
+    iab_logdet_var: np.ndarray,
+    reml_const: float,
+    *,
+    return_pab: Literal[True],
+) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+def _batch_reml_at_lambda_split_ncvt1_numpy(
+    lambda_vals: np.ndarray,
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    iab_logdet: float,
+    iab_inv_s_ww: float,
+    iab_p1_xx: np.ndarray,
+    iab_logdet_var: np.ndarray,
+    reml_const: float,
+    *,
     return_pab: bool = False,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Evaluate REML for each SNP at its own lambda using split-Uab (n_cvt=1).
@@ -1527,6 +1614,42 @@ def _batch_reml_at_lambda_split_ncvt1_numpy(
     return logl, Pab_batch
 
 
+@overload
+def golden_section_optimize_lambda_split_ncvt1_numpy(
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    iab_s_ww: float,
+    iab_s_wy: float,
+    iab_s_yy: float,
+    iab_logdet: float,
+    l_min: float = ...,
+    l_max: float = ...,
+    n_grid: int = ...,
+    n_iter: int = ...,
+    *,
+    return_pab: Literal[False] = ...,
+) -> tuple[np.ndarray, np.ndarray]: ...
+
+
+@overload
+def golden_section_optimize_lambda_split_ncvt1_numpy(
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    iab_s_ww: float,
+    iab_s_wy: float,
+    iab_s_yy: float,
+    iab_logdet: float,
+    l_min: float = ...,
+    l_max: float = ...,
+    n_grid: int = ...,
+    n_iter: int = ...,
+    *,
+    return_pab: Literal[True],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+
+
 def golden_section_optimize_lambda_split_ncvt1_numpy(
     eigenvalues: np.ndarray,
     uab_varying_soa: np.ndarray,
@@ -1539,6 +1662,7 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_iter: int = 20,
+    *,
     return_pab: bool = False,
 ) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Optimize REML lambda using split-Uab for n_cvt=1.

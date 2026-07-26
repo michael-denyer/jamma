@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Every zizmor finding fixed, and the gate tightened to match.** The
+  pre-commit hook ran `--min-severity high` with three high findings
+  ignored in `.zizmor.yml`. It now runs at default severity with no ignore
+  rules, so medium and low findings block a commit. Fixes, not suppressions:
+
+  - `persist-credentials: false` on all 16 `actions/checkout` steps
+    (`artipacked`). No workflow pushes back to the repo, so none needed the
+    token left in `.git/config`.
+  - `issues: write` moved from workflow level to the single job that files a
+    triage issue, in `flaky-detect.yml` and `sanitizers.yml`
+    (`excessive-permissions`). The jobs that run tests and
+    sanitizer-instrumented C now hold a read-only token.
+    `link-check-external.yml` got the same shape for consistency.
+  - `enable-cache: false` on `build-wheels.yml`'s sdist job
+    (`cache-poisoning`), matching `publish.yml`. That job builds an artifact
+    that gets published, and cache contents are user-controlled across runs.
+
+  The `cache-poisoning` one was on a clock: the hook pins zizmor v1.24.1,
+  which does not report it, while v1.25.x does — so the next dependabot rev
+  bump would have failed the gate with no ignore covering it.
+
+- **Dependabot `cooldown` on both ecosystems.** 7 days by default, 14 for
+  semver-major on pip. A compromised release is usually yanked within days
+  of publication, so waiting is the cheap half of supply-chain defence
+  alongside the existing Action SHA pinning. Surfaced by the tightened gate
+  (`dependabot-cooldown`), which the old high-severity bar never showed.
+
 ### Changed
 
 - **refurb now gates every commit.** It shipped as `stages: [manual]` with

@@ -21,9 +21,11 @@ on:
     - cron: "0 7 * * 1"  # Monday 07:00 UTC
   workflow_dispatch:
 
+# Job-scoped rather than workflow-wide, matching flaky-detect.yml and
+# sanitizers.yml. Only one job exists today, so zizmor does not flag the
+# wider grant — but the narrow form stays correct if a second one appears.
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -32,8 +34,13 @@ concurrency:
 jobs:
   external-links:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write  # to file a triage issue on broken external links
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
 
       - name: Run lychee (online)
         id: lychee

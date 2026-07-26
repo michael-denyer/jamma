@@ -31,7 +31,7 @@ from jamma.core.memory import (
     estimate_streaming_memory,
 )
 from jamma.io.covariate import read_covariate_file
-from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
+from jamma.io.plink import PlinkData, get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
 from jamma.kinship import (
     compute_kinship_streaming,
@@ -44,9 +44,11 @@ from jamma.kinship import (
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
-from jamma.lmm.schema import LmmRunResult
+from jamma.lmm.schema import LmmRunResult, RunnerTiming
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import (
+    VALID_BACKENDS,
+    BackendRequest,
     KinshipResult,
     PipelineConfig,
     PipelineResult,
@@ -60,6 +62,25 @@ __all__ = [
 ]
 
 
+def _parse_backend_override(value: str) -> BackendRequest:
+    """Validate a JAMMA_BACKEND value against the accepted backend requests.
+
+    Args:
+        value: Raw ``JAMMA_BACKEND`` environment variable value.
+
+    Returns:
+        The value, narrowed to a valid backend request.
+
+    Raises:
+        ValueError: If the value is not a recognised backend.
+    """
+    if value not in VALID_BACKENDS:
+        raise ValueError(
+            f"JAMMA_BACKEND must be one of {VALID_BACKENDS}, got {value!r}"
+        )
+    return value
+
+
 class _PhenoLoopOutcome(NamedTuple):
     """Aggregated results of the per-phenotype LMM loop.
 
@@ -71,7 +92,7 @@ class _PhenoLoopOutcome(NamedTuple):
     n_tested: int
     assoc_paths: list[Path]
     lmm_s: float
-    runner_timing: dict[str, float]
+    runner_timing: RunnerTiming
     pve: float | None
     pve_se: float | None
 
@@ -664,8 +685,15 @@ class PipelineRunner:
         t_start = time.perf_counter()
 
         # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
+        # It arrives as an unvalidated string, so check it here rather than
+        # letting an unknown value reach select_execution_mode after the
+        # pipeline has already read PLINK metadata off disk.
         env_backend = os.environ.get("JAMMA_BACKEND")
-        requested = env_backend if env_backend is not None else self.config.backend
+        requested: BackendRequest = (
+            _parse_backend_override(env_backend)
+            if env_backend is not None
+            else self.config.backend
+        )
 
         # Fail fast: HWE + explicit numpy is always invalid, before touching disk.
         if self.config.hwe_threshold > 0 and requested == "numpy":
@@ -1212,8 +1240,11 @@ class PipelineRunner:
             )
             _plink_data = load_plink_binary(self.config.bfile)
 
+        # The loop's last run carries the PVE estimate; both stay None if
+        # pheno_columns is empty, which PipelineConfig already rejects.
         prefix = self.config.output_prefix
-        run_result = None
+        pve: float | None = None
+        pve_se: float | None = None
         for col in pheno_columns:
             if is_multi:
                 logger.info(f"Starting LMM for phenotype column {col}")
@@ -1254,12 +1285,13 @@ class PipelineRunner:
             all_results.extend(run_result.associations)
             total_tested += n_tested
             all_assoc_paths.append(col_path)
+            pve, pve_se = run_result.pve, run_result.pve_se
             logger.info(f"Phenotype {col}: {n_tested} SNPs tested -> {col_path}")
 
         lmm_s = time.perf_counter() - t_lmm
 
         # Pull runner-level rotation timing from the most recent runner call.
-        runner_timing: dict[str, float] = {}
+        runner_timing: RunnerTiming = {}
         if plan.mode == "streaming":
             from jamma.lmm.runner_numpy_streaming import (
                 get_last_run_timing as _np_stream_timing,
@@ -1273,8 +1305,8 @@ class PipelineRunner:
             assoc_paths=all_assoc_paths,
             lmm_s=lmm_s,
             runner_timing=runner_timing,
-            pve=run_result.pve,
-            pve_se=run_result.pve_se,
+            pve=pve,
+            pve_se=pve_se,
         )
 
     def _run_loco(
@@ -1373,7 +1405,7 @@ class PipelineRunner:
         eigenvectors: np.ndarray | None,
         assoc_path: Path,
         snps_indices: np.ndarray | None,
-        plink_data: object | None = None,
+        plink_data: PlinkData | None = None,
     ) -> tuple[LmmRunResult, int]:
         """Run LMM association using the pure-NumPy batch backend.
 

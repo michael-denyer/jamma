@@ -250,7 +250,7 @@ def validate_plink_dimensions(bfile: Path) -> None:
     bim_path = Path(f"{bfile}.bim")
     fam_path = Path(f"{bfile}.fam")
 
-    for path, ext in [(bed_path, ".bed"), (bim_path, ".bim"), (fam_path, ".fam")]:
+    for path, ext in ((bed_path, ".bed"), (bim_path, ".bim"), (fam_path, ".fam")):
         if not path.exists():
             raise FileNotFoundError(f"PLINK {ext} file not found: {path}")
 

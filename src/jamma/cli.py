@@ -265,6 +265,8 @@ def main(
     # Mode validation: exactly one of -gk or -lmm required
     if gk is not None and lmm is not None:
         raise click.UsageError("-gk and -lmm are mutually exclusive")
+    # Not chained to `gk is lmm is None` (FURB124, silenced in pyproject):
+    # the line above is its mirror image, and the pair should look alike.
     if gk is None and lmm is None:
         raise click.UsageError("One of -gk or -lmm is required")
 

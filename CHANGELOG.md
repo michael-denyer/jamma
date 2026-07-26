@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refurb now gates every commit.** It shipped as `stages: [manual]` with
+  ~23 pre-existing findings; those are fixed (30 by the time they were
+  counted) and `stages: [manual]` is gone. Membership tests replace repeated
+  comparisons, `contextlib.suppress` replaces `try/except/pass`, tuple
+  literals replace throwaway lists in `for` targets, and a handful of
+  single-use locals and an `else: return` are collapsed. No behaviour change.
+
+  Three findings were **not** applied, with the reasons recorded in
+  `[tool.refurb]` in `pyproject.toml` rather than as inline `# noqa`:
+
+  - `FURB117` (`open(path)` → `path.open()`) is disabled outright. It is the
+    same rule as ruff's `PTH123`, which `[tool.ruff.lint].ignore` already
+    turns off as needless verbosity — so leaving refurb to demand it had the
+    two linters contradicting each other on one question.
+  - `FURB152` in `core/estimates.py` would replace `_EIGEN_ALPHA = 2.7152`
+    with `math.e`. It is a fitted power-law exponent, not Euler's number;
+    applying it would silently recalibrate every eigendecomp time estimate.
+  - `FURB124` in `cli.py` would chain `gk is None and lmm is None` into
+    `gk is lmm is None`, directly below its unchainable mirror image.
+
 - **`LocoConfig` now owns the naming of every LOCO artifact.** The
   `.txt`-vs-`.npy` branch was written twice and the `{prefix}.loco.chr{chr}`
   convention three times, once per helper that built a filename.

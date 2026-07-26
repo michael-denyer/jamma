@@ -137,7 +137,7 @@ def apply_sanitizer_overrides(
     return (
         [*extra_cflags, *san_cflags],
         [*extra_link_flags, *san_link],
-        list(san_cflags),
+        san_cflags.copy(),
     )
 
 
@@ -418,7 +418,7 @@ def compile_jlinalg(
 
     # First attempt: with OpenMP.
     used_openmp = bool(omp_compile)
-    current_omp_link = list(omp_link)
+    current_omp_link = omp_link.copy()
     compile_objs = _compile_sources(omp_compile, "")
 
     if compile_objs is None and used_openmp:

@@ -297,7 +297,7 @@ class IncrementalAssocWriter:
                 f"{missing_keys}. Expected: {expected_keys}, got: {set(arrays.keys())}"
             )
 
-        for name, arr in [("afs", afs), ("miss_counts", miss_counts)]:
+        for name, arr in (("afs", afs), ("miss_counts", miss_counts)):
             if len(arr) != n:
                 raise ValueError(
                     f"write_arrays_batch: {name} has length {len(arr)}, "

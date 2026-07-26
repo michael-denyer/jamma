@@ -120,7 +120,7 @@ def validate_runner_inputs(
             f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
         )
 
-    if kinship is None and eigenvalues is None:
+    if kinship is eigenvalues is None:
         raise ValueError(
             "Either kinship or pre-computed eigendecomposition (eigenvalues + "
             "eigenvectors) must be provided"

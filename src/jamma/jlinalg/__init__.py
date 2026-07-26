@@ -575,8 +575,7 @@ if not HAS_C_EXTENSION:
         if compute_uv:
             U, s, Vh = _np.linalg.svd(A64, full_matrices=False)
             return U, s, Vh
-        else:
-            return _np.linalg.svd(A64, compute_uv=False)
+        return _np.linalg.svd(A64, compute_uv=False)
 
     import os as _os
 

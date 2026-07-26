@@ -473,10 +473,11 @@ def compare_assoc_results(
         )
 
     # Check for mismatched SNP IDs
-    mismatched = []
-    for i, (a, e) in enumerate(zip(actual, expected, strict=True)):
-        if a.rs != e.rs:
-            mismatched.append(f"{i}:{a.rs}!={e.rs}")
+    mismatched = [
+        f"{i}:{a.rs}!={e.rs}"
+        for i, (a, e) in enumerate(zip(actual, expected, strict=True))
+        if a.rs != e.rs
+    ]
 
     # Always-present columns. AF is normalized to MAF (<= 0.5) first because
     # JAMMA reports MAF while GEMMA's AF can exceed 0.5 for the same allele.

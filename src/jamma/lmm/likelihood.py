@@ -254,7 +254,7 @@ def _compute_Uab_general(
     for a in range(1, n_cvt + 3):
         for b in range(a, n_cvt + 3):
             # Skip genotype if not provided
-            if Utx is None and (a == n_cvt + 1 or b == n_cvt + 1):
+            if Utx is None and n_cvt + 1 in (a, b):
                 continue
 
             idx = get_ab_index(a, b, n_cvt)
@@ -986,7 +986,7 @@ def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
     invariant = []
     varying = []
     for a_col, b_col, linear_idx in table["uab_pairs"]:
-        if a_col == genotype_col or b_col == genotype_col:
+        if genotype_col in (a_col, b_col):
             varying.append(linear_idx)
         else:
             invariant.append(linear_idx)
@@ -1052,7 +1052,7 @@ def build_pab_table_for_c(n_cvt: int) -> dict:
     var_a_list = []
     var_b_list = []
     for a_col, b_col, _linear_idx in table["uab_pairs"]:
-        if a_col == genotype_col or b_col == genotype_col:
+        if genotype_col in (a_col, b_col):
             var_a_list.append(a_col)
             var_b_list.append(b_col)
 

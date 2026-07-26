@@ -678,3 +678,58 @@ class TestIncrementalAssocWriter:
         assert not output_path.exists(), (
             "Partial output file should be deleted when tell() fails"
         )
+
+    @pytest.mark.tier0
+    def test_write_buf_rollback_discards_debris_before_retry(
+        self, tmp_path: Path, sample_result: AssocResult
+    ):
+        """A failed attempt is rolled back, so the retry writes over clean state.
+
+        The first attempt puts more bytes into the stream than the retry will,
+        then fails with a retryable errno. That is what the seek/truncate pair
+        in _write_buf exists for, and each half is load-bearing:
+
+        - Without ``seek(pos)``, ``truncate()`` cuts at the position left after
+          the debris, so the retried line lands *after* it.
+        - Without ``truncate()``, ``seek(pos)`` rewinds but the retried line is
+          shorter than the debris, so the tail of the debris survives past the
+          end of the line.
+
+        Either way the file is malformed while the writer reports success, so
+        this asserts the file contents rather than the call sequence.
+        """
+        output_path = tmp_path / "test.assoc.txt"
+        debris = "X" * 500
+
+        with patch("jamma.lmm.io.time.sleep"):
+            with IncrementalAssocWriter(output_path) as writer:
+                handle = open_handle(writer)
+                original_write = handle.write
+                data_attempts = 0
+
+                def debris_then_succeed(data: str) -> int:
+                    nonlocal data_attempts
+                    if "\t" not in data:  # header, not a result line
+                        return original_write(data)
+                    data_attempts += 1
+                    if data_attempts == 1:
+                        # Longer than the real line, so a missing truncate
+                        # leaves a tail behind that overwriting cannot cover.
+                        original_write(debris)
+                        raise OSError(errno.EIO, "I/O error")
+                    return original_write(data)
+
+                handle.write = debris_then_succeed
+                writer.write(sample_result)
+
+                assert data_attempts == 2, "expected exactly one retry"
+
+        content = output_path.read_text()
+        assert "X" not in content, (
+            f"Rollback must discard the failed attempt's bytes; got {content!r}"
+        )
+        lines = content.strip().split("\n")
+        assert len(lines) == 2, f"Expected header + one result, got {lines}"
+        assert lines[0].startswith("chr\trs\tps")
+        assert lines[1].startswith("1\trs12345\t")
+        assert writer.count == 1

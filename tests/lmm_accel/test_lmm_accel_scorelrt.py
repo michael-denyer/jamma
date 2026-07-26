@@ -31,6 +31,8 @@ def test_score_c_vs_python_parity(score_lrt_data):
     n_cvt = 1
 
     # C path
+    # skipif above gates this; the type checker cannot see it.
+    assert _compute_score_batch_c is not None
     result_c = _compute_score_batch_c(
         eigenvalues,
         Uab_batch,
@@ -63,6 +65,8 @@ def test_lrt_c_vs_python_parity(score_lrt_data):
     l_min, l_max, n_grid, n_refine = 1e-5, 1e5, 50, 20
 
     # C path
+    # skipif above gates this; the type checker cannot see it.
+    assert _compute_lrt_batch_c is not None
     result_c = _compute_lrt_batch_c(
         eigenvalues,
         Uab_batch,
@@ -113,6 +117,8 @@ def test_score_c_degenerate_snps(score_lrt_data):
     Uab_degen[0, :, 3] = 0.0  # xx = 0
     Uab_degen[0, :, 4] = 0.0  # xy = 0
 
+    # skipif above gates this; the type checker cannot see it.
+    assert _compute_score_batch_c is not None
     result = _compute_score_batch_c(
         eigenvalues,
         Uab_degen,
@@ -144,6 +150,8 @@ def test_lrt_c_degenerate_snps(score_lrt_data):
     Uab_degen[0, :, 3] = 0.0  # xx = 0
     Uab_degen[0, :, 4] = 0.0  # xy = 0
 
+    # skipif above gates this; the type checker cannot see it.
+    assert _compute_lrt_batch_c is not None
     result = _compute_lrt_batch_c(
         eigenvalues,
         Uab_degen,
@@ -173,6 +181,8 @@ def test_score_c_multithreaded(score_lrt_data):
     """Score C with n_threads=4 produces identical output to n_threads=1."""
     eigenvalues, Uab_batch, n_samples, Hi_eval_null, _ = score_lrt_data
 
+    # skipif above gates this; the type checker cannot see it.
+    assert _compute_score_batch_c is not None
     result_1t = _compute_score_batch_c(
         eigenvalues,
         Uab_batch,
@@ -180,6 +190,8 @@ def test_score_c_multithreaded(score_lrt_data):
         n_samples,
         1,
     )
+    # skipif above gates this; the type checker cannot see it.
+    assert _compute_score_batch_c is not None
     result_4t = _compute_score_batch_c(
         eigenvalues,
         Uab_batch,
@@ -199,6 +211,8 @@ def test_lrt_c_multithreaded(score_lrt_data):
     """LRT C with n_threads=4 produces identical output to n_threads=1."""
     eigenvalues, Uab_batch, n_samples, _, logl_H0 = score_lrt_data
 
+    # skipif above gates this; the type checker cannot see it.
+    assert _compute_lrt_batch_c is not None
     result_1t = _compute_lrt_batch_c(
         eigenvalues,
         Uab_batch,
@@ -210,6 +224,8 @@ def test_lrt_c_multithreaded(score_lrt_data):
         logl_H0,
         1,
     )
+    # skipif above gates this; the type checker cannot see it.
+    assert _compute_lrt_batch_c is not None
     result_4t = _compute_lrt_batch_c(
         eigenvalues,
         Uab_batch,

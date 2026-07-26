@@ -11,7 +11,30 @@ from unittest.mock import patch
 
 import pytest
 
+from jamma.core.telemetry import BenchmarkRecord
+
 pytestmark = pytest.mark.tier0
+
+
+def _record(**overrides: object) -> BenchmarkRecord:
+    """Build a complete BenchmarkRecord, with any field overridden.
+
+    ``BenchmarkRecord`` requires timestamp, jamma_version, n_samples, n_snps
+    and backend — ``append_benchmark_record`` writes the record straight to
+    JSON without filling anything in, so a partial dict would be written
+    partial. These tests care about one or two fields each; the rest come from
+    here rather than being omitted and silently violating the contract.
+    """
+    record: BenchmarkRecord = {
+        "timestamp": "2026-07-26T00:00:00+00:00",
+        "jamma_version": "0.0.0-test",
+        "n_samples": 100,
+        "n_snps": 1000,
+        "backend": "numpy-batch",
+    }
+    record.update(overrides)  # type: ignore[typeddict-item]
+    return record
+
 
 # ---------------------------------------------------------------------------
 # TEL-01: append_benchmark_record() creates file and writes valid JSON
@@ -27,7 +50,7 @@ def test_append_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     dest = tmp_path / "benchmarks.jsonl"
     assert not dest.exists()
 
-    append_benchmark_record({"n_samples": 100, "backend": "numpy-batch"}, path=dest)
+    append_benchmark_record(_record(n_samples=100, backend="numpy-batch"), path=dest)
 
     assert dest.exists()
     lines = dest.read_text().splitlines()
@@ -48,7 +71,7 @@ def test_append_creates_parent_dirs(
     dest = tmp_path / "nested" / "dir" / "benchmarks.jsonl"
     assert not dest.parent.exists()
 
-    append_benchmark_record({"n_samples": 50}, path=dest)
+    append_benchmark_record(_record(n_samples=50), path=dest)
 
     assert dest.exists()
     record = json.loads(dest.read_text().strip())
@@ -77,7 +100,7 @@ def test_write_failure_warns_not_raises(
 
     with patch.object(logger, "warning") as mock_warning:
         # Must not raise
-        append_benchmark_record({"n_samples": 10}, path=dest)
+        append_benchmark_record(_record(n_samples=10), path=dest)
         assert mock_warning.call_count == 1
         warning_msg = str(mock_warning.call_args)
         assert "benchmark" in warning_msg.lower() or str(dest) in warning_msg
@@ -98,7 +121,7 @@ def test_write_failure_on_readonly_file(
     dest.chmod(0o444)  # read-only
 
     with patch.object(logger, "warning") as mock_warning:
-        append_benchmark_record({"n_samples": 10}, path=dest)
+        append_benchmark_record(_record(n_samples=10), path=dest)
         assert mock_warning.call_count == 1
 
     # cleanup so tmp_path can be removed
@@ -120,9 +143,9 @@ def test_multiple_records_appended(
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record({"n_samples": 1000, "backend": "numpy-batch"}, path=dest)
+    append_benchmark_record(_record(n_samples=1000, backend="numpy-batch"), path=dest)
     append_benchmark_record(
-        {"n_samples": 2000, "backend": "numpy-streaming"}, path=dest
+        _record(n_samples=2000, backend="numpy-streaming"), path=dest
     )
 
     lines = dest.read_text().splitlines()
@@ -146,7 +169,7 @@ def test_each_line_independently_parseable(
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
     for i in range(5):
-        append_benchmark_record({"n_samples": i * 100, "n_snps": i * 1000}, path=dest)
+        append_benchmark_record(_record(n_samples=i * 100, n_snps=i * 1000), path=dest)
 
     for line in dest.read_text().splitlines():
         record = json.loads(line)  # must not raise
@@ -168,7 +191,7 @@ def test_opt_out_env_var_skips_write(
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record({"n_samples": 999}, path=dest)
+    append_benchmark_record(_record(n_samples=999), path=dest)
 
     assert not dest.exists()
 
@@ -183,7 +206,7 @@ def test_opt_out_env_var_any_truthy_value(
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record({"n_samples": 999}, path=dest)
+    append_benchmark_record(_record(n_samples=999), path=dest)
 
     assert not dest.exists()
 
@@ -198,7 +221,7 @@ def test_opt_out_env_var_not_set_writes(
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record({"n_samples": 42}, path=dest)
+    append_benchmark_record(_record(n_samples=42), path=dest)
 
     assert dest.exists()
 
@@ -218,7 +241,7 @@ def test_do_not_track_env_var_skips_write(
     monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record({"n_samples": 999}, path=dest)
+    append_benchmark_record(_record(n_samples=999), path=dest)
 
     assert not dest.exists()
 
@@ -233,7 +256,7 @@ def test_do_not_track_zero_allows_write(
     monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record({"n_samples": 999}, path=dest)
+    append_benchmark_record(_record(n_samples=999), path=dest)
 
     assert dest.exists()
 
@@ -248,7 +271,7 @@ def test_do_not_track_non_one_allows_write(
     monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record({"n_samples": 999}, path=dest)
+    append_benchmark_record(_record(n_samples=999), path=dest)
 
     assert dest.exists()
 
@@ -263,7 +286,7 @@ def test_do_not_track_unset_writes(
     monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record({"n_samples": 42}, path=dest)
+    append_benchmark_record(_record(n_samples=42), path=dest)
 
     assert dest.exists()
 
@@ -320,7 +343,7 @@ def test_no_home_warns_not_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         patch("pathlib.Path.home", side_effect=RuntimeError("no home dir")),
         patch.object(logger, "warning") as mock_warning,
     ):
-        append_benchmark_record({"n_samples": 10})  # no path= override
+        append_benchmark_record(_record(n_samples=10))  # no path= override
         assert mock_warning.call_count == 1
         assert "path" in str(mock_warning.call_args).lower()
 

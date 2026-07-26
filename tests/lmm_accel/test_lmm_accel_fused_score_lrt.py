@@ -99,6 +99,9 @@ class TestFusedScoreParity:
             _compute_score_split_c,
         )
 
+        assert _compute_score_fused_c is not None
+        assert _compute_score_split_c is not None
+
         (
             eigenvalues,
             w,
@@ -151,6 +154,8 @@ class TestFusedScoreParity:
         """Constant genotype produces NaN beta/se/p_score."""
         from jamma.lmm.compute_numpy import _compute_score_fused_c
 
+        assert _compute_score_fused_c is not None  # narrowed: skipif gates this
+
         (
             eigenvalues,
             w,
@@ -197,6 +202,9 @@ class TestFusedScoreParity:
             _compute_score_fused_c,
             _compute_score_split_c,
         )
+
+        assert _compute_score_fused_c is not None
+        assert _compute_score_split_c is not None
 
         (
             eigenvalues,
@@ -278,6 +286,9 @@ class TestFusedLrtParity:
             _compute_lrt_split_c,
         )
 
+        assert _compute_lrt_fused_c is not None
+        assert _compute_lrt_split_c is not None
+
         (
             eigenvalues,
             w,
@@ -344,6 +355,8 @@ class TestFusedLrtParity:
         """Constant genotype produces NaN lambda_mle and p_lrt=1.0."""
         from jamma.lmm.compute_numpy import _compute_lrt_fused_c
 
+        assert _compute_lrt_fused_c is not None  # narrowed: skipif gates this
+
         (
             eigenvalues,
             w,
@@ -396,6 +409,9 @@ class TestFusedLrtParity:
             _compute_lrt_fused_c,
             _compute_lrt_split_c,
         )
+
+        assert _compute_lrt_fused_c is not None
+        assert _compute_lrt_split_c is not None
 
         (
             eigenvalues,
@@ -505,6 +521,10 @@ def test_runner_fused_score_dispatch():
         _compute_score_fused_c,
         _compute_score_fused_ws_c,
     )
+
+    assert _C_SCORE_FUSED_WS_AVAILABLE is not None
+    assert _compute_score_fused_c is not None
+    assert _compute_score_fused_ws_c is not None
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
     rng = np.random.default_rng(200)
@@ -609,6 +629,10 @@ def test_runner_fused_lrt_dispatch():
         _compute_lrt_fused_c,
         _compute_lrt_fused_ws_c,
     )
+
+    assert _C_LRT_FUSED_WS_AVAILABLE is not None
+    assert _compute_lrt_fused_c is not None
+    assert _compute_lrt_fused_ws_c is not None
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
     rng = np.random.default_rng(201)

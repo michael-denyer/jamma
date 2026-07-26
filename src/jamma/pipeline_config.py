@@ -29,6 +29,9 @@ from jamma.lmm.schema import (
 )
 from jamma.lmm.stats import AssocResult
 
+BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
+VALID_BACKENDS: tuple[BackendRequest, ...] = ("auto", "numpy", "numpy-streaming")
+
 
 @dataclass
 class PipelineConfig:
@@ -89,8 +92,11 @@ class PipelineConfig:
         legacy_text: If True, write kinship and eigen files in GEMMA text format
             (.cXX.txt / .eigenD.txt / .eigenU.txt) instead of binary .npy.
             Default False writes binary for performance at scale.
-        phenotype_columns: List of 1-based phenotype column indices, or None to
-            derive from phenotype_column. When multiple columns are specified,
+        phenotype_columns: List of 1-based phenotype column indices. Left empty
+            (the default), it is derived from phenotype_column, and
+            phenotype_column is kept in sync with its first element either way,
+            so it is never empty after construction. When multiple columns are
+            specified,
             eigendecomposition is computed once and reused. Mutually exclusive
             with loco mode for multiple columns.
     """
@@ -122,9 +128,9 @@ class PipelineConfig:
     n_refine: int = DEFAULT_N_REFINE
     weight_file: Path | None = None
     cat_columns: list[int] | None = None
-    backend: Literal["auto", "numpy", "numpy-streaming"] = "auto"
+    backend: BackendRequest = "auto"
     legacy_text: bool = False
-    phenotype_columns: list[int] | None = None
+    phenotype_columns: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
@@ -132,10 +138,9 @@ class PipelineConfig:
                 f"output_prefix must not contain path separators, "
                 f"got '{self.output_prefix}'. Use output_dir for directory paths."
             )
-        _valid_backends = ("auto", "numpy", "numpy-streaming")
-        if self.backend not in _valid_backends:
+        if self.backend not in VALID_BACKENDS:
             raise ValueError(
-                f"backend must be one of {_valid_backends}, got {self.backend!r}"
+                f"backend must be one of {VALID_BACKENDS}, got {self.backend!r}"
             )
         # Build the LmmConfig now and discard it: its __post_init__ owns every
         # rule for the knobs this config carries, and the LOCO branch reaches
@@ -143,8 +148,10 @@ class PipelineConfig:
         # an invalid knob fail at config time instead of after kinship and
         # eigendecomposition — or, on the NumPy fallback, not at all.
         self.lmm_config()
-        # Derive phenotype_columns from phenotype_column if not set
-        if self.phenotype_columns is None:
+        # Derive phenotype_columns from phenotype_column if not set. Empty is
+        # the field default, so it means "unspecified" rather than "no columns";
+        # after this the list is non-empty and every reader can rely on that.
+        if not self.phenotype_columns:
             self.phenotype_columns = [self.phenotype_column]
         # Keep phenotype_column in sync as first element
         self.phenotype_column = self.phenotype_columns[0]
@@ -235,7 +242,7 @@ class PipelineResult:
     n_snps_tested: int
     assoc_path: Path
     assoc_paths: list[Path] = field(default_factory=list)
-    timing: PipelineTiming = field(default_factory=dict)
+    timing: PipelineTiming = field(default_factory=PipelineTiming)
     backend: Literal["numpy"] = "numpy"  # Set by PipelineRunner.run()
     n_covariates: int = 1
     pve_estimate: float | None = None

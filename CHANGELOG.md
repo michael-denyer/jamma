@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-07-26
+
 ### Security
 
 - **Every zizmor finding fixed, and the gate tightened to match.** The
@@ -65,9 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replace them, so the writer and the cache reader compose names from one
   place. `_computed_eigen_pairs` drops seven parameters as a result.
 
-- **`save_kinship=True` without `kinship_output_dir` now raises**, matching
-  `write_eigen`/`eigen_dir`. The docstring already called the directory
-  required; nothing enforced it, and the write was silently skipped.
+- **`save_kinship=True` without `kinship_output_dir` now raises** instead of
+  silently writing nothing, matching `write_eigen`/`eigen_dir`.
+
+  Released as a minor rather than a major bump. The behaviour it removes is a
+  silent no-op: `_computed_eigen_pairs` tested `save_kinship and
+  kinship_output_dir is not None` and skipped the write when the pair was
+  half-set, so no caller could have been depending on it for output. The
+  field's own docstring already called the directory required, and
+  `LocoConfig` first shipped one release ago in 7.0.0, so the window in which
+  anyone could have written that call is a single version.
 
 - **`loco.py` split into three modules.** It had reached 1000 lines.
   `LocoConfig` and `DEFAULT_LOCO_CONFIG` move to `jamma.lmm.loco_config`, the
@@ -94,6 +103,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with one caller that passes all of them, and its `col_chunk_size = 5_000`
   was a second copy of `LocoConfig`'s default. Now keyword-only with `config`,
   `col_chunk_size` and `chr_name` required.
+
+### Internal
+
+- **pyrefly baseline down from 269 errors to 171.** Two root causes accounted
+  for 98 of them: `test_telemetry.py` passed partial `BenchmarkRecord` dicts
+  to a TypedDict whose five required keys `append_benchmark_record` never
+  fills in (one error per missing key, hence 56 from 14 call sites), and three
+  `tests/lmm_accel` modules called `Callable[..., Any] | None` C bindings
+  without narrowing, behind runtime `skipif` gates a type checker cannot
+  follow. Test-only; no shipped code changed.
+
+  Note for anyone reading the tooling output: `pyrefly check --baseline`
+  reports `0 errors (28 suppressed)`, and that count is inline suppressions —
+  it appears identically with and without the baseline. Run without
+  `--baseline` to see the real backlog.
 
 ## [7.0.0] - 2026-07-25
 

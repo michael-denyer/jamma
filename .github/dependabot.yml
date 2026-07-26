@@ -1,9 +1,17 @@
 version: 2
+
+# Every ecosystem sets `cooldown`: Dependabot waits this long after a release
+# before proposing it. A compromised version is usually yanked within days of
+# publication, so waiting is the cheap half of supply-chain defence — the
+# other half is the SHA pinning in .github/workflows. Semver-major waits
+# longer because those land least often and hurt most.
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
 
   # Python dependencies in pyproject.toml. Weekly cadence keeps ruff,
   # hatchling, numpy, and test deps current so CVE exposure doesn't
@@ -12,6 +20,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     groups:
       python-minor-patch:
         update-types: ["minor", "patch"]

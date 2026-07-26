@@ -23,9 +23,11 @@ on:
         default: ''
         required: false
 
+# Default for every job. issues: write is granted to flake-summary alone,
+# the only job that files anything, so the matrix job that runs untrusted-ish
+# test code holds a read-only token.
 permissions:
   contents: read
-  issues: write  # to file a triage issue on flake detection
 
 concurrency:
   group: ${{ github.workflow }}
@@ -43,6 +45,8 @@ jobs:
         seed: [11, 41867, 2718281, 31415926, 1234567890]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3  # v8.3.0
@@ -69,6 +73,9 @@ jobs:
     needs: rotate-seeds
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write  # to file a triage issue on flake detection
     steps:
       - name: Open or update flake-triage issue on failure
         if: needs.rotate-seeds.result != 'success'

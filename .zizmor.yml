@@ -1,23 +1,34 @@
 # zizmor (GitHub Actions security audit) configuration.
 #
-# Rule: zizmor runs in pre-commit and CI. The current ruleset is HIGH
-# severity only — that's small enough (3 findings as of the introduction
-# commit) to fix in a follow-up PR while still catching the most
-# dangerous patterns in new workflow files.
+# There are no ignore rules, and that is the point: the pre-commit hook now
+# runs at zizmor's default severity rather than `--min-severity high`, so
+# medium and low findings block a commit too.
 #
-# When the existing high-severity findings are addressed, drop
-# `--min-severity high` from the pre-commit invocation so MEDIUM and
-# LOW findings are caught on every PR. Per CLAUDE.md "CI/CD Hardening",
-# defence-in-depth on workflow security is a stated goal.
+# Getting here meant fixing rather than ignoring:
+#
+#   * artipacked (16x medium) — every actions/checkout now sets
+#     `persist-credentials: false`. No workflow pushes back to the repo, so
+#     none of them needed the token left on disk.
+#   * excessive-permissions (2x high) — `issues: write` moved from the
+#     workflow level to the single job that files a triage issue, in
+#     flaky-detect.yml and sanitizers.yml. link-check-external.yml got the
+#     same treatment for consistency; zizmor never flagged that one because
+#     it has a single job, so workflow-level and job-level grants coincide.
+#   * cache-poisoning (1x high) — build-wheels.yml's sdist job sets
+#     `enable-cache: false` on setup-uv, matching publish.yml. It builds an
+#     artifact that gets published, and cache contents are user-controlled
+#     across runs.
+#
+# That last one was on a clock. The hook pins zizmor v1.24.1, which does not
+# report it; v1.25.x does, so the next dependabot rev bump would have failed
+# the gate with no ignore covering it.
+#
+# If a finding ever has to be ignored, add it here with the reason and the
+# narrow fix, rather than raising `--min-severity` again. Per CLAUDE.md
+# "CI/CD Hardening", defence-in-depth on workflow security is a stated goal.
+#
+# The pedantic persona (`zizmor --persona=pedantic`) still reports
+# informational findings such as unnamed jobs. Those are deliberately not
+# gated; run it by hand when tidying workflows.
 
-rules:
-  excessive-permissions:
-    # Workflow-level `issues: write` granted in flaky-detect.yml,
-    # link-check-external.yml, and sanitizers.yml. The narrow fix is to
-    # move the permission to the specific job that opens the triage
-    # issue. Tracked as a follow-up — not blocking the introduction of
-    # the zizmor hook itself.
-    ignore:
-      - flaky-detect.yml
-      - link-check-external.yml
-      - sanitizers.yml
+rules: {}

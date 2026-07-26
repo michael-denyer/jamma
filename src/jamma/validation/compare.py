@@ -203,11 +203,9 @@ def load_gemma_kinship(path: Path) -> np.ndarray:
     return np.loadtxt(path)
 
 
-# GEMMA .assoc.txt column headers are identical to AssocResult field names,
-# so parsing is a generic header->field map keyed by column name rather than a
-# per-format positional unpack. Only the field *type* varies by column.
-_ASSOC_INT_FIELDS = frozenset({"ps", "n_miss"})
-_ASSOC_STR_FIELDS = frozenset({"chr", "rs", "allele1", "allele0"})
+# GEMMA .assoc.txt column headers are identical to AssocResult field names, so
+# parsing is a header->field map keyed by column name rather than a per-format
+# positional unpack. Which columns are present varies by layout, not their order.
 
 
 def _assoc_header_layouts() -> frozenset[tuple[str, ...]]:
@@ -238,13 +236,10 @@ def _assoc_header_layouts() -> frozenset[tuple[str, ...]]:
 _ASSOC_HEADER_LAYOUTS = _assoc_header_layouts()
 
 
-def _parse_assoc_field(name: str, raw: str) -> str | int | float:
-    """Cast one .assoc.txt cell to the type of its AssocResult field."""
-    if name in _ASSOC_STR_FIELDS:
-        return raw
-    if name in _ASSOC_INT_FIELDS:
-        return int(raw)
-    return float(raw)
+def _opt_float(row: dict[str, str], name: str) -> float | None:
+    """Cast an optional .assoc.txt cell, or None when its layout omits the column."""
+    raw = row.get(name)
+    return None if raw is None else float(raw)
 
 
 def load_gemma_assoc(path: Path) -> list[AssocResult]:
@@ -289,14 +284,27 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
 
         for line in f:
             fields = line.strip().split("\t")
-            row = {
-                name: _parse_assoc_field(name, val)
-                for name, val in zip(cols, fields, strict=True)
-            }
-            # GEMMA LRT formats omit beta/se; AssocResult requires them.
-            row.setdefault("beta", float("nan"))
-            row.setdefault("se", float("nan"))
-            results.append(AssocResult(**row))
+            row = dict(zip(cols, fields, strict=True))
+            results.append(
+                AssocResult(
+                    chr=row["chr"],
+                    rs=row["rs"],
+                    ps=int(row["ps"]),
+                    n_miss=int(row["n_miss"]),
+                    allele1=row["allele1"],
+                    allele0=row["allele0"],
+                    af=float(row["af"]),
+                    # GEMMA LRT formats omit beta/se; AssocResult requires them.
+                    beta=float(row.get("beta", "nan")),
+                    se=float(row.get("se", "nan")),
+                    logl_H1=_opt_float(row, "logl_H1"),
+                    l_remle=_opt_float(row, "l_remle"),
+                    p_wald=_opt_float(row, "p_wald"),
+                    p_score=_opt_float(row, "p_score"),
+                    l_mle=_opt_float(row, "l_mle"),
+                    p_lrt=_opt_float(row, "p_lrt"),
+                )
+            )
     return results
 
 
@@ -541,10 +549,15 @@ def compare_assoc_results(
             actual_arr, expected_arr, mask, config.lambda_rtol, config.atol, field
         )
 
+    no_id_mismatch = len(mismatched) == 0
+
     p_score_result: ComparisonResult | None = None
     p_lrt_result: ComparisonResult | None = None
     l_mle_result: ComparisonResult | None = None
 
+    # Each branch computes the columns active for its test type and the overall
+    # pass from exactly those columns. The two must agree on which columns exist,
+    # so they share one dispatch rather than repeating the test-type conditions.
     if is_all_tests:
         pwald_result = _pvalue("p_wald", config.pvalue_rtol)
         p_score_result = _pvalue("p_score", config.pvalue_rtol)
@@ -552,27 +565,6 @@ def compare_assoc_results(
         logl_result = _logl("logl_H1 skipped (not in GEMMA -lmm 4 format)")
         lambda_result = _lambda("l_remle", check_upper=False)
         l_mle_result = _lambda("l_mle", check_upper=True)
-    elif is_score_test:
-        p_score_result = _pvalue("p_score", config.pvalue_rtol)
-        pwald_result = _skipped_result("p_wald skipped (Score test)")
-        logl_result = _skipped_result("logl_H1 skipped (Score test)")
-        lambda_result = _skipped_result("l_remle skipped (Score test)")
-    elif is_lrt_test:
-        p_lrt_result = _pvalue("p_lrt", config.p_lrt_rtol)
-        l_mle_result = _lambda("l_mle", check_upper=True)
-        pwald_result = _skipped_result("p_wald skipped (LRT)")
-        logl_result = _skipped_result("logl_H1 skipped (LRT)")
-        lambda_result = _skipped_result("l_remle skipped (LRT)")
-    else:  # Wald
-        pwald_result = _pvalue("p_wald", config.pvalue_rtol)
-        logl_result = _logl("logl_H1 skipped (reference missing logl_H1 column)")
-        lambda_result = _lambda("l_remle", check_upper=False)
-
-    # Overall pass: every column active for the test type must pass and SNP IDs
-    # must line up. LRT has NaN beta/se by construction, so it verifies both
-    # sides are all-NaN rather than checking the (meaningless) compare result.
-    no_id_mismatch = len(mismatched) == 0
-    if is_all_tests:
         all_passed = (
             beta_result.passed
             and se_result.passed
@@ -585,9 +577,30 @@ def compare_assoc_results(
             and l_mle_result.passed
             and no_id_mismatch
         )
+    elif is_score_test:
+        p_score_result = _pvalue("p_score", config.pvalue_rtol)
+        pwald_result = _skipped_result("p_wald skipped (Score test)")
+        logl_result = _skipped_result("logl_H1 skipped (Score test)")
+        lambda_result = _skipped_result("l_remle skipped (Score test)")
+        all_passed = (
+            beta_result.passed
+            and se_result.passed
+            and af_result.passed
+            and p_score_result.passed
+            and no_id_mismatch
+        )
     elif is_lrt_test:
-        beta_all_nan = np.all(np.isnan(actual_beta)) and np.all(np.isnan(expected_beta))
-        se_all_nan = np.all(np.isnan(actual_se)) and np.all(np.isnan(expected_se))
+        p_lrt_result = _pvalue("p_lrt", config.p_lrt_rtol)
+        l_mle_result = _lambda("l_mle", check_upper=True)
+        pwald_result = _skipped_result("p_wald skipped (LRT)")
+        logl_result = _skipped_result("logl_H1 skipped (LRT)")
+        lambda_result = _skipped_result("l_remle skipped (LRT)")
+        # LRT has NaN beta/se by construction, so check both sides are all-NaN
+        # rather than the (meaningless) compare result.
+        beta_all_nan = bool(
+            np.all(np.isnan(actual_beta)) and np.all(np.isnan(expected_beta))
+        )
+        se_all_nan = bool(np.all(np.isnan(actual_se)) and np.all(np.isnan(expected_se)))
         all_passed = (
             af_result.passed
             and beta_all_nan
@@ -596,15 +609,10 @@ def compare_assoc_results(
             and l_mle_result.passed
             and no_id_mismatch
         )
-    elif is_score_test:
-        all_passed = (
-            beta_result.passed
-            and se_result.passed
-            and af_result.passed
-            and p_score_result.passed
-            and no_id_mismatch
-        )
     else:  # Wald
+        pwald_result = _pvalue("p_wald", config.pvalue_rtol)
+        logl_result = _logl("logl_H1 skipped (reference missing logl_H1 column)")
+        lambda_result = _lambda("l_remle", check_upper=False)
         all_passed = (
             beta_result.passed
             and se_result.passed

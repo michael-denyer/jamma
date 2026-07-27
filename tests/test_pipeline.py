@@ -909,7 +909,7 @@ def test_pipeline_loco_numpy(tmp_path: Path) -> None:
 def test_pipeline_config_backend_validation() -> None:
     """PipelineConfig raises ValueError for invalid backend value."""
     with pytest.raises(ValueError, match="backend must be"):
-        PipelineConfig(bfile=Path("dummy"), backend="invalid")
+        PipelineConfig(bfile=Path("dummy"), backend="invalid")  # type: ignore[bad-argument-type]
 
 
 @pytest.mark.tier1

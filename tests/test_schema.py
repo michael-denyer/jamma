@@ -213,7 +213,7 @@ class TestDerivedTables:
         from jamma.lmm.schema import StatColumn
 
         with pytest.raises(ValueError, match="fmt must be a non-empty"):
-            StatColumn("x", "x", "x", fmt=123)
+            StatColumn("x", "x", "x", fmt=123)  # type: ignore[bad-argument-type]
 
     def test_mode_specs_is_immutable(self) -> None:
         with pytest.raises(TypeError):

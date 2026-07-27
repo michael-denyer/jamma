@@ -603,35 +603,35 @@ class TestDgemmValidation:
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(ValueError, match="transa"):
-            dgemm(A, B, transa="X")
+            dgemm(A, B, transa="X")  # type: ignore[bad-argument-type]
 
     def test_invalid_transb_value(self) -> None:
         """Invalid transb flag ('Z') raises ValueError."""
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(ValueError, match="transb"):
-            dgemm(A, B, transb="Z")
+            dgemm(A, B, transb="Z")  # type: ignore[bad-argument-type]
 
     def test_empty_string_transa(self) -> None:
         """Empty string transa raises ValueError."""
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises((ValueError, IndexError)):
-            dgemm(A, B, transa="")
+            dgemm(A, B, transa="")  # type: ignore[bad-argument-type]
 
     def test_multichar_transa_rejected(self) -> None:
         """Multi-character transa like 'transpose' must be rejected."""
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(ValueError, match="transa"):
-            dgemm(A, B, transa="transpose")
+            dgemm(A, B, transa="transpose")  # type: ignore[bad-argument-type]
 
     def test_multichar_transb_rejected(self) -> None:
         """Multi-character transb like 'TT' must be rejected."""
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(ValueError, match="transb"):
-            dgemm(A, B, transb="TT")
+            dgemm(A, B, transb="TT")  # type: ignore[bad-argument-type]
 
     def test_output_contiguity_and_dtype(self) -> None:
         """Output is C-contiguous float64."""
@@ -803,7 +803,7 @@ class TestDgemmFallback:
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(TypeError, match="transa must be a string"):
-            fb(A, B, transa=0)
+            fb(A, B, transa=0)  # type: ignore[bad-argument-type]
 
     def test_fallback_non_string_transb(self) -> None:
         """Fallback raises TypeError on non-string transb."""
@@ -811,7 +811,7 @@ class TestDgemmFallback:
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(TypeError, match="transb must be a string"):
-            fb(A, B, transb=True)
+            fb(A, B, transb=True)  # type: ignore[bad-argument-type]
 
     def test_fallback_out_parameter(self) -> None:
         """Fallback dgemm(A, B, out=C) writes into C and returns C."""
@@ -961,4 +961,4 @@ class TestDgemmOutParameter:
         B = np.eye(5, dtype=np.float64)
         out_f32 = np.empty((5, 5), dtype=np.float32)
         with pytest.raises((ValueError, TypeError)):
-            dgemm(A, B, out=out_f32)
+            dgemm(A, B, out=out_f32)  # type: ignore[bad-argument-type]

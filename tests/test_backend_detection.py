@@ -170,12 +170,12 @@ class TestExecutionMode:
     def test_invalid_requested_backend_raises(self):
         """Unknown requested backend raises ValueError."""
         with pytest.raises(ValueError, match="Unknown backend"):
-            select_execution_mode(100, 1000, requested="gpu")
+            select_execution_mode(100, 1000, requested="gpu")  # type: ignore[bad-argument-type]
 
     def test_jax_requested_raises(self):
         """Requesting 'jax' backend raises ValueError (removed backend)."""
         with pytest.raises(ValueError, match="Unknown backend"):
-            select_execution_mode(100, 1000, requested="jax")
+            select_execution_mode(100, 1000, requested="jax")  # type: ignore[bad-argument-type]
 
     # -- ExecutionPlan invariants --
 

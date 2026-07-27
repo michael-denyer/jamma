@@ -87,16 +87,32 @@ repos:
   #
   # Consistency: lychee.toml is the single source of truth for which paths
   # are excluded and which rule set applies. Pre-commit only adds the
-  # --offline flag on top of that shared config. The `rev:` below is also
-  # the binary version both workflows pin via `lycheeVersion:` — bump all
-  # three together, or the modes drift and a broken link passes one check
-  # while failing another.
+  # --offline flag on top of that shared config. The version below is also
+  # what both workflows pin via `lycheeVersion:` — bump all three together,
+  # or the modes drift and a broken link passes one check while failing
+  # another.
+  #
+  # LYCHEE_VERSION must be passed explicitly and must stay equal to `rev`.
+  # From 0.24.0 the hook script derives the version by running
+  # `git describe --exact-match --match 'lychee-*v*'`, assuming it is inside
+  # its own cached checkout. Under `git commit` that assumption is false:
+  # git exports GIT_DIR, so `git rev-parse --show-toplevel` resolves to THIS
+  # repo, `git describe` finds no lychee-* tag, and the hook exits 100 on any
+  # commit that touches a .md file. LYCHEE_VERSION= as the first arg is
+  # upstream's documented bypass and short-circuits that lookup entirely.
+  # (`prek run` does not reproduce the failure — no GIT_DIR is set — so this
+  # has to be checked with a real commit that stages a markdown file.)
   - repo: https://github.com/lycheeverse/lychee
     rev: lychee-v0.24.2
     hooks:
       - id: lychee
         name: lychee (offline link check)
-        args: [--offline, --no-progress, --config, lychee.toml]
+        args:
+          - LYCHEE_VERSION=0.24.2
+          - --offline
+          - --no-progress
+          - --config
+          - lychee.toml
         files: \.md$
   # Markdown formatting linter. Same shared-config consistency rule as
   # lychee: .markdownlint-cli2.jsonc is the single source of truth for

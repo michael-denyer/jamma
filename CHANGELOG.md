@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`IncrementalAssocWriter.write()` could raise `UnboundLocalError` instead of
+  `OSError`.** `_write_buf` read its rollback position with `self._file.tell()`
+  *inside* the try-block that protects the write. If `tell()` was what failed,
+  `pos` was never bound, so the `except OSError` handler raised
+  `UnboundLocalError` — which is not an `OSError`, so it bypassed the retry, the
+  seek/truncate rollback, and the partial-file cleanup, and escaped the
+  documented `Raises: OSError` contract with a misleading message. `tell()` now
+  runs once before the loop. Reproduced with an `ESPIPE` from `tell()` and
+  covered by `test_write_buf_tell_failure_surfaces_as_oserror`.
+
+### Changed
+
+- **`write_loco_kinship_matrices` accepts any iterable** of
+  `(chromosome, kinship)` pairs, not only an `Iterator`. It walks the argument
+  once and never calls `next()`, so a list or tuple was always valid at runtime
+  and is now valid to the type checker too.
+- **`get_hardware_context()` returns a `HardwareContext` TypedDict** rather than
+  `dict[str, str | int | bool]`. Same eight keys, same runtime values — callers
+  now get the per-key types the docstring already promised, so
+  `ctx["cpu_count_physical"]` is an `int` instead of a union.
+- **The `dgemm` type stub no longer claims float64-only operands.** Both the C
+  binding and the NumPy fallback coerce `A` and `B` to float64, which
+  `test_float32_coercion` has always asserted; the stub said otherwise. `out=`
+  is unchanged — a non-float64 buffer is still rejected.
+
+### Internal
+
+- **Zero pyrefly errors, and the baseline is gone.** The committed
+  `pyrefly-baseline.json` snapshotted 174 pre-existing errors so the gate could
+  block new ones; it is now empty and has been deleted, along with the
+  `--baseline` flag in the pre-commit hook and the CI lint job. The gate is
+  absolute: any pyrefly error fails. A new one must be fixed, or given a narrow
+  inline `# type: ignore[code]` at the offending line — visible in review in a
+  way a baseline JSON diff is not.
+
+  Grouping by root cause rather than by file is what made this tractable: 63
+  entries across 24 files collapsed into nine causes, and one file's 23 entries
+  turned out to be a single optional attribute. Along the way this removed a
+  dead 28-line `@st.composite` strategy in `tests/test_hypothesis.py` that was
+  defined once and referenced nowhere (vulture only scans `src/` and
+  `scripts/`), and replaced `spec_from_file_location` in
+  `tests/test_fixture_manifest.py` with the plain `sys.path` import the rest of
+  the suite uses.
+
+- **All three lychee entry points now pin the same binary version.** The
+  pre-commit hook pinned `lychee-v0.23.0` while both workflows pinned only the
+  `lycheeverse/lychee-action` SHA and inherited the action's own
+  `lycheeVersion` default (`v0.24.2`), which is free to move in any future
+  action release. Pinning the action does not pin the binary. All three are now
+  explicitly on v0.24.2 — the version CI already resolved to, so CI behaviour
+  is unchanged.
+
+  The hook also needs `LYCHEE_VERSION=0.24.2` passed as its first argument.
+  From 0.24.0 the hook script derives its version with
+  `git describe --exact-match --match 'lychee-*v*'`, assuming it runs inside
+  its own cached checkout — but `git commit` exports `GIT_DIR`, so the lookup
+  lands in this repo instead, finds no `lychee-*` tag, and exits 100 on any
+  commit that stages a markdown file. `prek run` sets no `GIT_DIR` and so does
+  not reproduce it.
+
 ## [7.1.0] - 2026-07-26
 
 ### Security

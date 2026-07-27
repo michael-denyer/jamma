@@ -13,7 +13,7 @@ uv sync
 prek install
 ```
 
-`uv sync` installs all runtime and dev dependencies (including scipy, which is dev-only). `prek install` sets up pre-commit hooks for ruff lint, ruff format, clang-format, cppcheck, and a pre-push ruff format check across all files.
+`uv sync` installs all runtime and dev dependencies (including scipy, which is dev-only). `prek install` sets up the hooks listed in `.pre-commit-config.yaml`: ruff lint and format, pyrefly, clang-format, cppcheck, markdownlint, `maid` (mermaid syntax), lychee, typos, actionlint, zizmor, shellcheck, vulture, refurb, and the JAMMA-specific gates. Two more run at pre-push, because prek only inspects staged files and would miss them. Those are a repo-wide `ruff format --check` and the C-extension freshness check.
 
 ### Compile C Extensions
 
@@ -44,6 +44,7 @@ uv run python -c "from jamma.jlinalg._compile_jlinalg import compile_extension; 
 | `uv run pytest tests/ -x -k lmm` | Run only tests matching `lmm` |
 | `uv run ruff check .` | Lint all Python source |
 | `uv run ruff format .` | Format all Python source |
+| `uv run pyrefly check` | Static type check (gate is zero errors) |
 | `prek run --all-files` | Run all pre-commit hooks across all files |
 | `uv build` | Build sdist and wheel |
 | `uv run python -m jamma.lmm._compile_accel` | Compile the LMM C extension |
@@ -74,10 +75,13 @@ Pre-commit hooks run ruff on staged files automatically. A pre-push hook runs `r
 ```bash
 uv run ruff check .        # Lint (shows violations)
 uv run ruff format .       # Format in place
-prek run --all-files       # All hooks: yaml, merge-conflict, ruff, clang-format, cppcheck
+uv run pyrefly check       # Static types (must be zero errors)
+prek run --all-files       # Every hook, over every file
 ```
 
-**C code style:** clang-format (v19.1.7) is enforced by prek on all `.c` files under `src/jamma/jlinalg/src/`. cppcheck static analysis also runs on these files.
+**Type checking:** [pyrefly](https://pyrefly.org) is pinned exactly in `pyproject.toml`, because the gate is "zero errors" and a minor bump that adds a check turns green into red with no code change. It type-checks `src`, `tests`, and `scripts` against Python 3.11, the floor of `requires-python`, so 3.12-only syntax is caught. There is no baseline file. Group work by root cause rather than by file, since one loose declaration scatters errors across every caller.
+
+**C code style:** prek runs clang-format (v19.1.7) over `.c` files under `src/jamma/jlinalg/src/`, and cppcheck over both C trees, `src/jamma/jlinalg/src/` and `src/jamma/lmm/`.
 
 **Conventions:**
 
@@ -122,11 +126,22 @@ refactor: extract _yield_loco_matrices helper
    - **Test plan**: How to verify the changes
 
 4. CI runs the following checks automatically (`.github/workflows/ci.yml`):
-   - **lint** job: `prek run --all-files` on Python 3.12 (Ubuntu)
+   - **lint** job: `uv lock --check`, `ruff check --no-fix`, `ruff format --check`, `uv run pyrefly check`, then `prek run --all-files` on Python 3.12 (Ubuntu)
    - **test** job: pytest on Linux (3.11, 3.12), ARM macOS (3.12), and Linux with MKL ILP64 numpy
-   - **coverage** job: slipcover with `--fail-under 80` (single-threaded, tier0/tier1 only)
+   - **package-smoke** job: builds the sdist and wheel, asserts both ship `_build_support/`, then installs the wheel in a clean venv and imports it
+   - **coverage** job: slipcover with `--fail-under 80` (single-threaded, tier0/tier1 only), plus per-subsystem floors from `scripts/check_subsystem_coverage.py`
+   - **link-check** job: lychee in `--offline` mode over every `.md`
 
-5. Slow tests (tier2) run separately on push to master via `.github/workflows/test-slow.yml`.
+5. Other workflows gate a PR without ever running locally:
+
+   | Workflow | What it catches |
+   |----------|-----------------|
+   | `test-slow.yml` | `tier2 or slow`, which the default `addopts` filter skips (push to master) |
+   | `fingerprint.yml` | Bit-level drift in the C accelerator, on any PR touching `_lmm_*.c`, `_lmm_*.h`, or `_build_support/` |
+   | `sanitizers.yml` | ASAN and UBSAN over the C extensions, weekly |
+   | `flaky-detect.yml` | Repeated runs under five seeds, to surface flaky tests |
+   | `codeql.yml`, `security.yml` | Static analysis and dependency scanning |
+   | `link-check-external.yml` | Online link check, weekly; opens an issue instead of blocking merge |
 
 ## Benchmarks
 

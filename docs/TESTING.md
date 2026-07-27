@@ -162,7 +162,10 @@ computation.
 | `ci.yml` → `lint` | push/PR | `prek run --all-files` |
 | `ci.yml` → `test` (Linux 3.11/3.12, ARM Mac 3.12, Linux MKL ILP64) | push/PR | `pytest -m "not tier2 and not slow and not benchmark" -v -n 3` |
 | `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` plus per-subsystem floors via `scripts/check_subsystem_coverage.py` (lmm 80%, jlinalg 18%, kinship 50%, io 80%) |
+| `ci.yml` → `package-smoke` | push/PR | `uv build`, then assert sdist and wheel both ship `_build_support/` and the wheel imports in a clean venv |
+| `ci.yml` → `link-check` | push/PR | lychee `--offline` over every `.md`, sharing `lychee.toml` with the pre-commit hook |
 | `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
+| `fingerprint.yml` | PR touching `_lmm_*.c`, `_lmm_*.h`, `_build_support/`, or the fingerprint scripts | Builds both sides of the merge base and diffs per-entry-point result digests. Tolerance-based tests do not catch last-bit drift |
 | `sanitizers.yml` | Wednesday cron + dispatch | `pytest -m "not benchmark and not slow" -n 0 -p no:randomly` (under ASAN/UBSAN) |
 | `flaky-detect.yml` | Sunday 06:00 UTC + dispatch | `pytest` under five distinct `--randomly-seed` values, opens an issue on disagreement |
 
@@ -295,9 +298,9 @@ catch. The carve-out is:
 
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
-| `_mm256_zeroupper()` / `vzeroupper` present in AVX2 kernel source ([`tests/test_jlinalg_dgemm.py:568`](../tests/test_jlinalg_dgemm.py#L568)) | Missing this corrupts SSE registers in *callers'* code, not in our test |
-| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` ([`tests/test_safety_gates.py:311`](../tests/test_safety_gates.py#L311)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
+| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` ([`tests/test_safety_gates.py:275`](../tests/test_safety_gates.py#L275)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
 | Compile-flag literals not in three forbidden entry points ([`scripts/check-compile-flag-literals.py`](../scripts/check-compile-flag-literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
+| `_lmm_accel.c` reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 
 **Rules for adding a new structural source test:**
 
@@ -306,6 +309,10 @@ catch. The carve-out is:
    ABI-relevant directive).
 2. Include a comment explaining *why* a behavior test cannot replace it.
 3. Mark `tier0` so it runs everywhere — these are guardrails, not parity.
+4. Assert on something that exists. A structural test whose target file is
+   deleted degrades to a permanent skip and reads as coverage it is not
+   providing. `test_avx2_vzeroupper_source` sat that way from `663a22b`
+   until it was removed.
 
 If the rule is "X function should call Y", that is a behavior test, not
 a structural test. Test the behavior.
@@ -341,7 +348,7 @@ non-zero rather than passing vacuously.
 
 ### 2.6 When `pytest.skip` is acceptable
 
-The suite has ~180 skip/xfail calls. Three categories — only the first
+The suite has ~220 skip/xfail calls. Three categories — only the first
 two are acceptable:
 
 1. **Hardware/library availability** — vendor LAPACK absent, ILP64 not
@@ -437,18 +444,20 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 | Subsystem | Test files | What's covered |
 |---|---|---|
-| **LMM core** | `lmm_accel/` (11 per-kernel-family modules), `test_lmm_unit.py`, `test_lmm_score.py`, `test_lmm_dispatch.py`, `test_lmm_audit.py`, `test_lmm_io_validation.py`, `test_likelihood_numpy.py`, `test_likelihood_derivatives.py` | C accelerator parity vs NumPy reference; Pab/Uab math; Wald/score/LRT statistics; dispatch routing; numerical guards; assoc-line/dispatch-table validation; REML 2nd/3rd derivatives |
-| **LMM runners** | `test_runner_numpy.py`, `test_runner_dispatch.py`, `test_numpy_streaming.py`, `test_compute_numpy.py`, `test_pipeline.py`, `test_pipeline_helpers.py`, `test_pipeline_banner.py` | Batch + streaming runners; shared chunk runner; backend selection; pipeline orchestration; CLI banner |
+| **LMM core** | `lmm_accel/` (11 per-kernel-family modules), `test_lmm_unit.py`, `test_lmm_score.py`, `test_lmm_dispatch.py`, `test_lmm_compute_dispatch.py`, `test_lmm_audit.py`, `test_lmm_io_validation.py`, `test_likelihood_numpy.py`, `test_likelihood_derivatives.py` | C accelerator parity vs NumPy reference; Pab/Uab math; Wald/score/LRT statistics; dispatch routing; numerical guards; assoc-line/dispatch-table validation; REML 2nd/3rd derivatives |
+| **LMM runners** | `test_runner_numpy.py`, `test_runner_dispatch.py`, `test_numpy_streaming.py`, `test_compute_numpy.py`, `test_chunk_runner_guards.py`, `test_pipeline.py`, `test_pipeline_helpers.py`, `test_pipeline_banner.py`, `test_pipeline_validation_order.py` | Batch + streaming runners; shared chunk runner and its guards; backend selection; pipeline orchestration and validation ordering; CLI banner |
 | **Kinship** | `test_kinship_numpy.py`, `test_kinship_io.py`, `test_kinship_validation.py` | DSYRK-based kinship computation; .cXX.txt I/O; GEMMA parity |
 | **jlinalg (BLAS dispatch)** | `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py`, `test_jlinalg_lapack.py`, `test_jlinalg_level1.py`, `test_jlinalg_dispatch.py`, `test_jlinalg_unity.py`, `test_jlinalg_build.py`, `test_eigh_inplace.py` | DGEMM/DSYRK/eigh wrappers; LP64 vs ILP64 dispatch; AVX2 microkernel guards; build artefact sanity |
 | **LOCO** | `test_loco_numpy.py`, `test_loco_eigen_cache.py`, `test_loco_orchestration.py` | Leave-one-chromosome-out orchestration; per-chromosome eigen cache |
-| **I/O** | `test_io.py`, `test_io_error_paths.py`, `test_eigen_io.py`, `test_matrix_reader.py`, `test_matrix_writer.py`, `test_incremental_writer.py`, `test_kinship_io.py`, `test_snp_list.py`, `test_plink_validation.py` | PLINK reader; eigenvector cache I/O; incremental .assoc.txt writer; SNP filters |
+| **I/O** | `test_io.py`, `test_io_error_paths.py`, `test_error_paths.py`, `test_eigen_io.py`, `test_matrix_reader.py`, `test_matrix_writer.py`, `test_incremental_writer.py`, `test_kinship_io.py`, `test_snp_list.py`, `test_plink_validation.py` | PLINK reader; eigenvector cache I/O; incremental .assoc.txt writer; SNP filters; error and rollback paths |
 | **Memory & gates** | `test_memory.py`, `test_memory_gates.py`, `test_memory_chunk_coupling.py`, `test_eigendecomp_memory.py`, `test_safety_gates.py`, `test_auto_tune_chunk.py`, `test_rss_logging.py` | Memory estimation; OOM gates; chunk-size auto-tuning; RSS telemetry |
 | **CLI / API** | `test_cli.py`, `test_cli_memory.py`, `test_gwas_api.py` | Click entry point; `-lmm` flag handling; programmatic GWAS API |
-| **Backend / hardware** | `test_backend_detection.py`, `test_hardware_context.py`, `test_threading.py`, `test_jlinalg_dispatch.py` | Backend autodetection; physical core count; threading limits |
-| **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_core_recompile.py` | Compile-flag invariants; OpenMP detection; wheel packaging; runtime recompile |
-| **Validation / parity** | `test_validation.py`, `test_validation_assoc.py`, `test_validate_runner_inputs.py`, `test_kinship_validation.py` | GEMMA parity machinery; tolerance config; assoc file diff |
-| **Numerics / utilities** | `test_special.py`, `test_schema.py`, `test_snp_filter.py`, `test_snp_filter_perf.py`, `test_snp_stats.py`, `test_categorical.py`, `test_missingness.py`, `test_weights.py`, `test_prepare_common.py`, `test_telemetry.py`, `test_progress.py`, `test_hypothesis.py` | Cephes betainc / chi2_sf; data-class schemas; SNP filtering; phenotype prep; progress bars |
+| **Backend / hardware** | `test_backend_detection.py`, `test_hardware_context.py`, `test_threading.py`, `test_jlinalg_dispatch.py`, `test_force_numpy_fallback.py` | Backend autodetection; physical core count; threading limits; the `JAMMA_FORCE_NUMPY_FALLBACK` escape hatch |
+| **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_build_support_sanitizer_override.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_c_include_order.py`, `test_c_lint_coverage.py`, `test_core_recompile.py` | Compile-flag invariants; OpenMP detection; wheel packaging; sanitizer flag injection; `NO_IMPORT_ARRAY` include order; cppcheck coverage; runtime recompile |
+| **Fingerprint / sanitizer harness** | `test_fingerprint_harness.py`, `test_compare_fingerprints.py`, `test_lmm_accel_sections.py`, `test_sanitizer_sentinel.py`, `test_compile_accel_sentinel_injection.py`, `test_sanitizer_workflow_yaml.py`, `test_asan_suppressions.py` | The machinery behind `fingerprint.yml` and `sanitizers.yml`. These test the gates themselves, so a broken harness cannot go green by doing nothing |
+| **Validation / parity** | `test_validation.py`, `test_validation_assoc.py`, `test_validate_runner_inputs.py`, `test_kinship_validation.py`, `test_demonstrate_equivalence.py` | GEMMA parity machinery; tolerance config; assoc file diff; the equivalence demonstration script |
+| **Suite meta** | `test_conftest_tier_gate.py`, `test_fixture_manifest.py`, `tests/fakes/test_fakes.py` | The mandatory-tier-marker gate (§1.6), the fixture manifest (§3.5), and the fakes' own contract tests |
+| **Numerics / utilities** | `test_special.py`, `test_schema.py`, `test_snp_filter.py`, `test_snp_filter_perf.py`, `test_snp_stats.py`, `test_core_snp_stats.py`, `test_categorical.py`, `test_missingness.py`, `test_weights.py`, `test_prepare_common.py`, `test_telemetry.py`, `test_progress.py`, `test_hypothesis.py` | Cephes betainc / chi2_sf; data-class schemas; SNP filtering and statistics; phenotype prep; progress bars |
 
 ### 3.2 Tests to improve
 
@@ -460,7 +469,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 | Files | Action |
 |---|---|
-| `test_jlinalg_lapack.py` lines [47](../tests/test_jlinalg_lapack.py#L47), [66](../tests/test_jlinalg_lapack.py#L66), [146](../tests/test_jlinalg_lapack.py#L146) | Duplicate large QR/SVD reconstruction-and-orthogonality checks (5000×200 each, all `slow`). Fold into one parametrised tier2 case per decomposition |
+| ~~`test_jlinalg_lapack.py` duplicate 5000×200 decompositions~~ | Done. QR's reconstruction and orthogonality checks are one `slow` case, [`test_large_5000x200_reconstruction_and_orthogonality`](../tests/test_jlinalg_lapack.py#L60), and SVD keeps a single [`test_reconstruction_accuracy_large`](../tests/test_jlinalg_lapack.py#L152). One decomposition per shape instead of two |
 | ~~`test_audit_fixes.py`~~ → `test_lmm_audit.py` | Renamed via `git mv` (history preserved). Content unchanged — still an LMM-numerical-guard suite, but the name no longer reads as a one-shot scratch bin |
 | ~~`test_review_fixes.py`~~ → `test_lmm_io_validation.py` | Renamed. Heterogeneous (assoc format, build_results, erfc parity, degenerate-SNP NaN); bound together by being I/O- and dispatch-validation-shaped |
 | ~~`test_loco_bugs.py`~~ → `test_loco_orchestration.py` | Renamed |
@@ -468,11 +477,13 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 ### 3.4 Suite-wide stats (snapshot)
 
-- 85 test files, ~39k lines.
+Counted at v7.2.0.
+
+- 106 test files, ~44k lines.
 - Largest: `test_likelihood_numpy.py` (~2,100 lines). `test_lmm_accel.py` was
   split into `tests/lmm_accel/`, eleven modules by kernel family, in 6.0.0.
-- ~178 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
-- 8 files use `@patch`/`MagicMock` (~31 occurrences). Most are at allowed boundaries; the violations called out in §3.2 are the exceptions.
+- ~220 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
+- 11 files use `@patch`/`MagicMock` (~25 occurrences). Four of them are the `tests/fakes/` package itself. The rest sit at the boundaries catalogued in §2.2.
 - `inspect.getsource()`: zero uses. The ban holds.
 
 ### 3.5 Fixture manifest

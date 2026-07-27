@@ -16,7 +16,7 @@
 
 - **Drop-in GEMMA replacement**: Same CLI flags, same file formats, same results. Change one word in your pipeline.
 - **Numerical equivalence**: Validated against GEMMA -- 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 41x faster than GEMMA 0.98.5 (LOCO mode); 16-32x on single-pass LMM. Against a GEMMA built with Apple Accelerate rather than OpenBLAS, roughly 25x and 9.8-13.6x
+- **Fast**: Up to 43x faster than GEMMA 0.98.5 (LOCO mode); 16-31x on single-pass LMM. Against a GEMMA built with Apple Accelerate rather than OpenBLAS, roughly 25x and 9.7-15.2x
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows with NumPy and vendor BLAS
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
@@ -55,7 +55,7 @@ pip install numpy \
 pip install git+https://github.com/michael-denyer/jamma.git --no-deps
 ```
 
-> **Why `--no-deps`?** JAMMA depends on `numpy>=2.0.0`, so a normal `pip install jamma` will pull in standard numpy and overwrite the ILP64 build. `--no-deps` prevents this; you install the runtime dependencies manually instead.
+> **Why `--no-deps`?** JAMMA depends on `numpy>=2.4.6`, so a normal `pip install jamma` will pull in standard numpy and overwrite the ILP64 build. `--no-deps` prevents this; you install the runtime dependencies manually instead.
 
 See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification steps.
 
@@ -164,23 +164,23 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-JAMMA v6.0.0 on mouse_hs1940 (1,940 samples x 12,226 SNPs), Apple M5 Pro
-(18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best observed across 3 rounds of
-best-of-3, end-to-end wall clock:
+JAMMA v7.2.0 on mouse_hs1940 (1,940 samples x 12,226 SNPs), Apple M5 Pro
+(18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best of 3, end-to-end wall clock,
+measured 2026-07-27:
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 195ms | 195ms | -- | 1.0x | **5.6x** | **6.2x** |
-| LMM Wald (`-lmm 1`) | 7.1s | 4.2s | 2.4s | 430ms | 541ms | 5.6x | **16.5x** | **9.8x** |
-| LMM All (`-lmm 4`) | 13.0s | 7.4s | 3.6s | 580ms | 695ms | 6.2x | **22.4x** | **12.8x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 26.9s | 11.4s | 5.8s | 836ms | 945ms | 6.9x | **32.2x** | **13.6x** |
-| LOCO Wald (`-loco`) | 2m14s | 1m21s | -- | **3.3s** | -- | -- | **~41x** | **~25x** |
+| Kinship (`-gk 1`) | 1.0s | 1.2s | 192ms | 192ms | -- | 1.0x | **5.3x** | **6.3x** |
+| LMM Wald (`-lmm 1`) | 7.0s | 4.3s | 2.3s | 439ms | 551ms | 5.3x | **15.9x** | **9.7x** |
+| LMM All (`-lmm 4`) | 12.8s | 7.6s | 3.5s | 570ms | 680ms | 6.2x | **22.4x** | **13.3x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 25.9s | 12.6s | 5.8s | 827ms | 939ms | 7.0x | **31.4x** | **15.2x** |
+| LOCO Wald (`-loco`) | 2m21s | 1m22s | -- | **3.3s** | -- | -- | **~43x** | **~25x** |
 
-v6.0.0 measures within +/-2% of v5.6.0 on every row here, so the version change
-carries no performance cost.
+Every row lands within +/-2.2% of the v6.0.0 measurement on the same machine,
+so nothing since then carries a performance cost.
 
-See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the v6.0.0
-against v5.6.0 comparison, and large-scale (125k) results.
+See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the
+version-over-version comparison, and large-scale (125k) results.
 
 ## Supported Features
 
@@ -290,17 +290,34 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 
 ## Documentation
 
+### Start here
+
+- [Getting Started](docs/GETTING-STARTED.md) -- Install, first run, common setup problems
 - [Why JAMMA?](docs/WHY_JAMMA.md) -- Key differentiators from GEMMA
 - [User Guide](docs/USER_GUIDE.md) -- Installation, usage examples, CLI reference
+- [Configuration](docs/CONFIGURATION.md) -- Every CLI flag, environment variable, and tool setting
+- [Glossary](docs/GLOSSARY.md) -- Terms and abbreviations (ILP64, REML, LOCO, BLAS, etc.)
+
+### Internals
+
+- [Architecture](docs/ARCHITECTURE.md) -- Components, data flow, key abstractions
 - [Code Map](docs/CODEMAP.md) -- Architecture diagrams and source navigation
-- [Equivalence Proof](docs/GEMMA_EQUIVALENCE.md) -- Mathematical proofs and empirical validation against GEMMA
-- [Numerical Equivalence Bound](docs/GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) -- End-to-end FP error bound vs GEMMA
-- [GEMMA Divergences](docs/GEMMA_DIVERGENCES.md) -- Known differences from GEMMA
 - [Performance](docs/PERFORMANCE.md) -- Bottleneck analysis, scale validation, configuration guide
 - [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) -- C vendor BLAS dispatch layer design
 - [jlinalg Algorithms](docs/JLINALG_ALGORITHMS.md) -- Cache blocking, D&C eigendecomposition, SVD
-- [Glossary](docs/GLOSSARY.md) -- Terms and abbreviations (ILP64, REML, LOCO, BLAS, etc.)
+
+### GEMMA parity
+
+- [Equivalence Proof](docs/GEMMA_EQUIVALENCE.md) -- Mathematical proofs and empirical validation against GEMMA
+- [Numerical Equivalence Bound](docs/GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) -- End-to-end FP error bound vs GEMMA
+- [GEMMA Divergences](docs/GEMMA_DIVERGENCES.md) -- Known differences from GEMMA
+
+### Contributing and operations
+
 - [Contributing](CONTRIBUTING.md) -- Development setup, testing, and PR guidelines
+- [Development](docs/DEVELOPMENT.md) -- Build commands, code style, local gates
+- [Testing](docs/TESTING.md) -- Tiers, mocking policy, suite map, sanitizer repro
+- [Deployment](docs/DEPLOYMENT.md) -- Docker image, PyPI publishing, release pipeline
 - [Changelog](CHANGELOG.md) -- Version history
 
 ## Requirements

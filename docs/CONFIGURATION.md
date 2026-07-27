@@ -23,6 +23,7 @@ use — the defaults are appropriate for most analyses.
 | `OMP_NUM_THREADS` | *(system default)* | OpenMP thread count for C extension kernels (`_lmm_accel`, `_jlinalg`). Separate from `JAMMA_BLAS_THREADS`, which controls BLAS only. |
 | `JAMMA_SANITIZE` | *(unset)* | **Build-time only.** Comma-separated sanitizer list (e.g. `address,undefined`) injected into compile and link flags by `_build_support/compile_and_link.py`. Used by `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10 for local repro. |
 | `JAMMA_SENTINEL_UB` | *(unset)* | **Build-time only.** When set to `1`, `_compile_accel.py` injects `-DJAMMA_SENTINEL_UB`, which compiles a known heap-OOB into `_lmm_accel.c`. Used by the sanitizer workflow's `asan-sentinel-meta-test` job to verify ASAN is actually catching bugs (distinguishes a clean run from an unwired sanitizer). |
+| `JAMMA_FINGERPRINT_OUT` | *(unset)* | **Test-harness only.** Where the test suite writes the C accelerator's bit-exactness fingerprint. `scripts/run-fingerprint.sh` sets it, and `.github/workflows/fingerprint.yml` runs that script on both sides of a PR touching the accelerator. |
 
 ```bash
 # Example: 4 BLAS threads, 2 LOCO workers, no telemetry
@@ -129,12 +130,15 @@ settings, and tool configuration.
 ```toml
 [project]
 name = "jamma"
-version = "5.3.0"
+version = "7.2.0"
 requires-python = ">=3.11"
 ```
 
-Runtime dependencies: `bed-reader>=1.0.0`, `numpy>=2.0.0`, `psutil>=5.9.0`,
+Runtime dependencies: `bed-reader>=1.0.0`, `numpy>=2.4.6`, `psutil>=5.9.0`,
 `threadpoolctl>=3.0.0`, `click>=8.0.0`, `loguru>=0.7.0`, `progressbar2>=4.2.0`.
+
+The numpy floor matches the `numpy==2.4.6` pin in `[build-system].requires`, so
+a wheel never builds against newer headers than it runs on.
 
 **scipy is intentionally excluded from runtime dependencies.** Installing scipy
 would overwrite an ILP64 numpy-mkl installation with LP64 numpy, breaking large-scale
@@ -163,10 +167,25 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = [
+    "E", "F", "I", "UP", "B",
+    "SIM", "RUF", "C4", "PIE", "PERF", "NPY", "PT", "PTH", "BLE",
+]
 ```
 
-Run with `uv run ruff check .` (lint) and `uv run ruff format .` (format).
+Run with `uv run ruff check .` (lint) and `uv run ruff format .` (format). See
+`[tool.ruff.lint].ignore` in `pyproject.toml` for the per-rule exemptions and
+the reason each one is there.
+
+### Other tool configuration
+
+`pyproject.toml` also configures [refurb](https://github.com/dosisod/refurb)
+(`[tool.refurb]`) and [pyrefly](https://pyrefly.org) (`[tool.pyrefly]`). Where
+refurb and ruff implement the same rule, the decision lives once in
+`[tool.refurb]` rather than in an inline `# noqa`, because ruff flags an
+unrecognised code in a noqa it does not own. pyrefly type-checks `src`, `tests`,
+and `scripts` against Python 3.11, the floor of `requires-python`. Its gate is
+absolute. Any error fails the build.
 
 ## BLAS Backend Dispatch
 
@@ -203,7 +222,7 @@ Set `JLINALG_NO_VENDOR_LAPACK=1` to force the NumPy fallback for debugging.
 
 ```bash
 jamma --version
-# prints: JAMMA version 5.3.0 (...)
+# prints: JAMMA version 7.2.0 (...)
 #         Backend: numpy
 ```
 

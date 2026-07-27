@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python 3.11+ (3.11 -- 3.14 supported)
+- Python 3.11 -- 3.13. CI tests 3.11 and 3.12, and `build-wheels.yml` ships CPython 3.11, 3.12, and 3.13
 - [uv](https://docs.astral.sh/uv/) (package manager)
 - [prek](https://prek.j178.dev) (pre-commit hooks; v0.3.8+)
 - A C compiler with OpenMP support (gcc, clang)
@@ -19,12 +19,18 @@ prek install
 
 This installs all runtime and dev dependencies and sets up the
 [prek](https://prek.j178.dev/)-managed git hooks. Hooks include ruff (lint + format),
-clang-format, cppcheck, markdownlint, mermaid syntax (`maid`), lychee link
-check, actionlint (workflow lint), zizmor (workflow security), shellcheck,
-vulture (dead-code), refurb (refactor suggestions), plus JAMMA-specific
+pyrefly (static types), clang-format, cppcheck, markdownlint, mermaid syntax
+(`maid`), lychee link check, typos (spell check), actionlint (workflow lint),
+zizmor (workflow security), shellcheck, vulture (dead-code),
+refurb (refactor suggestions), plus JAMMA-specific
 gates -- fixture-manifest verification, forbidden-patches AST check,
 compile-flag-literal lint, route-through-`_build_support` enforcement,
-and a pre-push C-extension freshness check.
+`uv.lock` sync, and two pre-push checks (repo-wide `ruff format --check` and
+C-extension freshness).
+
+The pyrefly gate is absolute. The project sits at zero errors and there is no
+baseline file, so a new error has to be fixed or given a narrow inline
+`# type: ignore[code]` on the offending line. Run it with `uv run pyrefly check`.
 
 ## Running Tests
 
@@ -139,7 +145,8 @@ src/jamma/
 ├── io/              # PLINK file readers, result writers
 ├── kinship/         # Kinship matrix computation (standard, streaming, LOCO)
 ├── lmm/             # LMM association (likelihood, optimization, runners,
-│                    # and the _lmm_accel.c C extension)
+│                    # and the _lmm_accel C extension, built from the
+│                    # _lmm_*.c files listed in LMM_ACCEL_SOURCES)
 ├── jlinalg/         # Vendor BLAS/LAPACK dispatch C layer + NumPy fallback
 ├── _build_support/  # Single source of truth for compile flags, sources,
 │                    # link flags. Imported by all three compile entry points

@@ -145,7 +145,7 @@ src/jamma/
 ├── io/              # PLINK file readers, result writers
 ├── kinship/         # Kinship matrix computation (standard, streaming, LOCO)
 ├── lmm/             # LMM association (likelihood, optimization, runners,
-│                    # and the _lmm_accel C extension, built from the several
+│                    # and the _lmm_accel C extension, built from the
 │                    # _lmm_*.c files listed in LMM_ACCEL_SOURCES)
 ├── jlinalg/         # Vendor BLAS/LAPACK dispatch C layer + NumPy fallback
 ├── _build_support/  # Single source of truth for compile flags, sources,

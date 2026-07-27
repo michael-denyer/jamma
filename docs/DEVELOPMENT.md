@@ -81,7 +81,7 @@ prek run --all-files       # Every hook, over every file
 
 **Type checking:** [pyrefly](https://pyrefly.org) is pinned exactly in `pyproject.toml`, because the gate is "zero errors" and a minor bump that adds a check turns green into red with no code change. It type-checks `src`, `tests`, and `scripts` against Python 3.11, the floor of `requires-python`, so 3.12-only syntax is caught. There is no baseline file. Group work by root cause rather than by file, since one loose declaration scatters errors across every caller.
 
-**C code style:** clang-format (v19.1.7) is enforced by prek on `.c` files under `src/jamma/jlinalg/src/`. cppcheck runs over both C trees, `src/jamma/jlinalg/src/` and `src/jamma/lmm/`.
+**C code style:** prek runs clang-format (v19.1.7) over `.c` files under `src/jamma/jlinalg/src/`, and cppcheck over both C trees, `src/jamma/jlinalg/src/` and `src/jamma/lmm/`.
 
 **Conventions:**
 

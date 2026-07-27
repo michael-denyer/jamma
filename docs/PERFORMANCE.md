@@ -16,15 +16,15 @@
 > backend set is now `numpy` and `numpy-streaming` only, both routing
 > through jlinalg with vendor LAPACK > NumPy fallback.
 
-## v7.2.0 — mouse_hs1940 (current)
+## v7.2.0 on mouse_hs1940 (current)
 
 Measured 2026-07-27. Apple M5 Pro (18 cores), 69 GB RAM, macOS 26.5.2.
 Accelerate-ILP64, numpy 2.5.1, Python 3.13.5, OpenMP on. GEMMA 0.98.5 in two
 builds, Homebrew OpenBLAS and Apple Accelerate. Dataset: mouse_hs1940, 1,940
 samples x 12,226 SNPs across 19 chromosomes; 1,410 samples survive
 phenotype-missingness filtering, so the eigendecomposition is 1,410 x 1,410.
-Built from a clean worktree with `-march=native` from the dev-mode compile, so
-these are not portable-wheel timings.
+The build came from a clean worktree and carries `-march=native` from the
+dev-mode compile, so these are not portable-wheel timings.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
@@ -41,8 +41,10 @@ detectable change" rather than as a measured equality.
 
 ### v7.2.0 against v6.0.0
 
-Comparing the JAMMA NumPy+C column against the v6.0.0 figures in the next
-section. Everything lands inside the +/-2% band that run established as noise.
+Both JAMMA columns, batch and streaming, against the v6.0.0 figures in the next
+section. The largest move is -2.2%, on streaming all-tests. That is a shade
+outside the +/-2% band the v6.0.0 run called noise, and it is negative, so
+nothing here reads as a regression.
 
 | Operation | v6.0.0 | v7.2.0 | Delta |
 |-----------|--------|--------|-------|
@@ -65,7 +67,7 @@ unchanged JAMMA binary path. That is machine variation on the GEMMA side, and
 it is why the "vs GEMMA (Accel)" column moved from 13.6x to 15.2x on that row
 without JAMMA getting faster.
 
-## v6.0.0 vs v5.6.0 — mouse_hs1940 (superseded by the v7.2.0 run above)
+## v6.0.0 vs v5.6.0 on mouse_hs1940 (superseded by the v7.2.0 run above)
 
 Measured 2026-07-25. This run answers one narrow question: did the v5.6.0 to
 v6.0.0 changes move the LMM hot path? They did not. Every operation lands

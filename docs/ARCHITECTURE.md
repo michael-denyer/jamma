@@ -149,7 +149,12 @@ The `eigh` function dispatches to DSYEVD (divide-and-conquer, faster, O(N²) wor
 
 The `_lmm_accel` C extension provides the per-SNP REML/Wald inner loop with optional OpenMP parallelism. It builds from several translation units, not one file. The `LMM_ACCEL_SOURCES` tuple in `src/jamma/_build_support/compile_and_link.py` is the authoritative list.
 
-Two rules govern adding a `.c` file. Put it in that tuple, since both build paths read it. And define `NO_IMPORT_ARRAY` before including `_lmm_support.h`, because only `_lmm_accel.c` calls `import_array()`; a unit that forgets leaves its NumPy C-API pointer NULL and segfaults on the first `PyArray_*` call. Neither mistake fails the link on macOS, which uses `-undefined dynamic_lookup`. They fail at import, or silently much later.
+Two rules govern adding a `.c` file:
+
+1. Put it in that tuple. Both build paths read it, so the wheel and the dev rebuild pick the new source up together.
+2. Define `NO_IMPORT_ARRAY` before including `_lmm_support.h`. Only `_lmm_accel.c` calls `import_array()`, so a unit that forgets leaves its NumPy C-API pointer NULL and segfaults on the first `PyArray_*` call. `tests/test_c_include_order.py` checks this.
+
+Neither mistake fails the link on macOS, which uses `-undefined dynamic_lookup`. They fail at import, or silently much later.
 
 Compile flags, source lists, and link flags are centralised in the same module and consumed by all three compile entry points (`hatch_build.py` for wheel builds, `_compile_jlinalg.py` and `_compile_accel.py` for dev-mode and runtime recompile). LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check-compile-flag-literals.py`) rejects bare flag literals outside `_build_support/`.
 

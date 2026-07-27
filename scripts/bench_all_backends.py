@@ -145,13 +145,13 @@ def bench_gemma(gemma_path: Path, runs: int) -> dict[str, float | None]:
 # ---------------------------------------------------------------------------
 def _bench_numpy_inner(
     plink, phenotypes, kinship, snp_info, covariates_4, runs: int, *, disable_c: bool
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """Benchmark NumPy backend with or without C acceleration."""
     import jamma.lmm.compute_numpy as cn
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.schema import LmmConfig
 
-    results: dict[str, float] = {}
+    results: dict[str, float | None] = {}
 
     # Optionally disable C extension for pure-Python comparison. compute_numpy is
     # the single source of truth: chunk_runner_numpy, chunk_workspaces, and
@@ -196,7 +196,7 @@ def _bench_numpy_inner(
 
 def bench_numpy(
     plink, phenotypes, kinship, snp_info, covariates_4, runs: int
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """Benchmark NumPy+C backend."""
     return _bench_numpy_inner(
         plink, phenotypes, kinship, snp_info, covariates_4, runs, disable_c=False
@@ -205,7 +205,7 @@ def bench_numpy(
 
 def bench_numpy_pure(
     plink, phenotypes, kinship, snp_info, covariates_4, runs: int
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """Benchmark pure NumPy backend (C extension disabled)."""
     return _bench_numpy_inner(
         plink, phenotypes, kinship, snp_info, covariates_4, runs, disable_c=True
@@ -217,12 +217,12 @@ def bench_numpy_pure(
 # ---------------------------------------------------------------------------
 def bench_numpy_streaming(
     phenotypes, kinship, covariates_4, runs: int
-) -> dict[str, float]:
+) -> dict[str, float | None]:
     """Benchmark NumPy streaming backend (disk I/O + C extension)."""
     from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
     from jamma.lmm.schema import LmmConfig
 
-    results: dict[str, float] = {}
+    results: dict[str, float | None] = {}
 
     ops: list[tuple[str, int, np.ndarray | None]] = [
         ("lmm_wald", 1, None),
@@ -254,7 +254,7 @@ def bench_numpy_streaming(
 # ---------------------------------------------------------------------------
 # Kinship benchmark
 # ---------------------------------------------------------------------------
-def bench_kinship(plink, runs: int) -> dict[str, float]:
+def bench_kinship(plink, runs: int) -> dict[str, float | None]:
     """Benchmark kinship computation (NumPy/BLAS via compute_centered_kinship)."""
     from jamma.kinship import compute_centered_kinship
 

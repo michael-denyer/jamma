@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 # Per-subsystem floor (percent line coverage).
 #
@@ -48,8 +49,18 @@ SUBSYSTEM_THRESHOLDS: tuple[tuple[str, float], ...] = (
 )
 
 
+class _FileCoverage(TypedDict, total=False):
+    """The slipcover per-file fields this script reads.
+
+    total=False because slipcover omits either list when it is empty.
+    """
+
+    executed_lines: list[int]
+    missing_lines: list[int]
+
+
 def _coverage_for_prefix(
-    files: dict[str, dict[str, object]], prefix: str
+    files: dict[str, _FileCoverage], prefix: str
 ) -> tuple[int, int]:
     """Aggregate executed/missing line counts across files under ``prefix``."""
     executed = 0

@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after kinship and eigendecomposition. Same `ValueError`, raised earlier. The
   message names `phenotype_columns`.
 
+- **`PipelineRunner.compute_kinship()` moved to
+  `jamma.pipeline_kinship.compute_kinship(config, mode)`.** `-gk` is a different
+  program from `-lmm`: it shared nothing with the association pipeline but the
+  config and the startup banner, and it returns a `KinshipResult` rather than a
+  `PipelineResult`. It is a module function taking the config because
+  `self.config` was the only instance state it read. `KinshipResult` is still
+  importable from `jamma.pipeline`.
+
 ### Fixed
 
 - **`IncrementalAssocWriter.write()` could raise `UnboundLocalError` instead of
@@ -67,6 +75,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is unchanged — a non-float64 buffer is still rejected.
 
 ### Internal
+
+- **`pipeline.py` is a third shorter, split along the seams the code already
+  had.** 1476 lines down to 1016. Four groups moved out whole, each verified
+  byte-identical on `mouse_hs1940` across `-lmm 1/2/3/4`, a two-phenotype run,
+  LOCO, and five `-gk` invocations.
+
+  | Moved to | What | Why it lifts cleanly |
+  |---|---|---|
+  | `pipeline_banner.py` | `log_dataset_banner`, `log_pipeline_banner` | Both were already `@staticmethod`, and nothing downstream reads what they print |
+  | `pipeline_phenotype_loop.py` | `run_phenotype_loop`, `_run_batch`, `_run_streaming`, `PhenoLoopOutcome` | A closed subtree. `_run_inner` is the only entry and they call nothing else on the runner |
+  | `pipeline_kinship.py` | `compute_kinship` | The `-gk` program, reached only from the CLI |
+  | `jamma.io.snp_list` | `resolve_snp_list_file` (was `PipelineRunner._resolve_snp_list`) | A wrapper over the two functions in that module, now beside them |
+
+  What made this checkable rather than a guess: `PipelineRunner.__init__` sets
+  `self.config` and nothing else, so no method holds pipeline state and every
+  extraction candidate was already a function of the config. The 628-line
+  execution group was deliberately left whole. `_run_inner` calls thirteen
+  siblings and everything under it is reachable only through it, so cutting
+  there would put one program across two files.
 
 - **Zero pyrefly errors, and the baseline is gone.** The committed
   `pyrefly-baseline.json` snapshotted 174 pre-existing errors so the gate could

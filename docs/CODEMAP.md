@@ -171,13 +171,15 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 1a | `main()` | Click command — all flags (`-gk`, `-lmm`, `-bfile`, `-o`, `-outdir`) | [cli.py](../src/jamma/cli.py) |
-| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `PipelineRunner.compute_kinship()` | [cli.py:360](../src/jamma/cli.py#L360) |
+| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:370](../src/jamma/cli.py#L370) |
 | 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:466](../src/jamma/cli.py#L466) |
 | 1b | `gwas()` | One-call GWAS pipeline (load -> kinship -> LMM -> results) | [gwas.py:40](../src/jamma/gwas.py#L40) |
 | 1b | `GWASResult` | Pipeline result dataclass (associations, timing, counts) | [gwas.py:22](../src/jamma/gwas.py#L22) |
-| 1c | `PipelineRunner` | Shared orchestration (validate -> parse -> memory -> kinship -> LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
-| 1c | `PipelineRunner.compute_kinship()` | `-gk` kinship orchestration (compute + write), returns `KinshipResult` | [pipeline.py:911](../src/jamma/pipeline.py#L911) |
-| 1c | `PipelineConfig` | Pipeline configuration dataclass (all CLI flags) | [pipeline.py](../src/jamma/pipeline.py) |
+| 1c | `PipelineRunner` | `-lmm` orchestration (validate -> parse -> memory -> kinship -> LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
+| 1c | `run_phenotype_loop()` | Per-phenotype loop; dispatches each column to the batch or streaming runner | [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py) |
+| 1c | `compute_kinship()` | `-gk` kinship orchestration (compute + write), returns `KinshipResult` | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
+| 1c | `log_dataset_banner()` / `log_pipeline_banner()` | GEMMA-style dataset summary and execution-plan banner | [pipeline_banner.py](../src/jamma/pipeline_banner.py) |
+| 1c | `PipelineConfig` | Pipeline configuration dataclass (all CLI flags) | [pipeline_config.py](../src/jamma/pipeline_config.py) |
 
 ---
 
@@ -479,7 +481,7 @@ flowchart TD
 
 ## Backend Architecture
 
-`PipelineRunner` always uses the NumPy backend. `select_execution_mode()` chooses batch or streaming mode based on memory availability. `_run_batch` handles in-memory genotypes; `_run_streaming` reads chunks from disk.
+`PipelineRunner` always uses the NumPy backend. `select_execution_mode()` chooses batch or streaming mode based on memory availability. In [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py), `_run_batch` handles in-memory genotypes and `_run_streaming` reads chunks from disk.
 
 ```mermaid
 flowchart TD
@@ -549,7 +551,8 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Area | Entry Point |
 |------|-------------|
 | gwas() API | [gwas.py:40](../src/jamma/gwas.py#L40) |
-| PipelineRunner | [pipeline.py](../src/jamma/pipeline.py) |
+| PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
+| Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
 | CLI dispatch | [cli.py:46](../src/jamma/cli.py#L46) |
 | Load genotypes | [plink.py:53](../src/jamma/io/plink.py#L53) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |

@@ -86,7 +86,11 @@ A typical LMM association run proceeds as follows:
 src/jamma/
 ├── cli.py                  # Click CLI; maps GEMMA flags to PipelineConfig
 ├── gwas.py                 # Public Python API (gwas() function)
-├── pipeline.py             # Shared pipeline orchestrator used by CLI and API
+├── pipeline.py             # The -lmm path: PipelineRunner, used by CLI and API
+├── pipeline_config.py      # PipelineConfig / PipelineResult / KinshipResult dataclasses
+├── pipeline_banner.py      # GEMMA-style dataset and execution-plan banners
+├── pipeline_phenotype_loop.py  # Per-phenotype loop + the batch/streaming runner calls
+├── pipeline_kinship.py     # The -gk path: compute a kinship matrix and write it
 ├── core/                   # Cross-cutting concerns: memory estimation, backend
 │   │                       # selection, progress bars, SNP filtering, threading
 │   ├── memory.py           # Pre-flight memory checks and DSYEVD/DSYEVR workspace estimates

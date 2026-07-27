@@ -17,7 +17,7 @@ from loguru import logger
 import jamma
 from jamma.core import OutputConfig
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_MISS
-from jamma.pipeline import PipelineConfig, PipelineRunner
+from jamma.pipeline import BackendRequest, PipelineConfig, PipelineRunner
 from jamma.utils import setup_logging, write_gemma_log
 
 
@@ -313,7 +313,9 @@ def main(
         if not cat_columns:
             raise click.UsageError("-cat requires at least one column index")
 
-    # Dispatch to handler
+    # Dispatch to handler. Both arms test their own mode flag rather than
+    # relying on the mutually-exclusive/one-required checks far above, so each
+    # handler's mode argument is known to be set at the call.
     if gk is not None:
         if len(phenotype_columns) > 1:
             raise click.UsageError(
@@ -333,7 +335,7 @@ def main(
             ksnps_file=_opt_path(ksnps),
             legacy_text=legacy_text,
         )
-    else:
+    elif lmm is not None:
         _run_lmm(
             bfile=Path(bfile),
             mode=lmm,
@@ -360,6 +362,8 @@ def main(
             backend=backend,
             legacy_text=legacy_text,
         )
+    else:  # pragma: no cover - the checks above already rejected this
+        raise click.UsageError("One of -gk or -lmm is required")
 
 
 def _run_gk(
@@ -493,7 +497,7 @@ def _run_lmm(
     l_max: float = DEFAULT_L_MAX,
     weight_file: Path | None = None,
     cat_columns: list[int] | None = None,
-    backend: str = "auto",
+    backend: BackendRequest = "auto",
     legacy_text: bool = False,
 ) -> None:
     """Run LMM association testing."""

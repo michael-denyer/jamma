@@ -22,7 +22,7 @@ from jamma.lmm.schema import (
     GWASTiming,
 )
 from jamma.lmm.stats import AssocResult
-from jamma.pipeline import PipelineConfig, PipelineRunner
+from jamma.pipeline import BackendRequest, PipelineConfig, PipelineRunner
 
 
 def _opt_path(value: str | Path | None) -> Path | None:
@@ -79,7 +79,7 @@ def gwas(
     l_max: float = DEFAULT_L_MAX,
     weight_file: str | Path | None = None,
     cat_columns: list[int] | None = None,
-    backend: str = "auto",
+    backend: BackendRequest = "auto",
 ) -> GWASResult:
     """Run a complete GWAS pipeline in a single call.
 

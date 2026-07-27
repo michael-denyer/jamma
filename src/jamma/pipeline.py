@@ -32,7 +32,7 @@ from jamma.core.memory import (
 )
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import PlinkData, get_plink_metadata, validate_plink_dimensions
-from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
+from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
     compute_loco_kinship_streaming,
@@ -530,27 +530,6 @@ class PipelineRunner:
         return covariates
 
     @staticmethod
-    def _resolve_snp_list(
-        snp_file: Path | None, sid_array: np.ndarray, label: str
-    ) -> np.ndarray | None:
-        """Resolve a SNP list file to column indices, or return None.
-
-        Args:
-            snp_file: Path to SNP list file, or None.
-            sid_array: Array of SNP IDs from PLINK metadata.
-            label: Label for log message (e.g. "-snps", "-ksnps").
-
-        Returns:
-            Sorted array of column indices, or None if snp_file is None.
-        """
-        if snp_file is None:
-            return None
-        snp_ids = read_snp_list_file(snp_file)
-        indices = resolve_snp_list_to_indices(snp_ids, sid_array)
-        logger.info(f"SNP list ({label}): {len(indices)} SNPs resolved")
-        return indices
-
-    @staticmethod
     def _log_banner(
         n_total: int,
         n_analyzed: int,
@@ -739,7 +718,7 @@ class PipelineRunner:
         # GEMMA-style banner — kinship uses all samples (n_analyzed == n_total).
         self._log_banner(n_total=n_samples, n_analyzed=n_samples, n_snps=n_snps)
 
-        ksnps_indices = self._resolve_snp_list(
+        ksnps_indices = resolve_snp_list_file(
             self.config.ksnps_file, meta["sid"], "-ksnps"
         )
 
@@ -983,10 +962,10 @@ class PipelineRunner:
         n_samples = meta["n_samples"]
         n_snps = meta["n_snps"]
 
-        snps_indices = self._resolve_snp_list(
+        snps_indices = resolve_snp_list_file(
             self.config.snps_file, meta["sid"], "-snps"
         )
-        ksnps_indices = self._resolve_snp_list(
+        ksnps_indices = resolve_snp_list_file(
             self.config.ksnps_file, meta["sid"], "-ksnps"
         )
 

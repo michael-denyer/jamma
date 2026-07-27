@@ -97,3 +97,28 @@ def resolve_snp_list_to_indices(snp_ids: set[str], bim_sids: np.ndarray) -> np.n
         )
 
     return np.array(sorted(indices), dtype=np.intp)
+
+
+def resolve_snp_list_file(
+    snp_file: Path | None, sid_array: np.ndarray, label: str
+) -> np.ndarray | None:
+    """Read a SNP list file and resolve it to column indices, or return None.
+
+    Composes ``read_snp_list_file`` and ``resolve_snp_list_to_indices`` for the
+    common case of an optional CLI flag, so a caller with no list does not have
+    to branch.
+
+    Args:
+        snp_file: Path to SNP list file, or None.
+        sid_array: Array of SNP IDs from PLINK metadata.
+        label: Flag name for the log message (e.g. "-snps", "-ksnps").
+
+    Returns:
+        Sorted array of column indices, or None if snp_file is None.
+    """
+    if snp_file is None:
+        return None
+    snp_ids = read_snp_list_file(snp_file)
+    indices = resolve_snp_list_to_indices(snp_ids, sid_array)
+    logger.info(f"SNP list ({label}): {len(indices)} SNPs resolved")
+    return indices

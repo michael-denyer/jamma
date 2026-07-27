@@ -178,7 +178,7 @@ def gwas(
         eigenvalue_file=_opt_path(eigenvalue_file),
         eigenvector_file=_opt_path(eigenvector_file),
         write_eigen=write_eigen,
-        phenotype_column=phenotype_column,
+        phenotype_columns=[phenotype_column],
         snps_file=_opt_path(snps_file),
         ksnps_file=_opt_path(ksnps_file),
         hwe_threshold=hwe,

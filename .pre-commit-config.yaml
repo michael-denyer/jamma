@@ -189,6 +189,19 @@ repos:
         language: system
         files: ^tests/.*\.py$
         pass_filenames: false
+      # docs/CODEMAP.md navigates the tree with ~120 `file.py#Lnnn` links.
+      # Nothing kept those line numbers honest and 53 of them had rotted by
+      # 7.2.0 — lychee and markdownlint both pass, because the *file*
+      # resolves and only the line is wrong. Whole-project (a moved function
+      # invalidates an anchor in a file the commit never touched), so
+      # always_run with pass_filenames false, same shape as the pyrefly hook.
+      # Runs in ~0.2s.
+      - id: check-doc-anchors
+        name: doc line anchors point at the symbols they name
+        entry: scripts/check-doc-anchors.py
+        language: system
+        always_run: true
+        pass_filenames: false
       - id: check-fixture-manifest
         name: GEMMA fixture sha256 manifest matches tests/fixtures/
         entry: uv run python scripts/check_fixture_manifest.py

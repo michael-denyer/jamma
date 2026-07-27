@@ -25,8 +25,8 @@ zizmor (workflow security), shellcheck, vulture (dead-code),
 refurb (refactor suggestions), plus JAMMA-specific
 gates -- fixture-manifest verification, forbidden-patches AST check,
 compile-flag-literal lint, route-through-`_build_support` enforcement,
-`uv.lock` sync, and two pre-push checks (repo-wide `ruff format --check` and
-C-extension freshness).
+doc line-anchor verification, `uv.lock` sync, and two pre-push checks
+(repo-wide `ruff format --check` and C-extension freshness).
 
 The pyrefly gate is absolute. The project sits at zero errors and there is no
 baseline file, so a new error has to be fixed or given a narrow inline

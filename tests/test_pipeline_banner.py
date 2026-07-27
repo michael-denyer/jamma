@@ -77,5 +77,5 @@ class TestFormatPipelineBanner:
                 eigen_driver="DSYEVD",
                 c_ext=False,
                 threads=16,
-                some_extra_param=4,
+                some_extra_param=4,  # type: ignore[unexpected-keyword]
             )

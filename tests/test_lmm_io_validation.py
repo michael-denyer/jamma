@@ -361,7 +361,7 @@ class TestComputeNumpyInvalidMode:
 
         with pytest.raises(ValueError, match="lmm_mode must be"):
             compute_lmm_chunk_numpy(
-                lmm_mode=99,
+                lmm_mode=99,  # type: ignore[bad-argument-type]
                 n_cvt=1,
                 eigenvalues=np.ones(10),
                 Uab_batch=np.ones((5, 10, 3)),

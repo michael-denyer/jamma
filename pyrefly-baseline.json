@@ -109,30 +109,6 @@
       "severity": "error"
     },
     {
-      "line": 173,
-      "column": 56,
-      "stop_line": 173,
-      "stop_column": 61,
-      "path": "tests/test_backend_detection.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['gpu']` is not assignable to parameter `requested` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.lmm.runner.select_execution_mode`",
-      "concise_description": "Argument `Literal['gpu']` is not assignable to parameter `requested` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.lmm.runner.select_execution_mode`",
-      "severity": "error"
-    },
-    {
-      "line": 178,
-      "column": 56,
-      "stop_line": 178,
-      "stop_column": 61,
-      "path": "tests/test_backend_detection.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['jax']` is not assignable to parameter `requested` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.lmm.runner.select_execution_mode`",
-      "concise_description": "Argument `Literal['jax']` is not assignable to parameter `requested` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.lmm.runner.select_execution_mode`",
-      "severity": "error"
-    },
-    {
       "line": 102,
       "column": 5,
       "stop_line": 102,
@@ -229,102 +205,6 @@
       "severity": "error"
     },
     {
-      "line": 606,
-      "column": 32,
-      "stop_line": 606,
-      "stop_column": 35,
-      "path": "tests/test_jlinalg_dgemm.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['X']` is not assignable to parameter `transa` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "concise_description": "Argument `Literal['X']` is not assignable to parameter `transa` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "severity": "error"
-    },
-    {
-      "line": 613,
-      "column": 32,
-      "stop_line": 613,
-      "stop_column": 35,
-      "path": "tests/test_jlinalg_dgemm.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['Z']` is not assignable to parameter `transb` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "concise_description": "Argument `Literal['Z']` is not assignable to parameter `transb` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "severity": "error"
-    },
-    {
-      "line": 620,
-      "column": 32,
-      "stop_line": 620,
-      "stop_column": 34,
-      "path": "tests/test_jlinalg_dgemm.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['']` is not assignable to parameter `transa` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "concise_description": "Argument `Literal['']` is not assignable to parameter `transa` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "severity": "error"
-    },
-    {
-      "line": 627,
-      "column": 32,
-      "stop_line": 627,
-      "stop_column": 43,
-      "path": "tests/test_jlinalg_dgemm.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['transpose']` is not assignable to parameter `transa` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "concise_description": "Argument `Literal['transpose']` is not assignable to parameter `transa` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "severity": "error"
-    },
-    {
-      "line": 634,
-      "column": 32,
-      "stop_line": 634,
-      "stop_column": 36,
-      "path": "tests/test_jlinalg_dgemm.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['TT']` is not assignable to parameter `transb` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "concise_description": "Argument `Literal['TT']` is not assignable to parameter `transb` with type `Literal['N', 'T', 'n', 't']` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "severity": "error"
-    },
-    {
-      "line": 806,
-      "column": 29,
-      "stop_line": 806,
-      "stop_column": 30,
-      "path": "tests/test_jlinalg_dgemm.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal[0]` is not assignable to parameter `transa` with type `str` in function `_dgemm`",
-      "concise_description": "Argument `Literal[0]` is not assignable to parameter `transa` with type `str` in function `_dgemm`",
-      "severity": "error"
-    },
-    {
-      "line": 814,
-      "column": 29,
-      "stop_line": 814,
-      "stop_column": 33,
-      "path": "tests/test_jlinalg_dgemm.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal[True]` is not assignable to parameter `transb` with type `str` in function `_dgemm`",
-      "concise_description": "Argument `Literal[True]` is not assignable to parameter `transb` with type `str` in function `_dgemm`",
-      "severity": "error"
-    },
-    {
-      "line": 964,
-      "column": 29,
-      "stop_line": 964,
-      "stop_column": 36,
-      "path": "tests/test_jlinalg_dgemm.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `ndarray[tuple[int, int], dtype[floating[_32Bit]]]` is not assignable to parameter `out` with type `ndarray[tuple[Any, ...], dtype[float64]] | None` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "concise_description": "Argument `ndarray[tuple[int, int], dtype[floating[_32Bit]]]` is not assignable to parameter `out` with type `ndarray[tuple[Any, ...], dtype[float64]] | None` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "severity": "error"
-    },
-    {
       "line": 75,
       "column": 12,
       "stop_line": 75,
@@ -346,18 +226,6 @@
       "name": "bad-return",
       "description": "Returned type `floating` is not assignable to declared return type `float`",
       "concise_description": "Returned type `floating` is not assignable to declared return type `float`",
-      "severity": "error"
-    },
-    {
-      "line": 364,
-      "column": 26,
-      "stop_line": 364,
-      "stop_column": 28,
-      "path": "tests/test_lmm_io_validation.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal[99]` is not assignable to parameter `lmm_mode` with type `Literal[1, 2, 3, 4]` in function `jamma.lmm.compute_numpy.compute_lmm_chunk_numpy`",
-      "concise_description": "Argument `Literal[99]` is not assignable to parameter `lmm_mode` with type `Literal[1, 2, 3, 4]` in function `jamma.lmm.compute_numpy.compute_lmm_chunk_numpy`",
       "severity": "error"
     },
     {
@@ -385,30 +253,6 @@
       "severity": "error"
     },
     {
-      "line": 912,
-      "column": 53,
-      "stop_line": 912,
-      "stop_column": 62,
-      "path": "tests/test_pipeline.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['invalid']` is not assignable to parameter `backend` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.pipeline_config.PipelineConfig.__init__`",
-      "concise_description": "Argument `Literal['invalid']` is not assignable to parameter `backend` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.pipeline_config.PipelineConfig.__init__`",
-      "severity": "error"
-    },
-    {
-      "line": 80,
-      "column": 17,
-      "stop_line": 80,
-      "stop_column": 33,
-      "path": "tests/test_pipeline_banner.py",
-      "code": -2,
-      "name": "unexpected-keyword",
-      "description": "Unexpected keyword argument `some_extra_param` in function `jamma.core.backend.format_pipeline_banner`",
-      "concise_description": "Unexpected keyword argument `some_extra_param` in function `jamma.core.backend.format_pipeline_banner`",
-      "severity": "error"
-    },
-    {
       "line": 76,
       "column": 14,
       "stop_line": 76,
@@ -418,18 +262,6 @@
       "name": "missing-attribute",
       "description": "No attribute `jamma_sentinel_oob` in module `jamma.lmm._lmm_accel`",
       "concise_description": "No attribute `jamma_sentinel_oob` in module `jamma.lmm._lmm_accel`",
-      "severity": "error"
-    },
-    {
-      "line": 216,
-      "column": 43,
-      "stop_line": 216,
-      "stop_column": 46,
-      "path": "tests/test_schema.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal[123]` is not assignable to parameter `fmt` with type `str` in function `jamma.lmm.schema.StatColumn.__init__`",
-      "concise_description": "Argument `Literal[123]` is not assignable to parameter `fmt` with type `str` in function `jamma.lmm.schema.StatColumn.__init__`",
       "severity": "error"
     }
   ]

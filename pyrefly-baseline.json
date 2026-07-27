@@ -349,30 +349,6 @@
       "severity": "error"
     },
     {
-      "line": 363,
-      "column": 24,
-      "stop_line": 363,
-      "stop_column": 25,
-      "path": "tests/test_jlinalg_level1.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `ndarray[tuple[Any, ...], dtype[floating[_32Bit]]]` is not assignable to parameter `A` with type `ndarray[tuple[Any, ...], dtype[float64]]` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "concise_description": "Argument `ndarray[tuple[Any, ...], dtype[floating[_32Bit]]]` is not assignable to parameter `A` with type `ndarray[tuple[Any, ...], dtype[float64]]` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "severity": "error"
-    },
-    {
-      "line": 363,
-      "column": 27,
-      "stop_line": 363,
-      "stop_column": 28,
-      "path": "tests/test_jlinalg_level1.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `ndarray[tuple[Any, ...], dtype[floating[_32Bit]]]` is not assignable to parameter `B` with type `ndarray[tuple[Any, ...], dtype[float64]]` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "concise_description": "Argument `ndarray[tuple[Any, ...], dtype[floating[_32Bit]]]` is not assignable to parameter `B` with type `ndarray[tuple[Any, ...], dtype[float64]]` in function `jamma.jlinalg._jlinalg.dgemm`",
-      "severity": "error"
-    },
-    {
       "line": 364,
       "column": 26,
       "stop_line": 364,

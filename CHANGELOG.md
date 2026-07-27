@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.2.0] - 2026-07-27
+
+Minor, not major, despite the Breaking heading below. That is a deliberate
+departure from strict SemVer and it is recorded here rather than left to be
+inferred. All three breaks are on internal orchestration surfaces
+(`PipelineConfig.phenotype_column`, when an out-of-range column is rejected,
+and where `compute_kinship` lives). The two documented public entry points,
+`gwas()` and the CLI, are unchanged: `gwas(phenotype_column=2)` still works and
+every `-n` / `-gk` / `-lmm` flag behaves identically. Output is byte-identical on
+mouse_hs1940 across `-lmm 1/2/3/4`, a two-phenotype run, LOCO, and five `-gk`
+invocations. Given that, a major bump would cost every user a compatibility
+review for a change none of them can observe.
+
 ### Breaking
 
 - **`PipelineConfig.phenotype_column` is gone. Use `phenotype_columns`.** The

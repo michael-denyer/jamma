@@ -211,14 +211,15 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
         "p_scores",
     )
     for key in all_keys:
-        assert result[key] is not None, f"{key} is None in mode 4"
-        assert result[key].shape == (n_snps,), (
-            f"{key} shape mismatch: {result[key].shape}"
-        )
+        arr = result[key]
+        assert arr is not None, f"{key} is None in mode 4"
+        assert arr.shape == (n_snps,), f"{key} shape mismatch: {arr.shape}"
 
     # Finite check (most values should be finite; allow NaN for degenerate SNPs)
     for key in ("betas", "ses", "pwalds"):
-        n_finite = np.sum(np.isfinite(result[key]))
+        arr = result[key]
+        assert arr is not None, f"{key} is None in mode 4"
+        n_finite = np.sum(np.isfinite(arr))
         assert n_finite > n_snps * 0.8, f"{key}: only {n_finite}/{n_snps} finite values"
 
     # Mode 2 (LRT only)

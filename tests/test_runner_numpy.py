@@ -1299,6 +1299,7 @@ def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
 
     # PVE and PVE SE should match
     assert result_disk.pve is not None
+    assert result_mem.pve is not None
     np.testing.assert_allclose(
         result_disk.pve,
         result_mem.pve,
@@ -1306,6 +1307,9 @@ def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
         err_msg="PVE mismatch between streaming and in-memory",
     )
     if result_mem.pve_se is not None:
+        assert result_disk.pve_se is not None, (
+            "in-memory run reported pve_se but streaming run did not"
+        )
         np.testing.assert_allclose(
             result_disk.pve_se,
             result_mem.pve_se,
@@ -1335,6 +1339,8 @@ def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
                 err_msg=f"beta mismatch for {r_mem.rs}",
             )
         if lmm_mode in (1, 4):
+            assert r_disk.p_wald is not None, f"p_wald absent on disk for {r_mem.rs}"
+            assert r_mem.p_wald is not None, f"p_wald absent in memory for {r_mem.rs}"
             np.testing.assert_allclose(
                 r_disk.p_wald,
                 r_mem.p_wald,
@@ -1342,6 +1348,8 @@ def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
                 err_msg=f"p_wald mismatch for {r_mem.rs}",
             )
         if lmm_mode in (2, 4):
+            assert r_disk.p_lrt is not None, f"p_lrt absent on disk for {r_mem.rs}"
+            assert r_mem.p_lrt is not None, f"p_lrt absent in memory for {r_mem.rs}"
             np.testing.assert_allclose(
                 r_disk.p_lrt,
                 r_mem.p_lrt,
@@ -1349,6 +1357,8 @@ def test_output_path_streaming_matches_inmemory(lmm_mode, tmp_path):
                 err_msg=f"p_lrt mismatch for {r_mem.rs}",
             )
         if lmm_mode in (3, 4):
+            assert r_disk.p_score is not None, f"p_score absent on disk for {r_mem.rs}"
+            assert r_mem.p_score is not None, f"p_score absent in memory for {r_mem.rs}"
             np.testing.assert_allclose(
                 r_disk.p_score,
                 r_mem.p_score,

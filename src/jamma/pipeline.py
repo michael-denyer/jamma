@@ -1,9 +1,16 @@
-"""Pipeline orchestration for JAMMA GWAS analysis.
+"""The ``-lmm`` path: PipelineRunner, which orchestrates an association run.
 
-Provides a single PipelineRunner service class that encapsulates the shared
-GWAS pipeline: validate inputs, parse phenotypes, check memory, load kinship,
-load covariates, run LMM association. Both the CLI (cli.py) and Python API
-(gwas.py) delegate to this runner.
+Validate inputs, parse phenotypes, check memory, load kinship, load covariates,
+run LMM association. Both the CLI (cli.py) and the Python API (gwas.py) delegate
+here.
+
+The pieces that are not orchestration live in sibling modules, so this file holds
+the flow and not the detail:
+
+- ``pipeline_config.py`` — the config, result, and kinship-result dataclasses
+- ``pipeline_banner.py`` — the two startup banners
+- ``pipeline_phenotype_loop.py`` — the per-phenotype loop and the runner calls
+- ``pipeline_kinship.py`` — the separate ``-gk`` program
 
 Example:
     >>> from jamma.pipeline import PipelineConfig, PipelineRunner

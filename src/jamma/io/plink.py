@@ -368,7 +368,7 @@ def stream_genotype_chunks(
                 return bed.read(index=(np.s_[:], snp_indices[start:end]), dtype=dtype)
         else:
             # Unfiltered mode: read all columns sequentially
-            n_total = bed.sid_count
+            n_total = int(bed.sid_count)
             label = "SNPs"
 
             def read_chunk(start: int, end: int) -> np.ndarray:

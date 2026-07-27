@@ -322,11 +322,11 @@ def run_lmm_loco(
 
         # Precompute global SNP membership mask for -snps restriction.
         # Avoids per-chromosome np.isin on every iteration.
+        snps_global_mask: np.ndarray | None = None
         if snps_indices is not None:
-            snps_global_mask: np.ndarray | None = np.zeros(n_snps_total, dtype=bool)
-            snps_global_mask[snps_indices] = True
-        else:
-            snps_global_mask = None
+            mask = np.zeros(n_snps_total, dtype=bool)
+            mask[snps_indices] = True
+            snps_global_mask = mask
 
         # Content + parameter key over every determinant of the eigendecomposition
         # (genotype files, filter thresholds, -ksnps set, analysed-sample mask).

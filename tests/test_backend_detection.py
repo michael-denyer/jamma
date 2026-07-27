@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -146,7 +147,7 @@ class TestExecutionMode:
         """Explicit backend='numpy' in PipelineConfig bypasses auto-selection."""
         from jamma.pipeline import PipelineConfig
 
-        config = PipelineConfig(bfile="/tmp/test", backend="numpy")
+        config = PipelineConfig(bfile=Path("/tmp/test"), backend="numpy")
         assert config.backend == "numpy"
 
     # -- Compound backend requests --

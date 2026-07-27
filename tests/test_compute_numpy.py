@@ -46,9 +46,9 @@ def mouse_data():
     MLE null model (finite logl_H0). The mouse_hs1940 column-1 phenotype
     produces a degenerate MLE landscape (NaN logl_H0 at boundary lambda).
     """
-    plink_data = load_plink_binary(str(MOUSE_HS1940_DATA))
+    plink_data = load_plink_binary(MOUSE_HS1940_DATA)
     genotypes = plink_data.genotypes
-    K = read_kinship_matrix(str(MOUSE_HS1940_KINSHIP))
+    K = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
 
     n_samples = genotypes.shape[0]
     n_cvt = 1
@@ -222,9 +222,9 @@ def degenerate_data(mouse_data):
     n_samples = d["n_samples"]
 
     # Load the original rotated genotypes for the first 10 well-conditioned SNPs
-    plink_data = load_plink_binary(str(MOUSE_HS1940_DATA))
+    plink_data = load_plink_binary(MOUSE_HS1940_DATA)
     genotypes = plink_data.genotypes
-    K = read_kinship_matrix(str(MOUSE_HS1940_KINSHIP))
+    K = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
     eigenvalues, U = np.linalg.eigh(K)
 
     geno_subset = genotypes[:, :10].astype(np.float64)

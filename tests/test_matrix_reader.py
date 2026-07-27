@@ -463,6 +463,7 @@ class TestMemmapLifecycle:
         assert isinstance(result, np.memmap)
 
         # Capture backing file path while memmap is alive
+        assert result.filename is not None, "copy=False memmap must be file-backed"
         backing_file = Path(result.filename)
         assert backing_file.exists(), "Backing file should exist while memmap is alive"
 

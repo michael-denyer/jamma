@@ -50,8 +50,8 @@ blas_has_dgesvd: Final[int]
 blas_has_lapacke_dsyevd: Final[int]
 
 def dgemm(
-    A: npt.NDArray[np.float64],
-    B: npt.NDArray[np.float64],
+    A: npt.NDArray[np.floating],
+    B: npt.NDArray[np.floating],
     transa: Literal["N", "T", "n", "t"] = ...,
     transb: Literal["N", "T", "n", "t"] = ...,
     out: npt.NDArray[np.float64] | None = ...,
@@ -59,8 +59,9 @@ def dgemm(
     """Compute matrix-matrix product with optional transpose.
 
     Args:
-        A: Left matrix, float64, C-contiguous.
-        B: Right matrix, float64, C-contiguous.
+        A: Left matrix, C-contiguous. Any float dtype; non-float64 input is
+            coerced to float64 (a copy).
+        B: Right matrix, C-contiguous. Coerced like A.
         transa: 'N' (no transpose) or 'T' (transpose A).
         transb: 'N' (no transpose) or 'T' (transpose B).
         out: Optional preallocated (M, N) float64 C-contiguous buffer. When

@@ -109,21 +109,9 @@
       "severity": "error"
     },
     {
-      "line": 149,
-      "column": 39,
-      "stop_line": 149,
-      "stop_column": 50,
-      "path": "tests/test_backend_detection.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `Literal['/tmp/test']` is not assignable to parameter `bfile` with type `Path` in function `jamma.pipeline_config.PipelineConfig.__init__`",
-      "concise_description": "Argument `Literal['/tmp/test']` is not assignable to parameter `bfile` with type `Path` in function `jamma.pipeline_config.PipelineConfig.__init__`",
-      "severity": "error"
-    },
-    {
-      "line": 172,
+      "line": 173,
       "column": 56,
-      "stop_line": 172,
+      "stop_line": 173,
       "stop_column": 61,
       "path": "tests/test_backend_detection.py",
       "code": -2,
@@ -133,63 +121,15 @@
       "severity": "error"
     },
     {
-      "line": 177,
+      "line": 178,
       "column": 56,
-      "stop_line": 177,
+      "stop_line": 178,
       "stop_column": 61,
       "path": "tests/test_backend_detection.py",
       "code": -2,
       "name": "bad-argument-type",
       "description": "Argument `Literal['jax']` is not assignable to parameter `requested` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.lmm.runner.select_execution_mode`",
       "concise_description": "Argument `Literal['jax']` is not assignable to parameter `requested` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.lmm.runner.select_execution_mode`",
-      "severity": "error"
-    },
-    {
-      "line": 49,
-      "column": 36,
-      "stop_line": 49,
-      "stop_column": 58,
-      "path": "tests/test_compute_numpy.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `str` is not assignable to parameter `bfile` with type `Path` in function `jamma.io.plink.load_plink_binary`",
-      "concise_description": "Argument `str` is not assignable to parameter `bfile` with type `Path` in function `jamma.io.plink.load_plink_binary`",
-      "severity": "error"
-    },
-    {
-      "line": 51,
-      "column": 29,
-      "stop_line": 51,
-      "stop_column": 54,
-      "path": "tests/test_compute_numpy.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `str` is not assignable to parameter `path` with type `Path` in function `jamma.kinship.io.read_kinship_matrix`",
-      "concise_description": "Argument `str` is not assignable to parameter `path` with type `Path` in function `jamma.kinship.io.read_kinship_matrix`",
-      "severity": "error"
-    },
-    {
-      "line": 225,
-      "column": 36,
-      "stop_line": 225,
-      "stop_column": 58,
-      "path": "tests/test_compute_numpy.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `str` is not assignable to parameter `bfile` with type `Path` in function `jamma.io.plink.load_plink_binary`",
-      "concise_description": "Argument `str` is not assignable to parameter `bfile` with type `Path` in function `jamma.io.plink.load_plink_binary`",
-      "severity": "error"
-    },
-    {
-      "line": 227,
-      "column": 29,
-      "stop_line": 227,
-      "stop_column": 54,
-      "path": "tests/test_compute_numpy.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `str` is not assignable to parameter `path` with type `Path` in function `jamma.kinship.io.read_kinship_matrix`",
-      "concise_description": "Argument `str` is not assignable to parameter `path` with type `Path` in function `jamma.kinship.io.read_kinship_matrix`",
       "severity": "error"
     },
     {
@@ -442,18 +382,6 @@
       "name": "bad-argument-type",
       "description": "Argument `Literal[99]` is not assignable to parameter `lmm_mode` with type `Literal[1, 2, 3, 4]` in function `jamma.lmm.compute_numpy.compute_lmm_chunk_numpy`",
       "concise_description": "Argument `Literal[99]` is not assignable to parameter `lmm_mode` with type `Literal[1, 2, 3, 4]` in function `jamma.lmm.compute_numpy.compute_lmm_chunk_numpy`",
-      "severity": "error"
-    },
-    {
-      "line": 466,
-      "column": 29,
-      "stop_line": 466,
-      "stop_column": 44,
-      "path": "tests/test_matrix_reader.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `str | None` is not assignable to parameter `*args` with type `PathLike[str] | str` in function `pathlib.Path.__new__`\n  Protocol `PathLike` requires attribute `__fspath__`\n  The declared type does not allow `None`. Consider narrowing the value with an `is not None` check.",
-      "concise_description": "Argument `str | None` is not assignable to parameter `*args` with type `PathLike[str] | str` in function `pathlib.Path.__new__`",
       "severity": "error"
     },
     {

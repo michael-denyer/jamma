@@ -18,7 +18,6 @@ both the fixture changes and the regenerated manifest in the same commit.
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -28,19 +27,23 @@ pytestmark = pytest.mark.tier0
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_CHECKER_PATH = _REPO_ROOT / "scripts" / "check_fixture_manifest.py"
+_SCRIPT_DIR = _REPO_ROOT / "scripts"
 
 
 def _load_checker():
-    """Import the checker by file path (it lives outside the package)."""
-    spec = importlib.util.spec_from_file_location(
-        "_jamma_fixture_manifest_checker", _CHECKER_PATH
-    )
-    assert spec is not None, f"could not build module spec for {_CHECKER_PATH}"
-    assert spec.loader is not None, "spec has no loader"
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Import the checker from ``scripts/``, which is not a package.
+
+    Same sys.path dance as tests/test_check_c_extension_freshness.py, rather
+    than spec_from_file_location, so the module's attributes stay visible to
+    the type checker (``scripts`` is on pyrefly's search-path).
+    """
+    sys.path.insert(0, str(_SCRIPT_DIR))
+    try:
+        import check_fixture_manifest
+    finally:
+        if sys.path and sys.path[0] == str(_SCRIPT_DIR):
+            sys.path.pop(0)
+    return check_fixture_manifest
 
 
 def test_fixture_manifest_matches_disk(capsys: pytest.CaptureFixture[str]) -> None:

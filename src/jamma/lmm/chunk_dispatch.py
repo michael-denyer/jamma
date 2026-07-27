@@ -9,7 +9,7 @@ before the chunk loop and consulted per chunk. Split out from
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple, assert_never, cast
 
 import numpy as np
@@ -99,7 +99,7 @@ def _guarded_compute(
 
 
 def _compose_mode4_from_split(
-    wald_cr: dict,
+    wald_cr: Mapping[str, object],
     n_cvt: int,
     eigenvalues_np: np.ndarray,
     uab_varying_soa: np.ndarray,

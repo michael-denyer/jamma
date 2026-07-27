@@ -72,7 +72,7 @@ def _assert_reconstruction(
     if label:
         msg = f"{label}: {msg}"
     assert ratio < tol, msg
-    return ratio
+    return float(ratio)
 
 
 def _assert_orthogonality(
@@ -96,7 +96,7 @@ def _assert_orthogonality(
     if label:
         msg = f"{label}: {msg}"
     assert norm_off < tol, msg
-    return norm_off
+    return float(norm_off)
 
 
 # ---------------------------------------------------------------------------

@@ -46,8 +46,9 @@ from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
 # Module-level timing from the last run, for programmatic access by pipeline/benchmarks.
-# Not thread-safe: concurrent calls will corrupt this dict.
-# Cleared at function entry; repopulated at function exit on success.
+# Not thread-safe: concurrent calls will corrupt this reading.
+# Reset at function entry; replaced wholesale at function exit on success, so a
+# reader never observes a half-populated dict.
 # Use get_last_run_timing() for a safe snapshot copy.
 last_run_timing: RunnerTiming = {}
 
@@ -57,7 +58,7 @@ def get_last_run_timing() -> RunnerTiming:
 
     Safe to call from any thread -- returns an independent dict.
     """
-    return dict(last_run_timing)
+    return last_run_timing.copy()
 
 
 def run_lmm_association_numpy_streaming(
@@ -132,9 +133,9 @@ def run_lmm_association_numpy_streaming(
     n_samples_total = meta["n_samples"]
     n_snps = meta["n_snps"]
 
-    if snp_info is None:
-        snp_info = _LazySnpMeta(meta)
-    assert snp_info is not None  # resolved above: caller list or LazySnpMeta view
+    # Caller-supplied list, or a lazy view over the PLINK metadata. Kept in its
+    # own local because the parameter is `list | None`, which is neither.
+    snp_meta: _LazySnpMeta | list = _LazySnpMeta(meta) if snp_info is None else snp_info
 
     # Validate inputs and apply sample filtering
     setup = validate_runner_inputs(
@@ -248,7 +249,8 @@ def run_lmm_association_numpy_streaming(
     t_eigen_end = time.perf_counter()
 
     # === PASS 2: Compute per chunk (float64) ===
-    last_run_timing.clear()
+    global last_run_timing
+    last_run_timing = {}
     all_results: list[AssocResult] = []
 
     def _make_stream_source(source_chunk_size: int):
@@ -284,13 +286,13 @@ def run_lmm_association_numpy_streaming(
 
         if writer is not None:
             _sink = make_writer_sink(
-                writer, lmm_mode, snp_info, snp_indices, filtered_afs, filtered_miss
+                writer, lmm_mode, snp_meta, snp_indices, filtered_afs, filtered_miss
             )
         else:
             _sink = make_result_list_sink(
                 all_results,
                 lmm_mode,
-                snp_info,
+                snp_meta,
                 snp_indices,
                 filtered_afs,
                 filtered_miss,
@@ -358,14 +360,11 @@ def run_lmm_association_numpy_streaming(
             elapsed = time.perf_counter() - start_time
             logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
-        last_run_timing.clear()
-        last_run_timing.update(
-            {
-                "rotation_s": chunk_stats.rotation_s,
-                "numpy_compute_s": chunk_stats.compute_s,
-                "result_write_s": chunk_stats.result_write_s,
-            }
-        )
+        last_run_timing = {
+            "rotation_s": chunk_stats.rotation_s,
+            "numpy_compute_s": chunk_stats.compute_s,
+            "result_write_s": chunk_stats.result_write_s,
+        }
 
         n_tested = writer.count if writer is not None else len(all_results)
         return (

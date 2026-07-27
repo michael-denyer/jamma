@@ -55,6 +55,7 @@ from jamma.pipeline_config import (
 )
 
 __all__ = [
+    "BackendRequest",
     "KinshipResult",
     "PipelineConfig",
     "PipelineResult",

@@ -43,10 +43,11 @@ def test_mode4_all_c_dispatch(score_lrt_data):
         "p_scores",
     ]
     for key in expected_keys:
-        assert result[key] is not None, f"Mode 4 result['{key}'] should not be None"
-        assert isinstance(result[key], np.ndarray), f"result['{key}'] should be ndarray"
-        assert result[key].shape == (Uab_batch.shape[0],), (
-            f"result['{key}'] shape mismatch: {result[key].shape}"
+        arr = result[key]
+        assert arr is not None, f"Mode 4 result['{key}'] should not be None"
+        assert isinstance(arr, np.ndarray), f"result['{key}'] should be ndarray"
+        assert arr.shape == (Uab_batch.shape[0],), (
+            f"result['{key}'] shape mismatch: {arr.shape}"
         )
 
 

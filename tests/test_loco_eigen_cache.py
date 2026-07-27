@@ -372,6 +372,8 @@ class TestLocoEigenCacheIntegration:
                 atol=1e-14,
                 err_msg=f"se mismatch for {r1.rs}",
             )
+            assert r1.p_wald is not None, f"p_wald absent in fresh run for {r1.rs}"
+            assert r2.p_wald is not None, f"p_wald absent in cached run for {r1.rs}"
             np.testing.assert_allclose(
                 r1.p_wald,
                 r2.p_wald,

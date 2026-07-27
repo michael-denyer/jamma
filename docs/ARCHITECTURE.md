@@ -69,7 +69,8 @@ A typical LMM association run proceeds as follows:
 
 | Abstraction | File | Description |
 |---|---|---|
-| `PipelineRunner` / `PipelineConfig` | `src/jamma/pipeline.py` | Orchestrates the full GWAS pipeline; both CLI and Python API delegate here |
+| `PipelineRunner` | `src/jamma/pipeline.py` | Orchestrates the `-lmm` pipeline; both CLI and Python API delegate here |
+| `PipelineConfig` / `PipelineResult` / `KinshipResult` | `src/jamma/pipeline_config.py` | Frozen configuration and result dataclasses for the pipeline; `KinshipResult` is also re-exported from `jamma.pipeline` |
 | `gwas()` / `GWASResult` | `src/jamma/gwas.py` | Public Python API for single-call GWAS; wraps `PipelineRunner` |
 | `ExecutionPlan` | `src/jamma/lmm/runner.py` | Frozen dataclass encoding backend (`numpy`) and mode (`batch` or `streaming`) with a human-readable reason |
 | `LmmConfig` | `src/jamma/lmm/schema.py` | Frozen configuration dataclass shared by all LMM runners (MAF, lambda bounds, test type, etc.) |
@@ -146,7 +147,11 @@ src/jamma/
 
 The `eigh` function dispatches to DSYEVD (divide-and-conquer, faster, O(N²) workspace) and falls back to DSYEVR (MRRR algorithm, O(N) workspace) when DSYEVD workspace would exceed available memory. At 100k samples, DSYEVD requires ~240 GB; DSYEVR requires ~160 GB.
 
-The `_lmm_accel` C extension (`src/jamma/lmm/_lmm_accel.c`) provides the per-SNP REML/Wald inner loop with optional OpenMP parallelism. Compile flags, source lists, and link flags are centralised in `src/jamma/_build_support/compile_and_link.py` and consumed by all three compile entry points (`hatch_build.py` for wheel builds, `_compile_jlinalg.py` and `_compile_accel.py` for dev-mode and runtime recompile). LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check-compile-flag-literals.py`) rejects bare flag literals outside `_build_support/`.
+The `_lmm_accel` C extension provides the per-SNP REML/Wald inner loop with optional OpenMP parallelism. It builds from several translation units, not one file. The `LMM_ACCEL_SOURCES` tuple in `src/jamma/_build_support/compile_and_link.py` is the authoritative list.
+
+Two rules govern adding a `.c` file. Put it in that tuple, since both build paths read it. And define `NO_IMPORT_ARRAY` before including `_lmm_support.h`, because only `_lmm_accel.c` calls `import_array()`; a unit that forgets leaves its NumPy C-API pointer NULL and segfaults on the first `PyArray_*` call. Neither mistake fails the link on macOS, which uses `-undefined dynamic_lookup`. They fail at import, or silently much later.
+
+Compile flags, source lists, and link flags are centralised in the same module and consumed by all three compile entry points (`hatch_build.py` for wheel builds, `_compile_jlinalg.py` and `_compile_accel.py` for dev-mode and runtime recompile). LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check-compile-flag-literals.py`) rejects bare flag literals outside `_build_support/`.
 
 ## C Extension Architecture
 
@@ -155,7 +160,7 @@ Two compiled C extensions accelerate the hot paths:
 | Extension | Source | Purpose |
 |---|---|---|
 | `jamma.jlinalg._jlinalg` | `src/jamma/jlinalg/src/` | BLAS dispatch (DGEMM, DSYRK), LAPACK dispatch (DSYEVD, DSYEVR), single-pass per-SNP statistics |
-| `jamma.lmm._lmm_accel` | `src/jamma/lmm/_lmm_accel.c` | Per-SNP REML Wald pipeline with OpenMP parallelism over SNP chunks |
+| `jamma.lmm._lmm_accel` | `src/jamma/lmm/_lmm_*.c` | Per-SNP REML Wald pipeline with OpenMP parallelism over SNP chunks |
 
 Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). The streaming runner is only selected by `select_execution_mode()` when `_lmm_accel` is available; explicit `--backend numpy-streaming` raises `ValueError` if the extension is missing.
 

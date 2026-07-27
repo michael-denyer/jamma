@@ -8,7 +8,7 @@ JAMMA delivers the same statistical results as GEMMA while solving practical pro
 |---------|-------|-------|
 | **OOM Handling** | Silent crash (OS kill) | Pre-flight check with clear error |
 | **Large-Scale** | Requires manual tuning | Streaming I/O, pre-flight memory checks (>100k requires ILP64) |
-| **Speed** | 1x baseline | Up to 10x faster (C extension + vendor BLAS) |
+| **Speed** | 1x baseline | 16-43x on mouse_hs1940, ~10x end-to-end at 125k samples (C extension + vendor BLAS) |
 | **Installation** | C++ compilation required | `pip install jamma` |
 | **Error Messages** | Segfault or cryptic | Clear, actionable |
 | **Numerical Results** | Reference | Equivalent ([proof](GEMMA_EQUIVALENCE.md)) |
@@ -89,15 +89,17 @@ results = run_lmm_association_numpy_streaming(
 
 ## 3. Speed: C Extension Acceleration
 
-### Benchmark (mouse_hs1940: 1,940 samples x 12,226 SNPs, Apple M2, GEMMA 0.98.5)
+### Benchmark (mouse_hs1940: 1,940 samples x 12,226 SNPs, Apple M5 Pro, GEMMA 0.98.5)
+
+JAMMA v7.2.0, measured 2026-07-27, best of 3. GEMMA is the Homebrew OpenBLAS build.
 
 | Operation          | GEMMA 0.98.5 | JAMMA (NumPy+C) | Speedup |
 |--------------------|--------------|------------------|---------|
-| Kinship (`-gk 1`)  | 2.1s         | 1.7s             | ~1.2x   |
-| LMM (`-lmm 1`)     | 11.3s        | 5.3s             | **2.1x** |
-| **Total**          | **13.4s**    | **7.0s**         | **1.9x** |
+| Kinship (`-gk 1`)  | 1.0s         | 192ms            | **5.3x** |
+| LMM Wald (`-lmm 1`) | 7.0s        | 439ms            | **15.9x** |
+| LOCO Wald (`-loco`) | 2m21s       | 3.3s             | **~43x** |
 
-Kinship is BLAS-bound (both use OpenBLAS/Accelerate matmul) so times are similar. The LMM speedup comes from the OpenMP-parallelized C extension for batch SNP processing.
+Kinship is BLAS-bound in both, so its margin is the smallest of the three. The LMM speedup comes from the OpenMP-parallelized C extension for batch SNP processing. LOCO gains twice over: JAMMA tests each SNP once where GEMMA re-tests all of them against every chromosome's kinship, and JAMMA runs all 19 chromosomes in one process instead of 19 cold starts. The full table, including the Accelerate-built GEMMA control, is in [PERFORMANCE.md](PERFORMANCE.md).
 
 ### At Scale: 125k Samples (Databricks E96ds_v6, 48 cores, ILP64 MKL)
 
@@ -304,7 +306,7 @@ class AssocResult:
 [project]
 dependencies = [
     "bed-reader>=1.0.0",
-    "numpy>=2.0.0",
+    "numpy>=2.4.6",
     "psutil>=5.9.0",
     "threadpoolctl>=3.0.0",
     "click>=8.0.0",
@@ -353,7 +355,7 @@ JAMMA is not always the right choice:
 |---------|-------|-------|
 | Crashes at scale | Silent OOM | Pre-flight checks |
 | Large samples | Manual tuning | Automatic streaming (>100k requires ILP64) |
-| Speed | Baseline | Up to 10x faster |
+| Speed | Baseline | 16-43x small scale, ~10x at 125k |
 | Installation | C++ build | pip install |
 | Errors | Cryptic | Actionable |
 | Results | Reference | Equivalent |

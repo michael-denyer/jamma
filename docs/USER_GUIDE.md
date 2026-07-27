@@ -38,7 +38,7 @@ pip install numpy \
 pip install git+https://github.com/michael-denyer/jamma.git --no-deps
 ```
 
-> **Why `--no-deps`?** JAMMA depends on `numpy>=2.0.0`, so a normal install will
+> **Why `--no-deps`?** JAMMA depends on `numpy>=2.4.6`, so a normal install will
 > pull in standard numpy and overwrite the ILP64 build. `--no-deps` prevents this;
 > you install the runtime dependencies manually instead.
 
@@ -659,8 +659,10 @@ typical Databricks / HPC environment for large-scale GWAS:
 
 - **BLAS/LAPACK**: Tuned for Intel MKL (shipped via `numpy-mkl` wheels).
   OpenBLAS works but is slower and segfaults above ~50k samples.
-- **C extension**: The OpenMP-parallelized C extension (`_lmm_accel.c`) provides
-  2-3x speedup over pure Python for the LMM compute phase.
+- **C extension**: The OpenMP-parallelized `_lmm_accel` extension provides a
+  5-7x speedup over pure NumPy for the LMM compute phase on mouse_hs1940. The
+  margin grows with covariate count, because the Pab table recursion gets more
+  expensive.
 - **ARM / Apple Silicon**: Runs correctly via Accelerate BLAS. Thread control
   (`blas_threads()`) is not available on Accelerate — Apple provides no public
   API and `VECLIB_MAXIMUM_THREADS` is only read at library load time. JAMMA

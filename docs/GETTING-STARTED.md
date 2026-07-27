@@ -9,7 +9,7 @@ genome-wide association studies (GWAS).
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | Python | `>= 3.11` | 3.11, 3.12, and 3.13 supported |
-| NumPy | `>= 2.0.0` | Bundled as a dependency |
+| NumPy | `>= 2.4.6` | Bundled as a dependency |
 | pip | any recent | or `uv` (recommended for development) |
 
 No other system tools are required for standard usage. PLINK binary files (`.bed/.bim/.fam`)
@@ -48,7 +48,7 @@ pip install numpy \
 pip install jamma --no-deps
 ```
 
-> **Why `--no-deps`?** `pip install jamma` pulls in `numpy>=2.0.0`, which overwrites the
+> **Why `--no-deps`?** `pip install jamma` pulls in `numpy>=2.4.6`, which overwrites the
 > ILP64 build with standard LP64 numpy. Installing deps first and using `--no-deps` for
 > JAMMA preserves the ILP64 build.
 
@@ -133,14 +133,19 @@ python -c "import numpy as np; cfg = np.show_config(mode='dicts'); print(cfg['Bu
 If the BLAS name does not contain `ilp64`, re-run the ILP64 install steps. Always install
 other packages before ILP64 numpy, and always use `pip install jamma --no-deps`.
 
-### C extension not compiled (development installs)
+### C extensions not compiled (development installs)
 
-After cloning from source, the C extension must be compiled:
+After cloning from source, both C extensions must be compiled. `uv sync` does
+not build them:
 
 ```bash
 uv sync
-uv run python -c "from jamma.jlinalg._compile_jlinalg import compile_extension; compile_extension()"
+uv run python -m jamma.lmm._compile_accel
+uv run python -m jamma.jlinalg._compile_jlinalg
 ```
+
+JAMMA falls back to pure Python without them. On mouse_hs1940 that fallback runs
+LMM roughly 5x to 7x slower, and the streaming runner is unavailable entirely.
 
 ### Missing environment variables
 

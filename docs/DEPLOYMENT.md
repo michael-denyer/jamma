@@ -119,16 +119,26 @@ the deployment.
 **Steps to cut a release:**
 
 1. Bump `version` in `pyproject.toml`.
-2. Update `CHANGELOG.md` — move Unreleased items into a new version section.
-3. Commit and push to `master`.
-4. Create a GitHub release:
+2. Run `uv lock` and stage `uv.lock` alongside `pyproject.toml`. The lock file does
+   not update itself, and CI's `uv lock --check` step fails on a stale one.
+3. Update `CHANGELOG.md`, moving Unreleased items into a new version section.
+4. Commit, push to `master`, and confirm CI is green:
+
+   ```bash
+   gh run list --branch master --limit 3
+   ```
+
+5. Create a GitHub release:
 
    ```bash
    gh release create v<X.Y.Z> --title "v<X.Y.Z>" --notes "..."
    ```
 
-5. The `build-wheels.yml` workflow fires automatically on the published event and
-   uploads to PyPI.
+   Do not pass `dist/*`. `build-wheels.yml` builds the artifacts itself across
+   platforms on the `release: published` event.
+
+6. The `build-wheels.yml` workflow fires automatically on that event and
+   uploads to PyPI. `publish.yml` is TestPyPI-only, on `workflow_dispatch`.
 
 ## Environment Setup
 

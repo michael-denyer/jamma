@@ -32,6 +32,13 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 |----------|-----------|-------------|
 | `dgemm` | `(A, B, transa='N', transb='N') -> ndarray` | Matrix multiply op(A) @ op(B) |
 | `dsyrk` | `(X, *, out=None, beta=0.0) -> ndarray` | Symmetric rank-k update X @ X.T + beta*out |
+| `dsyrk_scratch_bytes` | `(n) -> int` | Upper bound on what one `dsyrk` call holds beyond its n-by-n output. Zero on the native backend; the NumPy fallback needs a block, which a memory pre-flight has to budget for |
+
+### Kernels
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `compute_snp_stats_chunk` | `(data, means, miss_counts, variances, n_aa=None, n_ab=None, n_bb=None) -> None` | Single-pass per-SNP mean, population variance, and missing count into pre-allocated outputs. The three optional arrays collect genotype counts for HWE testing |
 
 ### LAPACK (vendor dispatch)
 
@@ -49,6 +56,7 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 | `blas_backend` | `str` | Active BLAS backend: "MKL-ILP64", "Accelerate-ILP64", "numpy-fallback", etc. |
 | `blas_is_ilp64` | `int` | 1 if active BLAS uses 64-bit integers |
 | `blas_has_dsyevd` | `int` | 1 if vendor DSYEVD available |
+| `blas_has_lapacke_dsyevd` | `int` | 1 if the vendor exposes DSYEVD through the LAPACKE row-major interface |
 | `blas_has_dsyevr` | `int` | 1 if vendor DSYEVR available |
 | `blas_has_dsyrk` | `int` | 1 if vendor DSYRK available |
 | `blas_has_dgeqrf` | `int` | 1 if vendor QR (DGEQRF + DORGQR) available |

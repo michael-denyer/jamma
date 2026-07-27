@@ -7,8 +7,13 @@ name: External Link Check
 # broken links.
 #
 # Consistency with ci.yml's link-check job:
-# - Both jobs use the same lychee binary version (lycheeverse/lychee-action
-#   pinned SHA) and the same lychee.toml shared config.
+# - Both jobs use the same lychee binary version and the same lychee.toml
+#   shared config. The binary version comes from the explicit
+#   `lycheeVersion:` input below, NOT from the lychee-action SHA — the
+#   action's own default floats (it was v0.24.2 at v2.9.0), so pinning the
+#   action alone does not pin the binary. Keep the three entry points in
+#   step: this file, ci.yml's link-check, and .pre-commit-config.yaml's
+#   `rev: lychee-v<version>`.
 # - ci.yml's link-check uses --offline and runs on every PR (fast,
 #   deterministic, no network).
 # - This workflow omits --offline so external URLs are actually fetched.
@@ -46,6 +51,9 @@ jobs:
         id: lychee
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8  # v2.9.0
         with:
+          # Same binary version as the pre-commit hook and the CI
+          # link-check job. See the comment on that job in ci.yml.
+          lycheeVersion: v0.24.2
           args: --no-progress --config lychee.toml './**/*.md'
           fail: false
           token: ${{ secrets.GITHUB_TOKEN }}

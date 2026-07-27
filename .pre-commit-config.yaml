@@ -87,9 +87,12 @@ repos:
   #
   # Consistency: lychee.toml is the single source of truth for which paths
   # are excluded and which rule set applies. Pre-commit only adds the
-  # --offline flag on top of that shared config.
+  # --offline flag on top of that shared config. The `rev:` below is also
+  # the binary version both workflows pin via `lycheeVersion:` — bump all
+  # three together, or the modes drift and a broken link passes one check
+  # while failing another.
   - repo: https://github.com/lycheeverse/lychee
-    rev: lychee-v0.23.0
+    rev: lychee-v0.24.2
     hooks:
       - id: lychee
         name: lychee (offline link check)

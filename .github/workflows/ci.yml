@@ -327,8 +327,11 @@ jobs:
   #
   # Consistency: lychee.toml is the shared source of truth for exclude
   # rules. The pre-commit hook (.pre-commit-config.yaml) runs the same
-  # binary with the same config and the same --offline flag. If this CI
-  # job passes, the local hook will too.
+  # binary version with the same config and the same --offline flag, so if
+  # this CI job passes the local hook will too. "Same binary version" is
+  # enforced by the explicit `lycheeVersion:` below matching the hook's
+  # `rev: lychee-v<version>` — the lychee-action SHA pin does not pin the
+  # binary, since the action downloads whatever its own default says.
   #
   # External (online) link checking runs separately in link-check-external
   # on a weekly schedule, to avoid PR-time flakes from third-party servers.
@@ -342,5 +345,11 @@ jobs:
       - name: Run lychee (offline)
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8  # v2.9.0
         with:
+          # Pinned explicitly, not left to the action's default: the
+          # pre-commit hook pins the same binary version (lychee-v0.24.2 in
+          # .pre-commit-config.yaml). Without this, the action's default
+          # floats on every lychee-action release and the two entry points
+          # silently diverge.
+          lycheeVersion: v0.24.2
           args: --offline --no-progress --config lychee.toml './**/*.md'
           fail: true

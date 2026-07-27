@@ -15,6 +15,7 @@ signature check fails loudly in that case.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -186,7 +187,7 @@ class TestFakeProductionDrift:
     """
 
     @staticmethod
-    def _param_names(callable_obj: object) -> list[str]:
+    def _param_names(callable_obj: Callable[..., object]) -> list[str]:
         return [
             p.name
             for p in inspect.signature(callable_obj).parameters.values()

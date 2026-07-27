@@ -730,24 +730,35 @@ class TestEarlySampleFiltering:
         _write_fam(tmp_path / "test.fam", nan_indices=_NAN_INDICES)
         n_valid = _N_SAMPLES - len(_NAN_INDICES)
 
+        # backend stays out of the dict: splatting it would widen the literal
+        # to str and no longer satisfy PipelineConfig's Literal[...] field.
         common_kwargs = {
             "bfile": bfile,
             "lmm_mode": 1,
             "check_memory": False,
             "show_progress": False,
-            "backend": "numpy",
         }
 
         out_no_save = tmp_path / "output_nosave"
         out_no_save.mkdir()
         result_no_save = PipelineRunner(
-            PipelineConfig(**common_kwargs, output_dir=out_no_save, save_kinship=False)
+            PipelineConfig(
+                **common_kwargs,
+                backend="numpy",
+                output_dir=out_no_save,
+                save_kinship=False,
+            )
         ).run()
 
         out_save = tmp_path / "output_save"
         out_save.mkdir()
         result_save = PipelineRunner(
-            PipelineConfig(**common_kwargs, output_dir=out_save, save_kinship=True)
+            PipelineConfig(
+                **common_kwargs,
+                backend="numpy",
+                output_dir=out_save,
+                save_kinship=True,
+            )
         ).run()
 
         assert result_save.n_samples == result_no_save.n_samples == n_valid

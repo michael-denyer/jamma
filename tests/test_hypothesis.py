@@ -678,34 +678,6 @@ class TestDegenerateSNPEdgeCases:
 class TestFilteringProperties:
     """Property-based tests for MAF/missing/monomorphic filtering."""
 
-    @st.composite
-    def genotypes_with_controlled_maf(draw, n_samples=100, n_snps=20):
-        """Generate genotypes with known MAF values for boundary testing."""
-        seed = draw(st.integers(min_value=0, max_value=2**32 - 1))
-        rng = np.random.default_rng(seed)
-
-        # Generate MAFs with some exactly at common thresholds
-        target_mafs = draw(
-            st.lists(
-                st.sampled_from([0.0, 0.001, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5]),
-                min_size=n_snps,
-                max_size=n_snps,
-            )
-        )
-
-        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
-
-        for j, maf in enumerate(target_mafs):
-            if maf == 0.0:
-                # Monomorphic
-                genotypes[:, j] = 0.0
-            else:
-                p = maf
-                probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
-                genotypes[:, j] = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=probs)
-
-        return genotypes, np.array(target_mafs)
-
     @given(
         n_samples=st.integers(min_value=50, max_value=100),
         seed=st.integers(min_value=0, max_value=2**32 - 1),

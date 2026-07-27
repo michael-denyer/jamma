@@ -10,9 +10,6 @@
 extend-exclude = [
     # Third-party vendored code.
     "src/jamma/jlinalg/tests/unity/**",
-    # Generated pyrefly error snapshot — contains library type names
-    # (e.g. numpy's `_UFunc_Nin1_Nout1`) that trip the spell checker.
-    "pyrefly-baseline.json",
     # Build artifacts and caches.
     ".venv/",
     ".planning/",

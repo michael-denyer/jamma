@@ -353,3 +353,19 @@ def compute_lrt_fused_ws_c(
     utg_t: npt.NDArray[np.float64],
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
+
+# Test-only entry points. Not part of the computational API.
+def _get_aligned_alloc_test_ptr(n: int) -> int:
+    """Return the address of an ``alloc_aligned_doubles(n)`` buffer.
+
+    Used by tests/lmm_accel/test_lmm_accel_split.py to assert 32-byte
+    alignment. Always compiled.
+    """
+
+def jamma_sentinel_oob() -> int:
+    """Deliberately read one byte past a heap allocation.
+
+    Compiled **only** when ``-DJAMMA_SENTINEL_UB`` is set, which just the
+    sanitizers workflow does. Absent from every normal build, so callers must
+    guard on ``hasattr`` first — tests/test_sanitizer_sentinel.py does.
+    """

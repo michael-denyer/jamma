@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import platform
 from contextlib import suppress
+from typing import TypedDict
 
 import numpy as np
 import psutil
@@ -16,7 +17,24 @@ import psutil
 from jamma.core.threading import get_blas_backend, get_blas_thread_count
 
 
-def get_hardware_context() -> dict[str, str | int | bool]:
+class HardwareContext(TypedDict):
+    """Hardware and software context for a benchmark run.
+
+    Every value is JSON-serializable. Field docs are on
+    :func:`get_hardware_context`.
+    """
+
+    cpu_model: str
+    cpu_count_physical: int
+    cpu_count_logical: int
+    blas_backend: str
+    blas_threads: int
+    numpy_version: str
+    platform: str
+    python_version: str
+
+
+def get_hardware_context() -> HardwareContext:
     """Collect hardware and software context for benchmark reproducibility.
 
     Gathers CPU, BLAS, NumPy, platform, and Python version information

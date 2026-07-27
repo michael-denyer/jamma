@@ -213,7 +213,10 @@ def chi2_sf_batch(x: np.ndarray) -> np.ndarray:
 
     if np.any(normal):
         args = np.sqrt(x[normal] / 2.0)
-        result[normal] = _erfc_ufunc(args).astype(np.float64)
+        # np.frompyfunc yields an object array; asarray is the cast, and it
+        # types correctly where .astype does not (frompyfunc is declared as
+        # returning a scalar).
+        result[normal] = np.asarray(_erfc_ufunc(args), dtype=np.float64)
 
     return result
 

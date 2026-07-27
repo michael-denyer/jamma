@@ -8,7 +8,7 @@ import contextlib
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import TypeVar
 
 import progressbar
@@ -92,7 +92,7 @@ def create_progress_bar(
 
 
 def progress_iterator(
-    iterable: Iterator,
+    iterable: Iterable,
     total: int,
     desc: str = "",
     initial_eta_seconds: float | None = None,

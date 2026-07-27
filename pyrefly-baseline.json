@@ -97,18 +97,6 @@
       "severity": "error"
     },
     {
-      "line": 52,
-      "column": 26,
-      "stop_line": 52,
-      "stop_column": 53,
-      "path": "src/jamma/gwas.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`dict[Unknown, Unknown]` is not assignable to `GWASTiming`",
-      "concise_description": "`dict[Unknown, Unknown]` is not assignable to `GWASTiming`",
-      "severity": "error"
-    },
-    {
       "line": 189,
       "column": 17,
       "stop_line": 189,
@@ -118,66 +106,6 @@
       "name": "bad-argument-type",
       "description": "Argument `str` is not assignable to parameter `backend` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.pipeline_config.PipelineConfig.__init__`",
       "concise_description": "Argument `str` is not assignable to parameter `backend` with type `Literal['auto', 'numpy', 'numpy-streaming']` in function `jamma.pipeline_config.PipelineConfig.__init__`",
-      "severity": "error"
-    },
-    {
-      "line": 386,
-      "column": 17,
-      "stop_line": 386,
-      "stop_column": 25,
-      "path": "src/jamma/io/plink.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `range` is not assignable to parameter `iterable` with type `Iterator[Unknown]` in function `jamma.core.progress.progress_iterator`\n  Protocol `Iterator` requires attribute `__next__`",
-      "concise_description": "Argument `range` is not assignable to parameter `iterable` with type `Iterator[Unknown]` in function `jamma.core.progress.progress_iterator`",
-      "severity": "error"
-    },
-    {
-      "line": 386,
-      "column": 33,
-      "stop_line": 386,
-      "stop_column": 41,
-      "path": "src/jamma/io/plink.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `int | ndarray` is not assignable to parameter `total` with type `int` in function `jamma.core.progress.progress_iterator`",
-      "concise_description": "Argument `int | ndarray` is not assignable to parameter `total` with type `int` in function `jamma.core.progress.progress_iterator`",
-      "severity": "error"
-    },
-    {
-      "line": 1068,
-      "column": 38,
-      "stop_line": 1068,
-      "stop_column": 49,
-      "path": "src/jamma/lmm/likelihood.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `tuple[int, ...]` is not assignable to parameter `data` with type `list[int]` in function `_frozen`",
-      "concise_description": "Argument `tuple[int, ...]` is not assignable to parameter `data` with type `list[int]` in function `_frozen`",
-      "severity": "error"
-    },
-    {
-      "line": 1069,
-      "column": 36,
-      "stop_line": 1069,
-      "stop_column": 47,
-      "path": "src/jamma/lmm/likelihood.py",
-      "code": -2,
-      "name": "bad-argument-type",
-      "description": "Argument `tuple[int, ...]` is not assignable to parameter `data` with type `list[int]` in function `_frozen`",
-      "concise_description": "Argument `tuple[int, ...]` is not assignable to parameter `data` with type `list[int]` in function `_frozen`",
-      "severity": "error"
-    },
-    {
-      "line": 327,
-      "column": 13,
-      "stop_line": 327,
-      "stop_column": 43,
-      "path": "src/jamma/lmm/loco.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `None`\n  Object of class `NoneType` has no attribute `__setitem__`",
-      "concise_description": "Cannot set item in `None`",
       "severity": "error"
     },
     {
@@ -226,18 +154,6 @@
       "name": "missing-attribute",
       "description": "Object of class `RunnerTiming` has no attribute `clear`",
       "concise_description": "Object of class `RunnerTiming` has no attribute `clear`",
-      "severity": "error"
-    },
-    {
-      "line": 216,
-      "column": 26,
-      "stop_line": 216,
-      "stop_column": 50,
-      "path": "src/jamma/lmm/special.py",
-      "code": -2,
-      "name": "missing-attribute",
-      "description": "Object of class `float` has no attribute `astype`",
-      "concise_description": "Object of class `float` has no attribute `astype`",
       "severity": "error"
     },
     {

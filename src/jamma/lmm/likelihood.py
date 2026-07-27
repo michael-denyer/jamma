@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import functools
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import numpy as np
 from loguru import logger
@@ -1040,7 +1040,7 @@ def build_pab_table_for_c(n_cvt: int) -> dict:
     diag_rows = [r for r, _ in table["logdet_diag_indices"]]
     diag_cols = [c for _, c in table["logdet_diag_indices"]]
 
-    def _frozen(data: list[int]) -> np.ndarray:
+    def _frozen(data: Sequence[int]) -> np.ndarray:
         arr = np.array(data, dtype=np.int32)
         arr.flags.writeable = False
         return arr

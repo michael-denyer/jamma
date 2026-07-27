@@ -49,7 +49,7 @@ class GWASResult:
     associations: list[AssocResult]
     n_samples: int
     n_snps_tested: int
-    timing: GWASTiming = field(default_factory=dict)
+    timing: GWASTiming = field(default_factory=GWASTiming)
     pve_estimate: float | None = None
     pve_se: float | None = None
 

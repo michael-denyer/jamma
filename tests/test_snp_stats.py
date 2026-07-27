@@ -99,6 +99,10 @@ class TestSnpStatsC:
     def test_hwe_counts(self, genotypes_f32):
         ref = _python_reference(genotypes_f32, compute_hwe=True)
         _, _, _, naa, nab, nbb = self._call(genotypes_f32, compute_hwe=True)
+        # compute_hwe=True must populate all three count arrays.
+        assert naa is not None
+        assert nab is not None
+        assert nbb is not None
         np.testing.assert_array_equal(naa, ref["n_aa"])
         np.testing.assert_array_equal(nab, ref["n_ab"])
         np.testing.assert_array_equal(nbb, ref["n_bb"])

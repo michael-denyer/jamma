@@ -18,6 +18,7 @@ import jamma
 from jamma.core import OutputConfig
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_MISS
 from jamma.pipeline import BackendRequest, PipelineConfig, PipelineRunner
+from jamma.pipeline_kinship import compute_kinship
 from jamma.utils import setup_logging, write_gemma_log
 
 
@@ -434,7 +435,7 @@ def _run_gk(
             ksnps_file=ksnps_file,
             legacy_text=legacy_text,
         )
-        result = PipelineRunner(pipeline_config).compute_kinship(mode)
+        result = compute_kinship(pipeline_config, mode)
     except (FileNotFoundError, ValueError, MemoryError, OSError) as e:
         logger.debug("Kinship computation failed with traceback:", exc_info=True)
         _cli_error(str(e))

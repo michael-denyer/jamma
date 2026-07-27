@@ -182,12 +182,6 @@ class PipelineRunner:
         # Validate .bed file size matches .fam/.bim dimensions (VALID-01)
         validate_plink_dimensions(bfile)
 
-        if self.config.phenotype_column < 1:
-            raise ValueError(
-                f"phenotype_column must be >= 1 (1-based), "
-                f"got {self.config.phenotype_column}"
-            )
-
         if self.config.loco and self.config.kinship_file is not None:
             raise ValueError(
                 "-k and -loco are mutually exclusive in this version. "
@@ -282,14 +276,11 @@ class PipelineRunner:
             (non-NaN, non-missing) phenotypes.
 
         Raises:
-            ValueError: If no samples have valid phenotypes, or if
-                pheno_col is invalid.
+            ValueError: If the .fam file cannot be read, if pheno_col names a
+                column the .fam file does not have, or if no sample has a valid
+                phenotype. pheno_col is trusted to be >= 1;
+                PipelineConfig.__post_init__ is where that is enforced.
         """
-        if pheno_col < 1:
-            raise ValueError(
-                f"phenotype_column must be >= 1 (1-based), got {pheno_col}"
-            )
-
         # Columns 0-4 are FID, IID, father, mother, sex
         col_index = 4 + pheno_col
         fam_path = f"{self.config.bfile}.fam"
@@ -306,7 +297,7 @@ class PipelineRunner:
         if col_index >= n_cols:
             n_pheno_cols = n_cols - 5
             raise ValueError(
-                f"phenotype_column {pheno_col} exceeds available columns "
+                f"phenotype column {pheno_col} exceeds available columns "
                 f"in .fam file ({n_pheno_cols} phenotype column"
                 f"{'s' if n_pheno_cols != 1 else ''} available)"
             )
@@ -328,12 +319,15 @@ class PipelineRunner:
         return phenotypes, n_analyzed
 
     def parse_phenotypes(self) -> tuple[np.ndarray, int]:
-        """Parse phenotypes from the .fam file.
+        """Parse the single configured phenotype column from the .fam file.
 
         Uses vectorized parsing: reads the phenotype column, replaces
         missing indicators ("-9", "NA") with NaN, converts to float64.
-        The column is selected by ``self.config.phenotype_column``
-        (1-based, matching GEMMA's ``-n`` flag).
+
+        Reads ``phenotype_columns[0]``. The LOCO path calls this, and
+        PipelineConfig rejects multi-phenotype LOCO, so there is exactly one
+        column to read there. The multi-phenotype path goes through
+        ``_load_phenotypes_and_intersect_masks`` instead.
 
         Returns:
             Tuple of (phenotypes array, n_analyzed) where phenotypes has
@@ -341,10 +335,10 @@ class PipelineRunner:
             (non-NaN, non-missing) phenotypes.
 
         Raises:
-            ValueError: If no samples have valid phenotypes, or if
-                phenotype_column is invalid.
+            ValueError: If no samples have valid phenotypes, or if the column
+                is not present in the .fam file.
         """
-        return self._parse_phenotype_column(self.config.phenotype_column)
+        return self._parse_phenotype_column(self.config.phenotype_columns[0])
 
     def check_memory_requirements(
         self, n_samples: int, n_snps: int, n_cvt: int = 1

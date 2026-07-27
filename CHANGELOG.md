@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`PipelineConfig.phenotype_column` is gone. Use `phenotype_columns`.** The
+  config carried two fields for one concept and `__post_init__` kept them in
+  step by mutating itself: an unset `phenotype_columns` was filled in from the
+  scalar, then the scalar was overwritten with `phenotype_columns[0]`. A reader
+  had to know that an empty list meant "unspecified" rather than "no columns",
+  and that assigning either field after construction desynchronised them.
+  `phenotype_columns` is now the only field, it defaults to `[1]`, and an empty
+  list is rejected instead of silently meaning `[1]`.
+
+  ```python
+  # Before
+  PipelineConfig(bfile=..., phenotype_column=2)
+  # After
+  PipelineConfig(bfile=..., phenotype_columns=[2])
+  ```
+
+  `gwas(phenotype_column=2)` is unchanged. It is a single-phenotype entry point
+  (`GWASResult` has no per-phenotype output paths), so a scalar is the honest
+  parameter there; it now maps to `phenotype_columns=[phenotype_column]`. The
+  CLI's `-n` is unchanged.
+
+- **An out-of-range phenotype column is now rejected when the config is
+  built,** not part-way through `PipelineRunner.validate_inputs`. The rule had
+  three homes: `validate_inputs` checked the scalar, `_parse_phenotype_column`
+  re-checked whatever column it was handed, and `__post_init__` checked neither.
+  It now lives only in `__post_init__`, which checks every index rather than
+  just the first, so `phenotype_columns=[1, 0]` fails at construction instead of
+  after kinship and eigendecomposition. Same `ValueError`, raised earlier. The
+  message names `phenotype_columns`.
+
 ### Fixed
 
 - **`IncrementalAssocWriter.write()` could raise `UnboundLocalError` instead of

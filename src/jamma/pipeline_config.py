@@ -62,9 +62,6 @@ class PipelineConfig:
         eigen_dir: Directory for LOCO per-chromosome eigen cache. When set
             with loco mode, looks for cached eigen files to skip eigendecomp.
             Combined with write_eigen, writes per-chromosome files here.
-        phenotype_column: 1-based phenotype column index. 1 selects column 6
-            of .fam (standard phenotype), 2 selects column 7, etc. Matches
-            GEMMA's -n flag.
         snps_file: SNP list file to restrict association testing. One SNP ID
             per line. Matches GEMMA's -snps flag. None means test all SNPs.
         ksnps_file: SNP list file to restrict kinship computation. One SNP ID
@@ -92,13 +89,12 @@ class PipelineConfig:
         legacy_text: If True, write kinship and eigen files in GEMMA text format
             (.cXX.txt / .eigenD.txt / .eigenU.txt) instead of binary .npy.
             Default False writes binary for performance at scale.
-        phenotype_columns: List of 1-based phenotype column indices. Left empty
-            (the default), it is derived from phenotype_column, and
-            phenotype_column is kept in sync with its first element either way,
-            so it is never empty after construction. When multiple columns are
-            specified,
-            eigendecomposition is computed once and reused. Mutually exclusive
-            with loco mode for multiple columns.
+        phenotype_columns: 1-based phenotype column indices, in the order they
+            are tested. 1 selects column 6 of .fam (the standard phenotype), 2
+            selects column 7, and so on, matching GEMMA's -n flag. Defaults to
+            [1]. Must name at least one column, every index >= 1 and distinct.
+            With more than one column the eigendecomposition is computed once
+            and reused; more than one is rejected in loco mode.
     """
 
     bfile: Path
@@ -118,7 +114,6 @@ class PipelineConfig:
     eigenvector_file: Path | None = None
     write_eigen: bool = False
     eigen_dir: Path | None = None
-    phenotype_column: int = 1
     snps_file: Path | None = None
     ksnps_file: Path | None = None
     hwe_threshold: float = 0.0
@@ -130,7 +125,7 @@ class PipelineConfig:
     cat_columns: list[int] | None = None
     backend: BackendRequest = "auto"
     legacy_text: bool = False
-    phenotype_columns: list[int] = field(default_factory=list)
+    phenotype_columns: list[int] = field(default_factory=lambda: [1])
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:
@@ -148,14 +143,17 @@ class PipelineConfig:
         # an invalid knob fail at config time instead of after kinship and
         # eigendecomposition — or, on the NumPy fallback, not at all.
         self.lmm_config()
-        # Derive phenotype_columns from phenotype_column if not set. Empty is
-        # the field default, so it means "unspecified" rather than "no columns";
-        # after this the list is non-empty and every reader can rely on that.
+        # Range and emptiness are checked here rather than in
+        # PipelineRunner.validate_inputs: an out-of-range column index is a
+        # config error, not a filesystem one, so it should fail at construction
+        # instead of surviving as far as a runner.
         if not self.phenotype_columns:
-            self.phenotype_columns = [self.phenotype_column]
-        # Keep phenotype_column in sync as first element
-        self.phenotype_column = self.phenotype_columns[0]
-        # Validate no duplicates
+            raise ValueError("phenotype_columns must name at least one column")
+        for col in self.phenotype_columns:
+            if col < 1:
+                raise ValueError(
+                    f"phenotype_columns indices must be >= 1 (1-based), got {col}"
+                )
         if len(self.phenotype_columns) != len(set(self.phenotype_columns)):
             raise ValueError(
                 f"phenotype_columns contains duplicate indices: "

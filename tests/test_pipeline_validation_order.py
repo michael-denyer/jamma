@@ -9,6 +9,12 @@ These cases were recorded from the implementation as it stood before the
 file-existence checks were table-driven. They pin the contract, not a
 preference. If a deliberate reordering is ever wanted, change these
 expectations in the same commit and say why.
+
+The phenotype column range check used to be in this ordering, between the PLINK
+files and the file-existence table. It moved to
+``PipelineConfig.__post_init__``, so a bad index now fails at construction and
+never reaches ``validate_inputs`` to be ordered against anything. Its
+replacement lives in ``test_pipeline.py::TestMultiPhenotypeConfig``.
 """
 
 from __future__ import annotations
@@ -37,26 +43,12 @@ def test_missing_plink_beats_every_other_violation(tmp_path):
         PipelineConfig(
             bfile=tmp_path / "nonexistent",
             kinship_file=tmp_path / "missing.cXX.txt",
-            phenotype_column=0,
             hwe_threshold=-1.0,
             check_memory=False,
         )
     )
     assert kind is FileNotFoundError
     assert "PLINK .bed file" in message
-
-
-def test_phenotype_column_beats_file_existence(tmp_path):
-    kind, message = _raises(
-        PipelineConfig(
-            bfile=BFILE,
-            phenotype_column=0,
-            kinship_file=tmp_path / "missing.cXX.txt",
-            check_memory=False,
-        )
-    )
-    assert kind is ValueError
-    assert "phenotype_column must be >= 1" in message
 
 
 def test_loco_kinship_conflict_beats_the_file_not_existing(tmp_path):

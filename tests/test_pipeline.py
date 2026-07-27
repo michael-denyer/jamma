@@ -200,15 +200,15 @@ def _copy_plink_genotypes(dest: Path) -> Path:
 
 @pytest.mark.tier1
 class TestPhenotypeColumnSelection:
-    """Tests for phenotype column selection via PipelineConfig.phenotype_column."""
+    """Tests for phenotype column selection via PipelineConfig.phenotype_columns."""
 
     def test_default_phenotype_column(self, sample_plink_data: Path) -> None:
-        """PipelineConfig default phenotype_column=1 produces same result as before."""
+        """The default phenotype_columns=[1] reads the standard .fam phenotype."""
         config = PipelineConfig(
             bfile=sample_plink_data,
             check_memory=False,
         )
-        assert config.phenotype_column == 1
+        assert config.phenotype_columns == [1]
 
         runner = PipelineRunner(config)
         phenotypes, n_analyzed = runner.parse_phenotypes()
@@ -222,7 +222,7 @@ class TestPhenotypeColumnSelection:
         assert phenotypes[0] == pytest.approx(expected_first)
 
     def test_phenotype_column_selects_different_data(self, tmp_path: Path) -> None:
-        """Different phenotype_column values return different phenotype vectors."""
+        """Different phenotype_columns values return different phenotype vectors."""
         bfile = _copy_plink_genotypes(tmp_path)
 
         # Write a custom .fam with 3 phenotype columns (8 total columns)
@@ -240,16 +240,13 @@ class TestPhenotypeColumnSelection:
                     f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\t{pheno3}\n"
                 )
 
-        # phenotype_column=1 -> first phenotype (column 6)
-        config1 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_column=1)
+        config1 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[1])
         pheno1, _ = PipelineRunner(config1).parse_phenotypes()
 
-        # phenotype_column=2 -> second phenotype (column 7)
-        config2 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_column=2)
+        config2 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[2])
         pheno2, _ = PipelineRunner(config2).parse_phenotypes()
 
-        # phenotype_column=3 -> third phenotype (column 8)
-        config3 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_column=3)
+        config3 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[3])
         pheno3, _ = PipelineRunner(config3).parse_phenotypes()
 
         # All should be different
@@ -262,33 +259,29 @@ class TestPhenotypeColumnSelection:
         assert pheno3[0] == pytest.approx(7.0)
 
     def test_phenotype_column_zero_raises(self) -> None:
-        """phenotype_column=0 raises ValueError."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            check_memory=False,
-            phenotype_column=0,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(ValueError, match="phenotype_column must be >= 1"):
-            runner.parse_phenotypes()
+        """A 0 index is rejected at construction, before any file is read."""
+        with pytest.raises(ValueError, match="phenotype_columns indices must be >= 1"):
+            PipelineConfig(
+                bfile=BFILE,
+                check_memory=False,
+                phenotype_columns=[0],
+            )
 
     def test_phenotype_column_negative_raises(self) -> None:
-        """Negative phenotype_column raises ValueError in validate_inputs."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            check_memory=False,
-            phenotype_column=-1,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(ValueError, match="phenotype_column must be >= 1"):
-            runner.validate_inputs()
+        """A negative index is rejected at construction."""
+        with pytest.raises(ValueError, match="phenotype_columns indices must be >= 1"):
+            PipelineConfig(
+                bfile=BFILE,
+                check_memory=False,
+                phenotype_columns=[-1],
+            )
 
     def test_phenotype_column_too_large_raises(self) -> None:
-        """phenotype_column exceeding .fam columns raises ValueError."""
+        """A column the .fam lacks is only detectable once the .fam is read."""
         config = PipelineConfig(
             bfile=BFILE,
             check_memory=False,
-            phenotype_column=99,
+            phenotype_columns=[99],
         )
         runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="exceeds available columns"):
@@ -794,7 +787,7 @@ class TestPhenotypeColumnMissingValues:
                     pheno2_str = str(10.0 + i)
                 f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2_str}\n")
 
-        config = PipelineConfig(bfile=bfile, check_memory=False, phenotype_column=2)
+        config = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[2])
         phenotypes, n_analyzed = PipelineRunner(config).parse_phenotypes()
 
         # First two samples should be NaN (NA and -9)
@@ -956,20 +949,25 @@ def test_pipeline_numpy_backend_modes(
 class TestMultiPhenotypeConfig:
     """Tests for PipelineConfig multi-phenotype support."""
 
-    def test_phenotype_columns_default_from_column(self) -> None:
-        """PipelineConfig(phenotype_column=3) has phenotype_columns==[3]."""
-        config = PipelineConfig(bfile=Path("test"), phenotype_column=3)
-        assert config.phenotype_columns == [3]
-
     def test_phenotype_columns_default_single(self) -> None:
         """PipelineConfig() has phenotype_columns==[1] by default."""
         config = PipelineConfig(bfile=Path("test"))
         assert config.phenotype_columns == [1]
 
     def test_phenotype_columns_explicit(self) -> None:
-        """PipelineConfig with explicit phenotype_columns overrides phenotype_column."""
+        """An explicit list is kept in the order it was given."""
         config = PipelineConfig(bfile=Path("test"), phenotype_columns=[1, 2, 3])
         assert config.phenotype_columns == [1, 2, 3]
+
+    def test_empty_phenotype_columns_raises(self) -> None:
+        """An empty list is a config error, not a stand-in for the default."""
+        with pytest.raises(ValueError, match="must name at least one column"):
+            PipelineConfig(bfile=Path("test"), phenotype_columns=[])
+
+    def test_every_phenotype_column_is_range_checked(self) -> None:
+        """A bad index is caught wherever it sits, not only at the front."""
+        with pytest.raises(ValueError, match="phenotype_columns indices must be >= 1"):
+            PipelineConfig(bfile=Path("test"), phenotype_columns=[1, 0])
 
     def test_loco_multi_phenotype_error(self) -> None:
         """PipelineConfig(loco=True, phenotype_columns=[1,2]) raises ValueError."""

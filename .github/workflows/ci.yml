@@ -107,15 +107,14 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
-      # Static type check. Gates only NEW type errors: the committed
-      # pyrefly-baseline.json snapshots the pre-existing backlog, and this
-      # step fails only when an error not in the baseline appears. Reads
-      # .pyi stubs (no compiled C extension needed), so it runs in the lint
-      # job without a build step. Config is in [tool.pyrefly] (pyproject.toml).
-      # Split out from `prek run` below (which also runs it) so a failure
-      # report names the type checker explicitly, mirroring the ruff steps.
+      # Static type check. The project is at zero pyrefly errors, so this
+      # gate is absolute: any error fails the build. Reads .pyi stubs (no
+      # compiled C extension needed), so it runs in the lint job without a
+      # build step. Config is in [tool.pyrefly] (pyproject.toml). Split out
+      # from `prek run` below (which also runs it) so a failure report names
+      # the type checker explicitly, mirroring the ruff steps.
       - name: Pyrefly type check
-        run: uv run pyrefly check --baseline pyrefly-baseline.json
+        run: uv run pyrefly check
 
       - name: Lint and format check
         run: prek run --all-files

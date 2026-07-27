@@ -151,10 +151,10 @@ The `_lmm_accel` C extension provides the per-SNP REML/Wald inner loop with opti
 
 Two rules govern adding a `.c` file:
 
-1. Put it in that tuple. Both build paths read it, so the wheel and the dev rebuild pick the new source up together.
-2. Define `NO_IMPORT_ARRAY` before including `_lmm_support.h`. Only `_lmm_accel.c` calls `import_array()`, so a unit that forgets leaves its NumPy C-API pointer NULL and segfaults on the first `PyArray_*` call. `tests/test_c_include_order.py` checks this.
+1. Put it in that tuple. Both build paths read it, so the wheel and the dev rebuild pick the new source up together. Omitting it does not fail the link on macOS, which uses `-undefined dynamic_lookup`. It fails at import, or silently much later.
+2. If it touches the CPython or NumPy C API, define `NO_IMPORT_ARRAY` before including `_lmm_support.h`. Only `_lmm_accel.c` calls `import_array()`. The header sets `PY_ARRAY_UNIQUE_SYMBOL`, so the C-API pointer is one shared extern rather than a per-unit copy, and a unit that forgets fails to link instead of leaving a NULL pointer to segfault on the first `PyArray_*` call. The loud failure is the design.
 
-Neither mistake fails the link on macOS, which uses `-undefined dynamic_lookup`. They fail at import, or silently much later.
+A separate trap, guarded by [`tests/test_c_include_order.py`](../tests/test_c_include_order.py): `_lmm_support.h` must reach `<math.h>` before anything else does, because `M_PI` is not C11 and glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets. macOS defines `M_PI` unconditionally, so a local build and the ARM Mac CI job pass while every Linux job fails.
 
 Compile flags, source lists, and link flags are centralised in the same module and consumed by all three compile entry points (`hatch_build.py` for wheel builds, `_compile_jlinalg.py` and `_compile_accel.py` for dev-mode and runtime recompile). LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check-compile-flag-literals.py`) rejects bare flag literals outside `_build_support/`.
 

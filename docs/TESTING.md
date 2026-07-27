@@ -298,9 +298,9 @@ catch. The carve-out is:
 
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
-| `_mm256_zeroupper()` / `vzeroupper` present in AVX2 kernel source ([`tests/test_jlinalg_dgemm.py:568`](../tests/test_jlinalg_dgemm.py#L568)) | Missing this corrupts SSE registers in *callers'* code, not in our test. **Dormant.** Its target, `jlinalg/kernels/dgemm_avx2.c`, went with the own-BLAS strip in `663a22b`, so the test skips on every platform. Kept as the worked example of the carve-out |
 | LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` ([`tests/test_safety_gates.py:275`](../tests/test_safety_gates.py#L275)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
 | Compile-flag literals not in three forbidden entry points ([`scripts/check-compile-flag-literals.py`](../scripts/check-compile-flag-literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
+| `_lmm_accel.c` reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 
 **Rules for adding a new structural source test:**
 
@@ -309,6 +309,10 @@ catch. The carve-out is:
    ABI-relevant directive).
 2. Include a comment explaining *why* a behavior test cannot replace it.
 3. Mark `tier0` so it runs everywhere — these are guardrails, not parity.
+4. Assert on something that exists. A structural test whose target file is
+   deleted degrades to a permanent skip and reads as coverage it is not
+   providing. `test_avx2_vzeroupper_source` sat that way from `663a22b`
+   until it was removed.
 
 If the rule is "X function should call Y", that is a behavior test, not
 a structural test. Test the behavior.
@@ -344,7 +348,7 @@ non-zero rather than passing vacuously.
 
 ### 2.6 When `pytest.skip` is acceptable
 
-The suite has ~221 skip/xfail calls. Three categories — only the first
+The suite has ~220 skip/xfail calls. Three categories — only the first
 two are acceptable:
 
 1. **Hardware/library availability** — vendor LAPACK absent, ILP64 not
@@ -478,7 +482,7 @@ Counted at v7.2.0.
 - 106 test files, ~44k lines.
 - Largest: `test_likelihood_numpy.py` (~2,100 lines). `test_lmm_accel.py` was
   split into `tests/lmm_accel/`, eleven modules by kernel family, in 6.0.0.
-- ~221 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
+- ~220 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
 - 11 files use `@patch`/`MagicMock` (~25 occurrences). Four of them are the `tests/fakes/` package itself. The rest sit at the boundaries catalogued in §2.2.
 - `inspect.getsource()`: zero uses. The ban holds.
 

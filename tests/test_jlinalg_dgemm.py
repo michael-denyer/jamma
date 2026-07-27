@@ -17,7 +17,6 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
-from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -558,36 +557,6 @@ def test_dgemm_throughput() -> None:
         )
     elif _isa in ("NEON", "generic"):
         print(f"{_isa}: throughput assertion skipped (ratio={ratio:.3f}x vs np.matmul)")
-
-
-# ---------------------------------------------------------------------------
-# vzeroupper structural check (BL3 design constraint)
-# ---------------------------------------------------------------------------
-
-
-def test_avx2_vzeroupper_source() -> None:
-    """Structural check: AVX2 microkernel source contains vzeroupper.
-
-    vzeroupper is mandatory in every AVX2 microkernel return path to avoid
-    AVX-SSE transition penalties.  This check runs on all platforms
-    (including aarch64 development machines) by grepping the C source
-    rather than objdump — CI on Linux can additionally check the .o file.
-    """
-    src = (
-        Path(__file__).parent.parent
-        / "src"
-        / "jamma"
-        / "jlinalg"
-        / "kernels"
-        / "dgemm_avx2.c"
-    )
-    if not src.exists():
-        pytest.skip("AVX2 kernel source not found")
-    text = src.read_text()
-    assert "_mm256_zeroupper()" in text or "vzeroupper" in text, (
-        "AVX2 microkernel source does not contain vzeroupper. "
-        "This is a mandatory AVX-SSE transition safety requirement."
-    )
 
 
 # ---------------------------------------------------------------------------

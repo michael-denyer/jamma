@@ -23,7 +23,7 @@ from typing import Literal, NamedTuple
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import format_pipeline_banner, log_backend_selection
+from jamma.core.backend import log_backend_selection
 from jamma.core.chunk import _compute_chunk_size
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory import (
@@ -46,6 +46,7 @@ from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
 from jamma.lmm.schema import LmmRunResult, RunnerTiming
 from jamma.lmm.stats import AssocResult
+from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
     VALID_BACKENDS,
     BackendRequest,
@@ -529,36 +530,6 @@ class PipelineRunner:
 
         return covariates
 
-    @staticmethod
-    def _log_banner(
-        n_total: int,
-        n_analyzed: int,
-        n_snps: int,
-        n_covariates: int = 1,
-        n_phenotypes: int = 1,
-    ) -> None:
-        """Log GEMMA-style startup banner with dataset summary.
-
-        Prints version, release date, and dataset dimensions to match
-        GEMMA's startup output format for user familiarity.
-
-        Args:
-            n_total: Total number of individuals in the PLINK file.
-            n_analyzed: Number of individuals after phenotype/covariate filtering.
-            n_snps: Total number of SNPs in the dataset.
-            n_covariates: Number of covariate columns (1 = intercept-only).
-            n_phenotypes: Number of phenotype columns being analyzed.
-        """
-        import jamma
-
-        logger.info(f"JAMMA v{jamma.__version__} ({jamma.__release_date__})")
-        logger.info("Reading Files ...")
-        logger.info(f"## number of total individuals = {n_total:,}")
-        logger.info(f"## number of analyzed individuals = {n_analyzed:,}")
-        logger.info(f"## number of covariates = {n_covariates}")
-        logger.info(f"## number of phenotypes = {n_phenotypes}")
-        logger.info(f"## number of total SNPs/var = {n_snps:,}")
-
     def _check_hwe_support(self, plan: ExecutionPlan) -> None:
         """Raise if HWE filtering requested but backend doesn't support it."""
         if self.config.hwe_threshold > 0 and plan.mode == "batch":
@@ -566,77 +537,6 @@ class PipelineRunner:
                 "HWE filtering (--hwe) is not supported with the NumPy "
                 "batch backend. Use --backend numpy-streaming or set --hwe 0."
             )
-
-    @staticmethod
-    def _log_pipeline_banner(
-        plan: ExecutionPlan,
-    ) -> None:
-        """Emit a consolidated one-line pipeline configuration banner.
-
-        Gathers runner type, BLAS backend, C extension status, and
-        thread count into a single log line. The banner shows "pending"
-        for the eigen driver; the actual driver is logged separately by
-        eigendecompose_kinship once the matrix size is known.
-
-        This method is purely diagnostic — failures are caught and logged
-        as warnings to avoid aborting the GWAS pipeline.
-
-        Args:
-            plan: ExecutionPlan with backend and mode already decided.
-        """
-        try:
-            from jamma.core.threading import (
-                get_blas_backend,
-                get_c_extension_thread_count,
-                get_physical_core_count,
-                is_blas_controllable,
-            )
-            from jamma.lmm._compile_utils import get_c_extension_capabilities
-
-            c_ext, c_has_openmp = get_c_extension_capabilities()
-            runner = plan.runner_name
-
-            blas = get_blas_backend()
-
-            # Respect JAMMA_BLAS_THREADS if set, otherwise use physical
-            # core count. We avoid get_blas_thread_count() because it
-            # imports threading module unconditionally.
-            max_threads = os.cpu_count() or 64
-            env_threads = os.environ.get("JAMMA_BLAS_THREADS")
-            if env_threads is not None:
-                try:
-                    threads = max(1, min(int(env_threads), max_threads))
-                except ValueError:
-                    threads = get_physical_core_count()
-            elif is_blas_controllable():
-                threads = get_physical_core_count()
-            else:
-                # Accelerate or no BLAS — use halved core count
-                # (same fallback used by the NumPy LMM chunk runner).
-                cores = get_physical_core_count()
-                threads = max(1, cores // 2)
-
-            # A single-threaded _lmm_accel build should not be logged as a
-            # multi-threaded compute kernel.
-            if c_ext:
-                threads = min(
-                    threads,
-                    get_c_extension_thread_count(
-                        c_accel_available=c_ext,
-                        c_has_openmp=c_has_openmp,
-                    ),
-                )
-
-            banner = format_pipeline_banner(
-                runner=runner,
-                blas=blas,
-                eigen_driver="pending",
-                c_ext=c_ext,
-                threads=threads,
-            )
-            logger.info(banner)
-        except (ImportError, OSError, RuntimeError, AttributeError) as exc:
-            logger.warning(f"Could not build pipeline banner: {exc}")
 
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
@@ -716,7 +616,7 @@ class PipelineRunner:
         n_snps = meta["n_snps"]
 
         # GEMMA-style banner — kinship uses all samples (n_analyzed == n_total).
-        self._log_banner(n_total=n_samples, n_analyzed=n_samples, n_snps=n_snps)
+        log_dataset_banner(n_total=n_samples, n_analyzed=n_samples, n_snps=n_snps)
 
         ksnps_indices = resolve_snp_list_file(
             self.config.ksnps_file, meta["sid"], "-ksnps"
@@ -993,7 +893,7 @@ class PipelineRunner:
         )
 
         n_cvt = covariates.shape[1] if covariates is not None else 1
-        self._log_banner(
+        log_dataset_banner(
             n_samples,
             n_valid,
             n_snps,
@@ -1008,7 +908,7 @@ class PipelineRunner:
         plan = self._reselect_plan_after_filtering(
             plan, n_valid, n_snps, n_cvt, requested
         )
-        self._log_pipeline_banner(plan)
+        log_pipeline_banner(plan)
 
         self._memory_preflight(plan, n_valid, n_snps, n_cvt)
 
@@ -1318,8 +1218,8 @@ class PipelineRunner:
         valid_mask = self._compute_valid_mask(phenotypes, covariates)
         n_valid = int(np.sum(valid_mask))
         n_cvt = covariates.shape[1] if covariates is not None else 1
-        self._log_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
-        self._log_pipeline_banner(plan)
+        log_dataset_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)
+        log_pipeline_banner(plan)
         warn_if_small_sample(n_valid)
 
         t_loco = time.perf_counter()

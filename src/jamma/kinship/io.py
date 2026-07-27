@@ -8,7 +8,7 @@ Read behaviour: .npy paths load directly. .txt paths check for a .npy sibling
 (preferred if at least as new as the text file). Falls back to text parsing.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -147,7 +147,7 @@ def write_kinship_matrix(
 
 
 def write_loco_kinship_matrices(
-    loco_kinships: Iterator[tuple[str, np.ndarray]],
+    loco_kinships: Iterable[tuple[str, np.ndarray]],
     output_dir: Path,
     prefix: str = "result",
     *,
@@ -165,8 +165,9 @@ def write_loco_kinship_matrices(
     This is a convenience wrapper for the ``gk -loco`` standalone command.
 
     Args:
-        loco_kinships: Iterator yielding (chromosome_name, kinship_matrix)
-            pairs. Typically produced by ``compute_loco_kinship_streaming()``.
+        loco_kinships: Iterable of (chromosome_name, kinship_matrix) pairs,
+            consumed once. Typically produced by
+            ``compute_loco_kinship_streaming()``.
         output_dir: Directory for output files (created if needed).
         prefix: Filename prefix (default "result").
         legacy_text: If True, write GEMMA text format. Default False writes

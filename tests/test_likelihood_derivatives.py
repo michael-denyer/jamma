@@ -41,7 +41,7 @@ pytestmark = pytest.mark.tier1
 GEMMA_SE_PVE = 0.032753  # from mouse_hs1940.log.txt (intercept-only)
 
 # Fixture paths
-MOUSE_FIXTURE = Path(__file__).parent / "fixtures" / "lmm"
+MOUSE_FIXTURE = Path(__file__).parent / "fixtures" / "mouse_hs1940"
 SYNTHETIC_FIXTURE = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 
 
@@ -79,12 +79,12 @@ def synthetic_null_model():
 @pytest.fixture
 def mouse_null_model():
     """Load mouse_hs1940 data and compute null model quantities."""
-    if not (MOUSE_FIXTURE / "mouse_hs1940.kinship.cXX.txt").exists():
+    if not (MOUSE_FIXTURE / "mouse_hs1940_kinship.cXX.txt").exists():
         pytest.skip("Mouse HS1940 fixture not available")
 
     plink = load_plink_binary(MOUSE_FIXTURE / "mouse_hs1940")
     kinship = read_kinship_matrix(
-        MOUSE_FIXTURE / "mouse_hs1940.kinship.cXX.txt", n_samples=plink.n_samples
+        MOUSE_FIXTURE / "mouse_hs1940_kinship.cXX.txt", n_samples=plink.n_samples
     )
     phenotypes = load_phenotypes_from_fam(MOUSE_FIXTURE / "mouse_hs1940.fam")
     eigenvalues, U = eigendecompose_kinship(kinship)

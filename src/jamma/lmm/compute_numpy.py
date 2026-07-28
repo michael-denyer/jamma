@@ -1337,7 +1337,6 @@ def _compute_wald_numpy(
             l_max=l_max,
             n_grid=n_grid,
             n_iter=n_refine,
-            return_pab=True,
         )
     else:
         # Generic Python path for n_cvt > 1
@@ -1352,7 +1351,6 @@ def _compute_wald_numpy(
             l_max=l_max,
             n_grid=n_grid,
             n_iter=n_refine,
-            return_pab=True,
         )
 
     betas, ses, pwalds = batch_calc_wald_stats_from_pab_numpy(

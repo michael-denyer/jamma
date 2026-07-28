@@ -260,7 +260,9 @@ class TestDegenerateSNPNaN:
 
         Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
         Iab = batch_compute_iab_numpy(n_cvt, Uab)
-        lambdas, _ = golden_section_optimize_lambda_numpy(n_cvt, eigenvalues, Uab, Iab)
+        lambdas, _, _ = golden_section_optimize_lambda_numpy(
+            n_cvt, eigenvalues, Uab, Iab
+        )
         betas, ses, pwalds = batch_calc_wald_stats_numpy(
             n_cvt, lambdas, eigenvalues, Uab, n_samples
         )

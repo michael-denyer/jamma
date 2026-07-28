@@ -437,15 +437,18 @@ def test_iab_invariant_scalars():
 
 
 @pytest.mark.tier0
-def test_golden_section_eval_count():
-    """Golden section calls compute_fn 2 + n_iter + 1 times (final midpoint eval).
+def test_golden_section_eval_count(monkeypatch):
+    """The optimizer evaluates REML 2 + n_iter + 1 times (final midpoint eval).
 
     The final midpoint evaluation ensures the returned (lambda, logl) pair is
     consistent — both from the same evaluation point. Without it, lambda is at
     the midpoint but logl is max(fc, fd) from different points c and d, causing
     a mismatch that propagates into LRT p-values.
+
+    Counted through the public optimizer rather than the bracket helper, since
+    the helper stops at the optimum and the caller owns the final evaluation.
     """
-    from jamma.lmm.likelihood_numpy import _batch_golden_section_numpy
+    import jamma.lmm.likelihood_numpy as ln
 
     call_count = [0]
 
@@ -459,24 +462,17 @@ def test_golden_section_eval_count():
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
-    n_grid = 10
     n_iter = 5
+    real_reml = ln._batch_reml_at_lambda_numpy
 
-    log_l_min = np.log(1e-5)
-    log_l_max = np.log(1e5)
-    log_lambdas = np.linspace(log_l_min, log_l_max, n_grid)
-    lambdas_grid = np.exp(log_lambdas)
-
-    grid_logls = _batch_grid_reml_numpy(
-        1, lambdas_grid, eigenvalues, Uab_batch, Iab_batch
-    )
-
-    def counting_reml(log_lams):
+    def counting_reml(*args, **kwargs):
         call_count[0] += 1
-        lams = np.exp(log_lams)
-        return _batch_reml_at_lambda_numpy(1, lams, eigenvalues, Uab_batch, Iab_batch)
+        return real_reml(*args, **kwargs)
 
-    _batch_golden_section_numpy(counting_reml, grid_logls, log_lambdas, n_iter)
+    monkeypatch.setattr(ln, "_batch_reml_at_lambda_numpy", counting_reml)
+    golden_section_optimize_lambda_numpy(
+        1, eigenvalues, Uab_batch, Iab_batch, n_grid=10, n_iter=n_iter
+    )
 
     # 2 initial probes (c, d) + n_iter (one per iteration) + 1 final midpoint eval
     expected_calls = 2 + n_iter + 1
@@ -493,7 +489,7 @@ def test_golden_section_accuracy_no_final_eval(synthetic_data):
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
-    lambdas_opt, logls_opt = golden_section_optimize_lambda_numpy(
+    lambdas_opt, logls_opt, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch
     )
 
@@ -623,7 +619,7 @@ def test_refinement_reml_split_matches_full(split_uab_data):
         uab_varying_soa, iab_inv_s_ww
     )
 
-    logls_split = _batch_reml_at_lambda_split_ncvt1_numpy(
+    logls_split, _ = _batch_reml_at_lambda_split_ncvt1_numpy(
         lambda_vals,
         eigenvalues,
         uab_varying_soa,
@@ -635,7 +631,7 @@ def test_refinement_reml_split_matches_full(split_uab_data):
         reml_const,
     )
 
-    logls_full = _batch_reml_at_lambda_numpy(
+    logls_full, _ = _batch_reml_at_lambda_numpy(
         1, lambda_vals, eigenvalues, Uab_batch, Iab_batch
     )
 
@@ -663,7 +659,7 @@ def test_split_optimizer_matches_full(split_uab_data):
         uab_invariant_soa
     )
 
-    lambdas_split, logls_split = golden_section_optimize_lambda_split_ncvt1_numpy(
+    lambdas_split, logls_split, _ = golden_section_optimize_lambda_split_ncvt1_numpy(
         eigenvalues,
         uab_varying_soa,
         uab_invariant_soa,
@@ -673,7 +669,7 @@ def test_split_optimizer_matches_full(split_uab_data):
         iab_logdet,
     )
 
-    lambdas_full, logls_full = golden_section_optimize_lambda_numpy(
+    lambdas_full, logls_full, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch
     )
 
@@ -715,11 +711,10 @@ def test_split_pab_matches_generic_pab(split_uab_data):
         iab_s_wy,
         iab_s_yy,
         iab_logdet,
-        return_pab=True,
     )
 
     _, _, Pab_generic = golden_section_optimize_lambda_numpy(
-        1, eigenvalues, Uab_batch, Iab_batch, return_pab=True
+        1, eigenvalues, Uab_batch, Iab_batch
     )
 
     assert Pab_split.shape == Pab_generic.shape, (
@@ -826,25 +821,8 @@ def wald_pab_data():
 
 
 @pytest.mark.tier0
-def test_optimizer_backward_compat(wald_pab_data):
-    """golden_section_optimize_lambda_numpy with return_pab=False returns 2-tuple."""
-    eigenvalues, Uab_batch, Iab_batch, _n_samples = wald_pab_data
-
-    result = golden_section_optimize_lambda_numpy(
-        1, eigenvalues, Uab_batch, Iab_batch, return_pab=False
-    )
-
-    assert isinstance(result, tuple), "Result must be a tuple"
-    assert len(result) == 2, f"Expected 2-tuple, got {len(result)}-tuple"
-    lambdas, logls = result
-    n_snps = Uab_batch.shape[0]
-    assert lambdas.shape == (n_snps,), f"lambdas shape {lambdas.shape}"
-    assert logls.shape == (n_snps,), f"logls shape {logls.shape}"
-
-
-@pytest.mark.tier0
 def test_optimizer_returns_pab(wald_pab_data):
-    """optimizer with return_pab=True returns 3-tuple with Pab of correct shape."""
+    """The optimizer returns (lambdas, logls, Pab) with Pab of the right shape."""
     from jamma.lmm.likelihood import build_index_table
 
     eigenvalues, Uab_batch, Iab_batch, _n_samples = wald_pab_data
@@ -852,7 +830,7 @@ def test_optimizer_returns_pab(wald_pab_data):
     n_snps = Uab_batch.shape[0]
 
     result = golden_section_optimize_lambda_numpy(
-        n_cvt, eigenvalues, Uab_batch, Iab_batch, return_pab=True
+        n_cvt, eigenvalues, Uab_batch, Iab_batch
     )
 
     assert isinstance(result, tuple), "Result must be a tuple"
@@ -880,25 +858,18 @@ def test_wald_from_pab_matches_original(wald_pab_data):
     eigenvalues, Uab_batch, Iab_batch, n_samples = wald_pab_data
     n_cvt = 1
 
-    # Path A: original (optimizer + reconstruct Hi_eval + Pab)
-    lambdas, _logls = golden_section_optimize_lambda_numpy(
+    lambdas, _logls, Pab_final = golden_section_optimize_lambda_numpy(
         n_cvt, eigenvalues, Uab_batch, Iab_batch
     )
+
+    # Path A: reconstruct Hi_eval and Pab from the optimal lambdas.
     betas_orig, ses_orig, pwalds_orig = batch_calc_wald_stats_numpy(
         n_cvt, lambdas, eigenvalues, Uab_batch, n_samples
     )
 
-    # Path B: merged (optimizer returns Pab directly)
-    lambdas2, _logls2, Pab_final = golden_section_optimize_lambda_numpy(
-        n_cvt, eigenvalues, Uab_batch, Iab_batch, return_pab=True
-    )
+    # Path B: reuse the Pab the optimizer already evaluated at those lambdas.
     betas_pab, ses_pab, pwalds_pab = batch_calc_wald_stats_from_pab_numpy(
         n_cvt, Pab_final, n_samples
-    )
-
-    # Lambdas from both paths should be identical (same optimizer, same path)
-    np.testing.assert_array_equal(
-        lambdas, lambdas2, err_msg="Lambdas differ between return_pab=False and True"
     )
 
     # Wald stats should be identical to machine precision
@@ -1058,7 +1029,6 @@ def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
         l_max=1e5,
         n_grid=50,
         n_iter=20,
-        return_pab=True,
     )
     betas_gen, ses_gen, pwalds_gen = ln.batch_calc_wald_stats_from_pab_numpy(
         n_cvt, Pab_gen, n_samples
@@ -1126,18 +1096,18 @@ def test_compute_wald_numpy_ncvt1_invariant_efficiency(compute_wald_data):
 
 @pytest.mark.tier0
 def test_batch_golden_section_numpy_all_nan_grid():
-    """_batch_golden_section_numpy with all-NaN grid logls returns l_min lambda.
+    """The bracket refinement with all-NaN grid logls brackets around l_min.
 
     When every grid log-likelihood is NaN (all SNPs degenerate), argmax of
     NaN-replaced -inf selects index 0 (the lower bound), bracketing around
-    l_min.  The optimizer should return lambdas at or near l_min without
-    crashing, and log-likelihoods should be finite (or NaN, but not inf).
+    l_min. Refinement should return log-lambdas at or near log(l_min) without
+    crashing, and never an infinite one.
 
     This is the all-SNPs-degenerate extreme: _guard_P_yy produces NaN for
     every grid point, so safe_logls is all -inf.
     """
     from jamma.lmm.likelihood_numpy import (
-        _batch_golden_section_numpy,
+        _batch_golden_section_bracket_numpy,
         _batch_reml_at_lambda_numpy,
     )
 
@@ -1165,10 +1135,14 @@ def test_batch_golden_section_numpy_all_nan_grid():
 
     def compute_batch_fn(log_lams):
         lams = np.exp(log_lams)
-        return _batch_reml_at_lambda_numpy(1, lams, eigenvalues, Uab_batch, Iab_batch)
+        return _batch_reml_at_lambda_numpy(1, lams, eigenvalues, Uab_batch, Iab_batch)[
+            0
+        ]
 
-    lambdas_out, logls_out = _batch_golden_section_numpy(
-        compute_batch_fn, grid_logls_all_nan, log_lambdas, n_iter=20
+    lambdas_out = np.exp(
+        _batch_golden_section_bracket_numpy(
+            compute_batch_fn, grid_logls_all_nan, log_lambdas, n_iter=20
+        )
     )
 
     assert lambdas_out.shape == (n_snps,), (
@@ -1212,7 +1186,7 @@ def test_batch_numpy_all_degenerate_snps_return_lmin():
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
-    lambdas, logls = golden_section_optimize_lambda_numpy(
+    lambdas, logls, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
     )
     betas, ses, pwalds = batch_calc_wald_stats_numpy(
@@ -1260,7 +1234,7 @@ def test_batch_numpy_mixed_degenerate_and_valid_snps():
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
-    lambdas, logls = golden_section_optimize_lambda_numpy(
+    lambdas, logls, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
     )
     betas, ses, pwalds = batch_calc_wald_stats_numpy(
@@ -1332,7 +1306,7 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
         uab_invariant_soa
     )
 
-    lambdas, logls = golden_section_optimize_lambda_split_ncvt1_numpy(
+    lambdas, logls, _ = golden_section_optimize_lambda_split_ncvt1_numpy(
         eigenvalues,
         uab_varying_soa,
         uab_invariant_soa,
@@ -1401,7 +1375,7 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
         uab_invariant_soa
     )
 
-    lambdas, logls = golden_section_optimize_lambda_split_ncvt1_numpy(
+    lambdas, logls, _ = golden_section_optimize_lambda_split_ncvt1_numpy(
         eigenvalues,
         uab_varying_soa,
         uab_invariant_soa,
@@ -1461,7 +1435,7 @@ def test_generic_batch_numpy_fallback_degenerate_wald_nan():
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
-    lambdas, logls = golden_section_optimize_lambda_numpy(
+    lambdas, logls, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
     )
 
@@ -1519,7 +1493,7 @@ def test_scalar_vs_batch_reml_single_snp_parity():
     # Batch path (single SNP, shape (n, 1))
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, Utx.reshape(n, 1))
     Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
-    lambdas_batch, _ = golden_section_optimize_lambda_numpy(
+    lambdas_batch, _, _ = golden_section_optimize_lambda_numpy(
         n_cvt, eigenvalues, Uab_batch, Iab_batch
     )
 
@@ -1551,7 +1525,7 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
     # Batch path — all 10 SNPs at once
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
     Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
-    lambdas_batch, _ = golden_section_optimize_lambda_numpy(
+    lambdas_batch, _, _ = golden_section_optimize_lambda_numpy(
         n_cvt, eigenvalues, Uab_batch, Iab_batch
     )
 
@@ -1621,7 +1595,7 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
     # --- Batch path (single SNP wrapped in batch dimension) ---
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, Utx.reshape(n, 1))
     Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
-    lambdas_batch, logls_batch = golden_section_optimize_lambda_numpy(
+    lambdas_batch, logls_batch, _ = golden_section_optimize_lambda_numpy(
         n_cvt, eigenvalues, Uab_batch, Iab_batch, n_grid=50, n_iter=20
     )
     lambda_batch = lambdas_batch[0]

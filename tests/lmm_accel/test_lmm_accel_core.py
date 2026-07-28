@@ -75,7 +75,6 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
         l_max=l_max,
         n_grid=n_grid,
         n_iter=n_refine,
-        return_pab=True,
     )
     betas_py, ses_py, pwalds_py = batch_calc_wald_stats_from_pab_numpy(
         n_cvt, Pab_py, n_samples

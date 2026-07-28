@@ -1,8 +1,8 @@
 """Tests for .github/workflows/sanitizers.yml structure.
 
 Asserts the workflow declares the cron schedule, timeout, env vars,
-artifact upload, and SHA-pinned actions that Phase 116.1's success
-criteria require. Catches accidental edits that drop a critical clause.
+artifact upload, and SHA-pinned actions the sanitizer workflow
+requires. Catches accidental edits that drop a critical clause.
 """
 
 from __future__ import annotations

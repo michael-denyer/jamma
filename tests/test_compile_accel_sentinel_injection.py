@@ -1,7 +1,7 @@
 """Tests for the JAMMA_SENTINEL_UB env-var injection in
 jamma.lmm._compile_accel.compile_extension.
 
-Phase 116.1, plan 04. The gate appends ``-DJAMMA_SENTINEL_UB`` to
+The gate appends ``-DJAMMA_SENTINEL_UB`` to
 ``extra_cflags`` so the sanitizer workflow's sentinel-meta-test job can
 rebuild ``_lmm_accel.so`` with the gated heap-OOB function exposed.
 
@@ -108,10 +108,10 @@ def test_sentinel_orthogonal_to_sanitize(monkeypatch, captured_compile_call, tmp
     """JAMMA_SENTINEL_UB=1 AND JAMMA_SANITIZE=address,undefined:
     BOTH flags reach compile_jlinalg's extra_cflags. The two env vars are
     truly orthogonal — setting one does not suppress the other, and the
-    sentinel-define gate (plan 04) is independent of the sanitizer-override
-    helper (plan 01 + plan 05).
+    sentinel-define gate is independent of the sanitizer-override
+    helper.
 
-    Post-plan-05 wiring: apply_sanitizer_overrides() runs inside
+    Wiring: apply_sanitizer_overrides() runs inside
     compile_extension() and appends -fsanitize=..., -fno-omit-frame-pointer,
     -O1 to extra_cflags. The sentinel append happens BEFORE that helper, so
     -DJAMMA_SENTINEL_UB lands earlier in the list than the sanitizer flags.
@@ -120,17 +120,17 @@ def test_sentinel_orthogonal_to_sanitize(monkeypatch, captured_compile_call, tmp
     monkeypatch.setenv("JAMMA_SANITIZE", "address,undefined")
     _run_compile_extension(monkeypatch, tmp_path)
     extra_cflags = captured_compile_call["kwargs"]["extra_cflags"]
-    # Sentinel macro present (plan 04 wiring).
+    # Sentinel macro present.
     assert "-DJAMMA_SENTINEL_UB" in extra_cflags, extra_cflags
-    # Sanitizer flags also present (plan 05 wiring of apply_sanitizer_overrides).
+    # Sanitizer flags also present (apply_sanitizer_overrides wiring).
     assert "-fsanitize=address,undefined" in extra_cflags, extra_cflags
     assert "-fno-omit-frame-pointer" in extra_cflags, extra_cflags
-    # Sentinel must precede sanitizer flags (plan 04 appends BEFORE
+    # Sentinel must precede sanitizer flags (the append happens BEFORE
     # apply_sanitizer_overrides runs).
     sentinel_idx = extra_cflags.index("-DJAMMA_SENTINEL_UB")
     sanitize_idx = extra_cflags.index("-fsanitize=address,undefined")
     assert sentinel_idx < sanitize_idx, extra_cflags
-    # extra_lapack_cflags should ALSO carry the sanitizer flags (plan 05's
+    # extra_lapack_cflags should ALSO carry the sanitizer flags (the helper's
     # full wiring instruments LAPACK sources too — no LAPACK source in
     # _lmm_accel, so this is a defensive check that the wiring is uniform).
     extra_lapack = captured_compile_call["kwargs"]["extra_lapack_cflags"]

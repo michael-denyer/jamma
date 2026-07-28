@@ -677,7 +677,7 @@ def reconstruct_uab_from_soa(
         return Uab
 
     # General path for n_cvt > 1: use classify_uab_columns to get index mapping.
-    # Function-level import avoids circular import (Phase 60 decision).
+    # Function-level import avoids circular import.
     from jamma.lmm.likelihood import classify_uab_columns
 
     inv_indices, var_indices = classify_uab_columns(n_cvt)

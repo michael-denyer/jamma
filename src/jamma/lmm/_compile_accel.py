@@ -53,7 +53,7 @@ from jamma._build_support.find_compiler import find_c_compiler
 from jamma._build_support.openmp_detect import detect_openmp_flags
 from jamma.core.constants import env_flag
 
-# Phase 116.1: dev-mode + sanitizer-workflow sentinel macro. Toggled by the
+# Dev-mode + sanitizer-workflow sentinel macro. Toggled by the
 # JAMMA_SENTINEL_UB env var; when set, _lmm_accel.c's gated heap-OOB function
 # `jamma_sentinel_oob` is exposed. The sanitizer workflow's
 # asan-sentinel-meta-test job sets this to verify that ASAN actually catches
@@ -217,9 +217,9 @@ def compile_extension(
             diag_flags = ["-fopt-info-vec-all"]
     extra_cflags.extend(diag_flags)
 
-    # Phase 116.1: opt-in sentinel macro for the sanitizer-workflow self-test.
+    # Opt-in sentinel macro for the sanitizer-workflow self-test.
     # See _SENTINEL_UB_DEFINE comment at module top. Truthy convention mirrors
-    # JAMMA_FORCE_NUMPY_FALLBACK (plan 02): "" and "0" are off, anything else
+    # JAMMA_FORCE_NUMPY_FALLBACK: "" and "0" are off, anything else
     # is on. Orthogonal to JAMMA_SANITIZE — either, both, or neither can
     # be set.
     if env_flag("JAMMA_SENTINEL_UB"):
@@ -229,7 +229,7 @@ def compile_extension(
     # Platform-specific link flags. Helper appends omp_link + extra_link_flags.
     ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
-    # Phase 116.1: route through apply_sanitizer_overrides so JAMMA_SANITIZE
+    # Route through apply_sanitizer_overrides so JAMMA_SANITIZE
     # env var (set by .github/workflows/sanitizers.yml) injects sanitizer
     # flags into BOTH extra_cflags AND extra_lapack_cflags. The helper is a
     # no-op when JAMMA_SANITIZE is unset, so this call is safe in every
@@ -276,7 +276,7 @@ def compile_extension(
     for k in [k for k in sys.modules if k.startswith("jamma.lmm._lmm_accel")]:
         del sys.modules[k]
 
-    # Phase 116.1: skip the post-link import probe when JAMMA_SANITIZE is set.
+    # Skip the post-link import probe when JAMMA_SANITIZE is set.
     # Importing an ASan-instrumented .so requires LD_PRELOAD=libasan.so; the
     # sanitizer workflow only exports LD_PRELOAD for the pytest step, not the
     # compile step, so the probe would abort with

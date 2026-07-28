@@ -171,7 +171,7 @@ def compile_extension(
     # Platform-specific link flags. Helper appends omp_link + extra_link_flags.
     ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
 
-    # Phase 116.1: route through apply_sanitizer_overrides so JAMMA_SANITIZE
+    # Route through apply_sanitizer_overrides so JAMMA_SANITIZE
     # env var injects sanitizer flags into BOTH extra_cflags AND
     # extra_lapack_cflags (the latter ensures eigh.c — the LAPACK source —
     # is also instrumented). Helper is a no-op when JAMMA_SANITIZE is unset.
@@ -211,7 +211,7 @@ def compile_extension(
 
     _detail(f"Compiled: {out}")
 
-    # Phase 116.1: skip the post-link import probe when JAMMA_SANITIZE is set.
+    # Skip the post-link import probe when JAMMA_SANITIZE is set.
     # Importing an ASan-instrumented .so requires LD_PRELOAD=libasan.so; the
     # sanitizer workflow only exports LD_PRELOAD for the pytest step, not the
     # compile step, so the probe would abort with
@@ -356,7 +356,7 @@ def compile_test_harness(verbose: bool = True) -> Path:
     # — eigh.c doesn't use Unity.)
     extra_cflags = ["-DUNITY_INCLUDE_DOUBLE"]
 
-    # Phase 116.1: harness builds run under JAMMA_SANITIZE too — the .o
+    # Harness builds run under JAMMA_SANITIZE too — the .o
     # files for the test binary need the same instrumentation as the
     # production .so so the harness exercises the sanitizer-instrumented
     # code path. Pass extra_cflags as the first arg so -DUNITY_INCLUDE_DOUBLE

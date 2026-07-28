@@ -79,7 +79,7 @@ jobs:
 
       - name: Compile C extensions with sanitizers
         # JAMMA_SANITIZE flows through apply_sanitizer_overrides() in
-        # _build_support/compile_and_link.py — see Phase 116.1 plan 01 + plan 05.
+        # _build_support/compile_and_link.py.
         run: |
           uv run python -m jamma.lmm._compile_accel
           uv run python -m jamma.jlinalg._compile_jlinalg
@@ -181,7 +181,7 @@ jobs:
 
       - name: Compile _lmm_accel with -DJAMMA_SENTINEL_UB
         # JAMMA_SENTINEL_UB env var causes _compile_accel.py to inject
-        # -DJAMMA_SENTINEL_UB into extra_cflags (plan 04). Combined with
+        # -DJAMMA_SENTINEL_UB into extra_cflags. Combined with
         # JAMMA_SANITIZE above, the .so is also instrumented.
         run: uv run python -m jamma.lmm._compile_accel
 

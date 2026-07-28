@@ -351,7 +351,7 @@ All three pipeline phases are dominated by BLAS/LAPACK calls. No Python-level op
 
 ### What v1.4 Did Not Change
 
-- **Wall-clock time**: Eigendecomp, kinship, and LMM times are unchanged from Phase 19 baseline. JAMMA was already operating at the hardware-limited floor for CPU eigendecomposition.
+- **Wall-clock time**: Eigendecomp, kinship, and LMM times are unchanged from the earlier baseline. JAMMA was already operating at the hardware-limited floor for CPU eigendecomposition.
 - **Thread configuration**: MKL was already running at 32 threads on Databricks. v1.4 formalized thread configuration into `blas_threads()` context managers but the runtime behavior is identical.
 
 ### Configuration Guide

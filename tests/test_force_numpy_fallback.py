@@ -2,7 +2,7 @@
 extension import shims (jamma.jlinalg.__init__ and
 jamma.lmm.compute_numpy._try_import_accel).
 
-Phase 116.1 plan 02. The gate is the load-bearing knob the ASAN/UBSAN
+The gate is the load-bearing knob the ASAN/UBSAN
 sanitizer workflow uses to skip the .so imports entirely — see
 RESEARCH.md §"Pitfall 4" (ASAN + dlopen interaction can produce
 false-positive heap-buffer-overflow reports inside dispatched BLAS calls).

@@ -59,7 +59,7 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
 
     # --- Python path: use generic golden section (same algorithm as C extension).
     # When _C_ACCEL_AVAILABLE is False, _compute_wald_numpy dispatches n_cvt=1
-    # to the split-Uab optimizer (Phase 53), which uses different FP accumulation
+    # to the split-Uab optimizer, which uses different FP accumulation
     # than the C extension's generic golden section. To compare like-for-like,
     # call the generic optimizer directly.
     from jamma.lmm.likelihood_numpy import (

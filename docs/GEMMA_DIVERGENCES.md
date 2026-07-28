@@ -393,10 +393,13 @@ LOCO kinship as external `-k` input. This validates that JAMMA's LOCO kinship
 formula produces results numerically equivalent to GEMMA's LMM expectations.
 See [`tests/test_loco_numpy.py`](../tests/test_loco_numpy.py), which compares
 against the committed GEMMA reference output in
-`tests/fixtures/gemma_loco/gemma_loco_chr{1,2,3}.assoc.txt`. The PLINK binary
-those were generated from is too large to commit, so the fixture's `.bed` ships
-out of band and the comparisons skip with "gemma_loco fixture not available"
-when it is absent. Regenerate it with
+`tests/fixtures/gemma_loco/gemma_loco_chr{1,2,3}.assoc.txt`. The synthetic
+PLINK binary those were generated from is committed alongside them (13 kB),
+so the comparisons assert its presence with `require_fixture` and fail rather
+than skip if a path is wrong (see [TESTING.md](TESTING.md) §1.11). Regenerate
+the PLINK files with
+[`scripts/generate_loco_synthetic.py`](../scripts/generate_loco_synthetic.py)
+and the GEMMA references with
 [`scripts/generate_loco_fixtures.sh`](../scripts/generate_loco_fixtures.sh).
 
 ---

@@ -23,7 +23,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.conftest import load_phenotypes_from_fam
+from tests.conftest import load_phenotypes_from_fam, require_fixture
 
 # ---------------------------------------------------------------------------
 # Tolerance configurations
@@ -590,8 +590,11 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     eigendecomp is passed to both calls to avoid repeated O(n^3) work and to
     ensure the only difference is the chunking path.
     """
-    if not MOUSE_HS1940_DATA.with_suffix(".bed").exists():
-        pytest.skip("mouse_hs1940 fixture not available")
+    require_fixture(
+        MOUSE_HS1940_DATA.with_suffix(".bed"),
+        MOUSE_HS1940_DATA.with_suffix(".fam"),
+        MOUSE_HS1940_KINSHIP,
+    )
 
     plink = load_plink_binary(MOUSE_HS1940_DATA)
     kinship = read_kinship_matrix(MOUSE_HS1940_KINSHIP)

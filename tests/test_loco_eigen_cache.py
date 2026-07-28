@@ -20,6 +20,7 @@ from jamma.lmm.eigen_cache import EigenCacheComponents
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.loco import LocoConfig, _find_loco_eigen_cache
 from jamma.lmm.schema import LmmConfig
+from tests.conftest import require_fixture
 
 # ---------------------------------------------------------------------------
 # Fixture paths
@@ -29,8 +30,12 @@ MOUSE_HS1940_DIR = _FIXTURE_ROOT / "mouse_hs1940"
 MOUSE_HS1940_BFILE = MOUSE_HS1940_DIR / "mouse_hs1940"
 
 
-def _mouse_hs1940_exists() -> bool:
-    return MOUSE_HS1940_BFILE.with_suffix(".bed").exists()
+# Asserted at import rather than by a per-class skipif: the fixture is
+# committed, so a wrong path must fail collection instead of silently
+# skipping every class that reads it. See docs/TESTING.md §1.11.
+require_fixture(
+    MOUSE_HS1940_BFILE.with_suffix(".bed"), MOUSE_HS1940_BFILE.with_suffix(".fam")
+)
 
 
 def _dummy_components(maf_threshold: float = 0.01) -> EigenCacheComponents:
@@ -230,9 +235,6 @@ class TestFindLocoEigenCache:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
-)
 class TestLocoWriteEigen:
     """Tests for run_lmm_loco with write_eigen=True."""
 
@@ -280,9 +282,6 @@ class TestLocoWriteEigen:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
-)
 class TestLocoEigenCacheIntegration:
     """End-to-end tests for LOCO eigen cache write/read cycle."""
 
@@ -395,9 +394,6 @@ class TestLocoEigenCacheIntegration:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
-)
 class TestLocoEigenCacheFallback:
     """Integration tests for LOCO eigen cache fallback behavior."""
 
@@ -588,9 +584,6 @@ class TestLocoWriteEigenAutoDefault:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
-)
 class TestGwasLocoWriteEigen:
     """End-to-end: gwas(loco=True, write_eigen=True) without eigen_dir works.
 
@@ -629,9 +622,6 @@ class TestGwasLocoWriteEigen:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
-)
 class TestLocoLegacyText:
     """LOCO honors legacy_text for kinship and eigen artifacts.
 
@@ -1014,9 +1004,6 @@ class TestEigenCacheManifest:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(
-    not _mouse_hs1940_exists(), reason="mouse_hs1940 fixture not available"
-)
 class TestLocoEigenCacheStaleDetection:
     """End-to-end: a cache whose inputs changed must NOT be silently reused."""
 

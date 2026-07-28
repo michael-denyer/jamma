@@ -18,7 +18,7 @@ from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.schema import LmmConfig
 from jamma.validation.compare import compare_assoc_results, load_gemma_assoc
 from jamma.validation.tolerances import ToleranceConfig
-from tests.conftest import load_phenotypes_from_fam
+from tests.conftest import load_phenotypes_from_fam, require_fixture
 
 # Fixture with 3 chromosomes — required for LOCO (needs >1 chromosome to leave one out)
 _LOCO_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "gemma_loco"
@@ -222,8 +222,7 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
     (PASS 1 stats + PASS 2 accumulation) + n_chr assoc reads (genotypes per chr).
     With cache = 4 + n_chr. Without cache = 4 + 2*n_chr (extra stats reads).
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     from unittest.mock import patch
 
@@ -283,8 +282,7 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
     the boundary where n_grid/n_refine are consumed, captured pre-clamp — and
     assert the configured non-default values actually arrive there.
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     import jamma.lmm.loco as loco_mod
 
@@ -320,8 +318,7 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
     Verifies LOCO-08 wiring: the env var is read at run_lmm_loco entry and
     a WARNING-level message is emitted when workers > 1 (not yet implemented).
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     from unittest.mock import patch
 
@@ -362,8 +359,7 @@ def test_loco_numpy_multipass_equivalence():
     and verifies that all association statistics match the single-pass baseline.
     This tests LOCO-02: batch_size_chrs sizing and S_full accumulation correctness.
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     from jamma.kinship import compute_loco_kinship_streaming
 
@@ -433,8 +429,7 @@ def test_loco_numpy_covariates_threaded_and_effective():
     silently dropped or wrongly subset in LOCO's per-chromosome covariate handling
     would otherwise leave results identical.
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
     n = phenotypes.shape[0]
@@ -514,8 +509,7 @@ def test_chr_snp_stats_for_loco_bypasses_all_sample_cache_when_analyzed_subset()
     cached approach must fall through to the valid-sample recompute, and the
     non-cache approach must already use it.
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     from jamma.lmm.loco import _chr_snp_stats_for_loco, _collect_chr_snp_stats
 
@@ -579,8 +573,7 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
     stats and diverged from the non-cache path; this pins them together so the
     divergence cannot return in either approach.
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     from unittest.mock import patch
 
@@ -638,8 +631,7 @@ def test_loco_numpy_valid_sample_subsetting():
     Verifies LOCO-07: compute_loco_kinship_streaming returns n_valid x n_valid
     kinship matrices when valid_indices is provided, rather than n_samples x n_samples.
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     from jamma.kinship import compute_loco_kinship_streaming
 
@@ -732,8 +724,7 @@ def test_loco_numpy_show_progress_true():
     compute_loco_kinship_streaming and run_lmm_loco.
     Runs in NumPy-only CI.
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
 
@@ -759,8 +750,11 @@ def test_loco_gemma_equivalence():
     per SNP using calibrated tolerances from ToleranceConfig via
     compare_assoc_results().
     """
-    if not _LOCO_BFILE.with_suffix(".bed").exists():
-        pytest.skip("gemma_loco fixture not available")
+    require_fixture(
+        _LOCO_BFILE.with_suffix(".bed"),
+        _LOCO_BFILE.with_suffix(".fam"),
+        *(_LOCO_FIXTURE_ROOT / f"gemma_loco_chr{c}.assoc.txt" for c in ("1", "2", "3")),
+    )
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
     # LOCO recomputes kinship per chromosome, amplifying Brent optimizer

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The `return_pab` flag is gone from the NumPy REML optimizers, along with all
+  ten `@overload` stubs it needed.** Four private and public functions in
+  `lmm/likelihood_numpy.py` returned either an array or a tuple depending on a
+  boolean argument, so #124 added 128 lines of overload stubs to describe the
+  union. Both production call sites in `compute_numpy.py` passed
+  `return_pab=True`; the `False` arm of the two public optimizers was reached
+  only by a test asserting its tuple length.
+
+  `_batch_reml_at_lambda_numpy` computed `Pab_batch` unconditionally and
+  discarded it when the flag was off, so returning it always is free. On the
+  split-`n_cvt=1` path packing Pab does cost work, measured at 2.6 ms of 413 ms
+  (0.6%) for 22 refinement iterations at 12,226 SNPs, which is not enough to
+  justify a second code path.
+
+  `_batch_golden_section_numpy` is now
+  `_batch_golden_section_bracket_numpy` and returns the optimal log-lambda per
+  SNP instead of evaluating there. Its three callers each own the final
+  evaluation they actually want: the two REML optimizers take the Pab batch that
+  falls out of it, and the MLE optimizer, which has no Pab, takes the
+  log-likelihood alone. That removes the optional second evaluator parameter and
+  the branch selecting between them.
+
+  `likelihood_numpy.py` drops from 1990 to 1779 lines; `@overload` across `src/`
+  drops from 18 to 8. No numerical change: the `.assoc.txt` output is
+  byte-identical across `-lmm 1/2/3/4` at `n_cvt=1` and `n_cvt=4` on
+  mouse_hs1940, with every C kernel disabled so the changed code is the code
+  that runs.
+
 ## [7.2.0] - 2026-07-27
 
 Minor, not major, despite the Breaking heading below. That is a deliberate

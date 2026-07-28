@@ -453,7 +453,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 | **Memory & gates** | `test_memory.py`, `test_memory_gates.py`, `test_memory_chunk_coupling.py`, `test_eigendecomp_memory.py`, `test_safety_gates.py`, `test_auto_tune_chunk.py`, `test_rss_logging.py` | Memory estimation; OOM gates; chunk-size auto-tuning; RSS telemetry |
 | **CLI / API** | `test_cli.py`, `test_cli_memory.py`, `test_gwas_api.py` | Click entry point; `-lmm` flag handling; programmatic GWAS API |
 | **Backend / hardware** | `test_backend_detection.py`, `test_hardware_context.py`, `test_threading.py`, `test_jlinalg_dispatch.py`, `test_force_numpy_fallback.py` | Backend autodetection; physical core count; threading limits; the `JAMMA_FORCE_NUMPY_FALLBACK` escape hatch |
-| **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_build_support_sanitizer_override.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_c_include_order.py`, `test_c_lint_coverage.py`, `test_core_recompile.py` | Compile-flag invariants; OpenMP detection; wheel packaging; sanitizer flag injection; `NO_IMPORT_ARRAY` include order; cppcheck coverage; runtime recompile |
+| **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_build_support_sanitizer_override.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_check_doc_anchors.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_c_include_order.py`, `test_c_lint_coverage.py`, `test_core_recompile.py` | Compile-flag invariants; OpenMP detection; wheel packaging; sanitizer flag injection; include order; cppcheck coverage; doc line anchors; runtime recompile |
 | **Fingerprint / sanitizer harness** | `test_fingerprint_harness.py`, `test_compare_fingerprints.py`, `test_lmm_accel_sections.py`, `test_sanitizer_sentinel.py`, `test_compile_accel_sentinel_injection.py`, `test_sanitizer_workflow_yaml.py`, `test_asan_suppressions.py` | The machinery behind `fingerprint.yml` and `sanitizers.yml`. These test the gates themselves, so a broken harness cannot go green by doing nothing |
 | **Validation / parity** | `test_validation.py`, `test_validation_assoc.py`, `test_validate_runner_inputs.py`, `test_kinship_validation.py`, `test_demonstrate_equivalence.py` | GEMMA parity machinery; tolerance config; assoc file diff; the equivalence demonstration script |
 | **Suite meta** | `test_conftest_tier_gate.py`, `test_fixture_manifest.py`, `tests/fakes/test_fakes.py` | The mandatory-tier-marker gate (§1.6), the fixture manifest (§3.5), and the fakes' own contract tests |
@@ -479,7 +479,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 Counted at v7.2.0.
 
-- 106 test files, ~44k lines.
+- 107 test files, ~44k lines.
 - Largest: `test_likelihood_numpy.py` (~2,100 lines). `test_lmm_accel.py` was
   split into `tests/lmm_accel/`, eleven modules by kernel family, in 6.0.0.
 - ~220 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).

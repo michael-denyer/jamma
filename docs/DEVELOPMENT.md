@@ -13,7 +13,7 @@ uv sync
 prek install
 ```
 
-`uv sync` installs all runtime and dev dependencies (including scipy, which is dev-only). `prek install` sets up the hooks listed in `.pre-commit-config.yaml`: ruff lint and format, pyrefly, clang-format, cppcheck, markdownlint, `maid` (mermaid syntax), lychee, typos, actionlint, zizmor, shellcheck, vulture, refurb, and the JAMMA-specific gates. Two more run at pre-push, because prek only inspects staged files and would miss them. Those are a repo-wide `ruff format --check` and the C-extension freshness check.
+`uv sync` installs all runtime and dev dependencies (including scipy, which is dev-only). `prek install` sets up the hooks listed in `.pre-commit-config.yaml`: ruff lint and format, pyrefly, clang-format, cppcheck, markdownlint, `maid` (mermaid syntax), lychee, typos, actionlint, zizmor, shellcheck, vulture, refurb, and the JAMMA-specific gates, `check-doc-anchors.py` among them. Two more run at pre-push, because prek only inspects staged files and would miss them. Those are a repo-wide `ruff format --check` and the C-extension freshness check.
 
 ### Compile C Extensions
 

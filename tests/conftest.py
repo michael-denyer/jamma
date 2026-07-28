@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +21,21 @@ _REQUIRED_TIER_MARKERS = frozenset({"tier0", "tier1", "tier2", "slow", "benchmar
 _TIER_MARKER_EXEMPT_FILES: frozenset[str] = frozenset()
 
 _TESTS_DIR = Path(__file__).resolve().parent
+
+# A skip reason matching this phrase claims a fixture under tests/fixtures/
+# could not be found. Every one of those fixtures is committed, so the only
+# way to reach such a skip is a wrong path in the test. That is a bug which
+# presents as a green run: two GEMMA-parity tests sat behind one for their
+# entire lifetime because the directory *and* the filename were both wrong
+# (#147). Reaching one now fails the session. See docs/TESTING.md §1.11.
+_FIXTURE_UNAVAILABLE_RE = re.compile("fixture not available", re.IGNORECASE)
+
+# Filled by pytest_runtest_logreport, drained by pytest_sessionfinish. Under
+# xdist the controller receives every worker's reports, so this accumulates
+# the whole session there. tests/test_conftest_fixture_skip_gate.py proves
+# that under -n 2 rather than assuming it, because the tier gate above was
+# once silently a no-op under -n for exactly that class of reason.
+_fixture_unavailable_skips: list[str] = []
 
 
 def _module_level_marker_names(tree: ast.Module) -> set[str]:
@@ -195,6 +211,41 @@ def pytest_configure(config: pytest.Config) -> None:
         "\033[33m[jamma] If this is unexpected, run "
         "scripts/check_c_extension_freshness.py for full drift report.\033[0m\n\n"
     )
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Record any skip claiming a committed fixture was unavailable.
+
+    Runs on xdist workers for their own tests and on the controller for
+    every report it receives, so the controller's list is the whole
+    session. xfail reports also set ``skipped``, but carry a string
+    longrepr rather than the ``(path, lineno, reason)`` tuple a skip
+    produces, so the tuple check excludes them.
+    """
+    if not report.skipped or hasattr(report, "wasxfail"):
+        return
+    if not isinstance(report.longrepr, tuple):
+        return
+    reason = report.longrepr[2]
+    if _FIXTURE_UNAVAILABLE_RE.search(reason):
+        _fixture_unavailable_skips.append(f"{report.nodeid}\n      {reason}")
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """Fail the session if anything skipped for fixture unavailability."""
+    if hasattr(session.config, "workerinput") or not _fixture_unavailable_skips:
+        return
+    offenders = sorted(set(_fixture_unavailable_skips))
+    listing = "\n  ".join(offenders)
+    sys.stderr.write(
+        f"\n\033[31m[jamma] ERROR: {len(offenders)} test(s) skipped because a "
+        f"fixture was reported unavailable:\n  {listing}\n\n"
+        "Everything under tests/fixtures/ is committed, so this means the "
+        "test is looking at the wrong path, not that the data is missing. "
+        "Fix the path rather than the skip guard. "
+        "See docs/TESTING.md §1.11.\033[0m\n"
+    )
+    session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:

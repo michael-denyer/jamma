@@ -23,6 +23,22 @@ Python targets resolve through ``ast``, so the check is exact rather than a
 grep. C targets fall back to a definition-shaped regex. Targets that are neither
 get checks 1 and 2 only, because "definition" means nothing in a ``.toml``.
 
+What a passing run does *not* prove
+-----------------------------------
+
+Check 3 has to work out which symbol an anchor means, and for CODEMAP's tables
+that is a guess. Those rows label the link ``file.py:123`` and put the symbol in
+a separate column, so ``_wanted_symbol`` takes the first plausible backticked
+name in the row. A row naming two symbols can therefore be checked against the
+wrong one, which passes when that other symbol happens to sit on the anchored
+line and fails misleadingly when it does not.
+
+So a green run means "no anchor is provably wrong", not "every anchor is
+provably right". Closing the gap means labelling each link with its own symbol,
+``[compute_kinship](../src/jamma/pipeline_kinship.py#L33)``, at which point the
+label alone is authoritative and the row never has to be consulted. That is a
+change to roughly 120 links across the docs and has not been made.
+
 Usage:
   python3 scripts/check-doc-anchors.py
 """
@@ -102,10 +118,14 @@ def _symbol_candidates(text: str) -> list[str]:
 def _wanted_symbol(label: str, row: str) -> str | None:
     """The symbol an anchor claims to point at, if the prose names one.
 
-    The link label wins when it names one, because that is the tightest
-    binding between the link and a name. CODEMAP's tables instead label links
+    The link label wins when it names one, because that is the tightest binding
+    between the link and a name. CODEMAP's tables instead label links
     ``file.py:123`` and put the symbol in the row's Component column, so fall
     back to the row.
+
+    Taking the first candidate from the row is a guess, not a derivation. A row
+    that names two symbols may be checked against the wrong one. See "What a
+    passing run does not prove" in the module docstring.
     """
     for source in (label, row):
         candidates = _symbol_candidates(source)

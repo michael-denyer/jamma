@@ -238,7 +238,9 @@ print(f"Will fit: {estimate.sufficient}")
 
 ### Type Safety
 
-Full type annotations throughout. IDE autocomplete works. Mypy catches bugs.
+Full type annotations throughout, so IDE autocomplete works. [pyrefly](https://pyrefly.org)
+type-checks `src`, `tests`, and `scripts` on every commit and in CI, and the gate is
+absolute: the project sits at zero errors with no baseline file to hide behind.
 
 ---
 

@@ -1,6 +1,6 @@
 """Type stub for the jlinalg C extension (_jlinalg).
 
-Provides IDE completion and mypy checking for the compiled extension module.
+Provides IDE completion and pyrefly checking for the compiled extension module.
 When the C extension is not available, jamma.jlinalg.__init__ provides NumPy-backed
 fallbacks with identical signatures.
 

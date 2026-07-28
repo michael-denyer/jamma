@@ -220,7 +220,8 @@ uv run pytest tests/ -x
    IEEE 754. The three compile entry points (`hatch_build.py`,
    `_compile_jlinalg.py`, `_compile_accel.py`) all import from
    `_build_support` and stay in sync automatically.
-6. **Write tests** in `tests/test_jlinalg_new_op.py`
+6. **Write tests** in a new `tests/test_jlinalg_<op>.py`, alongside the existing
+   `test_jlinalg_dgemm.py` and `test_jlinalg_dsyrk.py`
 
 ### Compilation Flags
 

@@ -355,8 +355,12 @@ two are acceptable:
    active, BLAS backend mismatch. Use module-level
    `pytestmark = pytest.mark.skipif(...)` so the file skips at collection
    time. Example: [`tests/test_jlinalg_dispatch.py:12`](../tests/test_jlinalg_dispatch.py#L12).
-2. **Optional fixture absent** — large datasets shipped out-of-band
-   (e.g. `gemma_loco`). Skip with a message naming the missing fixture path.
+2. **Optional fixture absent** — a dataset too large to commit. Skip with a
+   message naming the missing fixture path. No fixture is currently in this
+   category: `gemma_loco` and `mouse_hs1940` are both committed in full, so
+   their `fixture not available` guards are defensive and never fire on a
+   normal clone. Treat one that *does* fire as a bug in the path it checks,
+   not as a missing download.
 3. **Test is broken / commented-out** — *not acceptable*. Either fix or
    delete.
 

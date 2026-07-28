@@ -9,8 +9,13 @@ of the log restricted likelihood; this file's symbols inherit that
 naming, but the file itself is named for the *behavior* (derivatives)
 rather than the GEMMA jargon.
 
-GEMMA reference (mouse_hs1940.log.txt):
-- pve = 0.609795, se(pve) = 0.032753 (intercept-only, n_cvt=1)
+GEMMA reference (mouse_hs1940_all.log.txt, intercept-only, n_cvt=1):
+- 1410 of 1940 individuals analyzed, pve = 0.609672, se(pve) = 0.0327788
+
+That log is the run whose kinship matrix is the one this file loads.
+fixtures/lmm/mouse_hs1940.log.txt is a different run against a different
+kinship matrix and reports se(pve) = 0.032753. The two are not
+interchangeable.
 """
 
 from pathlib import Path
@@ -32,16 +37,17 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood_dev2,
     reml_log_likelihood_null,
 )
-from jamma.lmm.prepare_common import compute_and_log_pve
+from jamma.lmm.prepare_common import compute_and_log_pve, compute_valid_mask
 from tests.conftest import load_phenotypes_from_fam
 
 pytestmark = pytest.mark.tier1
 
-# GEMMA reference values
-GEMMA_SE_PVE = 0.032753  # from mouse_hs1940.log.txt (intercept-only)
+# GEMMA reference values, from mouse_hs1940_all.log.txt (intercept-only)
+GEMMA_SE_PVE = 0.0327788
+GEMMA_N_ANALYZED = 1410
 
 # Fixture paths
-MOUSE_FIXTURE = Path(__file__).parent / "fixtures" / "lmm"
+MOUSE_FIXTURE = Path(__file__).parent / "fixtures" / "mouse_hs1940"
 SYNTHETIC_FIXTURE = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 
 
@@ -79,17 +85,29 @@ def synthetic_null_model():
 @pytest.fixture
 def mouse_null_model():
     """Load mouse_hs1940 data and compute null model quantities."""
-    if not (MOUSE_FIXTURE / "mouse_hs1940.kinship.cXX.txt").exists():
+    if not (MOUSE_FIXTURE / "mouse_hs1940_kinship.cXX.txt").exists():
         pytest.skip("Mouse HS1940 fixture not available")
 
     plink = load_plink_binary(MOUSE_FIXTURE / "mouse_hs1940")
     kinship = read_kinship_matrix(
-        MOUSE_FIXTURE / "mouse_hs1940.kinship.cXX.txt", n_samples=plink.n_samples
+        MOUSE_FIXTURE / "mouse_hs1940_kinship.cXX.txt", n_samples=plink.n_samples
     )
     phenotypes = load_phenotypes_from_fam(MOUSE_FIXTURE / "mouse_hs1940.fam")
+
+    # 530 of the 1940 mouse_hs1940 phenotypes are missing. GEMMA drops those
+    # samples before eigendecomposition; keeping them makes Uty, and then
+    # every likelihood value derived from it, NaN.
+    valid_mask = compute_valid_mask(phenotypes, None)
+    n_samples = int(valid_mask.sum())
+    assert n_samples == GEMMA_N_ANALYZED, (
+        f"filtered to {n_samples} samples, GEMMA analyzed {GEMMA_N_ANALYZED}"
+    )
+    kinship = kinship[np.ix_(valid_mask, valid_mask)]
+    phenotypes = phenotypes[valid_mask]
+
     eigenvalues, U = eigendecompose_kinship(kinship)
 
-    W = np.ones((plink.n_samples, 1))
+    W = np.ones((n_samples, 1))
     UtW = U.T @ W
     Uty = U.T @ phenotypes
     n_cvt = 1
@@ -104,7 +122,7 @@ def mouse_null_model():
         "Uab": Uab,
         "n_cvt": n_cvt,
         "lambda_remle": lambda_remle,
-        "n_samples": plink.n_samples,
+        "n_samples": n_samples,
     }
 
 
@@ -268,7 +286,13 @@ class TestRemlLogLikelihoodDev2:
         assert dev2 < 0, f"Expected negative dev2 at REML optimum, got {dev2}"
 
     def test_se_pve_matches_gemma_mouse(self, mouse_null_model):
-        """se(pve) derived from dev2 matches GEMMA's 0.032753 within rtol=1e-3."""
+        """se(pve) derived from dev2 matches GEMMA's 0.0327788 within rtol=5e-4.
+
+        The observed agreement is ~8.5e-5, consistent with the golden-section
+        versus Brent lambda difference the delta method carries through. The
+        tolerance is set tight enough to reject the se(pve) reported by the
+        other, non-matching mouse_hs1940 log, which sits ~7.0e-4 away.
+        """
         data = mouse_null_model
         lam = data["lambda_remle"]
         eigenvalues = data["eigenvalues"]
@@ -287,8 +311,8 @@ class TestRemlLogLikelihoodDev2:
         np.testing.assert_allclose(
             pve_se,
             GEMMA_SE_PVE,
-            rtol=1e-3,
-            err_msg=f"se(pve)={pve_se:.6f} vs GEMMA={GEMMA_SE_PVE}",
+            rtol=5e-4,
+            err_msg=f"se(pve)={pve_se:.7f} vs GEMMA={GEMMA_SE_PVE}",
         )
 
     @pytest.mark.parametrize("n_cvt", [2, 3, 4])
@@ -416,6 +440,11 @@ class TestRemlLogLikelihoodDev2:
         f_center = reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
         f_minus = reml_log_likelihood_null(lam - h, eigenvalues, Uab, n_cvt)
         dev2_numerical = (f_plus - 2.0 * f_center + f_minus) / (h * h)
+
+        # assert_allclose treats NaN as equal to NaN, so without this the whole
+        # test passes vacuously when the fixture feeds in unfiltered data.
+        assert np.isfinite(dev2_analytical), f"analytical dev2={dev2_analytical}"
+        assert np.isfinite(dev2_numerical), f"numerical dev2={dev2_numerical}"
 
         np.testing.assert_allclose(
             dev2_analytical,

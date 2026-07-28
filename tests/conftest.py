@@ -31,6 +31,21 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # back as a skip. See docs/TESTING.md §1.11.
 _FIXTURE_WORD = "fixture"
 
+# Predicates that answer "is there a file at this path?", covering both the
+# pathlib methods and the os.path functions.
+#
+# A skip reached because one of these was False is the same bug as above wearing
+# different words, and the word-based check cannot see it. TestDstedcNoAbort read
+# a dstedc.c that 663a22b had deleted and skipped with the reason "source not
+# available"; "fixture" never appeared, so the gate passed it and the test
+# reported green on every run from that commit until #156 deleted it.
+#
+# Keying on the shape rather than the wording is what closes that off, because
+# the shape is not something the author of the next guard gets to choose. The
+# correct response to a path that should be there and is not is to fail --
+# pytest.fail, an assert, or require_fixture below -- never to skip.
+_PATH_PREDICATES = frozenset({"exists", "is_file", "is_dir", "isfile", "isdir"})
+
 
 def _module_level_marker_names(tree: ast.Module) -> set[str]:
     """Return the set of marker names assigned to ``pytestmark`` at module level.
@@ -143,6 +158,80 @@ def _enforce_tier_markers() -> None:
         )
 
 
+def _is_pytest_skip_call(node: ast.AST) -> bool:
+    """True for a ``pytest.skip(...)`` call."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "skip"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "pytest"
+    )
+
+
+def _is_pytest_skipif_call(node: ast.AST) -> bool:
+    """True for a ``pytest.mark.skipif(...)`` decorator call."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "skipif"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "mark"
+        and isinstance(node.func.value.value, ast.Name)
+        and node.func.value.value.id == "pytest"
+    )
+
+
+def _tests_a_path(expr: ast.expr) -> bool:
+    """True if ``expr`` asks whether a filesystem path exists.
+
+    Matches on the method or function name alone (``.exists()``,
+    ``os.path.isfile(...)``), not on the receiver, because the receiver is
+    usually a local whose type cannot be recovered from the source. Walking the
+    whole expression means a negation or a boolean combination is caught too.
+    """
+    return any(
+        isinstance(sub, ast.Call)
+        and isinstance(sub.func, ast.Attribute)
+        and sub.func.attr in _PATH_PREDICATES
+        for sub in ast.walk(expr)
+    )
+
+
+def _path_guarded_skip_lines(tree: ast.Module) -> list[int]:
+    """Line numbers of skips that are control-dependent on a path check.
+
+    Two shapes, which between them are how the guard gets written:
+
+    - ``if not src.exists(): pytest.skip(...)``, and the ``else``-branch
+      variant, reported at the line of the ``skip`` rather than the ``if`` so
+      the message points at the statement to delete.
+    - ``@pytest.mark.skipif(not SRC.exists(), reason=...)``.
+
+    Deliberately says nothing about the reason string. That is the whole point:
+    see the ``_PATH_PREDICATES`` comment above.
+    """
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and _tests_a_path(node.test):
+            lines += [
+                sub.lineno
+                for branch in (node.body, node.orelse)
+                for stmt in branch
+                for sub in ast.walk(stmt)
+                if isinstance(sub, ast.Call) and _is_pytest_skip_call(sub)
+            ]
+        elif _is_pytest_skipif_call(node):
+            assert isinstance(node, ast.Call)  # narrowed by the predicate
+            conditions = [
+                *node.args,
+                *(kw.value for kw in node.keywords if kw.arg == "condition"),
+            ]
+            if any(_tests_a_path(c) for c in conditions):
+                lines.append(node.lineno)
+    return sorted(set(lines))
+
+
 def _fixture_skip_lines(tree: ast.Module) -> list[int]:
     """Line numbers of skips whose reason names a fixture.
 
@@ -150,28 +239,16 @@ def _fixture_skip_lines(tree: ast.Module) -> list[int]:
     ``@pytest.mark.skipif(..., reason=...)`` decorator. Only string literals are
     inspected, because a computed reason cannot be judged from the source and
     guessing would produce false failures.
+
+    Complements ``_path_guarded_skip_lines``: this one catches a guard that
+    names a fixture without checking a path, that one catches a guard that
+    checks a path without naming anything. Neither subsumes the other.
     """
     lines: list[int] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+        if not (_is_pytest_skip_call(node) or _is_pytest_skipif_call(node)):
             continue
-        func = node.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        is_skip = (
-            func.attr == "skip"
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "pytest"
-        )
-        is_skipif = (
-            func.attr == "skipif"
-            and isinstance(func.value, ast.Attribute)
-            and func.value.attr == "mark"
-            and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "pytest"
-        )
-        if not (is_skip or is_skipif):
-            continue
+        assert isinstance(node, ast.Call)  # narrowed by the predicates
         reasons = [*node.args, *(kw.value for kw in node.keywords)]
         for reason in reasons:
             if (
@@ -184,8 +261,14 @@ def _fixture_skip_lines(tree: ast.Module) -> list[int]:
     return lines
 
 
-def _enforce_no_fixture_skips() -> None:
-    """Source-parse every test file and fail on a skip that names a fixture.
+def _enforce_no_dormant_skips() -> None:
+    """Source-parse every test file and reject skips that hide a wrong path.
+
+    Two detectors, reported together. ``_fixture_skip_lines`` reads the reason
+    string; ``_path_guarded_skip_lines`` reads the control flow. A guard has to
+    evade both to stay hidden, and the two evasions pull in opposite directions:
+    avoid the word and the shape still shows, keep the check implicit and the
+    wording has nothing left to describe it with.
 
     Source-parsed and run once from ``pytest_configure``, for the same reason
     the tier gate above is: it then holds under xdist, ``-k``, ``-m``, and any
@@ -199,10 +282,16 @@ def _enforce_no_fixture_skips() -> None:
     most new guards. Reading the source instead catches the guard whatever it
     says, before a single test executes.
 
+    Both categories are collected before raising, for the reason
+    ``require_fixture`` names every missing path at once: fixing one offender and
+    re-running to discover the next is the slow way to clear a sweep.
+
     Raises:
-        pytest.UsageError: Naming every file and line, with the fix.
+        pytest.UsageError: Naming every file and line in both categories, with
+            the fix for each.
     """
-    offenders: list[str] = []
+    by_word: list[str] = []
+    by_shape: list[str] = []
     repo_root = _TESTS_DIR.parent
     for path in sorted(_TESTS_DIR.rglob("test_*.py")):
         try:
@@ -211,21 +300,36 @@ def _enforce_no_fixture_skips() -> None:
             # Unparsable files are the tier gate's problem to report; flagging
             # them here too would double every message.
             continue
-        offenders += [
-            f"{path.relative_to(repo_root)}:{line}"
-            for line in _fixture_skip_lines(tree)
-        ]
-    if offenders:
-        listing = "\n  ".join(offenders)
-        raise pytest.UsageError(
+        rel = path.relative_to(repo_root)
+        by_word += [f"{rel}:{line}" for line in _fixture_skip_lines(tree)]
+        by_shape += [f"{rel}:{line}" for line in _path_guarded_skip_lines(tree)]
+    if not (by_word or by_shape):
+        return
+    parts: list[str] = []
+    if by_word:
+        listing = "\n  ".join(by_word)
+        parts.append(
             "The following skips name a fixture in their reason:\n  "
             f"{listing}\n\n"
             "Everything under tests/fixtures/ is committed, so a fixture that "
             "cannot be found means the test names the wrong path. Call "
             "require_fixture(*paths) from tests/conftest.py, which raises "
-            "instead of skipping, or assert the precondition. "
-            "See docs/TESTING.md §1.11."
+            "instead of skipping, or assert the precondition."
         )
+    if by_shape:
+        listing = "\n  ".join(by_shape)
+        parts.append(
+            "The following skips are guarded by a filesystem check:\n  "
+            f"{listing}\n\n"
+            "A path that should be present and is not is a bug in the test, not "
+            "a reason to skip: the run stays green and the test never executes "
+            "again. Use pytest.fail, an assert, or require_fixture(*paths). If "
+            "the file genuinely may be absent because it is a build output, "
+            "gate on the build flag that predicts it (HAS_C_EXTENSION and the "
+            "like) rather than on the path."
+        )
+    parts.append("See docs/TESTING.md §1.11.")
+    raise pytest.UsageError("\n\n".join(parts))
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -249,7 +353,7 @@ def pytest_configure(config: pytest.Config) -> None:
     # raising UsageError mid-session would crash xdist.
     if not hasattr(config, "workerinput"):
         _enforce_tier_markers()
-        _enforce_no_fixture_skips()
+        _enforce_no_dormant_skips()
 
     # Import guarded: script lives outside the package and may be missing
     # in some install layouts (e.g. a sdist-only install). Missing script

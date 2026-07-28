@@ -273,28 +273,58 @@ which is the half of #147 a single check could not show. For a file whose
 tests all need the same fixture, call it once at module level, as
 `tests/test_loco_eigen_cache.py` does; a wrong path there fails collection.
 
-**The skip gate is the backstop.** `_enforce_no_fixture_skips` in
+**The skip gate is the backstop.** `_enforce_no_dormant_skips` in
 `tests/conftest.py` parses every `tests/**/test_*.py` at `pytest_configure` and
-fails the session when a `pytest.skip(...)` reason or a
-`@pytest.mark.skipif(..., reason=...)` names a fixture, listing each file and
-line. Same mechanism as the §1.6 tier gate: source-parsed and run once, so it
-holds under xdist, `-k` and `-m`, and it flags the guard even in a file whose
-tests never ran.
+fails the session, listing each file and line. Same mechanism as the §1.6 tier
+gate: source-parsed and run once, so it holds under xdist, `-k` and `-m`, and it
+flags the guard even in a file whose tests never ran.
 
-- **Any wording is caught.** The gate looks for the word `fixture` in the
-  reason, so `fixture missing`, `no fixture data` and `fixture absent` all fail.
-  It replaced a runtime check that matched only the exact phrase `fixture not
-  available` in skip *reports*, which could fire only when the guarded test
-  actually ran and only for that one wording. `test_fixture_manifest.py` carried
-  a fixture skip worded around it, and the source-parsed gate is what found it.
-- **A computed reason is not judged.** Only string literals are inspected;
-  an f-string reason cannot be read from source and is left alone.
+It applies **two independent detectors**, and reports both categories in one
+failure so a sweep clears in a single pass:
+
+**1. The reason names a fixture** (`_fixture_skip_lines`) — reads the reason
+string of a `pytest.skip(...)` or `@pytest.mark.skipif(..., reason=...)`.
+
+- **Any wording is caught.** The detector looks for the word `fixture`, so
+  `fixture missing`, `no fixture data` and `fixture absent` all fail. It replaced
+  a runtime check that matched only the exact phrase `fixture not available` in
+  skip *reports*, which could fire only when the guarded test actually ran and
+  only for that one wording. `test_fixture_manifest.py` carried a fixture skip
+  worded around it, and the source-parsed gate is what found it.
+- **A computed reason is not judged.** Only string literals are inspected; an
+  f-string reason cannot be read from source and is left alone.
+
+**2. The skip is guarded by a filesystem check** (`_path_guarded_skip_lines`) —
+ignores the reason entirely and reads the control flow, flagging a
+`pytest.skip` reached because `.exists()`, `.is_file()`, `.is_dir()`,
+`os.path.isfile()` or `os.path.isdir()` was False, in either the `if` or the
+`else` branch, or in a `@pytest.mark.skipif(not P.exists(), ...)` decorator.
+
+Detector 2 exists because detector 1 has a blind spot that a real test sat in
+for months. `TestDstedcNoAbort` in `tests/test_jlinalg_eigh.py` read a
+`src/jamma/jlinalg/src/dstedc.c` that commit `663a22b` had deleted, and skipped
+with the reason `source not available`. The word `fixture` never appeared, so
+the gate passed it and the test reported green on every run until #156 deleted
+it. Wording is the wrong thing to key on, because whoever writes the next guard
+chooses it freely; the shape is not optional.
+
+A guard now has to evade both detectors, and the evasions pull against each
+other: avoid the word and the shape still shows, keep the check implicit and the
+wording has nothing left to describe it with.
+
 - **Skips about the environment are untouched.** `C extension not available`,
-  `uv not available on PATH` and the like are genuine conditional skips and stay
-  skips. Only a reason naming a fixture is fatal.
+  `uv not available on PATH`, an absent optional import and an env-var gate are
+  all genuine conditional skips and stay skips. Neither detector fires on them.
+- **Fail on a path, do not skip on it.** If a file should be there and is not,
+  use `pytest.fail`, an `assert`, or `require_fixture`, as
+  `tests/test_fingerprint_harness.py` does with `pytest.fail` when the recorder
+  writes nothing. If the file genuinely may be absent because it is a build
+  output, gate on the flag that predicts it (`HAS_C_EXTENSION` and the like)
+  rather than on the path.
 
-Both mechanisms have regression tests in
-`tests/test_conftest_fixture_skip_gate.py`.
+All three mechanisms have regression tests in
+`tests/test_conftest_fixture_skip_gate.py`, including one that plants the exact
+shape `TestDstedcNoAbort` had.
 
 ---
 

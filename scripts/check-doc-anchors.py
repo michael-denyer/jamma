@@ -32,26 +32,16 @@ from __future__ import annotations
 import ast
 import keyword
 import re
+import subprocess
 import sys
 from pathlib import Path
 
-# Mirrors the ignore list in .markdownlint-cli2.jsonc: vendored trees, build
-# output, and the two local-only agent files that are never committed.
-SKIP_DIRS: frozenset[str] = frozenset(
-    {
-        ".git",
-        ".venv",
-        ".planning",
-        ".beads",
-        ".claude",
-        ".code-review-graph",
-        "node_modules",
-        "dist",
-        "build",
-        "target",
-    }
-)
-SKIP_FILES: frozenset[str] = frozenset({"LICENSE.md", "CLAUDE.md", "AGENTS.md"})
+# LICENSE.md is upstream GPL boilerplate. Everything else the other two doc
+# checkers ignore (.venv, .planning, .beads, .claude, .code-review-graph,
+# node_modules, dist, build, target, CLAUDE.md, AGENTS.md) is gitignored, so
+# git excludes it by construction and there is no list here to drift from
+# .markdownlint-cli2.jsonc's "ignores" or lychee.toml's "exclude_path".
+SKIP_FILES: frozenset[str] = frozenset({"LICENSE.md"})
 
 PY_SUFFIXES: frozenset[str] = frozenset({".py", ".pyi"})
 C_SUFFIXES: frozenset[str] = frozenset({".c", ".h"})
@@ -125,14 +115,33 @@ def _wanted_symbol(label: str, row: str) -> str | None:
 
 
 def _markdown_files(root: Path) -> list[Path]:
-    found = []
-    for path in root.rglob("*.md"):
-        if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
-            continue
-        if path.name in SKIP_FILES:
-            continue
-        found.append(path)
-    return sorted(found)
+    """Every committed markdown file, per git.
+
+    ``git ls-files`` is the enumeration, not an rglob plus a hand-maintained
+    ignore list. Anything gitignored is excluded because git does not track it,
+    which is one fewer copy of that list to keep in step with the two other doc
+    checkers.
+
+    Raises:
+        RuntimeError: If git cannot list the tree. Falling back to a filesystem
+            walk would silently start checking uncommitted and vendored files.
+    """
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "*.md"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git ls-files failed in {root} (exit {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+    return sorted(
+        root / name
+        for name in result.stdout.split("\0")
+        if name and Path(name).name not in SKIP_FILES
+    )
 
 
 def _check_anchor(

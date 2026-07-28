@@ -242,6 +242,34 @@ See also: [`.github/workflows/sanitizers.yml`](../.github/workflows/sanitizers.y
 [`src/jamma/_build_support/compile_and_link.py`](../src/jamma/_build_support/compile_and_link.py)
 (the `apply_sanitizer_overrides` helper).
 
+### 1.11 A fixture skip is a bug, not a skip
+
+Everything under `tests/fixtures/` is committed and hash-verified by the
+`GEMMA fixture sha256 manifest` pre-commit hook. So a test that skips
+because it could not find a fixture is not reporting a missing input, it is
+reporting its own wrong path. That bug is invisible: the run stays green and
+the test simply never executes.
+
+Two GEMMA-parity tests in `tests/test_likelihood_derivatives.py` sat dormant
+for their whole lifetime this way. The fixture directory was wrong *and* the
+kinship filename was wrong, and a single `.exists()` guard turned both into
+one skip (#147).
+
+`pytest_runtest_logreport` and `pytest_sessionfinish` in
+`tests/conftest.py` now fail the session when any skip reason matches
+`fixture not available`, printing each offending test id. Fix the path; do
+not delete the guard.
+
+Two consequences when writing a fixture guard:
+
+- **Use the exact phrase `fixture not available`.** The gate matches on it
+  case-insensitively. `tests/test_conftest_fixture_skip_gate.py` scans the
+  suite and fails on a fixture-absence skip worded any other way, so a site
+  the gate cannot see does not go unnoticed.
+- **Skips about the environment are untouched.** `C extension not
+  available`, `uv not available on PATH` and the like are genuine
+  conditional skips and stay skips. Only fixture absence is fatal.
+
 ---
 
 ## 2. Test Design Rules

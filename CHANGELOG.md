@@ -84,6 +84,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   though it did. Both call sites now call that function directly, which is what
   `loco.py` and `prepare_common.py` already do.
 
+- **`compare_assoc_results` detects the reference test type as an enum instead of
+  three booleans.** `is_all_tests`, `is_score_test` and `is_lrt_test` were derived
+  from one sample of the reference rows, with Wald as the implicit `else` of an
+  if/elif chain: an enum spelled as a boolean triple. It is now `AssocTestType`,
+  produced by `_detect_assoc_test_type`.
+
+  That matters because the four cases were re-derived in three separate places.
+  #122 merged two of them and its comment claimed they shared one dispatch, but
+  the SNP-count-mismatch early return still asked `is_score_test or is_all_tests`
+  twice to decide which optional output slots to populate, and each of the four
+  branches still ended in a hand-written conjunction of `.passed` attributes
+  repeating overlapping subsets of the same columns.
+
+  Two tables now hold the case analysis. `_OPTIONAL_SLOTS` says which optional
+  result slots a test type populates, read by the early return. `_PASS_COLUMNS`
+  says which columns the overall verdict reads, so the four conjunctions become
+  one `all(...)`. LRT still omits beta and se, because it reports them as NaN by
+  construction and verifies both sides are all-NaN instead; that is now one named
+  branch rather than an inline special case inside a 240-line function.
+
+  The per-type column selection stays a four-way branch. Those branches call
+  different comparison helpers with different tolerances and skip messages, so
+  there is nothing there to collapse.
+
+  The file grows by 29 lines. The enum, the detector and the two tables cost more
+  lines than the four conjunctions they replace; what improves is that the case
+  analysis lives in three named places instead of being re-derived inline in
+  three others.
+
 ## [7.2.0] - 2026-07-27
 
 Minor, not major, despite the Breaking heading below. That is a deliberate

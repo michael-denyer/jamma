@@ -25,7 +25,7 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 from loguru import logger
@@ -47,6 +47,7 @@ from jamma.kinship import (
 )
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+from jamma.lmm.prepare_common import compute_valid_mask
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
@@ -65,6 +66,16 @@ __all__ = [
     "PipelineResult",
     "PipelineRunner",
 ]
+
+# Two places reject this combination, and they cannot share a predicate: run()
+# knows only the backend request and fails before reading PLINK metadata off
+# disk, while _check_hwe_support knows the resolved plan and re-checks after
+# sample filtering may have flipped the mode. They must not disagree on the
+# message, so it lives here rather than being written out at both.
+_HWE_BATCH_UNSUPPORTED = (
+    "HWE filtering (--hwe) is not supported with the NumPy "
+    "batch backend. Use --backend numpy-streaming or set --hwe 0."
+)
 
 
 def _parse_backend_override(value: str) -> BackendRequest:
@@ -139,15 +150,6 @@ class PipelineRunner:
             append_benchmark_record(record)
         except Exception:  # noqa: BLE001 — telemetry must never break the pipeline; log and continue
             logger.warning("Telemetry emission failed", exc_info=True)
-
-    @staticmethod
-    def _compute_valid_mask(
-        phenotypes: np.ndarray, covariates: np.ndarray | None
-    ) -> np.ndarray:
-        """Compute boolean mask of samples with valid phenotype and covariate values."""
-        from jamma.lmm.prepare_common import compute_valid_mask
-
-        return compute_valid_mask(phenotypes, covariates)
 
     def validate_inputs(self) -> None:
         """Validate that required input files exist and combine legally.
@@ -520,10 +522,7 @@ class PipelineRunner:
     def _check_hwe_support(self, plan: ExecutionPlan) -> None:
         """Raise if HWE filtering requested but backend doesn't support it."""
         if self.config.hwe_threshold > 0 and plan.mode == "batch":
-            raise ValueError(
-                "HWE filtering (--hwe) is not supported with the NumPy "
-                "batch backend. Use --backend numpy-streaming or set --hwe 0."
-            )
+            raise ValueError(_HWE_BATCH_UNSUPPORTED)
 
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
@@ -556,30 +555,28 @@ class PipelineRunner:
             else self.config.backend
         )
 
-        # Fail fast: HWE + explicit numpy is always invalid, before touching disk.
+        # Fail fast: an explicit numpy request always resolves to batch mode, so
+        # this is invalid before the metadata read below can raise about a
+        # missing .bed. tests/test_lmm_io_validation.py pins that ordering.
         if self.config.hwe_threshold > 0 and requested == "numpy":
-            raise ValueError(
-                "HWE filtering (--hwe) is not supported with the NumPy "
-                "batch backend. Use --backend numpy-streaming or set --hwe 0."
-            )
+            raise ValueError(_HWE_BATCH_UNSUPPORTED)
 
-        # PLINK metadata is lightweight (reads .fam/.bim header only) and needed
-        # for memory-based mode selection in both auto and explicit paths.
-        from jamma.io.plink import get_plink_metadata as _get_meta
-
-        _meta = _get_meta(self.config.bfile)
+        # Read once and pass it down. get_plink_metadata parses the whole .bim
+        # (sid, chromosome, bp_position and both allele arrays), so calling it
+        # again in _run_inner doubled that work on every run.
+        meta = get_plink_metadata(self.config.bfile)
 
         # Route through select_execution_mode for all backend requests.
         plan = select_execution_mode(
-            n_samples=_meta["n_samples"],
-            n_snps=_meta["n_snps"],
+            n_samples=meta["n_samples"],
+            n_snps=meta["n_snps"],
             requested=requested,
         )
 
         log_backend_selection("numpy", self.config.backend, env_backend)
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
-        return self._run_inner(t_start, plan, requested)
+        return self._run_inner(t_start, plan, requested, meta)
 
     def _load_phenotypes_and_intersect_masks(
         self,
@@ -619,7 +616,7 @@ class PipelineRunner:
         for col in pheno_columns:
             pheno, n_anal = self._parse_phenotype_column(col, fam_data=fam_data)
             all_pheno_data[col] = (pheno, n_anal)
-            all_masks.append(self._compute_valid_mask(pheno, covariates))
+            all_masks.append(compute_valid_mask(pheno, covariates))
 
         valid_mask = np.all(all_masks, axis=0)
         n_valid = int(np.sum(valid_mask))
@@ -701,7 +698,8 @@ class PipelineRunner:
         self,
         t_start: float,
         plan: ExecutionPlan,
-        requested: Literal["auto", "numpy", "numpy-streaming"] = "auto",
+        requested: Literal["auto", "numpy", "numpy-streaming"],
+        meta: dict[str, Any],
     ) -> PipelineResult:
         """Execute the pipeline body.
 
@@ -709,12 +707,12 @@ class PipelineRunner:
             t_start: Pipeline start time from time.perf_counter().
             plan: ExecutionPlan with backend, mode, and reason.
             requested: Resolved backend request (respects JAMMA_BACKEND env var).
+            meta: PLINK metadata already read by ``run``.
         """
         self._check_hwe_support(plan)
 
         self.validate_inputs()
 
-        meta = get_plink_metadata(self.config.bfile)
         n_samples = meta["n_samples"]
         n_snps = meta["n_snps"]
 
@@ -773,7 +771,6 @@ class PipelineRunner:
         eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
             n_samples, n_valid, valid_mask, ksnps_indices
         )
-        K = None
         load_s = time.perf_counter() - t_start
 
         outcome = run_phenotype_loop(
@@ -781,7 +778,6 @@ class PipelineRunner:
             plan,
             all_pheno_data,
             valid_mask,
-            K,
             covariates,
             eigenvalues,
             eigenvectors,
@@ -960,7 +956,7 @@ class PipelineRunner:
         )
 
         covariates = self.load_covariates(n_samples)
-        valid_mask = self._compute_valid_mask(phenotypes, covariates)
+        valid_mask = compute_valid_mask(phenotypes, covariates)
         n_valid = int(np.sum(valid_mask))
         n_cvt = covariates.shape[1] if covariates is not None else 1
         log_dataset_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)

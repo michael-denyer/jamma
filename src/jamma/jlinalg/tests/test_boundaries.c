@@ -128,12 +128,16 @@ static void _test_eigh_size(int n, double recon_tol, double ortho_tol,
 }
 
 /* Vendor DSYEVD/DSYEVR boundary tests at various matrix sizes.
- * Tolerances are conservative (1e-13 for small, 1e-8 for larger). */
-void test_eigh_small(void)               { _test_eigh_size(5,  1e-14, 1e-14, 300); }
-void test_eigh_dstedc_base(void)         { _test_eigh_size(64, 1e-13, 1e-13, 301); }
-void test_eigh_dstedc_base_plus_1(void)  { _test_eigh_size(65, 1e-8,  1e-8,  302); }
-void test_eigh_nb_dsytrd(void)           { _test_eigh_size(64, 1e-13, 1e-13, 303); }
-void test_eigh_nb_dsytrd_plus_1(void)    { _test_eigh_size(65, 1e-8,  1e-8,  304); }
+ * Tolerances are conservative (1e-13 for small, 1e-8 for larger).
+ *
+ * The 64 and 65 sizes appear twice each, differing only in seed.  Vendor
+ * LAPACK switches blocking around 64, so a defect that only shows up either
+ * side of that step is worth two independent draws rather than one. */
+void test_eigh_small(void)          { _test_eigh_size(5,  1e-14, 1e-14, 300); }
+void test_eigh_64(void)             { _test_eigh_size(64, 1e-13, 1e-13, 301); }
+void test_eigh_65(void)             { _test_eigh_size(65, 1e-8,  1e-8,  302); }
+void test_eigh_64_alt_seed(void)    { _test_eigh_size(64, 1e-13, 1e-13, 303); }
+void test_eigh_65_alt_seed(void)    { _test_eigh_size(65, 1e-8,  1e-8,  304); }
 
 /* -------------------------------------------------------------------------
  * Unity main
@@ -160,10 +164,10 @@ int main(void) {
 
     /* eigh boundary tests */
     RUN_TEST(test_eigh_small);
-    RUN_TEST(test_eigh_dstedc_base);
-    RUN_TEST(test_eigh_dstedc_base_plus_1);
-    RUN_TEST(test_eigh_nb_dsytrd);
-    RUN_TEST(test_eigh_nb_dsytrd_plus_1);
+    RUN_TEST(test_eigh_64);
+    RUN_TEST(test_eigh_65);
+    RUN_TEST(test_eigh_64_alt_seed);
+    RUN_TEST(test_eigh_65_alt_seed);
 
     int result = UNITY_END();
     Py_Finalize();

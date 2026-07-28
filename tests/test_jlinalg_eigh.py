@@ -1,17 +1,28 @@
-"""Tests for jlinalg eigh (symmetric eigendecomposition via DSYTRD + DSTEDC + DORMTR).
+"""Contract tests for ``jamma.jlinalg.eigh``, the symmetric eigendecomposition.
 
-Tests cover all EIGH requirements (EIGH-01 through EIGH-09):
-- EIGH-01: DSYTRD reduction to tridiagonal form (C extension stub)
-- EIGH-02: DSTEDC divide-and-conquer secular solver (C extension stub)
-- EIGH-03: Block-diagonal stress test (repeated/clustered eigenvalues)
-- EIGH-04: DORMTR eigenvector back-transformation (C extension stub)
-- EIGH-05: Python fallback correctness (identity, diagonal, random SPD, ascending)
-- EIGH-06: Output memory layout (shape, dtype, C-contiguous)
-- EIGH-07: Reconstruction accuracy: ||K - U diag(w) U.T|| / ||K|| < 1e-8
-- EIGH-08: Orthogonality: ||U.T @ U - I||_F < 1e-8
-- EIGH-09: LAPACK sources in hatch_build.py must not receive -ffast-math
+These test the *contract* of ``eigh()``, not any one implementation of it.
+``eigh`` dispatches to vendor DSYEVD, then vendor DSYEVR, then falls back to
+``numpy.linalg.eigh`` when neither is available (see
+``src/jamma/jlinalg/src/eigh.c``).  Which backend answers a given call depends
+on the installed BLAS, so every assertion here is chosen to hold for all three.
 
-Run with -n0 to avoid interference with OpenMP threading tests:
+What that means in practice: no test compares eigenvectors element-wise against
+a reference.  Eigenvectors are unique only up to sign, and only up to an
+arbitrary rotation within a degenerate eigenspace, so independent
+implementations legitimately return different bases.  The properties asserted
+instead are backend-independent:
+
+- **Reconstruction** — ``||K - V diag(w) V.T||_F / ||K||_F`` below a tolerance
+- **Orthogonality** — ``||V.T V - I||_F`` below a tolerance
+- **Ordering** — eigenvalues ascending
+- **Layout** — shapes, float64 dtype, C-contiguity
+- **Error contract** — which exception type each failure mode raises
+
+Sizes are parametrised across ``BOUNDARY_SIZES`` because vendor LAPACK picks
+different internal blocking and different kernels by size, so a bug that only
+appears at one blocking boundary stays visible.
+
+Run with ``-n0`` to avoid interference with the OpenMP threading tests:
     uv run pytest tests/test_jlinalg_eigh.py -x -n0 -v
 """
 
@@ -103,27 +114,32 @@ def _assert_orthogonality(
 # Boundary size parameters
 # ---------------------------------------------------------------------------
 
-# Sizes chosen to cover MR-1/MR/MR+1 for both AVX2 (MR=6) and NEON (MR=8),
-# plus MC boundaries (AVX2 MC=72, NEON MC=64), and a selection of primes.
-# Capped at 200 for eigh (eigendecomp is O(N^3) — larger sizes are in slow tests).
+# Degenerate and tiny sizes, then powers of two and their neighbours, then a
+# few primes.  Vendor LAPACK selects blocking and kernels by size, so an
+# off-by-one in a blocked path shows up at N and not at N+-1; keeping both
+# neighbours of each power of two is what makes that visible.  The exact
+# values are historical — they were chosen against a blocking scheme that no
+# longer ships — but they remain a good spread and cost little to keep.
+# Capped at 200 because eigendecomposition is O(N^3); larger sizes are in the
+# ``slow``-marked tests below.
 BOUNDARY_SIZES = [
     1,
     2,
     3,
     5,
     6,
-    7,  # MR-1/MR/MR+1 for AVX2 (MR=6)
+    7,
     8,
-    9,  # MR/MR+1 for NEON (MR=8)
+    9,
     11,
     13,
     31,
     63,
     64,
-    65,  # MC-1/MC/MC+1 for NEON (MC=64)
+    65,
     71,
     72,
-    73,  # MC-1/MC/MC+1 for AVX2 (MC=72)
+    73,
     100,
     127,
     128,
@@ -157,12 +173,12 @@ def _random_spd(N: int, rng: np.random.Generator) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# TestEigh — EIGH-05: Python fallback correctness
+# Core correctness on inputs with a known answer
 # ---------------------------------------------------------------------------
 
 
 class TestEigh:
-    """eigh must produce correct eigenvalues/eigenvectors (EIGH-05)."""
+    """eigh returns the known eigendecomposition of hand-checkable inputs."""
 
     @pytest.mark.parametrize("N", [1, 2, 3, 10, 100])
     def test_identity(self, N: int) -> None:
@@ -277,7 +293,7 @@ class TestEigh:
 
 
 # ---------------------------------------------------------------------------
-# test_reconstruction_accuracy — EIGH-07
+# Reconstruction and orthogonality at N=1000
 # ---------------------------------------------------------------------------
 
 
@@ -285,20 +301,15 @@ class TestEigh:
 def test_reconstruction_accuracy() -> None:
     """N=1000 random SPD: ||K - U diag(w) U.T|| / ||K|| < 1e-8.
 
-    D&C-direct (no QR fallback) produces ~1e-9 residuals at N=1000.
-    Tolerance 1e-8 gives comfortable margin above D&C-direct residuals.
+    The observed residual is ~1e-9 at this size; 1e-8 leaves margin for the
+    spread between the vendor backends and the NumPy fallback.
     """
     rng = np.random.default_rng(42)
     N = 1000
     K = _random_spd(N, rng)
     K_copy = K.copy()
     w, v = eigh(K_copy)
-    _assert_reconstruction(K, w, v, 1e-8, "EIGH-07 N=1000")
-
-
-# ---------------------------------------------------------------------------
-# test_orthogonality — EIGH-08
-# ---------------------------------------------------------------------------
+    _assert_reconstruction(K, w, v, 1e-8, "N=1000")
 
 
 @pytest.mark.slow
@@ -309,11 +320,11 @@ def test_orthogonality() -> None:
     K = _random_spd(N, rng)
     K_copy = K.copy()
     _, v = eigh(K_copy)
-    _assert_orthogonality(v, 1e-12, "EIGH-08 N=1000")
+    _assert_orthogonality(v, 1e-12, "N=1000")
 
 
 # ---------------------------------------------------------------------------
-# test_eigh_memory_layout — EIGH-06
+# Bad input, and the shape/dtype/contiguity of the output
 # ---------------------------------------------------------------------------
 
 
@@ -362,18 +373,18 @@ def test_eigh_memory_layout() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_block_diagonal_stress — EIGH-03
+# Clustered eigenvalues
 # ---------------------------------------------------------------------------
 
 
 def test_block_diagonal_stress() -> None:
     """Block-diagonal 1000x1000 matrix with clustered eigenvalues per block.
 
-    Builds 10 groups x 100 = 1000x1000 block-diagonal matrix.
-    Verifies reconstruction < 1e-8 and orthogonality < 1e-8.
-
-    With z-vector sign fix (Phase 80.4-07), D&C achieves ~1e-9 residuals
-    at N=1000 without QR fallback.
+    Builds a 10 x 100 block-diagonal matrix and checks reconstruction and
+    orthogonality below 1e-8.  Tight clusters within each block are the case
+    that separates a well-behaved eigensolver from one that loses
+    orthogonality between near-equal eigenvalues, so this is a stress test
+    rather than a duplicate of the random-SPD cases.
     """
     rng = np.random.default_rng(77)
     n_groups = 10
@@ -415,15 +426,14 @@ def test_vs_mouse_hs1940_kinship() -> None:
     - Eigenvalues: atol=1e-12, rtol=1e-8.  The kinship matrix is nearly
       singular (smallest eigenvalue ~9e-13, condition number ~4e13), so
       pure rtol is inappropriate for near-zero eigenvalues.  rtol=1e-8
-      accounts for the different rounding paths in jlinalg QR vs LAPACK dstevd.
+      accounts for the different rounding paths across the eigh backends.
     - Reconstruction: ||K - V W V^T||_F / ||K||_F < 1e-8.  For N=1940 with
-      condition number 4e13, O(N * eps * cond) gives ~4e13 * 2e-16 * 1940 ~
-      0.15 — but the tridiagonalization concentrates error so the practical
-      bound is ~1e-8 in the Frobenius norm.
-    - Orthogonality: ||V^T V - I||_F < 1e-5.  QR iteration loses a digit
-      per decade of condition ratio; with 13 decades the accumulated orthogon-
-      ality error is O(sqrt(N) * eps * cond_sub) where cond_sub is the local
-      subproblem condition.
+      condition number 4e13, the worst-case O(N * eps * cond) bound gives
+      ~4e13 * 2e-16 * 1940 ~ 0.15, far looser than what any backend here
+      actually delivers; 1e-8 is the empirically observed bound.
+    - Orthogonality: ||V^T V - I||_F < 1e-5.  Looser than the 1e-12 the
+      vendor path reaches, because it must also hold for the NumPy fallback
+      on a matrix this ill-conditioned.
     """
     fixtures_dir = Path(__file__).parent / "fixtures" / "kinship"
     kinship_path = fixtures_dir / "mouse_hs1940.cXX.txt"
@@ -431,7 +441,7 @@ def test_vs_mouse_hs1940_kinship() -> None:
     assert K.ndim == 2, f"Kinship matrix must be 2-D, got {K.ndim}-D"
     assert K.shape[0] == K.shape[1], f"Kinship matrix must be square, got {K.shape}"
 
-    # Reference eigenvalues from numpy (LAPACK dstevd/dsyevd)
+    # Reference eigenvalues from numpy, whatever LAPACK it is linked against
     w_ref = np.linalg.eigvalsh(K.copy())
 
     # jlinalg eigh
@@ -451,29 +461,18 @@ def test_vs_mouse_hs1940_kinship() -> None:
     _assert_reconstruction(K, w_jlinalg, v_jlinalg, 1e-4, "Kinship")
 
 
-# VALID-03: Sign ambiguity in eigenvectors.
-# All eigenvector comparisons in this module use reconstruction checks
-# (||K - V diag(w) V^T||_F / ||K||_F) and orthogonality checks
-# (||V^T V - I||_F) rather than element-wise comparison.  This is the
-# correct approach because eigenvectors are unique only up to sign (and
-# up to rotation within degenerate eigenspaces).  Reconstruction and
-# orthogonality are sign-invariant, making them robust to implementation
-# differences between jlinalg and NumPy/LAPACK.
-
-
 @pytest.mark.skipif(
     not HAS_C_EXTENSION or not blas_has_dsyevd,
-    reason="Requires vendor DSYEVD (ILP64 LAPACK) — jlinalg D&C path has looser bounds",
+    reason="Requires vendor DSYEVD (ILP64 LAPACK); the NumPy fallback is looser",
 )
 def test_mouse_hs1940_eigendecomp_strict() -> None:
-    """VALID-08: strict eigendecomp on real mouse_hs1940 kinship data.
+    """Strict eigendecomposition on real mouse_hs1940 kinship data.
 
-    Tighter tolerances than test_vs_mouse_hs1940_kinship to validate the
-    vendor LAPACK eigensolver quality on real data.  The vendor DSYEVD/DSYEVR
-    path (Accelerate, MKL-ILP64) achieves orthogonality < 1e-12 on this
-    1940 x 1940 kinship matrix.  The jlinalg D&C path has conditioning-
-    dependent error that exceeds this threshold, so this test is gated on
-    vendor LAPACK availability.
+    Tighter tolerances than ``test_vs_mouse_hs1940_kinship``, which has to
+    hold for every backend.  Vendor DSYEVD/DSYEVR (Accelerate, MKL-ILP64)
+    reaches orthogonality < 1e-12 on this 1940 x 1940 matrix; the NumPy
+    fallback does not reliably, which is why this one is gated on vendor
+    LAPACK rather than loosening the bound for everyone.
     """
     fixtures_dir = Path(__file__).parent / "fixtures" / "kinship"
     kinship_path = fixtures_dir / "mouse_hs1940.cXX.txt"
@@ -482,79 +481,75 @@ def test_mouse_hs1940_eigendecomp_strict() -> None:
 
     w, v = eigh(K_copy)
 
-    # VALID-08 requirement: orthogonality < 1e-12
     ortho_err = _assert_orthogonality(v, 1e-12, "mouse_hs1940 strict")
 
-    # Reconstruction: < 1e-8 (same as existing test, but confirms on C path)
+    # Same 1e-8 reconstruction bound as the all-backend test, but this time
+    # confirmed specifically on the vendor path.
     recon_err = _assert_reconstruction(K, w, v, 1e-8, "mouse_hs1940 strict")
 
     print(f"mouse_hs1940 strict: ortho={ortho_err:.3e}, recon={recon_err:.3e}")
 
 
 # ---------------------------------------------------------------------------
-# TestDsytrd — EIGH-01: Tridiagonalization (C extension only)
+# Reconstruction through the C entry point, at a single mid-range size
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
     not HAS_C_EXTENSION,
-    reason="C extension required for dsytrd tests",
+    reason="C extension required",
 )
-class TestDsytrd:
-    """DSYTRD reduction to tridiagonal form (EIGH-01).
+class TestEighReconstructionMidSize:
+    """Reconstruction at N=64, tight tolerance, C extension present.
 
-    dsytrd/dstedc/dormtr are internal C functions not yet exposed as individual
-    Python bindings. These tests exercise them indirectly through eigh.
+    Separate from the parametrised sweep because the tolerance is 1e-13
+    rather than 1e-8: at this size every backend is accurate to near machine
+    precision, so a loose bound here would hide a real regression.
     """
 
-    def test_tridiagonalizes_via_eigh(self) -> None:
-        """Verify dsytrd works correctly by checking eigh reconstruction.
-
-        dsytrd is the first step of eigh; if it produces wrong tridiagonal
-        output, reconstruction will fail.
-        """
+    def test_reconstruction_n64(self) -> None:
+        """N=64 random SPD reconstructs to 1e-13."""
         rng = np.random.default_rng(101)
-        N = 64  # NB_DSYTRD = 64, tests blocked path boundary
+        N = 64
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v = eigh(K_copy)
-        _assert_reconstruction(K, w, v, 1e-13, "dsytrd/eigh")
+        _assert_reconstruction(K, w, v, 1e-13, "N=64")
 
 
 # ---------------------------------------------------------------------------
-# TestDstedc — EIGH-02: Divide-and-conquer solver (C extension only)
+# Matrices whose spectra have a known awkward structure
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
     not HAS_C_EXTENSION,
-    reason="C extension required for dstedc tests",
+    reason="C extension required",
 )
-class TestDstedc:
-    """DSTEDC divide-and-conquer solver (EIGH-02).
+class TestEighDegenerateSpectra:
+    """eigh on spectra that are degenerate, empty, or indefinite.
 
-    Tests exercise dstedc indirectly through eigh at sizes that trigger
-    both the QR base case and D&C recursive splitting.
+    Exact eigenvalue multiplicity, an all-zero matrix, and a matrix with
+    negative eigenvalues each break a different naive implementation, and none
+    is covered by the random-SPD sweep, which almost surely produces distinct
+    positive eigenvalues.
     """
 
     @pytest.mark.parametrize("N", [127, 128, 129, 200])
-    def test_dstedc_boundary_reconstruction(self, N: int) -> None:
-        """Verify D&C merge at DSTEDC_BASE boundary via reconstruction.
+    def test_reconstruction_boundary_sizes(self, N: int) -> None:
+        """Reconstruction holds either side of the 128 blocking boundary.
 
-        With DSTEDC_BASE=64, D&C merge kicks in at N >= 65.  After
-        Phase 80.4 (A/B/C rational interpolation + delta_mat weight
-        product), D&C achieves ~1e-9 residuals without QR fallback.
-        Tolerance is 1e-8 to accept both D&C-direct and QR-fallback
-        paths.
+        1e-8 rather than a tighter bound so this holds for the NumPy fallback
+        as well as the vendor backends.
         """
         rng = np.random.default_rng(202 + N)
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v = eigh(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, f"D&C boundary N={N}")
+        _assert_reconstruction(K, w, v, 1e-8, f"boundary N={N}")
 
     def test_degenerate_eigenvalues(self) -> None:
-        """Matrix with exact repeated eigenvalues exercises deflation."""
+        """Matrix with exact repeated eigenvalues still yields an orthogonal basis."""
         # diag([1,1,1,2,2,3]) — exact multiplicity
         K = np.diag([1.0, 1.0, 1.0, 2.0, 2.0, 3.0])
         w, v = eigh(K.copy())
@@ -581,49 +576,39 @@ class TestDstedc:
 
 
 # ---------------------------------------------------------------------------
-# TestDormtr — EIGH-04: Back-transformation (C extension only)
+# Per-eigenpair residual, the defining equation
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
     not HAS_C_EXTENSION,
-    reason="C extension required for dormtr tests",
+    reason="C extension required",
 )
-class TestDormtr:
-    """DORMTR eigenvector back-transformation (EIGH-04).
+class TestEighEigenpairResidual:
+    """Each returned pair satisfies K v = w v individually.
 
-    Tests exercise dormtr indirectly through eigh by verifying that
-    eigenvectors are in the original (not tridiagonal) basis.
+    Reconstruction is an aggregate over all N pairs, so a single badly wrong
+    eigenvector can hide inside a passing Frobenius norm.  Checking pairs one
+    at a time is what catches that, and it also confirms the eigenvectors come
+    back in the basis of the input rather than in some internal working basis.
     """
 
-    def test_back_transforms_eigenvectors(self) -> None:
-        """Verify eigenvectors are in the original basis (not tridiagonal).
-
-        After Phase 80.4, D&C at N=100 achieves ~1e-9 residuals without
-        QR fallback, producing per-vector residuals up to ~2e-9.  Tolerance
-        1e-7 provides margin for seed-dependent variation.
-        """
+    def test_eigenpair_residual_n100(self) -> None:
+        """||K v_j - w_j v_j|| < 1e-7 for the first few eigenpairs at N=100."""
         rng = np.random.default_rng(303)
         N = 100
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v = eigh(K_copy)
-        # If dormtr failed, K @ v[:,j] != w[j] * v[:,j]
         for j in range(min(5, N)):
             residual = np.linalg.norm(K @ v[:, j] - w[j] * v[:, j])
             assert residual < 1e-7, (
-                f"dormtr back-transform failed for eigenvector {j}: "
-                f"residual={residual:.2e}"
+                f"eigenpair {j} does not satisfy K v = w v: residual={residual:.2e}"
             )
 
 
 # ---------------------------------------------------------------------------
-# test_lapack_no_ffast_math — EIGH-09
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# TestThreadControl — thread control API
+# Thread control API
 # ---------------------------------------------------------------------------
 
 
@@ -664,40 +649,37 @@ class TestThreadControl:
 
 
 # ---------------------------------------------------------------------------
-# TestAccumGemm — accumulate GEMM functional tests via eigh (EIGH-07/08)
+# Reconstruction and orthogonality together, at two larger sizes
 # ---------------------------------------------------------------------------
 
 
-class TestAccumGemm:
-    """Functional tests for _dgemm_core refactor via eigh correctness.
+class TestEighReconstructionAtScale:
+    """Both properties asserted on the same decomposition, at N=100 and N=500.
 
-    The accumulate GEMM and workspace APIs are C-internal with no direct
-    Python binding.  We verify them indirectly: eigh calls jlinalg_dgemm_c
-    internally (via DSTEDC D&C), so if the _dgemm_core refactor broke
-    anything, eigh reconstruction would fail.
+    The smaller cases above check one property at a time.  Asserting both on
+    one result rules out a decomposition that reconstructs the input while
+    returning a non-orthogonal basis, which is possible and which neither
+    check alone would catch.
     """
 
-    def test_eigh_still_correct_n100(self) -> None:
-        """eigh on 100x100 random SPD: reconstruction < 1e-8, orthogonality < 1e-12.
-
-        After Phase 80.4, D&C at N=100 achieves ~1e-9 residuals without
-        QR fallback.  Reconstruction tolerance 1e-8 provides margin.
-        """
+    def test_recon_and_ortho_n100(self) -> None:
+        """N=100: reconstruction < 1e-8 and orthogonality < 1e-12."""
         rng = np.random.default_rng(5001)
         N = 100
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v = eigh(K_copy)
 
-        _assert_reconstruction(K, w, v, 1e-8, "AccumGemm N=100")
-        _assert_orthogonality(v, 1e-12, "AccumGemm N=100")
+        _assert_reconstruction(K, w, v, 1e-8, "N=100")
+        _assert_orthogonality(v, 1e-12, "N=100")
 
     @pytest.mark.slow
-    def test_eigh_still_correct_n500(self) -> None:
-        """eigh on 500x500 random SPD: full pipeline test.
+    def test_recon_and_ortho_n500(self) -> None:
+        """N=500: reconstruction and orthogonality both < 1e-8.
 
-        At N=500, this exercises the full DSYTRD + DSTEDC (D&C with QR
-        base case) + DORMTR pipeline.  Verifies _dgemm_core refactor is sound.
+        Orthogonality is 1e-8 here rather than the 1e-12 used at N=100,
+        because the error grows with N and this bound must hold for the NumPy
+        fallback too.
         """
         rng = np.random.default_rng(5002)
         N = 500
@@ -705,12 +687,12 @@ class TestAccumGemm:
         K_copy = K.copy()
         w, v = eigh(K_copy)
 
-        _assert_reconstruction(K, w, v, 1e-8, "AccumGemm N=500")
-        _assert_orthogonality(v, 1e-8, "AccumGemm N=500")
+        _assert_reconstruction(K, w, v, 1e-8, "N=500")
+        _assert_orthogonality(v, 1e-8, "N=500")
 
 
 # ---------------------------------------------------------------------------
-# TestWorkspaceApi — workspace API (indirect via eigh, C-internal only)
+# Throughput against numpy, and a sequential-draw boundary sweep
 # ---------------------------------------------------------------------------
 
 
@@ -751,11 +733,9 @@ class TestEighThroughput:
         print(
             f"\nN={N}: jlinalg={t_jlinalg:.4f}s, np={t_numpy:.4f}s, ratio={ratio:.1f}x"
         )
-        # Cross-platform soft gate.  Apple Silicon Accelerate is multi-threaded
-        # and uses LAPACK dsyevd with vDSP BLAS — jlinalg single-threaded LAPACK
-        # cannot match that.  Use 15x to accommodate Accelerate (~14x observed)
-        # while still catching gross regressions.  On x86_64 with AVX2 + MKL,
-        # expect < 8x.
+        # Cross-platform soft gate against gross regressions in the dispatch
+        # layer, not a performance target.  15x accommodates the widest
+        # observed gap; on x86_64 with MKL, expect well under that.
         assert ratio < 15.0, (
             f"jlinalg eigh is {ratio:.1f}x slower than numpy -- expected < 15x"
         )
@@ -770,51 +750,53 @@ class TestEighThroughput:
         vals, vecs = eigh(K.copy())
         np_vals, _ = np.linalg.eigh(K.copy())
 
-        # Eigenvalue agreement — D&C eigenvalues match numpy to ~1e-10
+        # Eigenvalues agree with numpy to ~1e-10 in practice; 1e-8 for margin.
         npt.assert_allclose(vals, np_vals, rtol=1e-8)
 
-        _assert_reconstruction(K, vals, vecs, 1e-8, "N=1000 post-opt")
-        _assert_orthogonality(vecs, 1e-8, "N=1000 post-opt")
+        _assert_reconstruction(K, vals, vecs, 1e-8, "N=1000")
+        _assert_orthogonality(vecs, 1e-8, "N=1000")
 
 
-class TestWorkspaceApi:
-    """Workspace API has no Python binding (C-internal only).
+class TestEighBoundarySizeLoop:
+    """Two boundary sizes drawn in sequence from one generator.
 
-    Tested indirectly: if eigh works at N > DSTEDC_BASE (64), the GEMM
-    calls inside dstedc are functioning with workspace buffers.
-    The TestAccumGemm tests above cover the _dgemm_core refactor path.
+    Deliberately not parametrised, unlike ``test_reconstruction_boundary_sizes``
+    above.  Both matrices come from the same un-reseeded generator, so the
+    N=200 input depends on the N=128 draw.  That makes this the one case that
+    would catch state leaking between consecutive eigh calls; a parametrised
+    version reseeds and cannot.
     """
 
-    def test_eigh_uses_dgemm_internally(self) -> None:
-        """Verify eigh at boundary sizes uses the _dgemm_core path without error.
-
-        At N=128/200, D&C may or may not trigger QR fallback depending on
-        the specific matrix and seed.  Tolerance 1e-8 accepts both
-        D&C-direct (~1e-9) and QR-fallback (~1e-14) results.
-        """
+    def test_reconstruction_n128_n200(self) -> None:
+        """Consecutive eigh calls at N=128 then N=200 both reconstruct to 1e-8."""
         rng = np.random.default_rng(6001)
         for N in [128, 200]:
             K = _random_spd(N, rng)
             K_copy = K.copy()
             w, v = eigh(K_copy)
-            _assert_reconstruction(K, w, v, 1e-8, f"Workspace N={N}")
+            _assert_reconstruction(K, w, v, 1e-8, f"sequential N={N}")
 
 
 # ---------------------------------------------------------------------------
-# test_lapack_no_ffast_math — EIGH-09
+# Build-flag contract for the LAPACK-adjacent sources
 # ---------------------------------------------------------------------------
 
 
 def test_lapack_no_ffast_math() -> None:
-    """LAPACK sources in build configs must use strict IEEE 754 flags.
+    """LAPACK sources must be compiled with strict IEEE 754 flags.
 
     Compile flags are consolidated into
-    src/jamma/_build_support/compile_and_link.py. All three entry points
-    (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) route through
-    the helper instead of keeping inline flag lists, so we validate the
-    single source of truth once: LAPACK_CFLAGS must include '-fno-fast-math'
-    and must NOT include '-ffast-math'. The dstedc secular equation uses
-    IEEE 754 infinity arithmetic which -ffast-math breaks.
+    ``src/jamma/_build_support/compile_and_link.py``.  All three entry points
+    (``hatch_build.py``, ``_compile_jlinalg.py``, ``_compile_accel.py``) route
+    through that helper rather than keeping inline flag lists, so validating
+    the single source of truth once covers all of them: ``LAPACK_CFLAGS`` must
+    include ``-fno-fast-math`` and must not include ``-ffast-math``.
+
+    Why it matters for ``eigh.c``, the sole entry in ``LAPACK_SOURCES``: it
+    inspects vendor LAPACK return codes and hands NaN and Inf straight through
+    from the caller's matrix.  ``-ffast-math`` implies ``-ffinite-math-only``,
+    which lets the compiler assume no NaN or Inf ever occurs and so optimise
+    away the very checks the NaN and Inf tests above rely on.
     """
     from jamma._build_support.compile_and_link import LAPACK_CFLAGS, LAPACK_SOURCES
 
@@ -826,8 +808,8 @@ def test_lapack_no_ffast_math() -> None:
 
     # LAPACK_CFLAGS is the canonical flag list — must include strict IEEE 754.
     assert "-fno-fast-math" in LAPACK_CFLAGS, (
-        "LAPACK_CFLAGS must include '-fno-fast-math' to ensure strict IEEE 754 "
-        "arithmetic for the LAPACK secular equation solver"
+        "LAPACK_CFLAGS must include '-fno-fast-math' so NaN/Inf handling in "
+        "eigh.c is not optimised away"
     )
     assert "-ffast-math" not in LAPACK_CFLAGS, (
         "LAPACK_CFLAGS must NOT include '-ffast-math'"
@@ -835,7 +817,7 @@ def test_lapack_no_ffast_math() -> None:
 
 
 # ---------------------------------------------------------------------------
-# EIGH-10: Dtype handling — non-float64 inputs
+# Dtype handling — non-float64 inputs
 # ---------------------------------------------------------------------------
 
 
@@ -869,7 +851,7 @@ class TestEighDtype:
 
 
 # ---------------------------------------------------------------------------
-# EIGH-11: Error path tests
+# Error path tests
 # ---------------------------------------------------------------------------
 
 
@@ -968,87 +950,78 @@ def _call_eigh_with_status(
 
 
 # ---------------------------------------------------------------------------
-# TestDstedcNoSecularFailures — secular solver convergence and QR tracking
+# The same contract, asserted through the raw C entry point
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
     not _HAS_VENDOR_LAPACK,
-    reason="Vendor LAPACK (DSYEVD/DSYEVR) required for secular failure detection",
+    reason="Vendor LAPACK (DSYEVD/DSYEVR) required to reach jlinalg_eigh_c",
 )
-class TestDstedcNoSecularFailures:
-    """Test secular solver convergence and D&C eigenvector quality.
+class TestEighViaCApiAtScale:
+    """Reconstruction and orthogonality via ctypes, bypassing the Python wrapper.
 
-    After Phase 80.4-07 (LAPACK-matching z-vector sign handling in
-    dstedc_recurse), D&C produces eigenvectors with residuals < 1e-8
-    at all sizes without QR fallback.  The z-vector fix applies sign_rho
-    only to the right half (matching LAPACK DLAED2), which corrects the
-    cross-terms z[i]*z[j] that were corrupting eigenvectors at N>=128.
-
-    Asserts:
-      - Zero secular convergence failures at all sizes
-      - Zero QR fallback at all sizes
-      - Reconstruction accuracy < 1e-8 (D&C achieves ~1e-10 at N=200)
-      - Eigenvector orthogonality < 1e-8
+    Everything above calls ``eigh()``, which validates input, may copy, and
+    translates C return codes into Python exceptions.  These call
+    ``jlinalg_eigh_c`` directly instead, so a defect introduced by the wrapper
+    (a bad stride, a missed transpose) cannot mask a defect in the C layer or
+    the other way round.
     """
 
-    def test_no_secular_failures_n200(self) -> None:
-        """N=200: vendor eigh produces correct reconstruction and orthogonality."""
+    def test_recon_and_ortho_n200(self) -> None:
+        """N=200 through the C entry point: reconstruction and orthogonality < 1e-8."""
         rng = np.random.default_rng(42)
         N = 200
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
-        _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
+        _assert_reconstruction(K, w, v, 1e-8, f"C API N={N}")
+        _assert_orthogonality(v, 1e-8, f"C API N={N}")
 
     @pytest.mark.slow
-    def test_no_secular_failures_n500(self) -> None:
-        """N=500: vendor eigh produces correct reconstruction and orthogonality."""
+    def test_recon_and_ortho_n500(self) -> None:
+        """N=500 through the C entry point: reconstruction and orthogonality < 1e-8."""
         rng = np.random.default_rng(42)
         N = 500
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
-        _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
+        _assert_reconstruction(K, w, v, 1e-8, f"C API N={N}")
+        _assert_orthogonality(v, 1e-8, f"C API N={N}")
 
     @pytest.mark.slow
-    def test_no_secular_failures_n1000(self) -> None:
-        """N=1000: vendor eigh produces correct reconstruction and orthogonality."""
+    def test_recon_and_ortho_n1000(self) -> None:
+        """N=1000 through the C entry point: reconstruction and orthogonality < 1e-8."""
         rng = np.random.default_rng(42)
         N = 1000
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, f"SecularSolver N={N}")
-        _assert_orthogonality(v, 1e-8, f"SecularSolver N={N}")
+        _assert_reconstruction(K, w, v, 1e-8, f"C API N={N}")
+        _assert_orthogonality(v, 1e-8, f"C API N={N}")
 
 
 # ---------------------------------------------------------------------------
-# TestDlaed4Convergence — dlaed4 convergence on difficult inputs
+# Numerically awkward inputs, through the raw C entry point
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(
     not _HAS_VENDOR_LAPACK,
-    reason="Vendor LAPACK (DSYEVD/DSYEVR) required for dlaed4 convergence tests",
+    reason="Vendor LAPACK (DSYEVD/DSYEVR) required to reach jlinalg_eigh_c",
 )
-class TestDlaed4Convergence:
-    """Test dlaed4 convergence on known-difficult secular equation inputs.
+class TestEighViaCApiDifficultInputs:
+    """eigh holds up on inputs chosen to be numerically hostile.
 
-    These tests exercise dlaed4 indirectly through jlinalg_eigh_c by
-    constructing symmetric tridiagonal matrices that produce difficult
-    patterns. Since T is already tridiagonal, dsytrd is a no-op and
-    dstedc exercises the solver directly.
+    Each case targets a different way an eigensolver degrades: eigenvalues too
+    close to separate, a spectrum spanning fifteen orders of magnitude, an
+    eigenvalue pushed well outside the diagonal's range, and a scale far from
+    unity in both directions.  Random SPD matrices exhibit none of these, so
+    without this class the whole family would go untested.
 
-    With LAPACK-quality dlaed4 (ORGATI origin selection, A/B/C rational
-    interpolation for quadratic convergence, SWTCH/SWTCH3/dlaed6 for
-    clustered poles, and delta_mat weight product for full relative
-    precision) and LAPACK-matching z-vector sign handling (sign_rho
-    applied only to right half, matching DLAED2), secular convergence
-    is reliable (zero failures) and D&C achieves < 1e-8 residuals
-    at all sizes without QR fallback.
+    All inputs are symmetric tridiagonal, which keeps them cheap to build and
+    easy to reason about while still being fully general as far as ``eigh`` is
+    concerned.
     """
 
     @pytest.mark.parametrize(
@@ -1061,25 +1034,27 @@ class TestDlaed4Convergence:
         ],
         ids=["well-separated", "close", "tiny-scale", "huge-scale"],
     )
-    def test_dlaed5_both_roots(self, K: np.ndarray) -> None:
-        """N=2 exercises dlaed5 (analytical 2-pole secular solver).
+    def test_size_2_matrices(self, K: np.ndarray) -> None:
+        """N=2 across four spectra: reconstruction and orthogonality to 1e-12.
 
-        dlaed4 delegates all N=2 cases to dlaed5, which has three branches
-        (i=0 w>0, i=0 w<=0, i=1). Every D&C merge at DSTEDC_BASE boundary
-        involves 2-pole sub-problems, so dlaed5 correctness is critical.
+        N=2 has a closed-form answer, so any backend should be accurate to
+        near machine precision regardless of scale.  A failure here is a
+        genuine defect and not a conditioning artefact, which is why the
+        tolerance is far tighter than the large-N cases.
         """
         K_copy = K.copy()
         w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-12, "dlaed5")
-        _assert_orthogonality(v, 1e-12, "dlaed5")
+        _assert_reconstruction(K, w, v, 1e-12, "N=2")
+        _assert_orthogonality(v, 1e-12, "N=2")
         # Eigenvalues ascending
         assert w[0] <= w[1] + 1e-14, f"Eigenvalues not ascending: {w}"
 
     def test_clustered_eigenvalues(self) -> None:
-        """Clustered eigenvalues: d values within 1e-10 of each other.
+        """Diagonal entries within 1e-10 of each other still reconstruct to 1e-12.
 
-        Constructs a tridiagonal matrix whose eigenvalues cluster tightly,
-        stressing the secular solver's ability to separate close poles.
+        Near-equal eigenvalues are the case where a solver is most likely to
+        return a basis that is not orthogonal, because the eigenvectors it must
+        separate are nearly parallel.
         """
         N = 50
         # Construct a tridiagonal matrix with clustered eigenvalues
@@ -1107,10 +1082,11 @@ class TestDlaed4Convergence:
         _assert_reconstruction(K, w, v, 1e-10, "Large gap ratio")
 
     def test_boundary_eigenvalue(self) -> None:
-        """Boundary eigenvalue: stress the i=n-1 case (above largest pole).
+        """Largest eigenvalue pushed well above the largest diagonal entry.
 
-        Tridiagonal matrix with strong off-diagonal to push the last
-        eigenvalue well above d[n-1].
+        A strong off-diagonal moves the top eigenvalue outside the range of
+        the diagonal, so a solver that implicitly assumes eigenvalues bracket
+        within the diagonal returns a wrong answer here.
         """
         N = 30
         d = np.arange(1.0, N + 1.0)
@@ -1121,35 +1097,35 @@ class TestDlaed4Convergence:
         w, v, _ = _call_eigh_with_status(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "Boundary eigenvalue")
 
-    def test_negative_rho_zvector_sign(self) -> None:
-        """Regression: z-vector sign with negative off-diagonal (rho < 0).
+    def test_negative_offdiagonal(self) -> None:
+        """A negative off-diagonal entry mid-matrix does not corrupt the result.
 
-        Constructs a tridiagonal matrix where e[m-1] < 0 at a D&C split
-        point, forcing sign_rho = -1 in dstedc_recurse. The z-vector sign
-        fix (apply sign_rho only to the right half, matching LAPACK DLAED2)
-        is critical — applying it to all of z produces 5-13% residual errors.
-
-        Uses N=130 to ensure at least one D&C merge above DSTEDC_BASE=64.
+        Every other case here uses uniformly positive off-diagonals.  A sign
+        flip partway along changes the matrix meaningfully while leaving it
+        symmetric, and mishandling that sign historically produced residual
+        errors in the percent range rather than a clean failure — the kind of
+        wrongness a loose tolerance would wave through.
         """
         N = 130
         d = np.linspace(1.0, 10.0, N)
         e = np.full(N - 1, 0.5)
-        # Make e[mid-1] negative to force sign_rho = -1 at the split point
+        # Flip the sign of one off-diagonal entry, halfway along.
         mid = N // 2
         e[mid - 1] = -0.5
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
         w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, "Negative rho z-vector")
-        _assert_orthogonality(v, 1e-8, "Negative rho z-vector")
+        _assert_reconstruction(K, w, v, 1e-8, "negative off-diagonal")
+        _assert_orthogonality(v, 1e-8, "negative off-diagonal")
 
-    def test_delta_quality_via_reconstruction(self) -> None:
-        """Verify vendor eigh delivers reconstruction and orthogonality at scale.
+    def test_non_psd_symmetric_at_scale(self) -> None:
+        """Symmetric but indefinite matrices reconstruct at N=50, 200 and 500.
 
-        Asserts:
-          - Reconstruction < 1e-8 at all sizes
-          - Orthogonality < 1e-8 at all sizes
+        Built by symmetrising a Gaussian matrix rather than forming A @ A.T, so
+        unlike ``_random_spd`` these have negative eigenvalues and eigenvalues
+        near zero.  Sweeping three sizes in one test keeps the three C API
+        cases above free to stay size-specific.
         """
         rng = np.random.default_rng(42)
         for N in [50, 200, 500]:
@@ -1170,13 +1146,13 @@ class TestDlaed4Convergence:
 
 
 class TestEighVendorDispatch:
-    """Verify eigh produces correct results via vendor dsyevd or jlinalg pipeline."""
+    """eigh is correct whichever backend the installed BLAS causes it to pick."""
 
     def test_eigh_vendor_reconstruction_accuracy(self):
         """Reconstruction ||K - UDU.T||/||K|| on random SPD matrix.
 
-        Tolerance is 1e-9 to accommodate OpenBLAS dsyevd which has lower
-        accuracy than Accelerate/MKL on some matrix structures.
+        Tolerance is 1e-9 to accommodate OpenBLAS dsyevd, which is less
+        accurate than Accelerate or MKL on some matrix structures.
         """
         rng = np.random.default_rng(42)
         A = rng.standard_normal((100, 100))
@@ -1218,9 +1194,10 @@ class TestEighVendorDispatch:
         """Stress test: block-diagonal with repeated eigenvalues.
 
         OpenBLAS dsyevd can fail to converge on highly degenerate matrices
-        (returns info > 0).  In that case jlinalg_eigh_c propagates the error
-        rather than falling through to the jlinalg pipeline.  We tolerate this
-        by catching RuntimeError and verifying numpy succeeds instead.
+        (returns info > 0).  jlinalg_eigh_c propagates that error rather than
+        silently substituting another backend, so the test accepts either a
+        correct decomposition or a raised error, and in the error case confirms
+        numpy handles the same matrix — proving the input itself is valid.
         """
         N = 100
         # 5 blocks of 20 with identical eigenvalues within each block
@@ -1298,7 +1275,7 @@ class TestEighBackendReporting:
 
 
 # ---------------------------------------------------------------------------
-# EIGH-10: LinAlgError contract — convergence failure raises LinAlgError
+# LinAlgError contract — convergence failure raises LinAlgError
 # ---------------------------------------------------------------------------
 
 
@@ -1324,21 +1301,20 @@ class TestEighLinAlgError:
 
 
 # ---------------------------------------------------------------------------
-# EIGH-11: DSYEVR fallback path tests
+# DSYEVR fallback path tests
 # ---------------------------------------------------------------------------
 
 
 class TestEighDsyevrFallback:
-    """Verify DSYEVD→DSYEVR memory-pressure fallback in eigendecompose_kinship."""
+    """The DSYEVD-to-DSYEVR memory-pressure fallback in eigendecompose_kinship."""
 
     def test_dsyevr_fallback_on_dsyevd_memory_error(self):
         """When DSYEVD workspace can't allocate, DSYEVR should be tried.
 
-        We mock jlinalg.eigh to simulate the fallback: first call raises
-        MemoryError (DSYEVD path), second succeeds (DSYEVR path).  Since the
-        C code handles this internally, we verify the contract at the Python
-        level by confirming eigendecompose_kinship handles MemoryError from
-        jlinalg.eigh correctly.
+        The C code chooses between DSYEVD and DSYEVR internally, so the Python
+        layer cannot observe which ran.  What it can pin down is the contract at
+        its own boundary: a MemoryError out of jlinalg.eigh must propagate to
+        the caller rather than be swallowed.
         """
         from unittest.mock import patch
 
@@ -1357,8 +1333,7 @@ class TestEighDsyevrFallback:
                 eigendecompose_kinship(K, check_memory=False)
 
     def test_eigh_produces_correct_result_regardless_of_dispatch(self):
-        """Verify eigh returns correct eigendecomposition (covers whichever
-        vendor path is active — DSYEVD, DSYEVR, or jlinalg D&C)."""
+        """eigh is correct on whichever path is active: DSYEVD, DSYEVR, or NumPy."""
         rng = np.random.default_rng(99)
         A = rng.standard_normal((80, 80))
         K = np.ascontiguousarray(A @ A.T + np.eye(80), dtype=np.float64)
@@ -1376,7 +1351,7 @@ class TestEighDsyevrFallback:
 
 
 # ---------------------------------------------------------------------------
-# EIGH-12: Error propagation through eigendecompose_kinship
+# Error propagation through eigendecompose_kinship
 # ---------------------------------------------------------------------------
 
 
@@ -1465,40 +1440,13 @@ class TestEigendecomposeKinshipErrors:
 
         with patch("jamma.lmm.eigen.jlinalg") as mock_jlinalg:
             mock_jlinalg.blas_has_dsyevr = 0
-            mock_jlinalg.eigh.side_effect = RuntimeError("internal error in dstedc")
+            mock_jlinalg.eigh.side_effect = RuntimeError("internal error in eigh")
             with pytest.raises(RuntimeError, match="internal error"):
                 eigendecompose_kinship(K, check_memory=False)
 
 
-class TestDstedcNoAbort:
-    """Structural test: dstedc.c must not call abort()."""
-
-    def test_dstedc_no_abort_call(self):
-        """dstedc.c must not call abort() -- errors return codes instead."""
-        import pathlib
-        import re
-
-        dstedc_src = (
-            pathlib.Path(__file__).parent.parent
-            / "src"
-            / "jamma"
-            / "jlinalg"
-            / "src"
-            / "dstedc.c"
-        )
-        if not dstedc_src.exists():
-            pytest.skip("source not available")
-        source = dstedc_src.read_text()
-        # Check for actual abort() calls (not just the word "abort" in comments)
-        abort_calls = re.findall(r"\babort\s*\(\s*\)", source)
-        assert abort_calls == [], (
-            f"dstedc.c still contains abort() calls: {len(abort_calls)} found. "
-            "Use error return codes instead."
-        )
-
-
 # ---------------------------------------------------------------------------
-# EIGH-13: Eigenvalue zeroing boundary tests
+# Eigenvalue zeroing boundary tests
 # ---------------------------------------------------------------------------
 
 

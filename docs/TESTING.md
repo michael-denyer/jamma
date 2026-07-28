@@ -242,25 +242,43 @@ See also: [`.github/workflows/sanitizers.yml`](../.github/workflows/sanitizers.y
 [`src/jamma/_build_support/compile_and_link.py`](../src/jamma/_build_support/compile_and_link.py)
 (the `apply_sanitizer_overrides` helper).
 
-### 1.11 A fixture skip is a bug, not a skip
+### 1.11 A missing fixture is a bug, not a skip
 
 Everything under `tests/fixtures/` is committed and hash-verified by the
-`GEMMA fixture sha256 manifest` pre-commit hook. So a test that skips
-because it could not find a fixture is not reporting a missing input, it is
-reporting its own wrong path. That bug is invisible: the run stays green and
-the test simply never executes.
+`GEMMA fixture sha256 manifest` pre-commit hook. So a test that cannot find
+a fixture is not reporting a missing input, it is reporting its own wrong
+path. Guarded with `pytest.skip`, that bug is invisible: the run stays green
+and the test simply never executes.
 
 Two GEMMA-parity tests in `tests/test_likelihood_derivatives.py` sat dormant
 for their whole lifetime this way. The fixture directory was wrong *and* the
 kinship filename was wrong, and a single `.exists()` guard turned both into
 one skip (#147).
 
-`pytest_runtest_logreport` and `pytest_sessionfinish` in
-`tests/conftest.py` now fail the session when any skip reason matches
-`fixture not available`, printing each offending test id. Fix the path; do
-not delete the guard.
+**Guard with `require_fixture`, not `pytest.skip`.** `require_fixture` in
+`tests/conftest.py` raises `FileNotFoundError` when any argument does not
+exist, naming every missing path relative to the repository root, and
+returns `None` otherwise:
 
-Two consequences when writing a fixture guard:
+```python
+from tests.conftest import require_fixture
+
+def test_something():
+    require_fixture(MOUSE_BFILE.with_suffix(".bed"), MOUSE_KINSHIP)
+```
+
+Pass every path the test is about to read, in one call. A wrong directory
+then reports all of its files at once rather than stopping at the first,
+which is the half of #147 a single check could not show. For a file whose
+tests all need the same fixture, call it once at module level, as
+`tests/test_loco_eigen_cache.py` does; a wrong path there fails collection.
+
+**The skip gate is the backstop.** `pytest_runtest_logreport` and
+`pytest_sessionfinish` in `tests/conftest.py` fail the session when any skip
+reason matches `fixture not available`, printing each offending test id. No
+in-tree test relies on it now that every guard raises, and it stays anyway so
+a guard written as a skip in future cannot go quiet. Two consequences if you
+do write one:
 
 - **Use the exact phrase `fixture not available`.** The gate matches on it
   case-insensitively. `tests/test_conftest_fixture_skip_gate.py` scans the
@@ -269,6 +287,9 @@ Two consequences when writing a fixture guard:
 - **Skips about the environment are untouched.** `C extension not
   available`, `uv not available on PATH` and the like are genuine
   conditional skips and stay skips. Only fixture absence is fatal.
+
+Both mechanisms have regression tests in
+`tests/test_conftest_fixture_skip_gate.py`.
 
 ---
 
@@ -384,11 +405,11 @@ two are acceptable:
    `pytestmark = pytest.mark.skipif(...)` so the file skips at collection
    time. Example: [`tests/test_jlinalg_dispatch.py:12`](../tests/test_jlinalg_dispatch.py#L12).
 2. **Optional fixture absent** — a dataset too large to commit. Skip with a
-   message naming the missing fixture path. No fixture is currently in this
-   category: `gemma_loco` and `mouse_hs1940` are both committed in full, so
-   their `fixture not available` guards are defensive and never fire on a
-   normal clone. Treat one that *does* fire as a bug in the path it checks,
-   not as a missing download.
+   message naming the missing fixture path, worded so it does not contain
+   `fixture not available` (§1.11's gate treats that phrase as fatal). No
+   fixture is currently in this category: `gemma_loco` and `mouse_hs1940` are
+   both committed in full, so their guards use `require_fixture` and raise
+   instead of skipping.
 3. **Test is broken / commented-out** — *not acceptable*. Either fix or
    delete.
 

@@ -27,7 +27,9 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # way to reach such a skip is a wrong path in the test. That is a bug which
 # presents as a green run: two GEMMA-parity tests sat behind one for their
 # entire lifetime because the directory *and* the filename were both wrong
-# (#147). Reaching one now fails the session. See docs/TESTING.md §1.11.
+# (#147). require_fixture() below is the mechanism tests use, and it raises;
+# this pattern is the backstop that fails the session if someone writes a
+# fixture guard as a skip again. See docs/TESTING.md §1.11.
 _FIXTURE_UNAVAILABLE_RE = re.compile("fixture not available", re.IGNORECASE)
 
 # Filled by pytest_runtest_logreport, drained by pytest_sessionfinish. Under
@@ -246,6 +248,46 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         "See docs/TESTING.md §1.11.\033[0m\n"
     )
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def require_fixture(*paths: Path) -> None:
+    """Assert committed fixture paths exist, raising rather than skipping.
+
+    Everything under ``tests/fixtures/`` is committed and sha256-verified by
+    the ``GEMMA fixture sha256 manifest`` pre-commit hook. A path that does
+    not exist therefore means the test names the wrong path, never that the
+    data is unavailable, so the correct response is a failure and not a skip.
+    Guarding with ``pytest.skip`` hid two GEMMA-parity tests for their entire
+    lifetime: the directory and the filename were both wrong, one
+    ``.exists()`` check collapsed both misses into one skip reason, and the
+    run stayed green (#147).
+
+    Pass every path the caller is about to read, in one call. A wrong
+    directory then reports all of its files at once instead of stopping at
+    the first, which is the half of #147 a single check could not show.
+
+    Args:
+        paths: Fixture files that must be present.
+
+    Raises:
+        FileNotFoundError: If any path is absent. Every missing path is
+            named, relative to the repository root.
+    """
+    missing = [p for p in paths if not p.exists()]
+    if not missing:
+        return
+    repo_root = _TESTS_DIR.parent
+    listing = "\n  ".join(
+        str(p.relative_to(repo_root)) if p.is_relative_to(repo_root) else str(p)
+        for p in missing
+    )
+    raise FileNotFoundError(
+        f"{len(missing)} of {len(paths)} required test fixture(s) are "
+        f"missing:\n  {listing}\n\n"
+        "Everything under tests/fixtures/ is committed, so these paths are "
+        "wrong rather than absent. Fix the paths; do not skip the test. "
+        "See docs/TESTING.md §1.11."
+    )
 
 
 def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:

@@ -20,6 +20,7 @@ from jamma.io.plink import (
 from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
 from jamma.lmm.schema import get_spec
 from jamma.lmm.stats import AssocResult
+from tests.conftest import require_fixture
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
@@ -72,8 +73,7 @@ class TestPlinkIOErrorPaths:
         Verifies the returned dict has >= 3 keys and total SNP count
         matches the BIM line count.
         """
-        if not (LOCO_FIXTURES / "test.bed").exists():
-            pytest.skip("gemma_loco fixture not available")
+        require_fixture(LOCO_BFILE.with_suffix(".bed"), LOCO_BFILE.with_suffix(".bim"))
 
         partitions = get_chromosome_partitions(LOCO_BFILE)
 

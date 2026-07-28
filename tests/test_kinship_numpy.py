@@ -16,6 +16,7 @@ from jamma.kinship import (
     impute_center_and_standardize,
 )
 from jamma.validation import compare_kinship_matrices, load_gemma_kinship
+from tests.conftest import require_fixture
 
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"
 _SYNTHETIC_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
@@ -160,8 +161,7 @@ class TestImputationGemmaEquivalence:
 
     def test_impute_and_center_kinship_matches_gemma(self):
         """Centered kinship from impute_and_center matches GEMMA -gk 1 reference."""
-        if not _SYNTHETIC_DATA.with_suffix(".bed").exists():
-            pytest.skip("gemma_synthetic fixture not available")
+        require_fixture(_SYNTHETIC_DATA.with_suffix(".bed"), _REFERENCE_KINSHIP)
         plink = load_plink_binary(_SYNTHETIC_DATA)
         X = plink.genotypes.astype(np.float64)
         X_centered = impute_and_center(X)
@@ -177,8 +177,7 @@ class TestImputationGemmaEquivalence:
 
     def test_impute_center_standardize_produces_valid_standardized_kinship(self):
         """Standardized kinship has correct structural properties."""
-        if not _SYNTHETIC_DATA.with_suffix(".bed").exists():
-            pytest.skip("gemma_synthetic fixture not available")
+        require_fixture(_SYNTHETIC_DATA.with_suffix(".bed"))
         plink = load_plink_binary(_SYNTHETIC_DATA)
         X = plink.genotypes.astype(np.float64)
         X_std = impute_center_and_standardize(X.copy())
@@ -199,8 +198,7 @@ class TestImputationGemmaEquivalence:
 
     def test_impute_and_center_no_nans_remain(self):
         """All NaN values imputed after impute_and_center."""
-        if not _SYNTHETIC_DATA.with_suffix(".bed").exists():
-            pytest.skip("gemma_synthetic fixture not available")
+        require_fixture(_SYNTHETIC_DATA.with_suffix(".bed"))
         plink = load_plink_binary(_SYNTHETIC_DATA)
         X = plink.genotypes.astype(np.float64)
         # Inject missing values if fixture has none, ensuring imputation is exercised

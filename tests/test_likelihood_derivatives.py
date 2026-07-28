@@ -38,7 +38,7 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood_null,
 )
 from jamma.lmm.prepare_common import compute_and_log_pve, compute_valid_mask
-from tests.conftest import load_phenotypes_from_fam
+from tests.conftest import load_phenotypes_from_fam, require_fixture
 
 pytestmark = pytest.mark.tier1
 
@@ -54,8 +54,11 @@ SYNTHETIC_FIXTURE = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 @pytest.fixture
 def synthetic_null_model():
     """Load synthetic test data and compute null model quantities."""
-    if not (SYNTHETIC_FIXTURE / "test.bed").exists():
-        pytest.skip("GEMMA synthetic fixture not available")
+    require_fixture(
+        SYNTHETIC_FIXTURE / "test.bed",
+        SYNTHETIC_FIXTURE / "test.fam",
+        SYNTHETIC_FIXTURE / "gemma_kinship.cXX.txt",
+    )
 
     plink = load_plink_binary(SYNTHETIC_FIXTURE / "test")
     kinship = read_kinship_matrix(
@@ -85,8 +88,11 @@ def synthetic_null_model():
 @pytest.fixture
 def mouse_null_model():
     """Load mouse_hs1940 data and compute null model quantities."""
-    if not (MOUSE_FIXTURE / "mouse_hs1940_kinship.cXX.txt").exists():
-        pytest.skip("Mouse HS1940 fixture not available")
+    require_fixture(
+        MOUSE_FIXTURE / "mouse_hs1940.bed",
+        MOUSE_FIXTURE / "mouse_hs1940.fam",
+        MOUSE_FIXTURE / "mouse_hs1940_kinship.cXX.txt",
+    )
 
     plink = load_plink_binary(MOUSE_FIXTURE / "mouse_hs1940")
     kinship = read_kinship_matrix(

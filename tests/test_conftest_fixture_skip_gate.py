@@ -1,20 +1,26 @@
-"""Self-tests for the fixture-unavailability skip gate in conftest.py.
+"""Self-tests for the two mechanisms that keep a fixture-path bug loud.
 
-Everything under tests/fixtures/ is committed, so a test that skips because
-it "could not find" a fixture is really a test with a wrong path. That bug
-presents as a green run, which is how two GEMMA-parity tests stayed dormant
-for their whole lifetime (#147). The gate turns such a skip into a session
-failure.
+Everything under tests/fixtures/ is committed, so a test that cannot find a
+fixture is really a test with a wrong path. Guarded with ``pytest.skip``,
+that bug presents as a green run, which is how two GEMMA-parity tests stayed
+dormant for their whole lifetime (#147).
 
-The gate is a meta-rule, so it needs its own regression tests: if a future
-refactor drops the hook, inverts the predicate, or loses the exit-status
-mutation, dormant tests would silently re-enter the suite.
+``require_fixture`` is the mechanism the suite uses: it raises
+``FileNotFoundError`` naming every missing path, so the wrong path fails
+loudly and a wrong *directory* reports all of its files at once. The
+``pytest_runtest_logreport`` / ``pytest_sessionfinish`` gate is the backstop
+that fails the session if a future guard is written as a skip anyway.
 
-Two properties are easy to get wrong and are covered by subprocess tests
-rather than reasoning. The gate must fire under ``-n`` (the tier gate above
-it in conftest.py was once empirically a no-op under xdist), and mutating
-``session.exitstatus`` in ``pytest_sessionfinish`` must actually change the
-process exit code.
+Both are meta-rules, so both need their own regression tests: if a refactor
+drops the hook, inverts the predicate, loses the exit-status mutation, or
+softens ``require_fixture`` back into a skip, dormant tests would silently
+re-enter the suite.
+
+Two gate properties are easy to get wrong and are covered by subprocess
+tests rather than reasoning. The gate must fire under ``-n`` (the tier gate
+above it in conftest.py was once empirically a no-op under xdist), and
+mutating ``session.exitstatus`` in ``pytest_sessionfinish`` must actually
+change the process exit code.
 """
 
 from __future__ import annotations
@@ -25,11 +31,64 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import _FIXTURE_UNAVAILABLE_RE
+from tests.conftest import _FIXTURE_UNAVAILABLE_RE, require_fixture
 
 pytestmark = pytest.mark.tier0
 
 pytest_plugins = ["pytester"]
+
+_REPO_ROOT = Path(__file__).parent.parent
+_FIXTURES = Path(__file__).parent / "fixtures"
+# A real committed fixture, so deleting it fails these tests too.
+_PRESENT = _FIXTURES / "gemma_loco" / "test.bed"
+
+
+class TestRequireFixture:
+    """The mechanism must raise, and must name every miss in one failure."""
+
+    def test_returns_none_when_every_path_exists(self) -> None:
+        assert require_fixture(_PRESENT, _PRESENT.with_suffix(".bim")) is None
+
+    def test_raises_file_not_found_on_a_missing_path(self) -> None:
+        with pytest.raises(FileNotFoundError, match="no_such_fixture"):
+            require_fixture(_PRESENT.with_name("no_such_fixture.bed"))
+
+    def test_names_every_missing_path(self) -> None:
+        """A wrong directory reports all of its files, not just the first.
+
+        This is the half of #147 that a single ``.exists()`` check could not
+        show: both the directory and the filename were wrong, and only one
+        of the two misses was ever reported.
+        """
+        wrong_dir = _FIXTURES / "not_a_fixture_dir"
+        with pytest.raises(FileNotFoundError) as excinfo:
+            require_fixture(wrong_dir / "data.bed", wrong_dir / "kinship.cXX.txt")
+        message = str(excinfo.value)
+        assert "data.bed" in message
+        assert "kinship.cXX.txt" in message
+
+    def test_omits_paths_that_exist(self) -> None:
+        with pytest.raises(FileNotFoundError) as excinfo:
+            require_fixture(_PRESENT, _PRESENT.with_name("absent.bed"))
+        message = str(excinfo.value)
+        assert "absent.bed" in message
+        assert "1 of 2" in message
+        assert "test.bed" not in message
+
+    def test_renders_missing_paths_relative_to_the_repo_root(self) -> None:
+        with pytest.raises(FileNotFoundError) as excinfo:
+            require_fixture(_PRESENT.with_name("no_such_fixture.bed"))
+        message = str(excinfo.value)
+        expected = Path("tests") / "fixtures" / "gemma_loco" / "no_such_fixture.bed"
+        assert str(expected) in message
+        assert str(_REPO_ROOT) not in message
+
+    def test_renders_a_path_outside_the_repo_absolutely(self, tmp_path: Path) -> None:
+        """A path with no relative form must still be named in full."""
+        absent = tmp_path / "outside_the_repo.bed"
+        with pytest.raises(FileNotFoundError, match=re.escape(str(absent))):
+            require_fixture(absent)
+
 
 # Stub conftest importing the real hooks by file path. Pytester runs in a
 # tmpdir without our pyproject, so `tests.conftest` will not import as a

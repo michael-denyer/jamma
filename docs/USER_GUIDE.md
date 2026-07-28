@@ -615,7 +615,8 @@ print(f"Symbol suffix: {blas.get('symbol suffix', 'none')}")  # Should show: _64
 
 ```bash
 # Run JAMMA's validation suite to confirm equivalence
-uv run pytest tests/test_kinship_validation.py tests/test_lmm_validation.py -v
+uv run pytest tests/test_kinship_validation.py tests/test_validation.py \
+  tests/test_validation_assoc.py -v
 
 # Quick eigendecomposition sanity check
 python -c "

@@ -391,7 +391,13 @@ JAMMA's LOCO integration tests use a two-step validation: (1) JAMMA computes
 per-chromosome LOCO kinship matrices, (2) GEMMA runs standard LMM with each
 LOCO kinship as external `-k` input. This validates that JAMMA's LOCO kinship
 formula produces results numerically equivalent to GEMMA's LMM expectations.
-See `legacy/tests/test_gemma_loco_integration.py`.
+See [`tests/test_loco_numpy.py`](../tests/test_loco_numpy.py), which compares
+against the committed GEMMA reference output in
+`tests/fixtures/gemma_loco/gemma_loco_chr{1,2,3}.assoc.txt`. The PLINK binary
+those were generated from is too large to commit, so the fixture's `.bed` ships
+out of band and the comparisons skip with "gemma_loco fixture not available"
+when it is absent. Regenerate it with
+[`scripts/generate_loco_fixtures.sh`](../scripts/generate_loco_fixtures.sh).
 
 ---
 

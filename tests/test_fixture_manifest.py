@@ -90,8 +90,16 @@ def test_drift_is_detected(tmp_path: Path) -> None:
     """
     checker = _load_checker()
     fixtures = checker.tracked_fixtures()
-    if not fixtures:
-        pytest.skip("no tracked fixtures to drift-test against")
+    # Not a skip. Everything under tests/fixtures/ is committed and listed in
+    # the manifest, so an empty list means the checker stopped finding tracked
+    # files, which is the gate silently doing nothing. #149 replaced the fixture
+    # skip guards; this one survived because its reason did not use the phrase
+    # the old runtime backstop matched on.
+    assert fixtures, (
+        "tracked_fixtures() found nothing, so the drift gate has no input. "
+        "tests/fixtures/ is committed, so this is a broken checker, not an "
+        "absent fixture."
+    )
     target = fixtures[0]
     rel = target.relative_to(checker.REPO_ROOT).as_posix()
 

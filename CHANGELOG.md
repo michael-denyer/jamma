@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The fixture-skip gate reads the source instead of watching skip reports.**
+  #148 caught a fixture guard written as a skip by matching the exact phrase
+  `fixture not available` in skip reports as they arrived, via
+  `pytest_runtest_logreport` plus a module-level list plus a
+  `pytest_sessionfinish` that mutated `session.exitstatus`. That could only fire
+  when the guarded test actually ran, and only for that one wording. None of the
+  suite's ~30 legitimate skips phrase anything that way, and neither would most
+  new guards.
+
+  `_enforce_no_fixture_skips` parses every `tests/**/test_*.py` at
+  `pytest_configure` and rejects a `pytest.skip(...)` reason or a
+  `@pytest.mark.skipif(..., reason=...)` whose text contains the word `fixture`,
+  naming each file and line. Same mechanism as the tier-marker gate twelve lines
+  above it, which is source-parsed for exactly this reason: it holds under xdist,
+  `-k` and `-m`, and it flags the guard even in a file whose tests never ran.
+  Only string literals are inspected, so a computed reason is left alone rather
+  than guessed at.
+
+  It immediately found one the old gate could not: `test_drift_is_detected` in
+  `tests/test_fixture_manifest.py` skipped on "no tracked fixtures to
+  drift-test against". `tests/fixtures/` is committed and manifest-listed, so an
+  empty list means the checker stopped finding tracked files, which is the drift
+  gate silently doing nothing. It asserts now.
+
+  `require_fixture` is unchanged; it remains the mechanism tests call. Deleting
+  the runtime plumbing removes the need to prove it under `-n 2`, so
+  `tests/test_conftest_fixture_skip_gate.py` drops from 245 to 163 lines while
+  covering more: five wordings the old phrase-match missed, plus `skipif`.
+
+- **`check-doc-anchors.py` enumerates its inputs with `git ls-files`.** It
+  carried a hand-copied `SKIP_DIRS`/`SKIP_FILES` pair mirroring
+  `.markdownlint-cli2.jsonc`'s `ignores` and `lychee.toml`'s `exclude_path`, a
+  third copy of one list with no way to read either other. Everything on it
+  except `LICENSE.md` is gitignored, so git excludes it by construction.
+
+  Coverage is a strict improvement, not merely equal: the same 94 anchors are
+  checked, and `.pytest_cache/README.md` is no longer scanned. It is generated,
+  and the hand-maintained list did not exclude it.
+
+  The script now requires a git checkout and raises if `git ls-files` fails,
+  rather than falling back to a filesystem walk that would quietly start
+  checking uncommitted and vendored files. Its tests build a real repo and
+  `git add` the doc, so they exercise the same enumeration the hook does.
+
 ## [7.2.0] - 2026-07-27
 
 Minor, not major, despite the Breaking heading below. That is a deliberate

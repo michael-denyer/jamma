@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,22 +21,15 @@ _TIER_MARKER_EXEMPT_FILES: frozenset[str] = frozenset()
 
 _TESTS_DIR = Path(__file__).resolve().parent
 
-# A skip reason matching this phrase claims a fixture under tests/fixtures/
-# could not be found. Every one of those fixtures is committed, so the only
-# way to reach such a skip is a wrong path in the test. That is a bug which
-# presents as a green run: two GEMMA-parity tests sat behind one for their
-# entire lifetime because the directory *and* the filename were both wrong
-# (#147). require_fixture() below is the mechanism tests use, and it raises;
-# this pattern is the backstop that fails the session if someone writes a
-# fixture guard as a skip again. See docs/TESTING.md §1.11.
-_FIXTURE_UNAVAILABLE_RE = re.compile("fixture not available", re.IGNORECASE)
-
-# Filled by pytest_runtest_logreport, drained by pytest_sessionfinish. Under
-# xdist the controller receives every worker's reports, so this accumulates
-# the whole session there. tests/test_conftest_fixture_skip_gate.py proves
-# that under -n 2 rather than assuming it, because the tier gate above was
-# once silently a no-op under -n for exactly that class of reason.
-_fixture_unavailable_skips: list[str] = []
+# A skip reason naming a fixture claims something under tests/fixtures/ could
+# not be found. Every one of those is committed, so the only way to reach such
+# a skip is a wrong path in the test. That is a bug which presents as a green
+# run: two GEMMA-parity tests sat behind one for their entire lifetime because
+# the directory *and* the filename were both wrong (#147). require_fixture()
+# below is the mechanism tests use, and it raises; this word is what the
+# collection-time gate looks for in a skip reason so the guard cannot come
+# back as a skip. See docs/TESTING.md §1.11.
+_FIXTURE_WORD = "fixture"
 
 
 def _module_level_marker_names(tree: ast.Module) -> set[str]:
@@ -151,6 +143,91 @@ def _enforce_tier_markers() -> None:
         )
 
 
+def _fixture_skip_lines(tree: ast.Module) -> list[int]:
+    """Line numbers of skips whose reason names a fixture.
+
+    Matches both ways of writing the guard: a ``pytest.skip(...)`` call and a
+    ``@pytest.mark.skipif(..., reason=...)`` decorator. Only string literals are
+    inspected, because a computed reason cannot be judged from the source and
+    guessing would produce false failures.
+    """
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        is_skip = (
+            func.attr == "skip"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "pytest"
+        )
+        is_skipif = (
+            func.attr == "skipif"
+            and isinstance(func.value, ast.Attribute)
+            and func.value.attr == "mark"
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id == "pytest"
+        )
+        if not (is_skip or is_skipif):
+            continue
+        reasons = [*node.args, *(kw.value for kw in node.keywords)]
+        for reason in reasons:
+            if (
+                isinstance(reason, ast.Constant)
+                and isinstance(reason.value, str)
+                and _FIXTURE_WORD in reason.value.lower()
+            ):
+                lines.append(node.lineno)
+                break
+    return lines
+
+
+def _enforce_no_fixture_skips() -> None:
+    """Source-parse every test file and fail on a skip that names a fixture.
+
+    Source-parsed and run once from ``pytest_configure``, for the same reason
+    the tier gate above is: it then holds under xdist, ``-k``, ``-m``, and any
+    other collection-time filtering, and it flags the guard even in a file whose
+    tests never ran this session.
+
+    This replaced a runtime backstop that matched the exact phrase "fixture not
+    available" in skip reports as they arrived. That could only fire when the
+    guarded test actually ran, and only for that one wording; none of the ~30
+    legitimate skips in this suite phrase anything that way, and neither would
+    most new guards. Reading the source instead catches the guard whatever it
+    says, before a single test executes.
+
+    Raises:
+        pytest.UsageError: Naming every file and line, with the fix.
+    """
+    offenders: list[str] = []
+    repo_root = _TESTS_DIR.parent
+    for path in sorted(_TESTS_DIR.rglob("test_*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, OSError, UnicodeDecodeError):
+            # Unparsable files are the tier gate's problem to report; flagging
+            # them here too would double every message.
+            continue
+        offenders += [
+            f"{path.relative_to(repo_root)}:{line}"
+            for line in _fixture_skip_lines(tree)
+        ]
+    if offenders:
+        listing = "\n  ".join(offenders)
+        raise pytest.UsageError(
+            "The following skips name a fixture in their reason:\n  "
+            f"{listing}\n\n"
+            "Everything under tests/fixtures/ is committed, so a fixture that "
+            "cannot be found means the test names the wrong path. Call "
+            "require_fixture(*paths) from tests/conftest.py, which raises "
+            "instead of skipping, or assert the precondition. "
+            "See docs/TESTING.md §1.11."
+        )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Run session-start checks: tier-marker gate and stale-C-extension warn.
 
@@ -172,6 +249,7 @@ def pytest_configure(config: pytest.Config) -> None:
     # raising UsageError mid-session would crash xdist.
     if not hasattr(config, "workerinput"):
         _enforce_tier_markers()
+        _enforce_no_fixture_skips()
 
     # Import guarded: script lives outside the package and may be missing
     # in some install layouts (e.g. a sdist-only install). Missing script
@@ -213,41 +291,6 @@ def pytest_configure(config: pytest.Config) -> None:
         "\033[33m[jamma] If this is unexpected, run "
         "scripts/check_c_extension_freshness.py for full drift report.\033[0m\n\n"
     )
-
-
-def pytest_runtest_logreport(report: pytest.TestReport) -> None:
-    """Record any skip claiming a committed fixture was unavailable.
-
-    Runs on xdist workers for their own tests and on the controller for
-    every report it receives, so the controller's list is the whole
-    session. xfail reports also set ``skipped``, but carry a string
-    longrepr rather than the ``(path, lineno, reason)`` tuple a skip
-    produces, so the tuple check excludes them.
-    """
-    if not report.skipped or hasattr(report, "wasxfail"):
-        return
-    if not isinstance(report.longrepr, tuple):
-        return
-    reason = report.longrepr[2]
-    if _FIXTURE_UNAVAILABLE_RE.search(reason):
-        _fixture_unavailable_skips.append(f"{report.nodeid}\n      {reason}")
-
-
-def pytest_sessionfinish(session: pytest.Session) -> None:
-    """Fail the session if anything skipped for fixture unavailability."""
-    if hasattr(session.config, "workerinput") or not _fixture_unavailable_skips:
-        return
-    offenders = sorted(set(_fixture_unavailable_skips))
-    listing = "\n  ".join(offenders)
-    sys.stderr.write(
-        f"\n\033[31m[jamma] ERROR: {len(offenders)} test(s) skipped because a "
-        f"fixture was reported unavailable:\n  {listing}\n\n"
-        "Everything under tests/fixtures/ is committed, so this means the "
-        "test is looking at the wrong path, not that the data is missing. "
-        "Fix the path rather than the skip guard. "
-        "See docs/TESTING.md §1.11.\033[0m\n"
-    )
-    session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def require_fixture(*paths: Path) -> None:

@@ -34,7 +34,13 @@ class Beta:
 
 
 def _run(tmp_path: Path, doc_body: str) -> subprocess.CompletedProcess[str]:
-    """Build a miniature repo around ``doc_body`` and run the lint inside it."""
+    """Build a miniature git repo around ``doc_body`` and run the lint inside it.
+
+    A real repo with the doc committed, because the lint enumerates its inputs
+    with ``git ls-files``. That is what keeps it from carrying a third copy of the
+    ignore list that .markdownlint-cli2.jsonc and lychee.toml both hold, and it
+    means these tests exercise the same enumeration the pre-commit hook does.
+    """
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(_SCRIPT, scripts_dir / _SCRIPT.name)
@@ -46,6 +52,19 @@ def _run(tmp_path: Path, doc_body: str) -> subprocess.CompletedProcess[str]:
     docs = tmp_path / "docs"
     docs.mkdir(parents=True, exist_ok=True)
     (docs / "MAP.md").write_text(doc_body)
+
+    for args in (
+        ["init"],
+        # A committer identity is not configured in CI's checkout, and `add`
+        # alone does not need one; ls-files reads the index, so no commit.
+        ["add", "docs/MAP.md", "src/stub.py"],
+    ):
+        subprocess.run(
+            ["git", "-C", str(tmp_path), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
 
     return subprocess.run(
         [sys.executable, str(scripts_dir / _SCRIPT.name)],

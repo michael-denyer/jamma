@@ -273,20 +273,25 @@ which is the half of #147 a single check could not show. For a file whose
 tests all need the same fixture, call it once at module level, as
 `tests/test_loco_eigen_cache.py` does; a wrong path there fails collection.
 
-**The skip gate is the backstop.** `pytest_runtest_logreport` and
-`pytest_sessionfinish` in `tests/conftest.py` fail the session when any skip
-reason matches `fixture not available`, printing each offending test id. No
-in-tree test relies on it now that every guard raises, and it stays anyway so
-a guard written as a skip in future cannot go quiet. Two consequences if you
-do write one:
+**The skip gate is the backstop.** `_enforce_no_fixture_skips` in
+`tests/conftest.py` parses every `tests/**/test_*.py` at `pytest_configure` and
+fails the session when a `pytest.skip(...)` reason or a
+`@pytest.mark.skipif(..., reason=...)` names a fixture, listing each file and
+line. Same mechanism as the §1.6 tier gate: source-parsed and run once, so it
+holds under xdist, `-k` and `-m`, and it flags the guard even in a file whose
+tests never ran.
 
-- **Use the exact phrase `fixture not available`.** The gate matches on it
-  case-insensitively. `tests/test_conftest_fixture_skip_gate.py` scans the
-  suite and fails on a fixture-absence skip worded any other way, so a site
-  the gate cannot see does not go unnoticed.
-- **Skips about the environment are untouched.** `C extension not
-  available`, `uv not available on PATH` and the like are genuine
-  conditional skips and stay skips. Only fixture absence is fatal.
+- **Any wording is caught.** The gate looks for the word `fixture` in the
+  reason, so `fixture missing`, `no fixture data` and `fixture absent` all fail.
+  It replaced a runtime check that matched only the exact phrase `fixture not
+  available` in skip *reports*, which could fire only when the guarded test
+  actually ran and only for that one wording. `test_fixture_manifest.py` carried
+  a fixture skip worded around it, and the source-parsed gate is what found it.
+- **A computed reason is not judged.** Only string literals are inspected;
+  an f-string reason cannot be read from source and is left alone.
+- **Skips about the environment are untouched.** `C extension not available`,
+  `uv not available on PATH` and the like are genuine conditional skips and stay
+  skips. Only a reason naming a fixture is fatal.
 
 Both mechanisms have regression tests in
 `tests/test_conftest_fixture_skip_gate.py`.
@@ -404,12 +409,12 @@ two are acceptable:
    active, BLAS backend mismatch. Use module-level
    `pytestmark = pytest.mark.skipif(...)` so the file skips at collection
    time. Example: [`tests/test_jlinalg_dispatch.py:12`](../tests/test_jlinalg_dispatch.py#L12).
-2. **Optional fixture absent** — a dataset too large to commit. Skip with a
-   message naming the missing fixture path, worded so it does not contain
-   `fixture not available` (§1.11's gate treats that phrase as fatal). No
-   fixture is currently in this category: `gemma_loco` and `mouse_hs1940` are
-   both committed in full, so their guards use `require_fixture` and raise
-   instead of skipping.
+2. **Optional fixture absent** — a dataset too large to commit. There is no
+   fixture in this category, and §1.11's gate now rejects any skip reason that
+   names a fixture, whatever the wording. `gemma_loco` and `mouse_hs1940` are
+   both committed in full and their guards use `require_fixture`, which raises.
+   If a genuinely un-committable dataset ever arrives, gate it on an environment
+   variable or a marker rather than on the word "fixture" in a skip reason.
 3. **Test is broken / commented-out** — *not acceptable*. Either fix or
    delete.
 

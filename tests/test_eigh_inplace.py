@@ -1,7 +1,7 @@
 """Tests for in-place eigendecomposition (jlinalg.eigh inplace=True).
 
 Validates correctness, buffer identity, and memory estimation for the
-in-place DSYEVD path added in Phase 86.
+in-place DSYEVD path.
 """
 
 import numpy as np

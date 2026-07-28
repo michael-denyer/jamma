@@ -720,7 +720,7 @@ class TestAccumGemm:
     reason="C extension required for throughput benchmarks",
 )
 class TestEighThroughput:
-    """Benchmark jlinalg.eigh vs numpy.linalg.eigh for Phase 80.1."""
+    """Benchmark jlinalg.eigh vs numpy.linalg.eigh."""
 
     def test_eigh_throughput_n500(self) -> None:
         """eigh should be < 10x slower than numpy at N=500."""
@@ -761,7 +761,7 @@ class TestEighThroughput:
         )
 
     def test_eigh_correctness_n1000_post_optimization(self) -> None:
-        """Full correctness gate at N=1000 after all Phase 80.1 optimizations."""
+        """Full correctness gate at N=1000."""
         rng = np.random.default_rng(123)
         N = 1000
         A = rng.standard_normal((N, N))
@@ -808,7 +808,7 @@ class TestWorkspaceApi:
 def test_lapack_no_ffast_math() -> None:
     """LAPACK sources in build configs must use strict IEEE 754 flags.
 
-    Phase 123-05 consolidated compile flags into
+    Compile flags are consolidated into
     src/jamma/_build_support/compile_and_link.py. All three entry points
     (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) route through
     the helper instead of keeping inline flag lists, so we validate the

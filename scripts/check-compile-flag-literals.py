@@ -4,7 +4,7 @@
 Single source of truth for compiler flags is
 `src/jamma/_build_support/compile_and_link.py`.
 Any flag literal in the four compile entry points means someone duplicated a
-flag again — that's exactly the footgun Phase 123 is preventing.
+flag again — that's exactly the footgun this lint prevents.
 
 Scope: this is a drift-catcher for honest copy-paste, NOT defense-in-depth.
 Known bypasses (documented as xfail tests in
@@ -69,7 +69,7 @@ FLAGS: set[str] = {
     # Link-step flags that belong in LINK_FLAGS_BY_PLATFORM.
     "-shared",
     "-pthread",
-    # Sanitizer flags — Phase 116.1. Must NEVER appear in the four entry
+    # Sanitizer flags. Must NEVER appear in the four entry
     # points; they are assembled by
     # jamma._build_support.compile_and_link.apply_sanitizer_overrides()
     # and reach hatch_build.py / _compile_jlinalg.py / _compile_accel.py /
@@ -98,7 +98,7 @@ TARGETS: list[str] = [
 # obviously-not-a-flag strings. The leading `-` immediately after the
 # opening quote keeps paths like "/usr/lib/-O3-test/foo" from matching.
 # Comma is in the body class so the combined sanitizer form
-# "-fsanitize=address,undefined" matches as a single flag (Phase 116.1).
+# "-fsanitize=address,undefined" matches as a single flag.
 FLAG_PATTERN = re.compile(r"""["'](-[OfWmsp][A-Za-z0-9_=,-]*)["']""")
 
 

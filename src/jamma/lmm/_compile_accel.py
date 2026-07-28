@@ -219,7 +219,7 @@ def compile_extension(
 
     # Opt-in sentinel macro for the sanitizer-workflow self-test.
     # See _SENTINEL_UB_DEFINE comment at module top. Truthy convention mirrors
-    # JAMMA_FORCE_NUMPY_FALLBACK (plan 02): "" and "0" are off, anything else
+    # JAMMA_FORCE_NUMPY_FALLBACK: "" and "0" are off, anything else
     # is on. Orthogonal to JAMMA_SANITIZE — either, both, or neither can
     # be set.
     if env_flag("JAMMA_SENTINEL_UB"):

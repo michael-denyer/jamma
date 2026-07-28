@@ -121,7 +121,7 @@ def test_inline_comment_with_literal_on_code_line_still_flags(tmp_path):
         "-std=c11",
         "-shared",
         "-pthread",
-        # Sanitizer additions — Phase 116.1. Hardcoding any of these in an
+        # Sanitizer additions. Hardcoding any of these in an
         # entry point bypasses apply_sanitizer_overrides() and breaks the
         # single-source-of-truth invariant.
         "-fsanitize=address",
@@ -134,7 +134,7 @@ def test_inline_comment_with_literal_on_code_line_still_flags(tmp_path):
 def test_widened_flag_set_is_detected(tmp_path, flag):
     """Portability footguns, link-phase flags, and sanitizer flags beyond
     the original -O/-f set must trip the lint — particularly -march=native
-    which must stay dev-only per CLAUDE.md, and the Phase 116.1 sanitizer
+    which must stay dev-only per CLAUDE.md, and the sanitizer
     flags that must flow through apply_sanitizer_overrides()."""
     files = dict(_STUB_EMPTY_TARGETS)
     files["hatch_build.py"] = f'cflags.append("{flag}")\n'

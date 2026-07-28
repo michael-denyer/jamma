@@ -738,7 +738,7 @@ class TestDsyr2kBoundary:
         # full blocking loop.  NEON blocking (MC=64) introduces ~2x the
         # accumulation order difference compared to dsyrk.  Max observed
         # relative error ~1.96e-12 at N=65 (MC boundary) with K=50 on NEON.
-        # Use rtol=1e-9 for all boundary sizes (conservative; matches Phase 78
+        # Use rtol=1e-9 for all boundary sizes (conservative; matches the
         # calibration for NEON dgemm blocking accumulation differences).
         rtol = 1e-9
         npt.assert_allclose(
@@ -1146,7 +1146,7 @@ def test_dsyrk_throughput() -> None:
 
 
 # ---------------------------------------------------------------------------
-# TestDsyrkVendorDispatch — vendor dsyrk dispatch parity tests (Phase 80.5)
+# TestDsyrkVendorDispatch — vendor dsyrk dispatch parity tests
 # ---------------------------------------------------------------------------
 
 

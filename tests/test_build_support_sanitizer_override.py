@@ -1,7 +1,7 @@
 """Tests for the JAMMA_SANITIZE env-var override and the LAPACK extra-flags
 forwarding through ``resolve_cflags_for`` and ``compile_jlinalg``.
 
-Phase 116.1 plan 01 — sanitizer flag injection seam.
+Covers the sanitizer flag injection seam.
 """
 
 from __future__ import annotations

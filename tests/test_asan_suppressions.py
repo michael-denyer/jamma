@@ -4,8 +4,6 @@ Asserts the suppression file contains ONLY documented third-party noise
 patterns and never a `leak:jamma_*` / `leak:_jlinalg*` / `leak:_lmm_accel*`
 suppression. A blanket in-repo suppression would silently swallow real
 bugs in our C code — see scripts/asan-suppressions.txt header comment.
-
-Phase 116.1, plan 03.
 """
 
 from __future__ import annotations

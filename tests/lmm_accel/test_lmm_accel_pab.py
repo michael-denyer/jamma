@@ -96,7 +96,6 @@ class TestCExtensionPerformance:
             l_max=1e5,
             n_grid=50,
             n_iter=20,
-            return_pab=True,
         )
         betas_py, ses_py, pwalds_py = batch_calc_wald_stats_from_pab_numpy(
             1, pab_py, n_samples

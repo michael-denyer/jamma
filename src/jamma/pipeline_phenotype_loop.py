@@ -46,7 +46,6 @@ def run_phenotype_loop(
     plan: ExecutionPlan,
     all_pheno_data: dict[int, tuple[np.ndarray, int]],
     valid_mask: np.ndarray,
-    K: np.ndarray | None,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray | None,
     eigenvectors: np.ndarray | None,
@@ -119,7 +118,6 @@ def run_phenotype_loop(
             run_result, n_tested = _run_batch(
                 config,
                 phenotypes_col,
-                K,
                 covariates,
                 eigenvalues,
                 eigenvectors,
@@ -159,7 +157,6 @@ def run_phenotype_loop(
 def _run_batch(
     config: PipelineConfig,
     phenotypes: np.ndarray,
-    K: np.ndarray | None,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray | None,
     eigenvectors: np.ndarray | None,
@@ -203,7 +200,9 @@ def _run_batch(
     run_result = run_lmm_association_numpy(
         genotypes=genotypes,
         phenotypes=phenotypes,
-        kinship=K,
+        # The runner takes the eigenpairs; the pipeline consumes the kinship
+        # matrix during eigendecomposition and has none left to pass.
+        kinship=None,
         snp_info=snp_info,
         covariates=covariates,
         eigenvalues=eigenvalues,

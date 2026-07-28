@@ -1,6 +1,6 @@
 """Tests for memory gate OOM prevention in PipelineRunner and check_memory_available.
 
-Covers ERRP-05: memory gate code paths in both PipelineRunner.check_memory_requirements
+Covers ERRP-05: memory gate code paths in both pipeline_memory.check_streaming_memory
 and check_memory_available are tested using mock psutil to simulate low-memory
 conditions without requiring actual large allocations.
 """
@@ -16,6 +16,7 @@ import pytest
 from jamma.core.memory import StreamingMemoryBreakdown, check_memory_available
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
+from jamma.pipeline_memory import check_streaming_memory
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
@@ -28,40 +29,40 @@ class TestMemoryGates:
     def test_budget_exceeded_raises(self):
         """Budget-exceeded path: 1 MB budget raises MemoryError with 'exceeds' message.
 
-        PipelineRunner.check_memory_requirements raises MemoryError when
+        check_streaming_memory raises MemoryError when
         est.total_peak_gb > config.mem_budget.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=True, mem_budget=0.001)
         runner = PipelineRunner(config)
 
         with pytest.raises(MemoryError, match="exceeds"):
-            runner.check_memory_requirements(n_samples=100, n_snps=500)
+            check_streaming_memory(runner.config, n_samples=100, n_snps=500)
 
     @patch("jamma.core.memory._check_available", return_value=(0.001, False))
     def test_insufficient_system_memory_raises(self, mock_check):
         """Insufficient system memory raises MemoryError with 'Insufficient' message.
 
         Mocks _check_available to return (0.001 GB, False), simulating a system
-        with nearly no available memory. check_memory_requirements must raise when
+        with nearly no available memory. check_streaming_memory must raise when
         est.sufficient is False.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=True)
         runner = PipelineRunner(config)
 
         with pytest.raises(MemoryError, match="Insufficient"):
-            runner.check_memory_requirements(n_samples=100, n_snps=500)
+            check_streaming_memory(runner.config, n_samples=100, n_snps=500)
 
     @patch("jamma.core.memory._check_available", return_value=(1000.0, True))
     def test_memory_check_passes_when_sufficient(self, mock_check):
         """Sufficient memory (1 TB available) returns StreamingMemoryBreakdown.
 
         Mocks _check_available to return (1000.0 GB, True), simulating ample
-        memory. check_memory_requirements must return the breakdown, not raise.
+        memory. check_streaming_memory must return the breakdown, not raise.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=True)
         runner = PipelineRunner(config)
 
-        result = runner.check_memory_requirements(n_samples=100, n_snps=500)
+        result = check_streaming_memory(runner.config, n_samples=100, n_snps=500)
 
         assert result is not None
         assert isinstance(result, StreamingMemoryBreakdown)
@@ -70,13 +71,13 @@ class TestMemoryGates:
     def test_memory_check_disabled_returns_none(self):
         """check_memory=False returns None without performing any memory check.
 
-        When check_memory is disabled, check_memory_requirements must return
+        When check_memory is disabled, check_streaming_memory must return
         None immediately, even with a tiny (realistic) dataset.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=False)
         runner = PipelineRunner(config)
 
-        result = runner.check_memory_requirements(n_samples=100, n_snps=500)
+        result = check_streaming_memory(runner.config, n_samples=100, n_snps=500)
 
         assert result is None
 
@@ -179,10 +180,12 @@ class TestBatchPreflightThreadsNcvt:
             )
             runner = PipelineRunner(config)
 
-            # Patch estimate_lmm_memory at the source module — the batch
-            # preflight imports it locally inside _run_inner.
+            # Patch where it is used, not where it is defined. The batch
+            # preflight used to import it inside the function, so patching
+            # jamma.core.memory worked by accident of import placement; a
+            # module-level import there would have silently un-patched this.
             with patch(
-                "jamma.core.memory.estimate_lmm_memory",
+                "jamma.pipeline_memory.estimate_lmm_memory",
                 side_effect=capturing_estimator,
             ):
                 with pytest.raises(RuntimeError, match="stop-at-preflight-sentinel"):

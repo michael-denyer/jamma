@@ -26,8 +26,9 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import (
-    _enforce_no_fixture_skips,
+    _enforce_no_dormant_skips,
     _fixture_skip_lines,
+    _path_guarded_skip_lines,
     require_fixture,
 )
 
@@ -136,19 +137,85 @@ class TestFixtureSkipDetection:
         assert _lines(source) == [3]
 
 
+def _path_lines(source: str) -> list[int]:
+    return _path_guarded_skip_lines(ast.parse(source))
+
+
+class TestPathGuardedSkipDetection:
+    """The second detector: a skip reached because a path was not found.
+
+    The word-based detector above only fires when the reason says "fixture".
+    That let a real one through for months: ``TestDstedcNoAbort`` read a
+    ``dstedc.c`` deleted at 663a22b and skipped with the reason "source not
+    available", so the word never appeared and the test reported green on every
+    run until #156 removed it. Wording is the wrong thing to key on, because
+    the author of the next guard picks it freely. What cannot be avoided is the
+    shape: the skip is control-dependent on a filesystem check.
+    """
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # The exact shape that hid TestDstedcNoAbort.
+            'if not p.exists():\n    pytest.skip("source not available")',
+            # Positive test with the skip in the else branch.
+            'if p.exists():\n    run()\nelse:\n    pytest.skip("nope")',
+            'if not p.is_file():\n    pytest.skip("nope")',
+            'if not p.is_dir():\n    pytest.skip("nope")',
+            'if not os.path.exists(p):\n    pytest.skip("nope")',
+            'if not os.path.isfile(p):\n    pytest.skip("nope")',
+            # Nested inside a function body, which is how it is really written.
+            (
+                "def test_x():\n"
+                "    src = ROOT / 'a.c'\n"
+                "    if not src.exists():\n"
+                '        pytest.skip("not built")\n'
+            ),
+            # Decorator form.
+            '@pytest.mark.skipif(not P.exists(), reason="anything")\ndef t(): 0',
+            '@pytest.mark.skipif(condition=not P.exists(), reason="x")\ndef t(): 0',
+        ],
+    )
+    def test_flags_a_skip_guarded_by_a_path_check(self, source: str) -> None:
+        """Wording is irrelevant; not one of these reasons says "fixture"."""
+        assert _path_lines(source), f"gate missed: {source}"
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # Optional tooling and optional imports are legitimate skips.
+            'if shutil.which("uv") is None:\n    pytest.skip("uv not on PATH")',
+            'if find_spec("numba") is None:\n    pytest.skip("numba absent")',
+            'if not HAS_C_EXTENSION:\n    pytest.skip("C extension not built")',
+            'if os.environ.get("CI") != "1":\n    pytest.skip("CI only")',
+            # A path check that fails rather than skips is the correct pattern.
+            'if not p.exists():\n    pytest.fail("recorder wrote no file")',
+            # An assertion on a path is not a skip either.
+            "assert p.exists()",
+        ],
+    )
+    def test_leaves_legitimate_guards_alone(self, source: str) -> None:
+        assert not _path_lines(source), f"gate over-reached: {source}"
+
+    def test_reports_the_line_of_the_skip_not_the_if(self) -> None:
+        source = 'x = 1\nif not p.exists():\n    pytest.skip("nope")\n'
+        assert _path_lines(source) == [3]
+
+
 class TestGateOverTheRealSuite:
     """The gate must pass on the tree as committed, and be able to fail."""
 
     def test_the_real_suite_is_clean(self) -> None:
-        """No in-tree test guards a fixture with a skip.
+        """No in-tree test guards a fixture or a path with a skip.
 
         Runs the same sweep ``pytest_configure`` runs. #149 replaced the guards it
         knew about; ``test_fixture_manifest.py`` kept one whose reason avoided the
-        old backstop's phrase, and this sweep is what found it.
+        old backstop's phrase, and this sweep is what found it. #156 removed the
+        last path-guarded one, which no wording-based check could ever have seen.
         """
-        _enforce_no_fixture_skips()
+        _enforce_no_dormant_skips()
 
-    def test_a_planted_skip_is_caught(
+    def test_a_planted_fixture_skip_is_caught(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Prove the gate can fail, so a clean run means something."""
@@ -160,4 +227,45 @@ class TestGateOverTheRealSuite:
         )
         monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
         with pytest.raises(pytest.UsageError, match=r"name a fixture in their reason"):
-            _enforce_no_fixture_skips()
+            _enforce_no_dormant_skips()
+
+    def test_a_planted_path_guarded_skip_is_caught(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reason says nothing incriminating; only the shape gives it away."""
+        planted = tmp_path / "test_planted.py"
+        planted.write_text(
+            "import pytest\n"
+            "from pathlib import Path\n\n\n"
+            "def test_reads_a_source_file():\n"
+            "    src = Path('src/jamma/jlinalg/src/dstedc.c')\n"
+            "    if not src.exists():\n"
+            '        pytest.skip("source not available")\n'
+        )
+        monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
+        with pytest.raises(pytest.UsageError, match=r"guarded by a filesystem check"):
+            _enforce_no_dormant_skips()
+
+    def test_both_categories_report_together(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One run must name every offender, not stop at the first category.
+
+        Same reasoning as ``require_fixture`` naming every missing path at once:
+        fixing one and re-running to discover the next is the slow path.
+        """
+        (tmp_path / "test_word.py").write_text(
+            'import pytest\n\n\ndef test_a():\n    pytest.skip("fixture absent")\n'
+        )
+        (tmp_path / "test_shape.py").write_text(
+            "import pytest\n\n\n"
+            "def test_b():\n"
+            "    if not p.exists():\n"
+            '        pytest.skip("nope")\n'
+        )
+        monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
+        with pytest.raises(pytest.UsageError) as excinfo:
+            _enforce_no_dormant_skips()
+        message = str(excinfo.value)
+        assert "test_word.py" in message
+        assert "test_shape.py" in message

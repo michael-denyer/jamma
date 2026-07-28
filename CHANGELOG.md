@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`check-doc-anchors.py` now states what a passing run does not prove.** For
+  `docs/CODEMAP.md`'s tables the check has to work out which symbol an anchor
+  means, and that is a guess: the rows label the link `file.py:123` and put the
+  symbol in a separate column, so `_wanted_symbol` takes the first plausible
+  backticked name in the row. A row naming two symbols can be checked against
+  the wrong one. The gate is now under 94 anchors and `docs/DEVELOPMENT.md`
+  advertised it by name without saying any of this, so a green run read as
+  stronger than it is. Both the module docstring and DEVELOPMENT.md say so now.
+  The fix, labelling each link with its own symbol, is about 120 links and has
+  not been made.
+
+- **`load_gemma_assoc` names both kinds of absent column.** Optional columns went
+  through `_opt_float`, while beta and se used an inline
+  `float(row.get(name, "nan"))` on the next line, two idioms for one idea. They
+  are not one idea: an absent optional is `None` because the test does not report
+  it, and an absent beta is NaN because `AssocResult` requires it and GEMMA's LRT
+  formats omit it. Two named helpers, `_opt_float` and `_float_or_nan`, so the
+  difference is stated rather than inferred from which idiom was used.
+
 - **The `return_pab` flag is gone from the NumPy REML optimizers, along with all
   ten `@overload` stubs it needed.** Four private and public functions in
   `lmm/likelihood_numpy.py` returned either an array or a tuple depending on a

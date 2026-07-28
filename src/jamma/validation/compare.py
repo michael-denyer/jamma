@@ -243,6 +243,18 @@ def _opt_float(row: dict[str, str], name: str) -> float | None:
     return None if raw is None else float(raw)
 
 
+def _float_or_nan(row: dict[str, str], name: str) -> float:
+    """Cast a required .assoc.txt cell, or NaN when a layout omits the column.
+
+    Separate from ``_opt_float`` because the two absences mean different things.
+    A missing optional column is None, meaning the test does not report it. A
+    missing beta or se is NaN, because ``AssocResult`` requires both and GEMMA's
+    LRT formats do not write them.
+    """
+    raw = row.get(name)
+    return float("nan") if raw is None else float(raw)
+
+
 def load_gemma_assoc(path: Path) -> list[AssocResult]:
     """Load GEMMA association results from .assoc.txt format.
 
@@ -295,9 +307,8 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                     allele1=row["allele1"],
                     allele0=row["allele0"],
                     af=float(row["af"]),
-                    # GEMMA LRT formats omit beta/se; AssocResult requires them.
-                    beta=float(row.get("beta", "nan")),
-                    se=float(row.get("se", "nan")),
+                    beta=_float_or_nan(row, "beta"),
+                    se=_float_or_nan(row, "se"),
                     logl_H1=_opt_float(row, "logl_H1"),
                     l_remle=_opt_float(row, "l_remle"),
                     p_wald=_opt_float(row, "p_wald"),

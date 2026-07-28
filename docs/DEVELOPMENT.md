@@ -15,6 +15,8 @@ prek install
 
 `uv sync` installs all runtime and dev dependencies (including scipy, which is dev-only). `prek install` sets up the hooks listed in `.pre-commit-config.yaml`: ruff lint and format, pyrefly, clang-format, cppcheck, markdownlint, `maid` (mermaid syntax), lychee, typos, actionlint, zizmor, shellcheck, vulture, refurb, and the JAMMA-specific gates, `check-doc-anchors.py` among them. Two more run at pre-push, because prek only inspects staged files and would miss them. Those are a repo-wide `ruff format --check` and the C-extension freshness check.
 
+`check-doc-anchors.py` verifies that every `path#Lnnn` link in the docs still lands on the symbol it names, which neither lychee nor markdownlint can do because the *file* resolves and only the line is wrong. Read its guarantee narrowly: for CODEMAP's tables it has to guess which symbol a row means, so a green run says no anchor is provably wrong rather than every anchor is provably right. The module docstring has the details under "What a passing run does not prove".
+
 ### Compile C Extensions
 
 The C extensions are not compiled automatically during `uv sync`. Compile them before running tests:

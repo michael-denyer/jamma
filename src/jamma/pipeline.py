@@ -11,6 +11,7 @@ the flow and not the detail:
 - ``pipeline_banner.py`` — the two startup banners
 - ``pipeline_phenotype_loop.py`` — the per-phenotype loop and the runner calls
 - ``pipeline_kinship.py`` — the separate ``-gk`` program
+- ``pipeline_memory.py`` — the memory preflight gate for both modes
 
 Example:
     >>> from jamma.pipeline import PipelineConfig, PipelineRunner
@@ -31,12 +32,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.backend import log_backend_selection
-from jamma.core.chunk import _compute_chunk_size
 from jamma.core.constants import PHENOTYPE_MISSING
-from jamma.core.memory import (
-    StreamingMemoryBreakdown,
-    estimate_streaming_memory,
-)
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import resolve_snp_list_file
@@ -57,6 +53,7 @@ from jamma.pipeline_config import (
     PipelineConfig,
     PipelineResult,
 )
+from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_phenotype_loop import run_phenotype_loop
 
 __all__ = [
@@ -330,65 +327,6 @@ class PipelineRunner:
         """
         return self._parse_phenotype_column(self.config.phenotype_columns[0])
 
-    def check_memory_requirements(
-        self, n_samples: int, n_snps: int, n_cvt: int = 1
-    ) -> StreamingMemoryBreakdown | None:
-        """Check memory requirements if memory checking is enabled.
-
-        Computes actual chunk size via _compute_chunk_size, then estimates
-        streaming memory. Checks against mem_budget if set, and against
-        available system memory.
-
-        Args:
-            n_samples: Number of valid samples (after phenotype/covariate filtering).
-            n_snps: Number of SNPs in the dataset.
-            n_cvt: Number of covariates (affects Uab array sizing).
-
-        Returns:
-            StreamingMemoryBreakdown if check_memory is True, None otherwise.
-
-        Raises:
-            MemoryError: If estimated memory exceeds budget or available memory.
-        """
-        if not self.config.check_memory:
-            logger.info("Memory preflight skipped (streaming): check_memory=False")
-            return None
-
-        disk_chunk = _compute_chunk_size(n_snps)
-        compute_chunk = _compute_chunk_size(
-            n_snps, n_samples=n_samples, n_cvt=n_cvt, pipeline_buffers=2
-        )
-        est = estimate_streaming_memory(
-            n_samples,
-            chunk_size=disk_chunk,
-            n_cvt=n_cvt,
-            compute_chunk_size=compute_chunk,
-        )
-
-        logger.info(
-            f"Memory estimate: {est.total_peak_gb:.1f}GB required, "
-            f"{est.available_gb:.1f}GB available"
-        )
-
-        if (
-            self.config.mem_budget is not None
-            and est.total_peak_gb > self.config.mem_budget
-        ):
-            raise MemoryError(
-                f"Estimated memory ({est.total_peak_gb:.1f}GB) exceeds "
-                f"budget ({self.config.mem_budget}GB). "
-                f"Use --no-check-memory to override."
-            )
-
-        if not est.sufficient:
-            raise MemoryError(
-                f"Insufficient memory: need {est.total_peak_gb:.1f}GB "
-                f"(with 10% margin), have {est.available_gb:.1f}GB. "
-                f"Use --no-check-memory to override."
-            )
-
-        return est
-
     def load_kinship(
         self,
         n_samples: int,
@@ -641,59 +579,6 @@ class PipelineRunner:
 
         return all_pheno_data, valid_mask, n_valid
 
-    def _memory_preflight(
-        self,
-        plan: ExecutionPlan,
-        n_valid: int,
-        n_snps: int,
-        n_cvt: int,
-    ) -> None:
-        """Run the memory preflight gate for the chosen execution plan.
-
-        Streaming mode delegates to ``check_memory_requirements`` which
-        uses streaming-specific accounting. Batch mode uses the
-        in-memory estimator and additionally enforces ``mem_budget`` if
-        the user set one. Both raise ``MemoryError`` with actionable
-        messages on failure.
-
-        Args:
-            plan: Resolved ExecutionPlan (mode determines which estimator).
-            n_valid: Sample count after valid-mask intersection.
-            n_snps: Total SNPs from PLINK metadata (pre-MAF/missingness).
-            n_cvt: Covariate count including the intercept.
-        """
-        if plan.mode == "streaming":
-            self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
-            return
-
-        if not self.config.check_memory:
-            logger.info(
-                f"Memory preflight skipped ({plan.runner_name}): check_memory=False"
-            )
-            return
-
-        from jamma.core.memory import estimate_lmm_memory
-
-        est = estimate_lmm_memory(n_valid, n_snps, n_cvt=n_cvt)
-        logger.info(
-            f"Memory estimate ({plan.runner_name}): "
-            f"{est.total_gb:.1f}GB required, "
-            f"{est.available_gb:.1f}GB available"
-        )
-        if self.config.mem_budget is not None and est.total_gb > self.config.mem_budget:
-            raise MemoryError(
-                f"Estimated memory ({est.total_gb:.1f}GB) exceeds "
-                f"budget ({self.config.mem_budget}GB). "
-                f"Use --no-check-memory to override."
-            )
-        if not est.sufficient:
-            raise MemoryError(
-                f"Insufficient memory: "
-                f"need {est.total_gb:.1f}GB, "
-                f"have {est.available_gb:.1f}GB. "
-                f"Use --no-check-memory to override."
-            )
-
     def _run_inner(
         self,
         t_start: float,
@@ -764,7 +649,7 @@ class PipelineRunner:
         )
         log_pipeline_banner(plan)
 
-        self._memory_preflight(plan, n_valid, n_snps, n_cvt)
+        memory_preflight(self.config, plan, n_valid, n_snps, n_cvt)
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes). The
         # kinship matrix is consumed here; runners use the eigen arrays directly.

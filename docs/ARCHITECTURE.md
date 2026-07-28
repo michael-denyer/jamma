@@ -92,6 +92,7 @@ src/jamma/
 ├── pipeline_banner.py      # GEMMA-style dataset and execution-plan banners
 ├── pipeline_phenotype_loop.py  # Per-phenotype loop + the batch/streaming runner calls
 ├── pipeline_kinship.py     # The -gk path: compute a kinship matrix and write it
+├── pipeline_memory.py      # Memory preflight gate for the batch and streaming modes
 ├── core/                   # Cross-cutting concerns: memory estimation, backend
 │   │                       # selection, progress bars, SNP filtering, threading
 │   ├── memory.py           # Pre-flight memory checks and DSYEVD/DSYEVR workspace estimates

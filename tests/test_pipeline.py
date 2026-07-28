@@ -11,6 +11,7 @@ import pytest
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.schema import MIN_N_GRID
 from jamma.pipeline import PipelineConfig, PipelineRunner
+from jamma.pipeline_memory import check_streaming_memory
 
 # Fixture paths for gemma_synthetic dataset
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
@@ -159,20 +160,20 @@ class TestParsePhenotypes:
 
 @pytest.mark.tier1
 class TestCheckMemory:
-    """Tests for PipelineRunner.check_memory_requirements."""
+    """Tests for pipeline_memory.check_streaming_memory."""
 
     def test_returns_none_when_disabled(self) -> None:
-        """check_memory_requirements returns None when check_memory=False."""
+        """check_streaming_memory returns None when check_memory=False."""
         config = PipelineConfig(
             bfile=BFILE,
             check_memory=False,
         )
         runner = PipelineRunner(config)
-        result = runner.check_memory_requirements(100, 500)
+        result = check_streaming_memory(runner.config, 100, 500)
         assert result is None
 
     def test_returns_breakdown_when_enabled(self) -> None:
-        """check_memory_requirements returns StreamingMemoryBreakdown."""
+        """check_streaming_memory returns StreamingMemoryBreakdown."""
         from jamma.core.memory import StreamingMemoryBreakdown
 
         config = PipelineConfig(
@@ -180,7 +181,7 @@ class TestCheckMemory:
             check_memory=True,
         )
         runner = PipelineRunner(config)
-        result = runner.check_memory_requirements(100, 500)
+        result = check_streaming_memory(runner.config, 100, 500)
 
         assert isinstance(result, StreamingMemoryBreakdown)
         assert result.total_peak_gb >= 0

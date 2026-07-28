@@ -37,6 +37,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mouse_hs1940, with every C kernel disabled so the changed code is the code
   that runs.
 
+- **`run_phenotype_loop` and `_run_batch` no longer take a kinship matrix.**
+  `_run_inner` set `K = None` unconditionally on the line before the call, so the
+  only value the parameter could ever hold was `None`, threaded through three
+  signatures into `run_lmm_association_numpy(kinship=K)`. The pipeline consumes
+  the kinship matrix during eigendecomposition and the runners take the
+  eigenpairs, so there is nothing left to pass. #142 lifted this dead thread into
+  a new module's public signature, which is where it became a contract rather
+  than a stray local.
+
+- **`get_plink_metadata` is read once per `-lmm` run instead of twice.** `run`
+  read it for mode selection and `_run_inner` read it again. It parses the whole
+  `.bim` (`sid`, `chromosome`, `bp_position` and both allele arrays), so the
+  second call doubled that work. `run` now passes what it read down. Error
+  ordering is unchanged, because the first read already preceded
+  `validate_inputs`. The comment claiming the call "reads .fam/.bim header only"
+  is corrected.
+
+- **The `--hwe` rejection message has one home.** `run` and
+  `_check_hwe_support` raised the same three-line `ValueError` text from two
+  predicates. The predicates genuinely differ, since `run` fails before touching
+  disk while `_check_hwe_support` re-checks the resolved plan after sample
+  filtering, so both stay; the message is now a module constant they share.
+
+- **The memory preflight gate moved to `pipeline_memory.py`.**
+  `check_memory_requirements` and `_memory_preflight` were one question with two
+  estimators, sitting 300 lines apart in `pipeline.py`, and read only
+  `check_memory` and `mem_budget` off the config. They are now
+  `check_streaming_memory(config, ...)` and `memory_preflight(config, ...)`,
+  matching the shape `pipeline_kinship.compute_kinship` already uses. The two
+  `MemoryError` messages each estimator raised are now built in one place, so the
+  budget and insufficient-memory wording cannot drift between modes. `pipeline.py`
+  goes from 1016 to 897 lines, back under the 1000-line bar the #142 split
+  stopped just above.
+
+  Tests that reached these as `PipelineRunner` methods now call the module
+  functions. The batch estimator's monkeypatch target moves from
+  `jamma.core.memory.estimate_lmm_memory` to
+  `jamma.pipeline_memory.estimate_lmm_memory`: the old code imported it inside
+  the function, so patching the defining module worked by accident of import
+  placement.
+
+- **`PipelineRunner._compute_valid_mask` is gone.** It was a `@staticmethod`
+  whose whole body was a function-local import and a call to
+  `prepare_common.compute_valid_mask`, so it held no runner state and read as
+  though it did. Both call sites now call that function directly, which is what
+  `loco.py` and `prepare_common.py` already do.
+
 ## [7.2.0] - 2026-07-27
 
 Minor, not major, despite the Breaking heading below. That is a deliberate

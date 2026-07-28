@@ -11,6 +11,7 @@ the flow and not the detail:
 - ``pipeline_banner.py`` — the two startup banners
 - ``pipeline_phenotype_loop.py`` — the per-phenotype loop and the runner calls
 - ``pipeline_kinship.py`` — the separate ``-gk`` program
+- ``pipeline_memory.py`` — the memory preflight gate for both modes
 
 Example:
     >>> from jamma.pipeline import PipelineConfig, PipelineRunner
@@ -25,18 +26,13 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 from loguru import logger
 
 from jamma.core.backend import log_backend_selection
-from jamma.core.chunk import _compute_chunk_size
 from jamma.core.constants import PHENOTYPE_MISSING
-from jamma.core.memory import (
-    StreamingMemoryBreakdown,
-    estimate_streaming_memory,
-)
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import resolve_snp_list_file
@@ -47,6 +43,7 @@ from jamma.kinship import (
 )
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+from jamma.lmm.prepare_common import compute_valid_mask
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
@@ -56,6 +53,7 @@ from jamma.pipeline_config import (
     PipelineConfig,
     PipelineResult,
 )
+from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_phenotype_loop import run_phenotype_loop
 
 __all__ = [
@@ -65,6 +63,16 @@ __all__ = [
     "PipelineResult",
     "PipelineRunner",
 ]
+
+# Two places reject this combination, and they cannot share a predicate: run()
+# knows only the backend request and fails before reading PLINK metadata off
+# disk, while _check_hwe_support knows the resolved plan and re-checks after
+# sample filtering may have flipped the mode. They must not disagree on the
+# message, so it lives here rather than being written out at both.
+_HWE_BATCH_UNSUPPORTED = (
+    "HWE filtering (--hwe) is not supported with the NumPy "
+    "batch backend. Use --backend numpy-streaming or set --hwe 0."
+)
 
 
 def _parse_backend_override(value: str) -> BackendRequest:
@@ -139,15 +147,6 @@ class PipelineRunner:
             append_benchmark_record(record)
         except Exception:  # noqa: BLE001 — telemetry must never break the pipeline; log and continue
             logger.warning("Telemetry emission failed", exc_info=True)
-
-    @staticmethod
-    def _compute_valid_mask(
-        phenotypes: np.ndarray, covariates: np.ndarray | None
-    ) -> np.ndarray:
-        """Compute boolean mask of samples with valid phenotype and covariate values."""
-        from jamma.lmm.prepare_common import compute_valid_mask
-
-        return compute_valid_mask(phenotypes, covariates)
 
     def validate_inputs(self) -> None:
         """Validate that required input files exist and combine legally.
@@ -328,65 +327,6 @@ class PipelineRunner:
         """
         return self._parse_phenotype_column(self.config.phenotype_columns[0])
 
-    def check_memory_requirements(
-        self, n_samples: int, n_snps: int, n_cvt: int = 1
-    ) -> StreamingMemoryBreakdown | None:
-        """Check memory requirements if memory checking is enabled.
-
-        Computes actual chunk size via _compute_chunk_size, then estimates
-        streaming memory. Checks against mem_budget if set, and against
-        available system memory.
-
-        Args:
-            n_samples: Number of valid samples (after phenotype/covariate filtering).
-            n_snps: Number of SNPs in the dataset.
-            n_cvt: Number of covariates (affects Uab array sizing).
-
-        Returns:
-            StreamingMemoryBreakdown if check_memory is True, None otherwise.
-
-        Raises:
-            MemoryError: If estimated memory exceeds budget or available memory.
-        """
-        if not self.config.check_memory:
-            logger.info("Memory preflight skipped (streaming): check_memory=False")
-            return None
-
-        disk_chunk = _compute_chunk_size(n_snps)
-        compute_chunk = _compute_chunk_size(
-            n_snps, n_samples=n_samples, n_cvt=n_cvt, pipeline_buffers=2
-        )
-        est = estimate_streaming_memory(
-            n_samples,
-            chunk_size=disk_chunk,
-            n_cvt=n_cvt,
-            compute_chunk_size=compute_chunk,
-        )
-
-        logger.info(
-            f"Memory estimate: {est.total_peak_gb:.1f}GB required, "
-            f"{est.available_gb:.1f}GB available"
-        )
-
-        if (
-            self.config.mem_budget is not None
-            and est.total_peak_gb > self.config.mem_budget
-        ):
-            raise MemoryError(
-                f"Estimated memory ({est.total_peak_gb:.1f}GB) exceeds "
-                f"budget ({self.config.mem_budget}GB). "
-                f"Use --no-check-memory to override."
-            )
-
-        if not est.sufficient:
-            raise MemoryError(
-                f"Insufficient memory: need {est.total_peak_gb:.1f}GB "
-                f"(with 10% margin), have {est.available_gb:.1f}GB. "
-                f"Use --no-check-memory to override."
-            )
-
-        return est
-
     def load_kinship(
         self,
         n_samples: int,
@@ -520,10 +460,7 @@ class PipelineRunner:
     def _check_hwe_support(self, plan: ExecutionPlan) -> None:
         """Raise if HWE filtering requested but backend doesn't support it."""
         if self.config.hwe_threshold > 0 and plan.mode == "batch":
-            raise ValueError(
-                "HWE filtering (--hwe) is not supported with the NumPy "
-                "batch backend. Use --backend numpy-streaming or set --hwe 0."
-            )
+            raise ValueError(_HWE_BATCH_UNSUPPORTED)
 
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
@@ -556,30 +493,28 @@ class PipelineRunner:
             else self.config.backend
         )
 
-        # Fail fast: HWE + explicit numpy is always invalid, before touching disk.
+        # Fail fast: an explicit numpy request always resolves to batch mode, so
+        # this is invalid before the metadata read below can raise about a
+        # missing .bed. tests/test_lmm_io_validation.py pins that ordering.
         if self.config.hwe_threshold > 0 and requested == "numpy":
-            raise ValueError(
-                "HWE filtering (--hwe) is not supported with the NumPy "
-                "batch backend. Use --backend numpy-streaming or set --hwe 0."
-            )
+            raise ValueError(_HWE_BATCH_UNSUPPORTED)
 
-        # PLINK metadata is lightweight (reads .fam/.bim header only) and needed
-        # for memory-based mode selection in both auto and explicit paths.
-        from jamma.io.plink import get_plink_metadata as _get_meta
-
-        _meta = _get_meta(self.config.bfile)
+        # Read once and pass it down. get_plink_metadata parses the whole .bim
+        # (sid, chromosome, bp_position and both allele arrays), so calling it
+        # again in _run_inner doubled that work on every run.
+        meta = get_plink_metadata(self.config.bfile)
 
         # Route through select_execution_mode for all backend requests.
         plan = select_execution_mode(
-            n_samples=_meta["n_samples"],
-            n_snps=_meta["n_snps"],
+            n_samples=meta["n_samples"],
+            n_snps=meta["n_snps"],
             requested=requested,
         )
 
         log_backend_selection("numpy", self.config.backend, env_backend)
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
-        return self._run_inner(t_start, plan, requested)
+        return self._run_inner(t_start, plan, requested, meta)
 
     def _load_phenotypes_and_intersect_masks(
         self,
@@ -619,7 +554,7 @@ class PipelineRunner:
         for col in pheno_columns:
             pheno, n_anal = self._parse_phenotype_column(col, fam_data=fam_data)
             all_pheno_data[col] = (pheno, n_anal)
-            all_masks.append(self._compute_valid_mask(pheno, covariates))
+            all_masks.append(compute_valid_mask(pheno, covariates))
 
         valid_mask = np.all(all_masks, axis=0)
         n_valid = int(np.sum(valid_mask))
@@ -644,64 +579,12 @@ class PipelineRunner:
 
         return all_pheno_data, valid_mask, n_valid
 
-    def _memory_preflight(
-        self,
-        plan: ExecutionPlan,
-        n_valid: int,
-        n_snps: int,
-        n_cvt: int,
-    ) -> None:
-        """Run the memory preflight gate for the chosen execution plan.
-
-        Streaming mode delegates to ``check_memory_requirements`` which
-        uses streaming-specific accounting. Batch mode uses the
-        in-memory estimator and additionally enforces ``mem_budget`` if
-        the user set one. Both raise ``MemoryError`` with actionable
-        messages on failure.
-
-        Args:
-            plan: Resolved ExecutionPlan (mode determines which estimator).
-            n_valid: Sample count after valid-mask intersection.
-            n_snps: Total SNPs from PLINK metadata (pre-MAF/missingness).
-            n_cvt: Covariate count including the intercept.
-        """
-        if plan.mode == "streaming":
-            self.check_memory_requirements(n_valid, n_snps, n_cvt=n_cvt)
-            return
-
-        if not self.config.check_memory:
-            logger.info(
-                f"Memory preflight skipped ({plan.runner_name}): check_memory=False"
-            )
-            return
-
-        from jamma.core.memory import estimate_lmm_memory
-
-        est = estimate_lmm_memory(n_valid, n_snps, n_cvt=n_cvt)
-        logger.info(
-            f"Memory estimate ({plan.runner_name}): "
-            f"{est.total_gb:.1f}GB required, "
-            f"{est.available_gb:.1f}GB available"
-        )
-        if self.config.mem_budget is not None and est.total_gb > self.config.mem_budget:
-            raise MemoryError(
-                f"Estimated memory ({est.total_gb:.1f}GB) exceeds "
-                f"budget ({self.config.mem_budget}GB). "
-                f"Use --no-check-memory to override."
-            )
-        if not est.sufficient:
-            raise MemoryError(
-                f"Insufficient memory: "
-                f"need {est.total_gb:.1f}GB, "
-                f"have {est.available_gb:.1f}GB. "
-                f"Use --no-check-memory to override."
-            )
-
     def _run_inner(
         self,
         t_start: float,
         plan: ExecutionPlan,
-        requested: Literal["auto", "numpy", "numpy-streaming"] = "auto",
+        requested: Literal["auto", "numpy", "numpy-streaming"],
+        meta: dict[str, Any],
     ) -> PipelineResult:
         """Execute the pipeline body.
 
@@ -709,12 +592,12 @@ class PipelineRunner:
             t_start: Pipeline start time from time.perf_counter().
             plan: ExecutionPlan with backend, mode, and reason.
             requested: Resolved backend request (respects JAMMA_BACKEND env var).
+            meta: PLINK metadata already read by ``run``.
         """
         self._check_hwe_support(plan)
 
         self.validate_inputs()
 
-        meta = get_plink_metadata(self.config.bfile)
         n_samples = meta["n_samples"]
         n_snps = meta["n_snps"]
 
@@ -766,14 +649,13 @@ class PipelineRunner:
         )
         log_pipeline_banner(plan)
 
-        self._memory_preflight(plan, n_valid, n_snps, n_cvt)
+        memory_preflight(self.config, plan, n_valid, n_snps, n_cvt)
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes). The
         # kinship matrix is consumed here; runners use the eigen arrays directly.
         eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
             n_samples, n_valid, valid_mask, ksnps_indices
         )
-        K = None
         load_s = time.perf_counter() - t_start
 
         outcome = run_phenotype_loop(
@@ -781,7 +663,6 @@ class PipelineRunner:
             plan,
             all_pheno_data,
             valid_mask,
-            K,
             covariates,
             eigenvalues,
             eigenvectors,
@@ -960,7 +841,7 @@ class PipelineRunner:
         )
 
         covariates = self.load_covariates(n_samples)
-        valid_mask = self._compute_valid_mask(phenotypes, covariates)
+        valid_mask = compute_valid_mask(phenotypes, covariates)
         n_valid = int(np.sum(valid_mask))
         n_cvt = covariates.shape[1] if covariates is not None else 1
         log_dataset_banner(n_samples, n_valid, n_snps, n_covariates=n_cvt)

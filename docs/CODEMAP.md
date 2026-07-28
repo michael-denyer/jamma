@@ -178,6 +178,7 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | 1c | `PipelineRunner` | `-lmm` orchestration (validate -> parse -> memory -> kinship -> LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
 | 1c | `run_phenotype_loop()` | Per-phenotype loop; dispatches each column to the batch or streaming runner | [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py) |
 | 1c | `compute_kinship()` | `-gk` kinship orchestration (compute + write), returns `KinshipResult` | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
+| 1c | `memory_preflight()` | Memory gate before compute; streaming and batch estimators behind one entry point | [pipeline_memory.py](../src/jamma/pipeline_memory.py) |
 | 1c | `log_dataset_banner()` / `log_pipeline_banner()` | GEMMA-style dataset summary and execution-plan banner | [pipeline_banner.py](../src/jamma/pipeline_banner.py) |
 | 1c | `PipelineConfig` | Pipeline configuration dataclass (all CLI flags) | [pipeline_config.py](../src/jamma/pipeline_config.py) |
 
@@ -318,12 +319,12 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:40](../src/jamma/validation/tolerances.py#L40) |
-| 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:21](../src/jamma/validation/compare.py#L21) |
-| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:312](../src/jamma/validation/compare.py#L312) |
-| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:399](../src/jamma/validation/compare.py#L399) |
-| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:144](../src/jamma/validation/compare.py#L144) |
-| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:245](../src/jamma/validation/compare.py#L245) |
-| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:182](../src/jamma/validation/compare.py#L182) |
+| 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:21](../src/jamma/validation/compare.py#L22) |
+| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:312](../src/jamma/validation/compare.py#L313) |
+| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:399](../src/jamma/validation/compare.py#L470) |
+| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:144](../src/jamma/validation/compare.py#L145) |
+| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:245](../src/jamma/validation/compare.py#L246) |
+| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:182](../src/jamma/validation/compare.py#L183) |
 
 ---
 
@@ -581,6 +582,6 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Memory estimation | [memory.py:327](../src/jamma/core/memory.py#L327) |
 | Threading | [threading.py:43](../src/jamma/core/threading.py#L43) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
-| Validation comparison | [compare.py:399](../src/jamma/validation/compare.py#L399) |
+| Validation comparison | [compare.py:399](../src/jamma/validation/compare.py#L470) |
 | Equivalence proof | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
 | Numerical equivalence bound | [GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md](GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) |

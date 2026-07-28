@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from typing import Literal, NamedTuple, overload
+from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
@@ -28,11 +28,9 @@ from loguru import logger
 from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
 
-# Batch evaluators passed into the golden-section refinement: both take
-# per-SNP log-lambdas (n_snps,); the Pab variant also returns the Pab batch
-# at those lambdas, so the caller avoids reconstructing it afterwards.
+# The objective handed to the golden-section refinement: per-SNP log-lambdas
+# (n_snps,) in, per-SNP log-likelihoods (n_snps,) out.
 _BatchLoglFn = Callable[[np.ndarray], np.ndarray]
-_BatchLoglPabFn = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]
 
 
 class SplitUab(NamedTuple):
@@ -845,32 +843,6 @@ def compute_iab_invariant_scalars_ncvt1(
 # ---------------------------------------------------------------------------
 
 
-@overload
-def _batch_reml_at_lambda_numpy(
-    n_cvt: int,
-    lambda_vals: np.ndarray,
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    Iab_batch: np.ndarray,
-    reml_const: float | None = ...,
-    *,
-    return_pab: Literal[False] = ...,
-) -> np.ndarray: ...
-
-
-@overload
-def _batch_reml_at_lambda_numpy(
-    n_cvt: int,
-    lambda_vals: np.ndarray,
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    Iab_batch: np.ndarray,
-    reml_const: float | None = ...,
-    *,
-    return_pab: Literal[True],
-) -> tuple[np.ndarray, np.ndarray]: ...
-
-
 def _batch_reml_at_lambda_numpy(
     n_cvt: int,
     lambda_vals: np.ndarray,
@@ -878,9 +850,7 @@ def _batch_reml_at_lambda_numpy(
     Uab_batch: np.ndarray,
     Iab_batch: np.ndarray,
     reml_const: float | None = None,
-    *,
-    return_pab: bool = False,
-) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Evaluate REML log-likelihood for each SNP at its own lambda value.
 
     Args:
@@ -890,12 +860,12 @@ def _batch_reml_at_lambda_numpy(
         Uab_batch: Uab matrices (n_snps, n_samples, n_index).
         Iab_batch: Precomputed identity-weighted Pab (n_snps, n_cvt+2, n_index).
         reml_const: Precomputed 0.5*df*(log(df)-log(2*pi)-1). If None, computed here.
-        return_pab: If True, also return Pab_batch for downstream Wald stats.
 
     Returns:
-        If return_pab=False: REML log-likelihoods (n_snps,).
-        If return_pab=True: (log-likelihoods, Pab_batch) where Pab is
-        (n_snps, n_cvt+2, n_index).
+        ``(log-likelihoods (n_snps,), Pab_batch (n_snps, n_cvt+2, n_index))``.
+        Pab falls out of the log-likelihood computation, so it is always
+        returned rather than gated on a flag; the refinement loop discards it
+        and the final evaluation feeds it to the Wald statistics.
     """
     table = build_index_table(n_cvt)
     n_snps = Uab_batch.shape[0]
@@ -932,9 +902,7 @@ def _batch_reml_at_lambda_numpy(
     if reml_const is None:
         reml_const = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
     logl = reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
-    if return_pab:
-        return logl, Pab_batch
-    return logl
+    return logl, Pab_batch
 
 
 def _batch_mle_at_lambda_numpy(
@@ -1112,53 +1080,33 @@ def _batch_grid_mle_numpy(
 # ---------------------------------------------------------------------------
 
 
-@overload
-def _batch_golden_section_numpy(
+def _batch_golden_section_bracket_numpy(
     compute_batch_fn: _BatchLoglFn,
     grid_logls: np.ndarray,
     log_lambdas: np.ndarray,
     n_iter: int,
-    compute_batch_with_pab_fn: None = ...,
-) -> tuple[np.ndarray, np.ndarray]: ...
-
-
-@overload
-def _batch_golden_section_numpy(
-    compute_batch_fn: _BatchLoglFn,
-    grid_logls: np.ndarray,
-    log_lambdas: np.ndarray,
-    n_iter: int,
-    compute_batch_with_pab_fn: _BatchLoglPabFn,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
-
-
-def _batch_golden_section_numpy(
-    compute_batch_fn: _BatchLoglFn,
-    grid_logls: np.ndarray,
-    log_lambdas: np.ndarray,
-    n_iter: int,
-    compute_batch_with_pab_fn: _BatchLoglPabFn | None = None,
-) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Grid-to-golden-section refinement for lambda optimization.
+) -> np.ndarray:
+    """Refine each SNP's bracket and return the optimal log-lambda per SNP.
 
     Grid-to-golden-section refinement using NumPy broadcasting over SNPs.
 
     All operations are vectorized over SNPs (axis 0).
     After 20 iterations: 0.618^20 ~ 6.6e-5 relative tolerance.
 
+    Stops at the optimal log-lambda rather than evaluating there, because each
+    caller wants a different final evaluation: the REML optimizers need the Pab
+    batch that falls out of it, the MLE optimizer has no Pab. Every caller then
+    evaluates at the returned midpoint, so its (lambda, logl) pair comes from a
+    single point.
+
     Args:
         compute_batch_fn: callable(log_lambdas_per_snp: (n_snps,)) -> (n_snps,).
         grid_logls: Grid log-likelihoods (n_grid, n_snps).
         log_lambdas: Log-scale grid points (n_grid,).
         n_iter: Golden section iterations (should be >= 20).
-        compute_batch_with_pab_fn: Optional callable(log_lambdas: (n_snps,)) ->
-            (logls (n_snps,), Pab_batch (n_snps, n_cvt+2, n_index)).
-            If provided, performs a final evaluation at the optimal midpoint
-            using this function and returns Pab alongside lambdas/logls.
 
     Returns:
-        If compute_batch_with_pab_fn is None: (optimal_lambdas, optimal_logls).
-        If provided: (optimal_lambdas, optimal_logls, Pab_final).
+        Optimal log-lambda per SNP (n_snps,).
     """
     phi = 0.6180339887498949  # golden ratio - 1
 
@@ -1192,51 +1140,7 @@ def _batch_golden_section_numpy(
 
         a, b, c, d, fc, fd = new_a, new_b, new_c, new_d, new_fc, new_fd
 
-    log_opt = (a + b) / 2.0
-
-    if compute_batch_with_pab_fn is not None:
-        # Final eval at midpoint — captures Pab for downstream Wald stats.
-        # This makes the Wald path's "final evaluation" productive (its Pab
-        # is reused) rather than the optimizer returning best-of-fc/fd and
-        # then batch_calc_wald_stats_numpy reconstructing Hi_eval + Pab again.
-        opt_logl, Pab_final = compute_batch_with_pab_fn(log_opt)
-        return np.exp(log_opt), opt_logl, Pab_final
-
-    # Evaluate logl at the midpoint to match lambda — ensures the returned
-    # (lambda, logl) pair is from the same evaluation point. This matches
-    # the batch optimizer which also evaluates at midpoint.
-    opt_logl = compute_batch_fn(log_opt)
-    return np.exp(log_opt), opt_logl
-
-
-@overload
-def golden_section_optimize_lambda_numpy(
-    n_cvt: int,
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    Iab_batch: np.ndarray,
-    l_min: float = ...,
-    l_max: float = ...,
-    n_grid: int = ...,
-    n_iter: int = ...,
-    *,
-    return_pab: Literal[False] = ...,
-) -> tuple[np.ndarray, np.ndarray]: ...
-
-
-@overload
-def golden_section_optimize_lambda_numpy(
-    n_cvt: int,
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    Iab_batch: np.ndarray,
-    l_min: float = ...,
-    l_max: float = ...,
-    n_grid: int = ...,
-    n_iter: int = ...,
-    *,
-    return_pab: Literal[True],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+    return (a + b) / 2.0
 
 
 def golden_section_optimize_lambda_numpy(
@@ -1248,9 +1152,7 @@ def golden_section_optimize_lambda_numpy(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_iter: int = 20,
-    *,
-    return_pab: bool = False,
-) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Optimize REML lambda using grid search + golden section refinement.
 
     Optimize REML lambda using grid search + golden section refinement with
@@ -1269,14 +1171,12 @@ def golden_section_optimize_lambda_numpy(
         n_grid: Coarse grid points.
         n_iter: Golden section iterations (should be >= 20 for 1e-5 tolerance;
             runner-level code enforces the minimum).
-        return_pab: If True, return (lambdas, logls, Pab_final) where Pab_final
-            is the Pab batch at the optimal lambda. Avoids redundant Hi_eval +
-            Pab reconstruction in the Wald stats step.
 
     Returns:
-        If return_pab=False: (optimal_lambdas, optimal_logls) both (n_snps,).
-        If return_pab=True: (optimal_lambdas, optimal_logls, Pab_final) where
-        Pab_final is (n_snps, n_cvt+2, n_index).
+        ``(optimal_lambdas, optimal_logls, Pab_final)`` where the first two are
+        (n_snps,) and Pab_final is (n_snps, n_cvt+2, n_index). Pab comes from
+        the final evaluation, so the Wald stats step reuses it instead of
+        reconstructing Hi_eval and Pab.
     """
     log_l_min = np.log(l_min)
     log_l_max = np.log(l_max)
@@ -1292,36 +1192,22 @@ def golden_section_optimize_lambda_numpy(
         n_cvt, lambdas_grid, eigenvalues, Uab_batch, Iab_batch
     )
 
-    # REML batch evaluator closure (over precomputed Iab and reml_const)
-    def compute_reml_batch(log_lams: np.ndarray) -> np.ndarray:
-        lams = np.exp(log_lams)
+    def reml_at(log_lams: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return _batch_reml_at_lambda_numpy(
-            n_cvt, lams, eigenvalues, Uab_batch, Iab_batch, reml_const=reml_const
+            n_cvt,
+            np.exp(log_lams),
+            eigenvalues,
+            Uab_batch,
+            Iab_batch,
+            reml_const=reml_const,
         )
 
-    # Stage 2: Golden section refinement
-    pab_fn = None
-    if return_pab:
-
-        def pab_fn(log_lams: np.ndarray) -> tuple:
-            lams = np.exp(log_lams)
-            return _batch_reml_at_lambda_numpy(
-                n_cvt,
-                lams,
-                eigenvalues,
-                Uab_batch,
-                Iab_batch,
-                reml_const=reml_const,
-                return_pab=True,
-            )
-
-    return _batch_golden_section_numpy(
-        compute_reml_batch,
-        grid_logls,
-        log_lambdas,
-        n_iter,
-        compute_batch_with_pab_fn=pab_fn,
+    # Stage 2: Golden section refinement, then one evaluation at the optimum.
+    log_opt = _batch_golden_section_bracket_numpy(
+        lambda log_lams: reml_at(log_lams)[0], grid_logls, log_lambdas, n_iter
     )
+    opt_logls, Pab_final = reml_at(log_opt)
+    return np.exp(log_opt), opt_logls, Pab_final
 
 
 def golden_section_optimize_lambda_mle_numpy(
@@ -1364,10 +1250,11 @@ def golden_section_optimize_lambda_mle_numpy(
         lams = np.exp(log_lams)
         return _batch_mle_at_lambda_numpy(n_cvt, lams, eigenvalues, Uab_batch)
 
-    # Stage 2: Golden section refinement
-    return _batch_golden_section_numpy(
+    # Stage 2: Golden section refinement, then one evaluation at the optimum.
+    log_opt = _batch_golden_section_bracket_numpy(
         compute_mle_batch, grid_logls, log_lambdas, n_iter
     )
+    return np.exp(log_opt), compute_mle_batch(log_opt)
 
 
 # ---------------------------------------------------------------------------
@@ -1487,7 +1374,6 @@ def _batch_grid_reml_split_ncvt1_numpy(
     )
 
 
-@overload
 def _batch_reml_at_lambda_split_ncvt1_numpy(
     lambda_vals: np.ndarray,
     eigenvalues: np.ndarray,
@@ -1498,40 +1384,7 @@ def _batch_reml_at_lambda_split_ncvt1_numpy(
     iab_p1_xx: np.ndarray,
     iab_logdet_var: np.ndarray,
     reml_const: float,
-    *,
-    return_pab: Literal[False] = ...,
-) -> np.ndarray: ...
-
-
-@overload
-def _batch_reml_at_lambda_split_ncvt1_numpy(
-    lambda_vals: np.ndarray,
-    eigenvalues: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    iab_logdet: float,
-    iab_inv_s_ww: float,
-    iab_p1_xx: np.ndarray,
-    iab_logdet_var: np.ndarray,
-    reml_const: float,
-    *,
-    return_pab: Literal[True],
-) -> tuple[np.ndarray, np.ndarray]: ...
-
-
-def _batch_reml_at_lambda_split_ncvt1_numpy(
-    lambda_vals: np.ndarray,
-    eigenvalues: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    iab_logdet: float,
-    iab_inv_s_ww: float,
-    iab_p1_xx: np.ndarray,
-    iab_logdet_var: np.ndarray,
-    reml_const: float,
-    *,
-    return_pab: bool = False,
-) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Evaluate REML for each SNP at its own lambda using split-Uab (n_cvt=1).
 
     Same split logic as grid version but with per-SNP lambda values.
@@ -1546,11 +1399,12 @@ def _batch_reml_at_lambda_split_ncvt1_numpy(
         iab_p1_xx: Precomputed per-SNP Iab p1_xx (n_snps,).
         iab_logdet_var: Precomputed per-SNP log(iab_p1_xx) (n_snps,).
         reml_const: Precomputed REML constant.
-        return_pab: If True, also return the full Pab batch (n_snps, 3, 6).
 
     Returns:
-        If return_pab=False: REML log-likelihoods (n_snps,).
-        If return_pab=True: (log-likelihoods, Pab_batch (n_snps, 3, 6)).
+        ``(log-likelihoods (n_snps,), Pab_batch (n_snps, 3, 6))``. Packing Pab
+        costs 0.6% of this function's runtime at 12k SNPs, so it is always
+        returned rather than gated on a flag; the refinement loop discards it
+        and the final evaluation feeds it to the Wald statistics.
     """
     n_samples = eigenvalues.shape[0]
     n_snps = uab_varying_soa.shape[0]
@@ -1592,9 +1446,6 @@ def _batch_reml_at_lambda_split_ncvt1_numpy(
 
     logl = reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
 
-    if not return_pab:
-        return logl
-
     # Reconstruct full Pab (n_snps, 3, 6) for n_cvt=1:
     # Row 0: Hi_eval-weighted dot products — [ww, wx, wy, xx, xy, yy]
     # Row 1: Schur complement projecting out W — [xx, xy, yy] (cols 3,4,5)
@@ -1614,42 +1465,6 @@ def _batch_reml_at_lambda_split_ncvt1_numpy(
     return logl, Pab_batch
 
 
-@overload
-def golden_section_optimize_lambda_split_ncvt1_numpy(
-    eigenvalues: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    iab_s_ww: float,
-    iab_s_wy: float,
-    iab_s_yy: float,
-    iab_logdet: float,
-    l_min: float = ...,
-    l_max: float = ...,
-    n_grid: int = ...,
-    n_iter: int = ...,
-    *,
-    return_pab: Literal[False] = ...,
-) -> tuple[np.ndarray, np.ndarray]: ...
-
-
-@overload
-def golden_section_optimize_lambda_split_ncvt1_numpy(
-    eigenvalues: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    iab_s_ww: float,
-    iab_s_wy: float,
-    iab_s_yy: float,
-    iab_logdet: float,
-    l_min: float = ...,
-    l_max: float = ...,
-    n_grid: int = ...,
-    n_iter: int = ...,
-    *,
-    return_pab: Literal[True],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
-
-
 def golden_section_optimize_lambda_split_ncvt1_numpy(
     eigenvalues: np.ndarray,
     uab_varying_soa: np.ndarray,
@@ -1662,9 +1477,7 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
     l_max: float = 1e5,
     n_grid: int = 50,
     n_iter: int = 20,
-    *,
-    return_pab: bool = False,
-) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Optimize REML lambda using split-Uab for n_cvt=1.
 
     Uses invariant/varying split to reduce per-SNP computation.
@@ -1682,14 +1495,12 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
         l_max: Maximum lambda.
         n_grid: Coarse grid points.
         n_iter: Golden section iterations.
-        return_pab: If True, return (lambdas, logls, Pab_final) where Pab_final
-            is the full Pab batch (n_snps, 3, 6) at optimal lambda. Avoids
-            redundant Hi_eval + Pab reconstruction in the Wald stats step.
 
     Returns:
-        If return_pab=False: (optimal_lambdas, optimal_logls) both (n_snps,).
-        If return_pab=True: (optimal_lambdas, optimal_logls, Pab_final) where
-        Pab_final is (n_snps, 3, 6).
+        ``(optimal_lambdas, optimal_logls, Pab_final)`` where the first two are
+        (n_snps,) and Pab_final is (n_snps, 3, 6). Pab comes from the final
+        evaluation, so the Wald stats step reuses it instead of reconstructing
+        Hi_eval and Pab.
     """
     n_samples = eigenvalues.shape[0]
     df = n_samples - 2
@@ -1721,11 +1532,9 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
         reml_const,
     )
 
-    # Refinement closure (scalar logls only — no Pab)
-    def compute_reml_split(log_lams: np.ndarray) -> np.ndarray:
-        lams = np.exp(log_lams)
+    def reml_at(log_lams: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return _batch_reml_at_lambda_split_ncvt1_numpy(
-            lams,
+            np.exp(log_lams),
             eigenvalues,
             uab_varying_soa,
             uab_invariant_soa,
@@ -1736,31 +1545,11 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
             reml_const,
         )
 
-    pab_fn = None
-    if return_pab:
-
-        def pab_fn(log_lams: np.ndarray) -> tuple:
-            lams = np.exp(log_lams)
-            return _batch_reml_at_lambda_split_ncvt1_numpy(
-                lams,
-                eigenvalues,
-                uab_varying_soa,
-                uab_invariant_soa,
-                iab_logdet,
-                iab_inv_s_ww,
-                iab_p1_xx,
-                iab_logdet_var,
-                reml_const,
-                return_pab=True,
-            )
-
-    return _batch_golden_section_numpy(
-        compute_reml_split,
-        grid_logls,
-        log_lambdas,
-        n_iter,
-        compute_batch_with_pab_fn=pab_fn,
+    log_opt = _batch_golden_section_bracket_numpy(
+        lambda log_lams: reml_at(log_lams)[0], grid_logls, log_lambdas, n_iter
     )
+    opt_logls, Pab_final = reml_at(log_opt)
+    return np.exp(log_opt), opt_logls, Pab_final
 
 
 # ---------------------------------------------------------------------------
@@ -1875,9 +1664,9 @@ def batch_calc_wald_stats_from_pab_numpy(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute Wald test statistics from pre-computed Pab batch.
 
-    Used when the REML optimizer has already computed Pab at the optimal lambda
-    and returned it via return_pab=True. Avoids the redundant Hi_eval + Pab
-    construction in batch_calc_wald_stats_numpy.
+    The REML optimizers always return the Pab batch they evaluated at the
+    optimal lambda, so this avoids the redundant Hi_eval + Pab construction in
+    batch_calc_wald_stats_numpy.
 
     Args:
         n_cvt: Number of covariates.

@@ -35,7 +35,7 @@ Env vars:
         skips the _jlinalg.so import entirely. blas_backend is set to
         "numpy-fallback-forced" so the sanitizer workflow can confirm the
         gate engaged (distinguishable from the natural "numpy-fallback"
-        value used when the .so genuinely failed to import). See Phase 116.1.
+        value used when the .so genuinely failed to import).
 """
 
 from __future__ import annotations
@@ -187,7 +187,7 @@ def _dsyrk_numpy(
 _dsyrk_backend = _dsyrk_numpy_impl
 
 
-# Phase 116.1: ASAN/UBSAN sanitizer workflow needs a way to skip the
+# ASAN/UBSAN sanitizer workflow needs a way to skip the
 # _jlinalg.so import entirely. RESEARCH §"Pitfall 4" — ASAN + dlopen(...,
 # RTLD_LAZY) inside blas_dispatch.c can produce false-positive
 # heap-buffer-overflow reports. Forcing the import to be skipped (rather

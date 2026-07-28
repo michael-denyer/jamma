@@ -114,7 +114,7 @@ def apply_sanitizer_overrides(
     ``lapack_cflags``. Reads ``os.environ`` ONCE per call; the four compile
     entry points (``hatch_build.py``, ``_compile_jlinalg.py``,
     ``_compile_accel.py``, plus runtime recompile in ``core/recompile.py``)
-    MUST NOT duplicate the env-var read — that would defeat the Phase 123
+    MUST NOT duplicate the env-var read — that would defeat the
     single-source-of-truth invariant for compile flags.
 
     JAMMA_SANITIZE format: comma-separated ``-fsanitize`` values, e.g.
@@ -171,7 +171,7 @@ def resolve_cflags_for(
 
     LAPACK path: deliberately does NOT splice ``extra_cflags`` — LAPACK sources
     are strict IEEE 754, and a user-supplied ``-Ofast`` would defeat that split.
-    For the sanitizer use case (Phase 116.1), a separate ``extra_lapack_cflags``
+    For the sanitizer use case, a separate ``extra_lapack_cflags``
     parameter is forwarded by ``compile_jlinalg`` from the
     ``apply_sanitizer_overrides()`` triple, so ``eigh.c`` is also instrumented
     when ``JAMMA_SANITIZE`` is set. The trailing ``-O1`` from the sanitizer
@@ -317,7 +317,7 @@ def compile_jlinalg(
             ``ldflags``, before ``-o``).
         extra_lapack_cflags: Extra flags appended to LAPACK_CFLAGS for LAPACK
             sources (forwarded to ``resolve_cflags_for``). Used exclusively
-            by the sanitizer instrumentation flow (Phase 116.1) — assembled by
+            by the sanitizer instrumentation flow — assembled by
             ``apply_sanitizer_overrides()`` so ``eigh.c`` is also instrumented
             when ``JAMMA_SANITIZE`` is set. LAPACK sources stay
             ``-O2 -fno-fast-math`` baseline; the trailing ``-O1`` from the

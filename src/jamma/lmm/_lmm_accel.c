@@ -11,7 +11,7 @@
  *                     compute_score_split_c, compute_lrt_split_c,
  *                     compute_score_fused_c, compute_lrt_fused_c
  *
- * Phase 116.1: -DJAMMA_SENTINEL_UB enables a heap-OOB sentinel function
+ * -DJAMMA_SENTINEL_UB enables a heap-OOB sentinel function
  * (jamma_sentinel_oob) for sanitizer-workflow self-test. See
  * scripts/asan-suppressions.txt and .github/workflows/sanitizers.yml.
  * Never set in wheel builds — the macro is opt-in via apply_sanitizer_overrides
@@ -7571,7 +7571,7 @@ static PyObject *_get_aligned_alloc_test_ptr(PyObject *self, PyObject *args)
  * ------------------------------------------------------------------------- */
 
 #ifdef JAMMA_SENTINEL_UB
-/* Phase 116.1 sanitizer sentinel: deliberately reads 1 byte past a 4-byte
+/* Sanitizer sentinel: deliberately reads 1 byte past a 4-byte
  * heap allocation. Under -fsanitize=address this MUST abort with a
  * heap-buffer-overflow trace pointing at this source line. Without ASAN,
  * returns garbage from past the buffer end. Compile with
@@ -8176,7 +8176,7 @@ static PyMethodDef methods[] = {
         "jamma_sentinel_oob",
         (PyCFunction)jamma_sentinel_oob,
         METH_NOARGS,
-        "Phase 116.1 sanitizer sentinel — deliberately reads past a heap "
+        "Sanitizer sentinel — deliberately reads past a heap "
         "allocation. Under ASAN this aborts with heap-buffer-overflow; "
         "without ASAN it returns garbage. Only compiled when "
         "-DJAMMA_SENTINEL_UB is set at build time."

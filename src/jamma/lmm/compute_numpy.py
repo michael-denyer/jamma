@@ -257,7 +257,7 @@ _OPTIONAL_GROUPS: tuple[_OptionalGroup, ...] = (
 def _try_import_accel() -> AccelImport:
     """Attempt to import the C extension and validate ABI version.
 
-    Honours ``JAMMA_FORCE_NUMPY_FALLBACK`` (Phase 116.1) — when truthy
+    Honours ``JAMMA_FORCE_NUMPY_FALLBACK`` — when truthy
     (anything other than "" or "0"), returns ``_ACCEL_UNAVAILABLE``
     without attempting the .so import. The ASAN/UBSAN sanitizer workflow
     sets this so ``dlopen`` never runs (RESEARCH §"Pitfall 4": ASAN +
@@ -268,7 +268,7 @@ def _try_import_accel() -> AccelImport:
         AccelImport with availability flags and C function references
         (None when unavailable).
     """
-    # Phase 116.1: same convention as jamma.jlinalg.__init__ — truthy values
+    # Same convention as jamma.jlinalg.__init__ — truthy values
     # are anything other than "", "0".
     if env_flag("JAMMA_FORCE_NUMPY_FALLBACK"):
         return _ACCEL_UNAVAILABLE
@@ -345,8 +345,8 @@ def _auto_recompile() -> bool:
 
 _FORCE_NUMPY_FALLBACK = env_flag("JAMMA_FORCE_NUMPY_FALLBACK")
 
-# Auto-recompile and retry once if the C extension is unavailable. Phase 116.1:
-# when JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry — auto_recompile would
+# Auto-recompile and retry once if the C extension is unavailable.
+# When JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry — auto_recompile would
 # compile the .so and import it into sys.modules, defeating the gate's purpose
 # (RESEARCH §"Pitfall 4": ASAN must never see the .so loaded).
 _accel = _try_import_accel()

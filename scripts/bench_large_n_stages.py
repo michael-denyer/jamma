@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Interleaved A/B timing for the large-N numerical stages.
 
-Each revision runs in a separate, persistent worker. For every stage the
-workers alternate in ABBA/BAAB blocks, which keeps time-on-machine from being
-mistaken for a code change. The workers hash numerical results and stop when
-the revisions disagree.
+Each revision runs in a separate worker. For every stage, each ABBA/BAAB block
+gets a fresh pair of workers and reverses their creation order. This controls
+both time-on-machine drift and allocation or process-layout bias. Each stage
+owns representative prebuilt inputs, so unrelated setup work never
+contaminates its timing. The workers hash numerical results and stop when the
+revisions disagree.
 
 Examples:
     uv run python scripts/bench_large_n_stages.py \
@@ -84,7 +86,13 @@ def _build_inputs(
 class _StageRunner:
     """Own stage inputs and reusable output buffers inside one worker."""
 
-    def __init__(self, n_samples: int, n_snps: int, n_threads: int) -> None:
+    def __init__(
+        self,
+        n_samples: int,
+        n_snps: int,
+        n_threads: int,
+        stages: tuple[str, ...],
+    ) -> None:
         from jamma import jlinalg
         from jamma.lmm.compute_numpy import (
             compute_mode4_split_c_ws,
@@ -102,31 +110,50 @@ class _StageRunner:
             self._uab_varying,
         ) = _build_inputs(n_samples, n_snps)
 
-        self._kinship_out = np.empty((n_samples, n_samples), dtype=np.float64)
-        self._jlinalg.dsyrk(self._genotypes, out=self._kinship_out, beta=0.0)
-        self._kinship_seed = self._kinship_out.copy()
-        self._kinship_seed /= n_snps
-        self._kinship_seed.flat[:: n_samples + 1] += 1e-6
+        self._kinship_out: np.ndarray | None = None
+        self._kinship_seed: np.ndarray | None = None
+        self._eigen_work: np.ndarray | None = None
+        self._eigenvectors: np.ndarray | None = None
+        self._rotation_out: np.ndarray | None = None
+        self._mode4_workspace: object | None = None
 
-        eigen_work = self._kinship_seed.copy()
-        self._eigenvalues, self._eigenvectors = self._jlinalg.eigh(
-            eigen_work, inplace=True
-        )
-        self._eigen_work = np.empty_like(self._kinship_seed)
-        self._rotation_out = np.empty((n_snps, n_samples), dtype=np.float64)
-        hi_eval_null = 1.0 / (self._eigenvalues + 1.0)
-        self._mode4_workspace = create_lmm_workspace_mode4(
-            self._eigenvalues,
-            uab_invariant,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            n_threads,
-            hi_eval_null,
-            0.0,
-        )
+        if "kinship" in stages or "eigen" in stages:
+            self._kinship_out = np.empty((n_samples, n_samples), dtype=np.float64)
+            self._jlinalg.dsyrk(self._genotypes, out=self._kinship_out, beta=0.0)
+
+        if "eigen" in stages:
+            assert self._kinship_out is not None
+            self._kinship_seed = self._kinship_out.copy()
+            self._kinship_seed /= n_snps
+            self._kinship_seed.flat[:: n_samples + 1] += 1e-6
+            self._eigen_work = np.empty_like(self._kinship_seed)
+
+        if "rotation" in stages:
+            # Rotation needs a dense eigenvector-like matrix, not a timed
+            # eigendecomposition. Generating it directly isolates DGEMM.
+            rotation_rng = np.random.default_rng(20260802)
+            self._eigenvectors = np.ascontiguousarray(
+                rotation_rng.standard_normal((n_samples, n_samples))
+            )
+            self._rotation_out = np.empty((n_snps, n_samples), dtype=np.float64)
+
+        if "mode4" in stages:
+            mode4_eigenvalues = np.sort(
+                np.random.default_rng(20260803).uniform(0.1, 2.0, n_samples)
+            )
+            hi_eval_null = 1.0 / (mode4_eigenvalues + 1.0)
+            self._mode4_workspace = create_lmm_workspace_mode4(
+                mode4_eigenvalues,
+                uab_invariant,
+                n_samples,
+                1e-5,
+                1e5,
+                50,
+                20,
+                n_threads,
+                hi_eval_null,
+                0.0,
+            )
 
     def run(self, stage: str) -> object:
         if stage == "kinship":
@@ -136,20 +163,26 @@ class _StageRunner:
         if stage == "rotation":
             return self._run_rotation()
         if stage == "mode4":
+            assert self._mode4_workspace is not None
             return self._compute_mode4(
                 self._mode4_workspace, self._uab_varying, self._n_threads
             )
         raise ValueError(f"unknown benchmark stage: {stage}")
 
     def _run_kinship(self) -> np.ndarray:
+        assert self._kinship_out is not None
         self._jlinalg.dsyrk(self._genotypes, out=self._kinship_out, beta=0.0)
         return self._kinship_out
 
     def _run_eigen(self) -> tuple[np.ndarray, np.ndarray]:
+        assert self._kinship_seed is not None
+        assert self._eigen_work is not None
         np.copyto(self._eigen_work, self._kinship_seed)
         return self._jlinalg.eigh(self._eigen_work, inplace=True)
 
     def _run_rotation(self) -> np.ndarray:
+        assert self._eigenvectors is not None
+        assert self._rotation_out is not None
         return self._jlinalg.dgemm(
             self._genotypes,
             self._eigenvectors,
@@ -158,12 +191,18 @@ class _StageRunner:
         )
 
 
-def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> None:
+def _worker(
+    source_root: Path,
+    n_samples: int,
+    n_snps: int,
+    n_threads: int,
+    stages: tuple[str, ...],
+) -> None:
     """Serve warmed stage timings over a line-oriented protocol."""
     sys.path.insert(0, str(source_root / "src"))
-    runner = _StageRunner(n_samples, n_snps, n_threads)
+    runner = _StageRunner(n_samples, n_snps, n_threads, stages)
 
-    for stage in _STAGES:
+    for stage in stages:
         runner.run(stage)
     print("ready", flush=True)
 
@@ -171,7 +210,7 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
         stage = command.strip()
         if stage == "stop":
             return
-        if stage not in _STAGES:
+        if stage not in stages:
             raise ValueError(f"unknown worker command: {stage}")
         started = time.perf_counter()
         result = runner.run(stage)
@@ -183,7 +222,12 @@ class _WorkerProcess:
     """One persistent worker, isolated to one source tree."""
 
     def __init__(
-        self, source_root: Path, n_samples: int, n_snps: int, n_threads: int
+        self,
+        source_root: Path,
+        n_samples: int,
+        n_snps: int,
+        n_threads: int,
+        stages: tuple[str, ...],
     ) -> None:
         self._source_root = source_root
         command = [
@@ -198,6 +242,8 @@ class _WorkerProcess:
             str(n_snps),
             "--threads",
             str(n_threads),
+            "--stages",
+            ",".join(stages),
         ]
         self.process = subprocess.Popen(
             command,
@@ -253,6 +299,11 @@ def _balanced_schedule(blocks: int) -> list[list[str]]:
     ]
 
 
+def _worker_start_order(block_index: int) -> tuple[str, str]:
+    """Reverse worker creation order with each timing block."""
+    return ("A", "B") if block_index % 2 == 0 else ("B", "A")
+
+
 def _percent_change(after: float, before: float) -> float:
     return 100.0 * (after / before - 1.0)
 
@@ -264,22 +315,43 @@ def _revision(source_root: Path) -> str:
 
 
 def _summarize_stage(
-    stage: str, workers: dict[str, _WorkerProcess], schedule: list[list[str]]
+    stage: str,
+    a_root: Path,
+    b_root: Path,
+    n_samples: int,
+    n_snps: int,
+    n_threads: int,
+    schedule: list[list[str]],
 ) -> dict[str, object]:
     timings: dict[str, list[float]] = {"A": [], "B": []}
     digests: dict[str, set[str]] = {"A": set(), "B": set()}
     deltas: list[float] = []
     block_medians: list[float] = []
 
-    for order in schedule:
+    roots = {"A": a_root, "B": b_root}
+    for block_index, order in enumerate(schedule):
+        worker_start_order = _worker_start_order(block_index)
+        workers: dict[str, _WorkerProcess] = {}
         by_revision: dict[str, list[float]] = {"A": [], "B": []}
         chronological: list[float] = []
-        for revision in order:
-            seconds, digest = workers[revision].measure(stage)
-            timings[revision].append(seconds)
-            by_revision[revision].append(seconds)
-            chronological.append(seconds)
-            digests[revision].add(digest)
+        try:
+            for revision in worker_start_order:
+                workers[revision] = _WorkerProcess(
+                    roots[revision],
+                    n_samples,
+                    n_snps,
+                    n_threads,
+                    (stage,),
+                )
+            for revision in order:
+                seconds, digest = workers[revision].measure(stage)
+                timings[revision].append(seconds)
+                by_revision[revision].append(seconds)
+                chronological.append(seconds)
+                digests[revision].add(digest)
+        finally:
+            for worker in workers.values():
+                worker.close()
         deltas.append(
             _percent_change(
                 statistics.median(by_revision["B"]),
@@ -325,17 +397,19 @@ def compare(
     stages: tuple[str, ...],
 ) -> dict[str, object]:
     """Compare every requested stage with balanced, correctness-checked A/B runs."""
-    workers: dict[str, _WorkerProcess] = {}
     schedule = _balanced_schedule(blocks)
-    try:
-        workers["A"] = _WorkerProcess(a_root, n_samples, n_snps, n_threads)
-        workers["B"] = _WorkerProcess(b_root, n_samples, n_snps, n_threads)
-        stage_results = {
-            stage: _summarize_stage(stage, workers, schedule) for stage in stages
-        }
-    finally:
-        for worker in workers.values():
-            worker.close()
+    stage_results = {
+        stage: _summarize_stage(
+            stage,
+            a_root,
+            b_root,
+            n_samples,
+            n_snps,
+            n_threads,
+            schedule,
+        )
+        for stage in stages
+    }
 
     return {
         "a_root": str(a_root),
@@ -389,7 +463,13 @@ def main() -> None:
     if args.worker:
         if args.source_root is None:
             raise SystemExit("--worker requires --source-root")
-        _worker(args.source_root.resolve(), args.samples, args.snps, args.threads)
+        _worker(
+            args.source_root.resolve(),
+            args.samples,
+            args.snps,
+            args.threads,
+            args.stages,
+        )
         return
 
     schedule = _balanced_schedule(args.blocks)

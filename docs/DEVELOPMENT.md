@@ -161,6 +161,25 @@ For per-stage microbenchmarks, always use `-n0` to disable pytest-xdist:
 uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/lmm_accel/ -v -n0 --benchmark-only -m benchmark
 ```
 
+To compare large-N performance changes, use the drift-aware stage benchmark.
+It interleaves two source trees in ABBA/BAAB order, hashes each stage result,
+and reports kinship, eigendecomposition, rotation, and mode-4 timings
+separately. Start with a small same-tree smoke run, then use dimensions that
+fit the target machine:
+
+```bash
+uv run python scripts/bench_large_n_stages.py \
+  --a-root . --b-root . --samples 256 --snps 128 --blocks 1
+
+uv run python scripts/bench_large_n_stages.py \
+  --a-root /path/to/base --b-root /path/to/candidate \
+  --samples 10000 --snps 1000 --blocks 4
+```
+
+Treat a result as inconclusive when paired block deltas change sign. The
+eigendecomposition stage grows rapidly with sample count, so choose dimensions
+from the memory budget rather than copying the example blindly.
+
 ## Publishing
 
 PyPI publishing uses GitHub trusted publishing (no API tokens needed locally).

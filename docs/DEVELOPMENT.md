@@ -162,10 +162,10 @@ uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/lmm_
 ```
 
 To compare large-N performance changes, use the drift-aware stage benchmark.
-It interleaves two source trees in ABBA/BAAB order, hashes each stage result,
-and reports kinship, eigendecomposition, rotation, and mode-4 timings
-separately. Start with a small same-tree smoke run, then use dimensions that
-fit the target machine:
+It creates a fresh pair of workers for every ABBA/BAAB block, reverses both
+run and worker-creation order, hashes each stage result, and reports kinship,
+eigendecomposition, rotation, and mode-4 timings separately. Start with a
+small same-tree smoke run, then use dimensions that fit the target machine:
 
 ```bash
 uv run python scripts/bench_large_n_stages.py \

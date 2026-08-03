@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55  # v4.1.0
+        uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c  # v4.1.1
         env:
           # Build for CPython 3.11-3.13 only
           CIBW_BUILD: "cp311-* cp312-* cp313-*"
@@ -73,7 +73,7 @@ jobs:
           persist-credentials: false
 
       - name: Build AVX2-optimized wheels
-        uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55  # v4.1.0
+        uses: pypa/cibuildwheel@4726cd35bb13f7bde50cf2761f2499ac7b3aa32c  # v4.1.1
         env:
           # Build for CPython 3.11-3.13, Linux x86_64 only
           CIBW_BUILD: "cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"

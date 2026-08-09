@@ -74,7 +74,7 @@ dev = [
     # adds a check or reclassifies one turns green into red with no code
     # change. Bump deliberately and fix what it finds in the same commit.
     # Keep in sync with [dependency-groups].
-    "pyrefly==1.1.1",
+    "pyrefly==1.2.0",
     "pyyaml>=6.0.3",
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",
@@ -247,7 +247,7 @@ dev = [
     "pandas>=2.0.0",
     "ruff>=0.15.7",
     # Exact-pinned — see the note in [project.optional-dependencies].dev.
-    "pyrefly==1.1.1",
+    "pyrefly==1.2.0",
     "pyyaml>=6.0.3",
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",

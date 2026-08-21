@@ -482,10 +482,13 @@ def compute_and_log_pve(
     pve = lambda_remle * trace_K / (lambda_remle * trace_K + n)
     logger.info(f"pve estimate in the null model = {pve:.6f}")
 
-    # Compute se(pve) via delta method using REML second derivative.
-    # The analytical reml_log_likelihood_dev2 omits d²(logdet_hiw)/dλ²,
-    # which makes it incomplete for all n_cvt. Use finite differences of
-    # reml_log_likelihood_null until the analytical port is completed.
+    # Compute se(pve) via delta method using the REML second derivative.
+    # finite_difference_dev2 is the production path, and the analytical
+    # reml_log_likelihood_dev2 is not a stub. test_likelihood_derivatives.py
+    # shows it computing analytically, agreeing with this oracle to rtol=1e-4
+    # for n_cvt in 2..4, and reproducing GEMMA's se(pve) on mouse_hs1940 to
+    # ~8.5e-5. Switching would move pve_se at the 1e-4 level, so it is a
+    # numerics decision rather than a correctness fix.
     Uab = compute_Uab(UtW, Uty, Utx=None)
     dev2 = finite_difference_dev2(
         lambda_remle,

@@ -245,29 +245,6 @@ def plan_eigen_driver(
     )
 
 
-def estimate_eigendecomp_memory(n_samples: int) -> float:
-    """Estimate peak memory (GB) for eigendecomposition of kinship matrix.
-
-    Returns the DSYEVD estimate (the default/faster driver). If DSYEVR is
-    used under memory pressure, actual consumption will be lower — this
-    is intentionally conservative for pre-flight budget planning.
-
-    jlinalg.eigh DSYEVD path allocates:
-    - K (caller scratch): n^2 * 8 bytes
-    - U (caller eigenvectors/work buffer): n^2 * 8 bytes
-    - workspace (DSYEVD O(n^2))
-
-    For 200k samples: 320GB + 320GB + ~640GB = ~1280GB
-
-    Args:
-        n_samples: Number of samples (individuals).
-
-    Returns:
-        Estimated peak memory in GB (DSYEVD, conservative).
-    """
-    return _dsyevd_peak_gb(n_samples)
-
-
 class MemoryBreakdown(NamedTuple):
     """Detailed memory breakdown for GWAS workflow (full-materialization path).
 

@@ -15,9 +15,6 @@ import numpy as np
 import pytest
 
 from jamma.lmm.io import (
-    HEADER_ALL,
-    HEADER_LRT,
-    HEADER_SCORE,
     HEADER_WALD,
     IncrementalAssocWriter,
     format_assoc_line,
@@ -92,11 +89,8 @@ class TestFormatAssocLine:
             format_assoc_line(result, "waldd")
 
     def test_headers_generated_from_format_columns(self) -> None:
-        """Verify HEADERS dict matches named constants in io.py."""
+        """Verify HEADERS dict matches the named constant in io.py."""
         assert HEADERS["wald"] == HEADER_WALD
-        assert HEADERS["score"] == HEADER_SCORE
-        assert HEADERS["lrt"] == HEADER_LRT
-        assert HEADERS["all"] == HEADER_ALL
 
     def test_writer_rejects_invalid_test_type(self, tmp_path) -> None:
         """IncrementalAssocWriter should reject invalid test_type at init."""

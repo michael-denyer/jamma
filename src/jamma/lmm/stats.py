@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from jamma.lmm.likelihood import _P_YY_MIN, calc_pab, get_ab_index
+from jamma.lmm.likelihood import _P_YY_MIN, get_ab_index
 from jamma.lmm.special import betainc, chi2_sf
 
 
@@ -165,37 +165,6 @@ def calc_wald_test(
     p_wald = f_sf(f_stat, 1.0, float(df))
 
     return beta, se, p_wald
-
-
-def calc_wald_test_from_uab(
-    lambda_val: float,
-    eigenvalues: np.ndarray,
-    Uab: np.ndarray,
-    n_cvt: int,
-    ni_test: int,
-) -> tuple[float, float, float]:
-    """Compute Wald test from Uab matrix directly.
-
-    This combines calc_pab and calc_wald_test for convenience.
-
-    Args:
-        lambda_val: Optimized variance ratio
-        eigenvalues: Eigenvalues of kinship matrix
-        Uab: Matrix products from compute_Uab
-        n_cvt: Number of covariates
-        ni_test: Number of samples
-
-    Returns:
-        Tuple of (beta, se, p_wald)
-    """
-    # Compute Hi_eval
-    Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-
-    # Compute Pab
-    Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-    # Compute Wald test
-    return calc_wald_test(Pab, n_cvt, ni_test)
 
 
 def calc_lrt_test(

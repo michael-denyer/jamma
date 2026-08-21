@@ -30,11 +30,8 @@ _RETRYABLE_ERRNOS = frozenset(
 # Required keys in snp_info dicts (canonical keys from _LazySnpMeta)
 _REQUIRED_SNP_KEYS = frozenset({"chr", "rs", "pos", "a1", "a0"})
 
-# Convenience aliases for direct import
+# Convenience alias for direct import
 HEADER_WALD = HEADERS["wald"]
-HEADER_SCORE = HEADERS["score"]
-HEADER_LRT = HEADERS["lrt"]
-HEADER_ALL = HEADERS["all"]
 
 
 def format_assoc_line(result: AssocResult, test_type: str = "wald") -> str:

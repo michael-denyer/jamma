@@ -24,7 +24,6 @@ from jamma.lmm.chunk_runner_numpy import (
 )
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 from jamma.lmm.compute_numpy import LmmMode
-from jamma.lmm.likelihood_numpy import reset_p_yy_warned
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     prepare_lmm_run,
@@ -107,9 +106,6 @@ def run_lmm_association_numpy(
     # schema.LmmMode is a loose int alias (kept loose to avoid a circular
     # import); the chunk engine wants the Literal.
     lmm_mode = cast(LmmMode, config.lmm_mode)
-
-    # Reset per-run warning flags so each run gets its own diagnostics
-    reset_p_yy_warned()
 
     # Memory check before workflow (uses genotype shape, runner-specific)
     n_samples, n_snps = genotypes.shape

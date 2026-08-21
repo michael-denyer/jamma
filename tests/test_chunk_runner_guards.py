@@ -123,3 +123,20 @@ def test_dispatch_soa_split_mode4_without_workspace_raises():
 def test_dispatch_soa_split_unknown_mode_raises():
     with pytest.raises(ValueError, match="Unexpected lmm_mode=99"):
         dispatch_soa_split(**_dispatch_soa_split_args(lmm_mode=99))
+
+
+@pytest.mark.tier0
+def test_shared_chunk_entry_resets_the_p_yy_warning():
+    """Every runner reaches this entry, so the per-run reset belongs here.
+
+    The flag deduplicates the negative-P_yy warning within one run. Resetting
+    it in the batch runner only meant a streaming or LOCO run that followed
+    one in the same process never warned again.
+    """
+    from jamma.lmm import likelihood_numpy
+
+    likelihood_numpy._p_yy_state.warned = True
+    run_lmm_chunk_source_numpy(
+        lmm_mode=1, **_run_kwargs(n_filtered=0, filtered_means=np.zeros(0))
+    )
+    assert getattr(likelihood_numpy._p_yy_state, "warned", False) is False

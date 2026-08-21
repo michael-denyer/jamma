@@ -55,6 +55,7 @@ from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
+    reset_p_yy_warned,
 )
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
@@ -180,6 +181,10 @@ def run_lmm_chunk_source_numpy(
     outcome for degenerate inputs, and a fatal abort would be both wrong there and
     sensitive to platform floating-point (the NaN fraction can differ by BLAS).
     """
+    # Every runner reaches this entry, so the per-run diagnostic reset lives
+    # here rather than in one of them.
+    reset_p_yy_warned()
+
     if n_filtered == 0:
         return LmmChunkRunStats(
             processed=0,

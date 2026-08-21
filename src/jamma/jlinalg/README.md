@@ -55,6 +55,7 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 | `jlinalg_isa` | `str` | Active ISA: "AVX2", "NEON", "generic", or "numpy-fallback" |
 | `blas_backend` | `str` | Active BLAS backend: "MKL-ILP64", "Accelerate-ILP64", "numpy-fallback", etc. |
 | `blas_is_ilp64` | `int` | 1 if active BLAS uses 64-bit integers |
+| `blas_has_dgemm` | `int` | 1 if vendor DGEMM is wired; when 0, `dgemm` is the NumPy implementation |
 | `blas_has_dsyevd` | `int` | 1 if vendor DSYEVD available |
 | `blas_has_lapacke_dsyevd` | `int` | 1 if the vendor exposes DSYEVD through the LAPACKE row-major interface |
 | `blas_has_dsyevr` | `int` | 1 if vendor DSYEVR available |
@@ -108,7 +109,10 @@ onto the NumPy fallback even when vendor BLAS is loaded -- useful for
 isolating numerical differences between vendor LAPACK and NumPy, and
 required by the weekly sanitizer workflow. The narrower
 `JLINALG_NO_VENDOR_LAPACK` only affects eigendecomposition (in
-`lmm/eigen.py`), not the BLAS primitives.
+`lmm/eigen.py`), not the BLAS primitives. `JLINALG_NO_VENDOR_DGEMM=1`
+is narrower still: dispatch leaves vendor dgemm unwired, so
+`blas_has_dgemm` reports 0 with the extension loaded -- the state an
+LP64-only host is permanently in.
 
 ## Further Reading
 

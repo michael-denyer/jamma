@@ -438,7 +438,7 @@ two are acceptable:
 1. **Hardware/library availability** — vendor LAPACK absent, ILP64 not
    active, BLAS backend mismatch. Use module-level
    `pytestmark = pytest.mark.skipif(...)` so the file skips at collection
-   time. Example: [`tests/test_jlinalg_dispatch.py:12`](../tests/test_jlinalg_dispatch.py#L12).
+   time. Example: [`tests/test_jlinalg_dispatch.py:13`](../tests/test_jlinalg_dispatch.py#L13).
 2. **Optional fixture absent** — a dataset too large to commit. There is no
    fixture in this category, and §1.11's gate now rejects any skip reason that
    names a fixture, whatever the wording. `gemma_loco` and `mouse_hs1940` are

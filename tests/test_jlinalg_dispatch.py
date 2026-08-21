@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -388,4 +389,119 @@ class TestCapabilityFlags:
         if blas_backend == "numpy-fallback":
             assert blas_has_lapacke_dsyevd == 0, (
                 f"Backend {blas_backend} should not have LAPACKE"
+            )
+
+
+# ---------------------------------------------------------------------------
+# The dgemm vendor gate
+# ---------------------------------------------------------------------------
+
+
+class TestDgemmVendorGate:
+    """``dgemm`` must reach NumPy when vendor dgemm is not wired.
+
+    ``py_dgemm`` raises ``RuntimeError`` the moment ``blas_has_external()`` is
+    false, so binding ``dgemm`` straight off the C module is only safe while a
+    vendor BLAS is wired. An LP64-only host (distro or conda numpy) sits in the
+    unwired state permanently, and the first chunk rotation in
+    ``chunk_runner_numpy`` is where it lands. CI never sees it because PyPI
+    numpy ships ILP64 ``scipy_openblas64``, so ``JLINALG_NO_VENDOR_DGEMM``
+    reproduces the state here.
+    """
+
+    @staticmethod
+    def _run_unwired(body: str) -> subprocess.CompletedProcess[str]:
+        """Run ``body`` in a fresh interpreter with vendor dgemm unwired.
+
+        A subprocess is required: dispatch resolves once, at extension import.
+        """
+        return subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(body)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "JLINALG_NO_VENDOR_DGEMM": "1"},
+            timeout=60,
+        )
+
+    def test_rotation_still_computes_without_vendor_dgemm(self):
+        """The chunk-rotation call shape returns the right numbers, not an error."""
+        proc = self._run_unwired("""
+            import numpy as np
+            from jamma.jlinalg import HAS_C_EXTENSION, dgemm
+
+            assert HAS_C_EXTENSION, "this test needs the compiled extension"
+            rng = np.random.default_rng(7)
+            G = np.ascontiguousarray(rng.standard_normal((40, 12)))
+            U = np.ascontiguousarray(rng.standard_normal((40, 40)))
+            out = np.empty((12, 40))
+            returned = dgemm(G, U, transa="T", out=out)
+            assert returned is out
+            np.testing.assert_allclose(out, G.T @ U, rtol=1e-12, atol=1e-14)
+            print("OK")
+        """)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip().splitlines()[-1] == "OK", proc.stdout
+
+    def test_capability_flag_reports_the_unwired_state(self):
+        """``blas_has_dgemm`` is the gate; ``blas_backend`` cannot stand in for it.
+
+        The backend string names what dispatch resolved, not what it wired.
+        Here it still reads as a vendor backend while vendor dgemm is absent,
+        which is why the binding keys on the flag.
+        """
+        proc = self._run_unwired("""
+            from jamma.jlinalg import HAS_C_EXTENSION, blas_backend, blas_has_dgemm
+
+            assert HAS_C_EXTENSION, "this test needs the compiled extension"
+            print(f"{blas_has_dgemm} {blas_backend}")
+        """)
+        assert proc.returncode == 0, proc.stderr
+        flag, backend = proc.stdout.strip().splitlines()[-1].split(" ", 1)
+        assert flag == "0", proc.stdout
+        assert backend != "numpy-fallback", (
+            "the knob is meant to leave a vendor backend resolved; without that "
+            "this test no longer shows why the string is not a usable gate"
+        )
+
+    def test_numpy_dgemm_keeps_the_c_input_contract(self):
+        """The fallback rejects what the C entry point rejects."""
+        proc = self._run_unwired("""
+            import numpy as np
+            from jamma.jlinalg import dgemm
+
+            A = np.ones((3, 4))
+            for bad, match in [
+                (lambda: dgemm(np.ones(3), A), "2-D"),
+                (lambda: dgemm(A, np.ones((5, 6))), "must match"),
+                (lambda: dgemm(A, A, transa="X"), "'N' or 'T'"),
+                (lambda: dgemm(A, A, transb="T", out=np.empty((3, 4))), "shape"),
+            ]:
+                try:
+                    bad()
+                except ValueError as exc:
+                    assert match in str(exc), f"{match!r} not in {exc}"
+                else:
+                    raise AssertionError(f"no ValueError for {match!r}")
+            print("OK")
+        """)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip().splitlines()[-1] == "OK", proc.stdout
+
+
+class TestDgemmCapabilityFlag:
+    """``blas_has_dgemm`` parity with the rest of the dispatch state."""
+
+    def test_flag_is_int(self):
+        from jamma.jlinalg import blas_has_dgemm
+
+        assert isinstance(blas_has_dgemm, int)
+        assert blas_has_dgemm in (0, 1)
+
+    def test_numpy_fallback_backend_never_wires_dgemm(self):
+        """No vendor backend resolved means no vendor dgemm."""
+        from jamma.jlinalg import blas_has_dgemm
+
+        if blas_backend == "numpy-fallback":
+            assert blas_has_dgemm == 0, (
+                f"backend={blas_backend!r} but blas_has_dgemm={blas_has_dgemm}"
             )

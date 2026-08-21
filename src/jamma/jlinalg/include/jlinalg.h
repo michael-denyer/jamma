@@ -20,7 +20,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * structs, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 13
+#define JLINALG_ABI_VERSION 14
 
 /* ---------------------------------------------------------------------------
  * External BLAS dispatch (vendor BLAS / LAPACK discovery)
@@ -193,7 +193,9 @@ const char *blas_backend_name(void);
  * 0 if LP64 (32-bit integer) or no external dgemm was found. */
 int blas_is_ilp64(void);
 
-/* Returns 1 if an external dgemm was discovered (vendor BLAS), 0 otherwise. */
+/* Returns 1 if an external dgemm was discovered (vendor BLAS), 0 otherwise.
+ * pymodule.c exports this as blas_has_dgemm: py_dgemm raises RuntimeError
+ * when it is 0, so the Python layer routes dgemm to NumPy instead. */
 int blas_has_external(void);
 
 /* LP64 overflow tracking: incremented when dimensions exceed LP64_DIM_MAX.

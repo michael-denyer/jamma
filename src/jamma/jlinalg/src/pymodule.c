@@ -1040,6 +1040,14 @@ PyMODINIT_FUNC PyInit__jlinalg(void) {
         return NULL;
     }
 
+    /* blas_has_dgemm: 1 if vendor dgemm is wired, 0 otherwise. py_dgemm raises
+     * RuntimeError when this is 0, so jlinalg/__init__.py binds the NumPy
+     * dgemm instead of the C one. */
+    if (PyModule_AddIntConstant(m, "blas_has_dgemm", blas_has_external()) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
+
     /* blas_has_dsyrk: 1 if vendor cblas_dsyrk is available, 0 otherwise */
     if (PyModule_AddIntConstant(m, "blas_has_dsyrk", blas_has_dsyrk()) < 0) {
         Py_DECREF(m);

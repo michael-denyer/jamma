@@ -252,6 +252,10 @@ duplicating flag/source lists.
   workflow to exercise the pure-Python paths and during numerical-divergence
   debugging when vendor-LAPACK output needs to be cross-checked against the
   NumPy reference.
+- Set `JLINALG_NO_VENDOR_DGEMM=1` to leave vendor dgemm unwired while the
+  extension stays loaded, so `blas_has_dgemm` reports 0. Reproduces an
+  LP64-only host, where `py_dgemm` would raise and the Python layer has to
+  route `dgemm` to NumPy instead.
 - Set `JAMMA_SANITIZE=address,undefined` (or any subset) at build time to
   rebuild C extensions with `-fsanitize=...`. Used by
   `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10.

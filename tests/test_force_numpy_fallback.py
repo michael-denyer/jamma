@@ -11,7 +11,10 @@ false-positive heap-buffer-overflow reports inside dispatched BLAS calls).
 from __future__ import annotations
 
 import importlib
+import os
+import subprocess
 import sys
+import textwrap
 import warnings
 
 import numpy as np
@@ -279,6 +282,35 @@ class TestForceNumpyLmmAccel:
             assert result == _ACCEL_UNAVAILABLE, (
                 f"value={value!r} did not engage the gate"
             )
+
+
+def test_gate_holds_across_the_whole_backend_selection_path():
+    """The gate must hold for every consumer, not just ``_try_import_accel``.
+
+    ``test_no_so_import_attempted`` calls that one shim directly, so a second
+    probe importing ``jamma.lmm._lmm_accel`` on its own left it green while the
+    guarantee it names was already broken. ``sanitizers.yml`` sets this env var
+    precisely so the .so is never dlopened under ASAN, so assert the property
+    where the workflow relies on it: after driving backend selection and the
+    banner. A fresh interpreter is required because the gate is read at import
+    time.
+    """
+    code = textwrap.dedent("""
+        import sys
+        from jamma.lmm.runner import select_execution_mode
+        from jamma.pipeline_banner import log_pipeline_banner
+
+        log_pipeline_banner(select_execution_mode(1_000, 10_000, n_cvt=3))
+        print("LOADED" if "jamma.lmm._lmm_accel" in sys.modules else "CLEAN")
+    """)
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "JAMMA_FORCE_NUMPY_FALLBACK": "1"},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().splitlines()[-1] == "CLEAN", proc.stdout
 
 
 def test_accel_unavailable_sentinel_invariant():

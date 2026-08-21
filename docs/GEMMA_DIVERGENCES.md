@@ -79,7 +79,7 @@ p_wald = gsl_cdf_fdist_Q((P_yy - Px_yy) * tau, 1.0, df);
 
 **Behavior**: No guards. Division by zero produces `inf` or `NaN` depending on numerator.
 
-### JAMMA (`calc_wald_test` in stats.py)
+### JAMMA (`batch_calc_wald_stats_from_pab_numpy` in likelihood_numpy.py, shown here in the equivalent scalar form from `stats.calc_wald_test`)
 
 ```python
 if P_xx <= 0.0:

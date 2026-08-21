@@ -287,7 +287,8 @@ def run_lmm_loco(
 
     # Reused below for the kinship subsetting decisions (kinship_valid_indices
     # sizing and the K_loco valid-sample slice). The per-chromosome SNP-stats path
-    # recomputes its own valid_mask.all() in _loco_chr_common, so this is not a
+    # recomputes its own valid_mask.all() in _run_lmm_for_chromosome_numpy, so
+    # this is not a
     # shared value across the chromosome loop.
     all_samples_valid = n_valid == n_samples_total
 

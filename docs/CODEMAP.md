@@ -238,10 +238,12 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3e | `golden_section_optimize_lambda_mle_numpy()` | MLE optimization per SNP (LRT) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:40](../src/jamma/lmm/stats.py#L40) |
-| 3f | `calc_wald_test()` | beta, SE, p_wald from Pab matrix | [stats.py:99](../src/jamma/lmm/stats.py#L99) |
-| 3f | `calc_score_test()` | p_score using null model lambda | [stats.py:198](../src/jamma/lmm/stats.py#L198) |
-| 3f | `calc_lrt_test()` | p_lrt via chi-squared CDF | [stats.py:170](../src/jamma/lmm/stats.py#L170) |
-| 3f | `f_sf()` | F-distribution survival via Cephes betainc | [stats.py:67](../src/jamma/lmm/stats.py#L67) |
+| 3f | `batch_calc_wald_stats_from_pab_numpy()` | Production: beta, SE, p_wald across a chunk | [likelihood_numpy.py:1660](../src/jamma/lmm/likelihood_numpy.py#L1660) |
+| 3f | `batch_calc_score_stats_numpy()` | Production: p_score across a chunk | [likelihood_numpy.py:1702](../src/jamma/lmm/likelihood_numpy.py#L1702) |
+| 3f | `calc_wald_test()` | Scalar reference for the batch path; tests only | [stats.py:99](../src/jamma/lmm/stats.py#L99) |
+| 3f | `calc_score_test()` | Scalar reference for the batch path; tests only | [stats.py:198](../src/jamma/lmm/stats.py#L198) |
+| 3f | `calc_lrt_test()` | Scalar reference for the batch path; tests only | [stats.py:170](../src/jamma/lmm/stats.py#L170) |
+| 3f | `f_sf()` | F-distribution survival via Cephes betainc; tests only | [stats.py:67](../src/jamma/lmm/stats.py#L67) |
 | 3g | `compute_hwe_pvalues()` | Chi-squared HWE test via pure NumPy | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
 | 3g | `apply_snp_list_mask()` | DRY bounds-validated SNP mask application | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
 | 3h | `_build_covariate_matrix()` | Pure-NumPy covariate setup | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |

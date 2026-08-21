@@ -114,7 +114,7 @@ def get_plink_metadata(bfile: Path) -> dict[str, Any]:
         FileNotFoundError: If the .bed file does not exist.
 
     Example:
-        >>> meta = get_plink_metadata(Path("legacy/example/mouse_hs1940"))
+        >>> meta = get_plink_metadata(Path("tests/fixtures/mouse_hs1940/mouse_hs1940"))
         >>> print(f"{meta['n_samples']} samples, {meta['n_snps']} SNPs")
         1940 samples, 12226 SNPs
     """

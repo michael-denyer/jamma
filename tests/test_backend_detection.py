@@ -81,7 +81,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", True),
         ):
             plan = select_execution_mode(100, 1000)
         assert plan.backend == "numpy"
@@ -94,7 +94,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", True),
         ):
             plan = select_execution_mode(200_000, 100_000)
         assert plan.backend == "numpy"
@@ -107,7 +107,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=False),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", False),
         ):
             plan = select_execution_mode(100, 1000)
         assert plan.backend == "numpy"
@@ -120,7 +120,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=False),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", False),
             patch("jamma.lmm.runner.logger") as mock_logger,
         ):
             plan = select_execution_mode(n_samples=100, n_snps=1000)
@@ -137,7 +137,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", True),
         ):
             plan = select_execution_mode(200_000, 100_000, requested="numpy")
         assert plan.backend == "numpy"
@@ -154,14 +154,14 @@ class TestExecutionMode:
 
     def test_explicit_numpy_streaming_returns_numpy_streaming(self):
         """explicit 'numpy-streaming' -> numpy-streaming directly."""
-        with patch("jamma.lmm.runner.is_c_extension_usable", return_value=True):
+        with patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", True):
             plan = select_execution_mode(100, 1000, requested="numpy-streaming")
         assert plan.backend == "numpy"
         assert plan.mode == "streaming"
 
     def test_explicit_numpy_streaming_no_c_ext_raises(self):
         """explicit 'numpy-streaming' + no C extension -> ValueError."""
-        with patch("jamma.lmm.runner.is_c_extension_usable", return_value=False):
+        with patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", False):
             with pytest.raises(ValueError, match="C extension"):
                 select_execution_mode(100, 1000, requested="numpy-streaming")
 
@@ -229,7 +229,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 side_effect=[sufficient, insufficient],
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", True),
         ):
             plan1 = select_execution_mode(100, 1000)
             plan2 = select_execution_mode(100, 1000)
@@ -252,7 +252,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 side_effect=capturing_estimate,
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", True),
         ):
             select_execution_mode(1000, 10000, n_cvt=4)
 
@@ -268,7 +268,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", True),
             patch(
                 "jamma.lmm.compute_numpy._C_GENERAL_AVAILABLE",
                 False,
@@ -292,7 +292,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.runner.is_c_extension_usable", return_value=True),
+            patch("jamma.lmm.compute_numpy._C_ACCEL_AVAILABLE", True),
             patch(
                 "jamma.lmm.compute_numpy._C_GENERAL_AVAILABLE",
                 True,

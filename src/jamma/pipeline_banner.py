@@ -70,9 +70,10 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
             get_physical_core_count,
             is_blas_controllable,
         )
-        from jamma.lmm._compile_utils import get_c_extension_capabilities
+        from jamma.lmm import compute_numpy
 
-        c_ext, c_has_openmp = get_c_extension_capabilities()
+        c_ext = compute_numpy._C_ACCEL_AVAILABLE
+        c_has_openmp = bool(compute_numpy._C_HAS_OPENMP)
         runner = plan.runner_name
 
         blas = get_blas_backend()

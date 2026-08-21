@@ -277,7 +277,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:64](../src/jamma/lmm/runner_numpy_streaming.py#L64) |
-| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:106](../src/jamma/lmm/runner.py#L106) |
+| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:115](../src/jamma/lmm/runner.py#L115) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:73](../src/jamma/lmm/schema.py#L73) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:99](../src/jamma/lmm/schema.py#L99) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:56](../src/jamma/lmm/results.py#L56) |

@@ -59,17 +59,17 @@ class TestScoreWorkspaceParity:
     )
     def test_score_workspace_create(self, score_ws_data):
         """Workspace creation returns a non-None PyCapsule."""
-        from jamma.lmm.compute_numpy import _create_workspace_score_fused_c
+        from jamma.lmm.compute_numpy import _c
 
         assert (
-            _create_workspace_score_fused_c is not None
+            _c().create_workspace_score_fused_c is not None
         )  # narrowed: skipif gates this
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        ws = _create_workspace_score_fused_c(
+        ws = _c().create_workspace_score_fused_c(
             w,
             Uty,
             Hi_eval_null,
@@ -87,22 +87,14 @@ class TestScoreWorkspaceParity:
     )
     def test_score_workspace_parity(self, score_ws_data):
         """Workspace-based Score matches stateless Score (atol=0, rtol=0)."""
-        from jamma.lmm.compute_numpy import (
-            _compute_score_fused_c,
-            _compute_score_fused_ws_c,
-            _create_workspace_score_fused_c,
-        )
-
-        assert _compute_score_fused_c is not None
-        assert _compute_score_fused_ws_c is not None
-        assert _create_workspace_score_fused_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
         # Stateless reference
-        ref = _compute_score_fused_c(
+        ref = _c().compute_score_fused_c(
             utg_t,
             w,
             Uty,
@@ -114,7 +106,7 @@ class TestScoreWorkspaceParity:
         )
 
         # Workspace-based
-        ws = _create_workspace_score_fused_c(
+        ws = _c().create_workspace_score_fused_c(
             w,
             Uty,
             Hi_eval_null,
@@ -123,7 +115,7 @@ class TestScoreWorkspaceParity:
             n_samples,
             1,
         )
-        result = _compute_score_fused_ws_c(ws, utg_t, 1)
+        result = _c().compute_score_fused_ws_c(ws, utg_t, 1)
 
         for key in ("betas", "ses", "p_scores"):
             np.testing.assert_allclose(
@@ -141,21 +133,13 @@ class TestScoreWorkspaceParity:
     )
     def test_score_workspace_multi_chunk(self, score_ws_data):
         """Same workspace produces correct results for two different utg_t chunks."""
-        from jamma.lmm.compute_numpy import (
-            _compute_score_fused_c,
-            _compute_score_fused_ws_c,
-            _create_workspace_score_fused_c,
-        )
-
-        assert _compute_score_fused_c is not None
-        assert _compute_score_fused_ws_c is not None
-        assert _create_workspace_score_fused_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        ws = _create_workspace_score_fused_c(
+        ws = _c().create_workspace_score_fused_c(
             w,
             Uty,
             Hi_eval_null,
@@ -166,7 +150,7 @@ class TestScoreWorkspaceParity:
         )
 
         # Chunk 1
-        ref1 = _compute_score_fused_c(
+        ref1 = _c().compute_score_fused_c(
             utg_t,
             w,
             Uty,
@@ -176,7 +160,7 @@ class TestScoreWorkspaceParity:
             n_samples,
             1,
         )
-        result1 = _compute_score_fused_ws_c(ws, utg_t, 1)
+        result1 = _c().compute_score_fused_ws_c(ws, utg_t, 1)
         for key in ("betas", "ses", "p_scores"):
             np.testing.assert_allclose(
                 result1[key],
@@ -189,7 +173,7 @@ class TestScoreWorkspaceParity:
         # Chunk 2 (different data)
         rng2 = np.random.default_rng(99999)
         utg_t2 = rng2.standard_normal((15, n_samples))
-        ref2 = _compute_score_fused_c(
+        ref2 = _c().compute_score_fused_c(
             utg_t2,
             w,
             Uty,
@@ -199,7 +183,7 @@ class TestScoreWorkspaceParity:
             n_samples,
             1,
         )
-        result2 = _compute_score_fused_ws_c(ws, utg_t2, 1)
+        result2 = _c().compute_score_fused_ws_c(ws, utg_t2, 1)
         for key in ("betas", "ses", "p_scores"):
             np.testing.assert_allclose(
                 result2[key],
@@ -216,12 +200,7 @@ class TestScoreWorkspaceParity:
     )
     def test_score_workspace_capsule_type_safety(self, score_ws_data):
         """Passing a Wald workspace to Score compute raises ValueError."""
-        from jamma.lmm.compute_numpy import (
-            _compute_score_fused_ws_c,
-            create_lmm_workspace,
-        )
-
-        assert _compute_score_fused_ws_c is not None
+        from jamma.lmm.compute_numpy import _c, create_lmm_workspace
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
@@ -240,7 +219,7 @@ class TestScoreWorkspaceParity:
         )
 
         with pytest.raises(ValueError, match="PyCapsule_GetPointer"):
-            _compute_score_fused_ws_c(wald_ws, utg_t, 1)
+            _c().compute_score_fused_ws_c(wald_ws, utg_t, 1)
 
 
 _lrt_fused_ws_available = _C_ACCEL_AVAILABLE and getattr(
@@ -285,13 +264,11 @@ class TestLrtWorkspaceParity:
     )
     def test_lrt_workspace_create(self, lrt_ws_data):
         """Workspace creation returns a non-None PyCapsule."""
-        from jamma.lmm.compute_numpy import _create_workspace_lrt_fused_c
-
-        assert _create_workspace_lrt_fused_c is not None  # narrowed: skipif gates this
+        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
-        ws = _create_workspace_lrt_fused_c(
+        ws = _c().create_workspace_lrt_fused_c(
             w,
             Uty,
             eigenvalues,
@@ -313,22 +290,14 @@ class TestLrtWorkspaceParity:
     )
     def test_lrt_workspace_parity(self, lrt_ws_data):
         """Workspace-based LRT matches stateless LRT (atol=0, rtol=0)."""
-        from jamma.lmm.compute_numpy import (
-            _compute_lrt_fused_c,
-            _compute_lrt_fused_ws_c,
-            _create_workspace_lrt_fused_c,
-        )
-
-        assert _compute_lrt_fused_c is not None
-        assert _compute_lrt_fused_ws_c is not None
-        assert _create_workspace_lrt_fused_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
         logl_H0 = -150.0
 
         # Stateless reference
-        ref = _compute_lrt_fused_c(
+        ref = _c().compute_lrt_fused_c(
             utg_t,
             w,
             Uty,
@@ -344,7 +313,7 @@ class TestLrtWorkspaceParity:
         )
 
         # Workspace-based
-        ws = _create_workspace_lrt_fused_c(
+        ws = _c().create_workspace_lrt_fused_c(
             w,
             Uty,
             eigenvalues,
@@ -357,7 +326,7 @@ class TestLrtWorkspaceParity:
             logl_H0,
             1,
         )
-        result = _compute_lrt_fused_ws_c(ws, utg_t, 1)
+        result = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
 
         for key in ("lambdas_mle", "p_lrts"):
             np.testing.assert_allclose(
@@ -375,20 +344,12 @@ class TestLrtWorkspaceParity:
     )
     def test_lrt_workspace_multi_chunk(self, lrt_ws_data):
         """Same workspace produces correct results for two different utg_t chunks."""
-        from jamma.lmm.compute_numpy import (
-            _compute_lrt_fused_c,
-            _compute_lrt_fused_ws_c,
-            _create_workspace_lrt_fused_c,
-        )
-
-        assert _compute_lrt_fused_c is not None
-        assert _compute_lrt_fused_ws_c is not None
-        assert _create_workspace_lrt_fused_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
         logl_H0 = -150.0
-        ws = _create_workspace_lrt_fused_c(
+        ws = _c().create_workspace_lrt_fused_c(
             w,
             Uty,
             eigenvalues,
@@ -403,7 +364,7 @@ class TestLrtWorkspaceParity:
         )
 
         # Chunk 1
-        ref1 = _compute_lrt_fused_c(
+        ref1 = _c().compute_lrt_fused_c(
             utg_t,
             w,
             Uty,
@@ -417,7 +378,7 @@ class TestLrtWorkspaceParity:
             logl_H0,
             1,
         )
-        result1 = _compute_lrt_fused_ws_c(ws, utg_t, 1)
+        result1 = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
         for key in ("lambdas_mle", "p_lrts"):
             np.testing.assert_allclose(
                 result1[key],
@@ -430,7 +391,7 @@ class TestLrtWorkspaceParity:
         # Chunk 2 (different data)
         rng2 = np.random.default_rng(88888)
         utg_t2 = rng2.standard_normal((15, n_samples))
-        ref2 = _compute_lrt_fused_c(
+        ref2 = _c().compute_lrt_fused_c(
             utg_t2,
             w,
             Uty,
@@ -444,7 +405,7 @@ class TestLrtWorkspaceParity:
             logl_H0,
             1,
         )
-        result2 = _compute_lrt_fused_ws_c(ws, utg_t2, 1)
+        result2 = _c().compute_lrt_fused_ws_c(ws, utg_t2, 1)
         for key in ("lambdas_mle", "p_lrts"):
             np.testing.assert_allclose(
                 result2[key],
@@ -461,13 +422,7 @@ class TestLrtWorkspaceParity:
     )
     def test_lrt_workspace_capsule_type_safety(self, lrt_ws_data):
         """Passing a Score workspace to LRT compute raises ValueError."""
-        from jamma.lmm.compute_numpy import (
-            _compute_lrt_fused_ws_c,
-            _create_workspace_score_fused_c,
-        )
-
-        assert _compute_lrt_fused_ws_c is not None
-        assert _create_workspace_score_fused_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
@@ -475,7 +430,7 @@ class TestLrtWorkspaceParity:
         Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
 
         # Create a Score workspace (wrong type for LRT)
-        score_ws = _create_workspace_score_fused_c(
+        score_ws = _c().create_workspace_score_fused_c(
             w,
             Uty,
             Hi_eval_null,
@@ -486,4 +441,4 @@ class TestLrtWorkspaceParity:
         )
 
         with pytest.raises(ValueError, match="PyCapsule_GetPointer"):
-            _compute_lrt_fused_ws_c(score_ws, utg_t, 1)
+            _c().compute_lrt_fused_ws_c(score_ws, utg_t, 1)

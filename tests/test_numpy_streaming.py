@@ -847,19 +847,15 @@ class TestStreamingFusedScoreDispatch:
         """
         from unittest.mock import patch
 
-        from jamma.lmm.compute_numpy import (
-            _C_SCORE_FUSED_WS_AVAILABLE,
-            _compute_score_fused_c,
-            _compute_score_fused_ws_c,
-        )
+        from jamma.lmm.compute_numpy import _C_SCORE_FUSED_WS_AVAILABLE, _c
 
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Fused path — verify C function is called (WS preferred, stateless fallback)
         if _C_SCORE_FUSED_WS_AVAILABLE:
             with patch(
-                "jamma.lmm.compute_numpy._compute_score_fused_ws_c",
-                wraps=_compute_score_fused_ws_c,
+                "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
+                wraps=_c().compute_score_fused_ws_c,
             ) as mock_fused:
                 fused_result, n_fused = run_lmm_association_numpy_streaming(
                     bed_path=SYNTHETIC_DATA,
@@ -877,8 +873,8 @@ class TestStreamingFusedScoreDispatch:
             )
         else:
             with patch(
-                "jamma.lmm.compute_numpy._compute_score_fused_c",
-                wraps=_compute_score_fused_c,
+                "jamma.lmm.compute_numpy._accel.compute_score_fused_c",
+                wraps=_c().compute_score_fused_c,
             ) as mock_fused:
                 fused_result, n_fused = run_lmm_association_numpy_streaming(
                     bed_path=SYNTHETIC_DATA,
@@ -942,19 +938,15 @@ class TestStreamingFusedLrtDispatch:
         """
         from unittest.mock import patch
 
-        from jamma.lmm.compute_numpy import (
-            _C_LRT_FUSED_WS_AVAILABLE,
-            _compute_lrt_fused_c,
-            _compute_lrt_fused_ws_c,
-        )
+        from jamma.lmm.compute_numpy import _C_LRT_FUSED_WS_AVAILABLE, _c
 
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Fused path — verify C function is called (WS preferred, stateless fallback)
         if _C_LRT_FUSED_WS_AVAILABLE:
             with patch(
-                "jamma.lmm.compute_numpy._compute_lrt_fused_ws_c",
-                wraps=_compute_lrt_fused_ws_c,
+                "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
+                wraps=_c().compute_lrt_fused_ws_c,
             ) as mock_fused:
                 fused_result, n_fused = run_lmm_association_numpy_streaming(
                     bed_path=SYNTHETIC_DATA,
@@ -972,8 +964,8 @@ class TestStreamingFusedLrtDispatch:
             )
         else:
             with patch(
-                "jamma.lmm.compute_numpy._compute_lrt_fused_c",
-                wraps=_compute_lrt_fused_c,
+                "jamma.lmm.compute_numpy._accel.compute_lrt_fused_c",
+                wraps=_c().compute_lrt_fused_c,
             ) as mock_fused:
                 fused_result, n_fused = run_lmm_association_numpy_streaming(
                     bed_path=SYNTHETIC_DATA,

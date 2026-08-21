@@ -1755,7 +1755,7 @@ def test_compute_score_numpy_ncvt2_uses_c_path(synthetic_data):
     from jamma.lmm import compute_numpy as cn
     from jamma.lmm.compute_numpy import _compute_score_numpy
 
-    if cn._compute_score_batch_general_c is None:
+    if cn._accel is None:
         pytest.skip("compute_score_batch_general_c not available")
 
     eigenvalues, UtW_ncvt1, Uty, UtG = synthetic_data
@@ -1769,17 +1769,19 @@ def test_compute_score_numpy_ncvt2_uses_c_path(synthetic_data):
 
     call_log: list[str] = []
 
-    original_fn = cn._compute_score_batch_general_c
+    original_fn = cn._accel.compute_score_batch_general_c
 
     def spy_general(*args, **kwargs):
         call_log.append("general_c")
         return original_fn(*args, **kwargs)
 
-    with patch.object(cn, "_compute_score_batch_general_c", side_effect=spy_general):
+    with patch.object(
+        cn._accel, "compute_score_batch_general_c", side_effect=spy_general
+    ):
         _compute_score_numpy(n_cvt, eigenvalues, Hi_eval_null, Uab_batch, n_samples)
 
     assert "general_c" in call_log, (
-        "_compute_score_numpy did not call _compute_score_batch_general_c for n_cvt=2"
+        "_compute_score_numpy did not reach the general C kernel for n_cvt=2"
     )
 
 
@@ -1927,7 +1929,7 @@ def test_compute_lrt_numpy_ncvt2_uses_c_path(synthetic_data):
     from jamma.lmm import compute_numpy as cn
     from jamma.lmm.compute_numpy import _compute_lrt_numpy
 
-    if cn._compute_lrt_batch_general_c is None:
+    if cn._accel is None:
         pytest.skip("compute_lrt_batch_general_c not available")
 
     eigenvalues, UtW_ncvt1, Uty, UtG = synthetic_data
@@ -1938,17 +1940,19 @@ def test_compute_lrt_numpy_ncvt2_uses_c_path(synthetic_data):
     logl_H0 = -30.0
 
     call_log: list[str] = []
-    original_fn = cn._compute_lrt_batch_general_c
+    original_fn = cn._accel.compute_lrt_batch_general_c
 
     def spy_general(*args, **kwargs):
         call_log.append("general_c")
         return original_fn(*args, **kwargs)
 
-    with patch.object(cn, "_compute_lrt_batch_general_c", side_effect=spy_general):
+    with patch.object(
+        cn._accel, "compute_lrt_batch_general_c", side_effect=spy_general
+    ):
         _compute_lrt_numpy(n_cvt, eigenvalues, Uab_batch, 1e-5, 1e5, 50, 20, logl_H0)
 
     assert "general_c" in call_log, (
-        "_compute_lrt_numpy did not call _compute_lrt_batch_general_c for n_cvt=2"
+        "_compute_lrt_numpy did not reach the general C kernel for n_cvt=2"
     )
 
 

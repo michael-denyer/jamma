@@ -17,8 +17,7 @@ The caller is responsible for:
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Literal, TypedDict, TypeVar
 
 import numpy as np
 
@@ -35,300 +34,69 @@ from jamma.lmm.likelihood_numpy import (
 )
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from jamma.lmm.dispatch import DispatchPath, KernelCaps
 
 _EXPECTED_ABI_VERSION = 11  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
 
 
-class AccelImport(NamedTuple):
-    """C extension import result — zero-cost named tuple.
-
-    Fields match the positional unpack at module level. NamedTuple is a tuple
-    subclass, so existing destructuring continues to work unchanged.
-    """
-
-    accel_available: bool
-    split_available: bool
-    general_available: bool
-    has_openmp: bool
-    mode4_available: bool
-    compute_batch_c: Callable[..., Any] | None
-    compute_batch_split_c: Callable[..., Any] | None
-    create_workspace_split_c: Callable[..., Any] | None
-    compute_lmm_chunk_split_c: Callable[..., Any] | None
-    create_workspace_general_c: Callable[..., Any] | None
-    compute_lmm_chunk_general_c: Callable[..., Any] | None
-    compute_score_batch_c: Callable[..., Any] | None
-    compute_lrt_batch_c: Callable[..., Any] | None
-    create_workspace_mode4_split_c: Callable[..., Any] | None
-    compute_mode4_chunk_split_c: Callable[..., Any] | None
-    compute_score_batch_general_c: Callable[..., Any] | None
-    compute_lrt_batch_general_c: Callable[..., Any] | None
-    compute_score_split_c: Callable[..., Any] | None
-    compute_lrt_split_c: Callable[..., Any] | None
-    compute_score_split_general_c: Callable[..., Any] | None
-    compute_lrt_split_general_c: Callable[..., Any] | None
-    compute_score_fused_c: Callable[..., Any] | None
-    compute_lrt_fused_c: Callable[..., Any] | None
-    create_workspace_fused_c: Callable[..., Any] | None
-    compute_lmm_chunk_fused_c: Callable[..., Any] | None
-    create_workspace_mode4_fused_c: Callable[..., Any] | None
-    compute_mode4_chunk_fused_c: Callable[..., Any] | None
-    create_workspace_fused_general_c: Callable[..., Any] | None
-    compute_lmm_chunk_fused_general_c: Callable[..., Any] | None
-    create_workspace_mode4_fused_general_c: Callable[..., Any] | None
-    compute_mode4_chunk_fused_general_c: Callable[..., Any] | None
-    create_workspace_score_fused_c: Callable[..., Any] | None
-    compute_score_fused_ws_c: Callable[..., Any] | None
-    create_workspace_lrt_fused_c: Callable[..., Any] | None
-    compute_lrt_fused_ws_c: Callable[..., Any] | None
-
-
-# The five availability flags vs the thirty object-valued symbol fields. Both
-# the all-unavailable sentinel and the loader fill object fields with None and
-# flags with False, derived from AccelImport._fields so a new field can't be
-# forgotten in one place.
-_FLAG_FIELDS = (
-    "accel_available",
-    "split_available",
-    "general_available",
-    "has_openmp",
-    "mode4_available",
-)
-_OBJECT_FIELDS = tuple(f for f in AccelImport._fields if f not in _FLAG_FIELDS)
-
-# Build the sentinel from the field split (flags False, symbols None) so a new
-# field can't be forgotten. The intermediate is typed dict[str, Any] so the **
-# spread type-checks: pyrefly can't map spread keys to params, so a narrowly
-# typed dict (e.g. dict[str, bool] from fromkeys(..., False)) would flag False
-# against the Callable symbol fields. Any keeps the runtime values exact while
-# letting the unpack pass — mirroring the loader's **symbols spread below.
-_unavailable_fields: dict[str, Any] = {
-    **dict.fromkeys(_FLAG_FIELDS, False),
-    **dict.fromkeys(_OBJECT_FIELDS, None),
-}
-_ACCEL_UNAVAILABLE = AccelImport(**_unavailable_fields)
-
-# Core split symbols a valid ABI build always exports. Maps AccelImport field
-# name -> C symbol name (they differ only for the two "batch" entries).
-_CORE_SYMBOLS = {
-    "compute_batch_c": "compute_lmm_batch_c",
-    "compute_batch_split_c": "compute_lmm_batch_split_c",
-    "create_workspace_split_c": "create_workspace_split_c",
-    "compute_lmm_chunk_split_c": "compute_lmm_chunk_split_c",
-}
-
-
-class _OptionalGroup(NamedTuple):
-    """One optional C-symbol group loaded after the ABI-validated core import.
-
-    Every optional symbol shares its AccelImport field name with its C symbol
-    name, so a group is just the field names plus how to report it missing. A
-    group loads as a unit (the build exports them together per ABI level); if
-    any member is absent the whole group stays unbound and is logged once.
-    ``level`` "error" marks symbols a valid ABI v11 build must export, so their
-    absence signals a corrupt build.
-    """
-
-    fields: tuple[str, ...]
-    level: Literal["warning", "debug", "error"]
-    message: str
-
-
-# Optional capabilities in ABI order (matches the historical load sequence).
-_OPTIONAL_GROUPS: tuple[_OptionalGroup, ...] = (
-    _OptionalGroup(
-        ("create_workspace_general_c", "compute_lmm_chunk_general_c"),
-        "warning",
-        "C extension missing general n_cvt symbols "
-        "(create_workspace_general_c / compute_lmm_chunk_general_c). "
-        "Falling back to Python path for n_cvt > 1.",
-    ),
-    _OptionalGroup(
-        ("compute_score_batch_c",),
-        "warning",
-        "C extension missing compute_score_batch_c. Score will use Python path.",
-    ),
-    _OptionalGroup(
-        ("compute_lrt_batch_c",),
-        "warning",
-        "C extension missing compute_lrt_batch_c. LRT will use Python path.",
-    ),
-    _OptionalGroup(
-        ("create_workspace_mode4_split_c", "compute_mode4_chunk_split_c"),
-        "warning",
-        "C extension missing mode-4 fused functions. "
-        "Mode 4 will use reconstruct+compose fallback.",
-    ),
-    _OptionalGroup(
-        ("compute_score_batch_general_c",),
-        "warning",
-        "C extension missing compute_score_batch_general_c. "
-        "Score for n_cvt>1 will use Python path.",
-    ),
-    _OptionalGroup(
-        ("compute_lrt_batch_general_c",),
-        "warning",
-        "C extension missing compute_lrt_batch_general_c. "
-        "LRT for n_cvt>1 will use Python path.",
-    ),
-    _OptionalGroup(
-        ("compute_score_split_c",),
-        "warning",
-        "C extension missing compute_score_split_c. "
-        "Score split will fall back to reconstruct_uab_from_soa.",
-    ),
-    _OptionalGroup(
-        ("compute_lrt_split_c",),
-        "warning",
-        "C extension missing compute_lrt_split_c. "
-        "LRT split will fall back to reconstruct_uab_from_soa.",
-    ),
-    _OptionalGroup(
-        ("compute_score_split_general_c",),
-        "debug",
-        "C extension missing compute_score_split_general_c. "
-        "Score split for n_cvt>1 will fall back to reconstruct_uab_from_soa.",
-    ),
-    _OptionalGroup(
-        ("compute_lrt_split_general_c",),
-        "debug",
-        "C extension missing compute_lrt_split_general_c. "
-        "LRT split for n_cvt>1 will fall back to reconstruct_uab_from_soa.",
-    ),
-    _OptionalGroup(
-        ("compute_score_fused_c",),
-        "warning",
-        "C extension missing compute_score_fused_c. "
-        "Score fused will fall back to split path.",
-    ),
-    _OptionalGroup(
-        ("compute_lrt_fused_c",),
-        "warning",
-        "C extension missing compute_lrt_fused_c. "
-        "LRT fused will fall back to split path.",
-    ),
-    _OptionalGroup(
-        ("create_workspace_score_fused_c",),
-        "debug",
-        "C extension missing create_workspace_score_fused_c.",
-    ),
-    _OptionalGroup(
-        ("compute_score_fused_ws_c",),
-        "debug",
-        "C extension missing compute_score_fused_ws_c.",
-    ),
-    _OptionalGroup(
-        ("create_workspace_lrt_fused_c",),
-        "debug",
-        "C extension missing create_workspace_lrt_fused_c.",
-    ),
-    _OptionalGroup(
-        ("compute_lrt_fused_ws_c",),
-        "debug",
-        "C extension missing compute_lrt_fused_ws_c.",
-    ),
-    _OptionalGroup(
-        (
-            "create_workspace_fused_c",
-            "compute_lmm_chunk_fused_c",
-            "create_workspace_mode4_fused_c",
-            "compute_mode4_chunk_fused_c",
-        ),
-        "error",
-        "C extension ABI validated but fused Uab symbols missing. This indicates "
-        "build corruption — recompile: python -m jamma.lmm._compile_accel",
-    ),
-    _OptionalGroup(
-        (
-            "create_workspace_fused_general_c",
-            "compute_lmm_chunk_fused_general_c",
-            "create_workspace_mode4_fused_general_c",
-            "compute_mode4_chunk_fused_general_c",
-        ),
-        "error",
-        "C extension ABI validated but fused general symbols missing. This "
-        "indicates build corruption — recompile: python -m jamma.lmm._compile_accel",
-    ),
+# The symbols a valid, ABI-matched build always exports. Their absence means a
+# corrupt build rather than an older one, so it is treated as an import failure.
+# Everything else in methods[] ships with them: the table is unconditional apart
+# from the sanitizer sentinel, so ABI equality is the completeness check.
+_CORE_SYMBOLS = (
+    "compute_lmm_batch_c",
+    "compute_lmm_batch_split_c",
+    "create_workspace_split_c",
+    "compute_lmm_chunk_split_c",
 )
 
 
-def _try_import_accel() -> AccelImport:
-    """Attempt to import the C extension and validate ABI version.
+def _try_import_accel() -> ModuleType | None:
+    """Import the C extension and validate its ABI, or return None.
 
-    Honours ``JAMMA_FORCE_NUMPY_FALLBACK`` — when truthy
-    (anything other than "" or "0"), returns ``_ACCEL_UNAVAILABLE``
-    without attempting the .so import. The ASAN/UBSAN sanitizer workflow
-    sets this so ``dlopen`` never runs (RESEARCH §"Pitfall 4": ASAN +
-    dlopen interaction can produce false-positive heap-buffer-overflow
-    reports inside dispatched BLAS calls).
+    Honours ``JAMMA_FORCE_NUMPY_FALLBACK`` — when truthy (anything other than
+    "" or "0"), returns None without attempting the .so import. The
+    ASAN/UBSAN sanitizer workflow sets this so ``dlopen`` never runs
+    (RESEARCH §"Pitfall 4": ASAN + dlopen interaction can produce
+    false-positive heap-buffer-overflow reports inside dispatched BLAS calls).
 
     Returns:
-        AccelImport with availability flags and C function references
-        (None when unavailable).
+        The extension module when it is usable, else None.
     """
     # Same convention as jamma.jlinalg.__init__ — truthy values
     # are anything other than "", "0".
     if env_flag("JAMMA_FORCE_NUMPY_FALLBACK"):
-        return _ACCEL_UNAVAILABLE
+        return None
+
+    from loguru import logger
 
     try:
         import jamma.lmm._lmm_accel as mod
     except ImportError as e:
-        from loguru import logger
-
         logger.debug(f"C extension import failed: {e}")
-        return _ACCEL_UNAVAILABLE
+        return None
 
-    # The ABI-validated core: version, OpenMP flag, and the split symbols a
-    # valid build always exports. Their absence is treated as an import failure.
     abi = getattr(mod, "ABI_VERSION", None)
-    has_omp = getattr(mod, "HAS_OPENMP", None)
-    core = {field: getattr(mod, csym, None) for field, csym in _CORE_SYMBOLS.items()}
-    if abi is None or has_omp is None or any(v is None for v in core.values()):
-        from loguru import logger
-
+    if abi is None or getattr(mod, "HAS_OPENMP", None) is None:
         logger.debug("C extension import failed: ABI/core symbols missing")
-        return _ACCEL_UNAVAILABLE
+        return None
 
     if abi != _EXPECTED_ABI_VERSION:
-        from loguru import logger
-
         logger.warning(
             "C extension ABI mismatch: "
             f"compiled={abi}, expected={_EXPECTED_ABI_VERSION}. "
             "Stale .so needs recompilation."
         )
-        return _ACCEL_UNAVAILABLE
+        return None
 
-    from loguru import logger
+    if any(getattr(mod, name, None) is None for name in _CORE_SYMBOLS):
+        logger.debug("C extension import failed: ABI/core symbols missing")
+        return None
 
-    # Load each optional group by name; bind it only if every member is present,
-    # else leave the fields None and log once at the group's level.
-    symbols = dict.fromkeys(_OBJECT_FIELDS, None)
-    symbols.update(core)
-    for group in _OPTIONAL_GROUPS:
-        loaded = {field: getattr(mod, field, None) for field in group.fields}
-        if all(v is not None for v in loaded.values()):
-            symbols.update(loaded)
-        elif group.level == "error":
-            logger.error(group.message)
-        elif group.level == "warning":
-            logger.warning(group.message)
-        else:
-            logger.debug(group.message)
-
-    return AccelImport(
-        accel_available=True,
-        split_available=True,
-        general_available=symbols["create_workspace_general_c"] is not None
-        and symbols["compute_lmm_chunk_general_c"] is not None,
-        has_openmp=has_omp,
-        mode4_available=symbols["create_workspace_mode4_split_c"] is not None
-        and symbols["compute_mode4_chunk_split_c"] is not None,
-        **symbols,
-    )
+    return mod
 
 
 def _auto_recompile() -> bool:
@@ -349,50 +117,11 @@ _FORCE_NUMPY_FALLBACK = env_flag("JAMMA_FORCE_NUMPY_FALLBACK")
 # When JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry — auto_recompile would
 # compile the .so and import it into sys.modules, defeating the gate's purpose
 # (RESEARCH §"Pitfall 4": ASAN must never see the .so loaded).
-_accel = _try_import_accel()
-if not _accel.accel_available and not _FORCE_NUMPY_FALLBACK and _auto_recompile():
+_accel: ModuleType | None = _try_import_accel()
+if _accel is None and not _FORCE_NUMPY_FALLBACK and _auto_recompile():
     _accel = _try_import_accel()
 
-# Bind module-level names from the (possibly retried) AccelImport exactly once.
-# A single bind point means the initial-load and retry paths cannot drift —
-# adding a C symbol touches only AccelImport and this block.
-_C_ACCEL_AVAILABLE = _accel.accel_available
-_C_SPLIT_AVAILABLE = _accel.split_available
-_C_GENERAL_AVAILABLE = _accel.general_available
-_C_HAS_OPENMP = _accel.has_openmp
-_C_MODE4_AVAILABLE = _accel.mode4_available
-_compute_lmm_batch_c = _accel.compute_batch_c
-_compute_lmm_batch_split_c = _accel.compute_batch_split_c
-_create_workspace_split_c = _accel.create_workspace_split_c
-_compute_lmm_chunk_split_c = _accel.compute_lmm_chunk_split_c
-_create_workspace_general_c = _accel.create_workspace_general_c
-_compute_lmm_chunk_general_c = _accel.compute_lmm_chunk_general_c
-_compute_score_batch_c = _accel.compute_score_batch_c
-_compute_lrt_batch_c = _accel.compute_lrt_batch_c
-_create_workspace_mode4_split_c = _accel.create_workspace_mode4_split_c
-_compute_mode4_chunk_split_c = _accel.compute_mode4_chunk_split_c
-_compute_score_batch_general_c = _accel.compute_score_batch_general_c
-_compute_lrt_batch_general_c = _accel.compute_lrt_batch_general_c
-_compute_score_split_c = _accel.compute_score_split_c
-_compute_lrt_split_c = _accel.compute_lrt_split_c
-_compute_score_split_general_c = _accel.compute_score_split_general_c
-_compute_lrt_split_general_c = _accel.compute_lrt_split_general_c
-_compute_score_fused_c = _accel.compute_score_fused_c
-_compute_lrt_fused_c = _accel.compute_lrt_fused_c
-_create_workspace_fused_c = _accel.create_workspace_fused_c
-_compute_lmm_chunk_fused_c = _accel.compute_lmm_chunk_fused_c
-_create_workspace_mode4_fused_c = _accel.create_workspace_mode4_fused_c
-_compute_mode4_chunk_fused_c = _accel.compute_mode4_chunk_fused_c
-_create_workspace_fused_general_c = _accel.create_workspace_fused_general_c
-_compute_lmm_chunk_fused_general_c = _accel.compute_lmm_chunk_fused_general_c
-_create_workspace_mode4_fused_general_c = _accel.create_workspace_mode4_fused_general_c
-_compute_mode4_chunk_fused_general_c = _accel.compute_mode4_chunk_fused_general_c
-_create_workspace_score_fused_c = _accel.create_workspace_score_fused_c
-_compute_score_fused_ws_c = _accel.compute_score_fused_ws_c
-_create_workspace_lrt_fused_c = _accel.create_workspace_lrt_fused_c
-_compute_lrt_fused_ws_c = _accel.compute_lrt_fused_ws_c
-
-if not _C_ACCEL_AVAILABLE and not _FORCE_NUMPY_FALLBACK:
+if _accel is None and not _FORCE_NUMPY_FALLBACK:
     from loguru import logger as _logger
 
     _logger.warning(
@@ -402,23 +131,41 @@ if not _C_ACCEL_AVAILABLE and not _FORCE_NUMPY_FALLBACK:
         "python -m jamma.lmm._compile_accel"
     )
     del _logger
-    _C_HAS_OPENMP = False
-    _C_GENERAL_AVAILABLE = False
-    _C_MODE4_AVAILABLE = False
 
-_C_FUSED_AVAILABLE = _create_workspace_fused_c is not None
-_C_MODE4_FUSED_AVAILABLE = _create_workspace_mode4_fused_c is not None
-_C_FUSED_GENERAL_AVAILABLE = _create_workspace_fused_general_c is not None
-_C_MODE4_FUSED_GENERAL_AVAILABLE = _create_workspace_mode4_fused_general_c is not None
-_C_SCORE_FUSED_AVAILABLE = _compute_score_fused_c is not None
-_C_LRT_FUSED_AVAILABLE = _compute_lrt_fused_c is not None
-_C_SCORE_FUSED_WS_AVAILABLE = (
-    _create_workspace_score_fused_c is not None
-    and _compute_score_fused_ws_c is not None
-)
-_C_LRT_FUSED_WS_AVAILABLE = (
-    _create_workspace_lrt_fused_c is not None and _compute_lrt_fused_ws_c is not None
-)
+# One loaded extension means one capability bit. The ABI-equality gate above
+# admits all of methods[] or none of it, so these names are one value under
+# different labels; they stay as separate globals only until their readers
+# migrate. HAS_OPENMP is the exception and a genuinely independent bit: C sets
+# it from #ifdef _OPENMP at build time, and plan_thread_budget reads it.
+_C_ACCEL_AVAILABLE = _accel is not None
+_C_SPLIT_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_GENERAL_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_MODE4_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_FUSED_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_MODE4_FUSED_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_FUSED_GENERAL_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_MODE4_FUSED_GENERAL_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_SCORE_FUSED_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_LRT_FUSED_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_SCORE_FUSED_WS_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_LRT_FUSED_WS_AVAILABLE = _C_ACCEL_AVAILABLE
+_C_HAS_OPENMP = bool(_accel is not None and _accel.HAS_OPENMP)
+
+
+def _c() -> ModuleType:
+    """Return the loaded C extension, or raise naming the fix.
+
+    Every kernel entry point below needs the same guard. Hand-writing it per
+    symbol drifted before: some sites raised while others asserted, and an
+    assert vanishes under ``python -O``, turning a clear diagnostic into a
+    ``NoneType is not callable`` from inside the C call.
+    """
+    if _accel is None:
+        raise RuntimeError(
+            "This kernel requires the _lmm_accel C extension with ABI version "
+            f"{_EXPECTED_ABI_VERSION}. Recompile: python -m jamma.lmm._compile_accel"
+        )
+    return _accel
 
 
 def select_current_dispatch_path(
@@ -440,8 +187,16 @@ def current_kernel_caps() -> KernelCaps:
 
     Read at call time, not import time, so tests that toggle the
     ``_C_*_AVAILABLE`` flags to drive a dispatch path take effect.
+
+    ``_accel`` is checked first so the two seams cannot disagree. The flags are
+    bound once at import, so dropping the extension without it would leave
+    dispatch selecting a C path whose symbols are gone, and the kernel would
+    raise from ``_c()`` instead of falling back.
     """
     from jamma.lmm.dispatch import KernelCaps  # deferred: circular dep
+
+    if _accel is None:
+        return KernelCaps(*(False,) * len(KernelCaps._fields))
 
     return KernelCaps(
         split=_C_SPLIT_AVAILABLE,
@@ -456,29 +211,6 @@ def current_kernel_caps() -> KernelCaps:
         lrt_fused=_C_LRT_FUSED_AVAILABLE,
         lrt_fused_ws=_C_LRT_FUSED_WS_AVAILABLE,
     )
-
-
-def _require(
-    symbol: Callable[..., Any] | None, what: str, abi: int
-) -> Callable[..., Any]:
-    """Return a bound C symbol, or raise naming what is missing and how to fix it.
-
-    Every kernel entry point below needs the same guard, and hand-writing it
-    each time drifted: some sites raised while others asserted, and an assert
-    vanishes under ``python -O``, turning a clear diagnostic into a
-    ``NoneType is not callable`` from inside the C call.
-
-    Args:
-        symbol: The module-level C symbol, or None when the build omits it.
-        what: Human name of the capability, used in the error message.
-        abi: Minimum ``_lmm_accel`` ABI version that exports the symbol.
-    """
-    if symbol is None:
-        raise RuntimeError(
-            f"{what} requires the _lmm_accel C extension with ABI version "
-            f"{abi}+. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return symbol
 
 
 class WaldResult(TypedDict):
@@ -521,7 +253,7 @@ def _compute_wald_c(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
-    return _require(_compute_lmm_batch_c, "Batch Wald C compute", 11)(
+    return _c().compute_lmm_batch_c(
         eigenvalues,
         Uab_batch,
         Iab_batch,
@@ -567,7 +299,7 @@ def _compute_wald_split_c(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
-    return _require(_compute_lmm_batch_split_c, "Batch split Wald C compute", 11)(
+    return _c().compute_lmm_batch_split_c(
         eigenvalues,
         uab_varying_soa,
         uab_invariant_soa,
@@ -612,7 +344,7 @@ def create_lmm_workspace(
     Returns:
         PyCapsule wrapping lmm_workspace_t (opaque; pass to compute_wald_split_c_ws).
     """
-    return _require(_create_workspace_split_c, "Split C workspace", 11)(
+    return _c().create_workspace_split_c(
         eigenvalues,
         uab_invariant_soa,
         n_samples,
@@ -643,9 +375,7 @@ def compute_wald_split_c_ws(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
-    return _require(_compute_lmm_chunk_split_c, "Split Wald C compute", 11)(
-        workspace, uab_varying_soa, n_threads
-    )
+    return _c().compute_lmm_chunk_split_c(workspace, uab_varying_soa, n_threads)
 
 
 def create_lmm_workspace_mode4(
@@ -681,7 +411,7 @@ def create_lmm_workspace_mode4(
     Returns:
         PyCapsule wrapping mode-4 lmm_workspace_t.
     """
-    return _require(_create_workspace_mode4_split_c, "Fused mode-4 C workspace", 6)(
+    return _c().create_workspace_mode4_split_c(
         eigenvalues,
         uab_invariant_soa,
         n_samples,
@@ -714,9 +444,7 @@ def compute_mode4_split_c_ws(
         Dict with keys: lambdas, logls, betas, ses, pwalds,
         p_scores, lambdas_mle, p_lrts.
     """
-    return _require(_compute_mode4_chunk_split_c, "Fused mode-4 C compute", 6)(
-        workspace, uab_varying_soa, n_threads
-    )
+    return _c().compute_mode4_chunk_split_c(workspace, uab_varying_soa, n_threads)
 
 
 def create_lmm_workspace_fused(
@@ -748,7 +476,7 @@ def create_lmm_workspace_fused(
     Returns:
         PyCapsule wrapping lmm_workspace_t (fused).
     """
-    return _require(_create_workspace_fused_c, "Fused C workspace", 8)(
+    return _c().create_workspace_fused_c(
         eigenvalues,
         uab_invariant_soa,
         w,
@@ -777,9 +505,7 @@ def compute_wald_fused_c_ws(
     Returns:
         WaldResult dict with lambdas, logls, betas, ses, pwalds.
     """
-    return _require(_compute_lmm_chunk_fused_c, "Fused C compute", 8)(
-        workspace, utg_t, n_threads
-    )
+    return _c().compute_lmm_chunk_fused_c(workspace, utg_t, n_threads)
 
 
 def create_lmm_workspace_mode4_fused(
@@ -816,7 +542,7 @@ def create_lmm_workspace_mode4_fused(
     Returns:
         PyCapsule wrapping lmm_workspace_t (mode=4, fused).
     """
-    return _require(_create_workspace_mode4_fused_c, "Fused mode-4 C workspace", 8)(
+    return _c().create_workspace_mode4_fused_c(
         eigenvalues,
         uab_invariant_soa,
         w,
@@ -848,9 +574,7 @@ def compute_mode4_fused_c_ws(
         Dict with lambdas, logls, betas, ses, pwalds, p_scores,
         lambdas_mle, p_lrts.
     """
-    return _require(_compute_mode4_chunk_fused_c, "Fused mode-4 C compute", 8)(
-        workspace, utg_t, n_threads
-    )
+    return _c().compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
 
 
 def create_lmm_workspace_fused_general(
@@ -912,7 +636,7 @@ def create_lmm_workspace_fused_general(
     Returns:
         PyCapsule wrapping lmm_workspace_general_t (fused).
     """
-    return _require(_create_workspace_fused_general_c, "Fused general C workspace", 9)(
+    return _c().create_workspace_fused_general_c(
         eigenvalues,
         uab_invariant_soa,
         UtW,
@@ -954,9 +678,7 @@ def compute_wald_fused_general_c_ws(
     Returns:
         WaldResult dict with lambdas, logls, betas, ses, pwalds.
     """
-    return _require(_compute_lmm_chunk_fused_general_c, "Fused general C compute", 9)(
-        workspace, utg_t, n_threads
-    )
+    return _c().compute_lmm_chunk_fused_general_c(workspace, utg_t, n_threads)
 
 
 def create_lmm_workspace_mode4_fused_general(
@@ -1019,9 +741,7 @@ def create_lmm_workspace_mode4_fused_general(
     Returns:
         PyCapsule wrapping lmm_workspace_general_t (mode=4, fused).
     """
-    return _require(
-        _create_workspace_mode4_fused_general_c, "Fused general mode-4 C workspace", 9
-    )(
+    return _c().create_workspace_mode4_fused_general_c(
         eigenvalues,
         uab_invariant_soa,
         UtW,
@@ -1066,9 +786,7 @@ def compute_mode4_fused_general_c_ws(
         Dict with lambdas, logls, betas, ses, pwalds, p_scores,
         lambdas_mle, p_lrts.
     """
-    return _require(
-        _compute_mode4_chunk_fused_general_c, "Fused general mode-4 C compute", 9
-    )(workspace, utg_t, n_threads)
+    return _c().compute_mode4_chunk_fused_general_c(workspace, utg_t, n_threads)
 
 
 def create_lmm_workspace_general(
@@ -1101,7 +819,7 @@ def create_lmm_workspace_general(
     Returns:
         PyCapsule wrapping lmm_workspace_general_t.
     """
-    create = _require(_create_workspace_general_c, "General n_cvt C workspace", 4)
+    create = _c().create_workspace_general_c
 
     from jamma.lmm.likelihood import build_pab_table_for_c
 
@@ -1145,9 +863,7 @@ def compute_wald_general_c_ws(
     Returns:
         WaldResult with keys: lambdas, logls, betas, ses, pwalds.
     """
-    return _require(_compute_lmm_chunk_general_c, "General n_cvt C chunk compute", 4)(
-        workspace, uab_varying_soa, n_threads
-    )
+    return _c().compute_lmm_chunk_general_c(workspace, uab_varying_soa, n_threads)
 
 
 def _compute_score_c(
@@ -1169,7 +885,7 @@ def _compute_score_c(
     Returns:
         Dict with keys: betas, ses, p_scores.
     """
-    return _require(_compute_score_batch_c, "Batch Score C compute", 11)(
+    return _c().compute_score_batch_c(
         eigenvalues,
         Uab_batch,
         Hi_eval_null,
@@ -1205,7 +921,7 @@ def _compute_lrt_c(
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
     """
-    return _require(_compute_lrt_batch_c, "Batch LRT C compute", 11)(
+    return _c().compute_lrt_batch_c(
         eigenvalues,
         Uab_batch,
         n_samples,
@@ -1398,7 +1114,7 @@ def _compute_lrt_numpy(
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
     """
-    if _compute_lrt_batch_c is not None and n_cvt == 1:
+    if _accel is not None and n_cvt == 1:
         return _compute_lrt_c(
             eigenvalues,
             Uab_batch,
@@ -1411,11 +1127,11 @@ def _compute_lrt_numpy(
             n_threads,
         )
 
-    if _compute_lrt_batch_general_c is not None and n_cvt > 1:
+    if _accel is not None and n_cvt > 1:
         from jamma.lmm.likelihood import build_pab_table_for_c
 
         pab_table_dict = build_pab_table_for_c(n_cvt)
-        return _compute_lrt_batch_general_c(
+        return _c().compute_lrt_batch_general_c(
             eigenvalues,
             Uab_batch,
             len(eigenvalues),
@@ -1431,7 +1147,7 @@ def _compute_lrt_numpy(
 
     from loguru import logger
 
-    if _compute_lrt_batch_c is None:
+    if _accel is None:
         logger.debug("LRT using Python path (C extension unavailable)")
     else:
         logger.debug(
@@ -1478,7 +1194,7 @@ def _compute_score_numpy(
     Returns:
         Dict with keys: betas, ses, p_scores.
     """
-    if _compute_score_batch_c is not None and n_cvt == 1:
+    if _accel is not None and n_cvt == 1:
         return _compute_score_c(
             eigenvalues,
             Uab_batch,
@@ -1487,11 +1203,11 @@ def _compute_score_numpy(
             n_threads,
         )
 
-    if _compute_score_batch_general_c is not None and n_cvt > 1:
+    if _accel is not None and n_cvt > 1:
         from jamma.lmm.likelihood import build_pab_table_for_c
 
         pab_table_dict = build_pab_table_for_c(n_cvt)
-        return _compute_score_batch_general_c(
+        return _c().compute_score_batch_general_c(
             eigenvalues,
             Uab_batch,
             Hi_eval_null,
@@ -1503,7 +1219,7 @@ def _compute_score_numpy(
 
     from loguru import logger
 
-    if _compute_score_batch_c is None:
+    if _accel is None:
         logger.debug("Score using Python path (C extension unavailable)")
     else:
         logger.debug(
@@ -1556,8 +1272,8 @@ def _compute_score_split_numpy(
     Returns:
         Dict with keys: betas, ses, p_scores.
     """
-    if _compute_score_split_c is not None and n_cvt == 1:
-        return _compute_score_split_c(
+    if _accel is not None and n_cvt == 1:
+        return _c().compute_score_split_c(
             eigenvalues,
             uab_varying_soa,
             uab_invariant_soa,
@@ -1566,10 +1282,10 @@ def _compute_score_split_numpy(
             n_threads,
         )
 
-    if _compute_score_split_general_c is not None and n_cvt > 1:
+    if _accel is not None and n_cvt > 1:
         from jamma.lmm.likelihood import build_pab_table_for_c
 
-        return _compute_score_split_general_c(
+        return _c().compute_score_split_general_c(
             eigenvalues,
             uab_varying_soa,
             uab_invariant_soa,
@@ -1626,8 +1342,8 @@ def _compute_lrt_split_numpy(
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
     """
-    if _compute_lrt_split_c is not None and n_cvt == 1:
-        return _compute_lrt_split_c(
+    if _accel is not None and n_cvt == 1:
+        return _c().compute_lrt_split_c(
             eigenvalues,
             uab_varying_soa,
             uab_invariant_soa,
@@ -1640,10 +1356,10 @@ def _compute_lrt_split_numpy(
             n_threads,
         )
 
-    if _compute_lrt_split_general_c is not None and n_cvt > 1:
+    if _accel is not None and n_cvt > 1:
         from jamma.lmm.likelihood import build_pab_table_for_c
 
-        return _compute_lrt_split_general_c(
+        return _c().compute_lrt_split_general_c(
             eigenvalues,
             uab_varying_soa,
             uab_invariant_soa,

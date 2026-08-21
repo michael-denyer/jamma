@@ -1136,8 +1136,8 @@ def test_runner_lrt_mode_c_vs_python():
     # Run with C extension
     result_c = run_lmm_association_numpy(**kwargs)
 
-    # Run with C disabled (monkeypatch Score/LRT C pointers to None)
-    with patch.object(compute_numpy, "_compute_lrt_batch_c", None):
+    # Run with C disabled (drop the loaded extension)
+    with patch.object(compute_numpy, "_accel", None):
         kwargs["kinship"] = kinship.copy()
         result_py = run_lmm_association_numpy(**kwargs)
 
@@ -1179,7 +1179,7 @@ def test_runner_score_mode_c_vs_python():
     result_c = run_lmm_association_numpy(**kwargs)
 
     # Run with C disabled
-    with patch.object(compute_numpy, "_compute_score_batch_c", None):
+    with patch.object(compute_numpy, "_accel", None):
         kwargs["kinship"] = kinship.copy()
         result_py = run_lmm_association_numpy(**kwargs)
 
@@ -1580,7 +1580,7 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
 
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
 
-    if cn._compute_lrt_batch_general_c is None:
+    if cn._accel is None:
         pytest.skip("compute_lrt_batch_general_c not available")
 
     run_result = run_lmm_association_numpy(
@@ -1621,7 +1621,7 @@ def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
 
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
 
-    if cn._compute_score_batch_general_c is None:
+    if cn._accel is None:
         pytest.skip("compute_score_batch_general_c not available")
 
     run_result = run_lmm_association_numpy(

@@ -94,13 +94,7 @@ class TestFusedScoreParity:
     )
     def test_score_fused_parity(self, fused_score_data):
         """Fused Score matches split Score to rtol=1e-12."""
-        from jamma.lmm.compute_numpy import (
-            _compute_score_fused_c,
-            _compute_score_split_c,
-        )
-
-        assert _compute_score_fused_c is not None
-        assert _compute_score_split_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (
             eigenvalues,
@@ -115,7 +109,7 @@ class TestFusedScoreParity:
         ) = fused_score_data
 
         # Split reference
-        split_result = _compute_score_split_c(
+        split_result = _c().compute_score_split_c(
             eigenvalues,
             uab_var_soa,
             uab_inv_soa,
@@ -125,7 +119,7 @@ class TestFusedScoreParity:
         )
 
         # Fused
-        fused_result = _compute_score_fused_c(
+        fused_result = _c().compute_score_fused_c(
             utg_t,
             w,
             Uty,
@@ -152,9 +146,7 @@ class TestFusedScoreParity:
     )
     def test_score_fused_degenerate_snps(self, fused_score_data):
         """Constant genotype produces NaN beta/se/p_score."""
-        from jamma.lmm.compute_numpy import _compute_score_fused_c
-
-        assert _compute_score_fused_c is not None  # narrowed: skipif gates this
+        from jamma.lmm.compute_numpy import _c
 
         (
             eigenvalues,
@@ -171,7 +163,7 @@ class TestFusedScoreParity:
         utg_degen = utg_t.copy()
         utg_degen[0, :] = 0.0  # constant genotype
 
-        result = _compute_score_fused_c(
+        result = _c().compute_score_fused_c(
             utg_degen,
             w,
             Uty,
@@ -198,13 +190,7 @@ class TestFusedScoreParity:
     )
     def test_score_fused_multithreaded(self, fused_score_data):
         """Fused Score with n_threads=2 matches split Score."""
-        from jamma.lmm.compute_numpy import (
-            _compute_score_fused_c,
-            _compute_score_split_c,
-        )
-
-        assert _compute_score_fused_c is not None
-        assert _compute_score_split_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (
             eigenvalues,
@@ -218,7 +204,7 @@ class TestFusedScoreParity:
             n_snps,
         ) = fused_score_data
 
-        split_result = _compute_score_split_c(
+        split_result = _c().compute_score_split_c(
             eigenvalues,
             uab_var_soa,
             uab_inv_soa,
@@ -227,7 +213,7 @@ class TestFusedScoreParity:
             1,
         )
 
-        fused_result = _compute_score_fused_c(
+        fused_result = _c().compute_score_fused_c(
             utg_t,
             w,
             Uty,
@@ -281,13 +267,7 @@ class TestFusedLrtParity:
     )
     def test_lrt_fused_parity(self, fused_lrt_data):
         """Fused LRT matches split LRT to rtol=5e-5."""
-        from jamma.lmm.compute_numpy import (
-            _compute_lrt_fused_c,
-            _compute_lrt_split_c,
-        )
-
-        assert _compute_lrt_fused_c is not None
-        assert _compute_lrt_split_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (
             eigenvalues,
@@ -302,7 +282,7 @@ class TestFusedLrtParity:
         ) = fused_lrt_data
 
         # Split reference
-        split_result = _compute_lrt_split_c(
+        split_result = _c().compute_lrt_split_c(
             eigenvalues,
             uab_var_soa,
             uab_inv_soa,
@@ -316,7 +296,7 @@ class TestFusedLrtParity:
         )
 
         # Fused
-        fused_result = _compute_lrt_fused_c(
+        fused_result = _c().compute_lrt_fused_c(
             utg_t,
             w,
             Uty,
@@ -353,9 +333,7 @@ class TestFusedLrtParity:
     )
     def test_lrt_fused_degenerate_snps(self, fused_lrt_data):
         """Constant genotype produces NaN lambda_mle and p_lrt=1.0."""
-        from jamma.lmm.compute_numpy import _compute_lrt_fused_c
-
-        assert _compute_lrt_fused_c is not None  # narrowed: skipif gates this
+        from jamma.lmm.compute_numpy import _c
 
         (
             eigenvalues,
@@ -372,7 +350,7 @@ class TestFusedLrtParity:
         utg_degen = utg_t.copy()
         utg_degen[0, :] = 0.0
 
-        result = _compute_lrt_fused_c(
+        result = _c().compute_lrt_fused_c(
             utg_degen,
             w,
             Uty,
@@ -405,13 +383,7 @@ class TestFusedLrtParity:
     )
     def test_lrt_fused_multithreaded(self, fused_lrt_data):
         """Fused LRT with n_threads=2 matches split LRT."""
-        from jamma.lmm.compute_numpy import (
-            _compute_lrt_fused_c,
-            _compute_lrt_split_c,
-        )
-
-        assert _compute_lrt_fused_c is not None
-        assert _compute_lrt_split_c is not None
+        from jamma.lmm.compute_numpy import _c
 
         (
             eigenvalues,
@@ -425,7 +397,7 @@ class TestFusedLrtParity:
             n_snps,
         ) = fused_lrt_data
 
-        split_result = _compute_lrt_split_c(
+        split_result = _c().compute_lrt_split_c(
             eigenvalues,
             uab_var_soa,
             uab_inv_soa,
@@ -438,7 +410,7 @@ class TestFusedLrtParity:
             1,
         )
 
-        fused_result = _compute_lrt_fused_c(
+        fused_result = _c().compute_lrt_fused_c(
             utg_t,
             w,
             Uty,
@@ -516,15 +488,9 @@ def test_runner_fused_score_dispatch():
     """
     from unittest.mock import patch
 
-    from jamma.lmm.compute_numpy import (
-        _C_SCORE_FUSED_WS_AVAILABLE,
-        _compute_score_fused_c,
-        _compute_score_fused_ws_c,
-    )
+    from jamma.lmm.compute_numpy import _C_SCORE_FUSED_WS_AVAILABLE, _c
 
     assert _C_SCORE_FUSED_WS_AVAILABLE is not None
-    assert _compute_score_fused_c is not None
-    assert _compute_score_fused_ws_c is not None
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
     rng = np.random.default_rng(200)
@@ -534,8 +500,8 @@ def test_runner_fused_score_dispatch():
     # Workspace path is preferred when available; stateless is the fallback.
     if _C_SCORE_FUSED_WS_AVAILABLE:
         with patch(
-            "jamma.lmm.compute_numpy._compute_score_fused_ws_c",
-            wraps=_compute_score_fused_ws_c,
+            "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
+            wraps=_c().compute_score_fused_ws_c,
         ) as mock_fused:
             result_fused = run_lmm_association_numpy(
                 genotypes=genotypes,
@@ -556,8 +522,8 @@ def test_runner_fused_score_dispatch():
         assert mock_fused.called, "Fused Score WS C function was not called"
     else:
         with patch(
-            "jamma.lmm.compute_numpy._compute_score_fused_c",
-            wraps=_compute_score_fused_c,
+            "jamma.lmm.compute_numpy._accel.compute_score_fused_c",
+            wraps=_c().compute_score_fused_c,
         ) as mock_fused:
             result_fused = run_lmm_association_numpy(
                 genotypes=genotypes,
@@ -624,15 +590,9 @@ def test_runner_fused_lrt_dispatch():
     """
     from unittest.mock import patch
 
-    from jamma.lmm.compute_numpy import (
-        _C_LRT_FUSED_WS_AVAILABLE,
-        _compute_lrt_fused_c,
-        _compute_lrt_fused_ws_c,
-    )
+    from jamma.lmm.compute_numpy import _C_LRT_FUSED_WS_AVAILABLE, _c
 
     assert _C_LRT_FUSED_WS_AVAILABLE is not None
-    assert _compute_lrt_fused_c is not None
-    assert _compute_lrt_fused_ws_c is not None
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
     rng = np.random.default_rng(201)
@@ -642,8 +602,8 @@ def test_runner_fused_lrt_dispatch():
     # Workspace path is preferred when available; stateless is the fallback.
     if _C_LRT_FUSED_WS_AVAILABLE:
         with patch(
-            "jamma.lmm.compute_numpy._compute_lrt_fused_ws_c",
-            wraps=_compute_lrt_fused_ws_c,
+            "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
+            wraps=_c().compute_lrt_fused_ws_c,
         ) as mock_fused:
             result_fused = run_lmm_association_numpy(
                 genotypes=genotypes,
@@ -664,8 +624,8 @@ def test_runner_fused_lrt_dispatch():
         assert mock_fused.called, "Fused LRT WS C function was not called"
     else:
         with patch(
-            "jamma.lmm.compute_numpy._compute_lrt_fused_c",
-            wraps=_compute_lrt_fused_c,
+            "jamma.lmm.compute_numpy._accel.compute_lrt_fused_c",
+            wraps=_c().compute_lrt_fused_c,
         ) as mock_fused:
             result_fused = run_lmm_association_numpy(
                 genotypes=genotypes,

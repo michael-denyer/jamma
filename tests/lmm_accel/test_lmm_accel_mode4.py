@@ -7,12 +7,7 @@ live in tests/lmm_accel_helpers.py.
 import numpy as np
 import pytest
 
-from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _compute_lrt_batch_c,
-    _compute_score_batch_c,
-    compute_lmm_chunk_numpy,
-)
+from jamma.lmm.compute_numpy import _C_ACCEL_AVAILABLE, _c, compute_lmm_chunk_numpy
 
 
 @pytest.mark.tier0
@@ -297,7 +292,7 @@ def test_mode4_fused_score_matches_standalone(score_lrt_data):
 
     if not _C_MODE4_AVAILABLE:
         pytest.skip("Mode-4 fused C extension not available")
-    if _compute_score_batch_c is None:
+    if _c().compute_score_batch_c is None:
         pytest.skip("Score C batch not available")
 
     (
@@ -316,7 +311,7 @@ def test_mode4_fused_score_matches_standalone(score_lrt_data):
     Uab_reconstructed = reconstruct_uab_from_soa(uab_inv_soa, uab_var_soa)
 
     # Standalone Score via reconstructed Uab
-    standalone_score = _compute_score_batch_c(
+    standalone_score = _c().compute_score_batch_c(
         eigenvalues,
         Uab_reconstructed,
         Hi_eval_null,
@@ -347,7 +342,7 @@ def test_mode4_fused_lrt_matches_standalone(score_lrt_data):
 
     if not _C_MODE4_AVAILABLE:
         pytest.skip("Mode-4 fused C extension not available")
-    if _compute_lrt_batch_c is None:
+    if _c().compute_lrt_batch_c is None:
         pytest.skip("LRT C batch not available")
 
     (fused_cr, _, eigenvalues, _, n_samples, _, logl_H0, uab_inv_soa, uab_var_soa) = (
@@ -358,7 +353,7 @@ def test_mode4_fused_lrt_matches_standalone(score_lrt_data):
     Uab_reconstructed = reconstruct_uab_from_soa(uab_inv_soa, uab_var_soa)
 
     # Standalone LRT via reconstructed Uab
-    standalone_lrt = _compute_lrt_batch_c(
+    standalone_lrt = _c().compute_lrt_batch_c(
         eigenvalues,
         Uab_reconstructed,
         n_samples,

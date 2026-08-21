@@ -699,3 +699,16 @@ def test_cli_legacy_text_wires_to_pipeline(
 
     assert len(factory.runners) == 1
     assert factory.last_config.legacy_text is True
+
+
+@pytest.mark.tier1
+def test_output_prefix_with_separator_reports_a_usage_error():
+    """`-o a/b` must read as a usage error, not a Python traceback.
+
+    OutputConfig rejects a prefix containing a path separator. Building it
+    outside the CLI's error handling let that ValueError reach the user raw.
+    """
+    result = runner.invoke(main, ["-lmm", "1", "-o", "a/b", "-bfile", "nope"])
+    assert result.exit_code == 2
+    assert "path separators" in result.output
+    assert "Traceback" not in result.output

@@ -255,7 +255,10 @@ def main(
     if no_telemetry:
         os.environ["JAMMA_NO_TELEMETRY"] = "1"
 
-    config = OutputConfig(outdir=Path(outdir), prefix=o, verbose=verbose)
+    try:
+        config = OutputConfig(outdir=Path(outdir), prefix=o, verbose=verbose)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
 
     # Validate unimplemented flags
     _unimplemented = {"-wsnp": wsnp, "-gxe": gxe, "-vc": vc, "-mk": mk, "-mvlmm": mvlmm}

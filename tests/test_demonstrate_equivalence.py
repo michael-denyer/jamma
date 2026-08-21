@@ -17,6 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 pytestmark = pytest.mark.tier1
@@ -49,3 +50,28 @@ def test_equivalence_report_passes_all_tolerances():
         )
 
     assert "VERDICT: ALL FIELDS PASS TOLERANCES" in result.stdout
+
+
+@pytest.mark.tier0
+def test_extract_keeps_a_real_zero_instead_of_calling_it_missing():
+    """A beta of exactly 0.0 is a result, not a missing value.
+
+    _extract used truthiness to spot missing fields, so a SNP with no effect
+    was dropped from every comparison it fed.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import demonstrate_equivalence
+    finally:
+        if sys.path and sys.path[0] == str(ROOT / "scripts"):
+            sys.path.pop(0)
+
+    class _R:
+        def __init__(self, beta):
+            self.beta = beta
+
+    extracted = demonstrate_equivalence._extract([_R(0.0), _R(1.5), _R(None)], "beta")
+
+    assert extracted[0] == 0.0
+    assert extracted[1] == 1.5
+    assert np.isnan(extracted[2])

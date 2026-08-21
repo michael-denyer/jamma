@@ -305,12 +305,10 @@ def _dispatch_compute(
                 n_filtered=ctx.n_filtered,
             )
         case DispatchPath.FUSED_SCORE_WS:
-            from jamma.lmm.compute_numpy import _compute_score_fused_ws_c
+            from jamma.lmm.compute_numpy import _c
 
-            if _compute_score_fused_ws_c is None:
-                raise RuntimeError("fused Score workspace dispatch requires C support")
             return _guarded_compute(
-                _compute_score_fused_ws_c,
+                _c().compute_score_fused_ws_c,
                 ctx.score_fused_workspace,
                 chunk_input,
                 n_threads,
@@ -319,12 +317,10 @@ def _dispatch_compute(
                 n_filtered=ctx.n_filtered,
             )
         case DispatchPath.FUSED_LRT_WS:
-            from jamma.lmm.compute_numpy import _compute_lrt_fused_ws_c
+            from jamma.lmm.compute_numpy import _c
 
-            if _compute_lrt_fused_ws_c is None:
-                raise RuntimeError("fused LRT workspace dispatch requires C support")
             return _guarded_compute(
-                _compute_lrt_fused_ws_c,
+                _c().compute_lrt_fused_ws_c,
                 ctx.lrt_fused_workspace,
                 chunk_input,
                 n_threads,
@@ -333,12 +329,10 @@ def _dispatch_compute(
                 n_filtered=ctx.n_filtered,
             )
         case DispatchPath.FUSED_SCORE:
-            from jamma.lmm.compute_numpy import _compute_score_fused_c
+            from jamma.lmm.compute_numpy import _c
 
-            if _compute_score_fused_c is None:
-                raise RuntimeError("fused Score dispatch requires C support")
             return _guarded_compute(
-                _compute_score_fused_c,
+                _c().compute_score_fused_c,
                 chunk_input,
                 ctx.w,
                 ctx.Uty,
@@ -352,12 +346,10 @@ def _dispatch_compute(
                 n_filtered=ctx.n_filtered,
             )
         case DispatchPath.FUSED_LRT:
-            from jamma.lmm.compute_numpy import _compute_lrt_fused_c
+            from jamma.lmm.compute_numpy import _c
 
-            if _compute_lrt_fused_c is None:
-                raise RuntimeError("fused LRT dispatch requires C support")
             return _guarded_compute(
-                _compute_lrt_fused_c,
+                _c().compute_lrt_fused_c,
                 chunk_input,
                 ctx.w,
                 ctx.Uty,

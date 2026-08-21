@@ -243,11 +243,9 @@ def _create_workspaces(
                     n_threads,
                 )
         case DispatchPath.FUSED_SCORE_WS:
-            from jamma.lmm.compute_numpy import _create_workspace_score_fused_c
+            from jamma.lmm.compute_numpy import _c
 
-            if _create_workspace_score_fused_c is None:
-                raise RuntimeError("fused Score workspace dispatch requires C support")
-            score_fused_workspace = _create_workspace_score_fused_c(
+            score_fused_workspace = _c().create_workspace_score_fused_c(
                 w,
                 Uty,
                 Hi_eval_null,
@@ -257,11 +255,9 @@ def _create_workspaces(
                 n_threads,
             )
         case DispatchPath.FUSED_LRT_WS:
-            from jamma.lmm.compute_numpy import _create_workspace_lrt_fused_c
+            from jamma.lmm.compute_numpy import _c
 
-            if _create_workspace_lrt_fused_c is None:
-                raise RuntimeError("fused LRT workspace dispatch requires C support")
-            lrt_fused_workspace = _create_workspace_lrt_fused_c(
+            lrt_fused_workspace = _c().create_workspace_lrt_fused_c(
                 w,
                 Uty,
                 eigenvalues_np,

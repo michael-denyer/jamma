@@ -16,6 +16,7 @@ import subprocess
 import sys
 import textwrap
 import warnings
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -218,12 +219,11 @@ class TestForceNumpyLmmAccel:
     jamma.lmm.compute_numpy._try_import_accel."""
 
     def test_returns_unavailable(self, monkeypatch):
-        """Forced env: _try_import_accel returns _ACCEL_UNAVAILABLE."""
+        """Forced env: _try_import_accel reports no extension."""
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
-        from jamma.lmm.compute_numpy import _ACCEL_UNAVAILABLE, _try_import_accel
+        from jamma.lmm.compute_numpy import _try_import_accel
 
-        result = _try_import_accel()
-        assert result == _ACCEL_UNAVAILABLE
+        assert _try_import_accel() is None
 
     def test_no_so_import_attempted(self, monkeypatch):
         """Forced env: no .so import attempted — sys.modules stays clean."""
@@ -235,51 +235,41 @@ class TestForceNumpyLmmAccel:
         assert "jamma.lmm._lmm_accel" not in sys.modules
 
     def test_unset_preserves_behavior(self, monkeypatch):
-        """Unset env: _try_import_accel returns the natural import result —
-        whatever the .so produces (don't pin to True/False, depends on
-        whether the extension is built)."""
+        """Unset env: the result is the natural import outcome.
+
+        Whether that is the module or None depends on the build, so pin the
+        shape rather than the value.
+        """
         monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
         from jamma.lmm.compute_numpy import _try_import_accel
 
         result = _try_import_accel()
-        # Just assert the call returned an AccelImport (named tuple) — the
-        # natural state is environment-dependent.
-        assert hasattr(result, "accel_available")
+        assert result is None or isinstance(result, ModuleType)
 
     @pytest.mark.parametrize("value", ["", "0"])
     def test_off_values(self, monkeypatch, value):
-        """'' and '0' are off — _try_import_accel does NOT short-circuit."""
+        """'' and '0' are off — the gate does not short-circuit.
+
+        Both an engaged gate and a natural import failure return None, so this
+        is only decidable where the extension does import. Where it does, an
+        off value must yield the module.
+        """
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", value)
         from jamma.lmm.compute_numpy import _try_import_accel
 
-        # The result equals the natural-import result (depends on .so being
-        # present), so we cannot assert .accel_available — but we CAN assert
-        # the gate's early-return path was NOT taken: if it had been, the
-        # AccelImport returned would equal _ACCEL_UNAVAILABLE exactly. Since
-        # the .so is built in this environment, the result must differ.
-        result = _try_import_accel()
-        from jamma.lmm.compute_numpy import _ACCEL_UNAVAILABLE
-
-        # If the .so loaded, accel_available is True and result != _ACCEL_UNAVAILABLE.
-        # If the .so failed naturally, accel_available is False but the result is
-        # constructed via the fallback path inside _try_import_accel, NOT via the
-        # gate — both end up with accel_available=False. We cannot distinguish
-        # these two from the outside. So just verify the call did not error.
-        assert hasattr(result, "accel_available")
-        # In the typical CI environment with the .so built, the natural path
-        # MUST succeed — assert that to catch regressions where the gate
-        # accidentally engages on '' or '0':
-        if "_lmm_accel" in sys.modules and sys.modules["_lmm_accel"] is not None:
-            assert result.accel_available is True or result == _ACCEL_UNAVAILABLE
+        try:
+            import jamma.lmm._lmm_accel  # noqa: F401
+        except ImportError:
+            pytest.skip("extension not built, so the gate is not observable here")
+        assert _try_import_accel() is not None, f"value={value!r} engaged the gate"
 
     def test_truthy_values_engage_gate(self, monkeypatch):
         """Multiple truthy values all engage the gate."""
-        from jamma.lmm.compute_numpy import _ACCEL_UNAVAILABLE, _try_import_accel
+        from jamma.lmm.compute_numpy import _try_import_accel
 
         for value in ["1", "true", "yes", "TRUE", " 1 "]:
             monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", value)
-            result = _try_import_accel()
-            assert result == _ACCEL_UNAVAILABLE, (
+            assert _try_import_accel() is None, (
                 f"value={value!r} did not engage the gate"
             )
 
@@ -311,26 +301,3 @@ def test_gate_holds_across_the_whole_backend_selection_path():
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip().splitlines()[-1] == "CLEAN", proc.stdout
-
-
-def test_accel_unavailable_sentinel_invariant():
-    """The all-unavailable sentinel is every flag False and every symbol None.
-
-    The sentinel is built from a ``dict[str, Any]`` spread so its ``**`` unpack
-    type-checks against the callable symbol fields — which erases the static
-    field-completeness/type check the type checker would otherwise give. Pin
-    the invariant here: all flags ``False``, all symbols ``None``, and the
-    flag/symbol split covers every ``AccelImport`` field. A misclassified field
-    (e.g. a flag landing in ``_OBJECT_FIELDS``) would otherwise pass the type
-    checker and the equality-based fallback tests silently.
-    """
-    from jamma.lmm.compute_numpy import (
-        _ACCEL_UNAVAILABLE,
-        _FLAG_FIELDS,
-        _OBJECT_FIELDS,
-        AccelImport,
-    )
-
-    assert all(getattr(_ACCEL_UNAVAILABLE, f) is False for f in _FLAG_FIELDS)
-    assert all(getattr(_ACCEL_UNAVAILABLE, f) is None for f in _OBJECT_FIELDS)
-    assert set(_FLAG_FIELDS) | set(_OBJECT_FIELDS) == set(AccelImport._fields)

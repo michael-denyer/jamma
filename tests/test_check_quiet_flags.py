@@ -1,4 +1,4 @@
-"""Tests for scripts/check-quiet-flags.py.
+"""Tests for scripts/check_quiet_flags.py.
 
 The lint enforces CLAUDE.md's "No Quiet Flags Anywhere" rule and the
 hook-skip ban. Covers positive cases (flags must be caught), expected
@@ -8,29 +8,28 @@ negatives (documentation mentions, unrelated `-q` uses), and the
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import install_lint_script
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_SCRIPT = _REPO_ROOT / "scripts" / "check-quiet-flags.py"
+_SCRIPT = _REPO_ROOT / "scripts" / "check_quiet_flags.py"
 
 
 def _run(tmp_path: Path, rel_path: str, content: str) -> subprocess.CompletedProcess:
     """Copy the script into tmp_path/scripts/, write one target file, run it."""
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    shutil.copy2(_SCRIPT, scripts_dir / _SCRIPT.name)
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
 
     dst = tmp_path / rel_path
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(content)
 
     return subprocess.run(
-        [sys.executable, str(scripts_dir / _SCRIPT.name), str(dst)],
+        [sys.executable, str(script_copy), str(dst)],
         capture_output=True,
         text=True,
         check=False,
@@ -138,15 +137,13 @@ def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
     Skipping means a quiet flag inside that file passes the check while the
     hook reports success.
     """
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    shutil.copy2(_SCRIPT, scripts_dir / _SCRIPT.name)
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
 
     dst = tmp_path / "foo.sh"
     dst.write_bytes(b"pip install numpy --quiet\n\xff\xfe not utf-8\n")
 
     result = subprocess.run(
-        [sys.executable, str(scripts_dir / _SCRIPT.name), str(dst)],
+        [sys.executable, str(script_copy), str(dst)],
         capture_output=True,
         text=True,
         check=False,

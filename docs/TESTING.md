@@ -383,7 +383,7 @@ catch. The carve-out is:
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
 | LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` ([`tests/test_safety_gates.py:275`](../tests/test_safety_gates.py#L275)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
-| Compile-flag literals not in three forbidden entry points ([`scripts/check-compile-flag-literals.py`](../scripts/check-compile-flag-literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
+| Compile-flag literals not in three forbidden entry points ([`scripts/check_compile_flag_literals.py`](../scripts/check_compile_flag_literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
 | `_lmm_accel.c` reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 
 **Rules for adding a new structural source test:**
@@ -419,7 +419,7 @@ subprocess calls, dispatch routers where delegation IS the observable
 behavior. Not for internal functions.
 
 The "mocking numerical functions" anti-pattern is enforced by
-[`scripts/check-forbidden-patches.py`](../scripts/check-forbidden-patches.py),
+[`scripts/check_forbidden_patches.py`](../scripts/check_forbidden_patches.py),
 an AST-based pre-commit hook. It bans patching `numpy.linalg.*`,
 `scipy.*`, and JAMMA's own numerical modules
 (`compute_numpy`/`cn`, `likelihood`, `jlinalg`/`jl`,

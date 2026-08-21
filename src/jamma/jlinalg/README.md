@@ -98,7 +98,7 @@ C sources, compile flags, and link flags are owned by
 points (`hatch_build.py`, `_compile_jlinalg.py`,
 `src/jamma/lmm/_compile_accel.py`) all import from `_build_support` so
 they stay in sync. Bare flag literals outside `_build_support/` fail
-the `check-compile-flag-literals.py` pre-commit hook. LAPACK sources
+the `check_compile_flag_literals.py` pre-commit hook. LAPACK sources
 (`eigh.c`) use strict IEEE 754 flags (`-O2 -fno-fast-math`); other
 sources use `BASE_CFLAGS` (`-O3 -ftree-vectorize ...`).
 

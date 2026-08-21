@@ -3,7 +3,7 @@
 
 CLAUDE.md rule "No Quiet Flags Anywhere": when a tool fails silently, you
 can't diagnose the problem — you just see exit code 1 with no output. This
-hook catches the same class of drift that `check-compile-flag-literals.py`
+hook catches the same class of drift that `check_compile_flag_literals.py`
 catches for compile flags. Scope: CI workflows, shell scripts, pre-commit
 config, notebook ``%pip`` cells, and Python subprocess invocations.
 
@@ -23,8 +23,8 @@ for genuine use cases (e.g. ``ruff check --quiet`` in a diff-only context
 where exit code IS the output).
 
 Usage:
-  python3 scripts/check-quiet-flags.py            # repo-wide
-  python3 scripts/check-quiet-flags.py file1 f2   # specific files
+  python3 scripts/check_quiet_flags.py            # repo-wide
+  python3 scripts/check_quiet_flags.py file1 f2   # specific files
 """
 
 from __future__ import annotations
@@ -33,32 +33,32 @@ import re
 import sys
 from pathlib import Path
 
-# Files the hook scans when given no explicit args. Repo-wide sweep covers
-# CI, pre-commit config, shell scripts, and Python source.
-DEFAULT_GLOBS: tuple[str, ...] = (
+from _lint_common import allowed, read_lines, repo_root, report, tracked_files
+
+# What the hook scans when given no explicit args: CI, pre-commit config,
+# shell scripts, and Python source. These are git pathspecs, so `*` crosses
+# `/` and `src/*.py` reaches the whole package. Vendor directories, caches,
+# and build artifacts need no exclusion list — git does not track them.
+DEFAULT_PATHSPECS: tuple[str, ...] = (
     ".github/workflows/*.yml",
     ".github/workflows/*.yaml",
     ".pre-commit-config.yaml",
     "scripts/*.sh",
     "scripts/*.py",
-    "src/**/*.py",
-    "tests/**/*.py",
+    "src/*.py",
+    "tests/*.py",
     "hatch_build.py",
 )
 
-# Paths skipped entirely: vendor, cache, build artifacts, and this
-# script itself (which unavoidably mentions the banned flags in its own
-# documentation and pattern strings).
-SKIP_PREFIXES: tuple[str, ...] = (
-    ".venv/",
-    ".planning/",
-    ".beads/",
-    ".claude/",
-    "dist/",
-    "build/",
-    "__pycache__/",
-    "scripts/check-quiet-flags.py",
-    "tests/test_check_quiet_flags.py",
+# The two files that carry the banned flags as data rather than as
+# invocations: this lint documents and matches them, and its test feeds
+# them to it as fixtures. Both are tracked, so `tracked_files` cannot drop
+# them and this is not a second copy of .gitignore.
+SELF_EXCLUDE: frozenset[str] = frozenset(
+    {
+        "scripts/check_quiet_flags.py",
+        "tests/test_check_quiet_flags.py",
+    }
 )
 
 # Commands where ``-q`` unambiguously means "quiet". Extend as new tools
@@ -103,34 +103,29 @@ HOOK_SKIP_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 ALLOW_MARKER = "allow-quiet"
 
 
-def _iter_target_files(repo_root: Path, argv_files: list[str]) -> list[Path]:
+def _iter_target_files(argv_files: list[str]) -> list[Path]:
     if argv_files:
         return [Path(f).resolve() for f in argv_files]
-    out: list[Path] = []
-    for pattern in DEFAULT_GLOBS:
-        out.extend(repo_root.glob(pattern))
-    # De-dup while preserving order; drop skipped prefixes.
-    seen: set[Path] = set()
-    result: list[Path] = []
-    for p in out:
-        if p.is_absolute() and p.is_relative_to(repo_root):
-            rel = p.relative_to(repo_root).as_posix()
-        else:
-            rel = p.as_posix()
-        if any(rel.startswith(prefix) for prefix in SKIP_PREFIXES):
-            continue
-        if p in seen:
-            continue
-        seen.add(p)
-        if p.is_file():
-            result.append(p)
-    return result
+    root = repo_root()
+    return [
+        path
+        for path in tracked_files(*DEFAULT_PATHSPECS)
+        if path.relative_to(root).as_posix() not in SELF_EXCLUDE
+        # The index still lists a file deleted from the worktree without
+        # `git rm`. Reading it would fail the gate for an unrelated reason.
+        and path.is_file()
+    ]
 
 
-def _check_line(line: str) -> list[str]:
-    """Return list of violation descriptions found on a single line."""
-    if ALLOW_MARKER in line:
-        return []
+def _display(path: Path, root: Path) -> str:
+    """Path as written in a violation: repo-relative when it is inside."""
+    if path.is_absolute() and path.is_relative_to(root):
+        return path.relative_to(root).as_posix()
+    return str(path)
+
+
+def scan_line(line: str) -> list[str]:
+    """Return violation descriptions found on a single line."""
     violations: list[str] = []
 
     # Strip Python/YAML/shell comments so an in-comment mention like
@@ -170,58 +165,25 @@ def _strip_trailing_comment(line: str) -> str:
 
 
 def main(argv: list[str]) -> int:
-    repo_root = Path(__file__).resolve().parent.parent
-    files = _iter_target_files(repo_root, argv)
-    if not files:
-        return 0
-
+    root = repo_root()
     violations: list[str] = []
-    unreadable: list[str] = []
-    for path in files:
-        rel_path = (
-            path.relative_to(repo_root).as_posix()
-            if path.is_absolute() and path.is_relative_to(repo_root)
-            else str(path)
-        )
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            unreadable.append(f"{rel_path}: {type(exc).__name__}: {exc}")
-            continue
-        for lineno, line in enumerate(text.splitlines(), 1):
-            for v in _check_line(line):
-                rel = (
-                    path.relative_to(repo_root).as_posix()
-                    if path.is_absolute() and path.is_relative_to(repo_root)
-                    else str(path)
-                )
-                violations.append(f"{rel}:{lineno}: {v}")
+    for path in _iter_target_files(argv):
+        rel = _display(path, root)
+        lines = read_lines(path)
+        for i, line in enumerate(lines):
+            if allowed(lines, i, ALLOW_MARKER):
+                continue
+            violations.extend(f"{rel}:{i + 1}: {v}" for v in scan_line(line))
 
-    if unreadable:
-        print("Files could not be read, so they were not checked:", file=sys.stderr)
-        for u in unreadable:
-            print(f"  {u}", file=sys.stderr)
-        print(
-            f"\n{len(unreadable)} file(s) skipped. A skipped file is an "
-            "unchecked file, and this gate reports success only when every "
-            "target was read.",
-            file=sys.stderr,
-        )
-
-    if violations:
-        print("Quiet / hook-skip flag drift detected:", file=sys.stderr)
-        for v in violations:
-            print(f"  {v}", file=sys.stderr)
-        print(
-            f"\n{len(violations)} violation(s). CLAUDE.md bans --quiet/-q/"
-            "--silent project-wide: logs exist to be read. Hook-skip flags "
-            "(--no-verify, --no-gpg-sign, -c commit.gpgsign=false) need "
-            "explicit user authorization. Add '# allow-quiet: <reason>' on "
-            "the line for a documented exception.",
-            file=sys.stderr,
-        )
-        return 1
-    return 1 if unreadable else 0
+    return report(
+        "Quiet / hook-skip flag drift detected:",
+        violations,
+        f"{len(violations)} violation(s). CLAUDE.md bans --quiet/-q/"
+        "--silent project-wide: logs exist to be read. Hook-skip flags "
+        "(--no-verify, --no-gpg-sign, -c commit.gpgsign=false) need "
+        "explicit user authorization. Add '# allow-quiet: <reason>' on "
+        "the line for a documented exception.",
+    )
 
 
 if __name__ == "__main__":

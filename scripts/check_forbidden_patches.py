@@ -33,15 +33,18 @@ way single-line ones do.
 
 Usage::
 
-    python3 scripts/check-forbidden-patches.py        # repo-wide
-    python3 scripts/check-forbidden-patches.py f1 f2  # specific files
+    python3 scripts/check_forbidden_patches.py        # repo-wide
+    python3 scripts/check_forbidden_patches.py f1 f2  # specific files
 """
 
 from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+
+from _lint_common import allowed, read_lines, repo_root, report
 
 # Forbidden targets: each entry is (target_regex_after_open_paren, reason).
 # Each target is paired with every invocation prefix to build the full
@@ -181,69 +184,45 @@ DEFAULT_GLOBS: tuple[str, ...] = ("tests/**/*.py",)
 def _iter_target_files(args: list[str]) -> list[Path]:
     if args:
         return [Path(a) for a in args if Path(a).suffix == ".py"]
-    repo_root = Path(__file__).resolve().parent.parent
+    root = repo_root()
     files: list[Path] = []
     for pattern in DEFAULT_GLOBS:
-        files.extend(repo_root.glob(pattern))
+        files.extend(root.glob(pattern))
     return sorted(files)
 
 
-class _ScanError(Exception):
-    """Raised when a target file cannot be read.
+def _end_of_call(lines: Sequence[str], start: int) -> int:
+    """Return the index of the last physical line of the call on ``start``.
 
-    The gate must surface this — silently treating a read failure as
-    "no findings" would hide both the broken file and the fact that the
-    gate skipped it.
-    """
-
-
-def _allow_window_for_match(lines: list[str], match_line: int) -> range:
-    """Return the range of physical lines on which an allow-patch comment
-    applies to a match starting at ``match_line``.
-
-    Multi-line ``patch(...)`` calls span a paren-balanced region; the
-    comment may appear on any line in that region. We approximate by
-    counting parens until we close the open call (or hit EOF).
+    Multi-line ``patch(...)`` calls span a paren-balanced region and the
+    allow comment may sit on any line of it, so count parens until the call
+    closes (or EOF).
 
     The paren counter is naive about parens inside string literals — that
     would only matter if a forbidden target string contained a stray ``(``
     or ``)``, which they don't.
     """
-    line = lines[match_line]
-    depth = line.count("(") - line.count(")")
-    end = match_line
+    depth = lines[start].count("(") - lines[start].count(")")
+    end = start
     while depth > 0 and end + 1 < len(lines):
         end += 1
         depth += lines[end].count("(") - lines[end].count(")")
-    return range(match_line, end + 1)
+    return end
 
 
-def _scan_file(path: Path) -> list[tuple[int, str, str]]:
-    """Return [(line_number, matched_text, reason), ...] for forbidden patches.
-
-    Raises ``_ScanError`` if the file cannot be read.
-    """
-    findings: list[tuple[int, str, str]] = []
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise _ScanError(f"{path}: {exc}") from exc
-    lines = text.splitlines()
-    for lineno, line in enumerate(lines):
-        for pattern, reason in FORBIDDEN_PATTERNS:
-            match = pattern.search(line)
-            if not match:
-                continue
-            allow_window = _allow_window_for_match(lines, lineno)
-            if any(ALLOW_RE.search(lines[i]) for i in allow_window):
-                continue
-            findings.append((lineno + 1, match.group(0), reason))
+def scan_line(line: str) -> list[tuple[str, str]]:
+    """Return ``(matched_text, reason)`` for every forbidden patch on a line."""
+    findings: list[tuple[str, str]] = []
+    for pattern, reason in FORBIDDEN_PATTERNS:
+        match = pattern.search(line)
+        if match is not None:
+            findings.append((match.group(0), reason))
     return findings
 
 
 def main(argv: list[str]) -> int:
     files = _iter_target_files(argv)
-    repo_root = Path(__file__).resolve().parent.parent
+    root = repo_root()
 
     # If args were passed but none had a .py suffix, fall back to repo-wide
     # scanning rather than passing vacuously. Pre-commit can hand the hook a
@@ -251,48 +230,36 @@ def main(argv: list[str]) -> int:
     # than silently green-light it.
     if argv and not files:
         sys.stderr.write(
-            "[check-forbidden-patches] no .py files in args; "
+            "[check_forbidden_patches] no .py files in args; "
             "falling back to repo-wide scan.\n"
         )
         files = _iter_target_files([])
 
-    failures: list[str] = []
-    read_errors: list[str] = []
+    violations: list[str] = []
     for path in files:
-        try:
-            scan_results = _scan_file(path)
-        except _ScanError as exc:
-            read_errors.append(str(exc))
-            continue
-        for lineno, snippet, reason in scan_results:
-            try:
-                rel = path.relative_to(repo_root)
-            except ValueError:
-                rel = path
-            failures.append(f"{rel}:{lineno}: {snippet!r}\n    -> {reason}")
+        lines = read_lines(path)
+        rel = path.relative_to(root) if path.is_relative_to(root) else path
+        for i, line in enumerate(lines):
+            findings = scan_line(line)
+            if not findings:
+                continue
+            # The marker may sit on any physical line of a multi-line call,
+            # so ask from the call's last line back to its first.
+            last = _end_of_call(lines, i)
+            if allowed(lines, last, ALLOW_RE, window=last - i):
+                continue
+            violations.extend(
+                f"{rel}:{i + 1}: {snippet!r}\n    -> {reason}"
+                for snippet, reason in findings
+            )
 
-    if read_errors:
-        sys.stderr.write(
-            "Forbidden-patches gate could not read the following files. "
-            "The gate is non-functional until these are resolved:\n\n"
-        )
-        sys.stderr.write("\n".join(read_errors))
-        sys.stderr.write("\n")
-        return 1
-
-    if failures:
-        sys.stderr.write(
-            "Forbidden patch targets found in tests "
-            "(see docs/TESTING.md §2.2 boundary catalogue):\n\n"
-        )
-        sys.stderr.write("\n\n".join(failures))
-        sys.stderr.write(
-            "\n\nIf the patch is genuinely necessary (e.g. short-circuiting "
-            "for warning-routing tests), add `# allow-patch: <reason>` to "
-            "the line.\n"
-        )
-        return 1
-    return 0
+    return report(
+        "Forbidden patch targets found in tests "
+        "(see docs/TESTING.md §2.2 boundary catalogue):",
+        violations,
+        "If the patch is genuinely necessary (e.g. short-circuiting for "
+        "warning-routing tests), add `# allow-patch: <reason>` to the line.",
+    )
 
 
 if __name__ == "__main__":

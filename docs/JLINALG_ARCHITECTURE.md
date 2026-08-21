@@ -237,7 +237,7 @@ invariant:
   LAPACK dispatch and any future LAPACK-related C must keep strict IEEE 754
   semantics so vendor-LAPACK error bounds stay valid.
 
-The pre-commit hook `scripts/check-compile-flag-literals.py` bans bare
+The pre-commit hook `scripts/check_compile_flag_literals.py` bans bare
 `-O3`/`-fno-fast-math`/`-fopenmp` literals anywhere outside
 `_build_support/` (with one explicit exception for the `-march=native`
 dev-mode flag in `_compile_accel.py`). A second hook

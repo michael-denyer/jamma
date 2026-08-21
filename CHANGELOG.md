@@ -9,7 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`check-doc-anchors.py` now states what a passing run does not prove.** For
+- **The five `scripts/check_*.py` lints share one `_lint_common.py` and are
+  named with underscores.** Each had carried its own copy of the same five
+  steps — find the repo root, list the files, read one, decide whether an
+  opt-out comment covers a finding, print the violations and pick an exit
+  code — and the copies had drifted: two printed a different shape of report
+  for the same kind of failure, and `repo_root = Path(__file__)...` appeared
+  five times. `repo_root()`, `tracked_files()`, `read_lines()`, `allowed()`
+  and `report()` now live in one module and each lint keeps only its pattern
+  table and its `scan_line`. The hyphens had to go because
+  `check-quiet-flags.py` is not an importable module name, so there was
+  nowhere to import that module from; the `.pre-commit-config.yaml` entries
+  and the tests' `_SCRIPT` constants moved with them.
+
+  Three behaviours changed with it. `read_lines` raises on a file it cannot
+  decode instead of collecting the failure and carrying on, so the gate dies
+  naming the file rather than reporting how many it skipped — same exit code,
+  same reason text. `check_quiet_flags` enumerates through `git ls-files`
+  rather than `Path.glob` plus a seven-entry `SKIP_PREFIXES`, six of whose
+  entries were a second copy of `.gitignore`; the two that were not (the lint
+  and its own test, which carry the banned flags as fixture data) remain.
+  `check_forbidden_patches` prints its findings in the same indented shape as
+  the other four instead of separating them with blank lines.
+
+- **`check_doc_anchors.py` now states what a passing run does not prove.** For
   `docs/CODEMAP.md`'s tables the check has to work out which symbol an anchor
   means, and that is a guess: the rows label the link `file.py:123` and put the
   symbol in a separate column, so `_wanted_symbol` takes the first plausible

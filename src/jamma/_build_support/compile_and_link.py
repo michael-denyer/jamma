@@ -8,7 +8,7 @@ recompile reaches the same helpers the wheel was built with.
 
 No flag literal belongs outside this module; the pre-commit hook
 ``no-compile-flag-literals-outside-build-support``
-(scripts/check-compile-flag-literals.py) enforces that, and
+(scripts/check_compile_flag_literals.py) enforces that, and
 ``verify-compile-invocations-match`` confirms the three entry points route
 through ``compile_jlinalg`` below.
 """

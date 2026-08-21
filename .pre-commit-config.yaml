@@ -170,7 +170,7 @@ repos:
         pass_filenames: false
       - id: no-quiet-flags  # allow-quiet: hook name documents the flags it bans
         name: ban --quiet/-q/--silent and hook-skip flags (CLAUDE.md)  # allow-quiet
-        entry: scripts/check-quiet-flags.py
+        entry: scripts/check_quiet_flags.py
         language: system
         # Run repo-wide on every invocation (the script sweeps its own
         # default globs); pass_filenames=false prevents prek from also
@@ -179,13 +179,13 @@ repos:
         always_run: true
       - id: check-test-timeouts
         name: flag unjustified long @pytest.mark.timeout values
-        entry: scripts/check-test-timeouts.py
+        entry: scripts/check_test_timeouts.py
         language: system
         files: ^tests/.*\.py$
         pass_filenames: false
       - id: check-forbidden-patches
         name: ban patching numerical functions and internal jamma collaborators
-        entry: scripts/check-forbidden-patches.py
+        entry: scripts/check_forbidden_patches.py
         language: system
         files: ^tests/.*\.py$
         pass_filenames: false
@@ -198,7 +198,7 @@ repos:
       # Runs in ~0.2s.
       - id: check-doc-anchors
         name: doc line anchors point at the symbols they name
-        entry: scripts/check-doc-anchors.py
+        entry: scripts/check_doc_anchors.py
         language: system
         always_run: true
         pass_filenames: false
@@ -210,7 +210,7 @@ repos:
         pass_filenames: false
       - id: no-compile-flag-literals-outside-build-support
         name: ban compile-flag literals outside jamma._build_support
-        entry: scripts/check-compile-flag-literals.py
+        entry: scripts/check_compile_flag_literals.py
         language: system
         files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|core/recompile)\.py|src/jamma/_build_support/)
         pass_filenames: false

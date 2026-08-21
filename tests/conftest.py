@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +21,10 @@ _REQUIRED_TIER_MARKERS = frozenset({"tier0", "tier1", "tier2", "slow", "benchmar
 _TIER_MARKER_EXEMPT_FILES: frozenset[str] = frozenset()
 
 _TESTS_DIR = Path(__file__).resolve().parent
+
+# Shared plumbing every scripts/check_*.py lint imports. install_lint_script()
+# below copies it alongside whichever lint a test is driving.
+_LINT_COMMON = _TESTS_DIR.parent / "scripts" / "_lint_common.py"
 
 # A skip reason naming a fixture claims something under tests/fixtures/ could
 # not be found. Every one of those is committed, so the only way to reach such
@@ -435,6 +440,29 @@ def require_fixture(*paths: Path) -> None:
         "wrong rather than absent. Fix the paths; do not skip the test. "
         "See docs/TESTING.md §1.11."
     )
+
+
+def install_lint_script(script: Path, scripts_dir: Path) -> Path:
+    """Copy a ``scripts/check_*.py`` lint into ``scripts_dir`` and return it.
+
+    Every lint test drives its script against a synthetic tree, which means
+    reproducing the layout the script expects: it derives the repository root
+    from its own location, and it imports ``scripts/_lint_common.py`` from
+    ``sys.path[0]``. Copying the lint alone gives a tree where every test
+    fails on ImportError, so the shared module travels with it.
+
+    Args:
+        script: The real lint under ``scripts/``.
+        scripts_dir: The synthetic ``scripts/`` directory, created if absent.
+
+    Returns:
+        Path to the copied lint, ready to run.
+    """
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_LINT_COMMON, scripts_dir / _LINT_COMMON.name)
+    destination = scripts_dir / script.name
+    shutil.copy2(script, destination)
+    return destination
 
 
 def load_phenotypes_from_fam(fam_path: Path) -> np.ndarray:

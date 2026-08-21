@@ -258,3 +258,71 @@ def test_main_returns_zero_on_real_tree() -> None:
         f"Real-tree drift detected: {[r.spec.label for r in stale]}. "
         f"Rebuild with the commands printed by check_c_extension_freshness.py."
     )
+
+
+@pytest.mark.tier0
+def test_unreadable_source_is_reported_not_reported_as_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OSError while stat-ing sources must surface, not read as up to date.
+
+    The pre-push gate is the blocking one. If it cannot see the sources it
+    must say so, otherwise a stale .so pushes with a green check.
+    """
+    freshness = _load_script_module()
+
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    c_file = src_dir / "foo.c"
+    c_file.write_text("int main(){}")
+    so_path = tmp_path / "foo.so"
+    so_path.write_bytes(b"fake")
+
+    real_stat = Path.stat
+
+    def deny(self: Path, *args, **kwargs):
+        if self == c_file:
+            raise PermissionError(13, "Permission denied")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", deny)
+
+    spec = freshness.ExtensionSpec(
+        label="fake",
+        so_path=so_path,
+        source_globs=((src_dir, "*.c"),),
+        rebuild_command="fake-rebuild",
+    )
+    result = freshness._check_extension(spec)
+
+    assert result.error is not None
+    assert "PermissionError" in result.error
+    assert result.is_stale is False
+
+
+@pytest.mark.tier0
+def test_main_fails_when_an_extension_could_not_be_checked(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main() is the pre-push gate. An unchecked extension exits non-zero."""
+    freshness = _load_script_module()
+
+    spec = freshness.ExtensionSpec(
+        label="fake",
+        so_path=Path("/nonexistent/fake.so"),
+        source_globs=(),
+        rebuild_command="fake-rebuild",
+    )
+    unchecked = freshness.FreshnessResult(
+        spec=spec,
+        so_exists=False,
+        newest_source=None,
+        newest_source_mtime=0.0,
+        so_mtime=0.0,
+        is_stale=False,
+        error="PermissionError: Permission denied",
+    )
+    monkeypatch.setattr(freshness, "check_all", lambda: [unchecked])
+
+    assert freshness.main() == 1
+    assert "could not be checked" in capsys.readouterr().err

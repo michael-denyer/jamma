@@ -176,10 +176,17 @@ def main(argv: list[str]) -> int:
         return 0
 
     violations: list[str] = []
+    unreadable: list[str] = []
     for path in files:
+        rel_path = (
+            path.relative_to(repo_root).as_posix()
+            if path.is_absolute() and path.is_relative_to(repo_root)
+            else str(path)
+        )
         try:
             text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
+            unreadable.append(f"{rel_path}: {type(exc).__name__}: {exc}")
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
             for v in _check_line(line):
@@ -189,6 +196,17 @@ def main(argv: list[str]) -> int:
                     else str(path)
                 )
                 violations.append(f"{rel}:{lineno}: {v}")
+
+    if unreadable:
+        print("Files could not be read, so they were not checked:", file=sys.stderr)
+        for u in unreadable:
+            print(f"  {u}", file=sys.stderr)
+        print(
+            f"\n{len(unreadable)} file(s) skipped. A skipped file is an "
+            "unchecked file, and this gate reports success only when every "
+            "target was read.",
+            file=sys.stderr,
+        )
 
     if violations:
         print("Quiet / hook-skip flag drift detected:", file=sys.stderr)
@@ -203,7 +221,7 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 1
-    return 0
+    return 1 if unreadable else 0
 
 
 if __name__ == "__main__":

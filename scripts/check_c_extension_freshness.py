@@ -19,7 +19,7 @@ walks the known C sources, compares their mtimes against the compiled
 
 Exit codes:
   0 — all fresh OR no ``.so`` present (nothing to compare against)
-  1 — at least one extension is stale
+  1 — at least one extension is stale, or could not be checked at all
 
 Use as:
   - conftest.py: `check_all()` returns structured results for a warning
@@ -93,15 +93,19 @@ class FreshnessResult:
     newest_source_mtime: float
     so_mtime: float
     is_stale: bool
+    error: str | None = None
 
 
 def _check_extension(spec: ExtensionSpec) -> FreshnessResult:
     """Compare a single extension's .so mtime against its newest source.
 
     Any ``OSError`` (unreadable ``.so``, missing source raced by glob,
-    permission issues on locked-down hosts) degrades to ``is_stale=False``
-    so callers — including pytest_configure — never abort on transient FS
-    failures. The pre-push hook re-runs in a clean environment.
+    permission issues on locked-down hosts) lands in ``error`` rather than
+    raising, so pytest_configure never aborts on a transient FS failure.
+    ``error`` is set and ``is_stale`` stays False, which keeps the conftest
+    advisory quiet while letting ``main`` fail the pre-push gate. Reporting
+    "up to date" for an extension nobody could look at is the one answer
+    this must not give.
     """
     try:
         if not spec.so_path.exists():
@@ -124,7 +128,7 @@ def _check_extension(spec: ExtensionSpec) -> FreshnessResult:
                 if m > newest_mtime:
                     newest_mtime = m
                     newest_source = src
-    except OSError:
+    except OSError as exc:
         return FreshnessResult(
             spec=spec,
             so_exists=False,
@@ -132,6 +136,7 @@ def _check_extension(spec: ExtensionSpec) -> FreshnessResult:
             newest_source_mtime=0.0,
             so_mtime=0.0,
             is_stale=False,
+            error=f"{type(exc).__name__}: {exc}",
         )
 
     is_stale = newest_source is not None and newest_mtime > so_mtime
@@ -152,6 +157,8 @@ def check_all() -> list[FreshnessResult]:
 
 def _format_result(r: FreshnessResult) -> str:
     """Human-readable drift report for one extension."""
+    if r.error is not None:
+        return f"  {r.spec.label}: could not be checked ({r.error})"
     if not r.so_exists:
         return f"  {r.spec.label}: not built (no .so at {r.spec.so_path}) — skipped"
     if not r.is_stale:
@@ -168,9 +175,17 @@ def _format_result(r: FreshnessResult) -> str:
 def main() -> int:
     results = check_all()
     stale = [r for r in results if r.is_stale]
+    unchecked = [r for r in results if r.error is not None]
     print("C extension freshness check:")
     for r in results:
         print(_format_result(r))
+    if unchecked:
+        print(
+            f"\n{len(unchecked)} extension(s) could not be checked. A "
+            f"freshness gate that cannot read the sources cannot vouch for "
+            f"the .so, so this is a failure, not a pass.",
+            file=sys.stderr,
+        )
     if stale:
         print(
             f"\n{len(stale)} extension(s) stale. Tests may silently run against "
@@ -178,7 +193,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    return 0
+    return 1 if unchecked else 0
 
 
 if __name__ == "__main__":

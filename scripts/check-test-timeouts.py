@@ -43,12 +43,16 @@ def main() -> int:
         return 0
 
     violations: list[str] = []
+    unreadable: list[str] = []
     for path in test_dir.rglob("*.py"):
         if path.name in SKIP_FILES:
             continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
+            unreadable.append(
+                f"{path.relative_to(repo_root).as_posix()}: {type(exc).__name__}: {exc}"
+            )
             continue
         for lineno, line in enumerate(lines, 1):
             match = TIMEOUT_PATTERN.search(line)
@@ -69,6 +73,19 @@ def main() -> int:
                 "'# justified: <reason>' comment"
             )
 
+    if unreadable:
+        print(
+            "Test files could not be read, so they were not checked:", file=sys.stderr
+        )
+        for u in unreadable:
+            print(f"  {u}", file=sys.stderr)
+        print(
+            f"\n{len(unreadable)} file(s) skipped. A skipped file is an "
+            "unchecked file, and this gate reports success only when every "
+            "test file was read.",
+            file=sys.stderr,
+        )
+
     if violations:
         print("Unjustified long test timeouts detected:", file=sys.stderr)
         for v in violations:
@@ -82,7 +99,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    return 0
+    return 1 if unreadable else 0
 
 
 if __name__ == "__main__":

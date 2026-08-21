@@ -94,3 +94,27 @@ def test_justified_too_far_above_does_not_count(tmp_path):
         ),
     )
     assert result.returncode == 1
+
+
+@pytest.mark.tier0
+def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
+    """A test file the lint cannot decode must fail the gate, not be skipped."""
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_SCRIPT, scripts_dir / _SCRIPT.name)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_stub.py").write_bytes(
+        b"@pytest.mark.timeout(600)\n\xff\xfe not utf-8\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(scripts_dir / _SCRIPT.name)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "test_stub.py" in result.stderr
+    assert "could not be read" in result.stderr

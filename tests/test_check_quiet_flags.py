@@ -129,3 +129,29 @@ def test_shebang_line_is_ignored(tmp_path):
     verify nothing weird happens."""
     result = _run(tmp_path, "s.py", "#!/usr/bin/env python3\nprint('ok')\n")
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.tier0
+def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
+    """A file the lint cannot decode must fail the gate, not be skipped.
+
+    Skipping means a quiet flag inside that file passes the check while the
+    hook reports success.
+    """
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    shutil.copy2(_SCRIPT, scripts_dir / _SCRIPT.name)
+
+    dst = tmp_path / "foo.sh"
+    dst.write_bytes(b"pip install numpy --quiet\n\xff\xfe not utf-8\n")
+
+    result = subprocess.run(
+        [sys.executable, str(scripts_dir / _SCRIPT.name), str(dst)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "foo.sh" in result.stderr
+    assert "could not be read" in result.stderr

@@ -42,6 +42,7 @@ HAS_OPENMP: Final[bool]
 """True if the extension was compiled with OpenMP support."""
 
 # BLAS capability flags (set during init based on vendor detection).
+blas_has_dgemm: Final[int]
 blas_has_dsyrk: Final[int]
 blas_has_dsyevd: Final[int]
 blas_has_dsyevr: Final[int]
@@ -69,6 +70,10 @@ def dgemm(
 
     Returns:
         Result matrix C = op(A) @ op(B), float64.
+
+    Raises:
+        RuntimeError: If no vendor dgemm is wired (blas_has_dgemm == 0).
+            jamma.jlinalg binds the NumPy dgemm in that case.
     """
 
 def dsyrk(

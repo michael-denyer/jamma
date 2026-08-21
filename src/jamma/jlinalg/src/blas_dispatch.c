@@ -117,6 +117,17 @@ static int _debug_enabled(void) {
     return val && val[0] == '1';
 }
 
+/* JLINALG_NO_VENDOR_DGEMM — leave vendor dgemm unwired even when an ILP64
+ * backend resolves, so blas_has_external() reports 0 with the extension
+ * loaded and the rest of dispatch intact.  That is the state an LP64-only
+ * host is permanently in (distro or conda numpy), and CI never reaches it
+ * because PyPI numpy ships ILP64 scipy_openblas64.  Truthy values follow
+ * jamma.core.constants.env_flag: anything except unset, "" and "0". */
+static int _no_vendor_dgemm(void) {
+    const char *val = getenv("JLINALG_NO_VENDOR_DGEMM");
+    return val && val[0] != '\0' && !(val[0] == '0' && val[1] == '\0');
+}
+
 /* ---------------------------------------------------------------------------
  * Backend name detection from library path
  * ---------------------------------------------------------------------------
@@ -1219,15 +1230,20 @@ int blas_dispatch_init(void) {
 
     if (best && best->is_ilp64) {
         /* ILP64 backend — wire dgemm */
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: using %s (ILP64) for dgemm\n", best->name);
-        g_dgemm_ilp64 = best->dgemm_ilp64;
-        g_dgemm_lp64 = best->dgemm_lp64;
-        g_cblas_dgemm = best->cblas_dgemm;
-        g_cblas_dgemm_ilp64 = best->cblas_dgemm_ilp64;
+        if (_no_vendor_dgemm()) {
+            fprintf(stderr, "jlinalg_dispatch: INFO: JLINALG_NO_VENDOR_DGEMM set -- "
+                            "vendor dgemm left unwired, numpy fallback in use.\n");
+        } else {
+            if (dbg) fprintf(stderr, "jlinalg_dispatch: using %s (ILP64) for dgemm\n", best->name);
+            g_dgemm_ilp64 = best->dgemm_ilp64;
+            g_dgemm_lp64 = best->dgemm_lp64;
+            g_cblas_dgemm = best->cblas_dgemm;
+            g_cblas_dgemm_ilp64 = best->cblas_dgemm_ilp64;
+            g_has_vendor_dgemm = 1;
+        }
         g_is_ilp64 = 1;
         g_backend_name = best->name;
         g_blas_handle = best->handle;
-        g_has_vendor_dgemm = 1;
 
         /* Wire dsyrk — only ILP64 pointers (LP64 dsyrk is not dispatched,
          * same policy as dgemm: LP64 is not wired for numerical consistency) */

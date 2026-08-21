@@ -18,6 +18,8 @@ Exports:
     dsyrk: Symmetric rank-k update K = X @ X.T via vendor BLAS or NumPy.
     dsyr2k: Symmetric rank-2k update C -= A @ B.T + B @ A.T (NumPy).
     eigh: Eigenvalues and eigenvectors of a symmetric matrix via vendor LAPACK.
+    blas_has_dgemm: True if ILP64 vendor DGEMM is available. When 0, dgemm is
+        the NumPy implementation -- the C one raises RuntimeError.
     blas_has_dsyevd: True if ILP64 vendor DSYEVD is available.
     blas_has_dsyevr: True if ILP64 vendor DSYEVR is available.
     blas_has_dsyrk: True if ILP64 vendor DSYRK is available.
@@ -36,6 +38,9 @@ Env vars:
         "numpy-fallback-forced" so the sanitizer workflow can confirm the
         gate engaged (distinguishable from the natural "numpy-fallback"
         value used when the .so genuinely failed to import).
+    JLINALG_NO_VENDOR_DGEMM: when truthy, dispatch leaves vendor dgemm
+        unwired, so blas_has_dgemm reports 0 with the extension loaded. That
+        is the permanent state of an LP64-only host, which CI never reaches.
 """
 
 from __future__ import annotations
@@ -50,7 +55,7 @@ from jamma.core.constants import env_flag
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
 
-_EXPECTED_JLINALG_ABI = 13  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+_EXPECTED_JLINALG_ABI = 14  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
 
 
 def _validate_dsyrk(X: _np.ndarray, out: _np.ndarray | None, beta: float) -> None:
@@ -187,6 +192,78 @@ def _dsyrk_numpy(
 _dsyrk_backend = _dsyrk_numpy_impl
 
 
+def _dgemm_numpy(
+    A: _np.ndarray,
+    B: _np.ndarray,
+    transa: str = "N",
+    transb: str = "N",
+    out: _np.ndarray | None = None,
+) -> _np.ndarray:
+    """Compute matrix-matrix product op(A) @ op(B).
+
+    Args:
+        A: Left matrix, float64, C-contiguous.
+        B: Right matrix, float64, C-contiguous.
+        transa: 'N' (no transpose) or 'T' (transpose A).
+        transb: 'N' (no transpose) or 'T' (transpose B).
+        out: Optional preallocated output array. If provided, the result
+            is stored in this buffer and the same array is returned.
+            Must be 2-D float64, C-contiguous, with shape (M, N)
+            matching the result dimensions.
+
+    Returns:
+        Result matrix C = op(A) @ op(B), float64.
+
+    Raises:
+        ValueError: If A or B is not 2-D, inner dimensions don't match,
+            or out has wrong shape/dtype/layout.
+    """
+    if A.ndim != 2:
+        raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
+    if B.ndim != 2:
+        raise ValueError(f"dgemm: B must be a 2-D array, got {B.ndim}-D")
+    if not isinstance(transa, str):
+        raise TypeError(f"dgemm: transa must be a string, got {type(transa).__name__}")
+    if not isinstance(transb, str):
+        raise TypeError(f"dgemm: transb must be a string, got {type(transb).__name__}")
+    if transa.upper() not in ("N", "T"):
+        raise ValueError(f"dgemm: transa must be 'N' or 'T', got '{transa}'")
+    if transb.upper() not in ("N", "T"):
+        raise ValueError(f"dgemm: transb must be 'N' or 'T', got '{transb}'")
+    _A = A.T if transa.upper() == "T" else A
+    _B = B.T if transb.upper() == "T" else B
+    if _A.shape[1] != _B.shape[0]:
+        raise ValueError(
+            f"dgemm: op(A) columns ({_A.shape[1]}) must match "
+            f"op(B) rows ({_B.shape[0]})"
+        )
+    if out is not None:
+        expected = (_A.shape[0], _B.shape[1])
+        if out.ndim != 2 or out.shape != expected:
+            raise ValueError(
+                f"dgemm: out shape {out.shape} doesn't match result shape {expected}"
+            )
+        if out.dtype != _np.float64:
+            raise ValueError(f"dgemm: out must be float64, got {out.dtype}")
+        if not out.flags["C_CONTIGUOUS"]:
+            raise ValueError("dgemm: out must be C-contiguous")
+        if not out.flags["WRITEABLE"]:
+            raise ValueError("dgemm: out must be writeable")
+        _np.matmul(
+            _A.astype(_np.float64, copy=False),
+            _B.astype(_np.float64, copy=False),
+            out=out,
+        )
+        return out
+    return _np.asarray(
+        _np.matmul(
+            _A.astype(_np.float64, copy=False),
+            _B.astype(_np.float64, copy=False),
+        ),
+        dtype=_np.float64,
+    )
+
+
 # ASAN/UBSAN sanitizer workflow needs a way to skip the
 # _jlinalg.so import entirely. RESEARCH §"Pitfall 4" — ASAN + dlopen(...,
 # RTLD_LAZY) inside blas_dispatch.c can produce false-positive
@@ -209,6 +286,7 @@ else:
             ABI_VERSION,
             HAS_OPENMP,
             blas_backend,
+            blas_has_dgemm,
             blas_has_dgeqrf,
             blas_has_dgesvd,
             blas_has_dsyevd,
@@ -217,13 +295,15 @@ else:
             blas_has_lapacke_dsyevd,
             blas_is_ilp64,
             compute_snp_stats_chunk,
-            dgemm,
             eigh,
             get_n_threads,
             jlinalg_isa,
             qr,
             set_n_threads,
             svd,
+        )
+        from jamma.jlinalg._jlinalg import (
+            dgemm as _dgemm_native,
         )
         from jamma.jlinalg._jlinalg import (
             dsyrk as _dsyrk_native,
@@ -239,6 +319,7 @@ else:
         HAS_C_EXTENSION: bool = True
 
         # C extension loaded, but vendor BLAS/LAPACK may not be available.
+        dgemm = _dgemm_native if blas_has_dgemm else _dgemm_numpy
         _dsyrk_backend = _dsyrk_native if blas_has_dsyrk else _dsyrk_numpy_impl
 
         if not blas_has_dsyevd and not blas_has_dsyevr:
@@ -307,6 +388,7 @@ else:
                     ABI_VERSION,
                     HAS_OPENMP,
                     blas_backend,
+                    blas_has_dgemm,
                     blas_has_dgeqrf,
                     blas_has_dgesvd,
                     blas_has_dsyevd,
@@ -315,13 +397,15 @@ else:
                     blas_has_lapacke_dsyevd,
                     blas_is_ilp64,
                     compute_snp_stats_chunk,
-                    dgemm,
                     eigh,
                     get_n_threads,
                     jlinalg_isa,
                     qr,
                     set_n_threads,
                     svd,
+                )
+                from jamma.jlinalg._jlinalg import (
+                    dgemm as _dgemm_native,
                 )
                 from jamma.jlinalg._jlinalg import (
                     dsyrk as _dsyrk_native,
@@ -336,6 +420,7 @@ else:
                     )
 
                 HAS_C_EXTENSION: bool = True
+                dgemm = _dgemm_native if blas_has_dgemm else _dgemm_numpy
                 _dsyrk_backend = _dsyrk_native if blas_has_dsyrk else _dsyrk_numpy_impl
             except (ImportError, OSError) as _retry_exc:
                 warnings.warn(
@@ -375,6 +460,7 @@ if not HAS_C_EXTENSION:
     # acceptable form — a `dir()` check is order-dependent and unreliable.
     globals().setdefault("blas_backend", "numpy-fallback")
     globals().setdefault("blas_is_ilp64", 0)
+    blas_has_dgemm: int = 0
     blas_has_dsyrk: int = 0
     blas_has_dsyevd: int = 0
     blas_has_dsyevr: int = 0
@@ -426,81 +512,7 @@ if not HAS_C_EXTENSION:
             n_ab[:] = _np.sum((data == 1) & valid, axis=0)
             n_bb[:] = _np.sum((data == 2) & valid, axis=0)
 
-    def dgemm(
-        A: _np.ndarray,
-        B: _np.ndarray,
-        transa: str = "N",
-        transb: str = "N",
-        out: _np.ndarray | None = None,
-    ) -> _np.ndarray:
-        """Compute matrix-matrix product op(A) @ op(B).
-
-        Args:
-            A: Left matrix, float64, C-contiguous.
-            B: Right matrix, float64, C-contiguous.
-            transa: 'N' (no transpose) or 'T' (transpose A).
-            transb: 'N' (no transpose) or 'T' (transpose B).
-            out: Optional preallocated output array. If provided, the result
-                is stored in this buffer and the same array is returned.
-                Must be 2-D float64, C-contiguous, with shape (M, N)
-                matching the result dimensions.
-
-        Returns:
-            Result matrix C = op(A) @ op(B), float64.
-
-        Raises:
-            ValueError: If A or B is not 2-D, inner dimensions don't match,
-                or out has wrong shape/dtype/layout.
-        """
-        if A.ndim != 2:
-            raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
-        if B.ndim != 2:
-            raise ValueError(f"dgemm: B must be a 2-D array, got {B.ndim}-D")
-        if not isinstance(transa, str):
-            raise TypeError(
-                f"dgemm: transa must be a string, got {type(transa).__name__}"
-            )
-        if not isinstance(transb, str):
-            raise TypeError(
-                f"dgemm: transb must be a string, got {type(transb).__name__}"
-            )
-        if transa.upper() not in ("N", "T"):
-            raise ValueError(f"dgemm: transa must be 'N' or 'T', got '{transa}'")
-        if transb.upper() not in ("N", "T"):
-            raise ValueError(f"dgemm: transb must be 'N' or 'T', got '{transb}'")
-        _A = A.T if transa.upper() == "T" else A
-        _B = B.T if transb.upper() == "T" else B
-        if _A.shape[1] != _B.shape[0]:
-            raise ValueError(
-                f"dgemm: op(A) columns ({_A.shape[1]}) must match "
-                f"op(B) rows ({_B.shape[0]})"
-            )
-        if out is not None:
-            expected = (_A.shape[0], _B.shape[1])
-            if out.ndim != 2 or out.shape != expected:
-                raise ValueError(
-                    f"dgemm: out shape {out.shape} doesn't match "
-                    f"result shape {expected}"
-                )
-            if out.dtype != _np.float64:
-                raise ValueError(f"dgemm: out must be float64, got {out.dtype}")
-            if not out.flags["C_CONTIGUOUS"]:
-                raise ValueError("dgemm: out must be C-contiguous")
-            if not out.flags["WRITEABLE"]:
-                raise ValueError("dgemm: out must be writeable")
-            _np.matmul(
-                _A.astype(_np.float64, copy=False),
-                _B.astype(_np.float64, copy=False),
-                out=out,
-            )
-            return out
-        return _np.asarray(
-            _np.matmul(
-                _A.astype(_np.float64, copy=False),
-                _B.astype(_np.float64, copy=False),
-            ),
-            dtype=_np.float64,
-        )
+    dgemm = _dgemm_numpy
 
     _dsyrk_backend = _dsyrk_numpy_impl
 
@@ -788,6 +800,7 @@ __all__ = [
     "HAS_C_EXTENSION",
     "HAS_OPENMP",
     "blas_backend",
+    "blas_has_dgemm",
     "blas_has_dgeqrf",
     "blas_has_dgesvd",
     "blas_has_dsyevd",

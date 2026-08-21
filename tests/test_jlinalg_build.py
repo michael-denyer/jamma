@@ -136,6 +136,7 @@ def test_all_exports_present():
         "get_n_threads",
         "set_n_threads",
         "blas_backend",
+        "blas_has_dgemm",
         "blas_has_dsyrk",
         "blas_has_dsyevd",
         "blas_has_dsyevr",
@@ -154,10 +155,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 13 after adding caller-owned DSYRK output."""
+    """ABI_VERSION is 14 after exporting blas_has_dgemm."""
     from jamma.jlinalg import ABI_VERSION
 
-    assert ABI_VERSION == 13, f"Expected ABI_VERSION=13, got {ABI_VERSION}"
+    assert ABI_VERSION == 14, f"Expected ABI_VERSION=14, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

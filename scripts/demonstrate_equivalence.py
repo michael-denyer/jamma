@@ -261,8 +261,16 @@ def _print_scientific_equivalence(jamma: list, gemma: list, p_field: str) -> Non
 
 
 def _extract(results, field_name):
+    """Pull one field across results, mapping only a missing value to NaN.
+
+    Truthiness would read a real 0.0 as missing, which drops no-effect SNPs
+    out of every comparison this feeds.
+    """
     return np.array(
-        [getattr(r, field_name) if getattr(r, field_name) else np.nan for r in results]
+        [
+            np.nan if (value := getattr(r, field_name)) is None else value
+            for r in results
+        ]
     )
 
 

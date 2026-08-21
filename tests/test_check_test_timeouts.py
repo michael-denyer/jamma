@@ -97,7 +97,11 @@ def test_justified_too_far_above_does_not_count(tmp_path):
 
 @pytest.mark.tier0
 def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
-    """A test file the lint cannot decode must fail the gate, not be skipped."""
+    """A test file the lint cannot decode must fail the gate, not be skipped.
+
+    Asserts the report text, not just the exit code. See the same test in
+    tests/test_check_quiet_flags.py for why: a traceback also exits 1.
+    """
     script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir(parents=True, exist_ok=True)
@@ -113,5 +117,40 @@ def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "test_stub.py" in result.stderr
-    assert "could not be read" in result.stderr
+    assert "Traceback" not in result.stderr, (
+        f"the gate must report, not crash:\n{result.stderr}"
+    )
+    assert "Files could not be read, so they were not checked:" in result.stderr
+    assert "  tests/test_stub.py: UnicodeDecodeError:" in result.stderr
+    assert (
+        "1 file(s) skipped. A skipped file is an unchecked file, and this "
+        "gate reports success only when every target was read."
+    ) in result.stderr
+
+
+@pytest.mark.tier0
+def test_unreadable_file_does_not_hide_violations_elsewhere(tmp_path):
+    """One undecodable file must not stop the other files being checked.
+
+    Reading the batch and collecting the failures, rather than raising on the
+    first, is what keeps the violation in test_other.py visible.
+    """
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_stub.py").write_bytes(b"\xff\xfe not utf-8\n")
+    (tests_dir / "test_other.py").write_text(
+        "@pytest.mark.timeout(999)\ndef test_x(): pass\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(script_copy)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "  tests/test_stub.py: UnicodeDecodeError:" in result.stderr
+    assert "Unjustified long test timeouts detected:" in result.stderr
+    assert "tests/test_other.py:1: @pytest.mark.timeout(999)" in result.stderr

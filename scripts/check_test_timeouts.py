@@ -22,7 +22,14 @@ import re
 import sys
 from pathlib import Path
 
-from _lint_common import allowed, read_lines, repo_root, report
+from _lint_common import (
+    allowed,
+    display_path,
+    read_batch,
+    repo_root,
+    report,
+    report_unreadable,
+)
 
 THRESHOLD_S: int = 120
 TEST_DIR = Path("tests")
@@ -53,12 +60,12 @@ def main() -> int:
     if not test_dir.is_dir():
         return 0
 
+    targets = [p for p in sorted(test_dir.rglob("*.py")) if p.name not in SKIP_FILES]
+    lines_by_path, unreadable = read_batch(targets, root=root)
+
     violations: list[str] = []
-    for path in sorted(test_dir.rglob("*.py")):
-        if path.name in SKIP_FILES:
-            continue
-        lines = read_lines(path)
-        rel = path.relative_to(root).as_posix()
+    for path, lines in lines_by_path.items():
+        rel = display_path(path, root)
         for i, line in enumerate(lines):
             value = scan_line(line)
             if value is None:
@@ -71,7 +78,8 @@ def main() -> int:
                 "'# justified: <reason>' comment"
             )
 
-    return report(
+    skipped = report_unreadable(unreadable)
+    found = report(
         "Unjustified long test timeouts detected:",
         violations,
         f"{len(violations)} violation(s). Long timeouts often mask "
@@ -80,6 +88,7 @@ def main() -> int:
         f"'# justified: <reason>' on or within {NEIGHBORHOOD_LINES} "
         "lines above the decorator.",
     )
+    return max(skipped, found)
 
 
 if __name__ == "__main__":

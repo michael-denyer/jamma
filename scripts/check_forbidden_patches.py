@@ -44,7 +44,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from _lint_common import allowed, read_lines, repo_root, report
+from _lint_common import (
+    allowed,
+    display_path,
+    read_batch,
+    repo_root,
+    report,
+    report_unreadable,
+)
 
 # Forbidden targets: each entry is (target_regex_after_open_paren, reason).
 # Each target is paired with every invocation prefix to build the full
@@ -235,10 +242,11 @@ def main(argv: list[str]) -> int:
         )
         files = _iter_target_files([])
 
+    lines_by_path, unreadable = read_batch(files, root=root)
+
     violations: list[str] = []
-    for path in files:
-        lines = read_lines(path)
-        rel = path.relative_to(root) if path.is_relative_to(root) else path
+    for path, lines in lines_by_path.items():
+        rel = display_path(path, root)
         for i, line in enumerate(lines):
             findings = scan_line(line)
             if not findings:
@@ -253,13 +261,15 @@ def main(argv: list[str]) -> int:
                 for snippet, reason in findings
             )
 
-    return report(
+    skipped = report_unreadable(unreadable)
+    found = report(
         "Forbidden patch targets found in tests "
-        "(see docs/TESTING.md §2.2 boundary catalogue):",
+        "(see docs/TESTING.md \u00a72.2 boundary catalogue):",
         violations,
         "If the patch is genuinely necessary (e.g. short-circuiting for "
         "warning-routing tests), add `# allow-patch: <reason>` to the line.",
     )
+    return max(skipped, found)
 
 
 if __name__ == "__main__":

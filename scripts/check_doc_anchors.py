@@ -51,7 +51,14 @@ import re
 import sys
 from pathlib import Path
 
-from _lint_common import read_lines, repo_root, report, tracked_files
+from _lint_common import (
+    read_batch,
+    read_lines,
+    repo_root,
+    report,
+    report_unreadable,
+    tracked_files,
+)
 
 # LICENSE.md is upstream GPL boilerplate. Everything else the other two doc
 # checkers ignore (.venv, .planning, .beads, .claude, .code-review-graph,
@@ -149,7 +156,10 @@ def _check_anchor(
     if not target.exists():
         return f"{where}: {rel} does not exist"
 
-    lines = read_lines(target)
+    # errors="replace": an anchor target is a file the docs merely point
+    # at, so undecodable bytes in one are not this lint's business. The
+    # markdown files it owns are read strictly, through read_batch below.
+    lines = read_lines(target, errors="replace")
     if want > len(lines):
         return (
             f"{where}: {rel}#L{want} is past the end of the file ({len(lines)} lines)"
@@ -194,11 +204,12 @@ def _check_anchor(
 
 def main() -> int:
     root = repo_root()
+    lines_by_path, unreadable = read_batch(_markdown_files(), root=root)
     problems: list[str] = []
     anchors = 0
 
-    for doc in _markdown_files():
-        for doc_line, row in enumerate(read_lines(doc), start=1):
+    for doc, rows in lines_by_path.items():
+        for doc_line, row in enumerate(rows, start=1):
             for label, rel, anchor in LINK.findall(row):
                 anchors += 1
                 problem = _check_anchor(
@@ -207,19 +218,25 @@ def main() -> int:
                 if problem is not None:
                     problems.append(problem)
 
+    skipped = report_unreadable(unreadable)
     if problems:
         # stdout, not stderr: this lint has always reported there, and its
         # tests read result.stdout.
-        return report(
-            f"Stale documentation anchors ({len(problems)} of {anchors} checked):\n",
-            problems,
-            "Each anchor should point at the line where its symbol is defined.\n"
-            "Fix the line number, or the symbol name, or drop the anchor.",
-            stream=sys.stdout,
+        return max(
+            skipped,
+            report(
+                f"Stale documentation anchors "
+                f"({len(problems)} of {anchors} checked):\n",
+                problems,
+                "Each anchor should point at the line where its symbol is defined.\n"
+                "Fix the line number, or the symbol name, or drop the anchor.",
+                stream=sys.stdout,
+            ),
         )
 
-    print(f"check_doc_anchors: {anchors} anchors OK")
-    return 0
+    if skipped == 0:
+        print(f"check_doc_anchors: {anchors} anchors OK")
+    return skipped
 
 
 if __name__ == "__main__":

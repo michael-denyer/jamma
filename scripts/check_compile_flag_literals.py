@@ -45,8 +45,16 @@ from __future__ import annotations
 
 import re
 import sys
+from pathlib import Path
 
-from _lint_common import allowed, read_lines, repo_root, report
+from _lint_common import (
+    allowed,
+    display_path,
+    read_batch,
+    repo_root,
+    report,
+    report_unreadable,
+)
 
 FLAGS: set[str] = {
     "-O0",
@@ -121,18 +129,22 @@ def main() -> int:
     root = repo_root()
     violations: list[str] = []
 
+    present: list[Path] = []
     for target in TARGETS:
         path = root / target
-        if not path.exists():
+        if path.exists():
+            present.append(path)
+        else:
             # Missing file is a separate problem — the cleanup plan may have
             # deleted something the lint expected. Surface it as a violation.
             violations.append(
                 f"{target}: target file missing — "
                 f"check_compile_flag_literals.py needs updating"
             )
-            continue
 
-        lines = read_lines(path)
+    lines_by_path, unreadable = read_batch(present, root=root)
+    for path, lines in lines_by_path.items():
+        target = display_path(path, root)
         for i, line in enumerate(lines):
             # Deliberate-divergence escape hatch. Inline on the offending
             # line, or on the comment line immediately above it — ruff-format
@@ -148,12 +160,14 @@ def main() -> int:
                     f"compile_and_link.py instead"
                 )
 
-    return report(
+    skipped = report_unreadable(unreadable)
+    found = report(
         "Compile-flag drift detected:",
         violations,
         f"{len(violations)} violation(s). See docstring in "
         f"scripts/check_compile_flag_literals.py for rationale.",
     )
+    return max(skipped, found)
 
 
 if __name__ == "__main__":

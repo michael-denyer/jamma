@@ -4,7 +4,7 @@ Five lints gate this repo, and each one had carried its own copy of the
 same five steps: find the repo root, enumerate the files to look at, read
 one, decide whether an opt-out comment covers a finding, and print the
 violations with an exit code. The pattern tables differ. The plumbing did
-not, so it drifted — two of the five printed a different shape of report
+not, so it drifted -- two of the five printed a different shape of report
 for the same kind of failure, and the ``repo_root = Path(__file__)...``
 line existed five times.
 
@@ -24,9 +24,18 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import TextIO
+
+# What a lint prints when it could not read one of its targets. Kept here
+# rather than in each lint because the message is the point: a gate that
+# skips a file reports success over code it never checked, and the reader
+# has to be told which file and why. #171 added it deliberately, after
+# four gates were found reporting success for files they never opened.
+# Do not let it decay back into a traceback: a traceback exits 1 too,
+# which is why the tests pin this text and not just the exit code.
+UNREADABLE_HEADER = "Files could not be read, so they were not checked:"
 
 
 class LintReadError(Exception):
@@ -36,12 +45,40 @@ class LintReadError(Exception):
     is wrong; this means the lint never looked. Both fail the gate, because
     a gate that skips a file it cannot read reports success over unchecked
     code.
+
+    Attributes:
+        path: The file that could not be read.
+        cause: The underlying OSError or UnicodeDecodeError.
     """
+
+    def __init__(self, path: Path, cause: Exception) -> None:
+        self.path = path
+        self.cause = cause
+        super().__init__(f"{path}: {type(cause).__name__}: {cause}")
+
+    def entry(self, root: Path | None = None) -> str:
+        """One report line: the path as the reader knows it, and the reason."""
+        return (
+            f"{display_path(self.path, root)}: "
+            f"{type(self.cause).__name__}: {self.cause}"
+        )
 
 
 def repo_root() -> Path:
     """Return the repository root, derived from this module's own location."""
     return Path(__file__).resolve().parent.parent
+
+
+def display_path(path: Path, root: Path | None = None) -> str:
+    """Return the path as a violation should name it.
+
+    Repo-relative when the file is inside the tree, absolute otherwise, so
+    a lint handed an outside path by argv still says which file it meant.
+    """
+    base = repo_root() if root is None else root
+    if path.is_absolute() and path.is_relative_to(base):
+        return path.relative_to(base).as_posix()
+    return str(path)
 
 
 def tracked_files(*pathspecs: str, root: Path | None = None) -> list[Path]:
@@ -52,7 +89,7 @@ def tracked_files(*pathspecs: str, root: Path | None = None) -> list[Path]:
     does not track it, which is one fewer copy of that list to keep in step
     with ``.markdownlint-cli2.jsonc``, ``lychee.toml``, and the other lints.
     Staged-but-uncommitted files are included, because ``ls-files`` reads the
-    index — which is what a pre-commit gate wants.
+    index, which is what a pre-commit gate wants.
 
     Pathspecs are git's, not pathlib's. ``*`` crosses ``/``, so ``tests/*.py``
     reaches ``tests/fakes/x.py``; writing ``tests/**/*.py`` would instead
@@ -85,23 +122,53 @@ def tracked_files(*pathspecs: str, root: Path | None = None) -> list[Path]:
     return sorted(base / name for name in result.stdout.split("\0") if name)
 
 
-def read_lines(path: Path) -> list[str]:
+def read_lines(path: Path, *, errors: str = "strict") -> list[str]:
     """Return the file's lines, without terminators.
 
     Args:
         path: File to read as UTF-8.
+        errors: Decode policy. ``"replace"`` is for targets a lint merely
+            points at rather than owns, where undecodable bytes are not the
+            lint's business.
 
     Raises:
-        LintReadError: If the file cannot be read or decoded. Returning an
-            empty list instead would let the lint pass over a file it never
-            checked, which is the failure mode these gates exist to prevent.
+        LintReadError: If the file cannot be read, or cannot be decoded
+            under a strict policy. Returning an empty list instead would
+            let the lint pass over a file it never checked, which is the
+            failure mode these gates exist to prevent.
     """
     try:
-        return path.read_text(encoding="utf-8").splitlines()
+        return path.read_text(encoding="utf-8", errors=errors).splitlines()
     except (OSError, UnicodeDecodeError) as exc:
-        raise LintReadError(
-            f"{path}: could not be read: {type(exc).__name__}: {exc}"
-        ) from exc
+        raise LintReadError(path, exc) from exc
+
+
+def read_batch(
+    paths: Iterable[Path], *, root: Path | None = None
+) -> tuple[dict[Path, list[str]], list[str]]:
+    """Read every path, collecting the failures instead of raising on the first.
+
+    This is where `LintReadError` is caught, once, so a lint's ``main`` keeps
+    its pattern table and its ``scan_line`` and nothing else. Raising out of a
+    lint would end the run in a traceback, which tells the reader far less
+    than a list of the files the gate could not check.
+
+    Args:
+        paths: Files to read, in the order they should be reported.
+        root: Repository the paths are named relative to.
+
+    Returns:
+        The lines of every file that could be read, keyed by path and in
+        input order, and a report line for each file that could not.
+    """
+    lines_by_path: dict[Path, list[str]] = {}
+    unreadable: list[str] = []
+    for path in paths:
+        try:
+            lines_by_path[path] = read_lines(path)
+        except LintReadError as exc:
+            unreadable.append(exc.entry(root))
+    return lines_by_path, unreadable
 
 
 def allowed(
@@ -161,3 +228,18 @@ def report(
         print(f"  {violation}", file=stream)
     print(f"\n{footer}", file=stream)
     return 1
+
+
+def report_unreadable(unreadable: Sequence[str]) -> int:
+    """Print the files a lint could not read and return the exit status.
+
+    Always fails when there is anything to report. A skipped file is an
+    unchecked file, so a gate that stayed green here would be claiming a
+    result it does not have.
+    """
+    return report(
+        UNREADABLE_HEADER,
+        unreadable,
+        f"{len(unreadable)} file(s) skipped. A skipped file is an unchecked "
+        "file, and this gate reports success only when every target was read.",
+    )

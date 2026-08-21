@@ -136,6 +136,12 @@ def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
 
     Skipping means a quiet flag inside that file passes the check while the
     hook reports success.
+
+    The assertions pin the whole message, not just the exit code. An earlier
+    refactor let `read_lines` raise out of `main`, which kept the exit code
+    and the words "could not be read" while replacing the report with a
+    traceback. A test that checked only those two things passed anyway. The
+    legible report is the point of this gate, so it is what gets asserted.
     """
     script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
 
@@ -150,5 +156,12 @@ def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "foo.sh" in result.stderr
-    assert "could not be read" in result.stderr
+    assert "Traceback" not in result.stderr, (
+        f"the gate must report, not crash:\n{result.stderr}"
+    )
+    assert "Files could not be read, so they were not checked:" in result.stderr
+    assert "  foo.sh: UnicodeDecodeError:" in result.stderr
+    assert (
+        "1 file(s) skipped. A skipped file is an unchecked file, and this "
+        "gate reports success only when every target was read."
+    ) in result.stderr

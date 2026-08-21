@@ -33,7 +33,15 @@ import re
 import sys
 from pathlib import Path
 
-from _lint_common import allowed, read_lines, repo_root, report, tracked_files
+from _lint_common import (
+    allowed,
+    display_path,
+    read_batch,
+    repo_root,
+    report,
+    report_unreadable,
+    tracked_files,
+)
 
 # What the hook scans when given no explicit args: CI, pre-commit config,
 # shell scripts, and Python source. These are git pathspecs, so `*` crosses
@@ -117,13 +125,6 @@ def _iter_target_files(argv_files: list[str]) -> list[Path]:
     ]
 
 
-def _display(path: Path, root: Path) -> str:
-    """Path as written in a violation: repo-relative when it is inside."""
-    if path.is_absolute() and path.is_relative_to(root):
-        return path.relative_to(root).as_posix()
-    return str(path)
-
-
 def scan_line(line: str) -> list[str]:
     """Return violation descriptions found on a single line."""
     violations: list[str] = []
@@ -166,16 +167,18 @@ def _strip_trailing_comment(line: str) -> str:
 
 def main(argv: list[str]) -> int:
     root = repo_root()
+    lines_by_path, unreadable = read_batch(_iter_target_files(argv), root=root)
+
     violations: list[str] = []
-    for path in _iter_target_files(argv):
-        rel = _display(path, root)
-        lines = read_lines(path)
+    for path, lines in lines_by_path.items():
+        rel = display_path(path, root)
         for i, line in enumerate(lines):
             if allowed(lines, i, ALLOW_MARKER):
                 continue
             violations.extend(f"{rel}:{i + 1}: {v}" for v in scan_line(line))
 
-    return report(
+    skipped = report_unreadable(unreadable)
+    found = report(
         "Quiet / hook-skip flag drift detected:",
         violations,
         f"{len(violations)} violation(s). CLAUDE.md bans --quiet/-q/"
@@ -184,6 +187,7 @@ def main(argv: list[str]) -> int:
         "explicit user authorization. Add '# allow-quiet: <reason>' on "
         "the line for a documented exception.",
     )
+    return max(skipped, found)
 
 
 if __name__ == "__main__":

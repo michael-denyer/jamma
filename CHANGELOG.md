@@ -15,22 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opt-out comment covers a finding, print the violations and pick an exit
   code — and the copies had drifted: two printed a different shape of report
   for the same kind of failure, and `repo_root = Path(__file__)...` appeared
-  five times. `repo_root()`, `tracked_files()`, `read_lines()`, `allowed()`
-  and `report()` now live in one module and each lint keeps only its pattern
-  table and its `scan_line`. The hyphens had to go because
+  five times. `repo_root()`, `display_path()`, `tracked_files()`,
+  `read_lines()`, `read_batch()`, `allowed()`, `report()` and
+  `report_unreadable()` now live in one module and each lint keeps only its
+  pattern table and its `scan_line`. The hyphens had to go because
   `check-quiet-flags.py` is not an importable module name, so there was
   nowhere to import that module from; the `.pre-commit-config.yaml` entries
   and the tests' `_SCRIPT` constants moved with them.
 
-  Three behaviours changed with it. `read_lines` raises on a file it cannot
-  decode instead of collecting the failure and carrying on, so the gate dies
-  naming the file rather than reporting how many it skipped — same exit code,
-  same reason text. `check_quiet_flags` enumerates through `git ls-files`
-  rather than `Path.glob` plus a seven-entry `SKIP_PREFIXES`, six of whose
-  entries were a second copy of `.gitignore`; the two that were not (the lint
-  and its own test, which carry the banned flags as fixture data) remain.
-  `check_forbidden_patches` prints its findings in the same indented shape as
-  the other four instead of separating them with blank lines.
+  The unreadable-file report that #171 added is preserved byte for byte.
+  `read_lines` raises `LintReadError`, and `read_batch` is the one place that
+  catches it, so a lint still ends with the header, the indented per-file
+  line, and the footer saying that a skipped file is an unchecked file. The
+  one wording change is that `check_test_timeouts` used to say "Test files"
+  and "every test file"; the shared message says "Files" and "every target",
+  because a single helper cannot hold two nouns for one idea. The tests now
+  pin that header and footer rather than the exit code and a substring, which
+  is what let a traceback pass for a report during this refactor.
+
+  Two other behaviours changed. `check_quiet_flags` enumerates through
+  `git ls-files` rather than `Path.glob` plus a seven-entry `SKIP_PREFIXES`,
+  six of whose entries were a second copy of `.gitignore`; the two that were
+  not (the lint and its own test, which carry the banned flags as fixture
+  data) remain. `check_forbidden_patches` prints its findings in the same
+  indented shape as the other four instead of separating them with blank
+  lines, and its read failures now use the shared header instead of a
+  bespoke "the gate is non-functional" one.
 
 - **`check_doc_anchors.py` now states what a passing run does not prove.** For
   `docs/CODEMAP.md`'s tables the check has to work out which symbol an anchor

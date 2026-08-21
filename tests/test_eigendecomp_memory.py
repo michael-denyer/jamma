@@ -12,7 +12,6 @@ from jamma.core.memory import (
     _dsyevr_peak_gb,
     _dsyevr_workspace_gb,
     check_memory_before_run,
-    estimate_eigendecomp_memory,
     plan_eigen_driver,
 )
 from jamma.lmm.eigen import eigendecompose_kinship
@@ -233,17 +232,10 @@ class TestDsyevrWorkspaceFormula:
 class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
-    def test_estimate_200k_samples(self):
-        """200k samples: K + U + DSYEVD workspace ~1280GB."""
-        n_samples = 200_000
-        estimate = estimate_eigendecomp_memory(n_samples)
-        # K (320GB) + U (320GB) + DSYEVD workspace (~640GB) = ~1280GB
-        assert 1275 < estimate < 1285
-
     def test_estimate_100k_samples(self):
         """100k samples: K + U + DSYEVD workspace ~320GB."""
         n_samples = 100_000
-        estimate = estimate_eigendecomp_memory(n_samples)
+        estimate = _dsyevd_peak_gb(n_samples)
         # K (80GB) + U (80GB) + DSYEVD workspace (~160GB) = ~320GB
         assert 315 < estimate < 325
 
@@ -257,8 +249,8 @@ class TestEigendecompMemoryEstimate:
 
     def test_estimate_scales_quadratically(self):
         """Memory scales quadratically (kinship term dominates workspace)."""
-        est_10k = estimate_eigendecomp_memory(10_000)
-        est_20k = estimate_eigendecomp_memory(20_000)
+        est_10k = _dsyevd_peak_gb(10_000)
+        est_20k = _dsyevd_peak_gb(20_000)
         # 2x samples -> 4x memory (quadratic kinship dominates linear workspace)
         ratio = est_20k / est_10k
         assert 3.9 < ratio < 4.1
@@ -355,12 +347,6 @@ class TestEigendecompPreflightCheck:
 
         K_reconstructed = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
         np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)
-
-    def test_estimate_always_includes_eigenvector_allocation(self):
-        """Memory estimate includes K + U + DSYEVD workspace."""
-        est = estimate_eigendecomp_memory(200_000)
-        # K (320GB) + U (320GB) + DSYEVD workspace (~640GB) = ~1280GB
-        assert 1275 < est < 1285
 
 
 @pytest.mark.tier0

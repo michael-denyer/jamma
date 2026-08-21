@@ -685,9 +685,6 @@ class PipelineRunner:
                 "lmm_s": outcome.lmm_s,
                 "total_s": total_s,
                 "rotation_s": outcome.runner_timing.get("rotation_s", 0.0),
-                "rotation_exposed_s": outcome.runner_timing.get(
-                    "rotation_exposed_s", 0.0
-                ),
             },
             backend="numpy",
             n_covariates=(covariates.shape[1] if covariates is not None else 1),

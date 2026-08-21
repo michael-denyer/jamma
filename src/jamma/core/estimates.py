@@ -236,25 +236,3 @@ def estimate_lmm_seconds(
     snp_ratio = n_snps / _REF_SNPS
     core_ratio = (_REF_CORES / n_cores) ** _CORE_SCALING_EXP
     return (_LMM_A * n_k**2 + _LMM_B * n_k) * snp_ratio * core_ratio
-
-
-def estimate_lmm_time(
-    n_samples: int,
-    n_snps: int,
-    n_cores: int | None = None,
-) -> str:
-    """Estimate LMM association wall time as a human-readable string.
-
-    Estimates are calibrated to MKL ILP64 on 48-core Xeon. A caveat is
-    appended when the active BLAS backend differs.
-
-    Args:
-        n_samples: Number of samples.
-        n_snps: Number of filtered SNPs.
-        n_cores: Physical core count. None auto-detects.
-
-    Returns:
-        Minimum estimate string like ">=15 min", with BLAS caveat if applicable.
-    """
-    duration = _format_duration(estimate_lmm_seconds(n_samples, n_snps, n_cores))
-    return f">={duration}{_blas_caveat()}"

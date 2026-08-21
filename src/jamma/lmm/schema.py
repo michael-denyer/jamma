@@ -21,17 +21,14 @@ class RunnerTiming(TypedDict, total=False):
     """Timing breakdown from LMM runner execution.
 
     All keys are optional because not all runners populate all fields.
-    For example, ``rotation_exposed_s`` only appears in multi-chunk runs.
 
     Attributes:
         rotation_s: Total UT@G rotation time (seconds).
-        rotation_exposed_s: Rotation time exposed (not overlapped) by compute.
         numpy_compute_s: Total NumPy/C compute time (seconds).
         result_write_s: Total result write time (seconds).
     """
 
     rotation_s: float
-    rotation_exposed_s: float
     numpy_compute_s: float
     result_write_s: float
 
@@ -47,7 +44,6 @@ class PipelineTiming(TypedDict, total=False):
         lmm_s: LMM association runtime (seconds).
         total_s: Total pipeline wall time (seconds).
         rotation_s: UT@G rotation time from the runner (seconds).
-        rotation_exposed_s: Exposed rotation time from the runner (seconds).
     """
 
     kinship_s: float
@@ -55,7 +51,6 @@ class PipelineTiming(TypedDict, total=False):
     lmm_s: float
     total_s: float
     rotation_s: float
-    rotation_exposed_s: float
 
 
 class GWASTiming(TypedDict, total=False):

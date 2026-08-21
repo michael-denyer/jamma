@@ -108,34 +108,26 @@ def _wrap(name: str, fn: Any) -> Any:
 
 
 def _install() -> None:
-    """Wrap every C callable, then rebind every alias already handed out.
+    """Wrap every public C callable on the extension.
 
-    ``jamma.lmm.compute_numpy`` copies each C function into a module-level
-    ``_compute_*`` name at import, and importing the extension imports that
-    module first, so patching only the extension's own attributes misses
-    almost every call site. The identity sweep below catches those aliases
-    wherever they were bound.
+    Callers reach each kernel as an attribute lookup on the extension at call
+    time, so replacing the attribute here covers every call site.
+
+    This used to need a second pass sweeping ``sys.modules`` by ``id()``:
+    ``compute_numpy`` copied each C function into a module-level ``_compute_*``
+    global at import, and those copies kept pointing at the unwrapped original.
+    Those globals are gone, so the sweep matched nothing.
+    ``test_no_jamma_module_holds_a_raw_c_callable`` fails if a copy is
+    reintroduced, which is the condition that would bring the sweep back.
     """
-    import sys
-
     import jamma.lmm._lmm_accel as accel
-    import jamma.lmm.compute_numpy  # noqa: F401  — populates the aliases
 
-    by_id: dict[int, Any] = {}
     for name in dir(accel):
         if name.startswith("_"):
             continue
         attr = getattr(accel, name)
         if callable(attr) and not isinstance(attr, type):
-            wrapper = _wrap(name, attr)
-            by_id[id(attr)] = wrapper
-            setattr(accel, name, wrapper)
-
-    for module in [m for n, m in sys.modules.items() if n.startswith("jamma.")]:
-        for name, value in list(vars(module).items()):
-            wrapper = by_id.get(id(value))
-            if wrapper is not None:
-                setattr(module, name, wrapper)
+            setattr(accel, name, _wrap(name, attr))
 
 
 if os.environ.get(_ENV_OUT):

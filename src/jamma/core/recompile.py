@@ -28,8 +28,37 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import threading
 from collections.abc import Iterator
 from pathlib import Path
+
+# Extensions this thread is part-way through recompiling. The file lock below
+# serialises separate callers; this guards one call stack against itself,
+# because flock is per open-file-description and a second acquisition on a new
+# fd blocks rather than nesting.
+#
+# Thread-local, not global: two threads racing on the same extension are a real
+# race the file lock exists to serialise, and must still block. Only a call that
+# re-enters on its own stack can deadlock, and only that call may decline.
+_recompile_state = threading.local()
+
+
+def _recompiling(module_name: str) -> bool:
+    """Report whether this thread is already recompiling ``module_name``."""
+    return module_name in getattr(_recompile_state, "active", ())
+
+
+@contextlib.contextmanager
+def _reentrancy_guard(module_name: str) -> Iterator[None]:
+    """Mark ``module_name`` as being recompiled on this thread for the block."""
+    active = getattr(_recompile_state, "active", None)
+    if active is None:
+        active = _recompile_state.active = set()
+    active.add(module_name)
+    try:
+        yield
+    finally:
+        active.discard(module_name)
 
 
 def _lock_path_for(sys_module_key: str) -> Path:
@@ -176,6 +205,21 @@ def auto_recompile_c_extension(
     """
     from loguru import logger
 
+    # Refuse to recurse. compile_extension verifies its build by evicting
+    # jamma.<pkg>* from sys.modules and re-importing, which re-executes the
+    # package __init__ that called us. If that __init__ still cannot load the
+    # extension it calls straight back in here, and the second call opens a
+    # second fd on the lock file below. flock is per open-file-description, so
+    # the process blocks against its own lock forever: 0% CPU, two fds, and the
+    # .so already written. Returning False instead leaves this interpreter on
+    # the pure-Python fallback while the freshly built .so serves the next one.
+    if _recompiling(module_name):
+        logger.debug(
+            f"auto-recompile of {module_name} re-entered from the build's own "
+            f"import probe; not recursing"
+        )
+        return False
+
     try:
         compiler = importlib.import_module(compiler_module)
     except ImportError:
@@ -205,7 +249,7 @@ def auto_recompile_c_extension(
     # the secondary defense for code paths that bypass this shim
     # (e.g. ``python -m jamma.jlinalg._compile_jlinalg`` invoked twice).
     lock_path = _lock_path_for(sys_module_key)
-    with _file_lock(lock_path):
+    with _reentrancy_guard(module_name), _file_lock(lock_path):
         # Re-check after acquiring the lock — a sibling process may have
         # already recompiled while we were blocked. If the import now
         # succeeds, skip the redundant build.

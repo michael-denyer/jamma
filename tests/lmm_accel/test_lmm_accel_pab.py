@@ -21,17 +21,15 @@ class TestCExtensionPerformance:
     def test_c_faster_than_python(self, benchmark):
         """Benchmark C-accelerated Wald; verify numerical parity vs Python."""
         from jamma.core.threading import get_physical_core_count
-        from jamma.lmm.compute_numpy import (
-            _C_ACCEL_AVAILABLE,
-            _compute_wald_numpy,
-        )
+        from jamma.lmm import compute_numpy
+        from jamma.lmm.compute_numpy import _compute_wald_numpy
         from jamma.lmm.likelihood_numpy import (
             batch_calc_wald_stats_from_pab_numpy,
             batch_compute_iab_numpy,
             golden_section_optimize_lambda_numpy,
         )
 
-        if not _C_ACCEL_AVAILABLE:
+        if compute_numpy._accel is None:
             pytest.skip("C extension not compiled")
 
         n_threads = get_physical_core_count()
@@ -81,7 +79,7 @@ class TestCExtensionPerformance:
 
         # Numerical parity is the actual correctness invariant. Build the
         # reference from the generic optimizer rather than by disabling
-        # _C_ACCEL_AVAILABLE: that flag routes n_cvt=1 to the split-Uab
+        # compute_numpy._accel is not None: that flag routes n_cvt=1 to the split-Uab
         # optimizer, a different algorithm from the C batch path, so the
         # comparison would not be like-for-like. Same approach and same
         # calibrated tolerances as test_c_vs_python_parity_synthetic, where

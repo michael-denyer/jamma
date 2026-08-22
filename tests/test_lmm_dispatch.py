@@ -1,11 +1,11 @@
 """Unit tests for jamma.lmm.dispatch.select_dispatch_path.
 
-Pure-function tests over the dispatch matrix. Each named test pins one
-human-meaningful cell (WS preempts stateless, fused-general needs n_cvt>=2, the
-split mode-4 fallback). ``test_cross_product_invariants`` then sweeps the full
-input space and asserts the structural gating every ``DispatchPath`` must obey,
-so a regression in the priority resolution surfaces here, not as a slow
-end-to-end runner failure.
+The selector used to take an eleven-field capability snapshot, so its input
+space was large enough that only a property sweep could cover it. The
+ABI-equality gate admits all of ``methods[]`` or none of it, so the capability
+is one bit and the whole space is small enough to write down. This file states
+the mapping as a table and checks it exhaustively, which pins the actual
+decision rather than the invariants it happens to satisfy.
 """
 
 from __future__ import annotations
@@ -14,150 +14,97 @@ from itertools import product
 
 import pytest
 
-from jamma.lmm.dispatch import DispatchPath, KernelCaps, select_dispatch_path
+from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 
-_ALL_AVAILABLE = dict.fromkeys(KernelCaps._fields, True)
-_NONE_AVAILABLE = dict.fromkeys(_ALL_AVAILABLE, False)
-_FLAG_NAMES = tuple(_ALL_AVAILABLE)
+_MODES = (1, 2, 3, 4)
+_NCVT_1 = (1,)
+_NCVT_MANY = (2, 3, 5, 100, 101)
+
+# The complete mapping when the extension is loaded, by (n_cvt==1?, lmm_mode).
+_EXPECTED = {
+    (True, 1): DispatchPath.FUSED,
+    (True, 4): DispatchPath.FUSED,
+    (True, 3): DispatchPath.FUSED_SCORE_WS,
+    (True, 2): DispatchPath.FUSED_LRT_WS,
+    (False, 1): DispatchPath.FUSED_GENERAL,
+    (False, 4): DispatchPath.FUSED_GENERAL,
+    (False, 3): DispatchPath.SOA_SPLIT,
+    (False, 2): DispatchPath.SOA_SPLIT,
+}
 
 _FEEDS_RAW_UTG = {
     DispatchPath.FUSED,
     DispatchPath.FUSED_GENERAL,
-    DispatchPath.FUSED_SCORE,
     DispatchPath.FUSED_SCORE_WS,
-    DispatchPath.FUSED_LRT,
     DispatchPath.FUSED_LRT_WS,
 }
+_SCORE_OR_LRT = {DispatchPath.FUSED_SCORE_WS, DispatchPath.FUSED_LRT_WS}
 
 
-def _select(n_cvt: int, lmm_mode: int, **overrides) -> DispatchPath:
-    caps = KernelCaps(**{**_ALL_AVAILABLE, **overrides})
-    return select_dispatch_path(n_cvt, lmm_mode, caps, log_choices=False)
-
-
-@pytest.mark.tier0
-def test_no_c_kernels_is_numpy_fallback():
-    assert _select(1, 1, **_NONE_AVAILABLE) is DispatchPath.NUMPY_FALLBACK
+def _select(n_cvt: int, lmm_mode: int, *, accel: bool = True) -> DispatchPath:
+    return select_dispatch_path(n_cvt, lmm_mode, accel=accel, log_choices=False)
 
 
 @pytest.mark.tier0
-def test_split_requires_basic_kernel_for_n_cvt_1():
-    assert not _select(1, 1, split=False, general=True).use_split
-    assert _select(1, 1, split=True, general=False).use_split
+def test_no_extension_is_always_the_numpy_fallback():
+    for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
+        assert _select(n_cvt, mode, accel=False) is DispatchPath.NUMPY_FALLBACK
 
 
 @pytest.mark.tier0
-def test_split_requires_general_kernel_for_n_cvt_2_plus():
-    assert not _select(3, 1, split=True, general=False).use_split
-    assert _select(3, 1, split=False, general=True).use_split
+def test_every_input_maps_to_the_documented_path():
+    for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
+        expected = _EXPECTED[(n_cvt == 1, mode)]
+        assert _select(n_cvt, mode) is expected, (
+            f"n_cvt={n_cvt} mode={mode}: expected {expected.name}, "
+            f"got {_select(n_cvt, mode).name}"
+        )
 
 
 @pytest.mark.tier0
-def test_fused_general_implies_n_cvt_ge_2():
-    assert _select(1, 1) is DispatchPath.FUSED
-    assert _select(3, 1) is DispatchPath.FUSED_GENERAL
-
-
-@pytest.mark.tier0
-def test_ws_path_preempts_stateless_for_score_and_lrt():
-    """When the WS variant is available, the stateless variant must not win."""
-    assert _select(1, 3) is DispatchPath.FUSED_SCORE_WS
-    assert _select(1, 2) is DispatchPath.FUSED_LRT_WS
-
-
-@pytest.mark.tier0
-def test_stateless_score_lrt_used_only_when_ws_unavailable():
-    assert _select(1, 3, score_fused_ws=False) is DispatchPath.FUSED_SCORE
-    assert _select(1, 2, lrt_fused_ws=False) is DispatchPath.FUSED_LRT
-
-
-@pytest.mark.tier0
-def test_score_lrt_fused_only_for_n_cvt_1():
-    """The fused Score/LRT paths are n_cvt=1 fast paths; higher n_cvt falls to split."""
-    assert _select(2, 3) is DispatchPath.SOA_SPLIT
-    assert _select(2, 2) is DispatchPath.SOA_SPLIT
-
-
-@pytest.mark.tier0
-def test_soa_split_mode4_only_when_fused_unavailable():
-    """The split mode-4 single-pass path (n_cvt=1, mode 4, mode-4 kernel) is
-    reached only when the fused path is unavailable; otherwise fused wins."""
-    assert _select(1, 4) is DispatchPath.FUSED
-    assert _select(1, 4, fused=False) is DispatchPath.SOA_SPLIT_MODE4
-    assert _select(1, 4, fused=False, mode4=False) is DispatchPath.SOA_SPLIT
-    assert (
-        _select(2, 4, fused=False, mode4_fused_general=False) is DispatchPath.SOA_SPLIT
+def test_only_six_paths_are_reachable():
+    """A member no input can select is dead weight, and this is what catches it."""
+    reached = {
+        _select(n_cvt, mode, accel=accel)
+        for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False))
+    }
+    assert reached == set(DispatchPath), (
+        f"unreachable members: {sorted(m.name for m in set(DispatchPath) - reached)}"
     )
 
 
 @pytest.mark.tier0
-def test_fused_for_mode_2_or_3_at_high_n_cvt_is_disabled():
-    """The general Uab fused path is wired for modes 1 and 4 only. Modes 2/3
-    should not take a fused path at n_cvt>=2 since they don't use the workspace.
-    """
-    fused_family = (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL)
-    assert _select(3, 2) not in fused_family
-    assert _select(3, 3) not in fused_family
-    assert _select(3, 1) is DispatchPath.FUSED_GENERAL
-    assert _select(3, 4) is DispatchPath.FUSED_GENERAL
-
-
-@pytest.mark.tier0
-def test_cross_product_invariants():
-    """Sweep every (n_cvt, lmm_mode, availability) and assert the structural
-    gating each DispatchPath must obey. These invariants are stated from the
-    domain, not read off the selector's internal booleans, so a wrong priority
-    resolution or a wrongly gated member fails here.
-    """
-    for n_cvt, lmm_mode, bits in product(
-        (1, 2, 5), (1, 2, 3, 4), product((False, True), repeat=len(_FLAG_NAMES))
-    ):
-        flags = dict(zip(_FLAG_NAMES, bits, strict=True))
-        path = select_dispatch_path(
-            n_cvt, lmm_mode, KernelCaps(**flags), log_choices=False
-        )
-
-        # Property consistency.
+def test_path_properties_agree_with_membership():
+    """The derived properties must not drift from the members they describe."""
+    for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False)):
+        path = _select(n_cvt, mode, accel=accel)
         assert path.use_split == (path is not DispatchPath.NUMPY_FALLBACK)
         assert path.use_fused_general == (path is DispatchPath.FUSED_GENERAL)
         assert path.feeds_raw_utg == (path in _FEEDS_RAW_UTG)
-        assert path.uses_fused_score_or_lrt == (
-            path
-            in (
-                DispatchPath.FUSED_SCORE,
-                DispatchPath.FUSED_SCORE_WS,
-                DispatchPath.FUSED_LRT,
-                DispatchPath.FUSED_LRT_WS,
-            )
-        )
+        assert path.uses_fused_score_or_lrt == (path in _SCORE_OR_LRT)
 
-        # Mode gating: fused Uab and split mode-4 are Wald/All; score is mode 3;
-        # lrt is mode 2.
+
+@pytest.mark.tier0
+def test_mode_and_ncvt_gating():
+    """Each C path is wired for particular modes and covariate counts."""
+    for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
+        path = _select(n_cvt, mode)
         if path in (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL):
-            assert lmm_mode in (1, 4)
-        if path is DispatchPath.SOA_SPLIT_MODE4:
-            assert lmm_mode == 4
-            assert n_cvt == 1
-        if path in (DispatchPath.FUSED_SCORE, DispatchPath.FUSED_SCORE_WS):
-            assert lmm_mode == 3
-            assert n_cvt == 1
-        if path in (DispatchPath.FUSED_LRT, DispatchPath.FUSED_LRT_WS):
-            assert lmm_mode == 2
-            assert n_cvt == 1
-
-        # n_cvt gating: general fused is multi-covariate; bare fused is n_cvt==1.
-        if path is DispatchPath.FUSED_GENERAL:
-            assert n_cvt >= 2
+            assert mode in (1, 4)
         if path is DispatchPath.FUSED:
             assert n_cvt == 1
+        if path is DispatchPath.FUSED_GENERAL:
+            assert n_cvt >= 2
+        if path is DispatchPath.FUSED_SCORE_WS:
+            assert mode == 3
+            assert n_cvt == 1
+        if path is DispatchPath.FUSED_LRT_WS:
+            assert mode == 2
+            assert n_cvt == 1
 
-        # WS preempts stateless: a stateless fused Score/LRT is chosen only when
-        # its workspace kernel is unavailable.
-        if path is DispatchPath.FUSED_SCORE:
-            assert not flags["score_fused_ws"]
-        if path is DispatchPath.FUSED_LRT:
-            assert not flags["lrt_fused_ws"]
 
-        # Any non-fallback path needs a split kernel present.
-        if path is not DispatchPath.NUMPY_FALLBACK:
-            assert flags["split"] or flags["general"]
+@pytest.mark.tier0
+@pytest.mark.parametrize("bad_mode", [0, 5, -1, 99])
+def test_invalid_mode_raises(bad_mode):
+    with pytest.raises(ValueError, match="lmm_mode must be"):
+        _select(1, bad_mode)

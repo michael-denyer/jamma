@@ -153,15 +153,13 @@ def _bench_numpy_inner(
 
     results: dict[str, float | None] = {}
 
-    # Optionally disable C extension for pure-Python comparison. compute_numpy is
-    # the single source of truth: chunk_runner_numpy, chunk_workspaces, and
-    # chunk_sizing all read these flags live from it, so patching cn alone is
-    # enough to force the NumPy fallback everywhere.
-    cn_saved = (cn._C_ACCEL_AVAILABLE, cn._C_SPLIT_AVAILABLE, cn._C_GENERAL_AVAILABLE)
+    # Optionally disable the C extension for the pure-Python comparison.
+    # compute_numpy is the single source of truth: chunk_runner_numpy,
+    # chunk_workspaces and chunk_sizing all read it live, so dropping the
+    # extension here forces the NumPy fallback everywhere.
+    cn_saved = cn._accel
     if disable_c:
-        cn._C_ACCEL_AVAILABLE = False
-        cn._C_SPLIT_AVAILABLE = False
-        cn._C_GENERAL_AVAILABLE = False
+        cn._accel = None
 
     try:
         ops: list[tuple[str, int, np.ndarray | None]] = [
@@ -189,7 +187,7 @@ def _bench_numpy_inner(
                 best = min(best, elapsed)
             results[op] = best
     finally:
-        cn._C_ACCEL_AVAILABLE, cn._C_SPLIT_AVAILABLE, cn._C_GENERAL_AVAILABLE = cn_saved
+        cn._accel = cn_saved
 
     return results
 

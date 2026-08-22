@@ -8,9 +8,6 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-)
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
@@ -18,12 +15,12 @@ from jamma.lmm.likelihood_numpy import (
 )
 from jamma.lmm.schema import LmmConfig
 
-_score_fused_available = _C_ACCEL_AVAILABLE and getattr(
-    compute_numpy, "_C_SCORE_FUSED_AVAILABLE", False
+_score_fused_available = compute_numpy._accel is not None and getattr(
+    compute_numpy, "_accel", None
 )
 
-_lrt_fused_available = _C_ACCEL_AVAILABLE and getattr(
-    compute_numpy, "_C_LRT_FUSED_AVAILABLE", False
+_lrt_fused_available = compute_numpy._accel is not None and getattr(
+    compute_numpy, "_accel", None
 )
 
 
@@ -444,27 +441,11 @@ class TestFusedLrtParity:
 @pytest.mark.tier0
 def test_abi_version_11():
     """ABI_VERSION is 11 after persistent Score/LRT workspace addition."""
-    if not _C_ACCEL_AVAILABLE:
+    if compute_numpy._accel is None:
         pytest.skip("C extension not available")
     from jamma.lmm._lmm_accel import ABI_VERSION
 
     assert ABI_VERSION == 11
-
-
-@pytest.mark.tier0
-def test_fused_score_available_flag():
-    """_C_SCORE_FUSED_AVAILABLE is True when C extension loaded."""
-    if not _C_ACCEL_AVAILABLE:
-        pytest.skip("C extension not available")
-    assert compute_numpy._C_SCORE_FUSED_AVAILABLE is True
-
-
-@pytest.mark.tier0
-def test_fused_lrt_available_flag():
-    """_C_LRT_FUSED_AVAILABLE is True when C extension loaded."""
-    if not _C_ACCEL_AVAILABLE:
-        pytest.skip("C extension not available")
-    assert compute_numpy._C_LRT_FUSED_AVAILABLE is True
 
 
 def _make_runner_test_data(rng, n_samples=50, n_snps=20):
@@ -488,9 +469,10 @@ def test_runner_fused_score_dispatch():
     """
     from unittest.mock import patch
 
-    from jamma.lmm.compute_numpy import _C_SCORE_FUSED_WS_AVAILABLE, _c
+    from jamma.lmm import compute_numpy
+    from jamma.lmm.compute_numpy import _c
 
-    assert _C_SCORE_FUSED_WS_AVAILABLE is not None
+    assert compute_numpy._accel is not None
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
     rng = np.random.default_rng(200)
@@ -498,7 +480,7 @@ def test_runner_fused_score_dispatch():
 
     # Fused Score path (default) — verify the fused C function is actually called.
     # Workspace path is preferred when available; stateless is the fallback.
-    if _C_SCORE_FUSED_WS_AVAILABLE:
+    if compute_numpy._accel is not None:
         with patch(
             "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
             wraps=_c().compute_score_fused_ws_c,
@@ -545,8 +527,8 @@ def test_runner_fused_score_dispatch():
 
     # SoA split path (disable all fused Score variants)
     with (
-        patch("jamma.lmm.compute_numpy._C_SCORE_FUSED_AVAILABLE", False),
-        patch("jamma.lmm.compute_numpy._C_SCORE_FUSED_WS_AVAILABLE", False),
+        patch("jamma.lmm.compute_numpy._accel", None),
+        patch("jamma.lmm.compute_numpy._accel", None),
     ):
         result_split = run_lmm_association_numpy(
             genotypes=genotypes,
@@ -590,9 +572,10 @@ def test_runner_fused_lrt_dispatch():
     """
     from unittest.mock import patch
 
-    from jamma.lmm.compute_numpy import _C_LRT_FUSED_WS_AVAILABLE, _c
+    from jamma.lmm import compute_numpy
+    from jamma.lmm.compute_numpy import _c
 
-    assert _C_LRT_FUSED_WS_AVAILABLE is not None
+    assert compute_numpy._accel is not None
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
     rng = np.random.default_rng(201)
@@ -600,7 +583,7 @@ def test_runner_fused_lrt_dispatch():
 
     # Fused LRT path (default) — verify the fused C function is actually called.
     # Workspace path is preferred when available; stateless is the fallback.
-    if _C_LRT_FUSED_WS_AVAILABLE:
+    if compute_numpy._accel is not None:
         with patch(
             "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
             wraps=_c().compute_lrt_fused_ws_c,
@@ -647,8 +630,8 @@ def test_runner_fused_lrt_dispatch():
 
     # SoA split path (disable all fused LRT variants)
     with (
-        patch("jamma.lmm.compute_numpy._C_LRT_FUSED_AVAILABLE", False),
-        patch("jamma.lmm.compute_numpy._C_LRT_FUSED_WS_AVAILABLE", False),
+        patch("jamma.lmm.compute_numpy._accel", None),
+        patch("jamma.lmm.compute_numpy._accel", None),
     ):
         result_split = run_lmm_association_numpy(
             genotypes=genotypes,
@@ -708,19 +691,17 @@ def test_runner_fused_score_chunk_size():
         n_filtered,
         n_cvt=1,
         use_split=True,
-        lmm_mode=3,
         mem_budget_bytes=budget,
     )
 
     from unittest.mock import patch
 
-    with patch("jamma.lmm.compute_numpy._C_SCORE_FUSED_AVAILABLE", False):
+    with patch("jamma.lmm.compute_numpy._accel", None):
         chunk_split = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
             n_cvt=1,
             use_split=True,
-            lmm_mode=3,
             mem_budget_bytes=budget,
         )
 
@@ -743,19 +724,17 @@ def test_runner_fused_lrt_chunk_size():
         n_filtered,
         n_cvt=1,
         use_split=True,
-        lmm_mode=2,
         mem_budget_bytes=budget,
     )
 
     from unittest.mock import patch
 
-    with patch("jamma.lmm.compute_numpy._C_LRT_FUSED_AVAILABLE", False):
+    with patch("jamma.lmm.compute_numpy._accel", None):
         chunk_split = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
             n_cvt=1,
             use_split=True,
-            lmm_mode=2,
             mem_budget_bytes=budget,
         )
 

@@ -21,7 +21,6 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_fused,
     create_lmm_workspace_fused_general,
     create_lmm_workspace_general,
-    create_lmm_workspace_mode4,
     create_lmm_workspace_mode4_fused,
     create_lmm_workspace_mode4_fused_general,
 )
@@ -70,7 +69,7 @@ def _create_wald_workspace_for_ncvt(
             n_refine,
             n_threads,
         )
-    if compute_numpy._C_GENERAL_AVAILABLE:
+    if compute_numpy._accel is not None:
         return create_lmm_workspace_general(
             eigenvalues,
             uab_invariant_soa,
@@ -216,19 +215,6 @@ def _create_workspaces(
                 n_threads,
                 **null_model_kwargs,
             )
-        case DispatchPath.SOA_SPLIT_MODE4:
-            lmm_workspace = create_lmm_workspace_mode4(
-                eigenvalues_np,
-                uab_invariant,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                n_threads,
-                Hi_eval_null,
-                logl_H0,
-            )
         case DispatchPath.SOA_SPLIT:
             if lmm_mode in (1, 4):
                 lmm_workspace = _create_wald_workspace_for_ncvt(
@@ -270,13 +256,8 @@ def _create_workspaces(
                 logl_H0,
                 n_threads,
             )
-        case (
-            DispatchPath.FUSED_SCORE
-            | DispatchPath.FUSED_LRT
-            | DispatchPath.NUMPY_FALLBACK
-        ):
-            # Stateless fused Score/LRT and the NumPy fallback hold no persistent
-            # workspace.
+        case DispatchPath.NUMPY_FALLBACK:
+            # The NumPy fallback holds no persistent workspace.
             pass
         case _:
             assert_never(dispatch)

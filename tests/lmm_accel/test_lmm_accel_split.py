@@ -7,9 +7,8 @@ live in tests/lmm_accel_helpers.py.
 import numpy as np
 import pytest
 
+from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _C_SPLIT_AVAILABLE,
     _compute_wald_numpy,
     _compute_wald_split_c,
     compute_wald_split_c_ws,
@@ -101,7 +100,9 @@ def test_split_iab_matches_full_iab(split_wald_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 def test_split_c_vs_full_c_parity(split_wald_data):
     """Split C extension matches full C extension within FP tolerance."""
     from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
@@ -153,7 +154,9 @@ def test_split_c_vs_full_c_parity(split_wald_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 def test_split_c_degenerate_snps():
     """All-degenerate batch via split path produces all-NaN."""
     rng = np.random.default_rng(13)
@@ -186,7 +189,9 @@ def test_split_c_degenerate_snps():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 def test_split_c_multithreaded_parity(split_wald_data):
     """Multi-threaded split C matches single-threaded split C."""
     from jamma.core.threading import get_physical_core_count
@@ -237,7 +242,9 @@ def test_split_c_multithreaded_parity(split_wald_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 @pytest.mark.parametrize(
     "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
 )
@@ -269,7 +276,9 @@ def test_split_c_nonfinite_eigenvalues(bad_value):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 def test_workspace_api_matches_legacy_split(split_wald_data):
     """Workspace API (create + chunk) produces identical results to legacy split_c.
 
@@ -314,7 +323,9 @@ def test_workspace_api_matches_legacy_split(split_wald_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 def test_workspace_reuse_across_chunks(split_wald_data):
     """Workspace created once can be reused across multiple chunk calls.
 
@@ -362,7 +373,9 @@ def test_workspace_reuse_across_chunks(split_wald_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 def test_workspace_multithreaded_parity(split_wald_data):
     """Workspace path: multi-threaded results match single-threaded results."""
     from jamma.core.threading import get_physical_core_count
@@ -391,7 +404,9 @@ def test_workspace_multithreaded_parity(split_wald_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 def test_workspace_invalid_inputs(split_wald_data):
     """Workspace creation and chunk compute reject invalid inputs cleanly."""
     eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
@@ -412,7 +427,9 @@ def test_workspace_invalid_inputs(split_wald_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 @pytest.mark.parametrize(
     "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
 )
@@ -442,7 +459,9 @@ def test_workspace_nonfinite_eigenvalues(split_wald_data, bad_value):
 
 
 @pytest.mark.tier1
-@pytest.mark.skipif(not _C_SPLIT_AVAILABLE, reason="Split C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="Split C extension unavailable"
+)
 def test_pipeline_multi_chunk_correctness():
     """Pipeline path (multi-chunk) produces identical results to sequential path.
 
@@ -507,9 +526,9 @@ def test_pipeline_multi_chunk_correctness():
     # We do this by monkeypatching the canonical dispatch flag to False.
     import jamma.lmm.compute_numpy as compute_mod
 
-    orig_split = compute_mod._C_SPLIT_AVAILABLE
+    orig_split = compute_mod._accel
     try:
-        compute_mod._C_SPLIT_AVAILABLE = False
+        compute_mod._accel = None
         run_result = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -528,7 +547,7 @@ def test_pipeline_multi_chunk_correctness():
         )
         results_sequential = run_result.associations
     finally:
-        compute_mod._C_SPLIT_AVAILABLE = orig_split
+        compute_mod._accel = orig_split
 
     # Same number of results
     assert len(results_pipeline) == len(results_sequential), (
@@ -563,7 +582,7 @@ def test_pipeline_multi_chunk_correctness():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_workspace_alignment():
     """Verify alloc_aligned_doubles returns 32-byte-aligned addresses."""
     from jamma.lmm._lmm_accel import _get_aligned_alloc_test_ptr

@@ -230,7 +230,6 @@ def run_lmm_chunk_source_numpy(
             n_filtered,
             n_cvt,
             use_split=use_split,
-            lmm_mode=lmm_mode,
             use_fused_general=use_fused_general,
             pipeline_buffers=pipeline_buffers,
         )
@@ -263,7 +262,7 @@ def run_lmm_chunk_source_numpy(
             )
 
     omp_threads = get_c_extension_thread_count(
-        compute_numpy._C_ACCEL_AVAILABLE, compute_numpy._C_HAS_OPENMP
+        compute_numpy._accel is not None, compute_numpy._C_HAS_OPENMP
     )
 
     if use_pipeline:
@@ -445,7 +444,7 @@ def run_lmm_chunk_source_numpy(
 
         t_compute_start = time.perf_counter()
         blas_ctx = (
-            blas_threads(1) if compute_numpy._C_ACCEL_AVAILABLE else nullcontext()
+            blas_threads(1) if compute_numpy._accel is not None else nullcontext()
         )
         with blas_ctx:
             if use_split:

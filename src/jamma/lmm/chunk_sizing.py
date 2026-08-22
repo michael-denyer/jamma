@@ -26,7 +26,6 @@ def compute_chunk_size_numpy(
     n_cvt: int = 1,
     *,
     use_split: bool = False,
-    lmm_mode: int = 1,
     use_fused_general: bool = False,
     mem_budget_bytes: int | None = None,
     pipeline_buffers: int = 1,
@@ -36,17 +35,16 @@ def compute_chunk_size_numpy(
     Scales the memory budget with available RAM to minimise DRAM passes
     through the eigenvector matrix during UT@G rotation.
 
+    Memory accounting turns on whether the path feeds ``utg_t`` straight to a
+    C kernel, which allocates 1 col/SNP, or builds SoA-split columns, which
+    allocate 4 (3 varying + 1 utg_t). The non-split full-Uab fallback allocates
+    (n_cvt+3)(n_cvt+2)/2 cols/SNP.
+
     Args:
         n_samples: Number of samples.
         n_filtered: Number of filtered SNPs.
         n_cvt: Number of covariates.
         use_split: If True, use split Uab accounting instead of full Uab.
-        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All). Affects
-            memory accounting only via the fused-vs-split branch: fused paths
-            (Wald, fused Score/LRT, and mode 4 when the fused mode-4 kernel is
-            present) allocate 1 col/SNP (utg_t only); SoA-split paths allocate
-            4 cols/SNP (3 varying + 1 utg_t), with no Uab reconstruction. The
-            non-split full-Uab fallback allocates (n_cvt+3)(n_cvt+2)/2 cols/SNP.
         use_fused_general: If True, fused general path is active (n_cvt>=2);
             only utg_t is allocated (single buffer, no uab_varying_soa).
         mem_budget_bytes: Explicit per-chunk memory budget in bytes.
@@ -65,20 +63,13 @@ def compute_chunk_size_numpy(
         raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
 
     if use_split and n_cvt == 1:
-        if compute_numpy._C_FUSED_AVAILABLE and (
-            lmm_mode == 1 or (lmm_mode == 4 and compute_numpy._C_MODE4_FUSED_AVAILABLE)
-        ):
-            # Fused path: jlinalg.dgemm(chunk, U, transa="T") produces
-            # C-contiguous utg_t (n_snps, n_samples) directly — single buffer.
-            # No intermediate allocation or contiguous copy.
-            # Mode 4 only uses fused when _C_MODE4_FUSED_AVAILABLE; otherwise
-            # it falls back to split SoA which needs 4x buffers.
-            bytes_per_snp = n_samples * 8
-        elif lmm_mode == 3 and compute_numpy._C_SCORE_FUSED_AVAILABLE:
-            # Fused Score: utg_t only (1 col), no uab_varying_soa.
-            bytes_per_snp = n_samples * 8
-        elif lmm_mode == 2 and compute_numpy._C_LRT_FUSED_AVAILABLE:
-            # Fused LRT: utg_t only (1 col), no uab_varying_soa.
+        if compute_numpy._accel is not None:
+            # Every n_cvt=1 C path feeds utg_t straight to the kernel:
+            # jlinalg.dgemm(chunk, U, transa="T") produces C-contiguous utg_t
+            # (n_snps, n_samples) directly, with no intermediate allocation and
+            # no uab_varying_soa. This was four branches, one per mode, each
+            # gated on a different capability flag; those flags are one bit, so
+            # every mode landed on the same size.
             bytes_per_snp = n_samples * 8
         else:
             # SoA split paths (Wald, Score, LRT, mode-4):

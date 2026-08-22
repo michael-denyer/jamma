@@ -328,50 +328,12 @@ def _dispatch_compute(
                 write_offset=write_offset,
                 n_filtered=ctx.n_filtered,
             )
-        case DispatchPath.FUSED_SCORE:
-            from jamma.lmm.compute_numpy import _c
-
-            return _guarded_compute(
-                _c().compute_score_fused_c,
-                chunk_input,
-                ctx.w,
-                ctx.Uty,
-                ctx.Hi_eval_null,
-                ctx.uab_invariant_soa,
-                ctx.eigenvalues_np,
-                ctx.n_samples,
-                n_threads,
-                operation="Fused Score dispatch",
-                write_offset=write_offset,
-                n_filtered=ctx.n_filtered,
-            )
-        case DispatchPath.FUSED_LRT:
-            from jamma.lmm.compute_numpy import _c
-
-            return _guarded_compute(
-                _c().compute_lrt_fused_c,
-                chunk_input,
-                ctx.w,
-                ctx.Uty,
-                ctx.eigenvalues_np,
-                ctx.uab_invariant_soa,
-                ctx.n_samples,
-                ctx.l_min,
-                ctx.l_max,
-                ctx.n_grid,
-                ctx.n_refine,
-                ctx.logl_H0,
-                n_threads,
-                operation="Fused LRT dispatch",
-                write_offset=write_offset,
-                n_filtered=ctx.n_filtered,
-            )
-        case DispatchPath.SOA_SPLIT | DispatchPath.SOA_SPLIT_MODE4:
+        case DispatchPath.SOA_SPLIT:
             # chunk_input is the varying-Uab SoA array.
             return _guarded_compute(
                 dispatch_soa_split,
                 ctx.lmm_mode,
-                ctx.dispatch is DispatchPath.SOA_SPLIT_MODE4,
+                False,  # no single-pass mode-4 split kernel is reachable
                 ctx.lmm_workspace,
                 ctx.n_cvt,
                 ctx.eigenvalues_np,

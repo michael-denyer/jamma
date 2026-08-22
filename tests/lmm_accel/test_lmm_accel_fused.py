@@ -8,11 +8,7 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    compute_wald_split_c_ws,
-    create_lmm_workspace,
-)
+from jamma.lmm.compute_numpy import compute_wald_split_c_ws, create_lmm_workspace
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
@@ -21,7 +17,7 @@ from jamma.lmm.schema import LmmConfig
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 class TestHiEvalNullPositivity:
     """C extension rejects non-positive hi_eval_null values at all three sites."""
 
@@ -184,9 +180,9 @@ class TestHiEvalNullPositivity:
 
 
 _fused_c_available = (
-    _C_ACCEL_AVAILABLE
+    compute_numpy._accel is not None
     and hasattr(compute_numpy, "_C_FUSED_AVAILABLE")
-    and compute_numpy._C_FUSED_AVAILABLE
+    and compute_numpy._accel is not None
 )
 
 
@@ -335,15 +331,15 @@ class TestFusedParity:
 
     def test_mode4_parity(self, fused_data, score_lrt_data):
         """Fused mode-4 produces bitwise-identical results to SoA mode-4."""
+        from jamma.lmm import compute_numpy
         from jamma.lmm.compute_numpy import (
-            _C_MODE4_AVAILABLE,
             compute_mode4_fused_c_ws,
             compute_mode4_split_c_ws,
             create_lmm_workspace_mode4,
             create_lmm_workspace_mode4_fused,
         )
 
-        if not _C_MODE4_AVAILABLE:
+        if compute_numpy._accel is None:
             pytest.skip("Mode-4 split C extension not available")
 
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
@@ -534,10 +530,6 @@ class TestFusedParity:
         with pytest.raises(ValueError, match=r"[Ff]used"):
             compute_wald_fused_c_ws(ws_split, utg_t, 1)
 
-    def test_fused_available_flag(self):
-        """_C_FUSED_AVAILABLE flag is True when C extension has fused functions."""
-        assert compute_numpy._C_FUSED_AVAILABLE is True
-
 
 def _prepare_fused_general_data(data: dict) -> dict:
     """Prepare invariant SoA, varying SoA, UtG_T, and pab_c for fused general tests.
@@ -655,7 +647,7 @@ def _run_fused_general_wald_vs_nonfused(data: dict) -> None:
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Fused general C not available",
 )
 def test_fused_general_ncvt2_wald(synthetic_covariate_data_ncvt2):
@@ -667,7 +659,7 @@ def test_fused_general_ncvt2_wald(synthetic_covariate_data_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Fused general C not available",
 )
 def test_fused_general_ncvt4_wald(synthetic_covariate_data_ncvt4):
@@ -679,7 +671,7 @@ def test_fused_general_ncvt4_wald(synthetic_covariate_data_ncvt4):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_MODE4_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Mode-4 fused general C not available",
 )
 def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
@@ -794,7 +786,7 @@ def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Fused general C not available",
 )
 def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
@@ -873,7 +865,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Fused general C not available",
 )
 def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
@@ -979,7 +971,7 @@ def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Fused general C not available",
 )
 def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
@@ -1131,7 +1123,7 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Fused general C not available",
 )
 def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
@@ -1213,7 +1205,7 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Fused general C not available",
 )
 def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
@@ -1324,7 +1316,7 @@ def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    not compute_numpy._C_ACCEL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="C extension not available",
 )
 def test_fused_general_abi_version_9():
@@ -1335,20 +1327,7 @@ def test_fused_general_abi_version_9():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
-    reason="Fused general C not available",
-)
-def test_fused_general_availability_flags():
-    """Fused general availability flags are True when C extension has ABI v9."""
-    assert compute_numpy._C_FUSED_GENERAL_AVAILABLE is True
-    assert compute_numpy._C_MODE4_FUSED_GENERAL_AVAILABLE is True
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    not compute_numpy._C_FUSED_AVAILABLE, reason="Fused C not available"
-)
+@pytest.mark.skipif(compute_numpy._accel is None, reason="Fused C not available")
 def test_fused_ncvt1_regression(split_wald_data):
     """Regression: n_cvt=1 fused path works after general addition."""
     from jamma.lmm.compute_numpy import (
@@ -1400,7 +1379,7 @@ def test_fused_ncvt1_regression(split_wald_data):
 
 @pytest.mark.tier1
 @pytest.mark.skipif(
-    not compute_numpy._C_FUSED_GENERAL_AVAILABLE,
+    compute_numpy._accel is None,
     reason="Fused general C not available",
 )
 def test_runner_fused_general_ncvt2_dispatch():
@@ -1408,8 +1387,8 @@ def test_runner_fused_general_ncvt2_dispatch():
 
     Exercises the full build_pab_table_for_c → create_workspace_fused_general →
     compute_wald_fused_general_c_ws pipeline through run_lmm_association_numpy.
-    Compares fused general results (n_cvt=2 with C extension) against the
-    non-fused fallback (monkeypatched _C_FUSED_GENERAL_AVAILABLE=False).
+    Compares fused general results (n_cvt=2 with the C extension) against the
+    NumPy path, reached by dropping the extension.
     """
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
@@ -1451,7 +1430,7 @@ def test_runner_fused_general_ncvt2_dispatch():
     # Patch the source module (compute_numpy), which owns dispatch capability flags.
     from unittest.mock import patch
 
-    with patch("jamma.lmm.compute_numpy._C_FUSED_GENERAL_AVAILABLE", False):
+    with patch("jamma.lmm.compute_numpy._accel", None):
         result_nonfused = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -1480,16 +1459,24 @@ def test_runner_fused_general_ncvt2_dispatch():
         f"Too many SNPs filtered: {len(assoc_fused)} of {n_snps}"
     )
 
-    # Results should be bitwise identical — same C kernels, same data
+    # Not bitwise: the reference run is now the NumPy path, not a second C
+    # path. Dropping the fused general kernel used to leave the general split
+    # kernel in place, and the two agreed to the last bit; no build exports one
+    # without the other, so the honest reference is NumPy, which accumulates in
+    # a different order.
     for a_f, a_nf in zip(assoc_fused, assoc_nonfused, strict=True):
         assert a_f.rs == a_nf.rs, f"SNP order mismatch: {a_f.rs} vs {a_nf.rs}"
-        np.testing.assert_equal(
+        np.testing.assert_allclose(
             a_f.p_wald,
             a_nf.p_wald,
+            rtol=1e-8,
+            atol=1e-14,
             err_msg=f"p_wald mismatch for {a_f.rs}",
         )
-        np.testing.assert_equal(
+        np.testing.assert_allclose(
             a_f.beta,
             a_nf.beta,
+            rtol=1e-8,
+            atol=1e-14,
             err_msg=f"beta mismatch for {a_f.rs}",
         )

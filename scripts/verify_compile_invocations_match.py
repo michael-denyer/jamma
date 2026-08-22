@@ -10,7 +10,7 @@ Note on scope: ``src/jamma/core/recompile.py`` is deliberately EXCLUDED from
 ENTRY_POINTS. It is a thin import-retry shim that delegates to
 ``_compile_jlinalg`` / ``_compile_accel`` rather than invoking the helper
 directly, so it cannot satisfy the ``compile_jlinalg(`` assertion below.
-The complementary ``check-compile-flag-literals.py`` lint DOES cover
+The complementary ``check_compile_flag_literals.py`` lint DOES cover
 recompile.py for bare flag literals.
 """
 

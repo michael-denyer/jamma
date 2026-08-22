@@ -1,4 +1,4 @@
-"""Tests for scripts/check-compile-flag-literals.py.
+"""Tests for scripts/check_compile_flag_literals.py.
 
 The script's job is to block bare compile-flag literals (``"-O3"``,
 ``"-fopenmp"``, etc.) outside jamma._build_support. These tests exercise the
@@ -14,7 +14,6 @@ The lint is a drift-catcher for honest copy-paste, not a sandbox escape.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,8 +21,10 @@ from textwrap import dedent
 
 import pytest
 
+from tests.conftest import install_lint_script
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_SCRIPT = _REPO_ROOT / "scripts" / "check-compile-flag-literals.py"
+_SCRIPT = _REPO_ROOT / "scripts" / "check_compile_flag_literals.py"
 
 
 def _run_with_targets(
@@ -35,10 +36,7 @@ def _run_with_targets(
     TARGETS list. We reproduce that layout under ``tmp_path``: script goes
     to ``tmp_path/scripts/``, target files to relative paths under tmp_path.
     """
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    script_copy = scripts_dir / _SCRIPT.name
-    shutil.copy2(_SCRIPT, script_copy)
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
 
     for rel_path, content in files.items():
         dst = tmp_path / rel_path

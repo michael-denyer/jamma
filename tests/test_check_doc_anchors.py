@@ -1,4 +1,4 @@
-"""Tests for scripts/check-doc-anchors.py.
+"""Tests for scripts/check_doc_anchors.py.
 
 The lint exists because 53 anchors in docs/CODEMAP.md rotted unnoticed before
 7.2.0. A lint that passes on a clean tree but cannot detect the rot it was
@@ -8,17 +8,18 @@ carrying a known-stale anchor and assert that it fails and says why.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import install_lint_script
+
 pytestmark = pytest.mark.tier0
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_SCRIPT = _REPO_ROOT / "scripts" / "check-doc-anchors.py"
+_SCRIPT = _REPO_ROOT / "scripts" / "check_doc_anchors.py"
 
 # alpha() is on line 4 and Beta on line 8. The tests below anchor at those.
 _MODULE = '''"""A stub module."""
@@ -41,9 +42,7 @@ def _run(tmp_path: Path, doc_body: str) -> subprocess.CompletedProcess[str]:
     ignore list that .markdownlint-cli2.jsonc and lychee.toml both hold, and it
     means these tests exercise the same enumeration the pre-commit hook does.
     """
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(_SCRIPT, scripts_dir / _SCRIPT.name)
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
 
     src = tmp_path / "src"
     src.mkdir(parents=True, exist_ok=True)
@@ -67,7 +66,7 @@ def _run(tmp_path: Path, doc_body: str) -> subprocess.CompletedProcess[str]:
         )
 
     return subprocess.run(
-        [sys.executable, str(scripts_dir / _SCRIPT.name)],
+        [sys.executable, str(script_copy)],
         capture_output=True,
         text=True,
         check=False,

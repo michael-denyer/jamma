@@ -37,7 +37,7 @@ CLAUDE.md):
   -fsanitize=address,undefined / -fno-omit-frame-pointer / -shared-libasan
 
 Usage:
-  python3 scripts/check-compile-flag-literals.py
+  python3 scripts/check_compile_flag_literals.py
   # exits 0 if clean, exits 1 with violations printed to stderr
 """
 
@@ -46,6 +46,15 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+
+from _lint_common import (
+    allowed,
+    display_path,
+    read_batch,
+    repo_root,
+    report,
+    report_unreadable,
+)
 
 FLAGS: set[str] = {
     "-O0",
@@ -101,59 +110,64 @@ TARGETS: list[str] = [
 # "-fsanitize=address,undefined" matches as a single flag.
 FLAG_PATTERN = re.compile(r"""["'](-[OfWmsp][A-Za-z0-9_=,-]*)["']""")
 
+ALLOW_MARKER = "allow-compile-flag-literal"
+
+
+def scan_line(line: str) -> list[str]:
+    """Return the banned flag literals quoted on one line of source.
+
+    Pure-comment lines are exempt: documentation and rationale mention
+    ``-O3`` constantly. An inline comment after a literal is not, because
+    the literal on that line is still real.
+    """
+    if line.lstrip().startswith("#"):
+        return []
+    return [m.group(1) for m in FLAG_PATTERN.finditer(line) if m.group(1) in FLAGS]
+
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parent.parent
+    root = repo_root()
     violations: list[str] = []
 
+    present: list[Path] = []
     for target in TARGETS:
-        path = repo_root / target
-        if not path.exists():
+        path = root / target
+        if path.exists():
+            present.append(path)
+        else:
             # Missing file is a separate problem — the cleanup plan may have
             # deleted something the lint expected. Surface it as a violation.
             violations.append(
                 f"{target}: target file missing — "
-                f"check-compile-flag-literals.py needs updating"
+                f"check_compile_flag_literals.py needs updating"
             )
-            continue
 
-        source_lines = path.read_text().splitlines()
-        for lineno, line in enumerate(source_lines, 1):
-            # Skip pure-comment lines (but not inline comments — a literal on
-            # a code line followed by `# comment` is still a violation).
-            stripped = line.lstrip()
-            if stripped.startswith("#"):
+    lines_by_path, unreadable = read_batch(present, root=root)
+    for path, lines in lines_by_path.items():
+        target = display_path(path, root)
+        for i, line in enumerate(lines):
+            # Deliberate-divergence escape hatch. Inline on the offending
+            # line, or on the comment line immediately above it — ruff-format
+            # splits a long inline comment up there. Only a *comment* line
+            # above counts; an inline marker covers its own line alone.
+            above_is_comment = i > 0 and lines[i - 1].lstrip().startswith("#")
+            if allowed(lines, i, ALLOW_MARKER, window=1 if above_is_comment else 0):
                 continue
-            # Deliberate-divergence escape hatch. Accept the marker inline
-            # on the same line, or on the immediately preceding comment
-            # line (useful when the literal is long enough that ruff-format
-            # would split the inline comment to its own line).
-            if "allow-compile-flag-literal" in line:
-                continue
-            if lineno >= 2:
-                prev = source_lines[lineno - 2].lstrip()
-                if prev.startswith("#") and "allow-compile-flag-literal" in prev:
-                    continue
-            for match in FLAG_PATTERN.finditer(line):
-                flag = match.group(1)
-                if flag in FLAGS:
-                    violations.append(
-                        f"{target}:{lineno}: bare compile-flag literal {flag!r} — "
-                        f"add flags to src/jamma/_build_support/"
-                        f"compile_and_link.py instead"
-                    )
+            for flag in scan_line(line):
+                violations.append(
+                    f"{target}:{i + 1}: bare compile-flag literal {flag!r} — "
+                    f"add flags to src/jamma/_build_support/"
+                    f"compile_and_link.py instead"
+                )
 
-    if violations:
-        print("Compile-flag drift detected:", file=sys.stderr)
-        for v in violations:
-            print(f"  {v}", file=sys.stderr)
-        print(
-            f"\n{len(violations)} violation(s). See docstring in "
-            f"scripts/check-compile-flag-literals.py for rationale.",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    skipped = report_unreadable(unreadable)
+    found = report(
+        "Compile-flag drift detected:",
+        violations,
+        f"{len(violations)} violation(s). See docstring in "
+        f"scripts/check_compile_flag_literals.py for rationale.",
+    )
+    return max(skipped, found)
 
 
 if __name__ == "__main__":

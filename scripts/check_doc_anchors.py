@@ -40,7 +40,7 @@ label alone is authoritative and the row never has to be consulted. That is a
 change to roughly 120 links across the docs and has not been made.
 
 Usage:
-  python3 scripts/check-doc-anchors.py
+  python3 scripts/check_doc_anchors.py
 """
 
 from __future__ import annotations
@@ -48,9 +48,17 @@ from __future__ import annotations
 import ast
 import keyword
 import re
-import subprocess
 import sys
 from pathlib import Path
+
+from _lint_common import (
+    read_batch,
+    read_lines,
+    repo_root,
+    report,
+    report_unreadable,
+    tracked_files,
+)
 
 # LICENSE.md is upstream GPL boilerplate. Everything else the other two doc
 # checkers ignore (.venv, .planning, .beads, .claude, .code-review-graph,
@@ -134,34 +142,9 @@ def _wanted_symbol(label: str, row: str) -> str | None:
     return None
 
 
-def _markdown_files(root: Path) -> list[Path]:
-    """Every committed markdown file, per git.
-
-    ``git ls-files`` is the enumeration, not an rglob plus a hand-maintained
-    ignore list. Anything gitignored is excluded because git does not track it,
-    which is one fewer copy of that list to keep in step with the two other doc
-    checkers.
-
-    Raises:
-        RuntimeError: If git cannot list the tree. Falling back to a filesystem
-            walk would silently start checking uncommitted and vendored files.
-    """
-    result = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "*.md"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"git ls-files failed in {root} (exit {result.returncode}): "
-            f"{result.stderr.strip()}"
-        )
-    return sorted(
-        root / name
-        for name in result.stdout.split("\0")
-        if name and Path(name).name not in SKIP_FILES
-    )
+def _markdown_files() -> list[Path]:
+    """Every committed markdown file this repo is responsible for."""
+    return [p for p in tracked_files("*.md") if p.name not in SKIP_FILES]
 
 
 def _check_anchor(
@@ -173,8 +156,10 @@ def _check_anchor(
     if not target.exists():
         return f"{where}: {rel} does not exist"
 
-    source = target.read_text(encoding="utf-8", errors="replace")
-    lines = source.splitlines()
+    # errors="replace": an anchor target is a file the docs merely point
+    # at, so undecodable bytes in one are not this lint's business. The
+    # markdown files it owns are read strictly, through read_batch below.
+    lines = read_lines(target, errors="replace")
     if want > len(lines):
         return (
             f"{where}: {rel}#L{want} is past the end of the file ({len(lines)} lines)"
@@ -183,7 +168,7 @@ def _check_anchor(
     # Both languages reduce to the same two views: what is defined on the
     # anchored line, and where each name is actually defined.
     if target.suffix in PY_SUFFIXES:
-        by_line = _python_definitions(source, target)
+        by_line = _python_definitions("\n".join(lines), target)
     elif target.suffix in C_SUFFIXES:
         by_line = {}
         for n, text in enumerate(lines, start=1):
@@ -218,14 +203,13 @@ def _check_anchor(
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parent.parent
+    root = repo_root()
+    lines_by_path, unreadable = read_batch(_markdown_files(), root=root)
     problems: list[str] = []
     anchors = 0
 
-    for doc in _markdown_files(root):
-        for doc_line, row in enumerate(
-            doc.read_text(encoding="utf-8").splitlines(), start=1
-        ):
+    for doc, rows in lines_by_path.items():
+        for doc_line, row in enumerate(rows, start=1):
             for label, rel, anchor in LINK.findall(row):
                 anchors += 1
                 problem = _check_anchor(
@@ -234,18 +218,25 @@ def main() -> int:
                 if problem is not None:
                     problems.append(problem)
 
+    skipped = report_unreadable(unreadable)
     if problems:
-        print(f"Stale documentation anchors ({len(problems)} of {anchors} checked):\n")
-        for problem in problems:
-            print(f"  {problem}")
-        print(
-            "\nEach anchor should point at the line where its symbol is defined.\n"
-            "Fix the line number, or the symbol name, or drop the anchor."
+        # stdout, not stderr: this lint has always reported there, and its
+        # tests read result.stdout.
+        return max(
+            skipped,
+            report(
+                f"Stale documentation anchors "
+                f"({len(problems)} of {anchors} checked):\n",
+                problems,
+                "Each anchor should point at the line where its symbol is defined.\n"
+                "Fix the line number, or the symbol name, or drop the anchor.",
+                stream=sys.stdout,
+            ),
         )
-        return 1
 
-    print(f"check-doc-anchors: {anchors} anchors OK")
-    return 0
+    if skipped == 0:
+        print(f"check_doc_anchors: {anchors} anchors OK")
+    return skipped
 
 
 if __name__ == "__main__":

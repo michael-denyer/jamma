@@ -1,4 +1,4 @@
-"""Tests for scripts/check-quiet-flags.py.
+"""Tests for scripts/check_quiet_flags.py.
 
 The lint enforces CLAUDE.md's "No Quiet Flags Anywhere" rule and the
 hook-skip ban. Covers positive cases (flags must be caught), expected
@@ -8,29 +8,28 @@ negatives (documentation mentions, unrelated `-q` uses), and the
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import install_lint_script
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_SCRIPT = _REPO_ROOT / "scripts" / "check-quiet-flags.py"
+_SCRIPT = _REPO_ROOT / "scripts" / "check_quiet_flags.py"
 
 
 def _run(tmp_path: Path, rel_path: str, content: str) -> subprocess.CompletedProcess:
     """Copy the script into tmp_path/scripts/, write one target file, run it."""
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    shutil.copy2(_SCRIPT, scripts_dir / _SCRIPT.name)
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
 
     dst = tmp_path / rel_path
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(content)
 
     return subprocess.run(
-        [sys.executable, str(scripts_dir / _SCRIPT.name), str(dst)],
+        [sys.executable, str(script_copy), str(dst)],
         capture_output=True,
         text=True,
         check=False,
@@ -137,21 +136,32 @@ def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
 
     Skipping means a quiet flag inside that file passes the check while the
     hook reports success.
+
+    The assertions pin the whole message, not just the exit code. An earlier
+    refactor let `read_lines` raise out of `main`, which kept the exit code
+    and the words "could not be read" while replacing the report with a
+    traceback. A test that checked only those two things passed anyway. The
+    legible report is the point of this gate, so it is what gets asserted.
     """
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    shutil.copy2(_SCRIPT, scripts_dir / _SCRIPT.name)
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
 
     dst = tmp_path / "foo.sh"
     dst.write_bytes(b"pip install numpy --quiet\n\xff\xfe not utf-8\n")
 
     result = subprocess.run(
-        [sys.executable, str(scripts_dir / _SCRIPT.name), str(dst)],
+        [sys.executable, str(script_copy), str(dst)],
         capture_output=True,
         text=True,
         check=False,
     )
 
     assert result.returncode == 1
-    assert "foo.sh" in result.stderr
-    assert "could not be read" in result.stderr
+    assert "Traceback" not in result.stderr, (
+        f"the gate must report, not crash:\n{result.stderr}"
+    )
+    assert "Files could not be read, so they were not checked:" in result.stderr
+    assert "  foo.sh: UnicodeDecodeError:" in result.stderr
+    assert (
+        "1 file(s) skipped. A skipped file is an unchecked file, and this "
+        "gate reports success only when every target was read."
+    ) in result.stderr

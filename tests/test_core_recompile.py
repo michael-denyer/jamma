@@ -565,3 +565,57 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
         "compile_extension must be skipped when sibling process already "
         f"rebuilt the .so, but it was called {compile_calls[0]} time(s)"
     )
+
+
+@pytest.mark.tier0
+@pytest.mark.timeout(30)
+def test_recompile_refuses_to_recurse_into_its_own_import_probe(monkeypatch):
+    """Re-entry must return False, not block on the lock this call already holds.
+
+    ``compile_extension`` verifies its build by deleting ``jamma.<pkg>*`` from
+    ``sys.modules`` and re-importing. That re-executes the package ``__init__``
+    that called in here, and if the extension still will not load, that
+    ``__init__`` calls straight back in. ``flock`` is per open-file-description,
+    so the second call opens a second fd and the process blocks against its own
+    lock: 0% CPU, two fds, and the .so already written.
+
+    The timeout is what makes a regression a failure rather than a hung suite.
+    """
+    compiler_name = "jamma._fake_compiler_reentrant"
+    sys_key = "jamma._fake_ext_reentrant"
+    calls: list[str] = []
+    nested_result: list[bool] = []
+
+    mod = types.ModuleType(compiler_name)
+
+    def compile_extension(verbose: bool = False, on_retry=None) -> bool:
+        del verbose, on_retry
+        calls.append("compile")
+        nested_result.append(
+            auto_recompile_c_extension(
+                module_name="_fake_ext_reentrant",
+                compiler_module=compiler_name,
+                sys_module_key=sys_key,
+                label="fake",
+            )
+        )
+        return True
+
+    mod.compile_extension = compile_extension  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, compiler_name, mod)
+
+    result = auto_recompile_c_extension(
+        module_name="_fake_ext_reentrant",
+        compiler_module=compiler_name,
+        sys_module_key=sys_key,
+        label="fake",
+    )
+
+    assert result is True
+    assert nested_result == [False], (
+        "the re-entrant call must decline rather than recurse; returning True "
+        "would let the build run twice inside one lock"
+    )
+    assert calls == ["compile"], (
+        f"compile_extension must run once, not once per re-entry: {calls}"
+    )

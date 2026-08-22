@@ -7,10 +7,7 @@ live in tests/lmm_accel_helpers.py.
 import numpy as np
 import pytest
 
-from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _C_GENERAL_AVAILABLE,
-)
+from jamma.lmm import compute_numpy
 from jamma.lmm.likelihood_numpy import (
     _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
@@ -30,7 +27,7 @@ def general_score_lrt_ncvt4(synthetic_covariate_data_ncvt4):
 
 def _lrt_general_c_available() -> bool:
     """Check if compute_lrt_batch_general_c is available from the C extension."""
-    if not _C_ACCEL_AVAILABLE:
+    if compute_numpy._accel is None:
         return False
     try:
         from jamma.lmm._lmm_accel import compute_lrt_batch_general_c  # noqa: F401
@@ -41,7 +38,9 @@ def _lrt_general_c_available() -> bool:
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_score_batch_general_ncvt2(general_score_lrt_ncvt2):
     """C-70-01: compute_score_batch_general_c matches Python for n_cvt=2."""
     if not _score_general_c_available():
@@ -105,7 +104,9 @@ def test_score_batch_general_ncvt2(general_score_lrt_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_score_batch_general_ncvt4(general_score_lrt_ncvt4):
     """C-70-02: compute_score_batch_general_c matches Python for n_cvt=4."""
     if not _score_general_c_available():
@@ -167,7 +168,9 @@ def test_score_batch_general_ncvt4(general_score_lrt_ncvt4):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_score_batch_general_degenerate_snps(synthetic_covariate_data_ncvt2):
     """C-70-03: Degenerate SNPs produce NaN for Score general n_cvt."""
     if not _score_general_c_available():
@@ -214,7 +217,9 @@ def test_score_batch_general_degenerate_snps(synthetic_covariate_data_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_lrt_batch_general_ncvt2(general_score_lrt_ncvt2):
     """C-70-04: compute_lrt_batch_general_c matches Python for n_cvt=2."""
     if not _lrt_general_c_available():
@@ -279,7 +284,9 @@ def test_lrt_batch_general_ncvt2(general_score_lrt_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_lrt_batch_general_ncvt4(general_score_lrt_ncvt4):
     """C-70-05: compute_lrt_batch_general_c matches Python for n_cvt=4."""
     if not _lrt_general_c_available():
@@ -342,7 +349,9 @@ def test_lrt_batch_general_ncvt4(general_score_lrt_ncvt4):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_lrt_batch_general_degenerate_snps(synthetic_covariate_data_ncvt2):
     """C-70-06: LRT general C matches Python on degenerate SNPs.
 
@@ -418,7 +427,7 @@ def test_lrt_batch_general_degenerate_snps(synthetic_covariate_data_ncvt2):
 
 def _score_split_general_c_available() -> bool:
     """Check if compute_score_split_general_c is available from the C extension."""
-    if not _C_ACCEL_AVAILABLE:
+    if compute_numpy._accel is None:
         return False
     try:
         from jamma.lmm._lmm_accel import compute_score_split_general_c  # noqa: F401
@@ -430,7 +439,7 @@ def _score_split_general_c_available() -> bool:
 
 def _lrt_split_general_c_available() -> bool:
     """Check if compute_lrt_split_general_c is available from the C extension."""
-    if not _C_ACCEL_AVAILABLE:
+    if compute_numpy._accel is None:
         return False
     try:
         from jamma.lmm._lmm_accel import compute_lrt_split_general_c  # noqa: F401
@@ -441,7 +450,9 @@ def _lrt_split_general_c_available() -> bool:
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_score_split_ncvt2(general_score_lrt_ncvt2):
     """C-105-01: compute_score_split_general_c matches reconstruct+batch for n_cvt=2."""
     if not _score_split_general_c_available():
@@ -526,7 +537,9 @@ def test_general_score_split_ncvt2(general_score_lrt_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_lrt_split_ncvt2(general_score_lrt_ncvt2):
     """C-105-02: compute_lrt_split_general_c matches reconstruct+batch for n_cvt=2."""
     if not _lrt_split_general_c_available():
@@ -608,7 +621,9 @@ def test_general_lrt_split_ncvt2(general_score_lrt_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_score_split_ncvt4(general_score_lrt_ncvt4):
     """C-105-03: compute_score_split_general_c matches reconstruct+batch for n_cvt=4."""
     if not _score_split_general_c_available():
@@ -687,7 +702,9 @@ def test_general_score_split_ncvt4(general_score_lrt_ncvt4):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_lrt_split_ncvt4(general_score_lrt_ncvt4):
     """C-105-04: compute_lrt_split_general_c matches reconstruct+batch for n_cvt=4."""
     if not _lrt_split_general_c_available():

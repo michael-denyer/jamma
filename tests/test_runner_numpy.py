@@ -333,7 +333,6 @@ def test_chunk_size_mode4_fused_uses_4col():
         n_filtered=500_000,
         n_cvt=1,
         use_split=True,
-        lmm_mode=4,
         mem_budget_bytes=budget,
     )
     # Non-fused mode-4 fallback: also 4 cols/SNP (SoA split dispatch)
@@ -342,7 +341,6 @@ def test_chunk_size_mode4_fused_uses_4col():
         n_filtered=500_000,
         n_cvt=1,
         use_split=True,
-        lmm_mode=4,
         mem_budget_bytes=budget,
     )
     # Wald (mode 1): 4 cols/SNP — should match all other split paths
@@ -351,7 +349,6 @@ def test_chunk_size_mode4_fused_uses_4col():
         n_filtered=500_000,
         n_cvt=1,
         use_split=True,
-        lmm_mode=1,
         mem_budget_bytes=budget,
     )
 
@@ -367,10 +364,9 @@ def test_runner_mode4_uses_fused_dispatch():
     """Mode 4 with C extension uses fused dispatch, not compose fallback."""
     from unittest.mock import patch
 
-    from jamma.lmm import chunk_dispatch
-    from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
+    from jamma.lmm import chunk_dispatch, compute_numpy
 
-    if not _C_MODE4_AVAILABLE:
+    if compute_numpy._accel is None:
         pytest.skip("Fused mode-4 C extension not available")
 
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()

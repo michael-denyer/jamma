@@ -7,16 +7,21 @@ live in tests/lmm_accel_helpers.py.
 import numpy as np
 import pytest
 
-from jamma.lmm.compute_numpy import _C_ACCEL_AVAILABLE, _c
+from jamma.lmm import compute_numpy
+from jamma.lmm.compute_numpy import _c
 from jamma.lmm.likelihood_numpy import (
     _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
     golden_section_optimize_lambda_mle_numpy,
 )
 
-_score_c_available = _C_ACCEL_AVAILABLE and _c().compute_score_batch_c is not None
+_score_c_available = (
+    compute_numpy._accel is not None and _c().compute_score_batch_c is not None
+)
 
-_lrt_c_available = _C_ACCEL_AVAILABLE and _c().compute_lrt_batch_c is not None
+_lrt_c_available = (
+    compute_numpy._accel is not None and _c().compute_lrt_batch_c is not None
+)
 
 
 @pytest.mark.tier0

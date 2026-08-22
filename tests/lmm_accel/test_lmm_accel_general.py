@@ -7,9 +7,8 @@ live in tests/lmm_accel_helpers.py.
 import numpy as np
 import pytest
 
+from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _C_GENERAL_AVAILABLE,
     compute_lmm_chunk_numpy,
     compute_wald_general_c_ws,
     compute_wald_split_c_ws,
@@ -23,7 +22,9 @@ from tests.lmm_accel._helpers import (
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_reml_wald_matches_python_ncvt2(
     synthetic_covariate_data_ncvt2,
 ):
@@ -32,7 +33,9 @@ def test_general_ncvt_reml_wald_matches_python_ncvt2(
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_reml_wald_ncvt4(
     synthetic_covariate_data_ncvt4,
 ):
@@ -41,7 +44,9 @@ def test_general_ncvt_reml_wald_ncvt4(
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """C-GEN-02: Workspace create/compute/destroy cycle works for n_cvt>1."""
     from jamma.lmm.likelihood import classify_uab_columns
@@ -98,7 +103,9 @@ def test_general_ncvt_workspace_lifecycle(synthetic_covariate_data_ncvt2):
 
 
 @pytest.mark.tier1
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_gemma_covariate_match():
     """C-GEN-03: C extension Wald results match GEMMA reference with covariates.
 
@@ -159,7 +166,9 @@ def test_general_ncvt_gemma_covariate_match():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
     """C-GEN-04: All 4 LMM modes produce results with n_cvt=2 covariates.
 
@@ -252,7 +261,9 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
     """C-GEN-05: 1-thread vs N-thread produce identical results for n_cvt>1."""
     from jamma.core.threading import get_physical_core_count
@@ -302,7 +313,9 @@ def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
     """C-GEN-06: Constant genotypes produce NaN beta/se/p-value for n_cvt>1."""
     from jamma.lmm.likelihood import classify_uab_columns
@@ -353,7 +366,7 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_general_ncvt_abi_version():
     """C-GEN-07: ABI version is 11 for persistent Score/LRT workspaces."""
     from jamma.lmm._lmm_accel import ABI_VERSION
@@ -362,7 +375,7 @@ def test_general_ncvt_abi_version():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_existing_ncvt1_regression(synthetic_wald_data):
     """C-GEN-08: Existing n_cvt=1 C extension path unchanged with ABI_VERSION=5.
 

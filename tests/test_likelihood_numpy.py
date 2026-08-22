@@ -948,7 +948,7 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
         return real_generic_fn(*args, **kwargs)
 
     with (
-        patch.object(cn, "_C_ACCEL_AVAILABLE", False),
+        patch.object(cn, "_accel", None),
         patch.object(cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split),
         patch.object(cn, "golden_section_optimize_lambda_numpy", spy_generic),
     ):
@@ -984,8 +984,8 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
         return real_generic_fn(*args, **kwargs)
 
     with (
-        patch.object(cn, "_C_ACCEL_AVAILABLE", False),
-        patch.object(cn, "_C_GENERAL_AVAILABLE", False),
+        patch.object(cn, "_accel", None),
+        patch.object(cn, "_accel", None),
         patch.object(
             cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split2
         ),
@@ -1012,7 +1012,7 @@ def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
     Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
 
     # Split path (n_cvt=1 Python branch)
-    with patch.object(cn, "_C_ACCEL_AVAILABLE", False):
+    with patch.object(cn, "_accel", None):
         result_split = cn._compute_wald_numpy(
             n_cvt, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
         )
@@ -1078,7 +1078,7 @@ def test_compute_wald_numpy_ncvt1_invariant_efficiency(compute_wald_data):
         return real_fn(*args, **kwargs)
 
     with (
-        patch.object(cn, "_C_ACCEL_AVAILABLE", False),
+        patch.object(cn, "_accel", None),
         patch.object(cn, "compute_iab_invariant_scalars_ncvt1", counting_fn),
     ):
         cn._compute_wald_numpy(1, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20)

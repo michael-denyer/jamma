@@ -72,7 +72,7 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
         )
         from jamma.lmm import compute_numpy
 
-        c_ext = compute_numpy._C_ACCEL_AVAILABLE
+        c_ext = compute_numpy._accel is not None
         c_has_openmp = bool(compute_numpy._C_HAS_OPENMP)
         runner = plan.runner_name
 

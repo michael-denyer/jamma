@@ -8,11 +8,7 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _compute_wald_numpy,
-    compute_lmm_chunk_numpy,
-)
+from jamma.lmm.compute_numpy import _compute_wald_numpy, compute_lmm_chunk_numpy
 from jamma.lmm.likelihood_numpy import (
     batch_compute_iab_numpy,
     golden_section_optimize_lambda_numpy,
@@ -21,7 +17,7 @@ from jamma.lmm.schema import MIN_N_GRID
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_extension_importable():
     """Verify the C extension module can be imported directly."""
     from jamma.lmm._lmm_accel import compute_lmm_batch_c
@@ -30,7 +26,7 @@ def test_c_extension_importable():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
     """C extension and Python path produce numerically identical Wald outputs.
 
@@ -43,7 +39,7 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
     n_cvt = 1
     l_min, l_max, n_grid, n_refine = 1e-5, 1e5, 50, 20
 
-    # --- C path (default when _C_ACCEL_AVAILABLE and n_cvt == 1) ---
+    # --- C path (default when compute_numpy._accel is not None and n_cvt == 1) ---
     result_c = _compute_wald_numpy(
         n_cvt,
         eigenvalues,
@@ -58,7 +54,7 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
     )
 
     # --- Python path: use generic golden section (same algorithm as C extension).
-    # When _C_ACCEL_AVAILABLE is False, _compute_wald_numpy dispatches n_cvt=1
+    # With no extension loaded, _compute_wald_numpy dispatches n_cvt=1
     # to the split-Uab optimizer, which uses different FP accumulation
     # than the C extension's generic golden section. To compare like-for-like,
     # call the generic optimizer directly.
@@ -142,11 +138,11 @@ def test_c_vs_python_parity_synthetic(synthetic_wald_data, monkeypatch):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_fallback_ncvt_gt1_when_general_unavailable(synthetic_wald_data, monkeypatch):
-    """With n_cvt=2 and _C_GENERAL_AVAILABLE=False, falls back to Python.
+    """With n_cvt=2 and compute_numpy._accel is not None=False, falls back to Python.
 
-    Monkeypatches _C_GENERAL_AVAILABLE to False and verifies the n_cvt=1
+    Monkeypatches compute_numpy._accel is not None to False and verifies the n_cvt=1
     batch C function is NOT called (it doesn't support n_cvt>1).
     """
     eigenvalues, _Uab_batch_ncvt1, n_samples = synthetic_wald_data
@@ -166,7 +162,7 @@ def test_c_fallback_ncvt_gt1_when_general_unavailable(synthetic_wald_data, monke
         "compute_lmm_batch_c",
         should_not_be_called,
     )  # allow-patch: sentinel asserts n_cvt=1 C kernel is NOT taken when n_cvt>1
-    monkeypatch.setattr(compute_numpy, "_C_GENERAL_AVAILABLE", False)
+    monkeypatch.setattr(compute_numpy, "_accel", None)
 
     # Should succeed via the Python path without calling any C function
     result = _compute_wald_numpy(
@@ -185,10 +181,10 @@ def test_c_fallback_ncvt_gt1_when_general_unavailable(synthetic_wald_data, monke
 
 @pytest.mark.tier0
 def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch):
-    """When _C_ACCEL_AVAILABLE is False, the Python path runs without error."""
+    """With no extension loaded, the Python path runs without error."""
     eigenvalues, Uab_batch, n_samples = synthetic_wald_data
 
-    monkeypatch.setattr(compute_numpy, "_C_ACCEL_AVAILABLE", False)
+    monkeypatch.setattr(compute_numpy, "_accel", None)
 
     result = compute_lmm_chunk_numpy(
         lmm_mode=1,
@@ -206,7 +202,7 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_extension_handles_degenerate_snps():
     """Degenerate SNPs (constant genotype, xx column = 0) produce NaN beta/se.
 
@@ -267,7 +263,7 @@ def test_c_extension_handles_degenerate_snps():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_extension_single_snp():
     """Minimal case: n_snps=1 works without index errors."""
     rng = np.random.default_rng(99)
@@ -296,7 +292,7 @@ def test_c_extension_single_snp():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_multithreaded_parity(synthetic_wald_data):
     """Multi-threaded C results must match single-threaded C results.
 
@@ -354,7 +350,7 @@ def _make_valid_c_inputs():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 class TestCExtensionInputValidation:
     """Verify the C extension raises clean errors on invalid input shapes."""
 
@@ -380,7 +376,7 @@ class TestCExtensionInputValidation:
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 class TestCExtensionScalarValidation:
     """Verify the C extension validates scalar parameters."""
 
@@ -416,7 +412,7 @@ class TestCExtensionScalarValidation:
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 @pytest.mark.parametrize(
     "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
 )
@@ -445,7 +441,7 @@ def test_c_extension_nonfinite_eigenvalues(bad_value):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_extension_all_degenerate_snps():
     """All SNPs degenerate (xx=0) — entire output should be NaN beta/se."""
     rng = np.random.default_rng(13)

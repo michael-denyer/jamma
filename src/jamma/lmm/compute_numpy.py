@@ -36,7 +36,7 @@ from jamma.lmm.likelihood_numpy import (
 if TYPE_CHECKING:
     from types import ModuleType
 
-    from jamma.lmm.dispatch import DispatchPath, KernelCaps
+    from jamma.lmm.dispatch import DispatchPath
 
 _EXPECTED_ABI_VERSION = 11  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
@@ -132,23 +132,8 @@ if _accel is None and not _FORCE_NUMPY_FALLBACK:
     )
     del _logger
 
-# One loaded extension means one capability bit. The ABI-equality gate above
-# admits all of methods[] or none of it, so these names are one value under
-# different labels; they stay as separate globals only until their readers
-# migrate. HAS_OPENMP is the exception and a genuinely independent bit: C sets
-# it from #ifdef _OPENMP at build time, and plan_thread_budget reads it.
-_C_ACCEL_AVAILABLE = _accel is not None
-_C_SPLIT_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_GENERAL_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_MODE4_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_FUSED_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_MODE4_FUSED_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_FUSED_GENERAL_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_MODE4_FUSED_GENERAL_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_SCORE_FUSED_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_LRT_FUSED_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_SCORE_FUSED_WS_AVAILABLE = _C_ACCEL_AVAILABLE
-_C_LRT_FUSED_WS_AVAILABLE = _C_ACCEL_AVAILABLE
+# HAS_OPENMP is a genuinely independent bit, unlike kernel availability: C
+# sets it from #ifdef _OPENMP at build time, and plan_thread_budget reads it.
 _C_HAS_OPENMP = bool(_accel is not None and _accel.HAS_OPENMP)
 
 
@@ -174,42 +159,15 @@ def select_current_dispatch_path(
     *,
     log_choices: bool = True,
 ) -> DispatchPath:
-    """Select the dispatch path from the currently loaded C capabilities."""
+    """Select the dispatch path for the currently loaded extension.
+
+    ``_accel`` is read at call time, not import time, so a test that drops the
+    extension drives the fallback for real rather than describing it.
+    """
     from jamma.lmm.dispatch import select_dispatch_path
 
     return select_dispatch_path(
-        n_cvt, lmm_mode, current_kernel_caps(), log_choices=log_choices
-    )
-
-
-def current_kernel_caps() -> KernelCaps:
-    """Snapshot which optional C kernels the loaded build exports.
-
-    Read at call time, not import time, so tests that toggle the
-    ``_C_*_AVAILABLE`` flags to drive a dispatch path take effect.
-
-    ``_accel`` is checked first so the two seams cannot disagree. The flags are
-    bound once at import, so dropping the extension without it would leave
-    dispatch selecting a C path whose symbols are gone, and the kernel would
-    raise from ``_c()`` instead of falling back.
-    """
-    from jamma.lmm.dispatch import KernelCaps  # deferred: circular dep
-
-    if _accel is None:
-        return KernelCaps(*(False,) * len(KernelCaps._fields))
-
-    return KernelCaps(
-        split=_C_SPLIT_AVAILABLE,
-        general=_C_GENERAL_AVAILABLE,
-        fused=_C_FUSED_AVAILABLE,
-        fused_general=_C_FUSED_GENERAL_AVAILABLE,
-        mode4=_C_MODE4_AVAILABLE,
-        mode4_fused=_C_MODE4_FUSED_AVAILABLE,
-        mode4_fused_general=_C_MODE4_FUSED_GENERAL_AVAILABLE,
-        score_fused=_C_SCORE_FUSED_AVAILABLE,
-        score_fused_ws=_C_SCORE_FUSED_WS_AVAILABLE,
-        lrt_fused=_C_LRT_FUSED_AVAILABLE,
-        lrt_fused_ws=_C_LRT_FUSED_WS_AVAILABLE,
+        n_cvt, lmm_mode, accel=_accel is not None, log_choices=log_choices
     )
 
 
@@ -969,7 +927,7 @@ def _compute_wald_numpy(
         Dict with keys: lambdas, logls, betas, ses, pwalds.
     """
 
-    if _C_ACCEL_AVAILABLE and n_cvt == 1:
+    if _accel is not None and n_cvt == 1:
         if Iab_batch is None:
             Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
         return _compute_wald_c(
@@ -984,7 +942,7 @@ def _compute_wald_numpy(
             n_threads,
         )
 
-    if _C_GENERAL_AVAILABLE and 1 < n_cvt <= MAX_C_N_CVT:
+    if _accel is not None and 1 < n_cvt <= MAX_C_N_CVT:
         # Use C extension for general n_cvt via split-Uab workspace
         from jamma.lmm.likelihood import classify_uab_columns
 

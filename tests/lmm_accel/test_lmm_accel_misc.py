@@ -8,10 +8,7 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    _C_GENERAL_AVAILABLE,
-    _compute_wald_numpy,
-)
+from jamma.lmm.compute_numpy import _compute_wald_numpy
 from tests.lmm_accel._helpers import (
     _run_general_ncvt_c_vs_python,
     _score_general_c_available,
@@ -19,7 +16,9 @@ from tests.lmm_accel._helpers import (
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_wald_identity_pab_optimization(synthetic_covariate_data_ncvt2):
     """C-GEN-OPT-01: logdet_from_row0 helper produces identical Wald results.
 
@@ -41,9 +40,9 @@ def test_general_wald_identity_pab_optimization(synthetic_covariate_data_ncvt2):
     n_samples = data["n_samples"]
 
     # Python reference (force fallback — no C extension)
-    orig = compute_numpy._C_GENERAL_AVAILABLE
+    orig = compute_numpy._accel
     try:
-        compute_numpy._C_GENERAL_AVAILABLE = False
+        compute_numpy._accel = None
         result_py = _compute_wald_numpy(
             n_cvt,
             eigenvalues,
@@ -55,7 +54,7 @@ def test_general_wald_identity_pab_optimization(synthetic_covariate_data_ncvt2):
             n_refine=20,
         )
     finally:
-        compute_numpy._C_GENERAL_AVAILABLE = orig
+        compute_numpy._accel = orig
 
     # C extension path (uses logdet_from_row0 helper internally)
     result_c = _compute_wald_numpy(
@@ -102,7 +101,9 @@ def test_general_wald_identity_pab_optimization(synthetic_covariate_data_ncvt2):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_ncvt_101_rejected_by_c_extension():
     """C extension raises ValueError for n_cvt=101 (exceeds MAX_N_CVT=100).
 
@@ -143,7 +144,9 @@ def test_ncvt_101_rejected_by_c_extension():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_reml_wald_ncvt20():
     """C extension Wald matches Python for n_cvt=20 (previous MAX_N_CVT limit).
 
@@ -160,7 +163,9 @@ def test_general_ncvt_reml_wald_ncvt20():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_GENERAL_AVAILABLE, reason="General C extension unavailable")
+@pytest.mark.skipif(
+    compute_numpy._accel is None, reason="General C extension unavailable"
+)
 def test_general_ncvt_reml_wald_ncvt50():
     """C extension Wald matches Python for n_cvt=50 (well beyond old limit).
 

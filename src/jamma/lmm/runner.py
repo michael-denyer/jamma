@@ -35,7 +35,7 @@ def _c_extension_available() -> bool:
     """
     from jamma.lmm import compute_numpy  # deferred: circular dep
 
-    return compute_numpy._C_ACCEL_AVAILABLE
+    return compute_numpy._accel is not None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -177,27 +177,23 @@ def select_execution_mode(
     c_ext_available = _c_extension_available()
     est = estimate_lmm_memory(n_samples, n_snps, n_cvt=n_cvt)
 
-    # Check if C extension handles the covariate count
+    # No covariate-count guard here. A loaded extension exports the general
+    # n_cvt kernels too, so the check that used to sit here read a second
+    # capability flag that was always this same bit.
     if c_ext_available:
-        from jamma.lmm.compute_numpy import (
-            _C_GENERAL_AVAILABLE,  # deferred: circular dep
-        )
-
-        c_handles_n_cvt = n_cvt <= 1 or _C_GENERAL_AVAILABLE
-        if c_handles_n_cvt:
-            if est.sufficient:
-                return ExecutionPlan(
-                    "numpy",
-                    "batch",
-                    f"C extension available, {est.total_gb:.1f}GB fits in "
-                    f"{est.available_gb:.1f}GB available",
-                )
+        if est.sufficient:
             return ExecutionPlan(
                 "numpy",
-                "streaming",
-                f"C extension available, {est.total_gb:.1f}GB exceeds "
-                f"{est.available_gb:.1f}GB available, using NumPy streaming",
+                "batch",
+                f"C extension available, {est.total_gb:.1f}GB fits in "
+                f"{est.available_gb:.1f}GB available",
             )
+        return ExecutionPlan(
+            "numpy",
+            "streaming",
+            f"C extension available, {est.total_gb:.1f}GB exceeds "
+            f"{est.available_gb:.1f}GB available, using NumPy streaming",
+        )
 
     # Fallback: pure NumPy batch (no C extension)
     if not est.sufficient:

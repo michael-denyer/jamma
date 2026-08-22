@@ -7,11 +7,12 @@ live in tests/lmm_accel_helpers.py.
 import numpy as np
 import pytest
 
-from jamma.lmm.compute_numpy import _C_ACCEL_AVAILABLE, _c, compute_lmm_chunk_numpy
+from jamma.lmm import compute_numpy
+from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_all_c_dispatch(score_lrt_data):
     """Mode 4 (All) returns all 8 keys non-None when C extension available."""
     eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
@@ -47,16 +48,16 @@ def test_mode4_all_c_dispatch(score_lrt_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_workspace_api(score_lrt_data):
     """Fused mode-4 workspace creation and compute returns all 8 keys."""
+    from jamma.lmm import compute_numpy
     from jamma.lmm.compute_numpy import (
-        _C_MODE4_AVAILABLE,
         compute_mode4_split_c_ws,
         create_lmm_workspace_mode4,
     )
 
-    if not _C_MODE4_AVAILABLE:
+    if compute_numpy._accel is None:
         pytest.skip("Mode-4 fused C extension not available")
 
     eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
@@ -185,12 +186,12 @@ def _build_mode4_soa_and_fused(score_lrt_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_split_parity(score_lrt_data):
     """Fused C kernel matches compose path (Wald+Score+LRT) within tolerance."""
-    from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
+    from jamma.lmm import compute_numpy
 
-    if not _C_MODE4_AVAILABLE:
+    if compute_numpy._accel is None:
         pytest.skip("Mode-4 fused C extension not available")
 
     fused_cr, compose_cr, *_ = _build_mode4_soa_and_fused(score_lrt_data)
@@ -247,7 +248,7 @@ def test_mode4_fused_split_parity(score_lrt_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(score_lrt_data):
     """Shared reductions retain independent REML and MLE coarse brackets."""
     fused_cr, compose_cr, *_ = _build_mode4_soa_and_fused(score_lrt_data)
@@ -278,7 +279,7 @@ def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(score_lrt_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_score_matches_standalone(score_lrt_data):
     """Fused p_scores match standalone compute_score_batch_c on reconstructed Uab.
 
@@ -287,10 +288,10 @@ def test_mode4_fused_score_matches_standalone(score_lrt_data):
     kernel's input. This tests that Score accumulation in the fused loop
     matches the standalone batch Score function.
     """
-    from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
+    from jamma.lmm import compute_numpy
     from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
 
-    if not _C_MODE4_AVAILABLE:
+    if compute_numpy._accel is None:
         pytest.skip("Mode-4 fused C extension not available")
     if _c().compute_score_batch_c is None:
         pytest.skip("Score C batch not available")
@@ -330,17 +331,17 @@ def test_mode4_fused_score_matches_standalone(score_lrt_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_lrt_matches_standalone(score_lrt_data):
     """Fused p_lrts match standalone compute_lrt_batch_c on reconstructed Uab.
 
     Both paths use the same SoA invariant columns, so the reconstructed Uab
     is consistent with the fused kernel's input.
     """
-    from jamma.lmm.compute_numpy import _C_MODE4_AVAILABLE
+    from jamma.lmm import compute_numpy
     from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
 
-    if not _C_MODE4_AVAILABLE:
+    if compute_numpy._accel is None:
         pytest.skip("Mode-4 fused C extension not available")
     if _c().compute_lrt_batch_c is None:
         pytest.skip("LRT C batch not available")
@@ -387,16 +388,16 @@ def test_mode4_fused_lrt_matches_standalone(score_lrt_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_degenerate_snps(score_lrt_data):
     """Fused mode-4 handles degenerate SNPs: NaN Wald/Score, p_lrt ~ 1.0."""
+    from jamma.lmm import compute_numpy
     from jamma.lmm.compute_numpy import (
-        _C_MODE4_AVAILABLE,
         compute_mode4_split_c_ws,
         create_lmm_workspace_mode4,
     )
 
-    if not _C_MODE4_AVAILABLE:
+    if compute_numpy._accel is None:
         pytest.skip("Mode-4 fused C extension not available")
 
     eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
@@ -451,17 +452,13 @@ def test_mode4_fused_degenerate_snps(score_lrt_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_rejects_wald_workspace(score_lrt_data):
     """Passing a Wald (mode=0) workspace to fused mode-4 compute raises ValueError."""
-    from jamma.lmm.compute_numpy import (
-        _C_MODE4_AVAILABLE,
-        _C_SPLIT_AVAILABLE,
-        compute_mode4_split_c_ws,
-        create_lmm_workspace,
-    )
+    from jamma.lmm import compute_numpy
+    from jamma.lmm.compute_numpy import compute_mode4_split_c_ws, create_lmm_workspace
 
-    if not _C_MODE4_AVAILABLE or not _C_SPLIT_AVAILABLE:
+    if compute_numpy._accel is None or compute_numpy._accel is None:
         pytest.skip("Mode-4 fused or split C extension not available")
 
     eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
@@ -483,7 +480,7 @@ def test_mode4_fused_rejects_wald_workspace(score_lrt_data):
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension not compiled")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_multithreaded_parity(score_lrt_data):
     """Multi-threaded fused mode-4 results must match single-threaded results.
 
@@ -492,13 +489,13 @@ def test_mode4_fused_multithreaded_parity(score_lrt_data):
     conditions or thread-local state corruption in the fused kernel path.
     """
     from jamma.core.threading import get_physical_core_count
+    from jamma.lmm import compute_numpy
     from jamma.lmm.compute_numpy import (
-        _C_MODE4_AVAILABLE,
         compute_mode4_split_c_ws,
         create_lmm_workspace_mode4,
     )
 
-    if not _C_MODE4_AVAILABLE:
+    if compute_numpy._accel is None:
         pytest.skip("Mode-4 fused C extension not available")
 
     n_threads = get_physical_core_count()

@@ -5,6 +5,10 @@ import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
 
+# Stands in for a loaded extension. Only `is not None` is read on
+# the paths under test, so the object's identity is all that matters.
+_EXTENSION_LOADED = object()
+
 
 @pytest.mark.tier0
 @pytest.mark.parametrize("n_cvt", [76, compute_numpy.MAX_C_N_CVT])
@@ -49,7 +53,7 @@ def test_wald_general_c_dispatch_uses_documented_ncvt_limit(monkeypatch, n_cvt):
     def fail_python_fallback(*_args, **_kwargs):
         raise AssertionError("n_cvt within the C limit fell back to Python")
 
-    monkeypatch.setattr(compute_numpy, "_C_GENERAL_AVAILABLE", True)
+    monkeypatch.setattr(compute_numpy, "_accel", _EXTENSION_LOADED)
     monkeypatch.setattr(
         compute_numpy,
         "create_lmm_workspace_general",

@@ -14,11 +14,8 @@ import pytest
 
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _compute_lrt_numpy,
-    _compute_score_numpy,
-)
+from jamma.lmm import compute_numpy
+from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
 from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
@@ -105,7 +102,7 @@ def mouse_data():
     }
 
 
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension unavailable")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
 class TestScoreSplitParity:
     """SoA Score split produces identical results to full-Uab Score."""
 
@@ -155,7 +152,7 @@ class TestScoreSplitParity:
         )
 
 
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension unavailable")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
 class TestLrtSplitParity:
     """SoA LRT split produces identical results to full-Uab LRT."""
 
@@ -273,7 +270,7 @@ def degenerate_data(mouse_data):
     }
 
 
-@pytest.mark.skipif(not _C_ACCEL_AVAILABLE, reason="C extension unavailable")
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
 class TestDegenerateSplitParity:
     """Split and batch paths agree on NaN output for degenerate SNPs."""
 

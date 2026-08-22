@@ -19,9 +19,10 @@ The module-form ``monkeypatch.setattr(<module>, "<attr>", ...)`` is also
 covered when the module reference is one of the documented forbidden
 aliases (``compute_numpy``, ``cn``, ``likelihood``, ``jlinalg``, ``jl``,
 ``kinship_compute``, ``kc``) and the attribute name is a lowercase
-function-shaped identifier. Feature-flag constants (``_AVAILABLE`` /
-``_ENABLED`` suffixes) remain allowed because tests legitimately toggle
-them to drive dispatch paths. Add ``# allow-patch: <reason>`` for the
+function-shaped identifier. The capability seam ``_accel`` and feature-flag
+constants (``_AVAILABLE`` / ``_ENABLED`` suffixes) remain allowed because
+tests legitimately set them to drive dispatch paths; setting ``_accel`` to
+None is how a test reaches the NumPy path. Add ``# allow-patch: <reason>`` for the
 rare case where patching the function reference itself (e.g. setting it
 to ``None`` to force the NumPy fallback, or to a sentinel that asserts
 on call) is the right test design.
@@ -79,12 +80,12 @@ TARGETS: tuple[tuple[str, str], ...] = (
         "with known expected values.",
     ),
     (
-        # Functions in jamma.lmm.compute_numpy (not _AVAILABLE/_ENABLED flags).
-        r'["\']jamma\.lmm\.compute_numpy\.(?![A-Z_]+\b)'
+        # Functions in jamma.lmm.compute_numpy (not _accel, not a flag).
+        r'["\']jamma\.lmm\.compute_numpy\.(?!_accel\b)(?![A-Z_]+\b)'
         r"[_a-z][a-z_]*\b(?<!_AVAILABLE)(?<!_ENABLED)",
         "Patches a jamma compute function. Use real synthetic data. "
-        "(Toggling _C_*_AVAILABLE flags is allowed — those are dispatch "
-        "booleans, not functions.)",
+        "(Setting _accel to None is allowed — that is the one capability "
+        "seam, not a compute function.)",
     ),
     (
         r'["\']jamma\.jlinalg\.(eigh|dgemm|dsyrk)\b',
@@ -149,14 +150,15 @@ _FORBIDDEN_MODULE_ALIASES: tuple[str, ...] = (
 )
 
 # monkeypatch.setattr(<alias>, "<func_name>", ...) — module-form bypass.
-# Function-shaped attribute names are flagged. Excludes _AVAILABLE and
-# _ENABLED feature-flag constants (which legitimately drive dispatch paths
-# in tests). For the rare legitimate function-form patch (e.g. forcing the
-# NumPy fallback by setting ``_compute_score_batch_c = None``), add an
+# Function-shaped attribute names are flagged. Excludes ``_accel``, the one
+# capability seam a test drives to reach the NumPy path, and _AVAILABLE /
+# _ENABLED feature-flag constants. For the rare legitimate function-form patch
+# (e.g. a sentinel that asserts a kernel is not called), add an
 # ``# allow-patch: <reason>`` comment on the call.
 _MODULE_FORM_PATTERN = (
     r"monkeypatch\.setattr\(\s*(?:" + "|".join(_FORBIDDEN_MODULE_ALIASES) + r")"
-    r'\s*,\s*["\'](?![A-Z_]+\b)_?[a-z][a-z_0-9]*\b(?<!_AVAILABLE)(?<!_ENABLED)'
+    r'\s*,\s*["\'](?!_accel\b)(?![A-Z_]+\b)_?[a-z][a-z_0-9]*\b'
+    r"(?<!_AVAILABLE)(?<!_ENABLED)"
 )
 PATCH_OBJECT_PATTERNS = (
     *PATCH_OBJECT_PATTERNS,
@@ -164,8 +166,8 @@ PATCH_OBJECT_PATTERNS = (
         _MODULE_FORM_PATTERN,
         "monkeypatch.setattr on a function attribute of a forbidden module "
         "(jamma.lmm.compute_numpy / likelihood / jlinalg / kinship.compute). "
-        "Toggle _C_*_AVAILABLE flags instead, or add `# allow-patch: <reason>` "
-        "if forcing dispatch fallback or sentinel-on-call is intentional.",
+        "Set _accel to None instead to reach the NumPy path, or add "
+        "`# allow-patch: <reason>` if forcing a sentinel-on-call is intentional.",
     ),
 )
 

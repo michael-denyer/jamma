@@ -423,11 +423,13 @@ The "mocking numerical functions" anti-pattern is enforced by
 an AST-based pre-commit hook. It bans patching `numpy.linalg.*`,
 `scipy.*`, and JAMMA's own numerical modules
 (`compute_numpy`/`cn`, `likelihood`, `jlinalg`/`jl`,
-`kinship_compute`/`kc`). Feature-flag constants (`_C_*_AVAILABLE`,
-`_*_ENABLED`) are excluded. If you have a legitimate reason to patch one
-of these (typically toggling a dispatch boundary in a test that exists
-specifically to verify dispatch), add an inline `# allow-patch:` comment
-explaining why. Read failures (`OSError`, `UnicodeDecodeError`) exit
+`kinship_compute`/`kc`). The capability seam `compute_numpy._accel` and
+`_*_ENABLED` constants are excluded. To exercise the pure-NumPy path, set
+`_accel` to None; that is one bit, because the ABI-equality gate admits all
+of the C extension's `methods[]` table or none of it, so there is no build
+that exports some kernels and not others. If you have a legitimate reason to
+patch something else here, add an inline `# allow-patch:` comment explaining
+why. Read failures (`OSError`, `UnicodeDecodeError`) exit
 non-zero rather than passing vacuously.
 
 ### 2.6 When `pytest.skip` is acceptable

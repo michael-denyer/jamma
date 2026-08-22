@@ -3,10 +3,7 @@
 import numpy as np
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    _C_ACCEL_AVAILABLE,
-    _compute_wald_numpy,
-)
+from jamma.lmm.compute_numpy import _compute_wald_numpy
 from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
 )
@@ -15,7 +12,7 @@ from jamma.lmm.likelihood_numpy import (
 def _run_general_ncvt_c_vs_python(data: dict) -> None:
     """Helper: compare C extension general n_cvt results against Python path.
 
-    Monkeypatches _C_GENERAL_AVAILABLE to False for the Python reference,
+    Monkeypatches compute_numpy._accel is not None to False for the Python reference,
     then compares against C extension results.
     """
     n_cvt = data["n_cvt"]
@@ -24,9 +21,9 @@ def _run_general_ncvt_c_vs_python(data: dict) -> None:
     n_samples = data["n_samples"]
 
     # Python reference path (force fallback)
-    orig = compute_numpy._C_GENERAL_AVAILABLE
+    orig = compute_numpy._accel
     try:
-        compute_numpy._C_GENERAL_AVAILABLE = False
+        compute_numpy._accel = None
         result_py = _compute_wald_numpy(
             n_cvt,
             eigenvalues,
@@ -38,7 +35,7 @@ def _run_general_ncvt_c_vs_python(data: dict) -> None:
             n_refine=20,
         )
     finally:
-        compute_numpy._C_GENERAL_AVAILABLE = orig
+        compute_numpy._accel = orig
 
     # C extension path
     result_c = _compute_wald_numpy(
@@ -116,7 +113,7 @@ def _make_general_score_lrt_data(data: dict) -> dict:
 
 def _score_general_c_available() -> bool:
     """Check if compute_score_batch_general_c is available from the C extension."""
-    if not _C_ACCEL_AVAILABLE:
+    if compute_numpy._accel is None:
         return False
     try:
         from jamma.lmm._lmm_accel import compute_score_batch_general_c  # noqa: F401

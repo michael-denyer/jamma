@@ -373,7 +373,7 @@ def test_runner_mode4_uses_fused_dispatch():
     """Mode 4 takes a fused path, and the SoA-split kernel refuses to serve it.
 
     This used to wrap _compose_mode4_from_split and assert it was never called.
-    That helper has gone, and so has the dispatch_soa_split function that
+    That helper has gone, and so has the standalone split dispatcher that
     replaced it as this test's second half; the mode guard now lives in kernel
     construction, so a dispatch table that ever routed mode 4 to the split path
     fails before the chunk loop rather than on its first chunk.

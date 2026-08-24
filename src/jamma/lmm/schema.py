@@ -11,10 +11,23 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TypedDict, overload
+from typing import Literal, TypedDict, cast, overload
 
-# LmmMode type alias (kept local to avoid circular imports with compute_numpy)
-LmmMode = int
+LmmMode = Literal[1, 2, 3, 4]
+
+
+def parse_lmm_mode(value: int) -> LmmMode:
+    """Narrow a boundary int (a CLI flag, a public-API argument) to LmmMode.
+
+    The one place an int becomes an LmmMode. Inside the package the literal
+    type flows through untouched, so a bad mode can only enter through a
+    boundary that forgot to call this, and the type checker names it.
+    """
+    if value not in (1, 2, 3, 4):
+        raise ValueError(
+            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {value}"
+        )
+    return cast(LmmMode, value)
 
 
 class RunnerTiming(TypedDict, total=False):

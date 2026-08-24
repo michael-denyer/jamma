@@ -16,10 +16,9 @@ from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import compute_numpy
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
-from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
-from jamma.lmm.schema import LmmConfig
+from jamma.lmm.schema import LmmConfig, LmmMode
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     ToleranceConfig,

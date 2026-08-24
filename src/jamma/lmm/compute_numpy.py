@@ -21,7 +21,7 @@ The caller is responsible for:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, TypedDict, TypeVar
+from typing import TYPE_CHECKING, TypedDict, TypeVar
 
 import numpy as np
 
@@ -36,6 +36,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_numpy,
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
+from jamma.lmm.schema import LmmMode
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -183,9 +184,6 @@ class WaldResult(TypedDict):
     betas: np.ndarray
     ses: np.ndarray
     pwalds: np.ndarray
-
-
-LmmMode = Literal[1, 2, 3, 4]
 
 
 def create_lmm_workspace_fused(

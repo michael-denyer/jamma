@@ -34,7 +34,7 @@ from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship import compute_centered_kinship  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
 from jamma.lmm.runner_numpy import run_lmm_association_numpy  # noqa: E402
-from jamma.lmm.schema import LmmConfig  # noqa: E402
+from jamma.lmm.schema import LmmConfig, LmmMode  # noqa: E402
 from jamma.validation import (  # noqa: E402
     load_gemma_assoc,
     load_gemma_kinship,
@@ -56,7 +56,7 @@ class TestSpec:
 
     name: str
     ref_path: Path
-    lmm_mode: int
+    lmm_mode: LmmMode
     use_covariates: bool = False
 
 

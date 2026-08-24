@@ -1026,23 +1026,26 @@ class TestLocoEigenCacheStaleDetection:
             "bed_path": MOUSE_HS1940_BFILE,
             "phenotypes": phenotypes,
         }
-        common_lmm = {
-            "lmm_mode": 1,
-            "check_memory": False,
-            "show_progress": False,
-            "miss_threshold": 0.05,
-        }
+
+        def quiet_lmm_config(maf_threshold: float) -> LmmConfig:
+            return LmmConfig(
+                lmm_mode=1,
+                check_memory=False,
+                show_progress=False,
+                miss_threshold=0.05,
+                maf_threshold=maf_threshold,
+            )
 
         out_fresh = tmp_path / "fresh.assoc.txt"
         run_lmm_loco(
             **common,
-            config=LmmConfig(**common_lmm, maf_threshold=0.05),
+            config=quiet_lmm_config(maf_threshold=0.05),
             output_path=out_fresh,
         )
 
         run_lmm_loco(
             **common,
-            config=LmmConfig(**common_lmm, maf_threshold=0.01),
+            config=quiet_lmm_config(maf_threshold=0.01),
             loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir),
             output_path=tmp_path / "populate.assoc.txt",
         )
@@ -1050,7 +1053,7 @@ class TestLocoEigenCacheStaleDetection:
         out_cached = tmp_path / "cached.assoc.txt"
         run_lmm_loco(
             **common,
-            config=LmmConfig(**common_lmm, maf_threshold=0.05),
+            config=quiet_lmm_config(maf_threshold=0.05),
             loco=LocoConfig(eigen_dir=eigen_dir),
             output_path=out_cached,
         )
@@ -1098,16 +1101,19 @@ class TestLocoEigenCacheStaleDetection:
             "bed_path": MOUSE_HS1940_BFILE,
             "phenotypes": phenotypes,
         }
-        common_lmm = {
-            "lmm_mode": 1,
-            "check_memory": False,
-            "show_progress": False,
-            "miss_threshold": 0.05,
-        }
+
+        def quiet_lmm_config(maf_threshold: float) -> LmmConfig:
+            return LmmConfig(
+                lmm_mode=1,
+                check_memory=False,
+                show_progress=False,
+                miss_threshold=0.05,
+                maf_threshold=maf_threshold,
+            )
 
         run_lmm_loco(
             **common,
-            config=LmmConfig(**common_lmm, maf_threshold=0.01),
+            config=quiet_lmm_config(maf_threshold=0.01),
             loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir),
             output_path=tmp_path / "populate.assoc.txt",
         )
@@ -1143,7 +1149,7 @@ class TestLocoEigenCacheStaleDetection:
         with pytest.raises(RuntimeError, match="simulated interruption"):
             run_lmm_loco(
                 **common,
-                config=LmmConfig(**common_lmm, maf_threshold=0.05),
+                config=quiet_lmm_config(maf_threshold=0.05),
                 loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir),
                 output_path=tmp_path / "interrupted.assoc.txt",
             )

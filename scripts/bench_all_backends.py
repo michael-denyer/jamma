@@ -149,7 +149,7 @@ def _bench_numpy_inner(
     """Benchmark NumPy backend with or without C acceleration."""
     import jamma.lmm.compute_numpy as cn
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
-    from jamma.lmm.schema import LmmConfig
+    from jamma.lmm.schema import LmmConfig, LmmMode
 
     results: dict[str, float | None] = {}
 
@@ -162,7 +162,7 @@ def _bench_numpy_inner(
         cn._accel = None
 
     try:
-        ops: list[tuple[str, int, np.ndarray | None]] = [
+        ops: list[tuple[str, LmmMode, np.ndarray | None]] = [
             ("lmm_wald", 1, None),
             ("lmm_all", 4, None),
         ]
@@ -218,11 +218,11 @@ def bench_numpy_streaming(
 ) -> dict[str, float | None]:
     """Benchmark NumPy streaming backend (disk I/O + C extension)."""
     from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
-    from jamma.lmm.schema import LmmConfig
+    from jamma.lmm.schema import LmmConfig, LmmMode
 
     results: dict[str, float | None] = {}
 
-    ops: list[tuple[str, int, np.ndarray | None]] = [
+    ops: list[tuple[str, LmmMode, np.ndarray | None]] = [
         ("lmm_wald", 1, None),
         ("lmm_all", 4, None),
     ]

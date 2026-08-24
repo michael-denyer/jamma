@@ -20,7 +20,6 @@ import contextlib
 import gc
 import time
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 from bed_reader import open_bed
@@ -46,7 +45,6 @@ from jamma.kinship import (
     compute_loco_kinship_streaming,
 )
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
-from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.eigen_cache import (
     EigenCacheComponents,
     compute_eigen_cache_key,
@@ -706,7 +704,7 @@ def _run_lmm_for_chromosome_numpy(
             n_samples=n_samples,
             n_filtered=n_filtered,
             n_cvt=n_cvt,
-            lmm_mode=cast(LmmMode, lmm_mode),
+            lmm_mode=lmm_mode,
             filtered_means=snp_selection.filtered_means,
             l_min=l_min,
             l_max=l_max,

@@ -26,6 +26,7 @@ from jamma.lmm.schema import (
     DEFAULT_N_REFINE,
     LmmConfig,
     PipelineTiming,
+    parse_lmm_mode,
 )
 from jamma.lmm.stats import AssocResult
 
@@ -207,7 +208,7 @@ class PipelineConfig:
             n_refine=self.n_refine,
             check_memory=check_memory,
             show_progress=self.show_progress,
-            lmm_mode=self.lmm_mode,
+            lmm_mode=parse_lmm_mode(self.lmm_mode),
         )
 
 

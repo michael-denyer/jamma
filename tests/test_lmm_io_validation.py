@@ -393,11 +393,18 @@ class TestMode4WaldOverwritesScore:
     (Wald-only) — they must match exactly.
     """
 
-    def test_mode4_betas_ses_match_wald_only(self) -> None:
-        """Mode=4 betas/ses must equal mode=1 (Wald) betas/ses."""
+    def test_mode4_betas_ses_match_wald_only(self, monkeypatch) -> None:
+        """Mode=4 betas/ses must equal mode=1 (Wald) betas/ses.
+
+        Driven through the full-Uab NumPy path with the extension cleared, which
+        is the only state the runner reaches compute_lmm_chunk_numpy in.
+        """
+        from jamma.lmm import compute_numpy as cn
         from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
         from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
         from jamma.lmm.prepare_common import _compute_null_model_common
+
+        monkeypatch.setattr(cn, "_accel", None)
 
         rng = np.random.default_rng(99)
         n_samples, n_snps, n_cvt = 50, 10, 1

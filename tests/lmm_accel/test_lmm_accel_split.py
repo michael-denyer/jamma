@@ -1,7 +1,15 @@
-"""_lmm_accel C extension tests: SoA split Uab/Iab kernels and the persistent workspace.
+"""_lmm_accel C extension tests: SoA split Uab/Iab construction, and workspace guards.
 
 Split from the original single test_lmm_accel module. Shared fixtures
 live in tests/lmm_accel_helpers.py.
+
+The SoA Uab and Iab construction tested at the top is pure NumPy and still feeds
+the live kernels. The C kernels this module used to drive, compute_lmm_batch_split_c
+and the create_workspace_split_c workspace, are not reachable from any
+DispatchPath, and the fused workspace has taken their place. Their parity,
+degenerate-SNP and thread-determinism checks are covered on the fused kernel in
+test_lmm_accel_fused.py, and their input validation in test_lmm_accel_core.py.
+What is kept here is the workspace reuse pattern the runner relies on.
 """
 
 import numpy as np
@@ -9,18 +17,13 @@ import pytest
 
 from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import (
-    _compute_wald_numpy,
-    _compute_wald_split_c,
-    compute_wald_split_c_ws,
-    create_lmm_workspace,
+    compute_wald_fused_c_ws,
+    create_lmm_workspace_fused,
 )
 from jamma.lmm.likelihood_numpy import (
     batch_compute_iab_numpy,
     batch_compute_iab_split_ncvt1,
-    batch_compute_iab_split_ncvt1_soa,
     batch_compute_uab_split_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    compute_uab_invariant_soa,
 )
 from jamma.lmm.schema import LmmConfig
 
@@ -97,365 +100,6 @@ def test_split_iab_matches_full_iab(split_wald_data):
         atol=1e-14,
         err_msg="Split Iab does not match full Iab",
     )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-def test_split_c_vs_full_c_parity(split_wald_data):
-    """Split C extension matches full C extension within FP tolerance."""
-    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
-
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-
-    # Full path
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG)
-    full_iab = batch_compute_iab_numpy(1, full_uab)
-    result_full = _compute_wald_numpy(
-        n_cvt=1,
-        eigenvalues=eigenvalues,
-        Uab_batch=full_uab,
-        n_samples=n_samples,
-        l_min=1e-5,
-        l_max=1e5,
-        n_grid=50,
-        n_refine=20,
-        Iab_batch=full_iab,
-        n_threads=1,
-    )
-
-    # Split path — use SoA layout (no per-call transpose since Task 1 changes)
-    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-    split_iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
-    result_split = _compute_wald_split_c(
-        eigenvalues,
-        uab_var_soa,
-        uab_inv_soa,
-        split_iab,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_allclose(
-            result_split[key],
-            result_full[key],
-            rtol=1e-9,
-            atol=1e-14,
-            equal_nan=True,
-            err_msg=f"{key}: split vs full C mismatch",
-        )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-def test_split_c_degenerate_snps():
-    """All-degenerate batch via split path produces all-NaN."""
-    rng = np.random.default_rng(13)
-    n_samples, n_snps = 50, 4
-    eigenvalues = np.sort(rng.uniform(0.5, 1.5, n_samples))
-
-    # Build SoA split arrays with xx=0 (degenerate)
-    # SoA layout: (n_snps, 3, n_samples) — axis-1 rows [wx, xx, xy]
-    uab_var_soa = rng.standard_normal((n_snps, 3, n_samples))
-    uab_var_soa[:, 1, :] = 0.0  # xx row = 0 (row index 1 in SoA)
-    uab_inv_soa = np.abs(rng.standard_normal((3, n_samples))) + 0.1
-    iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
-
-    result = _compute_wald_split_c(
-        eigenvalues,
-        uab_var_soa,
-        uab_inv_soa,
-        iab,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-
-    assert np.all(np.isnan(result["betas"])), "Expected all-NaN betas"
-    assert np.all(np.isnan(result["ses"])), "Expected all-NaN ses"
-    assert np.all(np.isnan(result["pwalds"])), "Expected all-NaN pwalds"
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-def test_split_c_multithreaded_parity(split_wald_data):
-    """Multi-threaded split C matches single-threaded split C."""
-    from jamma.core.threading import get_physical_core_count
-
-    n_threads = get_physical_core_count()
-    if n_threads < 2:
-        pytest.skip("Need >=2 cores for multi-threaded test")
-
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-    iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
-
-    r1 = _compute_wald_split_c(
-        eigenvalues,
-        uab_var_soa,
-        uab_inv_soa,
-        iab,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-    rn = _compute_wald_split_c(
-        eigenvalues,
-        uab_var_soa,
-        uab_inv_soa,
-        iab,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        n_threads,
-    )
-
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_allclose(
-            rn[key],
-            r1[key],
-            rtol=1e-10,
-            atol=1e-14,
-            equal_nan=True,
-            err_msg=f"{key}: MT vs ST split mismatch",
-        )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-@pytest.mark.parametrize(
-    "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
-)
-def test_split_c_nonfinite_eigenvalues(bad_value):
-    """Non-finite eigenvalues (NaN, Inf, -Inf) are rejected by the split C path."""
-    rng = np.random.default_rng(11)
-    n_samples, n_snps = 50, 3
-    eigenvalues = rng.uniform(0.1, 2.0, n_samples)
-    eigenvalues[10] = bad_value
-
-    # SoA layout: (n_snps, 3, n_samples) for varying, (3, n_samples) for invariant
-    uab_var_soa = rng.standard_normal((n_snps, 3, n_samples))
-    uab_inv_soa = np.abs(rng.standard_normal((3, n_samples))) + 0.1
-    iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
-
-    with pytest.raises(ValueError, match=r"eigenvalues.*not finite"):
-        _compute_wald_split_c(
-            eigenvalues,
-            uab_var_soa,
-            uab_inv_soa,
-            iab,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-def test_workspace_api_matches_legacy_split(split_wald_data):
-    """Workspace API (create + chunk) produces identical results to legacy split_c.
-
-    Verifies that the per-run workspace path gives the same numerical output
-    as the per-call _compute_wald_split_c (which uses Iab_batch). Both paths
-    share the same golden section core — differences would indicate a bug in
-    the internal Iab/logdet_iab computation.
-    """
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-
-    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-    iab = batch_compute_iab_split_ncvt1_soa(uab_var_soa, uab_inv_soa)
-
-    # Legacy path (with Iab_batch passed explicitly)
-    result_legacy = _compute_wald_split_c(
-        eigenvalues,
-        uab_var_soa,
-        uab_inv_soa,
-        iab,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-
-    # Workspace path (Iab computed internally from raw column sums)
-    ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)
-    result_ws = compute_wald_split_c_ws(ws, uab_var_soa, 1)
-
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_allclose(
-            result_ws[key],
-            result_legacy[key],
-            rtol=1e-10,
-            atol=1e-14,
-            equal_nan=True,
-            err_msg=f"{key}: workspace vs legacy split mismatch",
-        )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-def test_workspace_reuse_across_chunks(split_wald_data):
-    """Workspace created once can be reused across multiple chunk calls.
-
-    Simulates the runner's cross-chunk reuse pattern: same workspace, different
-    uab_varying_soa slices. Results must match per-call legacy path.
-    """
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-
-    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-
-    # Create workspace once (before "chunk loop")
-    ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)
-
-    # Simulate two chunks by splitting the SNPs in half
-    mid = n_snps // 2
-    chunk1 = uab_var_soa[:mid]
-    chunk2 = uab_var_soa[mid:]
-
-    result_c1 = compute_wald_split_c_ws(ws, chunk1, 1)
-    result_c2 = compute_wald_split_c_ws(ws, chunk2, 1)
-
-    # Concatenate chunk results
-    combined_lambdas = np.concatenate([result_c1["lambdas"], result_c2["lambdas"]])
-    combined_betas = np.concatenate([result_c1["betas"], result_c2["betas"]])
-
-    # Reference: single call with all SNPs
-    result_full = compute_wald_split_c_ws(ws, uab_var_soa, 1)
-
-    np.testing.assert_allclose(
-        combined_lambdas,
-        result_full["lambdas"],
-        rtol=1e-12,
-        atol=1e-14,
-        err_msg="Chunked lambda mismatch vs single call",
-    )
-    np.testing.assert_allclose(
-        combined_betas,
-        result_full["betas"],
-        rtol=1e-12,
-        atol=1e-14,
-        equal_nan=True,
-        err_msg="Chunked beta mismatch vs single call",
-    )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-def test_workspace_multithreaded_parity(split_wald_data):
-    """Workspace path: multi-threaded results match single-threaded results."""
-    from jamma.core.threading import get_physical_core_count
-
-    n_threads = get_physical_core_count()
-    if n_threads < 2:
-        pytest.skip("Need >=2 cores for multi-threaded test")
-
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-
-    ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)
-    r1 = compute_wald_split_c_ws(ws, uab_var_soa, 1)
-    rn = compute_wald_split_c_ws(ws, uab_var_soa, n_threads)
-
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_allclose(
-            rn[key],
-            r1[key],
-            rtol=1e-10,
-            atol=1e-14,
-            equal_nan=True,
-            err_msg=f"{key}: workspace MT vs ST mismatch",
-        )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-def test_workspace_invalid_inputs(split_wald_data):
-    """Workspace creation and chunk compute reject invalid inputs cleanly."""
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-
-    # Wrong invariant shape
-    with pytest.raises(ValueError, match="uab_invariant"):
-        create_lmm_workspace(
-            eigenvalues,
-            uab_inv_soa.T,  # wrong shape: (n_samples, 3) instead of (3, n_samples)
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-@pytest.mark.parametrize(
-    "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
-)
-def test_workspace_nonfinite_eigenvalues(split_wald_data, bad_value):
-    """Workspace creation rejects non-finite eigenvalues."""
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    bad_evals = eigenvalues.copy()
-    bad_evals[0] = bad_value
-    with pytest.raises(ValueError, match=r"eigenvalues.*not finite"):
-        create_lmm_workspace(
-            bad_evals,
-            uab_inv_soa,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-
-    # Wrong uab_varying shape for chunk compute
-    ws = create_lmm_workspace(eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, 1)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-    with pytest.raises(ValueError, match="uab_varying"):
-        compute_wald_split_c_ws(ws, uab_var_soa.transpose(0, 2, 1), 1)
 
 
 @pytest.mark.tier1
@@ -592,4 +236,34 @@ def test_workspace_alignment():
         ptr = _get_aligned_alloc_test_ptr(n)
         assert ptr % 32 == 0, (
             f"alloc_aligned_doubles({n}) returned {ptr:#x}, not 32-byte aligned"
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
+def test_fused_workspace_reuse_across_chunks(fused_data):
+    """One workspace reused across two chunks matches a single call over both.
+
+    This is the runner's pattern: the workspace is built once before the chunk
+    loop and fed successive genotype slices.
+    """
+    eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+
+    ws = create_lmm_workspace_fused(
+        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, 1
+    )
+
+    mid = utg_t.shape[0] // 2
+    first = compute_wald_fused_c_ws(ws, utg_t[:mid], 1)
+    second = compute_wald_fused_c_ws(ws, utg_t[mid:], 1)
+    full = compute_wald_fused_c_ws(ws, utg_t, 1)
+
+    for key in ("lambdas", "betas"):
+        np.testing.assert_allclose(
+            np.concatenate([first[key], second[key]]),
+            full[key],
+            rtol=1e-12,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg=f"chunked {key} differs from the single call",
         )

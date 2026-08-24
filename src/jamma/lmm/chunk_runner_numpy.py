@@ -110,18 +110,17 @@ class _PreparedLmmChunk(NamedTuple):
 
 
 class LmmChunkRunStats(NamedTuple):
-    """Timing and diagnostic counters from the shared chunk runner."""
+    """What the chunk runner hands back: how much it did, and how long it took.
+
+    Six further counters used to ride along here (nan_counts, the two lambda
+    boundary tallies, chunk_size, n_chunks, used_pipeline). No caller read any
+    of them; the runner already logs the diagnostics they carried.
+    """
 
     processed: int
     rotation_s: float
     compute_s: float
     result_write_s: float
-    nan_counts: dict[str, int]
-    n_at_lmin: int
-    n_at_lmax: int
-    chunk_size: int
-    n_chunks: int
-    used_pipeline: bool
 
 
 class _ChunkEngine:
@@ -325,10 +324,7 @@ def run_lmm_chunk_source_numpy(
     l_max: float,
     n_grid: int,
     n_refine: int,
-    requested_chunk_size: int | None = None,
-    auto_scale_chunk_size: bool = True,
-    chunk_sizer: Callable[..., int] = compute_chunk_size_numpy,
-    min_pipeline_chunks: int = _MIN_PIPELINE_CHUNKS,
+    max_chunk_size: int | None = None,
     show_progress: bool = True,
     progress_label: str = "LMM association",
     lambda_warning_prefix: str = "",
@@ -355,22 +351,11 @@ def run_lmm_chunk_source_numpy(
 
     if n_filtered == 0:
         return LmmChunkRunStats(
-            processed=0,
-            rotation_s=0.0,
-            compute_s=0.0,
-            result_write_s=0.0,
-            nan_counts={},
-            n_at_lmin=0,
-            n_at_lmax=0,
-            chunk_size=0,
-            n_chunks=0,
-            used_pipeline=False,
+            processed=0, rotation_s=0.0, compute_s=0.0, result_write_s=0.0
         )
 
-    if requested_chunk_size is not None and requested_chunk_size < 1:
-        raise ValueError(
-            f"requested_chunk_size must be >= 1, got {requested_chunk_size}"
-        )
+    if max_chunk_size is not None and max_chunk_size < 1:
+        raise ValueError(f"max_chunk_size must be >= 1, got {max_chunk_size}")
     if len(filtered_means) != n_filtered:
         raise ValueError(
             f"filtered_means length ({len(filtered_means)}) does not match "
@@ -389,35 +374,30 @@ def run_lmm_chunk_source_numpy(
     dispatch = select_current_dispatch_path(
         n_cvt, lmm_mode, log_choices=log_dispatch_choices
     )
-    use_split = dispatch.use_split
 
-    def _compute_engine_chunk_size(*, pipeline_buffers: int = 1) -> int:
-        chunk = chunk_sizer(
+    def _engine_chunk_size(*, pipeline_buffers: int) -> int:
+        """As many SNPs as the RAM budget allows, never more than the caller asked."""
+        chunk = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
             n_cvt,
             dispatch=dispatch,
             pipeline_buffers=pipeline_buffers,
         )
-        if requested_chunk_size is not None:
-            chunk = min(chunk, requested_chunk_size)
+        if max_chunk_size is not None:
+            chunk = min(chunk, max_chunk_size)
         return max(1, chunk)
 
-    if requested_chunk_size is None or auto_scale_chunk_size:
-        chunk_size = _compute_engine_chunk_size()
-    else:
-        chunk_size = requested_chunk_size
-
+    # Sized twice: the first size decides whether pipelining is worth it, and a
+    # pipelined run then re-sizes against a budget split across two live buffers.
+    chunk_size = _engine_chunk_size(pipeline_buffers=1)
     n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-    use_pipeline = use_split and n_chunks >= min_pipeline_chunks
+    use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
     if use_pipeline:
-        if requested_chunk_size is None or auto_scale_chunk_size:
-            chunk_size = _compute_engine_chunk_size(pipeline_buffers=2)
-        else:
-            chunk_size = max(1, chunk_size // 2)
+        chunk_size = _engine_chunk_size(pipeline_buffers=2)
         n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-        use_pipeline = use_split and n_chunks >= min_pipeline_chunks
+        use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
     if show_progress:
         logger.info(f"  Analyzed individuals: {n_samples:,}")
@@ -518,10 +498,4 @@ def run_lmm_chunk_source_numpy(
         rotation_s=rotation_s,
         compute_s=engine.compute_s,
         result_write_s=engine.result_write_s,
-        nan_counts=engine.nan_counts,
-        n_at_lmin=engine.n_at_lmin,
-        n_at_lmax=engine.n_at_lmax,
-        chunk_size=chunk_size,
-        n_chunks=n_chunks,
-        used_pipeline=use_pipeline,
     )

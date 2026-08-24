@@ -636,9 +636,11 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     # Single-chunk run (no monkeypatching — default chunk_size fits all SNPs)
     result_single = run_lmm_association_numpy(**common_kwargs)
 
-    # Multi-chunk run: force chunk_size=50 so the batch loop iterates many times
+    # Multi-chunk run: force chunk_size=50 so the batch loop iterates many times.
+    # The sizer is a RAM-budget policy, not a numerical routine, so pinning its
+    # answer is the supported way to choose a chunking without a runner knob.
     monkeypatch.setattr(
-        "jamma.lmm.runner_numpy.compute_chunk_size_numpy",
+        "jamma.lmm.chunk_runner_numpy.compute_chunk_size_numpy",
         lambda *args, **kwargs: 50,
     )
     result_multi = run_lmm_association_numpy(**common_kwargs)
@@ -1243,34 +1245,52 @@ def test_runner_all_mode_c_path():
 
 
 @pytest.mark.tier1
-def test_runner_pipeline_enabled_for_non_wald_modes():
-    """Pipeline enabled for LRT/Score when chunks sufficient (RUN-07)."""
-    from unittest.mock import patch
+def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
+    """LRT and Score really do take the overlapped driver once chunks are enough.
 
-    from jamma.lmm import runner_numpy
+    This used to patch runner_numpy._MIN_PIPELINE_CHUNKS down to 3 and then
+    assert only that results came out. The chunk size was auto-sized on a
+    200-SNP dataset, so the run was single-chunk and the pipeline never
+    engaged; the assertion held either way. Forcing a small chunk gets past the
+    real threshold, and the spy is what makes the claim in the name checkable.
+    """
+    from jamma.lmm import chunk_runner_numpy
 
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data(
         n_samples=50, n_snps=200
     )
+    monkeypatch.setattr(
+        "jamma.lmm.chunk_runner_numpy.compute_chunk_size_numpy",
+        lambda *args, **kwargs: 20,
+    )
 
-    # Force very small chunks so we get >= 30 chunks for pipeline
-    with patch.object(runner_numpy, "_MIN_PIPELINE_CHUNKS", 3):
-        for mode in [2, 3]:
-            result = run_lmm_association_numpy(
-                genotypes=genotypes,
-                phenotypes=phenotypes,
-                kinship=kinship.copy(),
-                snp_info=snp_info * 4,  # 800 SNPs worth of info
-                config=LmmConfig(
-                    maf_threshold=0.0,
-                    miss_threshold=1.0,
-                    check_memory=False,
-                    show_progress=False,
-                    lmm_mode=mode,
-                ),
-                # Force small chunk size via explicit budget
-            )
-            assert len(result.associations) > 0, f"Mode {mode} should produce results"
+    drove = []
+    real_driver = chunk_runner_numpy._drive_pipeline
+
+    def spy(engine, **kwargs):
+        drove.append(kwargs["n_chunks"])
+        return real_driver(engine, **kwargs)
+
+    monkeypatch.setattr(chunk_runner_numpy, "_drive_pipeline", spy)
+
+    for mode in (2, 3):
+        result = run_lmm_association_numpy(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship.copy(),
+            snp_info=snp_info,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=mode,
+            ),
+        )
+        assert len(result.associations) > 0, f"Mode {mode} should produce results"
+
+    assert len(drove) == 2, f"pipeline ran {len(drove)} times, expected once per mode"
+    assert all(n >= 8 for n in drove), drove
 
 
 # ---------------------------------------------------------------------------

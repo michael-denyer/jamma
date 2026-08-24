@@ -51,9 +51,9 @@ def _run_kwargs(**overrides):
 
 
 @pytest.mark.tier0
-def test_requested_chunk_size_below_one_raises():
-    with pytest.raises(ValueError, match="requested_chunk_size must be >= 1"):
-        run_lmm_chunk_source_numpy(lmm_mode=1, **_run_kwargs(requested_chunk_size=0))
+def test_max_chunk_size_below_one_raises():
+    with pytest.raises(ValueError, match="max_chunk_size must be >= 1"):
+        run_lmm_chunk_source_numpy(lmm_mode=1, **_run_kwargs(max_chunk_size=0))
 
 
 @pytest.mark.tier0
@@ -78,12 +78,11 @@ def test_lrt_mode_without_logl_h0_raises():
 
 @pytest.mark.tier0
 def test_empty_filtered_returns_zeroed_stats():
+    """No SNPs means no work and no time spent, on every field the caller reads."""
     stats = run_lmm_chunk_source_numpy(
         lmm_mode=1, **_run_kwargs(n_filtered=0, filtered_means=np.zeros(0))
     )
-    assert stats.processed == 0
-    assert stats.n_chunks == 0
-    assert stats.nan_counts == {}
+    assert stats == (0, 0.0, 0.0, 0.0)
 
 
 # ---------------------------------------------------------------------------

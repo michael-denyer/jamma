@@ -2,15 +2,14 @@
 
 Sizes each genotype chunk against a RAM budget so the UT@G rotation makes as
 few DRAM passes over the eigenvector matrix as possible. Split out from
-``chunk_runner_numpy`` so the sizing policy (and its C-availability inputs)
-lives in one small, testable place.
+``chunk_runner_numpy`` so the sizing policy lives in one small, testable place.
 """
 
 from __future__ import annotations
 
 import psutil
 
-from jamma.lmm import compute_numpy
+from jamma.lmm.dispatch import DispatchPath
 
 # Allow large chunks — no int32 buffer constraint.
 _MAX_CHUNK = 200_000
@@ -20,13 +19,35 @@ _MIN_BUDGET = 2_000_000_000  # 2 GB floor (original default)
 _MAX_BUDGET = 40_000_000_000  # 40 GB ceiling
 
 
+def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
+    """Live float64 bytes one SNP occupies on *dispatch*'s buffers.
+
+    Three accountings, one per shape of chunk input. The fused family hands
+    ``utg_t`` straight to its kernel, so the rotation output is the only
+    allocation. The SoA-split path adds the varying Uab columns beside it. The
+    NumPy fallback materialises the whole Uab table.
+    """
+    if dispatch.feeds_raw_utg:
+        # jlinalg.dgemm(chunk, U, transa="T") writes C-contiguous utg_t
+        # directly: one column per SNP, no intermediate and no varying SoA.
+        return n_samples * 8
+
+    if dispatch is DispatchPath.SOA_SPLIT:
+        from jamma.lmm.likelihood import classify_uab_columns
+
+        n_var = len(classify_uab_columns(n_cvt)[1])
+        return n_samples * (n_var + 1) * 8
+
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+    return n_samples * n_index * 8
+
+
 def compute_chunk_size_numpy(
     n_samples: int,
     n_filtered: int,
     n_cvt: int = 1,
     *,
-    use_split: bool = False,
-    use_fused_general: bool = False,
+    dispatch: DispatchPath,
     mem_budget_bytes: int | None = None,
     pipeline_buffers: int = 1,
 ) -> int:
@@ -35,18 +56,12 @@ def compute_chunk_size_numpy(
     Scales the memory budget with available RAM to minimise DRAM passes
     through the eigenvector matrix during UT@G rotation.
 
-    Memory accounting turns on whether the path feeds ``utg_t`` straight to a
-    C kernel, which allocates 1 col/SNP, or builds SoA-split columns, which
-    allocate 4 (3 varying + 1 utg_t). The non-split full-Uab fallback allocates
-    (n_cvt+3)(n_cvt+2)/2 cols/SNP.
-
     Args:
         n_samples: Number of samples.
         n_filtered: Number of filtered SNPs.
         n_cvt: Number of covariates.
-        use_split: If True, use split Uab accounting instead of full Uab.
-        use_fused_general: If True, fused general path is active (n_cvt>=2);
-            only utg_t is allocated (single buffer, no uab_varying_soa).
+        dispatch: The run's active kernel path, which decides how many float64
+            columns per SNP are live at once.
         mem_budget_bytes: Explicit per-chunk memory budget in bytes.
             None (default) auto-scales with available RAM.
         pipeline_buffers: Number of live chunks (1 for sequential,
@@ -62,36 +77,7 @@ def compute_chunk_size_numpy(
     if pipeline_buffers < 1:
         raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
 
-    if use_split and n_cvt == 1:
-        if compute_numpy._accel is not None:
-            # Every n_cvt=1 C path feeds utg_t straight to the kernel:
-            # jlinalg.dgemm(chunk, U, transa="T") produces C-contiguous utg_t
-            # (n_snps, n_samples) directly, with no intermediate allocation and
-            # no uab_varying_soa. This was four branches, one per mode, each
-            # gated on a different capability flag; those flags are one bit, so
-            # every mode landed on the same size.
-            bytes_per_snp = n_samples * 8
-        else:
-            # SoA split paths (Wald, Score, LRT, mode-4):
-            # 3 varying SoA columns + 1 utg_t per SNP, no Uab reconstruction.
-            bytes_per_snp = n_samples * 4 * 8
-    elif use_split and n_cvt > 1:
-        from jamma.lmm.likelihood import classify_uab_columns
-
-        _inv, var = classify_uab_columns(n_cvt)
-        n_var = len(var)
-        if use_fused_general:
-            # Fused general path: jlinalg.dgemm produces utg_t directly.
-            # Single buffer, no intermediate allocation or contiguous copy.
-            bytes_per_snp = n_samples * 8
-        else:
-            # All modes: split C dispatch, no Uab reconstruction.
-            # n_var varying SoA columns + 1 utg_t per SNP.
-            bytes_per_snp = n_samples * (n_var + 1) * 8
-    else:
-        n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-        bytes_per_snp = n_samples * n_index * 8
-
+    bytes_per_snp = _bytes_per_snp(n_samples, n_cvt, dispatch)
     if bytes_per_snp == 0:
         return n_filtered
 
@@ -108,5 +94,4 @@ def compute_chunk_size_numpy(
     mem_budget = mem_budget // pipeline_buffers
 
     chunk_from_memory = int(mem_budget / bytes_per_snp)
-    chunk = max(100, min(chunk_from_memory, n_filtered, _MAX_CHUNK))
-    return chunk
+    return max(100, min(chunk_from_memory, n_filtered, _MAX_CHUNK))

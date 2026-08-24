@@ -222,15 +222,13 @@ def run_lmm_chunk_source_numpy(
         n_cvt, lmm_mode, log_choices=log_dispatch_choices
     )
     use_split = dispatch.use_split
-    use_fused_general = dispatch.use_fused_general
 
     def _compute_engine_chunk_size(*, pipeline_buffers: int = 1) -> int:
         chunk = chunk_sizer(
             n_samples,
             n_filtered,
             n_cvt,
-            use_split=use_split,
-            use_fused_general=use_fused_general,
+            dispatch=dispatch,
             pipeline_buffers=pipeline_buffers,
         )
         if requested_chunk_size is not None:

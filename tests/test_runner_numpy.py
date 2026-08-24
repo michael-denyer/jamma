@@ -15,6 +15,7 @@ import pytest
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.stats import AssocResult
@@ -201,6 +202,7 @@ def test_compute_chunk_size_small_dataset():
         n_samples=100,
         n_filtered=500,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     assert chunk == 500, f"Expected 500, got {chunk}"
@@ -212,6 +214,7 @@ def test_compute_chunk_size_large_dataset():
         n_samples=10_000,
         n_filtered=200_000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     assert 100 <= chunk <= 200_000, f"Chunk {chunk} outside expected bounds"
@@ -219,7 +222,9 @@ def test_compute_chunk_size_large_dataset():
 
 def test_compute_chunk_size_zero_bytes():
     """bytes_per_snp=0 (n_samples=0): returns n_filtered directly."""
-    chunk = compute_chunk_size_numpy(n_samples=0, n_filtered=1000, n_cvt=1)
+    chunk = compute_chunk_size_numpy(
+        n_samples=0, n_filtered=1000, n_cvt=1, dispatch=DispatchPath.NUMPY_FALLBACK
+    )
     assert chunk == 1000, f"Expected 1000, got {chunk}"
 
 
@@ -230,6 +235,7 @@ def test_compute_chunk_size_minimum():
         n_samples=1_000_000,
         n_filtered=200,
         n_cvt=10,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     assert chunk >= 100, f"Chunk {chunk} below minimum 100"
@@ -241,13 +247,14 @@ def test_chunk_size_split_larger_than_full():
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(10e9),
     )
     split = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
-        use_split=True,
+        dispatch=DispatchPath.FUSED,
         mem_budget_bytes=int(10e9),
     )
     assert split > full, f"Split chunk ({split}) should exceed full ({full})"
@@ -259,12 +266,14 @@ def test_chunk_size_explicit_budget():
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     large_budget = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(20e9),
     )
     assert large_budget > small_budget
@@ -276,14 +285,14 @@ def test_chunk_size_pipeline_halves_budget():
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
-        use_split=True,
+        dispatch=DispatchPath.FUSED,
         mem_budget_bytes=int(20e9),
     )
     double = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
-        use_split=True,
+        dispatch=DispatchPath.FUSED,
         mem_budget_bytes=int(20e9),
         pipeline_buffers=2,
     )
@@ -304,7 +313,7 @@ def test_chunk_size_auto_scales_with_memory():
             n_samples=50_000,
             n_filtered=100_000,
             n_cvt=1,
-            use_split=True,
+            dispatch=DispatchPath.FUSED,
         )
 
     # 10 GB available → 15% = 1.5 GB (hits 2 GB floor)
@@ -314,52 +323,50 @@ def test_chunk_size_auto_scales_with_memory():
             n_samples=50_000,
             n_filtered=100_000,
             n_cvt=1,
-            use_split=True,
+            dispatch=DispatchPath.FUSED,
         )
 
     assert chunk_big > chunk_small
 
 
-def test_chunk_size_mode4_fused_uses_4col():
-    """All n_cvt=1 split paths use 4-col accounting (SoA-native)."""
-    # Use large n_samples and n_filtered with moderate budget so chunks
-    # don't hit the _MAX_CHUNK cap (200k).
+def test_chunk_size_accounting_by_dispatch_path():
+    """Each path's column count, named by path rather than by mode.
+
+    Every n_cvt=1 C path is in the fused family and hands ``utg_t`` straight to
+    its kernel, so all three size identically at one column per SNP. The
+    SoA-split accounting adds the three varying Uab columns beside it, and the
+    NumPy fallback materialises the whole six-column table.
+
+    This replaced a test that called the sizer three times with identical
+    arguments and asserted the three results matched. It could not fail, and
+    its "4-col" claim had been wrong since the C-availability flags collapsed
+    to one bit: every n_cvt=1 C path had already moved to one column.
+    """
     n_samples = 10_000
     budget = int(5e9)
 
-    # Fused mode-4: 4 cols/SNP
-    fused_chunk = compute_chunk_size_numpy(
-        n_samples=n_samples,
-        n_filtered=500_000,
-        n_cvt=1,
-        use_split=True,
-        mem_budget_bytes=budget,
-    )
-    # Non-fused mode-4 fallback: also 4 cols/SNP (SoA split dispatch)
-    fallback_chunk = compute_chunk_size_numpy(
-        n_samples=n_samples,
-        n_filtered=500_000,
-        n_cvt=1,
-        use_split=True,
-        mem_budget_bytes=budget,
-    )
-    # Wald (mode 1): 4 cols/SNP — should match all other split paths
-    wald_chunk = compute_chunk_size_numpy(
-        n_samples=n_samples,
-        n_filtered=500_000,
-        n_cvt=1,
-        use_split=True,
-        mem_budget_bytes=budget,
-    )
+    def size(dispatch):
+        return compute_chunk_size_numpy(
+            n_samples=n_samples,
+            n_filtered=500_000,
+            n_cvt=1,
+            dispatch=dispatch,
+            mem_budget_bytes=budget,
+        )
 
-    # All n_cvt=1 split paths use 4-col accounting (3 varying SoA + 1 UtG)
-    assert fused_chunk == wald_chunk == fallback_chunk, (
-        f"All split paths should use same accounting: fused={fused_chunk}, "
-        f"wald={wald_chunk}, fallback={fallback_chunk}"
-    )
+    fused = [
+        size(DispatchPath.FUSED),
+        size(DispatchPath.FUSED_SCORE_WS),
+        size(DispatchPath.FUSED_LRT_WS),
+    ]
+    assert len(set(fused)) == 1, f"fused family must size alike, got {fused}"
+
+    # 1 column vs 4 (3 varying + utg_t) vs 6 ((n_cvt+3)(n_cvt+2)/2 at n_cvt=1).
+    # Floor division on both sides: the sizer truncates budget/bytes_per_snp.
+    assert size(DispatchPath.SOA_SPLIT) == fused[0] // 4
+    assert size(DispatchPath.NUMPY_FALLBACK) == fused[0] // 6
 
 
-@pytest.mark.tier0
 def test_runner_mode4_uses_fused_dispatch():
     """Mode 4 takes a fused path, and the SoA split dispatcher refuses it.
 

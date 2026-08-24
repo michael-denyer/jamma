@@ -292,6 +292,7 @@ def test_runner_fused_lrt_dispatch():
 def test_runner_fused_score_chunk_size():
     """Fused Score uses 1-col accounting (4x larger chunks at same budget)."""
     from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+    from jamma.lmm.dispatch import DispatchPath
 
     n_samples = 1000
     n_filtered = 200_000
@@ -304,20 +305,16 @@ def test_runner_fused_score_chunk_size():
         n_samples,
         n_filtered,
         n_cvt=1,
-        use_split=True,
+        dispatch=DispatchPath.FUSED_SCORE_WS,
         mem_budget_bytes=budget,
     )
-
-    from unittest.mock import patch
-
-    with patch("jamma.lmm.compute_numpy._accel", None):
-        chunk_split = compute_chunk_size_numpy(
-            n_samples,
-            n_filtered,
-            n_cvt=1,
-            use_split=True,
-            mem_budget_bytes=budget,
-        )
+    chunk_split = compute_chunk_size_numpy(
+        n_samples,
+        n_filtered,
+        n_cvt=1,
+        dispatch=DispatchPath.SOA_SPLIT,
+        mem_budget_bytes=budget,
+    )
 
     assert chunk_fused >= 3 * chunk_split, (
         f"Fused chunk ({chunk_fused}) should be >= 3x split chunk ({chunk_split})"
@@ -328,6 +325,7 @@ def test_runner_fused_score_chunk_size():
 def test_runner_fused_lrt_chunk_size():
     """Fused LRT uses 1-col accounting (4x larger chunks at same budget)."""
     from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+    from jamma.lmm.dispatch import DispatchPath
 
     n_samples = 1000
     n_filtered = 200_000
@@ -337,20 +335,16 @@ def test_runner_fused_lrt_chunk_size():
         n_samples,
         n_filtered,
         n_cvt=1,
-        use_split=True,
+        dispatch=DispatchPath.FUSED_LRT_WS,
         mem_budget_bytes=budget,
     )
-
-    from unittest.mock import patch
-
-    with patch("jamma.lmm.compute_numpy._accel", None):
-        chunk_split = compute_chunk_size_numpy(
-            n_samples,
-            n_filtered,
-            n_cvt=1,
-            use_split=True,
-            mem_budget_bytes=budget,
-        )
+    chunk_split = compute_chunk_size_numpy(
+        n_samples,
+        n_filtered,
+        n_cvt=1,
+        dispatch=DispatchPath.SOA_SPLIT,
+        mem_budget_bytes=budget,
+    )
 
     assert chunk_fused >= 3 * chunk_split, (
         f"Fused chunk ({chunk_fused}) should be >= 3x split chunk ({chunk_split})"

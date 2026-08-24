@@ -8,173 +8,107 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import compute_wald_split_c_ws, create_lmm_workspace
+from jamma.lmm.compute_numpy import (
+    compute_mode4_fused_general_c_ws,
+    compute_wald_fused_general_c_ws,
+)
 from jamma.lmm.likelihood_numpy import (
-    batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
 )
 from jamma.lmm.schema import LmmConfig
+from tests.lmm_accel._helpers import (
+    _fused_general_mode4_workspace,
+    _fused_general_workspace,
+    _numpy_general_lrt,
+    _numpy_general_score,
+    _numpy_general_wald,
+    _numpy_ncvt1_lrt,
+    _numpy_ncvt1_score,
+    _numpy_ncvt1_wald,
+    _prepare_fused_general_data,
+    assert_matches_numpy,
+)
+
+_WALD_KEYS = ("lambdas", "logls", "betas", "ses", "pwalds")
 
 
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 class TestHiEvalNullPositivity:
-    """C extension rejects non-positive hi_eval_null values at all three sites."""
+    """C extension rejects non-positive hi_eval_null at every site that takes it.
 
-    def test_mode4_workspace_rejects_zero_hi_eval_null(self, score_lrt_data):
-        """create_workspace_mode4_split_c raises ValueError on zero hi_eval_null."""
-        from jamma.lmm._lmm_accel import create_workspace_mode4_split_c
+    hi_eval_null is 1/(lambda_null*eval + 1), so a zero or negative entry means
+    the null model is broken upstream. The kernels divide by it, so the check has
+    to be at the boundary rather than left to produce infinities downstream.
 
-        eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
-        uab_inv_soa = np.stack(
-            [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
-        )
+    The three sites here are the ones dispatch reaches. Two earlier ones,
+    create_workspace_mode4_split_c and compute_score_batch_c, are unreachable and
+    have gone; the checks they covered live in the same C validation helper.
+    """
+
+    @pytest.mark.parametrize("bad", [0.0, -0.5], ids=["zero", "negative"])
+    def test_mode4_fused_workspace_rejects(self, fused_data, score_lrt_data, bad):
+        """create_workspace_mode4_fused_c rejects a non-positive hi_eval_null."""
+        from jamma.lmm.compute_numpy import create_lmm_workspace_mode4_fused
+
+        eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+        _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
 
         hi_bad = Hi_eval_null.copy()
-        hi_bad[5] = 0.0  # inject zero
+        hi_bad[5] = bad
 
-        with pytest.raises(ValueError, match="not positive"):
-            create_workspace_mode4_split_c(
+        with pytest.raises(ValueError, match="positive"):
+            create_lmm_workspace_mode4_fused(
                 eigenvalues,
                 uab_inv_soa,
+                w,
+                Uty,
                 n_samples,
                 1e-5,
                 1e5,
                 50,
                 20,
                 1,
-                hi_bad,
-                logl_H0,
+                hi_eval_null=hi_bad,
+                logl_H0=logl_H0,
             )
 
-    def test_mode4_workspace_rejects_negative_hi_eval_null(self, score_lrt_data):
-        """create_workspace_mode4_split_c raises ValueError on negative hi_eval_null."""
-        from jamma.lmm._lmm_accel import create_workspace_mode4_split_c
+    @pytest.mark.parametrize("bad", [0.0, -1.0], ids=["zero", "negative"])
+    def test_score_fused_workspace_rejects(self, fused_data, score_lrt_data, bad):
+        """create_workspace_score_fused_c rejects a non-positive hi_eval_null."""
+        from jamma.lmm.compute_numpy import _c
 
-        eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
-        uab_inv_soa = np.stack(
-            [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
-        )
+        eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+        _, _, _, Hi_eval_null, _ = score_lrt_data
 
         hi_bad = Hi_eval_null.copy()
-        hi_bad[10] = -0.5  # inject negative value
+        hi_bad[3] = bad
 
-        with pytest.raises(ValueError, match="not positive"):
-            create_workspace_mode4_split_c(
-                eigenvalues,
-                uab_inv_soa,
-                n_samples,
-                1e-5,
-                1e5,
-                50,
-                20,
-                1,
-                hi_bad,
-                logl_H0,
+        with pytest.raises(ValueError, match="positive"):
+            _c().create_workspace_score_fused_c(
+                w, Uty, hi_bad, eigenvalues, uab_inv_soa, n_samples, 1
             )
 
-    def test_score_batch_c_rejects_negative_hi_eval_null(self, score_lrt_data):
-        """compute_score_batch_c raises ValueError when hi_eval_null is negative."""
-        from jamma.lmm._lmm_accel import compute_score_batch_c
+    @pytest.mark.parametrize("bad", [0.0, -2.0], ids=["zero", "negative"])
+    def test_score_split_general_rejects(self, synthetic_covariate_data_ncvt2, bad):
+        """compute_score_split_general_c rejects a non-positive hi_eval_null."""
+        from jamma.lmm._lmm_accel import compute_score_split_general_c
 
-        eigenvalues, Uab_batch, n_samples, Hi_eval_null, _ = score_lrt_data
+        data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
+        eigenvalues = data["eigenvalues"]
 
-        hi_bad = Hi_eval_null.copy()
-        hi_bad[3] = -1.0  # inject negative value
+        hi_bad = 1.0 / (0.5 * eigenvalues + 1.0)
+        hi_bad[0] = bad
 
-        with pytest.raises(ValueError, match="not positive"):
-            compute_score_batch_c(
+        with pytest.raises(ValueError, match="positive"):
+            compute_score_split_general_c(
                 eigenvalues,
-                Uab_batch,
+                data["uab_var_soa"],
+                data["uab_inv_soa"],
                 hi_bad,
-                n_samples,
-                1,
-            )
-
-    def test_score_batch_c_rejects_zero_hi_eval_null(self, score_lrt_data):
-        """compute_score_batch_c raises ValueError when hi_eval_null is zero."""
-        from jamma.lmm._lmm_accel import compute_score_batch_c
-
-        eigenvalues, Uab_batch, n_samples, Hi_eval_null, _ = score_lrt_data
-
-        hi_bad = Hi_eval_null.copy()
-        hi_bad[3] = 0.0  # inject zero
-
-        with pytest.raises(ValueError, match="not positive"):
-            compute_score_batch_c(
-                eigenvalues,
-                Uab_batch,
-                hi_bad,
-                n_samples,
-                1,
-            )
-
-    def test_score_batch_general_c_rejects_negative_hi_eval_null(self):
-        """compute_score_batch_general_c raises ValueError on negative hi_eval_null."""
-        try:
-            from jamma.lmm._lmm_accel import compute_score_batch_general_c
-        except ImportError:
-            pytest.skip("compute_score_batch_general_c not compiled yet")
-
-        from jamma.lmm.likelihood import build_pab_table_for_c
-
-        rng = np.random.default_rng(77)
-        n_samples, n_snps, n_cvt = 80, 10, 2
-
-        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
-        lambda_null = 0.5
-        Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
-
-        # Build Uab_batch for n_cvt=2
-        n_uab = (n_cvt + 2) * (n_cvt + 3) // 2
-        Uab_batch = np.ones((n_snps, n_samples, n_uab), dtype=np.float64)
-        pab_table_dict = build_pab_table_for_c(n_cvt)
-
-        hi_bad = Hi_eval_null.copy()
-        hi_bad[0] = -2.0  # inject negative value
-
-        with pytest.raises(ValueError, match="not positive"):
-            compute_score_batch_general_c(
-                eigenvalues,
-                Uab_batch,
-                hi_bad,
-                n_samples,
-                n_cvt,
-                pab_table_dict,
-                1,
-            )
-
-    def test_score_batch_general_c_rejects_zero_hi_eval_null(self):
-        """compute_score_batch_general_c raises ValueError on zero hi_eval_null."""
-        try:
-            from jamma.lmm._lmm_accel import compute_score_batch_general_c
-        except ImportError:
-            pytest.skip("compute_score_batch_general_c not compiled yet")
-
-        from jamma.lmm.likelihood import build_pab_table_for_c
-
-        rng = np.random.default_rng(78)
-        n_samples, n_snps, n_cvt = 80, 10, 2
-
-        eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
-        lambda_null = 0.5
-        Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
-
-        n_uab = (n_cvt + 2) * (n_cvt + 3) // 2
-        Uab_batch = np.ones((n_snps, n_samples, n_uab), dtype=np.float64)
-        pab_table_dict = build_pab_table_for_c(n_cvt)
-
-        hi_bad = Hi_eval_null.copy()
-        hi_bad[0] = 0.0  # inject zero
-
-        with pytest.raises(ValueError, match="not positive"):
-            compute_score_batch_general_c(
-                eigenvalues,
-                Uab_batch,
-                hi_bad,
-                n_samples,
-                n_cvt,
-                pab_table_dict,
+                data["n_samples"],
+                data["n_cvt"],
+                data["pab_c"],
                 1,
             )
 
@@ -185,17 +119,7 @@ _fused_c_available = compute_numpy._accel is not None
 @pytest.mark.tier0
 @pytest.mark.skipif(not _fused_c_available, reason="Fused C extension not available")
 class TestFusedParity:
-    """Verify fused Uab path produces identical results to SoA path."""
-
-    @pytest.fixture
-    def fused_data(self, split_wald_data):
-        """Prepare data for both SoA and fused paths."""
-        eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-        w = UtW[:, 0].copy()
-        utg_t = np.ascontiguousarray(UtG.T)
-        uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-        uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-        return eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples
+    """Verify the fused Uab path against the NumPy implementations."""
 
     def test_fused_workspace_creation(self, fused_data):
         """create_workspace_fused_c returns a PyCapsule."""
@@ -217,7 +141,12 @@ class TestFusedParity:
         assert ws is not None
 
     def test_wald_parity(self, fused_data):
-        """Fused Wald produces bitwise-identical results to SoA Wald."""
+        """Fused Wald matches the NumPy REML Wald path.
+
+        The reference was the SoA workspace kernel, which let this be bitwise,
+        but no dispatch path reaches that kernel. NumPy is an independent
+        implementation, so the assertion carries the measured tolerance.
+        """
         from jamma.lmm.compute_numpy import (
             compute_wald_fused_c_ws,
             create_lmm_workspace_fused,
@@ -225,20 +154,6 @@ class TestFusedParity:
 
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
 
-        # SoA path
-        ws_soa = create_lmm_workspace(
-            eigenvalues,
-            uab_inv_soa,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-        soa_result = compute_wald_split_c_ws(ws_soa, uab_var_soa, 1)
-
-        # Fused path
         ws_fused = create_lmm_workspace_fused(
             eigenvalues,
             uab_inv_soa,
@@ -251,35 +166,26 @@ class TestFusedParity:
             20,
             1,
         )
-        fused_result = compute_wald_fused_c_ws(ws_fused, utg_t, 1)
+        result = compute_wald_fused_c_ws(ws_fused, utg_t, 1)
+        reference = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
 
-        for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-            np.testing.assert_array_equal(
-                soa_result[key],
-                fused_result[key],
-                err_msg=f"Wald {key}: fused vs SoA mismatch (should be bitwise)",
-            )
+        assert_matches_numpy(
+            result, {k: reference[k] for k in _WALD_KEYS}, "Fused Wald"
+        )
 
     def test_wald_parity_multithreaded(self, fused_data):
-        """Fused Wald with multiple threads matches SoA path."""
+        """Fused Wald is bitwise deterministic across thread counts.
+
+        The OpenMP parallel-for partitions SNPs across threads, so a race or
+        thread-local state corruption shows up as a difference here. This stays
+        a bitwise comparison because both sides are the same kernel.
+        """
         from jamma.lmm.compute_numpy import (
             compute_wald_fused_c_ws,
             create_lmm_workspace_fused,
         )
 
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
-
-        ws_soa = create_lmm_workspace(
-            eigenvalues,
-            uab_inv_soa,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-        soa_result = compute_wald_split_c_ws(ws_soa, uab_var_soa, 1)
 
         ws_fused = create_lmm_workspace_fused(
             eigenvalues,
@@ -293,13 +199,14 @@ class TestFusedParity:
             20,
             1,
         )
-        fused_result = compute_wald_fused_c_ws(ws_fused, utg_t, 4)
+        single = compute_wald_fused_c_ws(ws_fused, utg_t, 1)
+        multi = compute_wald_fused_c_ws(ws_fused, utg_t, 4)
 
-        for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+        for key in _WALD_KEYS:
             np.testing.assert_array_equal(
-                soa_result[key],
-                fused_result[key],
-                err_msg=f"Wald {key}: fused(4t) vs SoA mismatch",
+                single[key],
+                multi[key],
+                err_msg=f"Wald {key}: fused 4-thread vs 1-thread mismatch",
             )
 
     def test_mode4_fused_workspace_creation(self, fused_data, score_lrt_data):
@@ -326,37 +233,15 @@ class TestFusedParity:
         assert ws is not None
 
     def test_mode4_parity(self, fused_data, score_lrt_data):
-        """Fused mode-4 produces bitwise-identical results to SoA mode-4."""
-        from jamma.lmm import compute_numpy
+        """Fused mode-4 matches the NumPy Wald, Score and LRT statistics."""
         from jamma.lmm.compute_numpy import (
             compute_mode4_fused_c_ws,
-            compute_mode4_split_c_ws,
-            create_lmm_workspace_mode4,
             create_lmm_workspace_mode4_fused,
         )
-
-        if compute_numpy._accel is None:
-            pytest.skip("Mode-4 split C extension not available")
 
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
         _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
 
-        # SoA path
-        ws_soa = create_lmm_workspace_mode4(
-            eigenvalues,
-            uab_inv_soa,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-            Hi_eval_null,
-            logl_H0,
-        )
-        soa_result = compute_mode4_split_c_ws(ws_soa, uab_var_soa, 1)
-
-        # Fused path
         ws_fused = create_lmm_workspace_mode4_fused(
             eigenvalues,
             uab_inv_soa,
@@ -371,23 +256,16 @@ class TestFusedParity:
             hi_eval_null=Hi_eval_null,
             logl_H0=logl_H0,
         )
-        fused_result = compute_mode4_fused_c_ws(ws_fused, utg_t, 1)
+        result = compute_mode4_fused_c_ws(ws_fused, utg_t, 1)
 
-        for key in (
-            "lambdas",
-            "logls",
-            "betas",
-            "ses",
-            "pwalds",
-            "p_scores",
-            "lambdas_mle",
-            "p_lrts",
-        ):
-            np.testing.assert_array_equal(
-                soa_result[key],
-                fused_result[key],
-                err_msg=f"Mode-4 {key}: fused vs SoA mismatch (should be bitwise)",
-            )
+        wald = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
+        reference = {k: wald[k] for k in _WALD_KEYS}
+        reference["p_scores"] = _numpy_ncvt1_score(
+            w, Uty, utg_t, Hi_eval_null, n_samples
+        )["p_scores"]
+        reference.update(_numpy_ncvt1_lrt(eigenvalues, w, Uty, utg_t, logl_H0))
+
+        assert_matches_numpy(result, reference, "Fused mode-4")
 
     def test_fused_wrong_utg_t_shape(self, fused_data):
         """Fused compute raises ValueError for wrong UtG_T shape."""
@@ -506,139 +384,45 @@ class TestFusedParity:
             "non-degenerate betas should be finite"
         )
 
-    def test_fused_rejects_split_workspace(self, fused_data):
-        """compute_wald_fused_c_ws rejects a non-fused (split) workspace."""
-        from jamma.lmm.compute_numpy import compute_wald_fused_c_ws
+    def test_fused_rejects_foreign_workspace(self, fused_data):
+        """compute_wald_fused_c_ws rejects a workspace of another kernel's type.
 
-        eigenvalues, _, _, utg_t, uab_inv_soa, _, n_samples = fused_data
+        This used to pass the split Wald workspace, which shares a capsule name
+        with the fused one and differs by having NULL w/Uty, so it exercised the
+        kernel's own is-this-fused check. Nothing builds that capsule any more.
+        What remains testable is the capsule-name check, which is what the Score
+        and LRT workspace tests assert for their own kernels.
+        """
+        from jamma.lmm.compute_numpy import _c, compute_wald_fused_c_ws
 
-        # Create a split (non-fused) workspace — w/Uty will be NULL
-        ws_split = create_lmm_workspace(
-            eigenvalues,
-            uab_inv_soa,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+        Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
+
+        score_ws = _c().create_workspace_score_fused_c(
+            w, Uty, Hi_eval_null, eigenvalues, uab_inv_soa, n_samples, 1
         )
-        with pytest.raises(ValueError, match=r"[Ff]used"):
-            compute_wald_fused_c_ws(ws_split, utg_t, 1)
+        with pytest.raises(ValueError, match="PyCapsule_GetPointer"):
+            compute_wald_fused_c_ws(score_ws, utg_t, 1)
 
 
-def _prepare_fused_general_data(data: dict) -> dict:
-    """Prepare invariant SoA, varying SoA, UtG_T, and pab_c for fused general tests.
+def _run_fused_general_wald_vs_numpy(data: dict) -> None:
+    """Compare the fused general Wald kernel against the NumPy Wald path.
 
-    Args:
-        data: Dict from _build_synthetic_covariate_data.
-
-    Returns:
-        Dict with uab_inv_soa, uab_var_soa, utg_t, pab_c, and original data keys.
+    The reference was the non-fused general workspace, which let this be
+    bitwise. No dispatch path reaches that kernel, so it has gone and the
+    reference is now an independent implementation with a tolerance.
     """
-    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
-
-    n_cvt = data["n_cvt"]
-    Uab_batch = data["Uab_batch"]
-    UtG = data["UtG"]
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-    uab_var_soa = np.ascontiguousarray(
-        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+    prepared = _prepare_fused_general_data(data)
+    result = compute_wald_fused_general_c_ws(
+        _fused_general_workspace(prepared), prepared["utg_t"], 1
     )
-    utg_t = np.ascontiguousarray(UtG.T)
-    pab_c = build_pab_table_for_c(n_cvt)
+    reference = _numpy_general_wald(prepared)
 
-    return {
-        **data,
-        "uab_inv_soa": uab_inv_soa,
-        "uab_var_soa": uab_var_soa,
-        "utg_t": utg_t,
-        "pab_c": pab_c,
-    }
-
-
-def _run_fused_general_wald_vs_nonfused(data: dict) -> None:
-    """Compare fused general Wald against non-fused general Wald (bitwise).
-
-    Args:
-        data: Dict from _prepare_fused_general_data.
-    """
-    from jamma.lmm.compute_numpy import (
-        compute_wald_fused_general_c_ws,
-        compute_wald_general_c_ws,
-        create_lmm_workspace_fused_general,
-        create_lmm_workspace_general,
+    assert_matches_numpy(
+        result,
+        {k: reference[k] for k in _WALD_KEYS},
+        f"Fused general Wald n_cvt={data['n_cvt']}",
     )
-
-    eigenvalues = data["eigenvalues"]
-    n_samples = data["n_samples"]
-    n_cvt = data["n_cvt"]
-    uab_inv_soa = data["uab_inv_soa"]
-    uab_var_soa = data["uab_var_soa"]
-    utg_t = data["utg_t"]
-    pab_c = data["pab_c"]
-    UtW = data["UtW"]
-    Uty = data["Uty"]
-
-    # Non-fused general path
-    ws_nonfused = create_lmm_workspace_general(
-        eigenvalues,
-        uab_inv_soa,
-        n_samples,
-        n_cvt,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-    result_nonfused = compute_wald_general_c_ws(ws_nonfused, uab_var_soa, 1)
-
-    # Fused general path
-    pab_kwargs = {
-        k: pab_c[k]
-        for k in [
-            "invariant_indices",
-            "varying_indices",
-            "logdet_diag_rows",
-            "logdet_diag_cols",
-            "level_offsets",
-            "level_counts",
-            "entries",
-            "idx_xx",
-            "idx_xy",
-            "idx_yy",
-            "var_a_cols",
-            "var_b_cols",
-        ]
-    }
-    ws_fused = create_lmm_workspace_fused_general(
-        eigenvalues,
-        uab_inv_soa,
-        UtW,
-        Uty,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-        n_cvt=n_cvt,
-        **pab_kwargs,
-    )
-    result_fused = compute_wald_fused_general_c_ws(ws_fused, utg_t, 1)
-
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_array_equal(
-            result_nonfused[key],
-            result_fused[key],
-            err_msg=(
-                f"Wald {key}: fused general vs non-fused general mismatch "
-                f"(should be bitwise identical, n_cvt={n_cvt})"
-            ),
-        )
 
 
 @pytest.mark.tier0
@@ -648,7 +432,7 @@ def _run_fused_general_wald_vs_nonfused(data: dict) -> None:
 )
 def test_fused_general_ncvt2_wald(synthetic_covariate_data_ncvt2):
     """FGEN-04: Fused general Wald bitwise matches non-fused general for n_cvt=2."""
-    _run_fused_general_wald_vs_nonfused(
+    _run_fused_general_wald_vs_numpy(
         _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
     )
 
@@ -660,7 +444,7 @@ def test_fused_general_ncvt2_wald(synthetic_covariate_data_ncvt2):
 )
 def test_fused_general_ncvt4_wald(synthetic_covariate_data_ncvt4):
     """FGEN-04: Fused general Wald bitwise matches non-fused general for n_cvt=4."""
-    _run_fused_general_wald_vs_nonfused(
+    _run_fused_general_wald_vs_numpy(
         _prepare_fused_general_data(synthetic_covariate_data_ncvt4)
     )
 
@@ -671,113 +455,30 @@ def test_fused_general_ncvt4_wald(synthetic_covariate_data_ncvt4):
     reason="Mode-4 fused general C not available",
 )
 def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
-    """FGEN-07: Fused general mode-4 Wald matches non-fused general Wald for n_cvt=2.
+    """FGEN-07: Fused general mode-4 Wald matches the NumPy Wald for n_cvt=2.
 
-    Verifies the Wald component of mode-4 is bitwise identical to the non-fused
-    general workspace. Score and LRT are exercised (no crash, plausible values)
-    since their non-fused references use different code paths (batch C functions)
-    that may produce different NaN patterns on synthetic data.
+    The Wald component is checked against NumPy; Score and LRT are checked for
+    shape and range here, and against NumPy in the two tests below.
     """
-    from jamma.lmm.compute_numpy import (
-        compute_mode4_fused_general_c_ws,
-        compute_wald_general_c_ws,
-        create_lmm_workspace_general,
-        create_lmm_workspace_mode4_fused_general,
+    data = _prepare_fused_general_data(general_score_lrt_ncvt2)
+    result = compute_mode4_fused_general_c_ws(
+        _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
-    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+    reference = _numpy_general_wald(data)
 
-    data = general_score_lrt_ncvt2
-    eigenvalues = data["eigenvalues"]
-    n_samples = data["n_samples"]
-    n_cvt = data["n_cvt"]
-    Uab_batch = data["Uab_batch"]
-    UtW = data["UtW"]
-    Uty = data["Uty"]
-    UtG = data["UtG"]
-    Hi_eval_null = data["Hi_eval_null"]
-    logl_H0 = data["logl_H0"]
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-    uab_var_soa = np.ascontiguousarray(
-        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+    assert_matches_numpy(
+        result,
+        {k: reference[k] for k in _WALD_KEYS},
+        "Fused general mode-4 Wald n_cvt=2",
     )
-    utg_t = np.ascontiguousarray(UtG.T)
-    pab_c = build_pab_table_for_c(n_cvt)
-    pab_kwargs = {
-        k: pab_c[k]
-        for k in [
-            "invariant_indices",
-            "varying_indices",
-            "logdet_diag_rows",
-            "logdet_diag_cols",
-            "level_offsets",
-            "level_counts",
-            "entries",
-            "idx_xx",
-            "idx_xy",
-            "idx_yy",
-            "var_a_cols",
-            "var_b_cols",
-        ]
-    }
 
-    # Non-fused reference: Wald from general workspace
-    ws_nonfused = create_lmm_workspace_general(
-        eigenvalues,
-        uab_inv_soa,
-        n_samples,
-        n_cvt,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-    wald_nonfused = compute_wald_general_c_ws(ws_nonfused, uab_var_soa, 1)
+    n_snps = data["UtG"].shape[1]
+    for key in ("p_scores", "p_lrts", "lambdas_mle"):
+        assert result[key].shape == (n_snps,), f"{key} shape mismatch"
 
-    # Fused general mode-4 path
-    ws_fused = create_lmm_workspace_mode4_fused_general(
-        eigenvalues,
-        uab_inv_soa,
-        UtW,
-        Uty,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-        n_cvt=n_cvt,
-        **pab_kwargs,
-        hi_eval_null=Hi_eval_null,
-        logl_H0=logl_H0,
-    )
-    result_fused = compute_mode4_fused_general_c_ws(ws_fused, utg_t, 1)
-
-    # Wald comparison (bitwise)
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_array_equal(
-            wald_nonfused[key],
-            result_fused[key],
-            err_msg=f"Mode-4 Wald {key}: fused general vs non-fused mismatch",
-        )
-
-    # Score/LRT: verify arrays present with correct shape and no crashes
-    n_snps = UtG.shape[1]
-    assert result_fused["p_scores"].shape == (n_snps,), "p_scores shape mismatch"
-    assert result_fused["p_lrts"].shape == (n_snps,), "p_lrts shape mismatch"
-    assert result_fused["lambdas_mle"].shape == (n_snps,), "lambdas_mle shape mismatch"
-
-    # Score and LRT p-values should be in [0, 1] or NaN (degenerate SNPs)
-    finite_scores = result_fused["p_scores"][np.isfinite(result_fused["p_scores"])]
-    assert np.all((finite_scores >= 0) & (finite_scores <= 1)), (
-        "Score p-values out of range [0, 1]"
-    )
-    finite_lrts = result_fused["p_lrts"][np.isfinite(result_fused["p_lrts"])]
-    assert np.all((finite_lrts >= 0) & (finite_lrts <= 1)), (
-        "LRT p-values out of range [0, 1]"
-    )
+    for key in ("p_scores", "p_lrts"):
+        finite = result[key][np.isfinite(result[key])]
+        assert np.all((finite >= 0) & (finite <= 1)), f"{key} out of range [0, 1]"
 
 
 @pytest.mark.tier0
@@ -865,103 +566,14 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
     reason="Fused general C not available",
 )
 def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
-    """FGEN-09: Fused general mode-4 LRT matches compose fallback.
-
-    Compares fused general mode-4 lambdas_mle and p_lrts against the
-    non-fused batch LRT C path (compute_lrt_batch_general_c).
-    """
-    from jamma.lmm._lmm_accel import compute_lrt_batch_general_c
-    from jamma.lmm.compute_numpy import (
-        compute_mode4_fused_general_c_ws,
-        create_lmm_workspace_mode4_fused_general,
-    )
-    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
-
-    data = general_score_lrt_ncvt2
-    eigenvalues = data["eigenvalues"]
-    n_samples = data["n_samples"]
-    n_cvt = data["n_cvt"]
-    Uab_batch = data["Uab_batch"]
-    UtW = data["UtW"]
-    Uty = data["Uty"]
-    UtG = data["UtG"]
-    Hi_eval_null = data["Hi_eval_null"]
-    logl_H0 = data["logl_H0"]
-
-    inv_indices, _ = classify_uab_columns(n_cvt)
-    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-    utg_t = np.ascontiguousarray(UtG.T)
-    pab_c = build_pab_table_for_c(n_cvt)
-    pab_kwargs = {
-        k: pab_c[k]
-        for k in [
-            "invariant_indices",
-            "varying_indices",
-            "logdet_diag_rows",
-            "logdet_diag_cols",
-            "level_offsets",
-            "level_counts",
-            "entries",
-            "idx_xx",
-            "idx_xy",
-            "idx_yy",
-            "var_a_cols",
-            "var_b_cols",
-        ]
-    }
-
-    # Fused general mode-4 result
-    ws_fused = create_lmm_workspace_mode4_fused_general(
-        eigenvalues,
-        uab_inv_soa,
-        UtW,
-        Uty,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-        n_cvt=n_cvt,
-        **pab_kwargs,
-        hi_eval_null=Hi_eval_null,
-        logl_H0=logl_H0,
-    )
-    result_fused = compute_mode4_fused_general_c_ws(ws_fused, utg_t, 1)
-
-    # Non-fused batch LRT reference
-    result_lrt = compute_lrt_batch_general_c(
-        eigenvalues,
-        Uab_batch,
-        n_samples,
-        n_cvt,
-        pab_c,
-        1e-5,
-        1e5,
-        50,
-        20,
-        logl_H0,
-        1,
+    """FGEN-08: Fused general mode-4 LRT matches the NumPy MLE lambdas and p-values."""
+    data = _prepare_fused_general_data(general_score_lrt_ncvt2)
+    result = compute_mode4_fused_general_c_ws(
+        _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
 
-    # lambdas_mle parity (golden section FP tolerance)
-    np.testing.assert_allclose(
-        result_fused["lambdas_mle"],
-        result_lrt["lambdas_mle"],
-        rtol=5e-5,
-        atol=1e-14,
-        equal_nan=True,
-        err_msg="lambdas_mle: fused general mode-4 vs batch LRT mismatch",
-    )
-
-    # p_lrts parity (CDF tolerance)
-    np.testing.assert_allclose(
-        result_fused["p_lrts"],
-        result_lrt["p_lrts"],
-        rtol=1e-4,
-        atol=1e-14,
-        equal_nan=True,
-        err_msg="p_lrts: fused general mode-4 vs batch LRT mismatch",
+    assert_matches_numpy(
+        result, _numpy_general_lrt(data), "Fused general mode-4 LRT n_cvt=2"
     )
 
 
@@ -971,150 +583,22 @@ def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
     reason="Fused general C not available",
 )
 def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
-    """FGEN-10: Fused general mode-4 all 8 output arrays match compose reference.
+    """FGEN-09: every mode-4 statistic from the fused general kernel matches NumPy.
 
-    Verifies lambdas, logls, betas, ses, pwalds (bitwise Wald parity),
-    p_scores (Score CDF tolerance), lambdas_mle (golden section tolerance),
-    and p_lrts (LRT CDF tolerance) against their respective non-fused references.
+    Mode 4 composes Wald, Score and LRT in one pass over the workspace, so a
+    mix-up between the three shows here and not in the single-mode tests.
     """
-    from jamma.lmm._lmm_accel import (
-        compute_lrt_batch_general_c,
-        compute_score_batch_general_c,
-    )
-    from jamma.lmm.compute_numpy import (
-        compute_mode4_fused_general_c_ws,
-        compute_wald_general_c_ws,
-        create_lmm_workspace_general,
-        create_lmm_workspace_mode4_fused_general,
-    )
-    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
-
-    data = general_score_lrt_ncvt2
-    eigenvalues = data["eigenvalues"]
-    n_samples = data["n_samples"]
-    n_cvt = data["n_cvt"]
-    Uab_batch = data["Uab_batch"]
-    UtW = data["UtW"]
-    Uty = data["Uty"]
-    UtG = data["UtG"]
-    Hi_eval_null = data["Hi_eval_null"]
-    logl_H0 = data["logl_H0"]
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-    uab_var_soa = np.ascontiguousarray(
-        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
-    )
-    utg_t = np.ascontiguousarray(UtG.T)
-    pab_c = build_pab_table_for_c(n_cvt)
-    pab_kwargs = {
-        k: pab_c[k]
-        for k in [
-            "invariant_indices",
-            "varying_indices",
-            "logdet_diag_rows",
-            "logdet_diag_cols",
-            "level_offsets",
-            "level_counts",
-            "entries",
-            "idx_xx",
-            "idx_xy",
-            "idx_yy",
-            "var_a_cols",
-            "var_b_cols",
-        ]
-    }
-
-    # --- Fused general mode-4 ---
-    ws_fused = create_lmm_workspace_mode4_fused_general(
-        eigenvalues,
-        uab_inv_soa,
-        UtW,
-        Uty,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-        n_cvt=n_cvt,
-        **pab_kwargs,
-        hi_eval_null=Hi_eval_null,
-        logl_H0=logl_H0,
-    )
-    result_fused = compute_mode4_fused_general_c_ws(ws_fused, utg_t, 1)
-
-    # --- Wald reference (non-fused general workspace) ---
-    ws_wald = create_lmm_workspace_general(
-        eigenvalues,
-        uab_inv_soa,
-        n_samples,
-        n_cvt,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-    wald_ref = compute_wald_general_c_ws(ws_wald, uab_var_soa, 1)
-
-    # Wald: bitwise parity (same workspace, same code path)
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_array_equal(
-            result_fused[key],
-            wald_ref[key],
-            err_msg=f"Mode-4 Wald {key}: fused general vs non-fused mismatch",
-        )
-
-    # --- Score reference (batch C) ---
-    score_ref = compute_score_batch_general_c(
-        eigenvalues,
-        Uab_batch,
-        Hi_eval_null,
-        n_samples,
-        n_cvt,
-        pab_c,
-        1,
-    )
-    np.testing.assert_allclose(
-        result_fused["p_scores"],
-        score_ref["p_scores"],
-        rtol=1e-4,
-        atol=1e-14,
-        equal_nan=True,
-        err_msg="p_scores: fused general mode-4 vs batch Score mismatch",
+    data = _prepare_fused_general_data(general_score_lrt_ncvt2)
+    result = compute_mode4_fused_general_c_ws(
+        _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
 
-    # --- LRT reference (batch C) ---
-    lrt_ref = compute_lrt_batch_general_c(
-        eigenvalues,
-        Uab_batch,
-        n_samples,
-        n_cvt,
-        pab_c,
-        1e-5,
-        1e5,
-        50,
-        20,
-        logl_H0,
-        1,
-    )
-    np.testing.assert_allclose(
-        result_fused["lambdas_mle"],
-        lrt_ref["lambdas_mle"],
-        rtol=5e-5,
-        atol=1e-14,
-        equal_nan=True,
-        err_msg="lambdas_mle: fused general mode-4 vs batch LRT mismatch",
-    )
-    np.testing.assert_allclose(
-        result_fused["p_lrts"],
-        lrt_ref["p_lrts"],
-        rtol=1e-4,
-        atol=1e-14,
-        equal_nan=True,
-        err_msg="p_lrts: fused general mode-4 vs batch LRT mismatch",
-    )
+    wald = _numpy_general_wald(data)
+    reference = {k: wald[k] for k in _WALD_KEYS}
+    reference["p_scores"] = _numpy_general_score(data)["p_scores"]
+    reference.update(_numpy_general_lrt(data))
+
+    assert_matches_numpy(result, reference, "Fused general mode-4 n_cvt=2")
 
 
 @pytest.mark.tier0
@@ -1205,109 +689,43 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     reason="Fused general C not available",
 )
 def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
-    """FGEN-04: Degenerate SNPs produce NaN in fused general (same as non-fused)."""
-    from jamma.lmm.compute_numpy import (
-        compute_wald_fused_general_c_ws,
-        compute_wald_general_c_ws,
-        create_lmm_workspace_fused_general,
-        create_lmm_workspace_general,
-    )
-    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+    """FGEN-05: constant genotypes give NaN, and the rest still match NumPy.
 
-    data = synthetic_covariate_data_ncvt2
-    eigenvalues = data["eigenvalues"]
-    n_samples = data["n_samples"]
-    n_cvt = data["n_cvt"]
-    Uab_batch = data["Uab_batch"]
-    UtW = data["UtW"]
-    Uty = data["Uty"]
-    UtG = data["UtG"]
-
-    # Inject constant genotype columns (degenerate SNPs)
-    UtG_degen = UtG.copy()
-    UtG_degen[:, 0] = 0.0  # All zeros
-    UtG_degen[:, 1] = 1.0  # All ones (constant)
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-
-    # Recompute Uab for degenerate SNPs
+    A constant genotype rotates to an all-zero UtG column, which drives xx and
+    so P_XX to zero. Both sides are given the same degenerate input, so the
+    comparison stays between two implementations of one problem.
+    """
     from jamma.lmm.likelihood import compute_Uab
 
-    n_snps = UtG_degen.shape[1]
-    n_index = Uab_batch.shape[2]
-    Uab_degen = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
-    for i in range(n_snps):
-        Uab_degen[i] = compute_Uab(UtW, Uty, UtG_degen[:, i])
-    uab_var_soa_degen = np.ascontiguousarray(
-        Uab_degen[:, :, list(var_indices)].transpose(0, 2, 1)
+    data = dict(synthetic_covariate_data_ncvt2)
+    UtG = data["UtG"].copy()
+    UtG[:, :2] = 0.0
+    data["UtG"] = UtG
+    data["Uab_batch"] = np.stack(
+        [compute_Uab(data["UtW"], data["Uty"], UtG[:, i]) for i in range(UtG.shape[1])]
     )
 
-    # Non-fused reference
-    ws_nonfused = create_lmm_workspace_general(
-        eigenvalues,
-        uab_inv_soa,
-        n_samples,
-        n_cvt,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
+    prepared = _prepare_fused_general_data(data)
+    result = compute_wald_fused_general_c_ws(
+        _fused_general_workspace(prepared), prepared["utg_t"], 1
     )
-    result_nonfused = compute_wald_general_c_ws(ws_nonfused, uab_var_soa_degen, 1)
+    reference = _numpy_general_wald(prepared)
 
-    # Fused general path
-    pab_c = build_pab_table_for_c(n_cvt)
-    pab_kwargs = {
-        k: pab_c[k]
-        for k in [
-            "invariant_indices",
-            "varying_indices",
-            "logdet_diag_rows",
-            "logdet_diag_cols",
-            "level_offsets",
-            "level_counts",
-            "entries",
-            "idx_xx",
-            "idx_xy",
-            "idx_yy",
-            "var_a_cols",
-            "var_b_cols",
-        ]
-    }
-    utg_t_degen = np.ascontiguousarray(UtG_degen.T)
-    ws_fused = create_lmm_workspace_fused_general(
-        eigenvalues,
-        uab_inv_soa,
-        UtW,
-        Uty,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-        n_cvt=n_cvt,
-        **pab_kwargs,
-    )
-    result_fused = compute_wald_fused_general_c_ws(ws_fused, utg_t_degen, 1)
-
-    # Degenerate SNPs (0, 1) should have NaN beta/se/pwald in both paths
     for key in ("betas", "ses", "pwalds"):
+        assert np.all(np.isnan(result[key][:2])), (
+            f"{key}: degenerate SNPs should be NaN"
+        )
         np.testing.assert_array_equal(
-            np.isnan(result_nonfused[key][:2]),
-            np.isnan(result_fused[key][:2]),
-            err_msg=f"Degenerate SNP NaN pattern mismatch for {key}",
+            np.isnan(result[key][:2]),
+            np.isnan(reference[key][:2]),
+            err_msg=f"{key}: NaN pattern differs from NumPy on the degenerate SNPs",
         )
 
-    # Non-degenerate SNPs should match bitwise
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_array_equal(
-            result_nonfused[key][2:],
-            result_fused[key][2:],
-            err_msg=f"Non-degenerate {key}: fused vs non-fused mismatch",
-        )
+    assert_matches_numpy(
+        {k: result[k][2:] for k in _WALD_KEYS},
+        {k: reference[k][2:] for k in _WALD_KEYS},
+        "Fused general non-degenerate",
+    )
 
 
 @pytest.mark.tier0
@@ -1320,57 +738,6 @@ def test_fused_general_abi_version_9():
     from jamma.lmm._lmm_accel import ABI_VERSION
 
     assert ABI_VERSION >= 9, f"Expected ABI_VERSION>=9, got {ABI_VERSION}"
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="Fused C not available")
-def test_fused_ncvt1_regression(split_wald_data):
-    """Regression: n_cvt=1 fused path works after general addition."""
-    from jamma.lmm.compute_numpy import (
-        compute_wald_fused_c_ws,
-        create_lmm_workspace_fused,
-    )
-
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-    w = UtW[:, 0].copy()
-    utg_t = np.ascontiguousarray(UtG.T)
-    uab_inv_soa = compute_uab_invariant_soa(UtW, Uty)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-
-    # SoA reference
-    ws_soa = create_lmm_workspace(
-        eigenvalues,
-        uab_inv_soa,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-    soa_result = compute_wald_split_c_ws(ws_soa, uab_var_soa, 1)
-
-    # Fused n_cvt=1
-    ws_fused = create_lmm_workspace_fused(
-        eigenvalues,
-        uab_inv_soa,
-        w,
-        Uty,
-        n_samples,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-    fused_result = compute_wald_fused_c_ws(ws_fused, utg_t, 1)
-
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        np.testing.assert_array_equal(
-            soa_result[key],
-            fused_result[key],
-            err_msg=f"n_cvt=1 regression: {key} mismatch after fused general addition",
-        )
 
 
 @pytest.mark.tier1

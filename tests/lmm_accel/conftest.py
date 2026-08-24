@@ -60,6 +60,26 @@ def split_wald_data():
 
 
 @pytest.fixture
+def fused_data(split_wald_data):
+    """Rotated inputs in both the SoA and fused forms, for n_cvt=1."""
+    from jamma.lmm.likelihood_numpy import (
+        batch_compute_uab_varying_soa_numpy,
+        compute_uab_invariant_soa,
+    )
+
+    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
+    return (
+        eigenvalues,
+        UtW[:, 0].copy(),
+        Uty,
+        np.ascontiguousarray(UtG.T),
+        compute_uab_invariant_soa(UtW, Uty),
+        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T),
+        n_samples,
+    )
+
+
+@pytest.fixture
 def score_lrt_data(synthetic_wald_data):
     """Extends synthetic_wald_data with null-model Hi_eval and logl_H0.
 

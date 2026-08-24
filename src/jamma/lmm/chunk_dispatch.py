@@ -20,11 +20,8 @@ from jamma.lmm.compute_numpy import (
     _compute_score_split_numpy,
     compute_mode4_fused_c_ws,
     compute_mode4_fused_general_c_ws,
-    compute_mode4_split_c_ws,
     compute_wald_fused_c_ws,
     compute_wald_fused_general_c_ws,
-    compute_wald_general_c_ws,
-    compute_wald_split_c_ws,
 )
 from jamma.lmm.dispatch import DispatchPath
 
@@ -54,18 +51,6 @@ _ALL_RESULT_KEYS = (
     "p_lrts",
     "p_scores",
 )
-
-
-def _select_wald_fn(n_cvt: int):
-    """Return the C workspace Wald compute function appropriate for n_cvt.
-
-    Args:
-        n_cvt: Number of covariates.
-
-    Returns:
-        compute_wald_split_c_ws for n_cvt=1; compute_wald_general_c_ws for n_cvt>1.
-    """
-    return compute_wald_split_c_ws if n_cvt == 1 else compute_wald_general_c_ws
 
 
 def _guarded_compute(
@@ -149,8 +134,6 @@ def _compose_mode4_from_split(
 
 def dispatch_soa_split(
     lmm_mode: int,
-    use_fused_mode4: bool,
-    lmm_workspace: object | None,
     n_cvt: int,
     eigenvalues_np: np.ndarray,
     uab_var_soa: np.ndarray,
@@ -173,8 +156,6 @@ def dispatch_soa_split(
 
     Args:
         lmm_mode: 1=Wald, 2=LRT, 3=Score, 4=All.
-        use_fused_mode4: True when fused mode-4 C kernel is available.
-        lmm_workspace: C workspace capsule (None when unavailable).
         n_cvt: Number of covariates.
         eigenvalues_np: Kinship eigenvalues (n_samples,).
         uab_var_soa: SNP-varying Uab SoA (n_snps, n_var, n_samples).
@@ -191,32 +172,6 @@ def dispatch_soa_split(
     Returns:
         Dict of result arrays (keys depend on lmm_mode).
     """
-    if use_fused_mode4 and lmm_workspace is not None:
-        return compute_mode4_split_c_ws(lmm_workspace, uab_var_soa, n_threads)
-
-    if lmm_mode in (1, 4) and lmm_workspace is not None:
-        wald_fn = _select_wald_fn(n_cvt)
-        wald_cr = cast(
-            dict[str, np.ndarray], wald_fn(lmm_workspace, uab_var_soa, n_threads)
-        )
-        if lmm_mode == 1:
-            return wald_cr
-        return _compose_mode4_from_split(
-            wald_cr,
-            n_cvt,
-            eigenvalues_np,
-            uab_var_soa,
-            uab_invariant_soa,
-            n_samples,
-            Hi_eval_null=Hi_eval_null,
-            l_min=l_min,
-            l_max=l_max,
-            n_grid=n_grid,
-            n_refine=n_refine,
-            logl_H0=logl_H0,
-            n_threads=n_threads,
-        )
-
     if lmm_mode == 3:
         return _compute_score_split_numpy(
             n_cvt,
@@ -244,9 +199,9 @@ def dispatch_soa_split(
         )
 
     raise ValueError(
-        f"Unexpected lmm_mode={lmm_mode} in SoA split dispatch "
-        f"(workspace={lmm_workspace is not None}). "
-        f"Valid modes: 1 (Wald), 2 (LRT), 3 (Score), 4 (All, requires workspace)."
+        f"Unexpected lmm_mode={lmm_mode} in SoA split dispatch. This path serves "
+        f"n_cvt>=2 modes 2 (LRT) and 3 (Score); modes 1 and 4 take the fused "
+        f"general kernel."
     )
 
 
@@ -333,8 +288,6 @@ def _dispatch_compute(
             return _guarded_compute(
                 dispatch_soa_split,
                 ctx.lmm_mode,
-                False,  # no single-pass mode-4 split kernel is reachable
-                ctx.lmm_workspace,
                 ctx.n_cvt,
                 ctx.eigenvalues_np,
                 chunk_input,

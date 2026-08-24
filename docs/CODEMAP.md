@@ -265,8 +265,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:43](../src/jamma/lmm/runner_numpy.py#L43) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:141](../src/jamma/lmm/chunk_runner_numpy.py#L141) |
-| 4Nb | `_create_workspaces()` | Persistent C-workspace lifecycle | [chunk_workspaces.py:102](../src/jamma/lmm/chunk_workspaces.py#L102) |
-| 4Nb | `_dispatch_compute()` | Per-chunk C/Python kernel-selection ladder | [chunk_dispatch.py:282](../src/jamma/lmm/chunk_dispatch.py#L282) |
+| 4Nb | `_create_workspaces()` | Persistent C-workspace lifecycle | [chunk_workspaces.py:38](../src/jamma/lmm/chunk_workspaces.py#L38) |
+| 4Nb | `_dispatch_compute()` | Per-chunk C/Python kernel-selection ladder | [chunk_dispatch.py:237](../src/jamma/lmm/chunk_dispatch.py#L237) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:99](../src/jamma/lmm/chunk_pipeline.py#L99) |
 | 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:23](../src/jamma/lmm/chunk_sizing.py#L23) |
 | 4Nc | `create_lmm_workspace()` | Allocate reusable per-chunk Wald workspace (split C path) | [compute_numpy.py:274](../src/jamma/lmm/compute_numpy.py#L274) |

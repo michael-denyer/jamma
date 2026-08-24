@@ -11,7 +11,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal, TypedDict, cast, overload
+from typing import Literal, TypedDict, cast
+
+import numpy as np
 
 LmmMode = Literal[1, 2, 3, 4]
 
@@ -322,48 +324,62 @@ class LocoResult:
     pve_se: float | None = None
 
 
-class LazySnpMeta:
-    """Lazy view over PLINK metadata arrays, avoiding per-SNP dict materialization.
+@dataclass(frozen=True, slots=True)
+class SnpMeta:
+    """SNP metadata as one array per column, indexed by global SNP index.
 
-    Instead of building a list of n_snps dicts at construction time, this wrapper
-    holds references to the underlying metadata arrays and materializes a single
-    dict on each __getitem__ access. This saves O(n_snps) dict + string objects.
+    Writers and result builders slice these arrays directly; nothing
+    materialises a per-SNP dict. ``pos`` is normalised to int64 and ``chr``
+    to str at construction, so downstream formatting needs no coercion.
 
-    Compatible with all snp_info consumers that use integer indexing (snp_info[idx]).
-
-    Items are dicts with keys:
-        chr: Chromosome identifier (str).
-        rs: SNP identifier / rsID (str).
-        pos: Base-pair position (int).
-        a1: Minor allele (str).
-        a0: Major allele (str).
+    Attributes:
+        chr: Chromosome identifier per SNP (str).
+        rs: SNP identifier / rsID per SNP (str).
+        pos: Base-pair position per SNP (int64).
+        a1: Minor allele per SNP (str).
+        a0: Major allele per SNP (str).
     """
 
-    __slots__ = ("_a0", "_a1", "_chr", "_pos", "_rs")
+    chr: np.ndarray
+    rs: np.ndarray
+    pos: np.ndarray
+    a1: np.ndarray
+    a0: np.ndarray
 
-    def __init__(self, meta: dict) -> None:
-        self._chr = meta["chromosome"]
-        self._rs = meta["sid"]
-        self._pos = meta["bp_position"]
-        self._a1 = meta["allele_1"]
-        self._a0 = meta["allele_2"]
+    def __post_init__(self) -> None:
+        n = len(self.rs)
+        for name in ("chr", "pos", "a1", "a0"):
+            if len(getattr(self, name)) != n:
+                raise ValueError(
+                    f"SnpMeta columns must share one length; "
+                    f"{name} has {len(getattr(self, name))}, rs has {n}"
+                )
 
     def __len__(self) -> int:
-        return len(self._rs)
+        return len(self.rs)
 
-    @overload
-    def __getitem__(self, i: int) -> dict: ...
+    @classmethod
+    def from_plink_meta(cls, meta: dict) -> SnpMeta:
+        """Build from get_plink_metadata output without copying string data."""
+        return cls(
+            chr=np.asarray(meta["chromosome"]).astype(str),
+            rs=np.asarray(meta["sid"]),
+            pos=np.asarray(meta["bp_position"], dtype=np.int64),
+            a1=np.asarray(meta["allele_1"]),
+            a0=np.asarray(meta["allele_2"]),
+        )
 
-    @overload
-    def __getitem__(self, i: slice) -> list[dict]: ...
+    @classmethod
+    def from_dicts(cls, snp_info: list) -> SnpMeta:
+        """Parse a caller-supplied list of per-SNP dicts.
 
-    def __getitem__(self, i: int | slice) -> dict | list[dict]:
-        if isinstance(i, slice):
-            return [self[j] for j in range(*i.indices(len(self)))]
-        return {
-            "chr": str(self._chr[i]),
-            "rs": self._rs[i],
-            "pos": int(self._pos[i]),
-            "a1": self._a1[i],
-            "a0": self._a0[i],
-        }
+        The boundary for the public batch API. Requires the canonical keys
+        chr/rs/pos/a1/a0 on every dict; raises KeyError on the first miss.
+        """
+        return cls(
+            chr=np.array([str(s["chr"]) for s in snp_info]),
+            rs=np.array([s["rs"] for s in snp_info]),
+            pos=np.array([int(s["pos"]) for s in snp_info], dtype=np.int64),
+            a1=np.array([s["a1"] for s in snp_info]),
+            a0=np.array([s["a0"] for s in snp_info]),
+        )

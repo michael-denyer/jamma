@@ -31,6 +31,7 @@ from jamma.lmm.schema import (
     LmmConfig,
     LmmRunResult,
     RunnerTiming,
+    SnpMeta,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
@@ -103,6 +104,8 @@ def run_lmm_association_numpy(
     # schema.LmmMode is a loose int alias (kept loose to avoid a circular
     # import); the chunk engine wants the Literal.
     lmm_mode = config.lmm_mode
+
+    snp_meta = SnpMeta.from_dicts(snp_info)
 
     # Memory check before workflow (uses genotype shape, runner-specific)
     n_samples, n_snps = genotypes.shape
@@ -254,7 +257,7 @@ def run_lmm_association_numpy(
         if streaming:
             assert writer is not None
             _sink = make_writer_sink(
-                writer, lmm_mode, snp_info, snp_indices, filtered_afs, filtered_miss
+                writer, lmm_mode, snp_meta, snp_indices, filtered_afs, filtered_miss
             )
         else:
             _sink = _fill_arrays_sink
@@ -321,7 +324,7 @@ def run_lmm_association_numpy(
 
     assert arrays_out is not None
     associations = _build_results(
-        lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
+        lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_meta, arrays_out
     )
     return LmmRunResult(
         associations=associations,

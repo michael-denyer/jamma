@@ -20,7 +20,13 @@ from jamma.lmm.io import (
     format_assoc_line,
 )
 from jamma.lmm.results import _build_results
-from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, RESULT_FIELDS, LmmConfig
+from jamma.lmm.schema import (
+    FORMAT_COLUMNS,
+    HEADERS,
+    RESULT_FIELDS,
+    LmmConfig,
+    SnpMeta,
+)
 from jamma.lmm.stats import AssocResult
 
 # ---------------------------------------------------------------------------
@@ -113,11 +119,13 @@ class TestBuildResults:
             key: np.arange(n, dtype=np.float64) + 1.0 for key in RESULT_FIELDS[lmm_mode]
         }
 
-    def _make_snp_info(self, n: int = 3) -> list[dict]:
-        return [
-            {"chr": "1", "rs": f"rs{i}", "pos": i * 100, "a1": "A", "a0": "G"}
-            for i in range(n)
-        ]
+    def _make_snp_info(self, n: int = 3) -> SnpMeta:
+        return SnpMeta.from_dicts(
+            [
+                {"chr": "1", "rs": f"rs{i}", "pos": i * 100, "a1": "A", "a0": "G"}
+                for i in range(n)
+            ]
+        )
 
     @pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4])
     def test_correct_fields_populated(self, lmm_mode: int) -> None:
@@ -159,7 +167,9 @@ class TestBuildResults:
 
     def test_invalid_lmm_mode_raises_value_error(self) -> None:
         """Invalid lmm_mode should raise ValueError, not KeyError."""
-        snp = [{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}]
+        snp = SnpMeta.from_dicts(
+            [{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}]
+        )
         with pytest.raises(ValueError, match="Unknown lmm_mode"):
             _build_results(
                 99,

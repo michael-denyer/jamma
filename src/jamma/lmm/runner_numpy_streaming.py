@@ -37,9 +37,9 @@ from jamma.lmm.schema import (
     LmmConfig,
     LmmRunResult,
     RunnerTiming,
+    SnpMeta,
 )
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
-from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
@@ -130,9 +130,12 @@ def run_lmm_association_numpy_streaming(
     n_samples_total = meta["n_samples"]
     n_snps = meta["n_snps"]
 
-    # Caller-supplied list, or a lazy view over the PLINK metadata. Kept in its
-    # own local because the parameter is `list | None`, which is neither.
-    snp_meta: _LazySnpMeta | list = _LazySnpMeta(meta) if snp_info is None else snp_info
+    # Caller-supplied list, or the PLINK metadata, parsed once into columns.
+    snp_meta = (
+        SnpMeta.from_plink_meta(meta)
+        if snp_info is None
+        else SnpMeta.from_dicts(snp_info)
+    )
 
     # Validate inputs and apply sample filtering
     setup = validate_runner_inputs(

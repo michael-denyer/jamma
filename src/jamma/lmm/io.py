@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, LazySnpMeta, get_spec
+from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, SnpMeta, get_spec
 from jamma.lmm.stats import AssocResult
 
 # Retry backoff schedule (seconds) for transient write failures
@@ -27,8 +27,6 @@ _RETRYABLE_ERRNOS = frozenset(
     }
 )
 
-# Required keys in snp_info dicts (canonical keys from _LazySnpMeta)
-_REQUIRED_SNP_KEYS = frozenset({"chr", "rs", "pos", "a1", "a0"})
 
 # Convenience alias for direct import
 HEADER_WALD = HEADERS["wald"]
@@ -259,7 +257,7 @@ class IncrementalAssocWriter:
         self,
         lmm_mode: int,
         snp_indices: np.ndarray,
-        snp_info: LazySnpMeta | list,
+        snp_info: SnpMeta,
         afs: np.ndarray,
         miss_counts: np.ndarray,
         arrays: dict[str, np.ndarray],
@@ -273,10 +271,8 @@ class IncrementalAssocWriter:
 
         Args:
             lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All).
-            snp_indices: Global SNP indices for snp_info lookup.
-            snp_info: SNP metadata list (dict-like per element). Each element
-                must provide keys: chr, rs, pos, a1, a0 (not ps/allele1/allele0).
-                Typically a LazySnpMeta instance from the streaming runner.
+            snp_indices: Global SNP indices into snp_info's arrays.
+            snp_info: SNP metadata columns.
             afs: Allele frequencies, one per SNP in this batch.
             miss_counts: Missing counts, one per SNP in this batch.
             arrays: Stat arrays keyed by array_key names, same length.
@@ -325,40 +321,29 @@ class IncrementalAssocWriter:
         col_arrays = [arrays[c.array_key] for c in spec.stat_columns]
         col_fmts = [c.fmt for c in spec.stat_columns]
 
+        chrs = snp_info.chr[snp_indices]
+        rss = snp_info.rs[snp_indices]
+        poss = snp_info.pos[snp_indices]
+        a1s = snp_info.a1[snp_indices]
+        a0s = snp_info.a0[snp_indices]
+
         lines: list[str] = []
         for j in range(n):
-            snp = snp_info[int(snp_indices[j])]
-            # Spot-check first SNP only — validates key schema once per batch
-            # rather than paying dict key-set check cost on every row.
-            if j == 0:
-                missing_snp_keys = _REQUIRED_SNP_KEYS - set(snp.keys())
-                if missing_snp_keys:
-                    raise KeyError(
-                        f"snp_info dict missing required keys: {missing_snp_keys}. "
-                        f"Expected: {_REQUIRED_SNP_KEYS}, got: {set(snp.keys())}"
-                    )
+            prefix = (
+                f"{chrs[j]}\t"
+                f"{rss[j]}\t"
+                f"{poss[j]}\t"
+                f"{int(miss_counts[j])}\t"
+                f"{a1s[j]}\t"
+                f"{a0s[j]}\t"
+                f"{float(afs[j]):.3f}"
+            )
 
-            try:
-                prefix = (
-                    f"{snp['chr']}\t"
-                    f"{snp['rs']}\t"
-                    f"{snp['pos']}\t"
-                    f"{int(miss_counts[j])}\t"
-                    f"{snp['a1']}\t"
-                    f"{snp['a0']}\t"
-                    f"{float(afs[j]):.3f}"
-                )
-
-                stats = "\t".join(
-                    f"{float(arr[j]):{fmt}}"
-                    for arr, fmt in zip(col_arrays, col_fmts, strict=True)
-                )
-                lines.append(f"{prefix}\t{stats}")
-            except KeyError as exc:
-                raise KeyError(
-                    f"snp_info[{int(snp_indices[j])}] missing key at "
-                    f"batch position j={j}: {exc}"
-                ) from exc
+            stats = "\t".join(
+                f"{float(arr[j]):{fmt}}"
+                for arr, fmt in zip(col_arrays, col_fmts, strict=True)
+            )
+            lines.append(f"{prefix}\t{stats}")
 
         self._write_buf("\n".join(lines) + "\n", n)
 

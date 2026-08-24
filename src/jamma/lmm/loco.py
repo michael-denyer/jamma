@@ -68,9 +68,9 @@ from jamma.lmm.results import make_result_list_sink, make_writer_sink
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     TEST_TYPE_MAP,
-    LazySnpMeta,
     LmmConfig,
     LocoResult,
+    SnpMeta,
 )
 from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
@@ -299,8 +299,8 @@ def run_lmm_loco(
             f"  Analyzed individuals: {n_valid:,} ({n_filtered_samples} filtered)"
         )
 
-    # Build SNP metadata for result construction (lazy -- no upfront dict allocation)
-    snp_info = LazySnpMeta(meta)
+    # Build SNP metadata columns for result construction
+    snp_info = SnpMeta.from_plink_meta(meta)
 
     test_type = TEST_TYPE_MAP[lmm_mode]
 
@@ -536,7 +536,7 @@ def _run_lmm_for_chromosome_numpy(
     eigenvectors: np.ndarray,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None,
-    snp_info: LazySnpMeta | list,
+    snp_info: SnpMeta,
     valid_mask: np.ndarray,
     config: LmmConfig,
     col_chunk_size: int,
@@ -559,7 +559,7 @@ def _run_lmm_for_chromosome_numpy(
         eigenvectors: Eigenvectors from LOCO kinship eigendecomp.
         phenotypes: Phenotype vector (n_valid_samples,), already filtered.
         covariates: Covariate matrix (n_valid_samples, n_cvt) or None.
-        snp_info: Full SNP metadata view (indexed by global SNP index).
+        snp_info: SNP metadata columns (indexed by global SNP index).
         valid_mask: Boolean mask for valid samples (for genotype subsetting).
         config: Filter thresholds, test type, lambda bounds and grid. Whatever
             run_lmm_loco was given, unchanged.

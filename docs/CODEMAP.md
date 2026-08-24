@@ -197,9 +197,9 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:20](../src/jamma/io/covariate.py#L20) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L45) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L97) |
-| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:96](../src/jamma/lmm/io.py#L96) |
-| 2d | `format_assoc_line()` | Table-driven output row formatting | [lmm/io.py:37](../src/jamma/lmm/io.py#L37) |
-| 2d | `write_assoc_results()` | Batch write from list | [lmm/io.py:77](../src/jamma/lmm/io.py#L77) |
+| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:94](../src/jamma/lmm/io.py#L94) |
+| 2d | `format_assoc_line()` | Table-driven output row formatting | [lmm/io.py:35](../src/jamma/lmm/io.py#L35) |
+| 2d | `write_assoc_results()` | Batch write from list | [lmm/io.py:75](../src/jamma/lmm/io.py#L75) |
 | 2e | `read_snp_list_file()` | Parse SNP list file (one RS ID per line) | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2e | `resolve_snp_list_to_indices()` | Map SNP IDs to dataset indices | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2f | `read_eigen_files()` | Load eigenvalue/eigenvector files (auto-detects `.npy` or `.txt`) | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
@@ -263,7 +263,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_numpy()` | Vectorized Wald: REML optimize -> beta, SE, p_wald | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:40](../src/jamma/lmm/runner_numpy.py#L40) |
+| 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:41](../src/jamma/lmm/runner_numpy.py#L41) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:309](../src/jamma/lmm/chunk_runner_numpy.py#L309) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:127](../src/jamma/lmm/chunk_runner_numpy.py#L127) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:48](../src/jamma/lmm/chunk_kernel.py#L48) |
@@ -279,10 +279,10 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:53](../src/jamma/lmm/runner_numpy_streaming.py#L53) |
 | 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:115](../src/jamma/lmm/runner.py#L100) |
-| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:86](../src/jamma/lmm/schema.py#L86) |
-| 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:112](../src/jamma/lmm/schema.py#L112) |
-| 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:56](../src/jamma/lmm/results.py#L56) |
-| 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:188](../src/jamma/lmm/results.py#L188) |
+| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:88](../src/jamma/lmm/schema.py#L88) |
+| 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:114](../src/jamma/lmm/schema.py#L114) |
+| 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:34](../src/jamma/lmm/results.py#L34) |
+| 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:179](../src/jamma/lmm/results.py#L179) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:173](../src/jamma/lmm/loco.py#L173) |
 
 ---
@@ -567,7 +567,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | Wald/Score/LRT tests | [stats.py:99](../src/jamma/lmm/stats.py#L99) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
-| Output schema | [lmm/schema.py:86](../src/jamma/lmm/schema.py#L86) |
+| Output schema | [lmm/schema.py:88](../src/jamma/lmm/schema.py#L88) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | NumPy streaming runner | [runner_numpy_streaming.py](../src/jamma/lmm/runner_numpy_streaming.py) |
 | Shared NumPy chunk-loop orchestrator | [chunk_runner_numpy.py](../src/jamma/lmm/chunk_runner_numpy.py) |
@@ -580,7 +580,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | LOCO config and artifact naming | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
-| Result writer | [lmm/io.py:96](../src/jamma/lmm/io.py#L96) |
+| Result writer | [lmm/io.py:94](../src/jamma/lmm/io.py#L94) |
 | Memory estimation | [memory.py:304](../src/jamma/core/memory.py#L304) |
 | Threading | [threading.py:43](../src/jamma/core/threading.py#L43) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |

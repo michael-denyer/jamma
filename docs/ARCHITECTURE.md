@@ -77,7 +77,7 @@ A typical LMM association run proceeds as follows:
 | `LmmRunResult` | `src/jamma/lmm/schema.py` | Return type for all runners; bundles association list, PVE estimate, and SNP count |
 | `AssocResult` | `src/jamma/lmm/stats.py` | Per-SNP association result dataclass matching GEMMA's output columns |
 | `MODE_SPECS` / `ModeSpec` | `src/jamma/lmm/schema.py` | Single source of truth mapping `lmm_mode` integers to output column definitions, headers, and format strings |
-| `LazySnpMeta` | `src/jamma/lmm/schema.py` | Lazy view over PLINK metadata arrays; materialises per-SNP dicts on access to avoid O(n_snps) object allocation |
+| `SnpMeta` | `src/jamma/lmm/schema.py` | SNP metadata as one array per column; writers and result builders slice arrays directly, no per-SNP dicts |
 | `PlinkData` | `src/jamma/io/plink.py` | Container for loaded PLINK binary data (genotypes, sample IDs, SNP IDs, positions, alleles) |
 | `ToleranceConfig` | `src/jamma/validation/tolerances.py` | Configurable tolerance thresholds for GEMMA numerical comparisons, calibrated from formal error propagation |
 
@@ -110,7 +110,7 @@ src/jamma/
 │   ├── _compile_jlinalg.py # Dev-mode C extension compiler (CI + local)
 │   └── src/                # C sources for _jlinalg extension (BLAS dispatch, LAPACK)
 ├── lmm/                    # LMM association subsystem
-│   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, AssocResult, LazySnpMeta
+│   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, AssocResult, SnpMeta
 │   ├── likelihood.py       # REML/MLE log-likelihood; Pab recursion; golden section search
 │   ├── likelihood_numpy.py # NumPy-vectorised Uab batch computation
 │   ├── stats.py            # Wald/LRT/Score test statistic computation

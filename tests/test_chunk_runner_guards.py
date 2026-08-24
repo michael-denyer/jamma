@@ -94,8 +94,6 @@ def _dispatch_soa_split_args(**overrides):
     n_samples = 4
     base = {
         "lmm_mode": 4,
-        "use_fused_mode4": False,
-        "lmm_workspace": None,
         "n_cvt": 1,
         "eigenvalues_np": np.ones(n_samples),
         "uab_var_soa": np.ones((2, 3, n_samples)),
@@ -114,15 +112,11 @@ def _dispatch_soa_split_args(**overrides):
 
 
 @pytest.mark.tier0
-def test_dispatch_soa_split_mode4_without_workspace_raises():
-    with pytest.raises(ValueError, match="Unexpected lmm_mode=4"):
-        dispatch_soa_split(**_dispatch_soa_split_args(lmm_mode=4, lmm_workspace=None))
-
-
-@pytest.mark.tier0
-def test_dispatch_soa_split_unknown_mode_raises():
-    with pytest.raises(ValueError, match="Unexpected lmm_mode=99"):
-        dispatch_soa_split(**_dispatch_soa_split_args(lmm_mode=99))
+def test_dispatch_soa_split_rejects_modes_it_cannot_serve():
+    """Only modes 2 and 3 reach this path; 1 and 4 take the fused general kernel."""
+    for mode in (1, 4, 99):
+        with pytest.raises(ValueError, match=f"Unexpected lmm_mode={mode}"):
+            dispatch_soa_split(**_dispatch_soa_split_args(lmm_mode=mode))
 
 
 @pytest.mark.tier0

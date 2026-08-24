@@ -12,79 +12,15 @@ from __future__ import annotations
 from typing import Any, NamedTuple, assert_never, cast
 
 import numpy as np
-from loguru import logger
 
-from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import (
     LmmMode,
-    create_lmm_workspace,
     create_lmm_workspace_fused,
     create_lmm_workspace_fused_general,
-    create_lmm_workspace_general,
     create_lmm_workspace_mode4_fused,
     create_lmm_workspace_mode4_fused_general,
 )
 from jamma.lmm.dispatch import DispatchPath
-
-
-def _create_wald_workspace_for_ncvt(
-    n_cvt: int,
-    eigenvalues: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    n_threads: int,
-) -> object:
-    """Create the appropriate C Wald workspace for any n_cvt.
-
-    Dispatches to create_lmm_workspace (split, n_cvt=1) or
-    create_lmm_workspace_general (general, n_cvt>1). Returns None if the
-    required C extension is unavailable.
-
-    Args:
-        n_cvt: Number of covariates.
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_invariant_soa: Invariant Uab SoA array (n_inv, n_samples).
-        n_samples: Number of samples.
-        l_min: Minimum lambda.
-        l_max: Maximum lambda.
-        n_grid: Coarse grid resolution.
-        n_refine: Golden section iterations.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        C PyCapsule workspace, or None if extension unavailable.
-    """
-    if n_cvt == 1:
-        return create_lmm_workspace(
-            eigenvalues,
-            uab_invariant_soa,
-            n_samples,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            n_threads,
-        )
-    if compute_numpy._accel is not None:
-        return create_lmm_workspace_general(
-            eigenvalues,
-            uab_invariant_soa,
-            n_samples,
-            n_cvt,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            n_threads,
-        )
-    logger.debug(
-        "Wald workspace unavailable for n_cvt={} (general C extension missing)", n_cvt
-    )
-    return None
 
 
 class _Workspaces(NamedTuple):
@@ -216,18 +152,10 @@ def _create_workspaces(
                 **null_model_kwargs,
             )
         case DispatchPath.SOA_SPLIT:
-            if lmm_mode in (1, 4):
-                lmm_workspace = _create_wald_workspace_for_ncvt(
-                    n_cvt,
-                    eigenvalues_np,
-                    uab_invariant,
-                    n_samples,
-                    l_min,
-                    l_max,
-                    n_grid,
-                    n_refine,
-                    n_threads,
-                )
+            # Reached only for n_cvt>=2 modes 2 and 3, which compute per
+            # chunk with no persistent workspace. Modes 1 and 4 at that
+            # covariate count take the fused general kernel.
+            pass
         case DispatchPath.FUSED_SCORE_WS:
             from jamma.lmm.compute_numpy import _c
 

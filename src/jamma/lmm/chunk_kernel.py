@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, assert_never, cast
+from typing import Any, assert_never
 
 import numpy as np
 
@@ -128,60 +128,36 @@ class RunInvariants:
 
 @dataclass(frozen=True)
 class Kernel:
-    """One dispatch path's persistent state bound to the call that uses it.
+    """One dispatch path's persistent state, bound to the call that uses it.
 
-    ``workspace`` is held only to keep the PyCapsule alive for as long as
-    ``call`` can be invoked; nothing reads it. It is None for the two paths
-    that compute a chunk outright.
+    The path's workspace, where it has one, is captured by ``call``, so the
+    PyCapsule lives exactly as long as the kernel that can invoke it.
     """
 
     label: str
     n_filtered: int
     call: Callable[[np.ndarray, int], KernelResult]
-    workspace: object | None = None
 
     def compute_chunk(
         self, chunk_data: np.ndarray, n_threads: int, write_offset: int
     ) -> KernelResult:
         """Run one prepared chunk, labelling any failure with its SNP offset.
 
-        MemoryError, ValueError, TypeError, and OverflowError propagate
-        unchanged. Everything else (including OSError, which models a C-kernel
-        segfault) is wrapped so the message names the operation and the offset.
+        MemoryError, ValueError, TypeError, and OverflowError already say what
+        went wrong, so they propagate untouched. Everything else, including the
+        OSError that models a C-kernel segfault, is wrapped so the message names
+        the kernel and how far the run had got.
         """
-        return _guarded_compute(
-            self.call,
-            chunk_data,
-            n_threads,
-            operation=self.label,
-            write_offset=write_offset,
-            n_filtered=self.n_filtered,
-        )
-
-
-def _guarded_compute(
-    fn: Callable[..., Any],
-    *args: object,
-    operation: str,
-    write_offset: int,
-    n_filtered: int,
-    **kwargs: object,
-) -> KernelResult:
-    """Call *fn* with error wrapping that identifies the failed operation.
-
-    Extra positional and keyword arguments are forwarded to *fn*;
-    *operation*, *write_offset*, and *n_filtered* are consumed by the wrapper.
-    """
-    try:
-        return cast(KernelResult, fn(*args, **kwargs))
-    except (MemoryError, ValueError, TypeError, OverflowError):
-        raise
-    except Exception as exc:
-        raise RuntimeError(
-            f"{operation} failed at SNP offset "
-            f"{write_offset}/{n_filtered}. "
-            f"Processed {write_offset} SNPs before failure."
-        ) from exc
+        try:
+            return self.call(chunk_data, n_threads)
+        except (MemoryError, ValueError, TypeError, OverflowError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                f"{self.label} failed at SNP offset "
+                f"{write_offset}/{self.n_filtered}. "
+                f"Processed {write_offset} SNPs before failure."
+            ) from exc
 
 
 def make_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
@@ -236,7 +212,6 @@ def _fused_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         label=label,
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
-        workspace=workspace,
     )
 
 
@@ -281,7 +256,6 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         label=label,
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
-        workspace=workspace,
     )
 
 
@@ -301,7 +275,6 @@ def _score_ws_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         label="Fused Score WS dispatch",
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
-        workspace=workspace,
     )
 
 
@@ -325,7 +298,6 @@ def _lrt_ws_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         label="Fused LRT WS dispatch",
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
-        workspace=workspace,
     )
 
 

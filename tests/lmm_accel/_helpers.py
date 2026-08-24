@@ -237,6 +237,18 @@ def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> WaldResult:
         compute_numpy._accel = orig
 
 
+def _fused_inputs_from_uab_ncvt1(Uab_batch):
+    """Recover (w, Uty, utg_t) from an n_cvt=1 Uab batch.
+
+    The fused kernels build Uab from the rotated vectors themselves, so a
+    fixture that hands over a prebuilt Uab has to be inverted. Column layout is
+    0=ww, 1=wx, 2=wy, 3=xx, 4=xy, 5=yy, and this package's fixtures build every
+    column from a positive w, so the recovery is exact.
+    """
+    w = np.sqrt(Uab_batch[0, :, 0])
+    return w, Uab_batch[0, :, 2] / w, np.ascontiguousarray(Uab_batch[:, :, 1] / w)
+
+
 def _null_model_ncvt1(eigenvalues, w, Uty):
     """Fit the n_cvt=1 null model, returning (Hi_eval_null, logl_H0).
 

@@ -22,6 +22,7 @@ from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
     golden_section_optimize_lambda_mle_numpy,
 )
+from tests.lmm_accel._helpers import _null_model_ncvt1
 
 _C_RTOL = 1e-11
 _C_ATOL = 1e-14
@@ -367,6 +368,64 @@ class TestLrtWorkspaceParity:
             _numpy_lrt_reference(w, Uty, utg_t2, eigenvalues, logl_H0, 5),
             "LRT workspace chunk2",
         )
+
+    @pytest.mark.tier0
+    @pytest.mark.skipif(
+        not _lrt_fused_ws_available,
+        reason="LRT fused workspace C not available",
+    )
+    def test_lrt_workspace_degenerate_snps(self, lrt_ws_data):
+        """A constant genotype carries no signal, so its p_lrt sits at 1.
+
+        lambda_mle is left unasserted: with the likelihood flat, its argmin is
+        not determined.
+        """
+        from jamma.lmm.compute_numpy import _c
+
+        (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
+
+        utg_degen = utg_t.copy()
+        utg_degen[0, :] = 0.0
+
+        # The real null log-likelihood, not the module's stand-in constant: a
+        # p_lrt value is only interpretable against the model it is testing.
+        _, logl_H0 = _null_model_ncvt1(eigenvalues, w, Uty)
+
+        ws = _c().create_workspace_lrt_fused_c(
+            w, Uty, eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, logl_H0, 1
+        )
+        result = _c().compute_lrt_fused_ws_c(ws, utg_degen, 1)
+
+        assert result["p_lrts"][0] >= 0.99, (
+            f"degenerate SNP p_lrt={result['p_lrts'][0]}, expected near 1"
+        )
+        assert np.all(np.isfinite(result["p_lrts"][1:])), (
+            "non-degenerate p_lrts should be finite"
+        )
+
+    @pytest.mark.tier0
+    @pytest.mark.skipif(
+        not _lrt_fused_ws_available,
+        reason="LRT fused workspace C not available",
+    )
+    def test_lrt_workspace_multithreaded(self, lrt_ws_data):
+        """LRT is bitwise deterministic across thread counts."""
+        from jamma.lmm.compute_numpy import _c
+
+        (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
+
+        ws = _c().create_workspace_lrt_fused_c(
+            w, Uty, eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 5, -150.0, 1
+        )
+        single = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
+        multi = _c().compute_lrt_fused_ws_c(ws, utg_t, 2)
+
+        for key in ("lambdas_mle", "p_lrts"):
+            np.testing.assert_array_equal(
+                single[key],
+                multi[key],
+                err_msg=f"LRT {key}: 2-thread vs 1-thread mismatch",
+            )
 
     @pytest.mark.tier0
     @pytest.mark.skipif(

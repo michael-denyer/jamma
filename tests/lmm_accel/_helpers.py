@@ -237,6 +237,27 @@ def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> WaldResult:
         compute_numpy._accel = orig
 
 
+def _null_model_ncvt1(eigenvalues, w, Uty):
+    """Fit the n_cvt=1 null model, returning (Hi_eval_null, logl_H0).
+
+    The null model is the same Uab with the genotype columns zeroed. An LRT
+    p-value is only interpretable against the real logl_H0, so any test that
+    asserts a p_lrt value rather than comparing two implementations needs this
+    rather than a stand-in constant.
+    """
+    n_samples = eigenvalues.shape[0]
+    Uab_null = np.zeros((1, n_samples, 6), dtype=np.float64)
+    Uab_null[0, :, 0] = w * w
+    Uab_null[0, :, 2] = w * Uty
+    Uab_null[0, :, 5] = Uty * Uty
+
+    lambdas_null, logls_null = golden_section_optimize_lambda_mle_numpy(
+        1, eigenvalues, Uab_null, l_min=1e-5, l_max=1e5, n_grid=50, n_iter=20
+    )
+    lambda_null = float(lambdas_null[0])
+    return 1.0 / (lambda_null * eigenvalues + 1.0), float(logls_null[0])
+
+
 def _numpy_ncvt1_score(w, Uty, utg_t, Hi_eval_null, n_samples) -> dict:
     """NumPy Score statistics for the fused kernel's n_cvt=1 inputs."""
     betas, ses, p_scores = batch_calc_score_stats_numpy(

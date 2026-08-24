@@ -58,8 +58,17 @@ def synthetic_data():
 
 
 @pytest.mark.tier0
-def testcompute_lmm_chunk_numpy_all_modes(synthetic_data):
-    """compute_lmm_chunk_numpy must return non-None expected keys for each mode."""
+def testcompute_lmm_chunk_numpy_all_modes(synthetic_data, monkeypatch):
+    """compute_lmm_chunk_numpy must return non-None expected keys for each mode.
+
+    The extension is cleared because this function is the full-Uab NumPy path,
+    and the runner reaches it only on NUMPY_FALLBACK, which is selected only
+    when the extension is absent.
+    """
+    from jamma.lmm import compute_numpy as cn
+
+    monkeypatch.setattr(cn, "_accel", None)
+
     eigenvalues, UtW, Uty, UtG = synthetic_data
     n_samples = eigenvalues.shape[0]
 
@@ -1744,53 +1753,6 @@ def test_reconstruct_uab_from_soa_ncvt4():
 
 
 @pytest.mark.tier0
-def test_compute_score_numpy_ncvt2_uses_c_path(synthetic_data):
-    """_compute_score_numpy dispatches to C general path for n_cvt=2.
-
-    Verifies C general path is called, not Python fallback.
-    Skipped gracefully when general C function is not available.
-    """
-    from unittest.mock import patch
-
-    from jamma.lmm import compute_numpy as cn
-    from jamma.lmm.compute_numpy import _compute_score_numpy
-
-    if cn._accel is None:
-        pytest.skip("compute_score_batch_general_c not available")
-
-    eigenvalues, UtW_ncvt1, Uty, UtG = synthetic_data
-    n_samples = len(eigenvalues)
-    n_cvt = 2
-    UtW = np.column_stack([UtW_ncvt1, Uty])  # add second covariate
-
-    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
-    lambda_null = 0.1
-    Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
-
-    call_log: list[str] = []
-
-    original_fn = cn._accel.compute_score_batch_general_c
-
-    def spy_general(*args, **kwargs):
-        call_log.append("general_c")
-        return original_fn(*args, **kwargs)
-
-    with patch.object(
-        cn._accel, "compute_score_batch_general_c", side_effect=spy_general
-    ):
-        _compute_score_numpy(n_cvt, eigenvalues, Hi_eval_null, Uab_batch, n_samples)
-
-    assert "general_c" in call_log, (
-        "_compute_score_numpy did not reach the general C kernel for n_cvt=2"
-    )
-
-
-# ---------------------------------------------------------------------------
-# General n_cvt vectorized Uab parity tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.tier0
 @pytest.mark.parametrize("n_cvt", [2, 3, 4])
 def test_vectorized_general_uab_parity(n_cvt):
     """Vectorized _batch_compute_uab_general_numpy matches reference per-SNP loop."""
@@ -1915,50 +1877,6 @@ def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
         atol=1e-14,
         err_msg=f"batch_compute_uab_varying_soa_numpy general (n_cvt={n_cvt}) mismatch",
     )
-
-
-@pytest.mark.tier0
-def test_compute_lrt_numpy_ncvt2_uses_c_path(synthetic_data):
-    """_compute_lrt_numpy dispatches to C general path for n_cvt=2.
-
-    Verifies C general path is called, not Python fallback.
-    Skipped gracefully when general C function is not available.
-    """
-    from unittest.mock import patch
-
-    from jamma.lmm import compute_numpy as cn
-    from jamma.lmm.compute_numpy import _compute_lrt_numpy
-
-    if cn._accel is None:
-        pytest.skip("compute_lrt_batch_general_c not available")
-
-    eigenvalues, UtW_ncvt1, Uty, UtG = synthetic_data
-    n_cvt = 2
-    UtW = np.column_stack([UtW_ncvt1, Uty])
-
-    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
-    logl_H0 = -30.0
-
-    call_log: list[str] = []
-    original_fn = cn._accel.compute_lrt_batch_general_c
-
-    def spy_general(*args, **kwargs):
-        call_log.append("general_c")
-        return original_fn(*args, **kwargs)
-
-    with patch.object(
-        cn._accel, "compute_lrt_batch_general_c", side_effect=spy_general
-    ):
-        _compute_lrt_numpy(n_cvt, eigenvalues, Uab_batch, 1e-5, 1e5, 50, 20, logl_H0)
-
-    assert "general_c" in call_log, (
-        "_compute_lrt_numpy did not reach the general C kernel for n_cvt=2"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Shape validation guard tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.tier0

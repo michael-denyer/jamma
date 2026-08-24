@@ -1,12 +1,23 @@
-"""Parity tests for SoA-native Score/LRT dispatch vs full-Uab equivalents.
+"""Parity tests for SoA-native Score/LRT dispatch against the full-Uab path.
 
-Validates that the split SoA C kernels produce identical results to the
-full-Uab batch C kernels, ensuring that eliminating reconstruct_uab_from_soa
-in the runner paths does not change computed statistics.
+The runner feeds the SoA split kernels directly rather than reconstructing a
+full Uab per chunk. These check on real data that dropping that reconstruction
+does not change the statistics.
+
+Run at n_cvt=2, which is where ``DispatchPath.SOA_SPLIT`` is actually selected:
+modes 2 and 3 at n_cvt=1 take the fused workspace kernels instead, so the
+n_cvt=1 branches inside _compute_score_split_numpy and _compute_lrt_split_numpy
+are unreachable and this file used to exercise only those.
+
+The reference is the NumPy full-Uab path, not its C sibling. The C full-Uab
+kernels compute_score_batch_general_c and compute_lrt_batch_general_c are
+themselves unreachable, so pointing at them would have compared one dead kernel
+against another the moment the live subject changed.
 """
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +34,29 @@ from jamma.lmm.likelihood_numpy import (
     compute_uab_invariant_soa,
 )
 
+
+@contextlib.contextmanager
+def _numpy_only():
+    """Hold the extension out, so the full-Uab helpers take their NumPy path.
+
+    They consult compute_numpy._accel at call time and take a C branch when it
+    is set, so the attribute has to be cleared rather than an argument changed.
+    """
+    orig = compute_numpy._accel
+    compute_numpy._accel = None
+    try:
+        yield
+    finally:
+        compute_numpy._accel = orig
+
+
 pytestmark = pytest.mark.tier0
+
+# C against NumPy rather than C against C, so the bound is set by accumulation
+# order over 1940 samples rather than by two orderings of the same code.
+# Measured worst case on this fixture is 5.1e-9, on the Score p-values of the
+# batch that carries the degenerate SNPs.
+_C_VS_NUMPY_RTOL = 1e-7
 
 # ---------------------------------------------------------------------------
 # Fixture paths
@@ -48,7 +81,8 @@ def mouse_data():
     K = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
 
     n_samples = genotypes.shape[0]
-    n_cvt = 1
+    # n_cvt=2, because SOA_SPLIT is only selected for n_cvt>=2.
+    n_cvt = 2
 
     # Eigendecomposition
     eigenvalues, U = np.linalg.eigh(K)
@@ -60,8 +94,9 @@ def mouse_data():
         n_samples
     )
 
-    # Build intercept-only covariate matrix
-    W = np.ones((n_samples, 1))
+    # Intercept plus one covariate, so the SoA split has a genuine invariant
+    # block to keep separate from the varying one.
+    W = np.column_stack([np.ones(n_samples), rng.standard_normal(n_samples)])
     UtW = U.T @ W
     Uty = U.T @ phenotypes
 
@@ -111,15 +146,16 @@ class TestScoreSplitParity:
         from jamma.lmm.compute_numpy import _compute_score_split_numpy
 
         d = mouse_data
-        # Full-Uab path
-        full_result = _compute_score_numpy(
-            d["n_cvt"],
-            d["eigenvalues"],
-            d["Hi_eval_null"],
-            d["Uab_batch"],
-            d["n_samples"],
-            n_threads=1,
-        )
+        # Full-Uab reference, via NumPy
+        with _numpy_only():
+            full_result = _compute_score_numpy(
+                d["n_cvt"],
+                d["eigenvalues"],
+                d["Hi_eval_null"],
+                d["Uab_batch"],
+                d["n_samples"],
+                n_threads=1,
+            )
 
         # SoA split path
         split_result = _compute_score_split_numpy(
@@ -135,19 +171,19 @@ class TestScoreSplitParity:
         np.testing.assert_allclose(
             split_result["betas"],
             full_result["betas"],
-            rtol=1e-12,
+            rtol=_C_VS_NUMPY_RTOL,
             err_msg="Score split betas differ from full-Uab",
         )
         np.testing.assert_allclose(
             split_result["ses"],
             full_result["ses"],
-            rtol=1e-12,
+            rtol=_C_VS_NUMPY_RTOL,
             err_msg="Score split ses differ from full-Uab",
         )
         np.testing.assert_allclose(
             split_result["p_scores"],
             full_result["p_scores"],
-            rtol=1e-12,
+            rtol=_C_VS_NUMPY_RTOL,
             err_msg="Score split p_scores differ from full-Uab",
         )
 
@@ -164,18 +200,19 @@ class TestLrtSplitParity:
         l_min, l_max = 1e-5, 1e5
         n_grid, n_refine = 50, 20
 
-        # Full-Uab path
-        full_result = _compute_lrt_numpy(
-            d["n_cvt"],
-            d["eigenvalues"],
-            d["Uab_batch"],
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            d["logl_H0"],
-            n_threads=1,
-        )
+        # Full-Uab reference, via NumPy
+        with _numpy_only():
+            full_result = _compute_lrt_numpy(
+                d["n_cvt"],
+                d["eigenvalues"],
+                d["Uab_batch"],
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                d["logl_H0"],
+                n_threads=1,
+            )
 
         # SoA split path
         split_result = _compute_lrt_split_numpy(
@@ -241,7 +278,8 @@ def degenerate_data(mouse_data):
     )
     geno_with_degen = np.column_stack([geno_subset, const_cols])
 
-    W = np.ones((n_samples, 1))
+    rng = np.random.default_rng(42)
+    W = np.column_stack([np.ones(n_samples), rng.standard_normal(n_samples)])
     UtW = U.T @ W
     Uty = U.T @ (
         K @ np.random.default_rng(42).standard_normal(n_samples) * 0.5
@@ -249,7 +287,7 @@ def degenerate_data(mouse_data):
     )
     UtG = U.T @ geno_with_degen
 
-    n_cvt = 1
+    n_cvt = 2
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
     uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
@@ -279,14 +317,15 @@ class TestDegenerateSplitParity:
         from jamma.lmm.compute_numpy import _compute_score_split_numpy
 
         d = degenerate_data
-        full_result = _compute_score_numpy(
-            d["n_cvt"],
-            d["eigenvalues"],
-            d["Hi_eval_null"],
-            d["Uab_batch"],
-            d["n_samples"],
-            n_threads=1,
-        )
+        with _numpy_only():
+            full_result = _compute_score_numpy(
+                d["n_cvt"],
+                d["eigenvalues"],
+                d["Hi_eval_null"],
+                d["Uab_batch"],
+                d["n_samples"],
+                n_threads=1,
+            )
         split_result = _compute_score_split_numpy(
             d["n_cvt"],
             d["eigenvalues"],
@@ -302,8 +341,8 @@ class TestDegenerateSplitParity:
         np.testing.assert_allclose(
             split_result["p_scores"][:n],
             full_result["p_scores"][:n],
-            rtol=1e-12,
-            err_msg="Score normal SNPs: split vs batch mismatch",
+            rtol=_C_VS_NUMPY_RTOL,
+            err_msg="Score normal SNPs: split vs full-Uab mismatch",
         )
 
         # Degenerate SNPs must be NaN in both paths
@@ -322,17 +361,18 @@ class TestDegenerateSplitParity:
         l_min, l_max = 1e-5, 1e5
         n_grid, n_refine = 50, 20
 
-        full_result = _compute_lrt_numpy(
-            d["n_cvt"],
-            d["eigenvalues"],
-            d["Uab_batch"],
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            d["logl_H0"],
-            n_threads=1,
-        )
+        with _numpy_only():
+            full_result = _compute_lrt_numpy(
+                d["n_cvt"],
+                d["eigenvalues"],
+                d["Uab_batch"],
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                d["logl_H0"],
+                n_threads=1,
+            )
         split_result = _compute_lrt_split_numpy(
             d["n_cvt"],
             d["eigenvalues"],

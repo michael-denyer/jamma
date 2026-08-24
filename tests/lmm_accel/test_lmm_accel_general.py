@@ -10,13 +10,14 @@ import pytest
 from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import (
     compute_lmm_chunk_numpy,
-    compute_wald_general_c_ws,
-    compute_wald_split_c_ws,
-    create_lmm_workspace,
-    create_lmm_workspace_general,
+    compute_wald_fused_c_ws,
+    compute_wald_fused_general_c_ws,
+    create_lmm_workspace_fused,
 )
 from jamma.lmm.schema import LmmConfig
 from tests.lmm_accel._helpers import (
+    _fused_general_workspace,
+    _prepare_fused_general_data,
     _run_general_ncvt_c_vs_python,
 )
 
@@ -49,56 +50,30 @@ def test_general_ncvt_reml_wald_ncvt4(
 )
 def test_general_ncvt_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """C-GEN-02: Workspace create/compute/destroy cycle works for n_cvt>1."""
-    from jamma.lmm.likelihood import classify_uab_columns
+    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
+    utg_t = data["utg_t"]
+    n_snps = utg_t.shape[0]
 
-    data = synthetic_covariate_data_ncvt2
-    n_cvt = data["n_cvt"]
-    eigenvalues = data["eigenvalues"]
-    Uab_batch = data["Uab_batch"]
-    n_samples = data["n_samples"]
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    # a[0, :, list_idx] -> (n_inv, n_samples) due to numpy advanced indexing
-    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-    uab_var_soa = np.ascontiguousarray(
-        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
-    )
-
-    # Create workspace
-    ws = create_lmm_workspace_general(
-        eigenvalues,
-        uab_inv_soa,
-        n_samples,
-        n_cvt,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
+    ws = _fused_general_workspace(data)
     assert ws is not None
 
-    # Compute first chunk
-    mid = Uab_batch.shape[0] // 2
-    r1 = compute_wald_general_c_ws(ws, uab_var_soa[:mid], 1)
+    mid = n_snps // 2
+    r1 = compute_wald_fused_general_c_ws(ws, utg_t[:mid], 1)
     assert r1["lambdas"].shape == (mid,)
 
-    # Reuse workspace for second chunk
-    r2 = compute_wald_general_c_ws(ws, uab_var_soa[mid:], 1)
-    assert r2["lambdas"].shape == (Uab_batch.shape[0] - mid,)
+    # Reuse the same workspace for the second chunk.
+    r2 = compute_wald_fused_general_c_ws(ws, utg_t[mid:], 1)
+    assert r2["lambdas"].shape == (n_snps - mid,)
 
-    # Full batch
-    r_full = compute_wald_general_c_ws(ws, uab_var_soa, 1)
-    combined = np.concatenate([r1["lambdas"], r2["lambdas"]])
+    r_full = compute_wald_fused_general_c_ws(ws, utg_t, 1)
     np.testing.assert_allclose(
-        combined,
+        np.concatenate([r1["lambdas"], r2["lambdas"]]),
         r_full["lambdas"],
         rtol=1e-12,
         atol=1e-14,
         err_msg="Chunked vs full workspace mismatch",
     )
 
-    # Destroy workspace (PyCapsule GC)
     del ws
 
 
@@ -169,12 +144,14 @@ def test_general_ncvt_gemma_covariate_match():
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )
-def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
+def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2, monkeypatch):
     """C-GEN-04: All 4 LMM modes produce results with n_cvt=2 covariates.
 
-    Verifies that compute_lmm_chunk_numpy with lmm_mode=4 produces non-None
-    results for all output fields when covariates are present. Wald results
-    use the C extension; LRT/Score use the Python fallback.
+    ``compute_lmm_chunk_numpy`` is the full-Uab NumPy path, and the runner
+    reaches it only on ``DispatchPath.NUMPY_FALLBACK``, which is selected only
+    when the extension is absent. The extension is cleared here so the test
+    drives the path in the state production actually uses it in; left loaded, it
+    would take an inner C ladder no dispatch path selects.
     """
     from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
     from jamma.lmm.prepare_common import _compute_null_model_common
@@ -187,29 +164,28 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
     Uty = data["Uty"]
     UtG = data["UtG"]
 
-    # Build Uab
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
     n_snps = Uab_batch.shape[0]
 
-    # Compute null model for LRT/Score
     logl_H0, _lambda_mle, Hi_eval_null = _compute_null_model_common(
         4, eigenvalues, UtW, Uty, n_cvt, False
     )
 
-    # Mode 4 (All): exercises Wald (C ext), LRT (Python MLE), Score (Python)
+    monkeypatch.setattr(compute_numpy, "_accel", None)
+
+    common = {
+        "n_cvt": n_cvt,
+        "eigenvalues": eigenvalues,
+        "Uab_batch": Uab_batch,
+        "n_samples": n_samples,
+        "n_threads": 1,
+    }
+
     result = compute_lmm_chunk_numpy(
-        lmm_mode=4,
-        n_cvt=n_cvt,
-        eigenvalues=eigenvalues,
-        Uab_batch=Uab_batch,
-        n_samples=n_samples,
-        logl_H0=logl_H0,
-        Hi_eval_null=Hi_eval_null,
-        n_threads=1,
+        lmm_mode=4, logl_H0=logl_H0, Hi_eval_null=Hi_eval_null, **common
     )
 
-    # All fields must be non-None and have correct shape
-    all_keys = (
+    for key in (
         "lambdas",
         "logls",
         "betas",
@@ -218,42 +194,24 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2):
         "lambdas_mle",
         "p_lrts",
         "p_scores",
-    )
-    for key in all_keys:
+    ):
         arr = result[key]
         assert arr is not None, f"{key} is None in mode 4"
         assert arr.shape == (n_snps,), f"{key} shape mismatch: {arr.shape}"
 
-    # Finite check (most values should be finite; allow NaN for degenerate SNPs)
     for key in ("betas", "ses", "pwalds"):
         arr = result[key]
         assert arr is not None, f"{key} is None in mode 4"
         n_finite = np.sum(np.isfinite(arr))
         assert n_finite > n_snps * 0.8, f"{key}: only {n_finite}/{n_snps} finite values"
 
-    # Mode 2 (LRT only)
-    result_lrt = compute_lmm_chunk_numpy(
-        lmm_mode=2,
-        n_cvt=n_cvt,
-        eigenvalues=eigenvalues,
-        Uab_batch=Uab_batch,
-        n_samples=n_samples,
-        logl_H0=logl_H0,
-        n_threads=1,
-    )
+    result_lrt = compute_lmm_chunk_numpy(lmm_mode=2, logl_H0=logl_H0, **common)
     assert result_lrt["lambdas_mle"] is not None
     assert result_lrt["p_lrts"] is not None
     assert result_lrt["lambdas_mle"].shape == (n_snps,)
 
-    # Mode 3 (Score only)
     result_score = compute_lmm_chunk_numpy(
-        lmm_mode=3,
-        n_cvt=n_cvt,
-        eigenvalues=eigenvalues,
-        Uab_batch=Uab_batch,
-        n_samples=n_samples,
-        Hi_eval_null=Hi_eval_null,
-        n_threads=1,
+        lmm_mode=3, Hi_eval_null=Hi_eval_null, **common
     )
     assert result_score["p_scores"] is not None
     assert result_score["betas"] is not None
@@ -272,34 +230,11 @@ def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
     if n_threads < 2:
         pytest.skip("Need >=2 cores for multi-threaded test")
 
-    from jamma.lmm.likelihood import classify_uab_columns
+    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
+    ws = _fused_general_workspace(data)
 
-    data = synthetic_covariate_data_ncvt2
-    n_cvt = data["n_cvt"]
-    eigenvalues = data["eigenvalues"]
-    Uab_batch = data["Uab_batch"]
-    n_samples = data["n_samples"]
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-    uab_var_soa = np.ascontiguousarray(
-        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
-    )
-
-    ws = create_lmm_workspace_general(
-        eigenvalues,
-        uab_inv_soa,
-        n_samples,
-        n_cvt,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-
-    r1 = compute_wald_general_c_ws(ws, uab_var_soa, 1)
-    rn = compute_wald_general_c_ws(ws, uab_var_soa, n_threads)
+    r1 = compute_wald_fused_general_c_ws(ws, data["utg_t"], 1)
+    rn = compute_wald_fused_general_c_ws(ws, data["utg_t"], n_threads)
 
     for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
         np.testing.assert_allclose(
@@ -318,48 +253,23 @@ def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
 )
 def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
     """C-GEN-06: Constant genotypes produce NaN beta/se/p-value for n_cvt>1."""
-    from jamma.lmm.likelihood import classify_uab_columns
+    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
 
-    data = synthetic_covariate_data_ncvt2
-    n_cvt = data["n_cvt"]
-    eigenvalues = data["eigenvalues"]
-    Uab_batch = data["Uab_batch"].copy()
-    n_samples = data["n_samples"]
+    # A constant genotype rotates to an all-zero UtG column, which drives xx to
+    # zero and so P_XX to zero. Zeroing the row is how the fused kernel, which
+    # builds Uab from UtG itself, is given a degenerate SNP.
+    utg_t = data["utg_t"].copy()
+    utg_t[[0, 2]] = 0.0
 
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    ws = _fused_general_workspace(data)
+    result = compute_wald_fused_general_c_ws(ws, utg_t, 1)
 
-    # Make SNPs 0 and 2 degenerate by zeroing all varying columns
-    # (this makes xx=0, causing P_XX <= 0)
-    for snp_idx in [0, 2]:
-        for vi in var_indices:
-            Uab_batch[snp_idx, :, vi] = 0.0
-
-    uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-    uab_var_soa = np.ascontiguousarray(
-        Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
-    )
-
-    ws = create_lmm_workspace_general(
-        eigenvalues,
-        uab_inv_soa,
-        n_samples,
-        n_cvt,
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-    )
-    result = compute_wald_general_c_ws(ws, uab_var_soa, 1)
-
-    # Degenerate SNPs should have NaN
-    for snp_idx in [0, 2]:
+    for snp_idx in (0, 2):
         assert np.isnan(result["betas"][snp_idx]), f"SNP {snp_idx}: expected NaN beta"
         assert np.isnan(result["ses"][snp_idx]), f"SNP {snp_idx}: expected NaN se"
         assert np.isnan(result["pwalds"][snp_idx]), f"SNP {snp_idx}: expected NaN pwald"
 
-    # Non-degenerate SNPs should have valid results
-    for snp_idx in [1, 3]:
+    for snp_idx in (1, 3):
         assert np.isfinite(result["betas"][snp_idx]), (
             f"SNP {snp_idx}: expected finite beta"
         )
@@ -377,29 +287,31 @@ def test_general_ncvt_abi_version():
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_existing_ncvt1_regression(synthetic_wald_data):
-    """C-GEN-08: Existing n_cvt=1 C extension path unchanged with ABI_VERSION=5.
+    """C-GEN-08: the n_cvt=1 fused workspace path still works after the general work.
 
-    Ensures the general n_cvt additions (ABI_VERSION bump, new workspace types)
-    did not regress the original n_cvt=1 split-Uab workspace path.
+    Ensures the general n_cvt additions (ABI bump, extra workspace types) did not
+    regress the original n_cvt=1 path.
     """
     eigenvalues, Uab_batch, n_samples = synthetic_wald_data
 
-    # Use the existing Uab directly for split components
-    uab_varying_soa = np.stack(
-        [Uab_batch[:, :, 1], Uab_batch[:, :, 3], Uab_batch[:, :, 4]], axis=1
-    )
-    uab_inv_soa_direct = np.stack(
+    # The fused kernel builds Uab from w and UtG itself, so it is given the
+    # invariant SoA plus the raw rotated vectors rather than a prebuilt Uab.
+    # Column layout: 0=ww, 1=wx, 2=wy, 3=xx, 4=xy, 5=yy, and the fixture builds
+    # every column from a positive w, so recovering w and Uty from it is exact.
+    w = np.sqrt(Uab_batch[0, :, 0])
+    Uty = Uab_batch[0, :, 2] / w
+    utg_t = np.ascontiguousarray(Uab_batch[:, :, 1] / w)
+    uab_inv_soa = np.stack(
         [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
     )
 
-    # Create n_cvt=1 workspace and compute
-    ws = create_lmm_workspace(
-        eigenvalues, uab_inv_soa_direct, n_samples, 1e-5, 1e5, 50, 20, 1
+    ws = create_lmm_workspace_fused(
+        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, 1
     )
-    result = compute_wald_split_c_ws(ws, uab_varying_soa, 1)
+    result = compute_wald_fused_c_ws(ws, utg_t, 1)
 
-    # Basic sanity: shapes match, most values finite
     assert result["lambdas"].shape == (Uab_batch.shape[0],)
     assert result["betas"].shape == (Uab_batch.shape[0],)
-    n_finite = np.sum(np.isfinite(result["betas"]))
-    assert n_finite > 0, "No finite betas from n_cvt=1 workspace"
+    assert np.sum(np.isfinite(result["betas"])) > 0, (
+        "No finite betas from the n_cvt=1 fused workspace"
+    )

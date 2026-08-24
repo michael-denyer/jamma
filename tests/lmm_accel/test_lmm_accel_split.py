@@ -8,8 +8,8 @@ the live kernels. The C kernels this module used to drive, compute_lmm_batch_spl
 and the create_workspace_split_c workspace, are not reachable from any
 DispatchPath, and the fused workspace has taken their place. Their parity,
 degenerate-SNP and thread-determinism checks are covered on the fused kernel in
-test_lmm_accel_fused.py. What did not exist there, and is kept here, is the input
-validation: non-finite eigenvalues and wrong array shapes.
+test_lmm_accel_fused.py, and their input validation in test_lmm_accel_core.py.
+What is kept here is the workspace reuse pattern the runner relies on.
 """
 
 import numpy as np
@@ -236,45 +236,6 @@ def test_workspace_alignment():
         ptr = _get_aligned_alloc_test_ptr(n)
         assert ptr % 32 == 0, (
             f"alloc_aligned_doubles({n}) returned {ptr:#x}, not 32-byte aligned"
-        )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
-@pytest.mark.parametrize(
-    "bad_value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "neg_inf"]
-)
-def test_fused_workspace_rejects_nonfinite_eigenvalues(fused_data, bad_value):
-    """Workspace creation rejects NaN, Inf and -Inf eigenvalues."""
-    eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
-
-    bad_evals = eigenvalues.copy()
-    bad_evals[0] = bad_value
-
-    with pytest.raises(ValueError, match=r"eigenvalues.*not finite"):
-        create_lmm_workspace_fused(
-            bad_evals, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, 1
-        )
-
-
-@pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
-def test_fused_workspace_rejects_wrong_invariant_shape(fused_data):
-    """Workspace creation rejects a transposed invariant SoA."""
-    eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
-
-    with pytest.raises(ValueError, match="uab_invariant"):
-        create_lmm_workspace_fused(
-            eigenvalues,
-            uab_inv_soa.T,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
         )
 
 

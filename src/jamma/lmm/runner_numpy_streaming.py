@@ -137,6 +137,11 @@ def run_lmm_association_numpy_streaming(
     show_progress = config.show_progress
     lmm_mode = config.lmm_mode
 
+    # Checked here, not in the chunk runner, because the statistics pass reads
+    # the whole .bed first: a bad value must fail before that, not after it.
+    if chunk_size is not None and chunk_size < 1:
+        raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
+
     start_time = time.perf_counter()
 
     meta = get_plink_metadata(bed_path)
@@ -178,7 +183,7 @@ def run_lmm_association_numpy_streaming(
         bed_path,
         n_snps=n_snps,
         n_samples=n_samples_total,
-        chunk_size=chunk_size or _DEFAULT_STATS_CHUNK,
+        chunk_size=_DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
         sample_indices=stats_sample_indices,
         include_hwe=hwe_threshold > 0,
         validate_genotypes=validate_genotypes,

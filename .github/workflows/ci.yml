@@ -88,15 +88,19 @@ jobs:
         with:
           install-only: true
 
-      - name: Install dependencies
-        run: uv sync
-
-      # uv.lock must match pyproject.toml. The pre-commit uv-lock-sync
-      # hook catches this locally, but only if contributors run prek
-      # before pushing. `uv lock --check` fails if the lockfile is stale,
-      # closing the gap for PRs that bypass hooks.
-      - name: uv.lock sync check
-        run: uv lock --check
+      # uv.lock must match pyproject.toml. The pre-commit uv-lock-sync hook
+      # catches this locally, but only if contributors run prek before
+      # pushing, so this closes the gap for PRs that bypass hooks.
+      #
+      # --locked, not a separate `uv lock --check` step afterwards. A bare
+      # `uv sync` re-locks a stale lockfile in place and exits zero, so a
+      # check that runs after it always passes and the gate cannot fire.
+      # That is not hypothetical: pyproject moved to pyrefly 1.2.0 while
+      # uv.lock still recorded 1.1.1, and every run since was green.
+      # --locked makes the install itself the assertion, so no future
+      # reordering can reopen the hole.
+      - name: Install dependencies (uv.lock must be in sync)
+        run: uv sync --locked
 
       # Ruff check and format split into separate steps so a failure
       # report names the exact rule set that failed (check rules vs

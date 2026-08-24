@@ -151,9 +151,11 @@ def _run_numpy_lmm(
     output_path: Path | None,
     banner: str,
     label: str,
+    writer: IncrementalAssocWriter | None = None,
     snps_indices: np.ndarray | None = None,
     hwe_threshold: float = 0.0,
     max_chunk_size: int | None = None,
+    compute_pve: bool = True,
     progress_label: str = "LMM association",
     lambda_warning_prefix: str = "",
     log_dispatch_choices: bool = True,
@@ -176,10 +178,14 @@ def _run_numpy_lmm(
         output_path: Stream results to this file, or None for in-memory.
         banner: Runner name for the progress banner ("NumPy batch", ...).
         label: Memory-log label identifying the calling runner.
+        writer: A caller-owned writer to append results to, instead of
+            output_path. LOCO shares one writer across its chromosome
+            loop; the body neither opens nor closes it.
         snps_indices: Global indices restricting the tested SNP set, or None.
         hwe_threshold: HWE p-value threshold; 0.0 disables the filter.
         max_chunk_size: Cap on association-pass chunk width, or None to let
             the engine size chunks against the RAM budget.
+        compute_pve: Whether to run the null-REML PVE estimate.
         progress_label: Chunk-loop progress bar label.
         lambda_warning_prefix: Prefix for lambda-boundary warnings.
         log_dispatch_choices: Whether the chunk engine logs its dispatch.
@@ -188,6 +194,9 @@ def _run_numpy_lmm(
         LmmRunResult with associations (empty when output_path routed them
         to disk), n_tested, PVE, and the run's timing breakdown.
     """
+    if output_path is not None and writer is not None:
+        raise ValueError("pass output_path or writer, not both")
+
     maf_threshold = config.maf_threshold
     miss_threshold = config.miss_threshold
     l_min, l_max = config.l_min, config.l_max
@@ -278,6 +287,7 @@ def _run_numpy_lmm(
         show_progress=show_progress,
         check_memory=check_memory,
         label=label,
+        compute_pve=compute_pve,
     )
     del kinship
     gc.collect()
@@ -286,7 +296,6 @@ def _run_numpy_lmm(
     # === PASS 2: association per chunk ===
     all_results: list[AssocResult] = []
     with contextlib.ExitStack() as stack:
-        writer = None
         if output_path is not None:
             writer = stack.enter_context(
                 IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
@@ -349,14 +358,13 @@ def _run_numpy_lmm(
             logger.info(f"  Accounted:           {accounted:.2f}s")
             logger.info(f"  Total:               {elapsed:.2f}s")
 
-            if writer is not None:
+            if output_path is not None and writer is not None:
                 logger.info(f"Wrote {writer.count:,} results to {output_path}")
             logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
-        n_tested = writer.count if writer is not None else len(all_results)
         return LmmRunResult(
-            associations=[] if output_path is not None else all_results,
-            n_tested=n_tested,
+            associations=all_results if writer is None else [],
+            n_tested=chunk_stats.processed,
             pve=prepared.pve,
             pve_se=prepared.pve_se,
             timing=RunnerTiming(

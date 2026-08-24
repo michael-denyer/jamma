@@ -19,7 +19,6 @@ from numpy.typing import DTypeLike
 
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import (
-    apply_snp_list_mask,
     compute_hwe_pvalues,
     compute_snp_filter_mask,
 )
@@ -160,13 +159,10 @@ class SnpFilterSpec:
     maf_threshold: float
     miss_threshold: float
     restrict_indices: np.ndarray | None = None
-    restrict_global_mask: np.ndarray | None = None
     hwe_threshold: float = 0.0
     restrict_label: str = "SNP list"
 
     def __post_init__(self) -> None:
-        if self.restrict_indices is not None and self.restrict_global_mask is not None:
-            raise ValueError("use restrict_indices or restrict_global_mask, not both")
         if self.hwe_threshold < 0:
             raise ValueError("hwe_threshold must be >= 0")
         if self.restrict_indices is not None:
@@ -174,9 +170,6 @@ class SnpFilterSpec:
             if len(indices) > 1 and np.any(np.diff(indices) <= 0):
                 raise ValueError("restrict_indices must be strictly increasing")
             object.__setattr__(self, "restrict_indices", indices)
-        if self.restrict_global_mask is not None:
-            mask = _readonly_1d("restrict_global_mask", self.restrict_global_mask, bool)
-            object.__setattr__(self, "restrict_global_mask", mask)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,20 +203,19 @@ class SnpSelection:
         object.__setattr__(self, "filtered_means", filtered_means)
 
 
-def _is_identity_indices(indices: np.ndarray) -> bool:
-    return bool(np.array_equal(indices, np.arange(len(indices), dtype=np.intp)))
-
-
 def _apply_global_index_restriction(
     snp_mask: np.ndarray,
     global_indices: np.ndarray,
     restrict_indices: np.ndarray,
     label: str,
 ) -> None:
-    if _is_identity_indices(global_indices):
-        apply_snp_list_mask(snp_mask, restrict_indices, len(global_indices), label)
-        return
+    """Intersect the active mask with the requested global indices, by value.
 
+    Range validation does not belong here: this population may be one
+    chromosome of a larger file, so an index beyond ``global_indices`` is
+    routine, not an error. Callers holding the full SNP count validate with
+    :func:`jamma.core.snp_filter.validate_snp_indices` before reaching this.
+    """
     if len(restrict_indices) == 0:
         snp_mask[:] = False
         logger.info(f"{label}: restricting to 0 requested SNPs (all filtered)")
@@ -391,16 +383,6 @@ def filter_snp_stats(stats: SnpStats, spec: SnpFilterSpec) -> SnpSelection:
         _apply_global_index_restriction(
             snp_mask, global_indices, spec.restrict_indices, spec.restrict_label
         )
-
-    if spec.restrict_global_mask is not None:
-        if len(global_indices) > 0 and (
-            global_indices[0] < 0
-            or global_indices[-1] >= len(spec.restrict_global_mask)
-        ):
-            raise ValueError(
-                f"restrict_global_mask is too short for SNP index {global_indices[-1]}"
-            )
-        snp_mask &= spec.restrict_global_mask[global_indices]
 
     n_hwe_removed = 0
     if spec.hwe_threshold > 0:

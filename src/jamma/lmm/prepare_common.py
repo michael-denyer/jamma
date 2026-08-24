@@ -347,7 +347,9 @@ class PreparedLmmRun:
         logl_H0: Null-model MLE log-likelihood, or None for Wald.
         Hi_eval_null: Null-model Hi_eval, or None outside Score/All.
         pve: Proportion of variance explained, from the null REML lambda.
-        pve_se: Standard error of PVE, or None on a flat likelihood surface.
+            None when the caller skipped it (compute_pve=False).
+        pve_se: Standard error of PVE, or None on a flat likelihood surface
+            or when PVE was skipped.
     """
 
     eigenvalues: np.ndarray
@@ -356,7 +358,7 @@ class PreparedLmmRun:
     Uty: np.ndarray
     logl_H0: float | None
     Hi_eval_null: np.ndarray | None
-    pve: float
+    pve: float | None
     pve_se: float | None
 
 
@@ -374,6 +376,7 @@ def prepare_lmm_run(
     show_progress: bool,
     check_memory: bool,
     label: str,
+    compute_pve: bool = True,
 ) -> PreparedLmmRun:
     """Eigendecompose, rotate, solve the null model, and estimate PVE.
 
@@ -398,6 +401,8 @@ def prepare_lmm_run(
         show_progress: Whether to log memory and null-model diagnostics.
         check_memory: Whether to gate the eigendecomposition on memory.
         label: Memory-log label identifying the calling runner.
+        compute_pve: Whether to run the extra null-REML golden section for
+            PVE. LOCO passes False on every chromosome after the first.
     """
     eigenvalues_np, U = _eigendecompose_or_reuse(
         kinship,
@@ -423,7 +428,10 @@ def prepare_lmm_run(
         l_min=l_min,
         l_max=l_max,
     )
-    pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
+    pve: float | None = None
+    pve_se: float | None = None
+    if compute_pve:
+        pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
 
     return PreparedLmmRun(
         eigenvalues=eigenvalues_np,

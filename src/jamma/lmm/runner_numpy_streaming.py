@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
+from jamma.core.snp_filter import validate_snp_indices
 from jamma.core.snp_stats import SnpStats, collect_streamed_snp_stats
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
@@ -161,6 +162,7 @@ def run_lmm_association_numpy_streaming(
         raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
 
     meta = get_plink_metadata(bed_path)
+    validate_snp_indices(snps_indices, meta["n_snps"])
 
     # Caller-supplied list, or the PLINK metadata, parsed once into columns.
     snp_meta = (

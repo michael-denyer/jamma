@@ -29,18 +29,14 @@ from jamma.core.progress import progress_iterator
 from jamma.core.threading import (
     blas_threads,
     get_c_extension_thread_count,
-    get_physical_core_count,
     jlinalg_threads,
 )
 from jamma.lmm import compute_numpy
-from jamma.lmm.chunk_kernel import RunInvariants, make_kernel
-from jamma.lmm.chunk_pipeline import (
-    _drive_pipeline,
-    _ThreadBudget,
-    compute_pipeline_core_split,
-)
+from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
+from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 from jamma.lmm.compute_numpy import LmmMode, select_current_dispatch_path
+from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
@@ -126,6 +122,188 @@ class LmmChunkRunStats(NamedTuple):
     chunk_size: int
     n_chunks: int
     used_pipeline: bool
+
+
+class _ChunkEngine:
+    """The chunk loop's state: its buffers, its thread split, its counters.
+
+    ``prepare`` and ``compute_and_write`` were closures in the runner body over
+    seven ``nonlocal`` counters, and the pipeline driver reached the live thread
+    split through a separate mutable object because a bare-int ``nonlocal``
+    cannot cross a module boundary. Both are ordinary fields here, so the driver
+    takes one typed argument and rebinds ``rot_threads``/``omp_threads``
+    directly.
+    """
+
+    def __init__(
+        self,
+        *,
+        invariants: RunInvariants,
+        kernel: Kernel,
+        U: np.ndarray,
+        filtered_means: np.ndarray,
+        raw_chunk_source: Callable[[], RawLmmChunk | None],
+        chunk_sink: Callable[[dict[str, np.ndarray], int, int], None],
+        chunk_size: int,
+        n_buffers: int,
+        rot_threads: int,
+        omp_threads: int,
+    ) -> None:
+        self.inv = invariants
+        self.kernel = kernel
+        self.U = U
+        self.filtered_means = filtered_means
+        self.raw_chunk_source = raw_chunk_source
+        self.chunk_sink = chunk_sink
+        self.chunk_size = chunk_size
+
+        # Rebound by _drive_pipeline once it has profiled the first chunk.
+        self.rot_threads = rot_threads
+        self.omp_threads = omp_threads
+
+        n_samples = invariants.n_samples
+        self.utg_bufs = [
+            np.empty((chunk_size, n_samples), dtype=np.float64)
+            for _ in range(n_buffers)
+        ]
+        if invariants.dispatch is DispatchPath.SOA_SPLIT:
+            from jamma.lmm.likelihood import classify_uab_columns
+
+            n_var = len(classify_uab_columns(invariants.n_cvt)[1])
+            self.uab_var_bufs: list[np.ndarray] | None = [
+                np.empty((chunk_size, n_var, n_samples), dtype=np.float64)
+                for _ in range(n_buffers)
+            ]
+        else:
+            self.uab_var_bufs = None
+
+        self.chunk_counter = 0
+        self.next_expected_start = 0
+        self.processed = 0
+        self.compute_s = 0.0
+        self.result_write_s = 0.0
+        self.nan_counts: dict[str, int] = {}
+        self.n_at_lmin = 0
+        self.n_at_lmax = 0
+
+    def prepare(self) -> _PreparedLmmChunk | None:
+        """Pull the next raw chunk, impute it, rotate it, and shape it for the kernel.
+
+        Returns None once the source is exhausted. Runs on the background thread
+        during a pipelined run, so it touches only its own buffers and counters.
+        """
+        raw = self._next_non_empty_chunk()
+        if raw is None:
+            return None
+
+        chunk_range = raw.filtered_range
+        chunk_range.validate_next(self.next_expected_start, self.inv.n_filtered)
+        actual_len = chunk_range.length
+        if raw.genotypes.shape != (self.inv.n_samples, actual_len):
+            raise ValueError(
+                "raw LMM chunk shape mismatch: expected "
+                f"({self.inv.n_samples}, {actual_len}), got {raw.genotypes.shape}"
+            )
+        self.next_expected_start = chunk_range.filtered_end
+
+        buf_idx = self.chunk_counter % len(self.utg_bufs)
+        self.chunk_counter += 1
+
+        impute_missing_inplace(
+            raw.genotypes,
+            self.filtered_means[chunk_range.filtered_start : chunk_range.filtered_end],
+        )
+
+        utg_out = self.utg_bufs[buf_idx][:actual_len, :]
+        with jlinalg_threads(self.rot_threads):
+            utg_t = jlinalg.dgemm(raw.genotypes, self.U, transa="T", out=utg_out)
+
+        return _PreparedLmmChunk(
+            self._kernel_input(utg_t, buf_idx, actual_len), chunk_range
+        )
+
+    def _next_non_empty_chunk(self) -> RawLmmChunk | None:
+        """Skip zero-length chunks, checking each keeps the contiguity contract."""
+        raw = self.raw_chunk_source()
+        while raw is not None and raw.filtered_end <= raw.filtered_start:
+            empty_range = raw.filtered_range
+            if empty_range.filtered_start != empty_range.filtered_end:
+                raise RuntimeError(
+                    "raw LMM chunk has an invalid empty range: "
+                    f"[{empty_range.filtered_start}, {empty_range.filtered_end})"
+                )
+            if empty_range.filtered_start != self.next_expected_start:
+                raise RuntimeError(
+                    "empty raw LMM chunks must preserve contiguous order: "
+                    f"expected {self.next_expected_start}, "
+                    f"got {empty_range.filtered_start}"
+                )
+            raw = self.raw_chunk_source()
+        return raw
+
+    def _kernel_input(
+        self, utg_t: np.ndarray, buf_idx: int, actual_len: int
+    ) -> np.ndarray:
+        """Shape the rotated chunk into whatever this run's kernel consumes."""
+        if self.inv.dispatch.feeds_raw_utg:
+            return utg_t
+
+        if self.inv.dispatch is DispatchPath.SOA_SPLIT:
+            out_var = (
+                self.uab_var_bufs[buf_idx][:actual_len, :, :]
+                if self.uab_var_bufs is not None and actual_len == self.chunk_size
+                else None
+            )
+            return batch_compute_uab_varying_soa_numpy(
+                self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t, out=out_var
+            )
+
+        return batch_compute_uab_numpy(
+            self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t.T
+        )
+
+    def compute_and_write(self, prepared: _PreparedLmmChunk) -> None:
+        """Run one prepared chunk through the kernel and hand results to the sink."""
+        chunk_range = prepared.filtered_range
+        filtered_start = chunk_range.filtered_start
+        actual_len = chunk_range.length
+        if filtered_start != self.processed:
+            raise RuntimeError(
+                "prepared LMM chunks reached compute out of order: "
+                f"expected start {self.processed}, got {filtered_start}"
+            )
+
+        t_compute_start = time.perf_counter()
+        blas_ctx = (
+            blas_threads(1) if compute_numpy._accel is not None else nullcontext()
+        )
+        with blas_ctx:
+            cr = self.kernel.compute_chunk(
+                prepared.data, self.omp_threads, self.processed
+            )
+        self.compute_s += time.perf_counter() - t_compute_start
+
+        t_write_start = time.perf_counter()
+        chunk_arrays = {
+            key: cr[key][:actual_len] for key in _RESULT_FIELDS[self.inv.lmm_mode]
+        }
+
+        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
+            self.inv.lmm_mode, chunk_arrays, self.inv.l_min, self.inv.l_max
+        )
+        self.n_at_lmin += chunk_lmin
+        self.n_at_lmax += chunk_lmax
+
+        for key, arr in chunk_arrays.items():
+            if arr.dtype.kind != "f":
+                continue
+            n_nan = int(np.count_nonzero(np.isnan(arr)))
+            if n_nan > 0:
+                self.nan_counts[key] = self.nan_counts.get(key, 0) + n_nan
+
+        self.chunk_sink(chunk_arrays, filtered_start, chunk_range.filtered_end)
+        self.processed += actual_len
+        self.result_write_s += time.perf_counter() - t_write_start
 
 
 def run_lmm_chunk_source_numpy(
@@ -249,32 +427,13 @@ def run_lmm_chunk_source_numpy(
                 f"  Processing in {n_chunks} chunks ({chunk_size:,} SNPs/chunk)"
             )
 
-    omp_threads = get_c_extension_thread_count(
-        compute_numpy._accel is not None, compute_numpy._C_HAS_OPENMP
+    threads = plan_thread_budget(
+        n_samples=n_samples,
+        omp_threads=get_c_extension_thread_count(
+            compute_numpy._accel is not None, compute_numpy._C_HAS_OPENMP
+        ),
+        use_pipeline=use_pipeline,
     )
-
-    if use_pipeline:
-        logger.debug(f"Pipeline mode: overlapping rotation/compute ({n_chunks} chunks)")
-        total_cores = get_physical_core_count()
-        if omp_threads == 1:
-            pipeline_rot_threads = total_cores
-            pipeline_omp_threads = 1
-        else:
-            rot_threads, compute_threads = compute_pipeline_core_split(
-                n_samples, total_cores
-            )
-            pipeline_omp_threads = min(compute_threads, omp_threads)
-            pipeline_rot_threads = max(1, total_cores - pipeline_omp_threads)
-            logger.debug(
-                f"Pipeline core split: {pipeline_rot_threads} rotation, "
-                f"{pipeline_omp_threads} compute (n_samples={n_samples:,})"
-            )
-    else:
-        total_cores = get_physical_core_count()
-        pipeline_omp_threads = omp_threads
-        pipeline_rot_threads = total_cores
-
-    budget = _ThreadBudget(pipeline_rot_threads, pipeline_omp_threads)
     n_refine = max(n_refine, 20)
 
     invariants = RunInvariants.build(
@@ -293,152 +452,27 @@ def run_lmm_chunk_source_numpy(
         n_grid=n_grid,
         n_refine=n_refine,
     )
-    kernel = make_kernel(invariants, pipeline_omp_threads)
+    kernel = make_kernel(invariants, threads.omp)
 
-    raw_chunk_source = raw_chunk_source_factory(chunk_size)
+    engine = _ChunkEngine(
+        invariants=invariants,
+        kernel=kernel,
+        U=U,
+        filtered_means=filtered_means,
+        raw_chunk_source=raw_chunk_source_factory(chunk_size),
+        chunk_sink=chunk_sink,
+        chunk_size=chunk_size,
+        n_buffers=2 if use_pipeline else 1,
+        rot_threads=threads.rot,
+        omp_threads=threads.omp,
+    )
 
-    if use_pipeline:
-        utg_bufs = [
-            np.empty((chunk_size, n_samples), dtype=np.float64),
-            np.empty((chunk_size, n_samples), dtype=np.float64),
-        ]
-    else:
-        utg_bufs = [np.empty((chunk_size, n_samples), dtype=np.float64)]
-
-    if use_split and not dispatch.feeds_raw_utg:
-        from jamma.lmm.likelihood import classify_uab_columns
-
-        _inv_cols, var_cols = classify_uab_columns(n_cvt)
-        n_var = len(var_cols)
-        if use_pipeline:
-            uab_var_bufs = [
-                np.empty((chunk_size, n_var, n_samples), dtype=np.float64),
-                np.empty((chunk_size, n_var, n_samples), dtype=np.float64),
-            ]
-        else:
-            uab_var_bufs = [np.empty((chunk_size, n_var, n_samples), dtype=np.float64)]
-    else:
-        uab_var_bufs = None
-
-    chunk_counter = 0
-    next_expected_start = 0
-    processed = 0
     rotation_s = 0.0
-    compute_s = 0.0
-    result_write_s = 0.0
-    nan_counts: dict[str, int] = {}
-    n_at_lmin = 0
-    n_at_lmax = 0
-
-    def _prepare_chunk() -> _PreparedLmmChunk | None:
-        nonlocal chunk_counter, next_expected_start
-
-        raw = raw_chunk_source()
-        while raw is not None and raw.filtered_end <= raw.filtered_start:
-            empty_range = raw.filtered_range
-            if empty_range.filtered_start != empty_range.filtered_end:
-                raise RuntimeError(
-                    "raw LMM chunk has an invalid empty range: "
-                    f"[{empty_range.filtered_start}, {empty_range.filtered_end})"
-                )
-            if empty_range.filtered_start != next_expected_start:
-                raise RuntimeError(
-                    "empty raw LMM chunks must preserve contiguous order: "
-                    f"expected {next_expected_start}, "
-                    f"got {empty_range.filtered_start}"
-                )
-            raw = raw_chunk_source()
-        if raw is None:
-            return None
-
-        chunk_range = raw.filtered_range
-        chunk_range.validate_next(next_expected_start, n_filtered)
-        actual_len = chunk_range.length
-        if raw.genotypes.shape != (n_samples, actual_len):
-            raise ValueError(
-                "raw LMM chunk shape mismatch: expected "
-                f"({n_samples}, {actual_len}), got {raw.genotypes.shape}"
-            )
-        next_expected_start = chunk_range.filtered_end
-
-        buf_idx = chunk_counter % len(utg_bufs)
-        chunk_counter += 1
-
-        impute_missing_inplace(
-            raw.genotypes,
-            filtered_means[chunk_range.filtered_start : chunk_range.filtered_end],
-        )
-
-        utg_out = utg_bufs[buf_idx][:actual_len, :]
-        with jlinalg_threads(budget.rot):
-            utg_t = jlinalg.dgemm(raw.genotypes, U, transa="T", out=utg_out)
-
-        if dispatch.feeds_raw_utg:
-            return _PreparedLmmChunk(utg_t, chunk_range)
-
-        if use_split:
-            out_var = (
-                uab_var_bufs[buf_idx][:actual_len, :, :]
-                if uab_var_bufs is not None and actual_len == chunk_size
-                else None
-            )
-            uab_var_soa = batch_compute_uab_varying_soa_numpy(
-                n_cvt, UtW, Uty, utg_t, out=out_var
-            )
-            return _PreparedLmmChunk(uab_var_soa, chunk_range)
-
-        uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, utg_t.T)
-        return _PreparedLmmChunk(uab_batch, chunk_range)
-
-    def _compute_and_write(prepared: _PreparedLmmChunk) -> None:
-        nonlocal processed, compute_s, result_write_s, n_at_lmin, n_at_lmax
-
-        chunk_data = prepared.data
-        chunk_range = prepared.filtered_range
-        filtered_start = chunk_range.filtered_start
-        filtered_end = chunk_range.filtered_end
-        actual_len = chunk_range.length
-        if filtered_start != processed:
-            raise RuntimeError(
-                "prepared LMM chunks reached compute out of order: "
-                f"expected start {processed}, got {filtered_start}"
-            )
-
-        t_compute_start = time.perf_counter()
-        blas_ctx = (
-            blas_threads(1) if compute_numpy._accel is not None else nullcontext()
-        )
-        with blas_ctx:
-            cr = kernel.compute_chunk(chunk_data, budget.omp, processed)
-        compute_s += time.perf_counter() - t_compute_start
-
-        t_write_start = time.perf_counter()
-        chunk_arrays = {key: cr[key][:actual_len] for key in _RESULT_FIELDS[lmm_mode]}
-
-        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-            lmm_mode, chunk_arrays, l_min, l_max
-        )
-        n_at_lmin += chunk_lmin
-        n_at_lmax += chunk_lmax
-
-        for key, arr in chunk_arrays.items():
-            if arr.dtype.kind != "f":
-                continue
-            n_nan = int(np.count_nonzero(np.isnan(arr)))
-            if n_nan > 0:
-                nan_counts[key] = nan_counts.get(key, 0) + n_nan
-
-        chunk_sink(chunk_arrays, filtered_start, filtered_end)
-        processed += actual_len
-        result_write_s += time.perf_counter() - t_write_start
-
     if use_pipeline:
         rotation_s += _drive_pipeline(
-            _prepare_chunk,
-            _compute_and_write,
-            budget,
+            engine,
             n_chunks=n_chunks,
-            total_cores=total_cores,
+            total_cores=threads.total_cores,
             n_samples=n_samples,
             n_filtered=n_filtered,
             show_progress=show_progress,
@@ -457,36 +491,36 @@ def run_lmm_chunk_source_numpy(
 
         for _chunk_idx in chunk_iterator:
             t_rot_start = time.perf_counter()
-            prepared = _prepare_chunk()
+            prepared = engine.prepare()
             rotation_s += time.perf_counter() - t_rot_start
             if prepared is None:
                 break
-            _compute_and_write(prepared)
+            engine.compute_and_write(prepared)
 
-    if processed != n_filtered:
+    if engine.processed != n_filtered:
         raise RuntimeError(
-            f"Pre-allocated array size mismatch: wrote {processed} results, "
+            f"Pre-allocated array size mismatch: wrote {engine.processed} results, "
             f"expected {n_filtered}. This is an internal error — please report "
             f"this issue with your dataset dimensions."
         )
 
-    for key, n_nan in nan_counts.items():
+    for key, n_nan in engine.nan_counts.items():
         logger.warning(
             f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
             "check for degenerate (constant) genotypes and kinship matrix quality"
         )
     log_lambda_boundary_warning(
-        n_at_lmin, n_at_lmax, l_min, l_max, prefix=lambda_warning_prefix
+        engine.n_at_lmin, engine.n_at_lmax, l_min, l_max, prefix=lambda_warning_prefix
     )
 
     return LmmChunkRunStats(
-        processed=processed,
+        processed=engine.processed,
         rotation_s=rotation_s,
-        compute_s=compute_s,
-        result_write_s=result_write_s,
-        nan_counts=nan_counts,
-        n_at_lmin=n_at_lmin,
-        n_at_lmax=n_at_lmax,
+        compute_s=engine.compute_s,
+        result_write_s=engine.result_write_s,
+        nan_counts=engine.nan_counts,
+        n_at_lmin=engine.n_at_lmin,
+        n_at_lmax=engine.n_at_lmax,
         chunk_size=chunk_size,
         n_chunks=n_chunks,
         used_pipeline=use_pipeline,

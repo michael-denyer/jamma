@@ -1,8 +1,8 @@
 """Guard/precondition tests for the shared NumPy LMM chunk runner.
 
 These cover the cheap, isolated failure paths that the end-to-end parity suites
-never exercise: the ``run_lmm_chunk_source_numpy`` argument preconditions and the
-``dispatch_soa_split`` mode guard.
+never exercise: the ``run_lmm_chunk_source_numpy`` argument preconditions and
+the SoA-split kernel's mode guard.
 """
 
 from __future__ import annotations
@@ -10,8 +10,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jamma.lmm.chunk_dispatch import dispatch_soa_split
+from jamma.lmm.chunk_kernel import RunInvariants, make_kernel
 from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
+from jamma.lmm.dispatch import DispatchPath
 
 # ---------------------------------------------------------------------------
 # run_lmm_chunk_source_numpy preconditions
@@ -86,37 +87,42 @@ def test_empty_filtered_returns_zeroed_stats():
 
 
 # ---------------------------------------------------------------------------
-# dispatch_soa_split mode guard
+# SoA-split kernel mode guard
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_soa_split_args(**overrides):
+def _forced_split_invariants(lmm_mode):
+    """RunInvariants pinned to the split path, whatever the mode would select."""
     n_samples = 4
-    base = {
-        "lmm_mode": 4,
-        "n_cvt": 1,
-        "eigenvalues_np": np.ones(n_samples),
-        "uab_var_soa": np.ones((2, 3, n_samples)),
-        "uab_invariant_soa": np.ones((3, n_samples)),
-        "n_samples": n_samples,
-        "Hi_eval_null": np.ones(n_samples),
-        "l_min": 1e-5,
-        "l_max": 1e5,
-        "n_grid": 50,
-        "n_refine": 20,
-        "logl_H0": -1.0,
-        "n_threads": 1,
-    }
-    base.update(overrides)
-    return base
+    return RunInvariants.build(
+        dispatch=DispatchPath.SOA_SPLIT,
+        lmm_mode=lmm_mode,
+        n_cvt=1,
+        n_samples=n_samples,
+        n_filtered=5,
+        eigenvalues=np.ones(n_samples),
+        UtW=np.ones((n_samples, 1)),
+        Uty=np.ones(n_samples),
+        Hi_eval_null=np.ones(n_samples),
+        logl_H0=-1.0,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=50,
+        n_refine=20,
+    )
 
 
 @pytest.mark.tier0
-def test_dispatch_soa_split_rejects_modes_it_cannot_serve():
-    """Only modes 2 and 3 reach this path; 1 and 4 take the fused general kernel."""
+def test_soa_split_kernel_rejects_modes_it_cannot_serve():
+    """Only modes 2 and 3 reach this path; 1 and 4 take the fused general kernel.
+
+    The guard fires when the kernel is built, before any chunk arrives, so a
+    dispatch table that ever routed a Wald or mode-4 run here fails on the
+    first line of the run rather than partway through the loop.
+    """
     for mode in (1, 4, 99):
         with pytest.raises(ValueError, match=f"Unexpected lmm_mode={mode}"):
-            dispatch_soa_split(**_dispatch_soa_split_args(lmm_mode=mode))
+            make_kernel(_forced_split_invariants(mode), 1)
 
 
 @pytest.mark.tier0

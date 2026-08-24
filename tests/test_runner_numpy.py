@@ -14,7 +14,9 @@ import pytest
 
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
+from jamma.lmm import compute_numpy
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig
@@ -368,15 +370,15 @@ def test_chunk_size_accounting_by_dispatch_path():
 
 
 def test_runner_mode4_uses_fused_dispatch():
-    """Mode 4 takes a fused path, and the SoA split dispatcher refuses it.
+    """Mode 4 takes a fused path, and the SoA-split kernel refuses to serve it.
 
     This used to wrap _compose_mode4_from_split and assert it was never called.
-    That helper has gone: nothing in src called it, and dispatch_soa_split
-    raises for modes 1 and 4 rather than composing. The contract it stood for is
-    now two structural facts, and both are asserted directly.
+    That helper has gone, and so has the dispatch_soa_split function that
+    replaced it as this test's second half; the mode guard now lives in kernel
+    construction, so a dispatch table that ever routed mode 4 to the split path
+    fails before the chunk loop rather than on its first chunk.
     """
-    from jamma.lmm import compute_numpy
-    from jamma.lmm.chunk_dispatch import dispatch_soa_split
+    from jamma.lmm.chunk_kernel import RunInvariants, make_kernel
     from jamma.lmm.dispatch import DispatchPath
 
     if compute_numpy._accel is None:
@@ -388,22 +390,26 @@ def test_runner_mode4_uses_fused_dispatch():
             is expected
         )
 
-    with pytest.raises(ValueError, match="modes 1 and 4 take the fused"):
-        dispatch_soa_split(
-            4,
-            2,
-            np.ones(4),
-            np.zeros((1, 3, 4)),
-            np.zeros((3, 4)),
-            4,
-            Hi_eval_null=np.ones(4),
+    n_samples = 8
+    for refused_mode in (1, 4):
+        forced_split = RunInvariants.build(
+            dispatch=DispatchPath.SOA_SPLIT,
+            lmm_mode=refused_mode,
+            n_cvt=2,
+            n_samples=n_samples,
+            n_filtered=5,
+            eigenvalues=np.linspace(0.1, 2.0, n_samples),
+            UtW=np.ones((n_samples, 2)) * np.arange(1, 3),
+            Uty=np.linspace(-1.0, 1.0, n_samples),
+            Hi_eval_null=np.ones(n_samples),
+            logl_H0=-1.0,
             l_min=1e-5,
             l_max=1e5,
             n_grid=50,
             n_refine=20,
-            logl_H0=-1.0,
-            n_threads=1,
         )
+        with pytest.raises(ValueError, match="modes 1 and 4 take the fused"):
+            make_kernel(forced_split, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -1408,168 +1414,132 @@ def test_output_path_streaming_all_filtered(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _tiny_invariants(n_cvt: int, lmm_mode: LmmMode, n_samples: int = 8):
+    """Smallest RunInvariants every dispatch path will build a kernel from."""
+    from jamma.lmm.chunk_kernel import RunInvariants
+    from jamma.lmm.dispatch import select_dispatch_path
+
+    return RunInvariants.build(
+        dispatch=select_dispatch_path(n_cvt, lmm_mode, accel=True, log_choices=False),
+        lmm_mode=lmm_mode,
+        n_cvt=n_cvt,
+        n_samples=n_samples,
+        n_filtered=500,
+        eigenvalues=np.linspace(0.1, 2.0, n_samples),
+        UtW=np.ones((n_samples, n_cvt)) * np.arange(1, n_cvt + 1),
+        Uty=np.linspace(-1.0, 1.0, n_samples),
+        Hi_eval_null=np.ones(n_samples),
+        logl_H0=-10.0,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=20,
+        n_refine=20,
+    )
+
+
 @pytest.mark.tier0
 class TestErrorMessageDifferentiation:
-    """Verify that compute failures produce operation-specific error messages.
+    """A failing chunk must say which kernel failed, and where.
 
-    The _guarded_compute helper wraps compute calls and produces distinct
-    RuntimeError messages identifying the failed operation, SNP offset,
-    and total SNP count.
+    These used to call the wrapper with an operation label the test invented,
+    then assert the message contained it. All three labels they checked
+    ("Wald C workspace compute" and friends) appear nowhere in src and never
+    did, so the assertions only ever proved that an f-string interpolates.
+    The labels below come from ``make_kernel``, so a renamed or duplicated one
+    fails here.
     """
 
-    def test_fused_mode4_label(self):
-        """Fused mode-4 failure includes 'Fused mode-4' in the message."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+    def _failing_kernel(self, n_cvt: int, lmm_mode: LmmMode, exc: Exception):
+        """A real kernel for this path, with its call swapped for a raise."""
+        from jamma.lmm.chunk_kernel import Kernel, make_kernel
 
-        def _boom(*a, **kw):
-            raise OSError("segfault simulation")
+        built = make_kernel(_tiny_invariants(n_cvt, lmm_mode), 1)
 
-        with pytest.raises(RuntimeError, match="Fused mode-4"):
-            _guarded_compute(
-                _boom,
-                operation="Fused mode-4 C workspace compute",
-                write_offset=100,
-                n_filtered=500,
-            )
+        def _boom(_chunk, _threads):
+            raise exc
 
-    def test_wald_label(self):
-        """Wald workspace failure includes 'Wald' in the message."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+        return Kernel(label=built.label, n_filtered=built.n_filtered, call=_boom)
 
-        def _boom(*a, **kw):
-            raise OSError("segfault simulation")
+    def test_every_path_has_its_own_label(self):
+        """Seven labels over eight (n_cvt, mode) shapes, and none repeat a path.
 
-        with pytest.raises(RuntimeError, match="Wald"):
-            _guarded_compute(
-                _boom,
-                operation="Wald C workspace compute",
-                write_offset=200,
-                n_filtered=1000,
-            )
+        Eight shapes, seven labels: SoA-split serves modes 2 and 3 with one
+        kernel, so those two share. Every other shape is distinguishable,
+        including mode 4 against Wald within each fused family.
+        """
+        from jamma.lmm.chunk_kernel import make_kernel
 
-    def test_score_lrt_label(self):
-        """Score/LRT dispatch failure includes 'Score/LRT' in the message."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+        if compute_numpy._accel is None:
+            pytest.skip("kernel construction needs the C extension")
 
-        def _boom(*a, **kw):
-            raise OSError("segfault simulation")
+        labels = {
+            (n_cvt, mode): make_kernel(_tiny_invariants(n_cvt, mode), 1).label
+            for n_cvt in (1, 2)
+            for mode in (1, 2, 3, 4)
+        }
+        assert len(set(labels.values())) == 7, labels
+        assert labels[1, 4] != labels[1, 1], "mode 4 must not report as Wald"
+        assert labels[2, 4] != labels[2, 1], "mode 4 must not report as Wald"
+        assert labels[2, 2] == labels[2, 3], "both are the one SoA-split kernel"
 
-        with pytest.raises(RuntimeError, match="Score/LRT"):
-            _guarded_compute(
-                _boom,
-                operation="Score/LRT C batch dispatch",
-                write_offset=50,
-                n_filtered=200,
-            )
+    @pytest.mark.parametrize(
+        ("n_cvt", "lmm_mode"), [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 2)]
+    )
+    def test_wrapped_error_names_the_kernel_and_the_offset(self, n_cvt, lmm_mode):
+        """A segfault-shaped failure reports its own label, offset, and total."""
+        if compute_numpy._accel is None:
+            pytest.skip("kernel construction needs the C extension")
 
-    def test_error_includes_snp_offset(self):
-        """Error message includes SNP offset and total count."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+        kernel = self._failing_kernel(n_cvt, lmm_mode, OSError("segfault"))
+        with pytest.raises(RuntimeError) as exc_info:
+            kernel.compute_chunk(np.zeros((1, 8)), 1, 300)
 
-        def _boom(*a, **kw):
-            raise OSError("kaboom")
+        message = str(exc_info.value)
+        assert kernel.label in message
+        assert "300/500" in message
+        assert "300 SNPs before failure" in message
 
-        with pytest.raises(RuntimeError, match=r"300/1000") as exc_info:
-            _guarded_compute(
-                _boom,
-                operation="Wald C workspace compute",
-                write_offset=300,
-                n_filtered=1000,
-            )
-        assert "300 SNPs before failure" in str(exc_info.value)
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            MemoryError("out of memory"),
+            ValueError("bad value"),
+            TypeError("wrong type"),
+            OverflowError("overflow"),
+        ],
+    )
+    def test_diagnosable_exceptions_pass_through_unwrapped(self, exc):
+        """These four say what went wrong already; wrapping would bury them."""
+        if compute_numpy._accel is None:
+            pytest.skip("kernel construction needs the C extension")
 
-    def test_memory_error_passes_through(self):
-        """MemoryError is not wrapped in RuntimeError."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
-
-        def _oom(*a, **kw):
-            raise MemoryError("out of memory")
-
-        with pytest.raises(MemoryError, match="out of memory"):
-            _guarded_compute(
-                _oom,
-                operation="Wald C workspace compute",
-                write_offset=0,
-                n_filtered=100,
-            )
-
-    def test_value_error_passes_through(self):
-        """ValueError is not wrapped in RuntimeError."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
-
-        def _bad(*a, **kw):
-            raise ValueError("bad value")
-
-        with pytest.raises(ValueError, match="bad value"):
-            _guarded_compute(
-                _bad,
-                operation="Wald C workspace compute",
-                write_offset=0,
-                n_filtered=100,
-            )
-
-    def test_type_error_passes_through(self):
-        """TypeError is not wrapped in RuntimeError."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
-
-        def _bad(*a, **kw):
-            raise TypeError("wrong type")
-
-        with pytest.raises(TypeError, match="wrong type"):
-            _guarded_compute(
-                _bad,
-                operation="Wald C workspace compute",
-                write_offset=0,
-                n_filtered=100,
-            )
-
-    def test_overflow_error_passes_through(self):
-        """OverflowError is not wrapped in RuntimeError."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
-
-        def _bad(*a, **kw):
-            raise OverflowError("overflow")
-
-        with pytest.raises(OverflowError, match="overflow"):
-            _guarded_compute(
-                _bad,
-                operation="Wald C workspace compute",
-                write_offset=0,
-                n_filtered=100,
-            )
+        kernel = self._failing_kernel(1, 1, exc)
+        with pytest.raises(type(exc), match=str(exc)):
+            kernel.compute_chunk(np.zeros((1, 8)), 1, 0)
 
     def test_exception_chaining_preserved(self):
         """The original exception is chained via 'from exc'."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+        if compute_numpy._accel is None:
+            pytest.skip("kernel construction needs the C extension")
 
-        def _boom(*a, **kw):
-            raise OSError("root cause")
-
+        kernel = self._failing_kernel(1, 1, OSError("root cause"))
         with pytest.raises(RuntimeError) as exc_info:
-            _guarded_compute(
-                _boom,
-                operation="LMM chunk compute",
-                write_offset=0,
-                n_filtered=100,
-            )
-        assert exc_info.value.__cause__ is not None
+            kernel.compute_chunk(np.zeros((1, 8)), 1, 0)
+
         assert isinstance(exc_info.value.__cause__, OSError)
         assert "root cause" in str(exc_info.value.__cause__)
 
-    def test_successful_call_returns_result(self):
-        """Successful function call returns result without wrapping."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+    def test_successful_call_returns_result_unwrapped(self):
+        """A kernel that succeeds hands its dict straight back."""
+        from jamma.lmm.chunk_kernel import Kernel
 
-        def _ok(*a, **kw):
-            return {"betas": [1.0], "ses": [0.1]}
-
-        result = _guarded_compute(
-            _ok,
-            operation="Wald C workspace compute",
-            write_offset=0,
+        expected = {"betas": [1.0], "ses": [0.1]}
+        kernel = Kernel(
+            label="Fused Uab dispatch",
             n_filtered=100,
+            call=lambda _chunk, _threads: expected,
         )
-        assert result == {"betas": [1.0], "ses": [0.1]}
+        assert kernel.compute_chunk(np.zeros((1, 8)), 1, 0) is expected
 
 
 # ---------------------------------------------------------------------------

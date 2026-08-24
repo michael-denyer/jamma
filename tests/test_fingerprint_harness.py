@@ -90,8 +90,7 @@ def test_no_jamma_module_holds_a_raw_c_callable():
     import sys
 
     import jamma.lmm._lmm_accel as accel
-    import jamma.lmm.chunk_dispatch
-    import jamma.lmm.chunk_workspaces
+    import jamma.lmm.chunk_kernel
     import jamma.lmm.compute_numpy
     import jamma.lmm.loco
     import jamma.lmm.runner_numpy

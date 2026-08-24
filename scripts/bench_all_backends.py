@@ -154,9 +154,9 @@ def _bench_numpy_inner(
     results: dict[str, float | None] = {}
 
     # Optionally disable the C extension for the pure-Python comparison.
-    # compute_numpy is the single source of truth: chunk_runner_numpy,
-    # chunk_workspaces and chunk_sizing all read it live, so dropping the
-    # extension here forces the NumPy fallback everywhere.
+    # compute_numpy is the single source of truth: chunk_runner_numpy reads
+    # it live when it selects the dispatch path, so dropping the extension
+    # here forces the NumPy fallback everywhere.
     cn_saved = cn._accel
     if disable_c:
         cn._accel = None

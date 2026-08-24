@@ -8,9 +8,9 @@ per-chunk diagnostics. Callers provide raw genotype chunks
 (``raw_chunk_source_factory``) and a result sink (``chunk_sink``); everything
 after that boundary is owned here.
 
-The workspace lifecycle, kernel-dispatch ladder, chunk sizing, and pipeline
-driver live in sibling modules (``chunk_workspaces``, ``chunk_dispatch``,
-``chunk_sizing``, ``chunk_pipeline``); this module wires them together.
+The kernel and the state it needs live in ``chunk_kernel``, chunk sizing in
+``chunk_sizing``, and the overlapped driver in ``chunk_pipeline``; this module
+wires them together.
 """
 
 from __future__ import annotations
@@ -33,28 +33,18 @@ from jamma.core.threading import (
     jlinalg_threads,
 )
 from jamma.lmm import compute_numpy
-from jamma.lmm.chunk_dispatch import (
-    _ComputeContext,
-    _dispatch_compute,
-    _guarded_compute,
-)
+from jamma.lmm.chunk_kernel import RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import (
     _drive_pipeline,
     _ThreadBudget,
     compute_pipeline_core_split,
 )
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
-from jamma.lmm.chunk_workspaces import _create_workspaces
-from jamma.lmm.compute_numpy import (
-    LmmMode,
-    compute_lmm_chunk_numpy,
-    select_current_dispatch_path,
-)
+from jamma.lmm.compute_numpy import LmmMode, select_current_dispatch_path
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
-    compute_uab_invariant_soa,
     reset_p_yy_warned,
 )
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
@@ -287,49 +277,23 @@ def run_lmm_chunk_source_numpy(
     budget = _ThreadBudget(pipeline_rot_threads, pipeline_omp_threads)
     n_refine = max(n_refine, 20)
 
-    uab_invariant_soa = (
-        compute_uab_invariant_soa(UtW, Uty, n_cvt) if use_split else None
-    )
-    w = UtW[:, 0].copy() if dispatch.needs_null_w else None
-
-    lmm_workspace, score_fused_workspace, lrt_fused_workspace = _create_workspaces(
-        dispatch,
-        lmm_mode,
-        n_cvt,
-        eigenvalues_np,
-        uab_invariant_soa,
-        UtW,
-        Uty,
-        w,
-        hi_eval_for_compute,
-        logl_H0_for_compute,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        pipeline_omp_threads,
-    )
-    compute_ctx = _ComputeContext(
+    invariants = RunInvariants.build(
         dispatch=dispatch,
         lmm_mode=lmm_mode,
         n_cvt=n_cvt,
-        lmm_workspace=lmm_workspace,
-        score_fused_workspace=score_fused_workspace,
-        lrt_fused_workspace=lrt_fused_workspace,
-        w=w,
+        n_samples=n_samples,
+        n_filtered=n_filtered,
+        eigenvalues=eigenvalues_np,
+        UtW=UtW,
         Uty=Uty,
         Hi_eval_null=hi_eval_for_compute,
-        uab_invariant_soa=uab_invariant_soa,
-        eigenvalues_np=eigenvalues_np,
-        n_samples=n_samples,
+        logl_H0=logl_H0_for_compute,
         l_min=l_min,
         l_max=l_max,
         n_grid=n_grid,
         n_refine=n_refine,
-        logl_H0=logl_H0_for_compute,
-        n_filtered=n_filtered,
     )
+    kernel = make_kernel(invariants, pipeline_omp_threads)
 
     raw_chunk_source = raw_chunk_source_factory(chunk_size)
 
@@ -445,27 +409,7 @@ def run_lmm_chunk_source_numpy(
             blas_threads(1) if compute_numpy._accel is not None else nullcontext()
         )
         with blas_ctx:
-            if use_split:
-                cr = _dispatch_compute(compute_ctx, chunk_data, budget.omp, processed)
-            else:
-                cr = _guarded_compute(
-                    compute_lmm_chunk_numpy,
-                    lmm_mode,
-                    n_cvt,
-                    eigenvalues_np,
-                    chunk_data,
-                    n_samples,
-                    l_min=l_min,
-                    l_max=l_max,
-                    n_grid=n_grid,
-                    n_refine=n_refine,
-                    Hi_eval_null=hi_eval_for_compute,
-                    logl_H0=logl_H0_for_compute,
-                    n_threads=budget.omp,
-                    operation="LMM chunk compute",
-                    write_offset=processed,
-                    n_filtered=n_filtered,
-                )
+            cr = kernel.compute_chunk(chunk_data, budget.omp, processed)
         compute_s += time.perf_counter() - t_compute_start
 
         t_write_start = time.perf_counter()

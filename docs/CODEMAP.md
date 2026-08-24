@@ -263,7 +263,10 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_numpy()` | Vectorized Wald: REML optimize -> beta, SE, p_wald | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:41](../src/jamma/lmm/runner_numpy.py#L41) |
+| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:141](../src/jamma/lmm/runner_numpy.py#L141) |
+| 4Nb | `GenotypeSource` | Protocol a run's genotype provider implements (stats + chunk stream) | [runner_numpy.py:49](../src/jamma/lmm/runner_numpy.py#L49) |
+| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:76](../src/jamma/lmm/runner_numpy.py#L76) |
+| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:370](../src/jamma/lmm/runner_numpy.py#L370) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:309](../src/jamma/lmm/chunk_runner_numpy.py#L309) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:127](../src/jamma/lmm/chunk_runner_numpy.py#L127) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:48](../src/jamma/lmm/chunk_kernel.py#L48) |
@@ -277,7 +280,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 | 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:53](../src/jamma/lmm/runner_numpy_streaming.py#L53) |
+| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:33](../src/jamma/lmm/runner_numpy_streaming.py#L33) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:106](../src/jamma/lmm/runner_numpy_streaming.py#L106) |
 | 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:115](../src/jamma/lmm/runner.py#L100) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:88](../src/jamma/lmm/schema.py#L88) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:114](../src/jamma/lmm/schema.py#L114) |

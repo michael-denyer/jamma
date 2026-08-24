@@ -117,8 +117,8 @@ src/jamma/
 │   ├── eigen.py            # Kinship eigendecomposition via jlinalg.eigh
 │   ├── eigen_io.py         # Read/write eigenvalue and eigenvector files (.npy / .txt)
 │   ├── runner.py           # ExecutionPlan; select_execution_mode()
-│   ├── runner_numpy.py     # Batch runner: full genotype matrix in RAM + C extension
-│   ├── runner_numpy_streaming.py  # Streaming runner: two-pass disk I/O + C extension
+│   ├── runner_numpy.py     # Shared run body (_run_numpy_lmm) + GenotypeSource + batch wrapper
+│   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming wrapper
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 │   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation
 │   ├── chunk_kernel.py     # The one dispatch match: workspace + its call

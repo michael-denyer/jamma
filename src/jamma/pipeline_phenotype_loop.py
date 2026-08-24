@@ -203,6 +203,7 @@ def _run_batch(
         eigenvectors=eigenvectors,
         config=config.lmm_config(),
         output_path=assoc_path,
+        hwe_threshold=config.hwe_threshold,
     )
 
     return run_result

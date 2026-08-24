@@ -10,6 +10,7 @@ batch-stat functions.
 import math
 import subprocess
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -473,40 +474,67 @@ def test_jax_free_export_surface() -> None:
         )
 
 
-@pytest.mark.tier0
-def test_pipeline_hwe_numpy_raises() -> None:
-    """HWE filtering with NumPy backend raises ValueError."""
-    from pathlib import Path
+@pytest.mark.tier1
+def test_batch_hwe_matches_streaming_hwe() -> None:
+    """Batch HWE filtering removes the same SNPs streaming removes.
 
-    from jamma.pipeline import PipelineConfig, PipelineRunner
+    Batch used to reject hwe_threshold outright; now both runners filter
+    through the same filter_snp_stats call. If batch silently ignored the
+    threshold, its count would match the unfiltered run and this fails.
+    """
+    from jamma.io import load_plink_binary
+    from jamma.kinship.compute import compute_centered_kinship
+    from jamma.lmm.runner_numpy import run_lmm_association_numpy
+    from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
+    from tests.conftest import load_phenotypes_from_fam, require_fixture
 
-    config = PipelineConfig(
-        bfile=Path("dummy"),
-        lmm_mode=1,
-        backend="numpy",
-        hwe_threshold=0.001,
+    bed = Path("tests/fixtures/gemma_loco/test")
+    require_fixture(
+        bed.with_suffix(".bed"), bed.with_suffix(".bim"), bed.with_suffix(".fam")
     )
-    runner = PipelineRunner(config)
-    with pytest.raises(ValueError, match=r"HWE filtering.*not supported.*NumPy.*batch"):
-        runner.run()
+    plink = load_plink_binary(bed)
+    phen = load_phenotypes_from_fam(bed.with_suffix(".fam"))
+    genotypes = plink.genotypes.astype(np.float64)
+    kinship = compute_centered_kinship(genotypes.copy())
+    snp_info = [
+        {
+            "chr": str(plink.chromosome[i]),
+            "rs": plink.sid[i],
+            "pos": int(plink.bp_position[i]),
+            "a1": plink.allele_1[i],
+            "a0": plink.allele_2[i],
+        }
+        for i in range(plink.n_snps)
+    ]
+    cfg = LmmConfig(lmm_mode=1, check_memory=False, show_progress=False)
 
-
-@pytest.mark.tier0
-def test_check_hwe_support_accepts_numpy_streaming() -> None:
-    """HWE filtering with numpy-streaming does NOT raise."""
-    from pathlib import Path
-
-    from jamma.lmm.runner import ExecutionPlan
-    from jamma.pipeline import PipelineConfig, PipelineRunner
-
-    plan = ExecutionPlan("streaming", "test")
-
-    config = PipelineConfig(
-        bfile=Path("dummy"),
-        lmm_mode=1,
-        backend="numpy-streaming",
-        hwe_threshold=0.001,
+    unfiltered = run_lmm_association_numpy(
+        genotypes=genotypes.copy(),
+        phenotypes=phen,
+        kinship=kinship.copy(),
+        snp_info=snp_info,
+        config=cfg,
     )
-    runner = PipelineRunner(config)
-    # Should not raise — numpy-streaming supports HWE
-    runner._check_hwe_support(plan)
+    hwe_threshold = 0.5
+    batch = run_lmm_association_numpy(
+        genotypes=genotypes.copy(),
+        phenotypes=phen,
+        kinship=kinship.copy(),
+        snp_info=snp_info,
+        config=cfg,
+        hwe_threshold=hwe_threshold,
+    )
+    stream = run_lmm_association_numpy_streaming(
+        bed_path=bed,
+        phenotypes=phen,
+        kinship=kinship.copy(),
+        chunk_size=60,
+        config=cfg,
+        hwe_threshold=hwe_threshold,
+    )
+
+    assert batch.n_tested < unfiltered.n_tested, (
+        "hwe_threshold=0.5 removed no SNPs; the batch runner is ignoring it"
+    )
+    assert batch.n_tested == stream.n_tested
+    assert [r.rs for r in batch.associations] == [r.rs for r in stream.associations]

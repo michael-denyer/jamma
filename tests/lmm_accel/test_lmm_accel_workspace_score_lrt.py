@@ -9,9 +9,7 @@ import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
 
-_score_fused_ws_available = compute_numpy._accel is not None and getattr(
-    compute_numpy, "_accel", None
-)
+_score_fused_ws_available = compute_numpy._accel is not None
 
 
 class TestScoreWorkspaceParity:
@@ -219,9 +217,7 @@ class TestScoreWorkspaceParity:
             _c().compute_score_fused_ws_c(wald_ws, utg_t, 1)
 
 
-_lrt_fused_ws_available = compute_numpy._accel is not None and getattr(
-    compute_numpy, "_accel", None
-)
+_lrt_fused_ws_available = compute_numpy._accel is not None
 
 
 class TestLrtWorkspaceParity:

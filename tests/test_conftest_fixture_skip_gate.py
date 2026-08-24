@@ -1,21 +1,22 @@
-"""Self-tests for the two mechanisms that keep a fixture-path bug loud.
+"""Self-tests for the mechanisms that keep a dormant test loud.
 
-Everything under tests/fixtures/ is committed, so a test that cannot find a
-fixture is really a test with a wrong path. Guarded with ``pytest.skip``, that
-bug presents as a green run, which is how two GEMMA-parity tests stayed dormant
-for their whole lifetime (#147).
+A test that skips for a reason that is not true reports green forever. Three
+ways in have bitten this repo: a wrong fixture path (#147), a guard reading a
+source file deleted years earlier (#156), and a capability probe left pointing
+at a flag a refactor removed (#182).
 
-``require_fixture`` is the mechanism the suite uses: it raises
+``require_fixture`` is the mechanism the suite uses for fixture paths: it raises
 ``FileNotFoundError`` naming every missing path, so a wrong path fails loudly and
 a wrong *directory* reports all of its files at once.
 
-``_enforce_no_fixture_skips`` is the gate that stops the guard coming back as a
-skip. It parses every test file at ``pytest_configure`` and rejects a skip whose
-reason names a fixture.
+``_enforce_no_dormant_skips`` is the gate that stops such a guard coming back. It
+parses every test file at ``pytest_configure`` and rejects three shapes: a skip
+whose reason names a fixture, a skip control-dependent on a filesystem check, and
+a skip gated on whether a name still exists.
 
-Both are meta-rules, so both need regression tests: if a refactor softens
-``require_fixture`` back into a skip, or inverts the gate's predicate, dormant
-tests would silently re-enter the suite.
+These are meta-rules, so they need regression tests of their own: if a refactor
+softens ``require_fixture`` back into a skip, or inverts one of the gate's
+predicates, dormant tests would silently re-enter the suite.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import (
+    _attribute_probed_skip_lines,
     _enforce_no_dormant_skips,
     _fixture_skip_lines,
     _path_guarded_skip_lines,
@@ -202,6 +204,79 @@ class TestPathGuardedSkipDetection:
         assert _path_lines(source) == [3]
 
 
+def _probe_lines(source: str) -> list[int]:
+    return _attribute_probed_skip_lines(ast.parse(source))
+
+
+class TestAttributeProbedSkipDetection:
+    """The third detector: a skip gated on whether a name still exists.
+
+    Neither detector above sees this one. The reason is honest and says nothing
+    about a fixture, and there is no filesystem check anywhere. The guard reads
+    as a capability check, and behaves as one until the attribute it probes is
+    renamed or deleted, at which point it answers False forever and every test
+    behind it goes quiet. #182 deleted the ``_C_FUSED_AVAILABLE`` flag while
+    ``test_lmm_accel_fused.py`` still probed for it, and nine tests covering the
+    live fused Wald kernel skipped from that merge onward on a machine with the
+    extension fully built.
+    """
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # The exact shape that hid TestFusedParity: the probe is in a
+            # module-level flag, and the decorator only references the flag.
+            (
+                'AVAILABLE = mod._accel is not None and hasattr(mod, "_C_FUSED")\n'
+                '@pytest.mark.skipif(not AVAILABLE, reason="fused C absent")\n'
+                "def test_x(): pass\n"
+            ),
+            # Probe written straight into the decorator.
+            '@pytest.mark.skipif(not hasattr(m, "k"), reason="x")\ndef t(): 0',
+            '@pytest.mark.skipif(condition=not hasattr(m, "k"))\ndef t(): 0',
+            # getattr with a default is the same silent answer.
+            'FLAG = getattr(m, "k", None)\n@pytest.mark.skipif(not FLAG)\ndef t(): 0',
+            # Control-flow form.
+            'if not hasattr(m, "k"):\n    pytest.skip("no kernel")',
+            # One hop through a second binding.
+            (
+                'RAW = hasattr(m, "k")\n'
+                "FLAG = RAW and other\n"
+                "@pytest.mark.skipif(not FLAG)\n"
+                "def t(): 0\n"
+            ),
+        ],
+    )
+    def test_flags_a_skip_gated_on_an_attribute_probe(self, source: str) -> None:
+        assert _probe_lines(source), f"gate missed: {source}"
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # Gating on the capability itself is the correct pattern.
+            '@pytest.mark.skipif(m._accel is None, reason="C absent")\ndef t(): 0',
+            'if not HAS_C_EXTENSION:\n    pytest.skip("C extension not built")',
+            # A probe that asserts rather than skips is what the fix looks like.
+            'assert hasattr(m, "k")',
+            'if not hasattr(m, "k"):\n    pytest.fail("kernel went missing")',
+            # Probes outside any skip are ordinary reflection.
+            'def test_x():\n    assert hasattr(result, "beta")',
+            # An unrelated skip attribute is not pytest's.
+            'if not hasattr(m, "k"):\n    shutil.skip("nope")',
+        ],
+    )
+    def test_leaves_legitimate_guards_alone(self, source: str) -> None:
+        assert not _probe_lines(source), f"gate over-reached: {source}"
+
+    def test_a_self_referential_binding_terminates(self) -> None:
+        """Following bindings must not loop on a name that refers to itself."""
+        assert not _probe_lines("FLAG = FLAG and other\n")
+
+    def test_reports_the_line_of_the_skip_not_the_if(self) -> None:
+        source = 'x = 1\nif not hasattr(m, "k"):\n    pytest.skip("nope")\n'
+        assert _probe_lines(source) == [3]
+
+
 class TestGateOverTheRealSuite:
     """The gate must pass on the tree as committed, and be able to fail."""
 
@@ -246,7 +321,26 @@ class TestGateOverTheRealSuite:
         with pytest.raises(pytest.UsageError, match=r"guarded by a filesystem check"):
             _enforce_no_dormant_skips()
 
-    def test_both_categories_report_together(
+    def test_a_planted_attribute_probed_skip_is_caught(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The path is fine and the reason is honest; only the probe gives it away."""
+        planted = tmp_path / "test_planted.py"
+        planted.write_text(
+            "import pytest\n\n"
+            "import jamma.lmm.compute_numpy as compute_numpy\n\n"
+            "_available = compute_numpy._accel is not None and hasattr(\n"
+            '    compute_numpy, "_C_FUSED_AVAILABLE"\n'
+            ")\n\n\n"
+            '@pytest.mark.skipif(not _available, reason="fused C not available")\n'
+            "def test_fused_kernel():\n"
+            "    pass\n"
+        )
+        monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
+        with pytest.raises(pytest.UsageError, match=r"gated on whether a name exists"):
+            _enforce_no_dormant_skips()
+
+    def test_every_category_reports_together(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """One run must name every offender, not stop at the first category.
@@ -263,9 +357,16 @@ class TestGateOverTheRealSuite:
             "    if not p.exists():\n"
             '        pytest.skip("nope")\n'
         )
+        (tmp_path / "test_probe.py").write_text(
+            "import pytest\n\n\n"
+            "def test_c():\n"
+            '    if not hasattr(m, "k"):\n'
+            '        pytest.skip("nope")\n'
+        )
         monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
         with pytest.raises(pytest.UsageError) as excinfo:
             _enforce_no_dormant_skips()
         message = str(excinfo.value)
         assert "test_word.py" in message
         assert "test_shape.py" in message
+        assert "test_probe.py" in message

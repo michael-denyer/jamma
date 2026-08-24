@@ -179,11 +179,7 @@ class TestHiEvalNullPositivity:
             )
 
 
-_fused_c_available = (
-    compute_numpy._accel is not None
-    and hasattr(compute_numpy, "_C_FUSED_AVAILABLE")
-    and compute_numpy._accel is not None
-)
+_fused_c_available = compute_numpy._accel is not None
 
 
 @pytest.mark.tier0

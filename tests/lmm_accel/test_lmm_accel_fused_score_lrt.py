@@ -15,13 +15,9 @@ from jamma.lmm.likelihood_numpy import (
 )
 from jamma.lmm.schema import LmmConfig
 
-_score_fused_available = compute_numpy._accel is not None and getattr(
-    compute_numpy, "_accel", None
-)
+_score_fused_available = compute_numpy._accel is not None
 
-_lrt_fused_available = compute_numpy._accel is not None and getattr(
-    compute_numpy, "_accel", None
-)
+_lrt_fused_available = compute_numpy._accel is not None
 
 
 @pytest.fixture

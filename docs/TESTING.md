@@ -279,7 +279,7 @@ fails the session, listing each file and line. Same mechanism as the §1.6 tier
 gate: source-parsed and run once, so it holds under xdist, `-k` and `-m`, and it
 flags the guard even in a file whose tests never ran.
 
-It applies **two independent detectors**, and reports both categories in one
+It applies **three independent detectors**, and reports every category in one
 failure so a sweep clears in a single pass:
 
 **1. The reason names a fixture** (`_fixture_skip_lines`) — reads the reason
@@ -311,6 +311,28 @@ chooses it freely; the shape is not optional.
 A guard now has to evade both detectors, and the evasions pull against each
 other: avoid the word and the shape still shows, keep the check implicit and the
 wording has nothing left to describe it with.
+
+**3. The skip is gated on whether a name exists**
+(`_attribute_probed_skip_lines`) — flags a `pytest.skip` or
+`@pytest.mark.skipif` whose condition reaches a `hasattr` or `getattr` call,
+following module-level bindings so the usual
+`AVAILABLE = ... hasattr(mod, "FLAG")` plus `skipif(not AVAILABLE, ...)` pair is
+caught rather than just the inline form.
+
+Detector 3 covers what neither of the others can see: a guard whose path is fine
+and whose reason is honest, but which asks whether a name is still there.
+`hasattr` answers False for a deleted name exactly as readily as for one that was
+never built, so the guard turns itself off during an unrelated refactor.
+`test_lmm_accel_fused.py` probed `compute_numpy._C_FUSED_AVAILABLE`; #182
+collapsed the thirteen `_C_*_AVAILABLE` flags to a single capability bit and
+removed it, and the nine `TestFusedParity` tests covering the live fused Wald
+kernel skipped from that merge onward, on machines with the extension fully
+built.
+
+**Gate on the capability, not on the name.** For the C extension that is
+`compute_numpy._accel is not None`, which is the one bit the ABI-equality gate
+actually admits. If a test needs a specific attribute to be present, `assert` it:
+the assert fails when the name goes, which is the whole point.
 
 - **Skips about the environment are untouched.** `C extension not available`,
   `uv not available on PATH`, an absent optional import and an env-var gate are

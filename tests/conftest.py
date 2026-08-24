@@ -51,6 +51,11 @@ _FIXTURE_WORD = "fixture"
 # pytest.fail, an assert, or require_fixture below -- never to skip.
 _PATH_PREDICATES = frozenset({"exists", "is_file", "is_dir", "isfile", "isdir"})
 
+# Builtins that ask whether a name exists on an object. Harmless in an assert,
+# which fails when the name is gone; in a skip condition they mean the guard
+# silently turns itself off the day the name is renamed or deleted.
+_ATTRIBUTE_PROBES = frozenset({"hasattr", "getattr"})
+
 
 def _module_level_marker_names(tree: ast.Module) -> set[str]:
     """Return the set of marker names assigned to ``pytestmark`` at module level.
@@ -237,6 +242,80 @@ def _path_guarded_skip_lines(tree: ast.Module) -> list[int]:
     return sorted(set(lines))
 
 
+def _module_level_bindings(tree: ast.Module) -> dict[str, ast.expr]:
+    """Map each module-level ``NAME = expr`` to its right-hand side."""
+    return {
+        node.targets[0].id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    }
+
+
+def _probes_an_attribute(expr: ast.expr, bindings: dict[str, ast.expr]) -> bool:
+    """True if ``expr`` asks whether a name exists on an object.
+
+    Follows module-level bindings, because the availability flag is almost
+    always computed once at import and referenced by the decorator
+    (``AVAILABLE = ... hasattr(mod, "X") ...`` then
+    ``@pytest.mark.skipif(not AVAILABLE, ...)``). Looking only inside the
+    decorator's own expression would miss every real instance. Each name is
+    followed at most once, so a self-referential binding terminates.
+    """
+    seen: set[str] = set()
+    stack = [expr]
+    while stack:
+        current = stack.pop()
+        for sub in ast.walk(current):
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Name)
+                and sub.func.id in _ATTRIBUTE_PROBES
+            ):
+                return True
+            if isinstance(sub, ast.Name) and sub.id in bindings and sub.id not in seen:
+                seen.add(sub.id)
+                stack.append(bindings[sub.id])
+    return False
+
+
+def _attribute_probed_skip_lines(tree: ast.Module) -> list[int]:
+    """Line numbers of skips gated on whether a name exists.
+
+    The shape this catches: a capability flag built from ``hasattr`` against a
+    module attribute, feeding a ``skipif``. It reads as a capability check and
+    behaves like one right up until the attribute is renamed or deleted, at
+    which point every test behind it skips and the run stays green. Nine tests
+    covering the fused Wald kernel sat dormant that way once the flag they
+    probed was removed (#182).
+
+    Same two shapes as ``_path_guarded_skip_lines``, for the same reason: an
+    ``if``/``pytest.skip`` pair and a ``skipif`` decorator are both how the
+    guard gets written.
+    """
+    bindings = _module_level_bindings(tree)
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and _probes_an_attribute(node.test, bindings):
+            lines += [
+                sub.lineno
+                for branch in (node.body, node.orelse)
+                for stmt in branch
+                for sub in ast.walk(stmt)
+                if isinstance(sub, ast.Call) and _is_pytest_skip_call(sub)
+            ]
+        elif _is_pytest_skipif_call(node):
+            assert isinstance(node, ast.Call)  # narrowed by the predicate
+            conditions = [
+                *node.args,
+                *(kw.value for kw in node.keywords if kw.arg == "condition"),
+            ]
+            if any(_probes_an_attribute(c, bindings) for c in conditions):
+                lines.append(node.lineno)
+    return sorted(set(lines))
+
+
 def _fixture_skip_lines(tree: ast.Module) -> list[int]:
     """Line numbers of skips whose reason names a fixture.
 
@@ -269,11 +348,17 @@ def _fixture_skip_lines(tree: ast.Module) -> list[int]:
 def _enforce_no_dormant_skips() -> None:
     """Source-parse every test file and reject skips that hide a wrong path.
 
-    Two detectors, reported together. ``_fixture_skip_lines`` reads the reason
+    Three detectors, reported together. ``_fixture_skip_lines`` reads the reason
     string; ``_path_guarded_skip_lines`` reads the control flow. A guard has to
     evade both to stay hidden, and the two evasions pull in opposite directions:
     avoid the word and the shape still shows, keep the check implicit and the
     wording has nothing left to describe it with.
+
+    ``_attribute_probed_skip_lines`` covers a third way for a guard to go quiet,
+    which neither of the other two sees: the precondition is real and correctly
+    worded, but it is expressed as ``hasattr`` against a name that later gets
+    deleted. Nothing about the path or the wording changes; the condition just
+    starts answering False forever (#182).
 
     Source-parsed and run once from ``pytest_configure``, for the same reason
     the tier gate above is: it then holds under xdist, ``-k``, ``-m``, and any
@@ -287,16 +372,17 @@ def _enforce_no_dormant_skips() -> None:
     most new guards. Reading the source instead catches the guard whatever it
     says, before a single test executes.
 
-    Both categories are collected before raising, for the reason
+    Every category is collected before raising, for the reason
     ``require_fixture`` names every missing path at once: fixing one offender and
     re-running to discover the next is the slow way to clear a sweep.
 
     Raises:
-        pytest.UsageError: Naming every file and line in both categories, with
+        pytest.UsageError: Naming every file and line in every category, with
             the fix for each.
     """
     by_word: list[str] = []
     by_shape: list[str] = []
+    by_probe: list[str] = []
     repo_root = _TESTS_DIR.parent
     for path in sorted(_TESTS_DIR.rglob("test_*.py")):
         try:
@@ -308,7 +394,8 @@ def _enforce_no_dormant_skips() -> None:
         rel = path.relative_to(repo_root)
         by_word += [f"{rel}:{line}" for line in _fixture_skip_lines(tree)]
         by_shape += [f"{rel}:{line}" for line in _path_guarded_skip_lines(tree)]
-    if not (by_word or by_shape):
+        by_probe += [f"{rel}:{line}" for line in _attribute_probed_skip_lines(tree)]
+    if not (by_word or by_shape or by_probe):
         return
     parts: list[str] = []
     if by_word:
@@ -332,6 +419,18 @@ def _enforce_no_dormant_skips() -> None:
             "the file genuinely may be absent because it is a build output, "
             "gate on the build flag that predicts it (HAS_C_EXTENSION and the "
             "like) rather than on the path."
+        )
+    if by_probe:
+        listing = "\n  ".join(by_probe)
+        parts.append(
+            "The following skips are gated on whether a name exists:\n  "
+            f"{listing}\n\n"
+            "hasattr and getattr answer False for a name that was deleted just "
+            "as readily as for one that was never built, so the guard turns "
+            "itself off during an unrelated rename and the run stays green. "
+            "Gate on the capability instead (compute_numpy._accel is not None "
+            "for the C extension), and assert the attribute if the test needs "
+            "it to be there."
         )
     parts.append("See docs/TESTING.md §1.11.")
     raise pytest.UsageError("\n\n".join(parts))

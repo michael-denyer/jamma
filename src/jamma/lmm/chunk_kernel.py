@@ -20,7 +20,6 @@ from typing import Any, assert_never
 import numpy as np
 
 from jamma.lmm.compute_numpy import (
-    LmmMode,
     _c,
     _compute_lrt_split_numpy,
     _compute_score_split_numpy,
@@ -36,6 +35,7 @@ from jamma.lmm.compute_numpy import (
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood_numpy import compute_uab_invariant_soa
+from jamma.lmm.schema import LmmMode
 
 # What a kernel hands back. The C kernels return TypedDicts (WaldResult and
 # friends) and the split paths return plain dicts, and a TypedDict is not

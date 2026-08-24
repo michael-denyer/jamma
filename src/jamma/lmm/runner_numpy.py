@@ -10,7 +10,6 @@ import time
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 from loguru import logger
@@ -21,7 +20,6 @@ from jamma.lmm.chunk_runner_numpy import (
     RawLmmChunk,
     run_lmm_chunk_source_numpy,
 )
-from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     prepare_lmm_run,
@@ -103,7 +101,7 @@ def run_lmm_association_numpy(
     show_progress = config.show_progress
     # schema.LmmMode is a loose int alias (kept loose to avoid a circular
     # import); the chunk engine wants the Literal.
-    lmm_mode = cast(LmmMode, config.lmm_mode)
+    lmm_mode = config.lmm_mode
 
     # Memory check before workflow (uses genotype shape, runner-specific)
     n_samples, n_snps = genotypes.shape

@@ -35,7 +35,7 @@ from jamma.lmm import compute_numpy
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
-from jamma.lmm.compute_numpy import LmmMode, select_current_dispatch_path
+from jamma.lmm.compute_numpy import select_current_dispatch_path
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood_numpy import (
@@ -45,6 +45,7 @@ from jamma.lmm.likelihood_numpy import (
 )
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
+from jamma.lmm.schema import LmmMode
 
 # Minimum number of chunks before pipelined execution is worthwhile.
 _MIN_PIPELINE_CHUNKS = 8

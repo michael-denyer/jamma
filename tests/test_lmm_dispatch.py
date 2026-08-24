@@ -15,8 +15,9 @@ from itertools import product
 import pytest
 
 from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
+from jamma.lmm.schema import LmmMode
 
-_MODES = (1, 2, 3, 4)
+_MODES: tuple[LmmMode, ...] = (1, 2, 3, 4)
 _NCVT_1 = (1,)
 _NCVT_MANY = (2, 3, 5, 100, 101)
 
@@ -41,7 +42,7 @@ _FEEDS_RAW_UTG = {
 _SCORE_OR_LRT = {DispatchPath.FUSED_SCORE_WS, DispatchPath.FUSED_LRT_WS}
 
 
-def _select(n_cvt: int, lmm_mode: int, *, accel: bool = True) -> DispatchPath:
+def _select(n_cvt: int, lmm_mode: LmmMode, *, accel: bool = True) -> DispatchPath:
     return select_dispatch_path(n_cvt, lmm_mode, accel=accel, log_choices=False)
 
 

@@ -14,7 +14,6 @@ import contextlib
 import gc
 import time
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 from loguru import logger
@@ -26,7 +25,6 @@ from jamma.core.snp_stats import (
 )
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
-from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
@@ -163,7 +161,6 @@ def run_lmm_association_numpy_streaming(
     eigenvectors = setup.eigenvectors
     n_valid = setup.n_samples
     valid_mask = setup.valid_mask
-    lmm_mode = cast(LmmMode, lmm_mode)
 
     n_samples = phenotypes.shape[0]
 

@@ -8,8 +8,7 @@ Modules:
 - runner_numpy_streaming: Disk streaming with C extension
 - chunk_runner_numpy: Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 - chunk_sizing: RAM-budgeted chunk-size computation
-- chunk_workspaces: Persistent C-workspace lifecycle
-- chunk_dispatch: Per-chunk C/Python kernel dispatch ladder
+- chunk_kernel: The one dispatch match, and the per-run state it needs
 - chunk_pipeline: Rotation/compute thread split and overlapped pipeline driver
 - chunk: Chunk size computation
 - prepare_common: Shared setup (covariates, eigendecomp, null model)

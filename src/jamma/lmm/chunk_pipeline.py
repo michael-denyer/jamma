@@ -1,24 +1,26 @@
 """Rotation/compute thread split and the overlapped chunk pipeline driver.
 
-Owns the core-split heuristics (static and adaptive) and ``_drive_pipeline``,
-which overlaps background rotation of chunk N+1 with foreground C compute of
-chunk N. Split out from ``chunk_runner_numpy`` so the concurrency machinery is
-isolated from chunk sizing, workspace allocation, and per-chunk dispatch.
+Owns the core-split heuristics (static, adaptive, and the per-run plan) and
+``_drive_pipeline``, which overlaps background rotation of chunk N+1 with
+foreground C compute of chunk N. Split out from ``chunk_runner_numpy`` so the
+concurrency machinery is isolated from chunk sizing and kernel dispatch.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from typing import Any
+from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
 from jamma.core.estimates import estimate_lmm_seconds
 from jamma.core.progress import create_progress_bar
-from jamma.core.threading import is_blas_controllable
+from jamma.core.threading import get_physical_core_count, is_blas_controllable
+
+if TYPE_CHECKING:
+    from jamma.lmm.chunk_runner_numpy import _ChunkEngine
 
 
 def compute_pipeline_core_split(n_samples: int, total_cores: int) -> tuple[int, int]:
@@ -78,28 +80,43 @@ def compute_adaptive_core_split(
     return rot_threads, compute_threads
 
 
-class _ThreadBudget:
-    """Mutable rotation/compute core split shared with the pipeline callbacks.
+class ThreadPlan(NamedTuple):
+    """How a run divides the physical cores, before any profiling."""
 
-    The pipeline driver re-derives the split from the profiled first chunk and
-    rebinds these fields. Because the prepare/compute callbacks live in the
-    runner's scope while the driver lives here, a bare-int ``nonlocal`` cannot
-    carry the update across the boundary — the callbacks would keep reading the
-    pre-profile values. A shared mutable object does: the callbacks read
-    ``budget.rot`` / ``budget.omp`` and the driver mutates them in place.
+    rot: int
+    omp: int
+    total_cores: int
+
+
+def plan_thread_budget(
+    *, n_samples: int, omp_threads: int, use_pipeline: bool
+) -> ThreadPlan:
+    """Divide the physical cores between rotation and compute for this run.
+
+    A sequential run never rotates and computes at once, so rotation gets every
+    core and compute keeps its own OpenMP budget. A pipelined run overlaps the
+    two, so the cores are split, with rotation taking whatever compute does not.
+    ``_drive_pipeline`` re-derives the split from the profiled first chunk.
     """
+    total_cores = get_physical_core_count()
+    if not use_pipeline:
+        return ThreadPlan(rot=total_cores, omp=omp_threads, total_cores=total_cores)
 
-    __slots__ = ("omp", "rot")
+    logger.debug("Pipeline mode: overlapping rotation/compute")
+    if omp_threads == 1:
+        return ThreadPlan(rot=total_cores, omp=1, total_cores=total_cores)
 
-    def __init__(self, rot: int, omp: int) -> None:
-        self.rot = rot
-        self.omp = omp
+    _rot, compute_threads = compute_pipeline_core_split(n_samples, total_cores)
+    omp = min(compute_threads, omp_threads)
+    rot = max(1, total_cores - omp)
+    logger.debug(
+        f"Pipeline core split: {rot} rotation, {omp} compute (n_samples={n_samples:,})"
+    )
+    return ThreadPlan(rot=rot, omp=omp, total_cores=total_cores)
 
 
 def _drive_pipeline(
-    prepare: Callable[[], Any | None],
-    compute: Callable[[Any], None],
-    budget: _ThreadBudget,
+    engine: _ChunkEngine,
     *,
     n_chunks: int,
     total_cores: int,
@@ -108,27 +125,22 @@ def _drive_pipeline(
     show_progress: bool,
     progress_label: str,
 ) -> float:
-    """Drive the overlapped chunk pipeline shared by both NumPy runners.
+    """Drive the overlapped chunk pipeline shared by every NumPy runner.
 
     Profiles the first chunk, re-derives the rotation/compute core split from
     its measured stage durations, then overlaps rotation of chunk N+1 (a
-    background ``prepare``) with C compute of chunk N (a foreground ``compute``)
-    via a single-worker executor. Both stages release the GIL, so they run
-    concurrently.
+    background ``engine.prepare``) with C compute of chunk N (a foreground
+    ``engine.compute_and_write``) via a single-worker executor. Both stages
+    release the GIL, so they run concurrently.
 
-    Only the chunk source (in-memory fancy-index vs. disk stream) and the result
-    sink differ between runners; those are supplied as ``prepare`` and
-    ``compute`` callbacks. ``prepare`` returns an opaque prepared-chunk object,
-    or None at exhaustion; the driver passes it straight to ``compute`` and
-    never inspects it. Both callbacks read the live core split from ``budget``,
-    which this function mutates after profiling.
+    The engine owns the chunk source, the sink, the buffers, and the live core
+    split, so the driver takes one typed argument rather than a pair of opaque
+    callbacks plus a shared mutable budget object. The split it writes back is
+    what the engine reads on every subsequent chunk.
 
     Args:
-        prepare: Zero-arg callback that prepares the next chunk (slice/impute/
-            rotate), returning an opaque object or None when no chunks remain.
-        compute: Callback that runs C compute on a prepared chunk and writes its
-            results. Owns its own compute/write timing and diagnostics.
-        budget: Shared mutable core split; rebound from the profiled first chunk.
+        engine: The chunk engine to drive. Its ``rot_threads`` and
+            ``omp_threads`` are rebound here from the profiled first chunk.
         n_chunks: Expected chunk count (progress total; adaptive-split guard).
         total_cores: Physical core count for the adaptive split.
         n_samples: Sample count (adaptive-split static fallback; ETA estimate).
@@ -138,43 +150,43 @@ def _drive_pipeline(
 
     Returns:
         Total rotation wall-time (seconds) measured around the prepare calls,
-        for the caller's timing breakdown. Compute/write time is accumulated by
-        the ``compute`` callback itself.
+        for the caller's timing breakdown. Compute and write time is
+        accumulated by the engine itself.
     """
     rotation_s = 0.0
 
     # Profile the first chunk: prepare (rotation) then compute, timing each
     # stage so the adaptive split below uses empirically measured durations.
     t = time.perf_counter()
-    first = prepare()
+    first = engine.prepare()
     t_first_rot = time.perf_counter() - t
     rotation_s += t_first_rot
     if first is None:
         return rotation_s
 
     t = time.perf_counter()
-    compute(first)
+    engine.compute_and_write(first)
     t_first_compute = time.perf_counter() - t
     del first
 
     # Re-derive the core split from measured times (only when chunks remain and
-    # BLAS is controllable). Mutating the shared budget rebinds what the
-    # prepare/compute callbacks read on every subsequent call.
+    # BLAS is controllable). The engine reads these fields on every subsequent
+    # chunk, so writing them here is what makes the new split take effect.
     if n_chunks > 2 and is_blas_controllable():
-        old_rot, old_omp = budget.rot, budget.omp
-        budget.rot, budget.omp = compute_adaptive_core_split(
+        old_rot, old_omp = engine.rot_threads, engine.omp_threads
+        engine.rot_threads, engine.omp_threads = compute_adaptive_core_split(
             t_first_rot, t_first_compute, total_cores, n_samples=n_samples
         )
-        if (budget.rot, budget.omp) != (old_rot, old_omp):
+        if (engine.rot_threads, engine.omp_threads) != (old_rot, old_omp):
             logger.debug(
                 f"Adaptive core split: {old_rot}/{old_omp} -> "
-                f"{budget.rot}/{budget.omp} "
+                f"{engine.rot_threads}/{engine.omp_threads} "
                 f"(rot={t_first_rot:.3f}s, compute={t_first_compute:.3f}s)"
             )
 
     # Seed the pipeline with the next chunk (uses the updated split).
     t = time.perf_counter()
-    current = prepare()
+    current = engine.prepare()
     rotation_s += time.perf_counter() - t
 
     # Progress: profiled chunk + seeded chunk already accounted, so start at 2.
@@ -196,8 +208,8 @@ def _drive_pipeline(
             while current is not None:
                 # Prepare chunk N+1 in the background while computing chunk N;
                 # both release the GIL, so rotation and compute overlap.
-                future = executor.submit(prepare)
-                compute(current)
+                future = executor.submit(engine.prepare)
+                engine.compute_and_write(current)
 
                 t = time.perf_counter()
                 try:

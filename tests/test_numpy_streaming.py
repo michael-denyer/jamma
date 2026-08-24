@@ -97,49 +97,52 @@ NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
 
 @pytest.mark.tier0
 def test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
-    """Hot path must use transa='T', not pass U.T into jlinalg.dgemm.
+    """Hot path must use transa='T', not pass a transposed array into dgemm.
 
     jlinalg's C binding copies non-contiguous inputs to C-contiguous buffers.
     Passing U.T would therefore materialize an O(n^2) copy of the eigenvector
     matrix inside the shared LMM chunk loop used by batch, streaming, and LOCO.
 
     Structural (AST) guard, kept at tier0 per TESTING.md §2.4: it pins a
-    performance invariant that no behavior test can catch — a transposed copy
-    changes speed, not results — by asserting on parsed source, so it stays a
-    fast, dependency-free check.
+    performance invariant that no behavior test can catch, because a
+    transposed copy changes speed, not results.
+
+    The rule is about the shape of the call, not about what the operands are
+    called. An earlier version only recognised the rotation when its second
+    argument was a bare name, and only rejected a transpose when the array was
+    named U, so moving either into an attribute would have quietly disarmed it.
     """
     source = (
         Path(__file__).parent.parent / "src" / "jamma" / "lmm" / "chunk_runner_numpy.py"
     ).read_text()
     tree = ast.parse(source)
 
-    saw_transa_t = False
+    saw_rotation = False
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
 
         func = node.func
-        if (
+        is_dgemm = (
             isinstance(func, ast.Attribute)
             and isinstance(func.value, ast.Name)
             and func.value.id == "jlinalg"
             and func.attr == "dgemm"
-        ):
-            if len(node.args) >= 2:
-                assert not (
-                    isinstance(node.args[0], ast.Attribute)
-                    and isinstance(node.args[0].value, ast.Name)
-                    and node.args[0].value.id == "U"
-                    and node.args[0].attr == "T"
-                ), "streaming runner must not pass U.T directly into jlinalg.dgemm"
-            if len(node.args) >= 2 and isinstance(node.args[1], ast.Name):
-                for kw in node.keywords:
-                    if (
-                        kw.arg == "transa"
-                        and isinstance(kw.value, ast.Constant)
-                        and kw.value.value == "T"
-                    ):
-                        saw_transa_t = True
+        )
+        if is_dgemm and node.args:
+            assert not (
+                isinstance(node.args[0], ast.Attribute) and node.args[0].attr == "T"
+            ), (
+                "chunk runner must not pass a transposed array into jlinalg.dgemm; "
+                "use transa='T' so the C binding transposes in place"
+            )
+            if any(
+                kw.arg == "transa"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value == "T"
+                for kw in node.keywords
+            ):
+                saw_rotation = True
 
         if (
             isinstance(func, ast.Attribute)
@@ -156,7 +159,28 @@ def test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
                 "streaming runner must not materialize np.ascontiguousarray(UtG.T)"
             )
 
-    assert saw_transa_t
+    assert saw_rotation, "no jlinalg.dgemm(..., transa='T') rotation found"
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("bad", [0, -1])
+def test_streaming_rejects_a_chunk_size_below_one_before_reading_the_bed(bad, tmp_path):
+    """A bad chunk_size must fail before pass 1, not after it.
+
+    None means "not specified"; zero does not. Deriving the statistics-pass
+    block with ``chunk_size or _DEFAULT_STATS_CHUNK`` would read zero as unset,
+    stream the entire .bed at the default width, and only then raise from the
+    chunk runner, which on a large dataset is minutes of I/O before the
+    complaint.
+    """
+    with pytest.raises(ValueError, match="chunk_size must be >= 1 or None"):
+        run_lmm_association_numpy_streaming(
+            bed_path=tmp_path / "does-not-exist",
+            phenotypes=np.zeros(4),
+            kinship=np.eye(4),
+            chunk_size=bad,
+            config=LmmConfig(check_memory=False, show_progress=False),
+        )
 
 
 @pytest.fixture

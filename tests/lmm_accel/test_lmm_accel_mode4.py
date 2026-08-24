@@ -6,10 +6,10 @@ live in tests/lmm_accel_helpers.py.
 The kernel under test is the fused mode-4 workspace, which is what
 ``DispatchPath.FUSED`` reaches for lmm_mode 4 at n_cvt=1. These checks used to
 drive the SoA-split mode-4 workspace and compare it against
-``_compose_mode4_from_split``. Neither is reachable: ``dispatch_soa_split``
-raises for modes 1 and 4, saying in as many words that they take the fused
-kernel, and nothing in src calls the compose helper at all. So the comparison
-had a dead kernel on both sides.
+``_compose_mode4_from_split``. Neither is reachable: building an SoA-split
+kernel for mode 1 or 4 raises, saying in as many words that they take the
+fused kernel, and nothing in src called the compose helper at all. So the
+comparison had a dead kernel on both sides.
 
 Numerical agreement with NumPy across all eight outputs is checked in
 test_lmm_accel_fused.py::TestFusedParity::test_mode4_parity. What is left here

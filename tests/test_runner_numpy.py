@@ -14,7 +14,10 @@ import pytest
 
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
+from jamma.lmm import compute_numpy
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+from jamma.lmm.compute_numpy import LmmMode
+from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.stats import AssocResult
@@ -201,6 +204,7 @@ def test_compute_chunk_size_small_dataset():
         n_samples=100,
         n_filtered=500,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     assert chunk == 500, f"Expected 500, got {chunk}"
@@ -212,6 +216,7 @@ def test_compute_chunk_size_large_dataset():
         n_samples=10_000,
         n_filtered=200_000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     assert 100 <= chunk <= 200_000, f"Chunk {chunk} outside expected bounds"
@@ -219,7 +224,9 @@ def test_compute_chunk_size_large_dataset():
 
 def test_compute_chunk_size_zero_bytes():
     """bytes_per_snp=0 (n_samples=0): returns n_filtered directly."""
-    chunk = compute_chunk_size_numpy(n_samples=0, n_filtered=1000, n_cvt=1)
+    chunk = compute_chunk_size_numpy(
+        n_samples=0, n_filtered=1000, n_cvt=1, dispatch=DispatchPath.NUMPY_FALLBACK
+    )
     assert chunk == 1000, f"Expected 1000, got {chunk}"
 
 
@@ -230,6 +237,7 @@ def test_compute_chunk_size_minimum():
         n_samples=1_000_000,
         n_filtered=200,
         n_cvt=10,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     assert chunk >= 100, f"Chunk {chunk} below minimum 100"
@@ -241,13 +249,14 @@ def test_chunk_size_split_larger_than_full():
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(10e9),
     )
     split = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
-        use_split=True,
+        dispatch=DispatchPath.FUSED,
         mem_budget_bytes=int(10e9),
     )
     assert split > full, f"Split chunk ({split}) should exceed full ({full})"
@@ -259,12 +268,14 @@ def test_chunk_size_explicit_budget():
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     large_budget = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(20e9),
     )
     assert large_budget > small_budget
@@ -276,14 +287,14 @@ def test_chunk_size_pipeline_halves_budget():
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
-        use_split=True,
+        dispatch=DispatchPath.FUSED,
         mem_budget_bytes=int(20e9),
     )
     double = compute_chunk_size_numpy(
         n_samples=50_000,
         n_filtered=100_000,
         n_cvt=1,
-        use_split=True,
+        dispatch=DispatchPath.FUSED,
         mem_budget_bytes=int(20e9),
         pipeline_buffers=2,
     )
@@ -304,7 +315,7 @@ def test_chunk_size_auto_scales_with_memory():
             n_samples=50_000,
             n_filtered=100_000,
             n_cvt=1,
-            use_split=True,
+            dispatch=DispatchPath.FUSED,
         )
 
     # 10 GB available → 15% = 1.5 GB (hits 2 GB floor)
@@ -314,62 +325,60 @@ def test_chunk_size_auto_scales_with_memory():
             n_samples=50_000,
             n_filtered=100_000,
             n_cvt=1,
-            use_split=True,
+            dispatch=DispatchPath.FUSED,
         )
 
     assert chunk_big > chunk_small
 
 
-def test_chunk_size_mode4_fused_uses_4col():
-    """All n_cvt=1 split paths use 4-col accounting (SoA-native)."""
-    # Use large n_samples and n_filtered with moderate budget so chunks
-    # don't hit the _MAX_CHUNK cap (200k).
+def test_chunk_size_accounting_by_dispatch_path():
+    """Each path's column count, named by path rather than by mode.
+
+    Every n_cvt=1 C path is in the fused family and hands ``utg_t`` straight to
+    its kernel, so all three size identically at one column per SNP. The
+    SoA-split accounting adds the three varying Uab columns beside it, and the
+    NumPy fallback materialises the whole six-column table.
+
+    This replaced a test that called the sizer three times with identical
+    arguments and asserted the three results matched. It could not fail, and
+    its "4-col" claim had been wrong since the C-availability flags collapsed
+    to one bit: every n_cvt=1 C path had already moved to one column.
+    """
     n_samples = 10_000
     budget = int(5e9)
 
-    # Fused mode-4: 4 cols/SNP
-    fused_chunk = compute_chunk_size_numpy(
-        n_samples=n_samples,
-        n_filtered=500_000,
-        n_cvt=1,
-        use_split=True,
-        mem_budget_bytes=budget,
-    )
-    # Non-fused mode-4 fallback: also 4 cols/SNP (SoA split dispatch)
-    fallback_chunk = compute_chunk_size_numpy(
-        n_samples=n_samples,
-        n_filtered=500_000,
-        n_cvt=1,
-        use_split=True,
-        mem_budget_bytes=budget,
-    )
-    # Wald (mode 1): 4 cols/SNP — should match all other split paths
-    wald_chunk = compute_chunk_size_numpy(
-        n_samples=n_samples,
-        n_filtered=500_000,
-        n_cvt=1,
-        use_split=True,
-        mem_budget_bytes=budget,
-    )
+    def size(dispatch):
+        return compute_chunk_size_numpy(
+            n_samples=n_samples,
+            n_filtered=500_000,
+            n_cvt=1,
+            dispatch=dispatch,
+            mem_budget_bytes=budget,
+        )
 
-    # All n_cvt=1 split paths use 4-col accounting (3 varying SoA + 1 UtG)
-    assert fused_chunk == wald_chunk == fallback_chunk, (
-        f"All split paths should use same accounting: fused={fused_chunk}, "
-        f"wald={wald_chunk}, fallback={fallback_chunk}"
-    )
+    fused = [
+        size(DispatchPath.FUSED),
+        size(DispatchPath.FUSED_SCORE_WS),
+        size(DispatchPath.FUSED_LRT_WS),
+    ]
+    assert len(set(fused)) == 1, f"fused family must size alike, got {fused}"
+
+    # 1 column vs 4 (3 varying + utg_t) vs 6 ((n_cvt+3)(n_cvt+2)/2 at n_cvt=1).
+    # Floor division on both sides: the sizer truncates budget/bytes_per_snp.
+    assert size(DispatchPath.SOA_SPLIT) == fused[0] // 4
+    assert size(DispatchPath.NUMPY_FALLBACK) == fused[0] // 6
 
 
-@pytest.mark.tier0
 def test_runner_mode4_uses_fused_dispatch():
-    """Mode 4 takes a fused path, and the SoA split dispatcher refuses it.
+    """Mode 4 takes a fused path, and the SoA-split kernel refuses to serve it.
 
     This used to wrap _compose_mode4_from_split and assert it was never called.
-    That helper has gone: nothing in src called it, and dispatch_soa_split
-    raises for modes 1 and 4 rather than composing. The contract it stood for is
-    now two structural facts, and both are asserted directly.
+    That helper has gone, and so has the standalone split dispatcher that
+    replaced it as this test's second half; the mode guard now lives in kernel
+    construction, so a dispatch table that ever routed mode 4 to the split path
+    fails before the chunk loop rather than on its first chunk.
     """
-    from jamma.lmm import compute_numpy
-    from jamma.lmm.chunk_dispatch import dispatch_soa_split
+    from jamma.lmm.chunk_kernel import RunInvariants, make_kernel
     from jamma.lmm.dispatch import DispatchPath
 
     if compute_numpy._accel is None:
@@ -381,22 +390,26 @@ def test_runner_mode4_uses_fused_dispatch():
             is expected
         )
 
-    with pytest.raises(ValueError, match="modes 1 and 4 take the fused"):
-        dispatch_soa_split(
-            4,
-            2,
-            np.ones(4),
-            np.zeros((1, 3, 4)),
-            np.zeros((3, 4)),
-            4,
-            Hi_eval_null=np.ones(4),
+    n_samples = 8
+    for refused_mode in (1, 4):
+        forced_split = RunInvariants.build(
+            dispatch=DispatchPath.SOA_SPLIT,
+            lmm_mode=refused_mode,
+            n_cvt=2,
+            n_samples=n_samples,
+            n_filtered=5,
+            eigenvalues=np.linspace(0.1, 2.0, n_samples),
+            UtW=np.ones((n_samples, 2)) * np.arange(1, 3),
+            Uty=np.linspace(-1.0, 1.0, n_samples),
+            Hi_eval_null=np.ones(n_samples),
+            logl_H0=-1.0,
             l_min=1e-5,
             l_max=1e5,
             n_grid=50,
             n_refine=20,
-            logl_H0=-1.0,
-            n_threads=1,
         )
+        with pytest.raises(ValueError, match="modes 1 and 4 take the fused"):
+            make_kernel(forced_split, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -623,9 +636,11 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     # Single-chunk run (no monkeypatching — default chunk_size fits all SNPs)
     result_single = run_lmm_association_numpy(**common_kwargs)
 
-    # Multi-chunk run: force chunk_size=50 so the batch loop iterates many times
+    # Multi-chunk run: force chunk_size=50 so the batch loop iterates many times.
+    # The sizer is a RAM-budget policy, not a numerical routine, so pinning its
+    # answer is the supported way to choose a chunking without a runner knob.
     monkeypatch.setattr(
-        "jamma.lmm.runner_numpy.compute_chunk_size_numpy",
+        "jamma.lmm.chunk_runner_numpy.compute_chunk_size_numpy",
         lambda *args, **kwargs: 50,
     )
     result_multi = run_lmm_association_numpy(**common_kwargs)
@@ -1230,34 +1245,52 @@ def test_runner_all_mode_c_path():
 
 
 @pytest.mark.tier1
-def test_runner_pipeline_enabled_for_non_wald_modes():
-    """Pipeline enabled for LRT/Score when chunks sufficient (RUN-07)."""
-    from unittest.mock import patch
+def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
+    """LRT and Score really do take the overlapped driver once chunks are enough.
 
-    from jamma.lmm import runner_numpy
+    This used to patch runner_numpy._MIN_PIPELINE_CHUNKS down to 3 and then
+    assert only that results came out. The chunk size was auto-sized on a
+    200-SNP dataset, so the run was single-chunk and the pipeline never
+    engaged; the assertion held either way. Forcing a small chunk gets past the
+    real threshold, and the spy is what makes the claim in the name checkable.
+    """
+    from jamma.lmm import chunk_runner_numpy
 
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data(
         n_samples=50, n_snps=200
     )
+    monkeypatch.setattr(
+        "jamma.lmm.chunk_runner_numpy.compute_chunk_size_numpy",
+        lambda *args, **kwargs: 20,
+    )
 
-    # Force very small chunks so we get >= 30 chunks for pipeline
-    with patch.object(runner_numpy, "_MIN_PIPELINE_CHUNKS", 3):
-        for mode in [2, 3]:
-            result = run_lmm_association_numpy(
-                genotypes=genotypes,
-                phenotypes=phenotypes,
-                kinship=kinship.copy(),
-                snp_info=snp_info * 4,  # 800 SNPs worth of info
-                config=LmmConfig(
-                    maf_threshold=0.0,
-                    miss_threshold=1.0,
-                    check_memory=False,
-                    show_progress=False,
-                    lmm_mode=mode,
-                ),
-                # Force small chunk size via explicit budget
-            )
-            assert len(result.associations) > 0, f"Mode {mode} should produce results"
+    drove = []
+    real_driver = chunk_runner_numpy._drive_pipeline
+
+    def spy(engine, **kwargs):
+        drove.append(kwargs["n_chunks"])
+        return real_driver(engine, **kwargs)
+
+    monkeypatch.setattr(chunk_runner_numpy, "_drive_pipeline", spy)
+
+    for mode in (2, 3):
+        result = run_lmm_association_numpy(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship.copy(),
+            snp_info=snp_info,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=mode,
+            ),
+        )
+        assert len(result.associations) > 0, f"Mode {mode} should produce results"
+
+    assert len(drove) == 2, f"pipeline ran {len(drove)} times, expected once per mode"
+    assert all(n >= 8 for n in drove), drove
 
 
 # ---------------------------------------------------------------------------
@@ -1401,168 +1434,132 @@ def test_output_path_streaming_all_filtered(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _tiny_invariants(n_cvt: int, lmm_mode: LmmMode, n_samples: int = 8):
+    """Smallest RunInvariants every dispatch path will build a kernel from."""
+    from jamma.lmm.chunk_kernel import RunInvariants
+    from jamma.lmm.dispatch import select_dispatch_path
+
+    return RunInvariants.build(
+        dispatch=select_dispatch_path(n_cvt, lmm_mode, accel=True, log_choices=False),
+        lmm_mode=lmm_mode,
+        n_cvt=n_cvt,
+        n_samples=n_samples,
+        n_filtered=500,
+        eigenvalues=np.linspace(0.1, 2.0, n_samples),
+        UtW=np.ones((n_samples, n_cvt)) * np.arange(1, n_cvt + 1),
+        Uty=np.linspace(-1.0, 1.0, n_samples),
+        Hi_eval_null=np.ones(n_samples),
+        logl_H0=-10.0,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=20,
+        n_refine=20,
+    )
+
+
 @pytest.mark.tier0
 class TestErrorMessageDifferentiation:
-    """Verify that compute failures produce operation-specific error messages.
+    """A failing chunk must say which kernel failed, and where.
 
-    The _guarded_compute helper wraps compute calls and produces distinct
-    RuntimeError messages identifying the failed operation, SNP offset,
-    and total SNP count.
+    These used to call the wrapper with an operation label the test invented,
+    then assert the message contained it. All three labels they checked
+    ("Wald C workspace compute" and friends) appear nowhere in src and never
+    did, so the assertions only ever proved that an f-string interpolates.
+    The labels below come from ``make_kernel``, so a renamed or duplicated one
+    fails here.
     """
 
-    def test_fused_mode4_label(self):
-        """Fused mode-4 failure includes 'Fused mode-4' in the message."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+    def _failing_kernel(self, n_cvt: int, lmm_mode: LmmMode, exc: Exception):
+        """A real kernel for this path, with its call swapped for a raise."""
+        from jamma.lmm.chunk_kernel import Kernel, make_kernel
 
-        def _boom(*a, **kw):
-            raise OSError("segfault simulation")
+        built = make_kernel(_tiny_invariants(n_cvt, lmm_mode), 1)
 
-        with pytest.raises(RuntimeError, match="Fused mode-4"):
-            _guarded_compute(
-                _boom,
-                operation="Fused mode-4 C workspace compute",
-                write_offset=100,
-                n_filtered=500,
-            )
+        def _boom(_chunk, _threads):
+            raise exc
 
-    def test_wald_label(self):
-        """Wald workspace failure includes 'Wald' in the message."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+        return Kernel(label=built.label, n_filtered=built.n_filtered, call=_boom)
 
-        def _boom(*a, **kw):
-            raise OSError("segfault simulation")
+    def test_every_path_has_its_own_label(self):
+        """Seven labels over eight (n_cvt, mode) shapes, and none repeat a path.
 
-        with pytest.raises(RuntimeError, match="Wald"):
-            _guarded_compute(
-                _boom,
-                operation="Wald C workspace compute",
-                write_offset=200,
-                n_filtered=1000,
-            )
+        Eight shapes, seven labels: SoA-split serves modes 2 and 3 with one
+        kernel, so those two share. Every other shape is distinguishable,
+        including mode 4 against Wald within each fused family.
+        """
+        from jamma.lmm.chunk_kernel import make_kernel
 
-    def test_score_lrt_label(self):
-        """Score/LRT dispatch failure includes 'Score/LRT' in the message."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+        if compute_numpy._accel is None:
+            pytest.skip("kernel construction needs the C extension")
 
-        def _boom(*a, **kw):
-            raise OSError("segfault simulation")
+        labels = {
+            (n_cvt, mode): make_kernel(_tiny_invariants(n_cvt, mode), 1).label
+            for n_cvt in (1, 2)
+            for mode in (1, 2, 3, 4)
+        }
+        assert len(set(labels.values())) == 7, labels
+        assert labels[1, 4] != labels[1, 1], "mode 4 must not report as Wald"
+        assert labels[2, 4] != labels[2, 1], "mode 4 must not report as Wald"
+        assert labels[2, 2] == labels[2, 3], "both are the one SoA-split kernel"
 
-        with pytest.raises(RuntimeError, match="Score/LRT"):
-            _guarded_compute(
-                _boom,
-                operation="Score/LRT C batch dispatch",
-                write_offset=50,
-                n_filtered=200,
-            )
+    @pytest.mark.parametrize(
+        ("n_cvt", "lmm_mode"), [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 2)]
+    )
+    def test_wrapped_error_names_the_kernel_and_the_offset(self, n_cvt, lmm_mode):
+        """A segfault-shaped failure reports its own label, offset, and total."""
+        if compute_numpy._accel is None:
+            pytest.skip("kernel construction needs the C extension")
 
-    def test_error_includes_snp_offset(self):
-        """Error message includes SNP offset and total count."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+        kernel = self._failing_kernel(n_cvt, lmm_mode, OSError("segfault"))
+        with pytest.raises(RuntimeError) as exc_info:
+            kernel.compute_chunk(np.zeros((1, 8)), 1, 300)
 
-        def _boom(*a, **kw):
-            raise OSError("kaboom")
+        message = str(exc_info.value)
+        assert kernel.label in message
+        assert "300/500" in message
+        assert "300 SNPs before failure" in message
 
-        with pytest.raises(RuntimeError, match=r"300/1000") as exc_info:
-            _guarded_compute(
-                _boom,
-                operation="Wald C workspace compute",
-                write_offset=300,
-                n_filtered=1000,
-            )
-        assert "300 SNPs before failure" in str(exc_info.value)
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            MemoryError("out of memory"),
+            ValueError("bad value"),
+            TypeError("wrong type"),
+            OverflowError("overflow"),
+        ],
+    )
+    def test_diagnosable_exceptions_pass_through_unwrapped(self, exc):
+        """These four say what went wrong already; wrapping would bury them."""
+        if compute_numpy._accel is None:
+            pytest.skip("kernel construction needs the C extension")
 
-    def test_memory_error_passes_through(self):
-        """MemoryError is not wrapped in RuntimeError."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
-
-        def _oom(*a, **kw):
-            raise MemoryError("out of memory")
-
-        with pytest.raises(MemoryError, match="out of memory"):
-            _guarded_compute(
-                _oom,
-                operation="Wald C workspace compute",
-                write_offset=0,
-                n_filtered=100,
-            )
-
-    def test_value_error_passes_through(self):
-        """ValueError is not wrapped in RuntimeError."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
-
-        def _bad(*a, **kw):
-            raise ValueError("bad value")
-
-        with pytest.raises(ValueError, match="bad value"):
-            _guarded_compute(
-                _bad,
-                operation="Wald C workspace compute",
-                write_offset=0,
-                n_filtered=100,
-            )
-
-    def test_type_error_passes_through(self):
-        """TypeError is not wrapped in RuntimeError."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
-
-        def _bad(*a, **kw):
-            raise TypeError("wrong type")
-
-        with pytest.raises(TypeError, match="wrong type"):
-            _guarded_compute(
-                _bad,
-                operation="Wald C workspace compute",
-                write_offset=0,
-                n_filtered=100,
-            )
-
-    def test_overflow_error_passes_through(self):
-        """OverflowError is not wrapped in RuntimeError."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
-
-        def _bad(*a, **kw):
-            raise OverflowError("overflow")
-
-        with pytest.raises(OverflowError, match="overflow"):
-            _guarded_compute(
-                _bad,
-                operation="Wald C workspace compute",
-                write_offset=0,
-                n_filtered=100,
-            )
+        kernel = self._failing_kernel(1, 1, exc)
+        with pytest.raises(type(exc), match=str(exc)):
+            kernel.compute_chunk(np.zeros((1, 8)), 1, 0)
 
     def test_exception_chaining_preserved(self):
         """The original exception is chained via 'from exc'."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+        if compute_numpy._accel is None:
+            pytest.skip("kernel construction needs the C extension")
 
-        def _boom(*a, **kw):
-            raise OSError("root cause")
-
+        kernel = self._failing_kernel(1, 1, OSError("root cause"))
         with pytest.raises(RuntimeError) as exc_info:
-            _guarded_compute(
-                _boom,
-                operation="LMM chunk compute",
-                write_offset=0,
-                n_filtered=100,
-            )
-        assert exc_info.value.__cause__ is not None
+            kernel.compute_chunk(np.zeros((1, 8)), 1, 0)
+
         assert isinstance(exc_info.value.__cause__, OSError)
         assert "root cause" in str(exc_info.value.__cause__)
 
-    def test_successful_call_returns_result(self):
-        """Successful function call returns result without wrapping."""
-        from jamma.lmm.chunk_dispatch import _guarded_compute
+    def test_successful_call_returns_result_unwrapped(self):
+        """A kernel that succeeds hands its dict straight back."""
+        from jamma.lmm.chunk_kernel import Kernel
 
-        def _ok(*a, **kw):
-            return {"betas": [1.0], "ses": [0.1]}
-
-        result = _guarded_compute(
-            _ok,
-            operation="Wald C workspace compute",
-            write_offset=0,
+        expected = {"betas": [1.0], "ses": [0.1]}
+        kernel = Kernel(
+            label="Fused Uab dispatch",
             n_filtered=100,
+            call=lambda _chunk, _threads: expected,
         )
-        assert result == {"betas": [1.0], "ses": [0.1]}
+        assert kernel.compute_chunk(np.zeros((1, 8)), 1, 0) is expected
 
 
 # ---------------------------------------------------------------------------

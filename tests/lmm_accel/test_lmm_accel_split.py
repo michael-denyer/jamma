@@ -115,6 +115,7 @@ def test_pipeline_multi_chunk_correctness():
     in buffer management, and write_offset accumulation bugs.
     """
     from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+    from jamma.lmm.dispatch import DispatchPath
 
     rng = np.random.default_rng(42)
     n_samples = 100
@@ -123,6 +124,7 @@ def test_pipeline_multi_chunk_correctness():
         n_samples,
         1000,
         n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
     n_snps = chunk_size * 3 + 17  # non-aligned to catch last-chunk bugs

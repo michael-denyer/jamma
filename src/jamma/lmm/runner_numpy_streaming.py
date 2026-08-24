@@ -61,6 +61,13 @@ def get_last_run_timing() -> RunnerTiming:
     return last_run_timing.copy()
 
 
+# SNPs per block in the statistics pass when the caller names no chunk size.
+# Pass 1 reads the .bed and accumulates per-SNP counts, so its footprint is one
+# block of genotypes rather than the rotation and grid buffers the association
+# pass carries; it needs no RAM-budgeted sizing of its own.
+_DEFAULT_STATS_CHUNK = 10_000
+
+
 def run_lmm_association_numpy_streaming(
     bed_path: Path,
     phenotypes: np.ndarray,
@@ -69,7 +76,7 @@ def run_lmm_association_numpy_streaming(
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
     eigenvectors: np.ndarray | None = None,
-    chunk_size: int = 10_000,
+    chunk_size: int | None = None,
     output_path: Path | None = None,
     snps_indices: np.ndarray | None = None,
     hwe_threshold: float = 0.0,
@@ -98,7 +105,10 @@ def run_lmm_association_numpy_streaming(
         n_grid: Grid search resolution for lambda bracketing.
         n_refine: Golden section iterations for lambda refinement (clamped to
             min 20 internally for ~1e-5 tolerance).
-        chunk_size: Number of SNPs per disk chunk (default: 10,000).
+        chunk_size: Cap on SNPs per chunk, for both the statistics pass and
+            the association pass. None (default) reads statistics in
+            _DEFAULT_STATS_CHUNK blocks and lets the chunk engine size the
+            association chunks against the RAM budget.
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         output_path: Path for incremental result writing, or None for in-memory.
@@ -126,6 +136,11 @@ def run_lmm_association_numpy_streaming(
     check_memory = config.check_memory
     show_progress = config.show_progress
     lmm_mode = config.lmm_mode
+
+    # Checked here, not in the chunk runner, because the statistics pass reads
+    # the whole .bed first: a bad value must fail before that, not after it.
+    if chunk_size is not None and chunk_size < 1:
+        raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
 
     start_time = time.perf_counter()
 
@@ -168,7 +183,7 @@ def run_lmm_association_numpy_streaming(
         bed_path,
         n_snps=n_snps,
         n_samples=n_samples_total,
-        chunk_size=chunk_size,
+        chunk_size=_DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
         sample_indices=stats_sample_indices,
         include_hwe=hwe_threshold > 0,
         validate_genotypes=validate_genotypes,
@@ -298,8 +313,6 @@ def run_lmm_association_numpy_streaming(
                 filtered_miss,
             )
 
-        auto_scaled_chunk_size = chunk_size == 10_000
-        requested_chunk_size = None if auto_scaled_chunk_size else chunk_size
         chunk_stats = run_lmm_chunk_source_numpy(
             raw_chunk_source_factory=_make_stream_source,
             chunk_sink=_sink,
@@ -318,8 +331,7 @@ def run_lmm_association_numpy_streaming(
             l_max=l_max,
             n_grid=n_grid,
             n_refine=n_refine,
-            requested_chunk_size=requested_chunk_size,
-            auto_scale_chunk_size=auto_scaled_chunk_size,
+            max_chunk_size=chunk_size,
             show_progress=show_progress,
             progress_label="LMM association (streaming)",
             log_dispatch_choices=False,

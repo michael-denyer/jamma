@@ -61,7 +61,7 @@ A typical LMM association run proceeds as follows:
 
 6. **Null model** — The rotated data `U.T @ Y` and covariates are used to optimize the variance component `lambda` via a 50-point grid search followed by golden section refinement (`lmm/likelihood.py` REML path).
 
-7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size), `lmm/chunk_workspaces.py` (persistent C-workspace lifecycle), `lmm/chunk_dispatch.py` (the C/Python kernel-selection ladder), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/results.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics through the batched `lmm/likelihood_numpy.py` routines, or through `_lmm_accel` when the C extension is loaded. `lmm/stats.py` holds the `AssocResult` record and the scalar reference implementations the tests check the batch path against; production does not call them. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
+7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size), `lmm/chunk_kernel.py` (the one dispatch match, which builds each path's persistent C workspace and binds the call that consumes it), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/results.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics through the batched `lmm/likelihood_numpy.py` routines, or through `_lmm_accel` when the C extension is loaded. `lmm/stats.py` holds the `AssocResult` record and the scalar reference implementations the tests check the batch path against; production does not call them. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
 
 8. **Output** — `AssocResult` records are written to a GEMMA-compatible `.assoc.txt` file via `lmm/io.py:IncrementalAssocWriter`. When `output_path` is set, results stream to disk per chunk to avoid accumulating a large in-memory list.
 
@@ -121,8 +121,7 @@ src/jamma/
 │   ├── runner_numpy_streaming.py  # Streaming runner: two-pass disk I/O + C extension
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 │   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation
-│   ├── chunk_workspaces.py # Persistent C-workspace lifecycle
-│   ├── chunk_dispatch.py   # Per-chunk C/Python kernel dispatch ladder
+│   ├── chunk_kernel.py     # The one dispatch match: workspace + its call
 │   ├── chunk_pipeline.py   # Rotation/compute thread split + overlapped pipeline driver
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
 │   ├── loco_config.py      # LocoConfig: LOCO-only knobs and artifact naming

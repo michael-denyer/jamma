@@ -18,11 +18,9 @@ from loguru import logger
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.lmm.chunk_runner_numpy import (
-    _MIN_PIPELINE_CHUNKS,
     RawLmmChunk,
     run_lmm_chunk_source_numpy,
 )
-from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
 from jamma.lmm.compute_numpy import LmmMode
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
@@ -282,8 +280,6 @@ def run_lmm_association_numpy(
             n_refine=n_refine,
             show_progress=show_progress,
             progress_label="LMM association",
-            chunk_sizer=compute_chunk_size_numpy,
-            min_pipeline_chunks=_MIN_PIPELINE_CHUNKS,
         )
 
     # Log memory after all chunks processed

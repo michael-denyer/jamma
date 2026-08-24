@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
+from jamma.lmm.dispatch import DispatchPath
 
 # Stands in for a loaded extension. Only `is not None` is read on
 # the paths under test, so the object's identity is all that matters.
@@ -11,88 +12,109 @@ _EXTENSION_LOADED = object()
 
 
 @pytest.mark.tier0
-@pytest.mark.parametrize("n_cvt", [76, compute_numpy.MAX_C_N_CVT])
-def test_wald_general_c_dispatch_uses_documented_ncvt_limit(monkeypatch, n_cvt):
-    """_compute_wald_numpy uses the general C path through MAX_C_N_CVT."""
-    n_samples = n_cvt + 5
-    n_snps = 1
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-    eigenvalues = np.ones(n_samples, dtype=np.float64)
-    uab_batch = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
-    iab_batch = np.zeros((n_snps, n_index), dtype=np.float64)
-    workspace = object()
-    calls = {}
-    expected = {
-        "lambdas": np.zeros(n_snps),
-        "logls": np.zeros(n_snps),
-        "betas": np.zeros(n_snps),
-        "ses": np.zeros(n_snps),
-        "pwalds": np.zeros(n_snps),
-    }
+@pytest.mark.parametrize("n_cvt", [2, 76, compute_numpy.MAX_C_N_CVT])
+def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
+    """Wald routes to the fused general C kernel for every n_cvt up to the limit.
 
-    def fake_create_workspace(
-        _eigenvalues,
-        uab_invariant_soa,
-        n_samples_arg,
-        n_cvt_arg,
-        _l_min,
-        _l_max,
-        _n_grid,
-        _n_refine,
-        n_threads_arg,
-    ):
-        calls["workspace"] = (uab_invariant_soa.shape, n_samples_arg, n_cvt_arg)
-        calls["workspace_threads"] = n_threads_arg
-        return workspace
+    This used to assert that _compute_wald_numpy took a general C branch. That
+    branch could not run: the runner reaches _compute_wald_numpy only on
+    NUMPY_FALLBACK, which is selected only when the extension is absent. The
+    decision the runner actually makes is this one.
+    """
+    monkeypatch.setattr(compute_numpy, "_accel", _EXTENSION_LOADED)
 
-    def fake_compute(workspace_arg, uab_varying_soa, n_threads_arg):
-        calls["compute"] = (workspace_arg, uab_varying_soa.shape, n_threads_arg)
-        calls["varying_is_contiguous"] = uab_varying_soa.flags.c_contiguous
-        return expected
+    assert (
+        compute_numpy.select_current_dispatch_path(n_cvt, 1, log_choices=False)
+        is DispatchPath.FUSED_GENERAL
+    )
 
-    def fail_python_fallback(*_args, **_kwargs):
-        raise AssertionError("n_cvt within the C limit fell back to Python")
+
+@pytest.mark.tier0
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
+    """Past MAX_C_N_CVT the kernel refuses rather than the dispatcher diverting.
+
+    Nothing in Python bounds n_cvt any more. The guard that did lived in
+    _compute_wald_numpy, on a branch the runner never reached, so the C
+    kernel's own check is the enforcement and this pins that it fires.
+    """
+    from jamma.lmm._lmm_accel import compute_score_split_general_c
+    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+
+    n_cvt = compute_numpy.MAX_C_N_CVT + 1
+    n_samples, n_snps = 200, 5
+
+    rng = np.random.default_rng(777)
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]
+    inv_indices, var_indices = classify_uab_columns(n_cvt)
+
+    with pytest.raises(ValueError, match=r"n_cvt must be 1\.\.100, got 101"):
+        compute_score_split_general_c(
+            eigenvalues,
+            np.zeros((n_snps, len(var_indices), n_samples), dtype=np.float64),
+            np.zeros((len(inv_indices), n_samples), dtype=np.float64),
+            np.ones(n_samples, dtype=np.float64),
+            n_samples,
+            n_cvt,
+            build_pab_table_for_c(compute_numpy.MAX_C_N_CVT),
+            1,
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize(
+    "helper",
+    ["_compute_wald_numpy", "_compute_lrt_numpy", "_compute_score_numpy"],
+)
+def test_full_uab_helpers_never_touch_the_extension(monkeypatch, helper):
+    """The full-Uab helpers are pure NumPy, and must stay that way.
+
+    Each used to open with an `if _accel is not None` ladder into a C kernel.
+    None of those could run: the three are reached only through
+    compute_lmm_chunk_numpy, the runner calls that only on NUMPY_FALLBACK, and
+    that path is selected only when the extension is absent. So the ladders were
+    dead by construction and have been removed.
+
+    Reaching the extension is detected by making `_c` raise. It is the single
+    accessor, so a helper that calls it fails loudly here rather than quietly
+    reintroducing a branch no caller can reach.
+    """
+
+    def _extension_is_off_limits():
+        raise AssertionError(
+            f"{helper} reached the C extension. It is only ever called when the "
+            "extension is absent, so a C branch here is unreachable."
+        )
 
     monkeypatch.setattr(compute_numpy, "_accel", _EXTENSION_LOADED)
-    monkeypatch.setattr(
-        compute_numpy,
-        "create_lmm_workspace_general",
-        fake_create_workspace,
-    )
-    monkeypatch.setattr(  # allow-patch: sentinel proves boundary dispatch choice
-        compute_numpy,
-        "compute_wald_general_c_ws",
-        fake_compute,
-    )
-    monkeypatch.setattr(
-        compute_numpy,
-        "golden_section_optimize_lambda_numpy",
-        fail_python_fallback,
+    # allow-patch: sentinel-on-call is the assertion. _c is the single
+    # accessor, so raising there is how "never reaches C" is detected.
+    monkeypatch.setattr(  # allow-patch: see above
+        compute_numpy, "_c", _extension_is_off_limits
     )
 
-    result = compute_numpy._compute_wald_numpy(
-        n_cvt,
-        eigenvalues,
-        uab_batch,
-        n_samples,
-        l_min=1e-5,
-        l_max=1e5,
-        n_grid=50,
-        n_refine=20,
-        Iab_batch=iab_batch,
-        n_threads=3,
-    )
+    n_cvt, n_samples, n_snps = 2, 40, 3
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+    rng = np.random.default_rng(4)
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+    UtW = np.abs(rng.standard_normal((n_samples, n_cvt))) + 0.5
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
 
-    assert result is expected
-    invariant_shape, workspace_n_samples, workspace_n_cvt = calls["workspace"]
-    assert invariant_shape[1] == n_samples
-    assert workspace_n_samples == n_samples
-    assert workspace_n_cvt == n_cvt
-    assert calls["workspace_threads"] == 3
+    from jamma.lmm.likelihood import compute_Uab
 
-    compute_workspace, varying_shape, compute_threads = calls["compute"]
-    assert compute_workspace is workspace
-    assert varying_shape[0] == n_snps
-    assert varying_shape[2] == n_samples
-    assert compute_threads == 3
-    assert calls["varying_is_contiguous"] is True
+    Uab_batch = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
+    for i in range(n_snps):
+        Uab_batch[i] = compute_Uab(UtW, Uty, UtG[:, i])
+
+    common = (n_cvt, eigenvalues)
+    if helper == "_compute_wald_numpy":
+        compute_numpy._compute_wald_numpy(
+            *common, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
+        )
+    elif helper == "_compute_lrt_numpy":
+        compute_numpy._compute_lrt_numpy(*common, Uab_batch, 1e-5, 1e5, 50, 20, -100.0)
+    else:
+        compute_numpy._compute_score_numpy(
+            *common, 1.0 / (0.5 * eigenvalues + 1.0), Uab_batch, n_samples
+        )

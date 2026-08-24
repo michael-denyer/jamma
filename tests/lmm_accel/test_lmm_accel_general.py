@@ -278,10 +278,10 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_general_ncvt_abi_version():
-    """C-GEN-07: ABI version is 11 for persistent Score/LRT workspaces."""
+    """C-GEN-07: ABI version is 12 after the unreachable entry points were cut."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 11, f"Expected ABI_VERSION=11, got {ABI_VERSION}"
+    assert ABI_VERSION == 12, f"Expected ABI_VERSION=12, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

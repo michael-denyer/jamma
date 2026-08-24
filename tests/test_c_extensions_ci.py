@@ -30,32 +30,33 @@ class TestCExtensionsAvailable:
         )
 
     def test_lmm_accel_numerical_sanity(self):
-        """_lmm_accel produces finite outputs on synthetic data."""
+        """The fused Wald kernel produces finite outputs on synthetic data.
+
+        Drives what DispatchPath.FUSED resolves to for n_cvt=1. It used to drive
+        compute_lmm_batch_c, which no dispatch path selected, so this could have
+        passed on a build whose production kernel was broken.
+        """
         import numpy as np
 
-        from jamma.lmm._lmm_accel import compute_lmm_batch_c
+        from jamma.lmm._lmm_accel import (
+            compute_lmm_chunk_fused_c,
+            create_workspace_fused_c,
+        )
 
         rng = np.random.default_rng(42)
-        n, n_snps, n_cvt = 50, 3, 1
+        n, n_snps = 50, 3
         eigenvalues = np.sort(rng.uniform(0.1, 2.0, n))
-        ab_cols = 6
-        Uab = rng.standard_normal((n_snps, n, ab_cols))
-        Uab[:, :, 0] = np.abs(Uab[:, :, 0]) + 0.1
+        w = rng.standard_normal(n)
+        Uty = rng.standard_normal(n)
+        utg_t = rng.standard_normal((n_snps, n))
 
-        Iab = np.zeros((n_snps, 3, ab_cols))
-        Iab[:, 0, :] = Uab.sum(axis=1)
-        Iab[:, 1, 3] = Iab[:, 0, 3] - Iab[:, 0, 1] ** 2 / np.maximum(
-            Iab[:, 0, 0], 1e-10
-        )
-        Iab[:, 1, 4] = Iab[:, 0, 4] - Iab[:, 0, 1] * Iab[:, 0, 2] / np.maximum(
-            Iab[:, 0, 0], 1e-10
-        )
-        Iab[:, 1, 5] = Iab[:, 0, 5] - Iab[:, 0, 2] ** 2 / np.maximum(
-            Iab[:, 0, 0], 1e-10
-        )
-        Iab[:, 2, 5] = Iab[:, 1, 5] - Iab[:, 1, 4] ** 2 / np.maximum(
-            Iab[:, 1, 3], 1e-10
-        )
+        uab_inv_soa = np.empty((3, n), dtype=np.float64)
+        uab_inv_soa[0] = w * w
+        uab_inv_soa[1] = w * Uty
+        uab_inv_soa[2] = Uty * Uty
 
-        result = compute_lmm_batch_c(eigenvalues, Uab, Iab, n, 1e-5, 1e5, 50, 20, n_cvt)
+        ws = create_workspace_fused_c(
+            eigenvalues, uab_inv_soa, w, Uty, n, 1e-5, 1e5, 50, 20, 1
+        )
+        result = compute_lmm_chunk_fused_c(ws, utg_t, 1)
         assert np.isfinite(result["lambdas"]).all()

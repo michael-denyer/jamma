@@ -9,7 +9,7 @@ before the chunk loop and consulted per chunk. Split out from
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any, NamedTuple, assert_never, cast
 
 import numpy as np
@@ -81,55 +81,6 @@ def _guarded_compute(
             f"{write_offset}/{n_filtered}. "
             f"Processed {write_offset} SNPs before failure."
         ) from exc
-
-
-def _compose_mode4_from_split(
-    wald_cr: Mapping[str, object],
-    n_cvt: int,
-    eigenvalues_np: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    n_samples: int,
-    *,
-    Hi_eval_null: np.ndarray,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    logl_H0: float,
-    n_threads: int,
-) -> dict:
-    """Compose mode-4 results from Wald + SoA-split Score + LRT.
-
-    Merge order: Score, LRT, then Wald
-    (Wald's REML betas/ses overwrite Score's values).
-    """
-    score_cr = _compute_score_split_numpy(
-        n_cvt,
-        eigenvalues_np,
-        Hi_eval_null,
-        uab_varying_soa,
-        uab_invariant_soa,
-        n_samples,
-        n_threads,
-    )
-    lrt_cr = _compute_lrt_split_numpy(
-        n_cvt,
-        eigenvalues_np,
-        uab_varying_soa,
-        uab_invariant_soa,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        logl_H0,
-        n_threads,
-    )
-    cr: dict = dict.fromkeys(_ALL_RESULT_KEYS)
-    for d in (score_cr, lrt_cr, wald_cr):
-        cr.update({k: v for k, v in d.items() if v is not None})
-    return cr
 
 
 def dispatch_soa_split(

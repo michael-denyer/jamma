@@ -266,12 +266,12 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:43](../src/jamma/lmm/runner_numpy.py#L43) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:141](../src/jamma/lmm/chunk_runner_numpy.py#L141) |
 | 4Nb | `_create_workspaces()` | Persistent C-workspace lifecycle | [chunk_workspaces.py:38](../src/jamma/lmm/chunk_workspaces.py#L38) |
-| 4Nb | `_dispatch_compute()` | Per-chunk C/Python kernel-selection ladder | [chunk_dispatch.py:237](../src/jamma/lmm/chunk_dispatch.py#L237) |
+| 4Nb | `_dispatch_compute()` | Per-chunk C/Python kernel-selection ladder | [chunk_dispatch.py:188](../src/jamma/lmm/chunk_dispatch.py#L188) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:99](../src/jamma/lmm/chunk_pipeline.py#L99) |
 | 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:23](../src/jamma/lmm/chunk_sizing.py#L23) |
-| 4Nc | `create_lmm_workspace()` | Allocate reusable per-chunk Wald workspace (split C path) | [compute_numpy.py:274](../src/jamma/lmm/compute_numpy.py#L274) |
-| 4Nc | `compute_wald_split_c_ws()` | Workspace-based Wald compute dispatch to C extension | [compute_numpy.py:317](../src/jamma/lmm/compute_numpy.py#L317) |
-| 4Nd | `compute_lmm_batch_c()` | C extension: batch REML Wald pipeline for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
+| 4Nc | `create_lmm_workspace_fused()` | Allocate the reusable per-chunk Wald workspace (n_cvt=1 fused path) | [compute_numpy.py:191](../src/jamma/lmm/compute_numpy.py#L191) |
+| 4Nc | `compute_wald_fused_c_ws()` | Workspace-based Wald compute, dispatched to the C extension | [compute_numpy.py:234](../src/jamma/lmm/compute_numpy.py#L234) |
+| 4Nd | `compute_lmm_chunk_fused_c()` | C extension: chunked REML Wald for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:25](../src/jamma/lmm/_lmm_support.c#L25) |
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 | 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |

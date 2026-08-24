@@ -296,7 +296,9 @@ def compile_extension(
     # subsequent `from jamma.lmm._lmm_accel import ...` still raises.
     # Mirrors the verification in `jamma.jlinalg._compile_jlinalg`.
     try:
-        from jamma.lmm._lmm_accel import compute_lmm_batch_c as _probe  # noqa: F401
+        from jamma.lmm._lmm_accel import (
+            compute_lmm_chunk_fused_c as _probe,  # noqa: F401
+        )
     except ImportError as e:
         _print(f"ERROR: compiled but import failed (ImportError): {e}")
         _print("  This usually means ABI mismatch or missing shared libraries.")

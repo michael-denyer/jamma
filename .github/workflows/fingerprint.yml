@@ -76,16 +76,24 @@ jobs:
       - name: Fingerprint the PR head
         run: |
           set -euo pipefail
+          rm -f src/jamma/lmm/_lmm_accel*.so
           uv sync
           uv run python -m jamma.lmm._compile_accel
           "${RUNNER_TEMP}/run-fingerprint.sh" "${RUNNER_TEMP}/head.txt"
 
+      # The .so is gitignored, so the checkout below leaves the head's build in
+      # place. Each side has to compile from nothing, or the base build starts
+      # by importing the head's extension: if the two disagree on ABI_VERSION
+      # that trips auto-recompile, and its verifying re-import gets CPython's
+      # cached single-phase module rather than the freshly linked one, so the
+      # step fails reporting a symbol that the base does export.
       - name: Fingerprint the merge base
         env:
           BASE_SHA: ${{ steps.base.outputs.base }}
         run: |
           set -euo pipefail
           git checkout --detach "${BASE_SHA}"
+          rm -f src/jamma/lmm/_lmm_accel*.so
           uv sync
           uv run python -m jamma.lmm._compile_accel
           "${RUNNER_TEMP}/run-fingerprint.sh" "${RUNNER_TEMP}/base.txt"

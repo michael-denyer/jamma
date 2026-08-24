@@ -53,13 +53,13 @@ def _fused_score_lrt_null_model(split_wald_data):
 
 
 @pytest.mark.tier0
-def test_abi_version_11():
-    """ABI_VERSION is 11 after persistent Score/LRT workspace addition."""
+def test_abi_version_12():
+    """ABI_VERSION is 12 after the unreachable entry points were removed."""
     if compute_numpy._accel is None:
         pytest.skip("C extension not available")
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 11
+    assert ABI_VERSION == 12
 
 
 def _make_runner_test_data(rng, n_samples=50, n_snps=20):

@@ -1,11 +1,15 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-Dispatches to C extension (_lmm_accel) for Wald (batch/workspace/split),
-Score (batch), LRT (batch), and fused mode-4 when available. Supports
-n_cvt=1 (split/batch paths) and n_cvt>1 up to 100 (general workspace path).
-Falls back to NumPy Python path when C functions are unavailable or n_cvt>100.
-Also exports split-workspace and general-workspace APIs for direct use
-by runners.
+Exports the fused workspace APIs the runner drives: Wald and mode-4 at
+n_cvt=1 and at n_cvt>=2, plus the SoA-split Score and LRT kernels the
+n_cvt>=2 modes 2 and 3 take. Which of them a run uses is decided once by
+``DispatchPath``, not re-derived here.
+
+The full-Uab helpers below (``_compute_wald_numpy`` and its LRT and Score
+siblings) are pure NumPy. They are reached only through
+``compute_lmm_chunk_numpy``, which the runner calls only on
+``DispatchPath.NUMPY_FALLBACK``, and that path is selected only when the
+extension is absent.
 
 The caller is responsible for:
 - Computing Uab in the appropriate format: Uab_batch (n_snps, n_samples,
@@ -38,7 +42,7 @@ if TYPE_CHECKING:
 
     from jamma.lmm.dispatch import DispatchPath
 
-_EXPECTED_ABI_VERSION = 11  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 12  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
 
 
@@ -47,10 +51,10 @@ MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
 # Everything else in methods[] ships with them: the table is unconditional apart
 # from the sanitizer sentinel, so ABI equality is the completeness check.
 _CORE_SYMBOLS = (
-    "compute_lmm_batch_c",
-    "compute_lmm_batch_split_c",
-    "create_workspace_split_c",
-    "compute_lmm_chunk_split_c",
+    "create_workspace_fused_c",
+    "compute_lmm_chunk_fused_c",
+    "create_workspace_fused_general_c",
+    "compute_lmm_chunk_fused_general_c",
 )
 
 
@@ -182,227 +186,6 @@ class WaldResult(TypedDict):
 
 
 LmmMode = Literal[1, 2, 3, 4]
-
-
-def _compute_wald_c(
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    Iab_batch: np.ndarray,
-    n_threads: int,
-) -> WaldResult:
-    """Compute REML Wald via C extension (n_cvt=1 only).
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        Uab_batch: Pre-computed Uab matrices (n_snps, n_samples, 6).
-        n_samples: Number of samples.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution.
-        n_refine: Golden section iterations (should be >= 20 for 1e-5 tolerance).
-        Iab_batch: Pre-computed identity-weighted Pab (n_snps, 3, 6).
-        n_threads: OpenMP thread count for the C extension.
-
-    Returns:
-        WaldResult with keys: lambdas, logls, betas, ses, pwalds.
-    """
-    return _c().compute_lmm_batch_c(
-        eigenvalues,
-        Uab_batch,
-        Iab_batch,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        n_threads,
-    )
-
-
-def _compute_wald_split_c(
-    eigenvalues: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    Iab_batch: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    n_threads: int,
-) -> WaldResult:
-    """Compute REML Wald via split-Uab C extension (n_cvt=1 only).
-
-    Expects SoA layout arrays (no per-call transpose). Callers must pass
-    arrays already in SoA layout from batch_compute_uab_split_soa_numpy or
-    batch_compute_uab_varying_soa_numpy + compute_uab_invariant_soa.
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_varying_soa: SNP-varying columns (n_snps, 3, n_samples) [wx, xx, xy].
-        uab_invariant_soa: SNP-invariant columns (3, n_samples) [ww, wy, yy].
-        Iab_batch: Pre-computed identity-weighted Pab (n_snps, 3, 6).
-        n_samples: Number of samples.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution.
-        n_refine: Golden section iterations.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        WaldResult with keys: lambdas, logls, betas, ses, pwalds.
-    """
-    return _c().compute_lmm_batch_split_c(
-        eigenvalues,
-        uab_varying_soa,
-        uab_invariant_soa,
-        Iab_batch,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        n_threads,
-    )
-
-
-def create_lmm_workspace(
-    eigenvalues: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    n_threads: int,
-) -> object:
-    """Create a persistent C workspace for the split-Uab REML pipeline.
-
-    The workspace holds precomputed lambda_grid, hi_eval_grid, logdet_h_grid,
-    grid_inv, and invariant Iab column sums (iab_s_ww etc.). It is reused
-    across all chunks — eliminating per-chunk C malloc and grid precomputation.
-
-    Returns a PyCapsule that is freed automatically when it goes out of scope.
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_invariant_soa: Invariant Uab (3, n_samples) — rows [ww, wy, yy].
-        n_samples: Number of samples.
-        l_min: Minimum lambda.
-        l_max: Maximum lambda.
-        n_grid: Number of coarse grid points.
-        n_refine: Golden section iterations.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        PyCapsule wrapping lmm_workspace_t (opaque; pass to compute_wald_split_c_ws).
-    """
-    return _c().create_workspace_split_c(
-        eigenvalues,
-        uab_invariant_soa,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        n_threads,
-    )
-
-
-def compute_wald_split_c_ws(
-    workspace: object,
-    uab_varying_soa: np.ndarray,
-    n_threads: int,
-) -> WaldResult:
-    """Compute REML Wald for one chunk using a pre-built workspace.
-
-    Uses precomputed grids from create_lmm_workspace — no per-chunk malloc,
-    no eigenvalue reprocessing, no invariant Iab computation. Iab logdet
-    is computed inside C from the workspace's precomputed iab_s_ww.
-
-    Args:
-        workspace: PyCapsule from create_lmm_workspace.
-        uab_varying_soa: SNP-varying Uab (n_snps, 3, n_samples) — SoA layout.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        WaldResult with keys: lambdas, logls, betas, ses, pwalds.
-    """
-    return _c().compute_lmm_chunk_split_c(workspace, uab_varying_soa, n_threads)
-
-
-def create_lmm_workspace_mode4(
-    eigenvalues: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    n_threads: int,
-    hi_eval_null: np.ndarray,
-    logl_H0: float,
-) -> object:
-    """Create a persistent C workspace for fused mode-4 (Wald/Score/LRT).
-
-    Extends the Wald workspace with null-model Hi_eval and MLE fields,
-    enabling the fused kernel to compute all three test statistics in a
-    single OpenMP loop without Uab reconstruction.
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_invariant_soa: Invariant Uab (3, n_samples) -- rows [ww, wy, yy].
-        n_samples: Number of samples.
-        l_min: Minimum lambda.
-        l_max: Maximum lambda.
-        n_grid: Number of coarse grid points.
-        n_refine: Golden section iterations.
-        n_threads: OpenMP thread count.
-        hi_eval_null: Null-model Hi_eval (n_samples,).
-        logl_H0: Null model MLE log-likelihood.
-
-    Returns:
-        PyCapsule wrapping mode-4 lmm_workspace_t.
-    """
-    return _c().create_workspace_mode4_split_c(
-        eigenvalues,
-        uab_invariant_soa,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        n_threads,
-        hi_eval_null,
-        logl_H0,
-    )
-
-
-def compute_mode4_split_c_ws(
-    workspace: object,
-    uab_varying_soa: np.ndarray,
-    n_threads: int,
-) -> dict[str, np.ndarray]:
-    """Compute fused mode-4 (Wald/Score/LRT) for one chunk using a workspace.
-
-    Single-pass fused kernel: no Uab reconstruction, no separate Score/LRT
-    calls. Returns all 8 output arrays directly from the C extension.
-
-    Args:
-        workspace: PyCapsule from create_lmm_workspace_mode4.
-        uab_varying_soa: SNP-varying Uab (n_snps, 3, n_samples) -- SoA layout.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        Dict with keys: lambdas, logls, betas, ses, pwalds,
-        p_scores, lambdas_mle, p_lrts.
-    """
-    return _c().compute_mode4_chunk_split_c(workspace, uab_varying_soa, n_threads)
 
 
 def create_lmm_workspace_fused(
@@ -747,151 +530,6 @@ def compute_mode4_fused_general_c_ws(
     return _c().compute_mode4_chunk_fused_general_c(workspace, utg_t, n_threads)
 
 
-def create_lmm_workspace_general(
-    eigenvalues: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    n_samples: int,
-    n_cvt: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    n_threads: int,
-) -> object:
-    """Create a persistent C workspace for the general n_cvt REML pipeline.
-
-    Builds the Pab recursion table via build_pab_table_for_c(), then passes
-    all flat arrays to the C extension's create_workspace_general_c().
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_invariant_soa: Invariant Uab (n_inv, n_samples) — SoA layout.
-        n_samples: Number of samples.
-        n_cvt: Number of covariates.
-        l_min: Minimum lambda.
-        l_max: Maximum lambda.
-        n_grid: Number of coarse grid points.
-        n_refine: Golden section iterations.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        PyCapsule wrapping lmm_workspace_general_t.
-    """
-    create = _c().create_workspace_general_c
-
-    from jamma.lmm.likelihood import build_pab_table_for_c
-
-    table = build_pab_table_for_c(n_cvt)
-
-    return create(
-        eigenvalues,
-        uab_invariant_soa,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        n_threads,
-        n_cvt,
-        table["invariant_indices"],
-        table["varying_indices"],
-        table["logdet_diag_rows"],
-        table["logdet_diag_cols"],
-        table["level_offsets"],
-        table["level_counts"],
-        table["entries"],
-        table["idx_xx"],
-        table["idx_xy"],
-        table["idx_yy"],
-    )
-
-
-def compute_wald_general_c_ws(
-    workspace: object,
-    uab_varying_soa: np.ndarray,
-    n_threads: int,
-) -> WaldResult:
-    """Compute REML Wald for one chunk using a general n_cvt workspace.
-
-    Args:
-        workspace: PyCapsule from create_lmm_workspace_general.
-        uab_varying_soa: SNP-varying Uab (n_snps, n_var, n_samples) — SoA.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        WaldResult with keys: lambdas, logls, betas, ses, pwalds.
-    """
-    return _c().compute_lmm_chunk_general_c(workspace, uab_varying_soa, n_threads)
-
-
-def _compute_score_c(
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    Hi_eval_null: np.ndarray,
-    n_samples: int,
-    n_threads: int,
-) -> dict[str, np.ndarray]:
-    """Compute Score test via C extension (n_cvt=1 only).
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        Uab_batch: Pre-computed Uab matrices (n_snps, n_samples, 6).
-        Hi_eval_null: Pre-computed null-model Hi_eval (n_samples,).
-        n_samples: Number of samples.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        Dict with keys: betas, ses, p_scores.
-    """
-    return _c().compute_score_batch_c(
-        eigenvalues,
-        Uab_batch,
-        Hi_eval_null,
-        n_samples,
-        n_threads,
-    )
-
-
-def _compute_lrt_c(
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    logl_H0: float,
-    n_threads: int,
-) -> dict[str, np.ndarray]:
-    """Compute LRT via C extension (n_cvt=1 only).
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        Uab_batch: Pre-computed Uab matrices (n_snps, n_samples, 6).
-        n_samples: Number of samples.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution.
-        n_refine: Golden section iterations.
-        logl_H0: Null model MLE log-likelihood (scalar).
-        n_threads: OpenMP thread count.
-
-    Returns:
-        Dict with keys: lambdas_mle, p_lrts.
-    """
-    return _c().compute_lrt_batch_c(
-        eigenvalues,
-        Uab_batch,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        logl_H0,
-        n_threads,
-    )
-
-
 def _compute_wald_numpy(
     n_cvt: int,
     eigenvalues: np.ndarray,
@@ -906,9 +544,9 @@ def _compute_wald_numpy(
 ) -> WaldResult:
     """Compute REML-optimized Wald test statistics.
 
-    Dispatches to C extension: n_cvt=1 uses the batch path (compute_lmm_batch_c),
-    n_cvt>1 uses the general workspace path. Falls back to Python split path
-    (n_cvt=1) or generic Python path (n_cvt>1) when C extension is unavailable.
+    Pure NumPy. The runner reaches this only on ``DispatchPath.NUMPY_FALLBACK``,
+    which is selected only when the extension is absent, so there is no C branch
+    to take: n_cvt=1 uses the split-Uab optimizer, n_cvt>1 the generic one.
 
     Args:
         n_cvt: Number of covariates.
@@ -926,63 +564,6 @@ def _compute_wald_numpy(
     Returns:
         Dict with keys: lambdas, logls, betas, ses, pwalds.
     """
-
-    if _accel is not None and n_cvt == 1:
-        if Iab_batch is None:
-            Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
-        return _compute_wald_c(
-            eigenvalues,
-            Uab_batch,
-            n_samples,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            Iab_batch,
-            n_threads,
-        )
-
-    if _accel is not None and 1 < n_cvt <= MAX_C_N_CVT:
-        # Use C extension for general n_cvt via split-Uab workspace
-        from jamma.lmm.likelihood import classify_uab_columns
-
-        inv_indices, var_indices = classify_uab_columns(n_cvt)
-
-        # Build invariant SoA from Uab_batch (shared across all SNPs, use SNP 0)
-        # Note: a[0, :, list_idx] returns (n_inv, n_samples) due to numpy advanced
-        # indexing rules (integer + list separated by slice -> grouped at front).
-        inv_list = list(inv_indices)
-        if __debug__ and Uab_batch.shape[0] > 1:
-            # Verify columns classified as invariant are actually constant across SNPs
-            inv_sample = Uab_batch[:, :, inv_list]
-            if not np.allclose(inv_sample, inv_sample[0:1], rtol=1e-12, atol=0):
-                raise RuntimeError(
-                    f"classify_uab_columns({n_cvt}) classified varying columns as "
-                    "invariant — internal error, please report with your n_cvt value"
-                )
-        uab_invariant_soa = np.ascontiguousarray(
-            Uab_batch[0, :, inv_list]  # (n_inv, n_samples)
-        )
-        # Build varying SoA from Uab_batch
-        uab_varying_soa = np.ascontiguousarray(
-            Uab_batch[:, :, list(var_indices)].transpose(
-                0, 2, 1
-            )  # (n_snps, n_var, n_samples)
-        )
-
-        # Create per-call workspace and compute
-        ws = create_lmm_workspace_general(
-            eigenvalues,
-            uab_invariant_soa,
-            n_samples,
-            n_cvt,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            n_threads,
-        )
-        return compute_wald_general_c_ws(ws, uab_varying_soa, n_threads)
 
     if n_cvt == 1:
         # Python split path for n_cvt=1: separate invariant (ww, wy, yy)
@@ -1052,11 +633,9 @@ def _compute_lrt_numpy(
 ) -> dict[str, np.ndarray]:
     """Compute MLE-optimized LRT statistics.
 
-    Dispatches to C extension when available:
-    - n_cvt=1: uses the per-SNP batch path (compute_lrt_batch_c).
-    - n_cvt>1: uses the general batch path (compute_lrt_batch_general_c) with
-      pab_table_dict built from build_pab_table_for_c(n_cvt).
-    Falls back to Python golden section optimizer when C is unavailable.
+    Pure NumPy, via the golden section MLE optimizer. The runner reaches this
+    only on ``DispatchPath.NUMPY_FALLBACK``, which is selected only when the
+    extension is absent.
 
     Args:
         n_cvt: Number of covariates.
@@ -1072,46 +651,6 @@ def _compute_lrt_numpy(
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
     """
-    if _accel is not None and n_cvt == 1:
-        return _compute_lrt_c(
-            eigenvalues,
-            Uab_batch,
-            len(eigenvalues),
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            logl_H0,
-            n_threads,
-        )
-
-    if _accel is not None and n_cvt > 1:
-        from jamma.lmm.likelihood import build_pab_table_for_c
-
-        pab_table_dict = build_pab_table_for_c(n_cvt)
-        return _c().compute_lrt_batch_general_c(
-            eigenvalues,
-            Uab_batch,
-            len(eigenvalues),
-            n_cvt,
-            pab_table_dict,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            logl_H0,
-            n_threads,
-        )
-
-    from loguru import logger
-
-    if _accel is None:
-        logger.debug("LRT using Python path (C extension unavailable)")
-    else:
-        logger.debug(
-            "LRT using Python path (n_cvt={} > 1, general C unavailable)", n_cvt
-        )
-
     lambdas_mle, logls_mle = golden_section_optimize_lambda_mle_numpy(
         n_cvt,
         eigenvalues,
@@ -1135,11 +674,8 @@ def _compute_score_numpy(
 ) -> dict[str, np.ndarray]:
     """Compute Score test statistics (no optimization needed).
 
-    Dispatches to C extension when available:
-    - n_cvt=1: uses the per-SNP batch path (compute_score_batch_c).
-    - n_cvt>1: uses the general batch path (compute_score_batch_general_c) with
-      pab_table_dict built from build_pab_table_for_c(n_cvt).
-    Falls back to Python batch Score when C is unavailable.
+    Pure NumPy. The runner reaches this only on ``DispatchPath.NUMPY_FALLBACK``,
+    which is selected only when the extension is absent.
 
     Args:
         n_cvt: Number of covariates.
@@ -1152,38 +688,6 @@ def _compute_score_numpy(
     Returns:
         Dict with keys: betas, ses, p_scores.
     """
-    if _accel is not None and n_cvt == 1:
-        return _compute_score_c(
-            eigenvalues,
-            Uab_batch,
-            Hi_eval_null,
-            n_samples,
-            n_threads,
-        )
-
-    if _accel is not None and n_cvt > 1:
-        from jamma.lmm.likelihood import build_pab_table_for_c
-
-        pab_table_dict = build_pab_table_for_c(n_cvt)
-        return _c().compute_score_batch_general_c(
-            eigenvalues,
-            Uab_batch,
-            Hi_eval_null,
-            n_samples,
-            n_cvt,
-            pab_table_dict,
-            n_threads,
-        )
-
-    from loguru import logger
-
-    if _accel is None:
-        logger.debug("Score using Python path (C extension unavailable)")
-    else:
-        logger.debug(
-            "Score using Python path (n_cvt={} > 1, general C unavailable)", n_cvt
-        )
-
     if not np.all(np.isfinite(Hi_eval_null)):
         bad_idx = np.where(~np.isfinite(Hi_eval_null))[0]
         raise ValueError(
@@ -1214,8 +718,9 @@ def _compute_score_split_numpy(
 ) -> dict[str, np.ndarray]:
     """Compute Score test from SoA split data (no full Uab reconstruction).
 
-    Dispatches to C extension: compute_score_split_c for n_cvt=1,
-    compute_score_split_general_c for n_cvt>1. Falls back to
+    Dispatches to compute_score_split_general_c. ``DispatchPath.SOA_SPLIT`` is
+    selected only for n_cvt>=2, so there is no n_cvt=1 kernel here; modes 2 and
+    3 at n_cvt=1 take the fused workspace kernels instead. Falls back to
     reconstruct_uab_from_soa + _compute_score_numpy when C is unavailable.
 
     Args:
@@ -1230,17 +735,7 @@ def _compute_score_split_numpy(
     Returns:
         Dict with keys: betas, ses, p_scores.
     """
-    if _accel is not None and n_cvt == 1:
-        return _c().compute_score_split_c(
-            eigenvalues,
-            uab_varying_soa,
-            uab_invariant_soa,
-            Hi_eval_null,
-            n_samples,
-            n_threads,
-        )
-
-    if _accel is not None and n_cvt > 1:
+    if _accel is not None:
         from jamma.lmm.likelihood import build_pab_table_for_c
 
         return _c().compute_score_split_general_c(
@@ -1280,8 +775,9 @@ def _compute_lrt_split_numpy(
 ) -> dict[str, np.ndarray]:
     """Compute LRT from SoA split data (no full Uab reconstruction).
 
-    Dispatches to C extension: compute_lrt_split_c for n_cvt=1,
-    compute_lrt_split_general_c for n_cvt>1. Falls back to
+    Dispatches to compute_lrt_split_general_c. ``DispatchPath.SOA_SPLIT`` is
+    selected only for n_cvt>=2, so there is no n_cvt=1 kernel here; modes 2 and
+    3 at n_cvt=1 take the fused workspace kernels instead. Falls back to
     reconstruct_uab_from_soa + _compute_lrt_numpy when C is unavailable.
 
     Args:
@@ -1300,21 +796,7 @@ def _compute_lrt_split_numpy(
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
     """
-    if _accel is not None and n_cvt == 1:
-        return _c().compute_lrt_split_c(
-            eigenvalues,
-            uab_varying_soa,
-            uab_invariant_soa,
-            n_samples,
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            logl_H0,
-            n_threads,
-        )
-
-    if _accel is not None and n_cvt > 1:
+    if _accel is not None:
         from jamma.lmm.likelihood import build_pab_table_for_c
 
         return _c().compute_lrt_split_general_c(

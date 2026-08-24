@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interleaved A/B benchmark for the split/SoA n_cvt=1 mode-4 kernel.
+"""Interleaved A/B benchmark for the fused n_cvt=1 mode-4 kernel.
 
 Each revision runs in a persistent, warmed subprocess. Measurements alternate
 in balanced ABBA/BAAB blocks so machine drift is not aliased with revision.
@@ -21,20 +21,20 @@ import numpy as np
 
 def build_inputs(
     n_samples: int, n_snps: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Build well-conditioned split Uab arrays without a full AoS copy."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Build well-conditioned inputs for the fused kernel.
+
+    The fused kernel forms Uab from the rotated vectors itself, so it is handed
+    those plus the invariant block rather than a prebuilt varying SoA.
+    """
     rng = np.random.default_rng(20260721)
     eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
     w = np.abs(rng.standard_normal(n_samples)) + 1.0
     y = rng.standard_normal(n_samples)
-    x = rng.standard_normal((n_snps, n_samples))
+    utg_t = np.ascontiguousarray(rng.standard_normal((n_snps, n_samples)))
 
     uab_inv = np.ascontiguousarray(np.stack((w * w, w * y, y * y)))
-    uab_var = np.empty((n_snps, 3, n_samples), dtype=np.float64)
-    uab_var[:, 0, :] = x * w
-    uab_var[:, 1, :] = x * x
-    uab_var[:, 2, :] = x * y
-    return eigenvalues, uab_inv, uab_var
+    return eigenvalues, uab_inv, w, y, utg_t
 
 
 def _digest_result(result: dict[str, np.ndarray]) -> str:
@@ -49,28 +49,30 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
     """Serve warmed benchmark measurements over a line-oriented protocol."""
     sys.path.insert(0, str(source_root / "src"))
     from jamma.lmm.compute_numpy import (
-        compute_mode4_split_c_ws,
-        create_lmm_workspace_mode4,
+        compute_mode4_fused_c_ws,
+        create_lmm_workspace_mode4_fused,
     )
 
-    eigenvalues, uab_inv, uab_var = build_inputs(n_samples, n_snps)
+    eigenvalues, uab_inv, w, Uty, utg_t = build_inputs(n_samples, n_snps)
     hi_eval_null = 1.0 / (eigenvalues + 1.0)
-    workspace = create_lmm_workspace_mode4(
+    workspace = create_lmm_workspace_mode4_fused(
         eigenvalues,
         uab_inv,
+        w,
+        Uty,
         n_samples,
         1e-5,
         1e5,
         50,
         20,
         n_threads,
-        hi_eval_null,
-        0.0,
+        hi_eval_null=hi_eval_null,
+        logl_H0=0.0,
     )
 
     # Exercise the full working set once before any timed command. A small
     # warmup leaves first-touch and OpenMP effects in the first measurement.
-    compute_mode4_split_c_ws(workspace, uab_var, n_threads)
+    compute_mode4_fused_c_ws(workspace, utg_t, n_threads)
     print("ready", flush=True)
     for command in sys.stdin:
         if command.strip() == "stop":
@@ -78,7 +80,7 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
         if command.strip() != "run":
             raise ValueError(f"unknown worker command: {command.strip()}")
         start = time.perf_counter()
-        result = compute_mode4_split_c_ws(workspace, uab_var, n_threads)
+        result = compute_mode4_fused_c_ws(workspace, utg_t, n_threads)
         elapsed = time.perf_counter() - start
         print(
             json.dumps({"seconds": elapsed, "output_sha256": _digest_result(result)}),

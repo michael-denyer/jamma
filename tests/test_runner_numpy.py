@@ -361,36 +361,41 @@ def test_chunk_size_mode4_fused_uses_4col():
 
 @pytest.mark.tier0
 def test_runner_mode4_uses_fused_dispatch():
-    """Mode 4 with C extension uses fused dispatch, not compose fallback."""
-    from unittest.mock import patch
+    """Mode 4 takes a fused path, and the SoA split dispatcher refuses it.
 
-    from jamma.lmm import chunk_dispatch, compute_numpy
+    This used to wrap _compose_mode4_from_split and assert it was never called.
+    That helper has gone: nothing in src called it, and dispatch_soa_split
+    raises for modes 1 and 4 rather than composing. The contract it stood for is
+    now two structural facts, and both are asserted directly.
+    """
+    from jamma.lmm import compute_numpy
+    from jamma.lmm.chunk_dispatch import dispatch_soa_split
+    from jamma.lmm.dispatch import DispatchPath
 
     if compute_numpy._accel is None:
         pytest.skip("Fused mode-4 C extension not available")
 
-    genotypes, phenotypes, kinship, snp_info = _make_synthetic_data()
-
-    with patch.object(
-        chunk_dispatch,
-        "_compose_mode4_from_split",
-        wraps=chunk_dispatch._compose_mode4_from_split,
-    ) as mock_compose:
-        run_lmm_association_numpy(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=kinship,
-            snp_info=snp_info,
-            config=LmmConfig(
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=4,
-            ),
+    for n_cvt, expected in ((1, DispatchPath.FUSED), (2, DispatchPath.FUSED_GENERAL)):
+        assert (
+            compute_numpy.select_current_dispatch_path(n_cvt, 4, log_choices=False)
+            is expected
         )
-        assert mock_compose.call_count == 0, (
-            "Fused mode-4 should not fall back to _compose_mode4_from_split"
+
+    with pytest.raises(ValueError, match="modes 1 and 4 take the fused"):
+        dispatch_soa_split(
+            4,
+            2,
+            np.ones(4),
+            np.zeros((1, 3, 4)),
+            np.zeros((3, 4)),
+            4,
+            Hi_eval_null=np.ones(4),
+            l_min=1e-5,
+            l_max=1e5,
+            n_grid=50,
+            n_refine=20,
+            logl_H0=-1.0,
+            n_threads=1,
         )
 
 

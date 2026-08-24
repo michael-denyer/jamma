@@ -69,7 +69,7 @@ class TestMemoryPreflightStreaming:
             calls.append((n_valid, n_snps, n_cvt))
 
         monkeypatch.setattr(pipeline_memory, "check_streaming_memory", fake_check)
-        plan = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
+        plan = ExecutionPlan(mode="streaming", reason="test")
 
         memory_preflight(runner.config, plan, n_valid=1000, n_snps=50_000, n_cvt=3)
 
@@ -121,7 +121,7 @@ class TestMemoryPreflightBatch:
             called = True
 
         monkeypatch.setattr("jamma.pipeline_memory.estimate_lmm_memory", fake_estimate)
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="test")
+        plan = ExecutionPlan(mode="batch", reason="test")
 
         records: list[str] = []
         handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
@@ -152,7 +152,7 @@ class TestMemoryPreflightBatch:
         monkeypatch.setattr(
             "jamma.pipeline_memory.estimate_lmm_memory", lambda *a, **k: est
         )
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="test")
+        plan = ExecutionPlan(mode="batch", reason="test")
 
         with pytest.raises(MemoryError, match=r"exceeds .*budget \(8\.0GB\)"):
             memory_preflight(runner.config, plan, n_valid=1000, n_snps=100, n_cvt=1)
@@ -165,7 +165,7 @@ class TestMemoryPreflightBatch:
         monkeypatch.setattr(
             "jamma.pipeline_memory.estimate_lmm_memory", lambda *a, **k: est
         )
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="test")
+        plan = ExecutionPlan(mode="batch", reason="test")
 
         with pytest.raises(MemoryError, match=r"Insufficient memory"):
             memory_preflight(runner.config, plan, n_valid=1000, n_snps=100, n_cvt=1)
@@ -178,7 +178,7 @@ class TestMemoryPreflightBatch:
         monkeypatch.setattr(
             "jamma.pipeline_memory.estimate_lmm_memory", lambda *a, **k: est
         )
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="test")
+        plan = ExecutionPlan(mode="batch", reason="test")
 
         memory_preflight(runner.config, plan, n_valid=1000, n_snps=100, n_cvt=1)
 
@@ -366,7 +366,7 @@ class TestRunLoco:
             loco_result=loco,
             monkeypatch=monkeypatch,
         )
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="loco")
+        plan = ExecutionPlan(mode="batch", reason="loco")
         assoc_path = tmp_path / "out.assoc.txt"
 
         result = runner._run_loco(
@@ -410,7 +410,7 @@ class TestRunLoco:
             loco_result=loco,
             monkeypatch=monkeypatch,
         )
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="loco")
+        plan = ExecutionPlan(mode="batch", reason="loco")
 
         result = runner._run_loco(
             t_start=0.0,
@@ -439,7 +439,7 @@ class TestRunLoco:
             loco_result=loco,
             monkeypatch=monkeypatch,
         )
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="loco")
+        plan = ExecutionPlan(mode="batch", reason="loco")
 
         result = runner._run_loco(
             t_start=0.0,
@@ -471,7 +471,7 @@ class TestRunLoco:
             loco_result=loco,
             monkeypatch=monkeypatch,
         )
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="loco")
+        plan = ExecutionPlan(mode="batch", reason="loco")
 
         result = runner._run_loco(
             t_start=0.0,
@@ -536,7 +536,7 @@ class TestRunLoco:
 
         runner._run_loco(
             t_start=0.0,
-            plan=ExecutionPlan(backend="numpy", mode="batch", reason="loco"),
+            plan=ExecutionPlan(mode="batch", reason="loco"),
             n_samples=3,
             n_snps=0,
             assoc_path=tmp_path / "out.assoc.txt",
@@ -566,7 +566,7 @@ class TestRunLoco:
 
         monkeypatch.setattr(lmm_pkg, "run_lmm_loco", _raising_loco)
 
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="loco")
+        plan = ExecutionPlan(mode="batch", reason="loco")
 
         with pytest.raises(RuntimeError, match="sentinel: LOCO failed"):
             runner._run_loco(

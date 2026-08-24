@@ -20,7 +20,7 @@ duplicated PipelineRunner's.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from loguru import logger
@@ -38,44 +38,29 @@ def _c_extension_available() -> bool:
     return compute_numpy._accel is not None
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True)
 class ExecutionPlan:
-    """Describes the selected backend and execution mode.
+    """Describes the selected execution mode.
 
-    Equality compares (backend, mode) only — reason is diagnostic metadata
-    and must not affect dispatch or comparison logic.
+    Equality and hashing compare ``mode`` only — ``reason`` is diagnostic
+    metadata and must not affect dispatch or comparison logic.
 
     Attributes:
-        backend: Compute backend ("numpy").
         mode: Execution mode ("batch" or "streaming").
         reason: Human-readable explanation of why this plan was chosen.
     """
 
-    backend: Literal["numpy"]
     mode: Literal["batch", "streaming"]
-    reason: str
+    reason: str = field(compare=False)
 
     def __post_init__(self) -> None:
-        if self.mode not in ("batch", "streaming"):
-            raise ValueError(
-                f"Invalid execution mode: {self.mode!r}. "
-                f"Must be 'batch' or 'streaming'."
-            )
         if not self.reason:
             raise ValueError("ExecutionPlan.reason must be non-empty")
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ExecutionPlan):
-            return NotImplemented
-        return self.backend == other.backend and self.mode == other.mode
-
-    def __hash__(self) -> int:
-        return hash((self.backend, self.mode))
-
     @property
     def runner_name(self) -> str:
-        """Return '{backend}-{mode}' for logging and banner display."""
-        return f"{self.backend}-{self.mode}"
+        """Return 'numpy-{mode}' for logging and banner display."""
+        return f"numpy-{self.mode}"
 
 
 SMALL_SAMPLE_WARNING_THRESHOLD = 50
@@ -157,7 +142,7 @@ def select_execution_mode(
                 "'from jamma.jlinalg._compile_jlinalg import compile_extension; "
                 "compile_extension()'"
             )
-        return ExecutionPlan("numpy", "streaming", "Explicit numpy-streaming request")
+        return ExecutionPlan("streaming", "Explicit numpy-streaming request")
 
     _valid_requests = ("auto", "numpy", "numpy-streaming")
     if requested not in _valid_requests:
@@ -167,11 +152,7 @@ def select_execution_mode(
 
     # Explicit backend selection
     if requested == "numpy":
-        return ExecutionPlan(
-            "numpy",
-            "batch",
-            "NumPy backend explicitly requested",
-        )
+        return ExecutionPlan("batch", "NumPy backend explicitly requested")
 
     # Auto selection
     c_ext_available = _c_extension_available()
@@ -183,13 +164,11 @@ def select_execution_mode(
     if c_ext_available:
         if est.sufficient:
             return ExecutionPlan(
-                "numpy",
                 "batch",
                 f"C extension available, {est.total_gb:.1f}GB fits in "
                 f"{est.available_gb:.1f}GB available",
             )
         return ExecutionPlan(
-            "numpy",
             "streaming",
             f"C extension available, {est.total_gb:.1f}GB exceeds "
             f"{est.available_gb:.1f}GB available, using NumPy streaming",
@@ -202,8 +181,4 @@ def select_execution_mode(
             f"but only {est.available_gb:.1f}GB available. "
             "Compile the C extension for streaming support."
         )
-    return ExecutionPlan(
-        "numpy",
-        "batch",
-        "Fallback -- no C extension available",
-    )
+    return ExecutionPlan("batch", "Fallback -- no C extension available")

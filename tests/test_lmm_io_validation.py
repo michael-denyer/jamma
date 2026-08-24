@@ -489,7 +489,7 @@ def test_check_hwe_support_accepts_numpy_streaming() -> None:
     from jamma.lmm.runner import ExecutionPlan
     from jamma.pipeline import PipelineConfig, PipelineRunner
 
-    plan = ExecutionPlan("numpy", "streaming", "test")
+    plan = ExecutionPlan("streaming", "test")
 
     config = PipelineConfig(
         bfile=Path("dummy"),

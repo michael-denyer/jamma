@@ -43,22 +43,6 @@ from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.utils.logging import log_rss_memory
 
-# Module-level timing from the last run, for programmatic access by pipeline/benchmarks.
-# Not thread-safe: concurrent calls will corrupt this reading.
-# Reset at function entry; replaced wholesale at function exit on success, so a
-# reader never observes a half-populated dict.
-# Use get_last_run_timing() for a safe snapshot copy.
-last_run_timing: RunnerTiming = {}
-
-
-def get_last_run_timing() -> RunnerTiming:
-    """Return a snapshot copy of the last run's timing data.
-
-    Safe to call from any thread -- returns an independent dict.
-    """
-    return last_run_timing.copy()
-
-
 # SNPs per block in the statistics pass when the caller names no chunk size.
 # Pass 1 reads the .bed and accumulates per-SNP counts, so its footprint is one
 # block of genotypes rather than the rotation and grid buffers the association
@@ -80,7 +64,7 @@ def run_lmm_association_numpy_streaming(
     hwe_threshold: float = 0.0,
     validate_genotypes: bool = True,
     config: LmmConfig = DEFAULT_LMM_CONFIG,
-) -> tuple[LmmRunResult, int]:
+) -> LmmRunResult:
     """Run LMM association tests by streaming genotypes from disk (NumPy/C path).
 
     Two-pass disk streaming: pass 1 computes SNP statistics for filtering,
@@ -119,10 +103,10 @@ def run_lmm_association_numpy_streaming(
             threshold/mode kwargs above.
 
     Returns:
-        Tuple of (LmmRunResult, n_tested) where LmmRunResult contains
-        associations (empty if output_path is set -- results on disk) and
-        PVE from null model. n_tested is the number of SNPs that passed
-        filtering and were tested.
+        LmmRunResult with associations (empty if output_path is set --
+        results on disk), PVE from the null model, n_tested counting the
+        SNPs that passed filtering and were tested, and the run's timing
+        breakdown.
     """
     # One source for every knob. The runner reads locals rather than config.x
     # at forty-odd sites; the dual surface this replaced let a caller pass both
@@ -226,7 +210,7 @@ def run_lmm_association_numpy_streaming(
             logger.info(
                 f"LMM Association completed in {elapsed:.2f}s (no SNPs passed filter)"
             )
-        return LmmRunResult(associations=[]), 0
+        return LmmRunResult(associations=[], n_tested=0)
 
     filtered_afs = snp_selection.filtered_afs
     filtered_miss = snp_selection.filtered_miss
@@ -261,8 +245,6 @@ def run_lmm_association_numpy_streaming(
     t_eigen_end = time.perf_counter()
 
     # === PASS 2: Compute per chunk (float64) ===
-    global last_run_timing
-    last_run_timing = {}
     all_results: list[AssocResult] = []
 
     def _make_stream_source(source_chunk_size: int):
@@ -369,19 +351,15 @@ def run_lmm_association_numpy_streaming(
             elapsed = time.perf_counter() - start_time
             logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
-        last_run_timing = {
-            "rotation_s": chunk_stats.rotation_s,
-            "numpy_compute_s": chunk_stats.compute_s,
-            "result_write_s": chunk_stats.result_write_s,
-        }
-
         n_tested = writer.count if writer is not None else len(all_results)
-        return (
-            LmmRunResult(
-                associations=[] if output_path is not None else all_results,
-                pve=prepared.pve,
-                pve_se=prepared.pve_se,
-                n_tested=n_tested if output_path is not None else None,
+        return LmmRunResult(
+            associations=[] if output_path is not None else all_results,
+            n_tested=n_tested,
+            pve=prepared.pve,
+            pve_se=prepared.pve_se,
+            timing=RunnerTiming(
+                rotation_s=chunk_stats.rotation_s,
+                numpy_compute_s=chunk_stats.compute_s,
+                result_write_s=chunk_stats.result_write_s,
             ),
-            n_tested,
         )

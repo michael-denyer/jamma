@@ -559,37 +559,6 @@ def test_numpy_runner_covar_mouse_hs1940(
 
 
 # ---------------------------------------------------------------------------
-# LmmRunResult.snp_count property tests (PR-65)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.tier0
-class TestSnpCount:
-    """Unit tests for LmmRunResult.snp_count property."""
-
-    def test_snp_count_from_n_tested(self):
-        """snp_count returns n_tested when set (streaming mode)."""
-        from jamma.lmm.schema import LmmRunResult
-
-        result = LmmRunResult(associations=[], n_tested=42)
-        assert result.snp_count == 42
-
-    def test_snp_count_from_associations(self):
-        """snp_count falls back to len(associations) when n_tested is None."""
-        from jamma.lmm.schema import LmmRunResult
-
-        result = LmmRunResult(associations=[1, 2, 3])  # dummy items
-        assert result.snp_count == 3
-
-    def test_snp_count_prefers_n_tested_over_associations(self):
-        """n_tested takes priority even if associations is non-empty."""
-        from jamma.lmm.schema import LmmRunResult
-
-        result = LmmRunResult(associations=[1, 2, 3], n_tested=10)
-        assert result.snp_count == 10
-
-
-# ---------------------------------------------------------------------------
 # Multi-chunk equivalence test
 # ---------------------------------------------------------------------------
 

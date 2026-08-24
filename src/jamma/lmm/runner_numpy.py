@@ -30,6 +30,7 @@ from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     LmmConfig,
     LmmRunResult,
+    RunnerTiming,
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
@@ -304,19 +305,28 @@ def run_lmm_association_numpy(
         logger.info(f"  Total:               {elapsed:.2f}s")
         logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
+    timing = RunnerTiming(
+        rotation_s=chunk_stats.rotation_s,
+        numpy_compute_s=chunk_stats.compute_s,
+        result_write_s=chunk_stats.result_write_s,
+    )
     if streaming:
         return LmmRunResult(
             associations=[],
+            n_tested=chunk_stats.processed,
             pve=prepared.pve,
             pve_se=prepared.pve_se,
-            n_tested=chunk_stats.processed,
+            timing=timing,
         )
 
     assert arrays_out is not None
+    associations = _build_results(
+        lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
+    )
     return LmmRunResult(
-        associations=_build_results(
-            lmm_mode, snp_indices, filtered_afs, filtered_miss, snp_info, arrays_out
-        ),
+        associations=associations,
+        n_tested=len(associations),
         pve=prepared.pve,
         pve_se=prepared.pve_se,
+        timing=timing,
     )

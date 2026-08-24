@@ -57,7 +57,8 @@ def run_phenotype_loop(
     Iterates the configured phenotype columns, masking each to the shared
     valid-sample intersection, dispatching to the batch or streaming runner
     per the plan, and collecting associations, counts, and output paths.
-    Captures PVE and runner rotation timing from the final phenotype.
+    PVE and the runner timing breakdown are taken from the final phenotype's
+    result.
 
     Returns:
         A PhenoLoopOutcome bundling associations, total SNPs tested, the
@@ -88,6 +89,7 @@ def run_phenotype_loop(
     prefix = config.output_prefix
     pve: float | None = None
     pve_se: float | None = None
+    runner_timing: RunnerTiming = {}
     for col in pheno_columns:
         if is_multi:
             logger.info(f"Starting LMM for phenotype column {col}")
@@ -105,7 +107,7 @@ def run_phenotype_loop(
             col_path = assoc_path
 
         if plan.mode == "streaming":
-            run_result, n_tested = _run_streaming(
+            run_result = _run_streaming(
                 config,
                 phenotypes_col,
                 covariates,
@@ -115,7 +117,7 @@ def run_phenotype_loop(
                 snps_indices,
             )
         else:
-            run_result, n_tested = _run_batch(
+            run_result = _run_batch(
                 config,
                 phenotypes_col,
                 covariates,
@@ -127,21 +129,13 @@ def run_phenotype_loop(
             )
 
         all_results.extend(run_result.associations)
-        total_tested += n_tested
+        total_tested += run_result.n_tested
         all_assoc_paths.append(col_path)
         pve, pve_se = run_result.pve, run_result.pve_se
-        logger.info(f"Phenotype {col}: {n_tested} SNPs tested -> {col_path}")
+        runner_timing = run_result.timing
+        logger.info(f"Phenotype {col}: {run_result.n_tested} SNPs tested -> {col_path}")
 
     lmm_s = time.perf_counter() - t_lmm
-
-    # Pull runner-level rotation timing from the most recent runner call.
-    runner_timing: RunnerTiming = {}
-    if plan.mode == "streaming":
-        from jamma.lmm.runner_numpy_streaming import (
-            get_last_run_timing as _np_stream_timing,
-        )
-
-        runner_timing = _np_stream_timing()
 
     return PhenoLoopOutcome(
         associations=all_results,
@@ -163,7 +157,7 @@ def _run_batch(
     assoc_path: Path,
     snps_indices: np.ndarray | None,
     plink_data: PlinkData | None = None,
-) -> tuple[LmmRunResult, int]:
+) -> LmmRunResult:
     """Run LMM association using the pure-NumPy batch backend.
 
     Args:
@@ -211,7 +205,7 @@ def _run_batch(
         output_path=assoc_path,
     )
 
-    return run_result, run_result.snp_count
+    return run_result
 
 
 def _run_streaming(
@@ -222,7 +216,7 @@ def _run_streaming(
     eigenvectors: np.ndarray | None,
     assoc_path: Path,
     snps_indices: np.ndarray | None,
-) -> tuple[LmmRunResult, int]:
+) -> LmmRunResult:
     """Run LMM via NumPy streaming backend (disk I/O + C extension)."""
     from jamma.lmm.runner_numpy_streaming import (
         run_lmm_association_numpy_streaming,

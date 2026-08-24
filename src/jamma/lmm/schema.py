@@ -9,7 +9,7 @@ LMM subsystem are derived views of MODE_SPECS.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, TypedDict, cast, overload
 
@@ -286,26 +286,21 @@ class LmmRunResult:
     such as heritability estimates.
 
     Attributes:
-        associations: Per-SNP association results.
+        associations: Per-SNP association results. Empty when output_path
+            routed results to disk; n_tested still counts them.
+        n_tested: Number of SNPs tested, in every mode.
         pve: PVE (proportion of variance explained) from null model REML.
             None if no SNPs passed filtering (early return).
         pve_se: Standard error of PVE from REML second derivative delta method.
             None if not computed or likelihood surface is flat.
-        n_tested: Number of SNPs tested. Populated by batch runners
-            (batch and streaming runners) when output_path is set
-            (associations list is empty). None when associations list is
-            populated (backward compat).
+        timing: Wall-clock breakdown of the run's chunk loop.
     """
 
     associations: list  # list[AssocResult] -- avoid circular import with stats.py
+    n_tested: int
     pve: float | None = None
     pve_se: float | None = None
-    n_tested: int | None = None
-
-    @property
-    def snp_count(self) -> int:
-        """Number of SNPs tested, from n_tested or len(associations)."""
-        return self.n_tested if self.n_tested is not None else len(self.associations)
+    timing: RunnerTiming = field(default_factory=RunnerTiming)
 
 
 @dataclass(frozen=True, slots=True)

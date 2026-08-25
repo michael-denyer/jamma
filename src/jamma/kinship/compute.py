@@ -33,12 +33,10 @@ from loguru import logger
 
 from jamma import jlinalg
 from jamma.core import memory
+from jamma.core.eigen_plan import array_gb, square_matrix_gb
 from jamma.core.estimates import estimate_kinship_seconds
-from jamma.core.memory import (
-    check_memory_available,
-    estimate_streaming_memory,
-    log_memory_snapshot,
-)
+from jamma.core.memory import check_memory_available, estimate_streaming_memory
+from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.snp_stats import (
@@ -186,7 +184,7 @@ def _compute_kinship_inmemory(
     if check_memory:
         # Kinship phase only: the accumulator plus the float64 genotype matrix.
         # Callers that eigendecompose are gated by eigendecompose_kinship.
-        required_gb = n_samples**2 * 8 / 1e9 + n_samples * n_snps * 8 / 1e9
+        required_gb = square_matrix_gb(n_samples) + array_gb(n_samples, n_snps)
         check_memory_available(
             required_gb,
             operation=f"kinship accumulation (peak: {required_gb:.1f}GB)",
@@ -395,9 +393,9 @@ def compute_loco_kinship(
     # Memory check: S_full (n^2*8) + X_centered (n*p*8) + one S_c at a time (n^2*8)
     if check_memory:
         required_gb = (
-            n_samples**2 * 8 / 1e9  # S_full
-            + n_samples * n_filtered * 8 / 1e9  # X_centered (float64)
-            + n_samples**2 * 8 / 1e9  # S_c (one at a time)
+            square_matrix_gb(n_samples)  # S_full
+            + array_gb(n_samples, n_filtered)  # X_centered (float64)
+            + square_matrix_gb(n_samples)  # S_c (one at a time)
         )
         check_memory_available(
             required_gb,
@@ -1063,17 +1061,17 @@ def _decide_loco_passes(
     Returns:
         A _LocoPassPlan with the decision and the peak estimates.
     """
-    from jamma.core.memory import _dsyevr_peak_gb
+    from jamma.core.eigen_plan import dsyevr_peak_gb
 
-    matrix_gb = n_mat**2 * 8 / 1e9
+    matrix_gb = square_matrix_gb(n_mat)
     # Chunk buffer is n_samples (full disk read) regardless of valid_indices;
     # subsetting happens after load.
-    chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
+    chunk_buffer_gb = array_gb(n_samples, chunk_size)
     # S_full + K_loco_buf + all S_chr + chunk buffer
     single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
     # Minimum: 3 matrices (S_full + K_loco_buf + 1 remaining S_chr) + chunk
     # buffer + eigendecomp workspace (DSYEVR peak on the n_mat-sized K_loco).
-    eigendecomp_min_gb = _dsyevr_peak_gb(n_mat)
+    eigendecomp_min_gb = dsyevr_peak_gb(n_mat)
     min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
 
     if max_batch_chrs is not None:
@@ -1088,7 +1086,7 @@ def _decide_loco_passes(
             # suspended with remaining S_chr matrices still alive. Reserve
             # eigendecomp workspace (DSYEVR peak on the n_mat-sized K_loco) so
             # the batch doesn't exhaust memory before eigendecomp can run.
-            eigendecomp_reserve_gb = _dsyevr_peak_gb(n_mat)
+            eigendecomp_reserve_gb = dsyevr_peak_gb(n_mat)
             usable_gb = (
                 available_gb * 0.9
                 - 2 * matrix_gb

@@ -92,10 +92,12 @@ src/jamma/
 ├── pipeline_banner.py      # GEMMA-style dataset and execution-plan banners
 ├── pipeline_phenotype_loop.py  # Per-phenotype loop + the batch/streaming runner calls
 ├── pipeline_kinship.py     # The -gk path: compute a kinship matrix and write it
-├── pipeline_memory.py      # Memory preflight gate for the batch and streaming modes
+├── pipeline_memory.py      # MemoryPlan: the preflight gate, priced per dispatch path and eigen driver
 ├── core/                   # Cross-cutting concerns: memory estimation, backend
 │   │                       # selection, progress bars, SNP filtering, threading
-│   ├── memory.py           # Pre-flight memory checks and DSYEVD/DSYEVR workspace estimates
+│   ├── memory.py           # Cost model: estimators, RAM seam, sufficiency check
+│   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives
+│   ├── memory_snapshot.py  # Process RSS / free-RAM snapshots and cleanup
 │   ├── backend.py          # Backend detection and banner formatting
 │   ├── progress.py         # timed_progress() and progress_iterator() wrappers
 │   └── threading.py        # BLAS thread-count control via threadpoolctl

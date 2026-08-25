@@ -8,10 +8,10 @@ import numpy as np
 import pytest
 
 from jamma import jlinalg
-from jamma.core.memory import (
+from jamma.core.eigen_plan import (
     _dsyevd_inplace_peak_gb,
     _dsyevd_peak_gb,
-    _square_matrix_gb,
+    square_matrix_gb,
 )
 from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevd
 
@@ -107,10 +107,10 @@ class TestMemoryEstimateInplaceVsDefault:
         assert _dsyevd_inplace_peak_gb(n) < _dsyevd_peak_gb(n)
 
     def test_difference_is_one_square_matrix(self):
-        """Difference between default and inplace is ~_square_matrix_gb(n)."""
+        """Difference between default and inplace is ~square_matrix_gb(n)."""
         n = 1000
         diff = _dsyevd_peak_gb(n) - _dsyevd_inplace_peak_gb(n)
-        expected = _square_matrix_gb(n)
+        expected = square_matrix_gb(n)
         assert diff == pytest.approx(expected, rel=0.01), (
             f"Expected saving of {expected:.6f}GB, got {diff:.6f}GB"
         )

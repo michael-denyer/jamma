@@ -19,13 +19,14 @@ from loguru import logger
 from threadpoolctl import threadpool_info
 
 from jamma import jlinalg
-from jamma.core.memory import (
+from jamma.core.eigen_plan import (
     _memory_margin_gb,
-    check_memory_available,
     forced_numpy_fallback,
-    log_memory_snapshot,
     plan_eigen_driver,
+    square_matrix_gb,
 )
+from jamma.core.memory import check_memory_available
+from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import timed_progress
 from jamma.core.threading import blas_threads, get_physical_core_count
 
@@ -119,7 +120,8 @@ def eigendecompose_kinship(
 
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
-        f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"
+        f"Matrix elements: {n_elements:,}, "
+        f"memory: ~{square_matrix_gb(n_samples):.1f} GB"
     )
 
     # Memory pre-flight

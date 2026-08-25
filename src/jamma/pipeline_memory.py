@@ -16,13 +16,12 @@ from typing import TYPE_CHECKING, Literal
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.memory import (
+from jamma.core.eigen_plan import (
     EigenDriverPlan,
-    estimate_lmm_memory,
-    estimate_streaming_memory,
     forced_numpy_fallback,
     plan_eigen_driver,
 )
+from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
 from jamma.lmm.chunk_sizing import (
     compute_chunk_size_numpy,
     lmm_extra_bytes_per_snp,

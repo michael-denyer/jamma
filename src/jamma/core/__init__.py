@@ -8,12 +8,14 @@ from jamma.core.backend import get_backend_info
 from jamma.core.config import OutputConfig
 from jamma.core.memory import (
     MemoryBreakdown,
-    MemorySnapshot,
     StreamingMemoryBreakdown,
     check_memory_available,
-    cleanup_memory,
     estimate_lmm_memory,
     estimate_streaming_memory,
+)
+from jamma.core.memory_snapshot import (
+    MemorySnapshot,
+    cleanup_memory,
     get_memory_snapshot,
     log_memory_snapshot,
 )

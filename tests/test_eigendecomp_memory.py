@@ -5,12 +5,12 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from jamma.core.memory import (
+from jamma.core.eigen_plan import (
     _dsyevd_inplace_peak_gb,
     _dsyevd_peak_gb,
     _dsyevd_workspace_gb,
-    _dsyevr_peak_gb,
     _dsyevr_workspace_gb,
+    dsyevr_peak_gb,
     plan_eigen_driver,
 )
 from jamma.lmm.eigen import eigendecompose_kinship
@@ -60,7 +60,7 @@ class TestPlanEigenDriver:
     def test_dsyevr_fallback_when_inplace_wont_fit(self):
         """Memory below the in-place peak but above DSYEVR -> DSYEVR fallback."""
         # available sits between DSYEVR peak (+margin) and in-place peak (+margin).
-        available = (_dsyevr_peak_gb(self.N) + _dsyevd_inplace_peak_gb(self.N)) / 2
+        available = (dsyevr_peak_gb(self.N) + _dsyevd_inplace_peak_gb(self.N)) / 2
         plan = plan_eigen_driver(
             self.N,
             available_gb=available,
@@ -72,13 +72,13 @@ class TestPlanEigenDriver:
         assert plan.driver == "DSYEVR"
         assert plan.use_dsyevr is True
         assert plan.use_inplace is False
-        assert plan.required_gb == pytest.approx(_dsyevr_peak_gb(self.N))
+        assert plan.required_gb == pytest.approx(dsyevr_peak_gb(self.N))
         # pre_fallback_gb records the in-place peak we fell back from.
         assert plan.pre_fallback_gb == pytest.approx(_dsyevd_inplace_peak_gb(self.N))
 
     def test_no_dsyevr_stays_on_dsyevd_when_tight(self):
         """Tight memory, no DSYEVR available -> stay on DSYEVD (no fallback)."""
-        available = _dsyevr_peak_gb(self.N)  # below in-place peak
+        available = dsyevr_peak_gb(self.N)  # below in-place peak
         plan = plan_eigen_driver(
             self.N,
             available_gb=available,
@@ -139,7 +139,7 @@ class TestPlanEigenDriver:
         assert plan.use_dsyevr is True
         assert plan.use_inplace is False
         assert plan.no_vendor is False
-        assert plan.required_gb == pytest.approx(_dsyevr_peak_gb(self.N))
+        assert plan.required_gb == pytest.approx(dsyevr_peak_gb(self.N))
 
     def test_pure_function_is_deterministic(self):
         """Same inputs -> identical plan.
@@ -243,7 +243,7 @@ class TestEigendecompMemoryEstimate:
         # DSYEVD: K (320GB) + U (320GB) + workspace (~640GB) = ~1280GB
         assert 1275 < _dsyevd_peak_gb(n) < 1285
         # DSYEVR: K (320GB) + U (320GB) + workspace (~0.06GB) = ~640GB
-        assert 639 < _dsyevr_peak_gb(n) < 641
+        assert 639 < dsyevr_peak_gb(n) < 641
 
     def test_estimate_scales_quadratically(self):
         """Memory scales quadratically (kinship term dominates workspace)."""

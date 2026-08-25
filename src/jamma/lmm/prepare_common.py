@@ -14,6 +14,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.constants import PHENOTYPE_MISSING
+from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
@@ -23,7 +24,6 @@ from jamma.lmm.likelihood import (
     finite_difference_dev2,
 )
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN
-from jamma.utils.logging import log_rss_memory
 
 
 def compute_valid_mask(
@@ -253,12 +253,12 @@ def _eigendecompose_or_reuse(
         )
 
     if show_progress:
-        log_rss_memory(label, "before_eigendecomp")
+        log_memory_snapshot(f"{label}:before_eigendecomp")
     eigenvalues_np, U = eigendecompose_kinship(kinship, check_memory=check_memory)
     # Release LAPACK DSYEVD workspace before LMM phase
     gc.collect()
     if show_progress:
-        log_rss_memory(label, "after_eigendecomp")
+        log_memory_snapshot(f"{label}:after_eigendecomp")
     return eigenvalues_np, U
 
 

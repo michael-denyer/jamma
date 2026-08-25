@@ -29,7 +29,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from jamma.core.memory import MemorySnapshot
+from jamma.core.memory_snapshot import MemorySnapshot
 
 pytestmark = pytest.mark.tier0
 

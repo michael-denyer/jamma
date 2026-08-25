@@ -37,8 +37,9 @@ def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
         n_var = len(classify_uab_columns(n_cvt)[1])
         return n_samples * (n_var + 1) * 8
 
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-    return n_samples * n_index * 8
+    from jamma.lmm.likelihood import n_index
+
+    return n_samples * n_index(n_cvt) * 8
 
 
 def lmm_extra_bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
@@ -52,14 +53,15 @@ def lmm_extra_bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) 
     """
     if dispatch.feeds_raw_utg:
         return 0
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
     if dispatch is DispatchPath.SOA_SPLIT:
         from jamma.lmm.likelihood import classify_uab_columns
 
         n_var = len(classify_uab_columns(n_cvt)[1])
         return n_samples * n_var * 8
+    from jamma.lmm.likelihood import n_index
+
     # NUMPY_FALLBACK: Uab batch plus the small Iab batch
-    return (n_samples + n_cvt + 2) * n_index * 8
+    return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8
 
 
 def compute_chunk_size_numpy(

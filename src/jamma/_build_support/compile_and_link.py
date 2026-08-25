@@ -10,14 +10,17 @@ No flag literal belongs outside this module; the pre-commit hook
 ``no-compile-flag-literals-outside-build-support``
 (scripts/check_compile_flag_literals.py) enforces that, and
 ``verify-compile-invocations-match`` confirms the three entry points route
-through ``compile_jlinalg`` below.
+through ``run_build`` below (which drives ``compile_jlinalg``).
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
+import platform as _platform
+import shutil
 import subprocess
+import sysconfig
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -96,6 +99,119 @@ LINK_FLAGS_BY_PLATFORM: dict[str, tuple[str, ...]] = {
     "Linux": ("-ldl", "-lpthread"),
     "Darwin": ("-undefined", "dynamic_lookup"),
 }
+
+
+# ---------------------------------------------------------------------------
+# BuildSpec — per-target description of one C extension build
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BuildSpec:
+    """The toolchain-independent description of one C extension target.
+
+    One instance per compiled extension (``_lmm_accel``, ``_jlinalg``). It
+    carries everything ``run_build`` needs that does *not* depend on the host
+    toolchain: where the sources live, which of them require the strict-IEEE
+    LAPACK flags, the output name, the dev-mode-only extra flags, and whether
+    progress prints to stdout or stderr. The toolchain-dependent parts (the
+    compiler, the Python/NumPy include dirs, OpenMP, the sanitizer overrides)
+    are discovered by ``run_build`` at build time, so the same spec drives the
+    portable wheel build and the ``-march=native`` dev rebuild alike.
+
+    Paths are stored as ``parts`` tuples relative to the package directory
+    (``src/jamma`` under the PEP 517 build, the installed ``jamma/`` at
+    runtime), so a spec is a pure value with no absolute path baked in. The
+    caller supplies the package directory; ``run_build`` joins the parts.
+
+    ``-march=native`` lives here in ``dev_extra_cflags`` rather than in
+    ``_compile_accel.py`` so the compile-flag-literal lint has one sanctioned
+    home and the dev-only flag can never reach ``hatch_build.py``: the wheel
+    path does not read this field. Wheels stay portable by construction.
+    """
+
+    # Location, relative to the package directory.
+    package_parts: tuple[str, ...]  # ("lmm",) / ("jlinalg",)
+    source_parts: tuple[str, ...]  # () / ("src",) — subdir holding the .c files
+    include_parts: tuple[tuple[str, ...], ...]  # extra -I dirs, e.g. (("include",),)
+    # Sources, by bare filename; ``lapack_sources`` is the strict-IEEE subset.
+    sources: tuple[str, ...]
+    lapack_sources: tuple[str, ...]
+    output_stem: str  # "_lmm_accel" / "_jlinalg" — EXT_SUFFIX appended at build
+    # Dev-mode-only base cflags. The wheel path never applies these.
+    dev_extra_cflags: tuple[str, ...] = ()  # ("-march=native",) / ()
+    reads_sentinel_env: bool = False  # honour JAMMA_SENTINEL_UB (accel only)
+    supports_diagnose: bool = False  # accept the vectorization-report flags
+
+
+# -march=native is dev-mode only and portable wheels must not carry it; it
+# lives in LMM_ACCEL_SPEC.dev_extra_cflags, applied only on the dev rebuild
+# path, never by hatch_build.py.
+LMM_ACCEL_SPEC = BuildSpec(
+    package_parts=("lmm",),
+    source_parts=(),
+    include_parts=(),
+    sources=LMM_ACCEL_SOURCES,
+    lapack_sources=(),
+    output_stem="_lmm_accel",
+    dev_extra_cflags=("-march=native",),
+    reads_sentinel_env=True,
+    supports_diagnose=True,
+)
+
+JLINALG_SPEC = BuildSpec(
+    package_parts=("jlinalg",),
+    source_parts=("src",),
+    include_parts=(("include",),),
+    sources=BASELINE_SOURCES + LAPACK_SOURCES,
+    lapack_sources=LAPACK_SOURCES,
+    output_stem="_jlinalg",
+    dev_extra_cflags=(),
+    reads_sentinel_env=False,
+    supports_diagnose=False,
+)
+
+# Opt-in sentinel macro for the sanitizer-workflow self-test. When
+# JAMMA_SENTINEL_UB is set, _lmm_accel.c's gated heap-OOB function
+# jamma_sentinel_oob is compiled in so ASAN can be proven to catch a real bug.
+# A -D preprocessor macro, not an -O/-f flag, so the compile-flag-literal lint
+# does not cover it; the named constant keeps it greppable. Wheel builds never
+# set the env var.
+_SENTINEL_UB_DEFINE = "-DJAMMA_SENTINEL_UB"
+
+
+def _sentinel_env_on(env: dict[str, str] | os._Environ[str]) -> bool:
+    """Truthy check for JAMMA_SENTINEL_UB: "" and "0" are off, anything else on."""
+    return env.get("JAMMA_SENTINEL_UB", "").strip() not in ("", "0")
+
+
+def resolve_build_spec(
+    spec: BuildSpec,
+    *,
+    dev_mode: bool,
+    env: dict[str, str] | os._Environ[str] | None = None,
+    diagnose_flags: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Return the base ``extra_cflags`` for a build, pre-sanitizer.
+
+    Pure and toolchain-independent: it reads only the spec and the environment,
+    so a test can assert on it with zero mocks. ``run_build`` calls it once the
+    compiler is known (to pass ``diagnose_flags``); the sentinel meta-test calls
+    it directly to prove ``-DJAMMA_SENTINEL_UB`` lands when the env var is set.
+
+    Wheel path (``dev_mode=False``): honour ``CFLAGS`` and nothing else — never
+    ``-march=native`` — so the wheel stays portable. Dev path: the spec's
+    ``dev_extra_cflags`` (``-march=native`` for the accelerator), then any
+    diagnose flags, then the sentinel macro when the env var is set. The order
+    matches the four hand-written call sites this replaces.
+    """
+    resolved_env = os.environ if env is None else env
+    if not dev_mode:
+        return tuple(resolved_env.get("CFLAGS", "").split())
+    extras = [*spec.dev_extra_cflags, *diagnose_flags]
+    if spec.reads_sentinel_env and _sentinel_env_on(resolved_env):
+        extras.append(_SENTINEL_UB_DEFINE)
+    return tuple(extras)
 
 
 # ---------------------------------------------------------------------------
@@ -530,4 +646,193 @@ def compile_jlinalg(
         used_openmp_link=used_openmp_link,
         output_path=output,
         obj_files=compile_objs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# run_build — the eleven preflight+compile steps, once, driven by a BuildSpec
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BuildOutcome:
+    """Result of ``run_build``.
+
+    ``ok`` is True only when compile and link both succeeded. ``skipped`` marks
+    a preflight guard firing (no numpy, no compiler, missing headers/sources,
+    Windows) as distinct from a compile/link failure — the wheel path turns
+    both into a pure-Python fallback, while the dev path returns False either
+    way. ``output_path`` and ``out_name`` are populated whenever the sources
+    were located, so the caller can register the wheel artifact or run its
+    import probe.
+    """
+
+    ok: bool
+    result: CompileResult | None = None
+    output_path: Path | None = None
+    out_name: str = ""
+    skipped: bool = False
+
+
+def _diagnose_flags(cc_cmd: str) -> list[str]:
+    """Vectorization-report flags for ``cc_cmd`` (clang ``-Rpass`` vs gcc)."""
+    try:
+        probe = subprocess.run(
+            [cc_cmd, "--version"], capture_output=True, text=True, timeout=5
+        )
+        compiler_id = probe.stdout.lower() if probe.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, OSError):
+        compiler_id = ""
+    if "clang" in compiler_id:
+        return [
+            "-Rpass=loop-vectorize",
+            "-Rpass-missed=loop-vectorize",
+            "-Rpass-analysis=loop-vectorize",
+        ]
+    return ["-fopt-info-vec-all"]
+
+
+def run_build(
+    spec: BuildSpec,
+    package_dir: Path,
+    *,
+    dev_mode: bool,
+    find_c_compiler: Callable[[], tuple[str, list[str]] | None],
+    detect_openmp_flags: Callable[..., tuple[list[str], list[str], str]],
+    diagnose: bool = False,
+    on_retry: Callable[[str], None] | None = None,
+    verbose_print: Callable[..., None] = print,
+    error_print: Callable[..., None] | None = None,
+    env: dict[str, str] | os._Environ[str] | None = None,
+) -> BuildOutcome:
+    """Run the preflight checks and the two-phase compile for one ``BuildSpec``.
+
+    The eleven steps every compile entry point used to hand-write: numpy>=2,
+    compiler discovery, Python.h, Windows reject, ``EXT_SUFFIX``, numpy include,
+    OpenMP detection, platform link flags, sanitizer overrides, and the
+    ``compile_jlinalg`` call under a temp dir. The import probe and any wheel
+    ``force_include`` registration stay with the caller, since the wheel backend
+    does neither. ``find_c_compiler`` and ``detect_openmp_flags`` are injected so
+    this module never imports its ``_build_support`` siblings — the PEP 517
+    backend loads it by file path, where such an import would fail.
+
+    Preflight failures print through ``error_print`` — as ``WARNING`` and a
+    pure-Python-fallback note under the wheel build, as ``ERROR`` in dev mode —
+    and return ``BuildOutcome(ok=False, skipped=True)``. Platform link flags are
+    taken once from ``LINK_FLAGS_BY_PLATFORM``; the wheel path no longer adds a
+    second ``-undefined dynamic_lookup`` on macOS.
+    """
+    resolved_env = os.environ if env is None else env
+    if error_print is None:
+        error_print = verbose_print
+    system = _platform.system()
+    lead = "WARNING" if not dev_mode else "ERROR"
+    tail = " (pure-Python fallback)." if not dev_mode else ""
+
+    def _skip(message: str) -> BuildOutcome:
+        error_print(f"{lead}: {message}{tail}")
+        return BuildOutcome(ok=False, skipped=True)
+
+    pkg_dir = package_dir.joinpath(*spec.package_parts)
+    src_dir = pkg_dir.joinpath(*spec.source_parts)
+    sources = [src_dir / name for name in spec.sources]
+    lapack_sources = [src_dir / name for name in spec.lapack_sources]
+
+    missing = [str(s) for s in sources if not s.exists()]
+    if missing:
+        return _skip(
+            f"C source files missing: {missing}. If building from sdist, "
+            "verify the archive is complete"
+        )
+
+    try:
+        import numpy as np
+    except ImportError:
+        return _skip("numpy not available")
+    if int(np.__version__.split(".")[0]) < 2:
+        return _skip(
+            f"numpy {np.__version__} is 1.x — C extension requires numpy >= 2.0 "
+            "headers (build with numpy >= 2.0 to avoid an ABI mismatch)"
+        )
+
+    cc_env = resolved_env.get("CC")
+    if cc_env is not None and not cc_env.strip():
+        return _skip("CC is set but empty")
+    compiler = find_c_compiler()
+    if compiler is None:
+        return _skip(
+            "no usable C compiler found on PATH (tried $CC, sysconfig, cc, "
+            "clang, gcc). Install: apt-get install -y gcc (Linux) or "
+            "xcode-select --install (macOS)"
+        )
+    cc_cmd, cc_extra = compiler
+
+    python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
+    python_h = Path(python_inc) / "Python.h" if python_inc else None
+    if not python_h or not python_h.exists():
+        return _skip(
+            f"Python.h not found at {python_inc}. Install development headers: "
+            "apt-get install -y python3-dev (Linux)"
+        )
+
+    if system == "Windows":
+        return _skip("Windows is not supported for C extension compilation")
+
+    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+    out_name = f"{spec.output_stem}{ext_suffix}"
+    out_path = pkg_dir / out_name
+
+    numpy_inc = np.get_include()
+    include_dirs = [python_inc, numpy_inc]
+    include_dirs.extend(str(pkg_dir.joinpath(*parts)) for parts in spec.include_parts)
+
+    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
+        cc_cmd, system, verbose_print, _warn=error_print
+    )
+
+    diag_flags = tuple(
+        _diagnose_flags(cc_cmd) if spec.supports_diagnose and diagnose else ()
+    )
+    base_extras = resolve_build_spec(
+        spec, dev_mode=dev_mode, env=resolved_env, diagnose_flags=diag_flags
+    )
+
+    # -lm is the universal extra link flag; apply_sanitizer_overrides is a no-op
+    # unless JAMMA_SANITIZE is set, and also instruments the LAPACK sources.
+    extra_cflags, extra_link_flags, extra_lapack_cflags = apply_sanitizer_overrides(
+        list(base_extras), ["-lm"]
+    )
+
+    # Platform link flags taken ONCE — the macOS -undefined dynamic_lookup that
+    # the wheel path used to append twice is now a single copy for every caller.
+    ldflags = list(LINK_FLAGS_BY_PLATFORM.get(system, ()))
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"{spec.output_stem.lstrip('_')}_build_"))
+    try:
+        result = compile_jlinalg(
+            sources=sources,
+            lapack_sources=lapack_sources,
+            include_dirs=include_dirs,
+            cc_cmd=cc_cmd,
+            cc_extra=cc_extra,
+            omp_compile=omp_compile,
+            omp_link=omp_link,
+            ldflags=ldflags,
+            output=out_path,
+            tmp_dir=tmp_dir,
+            extra_cflags=extra_cflags,
+            extra_link_flags=extra_link_flags,
+            extra_lapack_cflags=extra_lapack_cflags,
+            on_retry=on_retry,
+            verbose_print=verbose_print,
+            error_print=error_print,
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return BuildOutcome(
+        ok=result.success,
+        result=result,
+        output_path=out_path,
+        out_name=out_name,
     )

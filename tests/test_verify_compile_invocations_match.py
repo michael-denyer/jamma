@@ -2,12 +2,12 @@
 
 The verifier enforces that all three compile entry points
 (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) route through
-``jamma._build_support.compile_and_link.compile_jlinalg`` — the single
-source of truth for compile flags and sources. A bug in the verifier
-would silently bless divergence, defeating its purpose.
+``jamma._build_support.compile_and_link.run_build`` — the shared build driver.
+A bug in the verifier would silently bless divergence, defeating its purpose.
 
-These tests build synthetic entry-point trees that should either pass
-or fail the verifier, and assert the right outcome.
+The bare-flag-literal scan was retired (it duplicated
+``check_compile_flag_literals.py``); these tests cover the remaining AST
+"calls ``run_build``" check against synthetic entry-point trees.
 """
 
 from __future__ import annotations
@@ -43,18 +43,13 @@ _VERIFIER = _load_verifier()
 
 
 # Minimal valid compile_and_link.py for the verifier's import step.
-# Only needs to expose the four constants the verifier prints.
+# Only needs to expose ``run_build`` for the presence check.
 _VALID_BUILD_SUPPORT = dedent(
     '''
     """Stub compile_and_link for verifier tests."""
 
-    BASE_CFLAGS = ("-O3",)
-    LAPACK_CFLAGS = ("-O2", "-fno-fast-math")
-    BASELINE_SOURCES = ("platform.c",)
-    LAPACK_SOURCES = ("eigh.c",)
 
-
-    def compile_jlinalg(**kwargs):
+    def run_build(**kwargs):
         return True
     '''
 ).strip()
@@ -76,56 +71,53 @@ def _write_tree(
     return bs_path, entry_points
 
 
-# -------- _has_compile_jlinalg_call: AST-based detection --------
+# -------- _has_run_build_call: AST-based detection --------
 
 
 @pytest.mark.tier0
 def test_ast_detects_bare_call():
-    assert _VERIFIER._has_compile_jlinalg_call("compile_jlinalg(sources=[])")
+    assert _VERIFIER._has_run_build_call("run_build(spec, pkg)")
 
 
 @pytest.mark.tier0
 def test_ast_detects_attribute_call():
-    src = "from x import y\ncompile_and_link.compile_jlinalg(sources=[])"
-    assert _VERIFIER._has_compile_jlinalg_call(src)
+    src = "from x import y\ncompile_and_link.run_build(spec, pkg)"
+    assert _VERIFIER._has_run_build_call(src)
 
 
 @pytest.mark.tier0
 def test_ast_rejects_mention_in_comment():
     """A commented-out call must NOT satisfy the check."""
-    src = "# compile_jlinalg(sources=[])\nreturn None"
-    assert not _VERIFIER._has_compile_jlinalg_call(src)
+    src = "# run_build(spec, pkg)\nreturn None"
+    assert not _VERIFIER._has_run_build_call(src)
 
 
 @pytest.mark.tier0
 def test_ast_rejects_mention_in_docstring():
     """A docstring mention must NOT satisfy the check — this is the
     exact weakness the old substring-match verifier had."""
-    src = '"""Module doc: call compile_jlinalg(x) like this."""\nreturn None'
-    assert not _VERIFIER._has_compile_jlinalg_call(src)
+    src = '"""Module doc: call run_build(x) like this."""\nreturn None'
+    assert not _VERIFIER._has_run_build_call(src)
 
 
 @pytest.mark.tier0
 def test_ast_rejects_mention_in_string_literal():
-    src = 'msg = "run compile_jlinalg(x) for help"'
-    assert not _VERIFIER._has_compile_jlinalg_call(src)
+    src = 'msg = "run run_build(x) for help"'
+    assert not _VERIFIER._has_run_build_call(src)
 
 
 @pytest.mark.tier0
 def test_ast_accepts_local_definition_that_also_calls_itself():
-    """Edge case: a local ``def compile_jlinalg`` that ALSO calls itself
-    (or another compile_jlinalg) satisfies the check — the call is real,
-    even though the definition shadows the imported helper. Worth
-    documenting: the AST check is about call-site presence, not
-    resolving WHICH compile_jlinalg is called. This is a deliberate
-    trade-off: resolving symbol origin robustly requires a full type
-    checker, and false positives here are caught by the compile-flag
-    drift lint (since a local reimplementation would duplicate flags)."""
+    """Edge case: a local ``def run_build`` that ALSO calls itself satisfies
+    the check — the call is real, even though the definition shadows the
+    imported helper. The AST check is about call-site presence, not resolving
+    WHICH run_build is called; a local reimplementation would duplicate flags
+    and trip the compile-flag drift lint."""
     src = dedent("""
-        def compile_jlinalg(**kwargs):
-            return compile_jlinalg(foo=1)  # recursion
+        def run_build(**kwargs):
+            return run_build(foo=1)  # recursion
     """)
-    assert _VERIFIER._has_compile_jlinalg_call(src)
+    assert _VERIFIER._has_run_build_call(src)
 
 
 @pytest.mark.tier0
@@ -133,7 +125,7 @@ def test_ast_handles_syntax_error_gracefully():
     """Malformed source should return False, not crash. The verifier
     treating unparsable entry points as 'no call' causes a violation,
     which is the right outcome — the entry point is broken."""
-    assert not _VERIFIER._has_compile_jlinalg_call("def broken(:")
+    assert not _VERIFIER._has_run_build_call("def broken(:")
 
 
 # -------- check() end-to-end: synthetic trees --------
@@ -141,9 +133,8 @@ def test_ast_handles_syntax_error_gracefully():
 
 @pytest.mark.tier0
 def test_valid_tree_passes(tmp_path):
-    """All three entry points call compile_jlinalg properly and have no
-    banned literals — verifier must return 0."""
-    entry = "from x import y\ncompile_and_link.compile_jlinalg(sources=[])\n"
+    """All three entry points call run_build properly — verifier returns 0."""
+    entry = "from x import y\ncompile_and_link.run_build(spec, pkg)\n"
     bs, eps = _write_tree(
         tmp_path,
         {
@@ -159,9 +150,9 @@ def test_valid_tree_passes(tmp_path):
 
 @pytest.mark.tier0
 def test_entry_point_with_no_call_fails(tmp_path):
-    """An entry point that imports but never calls compile_jlinalg is a
-    drift: someone might have deleted the call accidentally."""
-    good = "compile_jlinalg(sources=[])\n"
+    """An entry point that imports but never calls run_build is a drift:
+    someone might have deleted the call accidentally."""
+    good = "run_build(spec, pkg)\n"
     silent = "from jamma._build_support import compile_and_link\n# forgot to call\n"
     bs, eps = _write_tree(
         tmp_path,
@@ -173,23 +164,23 @@ def test_entry_point_with_no_call_fails(tmp_path):
     )
     rc, failures = _VERIFIER.check(bs, eps)
     assert rc == 1
-    assert any("no compile_jlinalg call" in f for f in failures)
+    assert any("no run_build call" in f for f in failures)
 
 
 @pytest.mark.tier0
 def test_commented_out_call_is_caught(tmp_path):
     """The KEY adversarial case: the old substring verifier accepted
-    `# compile_jlinalg(` in a comment. The AST-based verifier must
-    flag this as 'no real call'."""
+    `# run_build(` in a comment. The AST-based verifier must flag this
+    as 'no real call'."""
     bs, eps = _write_tree(
         tmp_path,
         {
-            "hatch_build.py": "# TODO: re-enable compile_jlinalg(sources=[])\npass\n",
+            "hatch_build.py": "# TODO: re-enable run_build(spec, pkg)\npass\n",
         },
     )
     rc, failures = _VERIFIER.check(bs, eps)
     assert rc == 1
-    assert any("no compile_jlinalg call" in f for f in failures)
+    assert any("no run_build call" in f for f in failures)
 
 
 @pytest.mark.tier0
@@ -199,27 +190,27 @@ def test_docstring_mention_is_caught(tmp_path):
     bs, eps = _write_tree(
         tmp_path,
         {
-            "hatch_build.py": '"""See compile_jlinalg(sources) for usage."""\npass\n',
+            "hatch_build.py": '"""See run_build(spec) for usage."""\npass\n',
         },
     )
     rc, failures = _VERIFIER.check(bs, eps)
     assert rc == 1
-    assert any("no compile_jlinalg call" in f for f in failures)
+    assert any("no run_build call" in f for f in failures)
 
 
 @pytest.mark.tier0
-@pytest.mark.parametrize(
-    "banned",
-    ["'-O3'", '"-O3"', "'-fopenmp'", '"-fno-fast-math"'],
-)
-def test_banned_literal_in_entry_point_fails(tmp_path, banned):
-    """Even with a valid call, a bare compile-flag literal in an entry
-    point means drift from _build_support."""
-    entry = f"compile_jlinalg(sources=[])\ncflags = [{banned}]\n"
-    bs, eps = _write_tree(tmp_path, {"hatch_build.py": entry})
+def test_missing_run_build_in_helper_is_flagged(tmp_path):
+    """If compile_and_link stops exporting run_build, the shared driver is
+    gone and the guarantee is void — surface it rather than passing."""
+    broken_support = '"""No driver here."""\n'
+    bs, eps = _write_tree(
+        tmp_path,
+        {"hatch_build.py": "run_build(spec, pkg)\n"},
+        build_support=broken_support,
+    )
     rc, failures = _VERIFIER.check(bs, eps)
     assert rc == 1
-    assert any(banned in f for f in failures)
+    assert any("run_build not found" in f for f in failures)
 
 
 @pytest.mark.tier0
@@ -227,7 +218,7 @@ def test_missing_entry_point_is_flagged(tmp_path):
     """A deleted entry point is drift — maybe someone renamed a file
     without updating the verifier. Must surface as a failure, not
     silently pass."""
-    bs, eps = _write_tree(tmp_path, {"hatch_build.py": "compile_jlinalg()\n"})
+    bs, eps = _write_tree(tmp_path, {"hatch_build.py": "run_build()\n"})
     # Append a non-existent entry point path.
     eps.append(tmp_path / "nonexistent.py")
     rc, failures = _VERIFIER.check(bs, eps)
@@ -242,15 +233,11 @@ def test_multiple_failures_all_reported(tmp_path):
         tmp_path,
         {
             "hatch_build.py": "# no call here\npass\n",
-            "_compile_jlinalg.py": 'flags = ["-O3"]\ncompile_jlinalg()\n',
-            "_compile_accel.py": 'flags = ["-fopenmp"]\n# no call\n',
+            "_compile_jlinalg.py": "# also no call\npass\n",
+            "_compile_accel.py": "run_build()\n",
         },
     )
     rc, failures = _VERIFIER.check(bs, eps)
     assert rc == 1
-    # hatch_build: missing call. jlinalg: banned -O3 literal. accel: missing
-    # call AND banned -fopenmp literal.
-    no_call_failures = [f for f in failures if "no compile_jlinalg call" in f]
-    literal_failures = [f for f in failures if "banned literal" in f]
+    no_call_failures = [f for f in failures if "no run_build call" in f]
     assert len(no_call_failures) >= 2
-    assert len(literal_failures) >= 2

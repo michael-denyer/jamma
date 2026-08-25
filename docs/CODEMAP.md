@@ -272,7 +272,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:48](../src/jamma/lmm/chunk_kernel.py#L48) |
 | 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:163](../src/jamma/lmm/chunk_kernel.py#L163) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:118](../src/jamma/lmm/chunk_pipeline.py#L118) |
-| 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:44](../src/jamma/lmm/chunk_sizing.py#L44) |
+| 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:65](../src/jamma/lmm/chunk_sizing.py#L65) |
 | 4Nc | `create_lmm_workspace_fused()` | Allocate the reusable per-chunk Wald workspace (n_cvt=1 fused path) | [compute_numpy.py:189](../src/jamma/lmm/compute_numpy.py#L189) |
 | 4Nc | `compute_wald_fused_c_ws()` | Workspace-based Wald compute, dispatched to the C extension | [compute_numpy.py:232](../src/jamma/lmm/compute_numpy.py#L232) |
 | 4Nd | `compute_lmm_chunk_fused_c()` | C extension: chunked REML Wald for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
@@ -300,8 +300,8 @@ Configuration, memory management, threading, and logging.
 | 5a | `OutputConfig` | Output directory + prefix + verbose flag | [config.py:13](../src/jamma/core/config.py#L13) |
 | 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:262](../src/jamma/core/memory.py#L262) |
 | 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:317](../src/jamma/core/memory.py#L317) |
-| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory.py:613](../src/jamma/core/memory.py#L613) |
-| 5c | `cleanup_memory()` | GC + clear caches | [memory.py:664](../src/jamma/core/memory.py#L664) |
+| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory.py:625](../src/jamma/core/memory.py#L625) |
+| 5c | `cleanup_memory()` | GC + clear caches | [memory.py:676](../src/jamma/core/memory.py#L676) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:16](../src/jamma/utils/logging.py#L16) |
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:51](../src/jamma/utils/logging.py#L51) |
 | 5d | `log_rss_memory()` | RSS snapshot at phase boundaries | [logging.py:120](../src/jamma/utils/logging.py#L120) |

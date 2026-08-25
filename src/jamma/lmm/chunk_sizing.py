@@ -41,6 +41,27 @@ def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     return n_samples * n_index * 8
 
 
+def lmm_extra_bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
+    """Per-SNP bytes live in the LMM phase beyond the UtG rotation buffers.
+
+    The preflight prices the association phase as rotation buffers plus this
+    figure, so its estimate follows the same dispatch knowledge the sizer
+    uses. Fused paths hold no per-SNP batch arrays (the C workspace forms
+    Uab on the fly); SOA_SPLIT holds the varying Uab columns; the NumPy
+    fallback materialises the full Uab and Iab batches.
+    """
+    if dispatch.feeds_raw_utg:
+        return 0
+    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
+    if dispatch is DispatchPath.SOA_SPLIT:
+        from jamma.lmm.likelihood import classify_uab_columns
+
+        n_var = len(classify_uab_columns(n_cvt)[1])
+        return n_samples * n_var * 8
+    # NUMPY_FALLBACK: Uab batch plus the small Iab batch
+    return (n_samples + n_cvt + 2) * n_index * 8
+
+
 def compute_chunk_size_numpy(
     n_samples: int,
     n_filtered: int,

@@ -477,6 +477,8 @@ def estimate_streaming_memory(
     n_cvt: int = 1,
     pipeline_buffers: int = 1,
     compute_chunk_size: int | None = None,
+    eigendecomp_peak_gb: float | None = None,
+    uab_iab_gb: float | None = None,
 ) -> StreamingMemoryBreakdown:
     """Estimate memory requirements for streaming GWAS workflow.
 
@@ -507,6 +509,12 @@ def estimate_streaming_memory(
         compute_chunk_size: SNPs per compute sub-chunk for rotation/Uab/grid
             buffers. Defaults to chunk_size. Pass the runtime compute chunk for
             accurate LMM phase estimates after per-subchunk flush.
+        eigendecomp_peak_gb: Peak for the eigendecomposition phase, from
+            plan_eigen_driver, when the caller knows which driver will run.
+            None (default) uses the conservative non-inplace DSYEVD figure.
+        uab_iab_gb: Per-chunk LMM intermediate memory, when the caller knows
+            the dispatch path (lmm_extra_bytes_per_snp). None (default) uses
+            the conservative full Uab/Iab batch figure.
 
     Returns:
         StreamingMemoryBreakdown with detailed component estimates.
@@ -528,17 +536,21 @@ def estimate_streaming_memory(
         n_samples, chunk_size, n_grid, pipeline_buffers, compute_chunk_size
     )
 
-    # Don't use fused estimate: callers (pipeline, kinship) don't know the
-    # backend or lmm_mode.  Fused only applies to NumPy modes 1/4.
-    uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt, use_fused=False)
+    if uab_iab_gb is None:
+        # Conservative full Uab/Iab batch figure, for callers that do not
+        # know the dispatch path (kinship's gate).
+        uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt, use_fused=False)
 
     # Peak memory calculation by workflow phase
     dsyrk_scratch_gb = _dsyrk_scratch_gb(n_samples)
     peak_kinship = kinship_gb + chunk_gb + dsyrk_scratch_gb
-    # Eigendecomp: conservative non-inplace estimate (K + U + workspace).
-    # Inplace DSYEVD saves one N×N matrix but requires vendor detection at
-    # runtime; plan_eigen_driver holds the tighter in-place figure.
-    peak_eigendecomp = _dsyevd_peak_gb(n_samples)
+    # Eigendecomp: the caller's driver-aware figure when given, else the
+    # conservative non-inplace DSYEVD estimate (K + U + workspace).
+    peak_eigendecomp = (
+        eigendecomp_peak_gb
+        if eigendecomp_peak_gb is not None
+        else _dsyevd_peak_gb(n_samples)
+    )
     peak_lmm = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
     )

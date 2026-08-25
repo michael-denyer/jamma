@@ -135,6 +135,9 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.11"
             name: "Linux + NumPy (3.11)"
+          - os: ubuntu-latest
+            python-version: "3.13"
+            name: "Linux + NumPy (3.13)"
           - os: macos-latest
             python-version: "3.12"
             name: "ARM Mac + NumPy"

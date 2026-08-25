@@ -151,10 +151,10 @@ def test_all_exports_present():
 
 @pytest.mark.tier0
 def test_abi_version():
-    """ABI_VERSION is 15 after dropping the QR/SVD dispatch stack."""
+    """ABI_VERSION is 16 after dropping the LP64 carriage."""
     from jamma.jlinalg import ABI_VERSION
 
-    assert ABI_VERSION == 15, f"Expected ABI_VERSION=15, got {ABI_VERSION}"
+    assert ABI_VERSION == 16, f"Expected ABI_VERSION=16, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

@@ -14,13 +14,8 @@ either C extension.
 
 import datetime
 import importlib.util
-import os
-import platform
-import shutil
 import subprocess
 import sys
-import sysconfig
-import tempfile
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -65,17 +60,9 @@ _omp = _load_build_support_module(
     "jamma_build_support.openmp_detect", "openmp_detect.py"
 )
 
-BASELINE_SOURCES = _cal.BASELINE_SOURCES
-LAPACK_SOURCES = _cal.LAPACK_SOURCES
-LMM_ACCEL_SOURCES = _cal.LMM_ACCEL_SOURCES
-LINK_FLAGS_BY_PLATFORM = _cal.LINK_FLAGS_BY_PLATFORM
-compile_jlinalg = _cal.compile_jlinalg
-# Phase 116.1: sanitizer flag injection seam. Wheel builds normally have
-# JAMMA_SANITIZE unset (apply_sanitizer_overrides returns inputs unchanged),
-# so wiring this here is a no-op on the production wheel path. Keeps the
-# three compile entry points uniform — every call to compile_jlinalg in the
-# codebase now flows through apply_sanitizer_overrides first.
-apply_sanitizer_overrides = _cal.apply_sanitizer_overrides
+LMM_ACCEL_SPEC = _cal.LMM_ACCEL_SPEC
+JLINALG_SPEC = _cal.JLINALG_SPEC
+run_build = _cal.run_build
 find_c_compiler = _fc.find_c_compiler
 detect_openmp_flags = _omp.detect_openmp_flags
 
@@ -113,337 +100,79 @@ class CustomBuildHook(BuildHookInterface):
 
         # Compile C extensions (graceful fallback if unavailable).
         # _lmm_accel is more critical — compile first so its errors are visible.
-        self._compile_c_extension(build_data)
-        self._compile_jlinalg_extension(build_data)
+        self._build_extension(LMM_ACCEL_SPEC, build_data)
+        self._build_extension(JLINALG_SPEC, build_data)
 
-    def _preflight_c_build(self):
-        """Verify build prerequisites and return compiler/include information.
+    def _build_extension(self, spec, build_data):
+        """Compile one C extension from ``spec`` and register it in the wheel.
 
-        Checks that numpy >= 2.0 is available, the C compiler is on PATH,
-        and Python.h exists. All checks produce actionable WARNING messages
-        on failure.
-
-        Returns:
-            tuple(cc_cmd, cc_extra, python_inc, numpy_inc, ldflags) on success,
-            or None if any pre-flight check fails.
-        """
-        try:
-            import numpy as np
-        except ImportError:
-            print(
-                "WARNING: numpy not available in build environment — "
-                "skipping C extension compilation (pure-Python fallback).",
-                file=sys.stderr,
-            )
-            return None
-
-        # Refuse to compile against numpy 1.x — the resulting .so crashes on
-        # numpy 2.x at import time due to C API ABI break (NPY_ABI_VERSION).
-        np_major = int(np.__version__.split(".")[0])
-        if np_major < 2:
-            print(
-                f"WARNING: build numpy is {np.__version__} (1.x) — "
-                "skipping C extension to avoid ABI mismatch with numpy 2.x "
-                "at runtime (pure-Python fallback).\n"
-                "  To compile the C extension, build with numpy >= 2.0:\n"
-                "    pip install --no-build-isolation --no-deps jamma",
-                file=sys.stderr,
-            )
-            return None
-
-        # Compiler discovery delegated to jamma._build_support.find_compiler.
-        # Honours $CC, falls back to sysconfig + cc/clang/gcc with probing.
-        cc_env = os.environ.get("CC")
-        if cc_env is not None and not cc_env.strip():
-            print(
-                "WARNING: CC is set but empty — "
-                "skipping C extension compilation (pure-Python fallback).",
-                file=sys.stderr,
-            )
-            return None
-
-        compiler = find_c_compiler()
-        if compiler is None:
-            if cc_env:
-                print(
-                    f"WARNING: $CC is set to '{cc_env}' but compiler "
-                    "verification failed — skipping C extension "
-                    "compilation (pure-Python fallback).",
-                    file=sys.stderr,
-                )
-            else:
-                print(
-                    "WARNING: no usable C compiler found — "
-                    "skipping C extension compilation (pure-Python fallback).\n"
-                    "  To enable the C extension, install a C compiler:\n"
-                    "    Debian/Ubuntu: apt-get install -y gcc\n"
-                    "    macOS: xcode-select --install",
-                    file=sys.stderr,
-                )
-            return None
-        cc_cmd, cc_extra = compiler
-
-        python_inc = sysconfig.get_config_var("INCLUDEPY")
-        numpy_inc = np.get_include()
-
-        # Pre-flight: verify Python.h exists (python3-dev package)
-        python_h = Path(python_inc) / "Python.h" if python_inc else None
-        if not python_h or not python_h.exists():
-            print(
-                f"WARNING: Python.h not found at {python_inc} — "
-                "skipping C extension compilation (pure-Python fallback).\n"
-                "  To enable the C extension, install Python development headers:\n"
-                "    Debian/Ubuntu: apt-get install -y python3-dev\n"
-                "    Fedora/RHEL: dnf install python3-devel",
-                file=sys.stderr,
-            )
-            return None
-
-        # macOS requires -undefined dynamic_lookup for Python C extensions
-        # (Python symbols are resolved at runtime from the embedding binary)
-        ldflags = []
-        if platform.system() == "Darwin":
-            ldflags = ["-undefined", "dynamic_lookup"]
-
-        return (cc_cmd, cc_extra, python_inc, numpy_inc, ldflags)
-
-    def _compile_c_extension(self, build_data):
-        """Compile LMM_ACCEL_SOURCES -> _lmm_accel{EXT_SUFFIX} via the shared helper.
-
-        Compile + link (no LAPACK split) routed through
-        jamma._build_support.compile_jlinalg. On any failure, logs a warning and
-        returns without raising — a pure-Python wheel is produced instead.
+        Drives ``run_build`` (wheel mode) for both ``_lmm_accel`` and
+        ``_jlinalg`` — the eleven preflight+compile steps live there now. On any
+        preflight skip or compile failure the build backend produces a
+        pure-Python wheel as a graceful fallback rather than raising. On success
+        it surfaces an OpenMP downgrade and force-includes the ``.so``.
 
         Args:
-            build_data: Hatchling build data dict. Updated with force_include
-                entry mapping the compiled .so into the wheel.
+            spec: The ``BuildSpec`` for the target (``LMM_ACCEL_SPEC`` /
+                ``JLINALG_SPEC``).
+            build_data: Hatchling build data dict. Updated with the
+                ``force_include`` entry mapping the compiled ``.so`` into the
+                wheel.
         """
-        preflight = self._preflight_c_build()
-        if preflight is None:
-            return
-        cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
 
-        lmm_dir = Path(self.root) / "src" / "jamma" / "lmm"
-        sources = [lmm_dir / name for name in LMM_ACCEL_SOURCES]
-        missing = [s for s in sources if not s.exists()]
-        if missing:
-            names = ", ".join(str(s) for s in missing)
-            print(
-                f"WARNING: C source {names} not found — skipping C extension "
-                "compilation (pure-Python fallback). If building from sdist, "
-                "verify the archive is complete.",
-                file=sys.stderr,
-            )
-            return
+        def _err(*a, **kw):
+            print(*a, **{"file": sys.stderr, **kw})
 
-        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-        out_name = f"_lmm_accel{ext_suffix}"
-        out_path = Path(self.root) / "src" / "jamma" / "lmm" / out_name
-
-        # Unified OpenMP detection — handles prefer-clang for libiomp5 on
-        # Linux, Homebrew on Darwin, and the JAMMA_NO_OPENMP escape hatch.
-        omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-            cc_cmd,
-            platform.system(),
-            _print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
-            _warn=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
+        outcome = run_build(
+            spec,
+            Path(self.root) / "src" / "jamma",
+            dev_mode=False,  # portable wheel: honour CFLAGS, never -march=native
+            find_c_compiler=find_c_compiler,
+            detect_openmp_flags=detect_openmp_flags,
+            on_retry=lambda msg: print(msg, file=sys.stderr),
+            verbose_print=_err,
+            error_print=_err,
         )
-
-        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3 in CI).
-        # Note: hatch_build.py does NOT pass -march=native — that's dev-mode only.
-        extra_cflags = os.environ.get("CFLAGS", "").split() or None
-
-        # Phase 116.1: sanitizer flag injection. Helper is a no-op when
-        # JAMMA_SANITIZE is unset (the typical wheel-build state).
-        extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
-            apply_sanitizer_overrides(extra_cflags, ["-lm"])
-        )
-
-        # Platform link flags (macOS needs -undefined dynamic_lookup; Linux
-        # does not need the sdist/wheel-distinct flags here — -lm was already
-        # routed through apply_sanitizer_overrides above).
-        platform_ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
-
-        tmp_dir = Path(tempfile.mkdtemp(prefix="lmm_accel_build_"))
-        try:
-            result = compile_jlinalg(
-                sources=sources,
-                lapack_sources=[],  # _lmm_accel has no LAPACK source.
-                include_dirs=[python_inc, numpy_inc],
-                cc_cmd=cc_cmd,
-                cc_extra=cc_extra,
-                omp_compile=omp_compile,
-                omp_link=omp_link,
-                ldflags=[*platform_ldflags, *ldflags],
-                output=out_path,
-                tmp_dir=tmp_dir,
-                extra_cflags=extra_cflags,
-                extra_link_flags=extra_link_flags_for_call,
-                extra_lapack_cflags=extra_lapack_cflags,
-                on_retry=lambda msg: print(msg, file=sys.stderr),
-                verbose_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
-                error_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
-            )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        if not result.success:
+        if outcome.skipped:
+            return  # run_build already printed the WARNING + pure-Python note
+        if not outcome.ok:
+            error = outcome.result.error if outcome.result else "unknown"
             print(
-                f"WARNING: _lmm_accel compilation failed: {result.error}. "
+                f"WARNING: {spec.output_stem} compilation failed: {error}. "
                 "Producing pure-Python wheel as fallback.",
                 file=sys.stderr,
             )
             return
 
-        # Surface OMP downgrade explicitly — otherwise a silent serial build
+        result = outcome.result
+        # Surface an OMP downgrade explicitly — otherwise a silent serial build
         # ships and the user sees 1/N the expected parallel speed with no
-        # diagnostic. ``used_openmp`` reflects the compile phase; link phase
+        # diagnostic. ``used_openmp`` reflects the compile phase; the link phase
         # is reported separately.
-        if not result.used_openmp:
+        if result and not result.used_openmp:
             print(
-                "WARNING: _lmm_accel was built WITHOUT OpenMP. Parallel "
-                "LMM association tests will run single-threaded.",
+                f"WARNING: {spec.output_stem} was built WITHOUT OpenMP. "
+                "The C compute path will run single-threaded.",
                 file=sys.stderr,
             )
-        elif not result.used_openmp_link:
+        elif result and not result.used_openmp_link:
             print(
-                "WARNING: _lmm_accel compiled with OpenMP but linked WITHOUT "
-                "the OpenMP runtime. Threads will not spawn at runtime.",
+                f"WARNING: {spec.output_stem} compiled with OpenMP but linked "
+                "WITHOUT the OpenMP runtime. Threads will not spawn at runtime.",
                 file=sys.stderr,
             )
-        print(f"C extension compiled: {out_path}", file=sys.stderr)
+        print(f"C extension compiled: {outcome.output_path}", file=sys.stderr)
 
-        # Register the compiled .so as a forced wheel inclusion.
-        # force_include maps: absolute_source_path -> distribution_path
-        # distribution_path is relative to the package root within the wheel,
-        # e.g. "jamma/lmm/_lmm_accel.cpython-311-darwin.so"
+        # Register the compiled .so as a forced wheel inclusion. force_include
+        # maps absolute_source_path -> distribution_path, the latter relative to
+        # the package root within the wheel, e.g.
+        # "jamma/lmm/_lmm_accel.cpython-311-darwin.so".
         build_data.setdefault("force_include", {})
-        dist_path = f"jamma/lmm/{out_name}"
-        build_data["force_include"][str(out_path)] = dist_path
+        dist_path = f"jamma/{'/'.join(spec.package_parts)}/{outcome.out_name}"
+        build_data["force_include"][str(outcome.output_path)] = dist_path
 
-        # Tell hatchling this is a platform wheel (not pure-Python).
-        # Without this, the wheel gets tagged py3-none-any even though it
-        # contains a compiled .so, and cibuildwheel rejects it.
-        # infer_tag makes hatchling use the current platform/ABI for the
-        # wheel filename tag (e.g. cp311-cp311-macosx_14_0_arm64).
-        build_data["pure_python"] = False
-        build_data["infer_tag"] = True
-
-    def _compile_jlinalg_extension(self, build_data):
-        """Compile jlinalg C sources -> _jlinalg{EXT_SUFFIX} via the shared helper.
-
-        Routes through jamma._build_support.compile_jlinalg, which handles the
-        baseline-vs-LAPACK per-source flag split, OpenMP compile/link retry,
-        and two-phase compile+link to avoid dual-runtime OMP errors.
-
-        Args:
-            build_data: Hatchling build data dict. Updated with force_include
-                entry mapping the compiled .so into the wheel.
-        """
-        preflight = self._preflight_c_build()
-        if preflight is None:
-            return
-        cc_cmd, cc_extra, python_inc, numpy_inc, ldflags = preflight
-
-        jlinalg_src_dir = Path(self.root) / "src" / "jamma" / "jlinalg" / "src"
-        jlinalg_inc_dir = Path(self.root) / "src" / "jamma" / "jlinalg" / "include"
-
-        if not jlinalg_src_dir.is_dir():
-            print(
-                f"WARNING: jlinalg source directory {jlinalg_src_dir} not found — "
-                "skipping jlinalg C extension compilation (NumPy fallback).",
-                file=sys.stderr,
-            )
-            return
-
-        # Source lists come from the shared helper — single source of truth.
-        baseline = [jlinalg_src_dir / name for name in BASELINE_SOURCES]
-        lapack = [jlinalg_src_dir / name for name in LAPACK_SOURCES]
-        sources = baseline + lapack
-
-        # Guard: source files must exist (sdist corruption check).
-        missing = [str(s) for s in sources if not s.exists()]
-        if missing:
-            print(
-                f"WARNING: jlinalg source files missing: {missing}. "
-                "Producing pure-Python wheel as fallback.",
-                file=sys.stderr,
-            )
-            return
-
-        ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-        out_name = f"_jlinalg{ext_suffix}"
-        out_path = Path(self.root) / "src" / "jamma" / "jlinalg" / out_name
-
-        # Unified OpenMP detection — same helper the _lmm_accel path uses.
-        omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-            cc_cmd,
-            platform.system(),
-            _print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
-            _warn=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
-        )
-
-        # Respect CFLAGS for arch-specific builds (e.g. -march=x86-64-v3 in CI).
-        extra_cflags = os.environ.get("CFLAGS", "").split() or None
-
-        # Phase 116.1: sanitizer flag injection. No-op on the typical wheel
-        # build (JAMMA_SANITIZE unset). When set, eigh.c also gets
-        # -fsanitize=... via extra_lapack_cflags (LAPACK source dispatch).
-        extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
-            apply_sanitizer_overrides(extra_cflags, ["-lm"])
-        )
-
-        # Platform-default link flags (Linux gets -ldl -lpthread for
-        # blas_dispatch/snp_stats; Darwin gets -undefined dynamic_lookup).
-        platform_ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
-
-        tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_build_"))
-        try:
-            result = compile_jlinalg(
-                sources=sources,
-                lapack_sources=lapack,
-                include_dirs=[python_inc, numpy_inc, str(jlinalg_inc_dir)],
-                cc_cmd=cc_cmd,
-                cc_extra=cc_extra,
-                omp_compile=omp_compile,
-                omp_link=omp_link,
-                ldflags=[*platform_ldflags, *ldflags],
-                output=out_path,
-                tmp_dir=tmp_dir,
-                extra_cflags=extra_cflags,
-                extra_link_flags=extra_link_flags_for_call,
-                extra_lapack_cflags=extra_lapack_cflags,
-                on_retry=lambda msg: print(msg, file=sys.stderr),
-                verbose_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
-                error_print=lambda *a, **kw: print(*a, **{"file": sys.stderr, **kw}),
-            )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        if not result.success:
-            print(
-                f"WARNING: jlinalg compilation failed: {result.error}. "
-                "Producing pure-Python wheel as fallback.",
-                file=sys.stderr,
-            )
-            return
-
-        if not result.used_openmp:
-            print(
-                "WARNING: jlinalg was built WITHOUT OpenMP. Kinship / "
-                "eigendecomposition will run single-threaded.",
-                file=sys.stderr,
-            )
-        elif not result.used_openmp_link:
-            print(
-                "WARNING: jlinalg compiled with OpenMP but linked WITHOUT "
-                "the OpenMP runtime. Threads will not spawn at runtime.",
-                file=sys.stderr,
-            )
-        print(f"jlinalg C extension compiled: {out_path}", file=sys.stderr)
-
-        # Register the compiled .so for wheel inclusion
-        build_data.setdefault("force_include", {})
-        build_data["force_include"][str(out_path)] = f"jamma/jlinalg/{out_name}"
+        # Tell hatchling this is a platform wheel (not pure-Python), so the tag
+        # reflects the current platform/ABI (e.g. cp311-cp311-macosx_14_0_arm64)
+        # instead of py3-none-any, which cibuildwheel rejects.
         build_data["pure_python"] = False
         build_data["infer_tag"] = True

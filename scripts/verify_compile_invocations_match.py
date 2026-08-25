@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Verify wheel-build and dev-mode compile paths share a single source of truth.
+"""Verify every compile entry point routes through the shared build driver.
 
 Structural guarantee (not empirical trace capture): if the three ENTRY_POINTS
-all call ``jamma._build_support.compile_and_link.compile_jlinalg`` with the
-shared constants, their compile invocations differ only by input paths (wheel
-writes to build/lib/jamma, dev-mode writes in-place).
+all reach ``jamma._build_support.compile_and_link.run_build``, their compile
+invocations differ only by the ``BuildSpec`` they pass and the package
+directory they build in — the flags, source lists, and the eleven preflight
+steps all live in one place.
 
-Note on scope: ``src/jamma/core/recompile.py`` is deliberately EXCLUDED from
-ENTRY_POINTS. It is a thin import-retry shim that delegates to
-``_compile_jlinalg`` / ``_compile_accel`` rather than invoking the helper
-directly, so it cannot satisfy the ``compile_jlinalg(`` assertion below.
-The complementary ``check_compile_flag_literals.py`` lint DOES cover
-recompile.py for bare flag literals.
+This lint used to also scan the entry points for bare compile-flag literals.
+That duplicated ``check_compile_flag_literals.py`` (which owns the check and
+carries the ``# allow-compile-flag-literal`` escape hatch), so the scan was
+dropped; the AST "calls ``run_build``" check is all that remains here.
+
+``src/jamma/core/recompile.py`` is deliberately EXCLUDED from ENTRY_POINTS. It
+is an import-retry shim that delegates to ``_compile_jlinalg`` / ``_compile_accel``
+rather than driving ``run_build`` itself.
 """
 
 from __future__ import annotations
@@ -26,20 +29,6 @@ ENTRY_POINTS = [
     REPO_ROOT / "hatch_build.py",
     REPO_ROOT / "src/jamma/jlinalg/_compile_jlinalg.py",
     REPO_ROOT / "src/jamma/lmm/_compile_accel.py",
-]
-BANNED_LITERALS = [
-    "'-O2'",
-    '"-O2"',
-    "'-O3'",
-    '"-O3"',
-    "'-fno-fast-math'",
-    '"-fno-fast-math"',
-    "'-ftree-vectorize'",
-    '"-ftree-vectorize"',
-    "'-funroll-loops'",
-    '"-funroll-loops"',
-    "'-fopenmp'",
-    '"-fopenmp"',
 ]
 
 
@@ -62,19 +51,18 @@ def _load_compile_and_link(path: Path):
     return module
 
 
-def _has_compile_jlinalg_call(source: str) -> bool:
-    """Return True iff ``source`` has a real call to ``compile_jlinalg``.
+def _has_run_build_call(source: str) -> bool:
+    """Return True iff ``source`` has a real call to ``run_build``.
 
     Uses AST inspection rather than substring matching, so the following
     do NOT count as calls:
 
-      - a mention inside a comment (e.g. ``# compile_jlinalg(x)``)
+      - a mention inside a comment (e.g. ``# run_build(x)``)
       - a mention inside a string literal or docstring
-      - a local ``def compile_jlinalg(...):`` with the same name
+      - a local ``def run_build(...):`` with the same name
 
-    A call matches if the callee is ``compile_jlinalg`` (bare name) or
-    ``<anything>.compile_jlinalg`` (attribute access, e.g.
-    ``compile_and_link.compile_jlinalg(...)``).
+    A call matches if the callee is ``run_build`` (bare name) or
+    ``<anything>.run_build`` (attribute access).
     """
     try:
         tree = ast.parse(source)
@@ -85,9 +73,9 @@ def _has_compile_jlinalg_call(source: str) -> bool:
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Name) and func.id == "compile_jlinalg":
+        if isinstance(func, ast.Name) and func.id == "run_build":
             return True
-        if isinstance(func, ast.Attribute) and func.attr == "compile_jlinalg":
+        if isinstance(func, ast.Attribute) and func.attr == "run_build":
             return True
     return False
 
@@ -95,7 +83,6 @@ def _has_compile_jlinalg_call(source: str) -> bool:
 def check(
     build_support_path: Path,
     entry_points: list[Path],
-    banned_literals: list[str] = BANNED_LITERALS,
 ) -> tuple[int, list[str]]:
     """Run the equivalence check. Returns (exit_code, failures).
 
@@ -103,34 +90,22 @@ def check(
     """
     failures: list[str] = []
 
-    # 1. Import and inspect compile_and_link constants. The import must
-    # succeed — if it fails the helper tree is broken and downstream
+    # 1. Import compile_and_link and confirm the shared driver is present. The
+    # import must succeed — if it fails the helper tree is broken and downstream
     # checks are meaningless.
     compile_and_link = _load_compile_and_link(build_support_path)
+    if not hasattr(compile_and_link, "run_build"):
+        failures.append(f"{build_support_path}: run_build not found in helper")
 
-    print(
-        f"BASE_CFLAGS ({len(compile_and_link.BASE_CFLAGS)} flags): "
-        f"{compile_and_link.BASE_CFLAGS}"
-    )
-    print(
-        f"LAPACK_CFLAGS ({len(compile_and_link.LAPACK_CFLAGS)} flags): "
-        f"{compile_and_link.LAPACK_CFLAGS}"
-    )
-    print(f"BASELINE_SOURCES: {compile_and_link.BASELINE_SOURCES}")
-    print(f"LAPACK_SOURCES: {compile_and_link.LAPACK_SOURCES}")
-
-    # 2. Scan entry points for banned literals and confirm a real call.
+    # 2. Confirm every entry point routes through run_build.
     for ep in entry_points:
         if not ep.exists():
             failures.append(f"{ep}: entry point missing")
             continue
-        text = ep.read_text()
-        for lit in banned_literals:
-            if lit in text:
-                failures.append(f"{ep}: banned literal {lit} found")
-        if not _has_compile_jlinalg_call(text):
+        if not _has_run_build_call(ep.read_text()):
             failures.append(
-                f"{ep}: no compile_jlinalg call found — entry point bypasses helper"
+                f"{ep}: no run_build call found — entry point bypasses the "
+                "shared build driver"
             )
 
     if failures:
@@ -140,8 +115,8 @@ def check(
         return 1, failures
 
     print(
-        "\nStructural equivalence holds. All entry points use "
-        "jamma._build_support.compile_and_link as single source of truth."
+        "Structural equivalence holds. All entry points route through "
+        "jamma._build_support.compile_and_link.run_build."
     )
     return 0, failures
 

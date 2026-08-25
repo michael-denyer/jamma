@@ -36,10 +36,11 @@ from pathlib import Path
 #      ``compile_extension()`` from this module.
 from jamma._build_support.compile_and_link import (
     BASELINE_SOURCES,
+    JLINALG_SPEC,
     LAPACK_SOURCES,
-    LINK_FLAGS_BY_PLATFORM,
     apply_sanitizer_overrides,
     compile_jlinalg,
+    run_build,
 )
 from jamma._build_support.find_compiler import find_c_compiler
 from jamma._build_support.openmp_detect import detect_openmp_flags
@@ -89,127 +90,24 @@ def compile_extension(
         else:
             _print(msg)
 
-    # Locate jlinalg source directory relative to this file
-    jlinalg_dir = Path(__file__).parent
-    jlinalg_src_dir = jlinalg_dir / "src"
-    jlinalg_inc_dir = jlinalg_dir / "include"
-
-    if not jlinalg_src_dir.is_dir():
-        _print(f"ERROR: jlinalg source directory not found: {jlinalg_src_dir}")
-        _print("  Package may be incomplete — reinstall from source.")
-        return False
-
-    # Source files split into two groups:
-    # - baseline: portable C compiled with standard flags
-    # - lapack: eigh.c compiled with strict IEEE 754 flags (-O2 -fno-fast-math)
-    baseline = [jlinalg_src_dir / name for name in BASELINE_SOURCES]
-    lapack = [jlinalg_src_dir / name for name in LAPACK_SOURCES]
-    source_files = baseline + lapack
-
-    missing = [str(s) for s in source_files if not s.exists()]
-    if missing:
-        _print(f"ERROR: jlinalg source files missing: {missing}")
-        return False
-
-    # NumPy
-    try:
-        import numpy as np
-    except ImportError:
-        _print("ERROR: numpy not installed")
-        return False
-
-    np_major = int(np.__version__.split(".")[0])
-    if np_major < 2:
-        _print(
-            f"ERROR: numpy {np.__version__} is 1.x — "
-            "C extension requires numpy >= 2.0 headers"
-        )
-        return False
-
-    _detail(f"numpy {np.__version__} OK")
-
-    # Compiler
-    cc_result = find_c_compiler()
-    if not cc_result:
-        _print(
-            "ERROR: No C compiler found on PATH (tried $CC, sysconfig, cc, clang, gcc)"
-        )
-        _print("  Install: apt-get install -y gcc  (Linux)")
-        _print("  Install: xcode-select --install  (macOS)")
-        return False
-    cc_cmd, cc_extra = cc_result
-    _detail(f"Compiler: {shutil.which(cc_cmd)}")
-
-    # Python headers
-    python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
-    python_h = Path(python_inc) / "Python.h" if python_inc else None
-    if not python_h or not python_h.exists():
-        _print(f"ERROR: Python.h not found at {python_inc}")
-        _print("  Install: apt-get install -y python3-dev  (Linux)")
-        return False
-    _detail(f"Python.h: {python_h}")
-
-    # Windows is not supported
-    if platform.system() == "Windows":
-        _print("ERROR: Windows is not supported for C extension compilation")
-        return False
-
-    # Output path (next to __init__.py in the installed package)
-    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
-    out = jlinalg_dir / f"_jlinalg{ext_suffix}"
-    numpy_inc = np.get_include()
-    _detail(f"NumPy include: {numpy_inc}")
-    _detail(f"Output: {out}")
-
-    # OpenMP detection — may override cc_cmd to use clang when libiomp5 is
-    # found, since GCC's GOMP compatibility shim has assertion failures after
-    # MKL LAPACK operations.
-    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-        cc_cmd, platform.system(), _detail, _warn=_print
+    outcome = run_build(
+        JLINALG_SPEC,
+        Path(__file__).parents[1],  # the installed jamma/ package directory
+        dev_mode=True,
+        find_c_compiler=find_c_compiler,
+        detect_openmp_flags=detect_openmp_flags,
+        on_retry=_retry,
+        verbose_print=_detail,
+        error_print=_print,
     )
-
-    # Platform-specific link flags. Helper appends omp_link + extra_link_flags.
-    ldflags = list(LINK_FLAGS_BY_PLATFORM.get(platform.system(), ()))
-
-    # Route through apply_sanitizer_overrides so JAMMA_SANITIZE
-    # env var injects sanitizer flags into BOTH extra_cflags AND
-    # extra_lapack_cflags (the latter ensures eigh.c — the LAPACK source —
-    # is also instrumented). Helper is a no-op when JAMMA_SANITIZE is unset.
-    san_extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
-        apply_sanitizer_overrides(None, ["-lm"])
-    )
-
-    # Compile + link via the shared helper. ``-lm`` was already routed
-    # through apply_sanitizer_overrides above so the sanitizer link flags
-    # can land alongside it.
-    tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_compile_"))
-    try:
-        result = compile_jlinalg(
-            sources=source_files,
-            lapack_sources=lapack,
-            include_dirs=[python_inc, numpy_inc, str(jlinalg_inc_dir)],
-            cc_cmd=cc_cmd,
-            cc_extra=cc_extra,
-            omp_compile=omp_compile,
-            omp_link=omp_link,
-            ldflags=ldflags,
-            output=out,
-            tmp_dir=tmp_dir,
-            extra_cflags=san_extra_cflags,
-            extra_link_flags=extra_link_flags_for_call,
-            extra_lapack_cflags=extra_lapack_cflags,
-            on_retry=_retry,
-            verbose_print=_detail,
-            error_print=_print,
-        )
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    if not result.success:
-        _print(f"ERROR: jlinalg compilation failed: {result.error}")
+    if outcome.skipped:
+        return False
+    if not outcome.ok:
+        error = outcome.result.error if outcome.result else "unknown"
+        _print(f"ERROR: jlinalg compilation failed: {error}")
         return False
 
-    _detail(f"Compiled: {out}")
+    _detail(f"Compiled: {outcome.output_path}")
 
     # Skip the post-link import probe when JAMMA_SANITIZE is set.
     # Importing an ASan-instrumented .so requires LD_PRELOAD=libasan.so; the

@@ -26,6 +26,13 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts/demonstrate_equivalence.py"
 
 
+# The report runs in about 8s standalone, but it shells out to a subprocess that
+# spins its own BLAS threads. Under the suite's `-n 3` xdist workers an unlucky
+# ordering co-schedules it with other heavy tests, oversubscribes the cores, and
+# pushes the run past the 120s default. Seed 11 hit that on three consecutive
+# weekly flaky-detect runs (#159), each a timeout rather than a tolerance failure.
+# justified: subprocess BLAS oversubscription under xdist, not slow test code (#159)
+@pytest.mark.timeout(300)
 def test_equivalence_report_passes_all_tolerances():
     result = subprocess.run(
         [sys.executable, str(SCRIPT)],

@@ -11,13 +11,13 @@ the shared chunk runner itself (``chunk_runner_numpy``), not here.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from loguru import logger
 
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import LazySnpMeta
+from jamma.lmm.schema import SnpMeta
 from jamma.lmm.stats import AssocResult
 
 if TYPE_CHECKING:
@@ -31,34 +31,12 @@ ChunkSink = Callable[[dict[str, np.ndarray], int, int], None]
 LAMBDA_BOUND_TOL = 1e-3
 
 
-def _snp_metadata(snp_info: dict, af: float, n_miss: int) -> dict:
-    """Extract common SNP metadata fields for AssocResult construction.
-
-    Args:
-        snp_info: SNP metadata dict with keys: chr, rs, pos/ps, a1/allele1, a0/allele0.
-        af: Allele frequency of counted allele (BIM A1), can be > 0.5.
-        n_miss: Missing genotype count.
-
-    Returns:
-        Dict of shared AssocResult fields.
-    """
-    return {
-        "chr": snp_info["chr"],
-        "rs": snp_info["rs"],
-        "ps": snp_info.get("pos", snp_info.get("ps", 0)),
-        "n_miss": n_miss,
-        "allele1": snp_info.get("a1", snp_info.get("allele1", "")),
-        "allele0": snp_info.get("a0", snp_info.get("allele0", "")),
-        "af": af,
-    }
-
-
 def _build_results(
     lmm_mode: int,
     snp_indices: np.ndarray,
     filtered_afs: np.ndarray,
     filtered_miss: np.ndarray,
-    snp_info: LazySnpMeta | list,
+    snp_info: SnpMeta,
     arrays: dict[str, np.ndarray],
 ) -> list[AssocResult]:
     """Build AssocResult objects for any LMM test mode.
@@ -68,7 +46,7 @@ def _build_results(
         snp_indices: Indices of SNPs that passed filtering.
         filtered_afs: Allele frequencies for filtered SNPs.
         filtered_miss: Missing counts for filtered SNPs.
-        snp_info: Full SNP metadata list.
+        snp_info: SNP metadata columns, indexed by global SNP index.
         arrays: Dict mapping stat name -> numpy array of values.
 
     Returns:
@@ -93,12 +71,25 @@ def _build_results(
     }
     af_list = filtered_afs.tolist()
     miss_list = filtered_miss.tolist()
+    chr_list = snp_info.chr[snp_indices].tolist()
+    rs_list = snp_info.rs[snp_indices].tolist()
+    pos_list = snp_info.pos[snp_indices].tolist()
+    a1_list = snp_info.a1[snp_indices].tolist()
+    a0_list = snp_info.a0[snp_indices].tolist()
 
     nan = float("nan")
     is_lrt = lmm_mode == 2
     results = []
-    for j, snp_idx in enumerate(snp_indices):
-        meta = _snp_metadata(snp_info[snp_idx], af_list[j], int(miss_list[j]))
+    for j in range(len(snp_indices)):
+        meta: dict[str, Any] = {
+            "chr": chr_list[j],
+            "rs": rs_list[j],
+            "ps": pos_list[j],
+            "n_miss": int(miss_list[j]),
+            "allele1": a1_list[j],
+            "allele0": a0_list[j],
+            "af": af_list[j],
+        }
 
         if is_lrt:
             meta["beta"] = nan
@@ -114,7 +105,7 @@ def _build_results(
 def make_writer_sink(
     writer: IncrementalAssocWriter,
     lmm_mode: int,
-    snp_info: LazySnpMeta | list,
+    snp_info: SnpMeta,
     snp_indices: np.ndarray,
     filtered_afs: np.ndarray,
     filtered_miss: np.ndarray,
@@ -146,7 +137,7 @@ def make_writer_sink(
 def make_result_list_sink(
     results: list[AssocResult],
     lmm_mode: int,
-    snp_info: LazySnpMeta | list,
+    snp_info: SnpMeta,
     snp_indices: np.ndarray,
     filtered_afs: np.ndarray,
     filtered_miss: np.ndarray,

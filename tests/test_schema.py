@@ -23,6 +23,7 @@ from jamma.lmm.schema import (
     MODE_SPECS,
     RESULT_FIELDS,
     TEST_TYPE_MAP,
+    SnpMeta,
     get_spec,
 )
 
@@ -223,17 +224,19 @@ class TestDerivedTables:
 # ── Byte-identical output: write_arrays_batch vs write_batch ─────────
 
 
-def _make_snp_info(n: int) -> list[dict]:
-    return [
-        {
-            "chr": str(i % 22 + 1),
-            "rs": f"rs{1000 + i}",
-            "pos": 100 * i,
-            "a1": "A",
-            "a0": "G",
-        }
-        for i in range(n)
-    ]
+def _make_snp_info(n: int) -> SnpMeta:
+    return SnpMeta.from_dicts(
+        [
+            {
+                "chr": str(i % 22 + 1),
+                "rs": f"rs{1000 + i}",
+                "pos": 100 * i,
+                "a1": "A",
+                "a0": "G",
+            }
+            for i in range(n)
+        ]
+    )
 
 
 def _make_arrays(mode: int, n: int, rng: np.random.Generator) -> dict:
@@ -312,7 +315,12 @@ def test_write_arrays_batch_empty(tmp_path: Path) -> None:
     path = tmp_path / "empty.txt"
     with IncrementalAssocWriter(path, test_type="wald") as w:
         w.write_arrays_batch(
-            1, np.array([], dtype=int), [], np.array([]), np.array([], dtype=int), {}
+            1,
+            np.array([], dtype=int),
+            SnpMeta.from_dicts([]),
+            np.array([]),
+            np.array([], dtype=int),
+            {},
         )
     assert w.count == 0
     lines = path.read_text().strip().split("\n")
@@ -440,22 +448,10 @@ def test_write_arrays_batch_stat_array_length_mismatch_raises(tmp_path: Path) ->
 
 
 @pytest.mark.tier0
-def test_write_arrays_batch_missing_snp_key_raises(tmp_path: Path) -> None:
-    """write_arrays_batch raises KeyError when snp_info missing required keys."""
-    from jamma.lmm.io import IncrementalAssocWriter
-
-    rng = np.random.default_rng(42)
-    n = 2
-    # snp_info dicts missing "pos" key
-    snp_info = [{"chr": "1", "rs": "rs100", "a1": "A", "a0": "G"} for _ in range(n)]
-    afs = rng.random(n)
-    miss_counts = rng.integers(0, 3, size=n)
-    arrays = _make_arrays(1, n, rng)
-
-    path = tmp_path / "bad_snp.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
-        with pytest.raises(KeyError, match="missing required keys"):
-            w.write_arrays_batch(1, np.arange(n), snp_info, afs, miss_counts, arrays)
+def test_snp_meta_from_dicts_missing_key_raises() -> None:
+    """SnpMeta.from_dicts rejects a dict missing a canonical key at the boundary."""
+    with pytest.raises(KeyError, match="pos"):
+        SnpMeta.from_dicts([{"chr": "1", "rs": "rs100", "a1": "A", "a0": "G"}])
 
 
 @pytest.mark.tier0
@@ -484,14 +480,13 @@ def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:
     assert len(lines) == 7  # header + 6 data rows
 
 
-# ── write_arrays_batch with _LazySnpMeta ─────────────────────────────
+# ── write_arrays_batch with SnpMeta from PLINK metadata ──────────────
 
 
 @pytest.mark.tier0
-def test_write_arrays_batch_with_lazy_snp_meta(tmp_path: Path) -> None:
-    """write_arrays_batch works with LazySnpMeta (the production type)."""
+def test_write_arrays_batch_with_plink_meta(tmp_path: Path) -> None:
+    """write_arrays_batch works with SnpMeta built from PLINK metadata."""
     from jamma.lmm.io import IncrementalAssocWriter
-    from jamma.lmm.schema import LazySnpMeta as _LazySnpMeta
 
     meta = {
         "chromosome": np.array(["1", "2", "3"]),
@@ -500,7 +495,7 @@ def test_write_arrays_batch_with_lazy_snp_meta(tmp_path: Path) -> None:
         "allele_1": np.array(["A", "T", "C"]),
         "allele_2": np.array(["G", "C", "A"]),
     }
-    snp_info = _LazySnpMeta(meta)
+    snp_info = SnpMeta.from_plink_meta(meta)
 
     rng = np.random.default_rng(55)
     n = 3

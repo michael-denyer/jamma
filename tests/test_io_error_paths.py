@@ -18,7 +18,7 @@ from jamma.io.plink import (
     validate_plink_dimensions,
 )
 from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
-from jamma.lmm.schema import get_spec
+from jamma.lmm.schema import SnpMeta, get_spec
 from jamma.lmm.stats import AssocResult
 from tests.conftest import require_fixture
 
@@ -126,7 +126,9 @@ class TestLmmIOErrorPaths:
     def test_write_arrays_batch_mode_mismatch_raises(self, tmp_path: Path) -> None:
         """write_arrays_batch rejects lmm_mode whose test_type != writer's test_type."""
         snp_indices = np.array([0])
-        snp_info = [{"chr": "1", "rs": "rs1", "pos": 100, "a1": "A", "a0": "G"}]
+        snp_info = SnpMeta.from_dicts(
+            [{"chr": "1", "rs": "rs1", "pos": 100, "a1": "A", "a0": "G"}]
+        )
         afs = np.array([0.3])
         miss_counts = np.array([0])
 
@@ -145,7 +147,9 @@ class TestLmmIOErrorPaths:
     def test_write_arrays_batch_missing_stat_keys_raises(self, tmp_path: Path) -> None:
         """write_arrays_batch rejects empty arrays (missing all wald stat keys)."""
         snp_indices = np.array([0])
-        snp_info = [{"chr": "1", "rs": "rs1", "pos": 100, "a1": "A", "a0": "G"}]
+        snp_info = SnpMeta.from_dicts(
+            [{"chr": "1", "rs": "rs1", "pos": 100, "a1": "A", "a0": "G"}]
+        )
         afs = np.array([0.3])
         miss_counts = np.array([0])
 
@@ -161,39 +165,22 @@ class TestLmmIOErrorPaths:
                     arrays={},
                 )
 
-    def test_write_arrays_batch_snp_info_missing_keys_raises(
-        self, tmp_path: Path
-    ) -> None:
-        """write_arrays_batch raises KeyError when snp_info missing required keys."""
-        snp_indices = np.array([0])
+    def test_snp_meta_from_dicts_missing_keys_raises(self) -> None:
+        """SnpMeta.from_dicts rejects a dict missing canonical keys."""
         # Only 'chr' key provided; missing rs, pos, a1, a0
-        snp_info = [{"chr": "1"}]
-        afs = np.array([0.3])
-        miss_counts = np.array([0])
-
-        # Build complete arrays for wald mode (lmm_mode=1) using get_spec
-        spec = get_spec(1)
-        arrays = {c.array_key: np.array([0.1]) for c in spec.stat_columns}
-
-        with IncrementalAssocWriter(tmp_path / "out.txt", test_type="wald") as writer:
-            with pytest.raises(KeyError, match="missing required keys"):
-                writer.write_arrays_batch(
-                    lmm_mode=1,
-                    snp_indices=snp_indices,
-                    snp_info=snp_info,
-                    afs=afs,
-                    miss_counts=miss_counts,
-                    arrays=arrays,
-                )
+        with pytest.raises(KeyError):
+            SnpMeta.from_dicts([{"chr": "1"}])
 
     def test_write_arrays_batch_length_mismatch_raises(self, tmp_path: Path) -> None:
         """write_arrays_batch raises ValueError when afs length != snp_indices."""
         # 2 SNPs but afs has only 1 value
         snp_indices = np.array([0, 1])
-        snp_info = [
-            {"chr": "1", "rs": "rs1", "pos": 100, "a1": "A", "a0": "G"},
-            {"chr": "1", "rs": "rs2", "pos": 200, "a1": "A", "a0": "G"},
-        ]
+        snp_info = SnpMeta.from_dicts(
+            [
+                {"chr": "1", "rs": "rs1", "pos": 100, "a1": "A", "a0": "G"},
+                {"chr": "1", "rs": "rs2", "pos": 200, "a1": "A", "a0": "G"},
+            ]
+        )
         afs = np.array([0.3])  # length 1, mismatches snp_indices length 2
         miss_counts = np.array([0, 0])
 

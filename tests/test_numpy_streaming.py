@@ -18,7 +18,6 @@ from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import compute_numpy
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import (
-    get_last_run_timing,
     run_lmm_association_numpy_streaming,
 )
 from jamma.lmm.schema import LmmConfig
@@ -244,7 +243,7 @@ class TestNumpyStreamingGemmaParity:
     def test_streaming_matches_gemma(self, synthetic_data, lmm_mode, reference_path):
         """Streaming runner matches GEMMA reference on synthetic data."""
         plink, kinship, phenotypes = synthetic_data
-        run_result, n_tested = run_lmm_association_numpy_streaming(
+        run_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -255,7 +254,7 @@ class TestNumpyStreamingGemmaParity:
         )
         results = run_result.associations
         assert len(results) > 0, "Expected results"
-        assert n_tested == len(results)
+        assert run_result.n_tested == len(results)
 
         reference = load_gemma_assoc(reference_path)
         tolerances = ToleranceConfig(lambda_rtol=5e-5)
@@ -293,7 +292,7 @@ class TestBatchEquivalence:
         batch_assoc = batch_result.associations
 
         # Streaming run
-        stream_result, n_tested = run_lmm_association_numpy_streaming(
+        stream_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -335,7 +334,7 @@ class TestBatchEquivalence:
         )
         batch_assoc = batch_result.associations
 
-        stream_result, _n = run_lmm_association_numpy_streaming(
+        stream_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -390,7 +389,7 @@ class TestStreamingCovariates:
         batch_assoc = batch_result.associations
 
         # Streaming run
-        stream_result, n_tested = run_lmm_association_numpy_streaming(
+        stream_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -422,7 +421,7 @@ class TestStreamingCovariates:
         plink, kinship, phenotypes = synthetic_data
         covariates = np.loadtxt(COVARIATE_FILE)
 
-        stream_result, n_tested = run_lmm_association_numpy_streaming(
+        stream_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
@@ -432,7 +431,7 @@ class TestStreamingCovariates:
         )
         results = stream_result.associations
         assert len(results) > 0, "Expected results"
-        assert n_tested == len(results)
+        assert stream_result.n_tested == len(results)
 
         reference = load_gemma_assoc(COVARIATE_WALD_REFERENCE)
         tolerances = ToleranceConfig(lambda_rtol=5e-5)
@@ -448,7 +447,7 @@ class TestStreamingCovariates:
         )
 
         # Many small chunks
-        small_result, n_small = run_lmm_association_numpy_streaming(
+        small_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -460,7 +459,7 @@ class TestStreamingCovariates:
         )
 
         # Single chunk
-        big_result, n_big = run_lmm_association_numpy_streaming(
+        big_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -471,7 +470,9 @@ class TestStreamingCovariates:
             chunk_size=100_000,
         )
 
-        assert n_small == n_big, f"Count mismatch: {n_small} vs {n_big}"
+        assert small_result.n_tested == big_result.n_tested, (
+            f"Count mismatch: {small_result.n_tested} vs {big_result.n_tested}"
+        )
 
         small_p = np.array([r.p_wald for r in small_result.associations])
         big_p = np.array([r.p_wald for r in big_result.associations])
@@ -498,7 +499,7 @@ class TestStreamingMechanics:
         plink, kinship, phenotypes = synthetic_data
         out_file = tmp_path / "streaming_out.assoc.txt"
 
-        result, n_tested = run_lmm_association_numpy_streaming(
+        result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -509,24 +510,23 @@ class TestStreamingMechanics:
 
         # Result should have empty associations but n_tested populated
         assert result.associations == []
-        assert n_tested > 0
-        assert result.n_tested == n_tested
+        assert result.n_tested > 0
 
         # Output file should exist with correct line count
         assert out_file.exists()
         lines = out_file.read_text().strip().split("\n")
         # First line is header, rest are data
-        assert len(lines) == n_tested + 1
+        assert len(lines) == result.n_tested + 1
 
         # Load and verify count matches
         loaded = load_gemma_assoc(out_file)
-        assert len(loaded) == n_tested
+        assert len(loaded) == result.n_tested
 
     def test_no_output_path_accumulates_in_memory(self, synthetic_data):
         """Without output_path, results accumulate in memory."""
         plink, kinship, phenotypes = synthetic_data
 
-        result, n_tested = run_lmm_association_numpy_streaming(
+        result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -534,16 +534,15 @@ class TestStreamingMechanics:
             chunk_size=200,
         )
 
-        assert len(result.associations) == n_tested
-        assert n_tested > 0
+        assert len(result.associations) == result.n_tested
+        assert result.n_tested > 0
         assert isinstance(result.associations[0], AssocResult)
-        assert result.n_tested is None  # Not set for in-memory mode
 
-    def test_get_last_run_timing(self, synthetic_data):
-        """get_last_run_timing returns dict with expected keys."""
+    def test_result_carries_timing_breakdown(self, synthetic_data):
+        """The returned result carries the run's timing breakdown."""
         plink, kinship, phenotypes = synthetic_data
 
-        run_lmm_association_numpy_streaming(
+        result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -551,8 +550,7 @@ class TestStreamingMechanics:
             chunk_size=200,
         )
 
-        timing = get_last_run_timing()
-        assert isinstance(timing, dict)
+        timing = result.timing
         assert "rotation_s" in timing
         assert "numpy_compute_s" in timing
         assert "result_write_s" in timing
@@ -564,7 +562,7 @@ class TestStreamingMechanics:
         """PVE should be populated in the result."""
         plink, kinship, phenotypes = synthetic_data
 
-        result, _n = run_lmm_association_numpy_streaming(
+        result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -604,7 +602,7 @@ class TestChunkingEdgeCases:
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
 
-        stream_result, _n = run_lmm_association_numpy_streaming(
+        stream_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -633,7 +631,7 @@ class TestChunkingEdgeCases:
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
 
-        stream_result, _n = run_lmm_association_numpy_streaming(
+        stream_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -653,7 +651,7 @@ class TestChunkingEdgeCases:
 
         # An empty -snps restriction leaves nothing to test. MAF cannot express
         # this: it is min(af, 1-af) and so never exceeds 0.5.
-        result, n_tested = run_lmm_association_numpy_streaming(
+        result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=kinship,
@@ -662,7 +660,7 @@ class TestChunkingEdgeCases:
         )
 
         assert result.associations == []
-        assert n_tested == 0
+        assert result.n_tested == 0
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +684,7 @@ class TestStreamingPipeline:
         log_buffer = io.StringIO()
         sink_id = _logger.add(log_buffer, level="DEBUG", format="{message}")
         try:
-            result, n_tested = run_lmm_association_numpy_streaming(
+            result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC_DATA,
                 phenotypes=phenotypes,
                 kinship=None,
@@ -702,14 +700,14 @@ class TestStreamingPipeline:
         assert "Pipeline mode" in log_text, (
             f"Expected 'Pipeline mode' in log output, got: {log_text[:500]}"
         )
-        assert n_tested > 0
+        assert result.n_tested > 0
 
     def test_streaming_pipeline_parity(self, synthetic_eigen):
         """Pipeline (chunk_size=1) matches sequential (chunk_size=100_000)."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Sequential: single chunk (no pipeline)
-        seq_result, n_seq = run_lmm_association_numpy_streaming(
+        seq_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -720,7 +718,7 @@ class TestStreamingPipeline:
         )
 
         # Pipeline: many chunks
-        pipe_result, n_pipe = run_lmm_association_numpy_streaming(
+        pipe_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -730,7 +728,9 @@ class TestStreamingPipeline:
             chunk_size=1,
         )
 
-        assert n_seq == n_pipe, f"Count mismatch: {n_seq} vs {n_pipe}"
+        assert seq_result.n_tested == pipe_result.n_tested, (
+            f"Count mismatch: {seq_result.n_tested} vs {pipe_result.n_tested}"
+        )
 
         seq_assoc = seq_result.associations
         pipe_assoc = pipe_result.associations
@@ -749,7 +749,7 @@ class TestStreamingPipeline:
         """Auto chunk sizing runs without error (default chunk_size=10_000)."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        result, n_tested = run_lmm_association_numpy_streaming(
+        result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -759,7 +759,7 @@ class TestStreamingPipeline:
             chunk_size=10_000,
         )
 
-        assert n_tested > 0
+        assert result.n_tested > 0
 
     def test_streaming_pipeline_output_path_parity(self, tmp_path, synthetic_eigen):
         """Pipeline with output_path produces same disk results as sequential."""
@@ -767,7 +767,7 @@ class TestStreamingPipeline:
 
         # Sequential: single chunk -> disk
         seq_file = tmp_path / "seq.assoc.txt"
-        seq_result, n_seq = run_lmm_association_numpy_streaming(
+        seq_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -780,7 +780,7 @@ class TestStreamingPipeline:
 
         # Pipeline: many chunks -> disk
         pipe_file = tmp_path / "pipe.assoc.txt"
-        pipe_result, n_pipe = run_lmm_association_numpy_streaming(
+        pipe_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -791,13 +791,13 @@ class TestStreamingPipeline:
             output_path=pipe_file,
         )
 
-        assert n_seq == n_pipe
+        assert seq_result.n_tested == pipe_result.n_tested
         assert seq_result.associations == []
         assert pipe_result.associations == []
 
         seq_loaded = load_gemma_assoc(seq_file)
         pipe_loaded = load_gemma_assoc(pipe_file)
-        assert len(seq_loaded) == len(pipe_loaded) == n_seq
+        assert len(seq_loaded) == len(pipe_loaded) == seq_result.n_tested
 
         for field in ("beta", "se", "p_wald"):
             seq_vals = np.array([getattr(r, field) for r in seq_loaded])
@@ -815,7 +815,7 @@ class TestStreamingPipeline:
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Sequential: single chunk
-        seq_result, n_seq = run_lmm_association_numpy_streaming(
+        seq_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -826,7 +826,7 @@ class TestStreamingPipeline:
         )
 
         # Pipeline: many chunks
-        pipe_result, n_pipe = run_lmm_association_numpy_streaming(
+        pipe_result = run_lmm_association_numpy_streaming(
             bed_path=SYNTHETIC_DATA,
             phenotypes=phenotypes,
             kinship=None,
@@ -836,7 +836,9 @@ class TestStreamingPipeline:
             chunk_size=1,
         )
 
-        assert n_seq == n_pipe, f"Count mismatch: {n_seq} vs {n_pipe}"
+        assert seq_result.n_tested == pipe_result.n_tested, (
+            f"Count mismatch: {seq_result.n_tested} vs {pipe_result.n_tested}"
+        )
 
         seq_assoc = seq_result.associations
         pipe_assoc = pipe_result.associations
@@ -879,7 +881,7 @@ class TestStreamingFusedScoreDispatch:
                 "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
                 wraps=_c().compute_score_fused_ws_c,
             ) as mock_fused:
-                fused_result, n_fused = run_lmm_association_numpy_streaming(
+                fused_result = run_lmm_association_numpy_streaming(
                     bed_path=SYNTHETIC_DATA,
                     phenotypes=phenotypes,
                     kinship=None,
@@ -898,7 +900,7 @@ class TestStreamingFusedScoreDispatch:
                 "jamma.lmm.compute_numpy._accel.compute_score_fused_c",
                 wraps=_c().compute_score_fused_c,
             ) as mock_fused:
-                fused_result, n_fused = run_lmm_association_numpy_streaming(
+                fused_result = run_lmm_association_numpy_streaming(
                     bed_path=SYNTHETIC_DATA,
                     phenotypes=phenotypes,
                     kinship=None,
@@ -924,7 +926,7 @@ class TestStreamingFusedScoreDispatch:
                 None,
             ),
         ):
-            split_result, n_split = run_lmm_association_numpy_streaming(
+            split_result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC_DATA,
                 phenotypes=phenotypes,
                 kinship=None,
@@ -934,7 +936,9 @@ class TestStreamingFusedScoreDispatch:
                 chunk_size=200,
             )
 
-        assert n_fused == n_split, f"Count mismatch: {n_fused} vs {n_split}"
+        assert fused_result.n_tested == split_result.n_tested, (
+            f"Count mismatch: {fused_result.n_tested} vs {split_result.n_tested}"
+        )
 
         fused_assoc = fused_result.associations
         split_assoc = split_result.associations
@@ -971,7 +975,7 @@ class TestStreamingFusedLrtDispatch:
                 "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
                 wraps=_c().compute_lrt_fused_ws_c,
             ) as mock_fused:
-                fused_result, n_fused = run_lmm_association_numpy_streaming(
+                fused_result = run_lmm_association_numpy_streaming(
                     bed_path=SYNTHETIC_DATA,
                     phenotypes=phenotypes,
                     kinship=None,
@@ -990,7 +994,7 @@ class TestStreamingFusedLrtDispatch:
                 "jamma.lmm.compute_numpy._accel.compute_lrt_fused_c",
                 wraps=_c().compute_lrt_fused_c,
             ) as mock_fused:
-                fused_result, n_fused = run_lmm_association_numpy_streaming(
+                fused_result = run_lmm_association_numpy_streaming(
                     bed_path=SYNTHETIC_DATA,
                     phenotypes=phenotypes,
                     kinship=None,
@@ -1014,7 +1018,7 @@ class TestStreamingFusedLrtDispatch:
                 None,
             ),
         ):
-            split_result, n_split = run_lmm_association_numpy_streaming(
+            split_result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC_DATA,
                 phenotypes=phenotypes,
                 kinship=None,
@@ -1024,7 +1028,9 @@ class TestStreamingFusedLrtDispatch:
                 chunk_size=200,
             )
 
-        assert n_fused == n_split, f"Count mismatch: {n_fused} vs {n_split}"
+        assert fused_result.n_tested == split_result.n_tested, (
+            f"Count mismatch: {fused_result.n_tested} vs {split_result.n_tested}"
+        )
 
         fused_assoc = fused_result.associations
         split_assoc = split_result.associations

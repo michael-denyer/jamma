@@ -197,9 +197,9 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:20](../src/jamma/io/covariate.py#L20) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L45) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L97) |
-| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:96](../src/jamma/lmm/io.py#L96) |
-| 2d | `format_assoc_line()` | Table-driven output row formatting | [lmm/io.py:37](../src/jamma/lmm/io.py#L37) |
-| 2d | `write_assoc_results()` | Batch write from list | [lmm/io.py:77](../src/jamma/lmm/io.py#L77) |
+| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:94](../src/jamma/lmm/io.py#L94) |
+| 2d | `format_assoc_line()` | Table-driven output row formatting | [lmm/io.py:35](../src/jamma/lmm/io.py#L35) |
+| 2d | `write_assoc_results()` | Batch write from list | [lmm/io.py:75](../src/jamma/lmm/io.py#L75) |
 | 2e | `read_snp_list_file()` | Parse SNP list file (one RS ID per line) | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2e | `resolve_snp_list_to_indices()` | Map SNP IDs to dataset indices | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2f | `read_eigen_files()` | Load eigenvalue/eigenvector files (auto-detects `.npy` or `.txt`) | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
@@ -245,7 +245,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3f | `calc_lrt_test()` | Scalar reference for the batch path; tests only | [stats.py:170](../src/jamma/lmm/stats.py#L170) |
 | 3f | `f_sf()` | F-distribution survival via Cephes betainc; tests only | [stats.py:67](../src/jamma/lmm/stats.py#L67) |
 | 3g | `compute_hwe_pvalues()` | Chi-squared HWE test via pure NumPy | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
-| 3g | `apply_snp_list_mask()` | DRY bounds-validated SNP mask application | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
+| 3g | `validate_snp_indices()` | Boundary range check for -snps restriction indices | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
 | 3h | `_build_covariate_matrix()` | Pure-NumPy covariate setup | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
 | 3h | `_eigendecompose_or_reuse()` | Handles kinship decomp or reuses pre-computed eigen | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
 | 3h | `_compute_null_model_common()` | Null model fitting | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
@@ -263,7 +263,10 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_numpy()` | Vectorized Wald: REML optimize -> beta, SE, p_wald | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 4Nb | `run_lmm_association_numpy()` | In-memory batch runner (full genotype load) | [runner_numpy.py:39](../src/jamma/lmm/runner_numpy.py#L39) |
+| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:141](../src/jamma/lmm/runner_numpy.py#L141) |
+| 4Nb | `GenotypeSource` | Protocol a run's genotype provider implements (stats + chunk stream) | [runner_numpy.py:49](../src/jamma/lmm/runner_numpy.py#L49) |
+| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:76](../src/jamma/lmm/runner_numpy.py#L76) |
+| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:378](../src/jamma/lmm/runner_numpy.py#L378) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:309](../src/jamma/lmm/chunk_runner_numpy.py#L309) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:127](../src/jamma/lmm/chunk_runner_numpy.py#L127) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:48](../src/jamma/lmm/chunk_kernel.py#L48) |
@@ -277,13 +280,14 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 | 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | NumPy disk streaming (two-pass, full pipeline support, C extension) | [runner_numpy_streaming.py:69](../src/jamma/lmm/runner_numpy_streaming.py#L69) |
-| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:115](../src/jamma/lmm/runner.py#L115) |
-| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:86](../src/jamma/lmm/schema.py#L86) |
-| 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:112](../src/jamma/lmm/schema.py#L112) |
-| 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:56](../src/jamma/lmm/results.py#L56) |
-| 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:188](../src/jamma/lmm/results.py#L188) |
-| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:173](../src/jamma/lmm/loco.py#L173) |
+| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:34](../src/jamma/lmm/runner_numpy_streaming.py#L34) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:107](../src/jamma/lmm/runner_numpy_streaming.py#L107) |
+| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:115](../src/jamma/lmm/runner.py#L100) |
+| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:88](../src/jamma/lmm/schema.py#L88) |
+| 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:114](../src/jamma/lmm/schema.py#L114) |
+| 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:34](../src/jamma/lmm/results.py#L34) |
+| 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:179](../src/jamma/lmm/results.py#L179) |
+| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:158](../src/jamma/lmm/loco.py#L158) |
 
 ---
 
@@ -567,7 +571,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | Wald/Score/LRT tests | [stats.py:99](../src/jamma/lmm/stats.py#L99) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
-| Output schema | [lmm/schema.py:86](../src/jamma/lmm/schema.py#L86) |
+| Output schema | [lmm/schema.py:88](../src/jamma/lmm/schema.py#L88) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | NumPy streaming runner | [runner_numpy_streaming.py](../src/jamma/lmm/runner_numpy_streaming.py) |
 | Shared NumPy chunk-loop orchestrator | [chunk_runner_numpy.py](../src/jamma/lmm/chunk_runner_numpy.py) |
@@ -580,7 +584,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | LOCO config and artifact naming | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
-| Result writer | [lmm/io.py:96](../src/jamma/lmm/io.py#L96) |
+| Result writer | [lmm/io.py:94](../src/jamma/lmm/io.py#L94) |
 | Memory estimation | [memory.py:304](../src/jamma/core/memory.py#L304) |
 | Threading | [threading.py:43](../src/jamma/core/threading.py#L43) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |

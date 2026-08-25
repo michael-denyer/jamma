@@ -164,24 +164,30 @@ def test_partitions_from_metadata_matches(sample_plink_data):
 
 
 @pytest.mark.tier1
-def test_apply_snp_list_mask_searchsorted():
-    """apply_snp_list_mask searchsorted yields same result as boolean array approach."""
-    from jamma.core.snp_filter import apply_snp_list_mask
+def test_global_index_restriction_matches_boolean_mask():
+    """The searchsorted intersection equals the boolean-mask approach.
+
+    filter_snp_stats routes every -snps restriction through
+    _apply_global_index_restriction; this pins its result against the
+    O(n_snps)-memory boolean formulation it replaced.
+    """
+    from jamma.core.snp_stats import _apply_global_index_restriction
 
     n_snps = 10000
     indices = np.sort(
         np.random.default_rng(42).choice(n_snps, size=500, replace=False)
     ).astype(np.intp)
 
-    # Build expected result using the old boolean approach
+    # Expected result using the boolean approach over the full space
     snp_mask_expected = np.ones(n_snps, dtype=bool)
     list_mask = np.zeros(n_snps, dtype=bool)
     list_mask[indices] = True
     snp_mask_expected &= list_mask
 
-    # Build actual result using the new searchsorted approach
     snp_mask_actual = np.ones(n_snps, dtype=bool)
-    apply_snp_list_mask(snp_mask_actual, indices, n_snps, "test")
+    _apply_global_index_restriction(
+        snp_mask_actual, np.arange(n_snps, dtype=np.intp), indices, "test"
+    )
 
     np.testing.assert_array_equal(snp_mask_actual, snp_mask_expected)
 
@@ -280,20 +286,21 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
     Asserting only n_tested > 0 would pass even if the values were dropped (a
     no-op body still tests SNPs). Instead, spy on run_lmm_chunk_source_numpy —
     the boundary where n_grid/n_refine are consumed, captured pre-clamp — and
-    assert the configured non-default values actually arrive there.
+    assert the configured non-default values actually arrive there. LOCO
+    reaches that boundary through the shared run body in runner_numpy.
     """
     require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
-    import jamma.lmm.loco as loco_mod
+    import jamma.lmm.runner_numpy as runner_mod
 
-    real_chunk_runner = loco_mod.run_lmm_chunk_source_numpy
+    real_chunk_runner = runner_mod.run_lmm_chunk_source_numpy
     captured: list[dict[str, int]] = []
 
     def spy(*args, **kwargs):
         captured.append({"n_grid": kwargs["n_grid"], "n_refine": kwargs["n_refine"]})
         return real_chunk_runner(*args, **kwargs)
 
-    monkeypatch.setattr(loco_mod, "run_lmm_chunk_source_numpy", spy)
+    monkeypatch.setattr(runner_mod, "run_lmm_chunk_source_numpy", spy)
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
     loco = run_lmm_loco(

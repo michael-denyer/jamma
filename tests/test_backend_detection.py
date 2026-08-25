@@ -88,7 +88,6 @@ class TestExecutionMode:
             patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
         ):
             plan = select_execution_mode(100, 1000)
-        assert plan.backend == "numpy"
         assert plan.mode == "batch"
 
     def test_auto_c_ext_memory_insufficient_returns_numpy_streaming(self):
@@ -101,7 +100,6 @@ class TestExecutionMode:
             patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
         ):
             plan = select_execution_mode(200_000, 100_000)
-        assert plan.backend == "numpy"
         assert plan.mode == "streaming"
 
     def test_auto_no_c_ext_returns_numpy_batch(self):
@@ -114,7 +112,6 @@ class TestExecutionMode:
             patch("jamma.lmm.compute_numpy._accel", None),
         ):
             plan = select_execution_mode(100, 1000)
-        assert plan.backend == "numpy"
         assert plan.mode == "batch"
 
     def test_no_c_ext_warns_for_large_dataset(self):
@@ -128,7 +125,6 @@ class TestExecutionMode:
             patch("jamma.lmm.runner.logger") as mock_logger,
         ):
             plan = select_execution_mode(n_samples=100, n_snps=1000)
-        assert plan.backend == "numpy"
         assert plan.mode == "batch"
         mock_logger.warning.assert_called_once()
 
@@ -144,7 +140,6 @@ class TestExecutionMode:
             patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
         ):
             plan = select_execution_mode(200_000, 100_000, requested="numpy")
-        assert plan.backend == "numpy"
         assert plan.mode == "batch"
 
     def test_explicit_numpy_bypasses_auto(self):
@@ -160,7 +155,6 @@ class TestExecutionMode:
         """explicit 'numpy-streaming' -> numpy-streaming directly."""
         with patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED):
             plan = select_execution_mode(100, 1000, requested="numpy-streaming")
-        assert plan.backend == "numpy"
         assert plan.mode == "streaming"
 
     def test_explicit_numpy_streaming_no_c_ext_raises(self):
@@ -184,41 +178,40 @@ class TestExecutionMode:
     # -- ExecutionPlan invariants --
 
     def test_runner_name_property(self):
-        """ExecutionPlan.runner_name returns 'backend-mode'."""
-        plan = ExecutionPlan(backend="numpy", mode="batch", reason="test")
+        """ExecutionPlan.runner_name returns 'numpy-{mode}'."""
+        plan = ExecutionPlan(mode="batch", reason="test")
         assert plan.runner_name == "numpy-batch"
 
-        plan2 = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
+        plan2 = ExecutionPlan(mode="streaming", reason="test")
         assert plan2.runner_name == "numpy-streaming"
 
     def test_numpy_streaming_is_valid(self):
         """ExecutionPlan accepts numpy-streaming (numpy streaming runner available)."""
-        plan = ExecutionPlan(backend="numpy", mode="streaming", reason="test")
-        assert plan.backend == "numpy"
+        plan = ExecutionPlan(mode="streaming", reason="test")
         assert plan.mode == "streaming"
         assert plan.runner_name == "numpy-streaming"
 
     def test_empty_reason_is_invalid(self):
         """ExecutionPlan rejects empty reason string."""
         with pytest.raises(ValueError, match="reason must be non-empty"):
-            ExecutionPlan(backend="numpy", mode="batch", reason="")
+            ExecutionPlan(mode="batch", reason="")
 
     def test_equality_excludes_reason(self):
         """Plans with same backend/mode but different reasons are equal."""
-        plan_a = ExecutionPlan("numpy", "batch", "reason A")
-        plan_b = ExecutionPlan("numpy", "batch", "reason B")
+        plan_a = ExecutionPlan("batch", "reason A")
+        plan_b = ExecutionPlan("batch", "reason B")
         assert plan_a == plan_b
 
     def test_inequality_on_different_mode(self):
         """Plans with different modes are not equal."""
-        plan_a = ExecutionPlan("numpy", "batch", "test")
-        plan_b = ExecutionPlan("numpy", "streaming", "test")
+        plan_a = ExecutionPlan("batch", "test")
+        plan_b = ExecutionPlan("streaming", "test")
         assert plan_a != plan_b
 
     def test_hashable_ignores_reason(self):
         """Plans with same backend/mode hash identically despite different reasons."""
-        plan_a = ExecutionPlan("numpy", "batch", "reason A")
-        plan_b = ExecutionPlan("numpy", "batch", "reason B")
+        plan_a = ExecutionPlan("batch", "reason A")
+        plan_b = ExecutionPlan("batch", "reason B")
         assert hash(plan_a) == hash(plan_b)
         assert len({plan_a, plan_b}) == 1
 
@@ -237,7 +230,6 @@ class TestExecutionMode:
         ):
             plan1 = select_execution_mode(100, 1000)
             plan2 = select_execution_mode(100, 1000)
-        assert plan1.backend == plan2.backend == "numpy"
         assert plan1.mode == "batch"
         assert plan2.mode == "streaming"
 
@@ -283,10 +275,8 @@ class TestExecutionMode:
             plan_n_cvt1 = select_execution_mode(1000, 10000, n_cvt=1)
 
         # n_cvt=4 without C general -> falls through to numpy-batch fallback
-        assert plan_n_cvt4.backend == "numpy"
         assert plan_n_cvt4.mode == "batch"
         # n_cvt=1 still uses numpy-batch (C extension handles n_cvt=1)
-        assert plan_n_cvt1.backend == "numpy"
         assert plan_n_cvt1.mode == "batch"
 
     def test_c_general_n_cvt_numpy_batch(self):
@@ -305,5 +295,4 @@ class TestExecutionMode:
         ):
             plan = select_execution_mode(1000, 10000, n_cvt=4)
 
-        assert plan.backend == "numpy"
         assert plan.mode == "batch"

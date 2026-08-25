@@ -64,16 +64,6 @@ __all__ = [
     "PipelineRunner",
 ]
 
-# Two places reject this combination, and they cannot share a predicate: run()
-# knows only the backend request and fails before reading PLINK metadata off
-# disk, while _check_hwe_support knows the resolved plan and re-checks after
-# sample filtering may have flipped the mode. They must not disagree on the
-# message, so it lives here rather than being written out at both.
-_HWE_BATCH_UNSUPPORTED = (
-    "HWE filtering (--hwe) is not supported with the NumPy "
-    "batch backend. Use --backend numpy-streaming or set --hwe 0."
-)
-
 
 def _parse_backend_override(value: str) -> BackendRequest:
     """Validate a JAMMA_BACKEND value against the accepted backend requests.
@@ -457,11 +447,6 @@ class PipelineRunner:
 
         return covariates
 
-    def _check_hwe_support(self, plan: ExecutionPlan) -> None:
-        """Raise if HWE filtering requested but backend doesn't support it."""
-        if self.config.hwe_threshold > 0 and plan.mode == "batch":
-            raise ValueError(_HWE_BATCH_UNSUPPORTED)
-
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
 
@@ -492,12 +477,6 @@ class PipelineRunner:
             if env_backend is not None
             else self.config.backend
         )
-
-        # Fail fast: an explicit numpy request always resolves to batch mode, so
-        # this is invalid before the metadata read below can raise about a
-        # missing .bed. tests/test_lmm_io_validation.py pins that ordering.
-        if self.config.hwe_threshold > 0 and requested == "numpy":
-            raise ValueError(_HWE_BATCH_UNSUPPORTED)
 
         # Read once and pass it down. get_plink_metadata parses the whole .bim
         # (sid, chromosome, bp_position and both allele arrays), so calling it
@@ -594,8 +573,6 @@ class PipelineRunner:
             requested: Resolved backend request (respects JAMMA_BACKEND env var).
             meta: PLINK metadata already read by ``run``.
         """
-        self._check_hwe_support(plan)
-
         self.validate_inputs()
 
         n_samples = meta["n_samples"]
@@ -707,8 +684,7 @@ class PipelineRunner:
         The initial plan used raw ``n_samples`` from the PLINK header; the
         valid-mask intersection can reduce it (and flip batch<->streaming).
         Re-selects with ``n_valid`` and ``n_cvt`` (so memory estimates account
-        for a larger Uab at n_cvt>1), logs any change, and re-checks HWE support
-        when the runner changes.
+        for a larger Uab at n_cvt>1) and logs any change.
 
         Returns:
             The post-filter ExecutionPlan (unchanged when filtering had no
@@ -720,7 +696,6 @@ class PipelineRunner:
                 f"Execution plan changed after sample filtering: "
                 f"{initial_plan.runner_name} -> {plan.runner_name} ({plan.reason})"
             )
-            self._check_hwe_support(plan)
         else:
             logger.debug(
                 f"Execution plan (post-filter): {plan.runner_name} ({plan.reason})"

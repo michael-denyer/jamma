@@ -8,7 +8,6 @@ Used by both kinship computation and LMM association runners.
 import math
 
 import numpy as np
-from loguru import logger
 
 from jamma.jlinalg import compute_snp_stats_chunk
 
@@ -20,39 +19,32 @@ _SNP_STATS_CHUNK_SIZE = 10_000
 _erfc_vec = np.vectorize(math.erfc, otypes=[np.float64])
 
 
-def apply_snp_list_mask(
-    snp_mask: np.ndarray, indices: np.ndarray, n_snps: int, label: str
+def validate_snp_indices(
+    snps_indices: np.ndarray | None, n_snps: int, label: str = "-snps"
 ) -> None:
-    """Apply SNP list restriction to mask in-place with bounds validation.
+    """Reject restriction indices outside the file's SNP column space.
+
+    Belongs at the boundary where the full SNP count is known (the runner
+    wrappers, the LOCO orchestrator); per-population filtering downstream
+    intersects by value and cannot tell a bad index from another
+    chromosome's.
 
     Args:
-        snp_mask: Boolean mask to modify in-place (AND with list mask).
-        indices: Array of SNP indices to include.
-        n_snps: Total number of SNPs (for bounds checking).
-        label: Human-readable label for log messages (e.g. "Kinship SNP list").
-    """
-    if len(indices) > 0 and indices.max() >= n_snps:
-        raise ValueError(
-            f"{label} index {indices.max()} out of range for {n_snps} SNPs"
-        )
-    if len(indices) == 0:
-        snp_mask[:] = False
-        logger.info(f"{label}: restricting to 0 requested SNPs (all filtered)")
-        return
+        snps_indices: Candidate global column indices, or None.
+        n_snps: Total SNP columns in the file.
+        label: Human-readable label for the error message.
 
-    # indices is sorted (guaranteed by resolve_snp_list_to_indices).
-    # Use searchsorted to test membership without allocating an O(n_snps) boolean array.
-    active = np.where(snp_mask)[0]
-    pos = np.searchsorted(indices, active)
-    pos = np.clip(pos, 0, len(indices) - 1)
-    in_list = indices[pos] == active
-    # Zero out positions that are True in snp_mask but not in indices
-    snp_mask[active[~in_list]] = False
-    retained = int(np.sum(snp_mask))
-    logger.info(
-        f"{label}: restricting to {len(indices)} requested SNPs "
-        f"({retained} retained after intersection)"
-    )
+    Raises:
+        ValueError: If any index is negative or >= n_snps.
+    """
+    if snps_indices is None or len(snps_indices) == 0:
+        return
+    lo = int(snps_indices.min())
+    hi = int(snps_indices.max())
+    if hi >= n_snps:
+        raise ValueError(f"{label} index {hi} out of range for {n_snps} SNPs")
+    if lo < 0:
+        raise ValueError(f"{label} index {lo} out of range for {n_snps} SNPs")
 
 
 def compute_snp_stats(

@@ -12,10 +12,10 @@ import numpy as np
 import pytest
 
 from jamma.core.snp_filter import (
-    apply_snp_list_mask,
     compute_hwe_pvalues,
     compute_snp_filter_mask,
     compute_snp_stats,
+    validate_snp_indices,
 )
 
 
@@ -94,32 +94,23 @@ class TestComputeHwePvalues:
 
 
 @pytest.mark.tier0
-class TestApplySnpListMask:
-    """Tests for apply_snp_list_mask helper with bounds validation."""
+class TestValidateSnpIndices:
+    """Boundary validation of -snps restriction indices."""
 
-    def test_basic_mask_application(self):
-        """apply_snp_list_mask restricts mask to specified indices."""
-        snp_mask = np.ones(10, dtype=bool)
-        indices = np.array([2, 5, 7])
-        apply_snp_list_mask(snp_mask, indices, 10, "test")
-        assert np.sum(snp_mask) == 3
-        assert snp_mask[2]
-        assert snp_mask[5]
-        assert snp_mask[7]
+    def test_in_range_passes(self):
+        validate_snp_indices(np.array([2, 5, 7]), 10, "test")
 
-    def test_bounds_check_raises(self):
-        """apply_snp_list_mask raises ValueError for out-of-range index."""
-        snp_mask = np.ones(10, dtype=bool)
-        indices = np.array([2, 5, 15])  # 15 is out of range for 10 SNPs
+    def test_out_of_range_raises(self):
         with pytest.raises(ValueError, match="index 15 out of range for 10 SNPs"):
-            apply_snp_list_mask(snp_mask, indices, 10, "test")
+            validate_snp_indices(np.array([2, 5, 15]), 10, "test")
 
-    def test_empty_indices(self):
-        """apply_snp_list_mask with empty indices zeros out entire mask."""
-        snp_mask = np.ones(10, dtype=bool)
-        indices = np.array([], dtype=np.int64)
-        apply_snp_list_mask(snp_mask, indices, 10, "test")
-        assert np.sum(snp_mask) == 0
+    def test_negative_raises(self):
+        with pytest.raises(ValueError, match="index -1 out of range for 10 SNPs"):
+            validate_snp_indices(np.array([-1, 5]), 10, "test")
+
+    def test_none_and_empty_pass(self):
+        validate_snp_indices(None, 10, "test")
+        validate_snp_indices(np.array([], dtype=np.int64), 10, "test")
 
 
 @pytest.mark.tier0

@@ -15,7 +15,7 @@ from loguru import logger
 
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory_snapshot import log_memory_snapshot
-from jamma.core.threading import blas_threads, get_physical_core_count
+from jamma.core.threading import blas_threads, get_blas_thread_count
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     compute_null_model_lambda,
@@ -414,7 +414,7 @@ def prepare_lmm_run(
     )
 
     # Rotation is pure BLAS — use all physical cores.
-    with blas_threads(get_physical_core_count()):
+    with blas_threads(get_blas_thread_count()):
         UtW = U.T @ W
         Uty = U.T @ phenotypes
 

@@ -66,6 +66,7 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
     try:
         from jamma.core.threading import (
             get_blas_backend,
+            get_blas_thread_count,
             get_c_extension_thread_count,
             get_physical_core_count,
             is_blas_controllable,
@@ -78,23 +79,13 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
 
         blas = get_blas_backend()
 
-        # Respect JAMMA_BLAS_THREADS if set, otherwise use physical
-        # core count. We avoid get_blas_thread_count() because it
-        # imports threading module unconditionally.
-        max_threads = os.cpu_count() or 64
-        env_threads = os.environ.get("JAMMA_BLAS_THREADS")
-        if env_threads is not None:
-            try:
-                threads = max(1, min(int(env_threads), max_threads))
-            except ValueError:
-                threads = get_physical_core_count()
-        elif is_blas_controllable():
-            threads = get_physical_core_count()
+        # One parse of JAMMA_BLAS_THREADS: get_blas_thread_count owns it.
+        if os.environ.get("JAMMA_BLAS_THREADS") or is_blas_controllable():
+            threads = get_blas_thread_count()
         else:
             # Accelerate or no BLAS — use halved core count
             # (same fallback used by the NumPy LMM chunk runner).
-            cores = get_physical_core_count()
-            threads = max(1, cores // 2)
+            threads = max(1, get_physical_core_count() // 2)
 
         # A single-threaded _lmm_accel build should not be logged as a
         # multi-threaded compute kernel.

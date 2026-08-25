@@ -142,6 +142,18 @@ class BuildSpec:
     dev_extra_cflags: tuple[str, ...] = ()  # ("-march=native",) / ()
     reads_sentinel_env: bool = False  # honour JAMMA_SENTINEL_UB (accel only)
     supports_diagnose: bool = False  # accept the vectorization-report flags
+    # Runtime load identity — used by core.recompile._load_c_module and
+    # auto_recompile_c_extension when a stale/missing .so must be reimported or
+    # rebuilt. Stored rather than derived so tests can inject synthetic keys.
+    module_name: str = ""  # log name, e.g. "_lmm_accel"
+    compiler_module: str = ""  # dotted path to the compile module
+    sys_module_key: str = ""  # sys.modules key of the built extension
+    fallback_label: str = ""  # human label for the pure-Python fallback path
+    # Symbols a valid, ABI-matched build always exports. Their absence means a
+    # corrupt build rather than a stale one, so _load_c_module treats it as an
+    # import failure and rebuilds. ABI equality is the real completeness check;
+    # this is the belt-and-braces list the caller used to import by name.
+    required_attrs: tuple[str, ...] = ()
 
 
 # -march=native is dev-mode only and portable wheels must not carry it; it
@@ -157,6 +169,17 @@ LMM_ACCEL_SPEC = BuildSpec(
     dev_extra_cflags=("-march=native",),
     reads_sentinel_env=True,
     supports_diagnose=True,
+    module_name="_lmm_accel",
+    compiler_module="jamma.lmm._compile_accel",
+    sys_module_key="jamma.lmm._lmm_accel",
+    fallback_label="LMM",
+    required_attrs=(
+        "HAS_OPENMP",
+        "create_workspace_fused_c",
+        "compute_lmm_chunk_fused_c",
+        "create_workspace_fused_general_c",
+        "compute_lmm_chunk_fused_general_c",
+    ),
 )
 
 JLINALG_SPEC = BuildSpec(
@@ -169,6 +192,31 @@ JLINALG_SPEC = BuildSpec(
     dev_extra_cflags=(),
     reads_sentinel_env=False,
     supports_diagnose=False,
+    module_name="_jlinalg",
+    compiler_module="jamma.jlinalg._compile_jlinalg",
+    sys_module_key="jamma.jlinalg._jlinalg",
+    fallback_label="jlinalg",
+    required_attrs=(
+        "HAS_OPENMP",
+        "blas_backend",
+        "blas_has_dgemm",
+        "blas_has_dgeqrf",
+        "blas_has_dgesvd",
+        "blas_has_dsyevd",
+        "blas_has_dsyevr",
+        "blas_has_dsyrk",
+        "blas_has_lapacke_dsyevd",
+        "blas_is_ilp64",
+        "compute_snp_stats_chunk",
+        "dgemm",
+        "dsyrk",
+        "eigh",
+        "get_n_threads",
+        "jlinalg_isa",
+        "qr",
+        "set_n_threads",
+        "svd",
+    ),
 )
 
 # Opt-in sentinel macro for the sanitizer-workflow self-test. When

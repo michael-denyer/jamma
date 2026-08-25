@@ -6,17 +6,16 @@ MagicMock. For the LP64 threshold tests, np.lib.stride_tricks.as_strided creates
 a 50k x 50k "view" backed by a tiny 4x4 allocation — exercises the real
 shape-checking code path without allocating 20 GB.
 
-SAFE-02 and SAFE-03 inspect source via the ``ast`` module (structural — not a
-regex) and exercise the guards at runtime: SAFE-02 uses a ``python -O``
-subprocess to verify the guard's ``RuntimeError`` survives bytecode
-optimisation (a bare ``assert`` would not), and SAFE-03 stubs the C extension
-in ``sys.modules`` with a wrong ``ABI_VERSION`` *before* importing
-``jamma.jlinalg`` so the production import-time guard fires; auto-recompile is
-also stubbed out so the test observes the warn-and-fallback path rather than a
-silent rebuild.
+SAFE-02 and SAFE-03 exercise the guards at runtime. SAFE-02 uses a ``python -O``
+subprocess to verify the guard's ``RuntimeError`` survives bytecode optimisation
+(a bare ``assert`` would not). SAFE-03 checks the ABI guard where it now lives,
+``recompile._import_and_validate`` (a wrong ABI or a missing required symbol
+returns None), and stubs the C extension in ``sys.modules`` with a wrong
+``ABI_VERSION`` *before* importing ``jamma.jlinalg`` so the production
+import-time fallback fires; the loader is faked so the test observes the
+warn-and-fallback path rather than a silent rebuild.
 """
 
-import ast
 import contextlib
 import subprocess
 import sys
@@ -349,15 +348,6 @@ class TestLOCOIteratorRuntimeError:
 class TestJlinalgABIValidation:
     """SAFE-03: _jlinalg ABI version validated at import."""
 
-    def _jlinalg_init_path(self) -> Path:
-        return (
-            Path(__file__).resolve().parent.parent
-            / "src"
-            / "jamma"
-            / "jlinalg"
-            / "__init__.py"
-        )
-
     def test_expected_abi_constant_exists(self) -> None:
         """jlinalg.__init__ defines _EXPECTED_JLINALG_ABI."""
         import jamma.jlinalg as jl
@@ -372,48 +362,50 @@ class TestJlinalgABIValidation:
         if jlinalg.HAS_C_EXTENSION:
             assert jlinalg.ABI_VERSION == jlinalg._EXPECTED_JLINALG_ABI
 
-    def test_abi_mismatch_guard_structure(self) -> None:
-        """AST inspection: the ABI check raises ImportError on mismatch.
+    def test_abi_mismatch_rejected_by_loader(self, monkeypatch) -> None:
+        """The ABI guard lives in recompile._import_and_validate now.
 
-        Robust against whitespace, comments, and line-continuation refactors
-        a regex would miss.
+        A module whose ABI_VERSION differs from expected is rejected (returns
+        None), as is one that is ABI-matched but missing a required symbol; a
+        matching module with every required symbol is accepted. This asserts the
+        observable behaviour of the guard rather than the source shape of the
+        old inline ``raise ImportError``.
         """
-        tree = ast.parse(self._jlinalg_init_path().read_text())
+        import types
 
-        def _matches_abi_check(if_node: ast.If) -> bool:
-            test = if_node.test
-            if not isinstance(test, ast.Compare):
-                return False
-            names = {
-                test.left.id if isinstance(test.left, ast.Name) else None,
-                *(c.id for c in test.comparators if isinstance(c, ast.Name)),
-            }
-            if {"ABI_VERSION", "_EXPECTED_JLINALG_ABI"} - names:
-                return False
-            return any(isinstance(op, ast.NotEq) for op in test.ops)
+        from jamma._build_support.compile_and_link import BuildSpec
+        from jamma.core.recompile import _import_and_validate
 
-        abi_guards = [
-            n for n in ast.walk(tree) if isinstance(n, ast.If) and _matches_abi_check(n)
-        ]
-        assert abi_guards, (
-            "jlinalg/__init__.py must contain an "
-            "'if ABI_VERSION != _EXPECTED_JLINALG_ABI' guard"
+        key = "jamma._fake_abi_probe"
+        spec = BuildSpec(
+            package_parts=(),
+            source_parts=(),
+            include_parts=(),
+            sources=(),
+            lapack_sources=(),
+            output_stem="_fake_abi_probe",
+            module_name="_fake_abi_probe",
+            sys_module_key=key,
+            required_attrs=("NEEDED",),
         )
-        for guard in abi_guards:
-            raises = [n for n in guard.body if isinstance(n, ast.Raise)]
-            assert raises, (
-                "ABI guard body has no 'raise' — silent fallback would mask drift"
-            )
-            exc = raises[0].exc
-            assert isinstance(exc, ast.Call), (
-                "ABI guard must raise a constructed exception"
-            )
-            assert isinstance(exc.func, ast.Name), (
-                "ABI guard must raise via a bare name (e.g. ImportError(...))"
-            )
-            assert exc.func.id == "ImportError", (
-                f"ABI guard raises {exc.func.id!r}, expected 'ImportError'"
-            )
+
+        matched = types.ModuleType(key)
+        matched.ABI_VERSION = 14  # type: ignore[attr-defined]
+        matched.NEEDED = object()  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, key, matched)
+        assert _import_and_validate(spec, 14) is matched
+
+        # Right ABI is not enough — a missing required symbol is rejected too.
+        wrong_abi = types.ModuleType(key)
+        wrong_abi.ABI_VERSION = 13  # type: ignore[attr-defined]
+        wrong_abi.NEEDED = object()  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, key, wrong_abi)
+        assert _import_and_validate(spec, 14) is None
+
+        missing_symbol = types.ModuleType(key)
+        missing_symbol.ABI_VERSION = 14  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, key, missing_symbol)
+        assert _import_and_validate(spec, 14) is None
 
     def test_abi_mismatch_triggers_production_guard_at_runtime(self) -> None:
         """Production guard fires when ``_jlinalg.ABI_VERSION`` is wrong.
@@ -474,12 +466,21 @@ class TestJlinalgABIValidation:
             fake.svd = lambda *a, **k: None
             sys.modules["jamma.jlinalg._jlinalg"] = fake
 
-            # Stub auto-recompile so the production fallback can not paper
-            # over the simulated ABI mismatch by actually rebuilding.
+            # Fully fake jamma.core.recompile BEFORE importing jamma, so no real
+            # recompile can paper over the simulated ABI mismatch by rebuilding
+            # (importing the real module would eager-load jamma.jlinalg and
+            # rebuild). The fake _load_c_module runs the same ABI check the real
+            # one does against the planted fake, so the wrong ABI drives None and
+            # jamma.jlinalg falls back.
             recompile_mod = types.ModuleType("jamma.core.recompile")
-            recompile_mod.auto_recompile_c_extension = (
-                lambda module_name, compiler_module, sys_module_key, label: False
-            )
+
+            def _fake_load(spec, expected_abi):
+                mod = sys.modules.get(spec.sys_module_key)
+                if mod is None or getattr(mod, "ABI_VERSION", None) != expected_abi:
+                    return None
+                return mod
+
+            recompile_mod._load_c_module = _fake_load
             sys.modules["jamma.core.recompile"] = recompile_mod
 
             with warnings.catch_warnings(record=True) as captured:

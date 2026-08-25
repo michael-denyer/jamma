@@ -25,6 +25,39 @@ import pytest
 from jamma.core.recompile import auto_recompile_c_extension
 
 
+def _fake_spec(*, module_name, compiler_module, sys_module_key, label):
+    """Build a BuildSpec carrying only the load identity these tests exercise.
+
+    The build fields are dummies — auto_recompile_c_extension reads only
+    module_name / compiler_module / sys_module_key / fallback_label.
+    """
+    from jamma._build_support.compile_and_link import BuildSpec
+
+    return BuildSpec(
+        package_parts=(),
+        source_parts=(),
+        include_parts=(),
+        sources=(),
+        lapack_sources=(),
+        output_stem=module_name,
+        module_name=module_name,
+        compiler_module=compiler_module,
+        sys_module_key=sys_module_key,
+        fallback_label=label,
+    )
+
+
+def _recompile(*, module_name, compiler_module, sys_module_key, label):
+    return auto_recompile_c_extension(
+        _fake_spec(
+            module_name=module_name,
+            compiler_module=compiler_module,
+            sys_module_key=sys_module_key,
+            label=label,
+        )
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolate_lock_files(monkeypatch, tmp_path):
     """Redirect every test's lock file into tmp_path.
@@ -68,7 +101,7 @@ def test_compiler_module_missing_returns_false(monkeypatch):
     module_name = "jamma._compiler_that_does_not_exist"
     monkeypatch.delitem(sys.modules, module_name, raising=False)
 
-    result = auto_recompile_c_extension(
+    result = _recompile(
         module_name="_fake_ext",
         compiler_module=module_name,
         sys_module_key="jamma._fake_ext",
@@ -96,7 +129,7 @@ def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     sentinel = types.ModuleType(sys_key)
     monkeypatch.setitem(sys.modules, sys_key, sentinel)
 
-    result = auto_recompile_c_extension(
+    result = _recompile(
         module_name="_fake_ext_raises",
         compiler_module=compiler_name,
         sys_module_key=sys_key,
@@ -124,7 +157,7 @@ def test_compiler_returns_false_does_not_evict(monkeypatch):
     sentinel = types.ModuleType(sys_key)
     monkeypatch.setitem(sys.modules, sys_key, sentinel)
 
-    result = auto_recompile_c_extension(
+    result = _recompile(
         module_name="_fake_ext_false",
         compiler_module=compiler_name,
         sys_module_key=sys_key,
@@ -150,7 +183,7 @@ def test_successful_recompile_evicts_stale_module(monkeypatch):
     stale = types.ModuleType(sys_key)
     monkeypatch.setitem(sys.modules, sys_key, stale)
 
-    result = auto_recompile_c_extension(
+    result = _recompile(
         module_name="_fake_ext_success",
         compiler_module=compiler_name,
         sys_module_key=sys_key,
@@ -178,7 +211,7 @@ def test_successful_recompile_with_no_prior_sys_modules_entry(monkeypatch):
     )
     monkeypatch.delitem(sys.modules, sys_key, raising=False)
 
-    result = auto_recompile_c_extension(
+    result = _recompile(
         module_name="_fake_ext_no_prior",
         compiler_module=compiler_name,
         sys_module_key=sys_key,
@@ -218,7 +251,7 @@ def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
     # Route loguru to stderr so capsys can observe it.
     sink_id = _logger.add(sys.stderr, level="WARNING")
     try:
-        result = auto_recompile_c_extension(
+        result = _recompile(
             module_name="_fake_ext_retry",
             compiler_module=compiler_name,
             sys_module_key=sys_key,
@@ -238,33 +271,6 @@ def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
         "on_retry invocation must produce a user-visible warning — "
         "loguru must emit, not silently discard, retry notices"
     )
-
-
-@pytest.mark.tier0
-def test_partial_upgrade_fallback_when_compile_extension_lacks_on_retry(monkeypatch):
-    """An older installed compile_extension (no on_retry kwarg) must not
-    break the recompile shim — it falls back to the legacy call.
-    """
-    compiler_name = "jamma._fake_compiler_legacy"
-    sys_key = "jamma._fake_ext_legacy"
-
-    mod = types.ModuleType(compiler_name)
-
-    def compile_extension(verbose: bool = False) -> bool:
-        return True
-
-    mod.compile_extension = compile_extension  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, compiler_name, mod)
-    monkeypatch.delitem(sys.modules, sys_key, raising=False)
-
-    result = auto_recompile_c_extension(
-        module_name="_fake_ext_legacy",
-        compiler_module=compiler_name,
-        sys_module_key=sys_key,
-        label="fake",
-    )
-
-    assert result is True
 
 
 @pytest.mark.tier0
@@ -319,7 +325,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
     results_lock = threading.Lock()
 
     def worker(sys_key: str) -> None:
-        r = auto_recompile_c_extension(
+        r = _recompile(
             module_name="_fake_ext_concurrent",
             compiler_module=compiler_name,
             sys_module_key=sys_key,
@@ -402,7 +408,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
         monkeypatch.setitem(sys.modules, k, types.ModuleType(k))
 
     def worker(sys_key: str) -> None:
-        auto_recompile_c_extension(
+        _recompile(
             module_name="_fake_ext_nolock",
             compiler_module=compiler_name,
             sys_module_key=sys_key,
@@ -553,7 +559,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
 
     monkeypatch.setattr(recompile_mod.importlib, "import_module", fake_import)
 
-    result = auto_recompile_c_extension(
+    result = _recompile(
         module_name="_fake_ext_skip",
         compiler_module=compiler_name,
         sys_module_key=sys_key,
@@ -592,7 +598,7 @@ def test_recompile_refuses_to_recurse_into_its_own_import_probe(monkeypatch):
         del verbose, on_retry
         calls.append("compile")
         nested_result.append(
-            auto_recompile_c_extension(
+            _recompile(
                 module_name="_fake_ext_reentrant",
                 compiler_module=compiler_name,
                 sys_module_key=sys_key,
@@ -604,7 +610,7 @@ def test_recompile_refuses_to_recurse_into_its_own_import_probe(monkeypatch):
     mod.compile_extension = compile_extension  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, compiler_name, mod)
 
-    result = auto_recompile_c_extension(
+    result = _recompile(
         module_name="_fake_ext_reentrant",
         compiler_module=compiler_name,
         sys_module_key=sys_key,

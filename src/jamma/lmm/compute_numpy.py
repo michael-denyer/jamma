@@ -25,7 +25,9 @@ from typing import TYPE_CHECKING, TypedDict, TypeVar
 
 import numpy as np
 
+from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
 from jamma.core.constants import env_flag
+from jamma.core.recompile import _load_c_module
 from jamma.lmm.likelihood_numpy import (
     _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
@@ -46,87 +48,15 @@ if TYPE_CHECKING:
 _EXPECTED_ABI_VERSION = 12  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
 
+# Load and validate the C accelerator through the one shared seam in
+# jamma.core.recompile. It honours JAMMA_FORCE_NUMPY_FALLBACK (returns None
+# without importing, so ASAN never dlopens the .so), checks ABI_VERSION against
+# _EXPECTED_ABI_VERSION, confirms the fused-kernel core symbols listed in
+# LMM_ACCEL_SPEC.required_attrs are present, and rebuilds a stale .so once
+# before giving up.
+_accel: ModuleType | None = _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION)
 
-# The symbols a valid, ABI-matched build always exports. Their absence means a
-# corrupt build rather than an older one, so it is treated as an import failure.
-# Everything else in methods[] ships with them: the table is unconditional apart
-# from the sanitizer sentinel, so ABI equality is the completeness check.
-_CORE_SYMBOLS = (
-    "create_workspace_fused_c",
-    "compute_lmm_chunk_fused_c",
-    "create_workspace_fused_general_c",
-    "compute_lmm_chunk_fused_general_c",
-)
-
-
-def _try_import_accel() -> ModuleType | None:
-    """Import the C extension and validate its ABI, or return None.
-
-    Honours ``JAMMA_FORCE_NUMPY_FALLBACK`` — when truthy (anything other than
-    "" or "0"), returns None without attempting the .so import. The
-    ASAN/UBSAN sanitizer workflow sets this so ``dlopen`` never runs
-    (RESEARCH §"Pitfall 4": ASAN + dlopen interaction can produce
-    false-positive heap-buffer-overflow reports inside dispatched BLAS calls).
-
-    Returns:
-        The extension module when it is usable, else None.
-    """
-    # Same convention as jamma.jlinalg.__init__ — truthy values
-    # are anything other than "", "0".
-    if env_flag("JAMMA_FORCE_NUMPY_FALLBACK"):
-        return None
-
-    from loguru import logger
-
-    try:
-        import jamma.lmm._lmm_accel as mod
-    except ImportError as e:
-        logger.debug(f"C extension import failed: {e}")
-        return None
-
-    abi = getattr(mod, "ABI_VERSION", None)
-    if abi is None or getattr(mod, "HAS_OPENMP", None) is None:
-        logger.debug("C extension import failed: ABI/core symbols missing")
-        return None
-
-    if abi != _EXPECTED_ABI_VERSION:
-        logger.warning(
-            "C extension ABI mismatch: "
-            f"compiled={abi}, expected={_EXPECTED_ABI_VERSION}. "
-            "Stale .so needs recompilation."
-        )
-        return None
-
-    if any(getattr(mod, name, None) is None for name in _CORE_SYMBOLS):
-        logger.debug("C extension import failed: ABI/core symbols missing")
-        return None
-
-    return mod
-
-
-def _auto_recompile() -> bool:
-    """Auto-recompile the LMM C extension and reimport into sys.modules."""
-    from jamma.core.recompile import auto_recompile_c_extension
-
-    return auto_recompile_c_extension(
-        module_name="_lmm_accel",
-        compiler_module="jamma.lmm._compile_accel",
-        sys_module_key="jamma.lmm._lmm_accel",
-        label="LMM",
-    )
-
-
-_FORCE_NUMPY_FALLBACK = env_flag("JAMMA_FORCE_NUMPY_FALLBACK")
-
-# Auto-recompile and retry once if the C extension is unavailable.
-# When JAMMA_FORCE_NUMPY_FALLBACK is set, skip the retry — auto_recompile would
-# compile the .so and import it into sys.modules, defeating the gate's purpose
-# (RESEARCH §"Pitfall 4": ASAN must never see the .so loaded).
-_accel: ModuleType | None = _try_import_accel()
-if _accel is None and not _FORCE_NUMPY_FALLBACK and _auto_recompile():
-    _accel = _try_import_accel()
-
-if _accel is None and not _FORCE_NUMPY_FALLBACK:
+if _accel is None and not env_flag("JAMMA_FORCE_NUMPY_FALLBACK"):
     from loguru import logger as _logger
 
     _logger.warning(

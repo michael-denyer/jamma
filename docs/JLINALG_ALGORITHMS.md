@@ -233,47 +233,6 @@ matrix via DGEMM.
 
 **Reference:** LAPACK `dormtr.f`, `dorgtr.f`.
 
-## 3. Golub-Kahan SVD (vendor DGESVD)
-
-*jlinalg dispatches SVD to vendor LAPACK (DGESVD) when available, falling back
-to NumPy (`np.linalg.svd`) otherwise.*
-
-The vendor routine implements the full Golub-Kahan bidiagonalization + QR
-iteration algorithm.
-
-For the JAMMA use case (LOCO eigenvalue update), the input is always
-tall-skinny (m >= n). The computation proceeds:
-
-1. **QR factorization** (dgeqrf): Reduces m x n matrix A to n x n upper
-   triangular R via Householder reflectors: A = Q * R.
-
-2. **SVD of R** (Golub-Kahan): The small n x n matrix R is bidiagonalized
-   via Householder reflectors from both sides, then QR iteration with
-   Wilkinson shifts converges on the singular values.
-
-3. **Back-transformation**: U = Q @ U_R where U_R are the left singular
-   vectors of R. This dgemm dominates the cost for tall matrices.
-
-The `compute_uv=False` path skips step 3 and returns only the singular
-values, which is faster when only the spectrum is needed.
-
-**Reference:** Golub & Van Loan (2013), "Matrix Computations", Chapter 8.
-
-### QR Factorization
-
-Vendor LAPACK computes QR via DGEQRF + DORGQR. The factorization computes
-A = Q * R where:
-
-- Q is m x n with orthonormal columns (the "thin" Q)
-- R is n x n upper triangular
-
-Note that R must be extracted from the upper triangle of the DGEQRF output
-BEFORE calling DORGQR, because DORGQR overwrites the Householder vectors
-stored in the lower triangle.
-
-When no vendor LAPACK is available, both QR and SVD fall back to NumPy
-(`np.linalg.qr`, `np.linalg.svd`).
-
 ## References
 
 1. Goto, K. & van de Geijn, R. (2008). "Anatomy of high-performance matrix

@@ -2,7 +2,7 @@
  * jlinalg.h -- Public C API for the JAMMA vendor BLAS/LAPACK dispatch layer.
  *
  * Declares blas_dispatch_init(), vendor-dispatch functions (dgemm_ext,
- * dsyrk_ext, dsyevd_ext, dsyevr_ext, dgeqrf_ext, dorgqr_ext, dgesvd_ext),
+ * dsyrk_ext, dsyevd_ext, dsyevr_ext),
  * eigh driver, SNP statistics, ISA detection, and thread control.
  *
  * The C layer is a thin vendor-dispatch shim; all computation is handled
@@ -20,7 +20,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * structs, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 14
+#define JLINALG_ABI_VERSION 15
 
 /* ---------------------------------------------------------------------------
  * External BLAS dispatch (vendor BLAS / LAPACK discovery)
@@ -134,48 +134,6 @@ typedef void (*jlinalg_dsyevr_ilp64_fn)(
     long long *isuppz, double *work, const long long *lwork,
     long long *iwork, const long long *liwork, long long *info);
 
-/* LAPACK dgeqrf (Fortran): dgeqrf_(m, n, a, lda, tau, work, lwork, info) */
-typedef void (*jlinalg_dgeqrf_lp64_fn)(
-    const int *m, const int *n,
-    double *a, const int *lda,
-    double *tau, double *work, const int *lwork,
-    int *info);
-typedef void (*jlinalg_dgeqrf_ilp64_fn)(
-    const long long *m, const long long *n,
-    double *a, const long long *lda,
-    double *tau, double *work, const long long *lwork,
-    long long *info);
-
-/* LAPACK dorgqr (Fortran): dorgqr_(m, n, k, a, lda, tau, work, lwork, info) */
-typedef void (*jlinalg_dorgqr_lp64_fn)(
-    const int *m, const int *n, const int *k,
-    double *a, const int *lda,
-    const double *tau, double *work, const int *lwork,
-    int *info);
-typedef void (*jlinalg_dorgqr_ilp64_fn)(
-    const long long *m, const long long *n, const long long *k,
-    double *a, const long long *lda,
-    const double *tau, double *work, const long long *lwork,
-    long long *info);
-
-/* LAPACK dgesvd (Fortran): dgesvd_(jobu, jobvt, m, n, a, lda, s, u, ldu, vt, ldvt, work, lwork, info) */
-typedef void (*jlinalg_dgesvd_lp64_fn)(
-    const char *jobu, const char *jobvt,
-    const int *m, const int *n,
-    double *a, const int *lda,
-    double *s, double *u, const int *ldu,
-    double *vt, const int *ldvt,
-    double *work, const int *lwork,
-    int *info);
-typedef void (*jlinalg_dgesvd_ilp64_fn)(
-    const char *jobu, const char *jobvt,
-    const long long *m, const long long *n,
-    double *a, const long long *lda,
-    double *s, double *u, const long long *ldu,
-    double *vt, const long long *ldvt,
-    double *work, const long long *lwork,
-    long long *info);
-
 /* Initialise external BLAS dispatch: discovers system BLAS and pip MKL,
  * then selects the best candidate.
  * Called from jlinalg_init() after ISA detection.
@@ -229,12 +187,6 @@ int blas_has_dsyevr(void);
  * When true, jlinalg_dsyevd_ext uses row-major LAPACKE -- no transpose needed. */
 int blas_has_lapacke_dsyevd(void);
 
-/* Returns 1 if vendor dgeqrf + dorgqr are available, 0 otherwise. */
-int blas_has_dgeqrf(void);
-
-/* Returns 1 if vendor dgesvd is available, 0 otherwise. */
-int blas_has_dgesvd(void);
-
 /* Return codes for vendor-dispatch functions. */
 #define JLINALG_EXT_SUCCESS         0   /* Operation succeeded */
 #define JLINALG_EXT_ALLOC_FAIL     -1   /* Workspace allocation failed */
@@ -263,30 +215,6 @@ int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
 int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
                      double *eigenvalues,
                      double *eigenvectors, npy_intp ldz);
-
-/* Vendor-dispatch QR factorization.
- * A: m x n input (column-major, overwritten). tau: min(m,n) Householder scalars.
- * Returns JLINALG_EXT_SUCCESS, JLINALG_EXT_UNAVAILABLE, or JLINALG_EXT_ALLOC_FAIL. */
-int jlinalg_dgeqrf_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, double *tau);
-
-/* Vendor-dispatch generate Q from Householder vectors (after dgeqrf).
- * A: m x n input/output (column-major). tau: n Householder scalars from dgeqrf.
- * Returns JLINALG_EXT_SUCCESS, JLINALG_EXT_UNAVAILABLE, or JLINALG_EXT_ALLOC_FAIL. */
-int jlinalg_dorgqr_ext(npy_intp m, npy_intp n, double *A_col, npy_intp lda, const double *tau);
-
-/* Vendor-dispatch SVD: A = U * diag(s) * Vt.
- * A_col: m x n column-major input (overwritten).
- * s: min(m,n) singular values (descending).
- * U_col: m x min(m,n) column-major output (NULL if compute_uv=0).
- * Vt_col: min(m,n) x n column-major output (NULL if compute_uv=0).
- * compute_uv: 1 = compute U and Vt, 0 = singular values only.
- * Returns JLINALG_EXT_SUCCESS, JLINALG_EXT_UNAVAILABLE, JLINALG_EXT_ALLOC_FAIL, or positive info. */
-int jlinalg_dgesvd_ext(npy_intp m, npy_intp n,
-                       double *A_col, npy_intp lda,
-                       double *s,
-                       double *U_col, npy_intp ldu,
-                       double *Vt_col, npy_intp ldvt,
-                       int compute_uv);
 
 /* ---------------------------------------------------------------------------
  * Full-signature vendor dgemm dispatch

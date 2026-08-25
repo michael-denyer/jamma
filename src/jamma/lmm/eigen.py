@@ -19,15 +19,16 @@ from loguru import logger
 from threadpoolctl import threadpool_info
 
 from jamma import jlinalg
-from jamma.core.memory import (
+from jamma.core.eigen_plan import (
     _memory_margin_gb,
-    check_memory_available,
     forced_numpy_fallback,
-    log_memory_snapshot,
     plan_eigen_driver,
+    square_matrix_gb,
 )
+from jamma.core.memory import check_memory_available
+from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import timed_progress
-from jamma.core.threading import blas_threads, get_physical_core_count
+from jamma.core.threading import blas_threads, get_blas_thread_count
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
@@ -119,7 +120,8 @@ def eigendecompose_kinship(
 
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
-        f"Matrix elements: {n_elements:,}, memory: ~{n_elements * 8 / 1e9:.1f} GB"
+        f"Matrix elements: {n_elements:,}, "
+        f"memory: ~{square_matrix_gb(n_samples):.1f} GB"
     )
 
     # Memory pre-flight
@@ -223,14 +225,13 @@ def eigendecompose_kinship(
     if check_memory:
         check_memory_available(
             required_gb,
-            safety_margin=0.1,
             operation=(
                 f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix"
             ),
         )
 
     # Use all physical cores for BLAS
-    n_threads = get_physical_core_count()
+    n_threads = get_blas_thread_count()
     blas_libs = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
     if blas_libs:
         active = jlinalg.blas_backend or "numpy-fallback"

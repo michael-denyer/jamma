@@ -17,11 +17,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma import pipeline_memory
 from jamma.core.memory import MemoryBreakdown
 from jamma.lmm.runner import ExecutionPlan
 from jamma.pipeline import PipelineConfig, PipelineRunner
-from jamma.pipeline_memory import check_streaming_memory, memory_preflight
+from jamma.pipeline_memory import memory_preflight
 
 
 def _make_runner(tmp_path: Path, **overrides) -> PipelineRunner:  # type: ignore[no-untyped-def]
@@ -57,46 +56,55 @@ def _memory_breakdown(
 
 @pytest.mark.tier0
 class TestMemoryPreflightStreaming:
-    """Streaming mode delegates to check_streaming_memory."""
+    """Streaming mode builds and returns one MemoryPlan."""
 
-    def test_delegates_with_n_cvt(
+    def test_returns_streaming_plan(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """The returned plan carries the chunk the engine will size and the
+        driver-aware eigendecomposition figure."""
+        from jamma.core import memory
+
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
         runner = _make_runner(tmp_path, check_memory=True)
-        calls: list[tuple[int, int, int]] = []
-
-        def fake_check(config, n_valid: int, n_snps: int, *, n_cvt: int = 1) -> None:
-            calls.append((n_valid, n_snps, n_cvt))
-
-        monkeypatch.setattr(pipeline_memory, "check_streaming_memory", fake_check)
         plan = ExecutionPlan(mode="streaming", reason="test")
 
-        memory_preflight(runner.config, plan, n_valid=1000, n_snps=50_000, n_cvt=3)
+        mem_plan = memory_preflight(
+            runner.config, plan, n_valid=1000, n_snps=50_000, n_cvt=3
+        )
 
-        assert calls == [(1000, 50_000, 3)]
+        assert mem_plan is not None
+        assert mem_plan.mode == "streaming"
+        assert mem_plan.disk_chunk_size == 10_000
+        assert mem_plan.compute_chunk_size is not None
+        assert mem_plan.compute_chunk_size >= 100
+        assert mem_plan.eigen is not None
+        assert mem_plan.eigen.required_gb > 0
+        assert mem_plan.sufficient
 
     def test_streaming_check_memory_false_logs_skip(self, tmp_path: Path) -> None:
         """Streaming path with check_memory=False must log the skip with the
-        ``(streaming)`` label so the log stream shows why no preflight ran.
+        runner label so the log stream shows why no preflight ran.
         Paired with the batch counterpart in TestMemoryPreflightBatch.
         """
         from loguru import logger
 
         runner = _make_runner(tmp_path, check_memory=False)
+        plan = ExecutionPlan(mode="streaming", reason="test")
 
         records: list[str] = []
         handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
         try:
-            result = check_streaming_memory(
-                runner.config, n_samples=1000, n_snps=50_000, n_cvt=3
+            result = memory_preflight(
+                runner.config, plan, n_valid=1000, n_snps=50_000, n_cvt=3
             )
         finally:
             logger.remove(handler_id)
 
         assert result is None
-        assert any("Memory preflight skipped (streaming)" in r for r in records), (
-            f"streaming skip must log the streaming label; got {records!r}"
-        )
+        assert any(
+            "Memory preflight skipped (numpy-streaming)" in r for r in records
+        ), f"streaming skip must log the runner label; got {records!r}"
 
 
 @pytest.mark.tier0

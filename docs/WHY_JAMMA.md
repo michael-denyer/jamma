@@ -217,21 +217,21 @@ The goal is a **drop-in replacement**: same CLI, same output format, same scient
 
 ```python
 # RSS logging at workflow boundaries
-from jamma.utils.logging import log_rss_memory
+from jamma.core.memory_snapshot import log_memory_snapshot
 
-log_rss_memory("kinship", "before")  # Logs current RSS in GB
+log_memory_snapshot("kinship:before")  # Logs RSS + free RAM
 kinship = compute_centered_kinship(genotypes)
-log_rss_memory("kinship", "after")
+log_memory_snapshot("kinship:after")
 ```
 
 ### Memory Estimation API
 
 ```python
-from jamma.core.memory import estimate_workflow_memory
+from jamma.core.memory import estimate_streaming_memory
 
 # Before starting a big job
-estimate = estimate_workflow_memory(n_samples=200_000, n_snps=95_000)
-print(f"Peak: {estimate.total_gb:.1f}GB")
+estimate = estimate_streaming_memory(n_samples=200_000)
+print(f"Peak: {estimate.total_peak_gb:.1f}GB")
 print(f"Available: {estimate.available_gb:.1f}GB")
 print(f"Will fit: {estimate.sufficient}")
 ```

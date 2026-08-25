@@ -1,6 +1,6 @@
 """Tests for memory gate OOM prevention in PipelineRunner and check_memory_available.
 
-Covers ERRP-05: memory gate code paths in both pipeline_memory.check_streaming_memory
+Covers ERRP-05: memory gate code paths in both pipeline_memory.memory_preflight
 and check_memory_available are tested using mock psutil to simulate low-memory
 conditions without requiring actual large allocations.
 """
@@ -8,15 +8,16 @@ conditions without requiring actual large allocations.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from jamma.core.memory import StreamingMemoryBreakdown, check_memory_available
+from jamma.core.memory import check_memory_available
+from jamma.lmm.runner import ExecutionPlan
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
-from jamma.pipeline_memory import check_streaming_memory
+from jamma.pipeline_memory import memory_preflight
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
@@ -29,81 +30,99 @@ class TestMemoryGates:
     def test_budget_exceeded_raises(self):
         """Budget-exceeded path: 1 MB budget raises MemoryError with 'exceeds' message.
 
-        check_streaming_memory raises MemoryError when
-        est.total_peak_gb > config.mem_budget.
+        memory_preflight raises MemoryError when
+        the plan's peak exceeds config.mem_budget.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=True, mem_budget=0.001)
         runner = PipelineRunner(config)
 
         with pytest.raises(MemoryError, match="exceeds"):
-            check_streaming_memory(runner.config, n_samples=100, n_snps=500)
+            memory_preflight(
+                runner.config,
+                ExecutionPlan(mode="streaming", reason="test"),
+                n_valid=100,
+                n_snps=500,
+                n_cvt=1,
+            )
 
     @patch("jamma.core.memory._check_available", return_value=(0.001, False))
     def test_insufficient_system_memory_raises(self, mock_check):
         """Insufficient system memory raises MemoryError with 'Insufficient' message.
 
         Mocks _check_available to return (0.001 GB, False), simulating a system
-        with nearly no available memory. check_streaming_memory must raise when
-        est.sufficient is False.
+        with nearly no available memory. memory_preflight must raise when
+        the plan reports sufficient=False.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=True)
         runner = PipelineRunner(config)
 
         with pytest.raises(MemoryError, match="Insufficient"):
-            check_streaming_memory(runner.config, n_samples=100, n_snps=500)
+            memory_preflight(
+                runner.config,
+                ExecutionPlan(mode="streaming", reason="test"),
+                n_valid=100,
+                n_snps=500,
+                n_cvt=1,
+            )
 
     @patch("jamma.core.memory._check_available", return_value=(1000.0, True))
     def test_memory_check_passes_when_sufficient(self, mock_check):
         """Sufficient memory (1 TB available) returns StreamingMemoryBreakdown.
 
         Mocks _check_available to return (1000.0 GB, True), simulating ample
-        memory. check_streaming_memory must return the breakdown, not raise.
+        memory. memory_preflight must return the plan, not raise.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=True)
         runner = PipelineRunner(config)
 
-        result = check_streaming_memory(runner.config, n_samples=100, n_snps=500)
+        result = memory_preflight(
+            runner.config,
+            ExecutionPlan(mode="streaming", reason="test"),
+            n_valid=100,
+            n_snps=500,
+            n_cvt=1,
+        )
 
         assert result is not None
-        assert isinstance(result, StreamingMemoryBreakdown)
+        assert result.mode == "streaming"
         assert result.sufficient is True
 
     def test_memory_check_disabled_returns_none(self):
         """check_memory=False returns None without performing any memory check.
 
-        When check_memory is disabled, check_streaming_memory must return
+        When check_memory is disabled, memory_preflight must return
         None immediately, even with a tiny (realistic) dataset.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=False)
         runner = PipelineRunner(config)
 
-        result = check_streaming_memory(runner.config, n_samples=100, n_snps=500)
+        result = memory_preflight(
+            runner.config,
+            ExecutionPlan(mode="streaming", reason="test"),
+            n_valid=100,
+            n_snps=500,
+            n_cvt=1,
+        )
 
         assert result is None
 
     def test_check_memory_available_raises_on_insufficient(self):
         """check_memory_available raises MemoryError when psutil reports 1 MB available.
 
-        Patches psutil.virtual_memory at the import site used by jamma.core.memory
-        to return 1 MB available. Requesting 100 GB must raise MemoryError.
+        Pins the machine at 1 MB available through the available_ram_gb seam.
+        Requesting 100 GB must raise MemoryError.
         """
-        mock_vmem = MagicMock()
-        mock_vmem.available = 1_000_000  # 1 MB in bytes
-
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+        with patch("jamma.core.memory.available_ram_gb", return_value=0.001):
             with pytest.raises(MemoryError, match="Insufficient memory"):
                 check_memory_available(required_gb=100.0, operation="test")
 
     def test_check_memory_available_passes_when_sufficient(self):
         """check_memory_available returns True when psutil reports 1 TB available.
 
-        Patches psutil.virtual_memory to return 1 TB available. Requesting
-        1 GB must succeed without raising.
+        Pins the machine at 1 TB available through the available_ram_gb seam.
+        Requesting 1 GB must succeed without raising.
         """
-        mock_vmem = MagicMock()
-        mock_vmem.available = 1_000_000_000_000  # 1 TB in bytes
-
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+        with patch("jamma.core.memory.available_ram_gb", return_value=1000.0):
             result = check_memory_available(required_gb=1.0)
 
         assert result is True
@@ -305,20 +324,14 @@ class TestKinshipOnlyPreflight:
             "test fixture no longer straddles the two budgets"
         )
 
-        mock_vmem = MagicMock()
-        mock_vmem.available = 40 * 10**9
-
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+        with patch("jamma.core.memory.available_ram_gb", return_value=40.0):
             _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
 
     def test_kinship_only_run_still_blocked_when_kinship_does_not_fit(self):
         """The gate still refuses when the kinship phase itself will not fit."""
         from jamma.kinship.compute import _preflight_kinship_memory
 
-        mock_vmem = MagicMock()
-        mock_vmem.available = 1 * 10**9  # 1 GB
-
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+        with patch("jamma.core.memory.available_ram_gb", return_value=1.0):
             with pytest.raises(MemoryError, match="Insufficient memory"):
                 _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
 

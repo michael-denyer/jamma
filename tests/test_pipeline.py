@@ -11,7 +11,7 @@ import pytest
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.schema import MIN_N_GRID
 from jamma.pipeline import PipelineConfig, PipelineRunner
-from jamma.pipeline_memory import check_streaming_memory
+from jamma.pipeline_memory import memory_preflight
 
 # Fixture paths for gemma_synthetic dataset
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
@@ -160,30 +160,45 @@ class TestParsePhenotypes:
 
 @pytest.mark.tier1
 class TestCheckMemory:
-    """Tests for pipeline_memory.check_streaming_memory."""
+    """Tests for pipeline_memory.memory_preflight."""
 
     def test_returns_none_when_disabled(self) -> None:
-        """check_streaming_memory returns None when check_memory=False."""
+        """memory_preflight returns None when check_memory=False."""
+        from jamma.lmm.runner import ExecutionPlan
+
         config = PipelineConfig(
             bfile=BFILE,
             check_memory=False,
         )
         runner = PipelineRunner(config)
-        result = check_streaming_memory(runner.config, 100, 500)
+        result = memory_preflight(
+            runner.config,
+            ExecutionPlan(mode="streaming", reason="test"),
+            n_valid=100,
+            n_snps=500,
+            n_cvt=1,
+        )
         assert result is None
 
-    def test_returns_breakdown_when_enabled(self) -> None:
-        """check_streaming_memory returns StreamingMemoryBreakdown."""
-        from jamma.core.memory import StreamingMemoryBreakdown
+    def test_returns_plan_when_enabled(self) -> None:
+        """memory_preflight returns a MemoryPlan for the streaming mode."""
+        from jamma.lmm.runner import ExecutionPlan
+        from jamma.pipeline_memory import MemoryPlan
 
         config = PipelineConfig(
             bfile=BFILE,
             check_memory=True,
         )
         runner = PipelineRunner(config)
-        result = check_streaming_memory(runner.config, 100, 500)
+        result = memory_preflight(
+            runner.config,
+            ExecutionPlan(mode="streaming", reason="test"),
+            n_valid=100,
+            n_snps=500,
+            n_cvt=1,
+        )
 
-        assert isinstance(result, StreamingMemoryBreakdown)
+        assert isinstance(result, MemoryPlan)
         assert result.total_peak_gb >= 0
         assert result.available_gb >= 0
 

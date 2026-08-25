@@ -19,6 +19,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.memory import estimate_lmm_memory
+from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.snp_filter import _SNP_STATS_CHUNK_SIZE
 from jamma.core.snp_stats import (
     SnpFilterSpec,
@@ -43,7 +44,6 @@ from jamma.lmm.schema import (
 )
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.stats import AssocResult
-from jamma.utils.logging import log_rss_memory
 
 
 class GenotypeSource(Protocol):
@@ -336,7 +336,7 @@ def _run_numpy_lmm(
         )
 
         if show_progress:
-            log_rss_memory(label, "after_association")
+            log_memory_snapshot(f"{label}:after_association")
 
             elapsed = time.perf_counter() - start_time
             t_stats = t_stats_end - t_stats_start

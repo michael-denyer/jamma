@@ -137,8 +137,10 @@ class TestEigendecompThreading:
         Regression test for a bug where eigendecomp ran with a reduced thread
         count on Databricks (2 threads instead of 48).
         """
-        # Mock get_physical_core_count to report 48 physical cores
-        monkeypatch.setattr("jamma.lmm.eigen.get_physical_core_count", lambda: 48)
+        # Mock the thread-count source to report 48 (physical cores, no env
+        # override) — eigen reads it through get_blas_thread_count so the
+        # documented JAMMA_BLAS_THREADS knob also reaches this path.
+        monkeypatch.setattr("jamma.lmm.eigen.get_blas_thread_count", lambda: 48)
         # Force vendor path so blas_threads is actually called
         monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevd", 1)
         monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevr", 0)
@@ -209,3 +211,49 @@ class TestEigendecompThreading:
         assert captured_threads[0] == 64, (
             f"Should fall back to os.cpu_count()=64, got {captured_threads[0]}"
         )
+
+
+@pytest.mark.tier0
+class TestBlasThreadsKnobReachesRotation:
+    """JAMMA_BLAS_THREADS must govern the rotation's thread context.
+
+    Regression for the documented-but-ignored knob: eigen and the shared
+    preparation called blas_threads(get_physical_core_count()) directly,
+    so the env override never reached the paths users benchmark with it.
+    """
+
+    def test_prepare_rotation_uses_env_thread_count(self, monkeypatch):
+        import numpy as np
+
+        from jamma.lmm import prepare_common
+
+        monkeypatch.setenv("JAMMA_BLAS_THREADS", "2")
+        seen: list[int] = []
+        real = prepare_common.blas_threads
+
+        def spy(n: int):
+            seen.append(n)
+            return real(n)
+
+        monkeypatch.setattr(prepare_common, "blas_threads", spy)
+
+        rng = np.random.default_rng(7)
+        n = 30
+        x = rng.standard_normal((n, n))
+        kinship = np.ascontiguousarray(x @ x.T / n)
+        prepare_common.prepare_lmm_run(
+            kinship=kinship,
+            eigenvalues=None,
+            eigenvectors=None,
+            phenotypes=rng.standard_normal(n),
+            W=np.ones((n, 1)),
+            n_cvt=1,
+            lmm_mode=1,
+            l_min=1e-5,
+            l_max=1e5,
+            show_progress=False,
+            check_memory=False,
+            label="test",
+        )
+
+        assert seen == [2], f"rotation must run under JAMMA_BLAS_THREADS=2, saw {seen}"

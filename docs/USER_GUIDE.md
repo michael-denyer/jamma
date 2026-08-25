@@ -871,11 +871,12 @@ jamma -lmm 1 ... --no-check-memory
 ### Programmatic Memory Estimation
 
 ```python
-from jamma.core.memory import estimate_workflow_memory, estimate_lmm_memory
+from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
 
-# Full pipeline estimate (before starting anything)
-full = estimate_workflow_memory(n_samples=200_000, n_snps=95_000)
-print(f"Full pipeline peak: {full.total_gb:.1f}GB")
+# Full pipeline estimate (before starting anything; streaming is the
+# production path, so genotypes are counted per chunk, not in full)
+full = estimate_streaming_memory(n_samples=200_000)
+print(f"Full pipeline peak: {full.total_peak_gb:.1f}GB")
 print(f"Eigendecomp workspace: {full.eigendecomp_workspace_gb:.1f}GB")
 print(f"Available: {full.available_gb:.1f}GB")
 print(f"Sufficient: {full.sufficient}")

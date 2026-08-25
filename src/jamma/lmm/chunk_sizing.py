@@ -7,8 +7,7 @@ few DRAM passes over the eigenvector matrix as possible. Split out from
 
 from __future__ import annotations
 
-import psutil
-
+from jamma.core import memory
 from jamma.lmm.dispatch import DispatchPath
 
 # Allow large chunks — no int32 buffer constraint.
@@ -38,8 +37,31 @@ def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
         n_var = len(classify_uab_columns(n_cvt)[1])
         return n_samples * (n_var + 1) * 8
 
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-    return n_samples * n_index * 8
+    from jamma.lmm.likelihood import n_index
+
+    return n_samples * n_index(n_cvt) * 8
+
+
+def lmm_extra_bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
+    """Per-SNP bytes live in the LMM phase beyond the UtG rotation buffers.
+
+    The preflight prices the association phase as rotation buffers plus this
+    figure, so its estimate follows the same dispatch knowledge the sizer
+    uses. Fused paths hold no per-SNP batch arrays (the C workspace forms
+    Uab on the fly); SOA_SPLIT holds the varying Uab columns; the NumPy
+    fallback materialises the full Uab and Iab batches.
+    """
+    if dispatch.feeds_raw_utg:
+        return 0
+    if dispatch is DispatchPath.SOA_SPLIT:
+        from jamma.lmm.likelihood import classify_uab_columns
+
+        n_var = len(classify_uab_columns(n_cvt)[1])
+        return n_samples * n_var * 8
+    from jamma.lmm.likelihood import n_index
+
+    # NUMPY_FALLBACK: Uab batch plus the small Iab batch
+    return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8
 
 
 def compute_chunk_size_numpy(
@@ -84,7 +106,7 @@ def compute_chunk_size_numpy(
     if mem_budget_bytes is not None:
         mem_budget = mem_budget_bytes
     else:
-        available = psutil.virtual_memory().available
+        available = int(memory.available_ram_gb() * 1e9)
         # Budget: 15% of available RAM (up from 5%), 2 GB floor, 40 GB ceiling.
         # Modern machines (128-512 GB) can afford larger working sets. The floor
         # prevents degenerate chunk sizes on low-memory systems; the ceiling

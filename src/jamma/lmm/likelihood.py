@@ -73,6 +73,15 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
 
 
 @functools.lru_cache(maxsize=8)
+def n_index(n_cvt: int) -> int:
+    """Total (a,b) pairs in Uab/Pab storage: (n_cvt+3)*(n_cvt+2)//2.
+
+    The one spelling of the formula; sizing code and kernels import it
+    rather than re-deriving it.
+    """
+    return (n_cvt + 3) * (n_cvt + 2) // 2
+
+
 def build_index_table(n_cvt: int) -> dict:
     """Precompute all index mappings for a given n_cvt.
 
@@ -97,8 +106,6 @@ def build_index_table(n_cvt: int) -> dict:
         - pab_recursion: per-level recursion tuples for Pab
         - logdet_diag_indices: (row, col) pairs for logdet_hiw diagonal
     """
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-
     idx_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
     idx_xx = get_ab_index(n_cvt + 1, n_cvt + 1, n_cvt)
     idx_xy = get_ab_index(n_cvt + 2, n_cvt + 1, n_cvt)
@@ -134,7 +141,7 @@ def build_index_table(n_cvt: int) -> dict:
         logdet_diag_indices.append((i, col))
 
     return {
-        "n_index": n_index,
+        "n_index": n_index(n_cvt),
         "idx_yy": idx_yy,
         "idx_xx": idx_xx,
         "idx_xy": idx_xy,
@@ -239,8 +246,7 @@ def _compute_Uab_general(
     Uses pre-computed index mapping to avoid repeated get_ab_index calls.
     """
     n = len(Uty)
-    n_index = (n_cvt + 2 + 1) * (n_cvt + 2) // 2
-    Uab = np.zeros((n, n_index), dtype=np.float64)
+    Uab = np.zeros((n, n_index(n_cvt)), dtype=np.float64)
 
     # Build combined vector matrix: [W1, W2, ..., W_ncvt, X, Y]
     # where X is genotype (placeholder if None) and Y is phenotype
@@ -296,8 +302,7 @@ def calc_pab(
     Returns:
         Pab matrix (n_cvt+2, n_index)
     """
-    n_index = (n_cvt + 2 + 1) * (n_cvt + 2) // 2
-    Pab = np.zeros((n_cvt + 2, n_index), dtype=np.float64)
+    Pab = np.zeros((n_cvt + 2, n_index(n_cvt)), dtype=np.float64)
 
     # Row 0: Vectorized weighted dot products
     Pab[0, :] = Hi_eval @ Uab
@@ -347,8 +352,7 @@ def calc_ppab(
     Returns:
         PPab matrix (n_cvt+2, n_index).
     """
-    n_index = (n_cvt + 2 + 1) * (n_cvt + 2) // 2
-    PPab = np.zeros((n_cvt + 2, n_index), dtype=np.float64)
+    PPab = np.zeros((n_cvt + 2, n_index(n_cvt)), dtype=np.float64)
 
     # Row 0: weighted dot products with HiHi_eval
     PPab[0, :] = HiHi_eval @ Uab
@@ -406,8 +410,7 @@ def calc_pppab(
     Returns:
         PPPab matrix (n_cvt+2, n_index).
     """
-    n_index = (n_cvt + 2 + 1) * (n_cvt + 2) // 2
-    PPPab = np.zeros((n_cvt + 2, n_index), dtype=np.float64)
+    PPPab = np.zeros((n_cvt + 2, n_index(n_cvt)), dtype=np.float64)
 
     # Row 0: weighted dot products with HiHiHi_eval
     PPPab[0, :] = HiHiHi_eval @ Uab

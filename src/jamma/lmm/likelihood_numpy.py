@@ -681,7 +681,9 @@ def reconstruct_uab_from_soa(
     from jamma.lmm.likelihood import classify_uab_columns
 
     inv_indices, var_indices = classify_uab_columns(n_cvt)
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2  # total Uab columns
+    from jamma.lmm.likelihood import n_index as _n_index
+
+    n_index = _n_index(n_cvt)  # total Uab columns
     Uab = np.empty((n_snps, n_samples, n_index), dtype=np.float64)
 
     # Place invariant columns (broadcast across all SNPs)

@@ -10,7 +10,6 @@ from jamma.core import (
     MemorySnapshot,
     check_memory_available,
     cleanup_memory,
-    estimate_workflow_memory,
     get_memory_snapshot,
     log_memory_snapshot,
 )
@@ -22,93 +21,6 @@ from jamma.core.memory import (
 
 
 @pytest.mark.tier0
-class TestMemoryEstimation:
-    """Tests for estimate_workflow_memory function."""
-
-    def test_memory_breakdown_200k(self):
-        """Memory estimate for 200k samples - peak during eigendecomp ~1280GB."""
-        est = estimate_workflow_memory(200_000, 95_000)
-
-        # Kinship: 200k^2 * 8 / 1e9 = 320GB
-        assert 319 < est.kinship_gb < 321, (
-            f"Expected ~320GB kinship, got {est.kinship_gb}"
-        )
-
-        # Genotypes: 200k * 95k * 8 / 1e9 = 152GB (float64)
-        assert 151 < est.genotypes_gb < 153, (
-            f"Expected ~152GB genotypes (float64), got {est.genotypes_gb}"
-        )
-
-        # Eigenvectors: same as kinship = 320GB (used in LMM phase)
-        assert 319 < est.eigenvectors_gb < 321
-
-        # Eigendecomp workspace: always DSYEVD O(n^2) ~640GB at 200k
-        assert est.eigendecomp_workspace_gb > 600, (
-            f"DSYEVD workspace should be ~640GB at 200k, "
-            f"got {est.eigendecomp_workspace_gb:.2f}GB"
-        )
-        # Peak: K + U + DSYEVD workspace = 320+320+640 = ~1280GB
-        assert 1270 < est.total_gb < 1290, (
-            f"Expected ~1280GB (K+U+workspace), got {est.total_gb}"
-        )
-
-    def test_memory_breakdown_10k(self):
-        """Memory estimate for 10k samples should be reasonable."""
-        est = estimate_workflow_memory(10_000, 100_000)
-
-        # Total includes float64 genotypes (8GB) + Uab/Iab intermediates
-        # LMM phase peak: eigenvectors(0.8) + genotypes(8) + batch+Uab/Iab(~11) ≈ 20GB
-        assert est.total_gb < 25, f"10k scale should need <25GB, got {est.total_gb}"
-
-    def test_memory_breakdown_has_all_fields(self):
-        """MemoryBreakdown should have all expected fields."""
-        est = estimate_workflow_memory(1_000, 1_000)
-
-        assert isinstance(est, MemoryBreakdown)
-        assert isinstance(est.kinship_gb, float)
-        assert isinstance(est.genotypes_gb, float)
-        assert isinstance(est.eigenvectors_gb, float)
-        assert isinstance(est.eigendecomp_workspace_gb, float)
-        assert isinstance(est.lmm_rotated_gb, float)
-        assert isinstance(est.lmm_batch_gb, float)
-        assert isinstance(est.total_gb, float)
-        assert isinstance(est.available_gb, float)
-        assert isinstance(est.sufficient, bool)
-
-    def test_peak_kinship_accounts_for_genotype_copy(self):
-        """Phase 1 (kinship) accounts for numpy genotype copy during accumulation.
-
-        During kinship accumulation, the numpy input and working copy
-        coexist. The estimate must use genotypes_gb * 2, not genotypes_gb.
-        """
-        # Choose dimensions where kinship phase is large relative to eigendecomp
-        est = estimate_workflow_memory(1_000, 500_000)
-
-        genotypes_gb = 1_000 * 500_000 * 8 / 1e9  # 4.0 GB
-        kinship_gb = 1_000**2 * 8 / 1e9  # 0.008 GB
-        # peak_kinship = genotypes * 2 + kinship
-        expected_peak_kinship = genotypes_gb * 2 + kinship_gb
-
-        assert est.total_gb >= expected_peak_kinship, (
-            f"total_gb ({est.total_gb:.4f}) should be >= peak_kinship "
-            f"({expected_peak_kinship:.4f}) which includes working copy"
-        )
-
-    def test_sufficient_flag_correct(self):
-        """Sufficient flag should reflect available vs required."""
-        # Tiny estimate should always be sufficient
-        est = estimate_workflow_memory(100, 100)
-        assert est.sufficient is True
-
-        # 200k estimate will not be sufficient on most machines (needs ~640GB)
-        est = estimate_workflow_memory(200_000, 95_000)
-        # Don't check exact match - just verify it's False for this huge estimate
-        # (would need 640GB+ which no typical machine has)
-        assert est.sufficient is False, (
-            "200k sample workflow should exceed available memory"
-        )
-
-
 @pytest.mark.tier0
 class TestCheckMemoryAvailable:
     """Tests for check_memory_available function."""
@@ -266,21 +178,6 @@ class TestCleanupMemory:
 class TestLmmMemoryEstimation:
     """Tests for estimate_lmm_memory function (LMM-phase only)."""
 
-    def test_lmm_estimate_at_most_workflow(self):
-        """LMM-only estimate should be <= full workflow estimate.
-
-        With DSYEVR, eigendecomp workspace is tiny so LMM phase dominates
-        the workflow total — LMM-only equals full pipeline. With DSYEVD,
-        eigendecomp dominates so LMM-only is strictly less.
-        """
-        lmm_est = estimate_lmm_memory(100_000, 10_000)
-        full_est = estimate_workflow_memory(100_000, 10_000)
-
-        assert lmm_est.total_gb <= full_est.total_gb, (
-            f"LMM-only ({lmm_est.total_gb:.1f}GB) should be <= "
-            f"full pipeline ({full_est.total_gb:.1f}GB)"
-        )
-
     def test_lmm_estimate_excludes_kinship(self):
         """LMM estimate should not include kinship memory."""
         est = estimate_lmm_memory(100_000, 10_000)
@@ -379,49 +276,10 @@ class TestMemoryEstimateVsActualAllocation:
             f"UtG-only ({utg_only_gb:.4f}GB) because Uab/Iab must be included"
         )
 
-    def test_streaming_lmm_estimate_covers_uab_iab(self):
-        """Streaming LMM estimate must include eigenvectors + per-chunk buffers."""
-        from jamma.core.memory import estimate_lmm_streaming_memory
-
-        n_samples = 10_000
-        chunk_size = 5_000
-
-        est = estimate_lmm_streaming_memory(n_samples, 95_000, chunk_size=chunk_size)
-
-        # Minimum must include eigenvectors + per-chunk intermediate buffers.
-        # Estimators always use standard (non-fused) estimate since they don't
-        # know the backend or lmm_mode.
-        uab_iab_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt=1, use_fused=False)
-        eigenvectors_gb = n_samples**2 * 8 / 1e9
-
-        assert est.total_peak_gb >= eigenvectors_gb + uab_iab_gb, (
-            f"total_peak_gb ({est.total_peak_gb:.4f}GB) should be >= "
-            f"eigenvectors ({eigenvectors_gb:.4f}GB) + "
-            f"per-chunk ({uab_iab_gb:.4f}GB)"
-        )
-
 
 @pytest.mark.tier0
 class TestKinshipDtypeAccounting:
     """Verify memory model accounts for float64 genotype copy in kinship."""
-
-    def test_workflow_genotypes_gb_is_float64(self):
-        """estimate_workflow_memory must use float64 (8 bytes) for genotypes.
-
-        compute_centered_kinship converts genotypes to float64 via
-        np.array(genotypes_filtered, dtype=np.float64).
-        """
-        n_samples = 10_000
-        n_snps = 50_000
-
-        est = estimate_workflow_memory(n_samples, n_snps)
-
-        # float64: n_samples * n_snps * 8 bytes
-        expected_gb = n_samples * n_snps * 8 / 1e9
-        assert abs(est.genotypes_gb - expected_gb) < 1e-9, (
-            f"genotypes_gb ({est.genotypes_gb:.4f}GB) should be float64 "
-            f"({expected_gb:.4f}GB), not float32 ({expected_gb / 2:.4f}GB)"
-        )
 
     def test_lmm_genotypes_gb_is_float64(self):
         """estimate_lmm_memory must use float64 for genotypes."""
@@ -528,30 +386,6 @@ class TestGateCorrectnessLmmMemory:
 @pytest.mark.tier0
 class TestGateCorrectnessRunnerStreaming:
     """Tests that streaming runner memory gate correctly blocks/passes."""
-
-    def test_streaming_gate_passes_with_ample_memory(self):
-        """Memory check should pass when plenty of memory is available."""
-
-        from jamma.core.memory import estimate_lmm_streaming_memory
-
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
-            mock_obj = mock_mem.return_value
-            mock_obj.available = 500 * 1e9
-
-            est = estimate_lmm_streaming_memory(1_000, 10_000)
-            assert est.sufficient is True
-
-    def test_streaming_gate_blocks_with_scarce_memory(self):
-        """Memory check should fail when memory is insufficient."""
-
-        from jamma.core.memory import estimate_lmm_streaming_memory
-
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
-            mock_obj = mock_mem.return_value
-            mock_obj.available = 1 * 1e9
-
-            est = estimate_lmm_streaming_memory(100_000, 95_000)
-            assert est.sufficient is False
 
 
 @pytest.mark.tier0

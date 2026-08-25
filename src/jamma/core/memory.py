@@ -24,9 +24,9 @@ def forced_numpy_fallback() -> bool:
     ``eigendecompose_kinship``.
 
     Shared by the runtime path (``eigendecompose_kinship``) and the pre-flight
-    estimator (``check_memory_before_run``) so both agree on whether vendor
-    LAPACK is bypassed — otherwise a forced-numpy run could pass pre-flight on a
-    smaller vendor estimate and then OOM.
+    estimators so both agree on whether vendor LAPACK is bypassed — otherwise a
+    forced-numpy run could pass pre-flight on a smaller vendor estimate and
+    then OOM.
     """
     return env_flag("JLINALG_NO_VENDOR_LAPACK")
 
@@ -120,11 +120,10 @@ class EigenDriverPlan(NamedTuple):
     """Chosen eigendecomposition driver and its peak-memory estimate.
 
     Single source of truth for the DSYEVD-inplace -> DSYEVD -> DSYEVR -> numpy
-    driver decision. Both the runtime path (``eigendecompose_kinship``) and the
-    pre-flight estimator (``check_memory_before_run``) build a plan from the same
-    ``plan_eigen_driver`` logic, so the *selection logic* cannot drift between
-    them. The chosen driver can still differ per caller when they pass different
-    ``inplace_eligible`` inputs (pre-flight assumes True; see that parameter).
+    driver decision. The runtime path (``eigendecompose_kinship``) builds its
+    plan here, so a pre-flight caller using the same function cannot drift from
+    it. The chosen driver can still differ per caller when they pass different
+    ``inplace_eligible`` inputs.
 
     Attributes:
         driver: Chosen driver name (one of the four ``Literal`` values).
@@ -252,8 +251,7 @@ class MemoryBreakdown(NamedTuple):
     and LMM phase since they don't overlap.
 
     Note: Streaming is the sole execution path in production. Prefer
-    StreamingMemoryBreakdown for runtime estimates. This class is retained
-    for backward compatibility and direct callers of estimate_workflow_memory.
+    StreamingMemoryBreakdown for runtime estimates.
     """
 
     kinship_gb: float  # n^2 * 8 bytes (float64)
@@ -301,99 +299,6 @@ def _uab_iab_gb(
     return (uab_bytes + iab_bytes) / 1e9
 
 
-def estimate_workflow_memory(
-    n_samples: int,
-    n_snps: int,
-    lmm_batch_size: int = 20_000,
-    n_cvt: int = 1,
-) -> MemoryBreakdown:
-    """Estimate memory requirements for full GWAS workflow (full-materialization).
-
-    Calculates memory for kinship computation, eigendecomposition, and LMM
-    association testing assuming genotypes are fully loaded into memory.
-    Returns the peak memory requirement.
-
-    Note: This estimate assumes full genotype materialization. In the streaming
-    architecture (the sole production path), genotypes are loaded as chunks and
-    never fully materialized — see estimate_streaming_memory() for accurate
-    runtime estimates. check_memory_before_run() uses estimate_streaming_memory
-    with the actual chunk size from _compute_chunk_size().
-
-    This function remains useful for direct callers who pass an explicit
-    lmm_batch_size and want worst-case full-load estimates.
-
-    Args:
-        n_samples: Number of samples (individuals).
-        n_snps: Number of SNPs (variants).
-        lmm_batch_size: Batch size for LMM SNP processing. The actual
-            runtime chunk size is computed by auto_tune_chunk_size() in
-            chunk.py; this parameter is for explicit caller control.
-        n_cvt: Number of covariates (default 1).
-
-    Returns:
-        MemoryBreakdown with detailed component estimates and total.
-
-    Example:
-        >>> est = estimate_workflow_memory(200_000, 95_000)
-        >>> print(f"Need {est.total_gb:.0f}GB, have {est.available_gb:.0f}GB")
-    """
-    # Component sizes
-    kinship_gb = _square_matrix_gb(n_samples)
-    # Kinship converts genotypes to float64 via np.array(..., dtype=np.float64)
-    # Full materialization — streaming path uses chunk_size instead
-    # (see estimate_streaming_memory)
-    genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64
-    eigenvectors_gb = _square_matrix_gb(n_samples)
-
-    # Eigendecomp workspace: DSYEVD O(n^2) (default driver).
-    # If DSYEVR is triggered by memory pressure, actual peak will be lower.
-    eigendecomp_workspace_gb = _eigendecomp_workspace_gb(n_samples)
-
-    # LMM working memory
-    lmm_rotated_gb = n_samples * 8 * 3 / 1e9  # Uy, UW, Ux per SNP
-    # UtG chunk + Uab_batch + Iab_batch (dominant intermediates)
-    lmm_batch_gb = (
-        n_samples * lmm_batch_size * 8 / 1e9  # UtG chunk
-        + _uab_iab_gb(n_samples, lmm_batch_size, n_cvt)  # Uab + Iab
-    )
-
-    # Peak memory calculation
-    # Workflow: genotypes -> kinship -> eigendecomp -> LMM
-    # Kinship can be freed after eigendecomp
-
-    # Phase 1 (kinship): input + working copy coexist during
-    # kinship accumulation
-    peak_kinship = genotypes_gb * 2 + kinship_gb
-
-    # Phase 2 (eigendecomp): conservative non-inplace estimate (K + U +
-    # workspace).  Inplace DSYEVD saves one N×N matrix but requires vendor
-    # detection at runtime — check_memory_before_run() uses the tighter
-    # _dsyevd_inplace_peak_gb() when available.
-    peak_eigendecomp = _dsyevd_peak_gb(n_samples)
-
-    # Phase 3 (LMM): eigenvectors + genotypes + working
-    # (kinship freed, eigenvalues are small ~n*8 bytes)
-    eigenvalues_gb = n_samples * 8 / 1e9
-    peak_lmm = (
-        eigenvectors_gb + genotypes_gb + eigenvalues_gb + lmm_rotated_gb + lmm_batch_gb
-    )
-
-    total_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)
-    available_gb, sufficient = _check_available(total_gb)
-
-    return MemoryBreakdown(
-        kinship_gb=kinship_gb,
-        genotypes_gb=genotypes_gb,
-        eigenvectors_gb=eigenvectors_gb,
-        eigendecomp_workspace_gb=eigendecomp_workspace_gb,
-        lmm_rotated_gb=lmm_rotated_gb,
-        lmm_batch_gb=lmm_batch_gb,
-        total_gb=total_gb,
-        available_gb=available_gb,
-        sufficient=sufficient,
-    )
-
-
 def estimate_lmm_memory(
     n_samples: int,
     n_snps: int,
@@ -403,22 +308,20 @@ def estimate_lmm_memory(
     """Estimate memory for the LMM phase only (full-materialization path).
 
     Use this when eigendecomposition is already complete and kinship has been
-    freed. Unlike estimate_workflow_memory() which returns the peak across all
-    phases, this returns only the LMM phase requirement.
+    freed: it returns only the LMM phase requirement, not the peak across
+    all workflow phases.
 
     Includes Uab_batch (n_chunk, n_samples, n_index) and Iab_batch
     (n_chunk, n_cvt+2, n_index) which are the dominant intermediates.
 
-    Note: The default lmm_batch_size=20_000 is a generic estimate. At runtime,
-    auto_tune_chunk_size() in chunk.py computes the actual chunk size based on
-    memory budget and int32 buffer constraints. Callers should use that value
-    for accurate estimates.
+    Note: The default lmm_batch_size=20_000 is a generic estimate; pass the
+    runtime chunk size for accurate estimates.
 
     Args:
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (variants).
-        lmm_batch_size: Batch size for LMM SNP processing. Use the value
-            from auto_tune_chunk_size() for accurate runtime estimates.
+        lmm_batch_size: Batch size for LMM SNP processing. Pass the runtime
+            chunk size for accurate estimates.
         n_cvt: Number of covariates (default 1).
 
     Returns:
@@ -430,7 +333,7 @@ def estimate_lmm_memory(
     """
     eigenvectors_gb = _square_matrix_gb(n_samples)
     # Full materialization — streaming path uses chunk_size instead
-    # (see estimate_lmm_streaming_memory)
+    # (see estimate_streaming_memory)
     genotypes_gb = n_samples * n_snps * 8 / 1e9  # float64
     eigenvalues_gb = n_samples * 8 / 1e9
     lmm_rotated_gb = n_samples * 8 * 3 / 1e9
@@ -586,9 +489,9 @@ def estimate_streaming_memory(
         pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
             Pass 2 when rotation-compute pipelining holds current + next buffers
             simultaneously — rotation_buffer_gb is multiplied accordingly.
-        compute_chunk_size: SNPs per compute sub-chunk for rotation/Uab/grid buffers.
-            Defaults to chunk_size. Pass the value from _compute_chunk_size()
-            for accurate LMM phase estimates after per-subchunk flush.
+        compute_chunk_size: SNPs per compute sub-chunk for rotation/Uab/grid
+            buffers. Defaults to chunk_size. Pass the runtime compute chunk for
+            accurate LMM phase estimates after per-subchunk flush.
 
     Returns:
         StreamingMemoryBreakdown with detailed component estimates.
@@ -610,8 +513,8 @@ def estimate_streaming_memory(
         n_samples, chunk_size, n_grid, pipeline_buffers, compute_chunk_size
     )
 
-    # Don't use fused estimate: callers (pipeline, kinship, check_memory_before_run)
-    # don't know the backend or lmm_mode.  Fused only applies to NumPy modes 1/4.
+    # Don't use fused estimate: callers (pipeline, kinship) don't know the
+    # backend or lmm_mode.  Fused only applies to NumPy modes 1/4.
     uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt, use_fused=False)
 
     # Peak memory calculation by workflow phase
@@ -619,8 +522,7 @@ def estimate_streaming_memory(
     peak_kinship = kinship_gb + chunk_gb + dsyrk_scratch_gb
     # Eigendecomp: conservative non-inplace estimate (K + U + workspace).
     # Inplace DSYEVD saves one N×N matrix but requires vendor detection at
-    # runtime — check_memory_before_run() uses the tighter
-    # _dsyevd_inplace_peak_gb() when available.
+    # runtime; plan_eigen_driver holds the tighter in-place figure.
     peak_eigendecomp = _dsyevd_peak_gb(n_samples)
     peak_lmm = (
         eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
@@ -638,79 +540,6 @@ def estimate_streaming_memory(
         grid_reml_gb=grid_reml_gb,
         dsyrk_scratch_gb=dsyrk_scratch_gb,
         peak_kinship_gb=peak_kinship,
-        total_peak_gb=total_peak_gb,
-        available_gb=available_gb,
-        sufficient=sufficient,
-    )
-
-
-def estimate_lmm_streaming_memory(
-    n_samples: int,
-    n_snps: int,
-    chunk_size: int = 10_000,
-    n_grid: int = 50,
-    n_cvt: int = 1,
-    pipeline_buffers: int = 1,
-    compute_chunk_size: int | None = None,
-) -> StreamingMemoryBreakdown:
-    """Estimate memory for the streaming LMM phase only (not the full pipeline).
-
-    Use this when eigendecomposition is already complete and kinship has been
-    freed. Unlike estimate_streaming_memory() which returns the peak across all
-    phases, this returns only the LMM phase requirement.
-
-    Includes Uab_batch and Iab_batch intermediates which are the dominant
-    compute buffers during LMM computation.
-
-    Args:
-        n_samples: Number of samples (individuals).
-        n_snps: Number of SNPs (for logging only, not used in peak calculation).
-        chunk_size: SNPs per disk chunk (default 10,000).
-        n_grid: Grid points for lambda optimization (default 50).
-        n_cvt: Number of covariates (default 1).
-        pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
-            Pass 2 when rotation-compute pipelining holds current + next buffers
-            simultaneously — rotation_buffer_gb is multiplied accordingly.
-        compute_chunk_size: SNPs per compute sub-chunk for rotation/Uab/grid buffers.
-            Defaults to chunk_size. Pass the value from _compute_chunk_size()
-            for accurate LMM phase estimates after per-subchunk flush.
-
-    Returns:
-        StreamingMemoryBreakdown with total_peak_gb reflecting only LMM phase needs.
-
-    Example:
-        >>> est = estimate_lmm_streaming_memory(100_000, 95_000)
-        >>> print(f"LMM needs {est.total_peak_gb:.0f}GB")
-    """
-    if compute_chunk_size is None:
-        compute_chunk_size = chunk_size
-    (
-        _kinship_gb,
-        eigenvectors_gb,
-        _eigendecomp_workspace_gb,
-        chunk_gb,
-        rotation_buffer_gb,
-        grid_reml_gb,
-    ) = _streaming_component_sizes(
-        n_samples, chunk_size, n_grid, pipeline_buffers, compute_chunk_size
-    )
-
-    # Don't use fused estimate: callers don't know lmm_mode.
-    uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt, use_fused=False)
-    total_peak_gb = (
-        eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
-    )
-    available_gb, sufficient = _check_available(total_peak_gb)
-
-    return StreamingMemoryBreakdown(
-        kinship_gb=0.0,
-        eigenvectors_gb=eigenvectors_gb,
-        eigendecomp_workspace_gb=0.0,
-        chunk_gb=chunk_gb,
-        rotation_buffer_gb=rotation_buffer_gb,
-        grid_reml_gb=grid_reml_gb,
-        dsyrk_scratch_gb=0.0,  # dsyrk runs in the kinship phase, which is skipped
-        peak_kinship_gb=0.0,  # kinship supplied by the caller; no kinship phase
         total_peak_gb=total_peak_gb,
         available_gb=available_gb,
         sufficient=sufficient,
@@ -871,171 +700,3 @@ def cleanup_memory(verbose: bool = True) -> MemorySnapshot:
         after = get_memory_snapshot()
 
     return after
-
-
-def check_memory_before_run(
-    n_samples: int,
-    n_snps: int,
-    operation: str = "GWAS",
-    has_kinship: bool = False,
-    n_cvt: int = 1,
-) -> bool:
-    """Pre-flight memory check with helpful diagnostics.
-
-    Call this before starting a large computation to verify sufficient
-    memory is available. Provides actionable suggestions if memory is
-    insufficient.
-
-    Args:
-        n_samples: Number of samples in the dataset.
-        n_snps: Number of SNPs in the dataset.
-        operation: Description for error messages.
-        has_kinship: If True, assume kinship is pre-computed (unused,
-            kept for backward compatibility).
-        n_cvt: Number of covariate columns (including the intercept).
-            Must match what the runner will pass to the LMM stage —
-            Uab/Iab batch buffers scale with n_cvt, so an underestimate
-            here lets multi-covariate runs pass preflight then OOM at
-            real allocation.
-
-    Returns:
-        True if sufficient memory available.
-
-    Raises:
-        MemoryError: If insufficient memory with suggestions.
-
-    Example:
-        >>> check_memory_before_run(100_000, 100_000, n_cvt=4)
-        INFO | Memory check for GWAS (100,000 samples x 100,000 SNPs):
-        INFO |   Estimated peak: 640.0GB (eigendecomp phase)
-        INFO |   Available: 237.4GB
-        INFO |   Status: OK (47.6GB headroom)
-    """
-    from jamma.core.chunk import _compute_chunk_size
-
-    compute_chunk = _compute_chunk_size(
-        n_snps, n_samples=n_samples, n_cvt=n_cvt, pipeline_buffers=2
-    )
-    est = estimate_streaming_memory(
-        n_samples,
-        n_cvt=n_cvt,
-        pipeline_buffers=2,
-        compute_chunk_size=compute_chunk,
-    )
-    snap = get_memory_snapshot()
-
-    # Report the eigendecomp peak for the driver that will actually run, using
-    # the same plan_eigen_driver() logic as eigendecompose_kinship() so the
-    # pre-flight estimate cannot drift from the runtime path. The kinship matrix
-    # is not built yet, so assume it will be in-place eligible (the common case:
-    # float64, C-contiguous, writeable).
-    _has_dsyevr = False
-    _has_dsyevd = False
-    try:
-        from jamma import jlinalg
-
-        _has_dsyevr = bool(getattr(jlinalg, "blas_has_dsyevr", False))
-        _has_dsyevd = bool(getattr(jlinalg, "blas_has_dsyevd", False))
-    except ImportError:
-        logger.debug(
-            "Could not import jlinalg; "
-            "pre-flight check will use conservative DSYEVD estimate."
-        )
-
-    plan = plan_eigen_driver(
-        n_samples,
-        snap.available_gb,
-        has_dsyevd=_has_dsyevd,
-        has_dsyevr=_has_dsyevr,
-        no_vendor=forced_numpy_fallback(),
-        inplace_eligible=True,
-    )
-
-    # Shared non-eigendecomp phase peaks (kinship build, LMM association).
-    # Don't use fused estimate here: we don't know lmm_mode, and fused only
-    # applies to modes 1/4.  Using the standard (larger) estimate is safe —
-    # it may overestimate for modes 1/4 but never underestimates for 2/3.
-    peak_kinship = est.kinship_gb + est.chunk_gb
-    peak_lmm = (
-        est.eigenvectors_gb
-        + est.chunk_gb
-        + est.rotation_buffer_gb
-        + est.grid_reml_gb
-        + _uab_iab_gb(n_samples, compute_chunk, n_cvt=n_cvt, use_fused=False)
-    )
-
-    reported_peak = max(peak_kinship, plan.required_gb, peak_lmm)
-    driver_note = f"eigendecomp phase, {plan.driver}"
-    if (
-        not plan.use_dsyevr
-        and not plan.no_vendor
-        and plan.required_gb + _memory_margin_gb(plan.required_gb) > snap.available_gb
-    ):
-        logger.warning(
-            f"DSYEVD peak ({plan.required_gb:.1f}GB) may exceed available memory "
-            f"({snap.available_gb:.1f}GB) and DSYEVR is not available. "
-            f"Run may OOM."
-        )
-
-    # BLAS context: warn if active backend differs from calibration reference
-    from jamma.core.estimates import get_blas_estimate_context
-
-    blas_backend, blas_ilp64, blas_calibrated = get_blas_estimate_context()
-
-    logger.info(
-        f"Memory check for {operation} ({n_samples:,} samples × {n_snps:,} SNPs):"
-    )
-    logger.info(f"  BLAS backend: {blas_backend} (ILP64={blas_ilp64})")
-    logger.info(f"  Estimated peak: {reported_peak:.1f}GB ({driver_note})")
-    logger.info(f"  Process using: {snap.rss_gb:.1f}GB")
-    logger.info(f"  Available: {snap.available_gb:.1f}GB")
-
-    if n_samples > 40_000 and not blas_ilp64:
-        logger.warning(
-            f"  No ILP64 BLAS detected (active: {blas_backend}). "
-            f"Eigendecomposition of {n_samples:,} samples will use NumPy "
-            f"fallback, which may be significantly slower. "
-            f"Install ILP64 numpy for best performance (see docs/USER_GUIDE.md)."
-        )
-    if not blas_calibrated:
-        logger.warning(
-            f"  Time estimates are calibrated to MKL ILP64. "
-            f"Active BLAS ({blas_backend}) may yield significantly different runtimes."
-        )
-
-    # Check if estimated peak exceeds available
-    headroom = snap.available_gb - reported_peak
-
-    # Intentionally uncapped 10%: e.g. at 500GB peak, this warns below 50GB
-    # headroom while _check_available only rejects below 10GB, giving the
-    # user a ~40GB window to run cleanup_memory() before the gate rejects.
-    if headroom < reported_peak * 0.1:
-        logger.warning(
-            f"  Status: RISKY ({headroom:.1f}GB headroom, recommend cleanup first)"
-        )
-        logger.warning("  Suggestion: Run cleanup_memory() before this computation")
-
-        if snap.rss_gb > 10:  # Significant existing memory usage
-            raise MemoryError(
-                f"Insufficient memory for {operation}.\n"
-                f"  Process using: {snap.rss_gb:.1f}GB (from previous runs?)\n"
-                f"  Estimated peak: {reported_peak:.1f}GB\n"
-                f"  Available: {snap.available_gb:.1f}GB\n\n"
-                f"Suggestions:\n"
-                f"  1. Run cleanup_memory() to free memory from previous runs\n"
-                f"  2. Delete large variables: del kinship, eigenvectors, results\n"
-                f"  3. Restart the Python kernel for a clean state"
-            )
-        else:
-            raise MemoryError(
-                f"Insufficient memory for {operation}.\n"
-                f"  Estimated peak: {reported_peak:.1f}GB\n"
-                f"  Available: {snap.available_gb:.1f}GB\n\n"
-                f"Suggestions:\n"
-                f"  1. Use a larger machine (need ~{reported_peak * 1.2:.0f}GB+)\n"
-                f"  2. Reduce dataset size"
-            )
-    else:
-        logger.info(f"  Status: OK ({headroom:.1f}GB headroom)")
-
-    return True

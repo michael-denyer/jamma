@@ -11,7 +11,6 @@ from jamma.core.memory import (
     _dsyevd_workspace_gb,
     _dsyevr_peak_gb,
     _dsyevr_workspace_gb,
-    check_memory_before_run,
     plan_eigen_driver,
 )
 from jamma.lmm.eigen import eigendecompose_kinship
@@ -22,9 +21,8 @@ class TestPlanEigenDriver:
     """Tests for plan_eigen_driver — the shared driver-selection decision.
 
     This pure function is the single source of truth for the
-    DSYEVD-inplace -> DSYEVD -> DSYEVR -> numpy choice used by both the runtime
-    path (eigendecompose_kinship) and the pre-flight estimator
-    (check_memory_before_run), so the two cannot drift.
+    DSYEVD-inplace -> DSYEVD -> DSYEVR -> numpy choice the runtime path
+    (eigendecompose_kinship) builds its plan from.
     """
 
     N = 100_000
@@ -467,108 +465,3 @@ class TestDsyevdWorkspaceAccuracy:
 @pytest.mark.tier0
 class TestPreFlightDsyevrAware:
     """Tests for EIGEN-01: pre-flight check uses DSYEVR peak when appropriate."""
-
-    def test_reports_dsyevr_peak_when_dsyevd_wont_fit(self):
-        """When DSYEVR available and DSYEVD exceeds memory, report DSYEVR peak."""
-        n_samples = 100_000
-        n_snps = 10_000
-        dsyevd_peak = _dsyevd_peak_gb(n_samples)
-        dsyevr_peak = _dsyevr_peak_gb(n_samples)
-        available_gb = (dsyevr_peak + dsyevd_peak) / 2
-        with (
-            patch("jamma.jlinalg.blas_has_dsyevr", 1),
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_proc,
-        ):
-            mock_vm.return_value.available = available_gb * 1e9
-            mock_vm.return_value.total = available_gb * 1e9
-            mock_proc.return_value.memory_info.return_value.rss = 0
-            mock_proc.return_value.memory_info.return_value.vms = 0
-            result = check_memory_before_run(n_samples, n_snps)
-            assert result is True
-
-    def test_raises_when_neither_driver_fits(self):
-        """When neither DSYEVD nor DSYEVR fits, MemoryError is raised."""
-        n_samples = 100_000
-        n_snps = 10_000
-        dsyevr_peak = _dsyevr_peak_gb(n_samples)
-        available_gb = dsyevr_peak * 0.5
-        with (
-            patch("jamma.jlinalg.blas_has_dsyevr", 1),
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_proc,
-        ):
-            mock_vm.return_value.available = available_gb * 1e9
-            mock_vm.return_value.total = available_gb * 1e9
-            mock_proc.return_value.memory_info.return_value.rss = 0
-            mock_proc.return_value.memory_info.return_value.vms = 0
-            with pytest.raises(MemoryError):
-                check_memory_before_run(n_samples, n_snps)
-
-    def test_uses_dsyevd_peak_when_memory_ample(self):
-        """When memory is ample, DSYEVD peak is reported (no DSYEVR switch)."""
-        n_samples = 1_000
-        n_snps = 1_000
-        with (
-            patch("jamma.jlinalg.blas_has_dsyevr", 1),
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_proc,
-        ):
-            mock_vm.return_value.available = 1e12
-            mock_vm.return_value.total = 1e12
-            mock_proc.return_value.memory_info.return_value.rss = 0
-            mock_proc.return_value.memory_info.return_value.vms = 0
-            result = check_memory_before_run(n_samples, n_snps)
-            assert result is True
-
-    def test_no_import_error_when_jlinalg_unavailable(self):
-        """Pre-flight check works even if jamma.jlinalg is not importable."""
-        import sys
-
-        n_samples = 100
-        n_snps = 100
-        with (
-            patch.dict(sys.modules, {"jamma.jlinalg": None}),
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_proc,
-        ):
-            mock_vm.return_value.available = 1e12
-            mock_vm.return_value.total = 1e12
-            mock_proc.return_value.memory_info.return_value.rss = 0
-            mock_proc.return_value.memory_info.return_value.vms = 0
-            result = check_memory_before_run(n_samples, n_snps)
-            assert result is True
-
-    def test_forced_numpy_uses_conservative_estimate(self, monkeypatch):
-        """JLINALG_NO_VENDOR_LAPACK makes pre-flight use the numpy (DSYEVD) peak.
-
-        Regression: pre-flight hard-coded no_vendor=False, so a forced-numpy run
-        could pass the check on the smaller in-place vendor estimate and then OOM
-        (np.linalg.eigh uses the larger non-inplace DSYEVD footprint). With the
-        env var set, the check must use the conservative DSYEVD estimate.
-        """
-        n_samples = 100_000
-        n_snps = 10_000
-        inplace_peak = _dsyevd_inplace_peak_gb(n_samples)
-        dsyevd_peak = _dsyevd_peak_gb(n_samples)
-        # Memory fits the in-place vendor path but not the full numpy path.
-        available_gb = (inplace_peak + dsyevd_peak) / 2
-        with (
-            patch("jamma.jlinalg.blas_has_dsyevd", 1),
-            patch("jamma.jlinalg.blas_has_dsyevr", 1),
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_proc,
-        ):
-            mock_vm.return_value.available = available_gb * 1e9
-            mock_vm.return_value.total = available_gb * 1e9
-            mock_proc.return_value.memory_info.return_value.rss = 0
-            mock_proc.return_value.memory_info.return_value.vms = 0
-
-            # Vendor path (env unset): the in-place estimate fits -> passes.
-            monkeypatch.delenv("JLINALG_NO_VENDOR_LAPACK", raising=False)
-            assert check_memory_before_run(n_samples, n_snps) is True
-
-            # Forced numpy: the conservative DSYEVD estimate does not fit.
-            monkeypatch.setenv("JLINALG_NO_VENDOR_LAPACK", "1")
-            with pytest.raises(MemoryError):
-                check_memory_before_run(n_samples, n_snps)

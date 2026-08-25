@@ -1,128 +1,13 @@
 """Tests for chunk size computation invariants.
 
-Verifies that _compute_chunk_size and auto_tune_chunk_size respect
-MAX_SAFE_CHUNK cap and clamp constraints.
+Verifies that _compute_chunk_size respects the MAX_SAFE_CHUNK cap and
+clamp constraints, and that estimate_streaming_memory prices the
+pipeline's double buffering.
 """
 
 import pytest
 
-from jamma.lmm.chunk import (
-    MAX_SAFE_CHUNK,
-    _compute_chunk_size,
-    auto_tune_chunk_size,
-)
-
-
-@pytest.mark.tier0
-class TestAutoTuneChunkSize:
-    """Tests for auto_tune_chunk_size() safe capping."""
-
-    def test_max_safe_chunk_constant_exists(self):
-        """MAX_SAFE_CHUNK constant should be defined."""
-        assert MAX_SAFE_CHUNK == 50_000
-
-    def test_respects_max_chunk_default(self):
-        """Should not exceed MAX_SAFE_CHUNK even with high memory budget."""
-        # Very high memory budget would suggest huge chunk without cap
-        result = auto_tune_chunk_size(
-            n_samples=1000,
-            n_filtered=1_000_000,  # Million SNPs
-            mem_budget_gb=1000.0,  # Unrealistically high budget
-        )
-
-        assert result <= MAX_SAFE_CHUNK
-
-    def test_respects_custom_max_chunk(self):
-        """Should respect custom max_chunk when provided."""
-        custom_max = 10_000
-
-        result = auto_tune_chunk_size(
-            n_samples=1000,
-            n_filtered=1_000_000,
-            mem_budget_gb=1000.0,
-            max_chunk=custom_max,
-        )
-
-        assert result <= custom_max
-
-    def test_still_respects_n_filtered_when_smaller(self):
-        """When n_filtered < max_chunk, should use n_filtered."""
-        result = auto_tune_chunk_size(
-            n_samples=1000,
-            n_filtered=5000,  # Smaller than max_chunk
-            mem_budget_gb=100.0,
-        )
-
-        assert result <= 5000
-
-    def test_still_respects_memory_budget_when_smaller(self):
-        """When memory budget limits chunk size, should use that limit."""
-        result = auto_tune_chunk_size(
-            n_samples=100_000,  # Large samples means high memory per SNP
-            n_filtered=1_000_000,
-            mem_budget_gb=0.1,  # Very low budget
-        )
-
-        # Should be constrained by memory, not max_chunk
-        assert result < MAX_SAFE_CHUNK
-
-    def test_min_chunk_still_enforced(self):
-        """min_chunk should be the floor when n_filtered allows it."""
-        result = auto_tune_chunk_size(
-            n_samples=100_000,
-            n_filtered=50_000,
-            mem_budget_gb=0.0001,  # Tiny budget
-            min_chunk=1000,
-        )
-        assert result >= 1000
-
-    def test_n_filtered_caps_below_min_chunk(self):
-        """n_filtered takes precedence when smaller than min_chunk."""
-        result = auto_tune_chunk_size(
-            n_samples=100_000,
-            n_filtered=500,  # Fewer SNPs than min_chunk
-            mem_budget_gb=0.0001,
-            min_chunk=1000,
-        )
-        assert result <= 500
-
-    def test_typical_gwas_scale(self):
-        """Smoke test: typical GWAS should get reasonable chunk size."""
-        result = auto_tune_chunk_size(
-            n_samples=10_000,
-            n_filtered=500_000,
-            mem_budget_gb=4.0,
-        )
-
-        # Should be reasonable: between 1000 and 50000
-        assert 1000 <= result <= MAX_SAFE_CHUNK
-
-    def test_backward_compatibility_default_args(self):
-        """Existing calls without max_chunk should still work."""
-        # This would fail if we broke the signature
-        result = auto_tune_chunk_size(
-            n_samples=1000,
-            n_filtered=10000,
-        )
-
-        assert result > 0
-
-    def test_max_chunk_caps_result(self):
-        """max_chunk should cap the result."""
-        result = auto_tune_chunk_size(
-            n_samples=1000,
-            n_filtered=100_000,
-            max_chunk=500,
-        )
-        assert result <= 500
-
-    def test_n_filtered_caps_result(self):
-        """n_filtered should cap the result."""
-        result = auto_tune_chunk_size(
-            n_samples=1000,
-            n_filtered=50,
-        )
-        assert result <= 50
+from jamma.core.chunk import MAX_SAFE_CHUNK, _compute_chunk_size
 
 
 @pytest.mark.tier0
@@ -156,25 +41,6 @@ class TestComputeChunkSize:
 
 
 @pytest.mark.tier0
-class TestChunkSizingAtScale:
-    """Chunk sizing at production scale (100k+ samples).
-
-    Verifies _compute_chunk_size and auto_tune_chunk_size produce valid
-    chunks at the scale where JAMMA actually runs.
-    """
-
-    def test_auto_tune_large_scale(self):
-        """auto_tune_chunk_size at 125k samples, 4GB budget."""
-        result = auto_tune_chunk_size(
-            n_samples=125_000,
-            n_filtered=95_000,
-            mem_budget_gb=4.0,
-        )
-        assert result > 0
-        assert result <= MAX_SAFE_CHUNK
-        assert result <= 95_000
-
-
 @pytest.mark.tier1
 def test_compute_chunk_size_with_n_samples():
     """_compute_chunk_size uses memory-aware sizing when n_samples > 0."""
@@ -277,17 +143,6 @@ class TestStreamingMemoryPipelineBuffers:
         )
         assert est_2.total_peak_gb > est_1.total_peak_gb
 
-    def test_lmm_streaming_memory_double_buffer(self):
-        """estimate_lmm_streaming_memory(pipeline_buffers=2).total_peak_gb is higher."""
-        from jamma.core.memory import estimate_lmm_streaming_memory
-
-        est_1 = estimate_lmm_streaming_memory(1000, n_snps=10000, pipeline_buffers=1)
-        est_2 = estimate_lmm_streaming_memory(1000, n_snps=10000, pipeline_buffers=2)
-        assert est_2.rotation_buffer_gb == pytest.approx(
-            2 * est_1.rotation_buffer_gb, rel=1e-10
-        )
-        assert est_2.total_peak_gb > est_1.total_peak_gb
-
     def test_streaming_memory_default_matches_single_buffer(self):
         """Omitting pipeline_buffers gives the same total_peak_gb as pipeline_buffers=1.
 
@@ -316,16 +171,6 @@ class TestStreamingMemoryPipelineBuffers:
 
         with pytest.raises(TypeError, match="pipeline_buffers must be an int"):
             estimate_streaming_memory(1000, pipeline_buffers=bad_value)
-
-    @pytest.mark.parametrize("bad_value", [0, -1, -10])
-    def test_lmm_streaming_memory_pipeline_buffers_invalid_raises(self, bad_value):
-        """pipeline_buffers < 1 raises ValueError in LMM memory estimator."""
-        from jamma.core.memory import estimate_lmm_streaming_memory
-
-        with pytest.raises(ValueError, match="pipeline_buffers must be >= 1"):
-            estimate_lmm_streaming_memory(
-                1000, n_snps=10000, pipeline_buffers=bad_value
-            )
 
     @pytest.mark.parametrize("bad_value", [0, -1, -10])
     def test_numpy_chunk_size_pipeline_buffers_invalid_raises(self, bad_value):

@@ -298,13 +298,10 @@ Configuration, memory management, threading, and logging.
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 5a | `OutputConfig` | Output directory + prefix + verbose flag | [config.py:13](../src/jamma/core/config.py#L13) |
-| 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:248](../src/jamma/core/memory.py#L248) |
-| 5c | `estimate_workflow_memory()` | Full pipeline memory estimate (pre-flight) | [memory.py:304](../src/jamma/core/memory.py#L304) |
-| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:397](../src/jamma/core/memory.py#L397) |
-| 5c | `estimate_lmm_streaming_memory()` | LMM streaming phase memory estimate | [memory.py:647](../src/jamma/core/memory.py#L647) |
-| 5c | `check_memory_before_run()` | Raise MemoryError if insufficient | [memory.py:876](../src/jamma/core/memory.py#L876) |
-| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory.py:771](../src/jamma/core/memory.py#L771) |
-| 5c | `cleanup_memory()` | GC + clear caches | [memory.py:822](../src/jamma/core/memory.py#L822) |
+| 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:247](../src/jamma/core/memory.py#L247) |
+| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:302](../src/jamma/core/memory.py#L302) |
+| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory.py:600](../src/jamma/core/memory.py#L600) |
+| 5c | `cleanup_memory()` | GC + clear caches | [memory.py:651](../src/jamma/core/memory.py#L651) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:16](../src/jamma/utils/logging.py#L16) |
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:51](../src/jamma/utils/logging.py#L51) |
 | 5d | `log_rss_memory()` | RSS snapshot at phase boundaries | [logging.py:120](../src/jamma/utils/logging.py#L120) |
@@ -445,7 +442,6 @@ flowchart LR
 flowchart TD
     subgraph Preflight["🔧 Pre-flight Check"]
         EST["estimate_lmm_memory()<br/><small>5c</small>"]
-        CHK["check_memory_before_run()<br/><small>5c</small>"]
     end
 
     subgraph Peak["📊 Memory Peak"]
@@ -585,7 +581,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO config and artifact naming | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
 | Result writer | [lmm/io.py:94](../src/jamma/lmm/io.py#L94) |
-| Memory estimation | [memory.py:304](../src/jamma/core/memory.py#L304) |
+| Memory estimation | [memory.py:458](../src/jamma/core/memory.py#L458) |
 | Threading | [threading.py:43](../src/jamma/core/threading.py#L43) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
 | Validation comparison | [compare.py:399](../src/jamma/validation/compare.py#L481) |

@@ -21,7 +21,6 @@ Modules:
 - io: Result file I/O
 """
 
-from jamma.lmm.chunk import auto_tune_chunk_size
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.io import write_assoc_results
@@ -39,7 +38,6 @@ __all__ = [
     "LmmConfig",
     "LmmRunResult",
     "LocoConfig",
-    "auto_tune_chunk_size",
     "eigendecompose_kinship",
     "read_eigen_files",
     "run_lmm_association_numpy",

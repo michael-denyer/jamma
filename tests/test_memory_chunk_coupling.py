@@ -1,21 +1,28 @@
 """Regression tests verifying memory estimation threads chunk size and n_cvt.
 
 These tests assert on observable outputs — estimated GB totals and whether
-``check_memory_before_run`` raises MemoryError — rather than on internal
-call counts of ``_compute_chunk_size`` / ``_uab_iab_gb``. This follows
-CLAUDE.md: assert observable behavior, not delegation plumbing.
+the live preflight gate (``memory_preflight``) raises MemoryError — rather
+than on internal call counts of ``_compute_chunk_size`` / ``_uab_iab_gb``.
+This follows CLAUDE.md: assert observable behavior, not delegation plumbing.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from jamma.core.memory import (
-    _uab_iab_gb,
-    check_memory_before_run,
-    estimate_streaming_memory,
-)
-from jamma.lmm.chunk import _compute_chunk_size
+from jamma.core.chunk import _compute_chunk_size
+from jamma.core.memory import _uab_iab_gb, estimate_streaming_memory
+from jamma.lmm.runner import ExecutionPlan
+from jamma.pipeline_config import PipelineConfig
+from jamma.pipeline_memory import memory_preflight
+
+
+def _streaming_preflight(n_valid: int, n_snps: int, n_cvt: int) -> None:
+    """Drive the live preflight gate the way the pipeline does."""
+    config = PipelineConfig(bfile=Path("unused"), lmm_mode=1)
+    memory_preflight(config, ExecutionPlan("streaming", "test"), n_valid, n_snps, n_cvt)
 
 
 @pytest.mark.tier0
@@ -73,10 +80,8 @@ def test_estimate_streaming_memory_peak_scales_with_n_cvt():
 
 
 @pytest.mark.tier0
-def test_check_memory_before_run_raises_when_n_cvt_inflates_past_available(
-    monkeypatch,
-):
-    """Regression for jamma-ca6p: check_memory_before_run must thread n_cvt.
+def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
+    """Regression for jamma-ca6p: the preflight gate must thread n_cvt.
 
     We pick a sample count where n_cvt=1 fits comfortably in available
     memory but n_cvt=200 inflates Uab/Iab past the available budget. If
@@ -84,39 +89,39 @@ def test_check_memory_before_run_raises_when_n_cvt_inflates_past_available(
     succeed — only a correctly threaded n_cvt produces the asymmetric
     pass/raise behavior this test asserts.
     """
-    from jamma.core import memory as memory_mod
+    import psutil
 
     # Pin available memory to a small fixed value to make the threshold
-    # deterministic across machines. Snapshot only — no compute mocking.
-    class _FakeSnap:
-        rss_gb = 0.5
-        available_gb = 2.0
+    # deterministic across machines. Both the chunk sizer and the
+    # sufficiency check read psutil.
+    class _Vm:
+        available = 2 * 1000**3
 
-    monkeypatch.setattr(memory_mod, "get_memory_snapshot", lambda: _FakeSnap())
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: _Vm())
 
     n_samples = 800
     n_snps = 10_000
 
     # With n_cvt=1, peak should be well under 2.0GB available.
-    # With n_cvt=200, Uab/Iab alone inflates past the budget.
-    assert check_memory_before_run(n_samples, n_snps, n_cvt=1) is True
+    _streaming_preflight(n_samples, n_snps, n_cvt=1)
 
+    # With n_cvt=200, Uab/Iab alone inflates past the budget.
     with pytest.raises(MemoryError):
-        check_memory_before_run(n_samples, n_snps, n_cvt=200)
+        _streaming_preflight(n_samples, n_snps, n_cvt=200)
 
 
 @pytest.mark.tier0
-def test_check_memory_before_run_succeeds_at_low_n_cvt():
+def test_preflight_succeeds_at_low_n_cvt():
     """Sanity: the default n_cvt=1 call on a tiny dataset must pass on any
-    machine with >1GB free. Exists to catch regressions where
-    check_memory_before_run spuriously rejects small inputs.
+    machine with >1GB free. Exists to catch regressions where the preflight
+    spuriously rejects small inputs.
     """
     # 100 samples x 1000 SNPs is negligible — must fit everywhere.
-    assert check_memory_before_run(100, 1000, n_cvt=1) is True
+    _streaming_preflight(100, 1000, n_cvt=1)
 
 
 @pytest.mark.tier0
-def test_check_memory_before_run_accepts_moderate_n_cvt(monkeypatch):
+def test_preflight_accepts_moderate_n_cvt(monkeypatch):
     """Regression (false-OOM): the preflight must size its compute chunk with the
     SAME n_cvt it estimates Uab with.
 
@@ -131,21 +136,13 @@ def test_check_memory_before_run_accepts_moderate_n_cvt(monkeypatch):
     """
     import psutil
 
-    from jamma.core import memory as memory_mod
-
-    # Pin available RAM at 100GB for both the chunk sizer (psutil) and the gate's
-    # sufficiency snapshot, so the pass/raise boundary is deterministic. With an
-    # n_cvt-aware chunk the peak is ~0.35x available (~35GB); the buggy n_cvt-blind
-    # chunk estimates ~467GB and exceeds 100GB.
+    # Pin available RAM at 100GB for both the chunk sizer and the gate's
+    # sufficiency check, so the pass/raise boundary is deterministic. With an
+    # n_cvt-aware chunk the peak is ~0.35x available (~35GB); the buggy
+    # n_cvt-blind chunk estimates ~467GB and exceeds 100GB.
     class _Vm:
         available = 100 * 1000**3
 
     monkeypatch.setattr(psutil, "virtual_memory", lambda: _Vm())
 
-    class _Snap:
-        rss_gb = 1.0
-        available_gb = 100.0
-
-    monkeypatch.setattr(memory_mod, "get_memory_snapshot", lambda: _Snap())
-
-    assert check_memory_before_run(3048, 88_268, n_cvt=25) is True
+    _streaming_preflight(3048, 88_268, n_cvt=25)

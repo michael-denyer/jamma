@@ -1,6 +1,6 @@
 """Tests for the JAMMA_FORCE_NUMPY_FALLBACK env-var gate at the two C
 extension import shims (jamma.jlinalg.__init__ and
-jamma.lmm.compute_numpy._try_import_accel).
+jamma.core.recompile._load_c_module).
 
 The gate is the load-bearing knob the ASAN/UBSAN
 sanitizer workflow uses to skip the .so imports entirely — see
@@ -190,7 +190,7 @@ def test_natural_fallback_blas_backend_value(monkeypatch, reload_jlinalg_after_t
     import jamma.core.recompile as recompile_mod
 
     monkeypatch.setattr(
-        recompile_mod, "auto_recompile_c_extension", lambda **kwargs: False
+        recompile_mod, "auto_recompile_c_extension", lambda *a, **kw: False
     )
 
     sys.modules.pop("jamma.jlinalg._jlinalg", None)
@@ -216,22 +216,26 @@ def test_natural_fallback_blas_backend_value(monkeypatch, reload_jlinalg_after_t
 
 class TestForceNumpyLmmAccel:
     """Tests for the JAMMA_FORCE_NUMPY_FALLBACK gate inside
-    jamma.lmm.compute_numpy._try_import_accel."""
+    jamma.core.recompile._load_c_module for LMM_ACCEL_SPEC."""
 
     def test_returns_unavailable(self, monkeypatch):
-        """Forced env: _try_import_accel reports no extension."""
+        """Forced env: _load_c_module reports no extension."""
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
-        from jamma.lmm.compute_numpy import _try_import_accel
+        from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
+        from jamma.core.recompile import _load_c_module
+        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
 
-        assert _try_import_accel() is None
+        assert _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION) is None
 
     def test_no_so_import_attempted(self, monkeypatch):
         """Forced env: no .so import attempted — sys.modules stays clean."""
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
-        from jamma.lmm.compute_numpy import _try_import_accel
+        from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
+        from jamma.core.recompile import _load_c_module
+        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
 
         sys.modules.pop("jamma.lmm._lmm_accel", None)
-        _try_import_accel()
+        _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION)
         assert "jamma.lmm._lmm_accel" not in sys.modules
 
     def test_unset_preserves_behavior(self, monkeypatch):
@@ -241,9 +245,11 @@ class TestForceNumpyLmmAccel:
         shape rather than the value.
         """
         monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
-        from jamma.lmm.compute_numpy import _try_import_accel
+        from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
+        from jamma.core.recompile import _load_c_module
+        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
 
-        result = _try_import_accel()
+        result = _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION)
         assert result is None or isinstance(result, ModuleType)
 
     @pytest.mark.parametrize("value", ["", "0"])
@@ -255,27 +261,33 @@ class TestForceNumpyLmmAccel:
         off value must yield the module.
         """
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", value)
-        from jamma.lmm.compute_numpy import _try_import_accel
+        from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
+        from jamma.core.recompile import _load_c_module
+        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
 
         try:
             import jamma.lmm._lmm_accel  # noqa: F401
         except ImportError:
             pytest.skip("extension not built, so the gate is not observable here")
-        assert _try_import_accel() is not None, f"value={value!r} engaged the gate"
+        assert _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION) is not None, (
+            f"value={value!r} engaged the gate"
+        )
 
     def test_truthy_values_engage_gate(self, monkeypatch):
         """Multiple truthy values all engage the gate."""
-        from jamma.lmm.compute_numpy import _try_import_accel
+        from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
+        from jamma.core.recompile import _load_c_module
+        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
 
         for value in ["1", "true", "yes", "TRUE", " 1 "]:
             monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", value)
-            assert _try_import_accel() is None, (
+            assert _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION) is None, (
                 f"value={value!r} did not engage the gate"
             )
 
 
 def test_gate_holds_across_the_whole_backend_selection_path():
-    """The gate must hold for every consumer, not just ``_try_import_accel``.
+    """The gate must hold for every consumer, not just the one loader call.
 
     ``test_no_so_import_attempted`` calls that one shim directly, so a second
     probe importing ``jamma.lmm._lmm_accel`` on its own left it green while the

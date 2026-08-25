@@ -352,10 +352,9 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
 
     double *pW = (double *)PyArray_DATA(aW);
 
-    /* Initialize status struct and reset LP64 overflow counter */
+    /* Initialize status struct */
     jlinalg_eigh_status_t eigh_status;
     memset(&eigh_status, 0, sizeof(eigh_status));
-    blas_dispatch_reset_lp64_overflow();
 
     int ret;
     Py_BEGIN_ALLOW_THREADS ret = jlinalg_eigh_c(N, pK, N, pW, pU, N, &eigh_status);
@@ -412,11 +411,6 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
         EMIT_STATUS_WARNING("jlinalg eigh: vendor LAPACK work buffer allocation failed -- "
                             "eigendecomposition may have used a slower path. "
                             "Free memory or reduce matrix size.");
-    }
-    if (blas_dispatch_lp64_overflow_count() > 0) {
-        EMIT_STATUS_WARNING("jlinalg eigh: LP64 overflow guard triggered during GEMM -- "
-                            "fell back to zero output (much slower). "
-                            "Install ILP64 numpy for large matrices.");
     }
 
 #undef EMIT_STATUS_WARNING

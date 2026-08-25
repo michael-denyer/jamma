@@ -20,21 +20,14 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * structs, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 15
+#define JLINALG_ABI_VERSION 16
 
 /* ---------------------------------------------------------------------------
  * External BLAS dispatch (vendor BLAS / LAPACK discovery)
  * ---------------------------------------------------------------------------
  */
 
-/* Fortran-style dgemm function pointer types for dlopen'd BLAS */
-typedef void (*jlinalg_dgemm_lp64_fn)(
-    const char *transa, const char *transb,
-    const int *m, const int *n, const int *k,
-    const double *alpha, const double *a, const int *lda,
-    const double *b, const int *ldb,
-    const double *beta, double *c, const int *ldc);
-
+/* Fortran-style dgemm function pointer type for dlopen'd BLAS */
 typedef void (*jlinalg_dgemm_ilp64_fn)(
     const char *transa, const char *transb,
     const long long *m, const long long *n, const long long *k,
@@ -46,17 +39,10 @@ typedef void (*jlinalg_dgemm_ilp64_fn)(
  * Preferred over Fortran interface when available -- Accelerate/MKL can
  * choose optimal algorithm for the memory layout.
  *
- * LP64 CBLAS uses int (32-bit) for dimensions.  ILP64 CBLAS (e.g.
- * Accelerate $NEWLAPACK$ILP64) uses long (64-bit on LP64 platforms
- * like macOS arm64 and Linux x86_64).  We use separate typedefs. */
+ * ILP64 CBLAS (e.g. Accelerate $NEWLAPACK$ILP64) uses long (64-bit on
+ * LP64 platforms like macOS arm64 and Linux x86_64). */
 enum { JLINALG_CblasRowMajor = 101, JLINALG_CblasNoTrans = 111, JLINALG_CblasTrans = 112 };
 enum { JLINALG_CblasUpper = 121, JLINALG_CblasLower = 122 };
-typedef void (*jlinalg_cblas_dgemm_fn)(
-    int order, int transa, int transb,
-    int m, int n, int k,
-    double alpha, const double *a, int lda,
-    const double *b, int ldb,
-    double beta, double *c, int ldc);
 typedef void (*jlinalg_cblas_dgemm_ilp64_fn)(
     int order, int transa, int transb,
     long m, long n, long k,
@@ -65,12 +51,6 @@ typedef void (*jlinalg_cblas_dgemm_ilp64_fn)(
     double beta, double *c, long ldc);
 
 /* Fortran dsyrk: dsyrk_(uplo, trans, n, k, alpha, a, lda, beta, c, ldc) */
-typedef void (*jlinalg_dsyrk_lp64_fn)(
-    const char *uplo, const char *trans,
-    const int *n, const int *k,
-    const double *alpha, const double *a, const int *lda,
-    const double *beta, double *c, const int *ldc);
-
 typedef void (*jlinalg_dsyrk_ilp64_fn)(
     const char *uplo, const char *trans,
     const long long *n, const long long *k,
@@ -78,12 +58,6 @@ typedef void (*jlinalg_dsyrk_ilp64_fn)(
     const double *beta, double *c, const long long *ldc);
 
 /* CBLAS dsyrk: cblas_dsyrk(order, uplo, trans, n, k, alpha, a, lda, beta, c, ldc) */
-typedef void (*jlinalg_cblas_dsyrk_fn)(
-    int order, int uplo, int trans,
-    int n, int k,
-    double alpha, const double *a, int lda,
-    double beta, double *c, int ldc);
-
 typedef void (*jlinalg_cblas_dsyrk_ilp64_fn)(
     int order, int uplo, int trans,
     long n, long k,
@@ -91,12 +65,6 @@ typedef void (*jlinalg_cblas_dsyrk_ilp64_fn)(
     double beta, double *c, long ldc);
 
 /* LAPACK dsyevd (Fortran): dsyevd_(jobz, uplo, n, a, lda, w, work, lwork, iwork, liwork, info) */
-typedef void (*jlinalg_dsyevd_lp64_fn)(
-    const char *jobz, const char *uplo,
-    const int *n, double *a, const int *lda,
-    double *w, double *work, const int *lwork,
-    int *iwork, const int *liwork, int *info);
-
 typedef void (*jlinalg_dsyevd_ilp64_fn)(
     const char *jobz, const char *uplo,
     const long long *n, double *a, const long long *lda,
@@ -109,23 +77,12 @@ typedef void (*jlinalg_dsyevd_ilp64_fn)(
  * -- Fortran is preferred because its suffixed symbol names (dsyevd_64_,
  * dsyevd$NEWLAPACK$ILP64) are unambiguous for LP64/ILP64. */
 enum { JLINALG_LAPACK_ROW_MAJOR = 101, JLINALG_LAPACK_COL_MAJOR = 102 };
-typedef int (*jlinalg_lapacke_dsyevd_lp64_fn)(
-    int matrix_layout, char jobz, char uplo,
-    int n, double *a, int lda, double *w);
 typedef long long (*jlinalg_lapacke_dsyevd_ilp64_fn)(
     int matrix_layout, char jobz, char uplo,
     long long n, double *a, long long lda, double *w);
 
 /* LAPACK dsyevr (Fortran): dsyevr_(jobz, range, uplo, n, a, lda, vl, vu, il, iu,
  *   abstol, m, w, z, ldz, isuppz, work, lwork, iwork, liwork, info) */
-typedef void (*jlinalg_dsyevr_lp64_fn)(
-    const char *jobz, const char *range, const char *uplo,
-    const int *n, double *a, const int *lda,
-    const double *vl, const double *vu, const int *il, const int *iu,
-    const double *abstol, int *m, double *w, double *z, const int *ldz,
-    int *isuppz, double *work, const int *lwork,
-    int *iwork, const int *liwork, int *info);
-
 typedef void (*jlinalg_dsyevr_ilp64_fn)(
     const char *jobz, const char *range, const char *uplo,
     const long long *n, double *a, const long long *lda,
@@ -155,12 +112,6 @@ int blas_is_ilp64(void);
  * pymodule.c exports this as blas_has_dgemm: py_dgemm raises RuntimeError
  * when it is 0, so the Python layer routes dgemm to NumPy instead. */
 int blas_has_external(void);
-
-/* LP64 overflow tracking: incremented when dimensions exceed LP64_DIM_MAX.
- * py_eigh resets before the computation and checks after to issue a Python
- * warning. */
-int  blas_dispatch_lp64_overflow_count(void);
-void blas_dispatch_reset_lp64_overflow(void);
 
 /* ---------------------------------------------------------------------------
  * Vendor-dispatch dsyrk / dsyevd / dsyevr API

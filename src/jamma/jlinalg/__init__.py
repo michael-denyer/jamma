@@ -57,7 +57,7 @@ from jamma.core.recompile import _load_c_module
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
 
-_EXPECTED_JLINALG_ABI = 15  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+_EXPECTED_JLINALG_ABI = 16  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
 
 
 def _validate_dsyrk(X: _np.ndarray, out: _np.ndarray | None, beta: float) -> None:

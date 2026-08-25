@@ -102,25 +102,12 @@ class TestBlasBackendFallback:
         assert blas_backend != "numpy-fallback"
 
 
-class TestLP64OverflowGuard:
-    """Verify LP64 dgemm fallback for large dimensions."""
-
-    def test_lp64_guard_constant_exposed(self):
-        """LP64_DIM_MAX (46340) is the int32 overflow threshold for N*N."""
-        # We can't allocate 46340^2 matrices in tests, but we can verify
-        # the guard exists structurally by checking that blas_dispatch.c
-        # defines LP64_DIM_MAX. LP64 backends are not wired, so dimensions
-        # exceeding 46340 fall back to NumPy.
-
-        from jamma.jlinalg import _jlinalg
-
-        # Verify the module has the blas_is_ilp64 constant
-        assert hasattr(_jlinalg, "blas_is_ilp64")
-        assert isinstance(_jlinalg.blas_is_ilp64, int)
-        assert _jlinalg.blas_is_ilp64 in (0, 1)
+class TestIlp64FlagConsistency:
+    """Verify blas_is_ilp64 stays consistent with the backend string and dgemm
+    computes correctly at moderate sizes."""
 
     def test_dgemm_moderate_size_correct(self):
-        """dgemm at moderate sizes (within LP64 range) produces correct results."""
+        """dgemm at moderate sizes produces correct results."""
         from jamma.jlinalg import dgemm
 
         rng = np.random.default_rng(99)

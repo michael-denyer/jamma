@@ -2,7 +2,7 @@
 
 jlinalg is JAMMA's controlled C compute layer. It dispatches to vendor
 ILP64 BLAS/LAPACK (MKL, Accelerate, OpenBLAS) for the operations JAMMA
-needs -- dgemm, dsyrk, eigh, qr, svd -- falling back to NumPy when no
+needs -- dgemm, dsyrk, eigh -- falling back to NumPy when no
 ILP64 vendor is available. This avoids numpy BLAS pitfalls: LP64 integer
 overflow at >46k samples, scipy ILP64 incompatibility, and inconsistent
 BLAS backends across platforms.
@@ -45,8 +45,6 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `eigh` | `(K, inplace=False) -> tuple[ndarray, ndarray]` | Eigenvalues and eigenvectors of symmetric K |
-| `qr` | `(A) -> tuple[ndarray, ndarray]` | Reduced QR factorization (Q, R) |
-| `svd` | `(A, compute_uv=True) -> tuple \| ndarray` | SVD of tall-skinny matrix (m >= n required) |
 
 ### Introspection
 
@@ -60,8 +58,6 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 | `blas_has_lapacke_dsyevd` | `int` | 1 if the vendor exposes DSYEVD through the LAPACKE row-major interface |
 | `blas_has_dsyevr` | `int` | 1 if vendor DSYEVR available |
 | `blas_has_dsyrk` | `int` | 1 if vendor DSYRK available |
-| `blas_has_dgeqrf` | `int` | 1 if vendor QR (DGEQRF + DORGQR) available |
-| `blas_has_dgesvd` | `int` | 1 if vendor SVD (DGESVD) available |
 | `HAS_C_EXTENSION` | `bool` | True if the compiled C extension is loaded |
 | `HAS_OPENMP` | `bool` | True if compiled with OpenMP |
 | `ABI_VERSION` | `int` | C extension ABI version (0 = numpy fallback) |
@@ -117,4 +113,4 @@ LP64-only host is permanently in.
 ## Further Reading
 
 - [Architecture and Contributing Guide](../../../docs/JLINALG_ARCHITECTURE.md) -- layer diagrams, file structure, benchmarking guide
-- [Algorithm Notes](../../../docs/JLINALG_ALGORITHMS.md) -- vendor DSYEVD algorithm notes, Golub-Kahan SVD
+- [Algorithm Notes](../../../docs/JLINALG_ALGORITHMS.md) -- vendor DSYEVD algorithm notes

@@ -108,7 +108,7 @@ src/jamma/
 │   ├── compute.py          # Centered kinship (dsyrk); streaming LOCO subtraction
 │   └── missing.py          # Genotype imputation and centring helpers
 ├── jlinalg/                # Vendor BLAS/LAPACK dispatch layer with NumPy fallback
-│   ├── __init__.py         # Public API: dgemm, dsyrk, eigh, qr, svd, compute_snp_stats_chunk
+│   ├── __init__.py         # Public API: dgemm, dsyrk, eigh, compute_snp_stats_chunk
 │   ├── _compile_jlinalg.py # Dev-mode C extension compiler (CI + local)
 │   └── src/                # C sources for _jlinalg extension (BLAS dispatch, LAPACK)
 ├── lmm/                    # LMM association subsystem

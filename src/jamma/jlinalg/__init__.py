@@ -57,7 +57,7 @@ from jamma.core.recompile import _load_c_module
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
 
-_EXPECTED_JLINALG_ABI = 14  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+_EXPECTED_JLINALG_ABI = 15  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
 
 
 def _validate_dsyrk(X: _np.ndarray, out: _np.ndarray | None, beta: float) -> None:
@@ -287,8 +287,6 @@ if _mod is not None:
     HAS_OPENMP = _mod.HAS_OPENMP
     blas_backend = _mod.blas_backend
     blas_has_dgemm = _mod.blas_has_dgemm
-    blas_has_dgeqrf = _mod.blas_has_dgeqrf
-    blas_has_dgesvd = _mod.blas_has_dgesvd
     blas_has_dsyevd = _mod.blas_has_dsyevd
     blas_has_dsyevr = _mod.blas_has_dsyevr
     blas_has_dsyrk = _mod.blas_has_dsyrk
@@ -298,9 +296,7 @@ if _mod is not None:
     eigh = _mod.eigh
     get_n_threads = _mod.get_n_threads
     jlinalg_isa = _mod.jlinalg_isa
-    qr = _mod.qr
     set_n_threads = _mod.set_n_threads
-    svd = _mod.svd
     _dgemm_native = _mod.dgemm
     _dsyrk_native = _mod.dsyrk
 
@@ -326,29 +322,6 @@ if _mod is not None:
                 K[:] = v
                 return w, K
             return w, v
-
-    if not blas_has_dgeqrf:
-
-        def qr(A: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:  # type: ignore[misc]
-            """NumPy fallback: reduced QR factorization."""
-            if A.ndim != 2:
-                raise ValueError(f"qr: A must be a 2-D array, got {A.ndim}-D")
-            return _np.linalg.qr(A.astype(_np.float64, copy=False), mode="reduced")
-
-    if not blas_has_dgesvd:
-
-        def svd(  # type: ignore[misc]
-            A: _np.ndarray, compute_uv: bool = True
-        ) -> tuple[_np.ndarray, _np.ndarray, _np.ndarray] | _np.ndarray:
-            """NumPy fallback: reduced SVD."""
-            if A.ndim != 2:
-                raise ValueError(f"svd: A must be a 2-D array, got {A.ndim}-D")
-            if A.shape[0] < A.shape[1]:
-                raise ValueError(f"svd: requires m >= n, got shape {A.shape}")
-            A64 = A.astype(_np.float64, copy=False)
-            if compute_uv:
-                return _np.linalg.svd(A64, full_matrices=False)
-            return _np.linalg.svd(A64, compute_uv=False)
 
 elif _FORCE_NUMPY:
     # Skip the _jlinalg.so import entirely. HAS_C_EXTENSION stays False; the
@@ -394,8 +367,6 @@ if not HAS_C_EXTENSION:
     blas_has_dsyevd: int = 0
     blas_has_dsyevr: int = 0
     blas_has_lapacke_dsyevd: int = 0
-    blas_has_dgeqrf: int = 0
-    blas_has_dgesvd: int = 0
 
     import warnings as _warnings
 
@@ -478,45 +449,6 @@ if not HAS_C_EXTENSION:
             if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
                 K[:] = 0.0
             return w, v
-
-    def qr(A: _np.ndarray) -> tuple[_np.ndarray, _np.ndarray]:
-        """Compute reduced QR factorization.
-
-        Args:
-            A: Input matrix, shape (m, n), float64.
-
-        Returns:
-            Tuple (Q, R) where Q is (m, n) orthogonal and R is (n, n) upper triangular.
-        """
-        if A.ndim != 2:
-            raise ValueError(f"qr: A must be a 2-D array, got {A.ndim}-D")
-        Q, R = _np.linalg.qr(A.astype(_np.float64, copy=False), mode="reduced")
-        return Q, R
-
-    def svd(
-        A: _np.ndarray, compute_uv: bool = True
-    ) -> tuple[_np.ndarray, _np.ndarray, _np.ndarray] | _np.ndarray:
-        """Compute reduced SVD of a tall-skinny matrix.
-
-        Args:
-            A: Input matrix, shape (m, n) with m >= n, float64.
-            compute_uv: If True, return (U, s, Vh). If False, return s only.
-
-        Returns:
-            If compute_uv=True: (U, s, Vh). If compute_uv=False: s only.
-
-        Raises:
-            ValueError: If m < n.
-        """
-        if A.ndim != 2:
-            raise ValueError(f"svd: A must be a 2-D array, got {A.ndim}-D")
-        if A.shape[0] < A.shape[1]:
-            raise ValueError(f"svd: requires m >= n (tall-skinny), got shape {A.shape}")
-        A64 = A.astype(_np.float64, copy=False)
-        if compute_uv:
-            U, s, Vh = _np.linalg.svd(A64, full_matrices=False)
-            return U, s, Vh
-        return _np.linalg.svd(A64, compute_uv=False)
 
     import os as _os
 
@@ -730,8 +662,6 @@ __all__ = [
     "HAS_OPENMP",
     "blas_backend",
     "blas_has_dgemm",
-    "blas_has_dgeqrf",
-    "blas_has_dgesvd",
     "blas_has_dsyevd",
     "blas_has_dsyevr",
     "blas_has_dsyrk",
@@ -750,7 +680,5 @@ __all__ = [
     "eigh",
     "get_n_threads",
     "jlinalg_isa",
-    "qr",
     "set_n_threads",
-    "svd",
 ]

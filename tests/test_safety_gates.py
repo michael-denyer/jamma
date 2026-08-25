@@ -448,8 +448,6 @@ class TestJlinalgABIValidation:
             fake.ABI_VERSION = {wrong_abi}
             fake.HAS_OPENMP = False
             fake.blas_backend = "fake"
-            fake.blas_has_dgeqrf = 0
-            fake.blas_has_dgesvd = 0
             fake.blas_has_dsyevd = 0
             fake.blas_has_dsyevr = 0
             fake.blas_has_dsyrk = 0
@@ -461,9 +459,7 @@ class TestJlinalgABIValidation:
             fake.eigh = lambda *a, **k: None
             fake.get_n_threads = lambda *a, **k: 1
             fake.jlinalg_isa = "fake"
-            fake.qr = lambda *a, **k: None
             fake.set_n_threads = lambda *a, **k: None
-            fake.svd = lambda *a, **k: None
             sys.modules["jamma.jlinalg._jlinalg"] = fake
 
             # Fully fake jamma.core.recompile BEFORE importing jamma, so no real

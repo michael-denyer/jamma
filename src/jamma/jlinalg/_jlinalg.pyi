@@ -8,7 +8,7 @@ ABI 12: Level 1/2 BLAS (ddot, dnrm2, daxpy, dscal, dgemv) and dsyr2k were
 removed from the C extension. They are NumPy-only in __init__.py.
 """
 
-from typing import Final, Literal, overload
+from typing import Final, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -46,8 +46,6 @@ blas_has_dgemm: Final[int]
 blas_has_dsyrk: Final[int]
 blas_has_dsyevd: Final[int]
 blas_has_dsyevr: Final[int]
-blas_has_dgeqrf: Final[int]
-blas_has_dgesvd: Final[int]
 blas_has_lapacke_dsyevd: Final[int]
 
 def dgemm(
@@ -115,44 +113,6 @@ def eigh(
         numpy.linalg.LinAlgError: If convergence fails.
         RuntimeError: If illegal argument detected (internal jlinalg bug).
         MemoryError: If workspace allocation fails.
-    """
-
-def qr(
-    A: npt.NDArray[np.float64],
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Compute QR decomposition of a matrix.
-
-    Args:
-        A: Input matrix, shape (M, N), float64, C-contiguous.
-
-    Returns:
-        Tuple of (Q, R).
-    """
-
-@overload
-def svd(
-    A: npt.NDArray[np.float64], compute_uv: Literal[True] = ...
-) -> tuple[
-    npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]
-]: ...
-@overload
-def svd(
-    A: npt.NDArray[np.float64], compute_uv: Literal[False]
-) -> npt.NDArray[np.float64]: ...
-def svd(
-    A: npt.NDArray[np.float64], compute_uv: bool = ...
-) -> (
-    tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]
-    | npt.NDArray[np.float64]
-):
-    """Compute reduced SVD of a tall-skinny matrix (m >= n).
-
-    Args:
-        A: Input matrix, shape (M, N) with M >= N, float64, C-contiguous.
-        compute_uv: If True (default), return (U, S, Vt). If False, return S only.
-
-    Returns:
-        (U, S, Vt) when compute_uv is True, else the singular values S.
     """
 
 def compute_snp_stats_chunk(

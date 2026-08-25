@@ -200,8 +200,6 @@ JLINALG_SPEC = BuildSpec(
         "HAS_OPENMP",
         "blas_backend",
         "blas_has_dgemm",
-        "blas_has_dgeqrf",
-        "blas_has_dgesvd",
         "blas_has_dsyevd",
         "blas_has_dsyevr",
         "blas_has_dsyrk",
@@ -213,9 +211,7 @@ JLINALG_SPEC = BuildSpec(
         "eigh",
         "get_n_threads",
         "jlinalg_isa",
-        "qr",
         "set_n_threads",
-        "svd",
     ),
 )
 

@@ -89,15 +89,12 @@ def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
     succeed — only a correctly threaded n_cvt produces the asymmetric
     pass/raise behavior this test asserts.
     """
-    import psutil
+    from jamma.core import memory
 
     # Pin available memory to a small fixed value to make the threshold
     # deterministic across machines. Both the chunk sizer and the
-    # sufficiency check read psutil.
-    class _Vm:
-        available = 2 * 1000**3
-
-    monkeypatch.setattr(psutil, "virtual_memory", lambda: _Vm())
+    # sufficiency check read the one seam.
+    monkeypatch.setattr(memory, "available_ram_gb", lambda: 2.0)
 
     n_samples = 800
     n_snps = 10_000
@@ -134,15 +131,12 @@ def test_preflight_accepts_moderate_n_cvt(monkeypatch):
     The inflate-and-raise test above passes even with the bug, because the bug
     also over-estimates; only threading n_cvt into the chunk fixes this direction.
     """
-    import psutil
+    from jamma.core import memory
 
     # Pin available RAM at 100GB for both the chunk sizer and the gate's
     # sufficiency check, so the pass/raise boundary is deterministic. With an
     # n_cvt-aware chunk the peak is ~0.35x available (~35GB); the buggy
     # n_cvt-blind chunk estimates ~467GB and exceeds 100GB.
-    class _Vm:
-        available = 100 * 1000**3
-
-    monkeypatch.setattr(psutil, "virtual_memory", lambda: _Vm())
+    monkeypatch.setattr(memory, "available_ram_gb", lambda: 100.0)
 
     _streaming_preflight(3048, 88_268, n_cvt=25)

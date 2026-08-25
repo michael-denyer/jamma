@@ -7,8 +7,7 @@ few DRAM passes over the eigenvector matrix as possible. Split out from
 
 from __future__ import annotations
 
-import psutil
-
+from jamma.core import memory
 from jamma.lmm.dispatch import DispatchPath
 
 # Allow large chunks — no int32 buffer constraint.
@@ -84,7 +83,7 @@ def compute_chunk_size_numpy(
     if mem_budget_bytes is not None:
         mem_budget = mem_budget_bytes
     else:
-        available = psutil.virtual_memory().available
+        available = int(memory.available_ram_gb() * 1e9)
         # Budget: 15% of available RAM (up from 5%), 2 GB floor, 40 GB ceiling.
         # Modern machines (128-512 GB) can afford larger working sets. The floor
         # prevents degenerate chunk sizes on low-memory systems; the ceiling

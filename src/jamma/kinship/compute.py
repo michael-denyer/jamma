@@ -29,10 +29,10 @@ from pathlib import Path
 from typing import Literal, NamedTuple, overload
 
 import numpy as np
-import psutil
 from loguru import logger
 
 from jamma import jlinalg
+from jamma.core import memory
 from jamma.core.estimates import estimate_kinship_seconds
 from jamma.core.memory import (
     check_memory_available,
@@ -95,7 +95,6 @@ def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
     est = estimate_streaming_memory(n_samples, chunk_size=chunk_size)
     check_memory_available(
         est.peak_kinship_gb,
-        safety_margin=0.1,
         operation=f"kinship accumulation (peak: {est.peak_kinship_gb:.1f}GB)",
     )
 
@@ -190,7 +189,6 @@ def _compute_kinship_inmemory(
         required_gb = n_samples**2 * 8 / 1e9 + n_samples * n_snps * 8 / 1e9
         check_memory_available(
             required_gb,
-            safety_margin=0.1,
             operation=f"kinship accumulation (peak: {required_gb:.1f}GB)",
         )
 
@@ -403,7 +401,6 @@ def compute_loco_kinship(
         )
         check_memory_available(
             required_gb,
-            safety_margin=0.1,
             operation=f"LOCO kinship ({n_samples:,} samples, {n_filtered:,} SNPs)",
         )
 
@@ -1330,7 +1327,7 @@ def compute_loco_kinship_streaming(
     # When valid_indices is provided, matrices are n_valid x n_valid (not
     # n_samples); the chromosomes-per-pass sizing lives in _decide_loco_passes.
     n_mat = len(valid_indices) if valid_indices is not None else n_samples
-    available_gb = psutil.virtual_memory().available / 1e9
+    available_gb = memory.available_ram_gb()
     plan = _decide_loco_passes(
         n_mat,
         n_samples,

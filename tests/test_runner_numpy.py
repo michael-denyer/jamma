@@ -304,12 +304,10 @@ def test_chunk_size_pipeline_halves_budget():
 
 def test_chunk_size_auto_scales_with_memory():
     """Auto-scaled budget uses 15% of available RAM between 2-40 GB bounds."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
     # 400 GB available → 15% = 60 GB (hits 40 GB ceiling)
-    mock_vmem = MagicMock()
-    mock_vmem.available = 400_000_000_000
-    with patch("jamma.lmm.chunk_sizing.psutil.virtual_memory", return_value=mock_vmem):
+    with patch("jamma.core.memory.available_ram_gb", return_value=400.0):
         chunk_big = compute_chunk_size_numpy(
             n_samples=50_000,
             n_filtered=100_000,
@@ -318,8 +316,7 @@ def test_chunk_size_auto_scales_with_memory():
         )
 
     # 10 GB available → 15% = 1.5 GB (hits 2 GB floor)
-    mock_vmem.available = 10_000_000_000
-    with patch("jamma.lmm.chunk_sizing.psutil.virtual_memory", return_value=mock_vmem):
+    with patch("jamma.core.memory.available_ram_gb", return_value=10.0):
         chunk_small = compute_chunk_size_numpy(
             n_samples=50_000,
             n_filtered=100_000,

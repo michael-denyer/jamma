@@ -46,20 +46,18 @@ def _compute_chunk_size(
     chunk = min(n_snps, MAX_SAFE_CHUNK)  # default cap
 
     if n_samples > 0:
-        # Use psutil available RAM at 70%
+        # 70% of available RAM, read through the one accessor
         device_budget = None
         try:
-            import psutil
+            from jamma.core import memory
 
-            device_budget = int(psutil.virtual_memory().available * 0.70)
-        except (ImportError, OSError, AttributeError):
-            # ImportError: psutil not installed.
+            device_budget = int(memory.available_ram_gb() * 1e9 * 0.70)
+        except (OSError, AttributeError):
             # OSError: /proc unreadable inside restrictive containers.
             # AttributeError: older psutil lacks virtual_memory().available
             # (seen on ancient Databricks runtimes).
             logger.warning(
-                "Could not query system memory via psutil; "
-                "falling back to MAX_SAFE_CHUNK cap",
+                "Could not query system memory; falling back to MAX_SAFE_CHUNK cap",
                 exc_info=True,
             )
 

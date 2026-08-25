@@ -8,7 +8,7 @@ conditions without requiring actual large allocations.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -84,26 +84,20 @@ class TestMemoryGates:
     def test_check_memory_available_raises_on_insufficient(self):
         """check_memory_available raises MemoryError when psutil reports 1 MB available.
 
-        Patches psutil.virtual_memory at the import site used by jamma.core.memory
-        to return 1 MB available. Requesting 100 GB must raise MemoryError.
+        Pins the machine at 1 MB available through the available_ram_gb seam.
+        Requesting 100 GB must raise MemoryError.
         """
-        mock_vmem = MagicMock()
-        mock_vmem.available = 1_000_000  # 1 MB in bytes
-
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+        with patch("jamma.core.memory.available_ram_gb", return_value=0.001):
             with pytest.raises(MemoryError, match="Insufficient memory"):
                 check_memory_available(required_gb=100.0, operation="test")
 
     def test_check_memory_available_passes_when_sufficient(self):
         """check_memory_available returns True when psutil reports 1 TB available.
 
-        Patches psutil.virtual_memory to return 1 TB available. Requesting
-        1 GB must succeed without raising.
+        Pins the machine at 1 TB available through the available_ram_gb seam.
+        Requesting 1 GB must succeed without raising.
         """
-        mock_vmem = MagicMock()
-        mock_vmem.available = 1_000_000_000_000  # 1 TB in bytes
-
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+        with patch("jamma.core.memory.available_ram_gb", return_value=1000.0):
             result = check_memory_available(required_gb=1.0)
 
         assert result is True
@@ -305,20 +299,14 @@ class TestKinshipOnlyPreflight:
             "test fixture no longer straddles the two budgets"
         )
 
-        mock_vmem = MagicMock()
-        mock_vmem.available = 40 * 10**9
-
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+        with patch("jamma.core.memory.available_ram_gb", return_value=40.0):
             _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
 
     def test_kinship_only_run_still_blocked_when_kinship_does_not_fit(self):
         """The gate still refuses when the kinship phase itself will not fit."""
         from jamma.kinship.compute import _preflight_kinship_memory
 
-        mock_vmem = MagicMock()
-        mock_vmem.available = 1 * 10**9  # 1 GB
-
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
+        with patch("jamma.core.memory.available_ram_gb", return_value=1.0):
             with pytest.raises(MemoryError, match="Insufficient memory"):
                 _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
 

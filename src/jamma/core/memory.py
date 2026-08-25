@@ -55,16 +55,31 @@ def _square_matrix_gb(n: int) -> float:
     return n * n * 8 / 1e9
 
 
+def available_ram_gb() -> float:
+    """Available system RAM in GB — the one place JAMMA asks psutil for it.
+
+    Every RAM-budget reader (the estimators, the chunk sizers, the kinship
+    pass planner) routes through this accessor, so a test pins the machine
+    with one ``monkeypatch.setattr(memory, "available_ram_gb", ...)``
+    instead of patching psutil in each importing module.
+    """
+    return psutil.virtual_memory().available / 1e9
+
+
 def _memory_margin_gb(peak_gb: float) -> float:
-    """Safety margin: 10% of peak, capped at 10GB absolute."""
+    """Safety margin: 10% of peak, capped at 10GB absolute.
+
+    The single spelling of the margin — the estimators' sufficiency verdict
+    and check_memory_available both apply exactly this.
+    """
     return min(peak_gb * 0.1, 10.0)
 
 
 def _check_available(total_gb: float) -> tuple[float, bool]:
     """Return (available_gb, sufficient) with 10% margin capped at 10GB."""
-    available_gb = psutil.virtual_memory().available / 1e9
+    available = available_ram_gb()
     margin_gb = _memory_margin_gb(total_gb)
-    return available_gb, (total_gb + margin_gb) < available_gb
+    return available, (total_gb + margin_gb) < available
 
 
 def _eigendecomp_workspace_gb(n: int) -> float:
@@ -548,19 +563,17 @@ def estimate_streaming_memory(
 
 def check_memory_available(
     required_gb: float,
-    safety_margin: float = 0.1,
     operation: str = "operation",
 ) -> bool:
     """Check if sufficient memory is available, raise if not.
 
-    The safety margin is percentage-based but capped at 10GB absolute.
-    At large scale (500GB+), a 10% margin (50GB) is excessive — the OS
-    and process overhead don't scale with eigendecomp workspace size.
+    Applies the shared 10% margin capped at 10GB absolute
+    (``_memory_margin_gb``). At large scale (500GB+), an uncapped 10%
+    margin (50GB) is excessive — the OS and process overhead don't scale
+    with eigendecomp workspace size.
 
     Args:
         required_gb: Memory required in GB.
-        safety_margin: Additional margin as fraction (0.1 = 10%), capped
-            at 10GB absolute to avoid blocking runs with adequate headroom.
         operation: Description for error message.
 
     Returns:
@@ -569,8 +582,8 @@ def check_memory_available(
     Raises:
         MemoryError: If insufficient memory with detailed message.
     """
-    available_gb = psutil.virtual_memory().available / 1e9
-    margin_gb = min(required_gb * safety_margin, 10.0)
+    available_gb = available_ram_gb()
+    margin_gb = _memory_margin_gb(required_gb)
     required_with_margin = required_gb + margin_gb
 
     if required_with_margin > available_gb:

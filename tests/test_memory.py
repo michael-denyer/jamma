@@ -41,7 +41,7 @@ class TestCheckMemoryAvailable:
     def test_error_message_contains_details(self):
         """Error message should include required, available, and suggestion."""
         with pytest.raises(MemoryError) as exc_info:
-            check_memory_available(1_000_000, safety_margin=0.1, operation="kinship")
+            check_memory_available(1_000_000, operation="kinship")
 
         msg = str(exc_info.value)
         assert "1000000" in msg or "1e+06" in msg.lower()  # Required amount

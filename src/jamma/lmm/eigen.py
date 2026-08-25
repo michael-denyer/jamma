@@ -223,7 +223,6 @@ def eigendecompose_kinship(
     if check_memory:
         check_memory_available(
             required_gb,
-            safety_margin=0.1,
             operation=(
                 f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix"
             ),

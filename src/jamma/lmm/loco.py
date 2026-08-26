@@ -273,8 +273,7 @@ def run_lmm_loco(
     # Reused below for the kinship subsetting decisions (kinship_valid_indices
     # sizing and the K_loco valid-sample slice). The per-chromosome SNP-stats path
     # recomputes its own valid_mask.all() in _run_lmm_for_chromosome_numpy, so
-    # this is not a
-    # shared value across the chromosome loop.
+    # this is not a shared value across the chromosome loop.
     all_samples_valid = n_valid == n_samples_total
 
     phenotypes_valid = phenotypes[valid_mask]
@@ -541,8 +540,9 @@ class _LocoChrSource:
 
     def snp_stats(self, valid_mask: np.ndarray, *, include_hwe: bool) -> SnpStats:
         if include_hwe:
-            # PipelineConfig rejects -hwe with -loco at construction; a direct
-            # caller reaching here would silently get unfiltered results.
+            # PipelineRunner rejects -hwe with -loco before this runs
+            # (pipeline.py); a direct caller reaching here would silently
+            # get unfiltered results.
             raise ValueError("HWE filtering is not supported in LOCO")
         return _chr_snp_stats_for_loco(
             self._snp_stats_cache,

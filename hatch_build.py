@@ -107,7 +107,7 @@ class CustomBuildHook(BuildHookInterface):
         """Compile one C extension from ``spec`` and register it in the wheel.
 
         Drives ``run_build`` (wheel mode) for both ``_lmm_accel`` and
-        ``_jlinalg`` — the eleven preflight+compile steps live there now. On any
+        ``_jlinalg`` — the twelve preflight+compile steps live there now. On any
         preflight skip or compile failure the build backend produces a
         pure-Python wheel as a graceful fallback rather than raising. On success
         it surfaces an OpenMP downgrade and force-includes the ``.so``.

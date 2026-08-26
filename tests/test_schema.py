@@ -2,7 +2,7 @@
 
 Verifies that derived dispatch tables match their original hardcoded values
 exactly, and that write_arrays_batch produces byte-identical output to
-write_batch via AssocResult.
+format_assoc_line via AssocResult.
 """
 
 from pathlib import Path
@@ -221,7 +221,7 @@ class TestDerivedTables:
             MODE_SPECS[99] = "should fail"  # type: ignore[index]
 
 
-# ── Byte-identical output: write_arrays_batch vs write_batch ─────────
+# ── Byte-identical output: write_arrays_batch vs format_assoc_line ───
 
 
 def _make_snp_info(n: int) -> SnpMeta:
@@ -246,9 +246,11 @@ def _make_arrays(mode: int, n: int, rng: np.random.Generator) -> dict:
 
 @pytest.mark.tier0
 @pytest.mark.parametrize("mode", [1, 2, 3, 4])
-def test_write_arrays_batch_matches_write_batch(mode: int, tmp_path: Path) -> None:
-    """write_arrays_batch produces byte-identical output to write_batch."""
-    from jamma.lmm.io import IncrementalAssocWriter
+def test_write_arrays_batch_matches_format_assoc_line(
+    mode: int, tmp_path: Path
+) -> None:
+    """write_arrays_batch produces byte-identical output to format_assoc_line."""
+    from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
     from jamma.lmm.results import _build_results
 
     n = 5
@@ -260,19 +262,21 @@ def test_write_arrays_batch_matches_write_batch(mode: int, tmp_path: Path) -> No
     snp_indices = np.arange(n)
     test_type = TEST_TYPE_MAP[mode]
 
-    # Path A: write_batch via AssocResult (using production _build_results)
-    path_a = tmp_path / "via_assoc.txt"
+    # Path A: format_assoc_line via AssocResult (using production _build_results)
     results = _build_results(mode, snp_indices, afs, miss_counts, snp_info, arrays)
-    with IncrementalAssocWriter(path_a, test_type=test_type) as w:
-        w.write_batch(results)
+    expected = (
+        HEADERS[test_type]
+        + "\n"
+        + "".join(format_assoc_line(r, test_type) + "\n" for r in results)
+    )
 
     # Path B: write_arrays_batch (no AssocResult)
     path_b = tmp_path / "via_arrays.txt"
     with IncrementalAssocWriter(path_b, test_type=test_type) as w:
         w.write_arrays_batch(mode, snp_indices, snp_info, afs, miss_counts, arrays)
 
-    assert path_a.read_text() == path_b.read_text(), (
-        f"Mode {mode}: write_arrays_batch output differs from write_batch"
+    assert path_b.read_text() == expected, (
+        f"Mode {mode}: write_arrays_batch output differs from format_assoc_line"
     )
 
 
@@ -330,7 +334,7 @@ def test_write_arrays_batch_empty(tmp_path: Path) -> None:
 @pytest.mark.tier0
 def test_write_arrays_batch_nan_formatting(tmp_path: Path) -> None:
     """NaN values format identically via both paths."""
-    from jamma.lmm.io import IncrementalAssocWriter
+    from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
     from jamma.lmm.results import _build_results
 
     mode = 1
@@ -341,16 +345,18 @@ def test_write_arrays_batch_nan_formatting(tmp_path: Path) -> None:
     arrays = {k: np.array([float("nan")] * n) for k in RESULT_FIELDS[mode]}
     snp_indices = np.arange(n)
 
-    path_a = tmp_path / "nan_assoc.txt"
     results = _build_results(mode, snp_indices, afs, miss_counts, snp_info, arrays)
-    with IncrementalAssocWriter(path_a, test_type="wald") as w:
-        w.write_batch(results)
+    expected = (
+        HEADERS["wald"]
+        + "\n"
+        + "".join(format_assoc_line(r, "wald") + "\n" for r in results)
+    )
 
     path_b = tmp_path / "nan_arrays.txt"
     with IncrementalAssocWriter(path_b, test_type="wald") as w:
         w.write_arrays_batch(mode, snp_indices, snp_info, afs, miss_counts, arrays)
 
-    assert path_a.read_text() == path_b.read_text()
+    assert path_b.read_text() == expected
 
 
 # ── write_arrays_batch error handling ────────────────────────────────

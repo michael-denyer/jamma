@@ -78,13 +78,12 @@ class IncrementalAssocWriter:
     Context manager that writes results immediately as they are produced,
     avoiding memory accumulation for large GWAS.
 
-    Supports two write paths:
-    - ``write_batch(results)`` — from AssocResult objects (in-memory API)
-    - ``write_arrays_batch(...)`` — directly from numpy arrays (hot path)
+    Writes via ``write_arrays_batch(...)``, directly from numpy arrays.
 
     Example:
         with IncrementalAssocWriter(Path("output.assoc.txt")) as writer:
-            writer.write_batch(compute_results())
+            writer.write_arrays_batch(lmm_mode, snp_indices, snp_info,
+                                       afs, miss_counts, arrays)
         print(f"Wrote {writer.count} results")
     """
 
@@ -136,7 +135,7 @@ class IncrementalAssocWriter:
     def _write_buf(self, buf: str, count: int) -> None:
         """Write pre-formatted buffer with retry logic.
 
-        Shared by ``write_batch`` and ``write_arrays_batch``.
+        Called by ``write_arrays_batch``.
 
         Args:
             buf: Pre-formatted string to write (must end with newline).
@@ -198,23 +197,6 @@ class IncrementalAssocWriter:
         else:
             logger.error(f"Write failed after {attempt + 1} retries: {self.path}")
         raise last_error  # type: ignore[misc]
-
-    def write_batch(self, results: list[AssocResult]) -> None:
-        """Write multiple results as a single buffered write + flush.
-
-        Args:
-            results: List of AssocResult to write.
-
-        Raises:
-            RuntimeError: If writer is not opened as context manager.
-            OSError: After exhausting retries on write failure.
-        """
-        if self._file is None:
-            raise RuntimeError("Writer not opened. Use as context manager.")
-        if not results:
-            return
-        buf = "\n".join(format_assoc_line(r, self.test_type) for r in results) + "\n"
-        self._write_buf(buf, len(results))
 
     def write_arrays_batch(
         self,

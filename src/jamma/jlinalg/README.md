@@ -89,8 +89,11 @@ Set `JAMMA_FORCE_NUMPY_FALLBACK=1` to force the entire jlinalg layer
 onto the NumPy fallback even when vendor BLAS is loaded -- useful for
 isolating numerical differences between vendor LAPACK and NumPy, and
 required by the weekly sanitizer workflow. The narrower
-`JLINALG_NO_VENDOR_LAPACK` only affects eigendecomposition (in
-`lmm/eigen.py`), not the BLAS primitives. `JLINALG_NO_VENDOR_DGEMM=1`
+`JLINALG_NO_VENDOR_LAPACK` only affects eigendecomposition: `jlinalg.eigh`
+checks it per call and routes to the NumPy fallback, and the pre-flight
+memory estimators read the same var (via `core.eigen_plan.forced_numpy_fallback`)
+so pre-flight and runtime agree. It does not affect the BLAS primitives.
+`JLINALG_NO_VENDOR_DGEMM=1`
 is narrower still: dispatch leaves vendor dgemm unwired, so
 `blas_has_dgemm` reports 0 with the extension loaded -- the state an
 LP64-only host is permanently in.

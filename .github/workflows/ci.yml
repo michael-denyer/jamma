@@ -129,22 +129,36 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # expected_blas_backend pins jamma.jlinalg.blas_backend as read
+          # from the most recent successful master run of this workflow
+          # (gh run view <id> --log | grep blas_backend=). It is the real
+          # runner value, not an aspiration: the "Linux + MKL ILP64" leg
+          # resolves to OpenBLAS-ILP64 here, because the numpy-mkl index
+          # publishes a scipy-openblas-linked wheel on this platform, not
+          # an MKL-linked one. Without this assertion the step only ever
+          # printed the value, so any leg silently falling back to
+          # numpy-fallback stayed green.
           - os: ubuntu-latest
             python-version: "3.12"
             name: "Linux + NumPy (3.12)"
+            expected_blas_backend: "OpenBLAS-ILP64"
           - os: ubuntu-latest
             python-version: "3.11"
             name: "Linux + NumPy (3.11)"
+            expected_blas_backend: "OpenBLAS-ILP64"
           - os: ubuntu-latest
             python-version: "3.13"
             name: "Linux + NumPy (3.13)"
+            expected_blas_backend: "OpenBLAS-ILP64"
           - os: macos-latest
             python-version: "3.12"
             name: "ARM Mac + NumPy"
+            expected_blas_backend: "Accelerate-ILP64"
           - os: ubuntu-latest
             python-version: "3.12"
             name: "Linux + MKL ILP64"
             ilp64_numpy: true
+            expected_blas_backend: "OpenBLAS-ILP64"
     name: ${{ matrix.name }}
     timeout-minutes: 20
     steps:
@@ -183,13 +197,24 @@ jobs:
           uv run python -m jamma.jlinalg._compile_jlinalg
 
       - name: Verify BLAS backend
+        env:
+          EXPECTED_BLAS_BACKEND: ${{ matrix.expected_blas_backend }}
         run: |
           uv run python -c "
+          import os
           from jamma.jlinalg import blas_backend, blas_is_ilp64, HAS_C_EXTENSION
           assert HAS_C_EXTENSION, 'C extension failed to load — aborting CI'
           print(f'HAS_C_EXTENSION={HAS_C_EXTENSION}')
           print(f'blas_backend={blas_backend}')
           print(f'blas_is_ilp64={blas_is_ilp64}')
+          expected = os.environ['EXPECTED_BLAS_BACKEND']
+          assert blas_backend == expected, (
+              f'blas_backend={blas_backend!r} but this leg expects '
+              f'{expected!r} — either the runner environment changed '
+              f'(re-pin expected_blas_backend in ci.yml from a fresh '
+              f'master run) or jlinalg silently fell back to a different '
+              f'BLAS backend'
+          )
           "
 
       - name: Run tests
@@ -273,6 +298,12 @@ jobs:
       # (wheel built with -march=native crashes on older CPUs during
       # import of the C extension — not caught by source-install tests).
       - name: Import-test wheel in scratch venv
+        # Import-only smoke passed on a wheel whose C build had silently
+        # fallen back (hatch_build.py warns and ships a source-only wheel
+        # rather than failing the build). jamma/jamma.cli both import fine
+        # in the pure-Python fallback, so that regression reached
+        # build-wheels.yml undetected. Assert both extensions actually
+        # loaded, not just that the package imports.
         run: |
           WHEEL=$(ls dist/*.whl)
           python3.12 -m venv /tmp/smoke_venv
@@ -283,6 +314,20 @@ jobs:
           # CLI entry point must resolve cleanly.
           from jamma.cli import main
           print('CLI entry point imports OK')
+
+          from jamma.lmm import compute_numpy
+          assert compute_numpy._accel is not None, (
+              'wheel shipped without a working _lmm_accel — the C build '
+              'silently fell back to pure Python'
+          )
+          print('jamma.lmm.compute_numpy._accel loaded OK')
+
+          import jamma.jlinalg as jlinalg
+          assert jlinalg.HAS_C_EXTENSION, (
+              'wheel shipped without a working _jlinalg — the C build '
+              'silently fell back to pure Python'
+          )
+          print('jamma.jlinalg.HAS_C_EXTENSION=True')
           "
           /tmp/smoke_venv/bin/jamma --help > /dev/null
 

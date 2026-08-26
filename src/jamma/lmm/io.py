@@ -136,7 +136,7 @@ class IncrementalAssocWriter:
     def _write_buf(self, buf: str, count: int) -> None:
         """Write pre-formatted buffer with retry logic.
 
-        Shared by ``write``, ``write_batch``, and ``write_arrays_batch``.
+        Shared by ``write_batch`` and ``write_arrays_batch``.
 
         Args:
             buf: Pre-formatted string to write (must end with newline).

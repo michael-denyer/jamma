@@ -256,6 +256,18 @@ def _dgemm_numpy(
     )
 
 
+def _eigh_check_square(K: _np.ndarray) -> None:
+    """Validate that K is a 2-D square array (shared eigh-fallback guard).
+
+    Raises:
+        ValueError: If K is not 2-D, or not square.
+    """
+    if K.ndim != 2:
+        raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
+    if K.shape[0] != K.shape[1]:
+        raise ValueError(f"eigh: K must be square, got shape {K.shape}")
+
+
 # ASAN/UBSAN sanitizer workflow needs a way to skip the
 # _jlinalg.so import entirely. RESEARCH §"Pitfall 4" — ASAN + dlopen(...,
 # RTLD_LAZY) inside blas_dispatch.c can produce false-positive
@@ -302,10 +314,7 @@ if _mod is not None:
             K: _np.ndarray, inplace: bool = False
         ) -> tuple[_np.ndarray, _np.ndarray]:
             """NumPy fallback: eigendecomposition of symmetric matrix."""
-            if K.ndim != 2:
-                raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
-            if K.shape[0] != K.shape[1]:
-                raise ValueError(f"eigh: K must be square, got shape {K.shape}")
+            _eigh_check_square(K)
             K64 = _np.asarray(K, dtype=_np.float64)
             w, v = _np.linalg.eigh(K64)
             if inplace:
@@ -419,10 +428,7 @@ if not HAS_C_EXTENSION:
         Raises:
             ValueError: If K is not 2-D square float64.
         """
-        if K.ndim != 2:
-            raise ValueError(f"eigh: K must be a 2-D array, got {K.ndim}-D")
-        if K.shape[0] != K.shape[1]:
-            raise ValueError(f"eigh: K must be square, got shape {K.shape}")
+        _eigh_check_square(K)
         if inplace:
             if K.dtype != _np.float64:
                 raise ValueError(f"eigh: inplace=True requires float64, got {K.dtype}")

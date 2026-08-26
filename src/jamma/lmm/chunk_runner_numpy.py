@@ -34,7 +34,7 @@ from jamma.core.threading import (
 from jamma.lmm import compute_numpy
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
-from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+from jamma.lmm.chunk_sizing import plan_lmm_chunks
 from jamma.lmm.compute_numpy import select_current_dispatch_path
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.impute import impute_missing_inplace
@@ -46,9 +46,6 @@ from jamma.lmm.likelihood_numpy import (
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import LmmMode
-
-# Minimum number of chunks before pipelined execution is worthwhile.
-_MIN_PIPELINE_CHUNKS = 8
 
 
 class LmmChunkRange(NamedTuple):
@@ -376,29 +373,12 @@ def run_lmm_chunk_source_numpy(
         n_cvt, lmm_mode, log_choices=log_dispatch_choices
     )
 
-    def _engine_chunk_size(*, pipeline_buffers: int) -> int:
-        """As many SNPs as the RAM budget allows, never more than the caller asked."""
-        chunk = compute_chunk_size_numpy(
-            n_samples,
-            n_filtered,
-            n_cvt,
-            dispatch=dispatch,
-            pipeline_buffers=pipeline_buffers,
-        )
-        if max_chunk_size is not None:
-            chunk = min(chunk, max_chunk_size)
-        return max(1, chunk)
-
-    # Sized twice: the first size decides whether pipelining is worth it, and a
-    # pipelined run then re-sizes against a budget split across two live buffers.
-    chunk_size = _engine_chunk_size(pipeline_buffers=1)
-    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-    use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
-
-    if use_pipeline:
-        chunk_size = _engine_chunk_size(pipeline_buffers=2)
-        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-        use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+    chunk_plan = plan_lmm_chunks(
+        n_samples, n_filtered, n_cvt, dispatch, max_chunk_size=max_chunk_size
+    )
+    chunk_size = chunk_plan.chunk_size
+    n_chunks = chunk_plan.n_chunks
+    use_pipeline = chunk_plan.use_pipeline
 
     if show_progress:
         logger.info(f"  Analyzed individuals: {n_samples:,}")
@@ -443,7 +423,7 @@ def run_lmm_chunk_source_numpy(
         raw_chunk_source=raw_chunk_source_factory(chunk_size),
         chunk_sink=chunk_sink,
         chunk_size=chunk_size,
-        n_buffers=2 if use_pipeline else 1,
+        n_buffers=chunk_plan.n_buffers,
         rot_threads=threads.rot,
         omp_threads=threads.omp,
     )

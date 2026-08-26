@@ -28,6 +28,8 @@ from jamma.core.snp_stats import (
     filter_snp_stats,
 )
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
+from jamma.lmm.chunk_sizing import plan_lmm_chunks
+from jamma.lmm.compute_numpy import select_current_dispatch_path
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
@@ -425,15 +427,31 @@ def run_lmm_association_numpy(
             or if no valid samples remain after filtering.
     """
     n_samples, n_snps = genotypes.shape
+    # Intercept column counts as a covariate, so minimum is 1 when no user
+    # covariates are passed.
+    n_cvt = covariates.shape[1] if covariates is not None else 1
+
+    # Plan the chunk once, from the same sizer the engine allocates from, and
+    # give both the memory gate and the engine that one number. Otherwise the
+    # gate prices a chunk it never actually allocates: this call has no
+    # MemoryPlan from a pipeline preflight to inherit, so without this it
+    # priced estimate_lmm_memory's lmm_batch_size=20_000 default while the
+    # engine sized its own chunk from the real RAM budget and dispatch path.
+    dispatch = select_current_dispatch_path(n_cvt, config.lmm_mode, log_choices=False)
+    chunk_plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
 
     if config.check_memory:
         # Propagate n_cvt so the preflight correctly sizes Uab/Iab for
         # multi-covariate runs. Otherwise the estimator silently uses its
         # n_cvt=1 default and can let a multi-covariate run pass preflight
-        # before OOMing at the real allocation. Intercept column counts as
-        # a covariate, so minimum is 1 when no user covariates are passed.
-        n_cvt = covariates.shape[1] if covariates is not None else 1
-        est = estimate_lmm_memory(n_samples, n_snps, n_cvt=n_cvt)
+        # before OOMing at the real allocation.
+        est = estimate_lmm_memory(
+            n_samples,
+            n_snps,
+            lmm_batch_size=chunk_plan.chunk_size,
+            n_cvt=n_cvt,
+            n_buffers=chunk_plan.n_buffers,
+        )
         logger.info(
             f"LMM memory: estimated {est.total_gb:.1f}GB, "
             f"available {est.available_gb:.1f}GB"
@@ -459,6 +477,7 @@ def run_lmm_association_numpy(
         config=config,
         output_path=output_path,
         hwe_threshold=hwe_threshold,
+        max_chunk_size=chunk_plan.chunk_size,
         banner="NumPy batch",
         label="lmm_numpy",
     )

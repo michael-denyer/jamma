@@ -1,10 +1,11 @@
 """The memory preflight gate: will this run fit, and if not, say so before it starts.
 
 One ``MemoryPlan`` per run. The plan's compute chunk comes from the same
-``compute_chunk_size_numpy`` the chunk engine calls at allocation time, with
-the same dispatch path and double-buffer count, so the estimate and the
-allocation cannot be computed from different formulas (the #74 bug class).
-The eigendecomposition phase is priced for the driver that will actually run
+``plan_lmm_chunks`` the chunk engine calls at allocation time, given the same
+dispatch path (see ``_compute_chunk`` for why ``n_snps`` stands in for the
+engine's post-filter ``n_filtered``), so the estimate and the allocation
+cannot be computed from different formulas (the #74 bug class). The
+eigendecomposition phase is priced for the driver that will actually run
 (``plan_eigen_driver``), not a blanket worst case.
 """
 
@@ -23,8 +24,9 @@ from jamma.core.eigen_plan import (
 )
 from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
 from jamma.lmm.chunk_sizing import (
-    compute_chunk_size_numpy,
+    LmmChunkPlan,
     lmm_extra_bytes_per_snp,
+    plan_lmm_chunks,
 )
 from jamma.lmm.dispatch import select_dispatch_path
 from jamma.lmm.runner_numpy_streaming import _DEFAULT_STATS_CHUNK
@@ -92,11 +94,22 @@ def _eigen_driver_plan(n_valid: int) -> EigenDriverPlan:
 
 def _compute_chunk(
     n_valid: int, n_snps: int, n_cvt: int, lmm_mode: int
-) -> tuple[int, float]:
-    """The chunk width the engine will size, and the LMM-phase extra it holds.
+) -> tuple[LmmChunkPlan, float]:
+    """The chunk plan the engine will size to, and the LMM-phase extra it holds.
+
+    Calls the same ``plan_lmm_chunks`` the chunk engine allocates from, with
+    ``n_snps`` standing in for the engine's ``n_filtered``: the preflight runs
+    before SNP-level MAF/missingness filtering, so it only knows the
+    pre-filter count. That is the conservative direction — filtering can only
+    shrink the SNP count, and ``compute_chunk_size_numpy`` never returns a
+    chunk larger than the SNP count it is given, so this call cannot plan a
+    chunk wider than the one the engine will actually allocate.
 
     Returns:
-        (compute_chunk_size, uab_iab_gb) for this run's dispatch path.
+        (chunk_plan, uab_iab_gb) for this run's dispatch path. The caller
+        reads ``chunk_plan.n_buffers`` to price the rotation term at the same
+        buffer count the plan (and the engine) actually use, rather than
+        assuming pipelining unconditionally.
     """
     from jamma.lmm import compute_numpy  # deferred: loads the C extension
 
@@ -106,11 +119,13 @@ def _compute_chunk(
         accel=compute_numpy._accel is not None,
         log_choices=False,
     )
-    chunk = compute_chunk_size_numpy(
-        n_valid, n_snps, n_cvt, dispatch=dispatch, pipeline_buffers=2
+    plan = plan_lmm_chunks(n_valid, n_snps, n_cvt, dispatch)
+    extra_gb = (
+        plan.chunk_size
+        * lmm_extra_bytes_per_snp(n_valid, n_cvt, dispatch, n_buffers=plan.n_buffers)
+        / 1e9
     )
-    extra_gb = chunk * lmm_extra_bytes_per_snp(n_valid, n_cvt, dispatch) / 1e9
-    return chunk, extra_gb
+    return plan, extra_gb
 
 
 def plan_memory(
@@ -121,7 +136,8 @@ def plan_memory(
     n_cvt: int,
 ) -> MemoryPlan:
     """Build the run's MemoryPlan for the chosen execution mode."""
-    compute_chunk, uab_iab_gb = _compute_chunk(n_valid, n_snps, n_cvt, config.lmm_mode)
+    chunk_plan, uab_iab_gb = _compute_chunk(n_valid, n_snps, n_cvt, config.lmm_mode)
+    compute_chunk = chunk_plan.chunk_size
 
     if plan.mode == "streaming":
         eigen = _eigen_driver_plan(n_valid)
@@ -129,7 +145,7 @@ def plan_memory(
             n_valid,
             chunk_size=_DEFAULT_STATS_CHUNK,
             n_cvt=n_cvt,
-            pipeline_buffers=2,
+            pipeline_buffers=chunk_plan.n_buffers,
             compute_chunk_size=compute_chunk,
             eigendecomp_peak_gb=eigen.required_gb,
             uab_iab_gb=uab_iab_gb,
@@ -145,7 +161,11 @@ def plan_memory(
         )
 
     est = estimate_lmm_memory(
-        n_valid, n_snps, lmm_batch_size=compute_chunk, n_cvt=n_cvt
+        n_valid,
+        n_snps,
+        lmm_batch_size=compute_chunk,
+        n_cvt=n_cvt,
+        n_buffers=chunk_plan.n_buffers,
     )
     return MemoryPlan(
         mode="batch",

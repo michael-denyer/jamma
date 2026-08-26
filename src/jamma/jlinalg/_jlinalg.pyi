@@ -8,6 +8,8 @@ ABI 12: Level 1/2 BLAS (ddot, dnrm2, daxpy, dscal, dgemv) and dsyr2k were
 removed from the C extension. ABI 17 removed their NumPy fallback
 implementations too; jamma.jlinalg still defines NumPy fallbacks for
 dgemm, dsyrk, eigh, compute_snp_stats_chunk, and the thread-count helpers.
+ABI 18 moved the JLINALG_EXT_* return sentinels out of the LAPACK info range
+so a raw LAPACK illegal-argument error can no longer alias one.
 """
 
 from typing import Final, Literal

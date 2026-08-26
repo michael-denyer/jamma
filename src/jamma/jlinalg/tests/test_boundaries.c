@@ -139,6 +139,25 @@ void test_eigh_65(void)             { _test_eigh_size(65, 1e-8,  1e-8,  302); }
 void test_eigh_64_alt_seed(void)    { _test_eigh_size(64, 1e-13, 1e-13, 303); }
 void test_eigh_65_alt_seed(void)    { _test_eigh_size(65, 1e-8,  1e-8,  304); }
 
+/* The wrappers pass raw LAPACK info (info = -i for illegal argument i) straight
+ * back to eigh.c and pymodule.c, which both compare it against the sentinels.
+ * If any sentinel fell inside LAPACK's [-JLINALG_LAPACK_MAX_ARG, -1] argument
+ * range, a genuine argument error would read as that sentinel and be swallowed
+ * (fall through to DSYEVR, or a spurious NumPy-fallback / MemoryError). This
+ * asserts the bands stay disjoint; the _Static_assert in jlinalg.h guards it at
+ * compile time, and this test surfaces the same invariant through the harness. */
+void test_ext_sentinels_disjoint_from_lapack_arg_range(void) {
+    const int sentinels[] = {
+        JLINALG_EXT_ALLOC_FAIL, JLINALG_EXT_UNAVAILABLE, JLINALG_EXT_COUNT_MISMATCH,
+        JLINALG_EXT_INTERNAL_ERROR, JLINALG_EXT_INPLACE_UNSUPPORTED,
+    };
+    for (size_t i = 0; i < sizeof(sentinels) / sizeof(sentinels[0]); i++) {
+        TEST_ASSERT_LESS_THAN_INT_MESSAGE(
+            -JLINALG_LAPACK_MAX_ARG, sentinels[i],
+            "JLINALG_EXT_* sentinel overlaps the LAPACK info argument range");
+    }
+}
+
 /* -------------------------------------------------------------------------
  * Unity main
  * ------------------------------------------------------------------------- */
@@ -168,6 +187,7 @@ int main(void) {
     RUN_TEST(test_eigh_65);
     RUN_TEST(test_eigh_64_alt_seed);
     RUN_TEST(test_eigh_65_alt_seed);
+    RUN_TEST(test_ext_sentinels_disjoint_from_lapack_arg_range);
 
     int result = UNITY_END();
     Py_Finalize();

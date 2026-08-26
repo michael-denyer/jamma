@@ -162,3 +162,92 @@ class TestSnpStatsC:
         means, miss, vari, _, _, _ = self._call(data)
         assert_allclose(means, [1.0])
         assert miss[0] == 1
+
+
+@pytest.mark.skipif(not HAS_C_EXTENSION, reason="error paths guard the C wrapper")
+class TestSnpStatsErrorPaths:
+    """Every rejecting exit of the C wrapper raises and leaks no references.
+
+    These exercise the single goto-cleanup unwind: each error path must
+    release a_data plus any output arrays already coerced, and discard
+    (never commit) the INOUT writeback copies.
+    """
+
+    def _outs(self, n_snps, hwe=False):
+        means = np.zeros(n_snps, dtype=np.float64)
+        miss = np.zeros(n_snps, dtype=np.intp)
+        vari = np.zeros(n_snps, dtype=np.float64)
+        if not hwe:
+            return means, miss, vari, None, None, None
+        naa = np.zeros(n_snps, dtype=np.int64)
+        nab = np.zeros(n_snps, dtype=np.int64)
+        nbb = np.zeros(n_snps, dtype=np.int64)
+        return means, miss, vari, naa, nab, nbb
+
+    def test_bad_dtype_rejected(self):
+        data = np.zeros((4, 3), dtype=np.int32)
+        with pytest.raises(TypeError, match="float32 or float64"):
+            compute_snp_stats_chunk(data, *self._outs(3))
+
+    def test_non_2d_rejected(self):
+        data = np.zeros(12, dtype=np.float64)
+        with pytest.raises(ValueError, match="must be 2-D"):
+            compute_snp_stats_chunk(data, *self._outs(1))
+
+    def test_mixed_hwe_none_rejected(self):
+        data = np.zeros((4, 3), dtype=np.float64)
+        means, miss, vari, naa, _, _ = self._outs(3, hwe=True)
+        with pytest.raises(ValueError, match="all be arrays or all None"):
+            compute_snp_stats_chunk(data, means, miss, vari, naa, None, None)
+
+    def test_undersized_output_rejected(self):
+        data = np.zeros((4, 5), dtype=np.float64)
+        with pytest.raises(ValueError, match="at least 5"):
+            compute_snp_stats_chunk(data, *self._outs(2))
+
+    def test_undersized_hwe_rejected(self):
+        data = np.zeros((4, 5), dtype=np.float64)
+        means, miss, vari, _, _, _ = self._outs(5)
+        naa = np.zeros(2, dtype=np.int64)
+        nab = np.zeros(2, dtype=np.int64)
+        nbb = np.zeros(2, dtype=np.int64)
+        with pytest.raises(ValueError, match="HWE arrays must have at least 5"):
+            compute_snp_stats_chunk(data, means, miss, vari, naa, nab, nbb)
+
+    def test_error_paths_do_not_leak_refs(self):
+        """Repeated rejection leaves the argument refcounts stable.
+
+        A missed Py_XDECREF on any goto-cleanup branch would grow the
+        refcount of a re-used argument monotonically; a double-DECREF would
+        crash. Re-use the same arrays across many failing calls and assert
+        their refcounts do not drift.
+        """
+        import sys
+
+        data = np.zeros((4, 5), dtype=np.float64)
+        means, miss, vari, _, _, _ = self._outs(2)  # undersized -> always rejects
+
+        def counts():
+            return (
+                sys.getrefcount(data),
+                sys.getrefcount(means),
+                sys.getrefcount(miss),
+                sys.getrefcount(vari),
+            )
+
+        for _ in range(3):  # warm up any interning
+            with pytest.raises(ValueError):
+                compute_snp_stats_chunk(data, means, miss, vari, None, None, None)
+        before = counts()
+        for _ in range(50):
+            with pytest.raises(ValueError):
+                compute_snp_stats_chunk(data, means, miss, vari, None, None, None)
+        assert counts() == before, "error path leaked or over-released a reference"
+
+    def test_success_still_writes_outputs(self):
+        """The refactor preserves the success path: outputs are populated."""
+        data = np.array([[0.0], [1.0], [2.0], [np.nan]], dtype=np.float64)
+        means, miss, vari, _, _, _ = self._outs(1)
+        compute_snp_stats_chunk(data, means, miss, vari, None, None, None)
+        assert_allclose(means, [1.0])
+        assert miss[0] == 1

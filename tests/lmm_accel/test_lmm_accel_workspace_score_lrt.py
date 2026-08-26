@@ -233,6 +233,72 @@ class TestScoreWorkspaceParity:
         with pytest.raises(ValueError, match="PyCapsule_GetPointer"):
             _c().compute_score_fused_ws_c(lrt_ws, utg_t, 1)
 
+    @pytest.mark.tier0
+    @pytest.mark.skipif(
+        not _score_fused_ws_available,
+        reason="Score fused workspace C not available",
+    )
+    def test_score_workspace_degenerate_snps(self, score_ws_data):
+        """A constant genotype (P_xx <= 0) yields NaN beta/se/p_score for that SNP."""
+        from jamma.lmm.compute_numpy import _c
+
+        (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
+            score_ws_data
+        )
+
+        utg_degen = utg_t.copy()
+        utg_degen[0, :] = 0.0
+
+        ws = _c().create_workspace_score_fused_c(
+            w,
+            Uty,
+            Hi_eval_null,
+            eigenvalues,
+            uab_inv_soa,
+            n_samples,
+            1,
+        )
+        result = _c().compute_score_fused_ws_c(ws, utg_degen, 1)
+
+        assert np.isnan(result["betas"][0]), "degenerate SNP should have NaN beta"
+        assert np.isnan(result["ses"][0]), "degenerate SNP should have NaN se"
+        assert np.isnan(result["p_scores"][0]), "degenerate SNP should have NaN p_score"
+        assert np.all(np.isfinite(result["betas"][1:])), (
+            "non-degenerate SNPs should be finite"
+        )
+
+    @pytest.mark.tier0
+    @pytest.mark.skipif(
+        not _score_fused_ws_available,
+        reason="Score fused workspace C not available",
+    )
+    def test_score_workspace_multithreaded(self, score_ws_data):
+        """Score is bitwise deterministic across thread counts."""
+        from jamma.lmm.compute_numpy import _c
+
+        (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
+            score_ws_data
+        )
+
+        ws = _c().create_workspace_score_fused_c(
+            w,
+            Uty,
+            Hi_eval_null,
+            eigenvalues,
+            uab_inv_soa,
+            n_samples,
+            1,
+        )
+        single = _c().compute_score_fused_ws_c(ws, utg_t, 1)
+        multi = _c().compute_score_fused_ws_c(ws, utg_t, 2)
+
+        for key in ("betas", "ses", "p_scores"):
+            np.testing.assert_array_equal(
+                single[key],
+                multi[key],
+                err_msg=f"Score {key}: 2-thread vs 1-thread mismatch",
+            )
+
 
 _lrt_fused_ws_available = compute_numpy._accel is not None
 

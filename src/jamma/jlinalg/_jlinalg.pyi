@@ -5,7 +5,7 @@ When the C extension is not available, jamma.jlinalg.__init__ provides NumPy-bac
 fallbacks with identical signatures.
 
 ABI 12: Level 1/2 BLAS (ddot, dnrm2, daxpy, dscal, dgemv) and dsyr2k were
-removed from the C extension. They are NumPy-only in __init__.py.
+removed from the C extension. ABI 17 removed the NumPy fallbacks too.
 """
 
 from typing import Final, Literal

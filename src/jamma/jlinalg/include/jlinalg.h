@@ -20,7 +20,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * structs, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 16
+#define JLINALG_ABI_VERSION 17
 
 /* ---------------------------------------------------------------------------
  * External BLAS dispatch (vendor BLAS / LAPACK discovery)

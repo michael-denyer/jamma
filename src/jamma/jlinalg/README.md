@@ -7,24 +7,9 @@ ILP64 vendor is available. This avoids numpy BLAS pitfalls: LP64 integer
 overflow at >46k samples, scipy ILP64 incompatibility, and inconsistent
 BLAS backends across platforms.
 
-Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) and dsyr2k
-are pure NumPy implementations -- they were removed from the C extension
-in ABI version 12.
-
 ## Public API
 
 All functions accept and return `numpy.ndarray` (float64, C-contiguous).
-
-### Level 1/2 BLAS (NumPy-only)
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `ddot` | `(x, y) -> float` | Inner product |
-| `dnrm2` | `(x) -> float` | Euclidean norm |
-| `daxpy` | `(alpha, x, y) -> None` | y += alpha * x (in-place) |
-| `dscal` | `(alpha, x) -> None` | x *= alpha (in-place) |
-| `dgemv` | `(A, x) -> ndarray` | Matrix-vector product A @ x |
-| `dsyr2k` | `(C, A, B) -> ndarray` | Symmetric rank-2k update C -= A @ B.T + B @ A.T |
 
 ### Level 3 BLAS (vendor dispatch)
 

@@ -4,19 +4,9 @@ The C extension provides vendor BLAS dispatch (dgemm, dsyrk via system
 BLAS/LAPACK), eigendecomposition (eigh via vendor DSYEVD/DSYEVR), and
 single-pass SNP statistics (compute_snp_stats_chunk).
 
-Level 1/2 BLAS primitives (ddot, dnrm2, daxpy, dscal, dgemv) and dsyr2k
-always use NumPy implementations -- they were removed from the C extension
-in ABI version 12 as vendor dispatch provides no benefit for these operations.
-
 Exports:
-    ddot: Inner product of two double vectors (NumPy).
-    dnrm2: Euclidean norm of a double vector (NumPy).
-    daxpy: In-place y += alpha * x (NumPy).
-    dscal: In-place x *= alpha (NumPy).
-    dgemv: Matrix-vector product A @ x (NumPy).
     dgemm: Matrix-matrix product op(A) @ op(B) via vendor BLAS or NumPy.
     dsyrk: Symmetric rank-k update K = X @ X.T via vendor BLAS or NumPy.
-    dsyr2k: Symmetric rank-2k update C -= A @ B.T + B @ A.T (NumPy).
     eigh: Eigenvalues and eigenvectors of a symmetric matrix via vendor LAPACK.
     blas_has_dgemm: True if ILP64 vendor DGEMM is available. When 0, dgemm is
         the NumPy implementation -- the C one raises RuntimeError.
@@ -57,7 +47,7 @@ from jamma.core.recompile import _load_c_module
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
 
-_EXPECTED_JLINALG_ABI = 16  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+_EXPECTED_JLINALG_ABI = 17  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
 
 
 def _validate_dsyrk(X: _np.ndarray, out: _np.ndarray | None, beta: float) -> None:
@@ -486,176 +476,6 @@ def dsyrk(
     return _dsyrk_backend(X, out=out, beta=beta)
 
 
-# ---------------------------------------------------------------------------
-# NumPy-only BLAS functions (always use NumPy, never from C extension)
-# ---------------------------------------------------------------------------
-# These were removed from the C extension in ABI 12 because vendor dispatch
-# provides no benefit for Level 1/2 operations -- NumPy's BLAS binding is
-# equally fast and simpler to maintain.
-
-
-def ddot(x: _np.ndarray, y: _np.ndarray) -> float:
-    """Compute inner product of two double vectors.
-
-    Args:
-        x: First vector, float64, C-contiguous.
-        y: Second vector, float64, C-contiguous, same length as x.
-
-    Returns:
-        Scalar dot product as Python float.
-
-    Raises:
-        ValueError: If x or y is not 1-D, or lengths differ.
-    """
-    if x.ndim != 1:
-        raise ValueError(f"ddot: x must be a 1-D array, got {x.ndim}-D")
-    if y.ndim != 1:
-        raise ValueError(f"ddot: y must be a 1-D array, got {y.ndim}-D")
-    if x.shape[0] != y.shape[0]:
-        raise ValueError(
-            f"ddot: x and y must have the same length, "
-            f"got {x.shape[0]} and {y.shape[0]}"
-        )
-    return float(
-        _np.dot(
-            x.astype(_np.float64, copy=False),
-            y.astype(_np.float64, copy=False),
-        )
-    )
-
-
-def dnrm2(x: _np.ndarray) -> float:
-    """Compute Euclidean norm of a double vector.
-
-    Args:
-        x: Input vector, float64, C-contiguous.
-
-    Returns:
-        Scalar norm as Python float.
-
-    Raises:
-        ValueError: If x is not 1-D.
-    """
-    if x.ndim != 1:
-        raise ValueError(f"dnrm2: x must be a 1-D array, got {x.ndim}-D")
-    return float(_np.linalg.norm(x.astype(_np.float64, copy=False)))
-
-
-def daxpy(alpha: float, x: _np.ndarray, y: _np.ndarray) -> None:
-    """Compute y += alpha * x in-place.
-
-    Args:
-        alpha: Scalar multiplier.
-        x: Input vector, float64, C-contiguous.
-        y: In/out vector, float64, C-contiguous, same length as x.
-            Modified in-place.
-
-    Raises:
-        ValueError: If x or y is not 1-D, or lengths differ.
-    """
-    if x.ndim != 1:
-        raise ValueError(f"daxpy: x must be a 1-D array, got {x.ndim}-D")
-    if y.ndim != 1:
-        raise ValueError(f"daxpy: y must be a 1-D array, got {y.ndim}-D")
-    if x.shape[0] != y.shape[0]:
-        raise ValueError(
-            f"daxpy: x and y must have the same length, "
-            f"got {x.shape[0]} and {y.shape[0]}"
-        )
-    if y.dtype != _np.float64:
-        raise TypeError(f"daxpy: y must be float64, got {y.dtype}")
-    y += alpha * _np.asarray(x, dtype=_np.float64)
-
-
-def dscal(alpha: float, x: _np.ndarray) -> None:
-    """Compute x *= alpha in-place.
-
-    Args:
-        alpha: Scalar multiplier.
-        x: In/out vector, float64, C-contiguous. Modified in-place.
-
-    Raises:
-        ValueError: If x is not 1-D.
-    """
-    if x.ndim != 1:
-        raise ValueError(f"dscal: x must be a 1-D array, got {x.ndim}-D")
-    if x.dtype != _np.float64:
-        raise TypeError(f"dscal: x must be float64, got {x.dtype}")
-    if alpha == 0.0:
-        x[:] = 0.0  # Match reference BLAS: NaN/Inf -> +0.0
-    else:
-        x *= alpha
-
-
-def dgemv(A: _np.ndarray, x: _np.ndarray) -> _np.ndarray:
-    """Compute matrix-vector product A @ x.
-
-    Args:
-        A: Input matrix, shape (m, n), float64, C-contiguous.
-        x: Input vector, shape (n,), float64, C-contiguous.
-
-    Returns:
-        Result vector, shape (m,), float64.
-
-    Raises:
-        ValueError: If A is not 2-D, x is not 1-D, or shapes don't match.
-    """
-    if A.ndim != 2:
-        raise ValueError(f"dgemv: A must be a 2-D array, got {A.ndim}-D")
-    if x.ndim != 1:
-        raise ValueError(f"dgemv: x must be a 1-D array, got {x.ndim}-D")
-    if A.shape[1] != x.shape[0]:
-        raise ValueError(
-            f"dgemv: A columns ({A.shape[1]}) must match x length ({x.shape[0]})"
-        )
-    return _np.asarray(
-        A.astype(_np.float64, copy=False) @ x.astype(_np.float64, copy=False),
-        dtype=_np.float64,
-    )
-
-
-def dsyr2k(C: _np.ndarray, A: _np.ndarray, B: _np.ndarray) -> _np.ndarray:
-    """Compute symmetric rank-2k update: result = C - A @ B.T - B @ A.T.
-
-    Returns a new array; the input C is not modified.
-
-    Args:
-        C: Symmetric matrix, shape (N, N), float64.
-        A: First factor, shape (N, K), float64.
-        B: Second factor, shape (N, K), float64.
-
-    Returns:
-        Updated result (new array), shape (N, N), float64.
-
-    Raises:
-        ValueError: If C is not 2-D square, or A/B are not 2-D, or
-            dimensions are inconsistent.
-    """
-    if C.ndim != 2:
-        raise ValueError(f"dsyr2k: C must be a 2-D array, got {C.ndim}-D")
-    if C.shape[0] != C.shape[1]:
-        raise ValueError(f"dsyr2k: C must be square, got shape {C.shape}")
-    if A.ndim != 2:
-        raise ValueError(f"dsyr2k: A must be a 2-D array, got {A.ndim}-D")
-    if B.ndim != 2:
-        raise ValueError(f"dsyr2k: B must be a 2-D array, got {B.ndim}-D")
-    N = C.shape[0]
-    if A.shape[0] != N:
-        raise ValueError(f"dsyr2k: A rows ({A.shape[0]}) must match C dimension ({N})")
-    if B.shape[0] != N:
-        raise ValueError(f"dsyr2k: B rows ({B.shape[0]}) must match C dimension ({N})")
-    if A.shape[1] != B.shape[1]:
-        raise ValueError(
-            f"dsyr2k: A columns ({A.shape[1]}) must match B columns ({B.shape[1]})"
-        )
-    C64 = _np.asarray(C, dtype=_np.float64).copy()
-    A64 = _np.asarray(A, dtype=_np.float64)
-    B64 = _np.asarray(B, dtype=_np.float64)
-    C64 -= A64 @ B64.T
-    C64 -= B64 @ A64.T
-    return C64
-
-
 __all__ = [
     "ABI_VERSION",
     "HAS_C_EXTENSION",
@@ -668,13 +488,7 @@ __all__ = [
     "blas_has_lapacke_dsyevd",
     "blas_is_ilp64",
     "compute_snp_stats_chunk",
-    "daxpy",
-    "ddot",
     "dgemm",
-    "dgemv",
-    "dnrm2",
-    "dscal",
-    "dsyr2k",
     "dsyrk",
     "dsyrk_scratch_bytes",
     "eigh",

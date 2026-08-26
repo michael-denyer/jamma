@@ -129,15 +129,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # expected_blas_backend pins jamma.jlinalg.blas_backend as read
-          # from the most recent successful master run of this workflow
-          # (gh run view <id> --log | grep blas_backend=). It is the real
-          # runner value, not an aspiration: the "Linux + MKL ILP64" leg
-          # resolves to OpenBLAS-ILP64 here, because the numpy-mkl index
-          # publishes a scipy-openblas-linked wheel on this platform, not
-          # an MKL-linked one. Without this assertion the step only ever
-          # printed the value, so any leg silently falling back to
-          # numpy-fallback stayed green.
           - os: ubuntu-latest
             python-version: "3.12"
             name: "Linux + NumPy (3.12)"
@@ -158,6 +149,8 @@ jobs:
             python-version: "3.12"
             name: "Linux + MKL ILP64"
             ilp64_numpy: true
+            # Real value on this runner, not MKL: the numpy-mkl index
+            # publishes a scipy-openblas-linked wheel here, not MKL-linked.
             expected_blas_backend: "OpenBLAS-ILP64"
     name: ${{ matrix.name }}
     timeout-minutes: 20
@@ -298,12 +291,6 @@ jobs:
       # (wheel built with -march=native crashes on older CPUs during
       # import of the C extension — not caught by source-install tests).
       - name: Import-test wheel in scratch venv
-        # Import-only smoke passed on a wheel whose C build had silently
-        # fallen back (hatch_build.py warns and ships a source-only wheel
-        # rather than failing the build). jamma/jamma.cli both import fine
-        # in the pure-Python fallback, so that regression reached
-        # build-wheels.yml undetected. Assert both extensions actually
-        # loaded, not just that the package imports.
         run: |
           WHEEL=$(ls dist/*.whl)
           python3.12 -m venv /tmp/smoke_venv

@@ -446,7 +446,11 @@ def run_lmm_association_numpy(
         # n_cvt=1 default and can let a multi-covariate run pass preflight
         # before OOMing at the real allocation.
         est = estimate_lmm_memory(
-            n_samples, n_snps, lmm_batch_size=chunk_plan.chunk_size, n_cvt=n_cvt
+            n_samples,
+            n_snps,
+            lmm_batch_size=chunk_plan.chunk_size,
+            n_cvt=n_cvt,
+            n_buffers=chunk_plan.n_buffers,
         )
         logger.info(
             f"LMM memory: estimated {est.total_gb:.1f}GB, "

@@ -102,6 +102,7 @@ def estimate_lmm_memory(
     n_snps: int,
     lmm_batch_size: int = 20_000,
     n_cvt: int = 1,
+    n_buffers: int = 1,
 ) -> MemoryBreakdown:
     """Estimate memory for the LMM phase only (full-materialization path).
 
@@ -121,6 +122,10 @@ def estimate_lmm_memory(
         lmm_batch_size: Batch size for LMM SNP processing. Pass the runtime
             chunk size for accurate estimates.
         n_cvt: Number of covariates (default 1).
+        n_buffers: Live chunk buffers the engine allocates (1 sequential, 2
+            pipelined). Scales both the UtG rotation chunk and the Uab/Iab
+            extra, matching ``_ChunkEngine``'s per-buffer allocation. Default
+            1 keeps every other caller's estimate unchanged.
 
     Returns:
         MemoryBreakdown with total_gb reflecting only LMM phase needs.
@@ -135,8 +140,9 @@ def estimate_lmm_memory(
     genotypes_gb = array_gb(n_samples, n_snps)  # float64
     eigenvalues_gb = array_gb(n_samples)
     lmm_rotated_gb = 3 * array_gb(n_samples)
-    # UtG chunk + Uab_batch + Iab_batch (dominant intermediates)
-    lmm_batch_gb = (
+    # UtG chunk + Uab_batch + Iab_batch (dominant intermediates), each live
+    # once per buffer.
+    lmm_batch_gb = n_buffers * (
         array_gb(n_samples, lmm_batch_size)  # UtG chunk
         + _uab_iab_gb(n_samples, lmm_batch_size, n_cvt)  # Uab + Iab
     )
@@ -175,10 +181,12 @@ class StreamingMemoryBreakdown(NamedTuple):
     eigenvectors_gb: float  # n^2 * 8 bytes (float64)
     eigendecomp_workspace_gb: float  # DSYEVD O(N^2) workspace (conservative)
     chunk_gb: float  # n * chunk_size * 8 bytes (float64 for precision)
+    lmm_chunk_gb: float  # n * compute_chunk_size * 8 bytes, association-pass raw block
     rotation_buffer_gb: float  # n * chunk_size * 8 * pipeline_buffers bytes for UtG
     grid_reml_gb: float  # n_grid * chunk_size * 8 bytes for Grid REML intermediate
     dsyrk_scratch_gb: float  # Scratch the active dsyrk backend holds (0 when native)
     peak_kinship_gb: float  # Kinship phase (accumulator + chunk + dsyrk scratch)
+    peak_lmm_gb: float  # LMM phase (eigenvectors + chunk + rotation + grid + Uab/Iab)
     total_peak_gb: float  # Max of phases (eigendecomp typically peak)
     available_gb: float  # Current available system memory
     sufficient: bool  # Whether available exceeds total plus margin (10% capped at 10GB)
@@ -358,10 +366,12 @@ def estimate_streaming_memory(
         eigenvectors_gb=eigenvectors_gb,
         eigendecomp_workspace_gb=eigendecomp_workspace_gb,
         chunk_gb=chunk_gb,
+        lmm_chunk_gb=lmm_chunk_gb,
         rotation_buffer_gb=rotation_buffer_gb,
         grid_reml_gb=grid_reml_gb,
         dsyrk_scratch_gb=dsyrk_scratch_gb,
         peak_kinship_gb=peak_kinship,
+        peak_lmm_gb=peak_lmm,
         total_peak_gb=total_peak_gb,
         available_gb=available_gb,
         sufficient=sufficient,

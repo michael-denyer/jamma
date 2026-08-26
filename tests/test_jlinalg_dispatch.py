@@ -30,13 +30,9 @@ class TestBlasBackend:
         """Backend string must be one of the known values."""
         known = {
             "MKL-ILP64",
-            "MKL-LP64",
             "OpenBLAS-ILP64",
-            "OpenBLAS-LP64",
-            "Accelerate",
             "Accelerate-ILP64",
             "system-BLAS-ILP64",
-            "system-BLAS-LP64",
             "numpy-fallback",
         }
         assert blas_backend in known, f"Unknown blas_backend: {blas_backend}"
@@ -124,8 +120,8 @@ class TestIlp64FlagConsistency:
             )
         else:
             # LP64 or no external BLAS — backend should NOT contain ILP64
-            if blas_backend not in ("Accelerate", "numpy-fallback"):
-                assert "LP64" in blas_backend or "ILP64" not in blas_backend, (
+            if blas_backend != "numpy-fallback":
+                assert "ILP64" not in blas_backend, (
                     f"blas_is_ilp64=0 but backend={blas_backend} contains ILP64"
                 )
 
@@ -166,24 +162,21 @@ class TestILP64Awareness:
     def test_blas_backend_string_has_known_value(self):
         """Backend string is one of the documented values.
 
-        MKL and OpenBLAS backends MUST advertise their ILP64/LP64 split
-        in the suffix. Accelerate is ILP64-only on macOS 13.3+ and is
-        reported without a suffix. ``numpy-fallback`` is the catch-all
-        when no vendor BLAS is wired in.
+        blas_dispatch.c only assigns ``g_backend_name`` from the ILP64
+        branch (an LP64 candidate resets it back to "numpy-fallback"
+        instead), so LP64-suffixed and bare "Accelerate" names can never
+        reach Python. ``numpy-fallback`` is the catch-all when no vendor
+        BLAS is wired in.
         """
         known_backends = {
             "MKL-ILP64",
-            "MKL-LP64",
             "OpenBLAS-ILP64",
-            "OpenBLAS-LP64",
-            "Accelerate",
             "Accelerate-ILP64",
-            # ``system-BLAS-{I,}LP64`` is returned by blas_dispatch.c when
+            # ``system-BLAS-ILP64`` is returned by blas_dispatch.c when
             # a vendor library is loaded but path-string detection fails to
             # identify it (typically Linux distributions linking against an
             # alias-only libblas.so).
             "system-BLAS-ILP64",
-            "system-BLAS-LP64",
             "numpy-fallback",
         }
         assert blas_backend in known_backends, (

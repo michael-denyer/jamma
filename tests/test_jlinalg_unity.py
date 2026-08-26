@@ -50,12 +50,7 @@ def c_test_binary():
         pytest.skip("No vendor LAPACK — C eigh tests require DSYEVD or DSYEVR")
     from jamma.jlinalg._compile_jlinalg import compile_test_harness
 
-    try:
-        binary = compile_test_harness()
-    except RuntimeError as e:
-        if "not found" in str(e):
-            pytest.skip(f"C source files archived (v5.0 simplification): {e}")
-        raise
+    binary = compile_test_harness()
     if not binary.exists():
         pytest.fail(f"Failed to compile C test harness at {binary}")
     return binary

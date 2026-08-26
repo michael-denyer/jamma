@@ -384,11 +384,6 @@ class TestGateCorrectnessLmmMemory:
 
 
 @pytest.mark.tier0
-class TestGateCorrectnessRunnerStreaming:
-    """Tests that streaming runner memory gate correctly blocks/passes."""
-
-
-@pytest.mark.tier0
 class TestSafetyMarginCap:
     """Verify 10GB absolute cap on safety margin."""
 

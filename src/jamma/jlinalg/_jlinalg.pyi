@@ -5,7 +5,9 @@ When the C extension is not available, jamma.jlinalg.__init__ provides NumPy-bac
 fallbacks with identical signatures.
 
 ABI 12: Level 1/2 BLAS (ddot, dnrm2, daxpy, dscal, dgemv) and dsyr2k were
-removed from the C extension. ABI 17 removed the NumPy fallbacks too.
+removed from the C extension. ABI 17 removed their NumPy fallback
+implementations too; jamma.jlinalg still defines NumPy fallbacks for
+dgemm, dsyrk, eigh, compute_snp_stats_chunk, and the thread-count helpers.
 """
 
 from typing import Final, Literal
@@ -23,17 +25,18 @@ jlinalg_isa: Final[Literal["AVX2", "NEON", "generic"]]
 blas_backend: Final[
     Literal[
         "MKL-ILP64",
-        "MKL-LP64",
         "OpenBLAS-ILP64",
-        "OpenBLAS-LP64",
-        "Accelerate",
         "Accelerate-ILP64",
         "system-BLAS-ILP64",
-        "system-BLAS-LP64",
         "numpy-fallback",
     ]
 ]
-"""Active dgemm backend. ILP64 vendor > numpy-fallback."""
+"""Resolved vendor BLAS/LAPACK library backing dsyrk and eigh.
+
+Under JLINALG_NO_VENDOR_DGEMM this names the ILP64 vendor library while
+dgemm itself is left unwired and falls back to NumPy; check
+blas_has_dgemm for whether dgemm actually dispatches to this backend.
+"""
 
 blas_is_ilp64: Final[int]
 """1 if the active dgemm backend uses ILP64 (64-bit int) parameters, 0 otherwise."""

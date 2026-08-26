@@ -4,7 +4,7 @@
 Structural guarantee (not empirical trace capture): if the three ENTRY_POINTS
 all reach ``jamma._build_support.compile_and_link.run_build``, their compile
 invocations differ only by the ``BuildSpec`` they pass and the package
-directory they build in — the flags, source lists, and the eleven preflight
+directory they build in — the flags, source lists, and the twelve preflight
 steps all live in one place.
 
 This lint used to also scan the entry points for bare compile-flag literals.

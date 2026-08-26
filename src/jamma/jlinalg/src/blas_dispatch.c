@@ -53,9 +53,6 @@
  * ---------------------------------------------------------------------------
  */
 static int g_is_ilp64 = 0;
-/* Set when LP64 BLAS is detected but not wired -- preserves the detection
- * signal for the "LP64 detected but not used" INFO line. */
-static int g_lp64_seen = 0;
 static jlinalg_dgemm_ilp64_fn g_dgemm_ilp64 = NULL;
 static jlinalg_cblas_dgemm_ilp64_fn g_cblas_dgemm_ilp64 = NULL; /* ILP64 CBLAS (Accelerate) */
 static const char *g_backend_name = "numpy-fallback";
@@ -1023,7 +1020,6 @@ int blas_dispatch_init(void) {
 
     if (best && best->found && !best->is_ilp64) {
         /* LP64 found but not ILP64 -- prefer numpy fallback for consistency */
-        g_lp64_seen = 1;
         if (dbg)
             fprintf(stderr,
                     "jlinalg_dispatch: LP64 %s available but preferring numpy fallback for "

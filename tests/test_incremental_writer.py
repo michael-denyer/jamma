@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from jamma.lmm.io import IncrementalAssocWriter, write_assoc_results
+from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.stats import AssocResult
 
 
@@ -88,7 +88,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with IncrementalAssocWriter(output_path) as writer:
-            writer.write(sample_result)
+            writer.write_batch([sample_result])
 
         content = output_path.read_text()
         lines = content.strip().split("\n")
@@ -101,33 +101,12 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with IncrementalAssocWriter(output_path) as writer:
-            for result in sample_results:
-                writer.write(result)
+            writer.write_batch(sample_results)
 
         content = output_path.read_text()
         lines = content.strip().split("\n")
         assert len(lines) == 11  # Header + 10 results
         assert writer.count == 10
-
-    def test_output_matches_write_assoc_results(
-        self, tmp_path: Path, sample_results: list
-    ):
-        """Incremental writer output should match batch writer exactly."""
-        incremental_path = tmp_path / "incremental.assoc.txt"
-        batch_path = tmp_path / "batch.assoc.txt"
-
-        # Write with incremental writer
-        with IncrementalAssocWriter(incremental_path) as writer:
-            for result in sample_results:
-                writer.write(result)
-
-        # Write with batch writer
-        write_assoc_results(sample_results, batch_path)
-
-        # Compare byte-for-byte
-        incremental_content = incremental_path.read_text()
-        batch_content = batch_path.read_text()
-        assert incremental_content == batch_content
 
     def test_write_batch_method(self, tmp_path: Path, sample_results: list):
         """write_batch should write all results at once."""
@@ -170,22 +149,6 @@ class TestIncrementalAssocWriter:
             f"result count ({n})"
         )
 
-    def test_write_batch_output_matches_individual_writes(
-        self, tmp_path: Path, sample_results: list
-    ):
-        """write_batch output must be byte-identical to individual write() calls."""
-        batch_path = tmp_path / "batch.assoc.txt"
-        individual_path = tmp_path / "individual.assoc.txt"
-
-        with IncrementalAssocWriter(batch_path) as writer:
-            writer.write_batch(sample_results)
-
-        with IncrementalAssocWriter(individual_path) as writer:
-            for result in sample_results:
-                writer.write(result)
-
-        assert batch_path.read_bytes() == individual_path.read_bytes()
-
     def test_write_batch_empty_list(self, tmp_path: Path):
         """write_batch([]) should be a no-op: count stays 0, no error."""
         output_path = tmp_path / "test.assoc.txt"
@@ -205,16 +168,16 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "deep" / "nested" / "dir" / "test.assoc.txt"
 
         with IncrementalAssocWriter(output_path) as writer:
-            writer.write(sample_result)
+            writer.write_batch([sample_result])
 
         assert output_path.exists()
 
     def test_raises_if_not_opened(self, sample_result: AssocResult):
-        """Should raise error if write called without context manager."""
+        """Should raise error if write_batch called without context manager."""
         writer = IncrementalAssocWriter(Path("dummy.txt"))
 
         with pytest.raises(RuntimeError, match="not opened"):
-            writer.write(sample_result)
+            writer.write_batch([sample_result])
 
     def test_retries_on_oserror(self, tmp_path: Path, sample_result: AssocResult):
         """Should retry on OSError and succeed on second attempt."""
@@ -236,7 +199,7 @@ class TestIncrementalAssocWriter:
             open_handle(writer).write = flaky_write
 
             with patch("jamma.lmm.io.time.sleep") as mock_sleep:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 # Should have slept once with 0.1s (first retry backoff)
                 mock_sleep.assert_called_once_with(0.1)
 
@@ -260,7 +223,7 @@ class TestIncrementalAssocWriter:
                         return original_write(data)
 
                     open_handle(writer).write = always_fail
-                    writer.write(sample_result)
+                    writer.write_batch([sample_result])
 
         # Partial file should be cleaned up
         assert not output_path.exists(), "Partial output file should be deleted"
@@ -277,7 +240,7 @@ class TestIncrementalAssocWriter:
                         "jamma.lmm.io.format_assoc_line",
                         side_effect=TypeError("bad format"),
                     ):
-                        writer.write(sample_result)
+                        writer.write_batch([sample_result])
 
             # time.sleep should NOT have been called
             mock_sleep.assert_not_called()
@@ -299,7 +262,7 @@ class TestIncrementalAssocWriter:
                         return original_write(data)
 
                     open_handle(writer).write = always_fail
-                    writer.write(sample_result)
+                    writer.write_batch([sample_result])
 
         # File should be cleaned up by __exit__
         assert not output_path.exists(), (
@@ -314,7 +277,7 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(KeyboardInterrupt):
             with IncrementalAssocWriter(output_path) as writer:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 raise KeyboardInterrupt()
 
         assert output_path.exists(), "Partial file should be retained on interrupt"
@@ -329,7 +292,7 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(SystemExit):
             with IncrementalAssocWriter(output_path) as writer:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 raise SystemExit(1)
 
         assert output_path.exists(), "Partial file should be retained on SystemExit"
@@ -344,7 +307,7 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(ValueError, match="bad data"):
             with IncrementalAssocWriter(output_path) as writer:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 raise ValueError("bad data")
 
         assert not output_path.exists(), (
@@ -418,7 +381,7 @@ class TestIncrementalAssocWriter:
             open_handle(writer).write = eio_write
 
             with patch("jamma.lmm.io.time.sleep") as mock_sleep:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 mock_sleep.assert_called_once_with(0.1)
 
         assert writer.count == 1
@@ -451,7 +414,7 @@ class TestIncrementalAssocWriter:
                         return original_write(data)
 
                     open_handle(writer).write = eacces_write
-                    writer.write(sample_result)
+                    writer.write_batch([sample_result])
 
             # No retry sleeps should have occurred
             mock_sleep.assert_not_called()
@@ -475,7 +438,7 @@ class TestIncrementalAssocWriter:
             with pytest.raises(OSError):
                 with IncrementalAssocWriter(output_path) as writer:
                     # Write first result successfully
-                    writer.write(sample_results[0])
+                    writer.write_batch([sample_results[0]])
                     assert writer.count == 1
 
                     # Now make all subsequent writes fail permanently
@@ -486,7 +449,7 @@ class TestIncrementalAssocWriter:
 
                     open_handle(writer).write = fail_after_first
                     # This should fail after retries and clean up
-                    writer.write(sample_results[1])
+                    writer.write_batch([sample_results[1]])
 
         # _cleanup_partial deletes the file after exhausting retries
         assert not output_path.exists(), (
@@ -501,7 +464,7 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(MemoryError):
             with IncrementalAssocWriter(output_path) as writer:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 raise MemoryError("OOM at 90% completion")
 
         assert output_path.exists(), "Partial file should be retained on MemoryError"
@@ -516,7 +479,7 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(GeneratorExit):
             with IncrementalAssocWriter(output_path) as writer:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 raise GeneratorExit()
 
         assert output_path.exists(), "Partial file should be retained on GeneratorExit"
@@ -531,7 +494,7 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(OSError, match="Disk full"):
             with IncrementalAssocWriter(output_path) as writer:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
 
                 def failing_flush():
                     raise OSError("Disk full")
@@ -551,7 +514,7 @@ class TestIncrementalAssocWriter:
 
         with pytest.raises(KeyboardInterrupt):
             with IncrementalAssocWriter(output_path) as writer:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 original_close = open_handle(writer).close
 
                 def failing_close():
@@ -600,7 +563,7 @@ class TestIncrementalAssocWriter:
             open_handle(writer).flush = flaky_flush
 
             with patch("jamma.lmm.io.time.sleep") as mock_sleep:
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
                 # Should have slept once with first retry backoff delay
                 mock_sleep.assert_called_once_with(0.1)
 
@@ -641,7 +604,7 @@ class TestIncrementalAssocWriter:
 
                     open_handle(writer).seek = failing_seek
 
-                    writer.write(sample_result)
+                    writer.write_batch([sample_result])
 
         # _cleanup_partial should have deleted the partial file
         assert not output_path.exists(), (
@@ -673,7 +636,7 @@ class TestIncrementalAssocWriter:
 
                     open_handle(writer).tell = failing_tell
 
-                    writer.write(sample_result)
+                    writer.write_batch([sample_result])
 
         assert not output_path.exists(), (
             "Partial output file should be deleted when tell() fails"
@@ -720,7 +683,7 @@ class TestIncrementalAssocWriter:
                     return original_write(data)
 
                 handle.write = debris_then_succeed
-                writer.write(sample_result)
+                writer.write_batch([sample_result])
 
                 assert data_attempts == 2, "expected exactly one retry"
 

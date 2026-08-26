@@ -23,7 +23,6 @@ Modules:
 
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-from jamma.lmm.io import write_assoc_results
 from jamma.lmm.loco import DEFAULT_LOCO_CONFIG, LocoConfig, run_lmm_loco
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
@@ -44,6 +43,5 @@ __all__ = [
     "run_lmm_association_numpy_streaming",
     "run_lmm_loco",
     "select_execution_mode",
-    "write_assoc_results",
     "write_eigen_files",
 ]

@@ -72,41 +72,19 @@ def format_assoc_line(result: AssocResult, test_type: str = "wald") -> str:
     return "\t".join(prefix + stats)
 
 
-def write_assoc_results(results: list[AssocResult], path: Path) -> None:
-    """Write association results in GEMMA .assoc.txt Wald format.
-
-    Convenience function for writing a complete list of Wald test results.
-    For incremental writing or other test types, use IncrementalAssocWriter.
-
-    Args:
-        results: List of AssocResult dataclass instances (Wald test).
-        path: Output file path (parent directories created if needed).
-    """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, "w") as f:
-        f.write(HEADER_WALD + "\n")
-        for result in results:
-            f.write(format_assoc_line(result) + "\n")
-
-
 class IncrementalAssocWriter:
     """Write association results incrementally to disk.
 
     Context manager that writes results immediately as they are produced,
-    avoiding memory accumulation for large GWAS. Output format matches
-    write_assoc_results exactly for byte-identical output.
+    avoiding memory accumulation for large GWAS.
 
-    Supports three write paths:
-    - ``write(result)`` — single AssocResult at a time
+    Supports two write paths:
     - ``write_batch(results)`` — from AssocResult objects (in-memory API)
     - ``write_arrays_batch(...)`` — directly from numpy arrays (hot path)
 
     Example:
         with IncrementalAssocWriter(Path("output.assoc.txt")) as writer:
-            for result in compute_results():
-                writer.write(result)
+            writer.write_batch(compute_results())
         print(f"Wrote {writer.count} results")
     """
 
@@ -220,21 +198,6 @@ class IncrementalAssocWriter:
         else:
             logger.error(f"Write failed after {attempt + 1} retries: {self.path}")
         raise last_error  # type: ignore[misc]
-
-    def write(self, result: AssocResult) -> None:
-        """Write single result immediately to disk.
-
-        Args:
-            result: AssocResult to write.
-
-        Raises:
-            RuntimeError: If writer is not opened as context manager.
-            OSError: After exhausting retries on write failure.
-        """
-        if self._file is None:
-            raise RuntimeError("Writer not opened. Use as context manager.")
-        line = format_assoc_line(result, self.test_type) + "\n"
-        self._write_buf(line, 1)
 
     def write_batch(self, results: list[AssocResult]) -> None:
         """Write multiple results as a single buffered write + flush.

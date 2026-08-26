@@ -1221,6 +1221,15 @@ def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
     """
     from jamma.lmm import chunk_runner_numpy
 
+    # The overlapped pipeline only engages on a split dispatch path, and
+    # DispatchPath.use_split is False for the NumPy fallback (see dispatch.py).
+    # With no C accelerator, every mode takes the full-Uab path and
+    # _drive_pipeline is never called, so the spy count would be 0. Skip rather
+    # than assert a C-accel-only behaviour. This is the case the ASAN workflow
+    # hits: it sets JAMMA_FORCE_NUMPY_FALLBACK to keep dlopen away from ASAN.
+    if compute_numpy._accel is None:
+        pytest.skip("overlapped pipeline needs the C accelerator (split dispatch)")
+
     genotypes, phenotypes, kinship, snp_info = _make_synthetic_data(
         n_samples=50, n_snps=200
     )

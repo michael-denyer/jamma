@@ -1,10 +1,10 @@
-"""Pin _MAX_CHUNK so a test can tell the cap from the n_filtered bound.
+"""Assert _MAX_CHUNK fires as a code path distinct from the n_filtered bound.
 
 test_runner_numpy.py::test_compute_chunk_size_large_dataset passes
 n_filtered=200_000, the same value as _MAX_CHUNK, so it cannot distinguish
 "capped by _MAX_CHUNK" from "capped by n_filtered". These tests set
 n_filtered well above the cap and control the RAM budget directly, so each
-assertion pins exactly one of the two bounds.
+assertion isolates one of the two bounds.
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ def test_chunk_size_capped_by_max_chunk(monkeypatch):
 
     n_filtered sits far above _MAX_CHUNK, and available RAM is set high
     enough that the budget-derived chunk would otherwise exceed it, so the
-    cap is the only thing that can produce this result.
+    cap is the only thing that can produce this result. This asserts the cap
+    exists as a code path distinct from n_filtered, not the cap's value.
     """
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 1_000_000.0)
 

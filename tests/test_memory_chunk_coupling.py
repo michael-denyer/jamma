@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from jamma.core import memory
@@ -538,3 +539,78 @@ class TestChunkPlanMatchesEngine:
             / 1e9
         )
         assert extra_gb == pytest.approx(2 * sequential_extra_gb, rel=1e-9)
+
+    def test_run_lmm_association_numpy_threads_real_n_buffers(self, monkeypatch):
+        """Call-site regression: run_lmm_association_numpy's check_memory gate
+        must call estimate_lmm_memory with the plan's real n_buffers, not a
+        default that silently reverts to 1.
+
+        estimate_lmm_memory gaining an n_buffers parameter (with a default of
+        1) does not by itself guarantee any caller passes the real value —
+        the parameter could be dropped from a call site in a later edit and
+        every existing test would still pass, because n_buffers=1 is a valid,
+        merely wrong, default. This drives the real
+        run_lmm_association_numpy(check_memory=True) entry point end to end
+        and records the exact kwargs its internal estimate_lmm_memory call
+        carries, rather than asserting on a GB total that a coincidentally
+        matching wrong number could also produce.
+
+        compute_chunk_size_numpy is forced to a constant so a small, fast
+        synthetic dataset can still produce n_chunks >= _MIN_PIPELINE_CHUNKS
+        (the real auto-scaling budget floor is 2GB per chunk, which no
+        unit-test-sized matrix clears without this).
+        """
+        from jamma.lmm import runner_numpy
+        from jamma.lmm.schema import LmmConfig
+
+        n_samples = 30
+        n_snps = 400
+        forced_chunk_size = 50  # n_snps / this == 8 == _MIN_PIPELINE_CHUNKS
+
+        monkeypatch.setattr(
+            "jamma.lmm.chunk_sizing.compute_chunk_size_numpy",
+            lambda *args, **kwargs: forced_chunk_size,
+        )
+
+        rng = np.random.default_rng(0)
+        genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+        phenotypes = rng.standard_normal(n_samples)
+        kinship = np.corrcoef(genotypes) + np.eye(n_samples) * 0.1
+        kinship = (kinship + kinship.T) / 2
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i, "a1": "A", "a0": "T"}
+            for i in range(n_snps)
+        ]
+
+        recorded_calls: list[dict] = []
+        real_estimate_lmm_memory = runner_numpy.estimate_lmm_memory
+
+        def _recording_estimate_lmm_memory(*args, **kwargs):
+            recorded_calls.append(kwargs)
+            return real_estimate_lmm_memory(*args, **kwargs)
+
+        monkeypatch.setattr(
+            runner_numpy, "estimate_lmm_memory", _recording_estimate_lmm_memory
+        )
+
+        result = runner_numpy.run_lmm_association_numpy(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship,
+            snp_info=snp_info,
+            config=LmmConfig(lmm_mode=1, check_memory=True, show_progress=False),
+        )
+
+        assert result.n_tested == n_snps
+        assert len(recorded_calls) == 1, (
+            f"expected exactly one estimate_lmm_memory call, got {len(recorded_calls)}"
+        )
+        call = recorded_calls[0]
+        assert call["n_buffers"] == 2, (
+            f"expected n_buffers=2 (the plan's real live-buffer count), "
+            f"got {call.get('n_buffers')!r}"
+        )
+        assert call["lmm_batch_size"] == forced_chunk_size, (
+            f"expected lmm_batch_size={forced_chunk_size} (the plan's chunk "
+            f"size), got {call.get('lmm_batch_size')!r}"
+        )

@@ -66,12 +66,6 @@ def _get_blas_context() -> tuple[str, bool]:
         return "unknown", False
 
 
-def _blas_is_mkl() -> bool:
-    """True if the active BLAS backend is MKL."""
-    backend, _ = _get_blas_context()
-    return "MKL" in backend.upper()
-
-
 def _blas_caveat() -> str:
     """Return a caveat suffix for time estimates when not on MKL.
 
@@ -85,17 +79,6 @@ def _blas_caveat() -> str:
         return " [estimates calibrated to MKL — no vendor BLAS detected, expect slower]"
     # Some other vendor BLAS (OpenBLAS, Accelerate)
     return f" [estimates calibrated to MKL — {backend} may differ]"
-
-
-def get_blas_estimate_context() -> tuple[str, bool, bool]:
-    """Return BLAS context relevant to estimate accuracy.
-
-    Returns:
-        Tuple of (backend_name, is_ilp64, estimates_calibrated) where
-        estimates_calibrated is True when on MKL (the reference backend).
-    """
-    backend, is_ilp64 = _get_blas_context()
-    return backend, is_ilp64, _blas_is_mkl()
 
 
 # Kinship: a*n_k^2 + b*n_k (SNP-normalized)

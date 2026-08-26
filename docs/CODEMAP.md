@@ -192,14 +192,13 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 |----|-----------|-------------|-----------|
 | 2a | `PlinkData` | Genotype container (n_samples x n_snps float32) | [plink.py:20](../src/jamma/io/plink.py#L20) |
 | 2a | `load_plink_binary()` | Full-load PLINK .bed/.bim/.fam | [plink.py:53](../src/jamma/io/plink.py#L53) |
-| 2a | `stream_genotype_chunks()` | Windowed reads from .bed (O(n x chunk)) | [plink.py:296](../src/jamma/io/plink.py#L296) |
+| 2a | `stream_genotype_chunks()` | Windowed reads from .bed (O(n x chunk)) | [plink.py:260](../src/jamma/io/plink.py#L260) |
 | 2a | `get_plink_metadata()` | Dimensions + metadata without loading genotypes | [plink.py:92](../src/jamma/io/plink.py#L92) |
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:20](../src/jamma/io/covariate.py#L20) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L45) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L97) |
-| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:94](../src/jamma/lmm/io.py#L94) |
+| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:75](../src/jamma/lmm/io.py#L75) |
 | 2d | `format_assoc_line()` | Table-driven output row formatting | [lmm/io.py:35](../src/jamma/lmm/io.py#L35) |
-| 2d | `write_assoc_results()` | Batch write from list | [lmm/io.py:75](../src/jamma/lmm/io.py#L75) |
 | 2e | `read_snp_list_file()` | Parse SNP list file (one RS ID per line) | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2e | `resolve_snp_list_to_indices()` | Map SNP IDs to dataset indices | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2f | `read_eigen_files()` | Load eigenvalue/eigenvector files (auto-detects `.npy` or `.txt`) | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
@@ -219,8 +218,8 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 3a | `compute_centered_kinship()` | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [compute.py:224](../src/jamma/kinship/compute.py#L224) |
-| 3a | `compute_kinship_streaming()` | 2-pass streaming (stats -> accumulate); accepts `valid_indices` for early sample filtering; canonical streaming kinship (LOCO streaming merged in) | [compute.py:540](../src/jamma/kinship/compute.py#L540) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship matrices | [compute.py:1108](../src/jamma/kinship/compute.py#L1108) |
+| 3a | `compute_kinship_streaming()` | 2-pass streaming (stats -> accumulate); accepts `valid_indices` for early sample filtering; canonical streaming kinship (LOCO streaming merged in) | [compute.py:406](../src/jamma/kinship/compute.py#L406) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship matrices | [compute.py:974](../src/jamma/kinship/compute.py#L974) |
 | 3a | `_filter_snps()` | MAF, missing rate, monomorphism filters | [compute.py:100](../src/jamma/kinship/compute.py#L100) |
 | 3b | `impute_and_center()` | NaN -> mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
 | 3b | `impute_missing_inplace()` | In-place NaN -> col-mean for genotype chunks (used by all runners) | [lmm/impute.py:6](../src/jamma/lmm/impute.py#L6) |
@@ -309,8 +308,8 @@ Configuration, memory management, threading, and logging.
 | 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:162](../src/jamma/core/threading.py#L162) |
 | 5f | `get_hardware_context()` | CPU, BLAS, platform info for benchmarks | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
 | 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:94](../src/jamma/core/progress.py#L94) |
-| 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:166](../src/jamma/core/estimates.py#L166) |
-| 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:202](../src/jamma/core/estimates.py#L202) |
+| 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/core/estimates.py#L149) |
+| 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:185](../src/jamma/core/estimates.py#L185) |
 | 5i | `PHENOTYPE_MISSING` | Missing phenotype sentinel (-9.0) | [constants.py:4](../src/jamma/core/constants.py#L4) |
 
 ---
@@ -580,7 +579,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | LOCO config and artifact naming | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
-| Result writer | [lmm/io.py:94](../src/jamma/lmm/io.py#L94) |
+| Result writer | [lmm/io.py:75](../src/jamma/lmm/io.py#L75) |
 | Memory estimation | [memory.py:252](../src/jamma/core/memory.py#L252) |
 | Threading | [threading.py:43](../src/jamma/core/threading.py#L43) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |

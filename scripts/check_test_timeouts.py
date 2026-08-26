@@ -14,6 +14,11 @@ line accommodates ruff-format line splitting.)
 
 Usage:
   python3 scripts/check_test_timeouts.py
+
+Takes no arguments. pre-commit wires this hook with ``pass_filenames:
+false``, so it always sweeps the whole ``tests/`` tree; an argument means
+something unexpected is invoking it, and passing filenames silently would
+scan the tree while pretending to check only what was named.
 """
 
 from __future__ import annotations
@@ -54,11 +59,26 @@ def scan_line(line: str) -> float | None:
     return value if value > THRESHOLD_S else None
 
 
-def main() -> int:
+def main(argv: list[str]) -> int:
+    if argv:
+        print(
+            f"check_test_timeouts.py takes no arguments, got: {argv!r}. "
+            "pre-commit runs this with pass_filenames: false; an argument "
+            "means an unexpected caller, not a file list to honour.",
+            file=sys.stderr,
+        )
+        return 1
+
     root = repo_root()
     test_dir = root / TEST_DIR
     if not test_dir.is_dir():
-        return 0
+        print(
+            f"check_test_timeouts.py: {test_dir} does not exist — nothing "
+            "was checked. A missing tests/ directory usually means the "
+            "tree moved; update TEST_DIR in this script.",
+            file=sys.stderr,
+        )
+        return 1
 
     targets = [p for p in sorted(test_dir.rglob("*.py")) if p.name not in SKIP_FILES]
     lines_by_path, unreadable = read_batch(targets, root=root)
@@ -92,4 +112,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

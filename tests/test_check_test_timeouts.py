@@ -129,6 +129,57 @@ def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
 
 
 @pytest.mark.tier0
+def test_missing_tests_dir_fails_instead_of_passing_silently(tmp_path):
+    """A repo root with no tests/ directory must fail the gate, not report
+    success over a tree it never looked at (the #188 lesson: a gate that
+    reports 0 for an absent target cannot tell 'nothing to check' from
+    'the tree moved and nobody noticed').
+    """
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
+    # Deliberately no tests/ directory created under tmp_path.
+
+    result = subprocess.run(
+        [sys.executable, str(script_copy)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(tmp_path),
+    )
+
+    assert result.returncode == 1
+    assert "does not exist" in result.stderr
+    assert "tests" in result.stderr
+
+
+@pytest.mark.tier0
+def test_unexpected_argv_fails_instead_of_being_ignored(tmp_path):
+    """An argument must fail the gate, not be silently ignored.
+
+    pre-commit wires this hook with pass_filenames: false, so it is never
+    handed a file list; passing one anyway is unexpected and, before this
+    test, `python3 scripts/check_test_timeouts.py some_file` reported
+    green regardless of what was in the real tests/ tree.
+    """
+    script_copy = install_lint_script(_SCRIPT, tmp_path / "scripts")
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_stub.py").write_text(
+        "@pytest.mark.timeout(600)\ndef test_x(): pass\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(script_copy), "some_file"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(tmp_path),
+    )
+
+    assert result.returncode == 1
+    assert "takes no arguments" in result.stderr
+
+
+@pytest.mark.tier0
 def test_unreadable_file_does_not_hide_violations_elsewhere(tmp_path):
     """One undecodable file must not stop the other files being checked.
 

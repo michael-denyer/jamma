@@ -20,7 +20,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * structs, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 17
+#define JLINALG_ABI_VERSION 18
 
 /* ---------------------------------------------------------------------------
  * External BLAS dispatch (vendor BLAS / LAPACK discovery)
@@ -138,20 +138,43 @@ int blas_has_dsyevr(void);
  * When true, jlinalg_dsyevd_ext uses row-major LAPACKE -- no transpose needed. */
 int blas_has_lapacke_dsyevd(void);
 
-/* Return codes for vendor-dispatch functions. */
-#define JLINALG_EXT_SUCCESS         0   /* Operation succeeded */
-#define JLINALG_EXT_ALLOC_FAIL     -1   /* Workspace allocation failed */
-#define JLINALG_EXT_UNAVAILABLE    -2   /* No vendor routine available -- use numpy fallback */
-#define JLINALG_EXT_COUNT_MISMATCH -3   /* DSYEVR returned fewer eigenvalues than expected (ABI mismatch) */
-#define JLINALG_EXT_INTERNAL_ERROR -4   /* Internal logic error */
-#define JLINALG_EXT_INPLACE_UNSUPPORTED -5  /* inplace=True requires vendor LAPACK (DSYEVD/DSYEVR) */
+/* Return codes for vendor-dispatch functions.
+ *
+ * These sentinels live at -1001..-1005, deliberately far below any value
+ * LAPACK returns in its `info` argument. LAPACK reports an illegal argument i
+ * as info = -i (a small negative), and a convergence failure as a small
+ * positive i. The wrappers pass that raw info straight back to the caller, so
+ * the sentinel band must not overlap the LAPACK negative range, or a genuine
+ * "illegal argument -1" would read as JLINALG_EXT_ALLOC_FAIL and a "-2" as
+ * JLINALG_EXT_UNAVAILABLE. That collision once made eigh.c fall through to
+ * DSYEVR (or the NumPy fallback) on a real ABI bug instead of surfacing it. */
+#define JLINALG_EXT_SUCCESS             0   /* Operation succeeded */
+#define JLINALG_EXT_ALLOC_FAIL      -1001   /* Workspace allocation failed */
+#define JLINALG_EXT_UNAVAILABLE     -1002   /* No vendor routine available -- use numpy fallback */
+#define JLINALG_EXT_COUNT_MISMATCH  -1003   /* DSYEVR returned fewer eigenvalues than expected (ABI mismatch) */
+#define JLINALG_EXT_INTERNAL_ERROR  -1004   /* Internal logic error */
+#define JLINALG_EXT_INPLACE_UNSUPPORTED -1005  /* inplace=True requires vendor LAPACK (DSYEVD/DSYEVR) */
+
+/* Largest LAPACK argument index the wrappers can plausibly report as info = -i.
+ * DSYEVR takes ~20 arguments; 100 is a comfortable ceiling. The sentinels must
+ * stay strictly below -JLINALG_LAPACK_MAX_ARG so raw LAPACK info can never
+ * alias one. Enforced at compile time below. */
+#define JLINALG_LAPACK_MAX_ARG 100
+
+_Static_assert(JLINALG_EXT_ALLOC_FAIL < -JLINALG_LAPACK_MAX_ARG &&
+                   JLINALG_EXT_UNAVAILABLE < -JLINALG_LAPACK_MAX_ARG &&
+                   JLINALG_EXT_COUNT_MISMATCH < -JLINALG_LAPACK_MAX_ARG &&
+                   JLINALG_EXT_INTERNAL_ERROR < -JLINALG_LAPACK_MAX_ARG &&
+                   JLINALG_EXT_INPLACE_UNSUPPORTED < -JLINALG_LAPACK_MAX_ARG,
+               "jlinalg sentinels must not overlap the LAPACK info argument range");
 
 /* Vendor-dispatch dsyevd for eigh.
  * Routes to vendor dsyevd when available, else returns JLINALG_EXT_UNAVAILABLE.
  * K: N x N row-major symmetric matrix (overwritten with eigenvectors in row-major on success).
  * eigenvalues: N doubles, ascending on success.
  * Returns JLINALG_EXT_SUCCESS, JLINALG_EXT_UNAVAILABLE, JLINALG_EXT_ALLOC_FAIL,
- * or positive LAPACK info on convergence/argument error. */
+ * positive LAPACK info on convergence failure, or negative info (-i) when
+ * LAPACK reports argument i illegal (an ABI/logic bug, surfaced not swallowed). */
 int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
                      double *eigenvalues);
 
@@ -162,7 +185,8 @@ int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk,
  * eigenvalues: N doubles, ascending on success.
  * eigenvectors: N x N row-major output, eigenvectors as columns.
  * Returns JLINALG_EXT_SUCCESS, JLINALG_EXT_UNAVAILABLE, JLINALG_EXT_ALLOC_FAIL,
- * or positive LAPACK info on convergence/argument error. */
+ * positive LAPACK info on convergence failure, or negative info (-i) when
+ * LAPACK reports argument i illegal (an ABI/logic bug, surfaced not swallowed). */
 int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
                      double *eigenvalues,
                      double *eigenvectors, npy_intp ldz);
@@ -228,7 +252,7 @@ typedef struct {
  *
  * Returns 0 on success, JLINALG_EXT_UNAVAILABLE if no vendor LAPACK,
  * JLINALG_EXT_ALLOC_FAIL on allocation failure, positive i on convergence
- * failure.
+ * failure, negative -i on LAPACK illegal-argument error.
  */
 int jlinalg_eigh_c(npy_intp N,
                  double *K, npy_intp ldk,

@@ -18,6 +18,7 @@
  *   Returns JLINALG_EXT_UNAVAILABLE if no vendor LAPACK available.
  *   Returns JLINALG_EXT_ALLOC_FAIL if workspace allocation fails.
  *   Returns positive i on LAPACK convergence failure.
+ *   Returns negative -i on LAPACK illegal-argument error (surfaced, not swallowed).
  */
 
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
@@ -33,7 +34,7 @@
  * Parameters: see jlinalg.h
  * Returns: 0 on success, JLINALG_EXT_UNAVAILABLE if no vendor LAPACK,
  *          JLINALG_EXT_ALLOC_FAIL on allocation failure, positive i on
- *          convergence failure.
+ *          convergence failure, negative -i on LAPACK illegal-argument error.
  * ---------------------------------------------------------------------------
  */
 int jlinalg_eigh_c(npy_intp N, double *K, npy_intp ldk, double *eigenvalues, double *eigenvectors,
@@ -52,10 +53,11 @@ int jlinalg_eigh_c(npy_intp N, double *K, npy_intp ldk, double *eigenvalues, dou
      * handles edge cases robustly.
      *
      * jlinalg_dsyevd_ext returns:
-     *   0:  success -- K contains eigenvectors (row-major), eigenvalues filled
-     *  -2:  no vendor dsyevd available -- fall through to dsyevr
-     *  -1:  allocation failure
-     *  >0:  LAPACK dsyevd convergence failure
+     *   JLINALG_EXT_SUCCESS:     K holds eigenvectors (row-major), eigenvalues filled
+     *   JLINALG_EXT_UNAVAILABLE: no vendor dsyevd -- fall through to dsyevr
+     *   JLINALG_EXT_ALLOC_FAIL:  workspace allocation failure -- fall through
+     *   >0:                      LAPACK convergence failure -- return
+     *   <0 (near -i):            LAPACK argument i illegal -- return, don't swallow
      *
      * When both input and output are tightly packed (ldk == ldz == N), reuse
      * the caller-owned eigenvectors buffer as the in-place vendor workspace.
@@ -116,7 +118,7 @@ int jlinalg_eigh_c(npy_intp N, double *K, npy_intp ldk, double *eigenvalues, dou
                 return ext_ret;
             } else {
                 free(K_work);
-                /* ext_ret == -2: no vendor dsyevd -- fall through to dsyevr */
+                /* ext_ret == JLINALG_EXT_UNAVAILABLE: no vendor dsyevd -- fall through to dsyevr */
             }
         } else {
             /* K_work malloc failed -- fall through to dsyevr. */

@@ -102,6 +102,7 @@ src/jamma/
 │   │                       # selection, progress bars, SNP filtering, threading
 │   ├── config.py           # Configuration dataclasses shared across JAMMA
 │   ├── constants.py        # Domain constants (e.g. GEMMA's -9 missing-phenotype code)
+│   ├── estimates.py        # Wall-clock time estimates for GWAS pipeline phases
 │   ├── memory.py           # Cost model: estimators, RAM seam, sufficiency check
 │   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives
 │   ├── memory_snapshot.py  # Process RSS / free-RAM snapshots and cleanup
@@ -145,6 +146,7 @@ src/jamma/
 │   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming wrapper
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 │   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation
+│   ├── dispatch.py         # DispatchPath: the one C-kernel path decision, from n_cvt/lmm_mode/accel
 │   ├── chunk_kernel.py     # The one dispatch match: workspace + its call
 │   ├── chunk_pipeline.py   # Rotation/compute thread split + overlapped pipeline driver
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
@@ -156,6 +158,7 @@ src/jamma/
 │   └── _lmm_accel.c        # C extension entry point: several translation units, see
 │                            # LMM_ACCEL_SOURCES in _build_support/compile_and_link.py
 ├── utils/                  # Shared utilities (logging setup, chromosome sort key)
+│   ├── logging.py          # setup_logging() + write_gemma_log(): loguru config, GEMMA .log.txt
 │   └── npy_cache.py        # Shared .npy sidecar cache validation for binary I/O
 └── validation/             # GEMMA comparison utilities and tolerance configuration
     ├── compare.py          # Side-by-side JAMMA vs GEMMA result comparisons

@@ -354,6 +354,16 @@ static void try_resolve_dsyevr(void *handle, blas_candidate_t *c) {
     /* LP64 dsyevr is not wired (same policy as dgemm). */
 }
 
+/* Resolve the Level-3/LAPACK ops that hang off a dgemm candidate: dsyrk,
+ * dsyevd, and its memory-pressure fallback dsyevr.  Every dgemm-resolution
+ * site runs the same three in the same order against the same handle, so
+ * they share one entry point.  Each resolver is a no-op on an LP64 candidate. */
+static void resolve_secondary_ops(void *handle, blas_candidate_t *c) {
+    try_resolve_dsyrk(handle, c);
+    try_resolve_dsyevd(handle, c);
+    try_resolve_dsyevr(handle, c);
+}
+
 /* ---------------------------------------------------------------------------
  * Directory scanning (populates candidate)
  * ---------------------------------------------------------------------------
@@ -393,9 +403,7 @@ static int scan_dir_for_blas_candidate(const char *dirpath, blas_candidate_t *c)
             if (dbg)
                 fprintf(stderr, "jlinalg_dispatch:   resolved dgemm from %s (ilp64=%d)\n", fullpath,
                         c->is_ilp64);
-            try_resolve_dsyrk(handle, c);
-            try_resolve_dsyevd(handle, c);
-            try_resolve_dsyevr(handle, c);
+            resolve_secondary_ops(handle, c);
             closedir(dir);
             return 1;
         }
@@ -511,9 +519,7 @@ static int scan_proc_maps_for_blas_candidate(blas_candidate_t *c) {
                 fprintf(stderr,
                         "jlinalg_dispatch:   resolved dgemm from /proc/self/maps (ilp64=%d)\n",
                         c->is_ilp64);
-            try_resolve_dsyrk(handle, c);
-            try_resolve_dsyevd(handle, c);
-            try_resolve_dsyevr(handle, c);
+            resolve_secondary_ops(handle, c);
             fclose(fp);
             return 1;
         }
@@ -541,9 +547,7 @@ static void discover_system_blas(blas_candidate_t *c) {
         if (dbg)
             fprintf(stderr, "jlinalg_dispatch: found via RTLD_DEFAULT (ilp64=%d, backend=%s)\n",
                     c->is_ilp64, c->name);
-        try_resolve_dsyrk(RTLD_DEFAULT, c);
-        try_resolve_dsyevd(RTLD_DEFAULT, c);
-        try_resolve_dsyevr(RTLD_DEFAULT, c);
+        resolve_secondary_ops(RTLD_DEFAULT, c);
         return;
     }
 
@@ -556,9 +560,7 @@ static void discover_system_blas(blas_candidate_t *c) {
                     "jlinalg_dispatch: found via RTLD_DEFAULT after numpy load (ilp64=%d, "
                     "backend=%s)\n",
                     c->is_ilp64, c->name);
-        try_resolve_dsyrk(RTLD_DEFAULT, c);
-        try_resolve_dsyevd(RTLD_DEFAULT, c);
-        try_resolve_dsyevr(RTLD_DEFAULT, c);
+        resolve_secondary_ops(RTLD_DEFAULT, c);
         return;
     }
 
@@ -830,9 +832,7 @@ static void discover_pip_mkl(blas_candidate_t *c) {
                         return;
                     }
                     c->name = "MKL-ILP64";
-                    try_resolve_dsyrk(RTLD_DEFAULT, c);
-                    try_resolve_dsyevd(RTLD_DEFAULT, c);
-                    try_resolve_dsyevr(RTLD_DEFAULT, c);
+                    resolve_secondary_ops(RTLD_DEFAULT, c);
                     if (dbg)
                         fprintf(stderr,
                                 "jlinalg_dispatch: pip-mkl -- resolved (ilp64=%d, lapack=%d)\n",

@@ -3,8 +3,9 @@
 ``make_kernel`` matches on ``DispatchPath`` exactly once. Each arm builds
 whatever persistent state its path needs and binds the call that consumes it,
 so a path's workspace and its invocation are written together and cannot drift
-apart. This replaced a pair of six-arm matches in sibling modules, one building
-a three-slot workspace tuple and one re-deciding which of them to pass where.
+apart. This replaced a six-arm match and a seven-arm match in sibling modules,
+one building a three-slot workspace tuple and one re-deciding which of them
+to pass where.
 
 ``RunInvariants`` is the per-run state both halves used to receive separately:
 sixteen positional arguments to the workspace builder, then thirteen of the
@@ -37,10 +38,11 @@ from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood_numpy import compute_uab_invariant_soa
 from jamma.lmm.schema import LmmMode
 
-# What a kernel hands back. The C kernels return TypedDicts (WaldResult and
-# friends) and the split paths return plain dicts, and a TypedDict is not
-# assignable to dict[str, Any]. The engine only ever reads keys, so the
-# read-only supertype is both accurate and wide enough for every path.
+# What a kernel hands back. The Wald C kernels return the WaldResult
+# TypedDict; every other C kernel and the split paths return a plain
+# dict[str, NDArray], and a TypedDict is not assignable to dict[str, Any].
+# The engine only ever reads keys, so the read-only supertype is both
+# accurate and wide enough for every path.
 KernelResult = Mapping[str, Any]
 
 

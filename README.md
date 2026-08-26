@@ -304,7 +304,7 @@ See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source li
 - [Code Map](docs/CODEMAP.md) -- Architecture diagrams and source navigation
 - [Performance](docs/PERFORMANCE.md) -- Bottleneck analysis, scale validation, configuration guide
 - [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) -- C vendor BLAS dispatch layer design
-- [jlinalg Algorithms](docs/JLINALG_ALGORITHMS.md) -- Cache blocking, D&C eigendecomposition, SVD
+- [jlinalg Algorithms](docs/JLINALG_ALGORITHMS.md) -- Vendor DSYEVD algorithm notes
 
 ### GEMMA parity
 

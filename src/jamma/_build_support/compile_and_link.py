@@ -271,11 +271,13 @@ def apply_sanitizer_overrides(
 
     Returns ``(cflags, link_flags, lapack_cflags)``. When ``JAMMA_SANITIZE`` is
     unset or empty, returns the inputs unchanged plus an empty
-    ``lapack_cflags``. Reads ``os.environ`` ONCE per call; the four compile
-    entry points (``hatch_build.py``, ``_compile_jlinalg.py``,
-    ``_compile_accel.py``, plus runtime recompile in ``core/recompile.py``)
-    MUST NOT duplicate the env-var read — that would defeat the
-    single-source-of-truth invariant for compile flags.
+    ``lapack_cflags``. Reads ``os.environ`` ONCE per call; ``run_build`` is the
+    one production caller (every compile entry point, including runtime
+    recompile via ``core/recompile.py``, routes through it). The Unity test
+    harness in ``_compile_jlinalg.py`` calls this directly for a second,
+    unrelated build (the C test binary, not a `.so`). No caller may duplicate
+    the env-var read — that would defeat the single-source-of-truth invariant
+    for compile flags.
 
     JAMMA_SANITIZE format: comma-separated ``-fsanitize`` values, e.g.
     ``"address,undefined"`` or ``"address"`` alone. Trailing ``-O1`` wins
@@ -694,7 +696,7 @@ def compile_jlinalg(
 
 
 # ---------------------------------------------------------------------------
-# run_build — the eleven preflight+compile steps, once, driven by a BuildSpec
+# run_build — the twelve preflight+compile steps, once, driven by a BuildSpec
 # ---------------------------------------------------------------------------
 
 
@@ -706,9 +708,11 @@ class BuildOutcome:
     a preflight guard firing (no numpy, no compiler, missing headers/sources,
     Windows) as distinct from a compile/link failure — the wheel path turns
     both into a pure-Python fallback, while the dev path returns False either
-    way. ``output_path`` and ``out_name`` are populated whenever the sources
-    were located, so the caller can register the wheel artifact or run its
-    import probe.
+    way. ``output_path`` and ``out_name`` are populated only on the final
+    return, after every preflight has passed and ``compile_jlinalg`` has run;
+    every ``_skip()`` path — including one after the sources were found, such
+    as a missing compiler — leaves them at their defaults (``None`` and
+    ``""``).
     """
 
     ok: bool
@@ -751,14 +755,17 @@ def run_build(
 ) -> BuildOutcome:
     """Run the preflight checks and the two-phase compile for one ``BuildSpec``.
 
-    The eleven steps every compile entry point used to hand-write: numpy>=2,
-    compiler discovery, Python.h, Windows reject, ``EXT_SUFFIX``, numpy include,
-    OpenMP detection, platform link flags, sanitizer overrides, and the
-    ``compile_jlinalg`` call under a temp dir. The import probe and any wheel
-    ``force_include`` registration stay with the caller, since the wheel backend
-    does neither. ``find_c_compiler`` and ``detect_openmp_flags`` are injected so
-    this module never imports its ``_build_support`` siblings — the PEP 517
-    backend loads it by file path, where such an import would fail.
+    The twelve steps every compile entry point used to hand-write:
+    sources-exist check, numpy>=2 check, compiler discovery, Python.h,
+    Windows reject, ``EXT_SUFFIX``, numpy include, OpenMP detection,
+    ``resolve_build_spec``, sanitizer overrides, platform link flags, and the
+    ``compile_jlinalg`` call under a temp dir. The import probe stays with
+    the caller; ``hatch_build.py`` skips it and instead registers
+    ``force_include`` for the wheel, while the dev-mode callers import the
+    freshly built module to confirm it loads. ``find_c_compiler`` and
+    ``detect_openmp_flags`` are injected so this module never imports its
+    ``_build_support`` siblings — the PEP 517 backend loads it by file path,
+    where such an import would fail.
 
     Preflight failures print through ``error_print`` — as ``WARNING`` and a
     pure-Python-fallback note under the wheel build, as ``ERROR`` in dev mode —

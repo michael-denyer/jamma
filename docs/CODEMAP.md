@@ -269,8 +269,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:378](../src/jamma/lmm/runner_numpy.py#L378) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:309](../src/jamma/lmm/chunk_runner_numpy.py#L309) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:127](../src/jamma/lmm/chunk_runner_numpy.py#L127) |
-| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:48](../src/jamma/lmm/chunk_kernel.py#L48) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:163](../src/jamma/lmm/chunk_kernel.py#L163) |
+| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:50](../src/jamma/lmm/chunk_kernel.py#L50) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:165](../src/jamma/lmm/chunk_kernel.py#L165) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:118](../src/jamma/lmm/chunk_pipeline.py#L118) |
 | 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:67](../src/jamma/lmm/chunk_sizing.py#L67) |
 | 4Nc | `create_lmm_workspace_fused()` | Allocate the reusable per-chunk Wald workspace (n_cvt=1 fused path) | [compute_numpy.py:119](../src/jamma/lmm/compute_numpy.py#L119) |
@@ -282,7 +282,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:34](../src/jamma/lmm/runner_numpy_streaming.py#L34) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:107](../src/jamma/lmm/runner_numpy_streaming.py#L107) |
-| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:115](../src/jamma/lmm/runner.py#L100) |
+| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:102](../src/jamma/lmm/runner.py#L102) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:88](../src/jamma/lmm/schema.py#L88) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:114](../src/jamma/lmm/schema.py#L114) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:34](../src/jamma/lmm/results.py#L34) |
@@ -322,12 +322,12 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:40](../src/jamma/validation/tolerances.py#L40) |
-| 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:21](../src/jamma/validation/compare.py#L22) |
-| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:312](../src/jamma/validation/compare.py#L324) |
-| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:399](../src/jamma/validation/compare.py#L481) |
-| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:144](../src/jamma/validation/compare.py#L145) |
-| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:245](../src/jamma/validation/compare.py#L258) |
-| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:182](../src/jamma/validation/compare.py#L183) |
+| 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:22](../src/jamma/validation/compare.py#L22) |
+| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:324](../src/jamma/validation/compare.py#L324) |
+| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:481](../src/jamma/validation/compare.py#L481) |
+| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:145](../src/jamma/validation/compare.py#L145) |
+| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:258](../src/jamma/validation/compare.py#L258) |
+| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:183](../src/jamma/validation/compare.py#L183) |
 
 ---
 
@@ -584,6 +584,6 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Memory estimation | [memory.py:252](../src/jamma/core/memory.py#L252) |
 | Threading | [threading.py:43](../src/jamma/core/threading.py#L43) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
-| Validation comparison | [compare.py:399](../src/jamma/validation/compare.py#L481) |
+| Validation comparison | [compare.py:481](../src/jamma/validation/compare.py#L481) |
 | Equivalence proof | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
 | Numerical equivalence bound | [GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md](GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) |

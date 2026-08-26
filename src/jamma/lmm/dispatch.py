@@ -20,8 +20,9 @@ class DispatchPath(Enum):
     Derived once by ``select_dispatch_path`` from ``(n_cvt, lmm_mode, accel)``
     and consulted per chunk. Exactly one member is active, so the
     contradictory flag combinations a multi-boolean form admits are
-    unrepresentable and need no runtime guard. Wald-vs-mode-4 for the FUSED and
-    SOA_SPLIT families is resolved from ``lmm_mode`` at the call site;
+    unrepresentable and need no runtime guard. Wald-vs-mode-4 for the FUSED
+    and FUSED_GENERAL families is resolved from ``lmm_mode`` at the call
+    site in ``chunk_kernel.py``; SOA_SPLIT never carries Wald or mode 4.
     """
 
     NUMPY_FALLBACK = "numpy_fallback"  # not split: pure-NumPy full-Uab path
@@ -29,7 +30,7 @@ class DispatchPath(Enum):
     FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab (Wald/mode-4 by lmm_mode)
     FUSED_SCORE_WS = "fused_score_ws"  # mode 3 workspace-based
     FUSED_LRT_WS = "fused_lrt_ws"  # mode 2 workspace-based
-    SOA_SPLIT = "soa_split"  # SoA split; Wald+compose / score / lrt by lmm_mode
+    SOA_SPLIT = "soa_split"  # SoA split; n_cvt>=2 score/lrt only
 
     @property
     def use_split(self) -> bool:

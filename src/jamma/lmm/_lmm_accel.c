@@ -92,7 +92,7 @@
  * The Python side checks this at import time to detect stale .so files. */
 #define ABI_VERSION 12  /* v12: Unreachable batch/split entry points removed */
 
-/* P_YY_MIN and REML_SENTINEL moved to _lmm_support.h when the general kernels
+/* P_YY_MIN and REML_SENTINEL moved to _lmm_types.h when the general kernels
  * left this file: both units read them, and two copies could drift. */
 
 
@@ -123,19 +123,6 @@
 /* grid_invariant_t moved to _lmm_types.h when the ncvt1 kernels left this
  * file: the workspace creators and batch entry points here build it, the
  * kernels there read it, so it spans the boundary. */
-
-
-/* Accumulate the three SNP-varying coarse-grid reductions and combine them
- * with the precomputed invariant reductions into the canonical Pab layout. */
-
-/* Cached split REML tail. The invariant W determinant was precomputed with
- * the coarse-grid weights, so only the SNP-specific X term needs a log. */
-
-
-/* Return the best REML coarse-grid index, or -1 when every point is degenerate. */
-
-
-/* Full REML optimization for callers that do not share the coarse-grid pass. */
 
 /* =========================================================================
  * Workspace API — persistent cross-chunk state for split-Uab pipeline
@@ -247,7 +234,9 @@ typedef struct {
     /* Invariant SoA (reference, not owned — Python holds the array) */
     const double *uab_inv;
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
-    /* Fused Uab fields (NULL when non-fused general workspace) */
+    /* Fused Uab fields. Every lmm_workspace_general_t is fused now (the
+     * non-fused general workspace was deleted); the NULL checks on these
+     * fields elsewhere in this file are defensive, not a real code path. */
     double *utw_transposed;     /* (n_cvt * n_samples) column-major, owned */
     const double *UtW;          /* points to utw_transposed (column-major) */
     const double *Uty;          /* (n_samples,) borrowed */
@@ -310,30 +299,13 @@ static void lmm_workspace_general_destructor(PyObject *cap)
 
 
 /* =========================================================================
- * MLE (Maximum Likelihood Estimation) helpers for LRT
- *
- * Key differences from REML:
- *   - No Iab parameter or logdet_hiw computation
- *   - Uses n_samples instead of df = n_samples - n_cvt - 1
- *   - MLE constant: 0.5 * n * (log(n) - log(2*pi) - 1)
- * ========================================================================= */
-
-
-/* Return the best MLE coarse-grid index, or -1 when every point is degenerate. */
-
-/* Find the REML and MLE coarse brackets together. Both likelihoods consume
- * one canonical Pab calculation per grid point and differ only in the tail. */
-
-
-/* Full MLE optimization for callers that do not share the coarse-grid pass. */
-
-/* =========================================================================
  * FUSED Uab — workspace holds w/Uty, chunk accepts UtG_T directly
  *
  * Eliminates the (n_snps, 3, n_samples) uab_varying_soa intermediate
  * allocation by computing wx/xx/xy products on-the-fly from UtG_T columns
  * in thread-local scratch buffers. Same FP operations in the same order
- * as the SoA path — results are bitwise-identical.
+ * as the *_ncvt1_split helpers (golden_section_optimize_lambda_split_ncvt1_numpy)
+ * — results are bitwise-identical.
  * ========================================================================= */
 
 /* -------------------------------------------------------------------------
@@ -1972,7 +1944,7 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
                 out_v[i] = a[i] * b[i];
         }
 
-        /* Compute per-SNP logdet_iab at identity (same as non-fused general).
+        /* Compute per-SNP logdet_iab at identity.
          * Reuse per-thread heap buffer (consumed before my_row0 needed). */
         double *iab_row0 = my_row0;
         for (int i = 0; i < n_index; i++) iab_row0[i] = 0.0;
@@ -3830,7 +3802,7 @@ static PyObject *jamma_sentinel_oob(PyObject *self, PyObject *args)
  * itself, not a family depending on another family, so scripts/
  * lmm_accel_sections.py excludes this block when it counts cross-section
  * coupling.  Without the banner the whole table reads as part of whichever
- * section precedes it, and 28 entry points look shared when none are.
+ * section precedes it, and 16 entry points look shared when none are.
  * ========================================================================= */
 
 static PyMethodDef methods[] = {

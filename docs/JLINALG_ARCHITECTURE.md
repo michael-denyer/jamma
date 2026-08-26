@@ -129,7 +129,7 @@ results that diverge from GEMMA's validation tolerances.
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Public API with NumPy fallbacks when C extension unavailable |
-| `_compile_jlinalg.py` | Dev-mode compiler script (per-file compilation with ISA-specific flags) |
+| `_compile_jlinalg.py` | Dev-mode compiler script; calls `run_build(JLINALG_SPEC)` in `_build_support/compile_and_link.py` |
 
 ### C Extension
 
@@ -239,8 +239,9 @@ invariant:
 
 The pre-commit hook `scripts/check_compile_flag_literals.py` bans bare
 `-O3`/`-fno-fast-math`/`-fopenmp` literals anywhere outside
-`_build_support/` (with one explicit exception for the `-march=native`
-dev-mode flag in `_compile_accel.py`). A second hook
+`_build_support/`. The dev-mode `-march=native` flag lives in
+`LMM_ACCEL_SPEC.dev_extra_cflags` in `compile_and_link.py`, applied only on
+the dev rebuild path so it can never reach the portable wheel build. A second hook
 (`scripts/verify_compile_invocations_match.py`) enforces that the three
 compile entry points all import from `_build_support` rather than
 duplicating flag/source lists.

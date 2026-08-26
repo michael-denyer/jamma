@@ -31,9 +31,11 @@ from jamma.core.memory import estimate_lmm_memory
 def _c_extension_available() -> bool:
     """Report whether the loaded C extension is usable.
 
-    Deferred import because compute_numpy imports this module transitively.
+    Deferred import: importing compute_numpy loads the C extension
+    (_load_c_module runs at module scope), so this stays lazy until the
+    caller actually needs the answer.
     """
-    from jamma.lmm import compute_numpy  # deferred: circular dep
+    from jamma.lmm import compute_numpy  # deferred: loads the C extension
 
     return compute_numpy._accel is not None
 

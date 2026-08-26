@@ -152,6 +152,56 @@ class EigenDriverPlan(NamedTuple):
     dsyevr_peak_gb: float
     inplace_peak_gb: float
 
+    def describe(self, available_gb: float, inplace_reason: str = "") -> str:
+        """One memory-log line for the chosen driver.
+
+        Reproduces the three per-driver log strings that ``eigendecompose_kinship``
+        used to spell inline. The eigenvalue counts are all on the plan; only the
+        DSYEVD-not-inplace ``inplace_reason`` is derived from the runtime kinship
+        matrix (dtype, contiguity, writeability), so the caller passes it in.
+
+        Args:
+            available_gb: Available memory (GB), for the log line.
+            inplace_reason: Why inplace was not chosen, for the DSYEVD line. The
+                numpy fallback and the vendor-DSYEVD-absent cases carry their own
+                phrasing; a caller-supplied reason covers the K-derived cases.
+
+        Returns:
+            The formatted log line.
+        """
+        if self.use_inplace:
+            return (
+                f"Eigendecomp memory (DSYEVD-inplace): estimated "
+                f"{self.inplace_peak_gb:.1f}GB, available {available_gb:.1f}GB "
+                f"(kinship in memory, overwriting in place; "
+                f"DSYEVR fallback={self.dsyevr_peak_gb:.1f}GB)"
+            )
+        if self.use_dsyevr:
+            if self.pre_fallback_gb > self.required_gb:
+                fell_from = (
+                    "DSYEVD-inplace"
+                    if self.pre_fallback_gb == self.inplace_peak_gb
+                    else "DSYEVD"
+                )
+                detail = f"{fell_from}={self.pre_fallback_gb:.1f}GB would not fit"
+            else:
+                detail = "vendor DSYEVD unavailable"
+            return (
+                f"Eigendecomp memory (DSYEVR): estimated {self.dsyevr_peak_gb:.1f}GB, "
+                f"available {available_gb:.1f}GB "
+                f"({detail})"
+            )
+        reason = inplace_reason or (
+            "JLINALG_NO_VENDOR_LAPACK set, using np.linalg.eigh"
+            if self.no_vendor
+            else "no vendor DSYEVD available"
+        )
+        return (
+            f"Eigendecomp memory (DSYEVD): estimated {self.required_gb:.1f}GB, "
+            f"available {available_gb:.1f}GB "
+            f"({reason}; DSYEVR fallback={self.dsyevr_peak_gb:.1f}GB)"
+        )
+
 
 def plan_eigen_driver(
     n_samples: int,

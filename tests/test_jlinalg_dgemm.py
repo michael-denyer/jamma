@@ -23,7 +23,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from jamma.jlinalg import HAS_C_EXTENSION, dgemm
+from jamma.jlinalg import HAS_C_EXTENSION, _dgemm_numpy, dgemm
 
 pytestmark = pytest.mark.tier0
 
@@ -166,6 +166,42 @@ class TestDgemmCorrectness:
         result = dgemm(A, B)
         expected = np.array([[58.0, 64.0], [139.0, 154.0]])
         npt.assert_array_equal(result, expected)
+
+
+# ---------------------------------------------------------------------------
+# TestDgemmContract — properties any dgemm implementation must uphold
+# ---------------------------------------------------------------------------
+
+
+class TestDgemmContract:
+    """NaN propagation and dtype coercion, checked against both backends.
+
+    ``dgemm`` is whichever implementation the module resolved at import
+    (vendor or NumPy); ``_dgemm_numpy`` is always the NumPy fallback,
+    reachable directly regardless of what the vendor path resolved to.
+    Running each case against both proves the contract holds independent
+    of which backend answers ``dgemm`` in this process.
+    """
+
+    def test_nan_propagates(self) -> None:
+        """A NaN in A propagates only to the output entries it touches."""
+        A = np.array([[1.0, 2.0], [np.nan, 1.0], [3.0, 4.0]])
+        B = np.array([[1.0], [1.0]])
+        for impl in (dgemm, _dgemm_numpy):
+            result = impl(A, B)
+            npt.assert_allclose(result[0, 0], 3.0, rtol=1e-14)
+            assert np.isnan(result[1, 0]), f"{impl}: NaN not propagated: {result}"
+            npt.assert_allclose(result[2, 0], 7.0, rtol=1e-14)
+
+    def test_float32_input_coerced_to_float64(self) -> None:
+        rng = np.random.default_rng(605)
+        A = rng.standard_normal((6, 4)).astype(np.float32)
+        B = rng.standard_normal((4, 3)).astype(np.float32)
+        expected = A.astype(np.float64) @ B.astype(np.float64)
+        for impl in (dgemm, _dgemm_numpy):
+            result = impl(A, B)
+            assert result.dtype == np.float64
+            npt.assert_allclose(result, expected, rtol=1e-6)
 
 
 # ---------------------------------------------------------------------------

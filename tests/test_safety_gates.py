@@ -46,14 +46,19 @@ def _make_memory_snapshot(available_gb: float = 1000.0) -> MemorySnapshot:
 
 def _fake_eigh(
     return_value: tuple[np.ndarray, np.ndarray],
+    side_effect: BaseException | None = None,
 ):
     """Build a fake eigh matching the real ``jlinalg.eigh(K, inplace=False)`` signature.
 
     Unlike MagicMock, this rejects unknown keyword arguments, catching
-    call-site drift between tests and the real interface.
+    call-site drift between tests and the real interface. When ``side_effect``
+    is given, the fake raises it instead of returning, standing in for a
+    backend failure (the vendor or NumPy path raising).
     """
 
     def _eigh(K: np.ndarray, inplace: bool = False) -> tuple[np.ndarray, np.ndarray]:
+        if side_effect is not None:
+            raise side_effect
         return return_value
 
     return _eigh
@@ -66,6 +71,7 @@ def _fake_jlinalg(
     blas_has_dsyevr: bool = False,
     blas_backend: str = "test",
     eigh_return: tuple | None = None,
+    eigh_side_effect: BaseException | None = None,
 ) -> SimpleNamespace:
     """Build a fake jlinalg with only the attributes eigen.py reads.
 
@@ -79,7 +85,7 @@ def _fake_jlinalg(
         blas_has_dsyevd=blas_has_dsyevd,
         blas_has_dsyevr=blas_has_dsyevr,
         blas_backend=blas_backend,
-        eigh=_fake_eigh(eigh_return or default_return),
+        eigh=_fake_eigh(eigh_return or default_return, eigh_side_effect),
     )
 
 
@@ -234,30 +240,28 @@ class TestLP64OverflowWarning:
 
         big_K = _big_K_view(50_000)
         snapshot = _make_memory_snapshot()
+        # jlinalg.eigh now owns the JLINALG_NO_VENDOR_LAPACK routing, so eigen.py
+        # always calls it (no direct np.linalg.eigh branch). Have the fake's eigh
+        # raise to stand in for the backend failing; the return value is
+        # irrelevant because the assertion only checks warning routing.
         fake_jl = _fake_jlinalg(
             blas_is_ilp64=0,
             blas_has_dsyevd=False,
             blas_has_dsyevr=False,
+            eigh_side_effect=RuntimeError("test stub"),
         )
 
-        # Patch eigh at the jamma import site (not numpy globally) and have
-        # it short-circuit with a RuntimeError. The assertion only checks the
-        # warning-routing branch, so the eigh return value is irrelevant —
-        # short-circuiting is safer than fabricating a fake numerical result.
         with (
             patch.object(eigen, "jlinalg", fake_jl),
             patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
             patch.dict("os.environ", {"JLINALG_NO_VENDOR_LAPACK": "1"}),
-            patch.object(
-                eigen.np.linalg, "eigh", side_effect=RuntimeError("test stub")
-            ),
             warnings.catch_warnings(record=True) as w,
         ):
             warnings.simplefilter("always")
 
             # Lock down two invariants:
-            # 1. The RuntimeError from the patched np.linalg.eigh PROPAGATES
-            #    to the caller (no silent catch returning a default result).
+            # 1. The RuntimeError from jlinalg.eigh PROPAGATES to the caller
+            #    (no silent catch returning a default result).
             # 2. The LP64 warning is NOT emitted on this routing branch.
             with pytest.raises(RuntimeError, match="test stub"):
                 eigen.eigendecompose_kinship(big_K, check_memory=False)

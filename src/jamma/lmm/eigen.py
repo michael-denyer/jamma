@@ -164,63 +164,33 @@ def eigendecompose_kinship(
             stacklevel=2,
         )
 
-    use_inplace = plan.use_inplace
-    use_dsyevr = plan.use_dsyevr
     required_gb = plan.required_gb
-    driver = plan.driver
-    dsyevd_req = plan.pre_fallback_gb  # pre-fallback peak, for logging
-    dsyevr_gb = plan.dsyevr_peak_gb
-    inplace_gb = plan.inplace_peak_gb
 
     # Warn when the chosen DSYEVD peak may exceed available memory and no DSYEVR
     # fallback exists (potential OOM at the real allocation).
     if (
         not no_vendor
-        and not use_dsyevr
+        and not plan.use_dsyevr
         and required_gb + _memory_margin_gb(required_gb) > available_gb
     ):
         logger.warning(
             f"DSYEVD peak ({required_gb:.1f}GB) may exceed available memory "
             f"({available_gb:.1f}GB) and DSYEVR is not available. "
-            f"Proceeding with {driver}."
+            f"Proceeding with {plan.driver}."
         )
-    if use_inplace:
-        logger.info(
-            f"Eigendecomp memory (DSYEVD-inplace): estimated {inplace_gb:.1f}GB, "
-            f"available {available_gb:.1f}GB "
-            f"(kinship in memory, overwriting in place; "
-            f"DSYEVR fallback={dsyevr_gb:.1f}GB)"
-        )
-    elif use_dsyevr:
-        if dsyevd_req > required_gb:
-            # Fell back from DSYEVD/inplace under memory pressure
-            fell_from = "DSYEVD-inplace" if dsyevd_req == inplace_gb else "DSYEVD"
-            detail = f"{fell_from}={dsyevd_req:.1f}GB would not fit"
-        else:
-            # DSYEVR is the only available vendor driver
-            detail = "vendor DSYEVD unavailable"
-        logger.info(
-            f"Eigendecomp memory (DSYEVR): estimated {dsyevr_gb:.1f}GB, "
-            f"available {available_gb:.1f}GB "
-            f"({detail})"
-        )
-    else:
-        # Determine why inplace was not used
-        if no_vendor:
-            reason = "JLINALG_NO_VENDOR_LAPACK set, using np.linalg.eigh"
-        elif not jlinalg.blas_has_dsyevd:
-            reason = "no vendor DSYEVD available"
-        elif K.dtype != np.float64:
-            reason = f"K dtype is {K.dtype}, not float64"
+
+    # Only the DSYEVD-not-inplace line names a K-derived reason. Reaching this
+    # branch means vendor DSYEVD exists (no_vendor and DSYEVR-only both route
+    # elsewhere in plan_eigen_driver), so the K flags are the only reason left.
+    inplace_reason = ""
+    if not plan.use_inplace and not plan.use_dsyevr and not no_vendor:
+        if K.dtype != np.float64:
+            inplace_reason = f"K dtype is {K.dtype}, not float64"
         elif not K.flags["C_CONTIGUOUS"]:
-            reason = "K is not C-contiguous"
+            inplace_reason = "K is not C-contiguous"
         else:
-            reason = "kinship not writeable, cannot use inplace"
-        logger.info(
-            f"Eigendecomp memory (DSYEVD): estimated {required_gb:.1f}GB, "
-            f"available {available_gb:.1f}GB "
-            f"({reason}; DSYEVR fallback={dsyevr_gb:.1f}GB)"
-        )
+            inplace_reason = "kinship not writeable, cannot use inplace"
+    logger.info(plan.describe(available_gb, inplace_reason))
 
     if check_memory:
         check_memory_available(
@@ -249,30 +219,24 @@ def eigendecompose_kinship(
     )
 
     est_seconds = estimate_eigendecomp_seconds(n_samples, n_threads)
-    logger.info(f"Eigendecomp: {driver}, threads={n_threads}")
+    logger.info(f"Eigendecomp: {plan.driver}, threads={n_threads}")
     logger.info(
         f"  Estimated time: "
-        f"{estimate_eigendecomp_time(n_samples, n_threads, use_dsyevr=use_dsyevr)}"
+        f"{estimate_eigendecomp_time(n_samples, n_threads, use_dsyevr=plan.use_dsyevr)}"
     )
 
     start_time = time.perf_counter()
+    # jlinalg.eigh dispatches to vendor DSYEVD/DSYEVR or the NumPy fallback, and
+    # honours JLINALG_NO_VENDOR_LAPACK itself, so one call covers every driver.
+    # blas_threads sets the process-global thread count (not thread-local) that
+    # governs both vendor and NumPy BLAS, and timed_progress blocks until done.
     try:
-        if no_vendor:
-            logger.info("JLINALG_NO_VENDOR_LAPACK set — using np.linalg.eigh")
+        with blas_threads(n_threads):
             eigenvalues, eigenvectors = timed_progress(
-                lambda: np.linalg.eigh(K),
+                lambda: jlinalg.eigh(K, inplace=plan.use_inplace),
                 estimated_seconds=est_seconds,
                 desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
             )
-        else:
-            # blas_threads sets process-global thread count (not thread-local),
-            # and timed_progress blocks until the worker finishes.
-            with blas_threads(n_threads):
-                eigenvalues, eigenvectors = timed_progress(
-                    lambda: jlinalg.eigh(K, inplace=use_inplace),
-                    estimated_seconds=est_seconds,
-                    desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
-                )
     except MemoryError:
         logger.error(
             f"MemoryError during eigendecomposition of "

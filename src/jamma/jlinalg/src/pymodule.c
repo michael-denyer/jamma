@@ -482,22 +482,29 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
                           &o_nbb))
         return NULL;
 
+    /* Every owned reference is declared and NULL-initialised before the first
+     * goto so the single cleanup label can release them unconditionally.
+     * a_data is coerced C-contiguous (no writeback); a_means/miss/vars and the
+     * three HWE arrays are INOUT (writeback resolved on success, discarded on
+     * error). The `ok` flag selects resolve-vs-discard at the label. */
+    PyArrayObject *a_data = NULL, *a_means = NULL, *a_miss = NULL, *a_vars = NULL;
+    PyArrayObject *a_naa = NULL, *a_nab = NULL, *a_nbb = NULL;
+    PyObject *result = NULL;
+    int ok = 0;
+
     /* Extract data array -- accept both float32 and float64. */
-    PyArrayObject *a_data =
-        (PyArrayObject *)PyArray_FROM_OTF(o_data, NPY_NOTYPE, NPY_ARRAY_C_CONTIGUOUS);
-    if (!a_data) return NULL;
+    a_data = (PyArrayObject *)PyArray_FROM_OTF(o_data, NPY_NOTYPE, NPY_ARRAY_C_CONTIGUOUS);
+    if (!a_data) goto cleanup;
 
     int dtype = PyArray_TYPE(a_data);
     if (dtype != NPY_FLOAT32 && dtype != NPY_FLOAT64) {
-        Py_DECREF(a_data);
         PyErr_SetString(PyExc_TypeError,
                         "compute_snp_stats_chunk: data must be float32 or float64");
-        return NULL;
+        goto cleanup;
     }
     if (PyArray_NDIM(a_data) != 2) {
-        Py_DECREF(a_data);
         PyErr_SetString(PyExc_ValueError, "compute_snp_stats_chunk: data must be 2-D");
-        return NULL;
+        goto cleanup;
     }
 
     npy_intp n_samples = PyArray_DIM(a_data, 0);
@@ -509,31 +516,18 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
     int nbb_none = (o_nbb == Py_None);
     int n_hwe_none = naa_none + nab_none + nbb_none;
     if (n_hwe_none != 0 && n_hwe_none != 3) {
-        Py_DECREF(a_data);
         PyErr_SetString(PyExc_ValueError,
                         "compute_snp_stats_chunk: n_aa, n_ab, n_bb must all be arrays "
                         "or all None");
-        return NULL;
+        goto cleanup;
     }
 
     /* Extract output arrays with INOUT for writeable access */
-    PyArrayObject *a_means =
-        (PyArrayObject *)PyArray_FROM_OTF(o_means, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
-    PyArrayObject *a_miss =
-        (PyArrayObject *)PyArray_FROM_OTF(o_miss, NPY_INTP, NPY_ARRAY_INOUT_ARRAY2);
-    PyArrayObject *a_vars =
-        (PyArrayObject *)PyArray_FROM_OTF(o_vars, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
+    a_means = (PyArrayObject *)PyArray_FROM_OTF(o_means, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
+    a_miss = (PyArrayObject *)PyArray_FROM_OTF(o_miss, NPY_INTP, NPY_ARRAY_INOUT_ARRAY2);
+    a_vars = (PyArrayObject *)PyArray_FROM_OTF(o_vars, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
 
-    if (!a_means || !a_miss || !a_vars) {
-        Py_DECREF(a_data);
-        if (a_means) PyArray_DiscardWritebackIfCopy(a_means);
-        if (a_miss) PyArray_DiscardWritebackIfCopy(a_miss);
-        if (a_vars) PyArray_DiscardWritebackIfCopy(a_vars);
-        Py_XDECREF(a_means);
-        Py_XDECREF(a_miss);
-        Py_XDECREF(a_vars);
-        return NULL;
-    }
+    if (!a_means || !a_miss || !a_vars) goto cleanup;
 
     /* Validate output array sizes match data columns */
     if (PyArray_SIZE(a_means) < n_snps || PyArray_SIZE(a_miss) < n_snps ||
@@ -544,41 +538,18 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
                      "vars=%zd",
                      (Py_ssize_t)n_snps, (Py_ssize_t)n_snps, (Py_ssize_t)PyArray_SIZE(a_means),
                      (Py_ssize_t)PyArray_SIZE(a_miss), (Py_ssize_t)PyArray_SIZE(a_vars));
-        Py_DECREF(a_data);
-        PyArray_DiscardWritebackIfCopy(a_means);
-        PyArray_DiscardWritebackIfCopy(a_miss);
-        PyArray_DiscardWritebackIfCopy(a_vars);
-        Py_DECREF(a_means);
-        Py_DECREF(a_miss);
-        Py_DECREF(a_vars);
-        return NULL;
+        goto cleanup;
     }
 
     /* HWE arrays (optional -- None means no HWE) */
     int compute_hwe = 0;
-    PyArrayObject *a_naa = NULL, *a_nab = NULL, *a_nbb = NULL;
     int64_t *naa_ptr = NULL, *nab_ptr = NULL, *nbb_ptr = NULL;
     if (n_hwe_none == 0) {
         compute_hwe = 1;
         a_naa = (PyArrayObject *)PyArray_FROM_OTF(o_naa, NPY_INT64, NPY_ARRAY_INOUT_ARRAY2);
         a_nab = (PyArrayObject *)PyArray_FROM_OTF(o_nab, NPY_INT64, NPY_ARRAY_INOUT_ARRAY2);
         a_nbb = (PyArrayObject *)PyArray_FROM_OTF(o_nbb, NPY_INT64, NPY_ARRAY_INOUT_ARRAY2);
-        if (!a_naa || !a_nab || !a_nbb) {
-            Py_DECREF(a_data);
-            PyArray_DiscardWritebackIfCopy(a_means);
-            PyArray_DiscardWritebackIfCopy(a_miss);
-            PyArray_DiscardWritebackIfCopy(a_vars);
-            Py_DECREF(a_means);
-            Py_DECREF(a_miss);
-            Py_DECREF(a_vars);
-            if (a_naa) PyArray_DiscardWritebackIfCopy(a_naa);
-            if (a_nab) PyArray_DiscardWritebackIfCopy(a_nab);
-            if (a_nbb) PyArray_DiscardWritebackIfCopy(a_nbb);
-            Py_XDECREF(a_naa);
-            Py_XDECREF(a_nab);
-            Py_XDECREF(a_nbb);
-            return NULL;
-        }
+        if (!a_naa || !a_nab || !a_nbb) goto cleanup;
         if (PyArray_SIZE(a_naa) < n_snps || PyArray_SIZE(a_nab) < n_snps ||
             PyArray_SIZE(a_nbb) < n_snps) {
             PyErr_Format(PyExc_ValueError,
@@ -586,20 +557,7 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
                          "elements, got n_aa=%zd, n_ab=%zd, n_bb=%zd",
                          (Py_ssize_t)n_snps, (Py_ssize_t)PyArray_SIZE(a_naa),
                          (Py_ssize_t)PyArray_SIZE(a_nab), (Py_ssize_t)PyArray_SIZE(a_nbb));
-            Py_DECREF(a_data);
-            PyArray_DiscardWritebackIfCopy(a_means);
-            PyArray_DiscardWritebackIfCopy(a_miss);
-            PyArray_DiscardWritebackIfCopy(a_vars);
-            Py_DECREF(a_means);
-            Py_DECREF(a_miss);
-            Py_DECREF(a_vars);
-            PyArray_DiscardWritebackIfCopy(a_naa);
-            PyArray_DiscardWritebackIfCopy(a_nab);
-            PyArray_DiscardWritebackIfCopy(a_nbb);
-            Py_DECREF(a_naa);
-            Py_DECREF(a_nab);
-            Py_DECREF(a_nbb);
-            return NULL;
+            goto cleanup;
         }
         naa_ptr = (int64_t *)PyArray_DATA(a_naa);
         nab_ptr = (int64_t *)PyArray_DATA(a_nab);
@@ -619,22 +577,37 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
     }
     Py_END_ALLOW_THREADS
 
-        /* Resolve INOUT arrays */
+        /* Success: commit writeback for every INOUT array, then return None. */
         PyArray_ResolveWritebackIfCopy(a_means);
     PyArray_ResolveWritebackIfCopy(a_miss);
     PyArray_ResolveWritebackIfCopy(a_vars);
     if (a_naa) PyArray_ResolveWritebackIfCopy(a_naa);
     if (a_nab) PyArray_ResolveWritebackIfCopy(a_nab);
     if (a_nbb) PyArray_ResolveWritebackIfCopy(a_nbb);
+    ok = 1;
+    Py_INCREF(Py_None);
+    result = Py_None;
 
-    Py_DECREF(a_data);
-    Py_DECREF(a_means);
-    Py_DECREF(a_miss);
-    Py_DECREF(a_vars);
+cleanup:
+    /* On error, discard uncommitted writeback copies for the INOUT arrays so
+     * numpy does not copy scratch back into the caller's buffers.  a_data has
+     * no writeback.  All decrefs are NULL-safe. */
+    if (!ok) {
+        if (a_means) PyArray_DiscardWritebackIfCopy(a_means);
+        if (a_miss) PyArray_DiscardWritebackIfCopy(a_miss);
+        if (a_vars) PyArray_DiscardWritebackIfCopy(a_vars);
+        if (a_naa) PyArray_DiscardWritebackIfCopy(a_naa);
+        if (a_nab) PyArray_DiscardWritebackIfCopy(a_nab);
+        if (a_nbb) PyArray_DiscardWritebackIfCopy(a_nbb);
+    }
+    Py_XDECREF(a_data);
+    Py_XDECREF(a_means);
+    Py_XDECREF(a_miss);
+    Py_XDECREF(a_vars);
     Py_XDECREF(a_naa);
     Py_XDECREF(a_nab);
     Py_XDECREF(a_nbb);
-    Py_RETURN_NONE;
+    return result;
 }
 
 /* ---------------------------------------------------------------------------

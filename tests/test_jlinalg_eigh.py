@@ -373,6 +373,42 @@ def test_eigh_memory_layout() -> None:
 
 
 # ---------------------------------------------------------------------------
+# JLINALG_NO_VENDOR_LAPACK override, honoured inside jlinalg.eigh
+# ---------------------------------------------------------------------------
+
+
+def test_no_vendor_lapack_env_forces_numpy_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JLINALG_NO_VENDOR_LAPACK set makes eigh take the NumPy path per call.
+
+    The override lives in jlinalg.eigh (not only in eigendecompose_kinship), so
+    any direct caller gets a consistent bypass. The result is still a correct
+    decomposition regardless of which vendor backend would otherwise answer.
+    """
+    rng = np.random.default_rng(4321)
+    N = 40
+    K = _random_spd(N, rng)
+    monkeypatch.setenv("JLINALG_NO_VENDOR_LAPACK", "1")
+    w, v = eigh(K.copy())
+    _assert_reconstruction(K, w, v, 1e-10, "NO_VENDOR_LAPACK forced")
+    assert np.all(np.diff(w) >= -1e-12), "eigenvalues not ascending on forced path"
+
+
+@pytest.mark.parametrize("off_value", ["", "0"])
+def test_no_vendor_lapack_off_values_do_not_force(
+    monkeypatch: pytest.MonkeyPatch, off_value: str
+) -> None:
+    """Empty and "0" leave vendor dispatch in place, matching env_flag semantics."""
+    rng = np.random.default_rng(4322)
+    N = 30
+    K = _random_spd(N, rng)
+    monkeypatch.setenv("JLINALG_NO_VENDOR_LAPACK", off_value)
+    w, v = eigh(K.copy())
+    _assert_reconstruction(K, w, v, 1e-10, f"NO_VENDOR_LAPACK={off_value!r}")
+
+
+# ---------------------------------------------------------------------------
 # Clustered eigenvalues
 # ---------------------------------------------------------------------------
 

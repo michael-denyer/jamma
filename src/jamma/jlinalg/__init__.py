@@ -31,6 +31,10 @@ Env vars:
     JLINALG_NO_VENDOR_DGEMM: when truthy, dispatch leaves vendor dgemm
         unwired, so blas_has_dgemm reports 0 with the extension loaded. That
         is the permanent state of an LP64-only host, which CI never reaches.
+    JLINALG_NO_VENDOR_LAPACK: when truthy, eigh routes to the NumPy fallback
+        regardless of the bound backend. Checked per call. eigendecompose_kinship
+        and the pre-flight memory estimators read the same var via
+        core.eigen_plan.forced_numpy_fallback so pre-flight and runtime agree.
 """
 
 from __future__ import annotations
@@ -268,6 +272,51 @@ def _eigh_check_square(K: _np.ndarray) -> None:
         raise ValueError(f"eigh: K must be square, got shape {K.shape}")
 
 
+def _eigh_numpy(
+    K: _np.ndarray, inplace: bool = False
+) -> tuple[_np.ndarray, _np.ndarray]:
+    """Validated NumPy eigendecomposition of a symmetric matrix.
+
+    The single fallback shared by the C-present-but-no-vendor-LAPACK path and
+    the no-C-extension path. Matches the vendor eigh contract: K is consumed
+    (overwritten as scratch) whether or not ``inplace`` is set.
+
+    Args:
+        K: Symmetric matrix, shape (N, N). Consumed on exit.
+        inplace: If True, return the eigenvectors in K's buffer. Requires a
+            C-contiguous writeable float64 array.
+
+    Returns:
+        Tuple of (eigenvalues ascending, eigenvectors).
+
+    Raises:
+        ValueError: If K is not 2-D square, or ``inplace`` is set on an array
+            that is not C-contiguous writeable float64.
+    """
+    _eigh_check_square(K)
+    if inplace:
+        if K.dtype != _np.float64:
+            raise ValueError(f"eigh: inplace=True requires float64, got {K.dtype}")
+        if not K.flags["C_CONTIGUOUS"]:
+            raise ValueError("eigh: inplace=True requires a C-contiguous array")
+        if not K.flags["WRITEABLE"]:
+            raise ValueError("eigh: inplace=True requires a writeable array")
+    K64 = _np.asarray(K, dtype=_np.float64)
+    w, v = _np.linalg.eigh(K64)
+    if inplace:
+        K[:] = v
+        return w, K
+    if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
+        # Vendor eigh consumes K as scratch; zero it so the fallback matches
+        # that contract and no caller relies on K surviving the call.
+        K[:] = 0.0
+    return w, v
+
+
+# Default eigh backend; a usable native implementation replaces it during import.
+_eigh_backend = _eigh_numpy
+
+
 # ASAN/UBSAN sanitizer workflow needs a way to skip the
 # _jlinalg.so import entirely. RESEARCH §"Pitfall 4" — ASAN + dlopen(...,
 # RTLD_LAZY) inside blas_dispatch.c can produce false-positive
@@ -295,7 +344,6 @@ if _mod is not None:
     blas_has_lapacke_dsyevd = _mod.blas_has_lapacke_dsyevd
     blas_is_ilp64 = _mod.blas_is_ilp64
     compute_snp_stats_chunk = _mod.compute_snp_stats_chunk
-    eigh = _mod.eigh
     get_n_threads = _mod.get_n_threads
     jlinalg_isa = _mod.jlinalg_isa
     set_n_threads = _mod.set_n_threads
@@ -307,20 +355,7 @@ if _mod is not None:
     # C extension loaded, but vendor BLAS/LAPACK may not be available.
     dgemm = _dgemm_native if blas_has_dgemm else _dgemm_numpy
     _dsyrk_backend = _dsyrk_native if blas_has_dsyrk else _dsyrk_numpy_impl
-
-    if not blas_has_dsyevd and not blas_has_dsyevr:
-
-        def eigh(  # type: ignore[misc]
-            K: _np.ndarray, inplace: bool = False
-        ) -> tuple[_np.ndarray, _np.ndarray]:
-            """NumPy fallback: eigendecomposition of symmetric matrix."""
-            _eigh_check_square(K)
-            K64 = _np.asarray(K, dtype=_np.float64)
-            w, v = _np.linalg.eigh(K64)
-            if inplace:
-                K[:] = v
-                return w, K
-            return w, v
+    _eigh_backend = _mod.eigh if (blas_has_dsyevd or blas_has_dsyevr) else _eigh_numpy
 
 elif _FORCE_NUMPY:
     # Skip the _jlinalg.so import entirely. HAS_C_EXTENSION stays False; the
@@ -414,37 +449,7 @@ if not HAS_C_EXTENSION:
     dgemm = _dgemm_numpy
 
     _dsyrk_backend = _dsyrk_numpy_impl
-
-    def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarray]:
-        """Compute eigenvalues and eigenvectors of a symmetric matrix.
-
-        Args:
-            K: Symmetric matrix, shape (N, N), float64.
-            inplace: If True, overwrite K with eigenvectors in-place.
-
-        Returns:
-            Tuple of (eigenvalues, eigenvectors).
-
-        Raises:
-            ValueError: If K is not 2-D square float64.
-        """
-        _eigh_check_square(K)
-        if inplace:
-            if K.dtype != _np.float64:
-                raise ValueError(f"eigh: inplace=True requires float64, got {K.dtype}")
-            if not K.flags["C_CONTIGUOUS"]:
-                raise ValueError("eigh: inplace=True requires a C-contiguous array")
-            if not K.flags["WRITEABLE"]:
-                raise ValueError("eigh: inplace=True requires a writeable array")
-        K64 = _np.asarray(K, dtype=_np.float64)
-        w, v = _np.linalg.eigh(K64)
-        if inplace:
-            K[:] = v
-            return w, K
-        else:
-            if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
-                K[:] = 0.0
-            return w, v
+    _eigh_backend = _eigh_numpy
 
     import os as _os
 
@@ -480,6 +485,30 @@ def dsyrk(
     """Compute ``X @ X.T + beta * out`` with a shared backend contract."""
     _validate_dsyrk(X, out, beta)
     return _dsyrk_backend(X, out=out, beta=beta)
+
+
+def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarray]:
+    """Eigendecompose a symmetric matrix via vendor LAPACK or NumPy.
+
+    Dispatches to the bound backend (vendor DSYEVD/DSYEVR when available, else
+    the NumPy fallback). ``JLINALG_NO_VENDOR_LAPACK`` forces the NumPy path
+    regardless of the backend, checked per call so a run can toggle it. K is
+    consumed (overwritten as scratch) on every path.
+
+    Args:
+        K: Symmetric matrix, shape (N, N). Consumed on exit.
+        inplace: If True, return the eigenvectors in K's buffer.
+
+    Returns:
+        Tuple of (eigenvalues ascending, eigenvectors).
+
+    Raises:
+        ValueError: If K is not 2-D square, or ``inplace`` is set on an array
+            that is not C-contiguous writeable float64.
+    """
+    if env_flag("JLINALG_NO_VENDOR_LAPACK"):
+        return _eigh_numpy(K, inplace=inplace)
+    return _eigh_backend(K, inplace=inplace)
 
 
 __all__ = [

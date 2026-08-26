@@ -10,9 +10,9 @@ n_cvt=1 branches inside _compute_score_split_numpy and _compute_lrt_split_numpy
 are unreachable and this file used to exercise only those.
 
 The reference is the NumPy full-Uab path, not its C sibling. The C full-Uab
-kernels compute_score_batch_general_c and compute_lrt_batch_general_c are
-themselves unreachable, so pointing at them would have compared one dead kernel
-against another the moment the live subject changed.
+kernels compute_score_batch_general_c and compute_lrt_batch_general_c were
+deleted, so pointing at them would have compared one dead kernel against
+another the moment the live subject changed.
 """
 
 from __future__ import annotations

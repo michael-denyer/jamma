@@ -460,8 +460,3 @@ class TestDsyevdWorkspaceAccuracy:
         assert actual < dominant_term_gb * 1.1, (
             "Workspace must be < 110% of dominant term"
         )
-
-
-@pytest.mark.tier0
-class TestPreFlightDsyevrAware:
-    """Tests for EIGEN-01: pre-flight check uses DSYEVR peak when appropriate."""

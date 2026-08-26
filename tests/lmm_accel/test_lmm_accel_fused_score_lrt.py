@@ -77,10 +77,7 @@ def _make_runner_test_data(rng, n_samples=50, n_snps=20):
 
 @pytest.mark.skipif(not _score_fused_available, reason="Fused Score C not available")
 def test_runner_fused_score_dispatch():
-    """Runner dispatches fused Score path for mode 3, matches SoA split.
-
-    Prefers workspace-based dispatch when available; falls back to stateless.
-    """
+    """Runner dispatches fused Score WS path for mode 3, matches SoA split."""
     from unittest.mock import patch
 
     from jamma.lmm import compute_numpy
@@ -92,58 +89,30 @@ def test_runner_fused_score_dispatch():
     rng = np.random.default_rng(200)
     eigenvalues, genotypes, phenotypes, snp_info, U = _make_runner_test_data(rng)
 
-    # Fused Score path (default) — verify the fused C function is actually called.
-    # Workspace path is preferred when available; stateless is the fallback.
-    if compute_numpy._accel is not None:
-        with patch(
-            "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
-            wraps=_c().compute_score_fused_ws_c,
-        ) as mock_fused:
-            result_fused = run_lmm_association_numpy(
-                genotypes=genotypes,
-                phenotypes=phenotypes,
-                kinship=None,
-                snp_info=snp_info,
-                eigenvalues=eigenvalues,
-                eigenvectors=U,
-                config=LmmConfig(
-                    maf_threshold=0.0,
-                    miss_threshold=1.0,
-                    check_memory=False,
-                    show_progress=False,
-                    lmm_mode=3,
-                    n_refine=20,
-                ),
-            )
-        assert mock_fused.called, "Fused Score WS C function was not called"
-    else:
-        with patch(
-            "jamma.lmm.compute_numpy._accel.compute_score_fused_c",
-            wraps=_c().compute_score_fused_c,
-        ) as mock_fused:
-            result_fused = run_lmm_association_numpy(
-                genotypes=genotypes,
-                phenotypes=phenotypes,
-                kinship=None,
-                snp_info=snp_info,
-                eigenvalues=eigenvalues,
-                eigenvectors=U,
-                config=LmmConfig(
-                    maf_threshold=0.0,
-                    miss_threshold=1.0,
-                    check_memory=False,
-                    show_progress=False,
-                    lmm_mode=3,
-                    n_refine=20,
-                ),
-            )
-        assert mock_fused.called, "Fused Score C function was not called"
+    with patch(
+        "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
+        wraps=_c().compute_score_fused_ws_c,
+    ) as mock_fused:
+        result_fused = run_lmm_association_numpy(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=None,
+            snp_info=snp_info,
+            eigenvalues=eigenvalues,
+            eigenvectors=U,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=3,
+                n_refine=20,
+            ),
+        )
+    assert mock_fused.called, "Fused Score WS C function was not called"
 
     # SoA split path (disable all fused Score variants)
-    with (
-        patch("jamma.lmm.compute_numpy._accel", None),
-        patch("jamma.lmm.compute_numpy._accel", None),
-    ):
+    with patch("jamma.lmm.compute_numpy._accel", None):
         result_split = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -180,10 +149,7 @@ def test_runner_fused_score_dispatch():
 
 @pytest.mark.skipif(not _lrt_fused_available, reason="Fused LRT C not available")
 def test_runner_fused_lrt_dispatch():
-    """Runner dispatches fused LRT path for mode 2, matches SoA split.
-
-    Prefers workspace-based dispatch when available; falls back to stateless.
-    """
+    """Runner dispatches fused LRT WS path for mode 2, matches SoA split."""
     from unittest.mock import patch
 
     from jamma.lmm import compute_numpy
@@ -195,58 +161,30 @@ def test_runner_fused_lrt_dispatch():
     rng = np.random.default_rng(201)
     eigenvalues, genotypes, phenotypes, snp_info, U = _make_runner_test_data(rng)
 
-    # Fused LRT path (default) — verify the fused C function is actually called.
-    # Workspace path is preferred when available; stateless is the fallback.
-    if compute_numpy._accel is not None:
-        with patch(
-            "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
-            wraps=_c().compute_lrt_fused_ws_c,
-        ) as mock_fused:
-            result_fused = run_lmm_association_numpy(
-                genotypes=genotypes,
-                phenotypes=phenotypes,
-                kinship=None,
-                snp_info=snp_info,
-                eigenvalues=eigenvalues,
-                eigenvectors=U,
-                config=LmmConfig(
-                    maf_threshold=0.0,
-                    miss_threshold=1.0,
-                    check_memory=False,
-                    show_progress=False,
-                    lmm_mode=2,
-                    n_refine=20,
-                ),
-            )
-        assert mock_fused.called, "Fused LRT WS C function was not called"
-    else:
-        with patch(
-            "jamma.lmm.compute_numpy._accel.compute_lrt_fused_c",
-            wraps=_c().compute_lrt_fused_c,
-        ) as mock_fused:
-            result_fused = run_lmm_association_numpy(
-                genotypes=genotypes,
-                phenotypes=phenotypes,
-                kinship=None,
-                snp_info=snp_info,
-                eigenvalues=eigenvalues,
-                eigenvectors=U,
-                config=LmmConfig(
-                    maf_threshold=0.0,
-                    miss_threshold=1.0,
-                    check_memory=False,
-                    show_progress=False,
-                    lmm_mode=2,
-                    n_refine=20,
-                ),
-            )
-        assert mock_fused.called, "Fused LRT C function was not called"
+    with patch(
+        "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
+        wraps=_c().compute_lrt_fused_ws_c,
+    ) as mock_fused:
+        result_fused = run_lmm_association_numpy(
+            genotypes=genotypes,
+            phenotypes=phenotypes,
+            kinship=None,
+            snp_info=snp_info,
+            eigenvalues=eigenvalues,
+            eigenvectors=U,
+            config=LmmConfig(
+                maf_threshold=0.0,
+                miss_threshold=1.0,
+                check_memory=False,
+                show_progress=False,
+                lmm_mode=2,
+                n_refine=20,
+            ),
+        )
+    assert mock_fused.called, "Fused LRT WS C function was not called"
 
     # SoA split path (disable all fused LRT variants)
-    with (
-        patch("jamma.lmm.compute_numpy._accel", None),
-        patch("jamma.lmm.compute_numpy._accel", None),
-    ):
+    with patch("jamma.lmm.compute_numpy._accel", None):
         result_split = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,

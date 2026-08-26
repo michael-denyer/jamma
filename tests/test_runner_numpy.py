@@ -1545,15 +1545,15 @@ class TestErrorMessageDifferentiation:
 def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
     """LRT (mode 2) with n_cvt=2 uses C general path and matches GEMMA reference.
 
-    Verifies the full path: use_split=True -> SoA split -> reconstruct(n_cvt=2)
-    -> _compute_lrt_numpy -> compute_lrt_batch_general_c.
+    Verifies the full path: use_split=True -> SoA split ->
+    _compute_lrt_split_numpy -> compute_lrt_split_general_c.
     """
     from jamma.lmm import compute_numpy as cn
 
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
 
     if cn._accel is None:
-        pytest.skip("compute_lrt_batch_general_c not available")
+        pytest.skip("C extension not available")
 
     run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
@@ -1586,15 +1586,15 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
 def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
     """Score (mode 3) with n_cvt=2 uses C general path and matches GEMMA reference.
 
-    Verifies the full path: use_split=True -> SoA split -> reconstruct(n_cvt=2)
-    -> _compute_score_numpy -> compute_score_batch_general_c.
+    Verifies the full path: use_split=True -> SoA split ->
+    _compute_score_split_numpy -> compute_score_split_general_c.
     """
     from jamma.lmm import compute_numpy as cn
 
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
 
     if cn._accel is None:
-        pytest.skip("compute_score_batch_general_c not available")
+        pytest.skip("C extension not available")
 
     run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,

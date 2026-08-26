@@ -263,11 +263,10 @@ class TestForceNumpyLmmAccel:
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", value)
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
         from jamma.core.recompile import _load_c_module
+        from jamma.lmm import compute_numpy
         from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
 
-        try:
-            import jamma.lmm._lmm_accel  # noqa: F401
-        except ImportError:
+        if compute_numpy._accel is None:
             pytest.skip("extension not built, so the gate is not observable here")
         assert _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION) is not None, (
             f"value={value!r} engaged the gate"

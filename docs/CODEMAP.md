@@ -308,8 +308,8 @@ Configuration, memory management, threading, and logging.
 | 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:162](../src/jamma/core/threading.py#L162) |
 | 5f | `get_hardware_context()` | CPU, BLAS, platform info for benchmarks | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
 | 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:94](../src/jamma/core/progress.py#L94) |
-| 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:166](../src/jamma/core/estimates.py#L166) |
-| 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:202](../src/jamma/core/estimates.py#L202) |
+| 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/core/estimates.py#L149) |
+| 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:185](../src/jamma/core/estimates.py#L185) |
 | 5i | `PHENOTYPE_MISSING` | Missing phenotype sentinel (-9.0) | [constants.py:4](../src/jamma/core/constants.py#L4) |
 
 ---

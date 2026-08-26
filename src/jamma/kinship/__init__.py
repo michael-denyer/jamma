@@ -12,7 +12,6 @@ Key functions:
 - write_kinship_matrix: Write kinship matrix in GEMMA format
 """
 
-from jamma.io.plink import get_chromosome_partitions
 from jamma.kinship.compute import (
     SnpStatsCache,
     compute_centered_kinship,
@@ -33,7 +32,6 @@ __all__ = [
     "compute_kinship_streaming",
     "compute_loco_kinship_streaming",
     "compute_standardized_kinship",
-    "get_chromosome_partitions",
     "impute_and_center",
     "impute_center_and_standardize",
     "read_kinship_matrix",

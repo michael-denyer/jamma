@@ -136,50 +136,14 @@ def get_plink_metadata(bfile: Path) -> dict[str, Any]:
         }
 
 
-def get_chromosome_partitions(bed_path: Path) -> dict[str, np.ndarray]:
-    """Get SNP column indices grouped by chromosome from BIM file.
-
-    Opens the PLINK .bed file to read the chromosome array from BIM metadata,
-    then groups SNP indices by chromosome name. Chromosome names are preserved
-    exactly as they appear in the BIM file (e.g., '1', 'chr1', 'X').
-
-    Args:
-        bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
-
-    Returns:
-        Dict mapping chromosome name (string) to sorted np.ndarray of SNP
-        column indices. Keys are ordered by first appearance in the BIM file.
-
-    Raises:
-        FileNotFoundError: If the .bed file does not exist.
-
-    Example:
-        >>> partitions = get_chromosome_partitions(Path("data/mouse_hs1940"))
-        >>> list(partitions.keys())[:3]
-        ['1', '2', '3']
-        >>> partitions['1'].shape
-        (...)
-    """
-    bed_file = Path(f"{bed_path}.bed")
-
-    if not bed_file.exists():
-        raise FileNotFoundError(f"PLINK .bed file not found: {bed_file}")
-
-    with open_bed(bed_file) as bed:
-        chromosomes = bed.chromosome
-        # Preserve BIM order: unique chromosomes by first appearance
-        _, first_idx = np.unique(chromosomes, return_index=True)
-        unique_chrs = [chromosomes[i] for i in np.sort(first_idx)]
-        return {
-            chr_name: np.where(chromosomes == chr_name)[0] for chr_name in unique_chrs
-        }
-
-
 def partitions_from_metadata(meta: dict[str, Any]) -> dict[str, np.ndarray]:
-    """Derive chromosome partitions from already-loaded PLINK metadata.
+    """Derive SNP column indices grouped by chromosome from PLINK metadata.
 
-    Equivalent to get_chromosome_partitions but avoids opening the BED
-    file a second time. Use when get_plink_metadata has already been called.
+    Groups SNP indices by chromosome name from an already-loaded metadata
+    dict, avoiding a second BED file open. Chromosome names are preserved
+    exactly as they appear in the BIM file (e.g., '1', 'chr1', 'X'), and
+    keys are ordered by first appearance. Use when get_plink_metadata has
+    already been called.
 
     Args:
         meta: Metadata dict from get_plink_metadata (must contain 'chromosome').

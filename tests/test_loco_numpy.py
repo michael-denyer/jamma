@@ -26,29 +26,6 @@ _LOCO_BFILE = _LOCO_FIXTURE_ROOT / "test"
 
 
 @pytest.mark.tier1
-def test_partitions_from_metadata_matches(sample_plink_data):
-    """partitions_from_metadata produces identical output to get_chromosome_partitions.
-
-    Verifies LOCO-04: derived partitions match direct BIM read without re-opening BED.
-    """
-    from jamma.io.plink import (
-        get_chromosome_partitions,
-        get_plink_metadata,
-        partitions_from_metadata,
-    )
-
-    meta = get_plink_metadata(sample_plink_data)
-    partitions_direct = get_chromosome_partitions(sample_plink_data)
-    partitions_derived = partitions_from_metadata(meta)
-
-    assert set(partitions_direct.keys()) == set(partitions_derived.keys())
-    for chr_name in partitions_direct:
-        np.testing.assert_array_equal(
-            partitions_direct[chr_name], partitions_derived[chr_name]
-        )
-
-
-@pytest.mark.tier1
 def test_global_index_restriction_matches_boolean_mask():
     """The searchsorted intersection equals the boolean-mask approach.
 

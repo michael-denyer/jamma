@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from jamma.core.recompile import auto_recompile_c_extension
+from jamma.core.recompile import _import_and_validate, auto_recompile_c_extension
 
 
 def _fake_spec(*, module_name, compiler_module, sys_module_key, label):
@@ -625,3 +625,195 @@ def test_recompile_refuses_to_recurse_into_its_own_import_probe(monkeypatch):
     assert calls == ["compile"], (
         f"compile_extension must run once, not once per re-entry: {calls}"
     )
+
+
+# --- WARNING-level logging on load failure (surface reason, not silence it) ---
+
+
+def _fake_build_spec(*, module_name, sys_module_key, fallback_label, required_attrs=()):
+    from jamma._build_support.compile_and_link import BuildSpec
+
+    return BuildSpec(
+        package_parts=(),
+        source_parts=(),
+        include_parts=(),
+        sources=(),
+        lapack_sources=(),
+        output_stem=module_name,
+        module_name=module_name,
+        compiler_module=f"jamma._nonexistent_compiler_for_{module_name}",
+        sys_module_key=sys_module_key,
+        fallback_label=fallback_label,
+        required_attrs=required_attrs,
+    )
+
+
+@pytest.mark.tier0
+def test_compiler_module_missing_logs_warning_with_reason(monkeypatch, capsys):
+    """Compiler module ImportError must be a WARNING carrying the exception
+    text, not a DEBUG line the user never sees. Without this, the
+    user-facing 'not available' message never explains why.
+    """
+    from loguru import logger as _logger
+
+    module_name = "jamma._compiler_that_does_not_exist"
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    sink_id = _logger.add(sys.stderr, level="WARNING")
+    try:
+        result = _recompile(
+            module_name="_fake_ext",
+            compiler_module=module_name,
+            sys_module_key="jamma._fake_ext",
+            label="fake",
+        )
+    finally:
+        _logger.remove(sink_id)
+
+    assert result is False
+    captured = capsys.readouterr()
+    assert "not available" in captured.err
+    assert module_name in captured.err
+    assert "No module named" in captured.err, (
+        "the ImportError text must be included so the user knows why the "
+        "compiler module could not be imported"
+    )
+
+
+@pytest.mark.tier0
+def test_import_and_validate_import_error_logs_warning_with_reason(capsys):
+    """A genuine import failure (dlopen error, missing .so) must be a
+    WARNING carrying the exception text, not a DEBUG line the user never
+    sees behind the generic 'not available' message.
+    """
+    from loguru import logger as _logger
+
+    spec = _fake_build_spec(
+        module_name="_fake_ext_importerr",
+        sys_module_key="jamma._fake_ext_that_does_not_exist_importerr",
+        fallback_label="fake-fallback",
+    )
+
+    sink_id = _logger.add(sys.stderr, level="WARNING")
+    try:
+        result = _import_and_validate(spec, expected_abi=1)
+    finally:
+        _logger.remove(sink_id)
+
+    assert result is None
+    captured = capsys.readouterr()
+    assert "_fake_ext_importerr" in captured.err
+    assert "fake-fallback" in captured.err
+    assert "No module named" in captured.err, (
+        "the ImportError text must be included so the user knows why the "
+        "compiled extension failed to import"
+    )
+
+
+@pytest.mark.tier0
+def test_import_and_validate_missing_abi_version_logs_warning(monkeypatch, capsys):
+    """A module with no ABI_VERSION attribute must log a WARNING naming the
+    missing attribute, not a silent DEBUG line.
+    """
+    from loguru import logger as _logger
+
+    sys_key = "jamma._fake_ext_no_abi"
+    fake_mod = types.ModuleType(sys_key)
+    monkeypatch.setitem(sys.modules, sys_key, fake_mod)
+
+    spec = _fake_build_spec(
+        module_name="_fake_ext_no_abi",
+        sys_module_key=sys_key,
+        fallback_label="fake-fallback",
+    )
+
+    sink_id = _logger.add(sys.stderr, level="WARNING")
+    try:
+        result = _import_and_validate(spec, expected_abi=1)
+    finally:
+        _logger.remove(sink_id)
+
+    assert result is None
+    captured = capsys.readouterr()
+    assert "ABI_VERSION missing" in captured.err
+    assert "fake-fallback" in captured.err
+
+
+@pytest.mark.tier0
+def test_import_and_validate_missing_required_attrs_logs_warning_with_names(
+    monkeypatch, capsys
+):
+    """A module missing a declared required_attrs symbol must log a WARNING
+    naming the missing attribute(s), not a silent DEBUG line. A
+    required_attrs typo would otherwise trigger a wasted rebuild and then a
+    silent fallback with no way to tell why.
+    """
+    from loguru import logger as _logger
+
+    sys_key = "jamma._fake_ext_missing_attr"
+    fake_mod = types.ModuleType(sys_key)
+    fake_mod.ABI_VERSION = 1  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, sys_key, fake_mod)
+
+    spec = _fake_build_spec(
+        module_name="_fake_ext_missing_attr",
+        sys_module_key=sys_key,
+        fallback_label="fake-fallback",
+        required_attrs=("dgemm", "eigh"),
+    )
+
+    sink_id = _logger.add(sys.stderr, level="WARNING")
+    try:
+        result = _import_and_validate(spec, expected_abi=1)
+    finally:
+        _logger.remove(sink_id)
+
+    assert result is None
+    captured = capsys.readouterr()
+    assert "dgemm" in captured.err
+    assert "eigh" in captured.err
+    assert "fake-fallback" in captured.err
+
+
+@pytest.mark.tier0
+def test_reentrancy_decline_logs_info_that_rebuild_succeeded(monkeypatch, capsys):
+    """When the reentrancy guard declines a nested recompile call, the log
+    must say the .so was rebuilt successfully and takes effect next
+    process — otherwise the caller's own "failed to load" message and this
+    line contradict each other (the .so was, in fact, just rebuilt).
+    """
+    from loguru import logger as _logger
+
+    compiler_name = "jamma._fake_compiler_reentrant_log"
+    sys_key = "jamma._fake_ext_reentrant_log"
+
+    mod = types.ModuleType(compiler_name)
+
+    def compile_extension(verbose: bool = False, on_retry=None) -> bool:
+        del verbose, on_retry
+        _recompile(
+            module_name="_fake_ext_reentrant_log",
+            compiler_module=compiler_name,
+            sys_module_key=sys_key,
+            label="fake",
+        )
+        return True
+
+    mod.compile_extension = compile_extension  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, compiler_name, mod)
+
+    sink_id = _logger.add(sys.stderr, level="INFO")
+    try:
+        result = _recompile(
+            module_name="_fake_ext_reentrant_log",
+            compiler_module=compiler_name,
+            sys_module_key=sys_key,
+            label="fake",
+        )
+    finally:
+        _logger.remove(sink_id)
+
+    assert result is True
+    captured = capsys.readouterr()
+    assert "rebuilt successfully" in captured.err
+    assert "next" in captured.err

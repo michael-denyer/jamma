@@ -162,18 +162,21 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     # .so already written. Returning False instead leaves this interpreter on
     # the pure-Python fallback while the freshly built .so serves the next one.
     if _recompiling(module_name):
-        logger.debug(
+        logger.info(
             f"auto-recompile of {module_name} re-entered from the build's own "
-            f"import probe; not recursing"
+            f"import probe; not recursing. The .so was rebuilt successfully "
+            f"and takes effect the next time this process (or a new one) "
+            f"imports {module_name} — this call reports failure only because "
+            f"the current import probe cannot use it yet."
         )
         return False
 
     try:
         compiler = importlib.import_module(compiler_module)
-    except ImportError:
-        logger.debug(
-            f"{compiler_module} not available — auto-recompilation of "
-            f"{module_name} not possible"
+    except ImportError as e:
+        logger.warning(
+            f"{compiler_module} not available ({e}) — auto-recompilation of "
+            f"{module_name} not possible. Falling back to pure-Python."
         )
         return False
 
@@ -270,12 +273,20 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
     try:
         mod = importlib.import_module(spec.sys_module_key)
     except ImportError as e:
-        logger.debug(f"{spec.module_name} import failed: {e}")
+        logger.warning(
+            f"{spec.module_name} not available ({e}) — usually an ABI "
+            f"mismatch or a missing build artifact. Falling back to "
+            f"pure-Python ({spec.fallback_label})."
+        )
         return None
 
     abi = getattr(mod, "ABI_VERSION", None)
     if abi is None:
-        logger.debug(f"{spec.module_name} import failed: ABI_VERSION missing")
+        logger.warning(
+            f"{spec.module_name} not available: ABI_VERSION missing from the "
+            f"compiled module — usually an ABI mismatch. Falling back to "
+            f"pure-Python ({spec.fallback_label})."
+        )
         return None
     if abi != expected_abi:
         logger.warning(
@@ -286,8 +297,10 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
 
     missing = [name for name in spec.required_attrs if getattr(mod, name, None) is None]
     if missing:
-        logger.debug(
-            f"{spec.module_name} import failed: required symbols missing: {missing}"
+        logger.warning(
+            f"{spec.module_name} not available: required symbols missing: "
+            f"{missing} — usually an ABI mismatch from a partial build. "
+            f"Falling back to pure-Python ({spec.fallback_label})."
         )
         return None
 

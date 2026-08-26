@@ -64,6 +64,7 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
         plan: ExecutionPlan with backend and mode already decided.
     """
     try:
+        import jamma.jlinalg as jlinalg
         from jamma.core.threading import (
             get_blas_backend,
             get_blas_thread_count,
@@ -74,6 +75,7 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
         from jamma.lmm import compute_numpy
 
         c_ext = compute_numpy._accel is not None
+        jlinalg_backend = jlinalg.blas_backend
         c_has_openmp = bool(compute_numpy._C_HAS_OPENMP)
         runner = plan.runner_name
 
@@ -104,6 +106,7 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
             eigen_driver="pending",
             c_ext=c_ext,
             threads=threads,
+            jlinalg_backend=jlinalg_backend,
         )
         logger.info(banner)
     except (ImportError, OSError, RuntimeError, AttributeError) as exc:

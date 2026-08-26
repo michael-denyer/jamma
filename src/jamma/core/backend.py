@@ -52,6 +52,7 @@ def format_pipeline_banner(
     eigen_driver: str,
     c_ext: bool,
     threads: int,
+    jlinalg_backend: str | None = None,
 ) -> str:
     """Build a single-line pipeline startup banner.
 
@@ -65,6 +66,11 @@ def format_pipeline_banner(
         eigen_driver: Eigen driver name (e.g. "DSYEVD", "DSYEVR").
         c_ext: Whether the C extension is usable.
         threads: BLAS/OpenMP thread count.
+        jlinalg_backend: jlinalg's ``blas_backend`` (e.g. "MKL-ILP64",
+            "numpy-fallback"). Omitted from the banner when None, since
+            jlinalg can report "numpy-fallback" even with its C extension
+            loaded (``JLINALG_NO_VENDOR_DGEMM``), a state the ``c_ext`` flag
+            alone cannot show.
 
     Returns:
         Formatted banner string.
@@ -72,13 +78,20 @@ def format_pipeline_banner(
     Example:
         >>> format_pipeline_banner("numpy-batch", "mkl", "DSYEVD", True, 48)
         'Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads)'
+        >>> format_pipeline_banner(
+        ...     "numpy-batch", "mkl", "DSYEVD", True, 48, jlinalg_backend="MKL-ILP64"
+        ... )
+        'Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads) | jlinalg: MKL-ILP64'
     """
     blas_display = _BLAS_DISPLAY.get(blas, blas.title())
     c_ext_str = "C-ext" if c_ext else "no C-ext"
-    return (
+    banner = (
         f"Pipeline: {runner} | {blas_display} | {eigen_driver}"
         f" | {c_ext_str} ({threads} threads)"
     )
+    if jlinalg_backend is not None:
+        banner += f" | jlinalg: {jlinalg_backend}"
+    return banner
 
 
 def get_backend_info() -> dict[str, str | bool]:

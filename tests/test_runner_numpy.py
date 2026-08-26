@@ -605,7 +605,7 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     # The sizer is a RAM-budget policy, not a numerical routine, so pinning its
     # answer is the supported way to choose a chunking without a runner knob.
     monkeypatch.setattr(
-        "jamma.lmm.chunk_runner_numpy.compute_chunk_size_numpy",
+        "jamma.lmm.chunk_sizing.compute_chunk_size_numpy",
         lambda *args, **kwargs: 50,
     )
     result_multi = run_lmm_association_numpy(**common_kwargs)
@@ -1234,7 +1234,7 @@ def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
         n_samples=50, n_snps=200
     )
     monkeypatch.setattr(
-        "jamma.lmm.chunk_runner_numpy.compute_chunk_size_numpy",
+        "jamma.lmm.chunk_sizing.compute_chunk_size_numpy",
         lambda *args, **kwargs: 20,
     )
 

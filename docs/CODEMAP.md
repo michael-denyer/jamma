@@ -262,16 +262,16 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_numpy()` | Vectorized Wald: REML optimize -> beta, SE, p_wald | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:141](../src/jamma/lmm/runner_numpy.py#L141) |
-| 4Nb | `GenotypeSource` | Protocol a run's genotype provider implements (stats + chunk stream) | [runner_numpy.py:49](../src/jamma/lmm/runner_numpy.py#L49) |
-| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:76](../src/jamma/lmm/runner_numpy.py#L76) |
-| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:378](../src/jamma/lmm/runner_numpy.py#L378) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:309](../src/jamma/lmm/chunk_runner_numpy.py#L309) |
-| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:127](../src/jamma/lmm/chunk_runner_numpy.py#L127) |
+| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:143](../src/jamma/lmm/runner_numpy.py#L143) |
+| 4Nb | `GenotypeSource` | Protocol a run's genotype provider implements (stats + chunk stream) | [runner_numpy.py:51](../src/jamma/lmm/runner_numpy.py#L51) |
+| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:78](../src/jamma/lmm/runner_numpy.py#L78) |
+| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:380](../src/jamma/lmm/runner_numpy.py#L380) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:306](../src/jamma/lmm/chunk_runner_numpy.py#L306) |
+| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:124](../src/jamma/lmm/chunk_runner_numpy.py#L124) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:50](../src/jamma/lmm/chunk_kernel.py#L50) |
 | 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:165](../src/jamma/lmm/chunk_kernel.py#L165) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:118](../src/jamma/lmm/chunk_pipeline.py#L118) |
-| 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:67](../src/jamma/lmm/chunk_sizing.py#L67) |
+| 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:90](../src/jamma/lmm/chunk_sizing.py#L90) |
 | 4Nc | `create_lmm_workspace_fused()` | Allocate the reusable per-chunk Wald workspace (n_cvt=1 fused path) | [compute_numpy.py:119](../src/jamma/lmm/compute_numpy.py#L119) |
 | 4Nc | `compute_wald_fused_c_ws()` | Workspace-based Wald compute, dispatched to the C extension | [compute_numpy.py:162](../src/jamma/lmm/compute_numpy.py#L162) |
 | 4Nd | `compute_lmm_chunk_fused_c()` | C extension: chunked REML Wald for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
@@ -297,8 +297,8 @@ Configuration, memory management, threading, and logging.
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 5a | `OutputConfig` | Output directory + prefix + verbose flag | [config.py:13](../src/jamma/core/config.py#L13) |
-| 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:39](../src/jamma/core/memory.py#L39) |
-| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:96](../src/jamma/core/memory.py#L96) |
+| 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:43](../src/jamma/core/memory.py#L43) |
+| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:100](../src/jamma/core/memory.py#L100) |
 | 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:28](../src/jamma/core/memory_snapshot.py#L28) |
 | 5c | `cleanup_memory()` | GC + clear caches | [memory_snapshot.py:79](../src/jamma/core/memory_snapshot.py#L79) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:16](../src/jamma/utils/logging.py#L16) |

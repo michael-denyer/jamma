@@ -19,12 +19,16 @@ from jamma.core.eigen_plan import (
 
 
 def available_ram_gb() -> float:
-    """Available system RAM in GB — the one place JAMMA asks psutil for it.
+    """Available system RAM in GB, as this module's estimators read it.
 
-    Every RAM-budget reader (the estimators, the chunk sizers, the kinship
-    pass planner) routes through this accessor, so a test pins the machine
-    with one ``monkeypatch.setattr(memory, "available_ram_gb", ...)``
-    instead of patching psutil in each importing module.
+    The estimators, the chunk sizers, and the kinship pass planner in this
+    module route through this accessor, so a test pins their view of the
+    machine with one ``monkeypatch.setattr(memory, "available_ram_gb", ...)``.
+    It is not the only psutil read in JAMMA: ``memory_snapshot.py`` queries
+    ``psutil.virtual_memory()`` directly for its own logging snapshot, and the
+    eigendecomposition driver in ``lmm/eigen.py`` takes its budget from that
+    snapshot, not from this accessor. Pinning this function alone does not
+    pin what the eigendecomp driver sees.
     """
     return psutil.virtual_memory().available / 1e9
 
@@ -207,23 +211,24 @@ def _streaming_component_sizes(
     n_grid: int,
     pipeline_buffers: int = 1,
     compute_chunk_size: int | None = None,
-) -> tuple[float, float, float, float, float, float]:
+) -> tuple[float, float, float, float, float, float, float]:
     """Compute component memory sizes (GB) for streaming estimation.
 
     Args:
         n_samples: Number of samples.
-        chunk_size: SNPs per disk chunk (raw genotype buffer).
+        chunk_size: SNPs per disk chunk (statistics-pass raw genotype buffer).
         n_grid: Grid points for lambda optimization.
         pipeline_buffers: Number of simultaneous live UtG rotation buffers (default 1).
             Pass 2 when rotation-compute pipelining holds current + next buffers.
-        compute_chunk_size: SNPs per compute sub-chunk (rotation/Uab/grid buffers).
-            Defaults to chunk_size for backward compatibility. After per-subchunk
-            flush, the actual live compute buffers are sized by compute_chunk_size, not
-            the disk chunk_size.
+        compute_chunk_size: SNPs per compute sub-chunk (rotation/Uab/grid buffers,
+            and the association-pass raw genotype buffer). Defaults to chunk_size
+            for backward compatibility. After per-subchunk flush, the actual live
+            compute buffers are sized by compute_chunk_size, not the disk
+            chunk_size.
 
     Returns:
         Tuple of (kinship_gb, eigenvectors_gb, eigendecomp_workspace_gb,
-        chunk_gb, rotation_buffer_gb, grid_reml_gb).
+        chunk_gb, lmm_chunk_gb, rotation_buffer_gb, grid_reml_gb).
     """
     if not isinstance(pipeline_buffers, int):
         raise TypeError(
@@ -236,7 +241,14 @@ def _streaming_component_sizes(
     kinship_gb = square_matrix_gb(n_samples)
     eigenvectors_gb = square_matrix_gb(n_samples)
     eigendecomp_workspace_gb = _eigendecomp_workspace_gb(n_samples)
+    # Statistics-pass raw genotype buffer (kinship phase reads at this width).
     chunk_gb = array_gb(n_samples, chunk_size)
+    # Association-pass raw genotype buffer (LMM phase reads at this width).
+    # The chunk engine's raw-chunk source hands ``prepare()`` one buffer at a
+    # time even under pipelining — the overlap is between a rotated buffer
+    # and the next prepare() call, not between two raw reads — so this term
+    # does not scale with pipeline_buffers.
+    lmm_chunk_gb = array_gb(n_samples, compute_chunk_size)
     rotation_buffer_gb = array_gb(n_samples, compute_chunk_size) * pipeline_buffers
     grid_reml_gb = array_gb(n_grid, compute_chunk_size)
     return (
@@ -244,6 +256,7 @@ def _streaming_component_sizes(
         eigenvectors_gb,
         eigendecomp_workspace_gb,
         chunk_gb,
+        lmm_chunk_gb,
         rotation_buffer_gb,
         grid_reml_gb,
     )
@@ -309,6 +322,7 @@ def estimate_streaming_memory(
         eigenvectors_gb,
         eigendecomp_workspace_gb,
         chunk_gb,
+        lmm_chunk_gb,
         rotation_buffer_gb,
         grid_reml_gb,
     ) = _streaming_component_sizes(
@@ -330,8 +344,10 @@ def estimate_streaming_memory(
         if eigendecomp_peak_gb is not None
         else _dsyevd_peak_gb(n_samples)
     )
+    # lmm_chunk_gb, not chunk_gb: the association pass streams its raw
+    # genotype buffer at compute_chunk_size, not the disk stats-pass width.
     peak_lmm = (
-        eigenvectors_gb + chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
+        eigenvectors_gb + lmm_chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
     )
 
     total_peak_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)

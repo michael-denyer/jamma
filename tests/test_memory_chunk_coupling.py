@@ -2,8 +2,8 @@
 
 These tests assert on observable outputs — estimated GB totals and whether
 the live preflight gate (``memory_preflight``) raises MemoryError — rather
-than on internal call counts of ``_compute_chunk_size`` / ``_uab_iab_gb``.
-This follows CLAUDE.md: assert observable behavior, not delegation plumbing.
+than on internal call counts of ``plan_lmm_chunks`` / ``_uab_iab_gb``. This
+follows CLAUDE.md: assert observable behavior, not delegation plumbing.
 """
 
 from __future__ import annotations
@@ -12,12 +12,14 @@ from pathlib import Path
 
 import pytest
 
+from jamma.core import memory
 from jamma.core.memory import _uab_iab_gb, estimate_streaming_memory
-from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
+from jamma.lmm.chunk_sizing import compute_chunk_size_numpy, plan_lmm_chunks
 from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm.likelihood import classify_uab_columns
 from jamma.lmm.runner import ExecutionPlan
 from jamma.pipeline_config import PipelineConfig
-from jamma.pipeline_memory import memory_preflight
+from jamma.pipeline_memory import _compute_chunk, memory_preflight
 
 
 def _streaming_preflight(
@@ -131,7 +133,7 @@ def test_preflight_accepts_moderate_n_cvt(monkeypatch):
     """Regression (false-OOM): the preflight must size its compute chunk with the
     SAME n_cvt it estimates Uab with.
 
-    The bug sized ``compute_chunk`` via ``_compute_chunk_size`` without n_cvt (so
+    The bug sized ``compute_chunk`` via the chunk sizer without n_cvt (so
     it defaulted to n_cvt=1 and capped at MAX_SAFE_CHUNK=50k), then estimated Uab
     at the real n_cvt. For 25 covariates that inflated the peak ~60x (~467GB) and
     raised MemoryError on a run the streaming runtime sizes down (chunk ~1.3k) and
@@ -149,3 +151,152 @@ def test_preflight_accepts_moderate_n_cvt(monkeypatch):
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 100.0)
 
     _streaming_preflight(3048, 88_268, n_cvt=25)
+
+
+# n_cvt=1 selects FUSED/FUSED_SCORE_WS/FUSED_LRT_WS depending on lmm_mode;
+# n_cvt>=2 selects FUSED_GENERAL or SOA_SPLIT. One representative lmm_mode per
+# path, matching select_dispatch_path's own resolution table.
+_DISPATCH_CASES = [
+    pytest.param(1, 1, DispatchPath.FUSED, id="fused"),
+    pytest.param(2, 1, DispatchPath.FUSED_GENERAL, id="fused_general"),
+    pytest.param(1, 3, DispatchPath.FUSED_SCORE_WS, id="fused_score_ws"),
+    pytest.param(1, 2, DispatchPath.FUSED_LRT_WS, id="fused_lrt_ws"),
+    pytest.param(2, 2, DispatchPath.SOA_SPLIT, id="soa_split"),
+]
+
+
+def _engine_allocation_gb(
+    n_samples: int, n_cvt: int, plan, dispatch: DispatchPath
+) -> float:
+    """The exact bytes ``_ChunkEngine.__init__`` allocates for this plan.
+
+    Reproduces its buffer shapes directly (``utg_bufs``, and ``uab_var_bufs``
+    for SOA_SPLIT) rather than calling back into the pricing helpers under
+    test, so this is an independent check of the allocation, not a tautology.
+    """
+    utg_bytes = plan.chunk_size * n_samples * 8 * plan.n_buffers
+    uab_var_bytes = 0
+    if dispatch is DispatchPath.SOA_SPLIT:
+        n_var = len(classify_uab_columns(n_cvt)[1])
+        uab_var_bytes = plan.chunk_size * n_var * n_samples * 8 * plan.n_buffers
+    # The raw genotype block the chunk source hands prepare(): one buffer
+    # live at a time regardless of pipelining (chunk_runner_numpy.py
+    # _drive_pipeline overlaps a rotated buffer with the next prepare() call,
+    # never two raw reads at once).
+    raw_block_bytes = plan.chunk_size * n_samples * 8
+    return (utg_bytes + uab_var_bytes + raw_block_bytes) / 1e9
+
+
+@pytest.mark.tier0
+class TestChunkPlanMatchesEngine:
+    """One LmmChunkPlan, computed once: the engine allocates from it, and the
+    preflight prices from it. These pin that the two routes cannot diverge.
+    """
+
+    @pytest.mark.parametrize("n_cvt,lmm_mode,dispatch", _DISPATCH_CASES)
+    def test_plan_chunk_size_matches_engine(
+        self, monkeypatch, n_cvt, lmm_mode, dispatch
+    ):
+        """plan_lmm_chunks' chunk size is exactly what the engine sizes.
+
+        chunk_runner_numpy.run_lmm_chunk_source_numpy calls plan_lmm_chunks
+        with these same arguments to size chunk_size/n_chunks/n_buffers for
+        the engine's _ChunkEngine, so calling it directly here with the same
+        inputs reproduces the engine's own sizing decision.
+        """
+        from jamma.lmm.dispatch import select_dispatch_path
+        from jamma.lmm.schema import parse_lmm_mode
+
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
+
+        n_samples = 50_000
+        n_filtered = 500_000
+
+        # The parametrized dispatch must be what select_dispatch_path
+        # actually derives for (n_cvt, lmm_mode) with the C extension
+        # active, or this case is testing an unreachable combination.
+        assert (
+            select_dispatch_path(
+                n_cvt, parse_lmm_mode(lmm_mode), accel=True, log_choices=False
+            )
+            is dispatch
+        )
+
+        plan = plan_lmm_chunks(n_samples, n_filtered, n_cvt, dispatch)
+
+        assert plan.chunk_size >= 1
+        assert plan.n_chunks == (n_filtered + plan.chunk_size - 1) // plan.chunk_size
+        assert plan.n_buffers in (1, 2)
+        if not dispatch.use_split:
+            # NUMPY_FALLBACK never pipelines.
+            assert plan.n_buffers == 1
+            assert not plan.use_pipeline
+
+    @pytest.mark.parametrize("n_cvt,lmm_mode,dispatch", _DISPATCH_CASES)
+    def test_preflight_priced_bytes_match_engine_allocation(
+        self, monkeypatch, n_cvt, lmm_mode, dispatch
+    ):
+        """The preflight's priced LMM-phase bytes equal what the engine holds.
+
+        Regression for the P6 finding: pipeline_memory.py priced the Uab
+        extra at one buffer's worth while chunk_runner_numpy.py allocated
+        uab_var_bufs at n_buffers, and priced NUMPY_FALLBACK's chunk at
+        pipeline_buffers=2 while the engine (which never pipelines that path)
+        sized it at 1. Both are folded into plan_lmm_chunks now, so the
+        preflight's rotation-buffer-plus-extra total must equal the engine's
+        utg_bufs + uab_var_bufs + one live raw block, to the byte.
+        """
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
+
+        n_samples = 50_000
+        n_snps = 500_000
+
+        plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
+
+        # What pipeline_memory._compute_chunk prices: rotation buffers
+        # (n_buffers x chunk x n_samples x 8, i.e. utg_bufs) plus the
+        # dispatch-specific extra (lmm_extra_bytes_per_snp), plus the one
+        # live raw genotype block at the plan's chunk width.
+        rotation_gb = plan.chunk_size * n_samples * 8 * plan.n_buffers / 1e9
+        raw_block_gb = plan.chunk_size * n_samples * 8 / 1e9
+        _, extra_gb = _compute_chunk(n_samples, n_snps, n_cvt, lmm_mode)
+        priced_gb = rotation_gb + raw_block_gb + extra_gb
+
+        allocated_gb = _engine_allocation_gb(n_samples, n_cvt, plan, dispatch)
+
+        assert priced_gb == pytest.approx(allocated_gb, rel=1e-9), (
+            f"{dispatch}: priced {priced_gb:.3f}GB != allocated {allocated_gb:.3f}GB"
+        )
+
+    def test_soa_split_pipelined_priced_extra_is_double_sequential(self, monkeypatch):
+        """Direct regression for the measured 17.1GB vs 34.3GB gap (#finding 1).
+
+        n=50000, n_cvt=4 dispatches to SOA_SPLIT under LRT (mode 2) and
+        pipelines at this scale, so the engine allocates uab_var_bufs twice
+        (n_buffers=2). The extra must price at exactly double the
+        n_buffers=1 figure, not the same figure the pre-fix preflight priced
+        regardless of whether the run pipelines.
+        """
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 640.0)
+
+        n_samples = 50_000
+        n_snps = 500_000
+        n_cvt = 4
+        lmm_mode = 2  # LRT: n_cvt >= 2 dispatches to SOA_SPLIT
+
+        plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, DispatchPath.SOA_SPLIT)
+        assert plan.use_pipeline, "this case must pipeline for the regression to bite"
+        assert plan.n_buffers == 2
+
+        _, extra_gb = _compute_chunk(n_samples, n_snps, n_cvt, lmm_mode)
+
+        from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
+
+        sequential_extra_gb = (
+            plan.chunk_size
+            * lmm_extra_bytes_per_snp(
+                n_samples, n_cvt, DispatchPath.SOA_SPLIT, n_buffers=1
+            )
+            / 1e9
+        )
+        assert extra_gb == pytest.approx(2 * sequential_extra_gb, rel=1e-9)

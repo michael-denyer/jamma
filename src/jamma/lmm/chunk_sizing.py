@@ -3,9 +3,16 @@
 Sizes each genotype chunk against a RAM budget so the UT@G rotation makes as
 few DRAM passes over the eigenvector matrix as possible. Split out from
 ``chunk_runner_numpy`` so the sizing policy lives in one small, testable place.
+
+``plan_lmm_chunks`` is the one place that decides chunk size, chunk count, and
+whether a run pipelines: the chunk engine allocates from its result, and the
+memory preflight prices from the same result, so the two cannot compute
+different numbers for the same run.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from jamma.core import memory
 from jamma.lmm.dispatch import DispatchPath
@@ -16,6 +23,9 @@ _MAX_CHUNK = 200_000
 # Memory budget bounds for auto-scaling
 _MIN_BUDGET = 2_000_000_000  # 2 GB floor (original default)
 _MAX_BUDGET = 40_000_000_000  # 40 GB ceiling
+
+# Minimum number of chunks before pipelined execution is worthwhile.
+_MIN_PIPELINE_CHUNKS = 8
 
 
 def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
@@ -42,7 +52,9 @@ def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     return n_samples * n_index(n_cvt) * 8
 
 
-def lmm_extra_bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
+def lmm_extra_bytes_per_snp(
+    n_samples: int, n_cvt: int, dispatch: DispatchPath, *, n_buffers: int = 1
+) -> int:
     """Per-SNP bytes live in the LMM phase beyond the UtG rotation buffers.
 
     The preflight prices the association phase as rotation buffers plus this
@@ -50,6 +62,16 @@ def lmm_extra_bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) 
     uses. Fused paths hold no per-SNP batch arrays (the C workspace forms
     Uab on the fly); SOA_SPLIT holds the varying Uab columns; the NumPy
     fallback materialises the full Uab and Iab batches.
+
+    Args:
+        n_samples: Number of samples.
+        n_cvt: Number of covariates.
+        dispatch: The run's active kernel path.
+        n_buffers: Live buffer count from the same ``LmmChunkPlan`` the
+            engine allocates from (1 sequential, 2 pipelined). SOA_SPLIT's
+            varying-Uab buffers are allocated once per live buffer
+            (``chunk_runner_numpy._ChunkEngine.uab_var_bufs``), so the price
+            must scale the same way or it under-counts a pipelined run.
     """
     if dispatch.feeds_raw_utg:
         return 0
@@ -57,10 +79,11 @@ def lmm_extra_bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) 
         from jamma.lmm.likelihood import classify_uab_columns
 
         n_var = len(classify_uab_columns(n_cvt)[1])
-        return n_samples * n_var * 8
+        return n_samples * n_var * 8 * n_buffers
     from jamma.lmm.likelihood import n_index
 
-    # NUMPY_FALLBACK: Uab batch plus the small Iab batch
+    # NUMPY_FALLBACK never pipelines (dispatch.use_split is False), so
+    # n_buffers is always 1 here; the full Uab+Iab batch is priced once.
     return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8
 
 
@@ -117,3 +140,90 @@ def compute_chunk_size_numpy(
 
     chunk_from_memory = int(mem_budget / bytes_per_snp)
     return max(100, min(chunk_from_memory, n_filtered, _MAX_CHUNK))
+
+
+@dataclass(frozen=True, slots=True)
+class LmmChunkPlan:
+    """One run's chunk size, chunk count, and pipelining decision.
+
+    Attributes:
+        chunk_size: SNPs per chunk.
+        n_chunks: Number of chunks ``n_filtered`` splits into at that size.
+        n_buffers: Live chunk buffers the engine allocates (1 sequential, 2
+            pipelined).
+        use_pipeline: Whether the run overlaps rotation and compute.
+    """
+
+    chunk_size: int
+    n_chunks: int
+    n_buffers: int
+    use_pipeline: bool
+
+
+def plan_lmm_chunks(
+    n_samples: int,
+    n_filtered: int,
+    n_cvt: int,
+    dispatch: DispatchPath,
+    *,
+    max_chunk_size: int | None = None,
+) -> LmmChunkPlan:
+    """Decide chunk size, chunk count, and pipelining for one LMM run.
+
+    The single sizing decision the chunk engine allocates from and the
+    memory preflight prices from: sizes with one live buffer, counts the
+    resulting chunks, and re-sizes against two live buffers only when the
+    dispatch path supports pipelining (``dispatch.use_split``) and the
+    single-buffer chunk count clears ``_MIN_PIPELINE_CHUNKS``. A caller-given
+    ``max_chunk_size`` caps the final chunk size before the chunk count is
+    recomputed, so a capped run still reports its true chunk count.
+
+    Args:
+        n_samples: Number of samples.
+        n_filtered: Number of filtered SNPs. The preflight calls this with
+            the pre-filter SNP count (statistics/MAF/missingness filtering
+            has not run yet), which is conservative: it can only ever be
+            greater than or equal to the real filtered count, so the chunk
+            size it plans is never larger than what the engine will use.
+        n_cvt: Number of covariates.
+        dispatch: The run's active kernel path.
+        max_chunk_size: Optional cap applied before chunk-count recomputation
+            (e.g. LOCO's disk-read chunk width).
+
+    Returns:
+        The plan's chunk size, chunk count, live buffer count, and whether
+        the run pipelines.
+    """
+    if max_chunk_size is not None and max_chunk_size < 1:
+        raise ValueError(f"max_chunk_size must be >= 1, got {max_chunk_size}")
+
+    def _sized(*, pipeline_buffers: int) -> int:
+        chunk = compute_chunk_size_numpy(
+            n_samples,
+            n_filtered,
+            n_cvt,
+            dispatch=dispatch,
+            pipeline_buffers=pipeline_buffers,
+        )
+        if max_chunk_size is not None:
+            chunk = min(chunk, max_chunk_size)
+        return max(1, chunk)
+
+    # Sized twice: the first size decides whether pipelining is worth it, and
+    # a pipelined run then re-sizes against a budget split across two live
+    # buffers.
+    chunk_size = _sized(pipeline_buffers=1)
+    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+    use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+
+    if use_pipeline:
+        chunk_size = _sized(pipeline_buffers=2)
+        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+        use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+
+    return LmmChunkPlan(
+        chunk_size=chunk_size,
+        n_chunks=n_chunks,
+        n_buffers=2 if use_pipeline else 1,
+        use_pipeline=use_pipeline,
+    )

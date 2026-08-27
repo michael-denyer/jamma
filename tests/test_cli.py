@@ -168,7 +168,7 @@ def test_lmin_validation():
         ["-bfile", str(EXAMPLE_BFILE), "-lmm", "1", "-k", "fake.txt", "-lmin", "0"],
     )
     assert result.exit_code == 2
-    assert "-lmin must be > 0" in result.output
+    assert "l_min must be positive" in result.output
 
     # lmin = -1 should fail
     result = runner.invoke(
@@ -185,7 +185,7 @@ def test_lmin_validation():
         ],
     )
     assert result.exit_code == 2
-    assert "-lmin must be > 0" in result.output
+    assert "l_min must be positive" in result.output
 
 
 @pytest.mark.tier1
@@ -207,24 +207,24 @@ def test_lmax_validation():
         ],
     )
     assert result.exit_code == 2
-    assert "-lmax must be > -lmin" in result.output
+    assert "l_max (0.0001) must be greater than l_min (0.001)" in result.output
 
 
 @pytest.mark.tier1
 def test_invalid_lmm_mode_reports_cli_error():
-    """A knob rejected at config construction still reads as a CLI error.
+    """A knob rejected at config construction reads as a usage error.
 
     PipelineConfig validates its knobs in __post_init__, so -lmm 99 raises
     before the runner starts. The construction must sit inside the handler
-    that turns ValueError into 'Error: ...', or the user gets a traceback.
+    that turns ValueError into a usage error, or the user gets a traceback.
     """
     result = runner.invoke(
         main,
         ["-bfile", str(EXAMPLE_BFILE), "-lmm", "99", "-k", "fake.txt"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "lmm_mode must be" in result.output
-    assert not isinstance(result.exception, ValueError)
+    assert "Traceback" not in result.output
 
 
 @pytest.mark.tier1
@@ -287,7 +287,7 @@ def test_cat_requires_covariate_file(tmp_path: Path):
             "1",
         ],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "-cat requires -c" in result.output
 
 

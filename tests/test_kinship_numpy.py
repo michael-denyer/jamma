@@ -24,6 +24,55 @@ _REFERENCE_KINSHIP = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_kinship.cXX.txt"
 
 
 @pytest.mark.tier0
+class TestMonomorphismMaskBasis:
+    """The single-pass kinship loop selects columns via compute_snp_stats.
+
+    It used np.nanvar > 0 to drop monomorphic columns per chunk; that mask is
+    equal to compute_snp_stats(chunk).col_vars > 0 on genotype data, so the loop
+    now uses the canonical stats path. These tests pin that equality on the edge
+    cases the swap depends on, so the single-pass filter cannot silently diverge
+    from the two-pass filter.
+    """
+
+    @staticmethod
+    def _nanvar_mask(chunk: np.ndarray) -> np.ndarray:
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            return np.nanvar(chunk, axis=0) > 0
+
+    @staticmethod
+    def _stats_mask(chunk: np.ndarray) -> np.ndarray:
+        from jamma.core.snp_filter import compute_snp_stats
+
+        _means, _miss, col_vars = compute_snp_stats(chunk)
+        return col_vars > 0
+
+    def test_masks_agree_on_genotype_data(self) -> None:
+        rng = np.random.default_rng(1)
+        chunk = rng.integers(0, 3, size=(64, 40)).astype(np.float64)
+        chunk[rng.random((64, 40)) < 0.15] = np.nan
+        np.testing.assert_array_equal(self._nanvar_mask(chunk), self._stats_mask(chunk))
+
+    def test_masks_agree_on_edge_columns(self) -> None:
+        # Columns crafted to hit every monomorphism edge case.
+        chunk = np.array(
+            [
+                [np.nan, 1.0, 1.0, 2.0, 0.0],
+                [np.nan, 1.0, np.nan, 2.0, 0.0],
+                [np.nan, 1.0, np.nan, np.nan, 2.0],
+                [np.nan, 1.0, np.nan, 2.0, 2.0],
+            ]
+        )
+        # col 0 all-NaN, col 1 constant, col 2 single value, col 3 constant+NaN,
+        # col 4 polymorphic.
+        expected = np.array([False, False, False, False, True])
+        np.testing.assert_array_equal(self._nanvar_mask(chunk), expected)
+        np.testing.assert_array_equal(self._stats_mask(chunk), expected)
+
+
+@pytest.mark.tier0
 class TestImputeAndCenterInPlace:
     """Tests for KIN-03: impute_and_center modifies input in-place."""
 

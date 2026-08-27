@@ -31,14 +31,25 @@ from loguru import logger
 
 _P_YY_MIN = 1e-8
 
-# Thread-local flag — deduplicates _clamp_p_yy warning across all calls
-# within a single LMM run. Reset at run start via reset_scalar_p_yy_warned().
-_scalar_p_yy_state = threading.local()
+# One thread-local flag deduplicates the negative-P_yy warning across the
+# scalar (_clamp_p_yy) and batch (likelihood_numpy._guard_P_yy) guards within
+# a single LMM run. The batch guard fires hundreds of times per run (once per
+# grid eval + golden section iter per chunk), which buried the meaningful first
+# warning under identical log spam. Reset at run start via reset_p_yy_warned().
+_p_yy_state = threading.local()
 
 
-def reset_scalar_p_yy_warned() -> None:
-    """Reset the scalar P_yy warning flag so each LMM run gets its own warning."""
-    _scalar_p_yy_state.warned = False
+def reset_p_yy_warned() -> None:
+    """Reset the P_yy warning flag so each LMM run gets its own warning."""
+    _p_yy_state.warned = False
+
+
+def warn_p_yy_once(message: str) -> None:
+    """Log ``message`` at WARNING level once per run, then stay silent."""
+    if getattr(_p_yy_state, "warned", False):
+        return
+    logger.warning(message)
+    _p_yy_state.warned = True
 
 
 def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
@@ -49,7 +60,7 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
     to _P_YY_MIN.
 
     Warning deduplication: only logs the first negative P_yy per run.
-    Call reset_scalar_p_yy_warned() at the start of each LMM run.
+    Call reset_p_yy_warned() at the start of each LMM run.
 
     Args:
         P_yy: Projected residual variance from Pab.
@@ -59,13 +70,11 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
         Clamped P_yy, or NaN for negative values (signals invalid region).
     """
     if P_yy < 0:
-        if not getattr(_scalar_p_yy_state, "warned", False):
-            logger.warning(
-                f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
-                "numerical breakdown (subsequent occurrences suppressed). "
-                "The kinship matrix may not be positive semi-definite."
-            )
-            _scalar_p_yy_state.warned = True
+        warn_p_yy_once(
+            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
+            "numerical breakdown (subsequent occurrences suppressed). "
+            "The kinship matrix may not be positive semi-definite."
+        )
         return float("nan")  # np.log(nan) = nan, optimizer avoids
     if P_yy < _P_YY_MIN:
         return _P_YY_MIN
@@ -1106,7 +1115,7 @@ def compute_null_model_lambda(
     Returns:
         (lambda_null, logl_null) - Null model lambda and log-likelihood
     """
-    reset_scalar_p_yy_warned()
+    reset_p_yy_warned()
 
     # Compute Uab without genotype (Utx=None)
     # This sets genotype-related columns to zero via placeholder
@@ -1201,7 +1210,7 @@ def compute_null_model_mle(
     Returns:
         (lambda_null_mle, logl_H0) - Null model MLE lambda and log-likelihood
     """
-    reset_scalar_p_yy_warned()
+    reset_p_yy_warned()
 
     # Compute Uab without genotype (Utx=None)
     Uab = compute_Uab(UtW, Uty, Utx=None)

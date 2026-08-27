@@ -18,14 +18,13 @@ All operations are vectorized over SNPs using NumPy broadcasting.
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
+from jamma.lmm.likelihood import _P_YY_MIN, build_index_table, warn_p_yy_once
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
 
 # The objective handed to the golden-section refinement: per-SNP log-lambdas
@@ -67,17 +66,6 @@ class SplitUabSoA(NamedTuple):
     """
 
 
-# Thread-local flag to deduplicate _guard_P_yy warning — fires hundreds of
-# times per run (once per grid eval + golden section iter per chunk) which
-# buries the meaningful first warning under identical log spam.
-_p_yy_state = threading.local()
-
-
-def reset_p_yy_warned() -> None:
-    """Reset the P_yy warning flag so each LMM run gets its own warning."""
-    _p_yy_state.warned = False
-
-
 def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
     """Clamp P_yy: negative -> NaN, near-zero -> _P_YY_MIN.
 
@@ -91,12 +79,11 @@ def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
         Guarded P_yy with same shape.
     """
     n_negative = int(np.sum(P_yy < 0.0))
-    if n_negative > 0 and not getattr(_p_yy_state, "warned", False):
-        logger.warning(
+    if n_negative > 0:
+        warn_p_yy_once(
             f"{n_negative} SNPs have negative P_yy — numerical breakdown. "
             "Kinship matrix may not be positive semi-definite."
         )
-        _p_yy_state.warned = True
     P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
     return np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
 

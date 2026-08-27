@@ -38,10 +38,10 @@ from jamma.lmm.chunk_sizing import plan_lmm_chunks
 from jamma.lmm.compute_numpy import select_current_dispatch_path
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.impute import impute_missing_inplace
+from jamma.lmm.likelihood import reset_p_yy_warned
 from jamma.lmm.likelihood_numpy import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
-    reset_p_yy_warned,
 )
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS

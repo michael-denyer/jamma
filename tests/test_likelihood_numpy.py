@@ -167,7 +167,7 @@ def test_p_yy_warn_once_scalar():
     """_clamp_p_yy fires warning exactly once per run; reset restarts the counter."""
     from loguru import logger
 
-    from jamma.lmm.likelihood import _clamp_p_yy, reset_scalar_p_yy_warned
+    from jamma.lmm.likelihood import _clamp_p_yy, reset_p_yy_warned
 
     warning_messages: list[str] = []
 
@@ -176,7 +176,7 @@ def test_p_yy_warn_once_scalar():
             warning_messages.append(message.record["message"])
 
     # Start clean
-    reset_scalar_p_yy_warned()
+    reset_p_yy_warned()
 
     sink_id = logger.add(_capture_sink, level="WARNING")
     try:
@@ -188,7 +188,7 @@ def test_p_yy_warn_once_scalar():
         )
 
         # Reset and fire again — should produce a second warning
-        reset_scalar_p_yy_warned()
+        reset_p_yy_warned()
         _clamp_p_yy(-1.0, 1.0)
 
         assert len(warning_messages) == 2, (

@@ -18,7 +18,8 @@ import pytest
 
 from jamma.lmm.eigen_cache import EigenCacheComponents
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-from jamma.lmm.loco import LocoConfig, _find_loco_eigen_cache
+from jamma.lmm.loco import LocoConfig
+from jamma.lmm.loco_eigen import _find_loco_eigen_cache
 from jamma.lmm.schema import LmmConfig
 from tests.conftest import require_fixture
 

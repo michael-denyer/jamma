@@ -243,8 +243,8 @@ def test_loco_numpy_multipass_equivalence():
 
     # Multi-pass: force batch_size_chrs=1 via debug override (_max_batch_chrs).
     # The fixture has 3 chromosomes, so this triggers 3 disk passes.
-    # We patch compute_loco_kinship_streaming (as imported into loco) to inject
-    # _max_batch_chrs=1.
+    # We patch compute_loco_kinship_streaming (as imported into loco_eigen) to
+    # inject _max_batch_chrs=1.
     original_fn = compute_loco_kinship_streaming
 
     def patched_fn(*args, **kwargs):
@@ -253,10 +253,10 @@ def test_loco_numpy_multipass_equivalence():
 
     from unittest.mock import patch
 
-    import jamma.lmm.loco as loco_module
+    import jamma.lmm.loco_eigen as loco_eigen_module
 
     with patch.object(
-        loco_module,
+        loco_eigen_module,
         "compute_loco_kinship_streaming",
         side_effect=patched_fn,
     ):
@@ -446,7 +446,7 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
 
     from unittest.mock import patch
 
-    import jamma.lmm.loco as loco_module
+    import jamma.lmm.loco_eigen as loco_eigen_module
     from jamma.kinship import LocoKinshipStream, compute_loco_kinship_streaming
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
@@ -467,7 +467,7 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
         return LocoKinshipStream(_matrices=iter(stream), snp_stats=None)
 
     with patch.object(
-        loco_module, "compute_loco_kinship_streaming", side_effect=_null_cache
+        loco_eigen_module, "compute_loco_kinship_streaming", side_effect=_null_cache
     ):
         loco_nocache = run_lmm_loco(
             bed_path=_LOCO_BFILE,

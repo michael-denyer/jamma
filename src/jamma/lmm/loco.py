@@ -9,9 +9,10 @@ Memory profile (sequential processing):
     plus one K_loco (n^2*8) during eigendecomp, plus LMM working set.
     Each K_loco is discarded after eigendecomp.
 
-``LocoConfig`` lives in ``loco_config`` and the eigenpair sources in
-``loco_eigen``; both are re-exported here, so ``from jamma.lmm.loco import
-LocoConfig`` keeps working.
+``LocoConfig`` lives in ``loco_config`` and is re-exported here, so ``from
+jamma.lmm.loco import LocoConfig`` keeps working. Where the eigenpairs come
+from (cache or compute), and every file the cache involves, is
+``loco_eigen.eigen_pairs_for``'s business.
 """
 
 from __future__ import annotations
@@ -37,25 +38,11 @@ from jamma.io.plink import (
     get_plink_metadata,
     partitions_from_metadata,
 )
-from jamma.kinship import (
-    SnpStatsCache,
-    compute_loco_kinship_streaming,
-)
+from jamma.kinship import SnpStatsCache
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
-from jamma.lmm.eigen_cache import (
-    EigenCacheComponents,
-    compute_eigen_cache_key,
-    eigen_cache_is_valid,
-    invalidate_eigen_cache_manifest,
-    write_eigen_cache_manifest,
-)
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig
-from jamma.lmm.loco_eigen import (
-    _cached_eigen_pairs,
-    _computed_eigen_pairs,
-    _find_loco_eigen_cache,
-)
+from jamma.lmm.loco_eigen import eigen_pairs_for
 from jamma.lmm.runner_numpy import _run_numpy_lmm
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
@@ -200,30 +187,8 @@ def run_lmm_loco(
             eigen_dir are rejected earlier, when LmmConfig and LocoConfig are
             constructed.
     """
-    # Unpacked to locals the way run_lmm_association_numpy does, so the body
-    # below reads the same as it did when these were 23 flat parameters.
-    maf_threshold = config.maf_threshold
-    miss_threshold = config.miss_threshold
-    lmm_mode = config.lmm_mode
-    check_memory = config.check_memory
     show_progress = config.show_progress
-
-    # Artifact naming (prefixes, .txt vs .npy) is not unpacked: LocoConfig owns
-    # it via kinship_path()/eigen_paths()/eigen_stem(), so there is one
-    # definition of each filename rather than one per helper that builds it.
-    save_kinship = loco.kinship_output_dir is not None
-    snps_indices = loco.snps_indices
-    ksnps_indices = loco.ksnps_indices
-    col_chunk_size = loco.col_chunk_size
-    write_eigen = loco.write_eigen
-    eigen_dir = loco.eigen_dir
-    eigen_prefix = loco.prefix
-
     start_time = time.perf_counter()
-
-    # No lmm_mode or write_eigen/eigen_dir guard here: LmmConfig and LocoConfig
-    # reject both at construction, as the other runners have relied on since
-    # 6.0.0. Re-checking would be dead code with a second, divergable message.
 
     # Read LOCO worker count and log configuration
     loco_workers = get_loco_worker_count()
@@ -240,7 +205,7 @@ def run_lmm_loco(
     n_samples_total = meta.n_samples
     n_snps_total = meta.n_snps
 
-    validate_snp_indices(snps_indices, n_snps_total)
+    validate_snp_indices(loco.snps_indices, n_snps_total)
 
     # Chromosome partitions (unfiltered) — derived from already-loaded metadata
     # to avoid a redundant BIM re-read
@@ -270,12 +235,6 @@ def run_lmm_loco(
     if n_valid == 0:
         raise ValueError("No samples with valid phenotypes")
 
-    # Reused below for the kinship subsetting decisions (kinship_valid_indices
-    # sizing and the K_loco valid-sample slice). The per-chromosome SNP-stats path
-    # recomputes its own valid_mask.all() in _run_lmm_for_chromosome_numpy, so
-    # this is not a shared value across the chromosome loop.
-    all_samples_valid = n_valid == n_samples_total
-
     phenotypes_valid = phenotypes[valid_mask]
     covariates_valid = covariates[valid_mask, :] if covariates is not None else None
 
@@ -288,7 +247,7 @@ def run_lmm_loco(
     # Build SNP metadata columns for result construction
     snp_info = SnpMeta.from_plink_meta(meta)
 
-    test_type = TEST_TYPE_MAP[lmm_mode]
+    test_type = TEST_TYPE_MAP[config.lmm_mode]
 
     if output_path is None and n_snps_total > 100_000:
         logger.warning(
@@ -305,124 +264,22 @@ def run_lmm_loco(
                 IncrementalAssocWriter(output_path, test_type=test_type)
             )
 
-        # Content + parameter key over every determinant of the eigendecomposition
-        # (genotype files, filter thresholds, -ksnps set, analysed-sample mask).
-        # Computed once and reused on both the read (validate) and write (persist)
-        # paths below. Those paths are mutually exclusive at runtime but key off
-        # the same inputs.
-        eigen_cache_key: str | None = None
-        eigen_cache_components: EigenCacheComponents | None = None
-        if eigen_dir is not None:
-            eigen_cache_key, eigen_cache_components = compute_eigen_cache_key(
-                bed_path,
-                maf_threshold=maf_threshold,
-                miss_threshold=miss_threshold,
-                valid_mask=valid_mask,
-                ksnps_indices=ksnps_indices,
-            )
-
-        # Check for cached eigen files before computing kinship.
-        # When write_eigen is True the user explicitly asked to
-        # (re)generate files, so skip the cache and recompute.
-        eigen_cache: dict[str, tuple[Path, Path]] | None = None
-        if eigen_dir is not None and not write_eigen:
-            eigen_cache = _find_loco_eigen_cache(loco, unique_chrs)
-            if eigen_cache is not None:
-                # eigen_cache_key is set whenever eigen_dir is not None.
-                assert eigen_cache_key is not None
-                ok, reason = eigen_cache_is_valid(
-                    eigen_dir, eigen_prefix, eigen_cache_key
-                )
-                if not ok:
-                    logger.warning(
-                        f"LOCO eigen cache in {eigen_dir} is stale or unverifiable "
-                        f"({reason}). Kinship and eigendecomposition will be "
-                        f"recomputed."
-                    )
-                    eigen_cache = None
-            if eigen_cache is not None:
-                logger.info(
-                    f"Found complete LOCO eigen cache in {eigen_dir} "
-                    f"({len(eigen_cache)} chromosomes). "
-                    f"Skipping kinship computation and eigendecomp."
-                )
-                if save_kinship:
-                    logger.warning(
-                        "kinship_output_dir ignored when using cached eigen "
-                        "files (kinship is not computed)"
-                    )
-                logger.warning(
-                    "Using cached eigen: SNP filtering will use "
-                    "valid-sample-only statistics (not all-sample stats "
-                    "from kinship pass). This may produce slightly "
-                    "different SNP filter sets compared to the original "
-                    "compute run."
-                )
-
-        # Where eigenpairs come from is settled once, here, rather than being
-        # re-tested at every step of the chromosome loop.
-        snp_stats_cache = None
-        if eigen_cache is not None:
-            eigen_pairs = _cached_eigen_pairs(
-                eigen_cache,
-                unique_chrs,
-                n_valid=n_valid,
-                partitions=partitions,
-                show_progress=show_progress,
-            )
-        else:
-            # When save_kinship=False and some samples are invalid, pass
-            # valid_indices so kinship is accumulated at n_valid x n_valid size,
-            # avoiding full n_samples^2 materialisation for post-hoc subsetting.
-            kinship_valid_indices = (
-                None if all_samples_valid or save_kinship else np.where(valid_mask)[0]
-            )
-            # Stream LOCO kinship matrices one at a time (pure NumPy), reusing
-            # the shared kinship streamer and its PASS-1 SNP statistics.
-            loco_stream = compute_loco_kinship_streaming(
-                bed_path,
-                maf_threshold=maf_threshold,
-                miss_threshold=miss_threshold,
-                check_memory=check_memory,
-                show_progress=show_progress,
-                ksnps_indices=ksnps_indices,
-                valid_indices=kinship_valid_indices,
-            )
-            snp_stats_cache = loco_stream.snp_stats
-
-            # Create eigen output directory before the loop (once, not per-chr).
-            if write_eigen:
-                # write_eigen guarantees eigen_dir (entry guard at top of function).
-                assert eigen_dir is not None
-                try:
-                    eigen_dir.mkdir(parents=True, exist_ok=True)
-                except OSError as e:
-                    raise OSError(
-                        f"Cannot create eigen cache directory {eigen_dir}: {e}"
-                    ) from e
-                # Invalidate any stale manifest before rewriting eigen files. The fresh
-                # manifest is written only after the loop completes, so an interrupted
-                # rewrite leaves no manifest and the next read recomputes rather than
-                # trusting a half-rewritten cache.
-                invalidate_eigen_cache_manifest(eigen_dir, eigen_prefix)
-
-            eigen_pairs = _computed_eigen_pairs(
-                loco_stream,
-                unique_chrs,
-                valid_mask=valid_mask,
-                n_valid=n_valid,
-                pre_subset=kinship_valid_indices is not None,
-                all_samples_valid=all_samples_valid,
-                partitions=partitions,
-                check_memory=check_memory,
-                show_progress=show_progress,
-                loco=loco,
-            )
+        source = eigen_pairs_for(
+            bed_path,
+            unique_chrs,
+            loco=loco,
+            maf_threshold=config.maf_threshold,
+            miss_threshold=config.miss_threshold,
+            valid_mask=valid_mask,
+            partitions=partitions,
+            check_memory=config.check_memory,
+            show_progress=show_progress,
+        )
 
         first_chr_pve: float | None = None
         first_chr_pve_se: float | None = None
 
-        for chr_idx, (chr_name, eigenvalues_np, U) in enumerate(eigen_pairs):
+        for chr_idx, (chr_name, eigenvalues_np, U) in enumerate(source.pairs):
             chr_snp_indices = partitions[chr_name]
             logger.debug(
                 f"  chr {chr_name}: numpy backend, {len(chr_snp_indices)} SNPs"
@@ -438,11 +295,11 @@ def run_lmm_loco(
                 snp_meta=snp_info,
                 valid_mask=valid_mask,
                 config=config,
-                snps_indices=snps_indices,
-                col_chunk_size=col_chunk_size,
+                snps_indices=loco.snps_indices,
+                col_chunk_size=loco.col_chunk_size,
                 writer=writer,
                 chr_name=chr_name,
-                snp_stats_cache=snp_stats_cache,
+                snp_stats_cache=source.snp_stats,
                 compute_pve=(first_chr_pve is None),
             )
             chr_pve, chr_pve_se = chr_result.pve, chr_result.pve_se
@@ -461,20 +318,6 @@ def run_lmm_loco(
 
             del eigenvalues_np, U
             gc.collect()
-
-        if write_eigen and eigen_cache is None:
-            # write_eigen guarantees eigen_dir (entry guard), and the key block
-            # above ran because eigen_dir is not None, so all three are set.
-            assert eigen_dir is not None
-            assert eigen_cache_key is not None
-            assert eigen_cache_components is not None
-            write_eigen_cache_manifest(
-                eigen_dir,
-                eigen_prefix,
-                eigen_cache_key,
-                components=eigen_cache_components,
-            )
-            logger.info(f"Wrote LOCO eigen cache manifest to {eigen_dir}")
 
         if first_chr_pve is None:
             logger.warning(

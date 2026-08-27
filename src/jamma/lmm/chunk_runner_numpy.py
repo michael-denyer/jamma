@@ -251,7 +251,7 @@ class _ChunkEngine:
             )
 
         return batch_compute_uab_numpy(
-            self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t.T
+            self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t
         )
 
     def compute_and_write(self, prepared: _PreparedLmmChunk) -> None:

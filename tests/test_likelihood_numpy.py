@@ -78,7 +78,7 @@ def testcompute_lmm_chunk_numpy_all_modes(synthetic_data, monkeypatch):
     Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
     logl_H0 = -25.0
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
 
     # Mode 1: Wald — expects lambdas, logls, betas, ses, pwalds
     result1 = compute_lmm_chunk_numpy(1, 1, eigenvalues, Uab_batch, n_samples)
@@ -141,7 +141,7 @@ def testcompute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
     """compute_lmm_chunk_numpy must raise ValueError when required args are absent."""
     eigenvalues, UtW, Uty, UtG = synthetic_data
     n_samples = eigenvalues.shape[0]
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
 
     with pytest.raises(ValueError, match="logl_H0 is required"):
         compute_lmm_chunk_numpy(2, 1, eigenvalues, Uab_batch, n_samples)
@@ -472,7 +472,7 @@ def test_golden_section_eval_count(monkeypatch):
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
     n_iter = 5
@@ -499,7 +499,7 @@ def test_golden_section_eval_count(monkeypatch):
 def test_golden_section_accuracy_no_final_eval(synthetic_data):
     """Golden section without final eval must produce finite, positive lambdas."""
     eigenvalues, UtW, Uty, UtG = synthetic_data
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
     lambdas_opt, logls_opt, _ = golden_section_optimize_lambda_numpy(
@@ -535,10 +535,10 @@ def split_uab_data():
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
 
-    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
+    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty, 1)
     uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
     return eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch
@@ -821,7 +821,7 @@ def wald_pab_data():
 
     from jamma.lmm.uab import batch_compute_iab_numpy, batch_compute_uab_numpy
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
     return eigenvalues, Uab_batch, Iab_batch, n_samples
 
@@ -923,7 +923,7 @@ def compute_wald_data():
 
     from jamma.lmm.uab import batch_compute_uab_numpy
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     return eigenvalues, Uab_batch, n_samples
 
 
@@ -976,7 +976,7 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
     UtG2 = rng.standard_normal((n_samples2, n_snps2))
     from jamma.lmm.uab import batch_compute_uab_numpy
 
-    Uab_batch2 = batch_compute_uab_numpy(2, UtW2, Uty2, UtG2)
+    Uab_batch2 = batch_compute_uab_numpy(2, UtW2, Uty2, UtG2.T)
 
     call_log2 = []
     generic_log2 = []
@@ -1128,7 +1128,7 @@ def test_batch_golden_section_numpy_all_nan_grid():
     Uty = rng.standard_normal(n)
     UtG_degen = np.zeros((n, n_snps))  # all-zero genotype → all-NaN grid logls
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
     n_grid = 10
@@ -1194,7 +1194,7 @@ def test_batch_numpy_all_degenerate_snps_return_lmin():
     Uty = rng.standard_normal(n)
     UtG_degen = np.zeros((n, n_snps))  # all-zero genotype → P_XX = 0
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
     lambdas, logls, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
@@ -1242,7 +1242,7 @@ def test_batch_numpy_mixed_degenerate_and_valid_snps():
     UtG[:, 1] = rng.standard_normal(n)  # valid
     UtG[:, 3] = rng.standard_normal(n)  # valid
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
     lambdas, logls, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
@@ -1312,7 +1312,7 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
     Uty = rng.standard_normal(n)
     UtG_degen = np.zeros((n, n_snps))  # constant genotype -> P_XX = 0
 
-    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
+    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty, 1)
     uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG_degen.T)
     iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
         uab_invariant_soa
@@ -1340,7 +1340,7 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
     )
 
     # Reconstruct full Uab for Wald stats
-    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa)
+    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa, 1)
     betas, ses, pwalds = batch_calc_wald_stats_numpy(
         1, lambdas, eigenvalues, Uab_batch, n
     )
@@ -1383,7 +1383,7 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
     UtG[:, 1] = rng.standard_normal(n)  # valid
     UtG[:, 3] = rng.standard_normal(n)  # valid
 
-    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty)
+    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty, 1)
     uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
     iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
         uab_invariant_soa
@@ -1400,7 +1400,7 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
         l_min=l_min,
     )
 
-    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa)
+    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa, 1)
     betas, ses, pwalds = batch_calc_wald_stats_numpy(
         1, lambdas, eigenvalues, Uab_batch, n
     )
@@ -1446,7 +1446,7 @@ def test_generic_batch_numpy_fallback_degenerate_wald_nan():
     Uty = rng.standard_normal(n)
     UtG_degen = np.zeros((n, n_snps))  # constant genotype
 
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen)
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
     lambdas, logls, _ = golden_section_optimize_lambda_numpy(
@@ -1507,7 +1507,7 @@ def test_scalar_vs_batch_reml_single_snp_parity():
     )
 
     # Batch path (single SNP, shape (n, 1))
-    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, Utx.reshape(n, 1))
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, Utx.reshape(1, n))
     Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
     lambdas_batch, _, _ = golden_section_optimize_lambda_numpy(
         n_cvt, eigenvalues, Uab_batch, Iab_batch
@@ -1539,7 +1539,7 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
     UtG = rng.standard_normal((n, n_snps))
 
     # Batch path — all 10 SNPs at once
-    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
     lambdas_batch, _, _ = golden_section_optimize_lambda_numpy(
         n_cvt, eigenvalues, Uab_batch, Iab_batch
@@ -1613,7 +1613,7 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
     )
 
     # --- Batch path (single SNP wrapped in batch dimension) ---
-    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, Utx.reshape(n, 1))
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, Utx.reshape(1, n))
     Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
     lambdas_batch, logls_batch, _ = golden_section_optimize_lambda_numpy(
         n_cvt, eigenvalues, Uab_batch, Iab_batch, n_grid=50, n_iter=20
@@ -1649,8 +1649,8 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
 
 
 @pytest.mark.tier0
-def test_reconstruct_uab_from_soa_ncvt1_backward_compat():
-    """reconstruct_uab_from_soa without n_cvt arg produces correct n_cvt=1 output."""
+def test_reconstruct_uab_from_soa_ncvt1_fast_path():
+    """reconstruct_uab_from_soa's n_cvt=1 fast path rebuilds the six-column Uab."""
     from jamma.lmm.uab import reconstruct_uab_from_soa
 
     rng = np.random.default_rng(42)
@@ -1659,7 +1659,7 @@ def test_reconstruct_uab_from_soa_ncvt1_backward_compat():
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
 
-    Uab_ref = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    Uab_ref = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
 
     # Build SoA for n_cvt=1
     inv_soa = np.stack([Uab_ref[0, :, 0], Uab_ref[0, :, 2], Uab_ref[0, :, 5]])  # (3, n)
@@ -1667,8 +1667,7 @@ def test_reconstruct_uab_from_soa_ncvt1_backward_compat():
         [Uab_ref[:, :, 1], Uab_ref[:, :, 3], Uab_ref[:, :, 4]], axis=1
     )  # (n_snps, 3, n)
 
-    # Old signature (no n_cvt) should still work
-    Uab_recon = reconstruct_uab_from_soa(inv_soa, var_soa)
+    Uab_recon = reconstruct_uab_from_soa(inv_soa, var_soa, 1)
     np.testing.assert_allclose(
         Uab_recon,
         Uab_ref,
@@ -1692,7 +1691,7 @@ def test_reconstruct_uab_from_soa_ncvt2():
     UtG = rng.standard_normal((n_samples, n_snps))
 
     # Full reference Uab
-    Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
     # n_index = (n_cvt+3)*(n_cvt+2)//2 = 5*4//2 = 10
 
     inv_indices, var_indices = classify_uab_columns(n_cvt)
@@ -1735,7 +1734,7 @@ def test_reconstruct_uab_from_soa_ncvt4():
     UtG = rng.standard_normal((n_samples, n_snps))
 
     # Full reference Uab
-    Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
     # n_index = (4+3)*(4+2)//2 = 7*6//2 = 21
 
     inv_indices, var_indices = classify_uab_columns(n_cvt)
@@ -1788,7 +1787,7 @@ def test_vectorized_general_uab_parity(n_cvt):
             Uab_ref[snp_idx, :, idx] = vectors[:, a_col] * vectors[:, b_col]
 
     # Vectorized implementation
-    Uab_vec = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_vec = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
 
     np.testing.assert_allclose(
         Uab_vec,
@@ -1817,11 +1816,12 @@ def test_direct_soa_varying_general_parity(n_cvt):
 
     # Reference: compute full Uab then extract varying columns to SoA
     _inv_indices, var_indices = classify_uab_columns(n_cvt)
-    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
     ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
 
     # Direct SoA varying — utg_t is (n_snps, n_samples)
-    direct_soa = _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, UtG.T)
+    out = np.empty((n_snps, len(var_indices), n_samples), dtype=np.float64)
+    direct_soa = _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, UtG.T, out)
 
     np.testing.assert_allclose(
         direct_soa,
@@ -1846,7 +1846,7 @@ def test_invariant_columns_constant_across_snps(n_cvt):
     UtG = rng.standard_normal((n_samples, n_snps))
 
     inv_indices, _var_indices = classify_uab_columns(n_cvt)
-    Uab = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+    Uab = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
 
     for col_idx in inv_indices:
         first_snp = Uab[0, :, col_idx]
@@ -1878,7 +1878,7 @@ def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
     from jamma.lmm.uab import _batch_compute_uab_general_numpy
 
     _inv, var_indices = classify_uab_columns(n_cvt)
-    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
     ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
 
     np.testing.assert_allclose(
@@ -1892,15 +1892,15 @@ def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
 
 @pytest.mark.tier0
 def test_batch_compute_uab_numpy_rejects_wrong_layout():
-    """batch_compute_uab_numpy raises ValueError when given (n_snps, n_samples)."""
+    """batch_compute_uab_numpy raises ValueError when given (n_samples, n_snps)."""
     rng = np.random.default_rng(99)
     n_samples, n_snps = 50, 10
     UtW = rng.standard_normal((n_samples, 1))
     Uty = rng.standard_normal(n_samples)
-    utg_t = rng.standard_normal((n_snps, n_samples))  # wrong layout for this fn
+    UtG = rng.standard_normal((n_samples, n_snps))  # wrong layout for this fn
 
-    with pytest.raises(ValueError, match="Pass \\(n_samples, n_snps\\)"):
-        batch_compute_uab_numpy(1, UtW, Uty, utg_t)
+    with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
+        batch_compute_uab_numpy(1, UtW, Uty, UtG)
 
 
 @pytest.mark.tier0
@@ -1915,6 +1915,24 @@ def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape():
 
     with pytest.raises(ValueError, match="out shape"):
         batch_compute_uab_varying_soa_numpy(1, UtW, Uty, utg_t, out=wrong_out)
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_varying_soa_ncvt1_rejects_wrong_out_dtype_and_layout():
+    """The n_cvt=1 branch validates out= dtype and contiguity like the general one."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+
+    with pytest.raises(ValueError, match="out dtype"):
+        batch_compute_uab_varying_soa_numpy(
+            1, UtW, Uty, utg_t, out=np.empty((n_snps, 3, n_samples), dtype=np.float32)
+        )
+    fortran_out = np.asfortranarray(np.empty((n_snps, 3, n_samples), dtype=np.float64))
+    with pytest.raises(ValueError, match="C-contiguous"):
+        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, utg_t, out=fortran_out)
 
 
 @pytest.mark.tier0

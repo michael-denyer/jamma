@@ -31,7 +31,7 @@ def _fused_score_lrt_null_model(split_wald_data):
     eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
 
     # Build null Uab from UtW/Uty (no genotype)
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Uab_null = np.zeros((1, n_samples, 6), dtype=np.float64)
     Uab_null[0, :, 0] = full_uab[0, :, 0]  # ww (invariant)
     Uab_null[0, :, 2] = full_uab[0, :, 2]  # wy (invariant)

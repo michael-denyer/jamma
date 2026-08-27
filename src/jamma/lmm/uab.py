@@ -18,6 +18,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.lmm.likelihood import (
+    _NCVT1,
     PabIndexTable,
     build_index_table,
     classify_uab_columns,
@@ -62,7 +63,7 @@ def batch_compute_uab_numpy(
     n_cvt: int,
     UtW: np.ndarray,
     Uty: np.ndarray,
-    UtG: np.ndarray,
+    utg_t: np.ndarray,
 ) -> np.ndarray:
     """Compute Uab matrices for all SNPs in a chunk.
 
@@ -73,57 +74,58 @@ def batch_compute_uab_numpy(
         n_cvt: Number of covariates. If 1, uses explicit fast-path broadcasting.
         UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
-        UtG: Rotated genotypes for all SNPs in this chunk (n_samples, n_snps).
+        utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
+            from jlinalg.dgemm(chunk, U, transa="T"), the same layout
+            batch_compute_uab_varying_soa_numpy takes.
 
     Returns:
         Uab matrices (n_snps, n_samples, n_index).
     """
-    if UtG.shape[0] != UtW.shape[0]:
-        raise ValueError(
-            f"UtG shape {UtG.shape} has {UtG.shape[0]} rows but expected "
-            f"{UtW.shape[0]} (n_samples from UtW). "
-            f"Pass (n_samples, n_snps), not (n_snps, n_samples)."
-        )
+    _check_utg_t(utg_t, UtW)
     if n_cvt == 1:
-        return _batch_compute_uab_ncvt1_numpy(UtW, Uty, UtG)
-    return _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)
+        return _batch_compute_uab_ncvt1_numpy(UtW, Uty, utg_t)
+    return _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, utg_t)
+
+
+def _check_utg_t(utg_t: np.ndarray, UtW: np.ndarray) -> None:
+    if utg_t.shape[1] != UtW.shape[0]:
+        raise ValueError(
+            f"utg_t shape {utg_t.shape} has {utg_t.shape[1]} columns but "
+            f"expected {UtW.shape[0]} (n_samples from UtW). "
+            f"Pass (n_snps, n_samples), not (n_samples, n_snps)."
+        )
 
 
 def _batch_compute_uab_ncvt1_numpy(
     UtW: np.ndarray,
     Uty: np.ndarray,
-    UtG: np.ndarray,
+    utg_t: np.ndarray,
 ) -> np.ndarray:
-    """Fast path batch Uab for n_cvt=1 (intercept only).
-
-    Indices for n_cvt=1:
-      0: ww  (1,1), 1: wx  (1,2), 2: wy  (1,3)
-      3: xx  (2,2), 4: xy  (2,3), 5: yy  (3,3)
+    """Fast path batch Uab for n_cvt=1 (intercept only). Columns follow _NCVT1.
 
     Args:
         UtW: Rotated covariates (n_samples, 1).
         Uty: Rotated phenotype (n_samples,).
-        UtG: Rotated genotypes (n_samples, n_snps).
+        utg_t: Rotated genotypes (n_snps, n_samples).
 
     Returns:
         Uab batch (n_snps, n_samples, 6).
     """
-    n_samples, n_snps = UtG.shape
+    n_snps, n_samples = utg_t.shape
     w = UtW[:, 0]  # (n_samples,)
-    UtG_T = UtG.T  # (n_snps, n_samples)
 
     # Pre-allocate and fill directly — avoids 2x memory spike from np.stack
     out = np.empty((n_snps, n_samples, 6), dtype=np.float64)
 
     # SNP-invariant fields (broadcast into pre-allocated slices)
-    out[:, :, 0] = (w * w)[None, :]  # ww
-    out[:, :, 2] = (w * Uty)[None, :]  # wy
-    out[:, :, 5] = (Uty * Uty)[None, :]  # yy
+    out[:, :, _NCVT1.ww] = (w * w)[None, :]
+    out[:, :, _NCVT1.wy] = (w * Uty)[None, :]
+    out[:, :, _NCVT1.yy] = (Uty * Uty)[None, :]
 
     # SNP-varying fields
-    out[:, :, 1] = w[None, :] * UtG_T  # wx
-    out[:, :, 3] = UtG_T * UtG_T  # xx
-    out[:, :, 4] = UtG_T * Uty[None, :]  # xy
+    out[:, :, _NCVT1.wx] = w[None, :] * utg_t
+    out[:, :, _NCVT1.xx] = utg_t * utg_t
+    out[:, :, _NCVT1.xy] = utg_t * Uty[None, :]
 
     return out
 
@@ -132,7 +134,7 @@ def _batch_compute_uab_general_numpy(
     n_cvt: int,
     UtW: np.ndarray,
     Uty: np.ndarray,
-    UtG: np.ndarray,
+    utg_t: np.ndarray,
 ) -> np.ndarray:
     """General batch Uab for arbitrary n_cvt -- fully vectorized over SNPs.
 
@@ -144,13 +146,13 @@ def _batch_compute_uab_general_numpy(
         n_cvt: Number of covariates (> 1).
         UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
-        UtG: Rotated genotypes (n_samples, n_snps).
+        utg_t: Rotated genotypes (n_snps, n_samples).
 
     Returns:
         Uab batch (n_snps, n_samples, n_index).
     """
     table = build_index_table(n_cvt)
-    n_samples, n_snps = UtG.shape
+    n_snps, n_samples = utg_t.shape
     n_index = table.n_index
     genotype_col = n_cvt  # 0-based index of X in vectors array
 
@@ -161,7 +163,7 @@ def _batch_compute_uab_general_numpy(
     vectors_all = np.empty((n_snps, n_samples, n_cvt + 2), dtype=np.float64)
     for j in range(n_cvt):
         vectors_all[:, :, j] = UtW[:, j][None, :]  # broadcast
-    vectors_all[:, :, genotype_col] = UtG.T  # (n_snps, n_samples)
+    vectors_all[:, :, genotype_col] = utg_t
     vectors_all[:, :, n_cvt + 1] = Uty[None, :]  # broadcast
 
     # Compute all Uab columns vectorized over SNPs
@@ -177,7 +179,7 @@ def _batch_compute_uab_varying_general_numpy(
     UtW: np.ndarray,
     Uty: np.ndarray,
     utg_t: np.ndarray,
-    out: np.ndarray | None = None,
+    out: np.ndarray,
 ) -> np.ndarray:
     """Direct SoA varying Uab for general n_cvt -- no full Uab materialization.
 
@@ -197,15 +199,15 @@ def _batch_compute_uab_varying_general_numpy(
         Uty: Rotated phenotype (n_samples,).
         utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
             from jlinalg.dgemm(chunk, U, transa="T").
+        out: Output buffer (n_snps, n_var, n_samples), already validated by
+            batch_compute_uab_varying_soa_numpy.
 
     Returns:
-        Varying Uab in SoA layout (n_snps, n_var, n_samples).
+        ``out``, filled.
     """
-
     _inv_indices, var_indices = classify_uab_columns(n_cvt)
     table = build_index_table(n_cvt)
-    n_snps, n_samples = utg_t.shape
-    n_var = len(var_indices)
+    n_samples = utg_t.shape[1]
     genotype_col = n_cvt  # 0-based index of X in vectors array
 
     # Map linear index -> position in var_indices for output placement
@@ -215,26 +217,6 @@ def _batch_compute_uab_varying_general_numpy(
     # vectors[j] = UtW[:, j] for j < n_cvt, vectors[n_cvt+1] = Uty
     vectors = np.column_stack([UtW, np.zeros(n_samples), Uty])  # (n_samples, n_cvt+2)
 
-    expected_shape = (n_snps, n_var, n_samples)
-    if out is not None:
-        if out.shape != expected_shape:
-            raise ValueError(
-                f"batch_compute_uab_varying_soa_numpy: out shape {out.shape} "
-                f"doesn't match expected {expected_shape}"
-            )
-        if out.dtype != np.float64:
-            raise ValueError(
-                f"batch_compute_uab_varying_soa_numpy: out dtype {out.dtype} "
-                f"must be float64"
-            )
-        if not out.flags["C_CONTIGUOUS"]:
-            raise ValueError(
-                "batch_compute_uab_varying_soa_numpy: out must be C-contiguous"
-            )
-        result = out
-    else:
-        result = np.empty(expected_shape, dtype=np.float64)
-
     for a_col, b_col, linear_idx in table.uab_pairs:
         if linear_idx not in var_index_to_row:
             continue  # invariant column, skip
@@ -242,15 +224,15 @@ def _batch_compute_uab_varying_general_numpy(
 
         if a_col == b_col == genotype_col:
             # xx case: genotype * genotype
-            result[:, row, :] = utg_t * utg_t
+            out[:, row, :] = utg_t * utg_t
         elif a_col == genotype_col:
             # genotype * other (b_col is covariate or phenotype)
-            result[:, row, :] = utg_t * vectors[:, b_col][None, :]
+            out[:, row, :] = utg_t * vectors[:, b_col][None, :]
         else:
             # other * genotype (a_col is covariate or phenotype, b_col is genotype)
-            result[:, row, :] = vectors[:, a_col][None, :] * utg_t
+            out[:, row, :] = vectors[:, a_col][None, :] * utg_t
 
-    return result
+    return out
 
 
 def batch_compute_pab_numpy(
@@ -465,7 +447,7 @@ def batch_compute_uab_split_soa_numpy(
     """
     if n_cvt != 1:
         raise ValueError("batch_compute_uab_split_soa_numpy requires n_cvt=1")
-    inv = compute_uab_invariant_soa(UtW, Uty)
+    inv = compute_uab_invariant_soa(UtW, Uty, 1)
     var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
     return SplitUabSoA(var, inv)
 
@@ -473,7 +455,7 @@ def batch_compute_uab_split_soa_numpy(
 def compute_uab_invariant_soa(
     UtW: np.ndarray,
     Uty: np.ndarray,
-    n_cvt: int = 1,
+    n_cvt: int,
 ) -> np.ndarray:
     """Compute SNP-invariant Uab columns in SoA layout (n_inv, n_samples).
 
@@ -487,7 +469,7 @@ def compute_uab_invariant_soa(
     Args:
         UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
-        n_cvt: Number of covariates (default 1 for backwards compatibility).
+        n_cvt: Number of covariates.
 
     Returns:
         Invariant array (n_inv, n_samples) — SoA layout.
@@ -509,8 +491,8 @@ def compute_uab_invariant_soa(
 
     # Build a single Uab with zero genotype (invariant columns are
     # independent of genotype, so the genotype value doesn't matter).
-    UtG_zero = np.zeros((n_samples, 1), dtype=np.float64)
-    Uab_single = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG_zero)
+    utg_t_zero = np.zeros((1, n_samples), dtype=np.float64)
+    Uab_single = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, utg_t_zero)
     # Uab_single shape: (1, n_samples, n_index)
     # Extract invariant columns: advanced indexing a[0, :, list] groups the
     # integer (0) and list indices at front -> (n_inv, n_samples) SoA layout.
@@ -543,39 +525,43 @@ def batch_compute_uab_varying_soa_numpy(
     Returns:
         Varying array (n_snps, n_var, n_samples) — SoA layout.
     """
-    if utg_t.shape[1] != UtW.shape[0]:
-        raise ValueError(
-            f"utg_t shape {utg_t.shape} has {utg_t.shape[1]} columns but "
-            f"expected {UtW.shape[0]} (n_samples from UtW). "
-            f"Pass (n_snps, n_samples), not (n_samples, n_snps)."
-        )
-    if n_cvt == 1:
-        n_snps, n_samples = utg_t.shape
-        w = UtW[:, 0]
+    _check_utg_t(utg_t, UtW)
+    n_snps, n_samples = utg_t.shape
+    n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
+    expected_shape = (n_snps, n_var, n_samples)
+    if out is None:
+        out = np.empty(expected_shape, dtype=np.float64)
+    else:
+        if out.shape != expected_shape:
+            raise ValueError(
+                f"batch_compute_uab_varying_soa_numpy: out shape {out.shape} "
+                f"doesn't match expected {expected_shape}"
+            )
+        if out.dtype != np.float64:
+            raise ValueError(
+                f"batch_compute_uab_varying_soa_numpy: out dtype {out.dtype} "
+                f"must be float64"
+            )
+        if not out.flags["C_CONTIGUOUS"]:
+            raise ValueError(
+                "batch_compute_uab_varying_soa_numpy: out must be C-contiguous"
+            )
 
-        expected_shape = (n_snps, 3, n_samples)
-        if out is not None:
-            if out.shape != expected_shape:
-                raise ValueError(
-                    f"batch_compute_uab_varying_soa_numpy: out shape {out.shape} "
-                    f"doesn't match expected {expected_shape}"
-                )
-            uab_varying_soa = out
-        else:
-            uab_varying_soa = np.empty(expected_shape, dtype=np.float64)
-        uab_varying_soa[:, 0, :] = w[None, :] * utg_t  # wx row
-        uab_varying_soa[:, 1, :] = utg_t * utg_t  # xx row
-        uab_varying_soa[:, 2, :] = utg_t * Uty[None, :]  # xy row
-        return uab_varying_soa
+    if n_cvt == 1:
+        w = UtW[:, 0]
+        out[:, 0, :] = w[None, :] * utg_t  # wx row
+        out[:, 1, :] = utg_t * utg_t  # xx row
+        out[:, 2, :] = utg_t * Uty[None, :]  # xy row
+        return out
 
     # General n_cvt: direct SoA varying without full Uab materialization
-    return _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, utg_t, out=out)
+    return _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, utg_t, out)
 
 
 def reconstruct_uab_from_soa(
     uab_invariant_soa: np.ndarray,
     uab_varying_soa: np.ndarray,
-    n_cvt: int = 1,
+    n_cvt: int,
 ) -> np.ndarray:
     """Reconstruct full Uab matrix from split SoA components.
 
@@ -591,7 +577,7 @@ def reconstruct_uab_from_soa(
         uab_invariant_soa: Shape (n_inv, n_samples) — one row per invariant column.
         uab_varying_soa: Shape (n_snps, n_var, n_samples) — one axis-1 row per
             varying column.
-        n_cvt: Number of covariates. Default 1 preserves backward compatibility.
+        n_cvt: Number of covariates.
 
     Returns:
         Full Uab array (n_snps, n_samples, n_index) matching
@@ -600,19 +586,18 @@ def reconstruct_uab_from_soa(
     n_snps, _, n_samples = uab_varying_soa.shape
 
     if n_cvt == 1:
-        # Fast path: hardcoded 6-column layout — zero overhead for common case.
-        # n_cvt=1 column order: 0=ww, 1=wx, 2=wy, 3=xx, 4=xy, 5=yy
+        # Fast path: the six-column layout, zero overhead for the common case.
         Uab = np.empty((n_snps, n_samples, 6), dtype=np.float64)
 
         # Invariant columns — broadcast across all SNPs
-        Uab[:, :, 0] = uab_invariant_soa[0]  # ww
-        Uab[:, :, 2] = uab_invariant_soa[1]  # wy
-        Uab[:, :, 5] = uab_invariant_soa[2]  # yy
+        Uab[:, :, _NCVT1.ww] = uab_invariant_soa[0]
+        Uab[:, :, _NCVT1.wy] = uab_invariant_soa[1]
+        Uab[:, :, _NCVT1.yy] = uab_invariant_soa[2]
 
         # Varying columns — per-SNP
-        Uab[:, :, 1] = uab_varying_soa[:, 0, :]  # wx
-        Uab[:, :, 3] = uab_varying_soa[:, 1, :]  # xx
-        Uab[:, :, 4] = uab_varying_soa[:, 2, :]  # xy
+        Uab[:, :, _NCVT1.wx] = uab_varying_soa[:, 0, :]
+        Uab[:, :, _NCVT1.xx] = uab_varying_soa[:, 1, :]
+        Uab[:, :, _NCVT1.xy] = uab_varying_soa[:, 2, :]
 
         return Uab
 
@@ -662,24 +647,26 @@ def batch_compute_iab_split_ncvt1_soa(
     s_xy = uab_varying_soa[:, 2, :].sum(axis=1)
 
     iab = np.zeros((n_snps, 3, 6), dtype=np.float64)
-    iab[:, 0, 0] = s_ww
-    iab[:, 0, 1] = s_wx
-    iab[:, 0, 2] = s_wy
-    iab[:, 0, 3] = s_xx
-    iab[:, 0, 4] = s_xy
-    iab[:, 0, 5] = s_yy
+    iab[:, 0, _NCVT1.ww] = s_ww
+    iab[:, 0, _NCVT1.wx] = s_wx
+    iab[:, 0, _NCVT1.wy] = s_wy
+    iab[:, 0, _NCVT1.xx] = s_xx
+    iab[:, 0, _NCVT1.xy] = s_xy
+    iab[:, 0, _NCVT1.yy] = s_yy
 
     # Row 1: project out W (Schur complement)
     inv_ww = 1.0 / s_ww if s_ww != 0 else 0.0
-    iab[:, 1, 3] = s_xx - s_wx * s_wx * inv_ww
-    iab[:, 1, 4] = s_xy - s_wx * s_wy * inv_ww
-    iab[:, 1, 5] = s_yy - s_wy * s_wy * inv_ww
+    iab[:, 1, _NCVT1.xx] = s_xx - s_wx * s_wx * inv_ww
+    iab[:, 1, _NCVT1.xy] = s_xy - s_wx * s_wy * inv_ww
+    iab[:, 1, _NCVT1.yy] = s_yy - s_wy * s_wy * inv_ww
 
     # Row 2: project out X
-    ps_xx = iab[:, 1, 3]
+    ps_xx = iab[:, 1, _NCVT1.xx]
     with np.errstate(divide="ignore"):
         inv_xx = np.where(ps_xx != 0, 1.0 / ps_xx, 0.0)
-    iab[:, 2, 5] = iab[:, 1, 5] - iab[:, 1, 4] * iab[:, 1, 4] * inv_xx
+    iab[:, 2, _NCVT1.yy] = (
+        iab[:, 1, _NCVT1.yy] - iab[:, 1, _NCVT1.xy] * iab[:, 1, _NCVT1.xy] * inv_xx
+    )
 
     return iab
 
@@ -713,24 +700,26 @@ def batch_compute_iab_split_ncvt1(
     s_xy = uab_varying[:, :, 2].sum(axis=1)
 
     iab = np.zeros((n_snps, 3, 6), dtype=np.float64)
-    iab[:, 0, 0] = s_ww
-    iab[:, 0, 1] = s_wx
-    iab[:, 0, 2] = s_wy
-    iab[:, 0, 3] = s_xx
-    iab[:, 0, 4] = s_xy
-    iab[:, 0, 5] = s_yy
+    iab[:, 0, _NCVT1.ww] = s_ww
+    iab[:, 0, _NCVT1.wx] = s_wx
+    iab[:, 0, _NCVT1.wy] = s_wy
+    iab[:, 0, _NCVT1.xx] = s_xx
+    iab[:, 0, _NCVT1.xy] = s_xy
+    iab[:, 0, _NCVT1.yy] = s_yy
 
     # Row 1: project out W (Schur complement)
     inv_ww = 1.0 / s_ww if s_ww != 0 else 0.0
-    iab[:, 1, 3] = s_xx - s_wx * s_wx * inv_ww
-    iab[:, 1, 4] = s_xy - s_wx * s_wy * inv_ww
-    iab[:, 1, 5] = s_yy - s_wy * s_wy * inv_ww
+    iab[:, 1, _NCVT1.xx] = s_xx - s_wx * s_wx * inv_ww
+    iab[:, 1, _NCVT1.xy] = s_xy - s_wx * s_wy * inv_ww
+    iab[:, 1, _NCVT1.yy] = s_yy - s_wy * s_wy * inv_ww
 
     # Row 2: project out X
-    ps_xx = iab[:, 1, 3]
+    ps_xx = iab[:, 1, _NCVT1.xx]
     with np.errstate(divide="ignore"):
         inv_xx = np.where(ps_xx != 0, 1.0 / ps_xx, 0.0)
-    iab[:, 2, 5] = iab[:, 1, 5] - iab[:, 1, 4] * iab[:, 1, 4] * inv_xx
+    iab[:, 2, _NCVT1.yy] = (
+        iab[:, 1, _NCVT1.yy] - iab[:, 1, _NCVT1.xy] * iab[:, 1, _NCVT1.xy] * inv_xx
+    )
 
     return iab
 

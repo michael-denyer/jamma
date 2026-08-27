@@ -970,14 +970,14 @@ def test_reconstruct_uab_from_soa_matches_direct():
     UtG = rng.standard_normal((n_samples, n_snps))
 
     # Direct full Uab construction
-    Uab_direct = batch_compute_uab_numpy(n_cvt=1, UtW=UtW, Uty=Uty, UtG=UtG)
+    Uab_direct = batch_compute_uab_numpy(n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T)
 
     # Split construction + reconstruction
-    invariant = compute_uab_invariant_soa(UtW, Uty)
+    invariant = compute_uab_invariant_soa(UtW, Uty, 1)
     varying = batch_compute_uab_varying_soa_numpy(
         n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T
     )
-    Uab_reconstructed = reconstruct_uab_from_soa(invariant, varying)
+    Uab_reconstructed = reconstruct_uab_from_soa(invariant, varying, 1)
 
     np.testing.assert_allclose(
         Uab_reconstructed,

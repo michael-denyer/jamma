@@ -148,6 +148,24 @@ class PabCTable(NamedTuple):
         return kwargs
 
 
+class _Ncvt1Layout(NamedTuple):
+    """Column order of the six-column Uab/Pab for n_cvt=1 (intercept only).
+
+    ``build_index_table(1)`` packs the (a, b) pairs in this order; the n_cvt=1
+    fast paths spell the columns by name instead of by literal.
+    """
+
+    ww: int
+    wx: int
+    wy: int
+    xx: int
+    xy: int
+    yy: int
+
+
+_NCVT1 = _Ncvt1Layout(ww=0, wx=1, wy=2, xx=3, xy=4, yy=5)
+
+
 @functools.lru_cache(maxsize=8)
 def n_index(n_cvt: int) -> int:
     """Total (a,b) pairs in Uab/Pab storage: (n_cvt+3)*(n_cvt+2)//2.
@@ -281,12 +299,8 @@ def _compute_Uab_ncvt1(
 ) -> np.ndarray:
     """Optimized Uab computation for n_cvt=1 (intercept only).
 
-    For n_cvt=1, indices are:
-    - (1,1)=0: WW, (1,2)=1: WX, (1,3)=2: WY
-    - (2,2)=3: XX, (2,3)=4: XY
-    - (3,3)=5: YY
-
-    This vectorized implementation avoids nested loops entirely.
+    Columns follow ``_NCVT1``. This vectorized implementation avoids nested
+    loops entirely.
     """
     n = len(Uty)
     w = UtW[:, 0]  # Intercept column
@@ -295,15 +309,15 @@ def _compute_Uab_ncvt1(
     Uab = np.zeros((n, 6), dtype=np.float64)
 
     # Covariate and phenotype products (always computed)
-    Uab[:, 0] = w * w  # (1,1): WW
-    Uab[:, 2] = w * Uty  # (1,3): WY
-    Uab[:, 5] = Uty * Uty  # (3,3): YY
+    Uab[:, _NCVT1.ww] = w * w
+    Uab[:, _NCVT1.wy] = w * Uty
+    Uab[:, _NCVT1.yy] = Uty * Uty
 
     # Genotype products (only if Utx provided)
     if Utx is not None:
-        Uab[:, 1] = w * Utx  # (1,2): WX
-        Uab[:, 3] = Utx * Utx  # (2,2): XX
-        Uab[:, 4] = Utx * Uty  # (2,3): XY
+        Uab[:, _NCVT1.wx] = w * Utx
+        Uab[:, _NCVT1.xx] = Utx * Utx
+        Uab[:, _NCVT1.xy] = Utx * Uty
 
     return Uab
 
@@ -544,12 +558,12 @@ def _mle_p_yy_scalar_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
     Returns:
         P_yy scalar (the projected phenotype variance).
     """
-    s_ww = Hi_eval @ Uab[:, 0]
-    s_wx = Hi_eval @ Uab[:, 1]
-    s_wy = Hi_eval @ Uab[:, 2]
-    s_xx = Hi_eval @ Uab[:, 3]
-    s_xy = Hi_eval @ Uab[:, 4]
-    s_yy = Hi_eval @ Uab[:, 5]
+    s_ww = Hi_eval @ Uab[:, _NCVT1.ww]
+    s_wx = Hi_eval @ Uab[:, _NCVT1.wx]
+    s_wy = Hi_eval @ Uab[:, _NCVT1.wy]
+    s_xx = Hi_eval @ Uab[:, _NCVT1.xx]
+    s_xy = Hi_eval @ Uab[:, _NCVT1.xy]
+    s_yy = Hi_eval @ Uab[:, _NCVT1.yy]
 
     # Row 1: project out W (Schur complement)
     if s_ww <= 0:
@@ -584,9 +598,9 @@ def _mle_p_yy_scalar_null_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
     Returns:
         P_yy scalar for the null model.
     """
-    s_ww = Hi_eval @ Uab[:, 0]
-    s_wy = Hi_eval @ Uab[:, 2]
-    s_yy = Hi_eval @ Uab[:, 5]
+    s_ww = Hi_eval @ Uab[:, _NCVT1.ww]
+    s_wy = Hi_eval @ Uab[:, _NCVT1.wy]
+    s_yy = Hi_eval @ Uab[:, _NCVT1.yy]
 
     if s_ww <= 0:
         if s_ww < 0:

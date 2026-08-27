@@ -197,7 +197,7 @@ LAMBDA_MLE_RTOL = 5e-5
 
 def _uab_from_fused_inputs(w, Uty, utg_t):
     """Rebuild the full Uab batch the NumPy kernels take from the fused SoA inputs."""
-    return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t.T)
+    return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t)
 
 
 def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> WaldResult:

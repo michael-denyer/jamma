@@ -21,7 +21,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from jamma.lmm.likelihood import _P_YY_MIN, build_index_table, warn_p_yy_once
+from jamma.lmm.likelihood import _NCVT1, _P_YY_MIN, build_index_table, warn_p_yy_once
 from jamma.lmm.uab import _batch_compute_pab_varying_numpy, _fill_pab_recursion
 
 # The objective handed to the golden-section refinement: per-SNP log-lambdas
@@ -696,20 +696,20 @@ def _batch_reml_at_lambda_split_ncvt1_numpy(
     logl = reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
 
     # Reconstruct full Pab (n_snps, 3, 6) for n_cvt=1:
-    # Row 0: Hi_eval-weighted dot products — [ww, wx, wy, xx, xy, yy]
-    # Row 1: Schur complement projecting out W — [xx, xy, yy] (cols 3,4,5)
-    # Row 2: Schur complement projecting out X — [yy] (col 5)
+    # Row 0: Hi_eval-weighted dot products
+    # Row 1: Schur complement projecting out W (xx, xy, yy)
+    # Row 2: Schur complement projecting out X (yy)
     Pab_batch = np.zeros((n_snps, 3, 6), dtype=np.float64)
-    Pab_batch[:, 0, 0] = s_ww
-    Pab_batch[:, 0, 1] = s_wx
-    Pab_batch[:, 0, 2] = s_wy
-    Pab_batch[:, 0, 3] = s_xx
-    Pab_batch[:, 0, 4] = s_xy
-    Pab_batch[:, 0, 5] = s_yy
-    Pab_batch[:, 1, 3] = p1_xx
-    Pab_batch[:, 1, 4] = p1_xy
-    Pab_batch[:, 1, 5] = p1_yy
-    Pab_batch[:, 2, 5] = P_yy  # already guarded
+    Pab_batch[:, 0, _NCVT1.ww] = s_ww
+    Pab_batch[:, 0, _NCVT1.wx] = s_wx
+    Pab_batch[:, 0, _NCVT1.wy] = s_wy
+    Pab_batch[:, 0, _NCVT1.xx] = s_xx
+    Pab_batch[:, 0, _NCVT1.xy] = s_xy
+    Pab_batch[:, 0, _NCVT1.yy] = s_yy
+    Pab_batch[:, 1, _NCVT1.xx] = p1_xx
+    Pab_batch[:, 1, _NCVT1.xy] = p1_xy
+    Pab_batch[:, 1, _NCVT1.yy] = p1_yy
+    Pab_batch[:, 2, _NCVT1.yy] = P_yy  # already guarded
 
     return logl, Pab_batch
 

@@ -114,7 +114,7 @@ def mouse_data():
     UtG = U.T @ geno_subset
 
     # Build full Uab
-    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
 
     # Build SoA split
     uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
@@ -288,7 +288,7 @@ def degenerate_data(mouse_data):
     UtG = U.T @ geno_with_degen
 
     n_cvt = 2
-    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
     uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
     lambda_null_mle, logl_H0 = compute_null_model_mle(eigenvalues, UtW, Uty, n_cvt)

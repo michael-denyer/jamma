@@ -592,3 +592,18 @@ class TestAssocResult:
         ]
         for field in expected_fields:
             assert hasattr(result, field), f"Missing field: {field}"
+
+
+@pytest.mark.tier0
+def test_ncvt1_layout_matches_index_table():
+    """_NCVT1 names the columns build_index_table(1) packs, in its order."""
+    from jamma.lmm.likelihood import _NCVT1, build_index_table, get_ab_index
+
+    table = build_index_table(1)
+    assert _NCVT1.ww == get_ab_index(1, 1, 1)
+    assert _NCVT1.wx == get_ab_index(1, 2, 1)
+    assert _NCVT1.wy == get_ab_index(1, 3, 1)
+    assert _NCVT1.xx == table.idx_xx
+    assert _NCVT1.xy == table.idx_xy
+    assert _NCVT1.yy == table.idx_yy
+    assert sorted(_NCVT1) == list(range(table.n_index))

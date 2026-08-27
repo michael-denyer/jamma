@@ -260,7 +260,7 @@ class TestDegenerateSNPNaN:
         UtG[:, 0] = 0.0
         UtG[:, 3] = 0.0
 
-        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
         Iab = batch_compute_iab_numpy(n_cvt, Uab)
         lambdas, _, _ = golden_section_optimize_lambda_numpy(
             n_cvt, eigenvalues, Uab, Iab
@@ -295,7 +295,7 @@ class TestDegenerateSNPNaN:
         UtG = rng.standard_normal((n_samples, n_snps))
         UtG[:, 1] = 0.0  # Make SNP 1 constant
 
-        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
         Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
 
         betas, ses, p_scores = batch_calc_score_stats_numpy(
@@ -420,7 +420,7 @@ class TestMode4WaldOverwritesScore:
         Uty = rng.standard_normal(n_samples)
         UtG = rng.standard_normal((n_samples, n_snps))
 
-        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
 
         logl_H0, _, Hi_eval_null = _compute_null_model_common(
             4, eigenvalues, UtW, Uty, n_cvt, show_progress=False

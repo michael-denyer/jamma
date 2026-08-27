@@ -29,7 +29,7 @@ _score_fused_ws_available = compute_numpy._accel is not None
 
 def _uab_from_fused_inputs(w, Uty, utg_t):
     """Rebuild the full Uab batch the NumPy kernels take from the fused SoA inputs."""
-    return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t.T)
+    return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t)
 
 
 def _numpy_score_reference(w, Uty, utg_t, Hi_eval_null, n_samples):

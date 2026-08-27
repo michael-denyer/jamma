@@ -35,7 +35,7 @@ def test_split_uab_matches_full_uab(split_wald_data):
 
     _, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
 
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     uab_var, uab_inv = batch_compute_uab_split_numpy(1, UtW, Uty, UtG)
 
     # Varying columns: wx(1), xx(3), xy(4) in full -> 0,1,2 in split
@@ -87,7 +87,7 @@ def test_split_iab_matches_full_iab(split_wald_data):
 
     _, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
 
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     full_iab = batch_compute_iab_numpy(1, full_uab)
 
     uab_var, uab_inv = batch_compute_uab_split_numpy(1, UtW, Uty, UtG)

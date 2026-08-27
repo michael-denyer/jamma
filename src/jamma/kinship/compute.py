@@ -74,6 +74,78 @@ def _accumulate_kinship(K: np.ndarray, X_centered: np.ndarray) -> None:
     jlinalg.dsyrk(X_centered, out=K, beta=1.0)
 
 
+class CenteredChunk(NamedTuple):
+    """One file chunk after column selection, row subset, and centering.
+
+    X: float64 (n_out, n_sel), imputed and centered per column.
+    global_idx: global BED SNP indices of X's columns, in column order, sorted
+        ascending. ``X.shape[1] == len(global_idx)``. LOCO maps these to chromosomes.
+    """
+
+    X: np.ndarray
+    global_idx: np.ndarray
+
+
+def _selected_chunks(
+    chunk_iter: Iterator[tuple[np.ndarray, int, int]],
+    snp_indices: np.ndarray,
+    valid_indices: np.ndarray | None,
+    *,
+    keep: Callable[[np.ndarray], bool] | None = None,
+) -> Iterator[CenteredChunk]:
+    """Select ``snp_indices`` columns, subset rows, center, one yield per file chunk.
+
+    Unifies the streaming (PASS 2) and LOCO accumulation loops, which share one
+    mechanism. Pick the filtered columns of each BED chunk via searchsorted against
+    the sorted global ``snp_indices``, subset rows to ``valid_indices``, and
+    impute-and-center. The single-pass monomorphism loop selects columns by a per-chunk
+    ``nanvar`` mask instead and is deliberately not routed through here.
+
+    Args:
+        chunk_iter: Yields ``(chunk, file_start, file_end)`` from the genotype stream.
+            ``chunk`` is float64 ``(n_samples, chunk_cols)`` over full BED rows.
+        snp_indices: Global indices of SNPs that passed filtering, sorted ascending.
+        valid_indices: Sample indices to keep, or None for all samples.
+        keep: Optional predicate on a chunk's global indices, evaluated before any
+            centering. Returning False skips the chunk with no work done, preserving
+            LOCO's "skip chunks that contribute nothing" optimisation. None keeps every
+            chunk with at least one selected column.
+
+    Yields:
+        One CenteredChunk per surviving file chunk. Chunks with no selected columns (or
+        that fail ``keep``) yield nothing.
+
+    Numerics contract:
+        Exactly one yield per file chunk, never re-batching selected columns across
+        chunks and never splitting one chunk's selection. So one ``_accumulate_kinship``
+        per yield reproduces the pre-refactor dsyrk column grouping, which splitting
+        would not (bit-level). ``searchsorted`` runs on full BED chunk boundaries.
+        Rows are subset before columns; centering is per-column over the retained rows,
+        so this is value-identical to selecting columns first.
+    """
+    assert snp_indices.ndim == 1, "snp_indices must be 1-D"
+    assert len(snp_indices) < 2 or np.all(np.diff(snp_indices) > 0), (
+        "snp_indices must be sorted ascending for searchsorted selection"
+    )
+
+    for chunk, file_start, file_end in chunk_iter:
+        left = np.searchsorted(snp_indices, file_start, side="left")
+        right = np.searchsorted(snp_indices, file_end, side="left")
+        global_idx = snp_indices[left:right]
+        if len(global_idx) == 0:
+            continue
+        if keep is not None and not keep(global_idx):
+            continue
+
+        rows = chunk if valid_indices is None else chunk[valid_indices, :]
+        X_chunk = rows[:, global_idx - file_start]
+        assert X_chunk.dtype == np.float64, (
+            f"kinship accumulation requires float64 chunks (got {X_chunk.dtype}); "
+            "check stream_genotype_chunks dtype arg"
+        )
+        yield CenteredChunk(impute_and_center(X_chunk), global_idx)
+
+
 def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
     """Gate a kinship computation on the memory that phase actually needs.
 
@@ -583,32 +655,9 @@ def compute_kinship_streaming(
             initial_eta_seconds=estimate_kinship_seconds(n_out, n_snps),
         )
 
-    for chunk, file_start, file_end in chunk_iter:
-        # Binary search for filtered SNPs in this chunk: O(log n) vs O(n)
-        # snp_indices is sorted (from np.where), so searchsorted is valid
-        left = np.searchsorted(snp_indices, file_start, side="left")
-        right = np.searchsorted(snp_indices, file_end, side="left")
-        chunk_filtered_indices = snp_indices[left:right] - file_start
-
-        if len(chunk_filtered_indices) == 0:
-            continue
-
-        # Early valid-sample subsetting for pass 2 (rows before columns
-        # to avoid allocating an (n_samples, n_filtered_cols) intermediate).
-        if valid_indices is not None:
-            chunk = chunk[valid_indices, :]
-
-        # Extract only filtered columns (fancy indexing produces a copy)
-        X_chunk = chunk[:, chunk_filtered_indices]
-        assert X_chunk.dtype == np.float64, (
-            f"kinship accumulation requires float64 chunks (got {X_chunk.dtype}); "
-            "check stream_genotype_chunks dtype arg"
-        )
-
-        # Impute and center the chunk
-        X_centered = impute_and_center(X_chunk)
-
-        # Accumulate the symmetric rank-k contribution in place.
+    for X_centered, _global_idx in _selected_chunks(
+        chunk_iter, snp_indices, valid_indices
+    ):
         _accumulate_kinship(K, X_centered)
 
     # Scale by number of filtered SNPs
@@ -839,40 +888,18 @@ def _stream_s_full_and_chr(
     if show_progress:
         chunk_iter = progress_iterator(chunk_iter, total=n_chunks, desc=desc)
 
-    for chunk, file_start, file_end in chunk_iter:
-        left = np.searchsorted(snp_indices, file_start, side="left")
-        right = np.searchsorted(snp_indices, file_end, side="left")
-        chunk_snp_global_indices = snp_indices[left:right]
-        chunk_filtered_local = chunk_snp_global_indices - file_start
+    def keep(global_idx: np.ndarray) -> bool:
+        # Skip centering when S_full isn't needed and no target chromosome is present.
+        return S_full is not None or not chr_set.isdisjoint(chromosomes[global_idx])
 
-        if len(chunk_filtered_local) == 0:
-            continue
-
-        # Check which target chromosomes are in this chunk before allocating
-        chunk_chrs = chromosomes[chunk_snp_global_indices]
-        target_chrs_in_chunk = set(chunk_chrs) & chr_set
-
-        # Skip centering when S_full isn't needed and no target chromosomes present
-        if S_full is None and not target_chrs_in_chunk:
-            continue
-
-        X_chunk = chunk[:, chunk_filtered_local]
-        assert X_chunk.dtype == np.float64, (
-            f"kinship accumulation requires float64 chunks (got {X_chunk.dtype}); "
-            "check stream_genotype_chunks dtype arg"
-        )
-
-        # Subset rows to valid samples before centering.
-        # Centering must use the valid-sample mean (not the full-sample mean)
-        # to match GEMMA's behaviour.
-        if valid_indices is not None:
-            X_chunk = X_chunk[valid_indices, :]
-        X_centered = impute_and_center(X_chunk)
-
+    for X_centered, global_idx in _selected_chunks(
+        chunk_iter, snp_indices, valid_indices, keep=keep
+    ):
         if S_full is not None:
             _accumulate_kinship(S_full, X_centered)
 
-        for chr_name in target_chrs_in_chunk:
+        chunk_chrs = chromosomes[global_idx]
+        for chr_name in set(chunk_chrs) & chr_set:
             X_chr_part = X_centered[:, chunk_chrs == chr_name]
             _accumulate_kinship(S_chr[chr_name], X_chr_part)
 

@@ -145,9 +145,10 @@ class PipelineRunner:
     def validate_inputs(self) -> None:
         """Validate that required input files exist and combine legally.
 
-        Only checks that need the filesystem or span several fields live here.
-        The LMM knobs (lmm_mode, maf, miss, l_min, l_max, n_grid) are already
-        guaranteed by PipelineConfig.__post_init__, which builds an LmmConfig.
+        Only checks that need the filesystem live here, plus the cross-field
+        rules that mention a file. Everything decidable from the config alone
+        (the LMM knobs, hwe_threshold, cat_columns, phenotype_columns) is
+        already guaranteed by PipelineConfig.__post_init__.
 
         Raises:
             FileNotFoundError: If PLINK files (.bed, .bim, .fam) are missing,
@@ -213,32 +214,6 @@ class PipelineRunner:
                 "-widv (individual weights) cannot be used with -d/-u "
                 "(pre-computed eigen). "
                 "Weights must be applied to kinship before eigendecomposition."
-            )
-
-        # Categorical columns validation
-        if self.config.cat_columns is not None:
-            if self.config.covariate_file is None:
-                raise ValueError("-cat requires -c (covariate file)")
-            for col in self.config.cat_columns:
-                if col < 1:
-                    raise ValueError(
-                        f"-cat column indices must be >= 1 (1-indexed), got {col}"
-                    )
-
-        # HWE threshold validation
-        if self.config.hwe_threshold < 0:
-            raise ValueError(
-                f"hwe_threshold must be >= 0, got {self.config.hwe_threshold}"
-            )
-        if self.config.hwe_threshold > 1.0:
-            raise ValueError(
-                f"hwe_threshold must be in [0, 1] (p-value threshold), "
-                f"got {self.config.hwe_threshold}"
-            )
-        if self.config.hwe_threshold > 0 and self.config.loco:
-            raise ValueError(
-                "-hwe is not yet supported with -loco mode. "
-                "Apply HWE filtering as a pre-processing step."
             )
 
     def _parse_phenotype_column(

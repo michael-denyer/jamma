@@ -359,39 +359,31 @@ class TestValidateInputsSnpsFields:
         with pytest.raises(FileNotFoundError, match="Kinship SNP list file not found"):
             runner.validate_inputs()
 
-    def test_negative_hwe_raises(self) -> None:
-        """validate_inputs raises ValueError for negative hwe_threshold."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            hwe_threshold=-0.1,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(ValueError, match="hwe_threshold must be >= 0"):
-            runner.validate_inputs()
-
-    def test_hwe_upper_bound_raises(self) -> None:
-        """validate_inputs raises ValueError for hwe_threshold > 1.0."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            hwe_threshold=1.5,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
+    @pytest.mark.parametrize("hwe", [-0.1, 1.5])
+    def test_hwe_outside_unit_interval_fails_at_construction(self, hwe: float):
+        """hwe_threshold is a p-value; anything outside [0, 1] is a config error."""
         with pytest.raises(ValueError, match="hwe_threshold must be in"):
-            runner.validate_inputs()
+            PipelineConfig(bfile=BFILE, hwe_threshold=hwe, check_memory=False)
 
-    def test_hwe_with_loco_raises(self) -> None:
-        """validate_inputs raises ValueError for -hwe combined with -loco."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            hwe_threshold=0.001,
-            loco=True,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
+    def test_hwe_with_loco_fails_at_construction(self) -> None:
+        """-hwe combined with -loco is rejected before any file is read."""
         with pytest.raises(ValueError, match="not yet supported with -loco"):
-            runner.validate_inputs()
+            PipelineConfig(
+                bfile=BFILE, hwe_threshold=0.001, loco=True, check_memory=False
+            )
+
+    def test_cat_requires_covariate_file_at_construction(self) -> None:
+        with pytest.raises(ValueError, match="-cat requires -c"):
+            PipelineConfig(bfile=BFILE, cat_columns=[1], check_memory=False)
+
+    def test_cat_column_below_one_fails_at_construction(self, tmp_path: Path):
+        with pytest.raises(ValueError, match=r"-cat column indices must be >= 1"):
+            PipelineConfig(
+                bfile=BFILE,
+                covariate_file=tmp_path / "cov.txt",
+                cat_columns=[0],
+                check_memory=False,
+            )
 
 
 @pytest.mark.tier1

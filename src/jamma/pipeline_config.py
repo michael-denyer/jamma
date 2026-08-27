@@ -160,6 +160,24 @@ class PipelineConfig:
                 f"phenotype_columns contains duplicate indices: "
                 f"{self.phenotype_columns}"
             )
+        if not 0 <= self.hwe_threshold <= 1:
+            raise ValueError(
+                f"hwe_threshold must be in [0, 1] (p-value threshold), "
+                f"got {self.hwe_threshold}"
+            )
+        if self.hwe_threshold > 0 and self.loco:
+            raise ValueError(
+                "-hwe is not yet supported with -loco mode. "
+                "Apply HWE filtering as a pre-processing step."
+            )
+        if self.cat_columns is not None:
+            if self.covariate_file is None:
+                raise ValueError("-cat requires -c (covariate file)")
+            for col in self.cat_columns:
+                if col < 1:
+                    raise ValueError(
+                        f"-cat column indices must be >= 1 (1-indexed), got {col}"
+                    )
         # LOCO + multi-phenotype guard
         if self.loco and len(self.phenotype_columns) > 1:
             raise ValueError(

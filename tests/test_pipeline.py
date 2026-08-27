@@ -12,10 +12,15 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.schema import MIN_N_GRID
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
+from tests.conftest import require_fixture
 
 # Fixture paths for gemma_synthetic dataset
 FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
 BFILE = FIXTURES / "test"
+
+# mouse_hs1940 has SNPs that MAF/missingness filtering actually removes, unlike
+# the tiny synthetic set where every SNP passes.
+_MOUSE_BFILE = Path(__file__).parent / "fixtures" / "mouse_hs1940" / "mouse_hs1940"
 
 
 @pytest.mark.tier0
@@ -610,6 +615,8 @@ class TestEarlySampleFiltering:
 
         K_ref = compute_kinship_streaming(
             bfile,
+            maf_threshold=config.maf,
+            miss_threshold=config.miss,
             check_memory=False,
             show_progress=False,
             valid_indices=valid_indices,
@@ -641,6 +648,52 @@ class TestEarlySampleFiltering:
         valid_indices = np.array([0, 1, 2, 3, 4, 6, 7, 8, 9])
         K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
         assert K.shape == (len(valid_indices), len(valid_indices))
+
+    @pytest.mark.tier1
+    def test_lmm_kinship_applies_config_maf_miss(self) -> None:
+        """-lmm internally-computed kinship applies config MAF/missing filters.
+
+        Regression for Bug 6: load_kinship built the kinship with no MAF or
+        missingness filter (thresholds defaulted to 0.0 / 1.0), while -gk applied
+        them. On mouse_hs1940 the default maf=0.01 removes SNPs, so the filtered
+        kinship differs from the unfiltered one, and load_kinship must match the
+        filtered computation, not the unfiltered one.
+        """
+        from jamma.kinship.compute import compute_kinship_streaming
+
+        require_fixture(
+            _MOUSE_BFILE.with_suffix(".bed"), _MOUSE_BFILE.with_suffix(".fam")
+        )
+
+        config = PipelineConfig(
+            bfile=_MOUSE_BFILE,
+            maf=0.01,
+            miss=0.05,
+            check_memory=False,
+            show_progress=False,
+        )
+        K_load = PipelineRunner(config).load_kinship(1940)
+
+        K_filtered = compute_kinship_streaming(
+            _MOUSE_BFILE,
+            maf_threshold=0.01,
+            miss_threshold=0.05,
+            check_memory=False,
+            show_progress=False,
+        )
+        K_unfiltered = compute_kinship_streaming(
+            _MOUSE_BFILE, check_memory=False, show_progress=False
+        )
+
+        # The filter must actually change the kinship, or the test proves nothing.
+        assert not np.allclose(K_filtered, K_unfiltered, rtol=1e-8)
+        np.testing.assert_allclose(
+            K_load,
+            K_filtered,
+            rtol=1e-12,
+            atol=1e-14,
+            err_msg="load_kinship must apply config maf/miss like -gk does",
+        )
 
     def test_weight_file_valid_indices(self, tmp_path: Path) -> None:
         """Weights filtered to match valid_indices under early filtering."""

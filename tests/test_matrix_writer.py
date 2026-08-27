@@ -241,6 +241,66 @@ class TestFailureHandling:
 
 
 @pytest.mark.tier0
+class TestAtomicPublication:
+    """A failed write never destroys a pre-existing valid destination."""
+
+    OLD_BYTES = b"prior valid matrix contents\n"
+
+    def test_serial_failure_preserves_destination(self, tmp_path: Path) -> None:
+        """Serial-path formatting error leaves the old destination intact."""
+        out_path = tmp_path / "kinship.txt"
+        out_path.write_bytes(self.OLD_BYTES)
+
+        # 3 rows is below min_rows_for_parallel (500), so this hits the
+        # np.savetxt path; "%q" raises ValueError during formatting.
+        with pytest.raises(ValueError, match="format"):
+            write_matrix_parallel(np.ones((3, 3)), out_path, fmt="%q")
+
+        assert out_path.read_bytes() == self.OLD_BYTES
+        remaining = list(tmp_path.glob(f".{out_path.name}.tmp.*"))
+        assert not remaining, f"Publication temp not cleaned up: {remaining}"
+
+    def test_parallel_publication_failure_preserves_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Publication failure after successful workers leaves the old file."""
+        out_path = tmp_path / "kinship.txt"
+        out_path.write_bytes(self.OLD_BYTES)
+
+        rng = np.random.default_rng(42)
+        matrix = rng.standard_normal((600, 10))
+
+        def raise_on_replace(src: object, dst: object) -> None:
+            raise OSError("injected publication failure")
+
+        monkeypatch.setattr("jamma.io.matrix_writer.os.replace", raise_on_replace)
+        with pytest.raises(OSError, match="injected publication failure"):
+            write_matrix_parallel(matrix, out_path, n_workers=2)
+
+        assert out_path.read_bytes() == self.OLD_BYTES
+        leftovers = [
+            p for p in tmp_path.iterdir() if p != out_path
+        ]  # temp dir, memmap, chunks, publication temp
+        assert not leftovers, f"Temp artifacts not cleaned up: {leftovers}"
+
+    def test_success_replaces_old_destination_atomically(self, tmp_path: Path) -> None:
+        """Serial and parallel successful writes replace old bytes exactly."""
+        rng = np.random.default_rng(42)
+        for name, matrix in (
+            ("serial.txt", rng.standard_normal((10, 5))),
+            ("parallel.txt", rng.standard_normal((600, 10))),
+        ):
+            out_path = tmp_path / name
+            out_path.write_bytes(self.OLD_BYTES)
+            write_matrix_parallel(matrix, out_path, n_workers=2)
+            expected = _savetxt_bytes(matrix, tmp_path / f"ref_{name}")
+            assert out_path.read_bytes() == expected
+            # Publication temps and .jamma_mwrite_* dirs all start with "."
+            leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(".")]
+            assert not leftovers, f"Temp artifacts not cleaned up: {leftovers}"
+
+
+@pytest.mark.tier0
 class TestWorkerCap:
     """Verify worker count is capped to avoid disk I/O bottleneck."""
 

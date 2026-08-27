@@ -18,7 +18,9 @@ deleted eagerly during concatenation to minimize peak disk usage.
 Output is byte-identical to np.savetxt for all matrix sizes.
 """
 
+import os
 import shutil
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -61,6 +63,16 @@ def _format_rows_to_file(args: tuple) -> None:
         raise RuntimeError(
             f"_format_rows_to_file failed on rows {start}-{end}: {e}"
         ) from e
+
+
+def _publish_temp_path(path: Path) -> Path:
+    """Unique sibling temp path for atomic publish via os.replace().
+
+    A sibling of ``path`` is guaranteed to be on the same filesystem, which
+    os.replace() needs to be atomic. The pid+uuid suffix keeps concurrent
+    writers from clobbering each other's temp file.
+    """
+    return path.parent / f".{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
 
 
 def _estimate_text_size(n_rows: int, n_cols: int) -> int:
@@ -107,7 +119,15 @@ def write_matrix_parallel(
 
     if n_rows < min_rows_for_parallel:
         logger.info(f"Writing {n_rows}x{n_cols} matrix to {path.resolve()}")
-        np.savetxt(path, matrix, fmt=fmt, delimiter=delimiter)
+        # Publish atomically: np.savetxt truncates its target on open, so a
+        # formatting failure would otherwise destroy a pre-existing valid file.
+        publish_tmp = _publish_temp_path(path)
+        try:
+            np.savetxt(publish_tmp, matrix, fmt=fmt, delimiter=delimiter)
+            publish_tmp.replace(path)
+        except BaseException:
+            unlink_quietly(publish_tmp)
+            raise
         return
 
     if n_workers is None:
@@ -193,9 +213,13 @@ def write_matrix_parallel(
             logger.warning(f"Could not delete memmap {memmap_path}: {e}")
         memmap_path = None  # prevent double-delete in finally
 
-        # Concatenate chunk files in order, deleting each after use
+        # Concatenate chunk files in order, deleting each after use.
+        # Concatenate into a sibling temp and os.replace() onto the final
+        # path, so a failure mid-concatenation never destroys a pre-existing
+        # valid file at the destination.
+        publish_tmp = _publish_temp_path(path)
         try:
-            with open(path, "wb") as f_out:
+            with open(publish_tmp, "wb") as f_out:
                 for chunk_path in chunk_paths:
                     with open(chunk_path, "rb") as f_in:
                         while True:
@@ -210,14 +234,12 @@ def write_matrix_parallel(
                         logger.debug(
                             f"Could not eagerly delete chunk {chunk_path}: {e}"
                         )
+            publish_tmp.replace(path)
         except BaseException as e:
             logger.opt(exception=e).error(
                 f"Failed during chunk concatenation to {path}: {e}"
             )
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as cleanup_err:
-                logger.warning(f"Failed to delete partial output {path}: {cleanup_err}")
+            unlink_quietly(publish_tmp)
             raise
     finally:
         # Clean up any remaining temp files (error paths)

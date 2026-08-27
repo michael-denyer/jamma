@@ -10,11 +10,16 @@ import numpy as np
 import pytest
 
 from jamma.io import load_plink_binary
-from jamma.kinship import compute_centered_kinship, compute_standardized_kinship
+from jamma.kinship import (
+    compute_centered_kinship,
+    compute_standardized_kinship,
+    compute_standardized_kinship_streaming,
+)
 from jamma.validation import (
     compare_kinship_matrices,
     load_gemma_kinship,
 )
+from tests.conftest import require_fixture
 
 # Test data paths - use gemma_synthetic which has matching PLINK + reference outputs
 _FIXTURE_ROOT = Path(__file__).parent / "fixtures"
@@ -261,3 +266,76 @@ class TestStandardizedKinshipValidation:
         assert max_rel < 1e-3, (
             f"Mismatch with missing data: max rel diff = {max_rel:.2e}"
         )
+
+
+@pytest.mark.tier1
+class TestStandardizedKinshipStreaming:
+    """The streaming -gk 2 path matches the in-memory path and the NumPy oracle."""
+
+    def test_streaming_matches_inmemory(self):
+        """Streaming -gk 2 matches in-memory -gk 2 within streaming grouping error.
+
+        The two differ only in column grouping (file chunks vs in-memory batches),
+        which shifts dsyrk accumulation order. On gemma_synthetic (one chunk) they
+        are bit-identical; the tolerance covers multi-chunk datasets.
+        """
+        require_fixture(
+            EXAMPLE_DATA.with_suffix(".bed"), EXAMPLE_DATA.with_suffix(".fam")
+        )
+        genotypes = load_plink_binary(EXAMPLE_DATA).genotypes
+
+        K_stream = compute_standardized_kinship_streaming(
+            EXAMPLE_DATA, check_memory=False, show_progress=False
+        )
+        K_inmem = compute_standardized_kinship(genotypes, check_memory=False)
+
+        max_rel = np.max(np.abs(K_stream - K_inmem) / (np.abs(K_inmem) + 1e-15))
+        assert max_rel < 1e-8, (
+            f"stream vs in-memory -gk 2: max rel diff = {max_rel:.2e}"
+        )
+
+    def test_streaming_matches_numpy_reference(self):
+        """Streaming -gk 2 matches the per-SNP NumPy oracle at the -gk 2 tolerance."""
+        require_fixture(
+            EXAMPLE_DATA.with_suffix(".bed"), EXAMPLE_DATA.with_suffix(".fam")
+        )
+        genotypes = load_plink_binary(EXAMPLE_DATA).genotypes
+
+        K_stream = compute_standardized_kinship_streaming(
+            EXAMPLE_DATA, check_memory=False, show_progress=False
+        )
+        K_ref = _numpy_standardized_kinship(genotypes)
+
+        max_rel = np.max(np.abs(K_stream - K_ref) / (np.abs(K_ref) + 1e-15))
+        assert max_rel < 1e-3, f"stream vs NumPy oracle: max rel diff = {max_rel:.2e}"
+
+    def test_streaming_valid_indices_subsets(self):
+        """valid_indices accumulates at n_valid size and matches an in-memory subset."""
+        require_fixture(
+            EXAMPLE_DATA.with_suffix(".bed"), EXAMPLE_DATA.with_suffix(".fam")
+        )
+        genotypes = load_plink_binary(EXAMPLE_DATA).genotypes
+        n_samples = genotypes.shape[0]
+        valid = np.arange(0, n_samples - 3)
+
+        K_stream = compute_standardized_kinship_streaming(
+            EXAMPLE_DATA, check_memory=False, show_progress=False, valid_indices=valid
+        )
+        K_inmem = compute_standardized_kinship(genotypes[valid, :], check_memory=False)
+
+        assert K_stream.shape == (len(valid), len(valid))
+        max_rel = np.max(np.abs(K_stream - K_inmem) / (np.abs(K_inmem) + 1e-15))
+        assert max_rel < 1e-8, (
+            f"subset stream vs in-memory: max rel diff = {max_rel:.2e}"
+        )
+
+    def test_streaming_maf_filter(self):
+        """Streaming -gk 2 honors the MAF filter and stays symmetric and finite."""
+        require_fixture(
+            EXAMPLE_DATA.with_suffix(".bed"), EXAMPLE_DATA.with_suffix(".fam")
+        )
+        K = compute_standardized_kinship_streaming(
+            EXAMPLE_DATA, maf_threshold=0.05, check_memory=False, show_progress=False
+        )
+        assert np.allclose(K, K.T)
+        assert not np.any(np.isnan(K))

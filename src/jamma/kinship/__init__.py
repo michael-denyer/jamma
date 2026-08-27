@@ -6,6 +6,7 @@ missing data handling.
 Key functions:
 - compute_centered_kinship: Compute K = X_c @ X_c.T / p (GEMMA -gk 1)
 - compute_standardized_kinship: Compute K = Z @ Z.T / p (GEMMA -gk 2)
+- compute_standardized_kinship_streaming: -gk 2 from disk (streaming)
 - compute_loco_kinship_streaming: Compute LOCO kinship from disk (streaming)
 - impute_and_center: Impute missing values to SNP mean and center
 - impute_center_and_standardize: Impute, center, and standardize per SNP
@@ -19,6 +20,7 @@ from jamma.kinship.compute import (
     compute_kinship_streaming,
     compute_loco_kinship_streaming,
     compute_standardized_kinship,
+    compute_standardized_kinship_streaming,
     validate_valid_indices,
 )
 from jamma.kinship.io import (
@@ -35,6 +37,7 @@ __all__ = [
     "compute_kinship_streaming",
     "compute_loco_kinship_streaming",
     "compute_standardized_kinship",
+    "compute_standardized_kinship_streaming",
     "impute_and_center",
     "impute_center_and_standardize",
     "read_kinship_matrix",

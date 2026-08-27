@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 import click
 from loguru import logger
@@ -33,6 +33,19 @@ def _opt_path(value: str | None) -> Path | None:
     return Path(value) if value else None
 
 
+def _int_list(value: str, flag: str) -> list[int]:
+    """Parse a space- or comma-separated list of integers from a CLI flag."""
+    try:
+        columns = [int(x) for x in value.replace(",", " ").split()]
+    except ValueError as e:
+        raise click.UsageError(
+            f"{flag} must be integer column indices, got '{value}'"
+        ) from e
+    if not columns:
+        raise click.UsageError(f"{flag} requires at least one column index")
+    return columns
+
+
 def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     """Print version and backend info, then exit."""
     if not value or ctx.resilient_parsing:
@@ -50,7 +63,10 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     "-bfile", type=click.Path(), required=True, help="PLINK binary file prefix"
 )
 @click.option(
-    "-gk", type=int, default=None, help="Kinship mode (1=centered, 2=standardized)"
+    "-gk",
+    type=click.IntRange(1, 2),
+    default=None,
+    help="Kinship mode (1=centered, 2=standardized)",
 )
 @click.option(
     "-lmm", type=int, default=None, help="LMM mode (1=Wald, 2=LRT, 3=Score, 4=All)"
@@ -166,48 +182,16 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     "-cat",
     type=str,
     default=None,
-    help="Categorical covariate columns, 1-indexed (e.g., -cat '1 3'). JAMMA-specific.",
+    help=(
+        "Categorical covariate columns, 1-indexed. Single value or "
+        "space/comma-separated: -cat '1 3' or -cat '1,3'. JAMMA-specific."
+    ),
 )
 @click.option(
     "-widv",
     type=click.Path(),
     default=None,
     help="Individual weight file (one weight per line)",
-)
-@click.option(
-    "-wsnp",
-    type=click.Path(),
-    default=None,
-    hidden=True,
-    help="SNP weight file (not yet implemented)",
-)
-@click.option(
-    "-gxe",
-    type=click.Path(),
-    default=None,
-    hidden=True,
-    help="G x E interaction file (not yet implemented)",
-)
-@click.option(
-    "-vc",
-    type=int,
-    default=None,
-    hidden=True,
-    help="Variance component estimation (not yet implemented)",
-)
-@click.option(
-    "-mk",
-    type=click.Path(),
-    default=None,
-    hidden=True,
-    help="Multiple kinship matrices (not yet implemented)",
-)
-@click.option(
-    "-mvlmm",
-    type=int,
-    default=None,
-    hidden=True,
-    help="Multivariate LMM (not yet implemented)",
 )
 @click.pass_context
 def main(
@@ -240,11 +224,6 @@ def main(
     legacy_text,
     cat,
     widv,
-    wsnp,
-    gxe,
-    vc,
-    mk,
-    mvlmm,
 ):
     """JAMMA: Highly-Accelerated Multi-method Mixed-Model Association.
 
@@ -259,12 +238,6 @@ def main(
         config = OutputConfig(outdir=Path(outdir), prefix=o, verbose=verbose)
     except ValueError as e:
         raise click.UsageError(str(e)) from e
-
-    # Validate unimplemented flags
-    _unimplemented = {"-wsnp": wsnp, "-gxe": gxe, "-vc": vc, "-mk": mk, "-mvlmm": mvlmm}
-    for flag_name, flag_value in _unimplemented.items():
-        if flag_value is not None:
-            raise click.ClickException(f"Flag {flag_name} is not yet implemented")
 
     # Mode validation: exactly one of -gk or -lmm required
     if gk is not None and lmm is not None:
@@ -293,29 +266,12 @@ def main(
         if ctx.get_parameter_source("miss") == click.core.ParameterSource.DEFAULT:
             miss = 1.0
 
-    # Parse -n: accept space or comma separated integers
-    try:
-        phenotype_columns = [int(x) for x in n.replace(",", " ").split()]
-    except ValueError as e:
-        raise click.UsageError(f"-n must be integer column indices, got '{n}'") from e
-    if not phenotype_columns:
-        raise click.UsageError("-n requires at least one column index")
+    phenotype_columns = _int_list(n, "-n")
     if len(phenotype_columns) != len(set(phenotype_columns)):
         raise click.UsageError(
             f"-n contains duplicate column indices: {phenotype_columns}"
         )
-
-    # Parse -cat option
-    cat_columns = None
-    if cat is not None:
-        try:
-            cat_columns = [int(x) for x in cat.split()]
-        except ValueError as e:
-            raise click.UsageError(
-                f"-cat must be space-separated integers, got '{cat}'"
-            ) from e
-        if not cat_columns:
-            raise click.UsageError("-cat requires at least one column index")
+    cat_columns = _int_list(cat, "-cat") if cat is not None else None
 
     # Dispatch to handler. Both arms test their own mode flag rather than
     # relying on the mutually-exclusive/one-required checks far above, so each
@@ -335,7 +291,6 @@ def main(
             check_memory=check_memory,
             loco=loco,
             write_eigen=eigen,
-            phenotype_column=phenotype_columns[0],
             ksnps_file=_opt_path(ksnps),
             legacy_text=legacy_text,
         )
@@ -373,57 +328,24 @@ def main(
 def _run_gk(
     *,
     bfile: Path,
-    mode: int,
+    mode: Literal[1, 2],
     config: OutputConfig,
     maf: float,
     miss: float,
     check_memory: bool,
     loco: bool,
     write_eigen: bool,
-    phenotype_column: int,
     ksnps_file: Path | None,
     legacy_text: bool = False,
 ) -> None:
     """Run kinship matrix computation (thin shell over compute_kinship)."""
-    if mode not in (1, 2):
-        _cli_error(f"invalid kinship mode {mode}. Use -gk 1 or -gk 2.")
-
-    if phenotype_column != 1:
-        logger.info(
-            f"Note: -n {phenotype_column} accepted but kinship computation "
-            f"uses all samples"
-        )
-
     start_time = time.perf_counter()
-
-    # Ensure output directory exists
     config.ensure_outdir()
-
-    # Construct command line for logging
     command_line = " ".join(sys.argv)
 
-    # Validate bfile exists
-    bed_path = Path(f"{bfile}.bed")
-    if not bed_path.exists():
-        _cli_error(f"PLINK file not found: {bed_path}")
-
-    if write_eigen and loco:
-        _cli_error(
-            "-eigen not supported with -gk -loco mode. "
-            "Use -lmm -loco -eigen to write per-chromosome eigen files."
-        )
-
-    if mode == 2 and loco:
-        _cli_error(
-            "-gk 2 (standardized) is not supported with -loco. "
-            "LOCO kinship uses centered mode (-gk 1). "
-            "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
-        )
-
-    # Delegate the compute/write orchestration to the pipeline, mirroring how
-    # _run_lmm delegates to PipelineRunner.run(). Construction is inside the
-    # try because PipelineConfig validates its knobs in __post_init__, and a
-    # bad value should read as a CLI error rather than a traceback.
+    # Construction is inside the try because PipelineConfig validates its
+    # knobs in __post_init__, and compute_kinship validates the -gk flag
+    # combinations at its top; either should read as a CLI error.
     try:
         pipeline_config = PipelineConfig(
             bfile=bfile,

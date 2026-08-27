@@ -146,23 +146,17 @@ def test_cli_requires_gk_or_lmm():
 
 
 @pytest.mark.tier1
-@pytest.mark.parametrize(
-    "flag,value",
-    [
-        ("-wsnp", "file.txt"),
-        ("-gxe", "file.txt"),
-        ("-vc", "1"),
-        ("-mk", "file.txt"),
-        ("-mvlmm", "1"),
-    ],
-)
-def test_cli_unimplemented_flags_error(flag: str, value: str):
-    """Unimplemented flags should produce a clear error message."""
-    result = runner.invoke(
-        main, ["-bfile", str(EXAMPLE_BFILE), "-gk", "1", flag, value]
-    )
-    assert result.exit_code == 1
-    assert "not yet implemented" in result.output.lower()
+@pytest.mark.parametrize("flag", ["-wsnp", "-gxe", "-mk", "-mvlmm"])
+def test_cli_rejects_gemma_flags_jamma_does_not_implement(flag: str):
+    """GEMMA flags with no JAMMA implementation are unknown options, not stubs.
+
+    GEMMA's -vc is not in the list: click reads it as the short flags -v -c,
+    so it fails on the covariate file instead of as an unknown option.
+    """
+    result = runner.invoke(main, ["-bfile", str(EXAMPLE_BFILE), "-gk", "1", flag, "1"])
+    assert result.exit_code == 2
+    assert "no such option" in result.output.lower()
+    assert "not yet implemented" not in result.output.lower()
 
 
 @pytest.mark.tier1
@@ -245,15 +239,23 @@ def test_cli_help_shows_lmin_lmax():
 
 
 @pytest.mark.tier1
-def test_wsnp_not_implemented():
-    """CLI rejects -wsnp with 'not yet implemented' error."""
-    weight_file = "dummy_snp_weights.txt"
+def test_gk_mode_outside_1_2_is_a_usage_error():
+    """-gk 3 is rejected by the option itself, before any file is read."""
+    result = runner.invoke(main, ["-bfile", str(EXAMPLE_BFILE), "-gk", "3"])
+    assert result.exit_code == 2
+    assert "-gk" in result.output
+    assert "1<=x<=2" in result.output
+
+
+@pytest.mark.tier1
+def test_gk2_with_loco_reports_cli_error(tmp_path: Path):
+    """The -gk 2 with -loco guard moved into compute_kinship; still a CLI error."""
     result = runner.invoke(
         main,
-        ["-bfile", str(EXAMPLE_BFILE), "-gk", "1", "-wsnp", weight_file],
+        ["-outdir", str(tmp_path), "-bfile", str(EXAMPLE_BFILE), "-gk", "2", "-loco"],
     )
     assert result.exit_code == 1
-    assert "not yet implemented" in result.output.lower()
+    assert "-gk 2 (standardized) is not supported with -loco" in result.output
 
 
 @pytest.mark.tier1
@@ -287,6 +289,47 @@ def test_cat_requires_covariate_file(tmp_path: Path):
     )
     assert result.exit_code == 1
     assert "-cat requires -c" in result.output
+
+
+@pytest.mark.tier1
+def test_cat_comma_separated_reaches_pipeline_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """-cat '1,3' parses like -n: commas and spaces both separate indices."""
+    factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(tmp_path / "out"))
+    monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
+    cov = tmp_path / "cov.txt"
+    cov.write_text("1 0 2\n1 1 3\n")
+    result = runner.invoke(
+        main,
+        [
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-lmm",
+            "1",
+            "-k",
+            str(KINSHIP_FILE),
+            "-c",
+            str(cov),
+            "-cat",
+            "1,3",
+            "--no-check-memory",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert factory.last_config.cat_columns == [1, 3]
+
+
+@pytest.mark.tier1
+@pytest.mark.parametrize("value", ["x", ""])
+def test_cat_rejects_non_integer_and_empty(value: str) -> None:
+    """-cat with a non-integer or nothing is a usage error naming the flag."""
+    result = runner.invoke(
+        main,
+        ["-bfile", str(EXAMPLE_BFILE), "-lmm", "1", "-k", "k.txt", "-cat", value],
+    )
+    assert result.exit_code == 2
+    assert "-cat" in result.output
 
 
 @pytest.mark.tier1

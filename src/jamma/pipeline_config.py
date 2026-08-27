@@ -246,7 +246,6 @@ class PipelineResult:
         assoc_paths: List of all per-phenotype association result paths. For
             single-phenotype runs, this is a single-element list matching assoc_path.
         timing: Timing breakdown by pipeline phase (seconds).
-        backend: The compute backend used ("numpy").
         n_covariates: Number of covariate columns (1 = intercept-only).
         pve_estimate: PVE (proportion of variance explained) from null model REML.
             None if not computed (e.g. LOCO with per-chromosome eigendecomp).
@@ -260,7 +259,6 @@ class PipelineResult:
     assoc_path: Path
     assoc_paths: list[Path] = field(default_factory=list)
     timing: PipelineTiming = field(default_factory=PipelineTiming)
-    backend: Literal["numpy"] = "numpy"  # Set by PipelineRunner.run()
     n_covariates: int = 1
     pve_estimate: float | None = None
     pve_se: float | None = None

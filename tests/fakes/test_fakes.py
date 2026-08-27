@@ -49,7 +49,6 @@ def _make_result() -> PipelineResult:
         assoc_path=Path("/tmp/jamma_fake.assoc.txt"),
         assoc_paths=[Path("/tmp/jamma_fake.assoc.txt")],
         timing={"total_s": 0.0},
-        backend="numpy",
         n_covariates=1,
     )
 

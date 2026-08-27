@@ -387,7 +387,6 @@ def _run_lmm(config: PipelineConfig, output: OutputConfig) -> None:
     params = {
         "n_samples": result.n_samples,
         "n_snps": result.n_snps_tested,
-        "backend": result.backend,
         "lmm_mode": config.lmm_mode,
         "kinship_file": str(config.kinship_file),
         "covariate_file": str(config.covariate_file) if config.covariate_file else None,

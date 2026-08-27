@@ -471,7 +471,7 @@ class PipelineRunner:
             requested=requested,
         )
 
-        log_backend_selection("numpy", self.config.backend, env_backend)
+        log_backend_selection(self.config.backend, env_backend)
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
         return self._run_inner(t_start, plan, requested, meta)
@@ -642,7 +642,6 @@ class PipelineRunner:
                 "total_s": total_s,
                 "rotation_s": outcome.runner_timing.get("rotation_s", 0.0),
             },
-            backend="numpy",
             n_covariates=(covariates.shape[1] if covariates is not None else 1),
             pve_estimate=outcome.pve,
             pve_se=outcome.pve_se,
@@ -839,7 +838,6 @@ class PipelineRunner:
                 "lmm_s": loco_s,
                 "total_s": total_s,
             },
-            backend="numpy",
             n_covariates=covariates.shape[1] if covariates is not None else 1,
             pve_estimate=loco.pve,
             pve_se=loco.pve_se,

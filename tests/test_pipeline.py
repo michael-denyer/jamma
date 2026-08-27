@@ -886,7 +886,6 @@ def test_pipeline_numpy_backend(sample_plink_data: Path, output_dir: Path) -> No
     result = PipelineRunner(config).run()
     assert result.n_snps_tested > 0
     assert result.assoc_path.exists()
-    assert result.backend == "numpy"
 
 
 @pytest.mark.tier1
@@ -965,7 +964,6 @@ def test_pipeline_loco_numpy(tmp_path: Path) -> None:
         show_progress=False,
     )
     result = PipelineRunner(config).run()
-    assert result.backend == "numpy"
     assert result.n_snps_tested > 0
     assert result.assoc_path.exists()
 
@@ -998,7 +996,6 @@ def test_pipeline_numpy_backend_modes(
     result = PipelineRunner(config).run()
     assert result.n_snps_tested > 0
     assert result.assoc_path.exists()
-    assert result.backend == "numpy"
 
 
 # ===========================================================================
@@ -1298,7 +1295,6 @@ def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) 
     assert result.n_snps_tested <= n_restrict
     assert result.n_snps_tested < total_snps
     assert result.assoc_path.exists()
-    assert result.backend == "numpy"
 
 
 @pytest.mark.tier1

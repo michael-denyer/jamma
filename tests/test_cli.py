@@ -521,7 +521,6 @@ def _mock_pipeline_result(outdir: Path):
         assoc_path=assoc_path,
         assoc_paths=[assoc_path],
         timing={"total_s": 1.0, "load_s": 0.1, "lmm_s": 0.9},
-        backend="numpy",
         n_covariates=1,
     )
 

@@ -393,7 +393,6 @@ class TestRunLoco:
         assert result.pve_se == 0.05
         assert result.assoc_path == assoc_path
         assert result.assoc_paths == [assoc_path]
-        assert result.backend == "numpy"
         # 3 valid samples after NaN filtering (observable n_valid).
         assert result.n_samples == 3
 

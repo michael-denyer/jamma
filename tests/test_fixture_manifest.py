@@ -12,7 +12,7 @@ Failure here means one of:
 * A new fixture was added without an entry in ``MANIFEST.toml``.
 * A manifest entry refers to a fixture that no longer exists.
 
-Fix: run ``python scripts/regenerate_fixture_manifest.py`` and commit
+Fix: run ``python scripts/check_fixture_manifest.py --write`` and commit
 both the fixture changes and the regenerated manifest in the same commit.
 """
 
@@ -62,7 +62,7 @@ def test_manifest_file_exists() -> None:
     checker = _load_checker()
     assert checker.MANIFEST_PATH.exists(), (
         f"Missing manifest at {checker.MANIFEST_PATH}; run "
-        "scripts/regenerate_fixture_manifest.py to create it."
+        f"{checker.REGENERATE_CMD} to create it."
     )
 
 
@@ -77,7 +77,7 @@ def test_every_tracked_fixture_has_manifest_entry() -> None:
     assert not missing, (
         "Fixtures committed without manifest entries:\n  "
         + "\n  ".join(missing)
-        + "\n\nRun scripts/regenerate_fixture_manifest.py."
+        + f"\n\nRun {checker.REGENERATE_CMD}."
     )
 
 

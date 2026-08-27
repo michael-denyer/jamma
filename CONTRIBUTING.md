@@ -79,7 +79,7 @@ PLINK fixtures -- no Docker workflow is maintained in-tree. After
 regenerating any fixture, refresh the manifest:
 
 ```bash
-uv run python scripts/regenerate_fixture_manifest.py
+uv run python scripts/check_fixture_manifest.py --write
 ```
 
 `tests/fixtures/MANIFEST.toml` SHA-256-tracks all 55 fixtures; a stale

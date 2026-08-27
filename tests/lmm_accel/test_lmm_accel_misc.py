@@ -70,7 +70,7 @@ def test_ncvt_101_rejected_by_c_extension():
             Hi_eval_null,
             n_samples,
             n_cvt,
-            build_pab_table_for_c(100),
+            build_pab_table_for_c(100)._asdict(),
             1,
         )
 

@@ -16,12 +16,9 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.likelihood_numpy import (
-    _batch_lrt_pvalues_numpy,
-    batch_calc_score_stats_numpy,
-    batch_compute_uab_numpy,
-    golden_section_optimize_lambda_mle_numpy,
-)
+from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
+from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.lmm_accel._helpers import _null_model_ncvt1
 
 _C_RTOL = 1e-11
@@ -32,7 +29,7 @@ _score_fused_ws_available = compute_numpy._accel is not None
 
 def _uab_from_fused_inputs(w, Uty, utg_t):
     """Rebuild the full Uab batch the NumPy kernels take from the fused SoA inputs."""
-    return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t.T)
+    return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t)
 
 
 def _numpy_score_reference(w, Uty, utg_t, Hi_eval_null, n_samples):

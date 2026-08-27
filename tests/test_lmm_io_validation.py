@@ -245,12 +245,9 @@ class TestDegenerateSNPNaN:
 
     def test_wald_degenerate_snps_return_nan(self) -> None:
         """batch_calc_wald_stats_numpy returns NaN for zero-variance SNPs."""
-        from jamma.lmm.likelihood_numpy import (
-            batch_calc_wald_stats_numpy,
-            batch_compute_iab_numpy,
-            batch_compute_uab_numpy,
-            golden_section_optimize_lambda_numpy,
-        )
+        from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_numpy
+        from jamma.lmm.stats import batch_calc_wald_stats_numpy
+        from jamma.lmm.uab import batch_compute_iab_numpy, batch_compute_uab_numpy
 
         rng = np.random.default_rng(42)
         n_samples, n_snps, n_cvt = 50, 5, 1
@@ -263,7 +260,7 @@ class TestDegenerateSNPNaN:
         UtG[:, 0] = 0.0
         UtG[:, 3] = 0.0
 
-        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
         Iab = batch_compute_iab_numpy(n_cvt, Uab)
         lambdas, _, _ = golden_section_optimize_lambda_numpy(
             n_cvt, eigenvalues, Uab, Iab
@@ -286,10 +283,8 @@ class TestDegenerateSNPNaN:
 
     def test_score_degenerate_snps_return_nan(self) -> None:
         """batch_calc_score_stats_numpy returns NaN for zero-variance SNPs."""
-        from jamma.lmm.likelihood_numpy import (
-            batch_calc_score_stats_numpy,
-            batch_compute_uab_numpy,
-        )
+        from jamma.lmm.stats import batch_calc_score_stats_numpy
+        from jamma.lmm.uab import batch_compute_uab_numpy
 
         rng = np.random.default_rng(42)
         n_samples, n_snps, n_cvt = 50, 4, 1
@@ -300,7 +295,7 @@ class TestDegenerateSNPNaN:
         UtG = rng.standard_normal((n_samples, n_snps))
         UtG[:, 1] = 0.0  # Make SNP 1 constant
 
-        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
         Hi_eval = 1.0 / (1.0 * eigenvalues + 1.0)
 
         betas, ses, p_scores = batch_calc_score_stats_numpy(
@@ -320,7 +315,7 @@ class TestNegativeLRTClamp:
 
     def test_negative_lrt_returns_pvalue_one(self) -> None:
         """When H1 logl < H0 logl, LRT stat is negative → p-value should be 1.0."""
-        from jamma.lmm.likelihood_numpy import _batch_lrt_pvalues_numpy
+        from jamma.lmm.stats import _batch_lrt_pvalues_numpy
 
         logl_H0 = -100.0
         # Some H1 logls worse than null (negative LRT stat)
@@ -412,8 +407,8 @@ class TestMode4WaldOverwritesScore:
         """
         from jamma.lmm import compute_numpy as cn
         from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
-        from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
         from jamma.lmm.prepare_common import _compute_null_model_common
+        from jamma.lmm.uab import batch_compute_uab_numpy
 
         monkeypatch.setattr(cn, "_accel", None)
 
@@ -425,7 +420,7 @@ class TestMode4WaldOverwritesScore:
         Uty = rng.standard_normal(n_samples)
         UtG = rng.standard_normal((n_samples, n_snps))
 
-        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG)
+        Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
 
         logl_H0, _, Hi_eval_null = _compute_null_model_common(
             4, eigenvalues, UtW, Uty, n_cvt, show_progress=False

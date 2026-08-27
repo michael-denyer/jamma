@@ -35,8 +35,9 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_mode4_fused_general,
 )
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.likelihood_numpy import compute_uab_invariant_soa
+from jamma.lmm.likelihood import build_pab_table_for_c
 from jamma.lmm.schema import LmmMode
+from jamma.lmm.uab import compute_uab_invariant_soa
 
 # What a kernel hands back. The Wald C kernels return the WaldResult
 # TypedDict; every other C kernel and the split paths return a plain
@@ -219,11 +220,8 @@ def _fused_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
 
 def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
     """n_cvt>=2 Wald or mode 4: same shape, plus the Pab table the kernel walks."""
-    from jamma.lmm.likelihood import build_pab_table_for_c
-
     is_mode4 = inv.lmm_mode == 4
-    pab_c = build_pab_table_for_c(inv.n_cvt)
-    pab_kwargs = {key: pab_c[key] for key in _PAB_TABLE_KEYS}
+    pab_kwargs = build_pab_table_for_c(inv.n_cvt).workspace_kwargs()
     create = (
         create_lmm_workspace_mode4_fused_general
         if is_mode4
@@ -376,19 +374,3 @@ def _null_model_kwargs(inv: RunInvariants) -> dict[str, Any]:
     if inv.lmm_mode != 4:
         return {}
     return {"hi_eval_null": inv.Hi_eval_null, "logl_H0": inv.logl_H0}
-
-
-_PAB_TABLE_KEYS = (
-    "invariant_indices",
-    "varying_indices",
-    "logdet_diag_rows",
-    "logdet_diag_cols",
-    "level_offsets",
-    "level_counts",
-    "entries",
-    "idx_xx",
-    "idx_xy",
-    "idx_yy",
-    "var_a_cols",
-    "var_b_cols",
-)

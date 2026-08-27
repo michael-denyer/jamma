@@ -18,8 +18,8 @@ graph TD
     BatchRunner["lmm/runner_numpy.py (Batch)"]
     StreamRunner["lmm/runner_numpy_streaming.py (Streaming)"]
     ChunkRunner["lmm/chunk_runner_numpy.py (Shared chunk engine)"]
-    Likelihood["lmm/likelihood.py / likelihood_numpy.py"]
-    Stats["lmm/stats.py (Wald/LRT/Score)"]
+    Likelihood["lmm/likelihood.py / uab.py / likelihood_numpy.py"]
+    Stats["lmm/stats.py (AssocResult, batch Wald/LRT/Score)"]
     LOCO["lmm/loco.py (LOCO orchestrator)"]
     jlinalg["jlinalg/ (BLAS/LAPACK dispatch)"]
     Core["core/ (Memory, backend, progress)"]
@@ -132,9 +132,10 @@ src/jamma/
 │   └── src/                # C sources for _jlinalg extension (BLAS dispatch, LAPACK)
 ├── lmm/                    # LMM association subsystem
 │   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, AssocResult, SnpMeta
-│   ├── likelihood.py       # REML/MLE log-likelihood; Pab recursion; golden section search
-│   ├── likelihood_numpy.py # NumPy-vectorised Uab batch computation
-│   ├── stats.py            # Wald/LRT/Score test statistic computation
+│   ├── likelihood.py       # Index tables, scalar REML/MLE, null-model golden section search
+│   ├── uab.py              # Uab/Pab/Iab batch builders in full, split and SoA layouts
+│   ├── likelihood_numpy.py # NumPy batch REML/MLE evaluation and lambda optimisation
+│   ├── stats.py            # AssocResult and the batch Wald/LRT/Score statistics
 │   ├── eigen.py            # Kinship eigendecomposition via jlinalg.eigh
 │   ├── eigen_cache.py      # Content + parameter cache key for LOCO per-chromosome eigen
 │   ├── eigen_io.py         # Read/write eigenvalue and eigenvector files (.npy / .txt)

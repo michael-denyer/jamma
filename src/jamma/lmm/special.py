@@ -24,6 +24,7 @@ Accuracy (verified against scipy):
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import numpy as np
 from loguru import logger
@@ -148,27 +149,21 @@ def betainc(a: float, b: float, z: float, complement_z: float | None = None) -> 
         return float("nan")
 
 
-def chi2_sf(x: float, df: int = 1) -> float:
-    """Chi-squared survival function P(X > x) for df=1.
+def chi2_sf(x: float) -> float:
+    """Chi-squared survival function P(X > x) for one degree of freedom.
 
     Uses the identity chi2(1) = N(0,1)^2, which gives:
         P(chi2(1) > x) = erfc(sqrt(x/2))
 
-    This is exact for df=1 (single degree of freedom). Max rtol vs scipy:
+    This is exact for df=1, the only df the LRT needs. Max rtol vs scipy:
     8.9e-15 across x in [0.001, 500].
 
     Args:
         x: Test statistic value.
-        df: Degrees of freedom. Must be 1; other values raise ValueError.
 
     Returns:
-        P(chi2(df) > x) in [0, 1].
-
-    Raises:
-        ValueError: If df != 1.
+        P(chi2(1) > x) in [0, 1].
     """
-    if df != 1:
-        raise ValueError(f"chi2_sf only supports df=1, got df={df}")
     if math.isnan(x):
         return float("nan")
     if x <= 0.0:
@@ -182,16 +177,32 @@ def chi2_sf(x: float, df: int = 1) -> float:
 # Vectorized batch functions (numpy, no scipy)
 # ---------------------------------------------------------------------------
 
-# Vectorized erfc via libm (math.erfc). np.frompyfunc has lower
-# overhead than np.vectorize — returns object array, cast to float64.
-_erfc_ufunc = np.frompyfunc(math.erfc, 1, 1)
+
+def _libm_vectorized(
+    fn: Callable[[float], float],
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Vectorise a scalar libm function over float64 arrays.
+
+    np.frompyfunc has lower per-call overhead than np.vectorize but yields an
+    object array, so the wrapper casts. asarray types correctly where .astype
+    does not (frompyfunc is declared as returning a scalar).
+    """
+    ufunc = np.frompyfunc(fn, 1, 1)
+
+    def apply(x: np.ndarray) -> np.ndarray:
+        return np.asarray(ufunc(x), dtype=np.float64)
+
+    return apply
+
+
+_erfc_vec = _libm_vectorized(math.erfc)
+_lgamma_vec = _libm_vectorized(math.lgamma)
 
 
 def chi2_sf_batch(x: np.ndarray) -> np.ndarray:
     """Vectorized chi-squared survival function P(X > x) for df=1.
 
-    Uses erfc(sqrt(x/2)) via libm erfc wrapped with np.frompyfunc
-    (lower overhead than np.vectorize). Handles NaN, negative, and
+    Uses erfc(sqrt(x/2)) via libm erfc. Handles NaN, negative, and
     infinite inputs.
 
     Args:
@@ -212,17 +223,9 @@ def chi2_sf_batch(x: np.ndarray) -> np.ndarray:
     result[inf_mask] = 0.0
 
     if np.any(normal):
-        args = np.sqrt(x[normal] / 2.0)
-        # np.frompyfunc yields an object array; asarray is the cast, and it
-        # types correctly where .astype does not (frompyfunc is declared as
-        # returning a scalar).
-        result[normal] = np.asarray(_erfc_ufunc(args), dtype=np.float64)
+        result[normal] = _erfc_vec(np.sqrt(x[normal] / 2.0))
 
     return result
-
-
-# Vectorized lgamma via math.lgamma (one-time O(n) cost for front factor)
-_lgamma_vec = np.vectorize(math.lgamma, otypes=[np.float64])
 
 
 def _betainc_cf_batch(a: np.ndarray, b: np.ndarray, x: np.ndarray) -> np.ndarray:

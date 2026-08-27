@@ -28,17 +28,23 @@ import numpy as np
 from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
 from jamma.core.constants import env_flag
 from jamma.core.recompile import _load_c_module
+from jamma.lmm.likelihood import build_pab_table_for_c
 from jamma.lmm.likelihood_numpy import (
-    _batch_lrt_pvalues_numpy,
-    batch_calc_score_stats_numpy,
-    batch_calc_wald_stats_from_pab_numpy,
-    batch_compute_iab_numpy,
-    compute_iab_invariant_scalars_ncvt1,
     golden_section_optimize_lambda_mle_numpy,
     golden_section_optimize_lambda_numpy,
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 from jamma.lmm.schema import LmmMode
+from jamma.lmm.stats import (
+    _batch_lrt_pvalues_numpy,
+    batch_calc_score_stats_numpy,
+    batch_calc_wald_stats_from_pab_numpy,
+)
+from jamma.lmm.uab import (
+    batch_compute_iab_numpy,
+    compute_iab_invariant_scalars_ncvt1,
+    reconstruct_uab_from_soa,
+)
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -664,8 +670,6 @@ def _compute_score_split_numpy(
         Dict with keys: betas, ses, p_scores.
     """
     if _accel is not None:
-        from jamma.lmm.likelihood import build_pab_table_for_c
-
         return _c().compute_score_split_general_c(
             eigenvalues,
             uab_varying_soa,
@@ -673,13 +677,11 @@ def _compute_score_split_numpy(
             Hi_eval_null,
             n_samples,
             n_cvt,
-            build_pab_table_for_c(n_cvt),
+            build_pab_table_for_c(n_cvt)._asdict(),
             n_threads,
         )
 
     # Fallback: reconstruct full Uab and use batch dispatch
-    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
-
     Uab_batch = reconstruct_uab_from_soa(
         uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
     )
@@ -725,15 +727,13 @@ def _compute_lrt_split_numpy(
         Dict with keys: lambdas_mle, p_lrts.
     """
     if _accel is not None:
-        from jamma.lmm.likelihood import build_pab_table_for_c
-
         return _c().compute_lrt_split_general_c(
             eigenvalues,
             uab_varying_soa,
             uab_invariant_soa,
             n_samples,
             n_cvt,
-            build_pab_table_for_c(n_cvt),
+            build_pab_table_for_c(n_cvt)._asdict(),
             l_min,
             l_max,
             n_grid,
@@ -743,8 +743,6 @@ def _compute_lrt_split_numpy(
         )
 
     # Fallback: reconstruct full Uab and use batch dispatch
-    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
-
     Uab_batch = reconstruct_uab_from_soa(
         uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
     )

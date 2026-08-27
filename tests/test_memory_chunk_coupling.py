@@ -197,7 +197,7 @@ def _engine_allocation_gb(
       per live buffer (``classify_uab_columns``' varying-column count).
     - NUMPY_FALLBACK: the kernel holds ``Uab_batch`` (shape
       ``(chunk_size, n_samples, n_index)``, from
-      ``likelihood_numpy.batch_compute_uab_numpy``'s documented return
+      ``uab.batch_compute_uab_numpy``'s documented return
       shape) and ``Iab_batch`` (shape ``(chunk_size, n_cvt + 2, n_index)``,
       from ``batch_compute_iab_numpy``) concurrently during compute. Derived
       from ``n_index`` directly, not from ``lmm_extra_bytes_per_snp``, which

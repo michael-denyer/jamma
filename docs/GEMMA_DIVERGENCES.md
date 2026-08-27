@@ -30,10 +30,10 @@ double safe_sqrt(const double d) {
 
 **Bug**: `fabs(d < 0.001)` evaluates the comparison `d < 0.001` as a boolean (0 or 1), then takes `fabs()` of that result. Since `fabs(0)=0` and `fabs(1)=1`, the condition is effectively always true-ish. Result: `safe_sqrt(-5.0)` returns `sqrt(5.0) = 2.236`.
 
-### JAMMA (stats.py:15-36)
+### JAMMA (tests/reference/stats.py)
 
 ```python
-def _safe_sqrt(d: float) -> float:
+def safe_sqrt(d: float) -> float:
     if abs(d) < 0.001:
         d = abs(d)
     if d < 0.0:
@@ -79,7 +79,7 @@ p_wald = gsl_cdf_fdist_Q((P_yy - Px_yy) * tau, 1.0, df);
 
 **Behavior**: No guards. Division by zero produces `inf` or `NaN` depending on numerator.
 
-### JAMMA (`batch_calc_wald_stats_from_pab_numpy` in likelihood_numpy.py, shown here in the equivalent scalar form from `stats.calc_wald_test`)
+### JAMMA (`batch_calc_wald_stats_from_pab_numpy` in stats.py, shown here in the equivalent scalar form from `stats.calc_wald_test`)
 
 ```python
 if P_xx <= 0.0:

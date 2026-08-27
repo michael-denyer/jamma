@@ -260,11 +260,6 @@ class TestChi2SF:
         result = chi2_sf(float("nan"))
         assert np.isnan(result), f"Expected NaN, got {result}"
 
-    def test_chi2_sf_raises_df_not_one(self):
-        """chi2_sf raises ValueError when df != 1."""
-        with pytest.raises(ValueError, match="df=1"):
-            chi2_sf(1.0, df=2)
-
     def test_chi2_sf_critical_values(self):
         """chi2_sf at standard critical values is close to known significance levels."""
         # At alpha=0.05: chi2(1) critical value is ~3.841

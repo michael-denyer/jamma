@@ -21,13 +21,9 @@ from jamma.lmm._lmm_accel import (
     compute_score_split_general_c,
 )
 from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
-from jamma.lmm.likelihood_numpy import (
-    _batch_lrt_pvalues_numpy,
-    batch_calc_score_stats_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    compute_uab_invariant_soa,
-    golden_section_optimize_lambda_mle_numpy,
-)
+from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
+from jamma.lmm.uab import batch_compute_uab_varying_soa_numpy, compute_uab_invariant_soa
 from tests.lmm_accel._helpers import _make_general_score_lrt_data
 
 _L_MIN, _L_MAX, _N_GRID, _N_REFINE = 1e-5, 1e5, 50, 20
@@ -56,7 +52,7 @@ def _soa_inputs(data: dict) -> tuple[np.ndarray, np.ndarray, dict]:
             n_cvt, data["UtW"], data["Uty"], data["UtG"].T
         ),
         compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt=n_cvt),
-        build_pab_table_for_c(n_cvt),
+        build_pab_table_for_c(n_cvt)._asdict(),
     )
 
 

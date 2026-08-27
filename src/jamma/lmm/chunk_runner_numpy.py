@@ -38,14 +38,11 @@ from jamma.lmm.chunk_sizing import plan_lmm_chunks
 from jamma.lmm.compute_numpy import select_current_dispatch_path
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.impute import impute_missing_inplace
-from jamma.lmm.likelihood_numpy import (
-    batch_compute_uab_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    reset_p_yy_warned,
-)
+from jamma.lmm.likelihood import classify_uab_columns, reset_p_yy_warned
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import LmmMode
+from jamma.lmm.uab import batch_compute_uab_numpy, batch_compute_uab_varying_soa_numpy
 
 
 class LmmChunkRange(NamedTuple):
@@ -164,8 +161,6 @@ class _ChunkEngine:
             for _ in range(n_buffers)
         ]
         if invariants.dispatch is DispatchPath.SOA_SPLIT:
-            from jamma.lmm.likelihood import classify_uab_columns
-
             n_var = len(classify_uab_columns(invariants.n_cvt)[1])
             self.uab_var_bufs: list[np.ndarray] | None = [
                 np.empty((chunk_size, n_var, n_samples), dtype=np.float64)
@@ -256,7 +251,7 @@ class _ChunkEngine:
             )
 
         return batch_compute_uab_numpy(
-            self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t.T
+            self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t
         )
 
     def compute_and_write(self, prepared: _PreparedLmmChunk) -> None:

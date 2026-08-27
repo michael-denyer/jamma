@@ -11,27 +11,9 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_mode4_fused_general,
 )
 from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
-from jamma.lmm.likelihood_numpy import (
-    _batch_lrt_pvalues_numpy,
-    batch_calc_score_stats_numpy,
-    batch_compute_uab_numpy,
-    golden_section_optimize_lambda_mle_numpy,
-)
-
-_PAB_KWARG_NAMES = (
-    "invariant_indices",
-    "varying_indices",
-    "logdet_diag_rows",
-    "logdet_diag_cols",
-    "level_offsets",
-    "level_counts",
-    "entries",
-    "idx_xx",
-    "idx_xy",
-    "idx_yy",
-    "var_a_cols",
-    "var_b_cols",
-)
+from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
+from jamma.lmm.uab import batch_compute_uab_numpy
 
 
 def _prepare_fused_general_data(data: dict) -> dict:
@@ -79,7 +61,7 @@ def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
         20,
         n_threads,
         n_cvt=data["n_cvt"],
-        **{k: data["pab_c"][k] for k in _PAB_KWARG_NAMES},
+        **data["pab_c"].workspace_kwargs(),
     )
 
 
@@ -103,7 +85,7 @@ def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
         20,
         n_threads,
         n_cvt=data["n_cvt"],
-        **{k: data["pab_c"][k] for k in _PAB_KWARG_NAMES},
+        **data["pab_c"].workspace_kwargs(),
         hi_eval_null=data["Hi_eval_null"],
         logl_H0=data["logl_H0"],
     )
@@ -215,7 +197,7 @@ LAMBDA_MLE_RTOL = 5e-5
 
 def _uab_from_fused_inputs(w, Uty, utg_t):
     """Rebuild the full Uab batch the NumPy kernels take from the fused SoA inputs."""
-    return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t.T)
+    return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t)
 
 
 def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> WaldResult:

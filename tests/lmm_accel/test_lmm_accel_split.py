@@ -20,22 +20,22 @@ from jamma.lmm.compute_numpy import (
     compute_wald_fused_c_ws,
     create_lmm_workspace_fused,
 )
-from jamma.lmm.likelihood_numpy import (
+from jamma.lmm.schema import LmmConfig
+from jamma.lmm.uab import (
     batch_compute_iab_numpy,
     batch_compute_iab_split_ncvt1,
     batch_compute_uab_split_numpy,
 )
-from jamma.lmm.schema import LmmConfig
 
 
 @pytest.mark.tier0
 def test_split_uab_matches_full_uab(split_wald_data):
     """Split Uab construction matches the full 6-column Uab."""
-    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+    from jamma.lmm.uab import batch_compute_uab_numpy
 
     _, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
 
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     uab_var, uab_inv = batch_compute_uab_split_numpy(1, UtW, Uty, UtG)
 
     # Varying columns: wx(1), xx(3), xy(4) in full -> 0,1,2 in split
@@ -83,11 +83,11 @@ def test_split_uab_matches_full_uab(split_wald_data):
 @pytest.mark.tier0
 def test_split_iab_matches_full_iab(split_wald_data):
     """Split Iab construction matches the full Iab."""
-    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+    from jamma.lmm.uab import batch_compute_uab_numpy
 
     _, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
 
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG)
+    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     full_iab = batch_compute_iab_numpy(1, full_uab)
 
     uab_var, uab_inv = batch_compute_uab_split_numpy(1, UtW, Uty, UtG)

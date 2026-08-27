@@ -1,39 +1,19 @@
-"""Wald test statistics computation for LMM association.
+"""AssocResult and the batch Wald, Score and LRT statistics that fill it.
 
-Implements the Wald test formula from GEMMA's CalcRLWald function.
-Uses pure-stdlib betainc (Cephes CF) for the F-distribution survival function.
+The vectorised forms of GEMMA's CalcRLWald, CalcRLScore and the LRT
+p-value, applied to a chunk of SNPs at once. The scalar ports they are
+checked against live in ``tests/reference/stats.py``.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
 
-from jamma.lmm.likelihood import _P_YY_MIN, get_ab_index
-from jamma.lmm.special import betainc, chi2_sf
-
-
-def _safe_sqrt(d: float) -> float:
-    """Safe square root following GEMMA's safe_sqrt behavior.
-
-    GEMMA's safe_sqrt (mathfunc.cpp:122-131):
-    - If |d| < 0.001, use abs(d) to tolerate small negative values from rounding
-    - If d < 0 after that check, return NaN
-    - Otherwise return sqrt(d)
-
-    This handles numerical edge cases where Px_yy becomes slightly negative
-    due to floating-point errors in the projection computation.
-
-    Args:
-        d: Value to take square root of
-
-    Returns:
-        sqrt(d) or sqrt(abs(d)) for small negatives, NaN for large negatives
-    """
-    if abs(d) < 0.001:
-        d = abs(d)
-    if d < 0.0:
-        return float("nan")
-    return np.sqrt(d)
+from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
+from jamma.lmm.special import betainc_batch, chi2_sf_batch
+from jamma.lmm.uab import _batch_compute_pab_varying_numpy, batch_compute_pab_numpy
 
 
 @dataclass
@@ -64,197 +44,218 @@ class AssocResult:
     p_lrt: float | None = None  # LRT p-value (for LRT/-lmm 2)
 
 
-def f_sf(x: float, df1: float, df2: float) -> float:
-    """F-distribution survival function using regularized incomplete beta.
+def _beta_se_from_pab(
+    P_XX: np.ndarray,
+    P_XY: np.ndarray,
+    Px_YY: np.ndarray,
+    df: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute beta, SE, and validity mask from Pab projections.
 
-    Computes P(F > x) for F-distributed random variable with df1 and df2
-    degrees of freedom. Uses the regularized incomplete beta function
-    for numerical stability with small p-values.
-
-    The relationship is:
-    SF(x) = 1 - CDF(x) = I_{df2/(df2 + df1*x)}(df2/2, df1/2)
-
-    where I_x(a, b) is the regularized incomplete beta function.
+    Shared by Wald and Score tests. Handles degenerate SNPs (P_XX <= 0)
+    by setting beta/SE to NaN and GEMMA-compatible safe_sqrt for tiny
+    variance values.
 
     Args:
-        x: F statistic value
-        df1: Numerator degrees of freedom
-        df2: Denominator degrees of freedom
+        P_XX: Projected genotype variance per SNP (n_snps,).
+        P_XY: Projected genotype-phenotype covariance per SNP (n_snps,).
+        Px_YY: Projected phenotype variance at n_cvt+1 level (n_snps,).
+        df: Degrees of freedom (n_samples - n_cvt - 1).
 
     Returns:
-        Survival function value (p-value for F-test)
+        Tuple of (beta, se, is_valid) each shape (n_snps,).
     """
-    if x <= 0:
-        return 1.0
-    if not np.isfinite(x):
-        return 0.0
+    is_valid = P_XX > 0
+    safe_P_XX = np.where(is_valid, P_XX, 1.0)
 
-    z = df2 / (df2 + df1 * x)
-    complement_z = df1 * x / (df2 + df1 * x)
-    result = betainc(df2 / 2.0, df1 / 2.0, z, complement_z=complement_z)
+    beta = np.where(is_valid, P_XY / safe_P_XX, np.nan)
+    tau = df / Px_YY
+    variance_beta = np.where(is_valid, 1.0 / (tau * safe_P_XX), np.nan)
+    # safe_sqrt: for |v| < 0.001, use abs(v) to avoid sqrt of tiny negative
+    # values from FP rounding (matches GEMMA lmm.cpp safe_sqrt behaviour)
+    variance_safe = np.where(
+        np.abs(variance_beta) < 0.001,
+        np.abs(variance_beta),
+        variance_beta,
+    )
+    # np.where evaluates sqrt on all elements including NaN/negative variance_safe
+    # from invalid SNPs; those results are discarded by the is_valid mask
+    with np.errstate(invalid="ignore"):
+        se = np.where(is_valid, np.sqrt(variance_safe), np.nan)
 
-    return float(result)
+    return beta, se, is_valid
 
 
-def calc_wald_test(
-    Pab: np.ndarray,
+def _f_to_pvalue(f_stat: np.ndarray, df: int, is_valid: np.ndarray) -> np.ndarray:
+    """Convert F-statistics to p-values via regularized incomplete beta.
+
+    Shared by Wald and Score test computations. Uses algebraically exact
+    complement_z = f_safe / (df + f_safe) to avoid cancellation near z = 1.
+
+    Args:
+        f_stat: F-statistics per SNP (n_snps,).
+        df: Degrees of freedom (n_samples - n_cvt - 1).
+        is_valid: Boolean mask of valid (non-degenerate) SNPs.
+
+    Returns:
+        P-values (n_snps,), NaN for invalid SNPs.
+    """
+    f_safe = np.maximum(f_stat, 1e-10)
+    denom = df + f_safe
+    z = np.clip(df / denom, 0.0, 1.0)
+    complement_z = f_safe / denom  # algebraically exact 1-z, avoids cancellation
+    a_arr = np.full_like(z, df / 2.0)
+    b_arr = np.full_like(z, 0.5)
+    p_val = betainc_batch(a_arr, b_arr, z, complement_z)
+    p_val = np.where(f_stat <= 0, 1.0, p_val)
+    return np.where(is_valid, p_val, np.nan)
+
+
+def batch_calc_wald_stats_numpy(
     n_cvt: int,
-    ni_test: int,
-) -> tuple[float, float, float]:
-    """Compute Wald test statistics following GEMMA's CalcRLWald exactly.
+    lambdas: np.ndarray,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+    n_samples: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute Wald test statistics for a batch of SNPs.
 
-    From GEMMA lmm.cpp CalcRLWald:
-    - P_yy = Pab[n_cvt, index_yy]      (y'Py after projecting out covariates)
-    - P_xx = Pab[n_cvt, index_xx]      (x'Px after projecting out covariates)
-    - P_xy = Pab[n_cvt, index_xy]      (x'Py after projecting out covariates)
-    - Px_yy = Pab[n_cvt+1, index_yy]   (y'Py after projecting out covariates AND X)
-    - beta = P_xy / P_xx
-    - tau = df / Px_yy
-    - se = sqrt(1 / (tau * P_xx))
-    - p_wald = F-distribution survival function((P_yy - Px_yy) * tau, 1, df)
+    Compute batch Wald test statistics. Computes per-SNP
+    Hi_eval from optimized lambdas, constructs Pab, then delegates to
+    batch_calc_wald_stats_from_pab_numpy for the statistics.
 
     Args:
-        Pab: Pab matrix from calc_pab (n_cvt+2, n_index)
-        n_cvt: Number of covariates
-        ni_test: Number of samples
+        n_cvt: Number of covariates.
+        lambdas: Optimized REML lambda per SNP (n_snps,).
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
+        n_samples: Number of samples.
 
     Returns:
-        Tuple of (beta, se, p_wald)
+        Tuple of (betas, ses, p_walds) each shape (n_snps,).
     """
-    df = ni_test - n_cvt - 1
+    Hi_eval_batch = 1.0 / (lambdas[:, None] * eigenvalues[None, :] + 1.0)
+    Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
+    return batch_calc_wald_stats_from_pab_numpy(n_cvt, Pab_batch, n_samples)
 
-    # GEMMA indexing (1-based):
-    # - Covariates are indices 1..n_cvt
-    # - Genotype is index n_cvt+1
-    # - Phenotype is index n_cvt+2
-    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    index_xx = get_ab_index(n_cvt + 1, n_cvt + 1, n_cvt)
-    index_xy = get_ab_index(n_cvt + 2, n_cvt + 1, n_cvt)
 
-    # Extract Pab values at the appropriate projection level
-    # After projecting out n_cvt covariates (row index = n_cvt, 0-based)
-    P_yy = Pab[n_cvt, index_yy]
-    P_xx = Pab[n_cvt, index_xx]
-    P_xy = Pab[n_cvt, index_xy]
+def batch_calc_wald_stats_from_pab_numpy(
+    n_cvt: int,
+    Pab_batch: np.ndarray,
+    n_samples: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute Wald test statistics from pre-computed Pab batch.
 
-    # After projecting out covariates AND genotype (row index = n_cvt+1, 0-based)
-    Px_yy = Pab[n_cvt + 1, index_yy]
+    The REML optimizers always return the Pab batch they evaluated at the
+    optimal lambda, so this avoids the redundant Hi_eval + Pab construction in
+    batch_calc_wald_stats_numpy.
 
-    # Guard against degenerate cases (matches GEMMA behavior)
-    # P_xx <= 0 means SNP has no variance after projection
-    # Px_yy <= 0 means residual variance is zero or negative (numerical issue)
-    if P_xx <= 0.0:
-        return float("nan"), float("nan"), float("nan")
+    Args:
+        n_cvt: Number of covariates.
+        Pab_batch: Pre-computed Pab (n_snps, n_cvt+2, n_index) at optimal lambdas.
+        n_samples: Number of samples.
 
-    # Clamp Px_yy to prevent negative variance (GEMMA lmm.cpp:854)
-    # Only clamp if >= 0 and < _P_YY_MIN; leave negative values to produce NaN
-    if Px_yy >= 0.0 and Px_yy < _P_YY_MIN:
-        Px_yy = _P_YY_MIN
+    Returns:
+        Tuple of (betas, ses, p_walds) each shape (n_snps,).
+    """
+    table = build_index_table(n_cvt)
+    idx_xx = table.idx_xx
+    idx_xy = table.idx_xy
+    idx_yy = table.idx_yy
+    df = n_samples - n_cvt - 1
 
-    # Compute effect size and standard error
-    # Use safe_sqrt to handle edge cases where 1/(tau*P_xx) could be slightly negative
-    # due to numerical issues (matches GEMMA's safe_sqrt behavior)
-    beta = P_xy / P_xx
-    tau = float(df) / Px_yy
-    se = _safe_sqrt(1.0 / (tau * P_xx))
+    P_XX = Pab_batch[:, n_cvt, idx_xx]
+    P_XY = Pab_batch[:, n_cvt, idx_xy]
+    P_YY = Pab_batch[:, n_cvt, idx_yy]
+    Px_YY = Pab_batch[:, n_cvt + 1, idx_yy]
 
-    # Compute F-statistic and p-value
-    # F = (SSR_reduced - SSR_full) / (df_reduced - df_full) / (SSR_full / df_full)
-    # For single SNP: F = (P_yy - Px_yy) * tau
-    f_stat = (P_yy - Px_yy) * tau
-    p_wald = f_sf(f_stat, 1.0, float(df))
+    # Clamp Px_YY (matches batch_calc_wald_stats_numpy behaviour)
+    Px_YY = np.where((Px_YY >= 0.0) & (Px_YY < _P_YY_MIN), _P_YY_MIN, Px_YY)
+
+    beta, se, is_valid = _beta_se_from_pab(P_XX, P_XY, Px_YY, df)
+
+    tau = df / Px_YY
+    f_stat = (P_YY - Px_YY) * tau
+    p_wald = _f_to_pvalue(f_stat, df, is_valid)
 
     return beta, se, p_wald
 
 
-def calc_lrt_test(
-    logl_H1: float,
-    logl_H0: float,
-) -> float:
-    """Compute LRT p-value using chi-squared distribution.
-
-    LRT statistic: 2 * (logl_H1 - logl_H0)
-    Under H0, follows chi-squared with df=1.
-
-    Args:
-        logl_H1: MLE log-likelihood under alternative (SNP has effect)
-        logl_H0: MLE log-likelihood under null (no SNP effect)
-
-    Returns:
-        p_lrt: LRT p-value from chi2.sf(stat, df=1)
-    """
-    lrt_stat = 2.0 * (logl_H1 - logl_H0)
-
-    # Guard against negative statistic (numerical artifact)
-    if lrt_stat < 0:
-        return 1.0
-
-    # Chi-squared survival function with df=1
-    p_lrt = chi2_sf(lrt_stat)
-
-    return float(p_lrt)
-
-
-def calc_score_test(
-    Pab: np.ndarray,
+def batch_calc_score_stats_numpy(
     n_cvt: int,
-    ni_test: int,
-) -> tuple[float, float, float]:
-    """Compute Score test statistics following GEMMA's CalcRLScore.
+    Hi_eval_null: np.ndarray,
+    Uab_batch: np.ndarray,
+    n_samples: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute Score test statistics for a batch of SNPs.
 
-    The Score test uses fixed null model lambda (computed once, reused for all SNPs)
-    rather than per-SNP optimization. This makes it faster than Wald test.
+    Compute batch Score test statistics. Uses fixed null-model
+    Hi_eval shared across all SNPs (cheaper than Wald — no per-SNP optimization).
 
-    Key difference from Wald: extracts P_xx, P_xy, P_yy at projection level n_cvt
-    (after covariates only), not n_cvt+1 (after covariates AND genotype).
+    Score F-statistic uses n_samples (not df) in numerator and P_yy*P_xx
+    denominator (not Px_yy). Matches GEMMA CalcRLScore exactly.
 
     Args:
-        Pab: Pab matrix from calc_pab (n_cvt+2, n_index)
-        n_cvt: Number of covariates
-        ni_test: Number of samples
+        n_cvt: Number of covariates.
+        Hi_eval_null: Null-model 1/(lambda_null*eval+1) vector (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
+        n_samples: Number of samples.
 
     Returns:
-        Tuple of (beta, se, p_score) where beta/se are informational only
-        (computed under null model, not used in hypothesis testing)
+        Tuple of (betas, ses, p_scores) each shape (n_snps,).
     """
-    df = ni_test - n_cvt - 1
+    table = build_index_table(n_cvt)
+    idx_xx = table.idx_xx
+    idx_xy = table.idx_xy
+    idx_yy = table.idx_yy
+    df = n_samples - n_cvt - 1
 
-    # GEMMA indexing (1-based):
-    # - Covariates are indices 1..n_cvt
-    # - Genotype is index n_cvt+1
-    # - Phenotype is index n_cvt+2
-    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    index_xx = get_ab_index(n_cvt + 1, n_cvt + 1, n_cvt)
-    index_xy = get_ab_index(n_cvt + 2, n_cvt + 1, n_cvt)
+    # Batch Pab with shared null Hi_eval
+    Pab_batch = batch_compute_pab_numpy(n_cvt, Hi_eval_null, Uab_batch)
 
-    # KEY DIFFERENCE FROM WALD: Extract at projection level n_cvt (NOT n_cvt+1)
-    # Score test extracts values BEFORE projecting out genotype
-    # This is the fundamental difference between Score and Wald tests
-    P_yy = Pab[n_cvt, index_yy]  # y'Py after projecting out covariates only
-    P_xx = Pab[n_cvt, index_xx]  # x'Px after projecting out covariates only
-    P_xy = Pab[n_cvt, index_xy]  # x'Py after projecting out covariates only
+    # Score test: extract at level n_cvt (covariates only, NOT genotype)
+    P_yy = Pab_batch[:, n_cvt, idx_yy]
+    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+    P_xx = Pab_batch[:, n_cvt, idx_xx]
+    P_xy = Pab_batch[:, n_cvt, idx_xy]
 
-    # Px_yy for beta/se computation (after projecting out covariates AND genotype)
-    Px_yy = Pab[n_cvt + 1, index_yy]
+    # Px_yy for beta/se computation
+    Px_yy = Pab_batch[:, n_cvt + 1, idx_yy]
+    Px_yy = np.where((Px_yy >= 0.0) & (Px_yy < _P_YY_MIN), _P_YY_MIN, Px_yy)
 
-    # Guard against degenerate cases
-    # P_xx <= 0 means SNP has no variance after projection (constant genotype)
-    if P_xx <= 0.0:
-        return float("nan"), float("nan"), float("nan")
+    beta, se, is_valid = _beta_se_from_pab(P_xx, P_xy, Px_yy, df)
 
-    # Clamp Px_yy like Wald test does (GEMMA lmm.cpp:854)
-    if Px_yy >= 0.0 and Px_yy < _P_YY_MIN:
-        Px_yy = _P_YY_MIN
+    # Score F-statistic: F = n * P_xy^2 / (P_yy * P_xx)
+    safe_P_xx = np.where(is_valid, P_xx, 1.0)
+    f_stat = n_samples * (P_xy * P_xy) / (P_yy * safe_P_xx)
 
-    # Compute beta and se (informational only for Score test)
-    beta = P_xy / P_xx
-    tau = float(df) / Px_yy
-    se = _safe_sqrt(1.0 / (tau * P_xx))
-
-    # Score test statistic: F = n * P_xy^2 / (P_yy * P_xx)
-    # This is derived from the Score statistic: U^2 / Var(U)
-    # where U = x'(y - Xb_0) is the score under null hypothesis
-    f_stat = float(ni_test) * (P_xy * P_xy) / (P_yy * P_xx)
-    p_score = f_sf(f_stat, 1.0, float(df))
+    # p_score via Cephes betainc
+    p_score = _f_to_pvalue(f_stat, df, is_valid)
 
     return beta, se, p_score
+
+
+def _batch_lrt_pvalues_numpy(
+    logls_mle: np.ndarray,
+    logl_H0: float,
+) -> np.ndarray:
+    """Compute LRT p-values for a batch of SNPs.
+
+    Compute LRT p-values for a batch of SNPs.
+    LRT statistic = 2 * (logl_H1 - logl_H0), chi2 with df=1.
+
+    Uses special.chi2_sf_batch (erfc-based, stdlib-only).
+
+    Args:
+        logls_mle: Per-SNP MLE log-likelihoods under alternative (n_snps,).
+        logl_H0: Null model MLE log-likelihood (scalar).
+
+    Returns:
+        LRT p-values (n_snps,).
+    """
+    lrt_stats = 2.0 * (logls_mle - logl_H0)
+    lrt_stats = np.maximum(lrt_stats, 0.0)
+    p_lrts = chi2_sf_batch(lrt_stats)
+    # Propagate NaN from MLE optimization failures (degenerate SNPs)
+    p_lrts = np.where(np.isnan(logls_mle), np.nan, p_lrts)
+    return p_lrts

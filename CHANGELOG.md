@@ -39,6 +39,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   functions are now private; `read_eigen_files` and `write_eigen_files`,
   the two `jamma.lmm` already exported, are the API. Shape errors carry one
   wording per kind (`... has wrong shape (3, 2), expected a square matrix`).
+- **`likelihood_numpy.py` is three modules.** `lmm/uab.py` holds the Uab,
+  Pab and Iab batch builders in full, split and SoA layouts, which every
+  path runs; `likelihood_numpy.py` keeps the NumPy-fallback grid and
+  golden-section optimisers (1781 to 805 lines); `lmm/stats.py` holds
+  `AssocResult` and the batch Wald, Score and LRT statistics that fill it.
+  Pure moves, and the eight function-level imports of
+  `classify_uab_columns`, `n_index`, `build_pab_table_for_c` and
+  `reconstruct_uab_from_soa` are top-level imports, because `likelihood.py`
+  imports nothing from `jamma` and the cycle they guarded against never
+  existed. Callers rename `from jamma.lmm.likelihood_numpy import
+  batch_compute_uab_numpy` to `from jamma.lmm.uab import ...`, and the
+  batch `batch_calc_*_stats_numpy` / `_batch_lrt_pvalues_numpy` imports to
+  `jamma.lmm.stats`.
+- **One `reml_log_likelihood` and one `mle_log_likelihood`, keyed by
+  `nc_total`.** The `_null` variants differed from the alternative-model
+  ones by the number of columns projected out, so each pair is one function
+  with a required keyword `nc_total` (`n_cvt` for the null model, `n_cvt +
+  1` once the genotype joins). The GEMMA-literal scalar oracles with no
+  production caller (`calc_wald_test`, `calc_score_test`, `calc_lrt_test`,
+  `f_sf`, `safe_sqrt`, `calc_ppab`, `calc_pppab`, `reml_log_likelihood_dev2`,
+  `logdet_hiw_null`) live in `tests/reference/{stats,likelihood}.py`;
+  `finite_difference_dev2` stays, since `prepare_common` computes se(pve)
+  with it. `likelihood.py` drops from 1216 to 895 lines.
+- **`PabIndexTable` and `PabCTable` replace the two untyped table dicts.**
+  `build_index_table` and `build_pab_table_for_c` return NamedTuples;
+  consumers read `table.idx_yy`. `PabCTable.workspace_kwargs()` is the one
+  statement of what the general C workspace constructors take, replacing
+  three hand-maintained copies of the same twelve names. The C table parser
+  still reads a dict, so the two calls into `compute_*_split_general_c` pass
+  `._asdict()`. The scalar `calc_pab`, the general `compute_Uab` and the REML
+  logdet loop walk the same table the batch code walks: same integers, same
+  arithmetic, same order.
+- **`batch_compute_uab_numpy` takes `utg_t` of shape `(n_snps,
+  n_samples)`**, the C-contiguous layout `jlinalg.dgemm(chunk, U,
+  transa="T")` writes and its SoA sibling already took, so the chunk engine
+  stops transposing. Callers holding `UtG` of shape `(n_samples, n_snps)`
+  pass `UtG.T`. `compute_uab_invariant_soa` and `reconstruct_uab_from_soa`
+  require `n_cvt`. `batch_compute_uab_varying_soa_numpy` validates `out`
+  (shape, dtype, C-contiguity) once for every `n_cvt`; the n_cvt=1 branch
+  used to check only the shape. `_NCVT1` names the six columns of the
+  n_cvt=1 layout that the fast paths spelled as literals.
+- **One negative-P_yy warn-once flag.** The scalar and batch guards each
+  kept their own thread-local and reset function; `reset_p_yy_warned` and
+  `warn_p_yy_once` in `likelihood.py` serve both. `chi2_sf(x)` drops the
+  `df` parameter it only ever accepted as 1, and `special.py` vectorises
+  `erfc` and `lgamma` through one helper.
 
 - **The five `scripts/check_*.py` lints share one `_lint_common.py` and are
   named with underscores.** Each had carried its own copy of the same five

@@ -29,16 +29,18 @@ from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     calc_pab,
-    calc_ppab,
-    calc_pppab,
     compute_null_model_lambda,
     compute_Uab,
     finite_difference_dev2,
-    reml_log_likelihood_dev2,
-    reml_log_likelihood_null,
+    reml_log_likelihood,
 )
 from jamma.lmm.prepare_common import compute_and_log_pve, compute_valid_mask
 from tests.conftest import load_phenotypes_from_fam, require_fixture
+from tests.reference.likelihood import (
+    calc_ppab,
+    calc_pppab,
+    reml_log_likelihood_dev2,
+)
 
 pytestmark = pytest.mark.tier1
 
@@ -416,9 +418,9 @@ class TestRemlLogLikelihoodDev2:
         # Central finite differences with h ~ O(eps^{1/4}) * lambda
         # for optimal second-derivative accuracy
         h = lam * 1e-3
-        f_plus = reml_log_likelihood_null(lam + h, eigenvalues, Uab, n_cvt)
-        f_center = reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
-        f_minus = reml_log_likelihood_null(lam - h, eigenvalues, Uab, n_cvt)
+        f_plus = reml_log_likelihood(lam + h, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        f_center = reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        f_minus = reml_log_likelihood(lam - h, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
         dev2_numerical = (f_plus - 2.0 * f_center + f_minus) / (h * h)
 
         np.testing.assert_allclose(
@@ -442,9 +444,9 @@ class TestRemlLogLikelihoodDev2:
         dev2_analytical = reml_log_likelihood_dev2(lam, eigenvalues, Uab, n_cvt)
 
         h = lam * 1e-3
-        f_plus = reml_log_likelihood_null(lam + h, eigenvalues, Uab, n_cvt)
-        f_center = reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
-        f_minus = reml_log_likelihood_null(lam - h, eigenvalues, Uab, n_cvt)
+        f_plus = reml_log_likelihood(lam + h, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        f_center = reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        f_minus = reml_log_likelihood(lam - h, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
         dev2_numerical = (f_plus - 2.0 * f_center + f_minus) / (h * h)
 
         # assert_allclose treats NaN as equal to NaN, so without this the whole
@@ -516,7 +518,7 @@ class TestRemlLogLikelihoodDev2:
         The analytical path (reml_log_likelihood_dev2 with n_cvt=1) omits the
         d^2(logdet_hiw)/dlambda^2 term (see likelihood.py near the n_cvt=1
         branch).  finite_difference_dev2 approximates the full second derivative
-        numerically via a central stencil (h=lam*1e-4) on reml_log_likelihood_null,
+        numerically via a central stencil (h=lam*1e-4) on the null REML log-likelihood,
         implicitly capturing all terms.  This test pins the approximation error
         upper bound at 0.5%.
 
@@ -568,9 +570,9 @@ class TestFiniteDifferenceDev2:
 
         # Independent verification with a different step size
         h = lam * 1e-3
-        f_plus = reml_log_likelihood_null(lam + h, eigenvalues, Uab, n_cvt)
-        f_center = reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
-        f_minus = reml_log_likelihood_null(lam - h, eigenvalues, Uab, n_cvt)
+        f_plus = reml_log_likelihood(lam + h, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        f_center = reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        f_minus = reml_log_likelihood(lam - h, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
         dev2_check = (f_plus - 2.0 * f_center + f_minus) / (h * h)
 
         if dev2_check != 0:
@@ -643,9 +645,9 @@ class TestComputeAndLogPveMultiCvt:
         lam, _ = compute_null_model_lambda(eigenvalues, UtW, Uty, n_cvt)
         Uab = compute_Uab(UtW, Uty, Utx=None)
         h = lam * 1e-3
-        fp = reml_log_likelihood_null(lam + h, eigenvalues, Uab, n_cvt)
-        fc = reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
-        fm = reml_log_likelihood_null(lam - h, eigenvalues, Uab, n_cvt)
+        fp = reml_log_likelihood(lam + h, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        fc = reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        fm = reml_log_likelihood(lam - h, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
         dev2_check = (fp - 2.0 * fc + fm) / (h * h)
 
         if dev2_check < 0 and pve_se is not None:

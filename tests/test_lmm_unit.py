@@ -14,7 +14,8 @@ from jamma.lmm.likelihood import (
     get_ab_index,
     reml_log_likelihood,
 )
-from jamma.lmm.stats import AssocResult, calc_wald_test, f_sf
+from jamma.lmm.stats import AssocResult
+from tests.reference.stats import calc_wald_test, f_sf
 
 
 @pytest.mark.tier0
@@ -347,7 +348,9 @@ class TestRemlLogLikelihood:
         Uab = compute_Uab(UtW, Uty, Utx)
         lambda_val = 1.0
 
-        logl = reml_log_likelihood(lambda_val, eigenvalues, Uab, n_cvt)
+        logl = reml_log_likelihood(
+            lambda_val, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1
+        )
 
         assert np.isfinite(logl), "REML should return finite value"
 
@@ -378,7 +381,10 @@ class TestRemlLogLikelihood:
 
         # Sample at multiple lambda values across the optimization range
         lambdas = np.logspace(-4, 4, 50)
-        logls = [reml_log_likelihood(lam, eigenvalues, Uab, n_cvt) for lam in lambdas]
+        logls = [
+            reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1)
+            for lam in lambdas
+        ]
 
         # Find maximum (REML returns positive log-likelihood)
         max_idx = np.argmax(logls)

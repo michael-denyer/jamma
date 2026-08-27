@@ -265,7 +265,7 @@ def test_mle_no_calc_pab_ncvt1():
     # n_cvt=1: scalar path, calc_pab should NOT be called
     Uab_1 = compute_Uab(UtW, Uty, Utx)
     with patch.object(lik_mod, "calc_pab", wraps=lik_mod.calc_pab) as mock_pab:
-        lik_mod.mle_log_likelihood(lambda_val, eigenvalues, Uab_1, n_cvt=1)
+        lik_mod.mle_log_likelihood(lambda_val, eigenvalues, Uab_1, n_cvt=1, nc_total=2)
     assert mock_pab.call_count == 0, (
         f"calc_pab called {mock_pab.call_count} times for n_cvt=1 (expected 0)"
     )
@@ -274,7 +274,7 @@ def test_mle_no_calc_pab_ncvt1():
     UtW2 = np.ones((n_samples, 2))
     Uab_2 = compute_Uab(UtW2, Uty, Utx)
     with patch.object(lik_mod, "calc_pab", wraps=lik_mod.calc_pab) as mock_pab:
-        lik_mod.mle_log_likelihood(lambda_val, eigenvalues, Uab_2, n_cvt=2)
+        lik_mod.mle_log_likelihood(lambda_val, eigenvalues, Uab_2, n_cvt=2, nc_total=3)
     assert mock_pab.call_count == 1, (
         f"calc_pab called {mock_pab.call_count} times for n_cvt=2 (expected 1)"
     )
@@ -282,13 +282,13 @@ def test_mle_no_calc_pab_ncvt1():
 
 @pytest.mark.tier0
 def test_mle_null_scalar_ncvt1():
-    """mle_log_likelihood_null with n_cvt=1 produces identical results to full Pab."""
+    """Null-model mle_log_likelihood with n_cvt=1 matches the full Pab path."""
     from jamma.lmm.likelihood import (
         _mle_p_yy_scalar_null_ncvt1,
         calc_pab,
         compute_Uab,
         get_ab_index,
-        mle_log_likelihood_null,
+        mle_log_likelihood,
     )
 
     rng = np.random.default_rng(789)
@@ -322,9 +322,11 @@ def test_mle_null_scalar_ncvt1():
         err_msg="_mle_p_yy_scalar_null_ncvt1 does not match calc_pab P_yy",
     )
 
-    # Verify end-to-end: mle_log_likelihood_null should produce a finite result
-    logl = mle_log_likelihood_null(lambda_val, eigenvalues, Uab, n_cvt)
-    assert np.isfinite(logl), f"mle_log_likelihood_null returned non-finite: {logl}"
+    # Verify end-to-end: the null-model MLE should produce a finite result
+    logl = mle_log_likelihood(lambda_val, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+    assert np.isfinite(logl), (
+        f"null-model mle_log_likelihood returned non-finite: {logl}"
+    )
 
 
 @pytest.mark.tier0
@@ -641,7 +643,7 @@ def test_refinement_reml_split_matches_full(split_uab_data):
     )
 
     logls_full, _ = _batch_reml_at_lambda_numpy(
-        1, lambda_vals, eigenvalues, Uab_batch, Iab_batch
+        1, lambda_vals, eigenvalues, Uab_batch, Iab_batch, reml_const
     )
 
     np.testing.assert_allclose(
@@ -1118,6 +1120,7 @@ def test_batch_golden_section_numpy_all_nan_grid():
     from jamma.lmm.likelihood_numpy import (
         _batch_golden_section_bracket_numpy,
         _batch_reml_at_lambda_numpy,
+        _compute_reml_const,
     )
 
     rng = np.random.default_rng(42)
@@ -1142,11 +1145,13 @@ def test_batch_golden_section_numpy_all_nan_grid():
     # Force the all-NaN scenario by using an artificial grid of NaN logls.
     grid_logls_all_nan = np.full((n_grid, n_snps), np.nan)
 
+    reml_const = _compute_reml_const(n - 1 - 1)
+
     def compute_batch_fn(log_lams):
         lams = np.exp(log_lams)
-        return _batch_reml_at_lambda_numpy(1, lams, eigenvalues, Uab_batch, Iab_batch)[
-            0
-        ]
+        return _batch_reml_at_lambda_numpy(
+            1, lams, eigenvalues, Uab_batch, Iab_batch, reml_const
+        )[0]
 
     lambdas_out = np.exp(
         _batch_golden_section_bracket_numpy(
@@ -1493,7 +1498,9 @@ def test_scalar_vs_batch_reml_single_snp_parity():
     Uab_scalar = compute_Uab(UtW, Uty, Utx)
 
     def scalar_obj(lam):
-        return -reml_log_likelihood(lam, eigenvalues, Uab_scalar, n_cvt=n_cvt)
+        return -reml_log_likelihood(
+            lam, eigenvalues, Uab_scalar, n_cvt=n_cvt, nc_total=n_cvt + 1
+        )
 
     lambda_scalar, _ = _golden_section_minimize(
         scalar_obj, 1e-5, 1e5, n_grid=50, n_iter=20
@@ -1544,7 +1551,9 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
         Uab_i = compute_Uab(UtW, Uty, UtG[:, i])
 
         def _scalar_obj(lam, uab=Uab_i):
-            return -reml_log_likelihood(lam, eigenvalues, uab, n_cvt=n_cvt)
+            return -reml_log_likelihood(
+                lam, eigenvalues, uab, n_cvt=n_cvt, nc_total=n_cvt + 1
+            )
 
         lambda_scalars[i], _ = _golden_section_minimize(
             _scalar_obj, 1e-5, 1e5, n_grid=50, n_iter=20
@@ -1595,7 +1604,9 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
     Uab_scalar = compute_Uab(UtW, Uty, Utx)
 
     def scalar_neg_reml(lam: float) -> float:
-        return -reml_log_likelihood(lam, eigenvalues, Uab_scalar, n_cvt=n_cvt)
+        return -reml_log_likelihood(
+            lam, eigenvalues, Uab_scalar, n_cvt=n_cvt, nc_total=n_cvt + 1
+        )
 
     lambda_scalar, logl_scalar = _golden_section_minimize(
         scalar_neg_reml, l_min=1e-5, l_max=1e5, n_grid=50, n_iter=20

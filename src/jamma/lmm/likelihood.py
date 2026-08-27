@@ -2,8 +2,11 @@
 
 Implements restricted maximum likelihood (REML) and maximum likelihood (MLE)
 functions for variance component estimation in LMM. This closely follows
-GEMMA's lmm.cpp CalcPab, CalcPPab, CalcPPPab, LogRL_f, LogRL_dev2, LogL_f,
-and CalcRLWald functions.
+GEMMA's lmm.cpp CalcPab, LogRL_f and LogL_f. One function serves the null
+and the alternative model of each likelihood: ``nc_total`` is the number of
+columns projected out, ``n_cvt`` for the null model and ``n_cvt + 1`` once
+the genotype joins. The scalar ports GEMMA keeps alongside (CalcPPab,
+CalcPPPab, LogRL_dev2, CalcRLWald, CalcRLScore) live in ``tests/reference``.
 
 Also provides null model optimization via golden section search for Score
 and LRT tests.
@@ -338,255 +341,6 @@ def calc_pab(
     return Pab
 
 
-def calc_ppab(
-    n_cvt: int,
-    HiHi_eval: np.ndarray,
-    Uab: np.ndarray,
-    Pab: np.ndarray,
-) -> np.ndarray:
-    """Compute PPab (second-order projected Pab) for REML second derivative.
-
-    PPab stores v_a P^2 v_b quantities. Row 0 uses HiHi_eval weighted
-    dot products; subsequent rows use Schur complement recursion involving
-    both Pab and PPab from the previous level.
-
-    Port of GEMMA v0.98.5 CalcPPab (e_mode=0 path).
-
-    Args:
-        n_cvt: Number of covariates.
-        HiHi_eval: 1/(lambda*eval + 1)^2 vector (n_samples,).
-        Uab: Matrix products (n_samples, n_index).
-        Pab: First-order projection from calc_pab (n_cvt+2, n_index).
-
-    Returns:
-        PPab matrix (n_cvt+2, n_index).
-    """
-    PPab = np.zeros((n_cvt + 2, n_index(n_cvt)), dtype=np.float64)
-
-    # Row 0: weighted dot products with HiHi_eval
-    PPab[0, :] = HiHi_eval @ Uab
-
-    # Rows 1..n_cvt+1: recursive projection
-    for p in range(1, n_cvt + 2):
-        for a in range(p + 1, n_cvt + 3):
-            for b in range(a, n_cvt + 3):
-                index_ab = get_ab_index(a, b, n_cvt)
-                index_aw = get_ab_index(a, p, n_cvt)
-                index_bw = get_ab_index(b, p, n_cvt)
-                index_ww = get_ab_index(p, p, n_cvt)
-
-                ps2_ab = PPab[p - 1, index_ab]
-                ps_aw = Pab[p - 1, index_aw]
-                ps_bw = Pab[p - 1, index_bw]
-                ps_ww = Pab[p - 1, index_ww]
-                ps2_aw = PPab[p - 1, index_aw]
-                ps2_bw = PPab[p - 1, index_bw]
-                ps2_ww = PPab[p - 1, index_ww]
-
-                if ps_ww != 0:
-                    p2_ab = ps2_ab + ps_aw * ps_bw * ps2_ww / (ps_ww * ps_ww)
-                    p2_ab -= (ps_aw * ps2_bw + ps_bw * ps2_aw) / ps_ww
-                else:
-                    p2_ab = ps2_ab
-
-                PPab[p, index_ab] = p2_ab
-
-    return PPab
-
-
-def calc_pppab(
-    n_cvt: int,
-    HiHiHi_eval: np.ndarray,
-    Uab: np.ndarray,
-    Pab: np.ndarray,
-    PPab: np.ndarray,
-) -> np.ndarray:
-    """Compute PPPab (third-order projected Pab) for REML second derivative.
-
-    PPPab stores v_a P^3 v_b quantities. Row 0 uses HiHiHi_eval weighted
-    dot products; subsequent rows use Schur complement recursion involving
-    Pab, PPab, and PPPab from the previous level.
-
-    Port of GEMMA v0.98.5 CalcPPPab (e_mode=0 path).
-
-    Args:
-        n_cvt: Number of covariates.
-        HiHiHi_eval: 1/(lambda*eval + 1)^3 vector (n_samples,).
-        Uab: Matrix products (n_samples, n_index).
-        Pab: First-order projection from calc_pab (n_cvt+2, n_index).
-        PPab: Second-order projection from calc_ppab (n_cvt+2, n_index).
-
-    Returns:
-        PPPab matrix (n_cvt+2, n_index).
-    """
-    PPPab = np.zeros((n_cvt + 2, n_index(n_cvt)), dtype=np.float64)
-
-    # Row 0: weighted dot products with HiHiHi_eval
-    PPPab[0, :] = HiHiHi_eval @ Uab
-
-    # Rows 1..n_cvt+1: recursive projection
-    for p in range(1, n_cvt + 2):
-        for a in range(p + 1, n_cvt + 3):
-            for b in range(a, n_cvt + 3):
-                index_ab = get_ab_index(a, b, n_cvt)
-                index_aw = get_ab_index(a, p, n_cvt)
-                index_bw = get_ab_index(b, p, n_cvt)
-                index_ww = get_ab_index(p, p, n_cvt)
-
-                ps3_ab = PPPab[p - 1, index_ab]
-                ps_aw = Pab[p - 1, index_aw]
-                ps_bw = Pab[p - 1, index_bw]
-                ps_ww = Pab[p - 1, index_ww]
-                ps2_aw = PPab[p - 1, index_aw]
-                ps2_bw = PPab[p - 1, index_bw]
-                ps2_ww = PPab[p - 1, index_ww]
-                ps3_aw = PPPab[p - 1, index_aw]
-                ps3_bw = PPPab[p - 1, index_bw]
-                ps3_ww = PPPab[p - 1, index_ww]
-
-                if ps_ww != 0:
-                    ps_ww2 = ps_ww * ps_ww
-                    ps_ww3 = ps_ww2 * ps_ww
-
-                    p3_ab = ps3_ab
-                    # Term: -aw*bw*ps2_ww^2 / ps_ww^3
-                    p3_ab -= ps_aw * ps_bw * ps2_ww * ps2_ww / ps_ww3
-                    # Term: -(aw*ps3_bw + bw*ps3_aw + ps2_aw*ps2_bw) / ps_ww
-                    p3_ab -= (ps_aw * ps3_bw + ps_bw * ps3_aw + ps2_aw * ps2_bw) / ps_ww
-                    # Term: +(aw*ps2_bw*ps2_ww + bw*ps2_aw*ps2_ww
-                    #         + aw*bw*ps3_ww) / ps_ww^2
-                    p3_ab += (
-                        ps_aw * ps2_bw * ps2_ww
-                        + ps_bw * ps2_aw * ps2_ww
-                        + ps_aw * ps_bw * ps3_ww
-                    ) / ps_ww2
-                else:
-                    p3_ab = ps3_ab
-
-                PPPab[p, index_ab] = p3_ab
-
-    return PPPab
-
-
-def _logdet_hiw_null(
-    lambda_val: float,
-    eigenvalues: np.ndarray,
-    Uab: np.ndarray,
-    n_cvt: int,
-) -> float:
-    """Compute logdet(W'HiW) - logdet(W'W) for null model.
-
-    Helper for computing the logdet_hiw second derivative via finite
-    differences on this isolated term. Much cheaper than finite-
-    differencing the full log-likelihood (only calc_pab + calc_iab,
-    no log/constant overhead).
-
-    Args:
-        lambda_val: Variance ratio.
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        Uab: Null model Uab (n_samples, n_index).
-        n_cvt: Number of covariates.
-
-    Returns:
-        logdet_hiw scalar.
-    """
-    Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-    Pab = calc_pab(n_cvt, Hi_eval, Uab)
-    Iab = calc_iab(n_cvt, Uab)
-
-    nc_total = n_cvt  # null model
-    logdet_hiw = 0.0
-    for i in range(nc_total):
-        index_ww = get_ab_index(i + 1, i + 1, n_cvt)
-        d_pab = Pab[i, index_ww]
-        d_iab = Iab[i, index_ww]
-        if d_pab > 0:
-            logdet_hiw += np.log(d_pab)
-        if d_iab > 0:
-            logdet_hiw -= np.log(d_iab)
-
-    return logdet_hiw
-
-
-def reml_log_likelihood_dev2(
-    lambda_val: float,
-    eigenvalues: np.ndarray,
-    Uab: np.ndarray,
-    n_cvt: int,
-) -> float:
-    """Compute REML log-likelihood second derivative for null model.
-
-    Used by the delta method to compute se(pve). The second derivative
-    at the REML optimum determines the precision of the lambda estimate.
-
-    Port of GEMMA v0.98.5 LogRL_dev2 (e_mode=0, calc_null=True).
-    The trace and yPKPy terms are computed analytically from Pab/PPab/PPPab.
-    The logdet_hiw second derivative uses a local finite-difference stencil
-    on the logdet_hiw function alone (3 lightweight calc_pab + calc_iab
-    evaluations, not 3 full likelihood evaluations).
-
-    Args:
-        lambda_val: REML-optimal lambda (null model).
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        Uab: Null model Uab (n_samples, n_index).
-        n_cvt: Number of covariates.
-
-    Returns:
-        Second derivative d^2 ell / d lambda^2 (negative at maximum).
-    """
-    if lambda_val <= 0:
-        logger.warning(f"lambda_val={lambda_val:.6e} is non-positive in dev2")
-        return np.nan
-
-    n = len(eigenvalues)
-    nc_total = n_cvt  # null model
-    df = n - n_cvt
-
-    v_temp = lambda_val * eigenvalues + 1.0
-    Hi_eval = 1.0 / v_temp
-    HiHi_eval = Hi_eval * Hi_eval
-    HiHiHi_eval = HiHi_eval * Hi_eval
-
-    trace_Hi = np.sum(Hi_eval)
-    trace_HiHi = np.sum(HiHi_eval)
-    trace_HiKHiK = (n + trace_HiHi - 2.0 * trace_Hi) / (lambda_val * lambda_val)
-
-    Pab = calc_pab(n_cvt, Hi_eval, Uab)
-    PPab_mat = calc_ppab(n_cvt, HiHi_eval, Uab, Pab)
-    PPPab_mat = calc_pppab(n_cvt, HiHiHi_eval, Uab, Pab, PPab_mat)
-
-    idx_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = Pab[nc_total, idx_yy]
-    if P_yy < _P_YY_MIN:
-        logger.warning(
-            f"P_yy={P_yy:.6e} below floor {_P_YY_MIN} in dev2 "
-            f"— phenotype may be degenerate after projection"
-        )
-        return np.nan
-    PP_yy = PPab_mat[nc_total, idx_yy]
-    PPP_yy = PPPab_mat[nc_total, idx_yy]
-
-    yPKPy = (P_yy - PP_yy) / lambda_val
-    yPKPKPy = (P_yy + PPP_yy - 2.0 * PP_yy) / (lambda_val * lambda_val)
-
-    # d^2(logdet_hiw)/dlambda^2 via central finite differences on
-    # the isolated logdet_hiw(lambda) function. Step size h ~ eps^{1/4}
-    # * lambda for optimal second-derivative accuracy.
-    h = max(lambda_val * 1e-4, 1e-8)
-    logdet_p = _logdet_hiw_null(lambda_val + h, eigenvalues, Uab, n_cvt)
-    logdet_c = _logdet_hiw_null(lambda_val, eigenvalues, Uab, n_cvt)
-    logdet_m = _logdet_hiw_null(lambda_val - h, eigenvalues, Uab, n_cvt)
-    d2_logdet_hiw = (logdet_p - 2.0 * logdet_c + logdet_m) / (h * h)
-
-    dev2 = (
-        0.5 * trace_HiKHiK
-        - 0.5 * d2_logdet_hiw
-        - 0.5 * df * (2.0 * yPKPKPy * P_yy - yPKPy * yPKPy) / (P_yy * P_yy)
-    )
-
-    return dev2
-
-
 def finite_difference_dev2(
     lambda_val: float,
     eigenvalues: np.ndarray,
@@ -597,11 +351,12 @@ def finite_difference_dev2(
 ) -> float:
     """Compute REML log-likelihood second derivative via central finite differences.
 
-    Full numerical second derivative using a central stencil on
-    reml_log_likelihood_null. Retained as a test oracle for validating
-    the analytical reml_log_likelihood_dev2. Uses h ~ O(eps^{1/4}) *
-    lambda for optimal second-derivative accuracy. Falls back to a
-    one-sided stencil when lambda is near the optimiser bounds.
+    Full numerical second derivative using a central stencil on the null
+    model REML log-likelihood. This is the production path for se(pve);
+    ``tests/reference/likelihood.py`` holds the analytical LogRL_dev2 port it
+    is checked against. Uses h ~ O(eps^{1/4}) * lambda for optimal
+    second-derivative accuracy. Falls back to a one-sided stencil when lambda
+    is near the optimiser bounds.
 
     Args:
         lambda_val: REML-optimal lambda (null model).
@@ -620,7 +375,7 @@ def finite_difference_dev2(
     can_go_right = (lambda_val + h) < l_max
 
     def f(lam: float) -> float:
-        return reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
+        return reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
 
     if can_go_left and can_go_right:
         # Central stencil
@@ -662,7 +417,12 @@ def calc_iab(
 
 
 def reml_log_likelihood(
-    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
+    lambda_val: float,
+    eigenvalues: np.ndarray,
+    Uab: np.ndarray,
+    n_cvt: int,
+    *,
+    nc_total: int,
 ) -> float:
     """Compute REML log-likelihood following GEMMA's LogRL_f exactly.
 
@@ -672,22 +432,23 @@ def reml_log_likelihood(
     where:
     - c = 0.5 * df * (log(df) - log(2*pi) - 1)
     - logdet_h = sum(log(lambda * eval + 1))
-    - logdet_hiw = sum(log(Pab[i,ww])) - sum(log(Iab[i,ww])) for covariates
+    - logdet_hiw = sum(log(Pab[i,ww])) - sum(log(Iab[i,ww])) over nc_total rows
     - P_yy = Pab[nc_total, index_yy]
-    - df = n - n_cvt - 1
+    - df = n - nc_total
 
     Args:
         lambda_val: Variance component ratio (sigma_g^2 / sigma_e^2)
         eigenvalues: Eigenvalues of kinship matrix (n_samples,)
         Uab: Matrix products from compute_Uab (n_samples, n_index)
         n_cvt: Number of covariates
+        nc_total: Columns projected out. ``n_cvt`` for the null model
+            (GEMMA ``calc_null=true``), ``n_cvt + 1`` for the alternative.
 
     Returns:
         Log-likelihood value (positive for maximization)
     """
     n = len(eigenvalues)
-    nc_total = n_cvt + 1
-    df = n - n_cvt - 1
+    df = n - nc_total
 
     v_temp = lambda_val * eigenvalues + 1.0
     Hi_eval = 1.0 / v_temp
@@ -706,59 +467,6 @@ def reml_log_likelihood(
         if d_iab > 0:
             logdet_hiw -= np.log(d_iab)
 
-    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
-
-    c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
-    f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
-
-    return f
-
-
-def reml_log_likelihood_null(
-    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
-) -> float:
-    """Compute REML log-likelihood for NULL model (no genotype effect).
-
-    Key differences from alternative model (reml_log_likelihood):
-    - nc_total = n_cvt (not n_cvt + 1) - no genotype column
-    - df = n - n_cvt (not n - n_cvt - 1) - different degrees of freedom
-    - logdet_hiw loop iterates to n_cvt (not n_cvt + 1)
-
-    This matches GEMMA's LogRL_f with calc_null=true.
-
-    Args:
-        lambda_val: Variance component ratio (sigma_g^2 / sigma_e^2)
-        eigenvalues: Eigenvalues of kinship matrix (n_samples,)
-        Uab: Matrix products from compute_Uab (n_samples, n_index)
-        n_cvt: Number of covariates
-
-    Returns:
-        Log-likelihood value (positive for maximization)
-    """
-    n = len(eigenvalues)
-    nc_total = n_cvt  # NULL MODEL: no genotype column
-    df = n - n_cvt  # NULL MODEL: different degrees of freedom
-
-    v_temp = lambda_val * eigenvalues + 1.0
-    Hi_eval = 1.0 / v_temp
-    logdet_h = np.sum(np.log(np.abs(v_temp)))
-
-    Pab = calc_pab(n_cvt, Hi_eval, Uab)
-    Iab = calc_iab(n_cvt, Uab)
-
-    # logdet_hiw: iterate to nc_total (n_cvt for null, not n_cvt+1)
-    logdet_hiw = 0.0
-    for i in range(nc_total):
-        index_ww = get_ab_index(i + 1, i + 1, n_cvt)
-        d_pab = Pab[i, index_ww]
-        d_iab = Iab[i, index_ww]
-        if d_pab > 0:
-            logdet_hiw += np.log(d_pab)
-        if d_iab > 0:
-            logdet_hiw -= np.log(d_iab)
-
-    # P_yy at level nc_total (n_cvt for null model)
     index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
     P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
 
@@ -841,52 +549,6 @@ def _mle_p_yy_scalar_null_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
         return float(s_yy)
     p1_yy = s_yy - s_wy * s_wy / s_ww
     return float(p1_yy)
-
-
-def mle_log_likelihood_null(
-    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
-) -> float:
-    """Compute MLE log-likelihood for NULL model (no genotype effect).
-
-    Key differences from alternative model (mle_log_likelihood):
-    - nc_total = n_cvt (not n_cvt + 1) - no genotype column
-    - P_yy extracted at Pab[n_cvt, index_yy]
-
-    No logdet_hiw term (same as alternative MLE).
-
-    This matches GEMMA's LogL_f with calc_null=true.
-
-    Args:
-        lambda_val: Variance component ratio (sigma_g^2 / sigma_e^2)
-        eigenvalues: Eigenvalues of kinship matrix (n_samples,)
-        Uab: Matrix products from compute_Uab (n_samples, n_index)
-        n_cvt: Number of covariates
-
-    Returns:
-        Log-likelihood value (positive for maximization)
-    """
-    n = len(eigenvalues)
-
-    v_temp = lambda_val * eigenvalues + 1.0
-    Hi_eval = 1.0 / v_temp
-    logdet_h = np.sum(np.log(np.abs(v_temp)))
-
-    # Scalar path for n_cvt=1: skip full Pab allocation
-    if n_cvt == 1:
-        P_yy_raw = _mle_p_yy_scalar_null_ncvt1(Hi_eval, Uab)
-    else:
-        nc_total = n_cvt  # NULL MODEL: no genotype column
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-        index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-        P_yy_raw = Pab[nc_total, index_yy]
-
-    P_yy = _clamp_p_yy(P_yy_raw, lambda_val)
-
-    # MLE formula (uses n, not df; no logdet_hiw)
-    c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)
-    f = c - 0.5 * logdet_h - 0.5 * n * np.log(P_yy)
-
-    return f
 
 
 def _golden_section_minimize(
@@ -1102,8 +764,8 @@ def compute_null_model_lambda(
     Used by Score test (-lmm 3) which reuses null model lambda for all SNPs
     instead of re-optimizing per SNP (as Wald does).
 
-    Uses reml_log_likelihood_null() which implements GEMMA's LogRL_f with
-    calc_null=true (nc_total = n_cvt, df = n - n_cvt).
+    Uses reml_log_likelihood() with nc_total = n_cvt, GEMMA's LogRL_f with
+    calc_null=true.
 
     Args:
         eigenvalues: Kinship eigenvalues (n_samples,)
@@ -1123,7 +785,7 @@ def compute_null_model_lambda(
 
     # Create closure for null model REML optimization
     def neg_reml_null(lam: float) -> float:
-        return -reml_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
+        return -reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
 
     # Optimize lambda under the null model using golden section search
     lambda_null, logl_null = _golden_section_minimize(neg_reml_null, l_min, l_max)
@@ -1132,12 +794,17 @@ def compute_null_model_lambda(
 
 
 def mle_log_likelihood(
-    lambda_val: float, eigenvalues: np.ndarray, Uab: np.ndarray, n_cvt: int
+    lambda_val: float,
+    eigenvalues: np.ndarray,
+    Uab: np.ndarray,
+    n_cvt: int,
+    *,
+    nc_total: int,
 ) -> float:
-    """Compute MLE log-likelihood (NOT REML) for LRT.
+    """Compute MLE log-likelihood (NOT REML) following GEMMA's LogL_f.
 
     Key differences from REML:
-    - Uses n (sample size) instead of df = n - n_cvt - 1
+    - Uses n (sample size) instead of df
     - Does NOT include logdet_hiw term
     - MLE constant: c = 0.5 * n * (log(n) - log(2*pi) - 1)
 
@@ -1156,6 +823,8 @@ def mle_log_likelihood(
         eigenvalues: Eigenvalues of kinship matrix (n_samples,)
         Uab: Matrix products from compute_Uab (n_samples, n_index)
         n_cvt: Number of covariates
+        nc_total: Columns projected out. ``n_cvt`` for the null model
+            (GEMMA ``calc_null=true``), ``n_cvt + 1`` for the alternative.
 
     Returns:
         Log-likelihood value (positive for maximization)
@@ -1167,10 +836,11 @@ def mle_log_likelihood(
     logdet_h = np.sum(np.log(np.abs(v_temp)))
 
     # Scalar path for n_cvt=1: skip full Pab allocation
-    if n_cvt == 1:
+    if n_cvt == nc_total == 1:
+        P_yy_raw = _mle_p_yy_scalar_null_ncvt1(Hi_eval, Uab)
+    elif n_cvt == 1:
         P_yy_raw = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
     else:
-        nc_total = n_cvt + 1
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
         index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
         P_yy_raw = Pab[nc_total, index_yy]
@@ -1197,8 +867,8 @@ def compute_null_model_mle(
     Used by LRT (-lmm 2) which requires MLE (not REML) likelihood.
     The null model MLE is computed once and reused for all SNPs.
 
-    Uses mle_log_likelihood_null() which implements GEMMA's LogL_f with
-    calc_null=true (nc_total = n_cvt).
+    Uses mle_log_likelihood() with nc_total = n_cvt, GEMMA's LogL_f with
+    calc_null=true.
 
     Args:
         eigenvalues: Kinship eigenvalues (n_samples,)
@@ -1217,7 +887,7 @@ def compute_null_model_mle(
 
     # Create closure for null model MLE optimization
     def neg_mle_null(lam: float) -> float:
-        return -mle_log_likelihood_null(lam, eigenvalues, Uab, n_cvt)
+        return -mle_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
 
     # Optimize lambda under the null model using golden section search
     lambda_null_mle, logl_H0 = _golden_section_minimize(neg_mle_null, l_min, l_max)

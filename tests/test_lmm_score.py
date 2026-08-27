@@ -17,7 +17,7 @@ from jamma.lmm.likelihood import (
     compute_Uab,
     get_ab_index,
 )
-from jamma.lmm.stats import calc_score_test, f_sf
+from tests.reference.stats import calc_score_test, f_sf
 
 
 def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):

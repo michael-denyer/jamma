@@ -832,35 +832,31 @@ def compute_iab_invariant_scalars_ncvt1(
 # ---------------------------------------------------------------------------
 
 
-def _batch_reml_at_lambda_numpy(
+def _batch_pab_at_lambda_numpy(
     n_cvt: int,
     lambda_vals: np.ndarray,
     eigenvalues: np.ndarray,
     Uab_batch: np.ndarray,
-    Iab_batch: np.ndarray,
-    reml_const: float | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Evaluate REML log-likelihood for each SNP at its own lambda value.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute per-SNP Pab, logdet(H), and guarded P_yy at each SNP's lambda.
+
+    The per-SNP mirror of ``_batch_grid_pab_numpy``: shared by the REML and
+    MLE evaluators, which differ only in the finisher they apply.
 
     Args:
         n_cvt: Number of covariates.
         lambda_vals: Per-SNP lambda values (n_snps,).
         eigenvalues: Kinship eigenvalues (n_samples,).
         Uab_batch: Uab matrices (n_snps, n_samples, n_index).
-        Iab_batch: Precomputed identity-weighted Pab (n_snps, n_cvt+2, n_index).
-        reml_const: Precomputed 0.5*df*(log(df)-log(2*pi)-1). If None, computed here.
 
     Returns:
-        ``(log-likelihoods (n_snps,), Pab_batch (n_snps, n_cvt+2, n_index))``.
-        Pab falls out of the log-likelihood computation, so it is always
-        returned rather than gated on a flag; the refinement loop discards it
-        and the final evaluation feeds it to the Wald statistics.
+        Tuple of (Pab, logdet_h, P_yy):
+            Pab: (n_snps, n_cvt+2, n_index)
+            logdet_h: (n_snps,)
+            P_yy: (n_snps,) -- guarded
     """
     table = build_index_table(n_cvt)
-    n_snps = Uab_batch.shape[0]
-    n = eigenvalues.shape[0]
     nc_total = n_cvt + 1
-    df = n - n_cvt - 1
 
     # Per-SNP H-inv weights: (n_snps, n_samples)
     v_temp = lambda_vals[:, None] * eigenvalues[None, :] + 1.0
@@ -871,6 +867,43 @@ def _batch_reml_at_lambda_numpy(
 
     # Pab with per-SNP Hi_eval
     Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
+
+    P_yy = _guard_P_yy(Pab_batch[:, nc_total, table["idx_yy"]])
+    return Pab_batch, logdet_h, P_yy
+
+
+def _batch_reml_at_lambda_numpy(
+    n_cvt: int,
+    lambda_vals: np.ndarray,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+    Iab_batch: np.ndarray,
+    reml_const: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Evaluate REML log-likelihood for each SNP at its own lambda value.
+
+    Args:
+        n_cvt: Number of covariates.
+        lambda_vals: Per-SNP lambda values (n_snps,).
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
+        Iab_batch: Precomputed identity-weighted Pab (n_snps, n_cvt+2, n_index).
+        reml_const: Precomputed 0.5*df*(log(df)-log(2*pi)-1).
+
+    Returns:
+        ``(log-likelihoods (n_snps,), Pab_batch (n_snps, n_cvt+2, n_index))``.
+        Pab falls out of the log-likelihood computation, so it is always
+        returned rather than gated on a flag; the refinement loop discards it
+        and the final evaluation feeds it to the Wald statistics.
+    """
+    table = build_index_table(n_cvt)
+    n_snps = Uab_batch.shape[0]
+    n = eigenvalues.shape[0]
+    df = n - n_cvt - 1
+
+    Pab_batch, logdet_h, P_yy = _batch_pab_at_lambda_numpy(
+        n_cvt, lambda_vals, eigenvalues, Uab_batch
+    )
 
     # logdet_hiw per SNP: sum over diagonal indices
     # Guard: non-positive diagonal Pab/Iab entries (degenerate SNPs) use 0.0
@@ -884,12 +917,7 @@ def _batch_reml_at_lambda_numpy(
             logdet_hiw += np.where(d_pab > 0, np.log(d_pab), 0.0)
             logdet_hiw -= np.where(d_iab > 0, np.log(d_iab), 0.0)
 
-    # P_yy per SNP with guards
-    P_yy = _guard_P_yy(Pab_batch[:, nc_total, table["idx_yy"]])
-
     # REML log-likelihood per SNP
-    if reml_const is None:
-        reml_const = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
     logl = reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
     return logl, Pab_batch
 
@@ -913,22 +941,11 @@ def _batch_mle_at_lambda_numpy(
     Returns:
         MLE log-likelihoods (n_snps,).
     """
-    table = build_index_table(n_cvt)
     n = eigenvalues.shape[0]
-    nc_total = n_cvt + 1
 
-    # Per-SNP H-inv weights: (n_snps, n_samples)
-    v_temp = lambda_vals[:, None] * eigenvalues[None, :] + 1.0
-    Hi_eval_batch = 1.0 / v_temp
-
-    # Log determinant of H per SNP: (n_snps,)
-    logdet_h = np.sum(np.log(np.abs(v_temp)), axis=1)
-
-    # Pab with per-SNP Hi_eval
-    Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
-
-    # P_yy per SNP with guards
-    P_yy = _guard_P_yy(Pab_batch[:, nc_total, table["idx_yy"]])
+    _Pab, logdet_h, P_yy = _batch_pab_at_lambda_numpy(
+        n_cvt, lambda_vals, eigenvalues, Uab_batch
+    )
 
     # MLE log-likelihood per SNP (no logdet_hiw, uses n not df)
     c = 0.5 * n * (np.log(n) - np.log(2.0 * np.pi) - 1.0)

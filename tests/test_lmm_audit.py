@@ -1,4 +1,4 @@
-"""LMM numerical-guard regressions: _safe_sqrt, P_yy clamp, covariate
+"""LMM numerical-guard regressions: safe_sqrt, P_yy clamp, covariate
 over-parameterization, golden-section optimizer.
 
 Covers boundary behavior at the edge of the LMM numerical envelope. Each
@@ -14,42 +14,40 @@ from jamma.lmm.likelihood import (
     _golden_section_minimize,
     compute_Uab,
     mle_log_likelihood,
-    mle_log_likelihood_null,
     reml_log_likelihood,
-    reml_log_likelihood_null,
 )
 from jamma.lmm.prepare_common import _build_covariate_matrix
-from jamma.lmm.stats import _safe_sqrt
+from tests.reference.stats import safe_sqrt
 
 
 @pytest.mark.tier0
 class TestSafeSqrt:
-    """T1: _safe_sqrt boundary behavior."""
+    """T1: safe_sqrt boundary behavior."""
 
     def test_positive_value(self):
-        assert _safe_sqrt(4.0) == pytest.approx(2.0)
+        assert safe_sqrt(4.0) == pytest.approx(2.0)
 
     def test_zero(self):
-        assert _safe_sqrt(0.0) == 0.0
+        assert safe_sqrt(0.0) == 0.0
 
     def test_small_negative_tolerated(self):
         """Values with |d| < 0.001 use abs(d) — tolerates FP rounding."""
-        result = _safe_sqrt(-1e-6)
+        result = safe_sqrt(-1e-6)
         assert np.isfinite(result)
         assert result == pytest.approx(np.sqrt(1e-6))
 
     def test_large_negative_returns_nan(self):
         """d = -1.0, |d| >= 0.001, d < 0 => NaN."""
-        assert np.isnan(_safe_sqrt(-1.0))
+        assert np.isnan(safe_sqrt(-1.0))
 
     def test_boundary_at_threshold(self):
         """|d| == 0.001 is NOT < 0.001, so d < 0 => NaN."""
-        assert np.isnan(_safe_sqrt(-0.001))
+        assert np.isnan(safe_sqrt(-0.001))
         # Just inside threshold: |d| < 0.001 => abs used
-        assert np.isfinite(_safe_sqrt(-0.0009))
+        assert np.isfinite(safe_sqrt(-0.0009))
 
     def test_very_small_positive(self):
-        result = _safe_sqrt(1e-15)
+        result = safe_sqrt(1e-15)
         assert result == pytest.approx(np.sqrt(1e-15))
 
 
@@ -105,22 +103,22 @@ class TestPyyInLogLikelihood:
 
     def test_reml_returns_finite(self, synthetic_eigen, synthetic_uab):
         eigenvalues, _ = synthetic_eigen
-        result = reml_log_likelihood(0.5, eigenvalues, synthetic_uab, 1)
+        result = reml_log_likelihood(0.5, eigenvalues, synthetic_uab, 1, nc_total=2)
         assert np.isfinite(result)
 
     def test_reml_null_returns_finite(self, synthetic_eigen, synthetic_uab):
         eigenvalues, _ = synthetic_eigen
-        result = reml_log_likelihood_null(0.5, eigenvalues, synthetic_uab, 1)
+        result = reml_log_likelihood(0.5, eigenvalues, synthetic_uab, 1, nc_total=1)
         assert np.isfinite(result)
 
     def test_mle_returns_finite(self, synthetic_eigen, synthetic_uab):
         eigenvalues, _ = synthetic_eigen
-        result = mle_log_likelihood(0.5, eigenvalues, synthetic_uab, 1)
+        result = mle_log_likelihood(0.5, eigenvalues, synthetic_uab, 1, nc_total=2)
         assert np.isfinite(result)
 
     def test_mle_null_returns_finite(self, synthetic_eigen, synthetic_uab):
         eigenvalues, _ = synthetic_eigen
-        result = mle_log_likelihood_null(0.5, eigenvalues, synthetic_uab, 1)
+        result = mle_log_likelihood(0.5, eigenvalues, synthetic_uab, 1, nc_total=1)
         assert np.isfinite(result)
 
 

@@ -11,32 +11,29 @@ from __future__ import annotations
 from loguru import logger
 
 
-def log_backend_selection(
-    active: str,
-    requested: str,
-    env_override: str | None = None,
-) -> None:
-    """Log the selected backend at INFO level.
+def log_backend_selection(requested: str, env_override: str | None = None) -> None:
+    """Log how the numpy backend was selected, at INFO level.
+
+    There is one backend, so the line only records what drove the choice.
 
     Args:
-        active: The backend that was selected ("numpy").
         requested: The originally requested backend
             ("auto", "numpy", or "numpy-streaming").
         env_override: Value of JAMMA_BACKEND if set, None otherwise.
             Caller passes this so the log reflects what actually drove selection.
 
     Example:
-        >>> log_backend_selection("numpy", "auto")
+        >>> log_backend_selection("auto")
         # logs: "Backend: numpy (auto-selected)"
-        >>> log_backend_selection("numpy", "numpy")
+        >>> log_backend_selection("numpy")
         # logs: "Backend: numpy (explicitly requested)"
     """
     if env_override is not None:
-        logger.info(f"Backend: {active} (from JAMMA_BACKEND={env_override})")
+        logger.info(f"Backend: numpy (from JAMMA_BACKEND={env_override})")
     elif requested != "auto":
-        logger.info(f"Backend: {active} (explicitly requested)")
+        logger.info("Backend: numpy (explicitly requested)")
     else:
-        logger.info(f"Backend: {active} (auto-selected)")
+        logger.info("Backend: numpy (auto-selected)")
 
 
 _BLAS_DISPLAY: dict[str, str] = {

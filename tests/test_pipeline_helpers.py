@@ -322,33 +322,48 @@ class TestRunLoco:
     """Direct tests for the extracted _run_loco helper.
 
     Replaces transitive coverage via test_loco_numpy.py / test_pipeline.py.
-    Monkeypatches the heavy collaborators (parse_phenotypes, load_covariates,
-    run_lmm_loco) and asserts on the observable PipelineResult returned.
+    run() hands _run_loco the loaded phenotype, covariates and valid mask, so
+    the tests pass those directly, stub run_lmm_loco, and assert on the
+    observable PipelineResult returned.
     """
 
     def _build_loco_runner(
         self,
         tmp_path: Path,
         *,
-        phenotypes: np.ndarray,
-        covariates: np.ndarray | None,
         loco_result,  # type: ignore[no-untyped-def]
         monkeypatch: pytest.MonkeyPatch,
     ) -> PipelineRunner:
-        """Construct a runner and stub out the heavy LOCO collaborators."""
+        """Construct a runner and stub out the LOCO orchestrator."""
         runner = _make_runner(tmp_path)
-
-        n_analyzed = int(np.sum(~np.isnan(phenotypes)))
-        monkeypatch.setattr(
-            runner, "parse_phenotypes", lambda: (phenotypes, n_analyzed)
-        )
-        monkeypatch.setattr(runner, "load_covariates", lambda _n: covariates)
         monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
         from jamma import lmm as lmm_pkg
 
         monkeypatch.setattr(lmm_pkg, "run_lmm_loco", lambda **_kw: loco_result)
         return runner
+
+    @staticmethod
+    def _call(
+        runner: PipelineRunner,
+        tmp_path: Path,
+        phenotypes: np.ndarray,
+        covariates: np.ndarray | None,
+    ):  # type: ignore[no-untyped-def]
+        """Invoke _run_loco the way run() does, with the mask run() would build."""
+        from jamma.lmm.prepare_common import compute_valid_mask
+
+        return runner._run_loco(
+            t_start=0.0,
+            plan=ExecutionPlan(mode="batch", reason="loco"),
+            phenotypes=phenotypes,
+            covariates=covariates,
+            valid_mask=compute_valid_mask(phenotypes, covariates),
+            n_snps=0,
+            assoc_path=tmp_path / "out.assoc.txt",
+            snps_indices=None,
+            ksnps_indices=None,
+        )
 
     def test_loco_result_fields_map_to_pipeline_result(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -368,32 +383,17 @@ class TestRunLoco:
             pve_se=0.05,
         )
         runner = self._build_loco_runner(
-            tmp_path,
-            phenotypes=phenos,
-            covariates=covs,
-            loco_result=loco,
-            monkeypatch=monkeypatch,
+            tmp_path, loco_result=loco, monkeypatch=monkeypatch
         )
-        plan = ExecutionPlan(mode="batch", reason="loco")
-        assoc_path = tmp_path / "out.assoc.txt"
 
-        result = runner._run_loco(
-            t_start=0.0,
-            plan=plan,
-            n_samples=4,
-            n_snps=3,
-            assoc_path=assoc_path,
-            snps_indices=None,
-            ksnps_indices=None,
-        )
+        result = self._call(runner, tmp_path, phenos, covs)
 
         assert result.n_snps_tested == 3
         assert result.associations == ["snp1", "snp2", "snp3"]
         assert result.pve_estimate == 0.42
         assert result.pve_se == 0.05
-        assert result.assoc_path == assoc_path
-        assert result.assoc_paths == [assoc_path]
-        assert result.backend == "numpy"
+        assert result.assoc_path == tmp_path / "out.assoc.txt"
+        assert result.assoc_paths == [tmp_path / "out.assoc.txt"]
         # 3 valid samples after NaN filtering (observable n_valid).
         assert result.n_samples == 3
 
@@ -412,23 +412,10 @@ class TestRunLoco:
         covs = np.ones((3, 3), dtype=np.float64)
         loco = LocoResult(associations=[], n_tested=0, pve=None, pve_se=None)
         runner = self._build_loco_runner(
-            tmp_path,
-            phenotypes=phenos,
-            covariates=covs,
-            loco_result=loco,
-            monkeypatch=monkeypatch,
+            tmp_path, loco_result=loco, monkeypatch=monkeypatch
         )
-        plan = ExecutionPlan(mode="batch", reason="loco")
 
-        result = runner._run_loco(
-            t_start=0.0,
-            plan=plan,
-            n_samples=3,
-            n_snps=0,
-            assoc_path=tmp_path / "out.assoc.txt",
-            snps_indices=None,
-            ksnps_indices=None,
-        )
+        result = self._call(runner, tmp_path, phenos, covs)
 
         assert result.n_covariates == 3
 
@@ -441,23 +428,10 @@ class TestRunLoco:
         phenos = np.array([1.0, 2.0], dtype=np.float64)
         loco = LocoResult(associations=[], n_tested=0, pve=None, pve_se=None)
         runner = self._build_loco_runner(
-            tmp_path,
-            phenotypes=phenos,
-            covariates=None,
-            loco_result=loco,
-            monkeypatch=monkeypatch,
+            tmp_path, loco_result=loco, monkeypatch=monkeypatch
         )
-        plan = ExecutionPlan(mode="batch", reason="loco")
 
-        result = runner._run_loco(
-            t_start=0.0,
-            plan=plan,
-            n_samples=2,
-            n_snps=0,
-            assoc_path=tmp_path / "out.assoc.txt",
-            snps_indices=None,
-            ksnps_indices=None,
-        )
+        result = self._call(runner, tmp_path, phenos, None)
 
         assert result.n_covariates == 1
 
@@ -473,23 +447,10 @@ class TestRunLoco:
         covs = np.ones((2, 1), dtype=np.float64)
         loco = LocoResult(associations=[], n_tested=0)
         runner = self._build_loco_runner(
-            tmp_path,
-            phenotypes=phenos,
-            covariates=covs,
-            loco_result=loco,
-            monkeypatch=monkeypatch,
+            tmp_path, loco_result=loco, monkeypatch=monkeypatch
         )
-        plan = ExecutionPlan(mode="batch", reason="loco")
 
-        result = runner._run_loco(
-            t_start=0.0,
-            plan=plan,
-            n_samples=2,
-            n_snps=0,
-            assoc_path=tmp_path / "out.assoc.txt",
-            snps_indices=None,
-            ksnps_indices=None,
-        )
+        result = self._call(runner, tmp_path, phenos, covs)
 
         assert result.timing["kinship_s"] == 0.0
         assert result.timing["load_s"] == 0.0
@@ -534,23 +495,13 @@ class TestRunLoco:
             n_refine=23,
             loco=True,
         )
-        monkeypatch.setattr(runner, "parse_phenotypes", lambda: (phenos, 3))
-        monkeypatch.setattr(runner, "load_covariates", lambda _n: None)
         monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
         from jamma import lmm as lmm_pkg
 
         monkeypatch.setattr(lmm_pkg, "run_lmm_loco", _capturing_loco)
 
-        runner._run_loco(
-            t_start=0.0,
-            plan=ExecutionPlan(mode="batch", reason="loco"),
-            n_samples=3,
-            n_snps=0,
-            assoc_path=tmp_path / "out.assoc.txt",
-            snps_indices=None,
-            ksnps_indices=None,
-        )
+        self._call(runner, tmp_path, phenos, None)
 
         assert captured["config"] == runner.config.lmm_config(check_memory=True)
         # The distinguishing field: LOCO returns before memory_preflight, so
@@ -563,8 +514,6 @@ class TestRunLoco:
         """If run_lmm_loco raises, _run_loco must propagate — no swallowing."""
         phenos = np.array([1.0, 2.0], dtype=np.float64)
         runner = _make_runner(tmp_path)
-        monkeypatch.setattr(runner, "parse_phenotypes", lambda: (phenos, 2))
-        monkeypatch.setattr(runner, "load_covariates", lambda _n: None)
         monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
         from jamma import lmm as lmm_pkg
@@ -574,15 +523,5 @@ class TestRunLoco:
 
         monkeypatch.setattr(lmm_pkg, "run_lmm_loco", _raising_loco)
 
-        plan = ExecutionPlan(mode="batch", reason="loco")
-
         with pytest.raises(RuntimeError, match="sentinel: LOCO failed"):
-            runner._run_loco(
-                t_start=0.0,
-                plan=plan,
-                n_samples=2,
-                n_snps=0,
-                assoc_path=tmp_path / "out.assoc.txt",
-                snps_indices=None,
-                ksnps_indices=None,
-            )
+            self._call(runner, tmp_path, phenos, None)

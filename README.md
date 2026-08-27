@@ -139,11 +139,8 @@ result = gwas("data/my_study", loco=True, write_eigen=True, output_dir="output")
 # per-chromosome files keyed by directory, so point --eigen-dir at the same dir:
 #   jamma -lmm 1 -bfile data/my_study -loco --eigen-dir output -o result
 
-# Multi-phenotype with eigendecomp reuse (Python API)
-result = gwas("data/my_study", write_eigen=True, phenotype_column=1)
-result = gwas("data/my_study", eigenvalue_file="output/result.eigenD.npy",
-              eigenvector_file="output/result.eigenU.npy", phenotype_column=2)
-# Or use the CLI for automatic multi-phenotype: jamma -lmm 1 ... -n "1 2 3"
+# Several phenotypes against one eigendecomposition (the CLI's -n "1 2 3")
+result = gwas("data/my_study", phenotype_columns=[1, 2, 3])
 
 # SNP filtering
 result = gwas("data/my_study", kinship_file="k.txt", snps_file="snps.txt", hwe=0.001)

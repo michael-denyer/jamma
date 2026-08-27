@@ -145,18 +145,25 @@ class TestValidateInputs:
             runner.validate_inputs()
 
 
+def _first_phenotype(runner: PipelineRunner) -> tuple[np.ndarray, int]:
+    """Read the runner's first configured phenotype column the way run() does."""
+    columns = runner.config.phenotype_columns
+    data, _mask, _n_valid = runner._load_phenotypes_and_intersect_masks(columns, None)
+    return data[columns[0]]
+
+
 @pytest.mark.tier1
 class TestParsePhenotypes:
-    """Tests for PipelineRunner.parse_phenotypes."""
+    """Tests for the .fam phenotype parsing behind run()."""
 
     def test_parse_phenotypes_from_fixture(self, sample_plink_data: Path) -> None:
-        """parse_phenotypes reads phenotypes from .fam file."""
+        """The phenotype loader reads phenotypes from the .fam file."""
         config = PipelineConfig(
             bfile=sample_plink_data,
             check_memory=False,
         )
         runner = PipelineRunner(config)
-        phenotypes, n_analyzed = runner.parse_phenotypes()
+        phenotypes, n_analyzed = _first_phenotype(runner)
 
         assert len(phenotypes) == 100  # gemma_synthetic has 100 samples
         assert n_analyzed > 0
@@ -232,7 +239,7 @@ class TestPhenotypeColumnSelection:
         assert config.phenotype_columns == [1]
 
         runner = PipelineRunner(config)
-        phenotypes, n_analyzed = runner.parse_phenotypes()
+        phenotypes, n_analyzed = _first_phenotype(runner)
 
         assert len(phenotypes) == 100
         assert n_analyzed > 0
@@ -262,13 +269,13 @@ class TestPhenotypeColumnSelection:
                 )
 
         config1 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[1])
-        pheno1, _ = PipelineRunner(config1).parse_phenotypes()
+        pheno1, _ = _first_phenotype(PipelineRunner(config1))
 
         config2 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[2])
-        pheno2, _ = PipelineRunner(config2).parse_phenotypes()
+        pheno2, _ = _first_phenotype(PipelineRunner(config2))
 
         config3 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[3])
-        pheno3, _ = PipelineRunner(config3).parse_phenotypes()
+        pheno3, _ = _first_phenotype(PipelineRunner(config3))
 
         # All should be different
         assert not np.array_equal(pheno1, pheno2)
@@ -306,7 +313,7 @@ class TestPhenotypeColumnSelection:
         )
         runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="exceeds available columns"):
-            runner.parse_phenotypes()
+            _first_phenotype(runner)
 
 
 @pytest.mark.tier1
@@ -359,39 +366,31 @@ class TestValidateInputsSnpsFields:
         with pytest.raises(FileNotFoundError, match="Kinship SNP list file not found"):
             runner.validate_inputs()
 
-    def test_negative_hwe_raises(self) -> None:
-        """validate_inputs raises ValueError for negative hwe_threshold."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            hwe_threshold=-0.1,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(ValueError, match="hwe_threshold must be >= 0"):
-            runner.validate_inputs()
-
-    def test_hwe_upper_bound_raises(self) -> None:
-        """validate_inputs raises ValueError for hwe_threshold > 1.0."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            hwe_threshold=1.5,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
+    @pytest.mark.parametrize("hwe", [-0.1, 1.5])
+    def test_hwe_outside_unit_interval_fails_at_construction(self, hwe: float):
+        """hwe_threshold is a p-value; anything outside [0, 1] is a config error."""
         with pytest.raises(ValueError, match="hwe_threshold must be in"):
-            runner.validate_inputs()
+            PipelineConfig(bfile=BFILE, hwe_threshold=hwe, check_memory=False)
 
-    def test_hwe_with_loco_raises(self) -> None:
-        """validate_inputs raises ValueError for -hwe combined with -loco."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            hwe_threshold=0.001,
-            loco=True,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
+    def test_hwe_with_loco_fails_at_construction(self) -> None:
+        """-hwe combined with -loco is rejected before any file is read."""
         with pytest.raises(ValueError, match="not yet supported with -loco"):
-            runner.validate_inputs()
+            PipelineConfig(
+                bfile=BFILE, hwe_threshold=0.001, loco=True, check_memory=False
+            )
+
+    def test_cat_requires_covariate_file_at_construction(self) -> None:
+        with pytest.raises(ValueError, match="-cat requires -c"):
+            PipelineConfig(bfile=BFILE, cat_columns=[1], check_memory=False)
+
+    def test_cat_column_below_one_fails_at_construction(self, tmp_path: Path):
+        with pytest.raises(ValueError, match=r"-cat column indices must be >= 1"):
+            PipelineConfig(
+                bfile=BFILE,
+                covariate_file=tmp_path / "cov.txt",
+                cat_columns=[0],
+                check_memory=False,
+            )
 
 
 @pytest.mark.tier1
@@ -629,7 +628,7 @@ class TestEarlySampleFiltering:
         )
 
     def test_save_kinship_full_size(self, tmp_path: Path) -> None:
-        """save_kinship=True: load_kinship still returns filtered shape."""
+        """save_kinship=True: the file is full-size, the return is the subset."""
         bfile = _copy_plink_genotypes(tmp_path)
         _write_fam(tmp_path / "test.fam")
 
@@ -648,6 +647,10 @@ class TestEarlySampleFiltering:
         valid_indices = np.array([0, 1, 2, 3, 4, 6, 7, 8, 9])
         K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
         assert K.shape == (len(valid_indices), len(valid_indices))
+
+        K_saved = np.load(out / "result.cXX.npy")
+        assert K_saved.shape == (_N_SAMPLES, _N_SAMPLES)
+        np.testing.assert_array_equal(K, K_saved[np.ix_(valid_indices, valid_indices)])
 
     @pytest.mark.tier1
     def test_lmm_kinship_applies_config_maf_miss(self) -> None:
@@ -857,7 +860,7 @@ class TestPhenotypeColumnMissingValues:
                 f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2_str}\n")
 
         config = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[2])
-        phenotypes, n_analyzed = PipelineRunner(config).parse_phenotypes()
+        phenotypes, n_analyzed = _first_phenotype(PipelineRunner(config))
 
         # First two samples should be NaN (NA and -9)
         assert np.isnan(phenotypes[0])
@@ -894,7 +897,6 @@ def test_pipeline_numpy_backend(sample_plink_data: Path, output_dir: Path) -> No
     result = PipelineRunner(config).run()
     assert result.n_snps_tested > 0
     assert result.assoc_path.exists()
-    assert result.backend == "numpy"
 
 
 @pytest.mark.tier1
@@ -973,7 +975,6 @@ def test_pipeline_loco_numpy(tmp_path: Path) -> None:
         show_progress=False,
     )
     result = PipelineRunner(config).run()
-    assert result.backend == "numpy"
     assert result.n_snps_tested > 0
     assert result.assoc_path.exists()
 
@@ -1006,7 +1007,6 @@ def test_pipeline_numpy_backend_modes(
     result = PipelineRunner(config).run()
     assert result.n_snps_tested > 0
     assert result.assoc_path.exists()
-    assert result.backend == "numpy"
 
 
 # ===========================================================================
@@ -1306,7 +1306,6 @@ def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) 
     assert result.n_snps_tested <= n_restrict
     assert result.n_snps_tested < total_snps
     assert result.assoc_path.exists()
-    assert result.backend == "numpy"
 
 
 @pytest.mark.tier1

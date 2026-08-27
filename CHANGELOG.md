@@ -7,7 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **`gwas()` returns `PipelineResult`; `GWASResult` and `GWASTiming` are
+  gone.** The API result was a copy of five of the runner's fields, so the
+  runner's result is returned as is. `result.timing` keeps `kinship_s`,
+  `lmm_s` and `total_s` and gains `load_s` and `rotation_s`; `assoc_path`,
+  `assoc_paths` and `n_covariates` become reachable. `jamma.PipelineResult`
+  is exported where `jamma.GWASResult` was.
+- **`gwas(phenotype_column=2)` is `gwas(phenotype_columns=[2])`.** The
+  keyword now takes the list `PipelineConfig` takes, so `[1, 2, 3]` runs
+  three phenotypes against one eigendecomposition, as the CLI's `-n "1 2 3"`
+  does. The other five knobs the CLI had and the API did not (`mem_budget`,
+  `eigen_dir`, `n_grid`, `n_refine`, `legacy_text`) are added, and a test
+  pins `gwas()`'s keyword set to `PipelineConfig`'s fields.
+- **A bad option value exits 2, not 1.** The CLI builds one `PipelineConfig`
+  and reports its `ValueError` as a usage error, so `-lmm 99`, `-maf 0.7`,
+  `-hwe -1`, `-cat` without `-c`, and the like exit 2 with the config's
+  message (`l_min must be positive` in place of `-lmin must be > 0`).
+  Runtime failures (a missing file, insufficient memory) still exit 1. `-gk`
+  is `click.IntRange(1, 2)`, so `-gk 3` is rejected by the option.
+- **The hidden `-wsnp`, `-gxe`, `-vc`, `-mk` and `-mvlmm` stubs are gone.**
+  They only ever raised "not yet implemented"; click now rejects them as
+  unknown options. `-vc` is read as `-v -c`, which fails on the covariate
+  file instead.
+- **`PipelineResult.backend` is removed and the GEMMA log loses its
+  `backend` line.** There is one backend. `log_backend_selection` takes
+  `(requested, env_override)` only.
+- **`PipelineRunner.parse_phenotypes` is removed.** `run()` reads the .fam
+  once through `_load_phenotypes_and_intersect_masks` for every path,
+  including LOCO, and `_parse_phenotype_column` requires the loaded
+  `fam_data`.
+
 ### Changed
+
+- **The CLI builds `PipelineConfig` once.** `_run_lmm` and `_run_gk` no
+  longer mirror the config as 26 and 12 keyword parameters; `main` builds
+  `OutputConfig` and `PipelineConfig` inside one `try` and hands them over.
+  The five checks the CLI repeated from `PipelineConfig.__post_init__` and
+  `LmmConfig` (`-lmin`, `-lmax`, duplicate `-n`, `-k` with `-loco`, the
+  `--eigen-dir` default) are gone. `-n` and `-cat` share one parser, so
+  `-cat '1,3'` works. `click.Path(path_type=Path)` replaces the CLI's own
+  string-to-Path helper.
+- **Config-only rules fail at construction.** `hwe_threshold`'s `[0, 1]`
+  range, `-hwe` with `-loco`, `-cat` without `-c`, and a `-cat` column
+  below 1 moved from `validate_inputs` to `PipelineConfig.__post_init__`,
+  next to the other knob checks. `validate_inputs` keeps only what needs the
+  filesystem.
+- **`compute_kinship(config, mode: Literal[1, 2])` owns the `-gk` guards.**
+  The mode range, `-eigen` with `-loco` and `-gk 2` with `-loco` are checked
+  at its top, before any disk read, so a direct caller gets the CLI's errors.
+  `_run_gk` no longer takes a phenotype column it never used.
+- **`run()` and `_run_inner` are one method, and LOCO leaves below the shared
+  preamble.** The LOCO branch used to re-read the .fam and load covariates on
+  its own before the batch path did the same; it now returns after the
+  shared covariate and phenotype loading, the valid mask and the dataset
+  banner. The only visible difference is log order on `-loco` runs.
+- **`load_kinship` returns K over `valid_indices` unconditionally.** It
+  computes or loads the full matrix only when `save_kinship` needs a
+  reusable file, writes it, and subsets afterwards; the caller no longer
+  decides before and after the call. Same operations in the same order, so
+  the saved matrix and the eigenpairs are unchanged.
 
 - **`LocoConfig` has one `prefix` and no `save_kinship`.** Setting
   `kinship_output_dir` is what asks for each chromosome's K_loco to be

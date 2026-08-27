@@ -10,11 +10,12 @@ file-existence checks were table-driven. They pin the contract, not a
 preference. If a deliberate reordering is ever wanted, change these
 expectations in the same commit and say why.
 
-The phenotype column range check used to be in this ordering, between the PLINK
-files and the file-existence table. It moved to
-``PipelineConfig.__post_init__``, so a bad index now fails at construction and
-never reaches ``validate_inputs`` to be ordered against anything. Its
-replacement lives in ``test_pipeline.py::TestMultiPhenotypeConfig``.
+The phenotype column range check, the hwe range and hwe-with-loco checks, and
+the two ``cat_columns`` checks used to be in this ordering. They moved to
+``PipelineConfig.__post_init__``, so a bad value now fails at construction and
+never reaches ``validate_inputs`` to be ordered against anything. Their
+replacements live in ``test_pipeline.py`` (``TestMultiPhenotypeConfig`` and
+``TestValidateInputsSnpsFields``).
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ def test_missing_plink_beats_every_other_violation(tmp_path):
         PipelineConfig(
             bfile=tmp_path / "nonexistent",
             kinship_file=tmp_path / "missing.cXX.txt",
-            hwe_threshold=-1.0,
+            loco=True,
             check_memory=False,
         )
     )
@@ -149,26 +150,6 @@ def test_weight_file_existence_beats_its_loco_conflict(tmp_path):
 
 
 def test_cat_requires_covariate_before_checking_column_indices():
-    kind, message = _raises(
-        PipelineConfig(
-            bfile=BFILE,
-            cat_columns=[0],
-            check_memory=False,
-        )
-    )
-    assert kind is ValueError
-    assert "-cat requires -c" in message
-
-
-def test_hwe_range_is_checked_last(tmp_path):
-    """Every file check precedes the hwe range check."""
-    kind, message = _raises(
-        PipelineConfig(
-            bfile=BFILE,
-            hwe_threshold=-1.0,
-            covariate_file=tmp_path / "missing.covar.txt",
-            check_memory=False,
-        )
-    )
-    assert kind is FileNotFoundError
-    assert "Covariate file not found" in message
+    """Both -cat rules are config-time now; the missing -c is still reported first."""
+    with pytest.raises(ValueError, match="-cat requires -c"):
+        PipelineConfig(bfile=BFILE, cat_columns=[0], check_memory=False)

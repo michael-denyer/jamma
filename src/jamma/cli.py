@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 import click
 from loguru import logger
@@ -17,7 +17,7 @@ from loguru import logger
 import jamma
 from jamma.core import OutputConfig
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_MISS
-from jamma.pipeline import BackendRequest, PipelineConfig, PipelineRunner
+from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_kinship import compute_kinship
 from jamma.utils import setup_logging, write_gemma_log
 
@@ -28,9 +28,17 @@ def _cli_error(message: str) -> NoReturn:
     sys.exit(1)
 
 
-def _opt_path(value: str | None) -> Path | None:
-    """Convert optional string to Path."""
-    return Path(value) if value else None
+def _int_list(value: str, flag: str) -> list[int]:
+    """Parse a space- or comma-separated list of integers from a CLI flag."""
+    try:
+        columns = [int(x) for x in value.replace(",", " ").split()]
+    except ValueError as e:
+        raise click.UsageError(
+            f"{flag} must be integer column indices, got '{value}'"
+        ) from e
+    if not columns:
+        raise click.UsageError(f"{flag} requires at least one column index")
+    return columns
 
 
 def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
@@ -47,26 +55,38 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 
 @click.command()
 @click.option(
-    "-bfile", type=click.Path(), required=True, help="PLINK binary file prefix"
+    "-bfile",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="PLINK binary file prefix",
 )
 @click.option(
-    "-gk", type=int, default=None, help="Kinship mode (1=centered, 2=standardized)"
+    "-gk",
+    type=click.IntRange(1, 2),
+    default=None,
+    help="Kinship mode (1=centered, 2=standardized)",
 )
 @click.option(
     "-lmm", type=int, default=None, help="LMM mode (1=Wald, 2=LRT, 3=Score, 4=All)"
 )
 @click.option(
-    "-k", type=click.Path(), default=None, help="Pre-computed kinship matrix file"
+    "-k",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Pre-computed kinship matrix file",
 )
 @click.option(
     "-c",
-    type=click.Path(),
+    type=click.Path(path_type=Path),
     default=None,
     help="Covariate file (whitespace-delimited, no header)",
 )
 @click.option("-o", type=str, default="result", help="Output file prefix")
 @click.option(
-    "-outdir", type=click.Path(), default="output", help="Output directory path"
+    "-outdir",
+    type=click.Path(path_type=Path),
+    default="output",
+    help="Output directory path",
 )
 @click.option(
     "-maf", type=float, default=DEFAULT_MAF, help="MAF threshold for SNP filtering"
@@ -83,7 +103,7 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 )
 @click.option(
     "--eigen-dir",
-    type=click.Path(),
+    type=click.Path(path_type=Path),
     default=None,
     help=(
         "Directory for LOCO per-chromosome eigen cache. When set with "
@@ -102,10 +122,16 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     ),
 )
 @click.option(
-    "-d", type=click.Path(), default=None, help="Eigenvalue file (.eigenD.npy or .txt)"
+    "-d",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Eigenvalue file (.eigenD.npy or .txt)",
 )
 @click.option(
-    "-u", type=click.Path(), default=None, help="Eigenvector file (.eigenU.npy or .txt)"
+    "-u",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Eigenvector file (.eigenU.npy or .txt)",
 )
 @click.option("-hwe", type=float, default=0.0, help="HWE p-value threshold")
 @click.option(
@@ -121,10 +147,16 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     help="Maximum lambda for optimization (default: 1e5)",
 )
 @click.option(
-    "-snps", type=click.Path(), default=None, help="SNP list for association testing"
+    "-snps",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="SNP list for association testing",
 )
 @click.option(
-    "-ksnps", type=click.Path(), default=None, help="SNP list for kinship computation"
+    "-ksnps",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="SNP list for kinship computation",
 )
 @click.option("-v", "--verbose", is_flag=True, default=False, help="Verbose output")
 @click.option(
@@ -166,48 +198,16 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     "-cat",
     type=str,
     default=None,
-    help="Categorical covariate columns, 1-indexed (e.g., -cat '1 3'). JAMMA-specific.",
+    help=(
+        "Categorical covariate columns, 1-indexed. Single value or "
+        "space/comma-separated: -cat '1 3' or -cat '1,3'. JAMMA-specific."
+    ),
 )
 @click.option(
     "-widv",
-    type=click.Path(),
+    type=click.Path(path_type=Path),
     default=None,
     help="Individual weight file (one weight per line)",
-)
-@click.option(
-    "-wsnp",
-    type=click.Path(),
-    default=None,
-    hidden=True,
-    help="SNP weight file (not yet implemented)",
-)
-@click.option(
-    "-gxe",
-    type=click.Path(),
-    default=None,
-    hidden=True,
-    help="G x E interaction file (not yet implemented)",
-)
-@click.option(
-    "-vc",
-    type=int,
-    default=None,
-    hidden=True,
-    help="Variance component estimation (not yet implemented)",
-)
-@click.option(
-    "-mk",
-    type=click.Path(),
-    default=None,
-    hidden=True,
-    help="Multiple kinship matrices (not yet implemented)",
-)
-@click.option(
-    "-mvlmm",
-    type=int,
-    default=None,
-    hidden=True,
-    help="Multivariate LMM (not yet implemented)",
 )
 @click.pass_context
 def main(
@@ -240,11 +240,6 @@ def main(
     legacy_text,
     cat,
     widv,
-    wsnp,
-    gxe,
-    vc,
-    mk,
-    mvlmm,
 ):
     """JAMMA: Highly-Accelerated Multi-method Mixed-Model Association.
 
@@ -255,18 +250,9 @@ def main(
     if no_telemetry:
         os.environ["JAMMA_NO_TELEMETRY"] = "1"
 
-    try:
-        config = OutputConfig(outdir=Path(outdir), prefix=o, verbose=verbose)
-    except ValueError as e:
-        raise click.UsageError(str(e)) from e
-
-    # Validate unimplemented flags
-    _unimplemented = {"-wsnp": wsnp, "-gxe": gxe, "-vc": vc, "-mk": mk, "-mvlmm": mvlmm}
-    for flag_name, flag_value in _unimplemented.items():
-        if flag_value is not None:
-            raise click.ClickException(f"Flag {flag_name} is not yet implemented")
-
-    # Mode validation: exactly one of -gk or -lmm required
+    # CLI policy: rules about flags PipelineConfig has no field for. Every
+    # rule about a knob the config does carry lives in its __post_init__ (or
+    # LmmConfig's) and surfaces below as a usage error when the config is built.
     if gk is not None and lmm is not None:
         raise click.UsageError("-gk and -lmm are mutually exclusive")
     # Not chained to `gk is lmm is None` (FURB124, silenced in pyproject):
@@ -274,176 +260,87 @@ def main(
     if gk is None and lmm is None:
         raise click.UsageError("One of -gk or -lmm is required")
 
-    # Validate memory budget
     if mem_budget is not None and mem_budget <= 0:
         raise click.UsageError(f"--mem-budget must be positive, got {mem_budget}")
 
-    # Validate lambda bounds (before pipeline construction)
-    if lmin <= 0:
-        raise click.UsageError(f"-lmin must be > 0, got {lmin}")
-    if lmax <= lmin:
-        raise click.UsageError(f"-lmax must be > -lmin ({lmin}), got {lmax}")
+    phenotype_columns = _int_list(n, "-n")
+    cat_columns = _int_list(cat, "-cat") if cat is not None else None
 
-    # Apply per-mode defaults for maf/miss.
-    # gk mode: no filtering by default (GEMMA kinship behavior)
-    # lmm mode: standard filtering (GEMMA association behavior)
     if gk is not None:
+        # gk mode: no filtering by default (GEMMA kinship behavior)
+        # lmm mode: standard filtering (GEMMA association behavior)
         if ctx.get_parameter_source("maf") == click.core.ParameterSource.DEFAULT:
             maf = 0.0
         if ctx.get_parameter_source("miss") == click.core.ParameterSource.DEFAULT:
             miss = 1.0
-
-    # Parse -n: accept space or comma separated integers
-    try:
-        phenotype_columns = [int(x) for x in n.replace(",", " ").split()]
-    except ValueError as e:
-        raise click.UsageError(f"-n must be integer column indices, got '{n}'") from e
-    if not phenotype_columns:
-        raise click.UsageError("-n requires at least one column index")
-    if len(phenotype_columns) != len(set(phenotype_columns)):
-        raise click.UsageError(
-            f"-n contains duplicate column indices: {phenotype_columns}"
-        )
-
-    # Parse -cat option
-    cat_columns = None
-    if cat is not None:
-        try:
-            cat_columns = [int(x) for x in cat.split()]
-        except ValueError as e:
-            raise click.UsageError(
-                f"-cat must be space-separated integers, got '{cat}'"
-            ) from e
-        if not cat_columns:
-            raise click.UsageError("-cat requires at least one column index")
-
-    # Dispatch to handler. Both arms test their own mode flag rather than
-    # relying on the mutually-exclusive/one-required checks far above, so each
-    # handler's mode argument is known to be set at the call.
-    if gk is not None:
         if len(phenotype_columns) > 1:
             raise click.UsageError(
                 "-n with multiple columns is not supported in -gk mode. "
                 "Kinship computation uses all samples regardless of phenotype."
             )
-        _run_gk(
-            bfile=Path(bfile),
-            mode=gk,
-            config=config,
+
+    try:
+        output_config = OutputConfig(outdir=outdir, prefix=o, verbose=verbose)
+        pipeline_config = PipelineConfig(
+            bfile=bfile,
+            kinship_file=k,
+            covariate_file=c,
+            lmm_mode=1 if lmm is None else lmm,
             maf=maf,
             miss=miss,
+            output_dir=outdir,
+            output_prefix=o,
             check_memory=check_memory,
-            loco=loco,
-            write_eigen=eigen,
-            phenotype_column=phenotype_columns[0],
-            ksnps_file=_opt_path(ksnps),
-            legacy_text=legacy_text,
-        )
-    elif lmm is not None:
-        _run_lmm(
-            bfile=Path(bfile),
-            mode=lmm,
-            config=config,
-            kinship_file=_opt_path(k),
-            covariate_file=_opt_path(c),
-            maf=maf,
-            miss=miss,
-            check_memory=check_memory,
+            show_progress=True,
             mem_budget=mem_budget,
             loco=loco,
-            eigenvalue_file=_opt_path(d),
-            eigenvector_file=_opt_path(u),
+            eigenvalue_file=d,
+            eigenvector_file=u,
             write_eigen=eigen,
-            eigen_dir=_opt_path(eigen_dir),
+            eigen_dir=eigen_dir,
             phenotype_columns=phenotype_columns,
-            snps_file=_opt_path(snps),
-            ksnps_file=_opt_path(ksnps),
+            snps_file=snps,
+            ksnps_file=ksnps,
             hwe_threshold=hwe,
             l_min=lmin,
             l_max=lmax,
-            weight_file=_opt_path(widv),
+            weight_file=widv,
             cat_columns=cat_columns,
             backend=backend,
             legacy_text=legacy_text,
         )
-    else:  # pragma: no cover - the checks above already rejected this
-        raise click.UsageError("One of -gk or -lmm is required")
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
 
+    if gk is not None:
+        _run_gk(pipeline_config, output_config, gk)
+        return
 
-def _run_gk(
-    *,
-    bfile: Path,
-    mode: int,
-    config: OutputConfig,
-    maf: float,
-    miss: float,
-    check_memory: bool,
-    loco: bool,
-    write_eigen: bool,
-    phenotype_column: int,
-    ksnps_file: Path | None,
-    legacy_text: bool = False,
-) -> None:
-    """Run kinship matrix computation (thin shell over compute_kinship)."""
-    if mode not in (1, 2):
-        _cli_error(f"invalid kinship mode {mode}. Use -gk 1 or -gk 2.")
-
-    if phenotype_column != 1:
-        logger.info(
-            f"Note: -n {phenotype_column} accepted but kinship computation "
-            f"uses all samples"
+    # The CLI requires a kinship source up front; the Python API computes one
+    # when none is given.
+    if k is None and not loco and d is None:
+        _cli_error(
+            "-k (kinship matrix) is required for -lmm "
+            "(or use -d/-u for pre-computed eigen)"
         )
+    if eigen_dir is not None and not loco:
+        _cli_error("--eigen-dir is only supported with -loco mode")
 
+    _run_lmm(pipeline_config, output_config)
+
+
+def _run_gk(config: PipelineConfig, output: OutputConfig, mode: Literal[1, 2]) -> None:
+    """Run kinship matrix computation (thin shell over compute_kinship)."""
     start_time = time.perf_counter()
-
-    # Ensure output directory exists
-    config.ensure_outdir()
-
-    # Construct command line for logging
+    output.ensure_outdir()
     command_line = " ".join(sys.argv)
 
-    # Validate bfile exists
-    bed_path = Path(f"{bfile}.bed")
-    if not bed_path.exists():
-        _cli_error(f"PLINK file not found: {bed_path}")
-
-    if write_eigen and loco:
-        _cli_error(
-            "-eigen not supported with -gk -loco mode. "
-            "Use -lmm -loco -eigen to write per-chromosome eigen files."
-        )
-
-    if mode == 2 and loco:
-        _cli_error(
-            "-gk 2 (standardized) is not supported with -loco. "
-            "LOCO kinship uses centered mode (-gk 1). "
-            "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
-        )
-
-    # Delegate the compute/write orchestration to the pipeline, mirroring how
-    # _run_lmm delegates to PipelineRunner.run(). Construction is inside the
-    # try because PipelineConfig validates its knobs in __post_init__, and a
-    # bad value should read as a CLI error rather than a traceback.
     try:
-        pipeline_config = PipelineConfig(
-            bfile=bfile,
-            maf=maf,
-            miss=miss,
-            output_dir=config.outdir,
-            output_prefix=config.prefix,
-            check_memory=check_memory,
-            show_progress=True,
-            loco=loco,
-            write_eigen=write_eigen,
-            ksnps_file=ksnps_file,
-            legacy_text=legacy_text,
-        )
-        result = compute_kinship(pipeline_config, mode)
+        result = compute_kinship(config, mode)
     except (FileNotFoundError, ValueError, MemoryError, OSError) as e:
         logger.debug("Kinship computation failed with traceback:", exc_info=True)
         _cli_error(str(e))
 
-    # Summary (CLI-facing)
     if result.is_loco:
         click.echo(f"Wrote {len(result.kinship_paths)} LOCO kinship matrices")
         for p in result.kinship_paths:
@@ -454,14 +351,13 @@ def _run_gk(
             click.echo(f"Eigenvalues written to {result.eigen_paths[0]}")
             click.echo(f"Eigenvectors written to {result.eigen_paths[1]}")
 
-    # Write GEMMA log file (CLI-only)
     elapsed = time.perf_counter() - start_time
     if result.is_loco:
         params = {
             "kinship_mode": "loco",
             "n_chromosomes": len(result.kinship_paths),
-            "maf_threshold": maf,
-            "miss_threshold": miss,
+            "maf_threshold": config.maf,
+            "miss_threshold": config.miss,
         }
     else:
         params = {
@@ -469,118 +365,37 @@ def _run_gk(
             "n_snps": result.n_snps,
             "kinship_mode": mode,
             "kinship_file": str(result.kinship_paths[0]),
-            "maf_threshold": maf,
-            "miss_threshold": miss,
+            "maf_threshold": config.maf,
+            "miss_threshold": config.miss,
         }
     timing = {"total": elapsed, "kinship": result.kinship_s}
-    log_path = write_gemma_log(config, params, timing, command_line)
+    log_path = write_gemma_log(output, params, timing, command_line)
     click.echo(f"Log written to {log_path}")
 
 
-def _run_lmm(
-    *,
-    bfile: Path,
-    mode: int,
-    config: OutputConfig,
-    kinship_file: Path | None,
-    covariate_file: Path | None,
-    maf: float,
-    miss: float,
-    check_memory: bool,
-    mem_budget: float | None,
-    loco: bool,
-    eigenvalue_file: Path | None,
-    eigenvector_file: Path | None,
-    write_eigen: bool,
-    eigen_dir: Path | None,
-    phenotype_columns: list[int],
-    snps_file: Path | None,
-    ksnps_file: Path | None,
-    hwe_threshold: float,
-    l_min: float = DEFAULT_L_MIN,
-    l_max: float = DEFAULT_L_MAX,
-    weight_file: Path | None = None,
-    cat_columns: list[int] | None = None,
-    backend: BackendRequest = "auto",
-    legacy_text: bool = False,
-) -> None:
-    """Run LMM association testing."""
-    # Mutual exclusivity check
-    if loco and kinship_file is not None:
-        _cli_error("-k and -loco are mutually exclusive")
-
-    # CLI requires kinship file unless LOCO mode or eigen files
-    if kinship_file is None and not loco and eigenvalue_file is None:
-        _cli_error(
-            "-k (kinship matrix) is required for -lmm "
-            "(or use -d/-u for pre-computed eigen)"
-        )
-
-    # --eigen-dir only makes sense with -loco
-    if eigen_dir is not None and not loco:
-        _cli_error("--eigen-dir is only supported with -loco mode")
-
-    # Default eigen_dir to output_dir when -eigen is set with LOCO
-    if write_eigen and loco and eigen_dir is None:
-        eigen_dir = config.outdir
-
-    # Build and run the pipeline, converting exceptions to CLI-friendly errors.
-    # Construction is inside the try because PipelineConfig validates its knobs
-    # in __post_init__, and a bad value (-lmm 99) should read as a CLI error
-    # rather than a traceback.
+def _run_lmm(config: PipelineConfig, output: OutputConfig) -> None:
+    """Run LMM association testing (thin shell over PipelineRunner)."""
     try:
-        pipeline_config = PipelineConfig(
-            bfile=bfile,
-            kinship_file=kinship_file,
-            covariate_file=covariate_file,
-            lmm_mode=mode,
-            maf=maf,
-            miss=miss,
-            output_dir=config.outdir,
-            output_prefix=config.prefix,
-            check_memory=check_memory,
-            show_progress=True,
-            mem_budget=mem_budget,
-            loco=loco,
-            eigenvalue_file=eigenvalue_file,
-            eigenvector_file=eigenvector_file,
-            write_eigen=write_eigen,
-            eigen_dir=eigen_dir,
-            phenotype_columns=phenotype_columns,
-            snps_file=snps_file,
-            ksnps_file=ksnps_file,
-            hwe_threshold=hwe_threshold,
-            l_min=l_min,
-            l_max=l_max,
-            weight_file=weight_file,
-            cat_columns=cat_columns,
-            backend=backend,
-            legacy_text=legacy_text,
-        )
-        if check_memory:
+        if config.check_memory:
             click.echo("Checking memory requirements...")
-        result = PipelineRunner(pipeline_config).run()
+        result = PipelineRunner(config).run()
     except (FileNotFoundError, ValueError, MemoryError, OSError) as e:
         logger.debug("Pipeline failed with traceback:", exc_info=True)
         _cli_error(str(e))
 
-    # Write GEMMA log file (CLI-only)
     command_line = " ".join(sys.argv)
-    n_covariates = result.n_covariates
-
     params = {
         "n_samples": result.n_samples,
         "n_snps": result.n_snps_tested,
-        "backend": result.backend,
-        "lmm_mode": mode,
-        "kinship_file": str(kinship_file),
-        "covariate_file": str(covariate_file) if covariate_file else None,
-        "n_covariates": n_covariates,
+        "lmm_mode": config.lmm_mode,
+        "kinship_file": str(config.kinship_file),
+        "covariate_file": str(config.covariate_file) if config.covariate_file else None,
+        "n_covariates": result.n_covariates,
         "output_file": str(result.assoc_path),
-        "maf_threshold": maf,
-        "miss_threshold": miss,
-        "check_memory": check_memory,
-        "mem_budget": mem_budget,
+        "maf_threshold": config.maf,
+        "miss_threshold": config.miss,
+        "check_memory": config.check_memory,
+        "mem_budget": config.mem_budget,
     }
     timing = {
         "total": result.timing.get("total_s", 0.0),
@@ -588,11 +403,10 @@ def _run_lmm(
         "lmm": result.timing.get("lmm_s", 0.0),
     }
 
-    config.ensure_outdir()
-    log_path = write_gemma_log(config, params, timing, command_line)
+    output.ensure_outdir()
+    log_path = write_gemma_log(output, params, timing, command_line)
     click.echo(f"Log written to {log_path}")
 
-    # Final summary
     click.echo(
         f"\nAnalyzed {result.n_snps_tested} SNPs "
         f"in {result.timing.get('total_s', 0.0):.2f} seconds"

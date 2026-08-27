@@ -1,6 +1,6 @@
 """The per-phenotype LMM loop and the two runner call sites it dispatches to.
 
-Split out of ``pipeline.py``: ``PipelineRunner._run_inner`` is the only caller,
+Split out of ``pipeline.py``: ``PipelineRunner.run`` is the only caller,
 these three functions call nothing else in the pipeline, and none of them read
 anything from the runner but the config. So this is where the question "how does
 one phenotype reach a runner" is answered, without the surrounding
@@ -28,7 +28,7 @@ __all__ = ["PhenoLoopOutcome", "run_phenotype_loop"]
 class PhenoLoopOutcome(NamedTuple):
     """Aggregated results of the per-phenotype LMM loop.
 
-    Returned by ``run_phenotype_loop`` so ``PipelineRunner._run_inner`` can
+    Returned by ``run_phenotype_loop`` so ``PipelineRunner.run`` can
     assemble the final ``PipelineResult`` without holding the loop's locals.
     """
 

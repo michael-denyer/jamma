@@ -308,7 +308,7 @@ def test_no_telemetry_flag_sets_env_var(monkeypatch: pytest.MonkeyPatch) -> None
 
     env_captured: dict[str, str | None] = {}
 
-    def capture_env(**_kwargs: object) -> None:
+    def capture_env(*_args: object) -> None:
         env_captured["JAMMA_NO_TELEMETRY"] = os.environ.get("JAMMA_NO_TELEMETRY")
 
     # Patch _run_lmm so we don't need real data files — just need to reach

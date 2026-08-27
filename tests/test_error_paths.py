@@ -142,7 +142,7 @@ class TestPipelineErrorPaths:
             PipelineConfig(bfile=Path("test"), backend="gpu")  # type: ignore[arg-type]
 
     def test_all_phenotypes_missing_raises(self, tmp_path: Path) -> None:
-        """parse_phenotypes raises ValueError when all phenotypes are -9 (missing)."""
+        """The phenotype loader raises ValueError when every phenotype is -9."""
         for ext in (".bed", ".bim", ".fam"):
             shutil.copy(FIXTURES / f"test{ext}", tmp_path / f"test{ext}")
 
@@ -156,7 +156,7 @@ class TestPipelineErrorPaths:
             check_memory=False,
         )
         with pytest.raises(ValueError, match="No samples"):
-            PipelineRunner(config).parse_phenotypes()
+            PipelineRunner(config)._load_phenotypes_and_intersect_masks([1], None)
 
     def test_covariate_dimension_mismatch_raises(self, tmp_path: Path) -> None:
         """load_covariates raises ValueError when covariate row count != n_samples."""

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Literal
 
 from loguru import logger
 
@@ -30,24 +31,43 @@ from jamma.pipeline_config import KinshipResult, PipelineConfig
 __all__ = ["compute_kinship"]
 
 
-def compute_kinship(config: PipelineConfig, mode: int) -> KinshipResult:
+def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResult:
     """Compute and write the kinship matrix (the ``-gk`` path).
 
     Orchestrates kinship computation end-to-end so the CLI is a thin shell,
     as ``PipelineRunner.run`` is for the ``-lmm`` path. Honours ``config.loco``
     (writes per-chromosome LOCO matrices), ``config.write_eigen``
     (eigendecomposes and writes the eigen files), and ``config.ksnps_file``
-    (restricts the SNPs used). Caller-facing validation (mode range, file
-    existence, flag-combination guards) stays in the CLI.
+    (restricts the SNPs used). The flag-combination guards are checked here,
+    before anything is read from disk, so a direct caller gets the same
+    errors the CLI does.
 
     Args:
         config: Pipeline configuration. Only the kinship knobs are read.
-        mode: Kinship mode — 1 (centered, streaming) or 2 (standardized,
-            in-memory).
+        mode: Kinship mode — 1 (centered) or 2 (standardized). Both stream.
 
     Returns:
         A KinshipResult with the written paths, dimensions, and timing.
+
+    Raises:
+        ValueError: If ``mode`` is not 1 or 2, or if ``config.loco`` is
+            combined with ``mode == 2`` or with ``config.write_eigen``.
+        FileNotFoundError: If the PLINK ``.bed`` file does not exist.
     """
+    if mode not in (1, 2):
+        raise ValueError(f"invalid kinship mode {mode}. Use -gk 1 or -gk 2.")
+    if config.loco and config.write_eigen:
+        raise ValueError(
+            "-eigen not supported with -gk -loco mode. "
+            "Use -lmm -loco -eigen to write per-chromosome eigen files."
+        )
+    if config.loco and mode == 2:
+        raise ValueError(
+            "-gk 2 (standardized) is not supported with -loco. "
+            "LOCO kinship uses centered mode (-gk 1). "
+            "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
+        )
+
     meta = get_plink_metadata(config.bfile)
     n_samples = meta.n_samples
     n_snps = meta.n_snps

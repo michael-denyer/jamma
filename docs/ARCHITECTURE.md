@@ -71,7 +71,7 @@ A typical LMM association run proceeds as follows:
 |---|---|---|
 | `PipelineRunner` | `src/jamma/pipeline.py` | Orchestrates the `-lmm` pipeline; both CLI and Python API delegate here |
 | `PipelineConfig` / `PipelineResult` / `KinshipResult` | `src/jamma/pipeline_config.py` | Frozen configuration and result dataclasses for the pipeline; `KinshipResult` is also re-exported from `jamma.pipeline` |
-| `gwas()` / `GWASResult` | `src/jamma/gwas.py` | Public Python API for single-call GWAS; wraps `PipelineRunner` |
+| `gwas()` | `src/jamma/gwas.py` | Public Python API for single-call GWAS; builds a `PipelineConfig` and returns `PipelineRunner`'s `PipelineResult` |
 | `ExecutionPlan` | `src/jamma/lmm/runner.py` | Frozen dataclass encoding backend (`numpy`) and mode (`batch` or `streaming`) with a human-readable reason |
 | `LmmConfig` | `src/jamma/lmm/schema.py` | Frozen configuration dataclass shared by all LMM runners (MAF, lambda bounds, test type, etc.) |
 | `LmmRunResult` | `src/jamma/lmm/schema.py` | Return type for all runners; bundles association list, PVE estimate, and SNP count |

@@ -366,6 +366,8 @@ class PipelineRunner:
             logger.info("Computing kinship from genotypes")
             K = compute_kinship_streaming(
                 self.config.bfile,
+                maf_threshold=self.config.maf,
+                miss_threshold=self.config.miss,
                 check_memory=False,
                 show_progress=self.config.show_progress,
                 ksnps_indices=ksnps_indices,

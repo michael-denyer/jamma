@@ -108,13 +108,13 @@ class TestLocoConfigArtifactNaming:
     """
 
     def test_eigen_paths_npy(self, tmp_path: Path) -> None:
-        loco = LocoConfig(eigen_dir=tmp_path, eigen_prefix="study")
+        loco = LocoConfig(eigen_dir=tmp_path, prefix="study")
         d_path, u_path = loco.eigen_paths("7")
         assert d_path == tmp_path / "study.loco.chr7.eigenD.npy"
         assert u_path == tmp_path / "study.loco.chr7.eigenU.npy"
 
     def test_eigen_paths_legacy_text(self, tmp_path: Path) -> None:
-        loco = LocoConfig(eigen_dir=tmp_path, eigen_prefix="study", legacy_text=True)
+        loco = LocoConfig(eigen_dir=tmp_path, prefix="study", legacy_text=True)
         d_path, u_path = loco.eigen_paths("X")
         assert d_path == tmp_path / "study.loco.chrX.eigenD.txt"
         assert u_path == tmp_path / "study.loco.chrX.eigenU.txt"
@@ -122,7 +122,7 @@ class TestLocoConfigArtifactNaming:
     def test_eigen_stem_is_the_write_prefix(self, tmp_path: Path) -> None:
         """eigen_stem() feeds write_eigen_files(prefix=), so the writer's output
         must land exactly on the paths eigen_paths() looks for."""
-        loco = LocoConfig(eigen_dir=tmp_path, eigen_prefix="study")
+        loco = LocoConfig(eigen_dir=tmp_path, prefix="study")
         write_eigen_files(
             np.arange(4, dtype=np.float64),
             np.eye(4),
@@ -133,20 +133,11 @@ class TestLocoConfigArtifactNaming:
             assert path.exists(), f"writer and reader disagree on {path.name}"
 
     def test_kinship_path(self, tmp_path: Path) -> None:
-        loco = LocoConfig(
-            save_kinship=True,
-            kinship_output_dir=tmp_path,
-            kinship_output_prefix="study",
-        )
+        loco = LocoConfig(kinship_output_dir=tmp_path, prefix="study")
         assert loco.kinship_path("3") == tmp_path / "study.loco.cXX.chr3.npy"
 
     def test_kinship_path_legacy_text(self, tmp_path: Path) -> None:
-        loco = LocoConfig(
-            save_kinship=True,
-            kinship_output_dir=tmp_path,
-            kinship_output_prefix="study",
-            legacy_text=True,
-        )
+        loco = LocoConfig(kinship_output_dir=tmp_path, prefix="study", legacy_text=True)
         assert loco.kinship_path("3") == tmp_path / "study.loco.cXX.chr3.txt"
 
     def test_paths_raise_without_their_directory(self) -> None:
@@ -259,9 +250,7 @@ class TestLocoWriteEigen:
             phenotypes=phenotypes,
             output_path=tmp_path / "result.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
-            loco=LocoConfig(
-                write_eigen=True, eigen_dir=tmp_path, eigen_prefix="result"
-            ),
+            loco=LocoConfig(write_eigen=True, eigen_dir=tmp_path, prefix="result"),
         )
         assert result.n_tested > 0
 
@@ -312,9 +301,7 @@ class TestLocoEigenCacheIntegration:
             phenotypes=phenotypes,
             output_path=out1,
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
-            loco=LocoConfig(
-                write_eigen=True, eigen_dir=eigen_dir, eigen_prefix="result"
-            ),
+            loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir, prefix="result"),
         )
 
         # Run 2: read cache (no kinship/eigendecomp). Capture INFO so we can
@@ -332,7 +319,7 @@ class TestLocoEigenCacheIntegration:
                 phenotypes=phenotypes,
                 output_path=out2,
                 config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
-                loco=LocoConfig(eigen_dir=eigen_dir, eigen_prefix="result"),
+                loco=LocoConfig(eigen_dir=eigen_dir, prefix="result"),
             )
         finally:
             logger.remove(handler_id)
@@ -412,7 +399,7 @@ class TestLocoEigenCacheFallback:
             phenotypes=phenotypes,
             output_path=tmp_path / "result.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
-            loco=LocoConfig(eigen_dir=empty_dir, eigen_prefix="result"),
+            loco=LocoConfig(eigen_dir=empty_dir, prefix="result"),
         )
         assert result.n_tested > 0
 
@@ -436,9 +423,7 @@ class TestLocoEigenCacheFallback:
             phenotypes=phenotypes,
             output_path=tmp_path / "full.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
-            loco=LocoConfig(
-                write_eigen=True, eigen_dir=eigen_dir, eigen_prefix="result"
-            ),
+            loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir, prefix="result"),
         )
 
         # Delete one chromosome's files to simulate partial cache
@@ -452,7 +437,7 @@ class TestLocoEigenCacheFallback:
             phenotypes=phenotypes,
             output_path=tmp_path / "partial.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
-            loco=LocoConfig(eigen_dir=eigen_dir, eigen_prefix="result"),
+            loco=LocoConfig(eigen_dir=eigen_dir, prefix="result"),
         )
         assert result.n_tested > 0
 
@@ -470,16 +455,6 @@ class TestLocoEigenCacheValidation:
         """
         with pytest.raises(ValueError, match="write_eigen=True requires eigen_dir"):
             LocoConfig(write_eigen=True, eigen_dir=None)
-
-    def test_save_kinship_without_output_dir_raises(self) -> None:
-        """save_kinship=True with kinship_output_dir=None raises.
-
-        The docstring called the directory required, but nothing enforced it:
-        _computed_eigen_pairs checked ``save_kinship and kinship_output_dir is
-        not None`` and silently wrote nothing when the pair was half-set.
-        """
-        with pytest.raises(ValueError, match="save_kinship=True requires"):
-            LocoConfig(save_kinship=True, kinship_output_dir=None)
 
     def test_dimension_mismatch_on_cached_eigen_raises(self, tmp_path: Path) -> None:
         """Cached eigen with wrong n_samples raises ValueError with chr context."""
@@ -648,12 +623,10 @@ class TestLocoLegacyText:
             output_path=tmp_path / "result.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
             loco=LocoConfig(
-                save_kinship=True,
                 kinship_output_dir=tmp_path,
-                kinship_output_prefix="result",
+                prefix="result",
                 write_eigen=True,
                 eigen_dir=tmp_path,
-                eigen_prefix="result",
                 legacy_text=True,
             ),
         )

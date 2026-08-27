@@ -211,13 +211,13 @@ def run_lmm_loco(
     # Artifact naming (prefixes, .txt vs .npy) is not unpacked: LocoConfig owns
     # it via kinship_path()/eigen_paths()/eigen_stem(), so there is one
     # definition of each filename rather than one per helper that builds it.
-    save_kinship = loco.save_kinship
+    save_kinship = loco.kinship_output_dir is not None
     snps_indices = loco.snps_indices
     ksnps_indices = loco.ksnps_indices
     col_chunk_size = loco.col_chunk_size
     write_eigen = loco.write_eigen
     eigen_dir = loco.eigen_dir
-    eigen_prefix = loco.eigen_prefix
+    eigen_prefix = loco.prefix
 
     start_time = time.perf_counter()
 
@@ -348,7 +348,7 @@ def run_lmm_loco(
                 )
                 if save_kinship:
                     logger.warning(
-                        "save_kinship ignored when using cached eigen "
+                        "kinship_output_dir ignored when using cached eigen "
                         "files (kinship is not computed)"
                     )
                 logger.warning(

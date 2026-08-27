@@ -39,7 +39,7 @@ def _find_loco_eigen_cache(
     eagerly just to check dimensions.
 
     Args:
-        loco: LOCO config supplying eigen_dir, eigen_prefix and legacy_text.
+        loco: LOCO config supplying eigen_dir, prefix and legacy_text.
         chr_names: List of chromosome names to check.
 
     Returns:
@@ -181,7 +181,7 @@ def _computed_eigen_pairs(
                 f"{len(partitions[chr_name])} SNPs, eigendecomposing..."
             )
 
-        if loco.save_kinship:
+        if loco.kinship_output_dir is not None:
             _save_loco_kinship(K_loco, chr_name, loco=loco, show_progress=show_progress)
 
         if pre_subset:

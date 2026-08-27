@@ -31,30 +31,26 @@ class LocoConfig:
     handing it over.
 
     Attributes:
-        save_kinship: Write each chromosome's K_loco to disk.
-        kinship_output_dir: Directory for K_loco files. Required when
-            save_kinship is set.
-        kinship_output_prefix: Filename prefix for K_loco files.
+        kinship_output_dir: Directory for K_loco files. Set it to write each
+            chromosome's K_loco to disk; None writes none.
+        prefix: Filename prefix shared by K_loco, eigen and manifest files.
         snps_indices: Global indices of SNPs to test. None tests all.
         ksnps_indices: Global indices of SNPs used to build kinship. None
             uses all.
         col_chunk_size: Columns per streaming chunk when building kinship.
         write_eigen: Write per-chromosome eigenvalues and eigenvectors.
         eigen_dir: Directory for eigen files. Required when write_eigen is set.
-        eigen_prefix: Filename prefix for eigen files.
         legacy_text: Write kinship and eigen files as GEMMA text rather than
             .npy.
     """
 
-    save_kinship: bool = False
     kinship_output_dir: Path | None = None
-    kinship_output_prefix: str = "result"
+    prefix: str = "result"
     snps_indices: np.ndarray | None = None
     ksnps_indices: np.ndarray | None = None
     col_chunk_size: int = 5_000
     write_eigen: bool = False
     eigen_dir: Path | None = None
-    eigen_prefix: str = "result"
     legacy_text: bool = False
 
     def __post_init__(self) -> None:
@@ -64,11 +60,6 @@ class LocoConfig:
             raise ValueError(
                 "write_eigen=True requires eigen_dir to be set. "
                 "Pass eigen_dir=<directory> alongside write_eigen=True."
-            )
-        if self.save_kinship and self.kinship_output_dir is None:
-            raise ValueError(
-                "save_kinship=True requires kinship_output_dir to be set. "
-                "Pass kinship_output_dir=<directory> alongside save_kinship=True."
             )
         if self.col_chunk_size <= 0:
             raise ValueError(
@@ -88,7 +79,7 @@ class LocoConfig:
         :meth:`eigen_paths` composes the read-side names from, which is how the
         writer and the cache reader stay in step.
         """
-        return f"{self.eigen_prefix}.loco.chr{chr_name}"
+        return f"{self.prefix}.loco.chr{chr_name}"
 
     def eigen_paths(self, chr_name: str) -> tuple[Path, Path]:
         """``(eigenD, eigenU)`` paths for one chromosome's cache entry.
@@ -110,16 +101,14 @@ class LocoConfig:
         """Path for one chromosome's LOCO kinship matrix.
 
         Raises:
-            ValueError: If ``kinship_output_dir`` is None, which
-                ``__post_init__`` rules out whenever ``save_kinship`` is set.
+            ValueError: If ``kinship_output_dir`` is None: nothing asked for
+                the kinship to be saved, so there is no directory to name it under.
         """
         if self.kinship_output_dir is None:
             raise ValueError(
                 "kinship_path() requires kinship_output_dir, which is None"
             )
-        name = (
-            f"{self.kinship_output_prefix}.loco.cXX.chr{chr_name}{self.artifact_suffix}"
-        )
+        name = f"{self.prefix}.loco.cXX.chr{chr_name}{self.artifact_suffix}"
         return self.kinship_output_dir / name
 
 

@@ -7,7 +7,6 @@ the primary input format for GEMMA analysis.
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 from bed_reader import open_bed
@@ -89,7 +88,32 @@ def load_plink_binary(bfile: Path) -> PlinkData:
         )
 
 
-def get_plink_metadata(bfile: Path) -> dict[str, Any]:
+@dataclass(frozen=True)
+class PlinkMetadata:
+    """PLINK file metadata read without loading genotypes.
+
+    Attributes:
+        n_samples: Number of samples (individuals).
+        n_snps: Number of SNPs (variants).
+        iid: Sample IDs as 2D array with columns [FID, IID].
+        sid: SNP IDs (variant identifiers).
+        chromosome: Chromosome for each SNP.
+        bp_position: Base pair position for each SNP.
+        allele_1: Reference allele for each SNP.
+        allele_2: Alternate allele for each SNP.
+    """
+
+    n_samples: int
+    n_snps: int
+    iid: np.ndarray
+    sid: np.ndarray
+    chromosome: np.ndarray
+    bp_position: np.ndarray
+    allele_1: np.ndarray
+    allele_2: np.ndarray
+
+
+def get_plink_metadata(bfile: Path) -> PlinkMetadata:
     """Get PLINK file metadata without loading genotypes.
 
     Opens the PLINK files to read dimensions and metadata arrays without
@@ -100,22 +124,14 @@ def get_plink_metadata(bfile: Path) -> dict[str, Any]:
         bfile: Path prefix for PLINK files (without .bed/.bim/.fam extension).
 
     Returns:
-        Dictionary with keys:
-        - n_samples: Number of samples (individuals)
-        - n_snps: Number of SNPs (variants)
-        - iid: Sample IDs as 2D array with columns [FID, IID]
-        - sid: SNP IDs (variant identifiers)
-        - chromosome: Chromosome for each SNP
-        - bp_position: Base pair position for each SNP
-        - allele_1: Reference allele for each SNP
-        - allele_2: Alternate allele for each SNP
+        A PlinkMetadata with dimensions and the per-SNP and per-sample arrays.
 
     Raises:
         FileNotFoundError: If the .bed file does not exist.
 
     Example:
         >>> meta = get_plink_metadata(Path("tests/fixtures/mouse_hs1940/mouse_hs1940"))
-        >>> print(f"{meta['n_samples']} samples, {meta['n_snps']} SNPs")
+        >>> print(f"{meta.n_samples} samples, {meta.n_snps} SNPs")
         1940 samples, 12226 SNPs
     """
     bed_path = Path(f"{bfile}.bed")
@@ -124,40 +140,35 @@ def get_plink_metadata(bfile: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"PLINK .bed file not found: {bed_path}")
 
     with open_bed(bed_path) as bed:
-        return {
-            "n_samples": bed.iid_count,
-            "n_snps": bed.sid_count,
-            "iid": bed.iid,
-            "sid": bed.sid,
-            "chromosome": bed.chromosome,
-            "bp_position": bed.bp_position,
-            "allele_1": bed.allele_1,
-            "allele_2": bed.allele_2,
-        }
+        return PlinkMetadata(
+            n_samples=int(bed.iid_count),
+            n_snps=int(bed.sid_count),
+            iid=bed.iid,
+            sid=bed.sid,
+            chromosome=bed.chromosome,
+            bp_position=bed.bp_position,
+            allele_1=bed.allele_1,
+            allele_2=bed.allele_2,
+        )
 
 
-def partitions_from_metadata(meta: dict[str, Any]) -> dict[str, np.ndarray]:
+def partitions_from_metadata(meta: PlinkMetadata) -> dict[str, np.ndarray]:
     """Derive SNP column indices grouped by chromosome from PLINK metadata.
 
-    Groups SNP indices by chromosome name from an already-loaded metadata
-    dict, avoiding a second BED file open. Chromosome names are preserved
-    exactly as they appear in the BIM file (e.g., '1', 'chr1', 'X'), and
-    keys are ordered by first appearance. Use when get_plink_metadata has
-    already been called.
+    Groups SNP indices by chromosome name from already-loaded metadata,
+    avoiding a second BED file open. Chromosome names are preserved exactly
+    as they appear in the BIM file (e.g., '1', 'chr1', 'X'), and keys are
+    ordered by first appearance. Use when get_plink_metadata has already
+    been called.
 
     Args:
-        meta: Metadata dict from get_plink_metadata (must contain 'chromosome').
+        meta: Metadata from get_plink_metadata.
 
     Returns:
         Dict mapping chromosome name to sorted array of SNP column indices.
         Keys ordered by first appearance in BIM file.
     """
-    chromosomes = meta.get("chromosome")
-    if chromosomes is None:
-        raise ValueError(
-            "partitions_from_metadata requires 'chromosome' key in metadata dict. "
-            "Ensure this is the return value of get_plink_metadata()."
-        )
+    chromosomes = meta.chromosome
     _, first_idx = np.unique(chromosomes, return_index=True)
     unique_chrs = [chromosomes[i] for i in np.sort(first_idx)]
     return {chr_name: np.where(chromosomes == chr_name)[0] for chr_name in unique_chrs}

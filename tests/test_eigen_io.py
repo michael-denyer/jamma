@@ -608,7 +608,7 @@ class TestLMMEquivalence:
         from jamma.io.plink import get_plink_metadata
 
         meta = get_plink_metadata(BFILE)
-        K = read_kinship_matrix(KINSHIP_FILE, n_samples=meta["n_samples"])
+        K = read_kinship_matrix(KINSHIP_FILE, n_samples=meta.n_samples)
 
         # Subset to valid-phenotype samples (same as runner does internally)
         pheno = load_phenotypes_from_fam(Path(f"{BFILE}.fam"))

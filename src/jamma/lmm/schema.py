@@ -11,9 +11,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from jamma.io.plink import PlinkMetadata
 
 LmmMode = Literal[1, 2, 3, 4]
 
@@ -359,14 +362,14 @@ class SnpMeta:
         return len(self.rs)
 
     @classmethod
-    def from_plink_meta(cls, meta: dict) -> SnpMeta:
+    def from_plink_meta(cls, meta: PlinkMetadata) -> SnpMeta:
         """Build from get_plink_metadata output without copying string data."""
         return cls(
-            chr=np.asarray(meta["chromosome"]).astype(str),
-            rs=np.asarray(meta["sid"]),
-            pos=np.asarray(meta["bp_position"], dtype=np.int64),
-            a1=np.asarray(meta["allele_1"]),
-            a0=np.asarray(meta["allele_2"]),
+            chr=np.asarray(meta.chromosome).astype(str),
+            rs=np.asarray(meta.sid),
+            pos=np.asarray(meta.bp_position, dtype=np.int64),
+            a1=np.asarray(meta.allele_1),
+            a0=np.asarray(meta.allele_2),
         )
 
     @classmethod

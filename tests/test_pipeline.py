@@ -1227,12 +1227,12 @@ def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) 
     from jamma.io.plink import get_plink_metadata
 
     meta = get_plink_metadata(sample_plink_data)
-    total_snps = meta["n_snps"]
+    total_snps = meta.n_snps
 
     # Restrict to first 30 SNPs
     n_restrict = 30
     snps_path = tmp_path / "snps.txt"
-    snps_path.write_text("\n".join(meta["sid"][:n_restrict]) + "\n")
+    snps_path.write_text("\n".join(meta.sid[:n_restrict]) + "\n")
 
     kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
     out = tmp_path / "output_snps"

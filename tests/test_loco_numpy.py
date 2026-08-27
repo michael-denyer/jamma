@@ -120,7 +120,7 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
         )
 
     meta = get_plink_metadata(_LOCO_BFILE)
-    n_chromosomes = len(set(meta["chromosome"].tolist()))
+    n_chromosomes = len(set(meta.chromosome.tolist()))
 
     # Expected: 2 metadata reads + 2 kinship reads + n_chr assoc reads
     # (no per-chromosome stats reads — eliminated by SnpStatsCache)
@@ -346,7 +346,7 @@ def _all_sample_cache(bed_path):
     from jamma.core.snp_stats import SnpStatsCache, collect_snp_stats_from_chunks
 
     meta = get_plink_metadata(bed_path)
-    n_total, n_snps = meta["n_samples"], meta["n_snps"]
+    n_total, n_snps = meta.n_samples, meta.n_snps
     with open_bed(Path(f"{bed_path}.bed")) as bed:
         geno_all = bed.read(index=np.s_[:, :], dtype=np.float64)
     stats = collect_snp_stats_from_chunks(
@@ -383,8 +383,8 @@ def test_chr_snp_stats_for_loco_bypasses_all_sample_cache_when_analyzed_subset()
     from jamma.lmm.loco import _chr_snp_stats_for_loco, _collect_chr_snp_stats
 
     meta = get_plink_metadata(_LOCO_BFILE)
-    n_total = meta["n_samples"]
-    chrs = np.asarray(meta["chromosome"])
+    n_total = meta.n_samples
+    chrs = np.asarray(meta.chromosome)
     chr1 = np.where(chrs == chrs[0])[0]  # first chromosome's global SNP indices
 
     cache = _all_sample_cache(_LOCO_BFILE)
@@ -505,7 +505,7 @@ def test_loco_numpy_valid_sample_subsetting():
     from jamma.kinship import compute_loco_kinship_streaming
 
     meta = get_plink_metadata(_LOCO_BFILE)
-    n_samples = meta["n_samples"]
+    n_samples = meta.n_samples
 
     # Exclude last 5 samples
     valid_indices = np.arange(0, n_samples - 5)

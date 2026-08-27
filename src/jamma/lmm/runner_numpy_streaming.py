@@ -162,7 +162,7 @@ def run_lmm_association_numpy_streaming(
         raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
 
     meta = get_plink_metadata(bed_path)
-    validate_snp_indices(snps_indices, meta["n_snps"])
+    validate_snp_indices(snps_indices, meta.n_snps)
 
     # Caller-supplied list, or the PLINK metadata, parsed once into columns.
     snp_meta = (
@@ -173,8 +173,8 @@ def run_lmm_association_numpy_streaming(
 
     source = BedSource(
         bed_path,
-        n_samples=meta["n_samples"],
-        n_snps=meta["n_snps"],
+        n_samples=meta.n_samples,
+        n_snps=meta.n_snps,
         stats_chunk_size=_DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
         validate_genotypes=validate_genotypes,
         show_progress=config.show_progress,

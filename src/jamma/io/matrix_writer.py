@@ -18,18 +18,18 @@ deleted eagerly during concatenation to minimize peak disk usage.
 Output is byte-identical to np.savetxt for all matrix sizes.
 """
 
-import multiprocessing as mp
-import os
 import shutil
-import tempfile
 from pathlib import Path
 
 import numpy as np
 from loguru import logger
 
-# Cap worker count — beyond this, disk I/O is the bottleneck, not CPU
-# formatting. Excess workers just add process overhead and memory pressure.
-_MAX_WRITERS = 32
+from jamma.io._parallel_text import (
+    default_worker_count,
+    run_spawn_pool,
+    temp_dir_beside,
+    unlink_quietly,
+)
 
 
 def _format_rows_to_file(args: tuple) -> None:
@@ -72,22 +72,6 @@ def _estimate_text_size(n_rows: int, n_cols: int) -> int:
     return n_rows * bytes_per_row
 
 
-def _create_temp_dir(output_path: Path) -> str:
-    """Create temp dir on the same filesystem as the output file.
-
-    Tries the output's parent directory first, falls back to the system
-    default (TMPDIR / /tmp) if that fails.
-    """
-    output_dir = output_path.parent
-    try:
-        return tempfile.mkdtemp(prefix=".jamma_mwrite_", dir=output_dir)
-    except OSError:
-        logger.warning(
-            f"Cannot create temp dir in {output_dir}, falling back to system tmpdir"
-        )
-        return tempfile.mkdtemp(prefix="jamma_mwrite_")
-
-
 def write_matrix_parallel(
     matrix: np.ndarray,
     path: Path,
@@ -127,7 +111,7 @@ def write_matrix_parallel(
         return
 
     if n_workers is None:
-        n_workers = min(os.cpu_count() or 1, _MAX_WRITERS)
+        n_workers = default_worker_count()
     if n_workers < 1:
         raise ValueError(f"n_workers must be >= 1, got {n_workers}")
 
@@ -160,10 +144,8 @@ def write_matrix_parallel(
             f"Could not check disk space for {path.parent}: {e}. Skipping space check."
         )
 
-    ctx = mp.get_context("spawn")
-
     # Create temp dir on same filesystem as output (avoids filling /tmp)
-    tmp_dir = _create_temp_dir(path)
+    tmp_dir = temp_dir_beside(path, prefix=".jamma_mwrite_")
     tmp_dir_p = Path(tmp_dir)
     memmap_path = str(tmp_dir_p / "matrix.dat")
     chunk_paths: list[str] = []
@@ -197,18 +179,12 @@ def write_matrix_parallel(
                 )
             )
 
-        with ctx.Pool(processes=n_workers) as pool:
-            try:
-                # imap (not imap_unordered) preserves chunk order for concatenation
-                for _ in pool.imap(_format_rows_to_file, chunks_args):
-                    pass
-            # BaseException (not Exception) to ensure pool cleanup even on
-            # KeyboardInterrupt or SystemExit — orphaned workers would leak.
-            except BaseException as e:
-                logger.opt(exception=e).error(f"Pool error writing {path}: {e}")
-                pool.terminate()
-                pool.join()
-                raise
+        run_spawn_pool(
+            _format_rows_to_file,
+            chunks_args,
+            error_context=f"writing {path}",
+            n_workers=n_workers,
+        )
 
         # Free memmap before concatenation — at 125k samples this is 126 GB
         try:
@@ -246,19 +222,9 @@ def write_matrix_parallel(
     finally:
         # Clean up any remaining temp files (error paths)
         if memmap_path is not None:
-            try:
-                Path(memmap_path).unlink()
-            except FileNotFoundError:
-                pass
-            except OSError as e:
-                logger.warning(f"Failed to clean up temp memmap {memmap_path}: {e}")
+            unlink_quietly(memmap_path)
         for p in chunk_paths:
-            try:
-                Path(p).unlink()
-            except FileNotFoundError:
-                pass
-            except OSError as e:
-                logger.warning(f"Failed to clean up chunk file {p}: {e}")
+            unlink_quietly(p)
         try:
             tmp_dir_p.rmdir()
         except OSError as e:

@@ -23,18 +23,18 @@ top-level picklable functions, temp dir on same filesystem as input.
 """
 
 import contextlib
-import multiprocessing as mp
-import os
-import tempfile
 import weakref
 from pathlib import Path
 
 import numpy as np
 from loguru import logger
 
-# Cap worker count — beyond this, disk I/O contention and memory pressure
-# outweigh the benefit of additional parse parallelism.
-_MAX_READERS = 32
+from jamma.io._parallel_text import (
+    default_worker_count,
+    run_spawn_pool,
+    temp_dir_beside,
+    unlink_quietly,
+)
 
 
 def _parse_chunk_to_memmap(args: tuple) -> None:
@@ -193,44 +193,19 @@ def _scan_chunk_boundaries(
     return n_rows, n_cols, chunks
 
 
-def _create_temp_dir(input_path: Path) -> str:
-    """Create temp dir on the same filesystem as the input file.
-
-    Tries the input's parent directory first, falls back to the system
-    default (TMPDIR / /tmp) if that fails.
-    """
-    input_dir = input_path.parent
-    try:
-        return tempfile.mkdtemp(prefix=".jamma_mread_", dir=input_dir)
-    except OSError as e:
-        logger.warning(
-            f"Cannot create temp dir in {input_dir} ({e}), "
-            "falling back to system tmpdir. "
-            "If /tmp is RAM-backed (tmpfs), this may increase memory "
-            "usage significantly for large matrices."
-        )
-        return tempfile.mkdtemp(prefix="jamma_mread_")
-
-
 def _cleanup_temp_memmap(tmp_dir: str, memmap_path: str) -> None:
-    """Clean up temp memmap file and its parent directory.
+    """Clean up the temp memmap file and its parent directory.
 
     Called from weakref.finalize (GC) and from the finally block on the
-    copy=True path. Logger calls are guarded because finalizers can run
-    during interpreter shutdown when loguru may already be torn down.
+    copy=True path.
     """
-    try:
-        Path(memmap_path).unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        with contextlib.suppress(Exception):
-            logger.warning(f"Failed to clean up temp memmap {memmap_path}: {e}")
+    unlink_quietly(memmap_path)
     try:
         Path(tmp_dir).rmdir()
     except FileNotFoundError:
         pass
     except OSError as e:
+        # loguru may be torn down when this runs from a finalizer at shutdown.
         with contextlib.suppress(Exception):
             logger.warning(f"Could not remove temp dir {tmp_dir}: {e}")
 
@@ -299,7 +274,7 @@ def read_matrix_parallel(
         return np.atleast_2d(np.loadtxt(path, dtype=np.float64, delimiter=delimiter))
 
     if n_workers is None:
-        n_workers = min(os.cpu_count() or 1, _MAX_READERS)
+        n_workers = default_worker_count()
     n_workers = max(1, n_workers)
 
     logger.info(f"Reading {path.name} via parallel parse ({n_workers} workers)")
@@ -309,7 +284,7 @@ def read_matrix_parallel(
 
     logger.debug(f"Matrix dimensions: {n_rows}x{n_cols}, {len(chunks)} chunks")
 
-    tmp_dir = _create_temp_dir(path)
+    tmp_dir = temp_dir_beside(path, prefix=".jamma_mread_")
     memmap_path = str(Path(tmp_dir) / "matrix.dat")
 
     # When copy=False, cleanup happens via weakref.finalize on the returned
@@ -327,17 +302,12 @@ def read_matrix_parallel(
             for sb, eb, sr, nr in chunks
         ]
 
-        ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=n_workers) as pool:
-            try:
-                for _ in pool.imap(_parse_chunk_to_memmap, chunk_args):
-                    pass
-            except BaseException as e:
-                pool.terminate()
-                pool.join()
-                if not isinstance(e, (KeyboardInterrupt, SystemExit)):
-                    logger.opt(exception=e).error(f"Pool error reading {path}: {e}")
-                raise
+        run_spawn_pool(
+            _parse_chunk_to_memmap,
+            chunk_args,
+            error_context=f"reading {path}",
+            n_workers=n_workers,
+        )
 
         if not copy:
             # Return a read-only memmap; cleanup deferred to GC via weakref.finalize.

@@ -153,8 +153,8 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2, monkeypatch):
     drives the path in the state production actually uses it in; left loaded, it
     would take an inner C ladder no dispatch path selects.
     """
-    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
     from jamma.lmm.prepare_common import _compute_null_model_common
+    from jamma.lmm.uab import batch_compute_uab_numpy
 
     data = synthetic_covariate_data_ncvt2
     n_cvt = data["n_cvt"]

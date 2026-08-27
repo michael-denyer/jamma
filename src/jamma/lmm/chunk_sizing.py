@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from jamma.core import memory
 from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm.likelihood import classify_uab_columns, n_index
 
 # Allow large chunks — no int32 buffer constraint.
 _MAX_CHUNK = 200_000
@@ -42,12 +43,8 @@ def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
         return n_samples * 8
 
     if dispatch is DispatchPath.SOA_SPLIT:
-        from jamma.lmm.likelihood import classify_uab_columns
-
         n_var = len(classify_uab_columns(n_cvt)[1])
         return n_samples * (n_var + 1) * 8
-
-    from jamma.lmm.likelihood import n_index
 
     return n_samples * n_index(n_cvt) * 8
 
@@ -76,12 +73,8 @@ def lmm_extra_bytes_per_snp(
     if dispatch.feeds_raw_utg:
         return 0
     if dispatch is DispatchPath.SOA_SPLIT:
-        from jamma.lmm.likelihood import classify_uab_columns
-
         n_var = len(classify_uab_columns(n_cvt)[1])
         return n_samples * n_var * 8 * n_buffers
-    from jamma.lmm.likelihood import n_index
-
     # NUMPY_FALLBACK never pipelines (dispatch.use_split is False), so
     # n_buffers is always 1 here; the full Uab+Iab batch is priced once.
     return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8

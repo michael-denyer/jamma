@@ -12,10 +12,8 @@ from jamma.lmm.compute_numpy import (
     compute_mode4_fused_general_c_ws,
     compute_wald_fused_general_c_ws,
 )
-from jamma.lmm.likelihood_numpy import (
-    compute_uab_invariant_soa,
-)
 from jamma.lmm.schema import LmmConfig
+from jamma.lmm.uab import compute_uab_invariant_soa
 from tests.lmm_accel._helpers import (
     _fused_general_mode4_workspace,
     _fused_general_workspace,

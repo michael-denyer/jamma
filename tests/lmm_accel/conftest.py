@@ -62,7 +62,7 @@ def split_wald_data():
 @pytest.fixture
 def fused_data(split_wald_data):
     """Rotated inputs in both the SoA and fused forms, for n_cvt=1."""
-    from jamma.lmm.likelihood_numpy import (
+    from jamma.lmm.uab import (
         batch_compute_uab_varying_soa_numpy,
         compute_uab_invariant_soa,
     )

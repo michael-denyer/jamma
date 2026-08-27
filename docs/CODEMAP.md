@@ -238,9 +238,9 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:892](../src/jamma/lmm/likelihood.py#L892) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3e | `golden_section_optimize_lambda_mle_numpy()` | MLE optimization per SNP (LRT) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:7](../src/jamma/lmm/stats.py#L7) |
-| 3f | `batch_calc_wald_stats_from_pab_numpy()` | Production: beta, SE, p_wald across a chunk | [likelihood_numpy.py:1671](../src/jamma/lmm/likelihood_numpy.py#L1671) |
-| 3f | `batch_calc_score_stats_numpy()` | Production: p_score across a chunk | [likelihood_numpy.py:1713](../src/jamma/lmm/likelihood_numpy.py#L1713) |
+| 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:20](../src/jamma/lmm/stats.py#L20) |
+| 3f | `batch_calc_wald_stats_from_pab_numpy()` | Production: beta, SE, p_wald across a chunk | [stats.py](../src/jamma/lmm/stats.py) |
+| 3f | `batch_calc_score_stats_numpy()` | Production: p_score across a chunk | [stats.py](../src/jamma/lmm/stats.py) |
 | 3f | `calc_wald_test()` | Scalar reference for the batch path; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
 | 3f | `calc_score_test()` | Scalar reference for the batch path; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
 | 3f | `calc_lrt_test()` | Scalar reference for the batch path; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
@@ -261,21 +261,21 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 4Na | `batch_calc_wald_stats_numpy()` | Vectorized Wald: REML optimize -> beta, SE, p_wald | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
+| 4Na | `batch_calc_wald_stats_numpy()` | Vectorized Wald: REML optimize -> beta, SE, p_wald | [stats.py](../src/jamma/lmm/stats.py) |
+| 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
+| 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:143](../src/jamma/lmm/runner_numpy.py#L143) |
 | 4Nb | `GenotypeSource` | Protocol a run's genotype provider implements (stats + chunk stream) | [runner_numpy.py:51](../src/jamma/lmm/runner_numpy.py#L51) |
 | 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:78](../src/jamma/lmm/runner_numpy.py#L78) |
 | 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:380](../src/jamma/lmm/runner_numpy.py#L380) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:306](../src/jamma/lmm/chunk_runner_numpy.py#L306) |
-| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:124](../src/jamma/lmm/chunk_runner_numpy.py#L124) |
-| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:50](../src/jamma/lmm/chunk_kernel.py#L50) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:165](../src/jamma/lmm/chunk_kernel.py#L165) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:301](../src/jamma/lmm/chunk_runner_numpy.py#L301) |
+| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:121](../src/jamma/lmm/chunk_runner_numpy.py#L121) |
+| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:51](../src/jamma/lmm/chunk_kernel.py#L51) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:166](../src/jamma/lmm/chunk_kernel.py#L166) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:118](../src/jamma/lmm/chunk_pipeline.py#L118) |
-| 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:90](../src/jamma/lmm/chunk_sizing.py#L90) |
-| 4Nc | `create_lmm_workspace_fused()` | Allocate the reusable per-chunk Wald workspace (n_cvt=1 fused path) | [compute_numpy.py:119](../src/jamma/lmm/compute_numpy.py#L119) |
-| 4Nc | `compute_wald_fused_c_ws()` | Workspace-based Wald compute, dispatched to the C extension | [compute_numpy.py:162](../src/jamma/lmm/compute_numpy.py#L162) |
+| 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:83](../src/jamma/lmm/chunk_sizing.py#L83) |
+| 4Nc | `create_lmm_workspace_fused()` | Allocate the reusable per-chunk Wald workspace (n_cvt=1 fused path) | [compute_numpy.py:125](../src/jamma/lmm/compute_numpy.py#L125) |
+| 4Nc | `compute_wald_fused_c_ws()` | Workspace-based Wald compute, dispatched to the C extension | [compute_numpy.py:168](../src/jamma/lmm/compute_numpy.py#L168) |
 | 4Nd | `compute_lmm_chunk_fused_c()` | C extension: chunked REML Wald for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:25](../src/jamma/lmm/_lmm_support.c#L25) |
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
@@ -547,7 +547,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 |---------|---------|---------|
 | `*_numpy.py` | NumPy implementation | `likelihood_numpy.py`, `runner_numpy.py`, `chunk_runner_numpy.py`, `compute_numpy.py` |
 | `*_common.py` | Shared preparation code | `prepare_common.py` |
-| No suffix | Base algorithms or shared code | `likelihood.py`, `stats.py`, `eigen.py` |
+| No suffix | Base algorithms or shared code | `likelihood.py`, `uab.py`, `stats.py`, `eigen.py` |
 
 ---
 
@@ -567,7 +567,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood (`reml_log_likelihood()`) | [likelihood.py:468](../src/jamma/lmm/likelihood.py#L468) |
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| Wald/Score/LRT tests | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
+| Wald/Score/LRT tests | [stats.py](../src/jamma/lmm/stats.py) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
 | Output schema | [lmm/schema.py:91](../src/jamma/lmm/schema.py#L91) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |

@@ -245,12 +245,9 @@ class TestDegenerateSNPNaN:
 
     def test_wald_degenerate_snps_return_nan(self) -> None:
         """batch_calc_wald_stats_numpy returns NaN for zero-variance SNPs."""
-        from jamma.lmm.likelihood_numpy import (
-            batch_calc_wald_stats_numpy,
-            batch_compute_iab_numpy,
-            batch_compute_uab_numpy,
-            golden_section_optimize_lambda_numpy,
-        )
+        from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_numpy
+        from jamma.lmm.stats import batch_calc_wald_stats_numpy
+        from jamma.lmm.uab import batch_compute_iab_numpy, batch_compute_uab_numpy
 
         rng = np.random.default_rng(42)
         n_samples, n_snps, n_cvt = 50, 5, 1
@@ -286,10 +283,8 @@ class TestDegenerateSNPNaN:
 
     def test_score_degenerate_snps_return_nan(self) -> None:
         """batch_calc_score_stats_numpy returns NaN for zero-variance SNPs."""
-        from jamma.lmm.likelihood_numpy import (
-            batch_calc_score_stats_numpy,
-            batch_compute_uab_numpy,
-        )
+        from jamma.lmm.stats import batch_calc_score_stats_numpy
+        from jamma.lmm.uab import batch_compute_uab_numpy
 
         rng = np.random.default_rng(42)
         n_samples, n_snps, n_cvt = 50, 4, 1
@@ -320,7 +315,7 @@ class TestNegativeLRTClamp:
 
     def test_negative_lrt_returns_pvalue_one(self) -> None:
         """When H1 logl < H0 logl, LRT stat is negative → p-value should be 1.0."""
-        from jamma.lmm.likelihood_numpy import _batch_lrt_pvalues_numpy
+        from jamma.lmm.stats import _batch_lrt_pvalues_numpy
 
         logl_H0 = -100.0
         # Some H1 logls worse than null (negative LRT stat)
@@ -412,8 +407,8 @@ class TestMode4WaldOverwritesScore:
         """
         from jamma.lmm import compute_numpy as cn
         from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
-        from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
         from jamma.lmm.prepare_common import _compute_null_model_common
+        from jamma.lmm.uab import batch_compute_uab_numpy
 
         monkeypatch.setattr(cn, "_accel", None)
 

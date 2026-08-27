@@ -27,12 +27,14 @@ from jamma.lmm.likelihood import (
 from jamma.lmm.likelihood_numpy import (
     _batch_grid_reml_numpy,
     _batch_reml_at_lambda_numpy,
-    batch_calc_wald_stats_numpy,
+    golden_section_optimize_lambda_numpy,
+)
+from jamma.lmm.stats import batch_calc_wald_stats_numpy
+from jamma.lmm.uab import (
     batch_compute_iab_numpy,
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
-    golden_section_optimize_lambda_numpy,
 )
 
 
@@ -424,7 +426,7 @@ def test_reml_const_precomputed():
 @pytest.mark.tier0
 def test_iab_invariant_scalars():
     """compute_iab_invariant_scalars_ncvt1 must match manual np.sum exactly."""
-    from jamma.lmm.likelihood_numpy import compute_iab_invariant_scalars_ncvt1
+    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
 
     rng = np.random.default_rng(123)
     n_samples = 80
@@ -545,10 +547,8 @@ def split_uab_data():
 @pytest.mark.tier0
 def test_grid_reml_split_matches_full(split_uab_data):
     """_batch_grid_reml_split_ncvt1_numpy must match _batch_grid_reml_numpy."""
-    from jamma.lmm.likelihood_numpy import (
-        _batch_grid_reml_split_ncvt1_numpy,
-        compute_iab_invariant_scalars_ncvt1,
-    )
+    from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
+    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
 
     eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
         split_uab_data
@@ -604,8 +604,8 @@ def test_refinement_reml_split_matches_full(split_uab_data):
     from jamma.lmm.likelihood_numpy import (
         _batch_reml_at_lambda_split_ncvt1_numpy,
         _compute_reml_const,
-        compute_iab_invariant_scalars_ncvt1,
     )
+    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
 
     eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
         split_uab_data
@@ -658,9 +658,9 @@ def test_refinement_reml_split_matches_full(split_uab_data):
 def test_split_optimizer_matches_full(split_uab_data):
     """golden_section_optimize_lambda_split_ncvt1_numpy must match full optimizer."""
     from jamma.lmm.likelihood_numpy import (
-        compute_iab_invariant_scalars_ncvt1,
         golden_section_optimize_lambda_split_ncvt1_numpy,
     )
+    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
 
     eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
         split_uab_data
@@ -702,9 +702,9 @@ def test_split_optimizer_matches_full(split_uab_data):
 def test_split_pab_matches_generic_pab(split_uab_data):
     """Pab from split optimizer must match generic Pab element-by-element."""
     from jamma.lmm.likelihood_numpy import (
-        compute_iab_invariant_scalars_ncvt1,
         golden_section_optimize_lambda_split_ncvt1_numpy,
     )
+    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
 
     eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
         split_uab_data
@@ -742,10 +742,8 @@ def test_split_pab_matches_generic_pab(split_uab_data):
 @pytest.mark.tier0
 def test_invariant_computed_once_per_lambda(split_uab_data):
     """Invariant dot products must be (n_grid,), not (n_grid, n_snps)."""
-    from jamma.lmm.likelihood_numpy import (
-        _compute_reml_const,
-        compute_iab_invariant_scalars_ncvt1,
-    )
+    from jamma.lmm.likelihood_numpy import _compute_reml_const
+    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
 
     # Verify structural property: function produces (n_grid, n_snps) output
     # while internally computing (n_grid,) invariant sums.
@@ -821,10 +819,7 @@ def wald_pab_data():
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
 
-    from jamma.lmm.likelihood_numpy import (
-        batch_compute_iab_numpy,
-        batch_compute_uab_numpy,
-    )
+    from jamma.lmm.uab import batch_compute_iab_numpy, batch_compute_uab_numpy
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
@@ -864,7 +859,7 @@ def test_optimizer_returns_pab(wald_pab_data):
 @pytest.mark.tier0
 def test_wald_from_pab_matches_original(wald_pab_data):
     """Wald stats from pre-computed Pab match original path to rtol=1e-14."""
-    from jamma.lmm.likelihood_numpy import batch_calc_wald_stats_from_pab_numpy
+    from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
 
     eigenvalues, Uab_batch, Iab_batch, n_samples = wald_pab_data
     n_cvt = 1
@@ -926,7 +921,7 @@ def compute_wald_data():
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
 
-    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+    from jamma.lmm.uab import batch_compute_uab_numpy
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG)
     return eigenvalues, Uab_batch, n_samples
@@ -979,7 +974,7 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
     UtW2 = rng.standard_normal((n_samples2, 2))
     Uty2 = rng.standard_normal(n_samples2)
     UtG2 = rng.standard_normal((n_samples2, n_snps2))
-    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+    from jamma.lmm.uab import batch_compute_uab_numpy
 
     Uab_batch2 = batch_compute_uab_numpy(2, UtW2, Uty2, UtG2)
 
@@ -1016,7 +1011,7 @@ def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
     from unittest.mock import patch
 
     from jamma.lmm import compute_numpy as cn
-    from jamma.lmm.likelihood_numpy import batch_compute_iab_numpy
+    from jamma.lmm.uab import batch_compute_iab_numpy
 
     eigenvalues, Uab_batch, n_samples = compute_wald_data
     n_cvt = 1
@@ -1030,6 +1025,7 @@ def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
 
     # Generic path: bypass n_cvt==1 branch by calling generic optimizer directly
     import jamma.lmm.likelihood_numpy as ln
+    from jamma.lmm import stats
 
     lambdas_gen, logls_gen, Pab_gen = ln.golden_section_optimize_lambda_numpy(
         n_cvt,
@@ -1041,7 +1037,7 @@ def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
         n_grid=50,
         n_iter=20,
     )
-    betas_gen, ses_gen, pwalds_gen = ln.batch_calc_wald_stats_from_pab_numpy(
+    betas_gen, ses_gen, pwalds_gen = stats.batch_calc_wald_stats_from_pab_numpy(
         n_cvt, Pab_gen, n_samples
     )
 
@@ -1076,13 +1072,13 @@ def test_compute_wald_numpy_ncvt1_invariant_efficiency(compute_wald_data):
     """compute_iab_invariant_scalars_ncvt1 called once per _compute_wald_numpy call."""
     from unittest.mock import patch
 
-    import jamma.lmm.likelihood_numpy as ln
     from jamma.lmm import compute_numpy as cn
+    from jamma.lmm import uab
 
     eigenvalues, Uab_batch, n_samples = compute_wald_data
 
     call_count = []
-    real_fn = ln.compute_iab_invariant_scalars_ncvt1
+    real_fn = uab.compute_iab_invariant_scalars_ncvt1
 
     def counting_fn(*args, **kwargs):
         call_count.append(1)
@@ -1187,7 +1183,7 @@ def test_batch_numpy_all_degenerate_snps_return_lmin():
     lambda change), so the optimizer converges to l_min (the lower bound).
     The critical downstream behavior is that Wald stats return NaN.
     """
-    from jamma.lmm.likelihood_numpy import batch_calc_wald_stats_numpy
+    from jamma.lmm.stats import batch_calc_wald_stats_numpy
 
     rng = np.random.default_rng(42)
     n, n_snps = 30, 5
@@ -1232,7 +1228,7 @@ def test_batch_numpy_mixed_degenerate_and_valid_snps():
     valid SNPs produce finite stats. Both run in the same batch without
     cross-SNP contamination.
     """
-    from jamma.lmm.likelihood_numpy import batch_calc_wald_stats_numpy
+    from jamma.lmm.stats import batch_calc_wald_stats_numpy
 
     rng = np.random.default_rng(99)
     n, n_snps = 30, 5
@@ -1297,11 +1293,13 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
     produce NaN for every SNP because P_XX = 0.
     """
     from jamma.lmm.likelihood_numpy import (
-        batch_calc_wald_stats_numpy,
+        golden_section_optimize_lambda_split_ncvt1_numpy,
+    )
+    from jamma.lmm.stats import batch_calc_wald_stats_numpy
+    from jamma.lmm.uab import (
         batch_compute_uab_varying_soa_numpy,
         compute_iab_invariant_scalars_ncvt1,
         compute_uab_invariant_soa,
-        golden_section_optimize_lambda_split_ncvt1_numpy,
         reconstruct_uab_from_soa,
     )
 
@@ -1363,11 +1361,13 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
     cross-SNP contamination.
     """
     from jamma.lmm.likelihood_numpy import (
-        batch_calc_wald_stats_numpy,
+        golden_section_optimize_lambda_split_ncvt1_numpy,
+    )
+    from jamma.lmm.stats import batch_calc_wald_stats_numpy
+    from jamma.lmm.uab import (
         batch_compute_uab_varying_soa_numpy,
         compute_iab_invariant_scalars_ncvt1,
         compute_uab_invariant_soa,
-        golden_section_optimize_lambda_split_ncvt1_numpy,
         reconstruct_uab_from_soa,
     )
 
@@ -1651,7 +1651,7 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
 @pytest.mark.tier0
 def test_reconstruct_uab_from_soa_ncvt1_backward_compat():
     """reconstruct_uab_from_soa without n_cvt arg produces correct n_cvt=1 output."""
-    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+    from jamma.lmm.uab import reconstruct_uab_from_soa
 
     rng = np.random.default_rng(42)
     n_samples, n_snps = 50, 8
@@ -1682,7 +1682,7 @@ def test_reconstruct_uab_from_soa_ncvt1_backward_compat():
 def test_reconstruct_uab_from_soa_ncvt2():
     """reconstruct_uab_from_soa with n_cvt=2 round-trips via classify_uab_columns."""
     from jamma.lmm.likelihood import classify_uab_columns
-    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+    from jamma.lmm.uab import reconstruct_uab_from_soa
 
     rng = np.random.default_rng(7)
     n_samples, n_snps = 40, 6
@@ -1725,7 +1725,7 @@ def test_reconstruct_uab_from_soa_ncvt2():
 def test_reconstruct_uab_from_soa_ncvt4():
     """reconstruct_uab_from_soa with n_cvt=4 matches batch_compute_uab_numpy."""
     from jamma.lmm.likelihood import classify_uab_columns
-    from jamma.lmm.likelihood_numpy import reconstruct_uab_from_soa
+    from jamma.lmm.uab import reconstruct_uab_from_soa
 
     rng = np.random.default_rng(13)
     n_samples, n_snps = 30, 5
@@ -1768,7 +1768,7 @@ def test_reconstruct_uab_from_soa_ncvt4():
 def test_vectorized_general_uab_parity(n_cvt):
     """Vectorized _batch_compute_uab_general_numpy matches reference per-SNP loop."""
     from jamma.lmm.likelihood import build_index_table
-    from jamma.lmm.likelihood_numpy import _batch_compute_uab_general_numpy
+    from jamma.lmm.uab import _batch_compute_uab_general_numpy
 
     rng = np.random.default_rng(99)
     n_samples, n_snps = 60, 15
@@ -1804,7 +1804,7 @@ def test_vectorized_general_uab_parity(n_cvt):
 def test_direct_soa_varying_general_parity(n_cvt):
     """_batch_compute_uab_varying_general_numpy matches extract-from-full-Uab."""
     from jamma.lmm.likelihood import classify_uab_columns
-    from jamma.lmm.likelihood_numpy import (
+    from jamma.lmm.uab import (
         _batch_compute_uab_general_numpy,
         _batch_compute_uab_varying_general_numpy,
     )
@@ -1837,7 +1837,7 @@ def test_direct_soa_varying_general_parity(n_cvt):
 def test_invariant_columns_constant_across_snps(n_cvt):
     """Uab columns classified as invariant are actually constant across SNPs."""
     from jamma.lmm.likelihood import classify_uab_columns
-    from jamma.lmm.likelihood_numpy import _batch_compute_uab_general_numpy
+    from jamma.lmm.uab import _batch_compute_uab_general_numpy
 
     rng = np.random.default_rng(123)
     n_samples, n_snps = 40, 20
@@ -1875,7 +1875,7 @@ def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
 
     # Reference: full Uab -> extract varying -> SoA
     from jamma.lmm.likelihood import classify_uab_columns
-    from jamma.lmm.likelihood_numpy import _batch_compute_uab_general_numpy
+    from jamma.lmm.uab import _batch_compute_uab_general_numpy
 
     _inv, var_indices = classify_uab_columns(n_cvt)
     Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG)

@@ -26,7 +26,7 @@ def _fused_score_lrt_null_model(split_wald_data):
     this computes the null model from the same UtW/Uty/eigenvalues
     used by the fused Score/LRT tests.
     """
-    from jamma.lmm.likelihood_numpy import batch_compute_uab_numpy
+    from jamma.lmm.uab import batch_compute_uab_numpy
 
     eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
 

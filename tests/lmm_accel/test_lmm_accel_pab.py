@@ -23,11 +23,9 @@ class TestCExtensionPerformance:
         from jamma.core.threading import get_physical_core_count
         from jamma.lmm import compute_numpy
         from jamma.lmm.compute_numpy import _compute_wald_numpy
-        from jamma.lmm.likelihood_numpy import (
-            batch_calc_wald_stats_from_pab_numpy,
-            batch_compute_iab_numpy,
-            golden_section_optimize_lambda_numpy,
-        )
+        from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_numpy
+        from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
+        from jamma.lmm.uab import batch_compute_iab_numpy
 
         if compute_numpy._accel is None:
             pytest.skip("C extension not compiled")

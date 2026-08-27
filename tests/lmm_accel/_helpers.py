@@ -11,12 +11,9 @@ from jamma.lmm.compute_numpy import (
     create_lmm_workspace_mode4_fused_general,
 )
 from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
-from jamma.lmm.likelihood_numpy import (
-    _batch_lrt_pvalues_numpy,
-    batch_calc_score_stats_numpy,
-    batch_compute_uab_numpy,
-    golden_section_optimize_lambda_mle_numpy,
-)
+from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
+from jamma.lmm.uab import batch_compute_uab_numpy
 
 
 def _prepare_fused_general_data(data: dict) -> dict:

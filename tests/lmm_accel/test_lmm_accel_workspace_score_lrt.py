@@ -16,12 +16,9 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.likelihood_numpy import (
-    _batch_lrt_pvalues_numpy,
-    batch_calc_score_stats_numpy,
-    batch_compute_uab_numpy,
-    golden_section_optimize_lambda_mle_numpy,
-)
+from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
+from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.lmm_accel._helpers import _null_model_ncvt1
 
 _C_RTOL = 1e-11

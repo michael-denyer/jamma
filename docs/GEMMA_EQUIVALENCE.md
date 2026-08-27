@@ -180,9 +180,9 @@ corresponds to weak-signal SNPs where test statistics are small.
 ## 6. Wald Test
 
 Both compute the same formula (GEMMA: `CalcRLWald`; JAMMA's production path is
-the vectorized `batch_calc_wald_stats_from_pab_numpy` in `lmm/likelihood_numpy.py`
-and the C kernels, with `calc_wald_test` in `lmm/stats.py` kept as a scalar
-reference for tests):
+the vectorized `batch_calc_wald_stats_from_pab_numpy` in `lmm/stats.py` and
+the C kernels, with `calc_wald_test` in `tests/reference/stats.py` kept as a
+scalar reference for tests):
 
 ```text
 beta = P_xy / P_xx
@@ -211,8 +211,8 @@ approximations. **Observed**: max relative p-value difference = 2.20e-6.
 ## 7. Score Test
 
 Both compute the same formula (GEMMA: `CalcRLScore`; JAMMA's production path is
-the vectorized `batch_calc_score_stats_numpy` in `lmm/likelihood_numpy.py` and
-the C kernels, with `calc_score_test` in `lmm/stats.py` kept as a scalar
+the vectorized `batch_calc_score_stats_numpy` in `lmm/stats.py` and the C
+kernels, with `calc_score_test` in `tests/reference/stats.py` kept as a scalar
 reference for tests):
 
 ```text
@@ -229,8 +229,9 @@ Uses **null model lambda** (computed once, reused for all SNPs).
 ## 8. Likelihood Ratio Test
 
 Both compute the same formula (GEMMA: `CalcLRT`; JAMMA's production path is
-`_batch_lrt_pvalues_numpy` in `lmm/likelihood_numpy.py` and the C kernels,
-with `calc_lrt_test` in `lmm/stats.py` kept as a scalar reference for tests):
+`_batch_lrt_pvalues_numpy` in `lmm/stats.py` and the C kernels, with
+`calc_lrt_test` in `tests/reference/stats.py` kept as a scalar reference for
+tests):
 
 ```text
 LRT   = 2 * (l_MLE(H1) - l_MLE(H0))
@@ -343,11 +344,11 @@ uv run python scripts/demonstrate_equivalence.py
 | `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py |
 | `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py |
 | `CalcLambda` | `golden_section_optimize_lambda_numpy` | lmm/likelihood_numpy.py |
-| `CalcRLWald` | `batch_calc_wald_stats_from_pab_numpy` (production); `calc_wald_test` (scalar reference, tests only) | lmm/likelihood_numpy.py; lmm/stats.py |
-| `CalcRLScore` | `batch_calc_score_stats_numpy` (production); `calc_score_test` (scalar reference, tests only) | lmm/likelihood_numpy.py; lmm/stats.py |
-| `CalcLRT` | `_batch_lrt_pvalues_numpy` (production); `calc_lrt_test` (scalar reference, tests only) | lmm/likelihood_numpy.py; lmm/stats.py |
-| `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`) | lmm/stats.py |
-| `gsl_cdf_chisq_Q` | `chi2_sf` (via `jamma.lmm.special`, Cephes erfc) | lmm/stats.py |
+| `CalcRLWald` | `batch_calc_wald_stats_from_pab_numpy` (production); `calc_wald_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
+| `CalcRLScore` | `batch_calc_score_stats_numpy` (production); `calc_score_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
+| `CalcLRT` | `_batch_lrt_pvalues_numpy` (production); `calc_lrt_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
+| `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`, scalar reference, tests only); `_f_to_pvalue` (production) | tests/reference/stats.py; lmm/stats.py |
+| `gsl_cdf_chisq_Q` | `chi2_sf` / `chi2_sf_batch` (erfc) | lmm/special.py |
 
 ---
 

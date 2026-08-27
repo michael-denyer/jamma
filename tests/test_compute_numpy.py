@@ -28,7 +28,7 @@ from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
 from jamma.lmm.likelihood import compute_null_model_mle
-from jamma.lmm.likelihood_numpy import (
+from jamma.lmm.uab import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,

@@ -374,7 +374,7 @@ def calc_pab(
     Pab[0, :] = Hi_eval @ Uab
 
     # Rows 1 to n_cvt+1: Recursive projection, the same walk as
-    # likelihood_numpy._fill_pab_recursion
+    # uab._fill_pab_recursion
     for p in range(1, n_cvt + 2):
         for _a, _b, index_ab, index_aw, index_bw, index_ww in table.pab_recursion[p]:
             ps_ab = Pab[p - 1, index_ab]

@@ -41,6 +41,8 @@ from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.core.snp_stats import (
     SnpFilterSpec,
+    SnpSelection,
+    SnpStats,
     SnpStatsCache,
     collect_streamed_snp_stats,
     filter_snp_stats,
@@ -167,6 +169,51 @@ def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
         est.peak_kinship_gb,
         operation=f"kinship accumulation (peak: {est.peak_kinship_gb:.1f}GB)",
     )
+
+
+def _select_kinship_snps(
+    stats: SnpStats,
+    maf_threshold: float,
+    miss_threshold: float,
+    ksnps_indices: np.ndarray | None,
+    n_snps: int,
+) -> SnpSelection:
+    """Apply the kinship MAF/missing/monomorphism filter, raising if none pass.
+
+    The streaming and LOCO kinship passes share this filter step exactly. Both
+    build the same SnpFilterSpec (no HWE, "Kinship SNP list" restriction label)
+    and raise the same message when every SNP is removed. Callers log their own
+    retained/removed line afterwards, since the wording differs between passes.
+
+    Args:
+        stats: Per-SNP statistics from collect_streamed_snp_stats.
+        maf_threshold: Minimum MAF for inclusion.
+        miss_threshold: Maximum missing rate for inclusion.
+        ksnps_indices: Optional -ksnps restriction, or None.
+        n_snps: Total SNP count, for the error message.
+
+    Returns:
+        The SnpSelection of SNPs that passed filtering.
+
+    Raises:
+        ValueError: If no SNPs pass filtering.
+    """
+    selection = filter_snp_stats(
+        stats,
+        SnpFilterSpec(
+            maf_threshold=maf_threshold,
+            miss_threshold=miss_threshold,
+            restrict_indices=ksnps_indices,
+            restrict_label="Kinship SNP list",
+        ),
+    )
+    if len(selection.indices) == 0:
+        raise ValueError(
+            f"No SNPs passed filtering (maf>={maf_threshold}, "
+            f"miss<={miss_threshold}, polymorphic). "
+            f"Original SNP count: {n_snps}"
+        )
+    return selection
 
 
 def _filter_snps(
@@ -607,23 +654,10 @@ def compute_kinship_streaming(
         dtype=np.float32,
         sample_scope="valid_samples" if valid_indices is not None else "all_samples",
     )
-    snp_selection = filter_snp_stats(
-        stats,
-        SnpFilterSpec(
-            maf_threshold=maf_threshold,
-            miss_threshold=miss_threshold,
-            restrict_indices=ksnps_indices,
-            restrict_label="Kinship SNP list",
-        ),
+    snp_selection = _select_kinship_snps(
+        stats, maf_threshold, miss_threshold, ksnps_indices, n_snps
     )
     n_filtered = len(snp_selection.indices)
-
-    if n_filtered == 0:
-        raise ValueError(
-            f"No SNPs passed filtering (maf>={maf_threshold}, "
-            f"miss<={miss_threshold}, polymorphic). "
-            f"Original SNP count: {n_snps}"
-        )
 
     if n_filtered < n_snps:
         n_removed = n_snps - n_filtered
@@ -1166,23 +1200,10 @@ def compute_loco_kinship_streaming(
         else None
     )
 
-    snp_selection = filter_snp_stats(
-        stats,
-        SnpFilterSpec(
-            maf_threshold=maf_threshold,
-            miss_threshold=miss_threshold,
-            restrict_indices=ksnps_indices,
-            restrict_label="Kinship SNP list",
-        ),
+    snp_selection = _select_kinship_snps(
+        stats, maf_threshold, miss_threshold, ksnps_indices, n_snps
     )
     n_filtered = len(snp_selection.indices)
-
-    if n_filtered == 0:
-        raise ValueError(
-            f"No SNPs passed filtering (maf>={maf_threshold}, "
-            f"miss<={miss_threshold}, polymorphic). "
-            f"Original SNP count: {n_snps}"
-        )
 
     if n_filtered < n_snps:
         n_removed = n_snps - n_filtered

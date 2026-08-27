@@ -316,7 +316,8 @@ def _compute_Uab_general(
     Uses pre-computed index mapping to avoid repeated get_ab_index calls.
     """
     n = len(Uty)
-    Uab = np.zeros((n, n_index(n_cvt)), dtype=np.float64)
+    table = build_index_table(n_cvt)
+    Uab = np.zeros((n, table.n_index), dtype=np.float64)
 
     # Build combined vector matrix: [W1, W2, ..., W_ncvt, X, Y]
     # where X is genotype (placeholder if None) and Y is phenotype
@@ -325,17 +326,11 @@ def _compute_Uab_general(
     else:
         vectors = np.column_stack([UtW, np.zeros(n), Uty])  # Placeholder for X
 
-    # Pre-compute all index pairs (a, b) and their linear indices
-    # Using 1-based indexing as per GEMMA convention
-    for a in range(1, n_cvt + 3):
-        for b in range(a, n_cvt + 3):
-            # Skip genotype if not provided
-            if Utx is None and n_cvt + 1 in (a, b):
-                continue
-
-            idx = get_ab_index(a, b, n_cvt)
-            # vectors column a-1 corresponds to index a (1-based)
-            Uab[:, idx] = vectors[:, a - 1] * vectors[:, b - 1]
+    genotype_col = n_cvt  # 0-based index of X in vectors array
+    for a_col, b_col, idx in table.uab_pairs:
+        if Utx is None and genotype_col in (a_col, b_col):
+            continue
+        Uab[:, idx] = vectors[:, a_col] * vectors[:, b_col]
 
     return Uab
 
@@ -372,29 +367,25 @@ def calc_pab(
     Returns:
         Pab matrix (n_cvt+2, n_index)
     """
-    Pab = np.zeros((n_cvt + 2, n_index(n_cvt)), dtype=np.float64)
+    table = build_index_table(n_cvt)
+    Pab = np.zeros((n_cvt + 2, table.n_index), dtype=np.float64)
 
     # Row 0: Vectorized weighted dot products
     Pab[0, :] = Hi_eval @ Uab
 
-    # Rows 1 to n_cvt+1: Recursive projection
+    # Rows 1 to n_cvt+1: Recursive projection, the same walk as
+    # likelihood_numpy._fill_pab_recursion
     for p in range(1, n_cvt + 2):
-        for a in range(p + 1, n_cvt + 3):
-            for b in range(a, n_cvt + 3):
-                index_ab = get_ab_index(a, b, n_cvt)
-                index_aw = get_ab_index(a, p, n_cvt)
-                index_bw = get_ab_index(b, p, n_cvt)
-                index_ww = get_ab_index(p, p, n_cvt)
+        for _a, _b, index_ab, index_aw, index_bw, index_ww in table.pab_recursion[p]:
+            ps_ab = Pab[p - 1, index_ab]
+            ps_aw = Pab[p - 1, index_aw]
+            ps_bw = Pab[p - 1, index_bw]
+            ps_ww = Pab[p - 1, index_ww]
 
-                ps_ab = Pab[p - 1, index_ab]
-                ps_aw = Pab[p - 1, index_aw]
-                ps_bw = Pab[p - 1, index_bw]
-                ps_ww = Pab[p - 1, index_ww]
-
-                if ps_ww != 0:
-                    Pab[p, index_ab] = ps_ab - ps_aw * ps_bw / ps_ww
-                else:
-                    Pab[p, index_ab] = ps_ab
+            if ps_ww != 0:
+                Pab[p, index_ab] = ps_ab - ps_aw * ps_bw / ps_ww
+            else:
+                Pab[p, index_ab] = ps_ab
 
     return Pab
 
@@ -512,12 +503,12 @@ def reml_log_likelihood(
     Hi_eval = 1.0 / v_temp
     logdet_h = np.sum(np.log(np.abs(v_temp)))
 
+    table = build_index_table(n_cvt)
     Pab = calc_pab(n_cvt, Hi_eval, Uab)
     Iab = calc_iab(n_cvt, Uab)
 
     logdet_hiw = 0.0
-    for i in range(nc_total):
-        index_ww = get_ab_index(i + 1, i + 1, n_cvt)
+    for i, index_ww in table.logdet_diag_indices[:nc_total]:
         d_pab = Pab[i, index_ww]
         d_iab = Iab[i, index_ww]
         if d_pab > 0:
@@ -525,8 +516,7 @@ def reml_log_likelihood(
         if d_iab > 0:
             logdet_hiw -= np.log(d_iab)
 
-    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    P_yy = _clamp_p_yy(Pab[nc_total, index_yy], lambda_val)
+    P_yy = _clamp_p_yy(Pab[nc_total, table.idx_yy], lambda_val)
 
     c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
@@ -888,8 +878,7 @@ def mle_log_likelihood(
         P_yy_raw = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
     else:
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
-        index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-        P_yy_raw = Pab[nc_total, index_yy]
+        P_yy_raw = Pab[nc_total, build_index_table(n_cvt).idx_yy]
 
     P_yy = _clamp_p_yy(P_yy_raw, lambda_val)
 

@@ -145,18 +145,25 @@ class TestValidateInputs:
             runner.validate_inputs()
 
 
+def _first_phenotype(runner: PipelineRunner) -> tuple[np.ndarray, int]:
+    """Read the runner's first configured phenotype column the way run() does."""
+    columns = runner.config.phenotype_columns
+    data, _mask, _n_valid = runner._load_phenotypes_and_intersect_masks(columns, None)
+    return data[columns[0]]
+
+
 @pytest.mark.tier1
 class TestParsePhenotypes:
-    """Tests for PipelineRunner.parse_phenotypes."""
+    """Tests for the .fam phenotype parsing behind run()."""
 
     def test_parse_phenotypes_from_fixture(self, sample_plink_data: Path) -> None:
-        """parse_phenotypes reads phenotypes from .fam file."""
+        """The phenotype loader reads phenotypes from the .fam file."""
         config = PipelineConfig(
             bfile=sample_plink_data,
             check_memory=False,
         )
         runner = PipelineRunner(config)
-        phenotypes, n_analyzed = runner.parse_phenotypes()
+        phenotypes, n_analyzed = _first_phenotype(runner)
 
         assert len(phenotypes) == 100  # gemma_synthetic has 100 samples
         assert n_analyzed > 0
@@ -232,7 +239,7 @@ class TestPhenotypeColumnSelection:
         assert config.phenotype_columns == [1]
 
         runner = PipelineRunner(config)
-        phenotypes, n_analyzed = runner.parse_phenotypes()
+        phenotypes, n_analyzed = _first_phenotype(runner)
 
         assert len(phenotypes) == 100
         assert n_analyzed > 0
@@ -262,13 +269,13 @@ class TestPhenotypeColumnSelection:
                 )
 
         config1 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[1])
-        pheno1, _ = PipelineRunner(config1).parse_phenotypes()
+        pheno1, _ = _first_phenotype(PipelineRunner(config1))
 
         config2 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[2])
-        pheno2, _ = PipelineRunner(config2).parse_phenotypes()
+        pheno2, _ = _first_phenotype(PipelineRunner(config2))
 
         config3 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[3])
-        pheno3, _ = PipelineRunner(config3).parse_phenotypes()
+        pheno3, _ = _first_phenotype(PipelineRunner(config3))
 
         # All should be different
         assert not np.array_equal(pheno1, pheno2)
@@ -306,7 +313,7 @@ class TestPhenotypeColumnSelection:
         )
         runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="exceeds available columns"):
-            runner.parse_phenotypes()
+            _first_phenotype(runner)
 
 
 @pytest.mark.tier1
@@ -849,7 +856,7 @@ class TestPhenotypeColumnMissingValues:
                 f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2_str}\n")
 
         config = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[2])
-        phenotypes, n_analyzed = PipelineRunner(config).parse_phenotypes()
+        phenotypes, n_analyzed = _first_phenotype(PipelineRunner(config))
 
         # First two samples should be NaN (NA and -9)
         assert np.isnan(phenotypes[0])

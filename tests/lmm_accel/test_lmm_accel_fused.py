@@ -108,7 +108,7 @@ class TestHiEvalNullPositivity:
                 hi_bad,
                 data["n_samples"],
                 data["n_cvt"],
-                data["pab_c"],
+                data["pab_c"]._asdict(),
                 1,
             )
 
@@ -514,23 +514,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
     uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
     utg_t = np.ascontiguousarray(UtG.T)
     pab_c = build_pab_table_for_c(n_cvt)
-    pab_kwargs = {
-        k: pab_c[k]
-        for k in [
-            "invariant_indices",
-            "varying_indices",
-            "logdet_diag_rows",
-            "logdet_diag_cols",
-            "level_offsets",
-            "level_counts",
-            "entries",
-            "idx_xx",
-            "idx_xy",
-            "idx_yy",
-            "var_a_cols",
-            "var_b_cols",
-        ]
-    }
+    pab_kwargs = pab_c.workspace_kwargs()
 
     ws_fused = create_lmm_workspace_mode4_fused_general(
         eigenvalues,
@@ -625,23 +609,7 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt)
     utg_t = np.ascontiguousarray(UtG.T)
     pab_c = build_pab_table_for_c(n_cvt)
-    pab_kwargs = {
-        k: pab_c[k]
-        for k in [
-            "invariant_indices",
-            "varying_indices",
-            "logdet_diag_rows",
-            "logdet_diag_cols",
-            "level_offsets",
-            "level_counts",
-            "entries",
-            "idx_xx",
-            "idx_xy",
-            "idx_yy",
-            "var_a_cols",
-            "var_b_cols",
-        ]
-    }
+    pab_kwargs = pab_c.workspace_kwargs()
 
     ws = create_lmm_workspace_fused_general(
         eigenvalues,

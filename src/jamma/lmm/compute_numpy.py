@@ -673,7 +673,7 @@ def _compute_score_split_numpy(
             Hi_eval_null,
             n_samples,
             n_cvt,
-            build_pab_table_for_c(n_cvt),
+            build_pab_table_for_c(n_cvt)._asdict(),
             n_threads,
         )
 
@@ -733,7 +733,7 @@ def _compute_lrt_split_numpy(
             uab_invariant_soa,
             n_samples,
             n_cvt,
-            build_pab_table_for_c(n_cvt),
+            build_pab_table_for_c(n_cvt)._asdict(),
             l_min,
             l_max,
             n_grid,

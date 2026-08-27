@@ -56,7 +56,7 @@ def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
             np.ones(n_samples, dtype=np.float64),
             n_samples,
             n_cvt,
-            build_pab_table_for_c(compute_numpy.MAX_C_N_CVT),
+            build_pab_table_for_c(compute_numpy.MAX_C_N_CVT)._asdict(),
             1,
         )
 

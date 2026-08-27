@@ -24,7 +24,12 @@ from typing import NamedTuple
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.likelihood import _P_YY_MIN, build_index_table, warn_p_yy_once
+from jamma.lmm.likelihood import (
+    _P_YY_MIN,
+    PabIndexTable,
+    build_index_table,
+    warn_p_yy_once,
+)
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
 
 # The objective handed to the golden-section refinement: per-SNP log-lambdas
@@ -186,7 +191,7 @@ def _batch_compute_uab_general_numpy(
     """
     table = build_index_table(n_cvt)
     n_samples, n_snps = UtG.shape
-    n_index = table["n_index"]
+    n_index = table.n_index
     genotype_col = n_cvt  # 0-based index of X in vectors array
 
     # Build vectors_all: (n_snps, n_samples, n_cvt+2)
@@ -201,7 +206,7 @@ def _batch_compute_uab_general_numpy(
 
     # Compute all Uab columns vectorized over SNPs
     Uab_batch = np.empty((n_snps, n_samples, n_index), dtype=np.float64)
-    for a_col, b_col, idx in table["uab_pairs"]:
+    for a_col, b_col, idx in table.uab_pairs:
         Uab_batch[:, :, idx] = vectors_all[:, :, a_col] * vectors_all[:, :, b_col]
 
     return Uab_batch
@@ -271,7 +276,7 @@ def _batch_compute_uab_varying_general_numpy(
     else:
         result = np.empty(expected_shape, dtype=np.float64)
 
-    for a_col, b_col, linear_idx in table["uab_pairs"]:
+    for a_col, b_col, linear_idx in table.uab_pairs:
         if linear_idx not in var_index_to_row:
             continue  # invariant column, skip
         row = var_index_to_row[linear_idx]
@@ -367,7 +372,7 @@ def _batch_compute_pab_varying_numpy(
 
 def _fill_pab_recursion(
     Pab_batch: np.ndarray,
-    table: dict,
+    table: PabIndexTable,
     n_cvt: int,
 ) -> None:
     """Fill rows 1..n_cvt+1 of Pab_batch using GEMMA's recursive formula.
@@ -382,7 +387,7 @@ def _fill_pab_recursion(
     """
     n_degenerate = 0
     for p in range(1, n_cvt + 2):
-        for _a, _b, index_ab, index_aw, index_bw, index_ww in table["pab_recursion"][p]:
+        for _a, _b, index_ab, index_aw, index_bw, index_ww in table.pab_recursion[p]:
             ps_ww = Pab_batch[..., p - 1, index_ww]
             # Guard: ps_ww=0 means degenerate covariate projection. Use 0
             # to prevent NaN/Inf propagation to valid SNPs in the same batch.
@@ -868,7 +873,7 @@ def _batch_pab_at_lambda_numpy(
     # Pab with per-SNP Hi_eval
     Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
 
-    P_yy = _guard_P_yy(Pab_batch[:, nc_total, table["idx_yy"]])
+    P_yy = _guard_P_yy(Pab_batch[:, nc_total, table.idx_yy])
     return Pab_batch, logdet_h, P_yy
 
 
@@ -910,7 +915,7 @@ def _batch_reml_at_lambda_numpy(
     # instead of log to prevent NaN/Inf from corrupting the batch. Degenerate
     # SNPs are caught downstream by the P_yy < 0 → NaN guard.
     logdet_hiw = np.zeros(n_snps, dtype=np.float64)
-    for row, col in table["logdet_diag_indices"]:
+    for row, col in table.logdet_diag_indices:
         d_pab = Pab_batch[:, row, col]  # (n_snps,)
         d_iab = Iab_batch[:, row, col]  # (n_snps,)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1003,7 +1008,7 @@ def _batch_grid_pab_numpy(
     # Recursive rows 1..n_cvt+1 (uses ... indexing for 4D)
     _fill_pab_recursion(Pab, table, n_cvt)
 
-    P_yy = _guard_P_yy(Pab[:, :, nc_total, table["idx_yy"]])
+    P_yy = _guard_P_yy(Pab[:, :, nc_total, table.idx_yy])
 
     return Pab, logdet_h, P_yy
 
@@ -1040,7 +1045,7 @@ def _batch_grid_reml_numpy(
     # logdet_hiw: Iab part is lambda-independent, precompute once
     logdet_iab = np.zeros(n_snps, dtype=np.float64)
     logdet_pab = np.zeros((n_grid, n_snps), dtype=np.float64)
-    for row, col in table["logdet_diag_indices"]:
+    for row, col in table.logdet_diag_indices:
         d_pab = Pab[:, :, row, col]  # (n_grid, n_snps)
         d_iab = Iab_batch[:, row, col]  # (n_snps,)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1683,9 +1688,9 @@ def batch_calc_wald_stats_from_pab_numpy(
         Tuple of (betas, ses, p_walds) each shape (n_snps,).
     """
     table = build_index_table(n_cvt)
-    idx_xx = table["idx_xx"]
-    idx_xy = table["idx_xy"]
-    idx_yy = table["idx_yy"]
+    idx_xx = table.idx_xx
+    idx_xy = table.idx_xy
+    idx_yy = table.idx_yy
     df = n_samples - n_cvt - 1
 
     P_XX = Pab_batch[:, n_cvt, idx_xx]
@@ -1729,9 +1734,9 @@ def batch_calc_score_stats_numpy(
         Tuple of (betas, ses, p_scores) each shape (n_snps,).
     """
     table = build_index_table(n_cvt)
-    idx_xx = table["idx_xx"]
-    idx_xy = table["idx_xy"]
-    idx_yy = table["idx_yy"]
+    idx_xx = table.idx_xx
+    idx_xy = table.idx_xy
+    idx_yy = table.idx_yy
     df = n_samples - n_cvt - 1
 
     # Batch Pab with shared null Hi_eval

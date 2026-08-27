@@ -222,8 +222,7 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
     from jamma.lmm.likelihood import build_pab_table_for_c
 
     is_mode4 = inv.lmm_mode == 4
-    pab_c = build_pab_table_for_c(inv.n_cvt)
-    pab_kwargs = {key: pab_c[key] for key in _PAB_TABLE_KEYS}
+    pab_kwargs = build_pab_table_for_c(inv.n_cvt).workspace_kwargs()
     create = (
         create_lmm_workspace_mode4_fused_general
         if is_mode4
@@ -376,19 +375,3 @@ def _null_model_kwargs(inv: RunInvariants) -> dict[str, Any]:
     if inv.lmm_mode != 4:
         return {}
     return {"hi_eval_null": inv.Hi_eval_null, "logl_H0": inv.logl_H0}
-
-
-_PAB_TABLE_KEYS = (
-    "invariant_indices",
-    "varying_indices",
-    "logdet_diag_rows",
-    "logdet_diag_cols",
-    "level_offsets",
-    "level_counts",
-    "entries",
-    "idx_xx",
-    "idx_xy",
-    "idx_yy",
-    "var_a_cols",
-    "var_b_cols",
-)

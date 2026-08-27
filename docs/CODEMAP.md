@@ -229,18 +229,18 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3c' | `jlinalg.eigh()` | Vendor DSYEVD/DSYEVR dispatch with NumPy fallback | [jlinalg/\_\_init\_\_.py](../src/jamma/jlinalg/__init__.py) |
 | 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n^2) workspace) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
 | 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
-| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:419](../src/jamma/lmm/likelihood.py#L419) |
-| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:796](../src/jamma/lmm/likelihood.py#L796) |
-| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:187](../src/jamma/lmm/likelihood.py#L187) |
-| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [likelihood.py:285](../src/jamma/lmm/likelihood.py#L285) |
-| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [likelihood.py:166](../src/jamma/lmm/likelihood.py#L166) |
-| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:754](../src/jamma/lmm/likelihood.py#L754) |
-| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:857](../src/jamma/lmm/likelihood.py#L857) |
+| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:477](../src/jamma/lmm/likelihood.py#L477) |
+| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:842](../src/jamma/lmm/likelihood.py#L842) |
+| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:245](../src/jamma/lmm/likelihood.py#L245) |
+| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [likelihood.py:343](../src/jamma/lmm/likelihood.py#L343) |
+| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [likelihood.py:224](../src/jamma/lmm/likelihood.py#L224) |
+| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:800](../src/jamma/lmm/likelihood.py#L800) |
+| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:903](../src/jamma/lmm/likelihood.py#L903) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3e | `golden_section_optimize_lambda_mle_numpy()` | MLE optimization per SNP (LRT) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:7](../src/jamma/lmm/stats.py#L7) |
-| 3f | `batch_calc_wald_stats_from_pab_numpy()` | Production: beta, SE, p_wald across a chunk | [likelihood_numpy.py:1666](../src/jamma/lmm/likelihood_numpy.py#L1666) |
-| 3f | `batch_calc_score_stats_numpy()` | Production: p_score across a chunk | [likelihood_numpy.py:1708](../src/jamma/lmm/likelihood_numpy.py#L1708) |
+| 3f | `batch_calc_wald_stats_from_pab_numpy()` | Production: beta, SE, p_wald across a chunk | [likelihood_numpy.py:1671](../src/jamma/lmm/likelihood_numpy.py#L1671) |
+| 3f | `batch_calc_score_stats_numpy()` | Production: p_score across a chunk | [likelihood_numpy.py:1713](../src/jamma/lmm/likelihood_numpy.py#L1713) |
 | 3f | `calc_wald_test()` | Scalar reference for the batch path; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
 | 3f | `calc_score_test()` | Scalar reference for the batch path; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
 | 3f | `calc_lrt_test()` | Scalar reference for the batch path; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
@@ -565,7 +565,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Matrix writer | [io/matrix_writer.py:87](../src/jamma/io/matrix_writer.py#L87) |
 | Kinship compute | [compute.py:386](../src/jamma/kinship/compute.py#L386) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
-| REML likelihood | [likelihood.py:419](../src/jamma/lmm/likelihood.py#L419) |
+| REML likelihood | [likelihood.py:477](../src/jamma/lmm/likelihood.py#L477) |
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | Wald/Score/LRT tests | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |

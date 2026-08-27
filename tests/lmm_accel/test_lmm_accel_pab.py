@@ -125,16 +125,16 @@ class TestBuildPabTableForC:
 
         t = build_pab_table_for_c(1)
 
-        assert t["n_cvt"] == 1
-        assert t["n_index"] == 6  # (1+3)*(1+2)//2 = 6
-        assert t["n_rows"] == 3  # n_cvt + 2
+        assert t.n_cvt == 1
+        assert t.n_index == 6  # (1+3)*(1+2)//2 = 6
+        assert t.n_rows == 3  # n_cvt + 2
         # idx_yy, idx_xx, idx_xy from build_index_table
         from jamma.lmm.likelihood import build_index_table
 
         ref = build_index_table(1)
-        assert t["idx_yy"] == ref["idx_yy"]
-        assert t["idx_xx"] == ref["idx_xx"]
-        assert t["idx_xy"] == ref["idx_xy"]
+        assert t.idx_yy == ref.idx_yy
+        assert t.idx_xx == ref.idx_xx
+        assert t.idx_xy == ref.idx_xy
 
     def test_ncvt2_dimensions(self):
         """n_cvt=2: n_index=10, n_rows=4, correct inv/var counts."""
@@ -142,11 +142,11 @@ class TestBuildPabTableForC:
 
         t = build_pab_table_for_c(2)
 
-        assert t["n_index"] == 10
-        assert t["n_rows"] == 4  # n_cvt + 2
-        assert t["n_inv"] == 6
-        assert t["n_var"] == 4
-        assert t["n_inv"] + t["n_var"] == t["n_index"]
+        assert t.n_index == 10
+        assert t.n_rows == 4  # n_cvt + 2
+        assert t.n_inv == 6
+        assert t.n_var == 4
+        assert t.n_inv + t.n_var == t.n_index
 
     def test_ncvt4_dimensions(self):
         """n_cvt=4: n_index=21, n_rows=6, correct inv/var counts."""
@@ -154,11 +154,11 @@ class TestBuildPabTableForC:
 
         t = build_pab_table_for_c(4)
 
-        assert t["n_index"] == 21
-        assert t["n_rows"] == 6  # n_cvt + 2
-        assert t["n_inv"] == 15
-        assert t["n_var"] == 6
-        assert t["n_inv"] + t["n_var"] == t["n_index"]
+        assert t.n_index == 21
+        assert t.n_rows == 6  # n_cvt + 2
+        assert t.n_inv == 15
+        assert t.n_var == 6
+        assert t.n_inv + t.n_var == t.n_index
 
     def test_invariant_varying_partition(self):
         """invariant + varying indices partition range(n_index) for n_cvt=1,2,4."""
@@ -166,10 +166,10 @@ class TestBuildPabTableForC:
 
         for n_cvt in (1, 2, 4):
             t = build_pab_table_for_c(n_cvt)
-            inv = set(t["invariant_indices"].tolist())
-            var = set(t["varying_indices"].tolist())
+            inv = set(t.invariant_indices.tolist())
+            var = set(t.varying_indices.tolist())
             assert inv & var == set(), f"n_cvt={n_cvt}: overlap in inv/var"
-            assert inv | var == set(range(t["n_index"])), (
+            assert inv | var == set(range(t.n_index)), (
                 f"n_cvt={n_cvt}: inv+var doesn't cover range(n_index)"
             )
 
@@ -188,8 +188,8 @@ class TestBuildPabTableForC:
             "entries",
         ]
         for key in array_keys:
-            assert t[key].dtype == np.int32, (
-                f"{key} has dtype {t[key].dtype}, expected int32"
+            assert getattr(t, key).dtype == np.int32, (
+                f"{key} has dtype {getattr(t, key).dtype}, expected int32"
             )
 
     def test_level_offsets_index_entries(self):
@@ -198,9 +198,9 @@ class TestBuildPabTableForC:
 
         for n_cvt in (1, 2, 4):
             t = build_pab_table_for_c(n_cvt)
-            offsets = t["level_offsets"]
-            counts = t["level_counts"]
-            entries = t["entries"]
+            offsets = t.level_offsets
+            counts = t.level_counts
+            entries = t.entries
 
             # n_cvt+2 levels (0..n_cvt+1)
             assert len(offsets) == n_cvt + 2
@@ -231,12 +231,12 @@ class TestBuildPabTableForC:
         for n_cvt in (1, 2, 4):
             t = build_pab_table_for_c(n_cvt)
             ref = build_index_table(n_cvt)
-            entries = t["entries"]
-            offsets = t["level_offsets"]
-            counts = t["level_counts"]
+            entries = t.entries
+            offsets = t.level_offsets
+            counts = t.level_counts
 
             for level in range(1, n_cvt + 2):
-                ref_entries = ref["pab_recursion"][level]
+                ref_entries = ref.pab_recursion[level]
                 start = offsets[level] * 4
                 count = counts[level]
                 assert count == len(ref_entries), (
@@ -257,9 +257,9 @@ class TestBuildPabTableForC:
             t = build_pab_table_for_c(n_cvt)
             ref = build_index_table(n_cvt)
 
-            rows = t["logdet_diag_rows"].tolist()
-            cols = t["logdet_diag_cols"].tolist()
-            ref_pairs = ref["logdet_diag_indices"]
+            rows = t.logdet_diag_rows.tolist()
+            cols = t.logdet_diag_cols.tolist()
+            ref_pairs = ref.logdet_diag_indices
 
             assert len(rows) == len(ref_pairs)
             for i, (ref_row, ref_col) in enumerate(ref_pairs):

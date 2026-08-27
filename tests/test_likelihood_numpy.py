@@ -853,7 +853,7 @@ def test_optimizer_returns_pab(wald_pab_data):
 
     # Pab shape: (n_snps, n_cvt+2, n_index)
     table = build_index_table(n_cvt)
-    n_index = table["n_index"]
+    n_index = table.n_index
     assert Pab_final.shape == (n_snps, n_cvt + 2, n_index), (
         f"Pab_final shape {Pab_final.shape}, expected {(n_snps, n_cvt + 2, n_index)}"
     )
@@ -1778,13 +1778,13 @@ def test_vectorized_general_uab_parity(n_cvt):
 
     # Reference: per-SNP loop (the old implementation)
     table = build_index_table(n_cvt)
-    n_index = table["n_index"]
+    n_index = table.n_index
     Uab_ref = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
     vectors_base = np.column_stack([UtW, np.zeros(n_samples), Uty])
     for snp_idx in range(n_snps):
         vectors = vectors_base.copy()
         vectors[:, n_cvt] = UtG[:, snp_idx]
-        for a_col, b_col, idx in table["uab_pairs"]:
+        for a_col, b_col, idx in table.uab_pairs:
             Uab_ref[snp_idx, :, idx] = vectors[:, a_col] * vectors[:, b_col]
 
     # Vectorized implementation

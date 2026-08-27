@@ -18,21 +18,6 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
 )
 
-_PAB_KWARG_NAMES = (
-    "invariant_indices",
-    "varying_indices",
-    "logdet_diag_rows",
-    "logdet_diag_cols",
-    "level_offsets",
-    "level_counts",
-    "entries",
-    "idx_xx",
-    "idx_xy",
-    "idx_yy",
-    "var_a_cols",
-    "var_b_cols",
-)
-
 
 def _prepare_fused_general_data(data: dict) -> dict:
     """Add the invariant SoA, varying SoA, UtG_T and Pab table the kernels need.
@@ -79,7 +64,7 @@ def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
         20,
         n_threads,
         n_cvt=data["n_cvt"],
-        **{k: data["pab_c"][k] for k in _PAB_KWARG_NAMES},
+        **data["pab_c"].workspace_kwargs(),
     )
 
 
@@ -103,7 +88,7 @@ def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
         20,
         n_threads,
         n_cvt=data["n_cvt"],
-        **{k: data["pab_c"][k] for k in _PAB_KWARG_NAMES},
+        **data["pab_c"].workspace_kwargs(),
         hi_eval_null=data["Hi_eval_null"],
         logl_H0=data["logl_H0"],
     )

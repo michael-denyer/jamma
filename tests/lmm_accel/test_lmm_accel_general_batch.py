@@ -56,7 +56,7 @@ def _soa_inputs(data: dict) -> tuple[np.ndarray, np.ndarray, dict]:
             n_cvt, data["UtW"], data["Uty"], data["UtG"].T
         ),
         compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt=n_cvt),
-        build_pab_table_for_c(n_cvt),
+        build_pab_table_for_c(n_cvt)._asdict(),
     )
 
 

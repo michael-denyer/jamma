@@ -19,6 +19,7 @@ Key data structures:
 Key functions for C extension support:
 - classify_uab_columns: splits Uab indices into SNP-invariant and SNP-varying
 - build_pab_table_for_c: flattens recursion data into C-friendly int32 arrays
+- PabIndexTable / PabCTable: the two tables above, as typed NamedTuples
 
 Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 """
@@ -28,6 +29,7 @@ from __future__ import annotations
 import functools
 import threading
 from collections.abc import Callable, Sequence
+from typing import Any, NamedTuple
 
 import numpy as np
 from loguru import logger
@@ -84,6 +86,68 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
     return P_yy
 
 
+class PabIndexTable(NamedTuple):
+    """Index mappings for one n_cvt: GEMMA's 1-based (a, b) packing made concrete.
+
+    Built once per n_cvt by ``build_index_table`` and walked by every Uab and
+    Pab builder, scalar or batch, so the recursion visits the same integers
+    in the same order everywhere.
+    """
+
+    n_index: int
+    """Total (a, b) pairs: (n_cvt+3)*(n_cvt+2)//2."""
+    idx_yy: int
+    idx_xx: int
+    idx_xy: int
+    uab_pairs: tuple[tuple[int, int, int], ...]
+    """(0-based col_a, 0-based col_b, linear index) for Uab construction."""
+    pab_recursion: tuple[tuple[tuple[int, int, int, int, int, int], ...], ...]
+    """Per projection level p, the (a, b, index_ab, index_aw, index_bw, index_ww)
+    tuples GEMMA's CalcPab visits. Level 0 is empty: row 0 comes from dot
+    products."""
+    logdet_diag_indices: tuple[tuple[int, int], ...]
+    """(row, col) of Pab[i, (i+1, i+1)] for i in 0..n_cvt, the logdet_hiw diagonal."""
+
+
+class PabCTable(NamedTuple):
+    """``build_pab_table_for_c``'s product: the recursion flattened for the C kernels.
+
+    The ``entries`` array is stride-4: each entry is
+    [index_ab, index_aw, index_bw, index_ww]. Level 0 has no entries (row 0
+    comes from dot products); levels 1..n_cvt+1 have recursion entries.
+    ``_asdict()`` is the dict the C table parser reads.
+    """
+
+    n_cvt: int
+    n_index: int
+    n_rows: int
+    n_inv: int
+    n_var: int
+    idx_xx: int
+    idx_xy: int
+    idx_yy: int
+    invariant_indices: np.ndarray
+    varying_indices: np.ndarray
+    logdet_diag_rows: np.ndarray
+    logdet_diag_cols: np.ndarray
+    level_offsets: np.ndarray
+    level_counts: np.ndarray
+    entries: np.ndarray
+    var_a_cols: np.ndarray
+    var_b_cols: np.ndarray
+
+    def workspace_kwargs(self) -> dict[str, Any]:
+        """The kwargs ``create_workspace_*_general_c`` take.
+
+        Those constructors receive ``n_cvt`` on their own and derive the
+        other shape scalars themselves.
+        """
+        kwargs = self._asdict()
+        for name in ("n_cvt", "n_index", "n_rows", "n_inv", "n_var"):
+            del kwargs[name]
+        return kwargs
+
+
 @functools.lru_cache(maxsize=8)
 def n_index(n_cvt: int) -> int:
     """Total (a,b) pairs in Uab/Pab storage: (n_cvt+3)*(n_cvt+2)//2.
@@ -94,7 +158,8 @@ def n_index(n_cvt: int) -> int:
     return (n_cvt + 3) * (n_cvt + 2) // 2
 
 
-def build_index_table(n_cvt: int) -> dict:
+@functools.lru_cache(maxsize=8)
+def build_index_table(n_cvt: int) -> PabIndexTable:
     """Precompute all index mappings for a given n_cvt.
 
     Pure Python function, lru_cached. Runs at Python level to produce
@@ -109,14 +174,7 @@ def build_index_table(n_cvt: int) -> dict:
         n_cvt: Number of covariates.
 
     Returns:
-        Dict with precomputed index mappings:
-        - n_index: total (a,b) pairs = (n_cvt+3)*(n_cvt+2)//2
-        - idx_yy: index for phenotype-phenotype
-        - idx_xx: index for genotype-genotype
-        - idx_xy: index for genotype-phenotype
-        - uab_pairs: list of (a_col, b_col, index) for Uab construction
-        - pab_recursion: per-level recursion tuples for Pab
-        - logdet_diag_indices: (row, col) pairs for logdet_hiw diagonal
+        The ``PabIndexTable`` for this n_cvt.
     """
     idx_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
     idx_xx = get_ab_index(n_cvt + 1, n_cvt + 1, n_cvt)
@@ -133,7 +191,7 @@ def build_index_table(n_cvt: int) -> dict:
     # Pab recursion: for each projection level p (1..n_cvt+1),
     # build list of (a, b, index_ab, index_aw, index_bw, index_ww)
     # using GEMMA 1-based indexing
-    pab_recursion = {}
+    pab_recursion: list[tuple[tuple[int, int, int, int, int, int], ...]] = [()]
     for p in range(1, n_cvt + 2):
         entries = []
         for a in range(p + 1, n_cvt + 3):
@@ -143,7 +201,7 @@ def build_index_table(n_cvt: int) -> dict:
                 index_bw = get_ab_index(b, p, n_cvt)
                 index_ww = get_ab_index(p, p, n_cvt)
                 entries.append((a, b, index_ab, index_aw, index_bw, index_ww))
-        pab_recursion[p] = entries
+        pab_recursion.append(tuple(entries))
 
     # logdet_hiw diagonal: for i=0..n_cvt, the diagonal element is
     # Pab[i, get_ab_index(i+1, i+1, n_cvt)]
@@ -152,15 +210,15 @@ def build_index_table(n_cvt: int) -> dict:
         col = get_ab_index(i + 1, i + 1, n_cvt)
         logdet_diag_indices.append((i, col))
 
-    return {
-        "n_index": n_index(n_cvt),
-        "idx_yy": idx_yy,
-        "idx_xx": idx_xx,
-        "idx_xy": idx_xy,
-        "uab_pairs": uab_pairs,
-        "pab_recursion": pab_recursion,
-        "logdet_diag_indices": logdet_diag_indices,
-    }
+    return PabIndexTable(
+        n_index=n_index(n_cvt),
+        idx_yy=idx_yy,
+        idx_xx=idx_xx,
+        idx_xy=idx_xy,
+        uab_pairs=tuple(uab_pairs),
+        pab_recursion=tuple(pab_recursion),
+        logdet_diag_indices=tuple(logdet_diag_indices),
+    )
 
 
 def get_ab_index(a: int, b: int, n_cvt: int) -> int:
@@ -659,7 +717,7 @@ def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
     genotype_col = n_cvt  # 0-based index of X in vectors array
     invariant = []
     varying = []
-    for a_col, b_col, linear_idx in table["uab_pairs"]:
+    for a_col, b_col, linear_idx in table.uab_pairs:
         if genotype_col in (a_col, b_col):
             varying.append(linear_idx)
         else:
@@ -668,38 +726,26 @@ def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
 
 
 @functools.lru_cache(maxsize=8)
-def build_pab_table_for_c(n_cvt: int) -> dict:
+def build_pab_table_for_c(n_cvt: int) -> PabCTable:
     """Build flat C-friendly arrays from build_index_table recursion data.
 
-    Converts the nested Python dicts from build_index_table() and the
-    invariant/varying classification from classify_uab_columns() into
-    flat int32 numpy arrays that the C extension can consume via
-    PyArray_DATA().
-
-    The entries array is stride-4: each entry is
-    [index_ab, index_aw, index_bw, index_ww].
-
-    Level 0 has no entries (row 0 comes from dot products).
-    Levels 1..n_cvt+1 have recursion entries.
+    Converts the ``PabIndexTable`` and the invariant/varying classification
+    from classify_uab_columns() into flat int32 numpy arrays that the C
+    extension can consume via PyArray_DATA().
 
     Args:
         n_cvt: Number of covariates.
 
     Returns:
-        Dict with scalar and array fields for C extension consumption.
+        The ``PabCTable`` for this n_cvt.
     """
     table = build_index_table(n_cvt)
     inv_indices, var_indices = classify_uab_columns(n_cvt)
 
     # Flatten pab_recursion into contiguous entries array
-    # Level 0 has no entries; levels 1..n_cvt+1 have entries
-    n_levels = n_cvt + 2  # levels 0..n_cvt+1
-    level_counts_list = [0] * n_levels  # level 0 has 0 entries
+    level_counts_list = [len(level) for level in table.pab_recursion]
     all_entries = []
-
-    for level in range(1, n_cvt + 2):
-        level_entries = table["pab_recursion"][level]
-        level_counts_list[level] = len(level_entries)
+    for level_entries in table.pab_recursion:
         for _, _, idx_ab, idx_aw, idx_bw, idx_ww in level_entries:
             all_entries.extend([idx_ab, idx_aw, idx_bw, idx_ww])
 
@@ -711,8 +757,8 @@ def build_pab_table_for_c(n_cvt: int) -> dict:
         running += count
 
     # Extract logdet_diag_indices
-    diag_rows = [r for r, _ in table["logdet_diag_indices"]]
-    diag_cols = [c for _, c in table["logdet_diag_indices"]]
+    diag_rows = [r for r, _ in table.logdet_diag_indices]
+    diag_cols = [c for _, c in table.logdet_diag_indices]
 
     def _frozen(data: Sequence[int]) -> np.ndarray:
         arr = np.array(data, dtype=np.int32)
@@ -725,30 +771,30 @@ def build_pab_table_for_c(n_cvt: int) -> dict:
     genotype_col = n_cvt  # 0-based index of X in vectors array
     var_a_list = []
     var_b_list = []
-    for a_col, b_col, _linear_idx in table["uab_pairs"]:
+    for a_col, b_col, _linear_idx in table.uab_pairs:
         if genotype_col in (a_col, b_col):
             var_a_list.append(a_col)
             var_b_list.append(b_col)
 
-    return {
-        "n_cvt": n_cvt,
-        "n_index": table["n_index"],
-        "n_rows": n_cvt + 2,
-        "n_inv": len(inv_indices),
-        "n_var": len(var_indices),
-        "idx_xx": table["idx_xx"],
-        "idx_xy": table["idx_xy"],
-        "idx_yy": table["idx_yy"],
-        "invariant_indices": _frozen(inv_indices),
-        "varying_indices": _frozen(var_indices),
-        "logdet_diag_rows": _frozen(diag_rows),
-        "logdet_diag_cols": _frozen(diag_cols),
-        "level_offsets": _frozen(level_offsets_list),
-        "level_counts": _frozen(level_counts_list),
-        "entries": _frozen(all_entries),
-        "var_a_cols": _frozen(var_a_list),
-        "var_b_cols": _frozen(var_b_list),
-    }
+    return PabCTable(
+        n_cvt=n_cvt,
+        n_index=table.n_index,
+        n_rows=n_cvt + 2,
+        n_inv=len(inv_indices),
+        n_var=len(var_indices),
+        idx_xx=table.idx_xx,
+        idx_xy=table.idx_xy,
+        idx_yy=table.idx_yy,
+        invariant_indices=_frozen(inv_indices),
+        varying_indices=_frozen(var_indices),
+        logdet_diag_rows=_frozen(diag_rows),
+        logdet_diag_cols=_frozen(diag_cols),
+        level_offsets=_frozen(level_offsets_list),
+        level_counts=_frozen(level_counts_list),
+        entries=_frozen(all_entries),
+        var_a_cols=_frozen(var_a_list),
+        var_b_cols=_frozen(var_b_list),
+    )
 
 
 def compute_null_model_lambda(

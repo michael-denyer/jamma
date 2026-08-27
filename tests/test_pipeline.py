@@ -628,7 +628,7 @@ class TestEarlySampleFiltering:
         )
 
     def test_save_kinship_full_size(self, tmp_path: Path) -> None:
-        """save_kinship=True: load_kinship still returns filtered shape."""
+        """save_kinship=True: the file is full-size, the return is the subset."""
         bfile = _copy_plink_genotypes(tmp_path)
         _write_fam(tmp_path / "test.fam")
 
@@ -647,6 +647,10 @@ class TestEarlySampleFiltering:
         valid_indices = np.array([0, 1, 2, 3, 4, 6, 7, 8, 9])
         K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
         assert K.shape == (len(valid_indices), len(valid_indices))
+
+        K_saved = np.load(out / "result.cXX.npy")
+        assert K_saved.shape == (_N_SAMPLES, _N_SAMPLES)
+        np.testing.assert_array_equal(K, K_saved[np.ix_(valid_indices, valid_indices)])
 
     @pytest.mark.tier1
     def test_lmm_kinship_applies_config_maf_miss(self) -> None:

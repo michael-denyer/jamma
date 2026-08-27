@@ -18,7 +18,7 @@ from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
     compute_loco_kinship_streaming,
-    compute_standardized_kinship,
+    compute_standardized_kinship_streaming,
     write_kinship_matrix,
     write_loco_kinship_matrices,
 )
@@ -103,21 +103,14 @@ def compute_kinship(config: PipelineConfig, mode: int) -> KinshipResult:
             ksnps_indices=ksnps_indices,
         )
     else:
-        # Standardized kinship needs the full genotype matrix (no streaming).
-        from jamma.io import load_plink_binary
-
-        logger.info(f"Loading PLINK data from {config.bfile}")
-        plink_data = load_plink_binary(config.bfile)
-        genotypes = plink_data.genotypes
-        if ksnps_indices is not None:
-            genotypes = genotypes[:, ksnps_indices]
-            logger.info(f"Using {genotypes.shape[1]} SNPs for kinship computation")
-        logger.info("Computing standardized kinship matrix")
-        K = compute_standardized_kinship(
-            genotypes,
+        logger.info("Computing standardized kinship matrix (streaming)")
+        K = compute_standardized_kinship_streaming(
+            config.bfile,
             maf_threshold=config.maf,
             miss_threshold=config.miss,
             check_memory=config.check_memory,
+            show_progress=config.show_progress,
+            ksnps_indices=ksnps_indices,
         )
 
     kinship_s = time.perf_counter() - t_kinship

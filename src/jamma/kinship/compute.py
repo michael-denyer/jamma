@@ -131,13 +131,14 @@ def _selected_chunks(
     valid_indices: np.ndarray | None,
     *,
     keep: Callable[[np.ndarray], bool] | None = None,
+    transform: Callable[[np.ndarray], np.ndarray] = impute_and_center,
 ) -> Iterator[CenteredChunk]:
-    """Select ``snp_indices`` columns, subset rows, center, one yield per file chunk.
+    """Select ``snp_indices`` columns, subset rows, transform, one yield per file chunk.
 
     Unifies the streaming (PASS 2) and LOCO accumulation loops, which share one
     mechanism. Pick the filtered columns of each BED chunk via searchsorted against
-    the sorted global ``snp_indices``, subset rows to ``valid_indices``, and
-    impute-and-center. The single-pass monomorphism loop selects columns by a per-chunk
+    the sorted global ``snp_indices``, subset rows to ``valid_indices``, and apply
+    ``transform``. The single-pass monomorphism loop selects columns by a per-chunk
     ``nanvar`` mask instead and is deliberately not routed through here.
 
     Args:
@@ -146,9 +147,14 @@ def _selected_chunks(
         snp_indices: Global indices of SNPs that passed filtering, sorted ascending.
         valid_indices: Sample indices to keep, or None for all samples.
         keep: Optional predicate on a chunk's global indices, evaluated before any
-            centering. Returning False skips the chunk with no work done, preserving
+            transform. Returning False skips the chunk with no work done, preserving
             LOCO's "skip chunks that contribute nothing" optimisation. None keeps every
             chunk with at least one selected column.
+        transform: Per-chunk preprocessing applied to the selected, row-subset columns.
+            Defaults to ``impute_and_center`` (GEMMA -gk 1). Pass
+            ``impute_center_and_standardize`` for -gk 2; it self-computes each column's
+            variance over the chunk's rows, which equals the full-sample variance since
+            every retained row is present in the chunk.
 
     Yields:
         One CenteredChunk per surviving file chunk. Chunks with no selected columns (or
@@ -159,8 +165,8 @@ def _selected_chunks(
         chunks and never splitting one chunk's selection. So one ``_accumulate_kinship``
         per yield reproduces the pre-refactor dsyrk column grouping, which splitting
         would not (bit-level). ``searchsorted`` runs on full BED chunk boundaries.
-        Rows are subset before columns; centering is per-column over the retained rows,
-        so this is value-identical to selecting columns first.
+        Rows are subset before columns; the transform is per-column over the retained
+        rows, so this is value-identical to selecting columns first.
     """
     assert snp_indices.ndim == 1, "snp_indices must be 1-D"
     assert len(snp_indices) < 2 or np.all(np.diff(snp_indices) > 0), (
@@ -182,7 +188,7 @@ def _selected_chunks(
             f"kinship accumulation requires float64 chunks (got {X_chunk.dtype}); "
             "check stream_genotype_chunks dtype arg"
         )
-        yield CenteredChunk(impute_and_center(X_chunk), global_idx)
+        yield CenteredChunk(transform(X_chunk), global_idx)
 
 
 def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
@@ -479,6 +485,94 @@ def compute_standardized_kinship(
     )
 
 
+def compute_standardized_kinship_streaming(
+    bed_path: Path,
+    chunk_size: int = 10_000,
+    maf_threshold: float = 0.0,
+    miss_threshold: float = 1.0,
+    check_memory: bool = True,
+    show_progress: bool = True,
+    ksnps_indices: np.ndarray | None = None,
+    valid_indices: np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute standardized kinship (GEMMA -gk 2) from disk-streamed genotypes.
+
+    Implements K = (1/p) * Z @ Z.T where Z[i,k] = (x[i,k] - mean_k) / sd_k, reading
+    genotype chunks from disk instead of loading the full matrix. This is the
+    streaming counterpart of ``compute_standardized_kinship`` and lets -gk 2 scale
+    past the in-memory genotype limit, exactly as ``compute_kinship_streaming`` does
+    for -gk 1.
+
+    Always two-pass (PASS 1 stats/filter, PASS 2 standardize + accumulate); the
+    single-pass -gk 1 optimisation does not apply, because standardization needs the
+    per-SNP variance the transform computes over each chunk's full rows.
+
+    Note: Monomorphic SNPs (zero variance) are excluded by the PASS-1 filter, matching
+    GEMMA and the in-memory path.
+
+    Args:
+        bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
+        chunk_size: Number of SNPs per chunk (default 10,000).
+        maf_threshold: Minimum MAF for SNP inclusion (default 0.0 = no filter).
+        miss_threshold: Maximum missing rate (default 1.0 = no filter).
+        check_memory: If True (default), check available memory before allocation.
+        show_progress: If True (default), show progress bar during iteration.
+        ksnps_indices: Pre-resolved column indices for -ksnps restriction, or None.
+        valid_indices: Optional array of sample indices to keep. When provided, the
+            kinship matrix is accumulated at (n_valid, n_valid) size directly.
+
+    Returns:
+        Standardized kinship matrix (n_out, n_out) where n_out = len(valid_indices)
+        or n_samples. Symmetric, scaled by the filtered SNP count.
+
+    Raises:
+        MemoryError: If check_memory=True and insufficient memory available.
+        FileNotFoundError: If the PLINK .bed file does not exist.
+        ValueError: If no SNPs pass filtering.
+    """
+    start_time = time.perf_counter()
+
+    meta = get_plink_metadata(bed_path)
+    n_samples = meta.n_samples
+    n_snps = meta.n_snps
+
+    if valid_indices is not None:
+        validate_valid_indices(valid_indices, n_samples)
+
+    n_out = len(valid_indices) if valid_indices is not None else n_samples
+
+    logger.info("Computing Standardized Kinship Matrix (streaming)")
+    logger.info(
+        f"  Individuals: {n_out:,}"
+        + (f" (filtered from {n_samples:,})" if n_out != n_samples else "")
+    )
+    logger.info(f"  SNPs: {n_snps:,}")
+    logger.info(f"  Chunk size: {chunk_size:,}")
+
+    if check_memory:
+        _preflight_kinship_memory(n_samples, chunk_size)
+
+    K = _stream_kinship_two_pass(
+        bed_path,
+        n_samples=n_samples,
+        n_snps=n_snps,
+        n_out=n_out,
+        chunk_size=chunk_size,
+        maf_threshold=maf_threshold,
+        miss_threshold=miss_threshold,
+        show_progress=show_progress,
+        ksnps_indices=ksnps_indices,
+        valid_indices=valid_indices,
+        transform=impute_center_and_standardize,
+        desc="Computing standardized kinship",
+    )
+
+    elapsed = time.perf_counter() - start_time
+    logger.info(f"Standardized kinship matrix computed in {elapsed:.2f}s")
+
+    return K
+
+
 def _kinship_single_pass(
     bed_path: Path,
     n_samples: int,
@@ -677,8 +771,74 @@ def compute_kinship_streaming(
         logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
         return K
 
-    # === PASS 1: Compute per-SNP statistics for filtering ===
-    # Always compute stats for monomorphic filtering (GEMMA behavior).
+    K = _stream_kinship_two_pass(
+        bed_path,
+        n_samples=n_samples,
+        n_snps=n_snps,
+        n_out=n_out,
+        chunk_size=chunk_size,
+        maf_threshold=maf_threshold,
+        miss_threshold=miss_threshold,
+        show_progress=show_progress,
+        ksnps_indices=ksnps_indices,
+        valid_indices=valid_indices,
+        transform=impute_and_center,
+        desc="Computing kinship",
+    )
+
+    elapsed = time.perf_counter() - start_time
+    logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
+
+    return K
+
+
+def _stream_kinship_two_pass(
+    bed_path: Path,
+    *,
+    n_samples: int,
+    n_snps: int,
+    n_out: int,
+    chunk_size: int,
+    maf_threshold: float,
+    miss_threshold: float,
+    show_progress: bool,
+    ksnps_indices: np.ndarray | None,
+    valid_indices: np.ndarray | None,
+    transform: Callable[[np.ndarray], np.ndarray],
+    desc: str,
+) -> np.ndarray:
+    """Two-pass streaming kinship accumulation shared by -gk 1 and -gk 2.
+
+    PASS 1 collects per-SNP stats and applies the MAF/missing/monomorphism filter.
+    PASS 2 streams the filtered columns one file chunk at a time, applies
+    ``transform`` (centering for -gk 1, standardizing for -gk 2), and accumulates
+    K via dsyrk, one call per file chunk. K is scaled by the filtered SNP count.
+
+    The transform is the only difference between the two modes; the disk-read order,
+    column grouping, and accumulation are identical, so the numerics contract of
+    ``_selected_chunks`` holds for both.
+
+    Args:
+        bed_path: PLINK file prefix.
+        n_samples: Total sample count (disk chunk-buffer width).
+        n_snps: Total SNP count.
+        n_out: Kinship matrix dimension (len(valid_indices) or n_samples).
+        chunk_size: SNPs per disk read.
+        maf_threshold: Minimum MAF for inclusion.
+        miss_threshold: Maximum missing rate for inclusion.
+        show_progress: Show the PASS-2 progress bar.
+        ksnps_indices: Optional -ksnps restriction, or None.
+        valid_indices: Sample indices to retain (already validated), or None.
+        transform: Per-chunk preprocessing (impute_and_center or
+            impute_center_and_standardize).
+        desc: Progress-bar description.
+
+    Returns:
+        Kinship matrix (n_out, n_out), symmetric, scaled by the filtered SNP count.
+
+    Raises:
+        ValueError: If no SNPs pass filtering.
+    """
     stats = collect_streamed_snp_stats(
         bed_path,
         n_snps=n_snps,
@@ -705,39 +865,29 @@ def compute_kinship_streaming(
     else:
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
-    # Get indices of SNPs that passed filtering.
     snp_indices = snp_selection.indices
     del stats, snp_selection
 
-    # Initialize kinship accumulator
     K = np.zeros((n_out, n_out), dtype=np.float64)
 
-    # === PASS 2: Accumulate kinship from filtered SNPs ===
     n_chunks = (n_snps + chunk_size - 1) // chunk_size
     chunk_iter = stream_genotype_chunks(
         bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
     )
-
     if show_progress:
         chunk_iter = progress_iterator(
             chunk_iter,
             total=n_chunks,
-            desc="Computing kinship",
+            desc=desc,
             initial_eta_seconds=estimate_kinship_seconds(n_out, n_snps),
         )
 
-    for X_centered, _global_idx in _selected_chunks(
-        chunk_iter, snp_indices, valid_indices
+    for X_transformed, _global_idx in _selected_chunks(
+        chunk_iter, snp_indices, valid_indices, transform=transform
     ):
-        _accumulate_kinship(K, X_centered)
+        _accumulate_kinship(K, X_transformed)
 
-    # Scale by number of filtered SNPs
-    K = K / n_filtered
-
-    elapsed = time.perf_counter() - start_time
-    logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
-
-    return K
+    return K / n_filtered
 
 
 def _yield_full_kinship_fallback(

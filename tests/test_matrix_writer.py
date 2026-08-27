@@ -9,7 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.io.matrix_writer import _MAX_WRITERS, write_matrix_parallel
+from jamma.io._parallel_text import MAX_WORKERS
+from jamma.io.matrix_writer import write_matrix_parallel
 
 
 def _savetxt_bytes(
@@ -244,8 +245,8 @@ class TestWorkerCap:
     """Verify worker count is capped to avoid disk I/O bottleneck."""
 
     def test_max_writers_constant(self) -> None:
-        """_MAX_WRITERS cap is 32."""
-        assert _MAX_WRITERS == 32
+        """The shared worker cap is 32."""
+        assert MAX_WORKERS == 32
 
     def test_worker_count_capped_on_high_core_machine(
         self, tmp_path: Path, monkeypatch
@@ -261,7 +262,7 @@ class TestWorkerCap:
         matrix = rng.standard_normal((600, 10))
         out_path = tmp_path / "output.txt"
 
-        # write_matrix_parallel should cap at _MAX_WRITERS internally.
+        # write_matrix_parallel should cap at MAX_WORKERS internally.
         # Verify by checking the output is correct (proves it ran) and
         # that the constant is in effect (tested above).
         write_matrix_parallel(matrix, out_path)

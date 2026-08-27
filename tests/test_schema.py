@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.io.plink import PlinkMetadata
 from jamma.lmm.schema import (
     ACCUM_KEYS,
     DEFAULT_L_MAX,
@@ -494,13 +495,16 @@ def test_write_arrays_batch_with_plink_meta(tmp_path: Path) -> None:
     """write_arrays_batch works with SnpMeta built from PLINK metadata."""
     from jamma.lmm.io import IncrementalAssocWriter
 
-    meta = {
-        "chromosome": np.array(["1", "2", "3"]),
-        "sid": np.array(["rs100", "rs200", "rs300"]),
-        "bp_position": np.array([1000, 2000, 3000]),
-        "allele_1": np.array(["A", "T", "C"]),
-        "allele_2": np.array(["G", "C", "A"]),
-    }
+    meta = PlinkMetadata(
+        n_samples=4,
+        n_snps=3,
+        iid=np.array([["F1", "I1"], ["F2", "I2"], ["F3", "I3"], ["F4", "I4"]]),
+        sid=np.array(["rs100", "rs200", "rs300"]),
+        chromosome=np.array(["1", "2", "3"]),
+        bp_position=np.array([1000, 2000, 3000]),
+        allele_1=np.array(["A", "T", "C"]),
+        allele_2=np.array(["G", "C", "A"]),
+    )
     snp_info = SnpMeta.from_plink_meta(meta)
 
     rng = np.random.default_rng(55)

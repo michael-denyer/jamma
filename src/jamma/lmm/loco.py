@@ -237,8 +237,8 @@ def run_lmm_loco(
 
     # Get metadata
     meta = get_plink_metadata(bed_path)
-    n_samples_total = meta["n_samples"]
-    n_snps_total = meta["n_snps"]
+    n_samples_total = meta.n_samples
+    n_snps_total = meta.n_snps
 
     validate_snp_indices(snps_indices, n_snps_total)
 

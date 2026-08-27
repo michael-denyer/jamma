@@ -49,13 +49,13 @@ def compute_kinship(config: PipelineConfig, mode: int) -> KinshipResult:
         A KinshipResult with the written paths, dimensions, and timing.
     """
     meta = get_plink_metadata(config.bfile)
-    n_samples = meta["n_samples"]
-    n_snps = meta["n_snps"]
+    n_samples = meta.n_samples
+    n_snps = meta.n_snps
 
     # GEMMA-style banner — kinship uses all samples (n_analyzed == n_total).
     log_dataset_banner(n_total=n_samples, n_analyzed=n_samples, n_snps=n_snps)
 
-    ksnps_indices = resolve_snp_list_file(config.ksnps_file, meta["sid"], "-ksnps")
+    ksnps_indices = resolve_snp_list_file(config.ksnps_file, meta.sid, "-ksnps")
 
     t_kinship = time.perf_counter()
 

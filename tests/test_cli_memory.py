@@ -27,7 +27,7 @@ class TestCliMemoryCheckUnit:
         # This simulates what CLI does: get dimensions, then estimate
         meta = get_plink_metadata(PLINK_PREFIX)
         est = estimate_streaming_memory(
-            n_samples=meta["n_samples"],
+            n_samples=meta.n_samples,
         )
 
         assert est.total_peak_gb >= 0
@@ -38,10 +38,8 @@ class TestCliMemoryCheckUnit:
         # This should be fast and low-memory
         meta = get_plink_metadata(PLINK_PREFIX)
 
-        assert "n_samples" in meta
-        assert "n_snps" in meta
-        assert meta["n_samples"] == 100
-        assert meta["n_snps"] == 500
+        assert meta.n_samples == 100
+        assert meta.n_snps == 500
 
 
 @pytest.mark.tier1

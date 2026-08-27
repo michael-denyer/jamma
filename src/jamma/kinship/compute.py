@@ -544,8 +544,8 @@ def compute_kinship_streaming(
 
     # Get dimensions without loading genotypes
     meta = get_plink_metadata(bed_path)
-    n_samples = meta["n_samples"]
-    n_snps = meta["n_snps"]
+    n_samples = meta.n_samples
+    n_snps = meta.n_snps
 
     if valid_indices is not None:
         _validate_valid_indices(valid_indices, n_samples)
@@ -1100,9 +1100,9 @@ def compute_loco_kinship_streaming(
 
     # Get dimensions and chromosome metadata
     meta = get_plink_metadata(bed_path)
-    n_samples = meta["n_samples"]
-    n_snps = meta["n_snps"]
-    chromosomes = meta["chromosome"]
+    n_samples = meta.n_samples
+    n_snps = meta.n_snps
+    chromosomes = meta.chromosome
 
     if valid_indices is not None:
         _validate_valid_indices(valid_indices, n_samples)

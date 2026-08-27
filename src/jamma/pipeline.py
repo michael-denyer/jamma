@@ -26,7 +26,7 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import numpy as np
 from loguru import logger
@@ -34,7 +34,11 @@ from loguru import logger
 from jamma.core.backend import log_backend_selection
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.io.covariate import read_covariate_file
-from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
+from jamma.io.plink import (
+    PlinkMetadata,
+    get_plink_metadata,
+    validate_plink_dimensions,
+)
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
@@ -485,8 +489,8 @@ class PipelineRunner:
 
         # Route through select_execution_mode for all backend requests.
         plan = select_execution_mode(
-            n_samples=meta["n_samples"],
-            n_snps=meta["n_snps"],
+            n_samples=meta.n_samples,
+            n_snps=meta.n_snps,
             requested=requested,
         )
 
@@ -563,7 +567,7 @@ class PipelineRunner:
         t_start: float,
         plan: ExecutionPlan,
         requested: Literal["auto", "numpy", "numpy-streaming"],
-        meta: dict[str, Any],
+        meta: PlinkMetadata,
     ) -> PipelineResult:
         """Execute the pipeline body.
 
@@ -575,14 +579,12 @@ class PipelineRunner:
         """
         self.validate_inputs()
 
-        n_samples = meta["n_samples"]
-        n_snps = meta["n_snps"]
+        n_samples = meta.n_samples
+        n_snps = meta.n_snps
 
-        snps_indices = resolve_snp_list_file(
-            self.config.snps_file, meta["sid"], "-snps"
-        )
+        snps_indices = resolve_snp_list_file(self.config.snps_file, meta.sid, "-snps")
         ksnps_indices = resolve_snp_list_file(
-            self.config.ksnps_file, meta["sid"], "-ksnps"
+            self.config.ksnps_file, meta.sid, "-ksnps"
         )
 
         self.config.output_dir.mkdir(parents=True, exist_ok=True)

@@ -19,13 +19,13 @@ import pytest
 
 from jamma.lmm.eigen_io import (
     _load_npy_cache,
+    _read_eigenvalues,
+    _read_eigenvectors,
+    _write_eigenvalues,
+    _write_eigenvectors,
     _write_npy_cache,
     read_eigen_files,
-    read_eigenvalues,
-    read_eigenvectors,
     write_eigen_files,
-    write_eigenvalues,
-    write_eigenvectors,
 )
 from tests.conftest import load_phenotypes_from_fam
 
@@ -42,7 +42,7 @@ class TestEigenvalueFormat:
         """Eigenvalue file: one value per line, .10g format, no header (legacy_text)."""
         values = np.array([0.001, 1.0, 2.5, 100.0, 12345.6789012345])
         path = tmp_path / "test.eigenD.txt"
-        write_eigenvalues(values, path, legacy_text=True)
+        _write_eigenvalues(values, path, legacy_text=True)
 
         lines = path.read_text().strip().splitlines()
         assert len(lines) == 5
@@ -62,7 +62,7 @@ class TestEigenvalueFormat:
             ]
         )
         path = tmp_path / "test.eigenU.txt"
-        write_eigenvectors(matrix, path, legacy_text=True)
+        _write_eigenvectors(matrix, path, legacy_text=True)
 
         lines = path.read_text().strip().splitlines()
         assert len(lines) == 3
@@ -85,8 +85,8 @@ class TestEigenvalueFormat:
         assert np.all(eigenvalues[:-1] <= eigenvalues[1:])
 
         path = tmp_path / "test.eigenD.npy"
-        write_eigenvalues(eigenvalues, path)
-        loaded = read_eigenvalues(path)
+        _write_eigenvalues(eigenvalues, path)
+        loaded = _read_eigenvalues(path)
 
         # Order is preserved
         assert np.all(loaded[:-1] <= loaded[1:])
@@ -109,8 +109,8 @@ class TestRoundTripPrecision:
         original = np.sort(rng.uniform(0.001, 1000.0, size=100))
 
         path = tmp_path / "eigenD.npy"
-        write_eigenvalues(original, path)
-        loaded = read_eigenvalues(path)
+        _write_eigenvalues(original, path)
+        loaded = _read_eigenvalues(path)
 
         np.testing.assert_array_equal(loaded, original)
 
@@ -123,8 +123,8 @@ class TestRoundTripPrecision:
 
         # Eigenvectors from eigh are orthonormal
         path = tmp_path / "eigenU.npy"
-        write_eigenvectors(eigenvectors, path)
-        loaded = read_eigenvectors(path)
+        _write_eigenvectors(eigenvectors, path)
+        loaded = _read_eigenvectors(path)
 
         np.testing.assert_array_equal(loaded, eigenvectors)
 
@@ -159,8 +159,8 @@ class TestDimensionValidation:
         d_path = tmp_path / "test.eigenD.npy"
         u_path = tmp_path / "test.eigenU.npy"
 
-        write_eigenvalues(np.ones(10), d_path)
-        write_eigenvectors(np.eye(8), u_path)
+        _write_eigenvalues(np.ones(10), d_path)
+        _write_eigenvectors(np.eye(8), u_path)
 
         with pytest.raises(ValueError, match="does not match"):
             read_eigen_files(d_path, u_path)
@@ -170,8 +170,8 @@ class TestDimensionValidation:
         d_path = tmp_path / "test.eigenD.npy"
         u_path = tmp_path / "test.eigenU.npy"
 
-        write_eigenvalues(np.ones(10), d_path)
-        write_eigenvectors(np.eye(10), u_path)
+        _write_eigenvalues(np.ones(10), d_path)
+        _write_eigenvectors(np.eye(10), u_path)
 
         with pytest.raises(ValueError, match="pipeline expects 12"):
             read_eigen_files(d_path, u_path, n_samples=12)
@@ -181,8 +181,8 @@ class TestDimensionValidation:
         d_path = tmp_path / "test.eigenD.npy"
         u_path = tmp_path / "test.eigenU.npy"
 
-        write_eigenvalues(np.ones(10), d_path)
-        write_eigenvectors(np.eye(10), u_path)
+        _write_eigenvalues(np.ones(10), d_path)
+        _write_eigenvectors(np.eye(10), u_path)
 
         eigenvalues, eigenvectors = read_eigen_files(d_path, u_path, n_samples=10)
         assert eigenvalues.shape == (10,)
@@ -193,8 +193,8 @@ class TestDimensionValidation:
         d_path = tmp_path / "test.eigenD.npy"
         u_path = tmp_path / "test.eigenU.npy"
 
-        write_eigenvalues(np.ones(10), d_path)
-        write_eigenvectors(np.eye(10), u_path)
+        _write_eigenvalues(np.ones(10), d_path)
+        _write_eigenvectors(np.eye(10), u_path)
 
         eigenvalues, eigenvectors = read_eigen_files(d_path, u_path)
         assert eigenvalues.shape == (10,)
@@ -213,9 +213,9 @@ class TestEdgeCases:
     def test_write_creates_parent_directories(self, tmp_path: Path) -> None:
         """Writing to nested path creates parent directories."""
         nested = tmp_path / "a" / "b" / "c" / "test.eigenD.npy"
-        write_eigenvalues(np.array([1.0, 2.0]), nested)
+        _write_eigenvalues(np.array([1.0, 2.0]), nested)
         assert nested.exists()
-        loaded = read_eigenvalues(nested)
+        loaded = _read_eigenvalues(nested)
         assert len(loaded) == 2
 
     def test_read_eigenvalues_empty_file(self, tmp_path: Path) -> None:
@@ -224,7 +224,7 @@ class TestEdgeCases:
         path.write_text("")
 
         with pytest.raises(ValueError, match="empty"):
-            read_eigenvalues(path)
+            _read_eigenvalues(path)
 
     def test_write_read_single_eigenvalue(self, tmp_path: Path) -> None:
         """1x1 matrix edge case preserves correct shapes."""
@@ -234,11 +234,11 @@ class TestEdgeCases:
         d_path = tmp_path / "single.eigenD.npy"
         u_path = tmp_path / "single.eigenU.npy"
 
-        write_eigenvalues(eigenvalues, d_path)
-        write_eigenvectors(eigenvectors, u_path)
+        _write_eigenvalues(eigenvalues, d_path)
+        _write_eigenvectors(eigenvectors, u_path)
 
-        loaded_d = read_eigenvalues(d_path)
-        loaded_u = read_eigenvectors(u_path)
+        loaded_d = _read_eigenvalues(d_path)
+        loaded_u = _read_eigenvectors(u_path)
 
         # Readers guarantee correct shapes
         assert loaded_d.shape == (1,)
@@ -263,7 +263,7 @@ class TestReaderValidation:
         path.write_text("1.0\nhello\n3.0\n")
 
         with pytest.raises(ValueError, match=str(path)):
-            read_eigenvalues(path)
+            _read_eigenvalues(path)
 
     def test_read_eigenvectors_unparsable_includes_path(self, tmp_path: Path) -> None:
         """Non-numeric eigenvector file includes path in error."""
@@ -271,7 +271,7 @@ class TestReaderValidation:
         path.write_text("1.0\t2.0\nfoo\tbar\n")
 
         with pytest.raises(ValueError, match=str(path)):
-            read_eigenvectors(path)
+            _read_eigenvectors(path)
 
     def test_read_eigenvectors_non_square_raises(self, tmp_path: Path) -> None:
         """Non-square eigenvector matrix raises ValueError at reader level."""
@@ -280,7 +280,7 @@ class TestReaderValidation:
         np.savetxt(path, np.ones((2, 3)), fmt="%.10g", delimiter="\t")
 
         with pytest.raises(ValueError, match="square"):
-            read_eigenvectors(path)
+            _read_eigenvectors(path)
 
     def test_read_eigenvectors_empty_file_raises(self, tmp_path: Path) -> None:
         """Empty eigenvector file raises ValueError."""
@@ -288,7 +288,7 @@ class TestReaderValidation:
         path.write_text("")
 
         with pytest.raises(ValueError, match="empty"):
-            read_eigenvectors(path)
+            _read_eigenvectors(path)
 
     def test_negative_eigenvalues_rejected(self, tmp_path: Path) -> None:
         """read_eigen_files rejects negative eigenvalues from external files.
@@ -302,8 +302,8 @@ class TestReaderValidation:
         u_path = tmp_path / "test.eigenU.npy"
 
         # One negative eigenvalue
-        write_eigenvalues(np.array([-0.5, 1.0, 2.0]), d_path)
-        write_eigenvectors(np.eye(3), u_path)
+        _write_eigenvalues(np.array([-0.5, 1.0, 2.0]), d_path)
+        _write_eigenvectors(np.eye(3), u_path)
 
         with pytest.raises(ValueError, match="negative"):
             read_eigen_files(d_path, u_path)
@@ -313,8 +313,8 @@ class TestReaderValidation:
         d_path = tmp_path / "test.eigenD.npy"
         u_path = tmp_path / "test.eigenU.npy"
 
-        write_eigenvalues(np.array([0.0, 0.0, 1.0]), d_path)
-        write_eigenvectors(np.eye(3), u_path)
+        _write_eigenvalues(np.array([0.0, 0.0, 1.0]), d_path)
+        _write_eigenvectors(np.eye(3), u_path)
 
         eigenvalues, _ = read_eigen_files(d_path, u_path)
         assert eigenvalues[0] == 0.0
@@ -324,14 +324,14 @@ class TestReaderValidation:
         path = tmp_path / "bad.eigenD.npy"
         np.save(path, np.eye(3))  # 2D, not 1D
         with pytest.raises(ValueError, match="wrong shape"):
-            read_eigenvalues(path)
+            _read_eigenvalues(path)
 
     def test_read_eigenvectors_npy_non_square(self, tmp_path: Path) -> None:
         """Non-square .npy file raises ValueError when loaded as eigenvectors."""
         path = tmp_path / "bad.eigenU.npy"
         np.save(path, np.ones((2, 3)))
         with pytest.raises(ValueError, match="wrong shape"):
-            read_eigenvectors(path)
+            _read_eigenvectors(path)
 
 
 # =============================================================================
@@ -348,15 +348,15 @@ class TestNpyCache:
         d_path = tmp_path / "test.eigenD.txt"
         u_path = tmp_path / "test.eigenU.txt"
         # Use legacy_text=True to write actual .txt files for sidecar test
-        write_eigenvalues(np.ones(5), d_path, legacy_text=True)
-        write_eigenvectors(np.eye(5), u_path, legacy_text=True)
+        _write_eigenvalues(np.ones(5), d_path, legacy_text=True)
+        _write_eigenvectors(np.eye(5), u_path, legacy_text=True)
 
         # Delete .npy files that write_* creates
         d_path.with_suffix(".npy").unlink(missing_ok=True)
         u_path.with_suffix(".npy").unlink(missing_ok=True)
 
-        read_eigenvalues(d_path)
-        read_eigenvectors(u_path)
+        _read_eigenvalues(d_path)
+        _read_eigenvectors(u_path)
 
         assert d_path.with_suffix(".npy").exists(), ".eigenD.npy not created"
         assert u_path.with_suffix(".npy").exists(), ".eigenU.npy not created"
@@ -369,16 +369,16 @@ class TestNpyCache:
         eigenvalues = np.array([1.0, 2.0, 3.0])
         eigenvectors = np.eye(3) * 2.0
         # Use legacy_text=True to write actual .txt files + sidecar
-        write_eigenvalues(eigenvalues, d_path, legacy_text=True)
-        write_eigenvectors(eigenvectors, u_path, legacy_text=True)
+        _write_eigenvalues(eigenvalues, d_path, legacy_text=True)
+        _write_eigenvectors(eigenvectors, u_path, legacy_text=True)
 
         # First read (uses cache written by write_*)
-        d1 = read_eigenvalues(d_path)
-        u1 = read_eigenvectors(u_path)
+        d1 = _read_eigenvalues(d_path)
+        u1 = _read_eigenvectors(u_path)
 
         # Second read (uses cache)
-        d2 = read_eigenvalues(d_path)
-        u2 = read_eigenvectors(u_path)
+        d2 = _read_eigenvalues(d_path)
+        u2 = _read_eigenvectors(u_path)
 
         np.testing.assert_array_equal(d1, d2)
         np.testing.assert_array_equal(u1, u2)
@@ -388,8 +388,8 @@ class TestNpyCache:
         import time
 
         path = tmp_path / "test.eigenD.txt"
-        write_eigenvalues(np.array([1.0, 2.0]), path, legacy_text=True)
-        first = read_eigenvalues(path)
+        _write_eigenvalues(np.array([1.0, 2.0]), path, legacy_text=True)
+        first = _read_eigenvalues(path)
 
         # Overwrite text file with different data (wait for mtime granularity)
         time.sleep(0.05)
@@ -397,7 +397,7 @@ class TestNpyCache:
         # Touch to ensure mtime is newer
         path.touch()
 
-        second = read_eigenvalues(path)
+        second = _read_eigenvalues(path)
         np.testing.assert_array_equal(second, [10.0, 20.0])
         assert not np.array_equal(first, second)
 
@@ -405,23 +405,23 @@ class TestNpyCache:
         """Corrupted .npy cache triggers text re-parse for legacy text files."""
         path = tmp_path / "test.eigenD.txt"
         # Write text file with sidecar
-        write_eigenvalues(np.array([1.0, 2.0, 3.0]), path, legacy_text=True)
+        _write_eigenvalues(np.array([1.0, 2.0, 3.0]), path, legacy_text=True)
 
         # Corrupt the .npy cache
         npy_path = path.with_suffix(".npy")
         npy_path.write_bytes(b"garbage data not a valid npy file")
 
         # Should still work by falling back to text
-        data = read_eigenvalues(path)
+        data = _read_eigenvalues(path)
         np.testing.assert_allclose(data, [1.0, 2.0, 3.0])
 
     def test_write_creates_npy_sidecar(self, tmp_path: Path) -> None:
-        """write_eigenvalues/write_eigenvectors with legacy_text create .npy sidecar."""
+        """The two legacy_text writers each leave a .npy sidecar beside the text."""
         d_path = tmp_path / "test.eigenD.txt"
         u_path = tmp_path / "test.eigenU.txt"
 
-        write_eigenvalues(np.ones(3), d_path, legacy_text=True)
-        write_eigenvectors(np.eye(3), u_path, legacy_text=True)
+        _write_eigenvalues(np.ones(3), d_path, legacy_text=True)
+        _write_eigenvectors(np.eye(3), u_path, legacy_text=True)
 
         assert d_path.with_suffix(".npy").exists()
         assert u_path.with_suffix(".npy").exists()
@@ -452,16 +452,16 @@ class TestNpyCache:
     def test_cache_load_is_read_only(self, tmp_path: Path) -> None:
         """Cache-loaded eigenvalues are read-only (mmap_mode='r' from _load_npy_cache).
 
-        write_eigenvalues with legacy_text=True writes both the .txt file and
-        a .npy sidecar via _write_npy_cache. Subsequent read_eigenvalues uses
+        _write_eigenvalues with legacy_text=True writes both the .txt file and
+        a .npy sidecar via _write_npy_cache. Subsequent _read_eigenvalues uses
         _load_npy_cache which returns np.load(..., mmap_mode='r').
         np.atleast_1d on a read-only memmap returns the same object unchanged.
         """
         d_path = tmp_path / "test.eigenD.txt"
-        write_eigenvalues(np.array([1.0, 2.0, 3.0]), d_path, legacy_text=True)
+        _write_eigenvalues(np.array([1.0, 2.0, 3.0]), d_path, legacy_text=True)
 
-        # read_eigenvalues will use the .npy sidecar via _load_npy_cache
-        result = read_eigenvalues(d_path)
+        # _read_eigenvalues will use the .npy sidecar via _load_npy_cache
+        result = _read_eigenvalues(d_path)
 
         assert not result.flags.writeable, (
             "Cache-loaded eigenvalues should be read-only (mmap_mode='r'); "
@@ -492,9 +492,9 @@ class TestAtomicCacheWrite:
     """Verify _write_npy_cache uses atomic rename and leaves no temp files."""
 
     def test_no_partial_npy_on_normal_write(self, tmp_path: Path) -> None:
-        """Normal write_eigenvalues leaves .npy file and no .tmp.npy artifact."""
+        """Normal _write_eigenvalues leaves .npy file and no .tmp.npy artifact."""
         d_path = tmp_path / "test.eigenD.txt"
-        write_eigenvalues(np.ones(5), d_path, legacy_text=True)
+        _write_eigenvalues(np.ones(5), d_path, legacy_text=True)
 
         npy_path = d_path.with_suffix(".npy")
         assert npy_path.exists(), ".eigenD.npy sidecar should exist after write"
@@ -510,9 +510,9 @@ class TestAtomicCacheWrite:
         np.testing.assert_array_equal(loaded, np.ones(5))
 
     def test_atomic_write_no_tmp_leftover(self, tmp_path: Path) -> None:
-        """write_eigenvectors with legacy_text leaves no .tmp.npy in directory."""
+        """_write_eigenvectors with legacy_text leaves no .tmp.npy in directory."""
         u_path = tmp_path / "test.eigenU.txt"
-        write_eigenvectors(np.eye(5), u_path, legacy_text=True)
+        _write_eigenvectors(np.eye(5), u_path, legacy_text=True)
 
         npy_path = u_path.with_suffix(".npy")
         assert npy_path.exists(), ".eigenU.npy sidecar should exist after write"
@@ -866,14 +866,14 @@ class TestBinaryEigenIO:
         np.testing.assert_array_equal(u_loaded, eigenvectors)
 
     def test_eigen_read_npy_path_directly(self, tmp_path: Path) -> None:
-        """read_eigenvalues/read_eigenvectors handle .npy paths directly."""
+        """_read_eigenvalues/_read_eigenvectors handle .npy paths directly."""
         eigenvalues, eigenvectors = self._make_eigen(n=6)
         d_path, u_path = write_eigen_files(
             eigenvalues, eigenvectors, tmp_path, prefix="direct"
         )
 
-        D_loaded = read_eigenvalues(d_path)
-        U_loaded = read_eigenvectors(u_path)
+        D_loaded = _read_eigenvalues(d_path)
+        U_loaded = _read_eigenvectors(u_path)
         np.testing.assert_array_equal(D_loaded, eigenvalues)
         np.testing.assert_array_equal(U_loaded, eigenvectors)
 
@@ -908,8 +908,8 @@ class TestBinaryEigenIO:
         d_path.with_suffix(".npy").unlink(missing_ok=True)
         u_path.with_suffix(".npy").unlink(missing_ok=True)
 
-        D_loaded = read_eigenvalues(d_path)
-        U_loaded = read_eigenvectors(u_path)
+        D_loaded = _read_eigenvalues(d_path)
+        U_loaded = _read_eigenvectors(u_path)
 
         np.testing.assert_allclose(D_loaded, eigenvalues, rtol=1e-9)
         np.testing.assert_allclose(U_loaded, eigenvectors, rtol=1e-9)

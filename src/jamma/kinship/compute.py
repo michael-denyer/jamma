@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import gc
 import time
-import warnings
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Literal, NamedTuple, overload
@@ -498,10 +497,10 @@ def _kinship_single_pass(
             chunk = chunk[valid_indices, :]
 
         # Per-chunk monomorphism filter: exclude constant genotype columns.
-        # Suppress RuntimeWarning for all-NaN columns (no valid samples in chunk).
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            col_vars = np.nanvar(chunk, axis=0)
+        # compute_snp_stats is the canonical variance basis (the C kernel the
+        # two-pass path uses); its var > 0 mask matches np.nanvar > 0 on genotype
+        # data, and it owns the all-NaN-column handling internally.
+        _col_means, _miss_counts, col_vars = compute_snp_stats(chunk)
         poly_mask = col_vars > 0
         n_poly = np.count_nonzero(poly_mask)
         if n_poly == 0:

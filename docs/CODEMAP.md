@@ -218,10 +218,10 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 3a | `compute_centered_kinship()` | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [compute.py:343](../src/jamma/kinship/compute.py#L343) |
-| 3a | `compute_kinship_streaming()` | 2-pass streaming (stats -> accumulate); accepts `valid_indices` for early sample filtering; canonical streaming kinship (LOCO streaming merged in) | [compute.py:525](../src/jamma/kinship/compute.py#L525) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship matrices | [compute.py:1035](../src/jamma/kinship/compute.py#L1035) |
-| 3a | `_filter_snps()` | MAF, missing rate, monomorphism filters | [compute.py:219](../src/jamma/kinship/compute.py#L219) |
+| 3a | `compute_centered_kinship()` | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [compute.py:342](../src/jamma/kinship/compute.py#L342) |
+| 3a | `compute_kinship_streaming()` | 2-pass streaming (stats -> accumulate); accepts `valid_indices` for early sample filtering; canonical streaming kinship (LOCO streaming merged in) | [compute.py:524](../src/jamma/kinship/compute.py#L524) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship matrices | [compute.py:1034](../src/jamma/kinship/compute.py#L1034) |
+| 3a | `_filter_snps()` | MAF, missing rate, monomorphism filters | [compute.py:218](../src/jamma/kinship/compute.py#L218) |
 | 3b | `impute_and_center()` | NaN -> mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
 | 3b | `impute_missing_inplace()` | In-place NaN -> col-mean for genotype chunks (used by all runners) | [lmm/impute.py:6](../src/jamma/lmm/impute.py#L6) |
 | 3c | `eigendecompose_kinship()` | Eigendecomp via `jlinalg.eigh` with BLAS thread control | [eigen.py](../src/jamma/lmm/eigen.py) |
@@ -561,7 +561,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:75](../src/jamma/io/matrix_writer.py#L75) |
-| Kinship compute | [compute.py:343](../src/jamma/kinship/compute.py#L343) |
+| Kinship compute | [compute.py:342](../src/jamma/kinship/compute.py#L342) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood | [likelihood.py:655](../src/jamma/lmm/likelihood.py#L655) |
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |

@@ -61,17 +61,16 @@ def compute_kinship(config: PipelineConfig, mode: int) -> KinshipResult:
 
     if config.loco:
         logger.info(f"Computing LOCO kinship matrices from {config.bfile}")
-        loco_iter = compute_loco_kinship_streaming(
+        loco_stream = compute_loco_kinship_streaming(
             config.bfile,
             maf_threshold=config.maf,
             miss_threshold=config.miss,
             check_memory=config.check_memory,
             show_progress=config.show_progress,
             ksnps_indices=ksnps_indices,
-            _copy_yielded_matrices=False,
         )
         written_paths = write_loco_kinship_matrices(
-            loco_iter,
+            loco_stream,
             output_dir=config.output_dir,
             prefix=config.output_prefix,
             legacy_text=config.legacy_text,

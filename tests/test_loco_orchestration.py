@@ -8,7 +8,11 @@ paths) and test_loco_eigen_cache.py (which covers cache I/O).
 import numpy as np
 import pytest
 
-from jamma.kinship.compute import _yield_full_kinship_fallback, _yield_loco_matrices
+from jamma.kinship.compute import (
+    LocoKinshipStream,
+    _yield_full_kinship_fallback,
+    _yield_loco_matrices,
+)
 from jamma.utils import chr_sort_key
 
 pytestmark = pytest.mark.tier0
@@ -125,11 +129,14 @@ class TestYieldLocoMatricesOrdering:
         chr_names = ["1", "10", "2", "X"]
         S_chr = {name: np.eye(n, dtype=np.float64) for name in chr_names}
         n_chr_filtered = dict.fromkeys(chr_names, 10)
+        K_loco_buf = np.empty((n, n), dtype=np.float64)
 
-        results = list(
-            _yield_loco_matrices(S_full, S_chr, n_chr_filtered, n_filtered=40)
-        )
-        yielded_order = [name for name, _ in results]
+        yielded_order = [
+            name
+            for name, _ in _yield_loco_matrices(
+                S_full, S_chr, n_chr_filtered, n_filtered=40, K_loco_buf=K_loco_buf
+            )
+        ]
         assert yielded_order == ["1", "2", "10", "X"]
 
 
@@ -145,18 +152,19 @@ def _loco_fixtures(n=10):
     return S_full, S_chr, n_chr_filtered, K_loco_buf
 
 
-class TestYieldLocoMatricesAliasing:
-    """Verify K_loco_buf.copy() prevents aliasing across chromosomes."""
+class TestLocoKinshipStreamMaterialize:
+    """Verify LocoKinshipStream.materialize() copies each K_loco, breaking aliasing."""
 
-    def test_materialized_iterator_yields_independent_arrays(self):
-        """dict() materialization must produce different K_loco per chromosome."""
+    def test_materialize_yields_independent_arrays(self):
+        """materialize() must produce a distinct K_loco per chromosome."""
         S_full, S_chr, n_chr_filtered, K_loco_buf = _loco_fixtures()
 
-        results = dict(
-            _yield_loco_matrices(
+        stream = LocoKinshipStream(
+            _matrices=_yield_loco_matrices(
                 S_full, S_chr, n_chr_filtered, n_filtered=30, K_loco_buf=K_loco_buf
             )
         )
+        results = stream.materialize()
 
         assert not np.allclose(results["1"], results["2"]), (
             "Chromosomes 1 and 2 should have different K_loco matrices"
@@ -169,22 +177,24 @@ class TestYieldLocoMatricesAliasing:
         )
 
 
-class TestYieldLocoMatricesNoCopy:
-    """Verify copy_output=False yields correct results when consumed sequentially."""
+class TestYieldLocoMatricesBufferReuse:
+    """Verify the shared-buffer yield is correct when each matrix is consumed first."""
 
     def test_sequential_consumption_produces_correct_values(self):
-        """Each yielded matrix is correct when consumed before advancing."""
+        """Each yielded matrix is correct when copied before advancing."""
         S_full, _, n_chr_filtered, K_loco_buf = _loco_fixtures()
 
-        reference = dict(
-            _yield_loco_matrices(
+        # Reference: copy each matrix as it is yielded (consume-before-advance).
+        reference = {
+            chr_name: K.copy()
+            for chr_name, K in _yield_loco_matrices(
                 S_full,
                 _loco_fixtures()[1],  # fresh S_chr (consumed by iterator)
                 n_chr_filtered,
                 n_filtered=30,
                 K_loco_buf=K_loco_buf.copy(),
             )
-        )
+        }
 
         sequential_results = {}
         for chr_name, K_loco in _yield_loco_matrices(
@@ -193,7 +203,6 @@ class TestYieldLocoMatricesNoCopy:
             n_chr_filtered,
             n_filtered=30,
             K_loco_buf=K_loco_buf,
-            copy_output=False,
         ):
             sequential_results[chr_name] = K_loco.copy()
 
@@ -201,11 +210,15 @@ class TestYieldLocoMatricesNoCopy:
             np.testing.assert_array_equal(
                 sequential_results[chr_name],
                 reference[chr_name],
-                err_msg=f"chr {chr_name} mismatch with copy_output=False",
+                err_msg=f"chr {chr_name} mismatch under buffer reuse",
             )
 
-    def test_materialized_iterator_aliases_all_to_last(self):
-        """dict() materialization with copy_output=False shows the aliasing hazard."""
+    def test_dict_materialization_aliases_all_to_last(self):
+        """dict() on the raw yields aliases every entry to the final buffer.
+
+        This is the hazard LocoKinshipStream.materialize() exists to avoid; the
+        raw generator is documented as consume-once for exactly this reason.
+        """
         S_full, S_chr, n_chr_filtered, K_loco_buf = _loco_fixtures()
 
         results = dict(
@@ -215,7 +228,6 @@ class TestYieldLocoMatricesNoCopy:
                 n_chr_filtered,
                 n_filtered=30,
                 K_loco_buf=K_loco_buf,
-                copy_output=False,
             )
         )
         assert results["1"].base is results["3"].base or results["1"] is results["3"]

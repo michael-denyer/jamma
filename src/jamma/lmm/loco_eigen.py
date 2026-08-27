@@ -12,7 +12,7 @@ literal in this module.
 from __future__ import annotations
 
 import gc
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import numpy as np
@@ -153,7 +153,7 @@ def _cached_eigen_pairs(
 
 
 def _computed_eigen_pairs(
-    loco_iter: Iterator[tuple[str, np.ndarray]],
+    loco_iter: Iterable[tuple[str, np.ndarray]],
     chr_names: list[str],
     *,
     valid_mask: np.ndarray,

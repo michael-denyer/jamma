@@ -352,9 +352,9 @@ class PipelineRunner:
             or n_samples.
         """
         if valid_indices is not None:
-            from jamma.kinship.compute import _validate_valid_indices
+            from jamma.kinship import validate_valid_indices
 
-            _validate_valid_indices(valid_indices, n_samples)
+            validate_valid_indices(valid_indices, n_samples)
 
         if self.config.kinship_file is not None:
             logger.info(f"Loading kinship from {self.config.kinship_file}")

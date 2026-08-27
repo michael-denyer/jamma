@@ -379,7 +379,7 @@ def run_lmm_loco(
             )
             # Stream LOCO kinship matrices one at a time (pure NumPy), reusing
             # the shared kinship streamer and its PASS-1 SNP statistics.
-            loco_stream, snp_stats_cache = compute_loco_kinship_streaming(
+            loco_stream = compute_loco_kinship_streaming(
                 bed_path,
                 maf_threshold=maf_threshold,
                 miss_threshold=miss_threshold,
@@ -387,9 +387,8 @@ def run_lmm_loco(
                 show_progress=show_progress,
                 ksnps_indices=ksnps_indices,
                 valid_indices=kinship_valid_indices,
-                _copy_yielded_matrices=False,
-                return_snp_stats=True,
             )
+            snp_stats_cache = loco_stream.snp_stats
 
             # Create eigen output directory before the loop (once, not per-chr).
             if write_eigen:

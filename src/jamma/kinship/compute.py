@@ -24,6 +24,7 @@ from __future__ import annotations
 import gc
 import time
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, NamedTuple, overload
 
@@ -53,6 +54,43 @@ from jamma.io.plink import (
 )
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 from jamma.utils import chr_sort_key
+
+
+@dataclass(slots=True)
+class LocoKinshipStream:
+    """Consume-once stream of ``(chr_name, K_loco)`` LOCO matrices plus PASS-1 stats.
+
+    Wraps the generator ``compute_loco_kinship_streaming`` builds internally.
+    Iterating it drives disk reads and dsyrk accumulation lazily, chromosome by
+    chromosome; each yielded ``K_loco`` aliases one shared ``(n, n)`` buffer that is
+    overwritten on the next advance (LOCO-03, no per-chromosome allocation). Consume
+    it exactly once, in order — the contract a bare generator always had. Do not call
+    ``list()``/``dict()`` on it directly; use ``materialize()``, which copies each
+    matrix, or you get N references to the same final buffer.
+
+    Attributes:
+        snp_stats: PASS-1 all-sample SnpStatsCache for the LOCO association pass to
+            reuse, or None when ``valid_indices`` filtered the basis. SnpStatsCache is
+            all-sample by contract (``__post_init__`` forbids caching a valid-sample
+            basis), so a filtered run exports no cache. Available before iteration,
+            since PASS 1 runs eagerly at construction time.
+    """
+
+    _matrices: Iterator[tuple[str, np.ndarray]]
+    snp_stats: SnpStatsCache | None = None
+
+    def __iter__(self) -> Iterator[tuple[str, np.ndarray]]:
+        return self._matrices
+
+    def materialize(self) -> dict[str, np.ndarray]:
+        """Drain the stream into a chr->matrix dict, copying each matrix.
+
+        Test and diagnostic convenience. Production callers (the write path and the
+        eigendecomposition path) never call this; both consume the stream once, in
+        order, without collecting it. The per-chromosome buffer aliasing that governs
+        live iteration does not apply to the copies, so the dict is safe to hold.
+        """
+        return {chr_name: K.copy() for chr_name, K in self}
 
 
 def _ensure_float64(arr: np.ndarray) -> np.ndarray:
@@ -469,12 +507,12 @@ def _kinship_single_pass(
         Kinship matrix (n_out, n_out) where n_out = len(valid_indices) or n_samples.
 
     Raises:
-        ValueError: If valid_indices is empty, out of bounds, or unsorted.
         ValueError: If no SNPs pass monomorphism filter.
-    """
-    if valid_indices is not None:
-        _validate_valid_indices(valid_indices, n_samples)
 
+    Note:
+        ``valid_indices`` is trusted here, already validated by the sole caller
+        ``compute_kinship_streaming`` at its public boundary.
+    """
     n_out = len(valid_indices) if valid_indices is not None else n_samples
     K = np.zeros((n_out, n_out), dtype=np.float64)
     n_filtered = 0
@@ -594,7 +632,7 @@ def compute_kinship_streaming(
     n_snps = meta.n_snps
 
     if valid_indices is not None:
-        _validate_valid_indices(valid_indices, n_samples)
+        validate_valid_indices(valid_indices, n_samples)
 
     from jamma.core.estimates import estimate_kinship_time
 
@@ -746,29 +784,25 @@ def _yield_loco_matrices(
     S_chr: dict[str, np.ndarray],
     n_chr_filtered: dict[str, int],
     n_filtered: int,
-    K_loco_buf: np.ndarray | None = None,
-    *,
-    copy_output: bool = True,
+    K_loco_buf: np.ndarray,
 ) -> Iterator[tuple[str, np.ndarray]]:
     """Compute and yield LOCO kinship matrices from S_full and per-chr accumulators.
 
     For each chromosome, computes K_loco = (S_full - S_chr[c]) / (p - p_c),
     freeing S_chr[c] after each yield.
 
+    Each yielded matrix IS the shared ``K_loco_buf``, overwritten on the next
+    iteration (LOCO-03: no per-chromosome allocation). This is the consume-once
+    contract ``LocoKinshipStream`` documents; consumers that need every matrix at
+    once go through ``LocoKinshipStream.materialize()``, which copies.
+
     Args:
         S_full_np: Full kinship numerator as numpy array (n_samples, n_samples).
         S_chr: Per-chromosome kinship contributions.
         n_chr_filtered: Count of filtered SNPs per chromosome.
         n_filtered: Total number of filtered SNPs.
-        K_loco_buf: Pre-allocated workspace (n_samples, n_samples) for K_loco.
-            When provided, np.subtract(out=) avoids a temporary. When None,
-            a new array is allocated per chromosome (legacy behavior).
-        copy_output: If True (default), the buffer is copied before yielding
-            so callers may freely materialise the iterator (e.g. ``dict()``
-            or ``list()``). If False, the yielded array is the shared
-            ``K_loco_buf`` itself — callers MUST fully consume each matrix
-            before advancing the iterator, as the next iteration overwrites
-            the buffer.
+        K_loco_buf: Pre-allocated workspace (n_samples, n_samples) reused for every
+            K_loco via ``np.subtract(out=)``, avoiding a per-chromosome temporary.
 
     Yields:
         (chr_name, K_loco) pairs in biological chromosome order.
@@ -787,25 +821,26 @@ def _yield_loco_matrices(
                 f"are on chromosome '{chr_name}'."
             )
 
-        if K_loco_buf is not None:
-            # In-place subtraction avoids a temporary array (LOCO-03).
-            # Copy before yielding only when the caller may materialise the
-            # iterator. Sequential internal consumers can safely reuse the
-            # buffer and avoid one extra n x n allocation per chromosome.
-            np.subtract(S_full_np, np.asarray(S_chr[chr_name]), out=K_loco_buf)
-            K_loco_buf /= p_loco
-            K_loco = K_loco_buf.copy() if copy_output else K_loco_buf
-        else:
-            K_loco = (S_full_np - np.asarray(S_chr[chr_name])) / p_loco
+        # In-place subtraction avoids a temporary array (LOCO-03). K_loco is the
+        # shared buffer; the consume-once contract lets sequential consumers reuse
+        # it and avoid one extra n x n allocation per chromosome.
+        np.subtract(S_full_np, np.asarray(S_chr[chr_name]), out=K_loco_buf)
+        K_loco_buf /= p_loco
         logger.debug(
             f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
         )
         del S_chr[chr_name]
-        yield (chr_name, K_loco)
+        yield (chr_name, K_loco_buf)
 
 
-def _validate_valid_indices(valid_indices: np.ndarray, n_samples: int) -> None:
+def validate_valid_indices(valid_indices: np.ndarray, n_samples: int) -> None:
     """Validate valid_indices for emptiness, bounds, duplicates, and ordering.
+
+    The single source of truth for the sample-subset invariant. Called once per
+    public entry path (``compute_kinship_streaming``,
+    ``compute_loco_kinship_streaming``, and ``PipelineRunner._load_or_compute_kinship``
+    before its ``np.ix_`` file subset). Internal helpers below a validating boundary
+    trust the value and do not re-check.
 
     Args:
         valid_indices: Array of sample indices to keep.
@@ -903,10 +938,11 @@ def _stream_s_full_and_chr(
         (S_full or None, dict of chr_name -> S_chr). Matrix dimension is
         n_valid x n_valid when valid_indices is provided, otherwise
         n_samples x n_samples.
-    """
-    if valid_indices is not None:
-        _validate_valid_indices(valid_indices, n_samples)
 
+    Note:
+        ``valid_indices`` is trusted here, already validated by
+        ``compute_loco_kinship_streaming`` at its public boundary.
+    """
     n_out = len(valid_indices) if valid_indices is not None else n_samples
     S_full = np.zeros((n_out, n_out), dtype=np.float64) if S_full_accum else None
     chr_set = set(chr_subset)
@@ -1030,39 +1066,6 @@ def _decide_loco_passes(
     )
 
 
-@overload
-def compute_loco_kinship_streaming(
-    bed_path: Path,
-    chunk_size: int = ...,
-    maf_threshold: float = ...,
-    miss_threshold: float = ...,
-    check_memory: bool = ...,
-    show_progress: bool = ...,
-    ksnps_indices: np.ndarray | None = ...,
-    valid_indices: np.ndarray | None = ...,
-    _copy_yielded_matrices: bool = ...,
-    return_snp_stats: Literal[False] = ...,
-    _max_batch_chrs: int | None = ...,
-) -> Iterator[tuple[str, np.ndarray]]: ...
-
-
-@overload
-def compute_loco_kinship_streaming(
-    bed_path: Path,
-    chunk_size: int = ...,
-    maf_threshold: float = ...,
-    miss_threshold: float = ...,
-    check_memory: bool = ...,
-    show_progress: bool = ...,
-    ksnps_indices: np.ndarray | None = ...,
-    valid_indices: np.ndarray | None = ...,
-    _copy_yielded_matrices: bool = ...,
-    *,
-    return_snp_stats: Literal[True],
-    _max_batch_chrs: int | None = ...,
-) -> tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache | None]: ...
-
-
 def compute_loco_kinship_streaming(
     bed_path: Path,
     chunk_size: int = 10_000,
@@ -1072,13 +1075,9 @@ def compute_loco_kinship_streaming(
     show_progress: bool = True,
     ksnps_indices: np.ndarray | None = None,
     valid_indices: np.ndarray | None = None,
-    _copy_yielded_matrices: bool = True,
-    return_snp_stats: bool = False,
+    *,
     _max_batch_chrs: int | None = None,
-) -> (
-    Iterator[tuple[str, np.ndarray]]
-    | tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache | None]
-):
+) -> LocoKinshipStream:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
     Two-pass streaming approach that accumulates both S_full and per-chromosome
@@ -1106,21 +1105,20 @@ def compute_loco_kinship_streaming(
             (n_valid, n_valid) where n_valid = len(valid_indices), eliminating
             the post-hoc np.ix_ copy. When None, K_loco has shape
             (n_samples, n_samples) (default, backward-compatible).
-        return_snp_stats: If True, also return the PASS-1 SnpStatsCache (global
-            per-SNP means/miss-counts/variances over all samples) so callers
-            (the LOCO LMM pass) can reuse it instead of re-reading the BED per
-            chromosome. Changes the return type from an iterator to
-            ``(iterator, SnpStatsCache)``.
         _max_batch_chrs: Debug override forcing a fixed chromosomes-per-pass
             batch size (bypasses memory-based sizing). Used by tests to exercise
             multi-pass without mocking psutil.
 
     Returns:
-        An iterator of (chr_name, K_loco) pairs, where chr_name is the
-        chromosome being excluded and K_loco is the LOCO kinship matrix with
-        shape (n_valid, n_valid) when valid_indices is provided, else
-        (n_samples, n_samples). When ``return_snp_stats`` is True, returns
-        ``(iterator, SnpStatsCache)`` instead.
+        A consume-once LocoKinshipStream. Iterate it for (chr_name, K_loco) pairs,
+        where chr_name is the chromosome being excluded and K_loco has shape
+        (n_valid, n_valid) when valid_indices is provided, else
+        (n_samples, n_samples). Read ``.snp_stats`` for the PASS-1 all-sample
+        SnpStatsCache the LOCO association pass reuses; it is None when
+        valid_indices filtered the basis (the all-sample cache is then neither
+        valid nor consumable). Each yielded matrix aliases a shared buffer
+        overwritten on the next advance, so consume each before advancing, or call
+        ``.materialize()`` to collect independent copies.
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory for even
@@ -1138,7 +1136,7 @@ def compute_loco_kinship_streaming(
     chromosomes = meta.chromosome
 
     if valid_indices is not None:
-        _validate_valid_indices(valid_indices, n_samples)
+        validate_valid_indices(valid_indices, n_samples)
 
     # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
     partitions = partitions_from_metadata(meta)
@@ -1179,11 +1177,13 @@ def compute_loco_kinship_streaming(
             f"expected range {{0, 1, 2, NaN}}"
         )
 
-    # Export the PASS-1 stats for the association pass only when they are the
+    # Export the PASS-1 stats on the returned stream, but only when they are the
     # all-sample basis (valid_indices is None). SnpStatsCache is all-sample by
     # contract, and _chr_snp_stats_for_loco reuses it only when every sample is
     # analysed; on filtered runs it re-derives valid-sample stats, so no cache is
-    # exported (None).
+    # exported (None). The cache is a wrapper over the O(n_snps) arrays PASS 1
+    # already holds, so building it always (when all-sample) costs a dataclass, not
+    # a copy — the write-path caller simply never reads stream.snp_stats.
     snp_stats_cache = (
         SnpStatsCache(
             col_means=stats.col_means,
@@ -1195,7 +1195,7 @@ def compute_loco_kinship_streaming(
             global_indices=stats.global_indices,
             sample_scope=stats.sample_scope,
         )
-        if return_snp_stats and valid_indices is None
+        if valid_indices is None
         else None
     )
 
@@ -1211,11 +1211,10 @@ def compute_loco_kinship_streaming(
             f"{n_removed:,} removed (MAF/missing/monomorphic)"
         )
 
-    # Build SNP-to-chromosome mapping for filtered SNPs.
+    # Build SNP-to-chromosome mapping for filtered SNPs. The PASS-1 stats are no
+    # longer needed: snp_stats_cache (if any) was already built from stats above.
     snp_indices = snp_selection.indices
-    del snp_selection
-    if not return_snp_stats:
-        del stats
+    del snp_selection, stats
 
     # Map each filtered SNP index to its chromosome
     chr_for_filtered = chromosomes[snp_indices]
@@ -1295,7 +1294,6 @@ def compute_loco_kinship_streaming(
                 n_chr_filtered,
                 n_filtered,
                 K_loco_buf,
-                copy_output=_copy_yielded_matrices,
             )
             yield from _yield_full_kinship_fallback(
                 S_full_np, chrs_without_snps, n_filtered
@@ -1333,7 +1331,6 @@ def compute_loco_kinship_streaming(
                 n_chr_filtered,
                 n_filtered,
                 K_loco_buf,
-                copy_output=_copy_yielded_matrices,
             )
             del S_chr
             gc.collect()
@@ -1366,7 +1363,6 @@ def compute_loco_kinship_streaming(
                     n_chr_filtered,
                     n_filtered,
                     K_loco_buf,
-                    copy_output=_copy_yielded_matrices,
                 )
                 del S_chr
                 gc.collect()
@@ -1381,10 +1377,8 @@ def compute_loco_kinship_streaming(
                 f"{n_batches} passes over {n_chr_with_snps} chromosomes"
             )
 
-    # snp_stats_cache is None on filtered-sample runs (valid_indices given), where
-    # the all-sample cache would be neither valid nor consumed. The return shape
-    # still follows return_snp_stats, so a caller that asked for stats always gets
-    # the 2-tuple, with None standing in for "no all-sample cache available".
-    if return_snp_stats:
-        return _generate(), snp_stats_cache
-    return _generate()
+    # snp_stats is None on filtered-sample runs (valid_indices given), where the
+    # all-sample cache would be neither valid nor consumed. The write-path caller
+    # ignores it; the LOCO association pass reads it and re-derives valid-sample
+    # stats itself when it is None.
+    return LocoKinshipStream(_matrices=_generate(), snp_stats=snp_stats_cache)

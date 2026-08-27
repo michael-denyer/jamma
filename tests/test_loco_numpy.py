@@ -447,7 +447,7 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
     from unittest.mock import patch
 
     import jamma.lmm.loco as loco_module
-    from jamma.kinship import compute_loco_kinship_streaming
+    from jamma.kinship import LocoKinshipStream, compute_loco_kinship_streaming
 
     phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
     pheno = phenotypes.copy()
@@ -463,11 +463,8 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
 
     def _null_cache(*args, **kwargs):
         # Force the non-cache path: keep the kinship iterator, drop the cache.
-        result = original(*args, **kwargs)
-        if isinstance(result, tuple):
-            loco_iter, _cache = result
-            return loco_iter, None
-        return result
+        stream = original(*args, **kwargs)
+        return LocoKinshipStream(_matrices=iter(stream), snp_stats=None)
 
     with patch.object(
         loco_module, "compute_loco_kinship_streaming", side_effect=_null_cache
@@ -494,6 +491,55 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
 
 
 @pytest.mark.tier1
+def test_loco_stream_carries_all_sample_snp_stats():
+    """An all-sample LOCO run exposes its PASS-1 cache on stream.snp_stats.
+
+    The typed LocoKinshipStream replaces the old (iterator, cache) tuple. On an
+    all-sample run the cache must be a real SnpStatsCache, readable before any
+    iteration, so the LOCO association pass can reuse it.
+    """
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
+
+    from jamma.kinship import SnpStatsCache, compute_loco_kinship_streaming
+
+    stream = compute_loco_kinship_streaming(
+        _LOCO_BFILE, check_memory=False, show_progress=False
+    )
+    # Available before iteration (PASS 1 is eager at construction time).
+    assert isinstance(stream.snp_stats, SnpStatsCache)
+    assert stream.snp_stats.sample_scope == "all_samples"
+
+
+@pytest.mark.tier1
+def test_loco_stream_materialize_matches_iteration():
+    """materialize() copies each K_loco; the values equal a single live pass.
+
+    Pins that the LocoKinshipStream wrapper does not perturb the matrices: the
+    copied dict from materialize() is value-identical to consuming a fresh stream
+    one chromosome at a time (each copied on the spot).
+    """
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
+
+    from jamma.kinship import compute_loco_kinship_streaming
+
+    live = {
+        chr_name: K.copy()
+        for chr_name, K in compute_loco_kinship_streaming(
+            _LOCO_BFILE, check_memory=False, show_progress=False
+        )
+    }
+    materialized = compute_loco_kinship_streaming(
+        _LOCO_BFILE, check_memory=False, show_progress=False
+    ).materialize()
+
+    assert set(materialized) == set(live)
+    for chr_name, K in materialized.items():
+        # Independent copies, not aliases of one shared buffer.
+        assert not any(K is other for c, other in materialized.items() if c != chr_name)
+        np.testing.assert_array_equal(K, live[chr_name])
+
+
+@pytest.mark.tier1
 def test_loco_numpy_valid_sample_subsetting():
     """K_loco is computed at valid-sample size when valid_indices is provided.
 
@@ -511,20 +557,19 @@ def test_loco_numpy_valid_sample_subsetting():
     valid_indices = np.arange(0, n_samples - 5)
     n_valid = len(valid_indices)
 
-    loco_iter, cache = compute_loco_kinship_streaming(
+    loco_stream = compute_loco_kinship_streaming(
         _LOCO_BFILE,
         check_memory=False,
         show_progress=False,
         valid_indices=valid_indices,
-        return_snp_stats=True,
     )
 
     # The all-sample SNP-stats cache is not exported on a filtered-sample run:
     # PASS-1 stats are on the valid-sample basis (matching GEMMA and PASS-2), so
     # there is no all-sample cache to reuse, and the association pass re-derives.
-    assert cache is None
+    assert loco_stream.snp_stats is None
 
-    for chr_name, K_loco in loco_iter:
+    for chr_name, K_loco in loco_stream:
         assert K_loco.shape == (n_valid, n_valid), (
             f"K_loco for chr {chr_name} has shape {K_loco.shape}, "
             f"expected ({n_valid}, {n_valid})"

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
 from pathlib import Path
 
 import pytest
 
-from jamma.gwas import GWASResult, gwas
+from jamma.gwas import gwas
+from jamma.pipeline import PipelineConfig, PipelineResult
 
 # Fixture paths for mouse_hs1940 dataset
 FIXTURES = Path(__file__).parent / "fixtures" / "mouse_hs1940"
@@ -22,7 +25,7 @@ SYNTHETIC_BFILE = SYNTHETIC_DIR / "test"
 @pytest.mark.slow
 @pytest.mark.tier1
 def test_gwas_basic(tmp_path: Path) -> None:
-    """gwas() with pre-computed kinship returns valid GWASResult and writes output."""
+    """gwas() with pre-computed kinship returns a PipelineResult and writes output."""
     result = gwas(
         BFILE,
         kinship_file=KINSHIP_FILE,
@@ -31,7 +34,7 @@ def test_gwas_basic(tmp_path: Path) -> None:
         check_memory=False,
     )
 
-    assert isinstance(result, GWASResult)
+    assert isinstance(result, PipelineResult)
     assert result.n_samples > 0
     assert result.n_snps_tested > 0
     assert "kinship_s" in result.timing
@@ -62,12 +65,26 @@ def test_gwas_invalid_lmm_mode() -> None:
 
 @pytest.mark.tier0
 def test_gwas_import_from_top_level() -> None:
-    """gwas and GWASResult are importable from the top-level jamma package."""
-    from jamma import GWASResult as GR
+    """gwas and PipelineResult are importable from the top-level jamma package."""
+    from jamma import PipelineResult as PR
     from jamma import gwas as g
 
     assert callable(g)
-    assert hasattr(GR, "__dataclass_fields__")
+    assert PR is PipelineResult
+
+
+@pytest.mark.tier0
+def test_gwas_keywords_are_exactly_the_pipeline_config_fields() -> None:
+    """Every PipelineConfig knob is a gwas() keyword, and nothing else is.
+
+    The API mirrors the config by hand, so a field added to one and not the
+    other is the drift this pins. ``hwe`` is the one renamed keyword (it is
+    GEMMA's flag name; the field says what it thresholds).
+    """
+    params = set(inspect.signature(gwas).parameters)
+    params = (params - {"hwe"}) | {"hwe_threshold"}
+    fields = {f.name for f in dataclasses.fields(PipelineConfig)}
+    assert params == fields
 
 
 @pytest.mark.tier1
@@ -82,7 +99,7 @@ def test_gwas_loco_numpy_backend(tmp_path: Path) -> None:
         check_memory=False,
     )
 
-    assert isinstance(result, GWASResult)
+    assert isinstance(result, PipelineResult)
     assert result.n_samples > 0
     assert result.n_snps_tested > 0
 

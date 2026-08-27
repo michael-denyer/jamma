@@ -71,22 +71,6 @@ class PipelineTiming(TypedDict, total=False):
     rotation_s: float
 
 
-class GWASTiming(TypedDict, total=False):
-    """Timing breakdown from GWAS API execution.
-
-    Subset of PipelineTiming exposed through the public gwas() API.
-
-    Attributes:
-        kinship_s: Kinship load/compute time (seconds).
-        lmm_s: LMM association runtime (seconds).
-        total_s: Total pipeline wall time (seconds).
-    """
-
-    kinship_s: float
-    lmm_s: float
-    total_s: float
-
-
 @dataclass(frozen=True, slots=True)
 class StatColumn:
     """One statistical output column.

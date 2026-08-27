@@ -472,15 +472,17 @@ result = gwas(
 # LOCO analysis (leave-one-chromosome-out)
 result = gwas("data/my_study", loco=True)
 
-# Multi-phenotype with eigendecomp reuse (Python API)
-result = gwas("data/my_study", write_eigen=True, phenotype_column=1)
+# Several phenotypes against one eigendecomposition (the CLI's -n "1 2 3")
+result = gwas("data/my_study", phenotype_columns=[1, 2, 3])
+
+# Or reuse a written eigendecomposition across separate calls
+result = gwas("data/my_study", write_eigen=True, phenotype_columns=[1])
 result = gwas(
     "data/my_study",
     eigenvalue_file="output/result.eigenD.npy",
     eigenvector_file="output/result.eigenU.npy",
-    phenotype_column=2,
+    phenotype_columns=[2],
 )
-# Or use the CLI for automatic multi-phenotype: jamma -lmm 1 ... -n "1 2 3"
 
 # SNP filtering and HWE QC
 result = gwas(
@@ -492,8 +494,9 @@ result = gwas(
 ```
 
 `gwas()` handles the full pipeline: load data, compute or load kinship,
-eigendecompose, run LMM association, and write results. Returns a `GWASResult`
-with timing breakdown and summary stats. Access `result.pve_estimate` for the PVE
+eigendecompose, run LMM association, and write results. Returns the same
+`PipelineResult` as `PipelineRunner.run()`: association paths, sample and SNP
+counts, and a timing breakdown. Every keyword is one `PipelineConfig` field. Access `result.pve_estimate` for the PVE
 (proportion of variance explained) estimate and `result.pve_se` for the
 standard error of PVE computed via the delta method from the REML second
 derivative at the null model optimum.

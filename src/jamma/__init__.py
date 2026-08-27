@@ -34,6 +34,7 @@ try:
 except ImportError:
     __release_date__ = "dev"
 
-from jamma.gwas import GWASResult, gwas
+from jamma.gwas import gwas
+from jamma.pipeline import PipelineResult
 
-__all__ = ["GWASResult", "__release_date__", "__version__", "gwas"]
+__all__ = ["PipelineResult", "__release_date__", "__version__", "gwas"]

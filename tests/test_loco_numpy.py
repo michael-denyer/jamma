@@ -519,6 +519,11 @@ def test_loco_numpy_valid_sample_subsetting():
         return_snp_stats=True,
     )
 
+    # The all-sample SNP-stats cache is not exported on a filtered-sample run:
+    # PASS-1 stats are on the valid-sample basis (matching GEMMA and PASS-2), so
+    # there is no all-sample cache to reuse, and the association pass re-derives.
+    assert cache is None
+
     for chr_name, K_loco in loco_iter:
         assert K_loco.shape == (n_valid, n_valid), (
             f"K_loco for chr {chr_name} has shape {K_loco.shape}, "

@@ -1061,7 +1061,7 @@ def compute_loco_kinship_streaming(
     *,
     return_snp_stats: Literal[True],
     _max_batch_chrs: int | None = ...,
-) -> tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]: ...
+) -> tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache | None]: ...
 
 
 def compute_loco_kinship_streaming(
@@ -1078,7 +1078,7 @@ def compute_loco_kinship_streaming(
     _max_batch_chrs: int | None = None,
 ) -> (
     Iterator[tuple[str, np.ndarray]]
-    | tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache]
+    | tuple[Iterator[tuple[str, np.ndarray]], SnpStatsCache | None]
 ):
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -1156,25 +1156,22 @@ def compute_loco_kinship_streaming(
     logger.info(f"  Chunk size: {chunk_size:,}")
 
     # === PASS 1: Compute per-SNP statistics for filtering ===
-    # Stats are computed on ALL samples (not the valid_indices subset), so the
-    # kinship SNP filter (MAF, missingness) and the exported cache both span the
-    # full population; valid_indices only affects PASS 2 kinship accumulation, not
-    # which SNPs are included. This all-sample basis is NOT GEMMA's basis for the
-    # per-SNP association statistics: GEMMA computes MAF/AF and imputes missing
-    # genotypes over the analysed individuals only. The LOCO association pass
-    # therefore reuses this cache only when every sample is analysed and
-    # re-derives analysed-sample stats otherwise -- see _chr_snp_stats_for_loco
-    # in lmm/loco.py.
+    # Compute stats over the analysed (valid) samples, matching GEMMA's basis and
+    # the non-LOCO streaming path. The kinship SNP filter then selects SNPs on the
+    # same basis PASS 2 accumulates on, so a SNP that is (near-)monomorphic among
+    # the analysed individuals is not admitted just because it varies in samples
+    # that were dropped.
     stats = collect_streamed_snp_stats(
         bed_path,
         n_snps=n_snps,
         n_samples=n_samples,
         chunk_size=chunk_size,
+        sample_indices=valid_indices,
         validate_genotypes=True,
         show_progress=show_progress,
         progress_label="LOCO: SNP statistics",
         dtype=np.float32,
-        sample_scope="all_samples",
+        sample_scope="valid_samples" if valid_indices is not None else "all_samples",
     )
 
     if stats.n_unexpected > 0:
@@ -1183,8 +1180,11 @@ def compute_loco_kinship_streaming(
             f"expected range {{0, 1, 2, NaN}}"
         )
 
-    # Cache global PASS-1 stats (computed over ALL samples) for the association
-    # pass when requested. n_samples is the population the stats span.
+    # Export the PASS-1 stats for the association pass only when they are the
+    # all-sample basis (valid_indices is None). SnpStatsCache is all-sample by
+    # contract, and _chr_snp_stats_for_loco reuses it only when every sample is
+    # analysed; on filtered runs it re-derives valid-sample stats, so no cache is
+    # exported (None).
     snp_stats_cache = (
         SnpStatsCache(
             col_means=stats.col_means,
@@ -1196,7 +1196,7 @@ def compute_loco_kinship_streaming(
             global_indices=stats.global_indices,
             sample_scope=stats.sample_scope,
         )
-        if return_snp_stats
+        if return_snp_stats and valid_indices is None
         else None
     )
 
@@ -1382,9 +1382,10 @@ def compute_loco_kinship_streaming(
                 f"{n_batches} passes over {n_chr_with_snps} chromosomes"
             )
 
-    # Narrowing on the cache rather than on return_snp_stats: the two are
-    # equivalent by construction above, and this form carries the non-None
-    # through to the overload's declared return type.
-    if snp_stats_cache is not None:
+    # snp_stats_cache is None on filtered-sample runs (valid_indices given), where
+    # the all-sample cache would be neither valid nor consumed. The return shape
+    # still follows return_snp_stats, so a caller that asked for stats always gets
+    # the 2-tuple, with None standing in for "no all-sample cache available".
+    if return_snp_stats:
         return _generate(), snp_stats_cache
     return _generate()

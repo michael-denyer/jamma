@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`LocoConfig` has one `prefix` and no `save_kinship`.** Setting
+  `kinship_output_dir` is what asks for each chromosome's K_loco to be
+  written; leaving it `None` writes none, so the flag that could only agree
+  with the directory or raise is gone, along with its `__post_init__` check.
+  `kinship_output_prefix` and `eigen_prefix` always carried the same value
+  (the pipeline passed `output_prefix` to both), so they are one `prefix`
+  that also names the cache manifest. `PipelineRunner` maps its own
+  `save_kinship` onto `kinship_output_dir` at the one call site, so the CLI
+  and `gwas()` are unchanged. Direct `LocoConfig(...)` callers rename
+  `eigen_prefix=` to `prefix=` and replace `save_kinship=True,
+  kinship_output_dir=d` with `kinship_output_dir=d`.
+- **`run_lmm_loco` no longer runs the eigen cache itself.**
+  `loco_eigen.eigen_pairs_for()` decides once whether the run reads a
+  validated cache or streams and eigendecomposes each chromosome, and owns
+  the cache key, the directory, the manifest invalidate-then-commit, and the
+  per-chromosome artifact writes. It returns an `EigenPairSource` (the pair
+  iterator plus the PASS-1 SNP statistics, or `None` when the cache
+  answered). `run_lmm_loco` shrinks from 349 to 207 lines and threads no
+  Optionals through its loop. The manifest is still written only after the
+  last chromosome's association completes, and an interrupted rewrite still
+  leaves none. Every LOCO artifact (`.assoc.txt`, `.cXX`, `.eigenD`,
+  `.eigenU`, manifest; binary and legacy text; cached, stale, partial and
+  missing-phenotype runs) is byte-identical to before.
+- **`eigen_io` reads and writes through one `_read_array` and one
+  `_write_array`.** `read_eigenvalues`/`read_eigenvectors` were the same
+  three-branch routine with the shape check inlined three times each, and
+  the writers the same two-branch routine twice. The four per-array
+  functions are now private; `read_eigen_files` and `write_eigen_files`,
+  the two `jamma.lmm` already exported, are the API. Shape errors carry one
+  wording per kind (`... has wrong shape (3, 2), expected a square matrix`).
+
 - **The five `scripts/check_*.py` lints share one `_lint_common.py` and are
   named with underscores.** Each had carried its own copy of the same five
   steps — find the repo root, list the files, read one, decide whether an

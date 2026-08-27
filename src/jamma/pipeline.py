@@ -834,14 +834,14 @@ class PipelineRunner:
             # owns the only memory gate on the LOCO path.
             config=self.config.lmm_config(check_memory=self.config.check_memory),
             loco=LocoConfig(
-                save_kinship=self.config.save_kinship,
-                kinship_output_dir=self.config.output_dir,
-                kinship_output_prefix=self.config.output_prefix,
+                kinship_output_dir=(
+                    self.config.output_dir if self.config.save_kinship else None
+                ),
+                prefix=self.config.output_prefix,
                 snps_indices=snps_indices,
                 ksnps_indices=ksnps_indices,
                 write_eigen=self.config.write_eigen,
                 eigen_dir=self.config.eigen_dir,
-                eigen_prefix=self.config.output_prefix,
                 legacy_text=self.config.legacy_text,
             ),
             output_path=assoc_path,

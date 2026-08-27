@@ -151,7 +151,7 @@ src/jamma/
 │   ├── chunk_pipeline.py   # Rotation/compute thread split + overlapped pipeline driver
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
 │   ├── loco_config.py      # LocoConfig: LOCO-only knobs and artifact naming
-│   ├── loco_eigen.py       # LOCO eigenpair sources (cache / compute) + artifact writes
+│   ├── loco_eigen.py       # eigen_pairs_for(): cache-or-compute decision, cache key, manifest, artifact writes
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
 │   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)
 │   ├── _compile_accel.py   # Dev-mode/runtime compiler; calls run_build(LMM_ACCEL_SPEC)

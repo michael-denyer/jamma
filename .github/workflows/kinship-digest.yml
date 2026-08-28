@@ -1,15 +1,5 @@
 name: Kinship digest
 
-# Bit-exactness gate for the kinship and eigendecomposition paths.
-#
-# fingerprint.yml does not path-match src/jamma/kinship/compute.py, so a
-# kinship refactor has no bit-exactness check unless someone runs this by
-# hand. Every prior kinship digest lever (#215, #221, #223, #224) was a
-# throwaway script, never committed, so the coverage each PR claimed was an
-# assertion, not a rerunnable check. This workflow exists so a kinship PR
-# can ask for the same base-vs-head comparison the fingerprint gate gives
-# the C accelerator.
-#
 # workflow_dispatch only. Never add this to the required-status-checks
 # ruleset: it needs a base-vs-head double build like the fingerprint gate,
 # and making it required would block every non-kinship PR.
@@ -59,10 +49,8 @@ jobs:
           echo "base=${base_sha}" >> "$GITHUB_OUTPUT"
           echo "Comparing ${head_sha} against ${base_sha}"
 
-      # The script is staged outside the worktree so the base checkout below
-      # cannot swap it for an older copy: both sides must run the head's
-      # key set, or the comparison finds nothing in common while looking
-      # like it ran.
+      # Staged outside the worktree so the base checkout below cannot swap it
+      # for an older copy; both sides must run the head's key set.
       - name: Stage the digest script
         run: |
           install -m 755 scripts/kinship_digest.py "${RUNNER_TEMP}/kinship_digest.py"

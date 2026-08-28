@@ -1,15 +1,9 @@
-"""Behaviour tests for ``scripts/kinship_digest.py``.
-
-Probe C found every prior kinship bit-exactness check (#215, #221, #223,
-#224) was a throwaway script, never committed, so no rerunnable gate exists
-for a kinship refactor today. This is the first committed one; these tests
-pin the two properties a digest lever must have: two runs of the same code
-agree exactly, and one changed value is caught and named.
-"""
+"""Behaviour tests for ``scripts/kinship_digest.py``."""
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -26,13 +20,8 @@ SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "kinship_dige
 
 @pytest.fixture
 def digest_module(monkeypatch):
-    """Import kinship_digest fresh, restricted to the smallest fixture.
-
-    Full coverage runs every fixture including mouse_hs1940 (1940 samples x
-    12226 SNPs), which is the live-lane's job, not a unit test's. Restricting
-    ``FIXTURES``/``LOCO_FIXTURES`` to gemma_synthetic keeps this test fast
-    while exercising the same code path every other fixture uses.
-    """
+    # Restrict to gemma_synthetic; the full mouse_hs1940 sweep is the
+    # live-lane's job, not a unit test's.
     spec = importlib.util.spec_from_file_location("kinship_digest", SCRIPT_PATH)
     assert spec is not None
     assert spec.loader is not None
@@ -104,12 +93,9 @@ def test_header_mismatch_on_backend_refuses_to_compare(digest_module, tmp_path):
     out = tmp_path / "k.json"
     digest_module.main(["--out", str(out)])
 
-    payload = out.read_text()
-    tampered = tmp_path / "k_other_backend.json"
-    import json
-
-    data = json.loads(payload)
+    data = json.loads(out.read_text())
     data["header"]["blas_backend"] = "SomeOtherBackend"
+    tampered = tmp_path / "k_other_backend.json"
     tampered.write_text(json.dumps(data))
 
     assert digest_module.main(["--diff", str(out), str(tampered)]) == 2

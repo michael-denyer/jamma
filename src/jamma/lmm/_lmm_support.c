@@ -8,6 +8,7 @@
 #define NO_IMPORT_ARRAY
 #include "_lmm_support.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -464,4 +465,124 @@ void free_pab_table(pab_table_t *t)
     free(t->level_offsets);
     free(t->level_counts);
     free(t->entries);
+}
+
+PyArrayObject *take_array(PyObject *obj)
+{
+    return (PyArrayObject *)PyArray_FROM_OTF(
+        obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+}
+
+PyArrayObject *take_vector(PyObject *obj, int n, const char *name)
+{
+    PyArrayObject *arr = take_array(obj);
+    if (!arr) return NULL;
+    if (PyArray_NDIM(arr) != 1 || PyArray_DIM(arr, 0) != n) {
+        PyErr_Format(PyExc_ValueError, "%s must be shape (%d,)", name, n);
+        Py_DECREF(arr);
+        return NULL;
+    }
+    return arr;
+}
+
+PyArrayObject *take_matrix(PyObject *obj, int rows, int cols, const char *name)
+{
+    PyArrayObject *arr = take_array(obj);
+    if (!arr) return NULL;
+    if (PyArray_NDIM(arr) != 2 || PyArray_DIM(arr, 0) != rows ||
+        PyArray_DIM(arr, 1) != cols) {
+        PyErr_Format(PyExc_ValueError, "%s must be shape (%d, %d)",
+                     name, rows, cols);
+        Py_DECREF(arr);
+        return NULL;
+    }
+    return arr;
+}
+
+PyArrayObject *take_chunk(PyObject *obj, int n_samples, int *n_snps_out)
+{
+    PyArrayObject *arr = take_array(obj);
+    if (!arr) return NULL;
+    if (PyArray_NDIM(arr) != 2 || PyArray_DIM(arr, 1) != n_samples) {
+        PyErr_Format(PyExc_ValueError,
+                     "utg_t must be shape (n_snps, %d)", n_samples);
+        Py_DECREF(arr);
+        return NULL;
+    }
+    npy_intp n_snps = PyArray_DIM(arr, 0);
+    if (n_snps > INT_MAX) {
+        PyErr_Format(PyExc_OverflowError,
+                     "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps);
+        Py_DECREF(arr);
+        return NULL;
+    }
+    *n_snps_out = (int)n_snps;
+    return arr;
+}
+
+int validate_n_cvt(int n_cvt)
+{
+    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError,
+                     "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+        return -1;
+    }
+    return 0;
+}
+
+int validate_logl_H0(double logl_H0)
+{
+    if (!isfinite(logl_H0)) {
+        PyErr_SetString(PyExc_ValueError,
+            "logl_H0 must be finite (got NaN or Inf from null model)");
+        return -1;
+    }
+    return 0;
+}
+
+int validate_hi_eval_null(const double *hi, int n_samples)
+{
+    for (int i = 0; i < n_samples; i++) {
+        if (!isfinite(hi[i]) || hi[i] <= 0.0) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", hi[i]);
+            PyErr_Format(PyExc_ValueError,
+                "Hi_eval_null[%d] = %s is not finite positive. "
+                "Null model optimization may have failed.", i, buf);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+void build_grid_ncvt1(int n_grid, int n_samples, double log_l_min, double step,
+                      const double *eigenvalues, const double *inv_ww,
+                      const double *inv_wy, const double *inv_yy,
+                      double *lambda_grid, double *hi_eval_grid,
+                      double *logdet_h_grid, grid_invariant_t *grid_inv)
+{
+    for (int g = 0; g < n_grid; g++) {
+        lambda_grid[g] = exp(log_l_min + g * step);
+    }
+    for (int g = 0; g < n_grid; g++) {
+        double lam    = lambda_grid[g];
+        double *hi_row = hi_eval_grid + (size_t)g * n_samples;
+        double logdet = 0.0;
+        double sw = 0.0, swy = 0.0, sy = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double v = lam * eigenvalues[i] + 1.0;
+            double h = 1.0 / v;
+            hi_row[i] = h;
+            logdet += log(v);
+            sw  += h * inv_ww[i];
+            swy += h * inv_wy[i];
+            sy  += h * inv_yy[i];
+        }
+        logdet_h_grid[g] = logdet;
+
+        grid_inv[g].s_ww    = sw;
+        grid_inv[g].s_wy    = swy;
+        grid_inv[g].s_yy    = sy;
+        grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
+    }
 }

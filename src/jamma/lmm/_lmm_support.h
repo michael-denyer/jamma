@@ -151,4 +151,40 @@ int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples);
 /* Release the owned fields. Does NOT free the struct itself. */
 void free_pab_table(pab_table_t *t);
 
+/* ---------------------------------------------------------------------------
+ * Array intake. Each returns a new reference to a C-contiguous, aligned
+ * float64 view of obj, or NULL with PyErr set.
+ * ------------------------------------------------------------------------- */
+
+/* Any shape; the caller checks dims it can only know later. */
+PyArrayObject *take_array(PyObject *obj);
+
+/* Shape (n,). */
+PyArrayObject *take_vector(PyObject *obj, int n, const char *name);
+
+/* Shape (rows, cols). */
+PyArrayObject *take_matrix(PyObject *obj, int rows, int cols,
+                           const char *name);
+
+/* A genotype chunk utg_t, shape (n_snps, n_samples) with n_snps <= INT_MAX.
+ * Writes n_snps to *n_snps_out. Whether n_snps == 0 is an error is the
+ * caller's decision: the n_cvt=1 Wald paths accept it. */
+PyArrayObject *take_chunk(PyObject *obj, int n_samples, int *n_snps_out);
+
+/* Each 0 on success, -1 with PyErr set. */
+int validate_n_cvt(int n_cvt);
+int validate_logl_H0(double logl_H0);
+int validate_hi_eval_null(const double *hi, int n_samples);
+
+/* ---------------------------------------------------------------------------
+ * n_cvt = 1 lambda grid. Fills the caller-allocated lambda_grid (n_grid,),
+ * hi_eval_grid (n_grid * n_samples), logdet_h_grid (n_grid,) and the per-grid
+ * invariant dot products grid_inv (n_grid,).
+ * ------------------------------------------------------------------------- */
+void build_grid_ncvt1(int n_grid, int n_samples, double log_l_min, double step,
+                      const double *eigenvalues, const double *inv_ww,
+                      const double *inv_wy, const double *inv_yy,
+                      double *lambda_grid, double *hi_eval_grid,
+                      double *logdet_h_grid, grid_invariant_t *grid_inv);
+
 #endif /* JAMMA_LMM_SUPPORT_H */

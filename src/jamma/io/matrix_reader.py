@@ -14,16 +14,13 @@ streams line-by-line internally instead of buffering the entire byte range in RA
 The memmap-to-dense final copy uses block-by-block transfer (1024 rows at a time)
 so that only a small window of memmap pages is faulted into physical memory at a
 time, significantly reducing peak RSS compared to np.array(mm) which faults the
-entire memmap at once. When copy=False, skips the memmap-to-dense copy and returns
-the read-only memmap directly, with cleanup deferred to garbage collection via
-weakref.finalize.
+entire memmap at once.
 
 Mirrors the conventions in matrix_writer.py: spawn context, file-backed memmap,
 top-level picklable functions, temp dir on same filesystem as input.
 """
 
 import contextlib
-import weakref
 from pathlib import Path
 
 import numpy as np
@@ -194,11 +191,7 @@ def _scan_chunk_boundaries(
 
 
 def _cleanup_temp_memmap(tmp_dir: str, memmap_path: str) -> None:
-    """Clean up the temp memmap file and its parent directory.
-
-    Called from weakref.finalize (GC) and from the finally block on the
-    copy=True path.
-    """
+    """Clean up the temp memmap file and its parent directory."""
     unlink_quietly(memmap_path)
     try:
         Path(tmp_dir).rmdir()
@@ -215,7 +208,6 @@ def read_matrix_parallel(
     delimiter: str | None = None,
     n_workers: int | None = None,
     min_rows_for_parallel: int = 500,
-    copy: bool = True,
 ) -> np.ndarray:
     """Read a 2D matrix from a text file, optionally using parallel parsing.
 
@@ -228,16 +220,9 @@ def read_matrix_parallel(
         delimiter: Column separator (None = whitespace, matching np.loadtxt default).
         n_workers: Number of worker processes (default: min(cpu_count, 32)).
         min_rows_for_parallel: Row threshold for parallel path (default 500).
-        copy: If True (default), returns a dense C-contiguous float64 array
-            (existing behavior). If False, returns a read-only ``np.memmap``
-            backed by a temp file; the temp file is removed automatically when
-            the returned memmap is garbage collected via ``weakref.finalize``.
-            copy=False only applies to the parallel path; the small-matrix
-            np.loadtxt fallback always returns a dense array regardless.
 
     Returns:
-        2D float64 numpy array (C-contiguous) when copy=True, or a read-only
-        np.memmap when copy=False on the parallel path.
+        2D float64 numpy array (C-contiguous).
     """
     path = Path(path)
     if not path.exists():
@@ -264,12 +249,6 @@ def read_matrix_parallel(
     n_rows_approx = max(1, file_size // bytes_per_line)
 
     if n_rows_approx < min_rows_for_parallel:
-        if not copy:
-            logger.debug(
-                f"copy=False ignored for {path.name}: below parallel threshold "
-                f"({n_rows_approx} < {min_rows_for_parallel} rows), "
-                f"returning dense array"
-            )
         logger.info(f"Reading {path.name} via np.loadtxt (small matrix)")
         return np.atleast_2d(np.loadtxt(path, dtype=np.float64, delimiter=delimiter))
 
@@ -286,10 +265,6 @@ def read_matrix_parallel(
 
     tmp_dir = temp_dir_beside(path, prefix=".jamma_mread_")
     memmap_path = str(Path(tmp_dir) / "matrix.dat")
-
-    # When copy=False, cleanup happens via weakref.finalize on the returned
-    # memmap instead of the finally block. This flag controls which path runs.
-    cleanup_in_finally = True
 
     try:
         # Create zero-filled memmap for workers to write into
@@ -309,13 +284,6 @@ def read_matrix_parallel(
             n_workers=n_workers,
         )
 
-        if not copy:
-            # Return a read-only memmap; cleanup deferred to GC via weakref.finalize.
-            mm = np.memmap(memmap_path, dtype=np.float64, mode="r", shape=shape)
-            weakref.finalize(mm, _cleanup_temp_memmap, tmp_dir, memmap_path)
-            cleanup_in_finally = False
-            return mm
-
         # Block-by-block copy: dense output is pre-allocated at full size,
         # but only ~1024 rows of memmap pages are faulted at a time.  For
         # matrices larger than physical memory this significantly reduces
@@ -330,5 +298,4 @@ def read_matrix_parallel(
 
         return result
     finally:
-        if cleanup_in_finally:
-            _cleanup_temp_memmap(tmp_dir, memmap_path)
+        _cleanup_temp_memmap(tmp_dir, memmap_path)

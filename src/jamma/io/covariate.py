@@ -110,9 +110,6 @@ def encode_categorical_covariates(
     k-1 levels produce one dummy column each (0/1). Rows with NaN in the
     original categorical column get NaN in all resulting dummy columns.
 
-    Columns are processed in descending index order to preserve column numbering
-    when multiple columns are encoded simultaneously.
-
     After encoding, any zero-variance dummy columns are warned about and removed
     (they would cause rank-deficient W).
 
@@ -140,17 +137,22 @@ def encode_categorical_covariates(
                 f"(covariate file has {n_cvt} columns)"
             )
 
-    # Convert to 0-indexed and sort descending for stable replacement
-    zero_indexed = sorted([c - 1 for c in cat_columns], reverse=True)
+    zero_indexed_cat_columns = {c - 1 for c in cat_columns}
 
-    # Track newly created dummy column indices so zero-variance check
-    # only applies to dummies, not originals (e.g. intercept is all 1s
-    # = zero variance but must be preserved)
-    result = covariates.copy()
-    dummy_col_indices: list[int] = []
+    # Build the output column list once, in ascending input order. Each
+    # original column contributes one block: itself unchanged (not
+    # categorical), its k-1 dummy columns, a NaN marker column, or nothing
+    # (constant categorical with no missing rows).
+    blocks: list[np.ndarray] = []
+    is_dummy: list[bool] = []
 
-    for col_idx in zero_indexed:
-        col_values = result[:, col_idx]
+    for col_idx in range(n_cvt):
+        col_values = covariates[:, col_idx]
+
+        if col_idx not in zero_indexed_cat_columns:
+            blocks.append(col_values.reshape(n_samples, 1))
+            is_dummy.append(False)
+            continue
 
         # Get sorted unique non-NaN values
         non_nan_values = col_values[~np.isnan(col_values)]
@@ -173,21 +175,15 @@ def encode_categorical_covariates(
             # remove the column entirely (it's constant, zero variance).
             nan_mask_col = np.isnan(col_values)
             if np.any(nan_mask_col):
-                # Replace column with NaN marker (0 for valid, NaN for missing)
-                marker = np.zeros(n_samples, dtype=np.float64)
-                marker[nan_mask_col] = np.nan
-                result[:, col_idx] = marker
+                marker = np.zeros((n_samples, 1), dtype=np.float64)
+                marker[nan_mask_col, 0] = np.nan
+                blocks.append(marker)
+                is_dummy.append(False)
                 logger.warning(
                     f"Categorical column {col_idx + 1} has only 1 non-NaN level; "
                     f"kept as NaN marker column to preserve {int(nan_mask_col.sum())} "
                     f"missing-value row(s)"
                 )
-            else:
-                # No NaN rows, safe to remove entirely
-                dummy_col_indices = [
-                    i - 1 if i > col_idx else i for i in dummy_col_indices
-                ]
-                result = np.delete(result, col_idx, axis=1)
             continue
 
         # Create dummy columns
@@ -200,24 +196,13 @@ def encode_categorical_covariates(
             # Propagate NaN for missing rows
             dummies[nan_mask, i] = np.nan
 
-        # Replace original column with dummy columns
-        # Adjust existing tracked dummy indices for the column shift
-        shift = n_dummies - 1  # net new columns added
-        dummy_col_indices = [
-            i + shift if i >= col_idx else i for i in dummy_col_indices
-        ]
-        # Track new dummy column positions
-        dummy_col_indices.extend(range(col_idx, col_idx + n_dummies))
+        blocks.append(dummies)
+        is_dummy.extend([True] * n_dummies)
 
-        result = np.hstack(
-            [
-                result[:, :col_idx],
-                dummies,
-                result[:, col_idx + 1 :],
-            ]
-        )
+    result = np.hstack(blocks) if blocks else np.empty((n_samples, 0), dtype=np.float64)
 
     # Check for zero-variance among ONLY the newly created dummy columns
+    dummy_col_indices = [i for i, d in enumerate(is_dummy) if d]
     if dummy_col_indices:
         col_vars = np.nanvar(result[:, dummy_col_indices], axis=0)
         zero_var_positions = [

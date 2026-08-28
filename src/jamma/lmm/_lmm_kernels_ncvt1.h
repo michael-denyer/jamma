@@ -210,29 +210,6 @@ double refine_lambda_ncvt1_split(
 );
 
 
-double golden_section_lambda_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    double logdet_iab,
-    int n_samples,
-    const double *lambda_grid,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
-    int df, double reml_const,
-    double *logl_out,
-    double *beta_out, double *se_out, double *f_stat_out,
-    int *is_valid_out
-);
-
-
 /* -------------------------------------------------------------------------
  * mle_logl_ncvt1
  *

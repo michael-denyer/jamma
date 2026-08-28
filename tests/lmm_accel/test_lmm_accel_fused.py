@@ -210,7 +210,7 @@ class TestFusedParity:
         ws_fused = _ncvt1_workspace(
             fused_data, lmm_mode=4, hi_eval_null=Hi_eval_null, logl_H0=logl_H0
         )
-        result = _c().compute_mode4_chunk_fused_c(ws_fused, utg_t, 1)
+        result = _c().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
 
         wald = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
         reference = {k: wald[k] for k in _WALD_KEYS}
@@ -372,7 +372,7 @@ def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
     shape and range here, and against NumPy in the two tests below.
     """
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = _c().compute_mode4_chunk_fused_general_c(
+    result = _c().compute_lmm_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
     reference = _numpy_general_wald(data)
@@ -436,7 +436,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
         hi_eval_null=Hi_eval_null,
         logl_H0=logl_H0,
     )
-    result = _c().compute_mode4_chunk_fused_general_c(ws_fused, utg_t, 1)
+    result = _c().compute_lmm_chunk_fused_general_c(ws_fused, utg_t, 1)
 
     # All non-degenerate SNPs must have finite lambda_mle
     lambdas_mle = result["lambdas_mle"]
@@ -456,7 +456,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
 def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
     """FGEN-08: Fused general mode-4 LRT matches the NumPy MLE lambdas and p-values."""
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = _c().compute_mode4_chunk_fused_general_c(
+    result = _c().compute_lmm_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
 
@@ -477,7 +477,7 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
     mix-up between the three shows here and not in the single-mode tests.
     """
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = _c().compute_mode4_chunk_fused_general_c(
+    result = _c().compute_lmm_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
 

@@ -36,6 +36,10 @@ _MODE4_KEYS = (
     "p_scores",
 )
 
+# What lmm_mode=1 returns from the same compute: the Wald arrays without the
+# Score and LRT three. Sliced from _MODE4_KEYS so the two cannot drift.
+_WALD_KEYS = _MODE4_KEYS[:5]
+
 
 def _mode4_workspace(fused_data):
     """Build the live fused mode-4 workspace and the genotypes to run it over.
@@ -106,7 +110,7 @@ def test_mode4_fused_workspace_api(fused_data):
     ws, utg_t, n_snps = _mode4_workspace(fused_data)
     assert ws is not None
 
-    cr = _c().compute_mode4_chunk_fused_c(ws, utg_t, 1)
+    cr = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
 
     for key in _MODE4_KEYS:
         assert key in cr, f"Missing key '{key}' in fused mode-4 result"
@@ -133,7 +137,7 @@ def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(fused_data):
     the 50 SNPs here, so there is no sign to pin.
     """
     ws, utg_t, _ = _mode4_workspace(fused_data)
-    cr = _c().compute_mode4_chunk_fused_c(ws, utg_t, 1)
+    cr = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
 
     log_separation = np.abs(np.log(cr["lambdas"]) - np.log(cr["lambdas_mle"]))
 
@@ -152,7 +156,7 @@ def test_mode4_fused_degenerate_snps(fused_data):
     utg_degen = utg_t.copy()
     utg_degen[0, :] = 0.0
 
-    cr = _c().compute_mode4_chunk_fused_c(ws, utg_degen, 1)
+    cr = _c().compute_lmm_chunk_fused_c(ws, utg_degen, 1)
 
     for key in ("betas", "ses", "pwalds", "p_scores"):
         assert np.isnan(cr[key][0]), f"degenerate SNP should have NaN {key}"
@@ -164,20 +168,24 @@ def test_mode4_fused_degenerate_snps(fused_data):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
-def test_mode4_fused_rejects_wald_workspace(fused_data):
-    """A workspace built with lmm_mode=1 is rejected by the mode-4 compute.
+def test_wald_workspace_yields_wald_keys_only(fused_data):
+    """One compute serves both modes, and the workspace decides what comes back.
 
-    One capsule type now carries every n_cvt=1 workspace, so the check that
-    fires is the workspace's recorded lmm_mode, not the capsule's name.
+    A workspace built with lmm_mode=1 gets the five Wald arrays; the same call
+    against an lmm_mode=4 workspace gets those plus the Score and LRT three.
+    Nothing but the workspace differs between the two calls.
     """
     eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
 
     wald_ws = _c().create_workspace_ncvt1_c(
         eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
     )
+    wald_result = _c().compute_lmm_chunk_fused_c(wald_ws, utg_t, 1)
+    assert set(wald_result) == set(_WALD_KEYS)
 
-    with pytest.raises(ValueError, match="lmm_mode"):
-        _c().compute_mode4_chunk_fused_c(wald_ws, utg_t, 1)
+    mode4_ws, mode4_utg_t, _ = _mode4_workspace(fused_data)
+    mode4_result = _c().compute_lmm_chunk_fused_c(mode4_ws, mode4_utg_t, 1)
+    assert set(mode4_result) == set(_MODE4_KEYS)
 
 
 @pytest.mark.tier0
@@ -195,8 +203,8 @@ def test_mode4_fused_multithreaded_parity(fused_data):
         pytest.skip("Need >=2 cores for multi-threaded test")
 
     ws, utg_t, _ = _mode4_workspace(fused_data)
-    single = _c().compute_mode4_chunk_fused_c(ws, utg_t, 1)
-    multi = _c().compute_mode4_chunk_fused_c(ws, utg_t, n_threads)
+    single = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    multi = _c().compute_lmm_chunk_fused_c(ws, utg_t, n_threads)
 
     for key in _MODE4_KEYS:
         np.testing.assert_array_equal(

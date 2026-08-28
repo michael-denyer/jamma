@@ -94,7 +94,7 @@ double reml_logl_general_fresh(
 /* -------------------------------------------------------------------------
  * golden_section_lambda_general — Grid + golden section for general n_cvt.
  *
- * Mirrors golden_section_lambda_ncvt1_split() structure. Grid phase uses
+ * Mirrors the coarse-grid plus refine_lambda_ncvt1_split pair. Grid phase uses
  * precomputed hi_eval + invariant sums; refinement uses fresh evaluation.
  * At optimal lambda, computes full Pab and returns it + Wald stats.
  * ------------------------------------------------------------------------- */

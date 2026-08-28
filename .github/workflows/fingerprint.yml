@@ -68,8 +68,14 @@ jobs:
       # Both runs go through one copy of the runner, kept outside the worktree
       # so the base checkout cannot swap it for an older version. Identical
       # pytest arguments on both sides is what makes the record keys line up.
-      - name: Stage the fingerprint runner
-        run: install -m 755 scripts/run-fingerprint.sh "${RUNNER_TEMP}/run-fingerprint.sh"
+      # Both sides must run the head's harness: the runner for identical pytest
+      # arguments, and the recorder because it decides how records are keyed.
+      # A recorder that keys differently on the two sides shares no records
+      # and the comparison finds nothing to compare while looking like it ran.
+      - name: Stage the fingerprint harness
+        run: |
+          install -m 755 scripts/run-fingerprint.sh "${RUNNER_TEMP}/run-fingerprint.sh"
+          install -m 644 scripts/lmm_accel_fingerprint.py "${RUNNER_TEMP}/lmm_accel_fingerprint.py"
 
       # HEAD first, so a build failure lands against the code under review
       # rather than against the base.
@@ -93,6 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           git checkout --detach "${BASE_SHA}"
+          install -m 644 "${RUNNER_TEMP}/lmm_accel_fingerprint.py" scripts/lmm_accel_fingerprint.py
           rm -f src/jamma/lmm/_lmm_accel*.so
           uv sync
           uv run python -m jamma.lmm._compile_accel
@@ -103,7 +110,7 @@ jobs:
           HEAD_SHA: ${{ steps.base.outputs.head }}
         run: |
           set -euo pipefail
-          git checkout --detach "${HEAD_SHA}"
+          git checkout --force --detach "${HEAD_SHA}"
           uv run python scripts/compare_fingerprints.py \
             "${RUNNER_TEMP}/base.txt" "${RUNNER_TEMP}/head.txt"
 

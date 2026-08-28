@@ -44,6 +44,13 @@ import numpy as np
 _records: set[str] = set()
 _ENV_OUT = "JAMMA_FINGERPRINT_OUT"
 
+# id(capsule) -> "<creator>|<args digest>" for every workspace a wrapped
+# creator returned. A capsule's contents are unreachable from Python, and one
+# compute entry point serves workspaces built for different lmm_modes, so
+# without this a Wald call and a mode-4 call on the same chunk share a key
+# and the comparison reports the union of their results as a change.
+_workspaces: dict[int, str] = {}
+
 
 def _feed(obj: Any, h: Any) -> None:
     """Fold one value into the running hash, byte-exactly for floats."""
@@ -78,10 +85,11 @@ def _feed(obj: Any, h: Any) -> None:
             _feed(item, h)
         h.update(b"]")
     else:
-        # Opaque workspace capsules. Their contents are unreachable from
-        # Python, but every result computed from one is still digested, so a
-        # workspace that changed would surface downstream.
+        # Opaque workspace capsules: digest the creator call that built one,
+        # recorded in _workspaces. Every result computed from a workspace is
+        # digested too, so a workspace whose contents changed still surfaces.
         h.update(b"opaque|" + type(obj).__name__.encode())
+        h.update(b"|" + _workspaces.get(id(obj), "").encode())
 
 
 def _digest(*values: Any) -> str:
@@ -99,6 +107,11 @@ def _wrap(name: str, fn: Any) -> Any:
         except BaseException as exc:
             _records.add(f"{name}\t{args_digest}\traise:{type(exc).__name__}")
             raise
+        if name.startswith("create_workspace"):
+            # Register before digesting, so a creator's result digest is a
+            # function of its own call and never of whatever capsule last
+            # lived at that address.
+            _workspaces[id(result)] = f"{name}|{args_digest}"
         _records.add(f"{name}\t{args_digest}\t{_digest(result)}")
         return result
 

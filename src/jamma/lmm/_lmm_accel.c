@@ -2,14 +2,12 @@
  * _lmm_accel.c — C extension implementing per-SNP REML/MLE pipelines
  * for Wald, Score, and LRT tests (n_cvt=1 and general n_cvt).
  *
- * Exported functions, one workspace per family plus one compute per test:
+ * Exported functions, one workspace and one compute per family:
  *   n_cvt = 1      create_workspace_ncvt1_c(..., lmm_mode=1|2|3|4), then
- *                  compute_lmm_chunk_fused_c (mode 1 or 4),
- *                  compute_lrt_fused_ws_c (2), compute_score_fused_ws_c (3),
- *                  compute_mode4_chunk_fused_c (4)
+ *                  compute_lmm_chunk_fused_c (modes 1 and 4),
+ *                  compute_lrt_fused_ws_c (2), compute_score_fused_ws_c (3)
  *   n_cvt >= 2     create_workspace_general_c(..., pab_table, lmm_mode=1|4),
- *                  then compute_lmm_chunk_fused_general_c (mode 1 or 4),
- *                  compute_mode4_chunk_fused_general_c (4)
+ *                  then compute_lmm_chunk_fused_general_c (modes 1 and 4)
  *   SOA_SPLIT      compute_score_split_general_c, compute_lrt_split_general_c
  *
  * -DJAMMA_SENTINEL_UB enables a heap-OOB sentinel function
@@ -88,7 +86,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 14  /* v14: one general creator on the Pab table dict, keyed by lmm_mode */
+#define ABI_VERSION 15  /* v15: one compute per family, taking lmm_mode 1 or 4 */
 
 /* P_YY_MIN and REML_SENTINEL moved to _lmm_types.h when the general kernels
  * left this file: both units read them, and two copies could drift. */
@@ -612,17 +610,25 @@ err_input:
 /* -------------------------------------------------------------------------
  * compute_lmm_chunk_fused_c
  *
- * Fused per-chunk Wald compute: accepts UtG_T (n_snps, n_samples) and
+ * Fused per-chunk compute for one n_cvt=1 workspace, Wald (lmm_mode 1) or
+ * Wald + Score + LRT (lmm_mode 4). Accepts UtG_T (n_snps, n_samples) and
  * computes wx/xx/xy on-the-fly from the w/Uty stored in the workspace, rather
  * than taking them prebuilt. The arithmetic and its order are unchanged by
  * that, so results do not depend on which form the caller supplies.
+ *
+ * The workspace's lmm_mode picks which blocks of the per-SNP body run and how
+ * many output arrays come back. The REML lambda search is the same coarse grid
+ * plus golden-section refinement in both modes; mode 4 additionally reads the
+ * MLE bracket that same grid pass produces.
  *
  * Python signature:
  *   compute_lmm_chunk_fused_c(
  *       workspace,   # PyCapsule from create_workspace_ncvt1_c, lmm_mode 1 or 4
  *       utg_t,       # (n_snps, n_samples) float64 — UtG.T
  *       n_threads,   # int
- *   ) -> dict {lambdas, logls, betas, ses, pwalds}  each (n_snps,) float64
+ *   ) -> dict {lambdas, logls, betas, ses, pwalds}, plus
+ *        {p_scores, lambdas_mle, p_lrts} under lmm_mode 4. Each (n_snps,)
+ *        float64.
  * ------------------------------------------------------------------------- */
 static PyObject *compute_lmm_chunk_fused_c_py(
     PyObject *self, PyObject *args, PyObject *kwargs)
@@ -643,8 +649,10 @@ static PyObject *compute_lmm_chunk_fused_c_py(
         capsule_obj, "compute_lmm_chunk_fused_c", 1, 4);
     if (!ws) return NULL;
 
+    const int mode4 = (ws->mode == 4);
+
     PyArrayObject *utg_t_arr = NULL;
-    output_arrays_t out = {0};
+    lmm_output_t out = {0};
     PyObject *result = NULL;
 
     int n_samples = ws->n_samples;
@@ -652,167 +660,7 @@ static PyObject *compute_lmm_chunk_fused_c_py(
     utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
     if (!utg_t_arr) return NULL;
 
-    if (alloc_output_arrays(&out, n_snps) < 0)
-        goto err_input;
-
-    const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
-    const double *inv_ww = ws->inv_ww;
-    const double *inv_wy = ws->inv_wy;
-    const double *inv_yy = ws->inv_yy;
-    const double *w_ptr = ws->w;
-    const double *Uty_ptr = ws->Uty;
-
-    double *lambdas = (double *)PyArray_DATA(out.lambdas);
-    double *logls   = (double *)PyArray_DATA(out.logls);
-    double *betas   = (double *)PyArray_DATA(out.betas);
-    double *ses     = (double *)PyArray_DATA(out.ses);
-    double *pwalds  = (double *)PyArray_DATA(out.pwalds);
-
-    int n_grid    = ws->n_grid;
-    int n_refine  = ws->n_refine;
-    int df        = ws->df;
-    double reml_const = ws->reml_const;
-
-    /* Clamp n_threads to n_snps */
-    int actual_threads = 1;
-#ifdef _OPENMP
-    actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
-    if (actual_threads < 1) actual_threads = 1;
-#endif
-
-    /* Per-thread scratch buffers for on-the-fly wx/xx/xy computation */
-    double **scratch_wx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
-    double **scratch_xx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
-    double **scratch_xy = alloc_thread_scratch(actual_threads, (size_t)n_samples);
-    if (!scratch_wx || !scratch_xx || !scratch_xy) {
-        free_thread_scratch(scratch_wx, actual_threads);
-        free_thread_scratch(scratch_xx, actual_threads);
-        free_thread_scratch(scratch_xy, actual_threads);
-        decref_output_arrays(&out);
-        PyErr_NoMemory();
-        goto err_input;
-    }
-
-    Py_BEGIN_ALLOW_THREADS
-
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(static) num_threads(actual_threads)
-#endif
-    for (int snp = 0; snp < n_snps; snp++) {
-        int tid = 0;
-#ifdef _OPENMP
-        tid = omp_get_thread_num();
-#endif
-        double *vwx = scratch_wx[tid];
-        double *vxx = scratch_xx[tid];
-        double *vxy = scratch_xy[tid];
-
-        const double *x = utg_t_data + (size_t)snp * n_samples;
-
-        /* Compute wx/xx/xy on-the-fly — same operations as SoA path */
-        for (int i = 0; i < n_samples; i++) {
-            vwx[i] = w_ptr[i] * x[i];
-            vxx[i] = x[i] * x[i];
-            vxy[i] = x[i] * Uty_ptr[i];
-        }
-
-        /* From here, the per-SNP body works on wx/xx/xy like any other */
-        double iab_s_wx = 0.0, iab_s_xx = 0.0;
-        #pragma omp simd reduction(+:iab_s_wx,iab_s_xx)
-        for (int i = 0; i < n_samples; i++) {
-            iab_s_wx += vwx[i];
-            iab_s_xx += vxx[i];
-        }
-
-        double iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * ws->iab_inv_ww;
-        double logdet_iab = ws->iab_log_ww
-                            + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
-
-        double logl_opt, beta, se, f_stat;
-        int is_valid;
-        double lambda_opt = golden_section_lambda_ncvt1_split(
-            vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
-            ws->eigenvalues, logdet_iab,
-            n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
-            ws->grid_inv, ws->log_l_min, ws->step, n_grid, n_refine,
-            df, reml_const, &logl_opt, &beta, &se, &f_stat, &is_valid
-        );
-
-        lambdas[snp] = lambda_opt;
-        logls[snp]   = logl_opt;
-        betas[snp]   = beta;
-        ses[snp]     = se;
-
-        pwalds[snp] = f_to_pvalue(
-            f_stat, df, is_valid,
-            ws->beta_a, ws->beta_b, ws->lbeta_ab);
-    }
-
-    Py_END_ALLOW_THREADS
-
-    /* Free scratch buffers */
-    free_thread_scratch(scratch_wx, actual_threads);
-    free_thread_scratch(scratch_xx, actual_threads);
-    free_thread_scratch(scratch_xy, actual_threads);
-
-    if (warn_betainc_convergence(betas, pwalds, n_snps) < 0)
-        goto err_output;
-
-    result = build_result_dict(&out);
-    if (!result) goto err_input;
-
-    Py_DECREF(utg_t_arr);
-    return result;
-
-err_output:
-    decref_output_arrays(&out);
-err_input:
-    Py_XDECREF(utg_t_arr);
-    return NULL;
-}
-
-/* -------------------------------------------------------------------------
- * compute_mode4_chunk_fused_c
- *
- * Fused per-chunk mode-4 compute: Score + Wald + LRT from UtG_T directly,
- * computing wx/xx/xy on-the-fly from the w/Uty stored in the workspace.
- *
- * Python signature:
- *   compute_mode4_chunk_fused_c(
- *       workspace,   # PyCapsule from create_workspace_ncvt1_c, lmm_mode 4
- *       utg_t,       # (n_snps, n_samples) float64 — UtG.T
- *       n_threads,   # int
- *   ) -> dict {lambdas, logls, betas, ses, pwalds, p_scores, lambdas_mle, p_lrts}
- * ------------------------------------------------------------------------- */
-static PyObject *compute_mode4_chunk_fused_c_py(
-    PyObject *self, PyObject *args, PyObject *kwargs)
-{
-    static const char *kwlist[] = {"workspace", "utg_t", "n_threads", NULL};
-
-    PyObject *capsule_obj;
-    PyObject *utg_t_obj;
-    int n_threads;
-
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOi", (char **)kwlist,
-            &capsule_obj, &utg_t_obj, &n_threads)) {
-        return NULL;
-    }
-
-    lmm_workspace_t *ws = ncvt1_workspace(
-        capsule_obj, "compute_mode4_chunk_fused_c", 4, 4);
-    if (!ws) return NULL;
-
-    PyArrayObject *utg_t_arr = NULL;
-    mode4_output_t out = {0};
-    PyObject *result = NULL;
-
-    int n_samples = ws->n_samples;
-    int n_snps;
-    utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
-    if (!utg_t_arr) return NULL;
-
-    if (alloc_mode4_output(&out, (npy_intp)n_snps) < 0) {
+    if (alloc_lmm_output(&out, (npy_intp)n_snps, mode4) < 0) {
         if (!PyErr_Occurred()) PyErr_NoMemory();
         goto err_input;
     }
@@ -829,9 +677,9 @@ static PyObject *compute_mode4_chunk_fused_c_py(
     double *out_betas       = (double *)PyArray_DATA(out.betas);
     double *out_ses         = (double *)PyArray_DATA(out.ses);
     double *out_pwalds      = (double *)PyArray_DATA(out.pwalds);
-    double *out_p_scores    = (double *)PyArray_DATA(out.p_scores);
-    double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
-    double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
+    double *out_p_scores    = mode4 ? (double *)PyArray_DATA(out.p_scores) : NULL;
+    double *out_lambdas_mle = mode4 ? (double *)PyArray_DATA(out.lambdas_mle) : NULL;
+    double *out_p_lrts      = mode4 ? (double *)PyArray_DATA(out.p_lrts) : NULL;
 
     int n_grid    = ws->n_grid;
     int n_refine  = ws->n_refine;
@@ -847,17 +695,19 @@ static PyObject *compute_mode4_chunk_fused_c_py(
 
     /* Per-thread scratch buffers:
      * - 3 for wx/xx/xy on-the-fly computation
-     * - 1 for MLE golden section refinement (hi_eval_local) */
+     * - 1 for MLE golden section refinement (hi_eval_local), mode 4 only */
     double **scratch_wx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
     double **scratch_xx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
     double **scratch_xy = alloc_thread_scratch(actual_threads, (size_t)n_samples);
-    double **thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
-    if (!scratch_wx || !scratch_xx || !scratch_xy || !thread_bufs) {
+    double **thread_bufs = mode4
+        ? alloc_thread_scratch(actual_threads, (size_t)n_samples)
+        : NULL;
+    if (!scratch_wx || !scratch_xx || !scratch_xy || (mode4 && !thread_bufs)) {
         free_thread_scratch(scratch_wx, actual_threads);
         free_thread_scratch(scratch_xx, actual_threads);
         free_thread_scratch(scratch_xy, actual_threads);
         free_thread_scratch(thread_bufs, actual_threads);
-        decref_mode4_output(&out);
+        decref_lmm_output(&out);
         PyErr_NoMemory();
         goto err_input;
     }
@@ -875,7 +725,6 @@ static PyObject *compute_mode4_chunk_fused_c_py(
         double *vwx = scratch_wx[tid];
         double *vxx = scratch_xx[tid];
         double *vxy = scratch_xy[tid];
-        double *hi_eval_local = thread_bufs[tid];
 
         const double *x = utg_t_data + (size_t)snp * n_samples;
 
@@ -887,7 +736,7 @@ static PyObject *compute_mode4_chunk_fused_c_py(
         }
 
         /* ---- (a) Score: null-model Pab ---- */
-        {
+        if (mode4) {
             double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
             #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
             for (int i = 0; i < n_samples; i++) {
@@ -951,19 +800,23 @@ static PyObject *compute_mode4_chunk_fused_c_py(
             ws->beta_a, ws->beta_b, ws->lbeta_ab);
 
         /* ---- (d) LRT: MLE optimization ---- */
-        double logl_H1;
-        double lambda_mle = refine_lambda_mle_ncvt1_split(
-            vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
-            ws->eigenvalues, n_samples, ws->lambda_grid,
-            ws->log_l_min, ws->step, n_grid, n_refine,
-            best_mle_idx, ws->mle_const, hi_eval_local, &logl_H1
-        );
+        if (mode4) {
+            double *hi_eval_local = thread_bufs[tid];
 
-        out_lambdas_mle[snp] = lambda_mle;
+            double logl_H1;
+            double lambda_mle = refine_lambda_mle_ncvt1_split(
+                vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
+                ws->eigenvalues, n_samples, ws->lambda_grid,
+                ws->log_l_min, ws->step, n_grid, n_refine,
+                best_mle_idx, ws->mle_const, hi_eval_local, &logl_H1
+            );
 
-        double lrt_stat = 2.0 * (logl_H1 - ws->logl_H0);
-        if (lrt_stat < 0.0) lrt_stat = 0.0;
-        out_p_lrts[snp] = chi2_sf_c(lrt_stat);
+            out_lambdas_mle[snp] = lambda_mle;
+
+            double lrt_stat = 2.0 * (logl_H1 - ws->logl_H0);
+            if (lrt_stat < 0.0) lrt_stat = 0.0;
+            out_p_lrts[snp] = chi2_sf_c(lrt_stat);
+        }
     }
 
     Py_END_ALLOW_THREADS
@@ -977,14 +830,14 @@ static PyObject *compute_mode4_chunk_fused_c_py(
     if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0)
         goto err_output;
 
-    result = build_mode4_result_dict(&out);
+    result = build_lmm_result_dict(&out);
     if (!result) goto err_input;
 
     Py_DECREF(utg_t_arr);
     return result;
 
 err_output:
-    decref_mode4_output(&out);
+    decref_lmm_output(&out);
 err_input:
     Py_XDECREF(utg_t_arr);
     return NULL;
@@ -1328,16 +1181,21 @@ err_input:
 /* -------------------------------------------------------------------------
  * compute_lmm_chunk_fused_general_c
  *
- * Per-chunk Wald compute using fused general workspace. Computes n_var
- * varying dot products on-the-fly from UtW/Uty/UtG_T per SNP, then feeds
- * them into the table-driven Pab recursion and golden section.
+ * Per-chunk compute for one general (n_cvt >= 2) workspace, Wald (lmm_mode 1)
+ * or Wald + Score + LRT (lmm_mode 4). Computes n_var varying dot products
+ * on-the-fly from UtW/Uty/UtG_T per SNP, then feeds them into the table-driven
+ * Pab recursion and golden section.
+ *
+ * The workspace's lmm_mode picks which blocks of the per-SNP body run and how
+ * many output arrays come back.
  *
  * Python signature:
  *   compute_lmm_chunk_fused_general_c(
  *       workspace,   # PyCapsule from create_workspace_general_c, lmm_mode 1 or 4
  *       utg_t,       # (n_snps, n_samples) float64
  *       n_threads,   # int
- *   ) -> dict {lambdas, logls, betas, ses, pwalds}
+ *   ) -> dict {lambdas, logls, betas, ses, pwalds}, plus
+ *        {p_scores, lambdas_mle, p_lrts} under lmm_mode 4.
  * ------------------------------------------------------------------------- */
 static PyObject *compute_lmm_chunk_fused_general_c_py(
     PyObject *self, PyObject *args, PyObject *kwargs)
@@ -1358,8 +1216,10 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
         capsule_obj, "compute_lmm_chunk_fused_general_c", 1, 4);
     if (!ws) return NULL;
 
+    const int mode4 = (ws->mode == 4);
+
     PyArrayObject *utg_t_arr = NULL;
-    output_arrays_t out = {0};
+    lmm_output_t out = {0};
     PyObject *result = NULL;
 
     int n_samples = ws->n_samples;
@@ -1373,16 +1233,21 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
         goto err_input_fg;
     }
 
-    if (alloc_output_arrays(&out, n_snps) < 0)
+    if (alloc_lmm_output(&out, (npy_intp)n_snps, mode4) < 0) {
+        if (!PyErr_Occurred()) PyErr_NoMemory();
         goto err_input_fg;
+    }
 
     const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
 
-    double *lambdas = (double *)PyArray_DATA(out.lambdas);
-    double *logls   = (double *)PyArray_DATA(out.logls);
-    double *betas   = (double *)PyArray_DATA(out.betas);
-    double *ses     = (double *)PyArray_DATA(out.ses);
-    double *pwalds  = (double *)PyArray_DATA(out.pwalds);
+    double *out_lambdas     = (double *)PyArray_DATA(out.lambdas);
+    double *out_logls       = (double *)PyArray_DATA(out.logls);
+    double *out_betas       = (double *)PyArray_DATA(out.betas);
+    double *out_ses         = (double *)PyArray_DATA(out.ses);
+    double *out_pwalds      = (double *)PyArray_DATA(out.pwalds);
+    double *out_p_scores    = mode4 ? (double *)PyArray_DATA(out.p_scores) : NULL;
+    double *out_lambdas_mle = mode4 ? (double *)PyArray_DATA(out.lambdas_mle) : NULL;
+    double *out_p_lrts      = mode4 ? (double *)PyArray_DATA(out.p_lrts) : NULL;
 
     int n_grid = ws->n_grid;
     int n_refine = ws->n_refine;
@@ -1430,174 +1295,8 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
                 out_v[i] = a[i] * b[i];
         }
 
-        /* Compute per-SNP logdet_iab at identity.
-         * Reuse per-thread heap buffer (consumed before my_row0 needed). */
-        double *iab_row0 = my_row0;
-        for (int i = 0; i < n_index; i++) iab_row0[i] = 0.0;
-
-        for (int c = 0; c < n_inv; c++)
-            iab_row0[ws->table.invariant_indices[c]] = ws->inv_identity_sums[c];
-        for (int c = 0; c < n_var; c++) {
-            double s = 0.0;
-            const double *col = scratch + (size_t)c * n_samples;
-            for (int i = 0; i < n_samples; i++)
-                s += col[i];
-            iab_row0[ws->table.varying_indices[c]] = s;
-        }
-
-        double logdet_iab = logdet_from_row0(
-            iab_row0, &ws->table, ws->table.n_cvt, my_pab);
-
-        /* Golden section optimization — uses scratch as uab_var */
-        double logl_opt, beta, se, f_stat;
-        int is_valid;
-        double lambda_opt = golden_section_lambda_general(
-            ws->uab_inv, scratch, ws->eigenvalues,
-            n_samples, ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
-            ws->inv_sums_grid,
-            log_l_min, step, n_grid, n_refine,
-            logdet_iab, reml_const, &ws->table,
-            &logl_opt, &beta, &se, &f_stat, &is_valid,
-            my_row0, my_pab
-        );
-
-        lambdas[snp] = lambda_opt;
-        logls[snp]   = logl_opt;
-        betas[snp]   = beta;
-        ses[snp]     = se;
-        pwalds[snp]  = f_to_pvalue(
-            f_stat, df, is_valid,
-            ws->beta_a, ws->beta_b, ws->lbeta_ab);
-    }
-
-    Py_END_ALLOW_THREADS
-
-    if (warn_betainc_convergence(betas, pwalds, n_snps) < 0)
-        goto err_output_fg;
-
-    result = build_result_dict(&out);
-    if (!result) goto err_input_fg;
-
-    Py_DECREF(utg_t_arr);
-    return result;
-
-err_output_fg:
-    decref_output_arrays(&out);
-err_input_fg:
-    Py_XDECREF(utg_t_arr);
-    return NULL;
-}
-
-/* -------------------------------------------------------------------------
- * compute_mode4_chunk_fused_general_c
- *
- * Fused per-chunk mode-4 for general n_cvt: Score + Wald + LRT from UtG_T.
- * Computes varying dot products on-the-fly, then uses table-driven Pab
- * recursion for all three statistics.
- *
- * Python signature:
- *   compute_mode4_chunk_fused_general_c(
- *       workspace,   # PyCapsule from create_workspace_general_c, lmm_mode 4
- *       utg_t,       # (n_snps, n_samples) float64
- *       n_threads,   # int
- *   ) -> dict {lambdas, logls, betas, ses, pwalds, p_scores, lambdas_mle, p_lrts}
- * ------------------------------------------------------------------------- */
-static PyObject *compute_mode4_chunk_fused_general_c_py(
-    PyObject *self, PyObject *args, PyObject *kwargs)
-{
-    static const char *kwlist[] = {"workspace", "utg_t", "n_threads", NULL};
-
-    PyObject *capsule_obj;
-    PyObject *utg_t_obj;
-    int n_threads;
-
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOi", (char **)kwlist,
-            &capsule_obj, &utg_t_obj, &n_threads)) {
-        return NULL;
-    }
-
-    lmm_workspace_general_t *ws = general_workspace(
-        capsule_obj, "compute_mode4_chunk_fused_general_c", 4, 4);
-    if (!ws) return NULL;
-
-    PyArrayObject *utg_t_arr = NULL;
-    mode4_output_t out = {0};
-    PyObject *result = NULL;
-
-    int n_samples = ws->n_samples;
-    int n_var = ws->table.n_var;
-    int n_inv = ws->table.n_inv;
-    int n_snps;
-    utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
-    if (!utg_t_arr) return NULL;
-    if (n_snps == 0) {
-        PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
-        goto err_input_m4fg;
-    }
-
-    if (alloc_mode4_output(&out, (npy_intp)n_snps) < 0) {
-        if (!PyErr_Occurred()) PyErr_NoMemory();
-        goto err_input_m4fg;
-    }
-
-    const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
-
-    double *out_lambdas     = (double *)PyArray_DATA(out.lambdas);
-    double *out_logls       = (double *)PyArray_DATA(out.logls);
-    double *out_betas       = (double *)PyArray_DATA(out.betas);
-    double *out_ses         = (double *)PyArray_DATA(out.ses);
-    double *out_pwalds      = (double *)PyArray_DATA(out.pwalds);
-    double *out_p_scores    = (double *)PyArray_DATA(out.p_scores);
-    double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
-    double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
-
-    int n_grid = ws->n_grid;
-    int n_refine = ws->n_refine;
-    int df = ws->table.df;
-    int n_index = ws->table.n_index;
-    double reml_const = ws->reml_const;
-
-    double log_l_min = log(ws->lambda_grid[0]);
-    double step = (n_grid > 1)
-        ? (log(ws->lambda_grid[n_grid - 1]) - log_l_min) / (double)(n_grid - 1)
-        : 0.0;
-
-    int actual_threads = 1;
-#ifdef _OPENMP
-    actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
-    if (actual_threads < 1) actual_threads = 1;
-    if (actual_threads > ws->actual_threads) actual_threads = ws->actual_threads;
-#endif
-
-    Py_BEGIN_ALLOW_THREADS
-
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(static) num_threads(actual_threads)
-#endif
-    for (int snp = 0; snp < n_snps; snp++) {
-        int tid = 0;
-#ifdef _OPENMP
-        tid = omp_get_thread_num();
-#endif
-        const double *x = utg_t_data + (size_t)snp * n_samples;
-        double *scratch = ws->scratch_flat +
-            (size_t)tid * (size_t)n_var * (size_t)n_samples;
-        double *my_pab = ws->pab_per_thread + (size_t)tid * ws->pab_size;
-        double *my_row0 = ws->row0_per_thread + (size_t)tid * n_index;
-
-        /* Compute n_var varying columns on-the-fly */
-        for (int v = 0; v < n_var; v++) {
-            double *out_v = scratch + (size_t)v * n_samples;
-            const double *a = get_fused_vector(ws, ws->table.var_a_cols[v], x);
-            const double *b = get_fused_vector(ws, ws->table.var_b_cols[v], x);
-            #pragma omp simd
-            for (int i = 0; i < n_samples; i++)
-                out_v[i] = a[i] * b[i];
-        }
-
         /* ---- (a) Score: null-model Pab ---- */
-        {
+        if (mode4) {
             double *null_row0 = my_row0;  /* reuse per-thread heap buffer */
             for (int i = 0; i < n_index; i++) null_row0[i] = 0.0;
 
@@ -1663,7 +1362,7 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
             ws->beta_a, ws->beta_b, ws->lbeta_ab);
 
         /* ---- (d) LRT: MLE optimization ---- */
-        {
+        if (mode4) {
             /* MLE requires the full (n_samples, n_index) Uab for one SNP
              * in row-major layout (mle_logl_general_cached accesses as
              * uab_snp[sample * n_index + col]).
@@ -1711,17 +1410,17 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
     Py_END_ALLOW_THREADS
 
     if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0)
-        goto err_output_m4fg;
+        goto err_output_fg;
 
-    result = build_mode4_result_dict(&out);
-    if (!result) goto err_input_m4fg;
+    result = build_lmm_result_dict(&out);
+    if (!result) goto err_input_fg;
 
     Py_DECREF(utg_t_arr);
     return result;
 
-err_output_m4fg:
-    decref_mode4_output(&out);
-err_input_m4fg:
+err_output_fg:
+    decref_lmm_output(&out);
+err_input_fg:
     Py_XDECREF(utg_t_arr);
     return NULL;
 }
@@ -1846,7 +1545,7 @@ static PyObject *compute_score_fused_ws_c_py(PyObject *self, PyObject *args)
  * (uab_varying_soa + uab_invariant_soa + pab_table_dict) directly.
  * Eliminates the need for reconstruct_uab_from_soa + batch dispatch.
  *
- * Mirrors the Score section of compute_mode4_chunk_fused_general_c but
+ * Mirrors the Score section of compute_lmm_chunk_fused_general_c but
  * reads from pre-computed SoA arrays instead of fused UtW/Uty vectors.
  * ========================================================================= */
 
@@ -2620,18 +2319,20 @@ static PyMethodDef methods[] = {
         "\n"
         "Returns:\n"
         "    PyCapsule for compute_lmm_chunk_fused_c (modes 1, 4),\n"
-        "    compute_lrt_fused_ws_c (2), compute_score_fused_ws_c (3),\n"
-        "    compute_mode4_chunk_fused_c (4)\n"
+        "    compute_lrt_fused_ws_c (2), compute_score_fused_ws_c (3)\n"
     },
     {
         "compute_lmm_chunk_fused_c",
         (PyCFunction)compute_lmm_chunk_fused_c_py,
         METH_VARARGS | METH_KEYWORDS,
-        "Fused per-chunk REML Wald from UtG_T directly.\n"
+        "Fused per-chunk compute from UtG_T directly, lmm_mode 1 or 4.\n"
         "\n"
         "Computes wx/xx/xy on-the-fly from UtG_T and w/Uty in workspace.\n"
         "Forms the varying Uab columns from w/Uty rather than taking them\n"
         "prebuilt; the arithmetic and its order are unchanged.\n"
+        "\n"
+        "Mode 1 runs REML Wald alone. Mode 4 adds Score and LRT in the same\n"
+        "pass, off the same coarse grid.\n"
         "\n"
         "Args:\n"
         "    workspace:  PyCapsule from create_workspace_ncvt1_c, lmm_mode 1 or 4\n"
@@ -2639,26 +2340,9 @@ static PyMethodDef methods[] = {
         "    n_threads:  int\n"
         "\n"
         "Returns:\n"
-        "    dict with keys: lambdas, logls, betas, ses, pwalds\n"
-    },
-    {
-        "compute_mode4_chunk_fused_c",
-        (PyCFunction)compute_mode4_chunk_fused_c_py,
-        METH_VARARGS | METH_KEYWORDS,
-        "Fused per-chunk mode-4 compute from UtG_T directly.\n"
-        "\n"
-        "Score + Wald + LRT with on-the-fly wx/xx/xy computation.\n"
-        "Forms the varying Uab columns from w/Uty rather than taking them\n"
-        "prebuilt; the arithmetic and its order are unchanged.\n"
-        "\n"
-        "Args:\n"
-        "    workspace:  PyCapsule from create_workspace_ncvt1_c, lmm_mode 4\n"
-        "    utg_t:      (n_snps, n_samples) float64 — UtG.T\n"
-        "    n_threads:  int\n"
-        "\n"
-        "Returns:\n"
-        "    dict with keys: lambdas, logls, betas, ses, pwalds, p_scores,\n"
-        "                    lambdas_mle, p_lrts — each (n_snps,) float64\n"
+        "    dict with keys: lambdas, logls, betas, ses, pwalds; under\n"
+        "    lmm_mode 4 also p_scores, lambdas_mle, p_lrts — each\n"
+        "    (n_snps,) float64\n"
     },
     {
         "create_workspace_general_c",
@@ -2675,19 +2359,15 @@ static PyMethodDef methods[] = {
         "compute_lmm_chunk_fused_general_c",
         (PyCFunction)compute_lmm_chunk_fused_general_c_py,
         METH_VARARGS | METH_KEYWORDS,
-        "Compute Wald chunk from UtG_T using fused general workspace.\n"
+        "Compute a chunk from UtG_T using a fused general workspace,\n"
+        "lmm_mode 1 or 4.\n"
         "\n"
         "Per-SNP varying dot products computed on-the-fly.\n"
         "Forms the varying Uab columns from UtW/Uty rather than taking them\n"
         "prebuilt; the arithmetic and its order are unchanged.\n"
-    },
-    {
-        "compute_mode4_chunk_fused_general_c",
-        (PyCFunction)compute_mode4_chunk_fused_general_c_py,
-        METH_VARARGS | METH_KEYWORDS,
-        "Compute mode-4 chunk from UtG_T using fused general workspace.\n"
         "\n"
-        "Score + Wald + LRT with on-the-fly varying dot products.\n"
+        "Mode 1 runs REML Wald alone. Mode 4 adds Score and LRT in the same\n"
+        "pass.\n"
     },
     {
         "_get_aligned_alloc_test_ptr",

@@ -42,15 +42,6 @@
  * each with an alloc / decref / build triple below.
  * ------------------------------------------------------------------------- */
 
-/* Wald: 5 arrays. */
-typedef struct {
-    PyArrayObject *lambdas;
-    PyArrayObject *logls;
-    PyArrayObject *betas;
-    PyArrayObject *ses;
-    PyArrayObject *pwalds;
-} output_arrays_t;
-
 /* Score: 3 arrays. */
 typedef struct {
     PyArrayObject *betas;
@@ -64,17 +55,19 @@ typedef struct {
     PyArrayObject *p_lrts;
 } lrt_output_t;
 
-/* Mode 4: Wald + Score + LRT in one pass, 8 arrays. */
+/* What one compute_lmm_chunk_fused_*_c call returns: the five Wald arrays,
+ * plus the three mode-4 extras, which stay NULL when the workspace is Wald-only
+ * (with_mode4 = 0 at alloc). Both families share this one shape. */
 typedef struct {
     PyArrayObject *lambdas;      /* REML lambda */
     PyArrayObject *logls;        /* REML log-likelihood */
     PyArrayObject *betas;        /* Wald beta (REML-optimized) */
     PyArrayObject *ses;          /* Wald SE (REML-optimized) */
     PyArrayObject *pwalds;       /* Wald p-value */
-    PyArrayObject *p_scores;     /* Score p-value */
-    PyArrayObject *lambdas_mle;  /* MLE lambda */
-    PyArrayObject *p_lrts;       /* LRT p-value */
-} mode4_output_t;
+    PyArrayObject *p_scores;     /* Score p-value, mode 4 only */
+    PyArrayObject *lambdas_mle;  /* MLE lambda, mode 4 only */
+    PyArrayObject *p_lrts;       /* LRT p-value, mode 4 only */
+} lmm_output_t;
 
 /* ---------------------------------------------------------------------------
  * Pab recursion table, parsed from the dict build_pab_table_for_c() returns.
@@ -121,10 +114,6 @@ int warn_betainc_convergence(const double *betas, const double *pvalues,
  * success the dict holds its own, on failure everything is released.
  * ------------------------------------------------------------------------- */
 
-int alloc_output_arrays(output_arrays_t *out, npy_intp n_snps);
-void decref_output_arrays(output_arrays_t *out);
-PyObject *build_result_dict(output_arrays_t *out);
-
 int alloc_score_output(score_output_t *out, npy_intp n_snps);
 void decref_score_output(score_output_t *out);
 PyObject *build_score_result_dict(score_output_t *out);
@@ -133,9 +122,11 @@ int alloc_lrt_output(lrt_output_t *out, npy_intp n_snps);
 void decref_lrt_output(lrt_output_t *out);
 PyObject *build_lrt_result_dict(lrt_output_t *out);
 
-int alloc_mode4_output(mode4_output_t *out, npy_intp n_snps);
-void decref_mode4_output(mode4_output_t *out);
-PyObject *build_mode4_result_dict(mode4_output_t *out);
+/* with_mode4 = 0 leaves p_scores/lambdas_mle/p_lrts NULL, and
+ * build_lmm_result_dict then emits the five Wald keys only. */
+int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int with_mode4);
+void decref_lmm_output(lmm_output_t *out);
+PyObject *build_lmm_result_dict(lmm_output_t *out);
 
 /* ---------------------------------------------------------------------------
  * Argument parsing

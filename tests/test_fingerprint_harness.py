@@ -118,12 +118,14 @@ def test_no_jamma_module_holds_a_raw_c_callable():
     )
 
 
-def test_the_suite_covers_most_of_the_extension(recorded):
-    """A collapse to a handful of entry points is the signature of a broken recorder.
+def test_the_suite_covers_the_whole_extension(recorded):
+    """Every public callable the accel suite can reach has a record.
 
-    The suite drives roughly 30 of the extension's public callables. The bar is
-    deliberately well under that, so adding or retiring a kernel family does not
-    fail this, but losing most of the wrapping does.
+    The bar is the extension's own export set, not a number, so retiring a
+    kernel family cannot make this pass vacuously and losing the wrapping
+    cannot hide behind a generous margin. ``jamma_sentinel_oob`` exists only
+    in sanitizer builds and is driven by tests/test_sanitizer_sentinel.py,
+    outside the recorded suite.
     """
     import jamma.lmm._lmm_accel as accel
 
@@ -131,9 +133,9 @@ def test_the_suite_covers_most_of_the_extension(recorded):
         name
         for name in dir(accel)
         if not name.startswith("_") and callable(getattr(accel, name))
-    }
+    } - {"jamma_sentinel_oob"}
     covered = {name for name, _, _ in recorded}
-    assert len(covered) >= 10, (
-        f"only {len(covered)} of {len(public)} public callables recorded: "
-        f"{sorted(covered)}. The wrapping in _install() has likely broken."
+    assert covered == public, (
+        f"recorded {sorted(covered)}, extension exports {sorted(public)}. "
+        "The wrapping in _install() has likely broken."
     )

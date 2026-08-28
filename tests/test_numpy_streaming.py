@@ -871,6 +871,7 @@ class TestStreamingFusedScoreDispatch:
 
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
+        # allow-patch: dispatch spy; wraps the real kernel to see the runner reach it
         with patch(
             "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
             wraps=_c().compute_score_fused_ws_c,
@@ -927,6 +928,7 @@ class TestStreamingFusedLrtDispatch:
 
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
+        # allow-patch: dispatch spy; wraps the real kernel to see the runner reach it
         with patch(
             "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
             wraps=_c().compute_lrt_fused_ws_c,

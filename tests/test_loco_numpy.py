@@ -255,6 +255,7 @@ def test_loco_numpy_multipass_equivalence():
 
     import jamma.lmm.loco_eigen as loco_eigen_module
 
+    # allow-patch: forwards to the real function with _max_batch_chrs=1 injected
     with patch.object(
         loco_eigen_module,
         "compute_loco_kinship_streaming",
@@ -466,6 +467,7 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
         stream = original(*args, **kwargs)
         return LocoKinshipStream(_matrices=iter(stream), snp_stats=None)
 
+    # allow-patch: forwards to the real function, then drops the stats cache it returns
     with patch.object(
         loco_eigen_module, "compute_loco_kinship_streaming", side_effect=_null_cache
     ):

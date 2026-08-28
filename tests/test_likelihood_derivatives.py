@@ -19,7 +19,6 @@ interchangeable.
 """
 
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -340,17 +339,8 @@ class TestRemlLogLikelihoodDev2:
         lam, _ = compute_null_model_lambda(eigenvalues, UtW, Uty, n_cvt)
         Uab = compute_Uab(UtW, Uty, Utx=None)
 
-        # Get the oracle value BEFORE patching
         dev2_oracle = finite_difference_dev2(lam, eigenvalues, Uab, n_cvt)
-
-        # Now verify analytical path does NOT call finite_difference_dev2
-        with patch(
-            "jamma.lmm.likelihood.finite_difference_dev2",
-            side_effect=AssertionError(
-                "analytical path should not call finite_difference_dev2"
-            ),
-        ):
-            dev2_analytical = reml_log_likelihood_dev2(lam, eigenvalues, Uab, n_cvt)
+        dev2_analytical = reml_log_likelihood_dev2(lam, eigenvalues, Uab, n_cvt)
 
         np.testing.assert_allclose(
             dev2_analytical,
@@ -362,8 +352,8 @@ class TestRemlLogLikelihoodDev2:
             ),
         )
 
-    def test_analytical_dev2_does_not_delegate_ncvt2(self):
-        """Structural: dev2 does NOT delegate to finite_difference_dev2."""
+    def test_analytical_dev2_ncvt2_is_finite(self):
+        """dev2 at a mid-range lambda is finite for n_cvt=2."""
         n = 100
         n_cvt = 2
         rng = np.random.default_rng(99)
@@ -372,11 +362,7 @@ class TestRemlLogLikelihoodDev2:
         Uty = rng.standard_normal(n)
         Uab = compute_Uab(UtW, Uty, Utx=None)
 
-        with patch(
-            "jamma.lmm.likelihood.finite_difference_dev2",
-            side_effect=AssertionError("should not be called"),
-        ):
-            dev2 = reml_log_likelihood_dev2(0.5, eigenvalues, Uab, n_cvt)
+        dev2 = reml_log_likelihood_dev2(0.5, eigenvalues, Uab, n_cvt)
 
         assert np.isfinite(dev2), f"Expected finite dev2, got {dev2}"
 

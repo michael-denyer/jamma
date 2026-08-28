@@ -61,23 +61,19 @@ class TestBetaincInterface:
         """betainc(a, b, 1.0) == 1.0 for any valid a, b."""
         assert betainc(1.0, 1.0, 1.0) == 1.0
 
-    def test_betainc_non_convergence_returns_nan(self):
-        """T5: betainc returns NaN (not ArithmeticError) when CF fails to converge.
+    def test_betainc_non_convergence_returns_nan(self, monkeypatch):
+        """betainc returns NaN (not ArithmeticError) when the CF fails to converge.
 
-        Pathological inputs can cause the continued fraction to not converge
-        within _CF_MAX_ITER iterations. The ArithmeticError is caught internally
-        and NaN is returned, preventing a single degenerate SNP from killing
-        an entire GWAS run.
+        With the iteration budget set to zero the continued fraction cannot
+        converge for any input. The ArithmeticError is caught internally and
+        NaN is returned, so one degenerate SNP cannot end a GWAS run.
         """
-        from unittest.mock import patch
+        from jamma.lmm import special
 
-        # Mock _betainc_cf to raise ArithmeticError (simulating non-convergence)
-        with patch(
-            "jamma.lmm.special._betainc_cf",
-            side_effect=ArithmeticError("mock: CF did not converge"),
-        ):
-            result = betainc(5.0, 0.5, 0.3)
-            assert np.isnan(result), f"Expected NaN for non-convergent CF, got {result}"
+        monkeypatch.setattr(special, "_CF_MAX_ITER", 0)
+
+        result = betainc(5.0, 0.5, 0.3)
+        assert np.isnan(result), f"Expected NaN for non-convergent CF, got {result}"
 
     def test_betainc_raises_z_below_zero(self):
         """betainc raises ValueError when z < 0."""

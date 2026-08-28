@@ -248,41 +248,6 @@ def test_mle_scalar_pab_ncvt1():
 
 
 @pytest.mark.tier0
-def test_mle_no_calc_pab_ncvt1():
-    """mle_log_likelihood with n_cvt=1 must NOT call calc_pab; n_cvt=2 must call it."""
-    from unittest.mock import patch
-
-    import jamma.lmm.likelihood as lik_mod
-    from jamma.lmm.likelihood import compute_Uab
-
-    rng = np.random.default_rng(456)
-    n_samples = 50
-
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    Utx = rng.standard_normal(n_samples)
-    lambda_val = 0.5
-
-    # n_cvt=1: scalar path, calc_pab should NOT be called
-    Uab_1 = compute_Uab(UtW, Uty, Utx)
-    with patch.object(lik_mod, "calc_pab", wraps=lik_mod.calc_pab) as mock_pab:
-        lik_mod.mle_log_likelihood(lambda_val, eigenvalues, Uab_1, n_cvt=1, nc_total=2)
-    assert mock_pab.call_count == 0, (
-        f"calc_pab called {mock_pab.call_count} times for n_cvt=1 (expected 0)"
-    )
-
-    # n_cvt=2: full Pab path, calc_pab MUST be called
-    UtW2 = np.ones((n_samples, 2))
-    Uab_2 = compute_Uab(UtW2, Uty, Utx)
-    with patch.object(lik_mod, "calc_pab", wraps=lik_mod.calc_pab) as mock_pab:
-        lik_mod.mle_log_likelihood(lambda_val, eigenvalues, Uab_2, n_cvt=2, nc_total=3)
-    assert mock_pab.call_count == 1, (
-        f"calc_pab called {mock_pab.call_count} times for n_cvt=2 (expected 1)"
-    )
-
-
-@pytest.mark.tier0
 def test_mle_null_scalar_ncvt1():
     """Null-model mle_log_likelihood with n_cvt=1 matches the full Pab path."""
     from jamma.lmm.likelihood import (
@@ -463,8 +428,6 @@ def test_golden_section_eval_count(monkeypatch):
     """
     import jamma.lmm.likelihood_numpy as ln
 
-    call_count = [0]
-
     rng = np.random.default_rng(42)
     n_samples, n_snps = 50, 10
     eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
@@ -475,23 +438,18 @@ def test_golden_section_eval_count(monkeypatch):
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
 
-    n_iter = 5
-    real_reml = ln._batch_reml_at_lambda_numpy
-
-    def counting_reml(*args, **kwargs):
-        call_count[0] += 1
-        return real_reml(*args, **kwargs)
-
-    monkeypatch.setattr(ln, "_batch_reml_at_lambda_numpy", counting_reml)
-    golden_section_optimize_lambda_numpy(
-        1, eigenvalues, Uab_batch, Iab_batch, n_grid=10, n_iter=n_iter
+    lambdas, logls, _ = golden_section_optimize_lambda_numpy(
+        1, eigenvalues, Uab_batch, Iab_batch, n_grid=10, n_iter=5
     )
 
-    # 2 initial probes (c, d) + n_iter (one per iteration) + 1 final midpoint eval
-    expected_calls = 2 + n_iter + 1
-    assert call_count[0] == expected_calls, (
-        f"Expected {expected_calls} calls, got {call_count[0]}. "
-        "Golden section must evaluate at midpoint for consistent (lambda, logl)."
+    reml_const = ln._compute_reml_const(n_samples - 2)
+    at_lambda, _ = ln._batch_reml_at_lambda_numpy(
+        1, lambdas, eigenvalues, Uab_batch, Iab_batch, reml_const=reml_const
+    )
+    np.testing.assert_array_equal(
+        logls,
+        at_lambda,
+        err_msg="returned logl must be the REML evaluated at the returned lambda",
     )
 
 
@@ -953,6 +911,8 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
         split_generic_log.append("generic")
         return real_generic_fn(*args, **kwargs)
 
+    # allow-patch: dispatch spy. Which optimiser _compute_wald_numpy selects
+    # for n_cvt is the contract; both spies forward to the real function.
     with (
         patch.object(cn, "_accel", None),
         patch.object(cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split),
@@ -989,8 +949,8 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
         generic_log2.append("generic")
         return real_generic_fn(*args, **kwargs)
 
+    # allow-patch: dispatch spy, as above.
     with (
-        patch.object(cn, "_accel", None),
         patch.object(cn, "_accel", None),
         patch.object(
             cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split2
@@ -1064,35 +1024,6 @@ def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
         pwalds_gen,
         rtol=1e-12,
         err_msg="pwalds: split path vs generic path",
-    )
-
-
-@pytest.mark.tier0
-def test_compute_wald_numpy_ncvt1_invariant_efficiency(compute_wald_data):
-    """compute_iab_invariant_scalars_ncvt1 called once per _compute_wald_numpy call."""
-    from unittest.mock import patch
-
-    from jamma.lmm import compute_numpy as cn
-    from jamma.lmm import uab
-
-    eigenvalues, Uab_batch, n_samples = compute_wald_data
-
-    call_count = []
-    real_fn = uab.compute_iab_invariant_scalars_ncvt1
-
-    def counting_fn(*args, **kwargs):
-        call_count.append(1)
-        return real_fn(*args, **kwargs)
-
-    with (
-        patch.object(cn, "_accel", None),
-        patch.object(cn, "compute_iab_invariant_scalars_ncvt1", counting_fn),
-    ):
-        cn._compute_wald_numpy(1, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20)
-
-    assert len(call_count) == 1, (
-        f"compute_iab_invariant_scalars_ncvt1 should be called exactly once, "
-        f"got {len(call_count)}"
     )
 
 

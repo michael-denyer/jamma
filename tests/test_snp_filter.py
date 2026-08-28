@@ -275,6 +275,7 @@ class TestComputeSnpStats:
             calls.append(data.shape)
             return real_kernel(data, means, miss, vari)
 
+        # allow-patch: dispatch spy; wraps the real kernel to observe chunk boundaries
         monkeypatch.setattr(snp_filter, "compute_snp_stats_chunk", wrapped_kernel)
 
         col_means, miss_counts, col_vars = snp_filter.compute_snp_stats(genotypes)

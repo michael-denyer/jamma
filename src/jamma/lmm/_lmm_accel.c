@@ -86,7 +86,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 15  /* v15: one compute per family, taking lmm_mode 1 or 4 */
+#define ABI_VERSION 16  /* v16: general workspace stores log_l_min/step at creation */
 
 /* P_YY_MIN and REML_SENTINEL moved to _lmm_types.h when the general kernels
  * left this file: both units read them, and two copies could drift. */
@@ -245,6 +245,7 @@ static lmm_workspace_t *ncvt1_workspace(
 typedef struct {
     /* Grid precomputed */
     double *lambda_grid;    /* (n_grid,) */
+    double log_l_min, step; /* bracket endpoints as computed at creation */
     double *hi_eval_grid;   /* (n_grid * n_samples) */
     double *logdet_h_grid;  /* (n_grid,) */
     double *inv_sums_grid;  /* (n_grid * n_inv) — precomputed invariant dot products */
@@ -959,6 +960,8 @@ static int init_fused_general_workspace(
     double log_l_min = log(l_min);
     double log_l_max_v = log(l_max);
     double step = (log_l_max_v - log_l_min) / (double)(n_grid - 1);
+    ws->log_l_min = log_l_min;
+    ws->step = step;
 
     ws->lambda_grid = (double *)malloc((size_t)n_grid * sizeof(double));
     ws->hi_eval_grid = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
@@ -1255,11 +1258,8 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
     int n_index = ws->table.n_index;
     double reml_const = ws->reml_const;
 
-    /* Compute log_l_min and step from lambda_grid */
-    double log_l_min = log(ws->lambda_grid[0]);
-    double step = (n_grid > 1)
-        ? (log(ws->lambda_grid[n_grid - 1]) - log_l_min) / (double)(n_grid - 1)
-        : 0.0;
+    double log_l_min = ws->log_l_min;
+    double step = ws->step;
 
     /* Clamp n_threads */
     int actual_threads = 1;

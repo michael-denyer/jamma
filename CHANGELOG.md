@@ -57,6 +57,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`scripts/check_forbidden_patches.py` walks the AST.** The gate that bans
+  patching numerical functions in tests matched line regexes, so a target
+  wrapped by ruff or reached through `patch.object(cn, "name")` passed it;
+  it now collects every patch call from the module's `ast`, resolves
+  module-object arguments through the test's import table and
+  canonicalises the target through the source tree's imports, so
+  `patch("jamma.lmm.eigen.jlinalg.eigh")` is judged as `jamma.jlinalg.eigh`.
+  It flagged 38 sites on the tree. Triage: the two `finite_difference_dev2`
+  patches were vacuous (the reference `dev2` never calls it) and are gone;
+  the `prepare_common` guards are driven by a negative and a NaN eigenvalue
+  through the real optimiser instead of a `mock.Mock` one; `betainc`
+  non-convergence starves `_CF_MAX_ITER` instead of replacing `_betainc_cf`;
+  the `calc_pab`, `_check_symmetry_sampled` and
+  `compute_iab_invariant_scalars_ncvt1` call-count tests are deleted; the
+  golden-section evaluation count became an assertion that the returned
+  `logl` is the REML at the returned `lambda`; eight dispatch spies that
+  wrap the real function carry `# allow-patch:` with the reason.
+- **`tests/fakes/jlinalg.py`.** `FakeJlinalg` replaces the six
+  `patch("jamma.lmm.eigen.jlinalg")` MagicMocks, the `SimpleNamespace`
+  fake in `test_safety_gates.py` and the triple patch in `test_lmm_unit.py`;
+  `use_fake_jlinalg` is the one place a fake enters `eigen.py`. Its
+  self-tests check the declared names against `jamma.jlinalg` and against
+  every `jlinalg.<name>` read in `eigen.py`. The `eigendecompose_kinship`
+  error-propagation and eigenvalue-zeroing tests moved from
+  `test_jlinalg_eigh.py` to `test_lmm_unit.py`, five error tests
+  parametrised into one.
 - **`scripts/demonstrate_equivalence.py` uses `compare_assoc_results`.** The
   report kept its own field-diff code beside the validation package the
   tier1 suite uses; it now compares with `compare_assoc_results` and

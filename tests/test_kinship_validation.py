@@ -8,17 +8,17 @@ import numpy as np
 import pytest
 
 from jamma.io import load_plink_binary
-from jamma.kinship import (
-    compute_centered_kinship,
-    compute_standardized_kinship,
-    compute_standardized_kinship_streaming,
-)
+from jamma.kinship import compute_standardized_kinship_streaming
 from jamma.validation import (
     compare_kinship_matrices,
     load_gemma_kinship,
 )
 from tests.conftest import require_fixture
 from tests.fixture_paths import SYNTHETIC
+from tests.reference.kinship import (
+    compute_centered_kinship,
+    compute_standardized_kinship,
+)
 
 
 @pytest.fixture

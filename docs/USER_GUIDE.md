@@ -508,14 +508,12 @@ For more control, use the component functions directly:
 #### Kinship Computation
 
 ```python
-from jamma.io import load_plink_binary
-from jamma.kinship import compute_centered_kinship
+from pathlib import Path
 
-# Load genotypes
-data = load_plink_binary("data/my_study")
+from jamma.kinship import compute_kinship_streaming
 
-# Compute kinship
-K = compute_centered_kinship(data.genotypes)
+# Compute kinship directly from the PLINK binary files (no full load into RAM)
+K = compute_kinship_streaming(Path("data/my_study"))
 ```
 
 #### LMM Association

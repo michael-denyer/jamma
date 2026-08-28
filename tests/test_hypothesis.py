@@ -104,7 +104,7 @@ class TestKinshipProperties:
     )
     def test_kinship_is_symmetric(self, genotypes):
         """Kinship matrix must be symmetric."""
-        from jamma.kinship import compute_centered_kinship
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes)
 
@@ -121,7 +121,7 @@ class TestKinshipProperties:
     )
     def test_kinship_diagonal_positive(self, genotypes):
         """Kinship diagonal elements should be non-negative."""
-        from jamma.kinship import compute_centered_kinship
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes)
 
@@ -140,7 +140,7 @@ class TestKinshipProperties:
     )
     def test_kinship_eigenvalues_nonnegative(self, genotypes):
         """Kinship eigenvalues should be non-negative (PSD property)."""
-        from jamma.kinship import compute_centered_kinship
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes)
         eigenvalues = np.linalg.eigvalsh(K)
@@ -448,8 +448,8 @@ class TestEigendecompositionProperties:
         Note: When eigenvalues are thresholded to zero, reconstruction
         won't be exact. We use a looser tolerance to account for this.
         """
-        from jamma.kinship import compute_centered_kinship
         from jamma.lmm.eigen import eigendecompose_kinship
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes)
         # eigendecomp overwrites K in-place; save copy first
@@ -472,8 +472,8 @@ class TestEigendecompositionProperties:
     )
     def test_eigenvectors_orthonormal(self, genotypes):
         """Eigenvectors should be orthonormal."""
-        from jamma.kinship import compute_centered_kinship
         from jamma.lmm.eigen import eigendecompose_kinship
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes)
         _, U = eigendecompose_kinship(K, threshold=0)  # No thresholding
@@ -698,7 +698,7 @@ class TestFilteringProperties:
     )
     def test_monomorphic_snps_always_filtered(self, n_samples, seed):
         """Monomorphic SNPs should always be filtered regardless of MAF threshold."""
-        from jamma.kinship.compute import _filter_snps
+        from tests.reference.kinship import _filter_snps
 
         rng = np.random.default_rng(seed)
 
@@ -734,7 +734,7 @@ class TestFilteringProperties:
     )
     def test_filtered_snps_meet_maf_threshold(self, n_samples, maf_threshold):
         """All SNPs passing filter should have MAF >= threshold."""
-        from jamma.kinship.compute import _filter_snps
+        from tests.reference.kinship import _filter_snps
 
         rng = np.random.default_rng(42)
 
@@ -770,7 +770,7 @@ class TestFilteringProperties:
     )
     def test_filtered_snps_meet_miss_threshold(self, n_samples, miss_threshold):
         """All SNPs passing filter should have missing rate <= threshold."""
-        from jamma.kinship.compute import _filter_snps
+        from tests.reference.kinship import _filter_snps
 
         rng = np.random.default_rng(42)
 
@@ -809,7 +809,7 @@ class TestFilteringProperties:
     )
     def test_filtering_deterministic(self, n_samples, seed):
         """Filtering should be deterministic given same input."""
-        from jamma.kinship.compute import _filter_snps
+        from tests.reference.kinship import _filter_snps
 
         rng = np.random.default_rng(seed)
         genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, 20)).astype(np.float64)
@@ -848,7 +848,7 @@ class TestFilteringEquivalence:
         self, n_samples, n_snps, maf_threshold, miss_threshold
     ):
         """Full-load kinship should use same filtering as _filter_snps."""
-        from jamma.kinship.compute import _filter_snps, compute_centered_kinship
+        from tests.reference.kinship import _filter_snps, compute_centered_kinship
 
         rng = np.random.default_rng(42)
 
@@ -1032,7 +1032,7 @@ class TestStandardizedKinshipProperties:
     )
     def test_standardized_kinship_is_symmetric(self, genotypes):
         """Standardized kinship must be symmetric."""
-        from jamma.kinship.compute import compute_standardized_kinship
+        from tests.reference.kinship import compute_standardized_kinship
 
         K = compute_standardized_kinship(genotypes, check_memory=False)
         np.testing.assert_allclose(K, K.T, rtol=1e-10, atol=1e-14)
@@ -1047,7 +1047,7 @@ class TestStandardizedKinshipProperties:
     )
     def test_standardized_kinship_psd(self, genotypes):
         """Standardized kinship eigenvalues should be non-negative."""
-        from jamma.kinship.compute import compute_standardized_kinship
+        from tests.reference.kinship import compute_standardized_kinship
 
         K = compute_standardized_kinship(genotypes, check_memory=False)
         eigenvalues = np.linalg.eigvalsh(K)
@@ -1070,7 +1070,7 @@ class TestStandardizedKinshipProperties:
         So trace(K) = (1/p) * sum of column norms^2. Each column has
         variance ~1 and n samples, so norm^2 ~ n, giving trace ~ n.
         """
-        from jamma.kinship.compute import compute_standardized_kinship
+        from tests.reference.kinship import compute_standardized_kinship
 
         K = compute_standardized_kinship(genotypes, check_memory=False)
         n_samples = genotypes.shape[0]
@@ -1092,7 +1092,7 @@ class TestStandardizedKinshipProperties:
     )
     def test_centered_and_standardized_same_shape(self, genotypes):
         """Centered and standardized kinship should produce same-shaped matrices."""
-        from jamma.kinship.compute import (
+        from tests.reference.kinship import (
             compute_centered_kinship,
             compute_standardized_kinship,
         )
@@ -1130,9 +1130,9 @@ class TestEigenIoRoundTrip:
         import tempfile
         from pathlib import Path
 
-        from jamma.kinship import compute_centered_kinship
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes, check_memory=False)
         # eigendecomp overwrites K in-place; save copy for reconstruction check
@@ -1170,9 +1170,9 @@ class TestEigenIoRoundTrip:
         import tempfile
         from pathlib import Path
 
-        from jamma.kinship import compute_centered_kinship
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes, check_memory=False)
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
@@ -1204,9 +1204,9 @@ class TestEigenIoRoundTrip:
         import tempfile
         from pathlib import Path
 
-        from jamma.kinship import compute_centered_kinship
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes, check_memory=False)
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
@@ -1236,9 +1236,9 @@ class TestEigenIoRoundTrip:
         import tempfile
         from pathlib import Path
 
-        from jamma.kinship import compute_centered_kinship
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+        from tests.reference.kinship import compute_centered_kinship
 
         K = compute_centered_kinship(genotypes, check_memory=False)
         K_original = K.copy()

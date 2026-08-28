@@ -68,7 +68,7 @@ filtered SNP count.
 
 | | GEMMA | JAMMA |
 |-|-------|-------|
-| Function | `CalcKin` (lmm.cpp) | `compute_centered_kinship` (kinship/compute.py) |
+| Function | `CalcKin` (lmm.cpp) | `compute_kinship_streaming` (kinship/compute.py) |
 | BLAS | OpenBLAS/MKL `dsyrk` | Vendor BLAS `dsyrk` (via jlinalg) |
 | Batching | 10,000 SNPs | 10,000 SNPs |
 | Missing | Mean imputation | Mean imputation |
@@ -337,7 +337,7 @@ uv run python scripts/demonstrate_equivalence.py
 
 | GEMMA Function (lmm.cpp) | JAMMA Function | Location |
 |--------------------------|----------------|----------|
-| `CalcKin` | `compute_centered_kinship` | kinship/compute.py |
+| `CalcKin` | `compute_kinship_streaming` | kinship/compute.py |
 | `GetabIndex` | `get_ab_index` | lmm/likelihood.py |
 | `CalcUab` | `compute_Uab` | lmm/likelihood.py |
 | `CalcPab` | `calc_pab` | lmm/likelihood.py |

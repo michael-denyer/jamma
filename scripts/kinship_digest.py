@@ -54,13 +54,15 @@ sys.path.insert(0, str(REPO_ROOT))
 from jamma import jlinalg  # noqa: E402
 from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship import (  # noqa: E402
-    compute_centered_kinship,
     compute_kinship_streaming,
     compute_loco_kinship_streaming,
-    compute_standardized_kinship,
     compute_standardized_kinship_streaming,
 )
 from tests.fixture_paths import LOCO, MOUSE, SYNTHETIC  # noqa: E402
+from tests.reference.kinship import (  # noqa: E402
+    compute_centered_kinship,
+    compute_standardized_kinship,
+)
 
 FIXTURES = {
     "mouse_hs1940": MOUSE.bfile,

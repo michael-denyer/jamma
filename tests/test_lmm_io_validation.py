@@ -477,11 +477,11 @@ def test_batch_hwe_matches_streaming_hwe() -> None:
     threshold, its count would match the unfiltered run and this fails.
     """
     from jamma.io import load_plink_binary, read_fam_phenotypes
-    from jamma.kinship.compute import compute_centered_kinship
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
     from tests.conftest import require_fixture
     from tests.fixture_paths import LOCO
+    from tests.reference.kinship import compute_centered_kinship
 
     bed = LOCO.bfile
     require_fixture(

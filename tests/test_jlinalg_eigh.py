@@ -989,6 +989,60 @@ class TestEighViaCtypesAtScale:
         _assert_orthogonality(v, 1e-8, f"C API N={n}")
 
 
+_JLINALG_EXT_BAD_STRIDE = -1004
+
+
+class TestEighPaddedStrideRejected:
+    """A padded stride is a contract violation, not a case jlinalg_eigh_c services.
+
+    Every production caller passes ldk == ldz == N. jlinalg_eigh_c used to carry
+    a second code path for ldk != N or ldz != N with no exerciser anywhere in the
+    tree; it is gone, replaced by one check that rejects the mismatch outright.
+    """
+
+    def test_padded_ldk_rejected(self) -> None:
+        """ldk != N returns JLINALG_EXT_BAD_STRIDE without touching LAPACK."""
+        n = 5
+        rng = np.random.default_rng(7)
+        K = _random_spd(n, rng)
+        eigenvalues = np.empty(n, dtype=np.float64)
+        eigenvectors = np.empty((n, n), dtype=np.float64)
+        status = _EighStatus()
+
+        fn = _load_jlinalg_eigh_c()
+        ret = fn(
+            n,
+            _ptr(K),
+            n + 1,  # ldk != N
+            _ptr(eigenvalues),
+            _ptr(eigenvectors),
+            n,
+            ctypes.byref(status),
+        )
+        assert ret == _JLINALG_EXT_BAD_STRIDE
+
+    def test_padded_ldz_rejected(self) -> None:
+        """ldz != N returns JLINALG_EXT_BAD_STRIDE without touching LAPACK."""
+        n = 5
+        rng = np.random.default_rng(8)
+        K = _random_spd(n, rng)
+        eigenvalues = np.empty(n, dtype=np.float64)
+        eigenvectors = np.empty((n, n), dtype=np.float64)
+        status = _EighStatus()
+
+        fn = _load_jlinalg_eigh_c()
+        ret = fn(
+            n,
+            _ptr(K),
+            n,
+            _ptr(eigenvalues),
+            _ptr(eigenvectors),
+            n + 1,  # ldz != N
+            ctypes.byref(status),
+        )
+        assert ret == _JLINALG_EXT_BAD_STRIDE
+
+
 # ---------------------------------------------------------------------------
 # Numerically awkward inputs, through the raw C entry point
 # ---------------------------------------------------------------------------

@@ -152,8 +152,7 @@ int blas_has_lapacke_dsyevd(void);
 #define JLINALG_EXT_ALLOC_FAIL      -1001   /* Workspace allocation failed */
 #define JLINALG_EXT_UNAVAILABLE     -1002   /* No vendor routine available -- use numpy fallback */
 #define JLINALG_EXT_COUNT_MISMATCH  -1003   /* DSYEVR returned fewer eigenvalues than expected (ABI mismatch) */
-#define JLINALG_EXT_INTERNAL_ERROR  -1004   /* Internal logic error */
-#define JLINALG_EXT_INPLACE_UNSUPPORTED -1005  /* inplace=True requires vendor LAPACK (DSYEVD/DSYEVR) */
+#define JLINALG_EXT_BAD_STRIDE      -1004   /* Caller passed ldk != N or ldz != N (padded stride unsupported) */
 
 /* Largest LAPACK argument index the wrappers can plausibly report as info = -i.
  * DSYEVR takes ~20 arguments; 100 is a comfortable ceiling. The sentinels must
@@ -164,8 +163,7 @@ int blas_has_lapacke_dsyevd(void);
 _Static_assert(JLINALG_EXT_ALLOC_FAIL < -JLINALG_LAPACK_MAX_ARG &&
                    JLINALG_EXT_UNAVAILABLE < -JLINALG_LAPACK_MAX_ARG &&
                    JLINALG_EXT_COUNT_MISMATCH < -JLINALG_LAPACK_MAX_ARG &&
-                   JLINALG_EXT_INTERNAL_ERROR < -JLINALG_LAPACK_MAX_ARG &&
-                   JLINALG_EXT_INPLACE_UNSUPPORTED < -JLINALG_LAPACK_MAX_ARG,
+                   JLINALG_EXT_BAD_STRIDE < -JLINALG_LAPACK_MAX_ARG,
                "jlinalg sentinels must not overlap the LAPACK info argument range");
 
 /* Vendor-dispatch dsyevd for eigh.
@@ -211,14 +209,6 @@ void jlinalg_dgemm_ext(npy_intp M, npy_intp N, npy_intp K,
                      double *C, npy_intp ldc,
                      int transa, int transb);
 
-/* C = alpha * op(A) * op(B) + beta * C. */
-void jlinalg_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K,
-                        const double *A, npy_intp lda,
-                        const double *B, npy_intp ldb,
-                        double *C, npy_intp ldc,
-                        int transa, int transb,
-                        double alpha, double beta);
-
 /* ---------------------------------------------------------------------------
  * Thread control API
  * ---------------------------------------------------------------------------
@@ -249,10 +239,12 @@ typedef struct {
  * eigenvectors: caller-allocated N x N doubles, row-major. U[:,j] is the
  *               eigenvector for eigenvalues[j].
  * status: if non-NULL, populated with diagnostic flags.
+ * ldk, ldz: must equal N. Padded strides are rejected with JLINALG_EXT_BAD_STRIDE.
  *
  * Returns 0 on success, JLINALG_EXT_UNAVAILABLE if no vendor LAPACK,
- * JLINALG_EXT_ALLOC_FAIL on allocation failure, positive i on convergence
- * failure, negative -i on LAPACK illegal-argument error.
+ * JLINALG_EXT_ALLOC_FAIL on allocation failure, JLINALG_EXT_BAD_STRIDE if
+ * ldk != N or ldz != N, positive i on convergence failure, negative -i on
+ * LAPACK illegal-argument error.
  */
 int jlinalg_eigh_c(npy_intp N,
                  double *K, npy_intp ldk,

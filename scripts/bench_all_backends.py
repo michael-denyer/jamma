@@ -16,65 +16,57 @@ Backends run sequentially to avoid cross-contamination of timings.
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from _bench_common import (
+    MOUSE_COVAR_4,
+    MOUSE_DIR,
+    MOUSE_KINSHIP,
+    MOUSE_PREFIX,
+    add_gemma_args,
+    best_of,
+    find_gemma,
+    fmt_seconds,
+    load_covariates_4,
+    load_fam_phenotypes,
+    print_hardware_header,
+)
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_MOUSE_DIR = _REPO_ROOT / "tests" / "fixtures" / "mouse_hs1940"
-_MOUSE_PREFIX = _MOUSE_DIR / "mouse_hs1940"
-_MOUSE_KINSHIP = _MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt"
-_MOUSE_COVAR_4 = _MOUSE_DIR / "covariates_4.txt"
-_DEFAULT_GEMMA = Path.home() / ".local" / "bin" / "gemma"
-_DEFAULT_GEMMA_ACCEL = Path.home() / ".local" / "bin" / "gemma-accelerate"
+OpTimings = dict[str, float | None]
+
+
+@dataclass(frozen=True)
+class Timing:
+    """Best-of-N seconds per operation for every benchmarked backend.
+
+    Each field maps an operation key (``kinship``, ``lmm_wald``,
+    ``lmm_all``, ``lmm_wald_c4``) to its fastest observed time, or None
+    when that backend did not run the operation.
+    """
+
+    gemma: OpTimings
+    gemma_accel: OpTimings
+    numpy_pure: OpTimings
+    numpy: OpTimings
+    numpy_streaming: OpTimings
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _fmt(seconds: float) -> str:
-    """Format seconds as human-readable string."""
-    if seconds < 1.0:
-        return f"{seconds * 1000:.0f}ms"
-    return f"{seconds:.1f}s"
-
-
-def _speedup(gemma: float | None, jamma: float) -> str:
-    if gemma is None:
-        return "—"
-    return f"**{gemma / jamma:.1f}x**"
-
-
 def _load_mouse_data():
     """Load mouse_hs1940 PLINK data and phenotypes."""
     from jamma.io import load_plink_binary
 
-    plink = load_plink_binary(_MOUSE_PREFIX)
-
-    # Load phenotypes from .fam (column 6)
-    from jamma.core.constants import PHENOTYPE_MISSING
-
-    fam_data = np.loadtxt(_MOUSE_PREFIX.with_suffix(".fam"), usecols=5, dtype=str)
-    missing = np.isin(fam_data, [str(int(PHENOTYPE_MISSING)), "NA"])
-    phenotypes = np.where(missing, "0", fam_data).astype(np.float64)
-    phenotypes[missing] = np.nan
-
+    plink = load_plink_binary(MOUSE_PREFIX)
+    phenotypes = load_fam_phenotypes(MOUSE_PREFIX.with_suffix(".fam"))
     return plink, phenotypes
-
-
-def _load_covariates_4() -> np.ndarray | None:
-    """Load 4-column covariate file if it exists."""
-    if _MOUSE_COVAR_4.exists():
-        return np.loadtxt(_MOUSE_COVAR_4)
-    return None
 
 
 def _build_snp_info(plink):
@@ -94,20 +86,20 @@ def _build_snp_info(plink):
 # ---------------------------------------------------------------------------
 # GEMMA benchmark
 # ---------------------------------------------------------------------------
-def bench_gemma(gemma_path: Path, runs: int) -> dict[str, float | None]:
+def bench_gemma(gemma_path: Path, runs: int) -> OpTimings:
     """Benchmark GEMMA binary on mouse_hs1940."""
-    results: dict[str, float | None] = {}
+    results: OpTimings = {}
 
     ops = [
         ("kinship", ["-gk", "1"]),
-        ("lmm_wald", ["-lmm", "1", "-k", str(_MOUSE_KINSHIP)]),
-        ("lmm_all", ["-lmm", "4", "-k", str(_MOUSE_KINSHIP)]),
+        ("lmm_wald", ["-lmm", "1", "-k", str(MOUSE_KINSHIP)]),
+        ("lmm_all", ["-lmm", "4", "-k", str(MOUSE_KINSHIP)]),
     ]
-    if _MOUSE_COVAR_4.exists():
+    if MOUSE_COVAR_4.exists():
         ops.append(
             (
                 "lmm_wald_c4",
-                ["-lmm", "1", "-k", str(_MOUSE_KINSHIP), "-c", str(_MOUSE_COVAR_4)],
+                ["-lmm", "1", "-k", str(MOUSE_KINSHIP), "-c", str(MOUSE_COVAR_4)],
             )
         )
 
@@ -118,7 +110,7 @@ def bench_gemma(gemma_path: Path, runs: int) -> dict[str, float | None]:
                 cmd = [
                     str(gemma_path),
                     "-bfile",
-                    str(_MOUSE_PREFIX),
+                    str(MOUSE_PREFIX),
                     *args,
                     "-o",
                     "bench",
@@ -145,15 +137,14 @@ def bench_gemma(gemma_path: Path, runs: int) -> dict[str, float | None]:
 # ---------------------------------------------------------------------------
 def _bench_numpy_inner(
     plink, phenotypes, kinship, snp_info, covariates_4, runs: int, *, disable_c: bool
-) -> dict[str, float | None]:
+) -> OpTimings:
     """Benchmark NumPy backend with or without C acceleration."""
     import jamma.lmm.compute_numpy as cn
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.schema import LmmConfig, LmmMode
 
-    results: dict[str, float | None] = {}
+    results: OpTimings = {}
 
-    # Optionally disable the C extension for the pure-Python comparison.
     # compute_numpy is the single source of truth: chunk_runner_numpy reads
     # it live when it selects the dispatch path, so dropping the extension
     # here forces the NumPy fallback everywhere.
@@ -170,10 +161,9 @@ def _bench_numpy_inner(
             ops.append(("lmm_wald_c4", 1, covariates_4))
 
         for op, mode, covars in ops:
-            best = float("inf")
-            for _ in range(runs):
-                t0 = time.perf_counter()
-                run_lmm_association_numpy(
+
+            def one_run(mode: LmmMode = mode, covars=covars):
+                return run_lmm_association_numpy(
                     genotypes=plink.genotypes,
                     phenotypes=phenotypes,
                     kinship=kinship.copy(),
@@ -183,9 +173,8 @@ def _bench_numpy_inner(
                         show_progress=False, check_memory=False, lmm_mode=mode
                     ),
                 )
-                elapsed = time.perf_counter() - t0
-                best = min(best, elapsed)
-            results[op] = best
+
+            results[op] = best_of(one_run, runs)
     finally:
         cn._accel = cn_saved
 
@@ -194,7 +183,7 @@ def _bench_numpy_inner(
 
 def bench_numpy(
     plink, phenotypes, kinship, snp_info, covariates_4, runs: int
-) -> dict[str, float | None]:
+) -> OpTimings:
     """Benchmark NumPy+C backend."""
     return _bench_numpy_inner(
         plink, phenotypes, kinship, snp_info, covariates_4, runs, disable_c=False
@@ -203,7 +192,7 @@ def bench_numpy(
 
 def bench_numpy_pure(
     plink, phenotypes, kinship, snp_info, covariates_4, runs: int
-) -> dict[str, float | None]:
+) -> OpTimings:
     """Benchmark pure NumPy backend (C extension disabled)."""
     return _bench_numpy_inner(
         plink, phenotypes, kinship, snp_info, covariates_4, runs, disable_c=True
@@ -213,14 +202,12 @@ def bench_numpy_pure(
 # ---------------------------------------------------------------------------
 # JAMMA NumPy streaming benchmark
 # ---------------------------------------------------------------------------
-def bench_numpy_streaming(
-    phenotypes, kinship, covariates_4, runs: int
-) -> dict[str, float | None]:
+def bench_numpy_streaming(phenotypes, kinship, covariates_4, runs: int) -> OpTimings:
     """Benchmark NumPy streaming backend (disk I/O + C extension)."""
     from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
     from jamma.lmm.schema import LmmConfig, LmmMode
 
-    results: dict[str, float | None] = {}
+    results: OpTimings = {}
 
     ops: list[tuple[str, LmmMode, np.ndarray | None]] = [
         ("lmm_wald", 1, None),
@@ -230,11 +217,10 @@ def bench_numpy_streaming(
         ops.append(("lmm_wald_c4", 1, covariates_4))
 
     for op, mode, covars in ops:
-        best = float("inf")
-        for _ in range(runs):
-            t0 = time.perf_counter()
-            run_lmm_association_numpy_streaming(
-                bed_path=_MOUSE_PREFIX,
+
+        def one_run(mode: LmmMode = mode, covars=covars):
+            return run_lmm_association_numpy_streaming(
+                bed_path=MOUSE_PREFIX,
                 phenotypes=phenotypes,
                 kinship=kinship.copy(),
                 covariates=covars,
@@ -242,9 +228,8 @@ def bench_numpy_streaming(
                     show_progress=False, check_memory=False, lmm_mode=mode
                 ),
             )
-            elapsed = time.perf_counter() - t0
-            best = min(best, elapsed)
-        results[op] = best
+
+        results[op] = best_of(one_run, runs)
 
     return results
 
@@ -252,175 +237,150 @@ def bench_numpy_streaming(
 # ---------------------------------------------------------------------------
 # Kinship benchmark
 # ---------------------------------------------------------------------------
-def bench_kinship(plink, runs: int) -> dict[str, float | None]:
+def bench_kinship(plink, runs: int) -> OpTimings:
     """Benchmark kinship computation (NumPy/BLAS via compute_centered_kinship)."""
     from jamma.kinship import compute_centered_kinship
 
     # Warmup
     compute_centered_kinship(plink.genotypes, check_memory=False)
 
-    best = float("inf")
-    for _ in range(runs):
-        t0 = time.perf_counter()
-        compute_centered_kinship(plink.genotypes, check_memory=False)
-        elapsed = time.perf_counter() - t0
-        best = min(best, elapsed)
-
+    best = best_of(
+        lambda: compute_centered_kinship(plink.genotypes, check_memory=False), runs
+    )
     return {"kinship": best}
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Phases
 # ---------------------------------------------------------------------------
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--gemma-path",
-        type=Path,
-        default=None,
-        help=f"Path to GEMMA binary (default: auto-detect at {_DEFAULT_GEMMA})",
-    )
-    parser.add_argument(
-        "--gemma-accelerate-path",
-        type=Path,
-        default=None,
-        help=f"Path to Accelerate GEMMA (default: {_DEFAULT_GEMMA_ACCEL})",
-    )
-    parser.add_argument(
-        "--runs",
-        type=int,
-        default=1,
-        help="Number of runs per operation, report best (default: 1)",
-    )
-    args = parser.parse_args()
+def load_inputs():
+    """Load PLINK data, phenotypes, kinship, SNP metadata, and covariates.
 
-    # Resolve GEMMA paths
-    gemma_path = args.gemma_path
-    if gemma_path is None:
-        if _DEFAULT_GEMMA.exists():
-            gemma_path = _DEFAULT_GEMMA
-        else:
-            found = shutil.which("gemma")
-            if found:
-                gemma_path = Path(found)
+    Returns:
+        Tuple of ``(plink, phenotypes, kinship, snp_info, covariates_4)``.
+    """
+    from jamma.kinship.io import read_kinship_matrix
 
-    gemma_accel_path = args.gemma_accelerate_path
-    if gemma_accel_path is None and _DEFAULT_GEMMA_ACCEL.exists():
-        gemma_accel_path = _DEFAULT_GEMMA_ACCEL
-
-    # Validate data exists
-    if not _MOUSE_PREFIX.with_suffix(".bed").exists():
-        print(f"ERROR: mouse_hs1940 data not found at {_MOUSE_DIR}", file=sys.stderr)
-        sys.exit(1)
-
-    # Print hardware context
-    from jamma.core.hardware import get_hardware_context
-
-    ctx = get_hardware_context()
-    phys, log = ctx["cpu_count_physical"], ctx["cpu_count_logical"]
-    print(f"CPU: {ctx['cpu_model']} ({phys}P/{log}L)")
-    print(f"BLAS: {ctx['blas_backend']} ({ctx['blas_threads']} threads)")
-    print(f"NumPy: {ctx['numpy_version']}")
-    print(f"Platform: {ctx['platform']}")
-    print(f"Runs: {args.runs} (best of)")
-    print()
-
-    # Load data once
     print("Loading mouse_hs1940 data...", flush=True)
     plink, phenotypes = _load_mouse_data()
     print(f"  {plink.n_samples} samples, {plink.n_snps} SNPs")
 
-    # Load pre-computed kinship for LMM runs
-    from jamma.kinship.io import read_kinship_matrix
-
-    kinship = read_kinship_matrix(_MOUSE_KINSHIP)
+    kinship = read_kinship_matrix(MOUSE_KINSHIP)
     snp_info = _build_snp_info(plink)
-    covariates_4 = _load_covariates_4()
+    covariates_4 = load_covariates_4()
     if covariates_4 is not None:
         print(
-            f"  Covariates: {covariates_4.shape[1]} columns from {_MOUSE_COVAR_4.name}"
+            f"  Covariates: {covariates_4.shape[1]} columns from {MOUSE_COVAR_4.name}"
         )
     print()
 
-    # Collect results: {backend: {op: seconds}}
-    timings: dict[str, dict[str, float | None]] = {}
+    return plink, phenotypes, kinship, snp_info, covariates_4
 
-    # --- GEMMA (OpenBLAS) ---
+
+def run_benchmarks(
+    gemma_path: Path | None,
+    gemma_accel_path: Path | None,
+    plink,
+    phenotypes,
+    kinship,
+    snp_info,
+    covariates_4,
+    runs: int,
+) -> Timing:
+    """Run every backend sequentially and collect their best-of-N timings.
+
+    Kinship is pure NumPy and BLAS, so its one timing is injected into both
+    NumPy columns and left absent from the streaming column.
+
+    Args:
+        gemma_path: OpenBLAS GEMMA binary, or None to skip it.
+        gemma_accel_path: Accelerate GEMMA binary, or None to skip it.
+        plink: Loaded PLINK data.
+        phenotypes: Per-sample phenotypes.
+        kinship: Pre-computed kinship matrix for the LMM runs.
+        snp_info: Per-SNP metadata for the batch runner.
+        covariates_4: Covariate matrix, or None when the file is absent.
+        runs: Repetitions per operation.
+
+    Returns:
+        A ``Timing`` holding every backend's per-operation seconds.
+    """
     if gemma_path:
         print(f"Benchmarking GEMMA OpenBLAS ({gemma_path})...", flush=True)
-        timings["gemma"] = bench_gemma(gemma_path, args.runs)
+        gemma = bench_gemma(gemma_path, runs)
     else:
         print("GEMMA not found, skipping (use --gemma-path to specify)")
-        timings["gemma"] = {"kinship": None, "lmm_wald": None, "lmm_all": None}
+        gemma = {"kinship": None, "lmm_wald": None, "lmm_all": None}
 
-    # --- GEMMA (Accelerate) ---
     if gemma_accel_path:
         print(f"Benchmarking GEMMA Accelerate ({gemma_accel_path})...", flush=True)
-        timings["gemma_accel"] = bench_gemma(gemma_accel_path, args.runs)
+        gemma_accel = bench_gemma(gemma_accel_path, runs)
     else:
         print("GEMMA Accelerate not found, skipping (use --gemma-accelerate-path)")
-        timings["gemma_accel"] = {"kinship": None, "lmm_wald": None, "lmm_all": None}
+        gemma_accel = {"kinship": None, "lmm_wald": None, "lmm_all": None}
 
-    # --- Kinship (JAMMA) ---
     print("Benchmarking kinship (JAMMA)...", flush=True)
-    kinship_times = bench_kinship(plink, args.runs)
+    kinship_times = bench_kinship(plink, runs)
 
-    # --- Pure NumPy (no C) ---
     print("Benchmarking NumPy (pure Python, no C)...", flush=True)
-    numpy_pure_times = bench_numpy_pure(
-        plink, phenotypes, kinship, snp_info, covariates_4, args.runs
+    numpy_pure = bench_numpy_pure(
+        plink, phenotypes, kinship, snp_info, covariates_4, runs
     )
-    timings["numpy_pure"] = numpy_pure_times
 
-    # --- NumPy+C ---
     print("Benchmarking NumPy+C...", flush=True)
-    numpy_times = bench_numpy(
-        plink, phenotypes, kinship, snp_info, covariates_4, args.runs
-    )
-    timings["numpy"] = numpy_times
+    numpy = bench_numpy(plink, phenotypes, kinship, snp_info, covariates_4, runs)
 
-    # --- NumPy streaming ---
     print("Benchmarking NumPy streaming...", flush=True)
-    numpy_streaming_times = bench_numpy_streaming(
-        phenotypes, kinship, covariates_4, args.runs
-    )
-    numpy_streaming_times["kinship"] = None  # streaming doesn't do kinship
-    timings["numpy_streaming"] = numpy_streaming_times
+    numpy_streaming = bench_numpy_streaming(phenotypes, kinship, covariates_4, runs)
+    numpy_streaming["kinship"] = None
+
+    numpy_pure["kinship"] = kinship_times["kinship"]
+    numpy["kinship"] = kinship_times["kinship"]
 
     print()
 
-    # --- Print results table ---
-    gemma = timings["gemma"]
-    gemma_a = timings["gemma_accel"]
-    npy_pure = timings["numpy_pure"]
-    npy = timings["numpy"]
-    npy_s = timings["numpy_streaming"]
+    return Timing(
+        gemma=gemma,
+        gemma_accel=gemma_accel,
+        numpy_pure=numpy_pure,
+        numpy=numpy,
+        numpy_streaming=numpy_streaming,
+    )
 
-    def _cell(t: float | None) -> str:
-        return _fmt(t) if t is not None else "—"
 
-    def _vs(t: float | None, op: str, *, ref: dict | None = None) -> str:
-        src = ref if ref is not None else gemma
-        g = src.get(op)
+def print_results_table(timing: Timing, covariates_4) -> None:
+    """Print the markdown comparison table.
+
+    The ``vs GEMMA`` columns compare the fastest JAMMA backend for each
+    operation against that GEMMA variant.
+
+    Args:
+        timing: Collected per-backend timings.
+        covariates_4: Covariate matrix, or None; its presence adds a row.
+    """
+
+    def cell(t: float | None) -> str:
+        return fmt_seconds(t) if t is not None else "—"
+
+    def vs(t: float | None, op: str, ref: OpTimings) -> str:
+        g = ref.get(op)
         if g is None or t is None:
             return "—"
         return f"{g / t:.1f}x"
 
-    def _c_speedup(op: str) -> str:
-        """C extension speedup vs pure NumPy."""
-        pure = npy_pure.get(op)
-        c = npy.get(op)
+    def c_speedup(op: str) -> str:
+        pure = timing.numpy_pure.get(op)
+        c = timing.numpy.get(op)
         if pure is None or c is None:
             return "—"
         return f"{pure / c:.1f}x"
 
-    # Find the fastest JAMMA backend per operation for the "vs GEMMA" column
-    def _best_jamma(op: str) -> float | None:
-        candidates = [
-            npy.get(op),
-            npy_s.get(op),
+    def best_jamma(op: str) -> float | None:
+        valid = [
+            c
+            for c in (timing.numpy.get(op), timing.numpy_streaming.get(op))
+            if c is not None
         ]
-        valid = [c for c in candidates if c is not None]
         return min(valid) if valid else None
 
     rows = [
@@ -431,12 +391,6 @@ def main():
     if covariates_4 is not None:
         rows.append(("LMM Wald+4cov (`-lmm 1 -c`)", "lmm_wald_c4"))
 
-    # Kinship is always NumPy/BLAS (no C extension).
-    # Inject into both NumPy dicts so it appears in those columns.
-    npy_pure["kinship"] = kinship_times["kinship"]
-    npy["kinship"] = kinship_times["kinship"]
-
-    # Header
     hdr = (
         "| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy"
         " | JAMMA NumPy+C"
@@ -452,18 +406,51 @@ def main():
     print(sep)
 
     for label, op in rows:
-        best = _best_jamma(op)
-        vs_ob = _vs(best, op) if best else "—"
-        vs_ac = _vs(best, op, ref=gemma_a) if best else "—"
+        best = best_jamma(op)
+        vs_ob = vs(best, op, timing.gemma) if best else "—"
+        vs_ac = vs(best, op, timing.gemma_accel) if best else "—"
         print(
-            f"| {label} | {_cell(gemma.get(op))}"
-            f" | {_cell(gemma_a.get(op))}"
-            f" | {_cell(npy_pure.get(op))} | {_cell(npy.get(op))}"
-            f" | {_cell(npy_s.get(op))}"
-            f" | {_c_speedup(op)} | {vs_ob} | {vs_ac} |"
+            f"| {label} | {cell(timing.gemma.get(op))}"
+            f" | {cell(timing.gemma_accel.get(op))}"
+            f" | {cell(timing.numpy_pure.get(op))} | {cell(timing.numpy.get(op))}"
+            f" | {cell(timing.numpy_streaming.get(op))}"
+            f" | {c_speedup(op)} | {vs_ob} | {vs_ac} |"
         )
 
     print()
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_gemma_args(parser)
+    args = parser.parse_args()
+
+    gemma_path = find_gemma(args.gemma_path, "gemma")
+    gemma_accel_path = find_gemma(args.gemma_accelerate_path, "gemma-accelerate")
+
+    if not MOUSE_PREFIX.with_suffix(".bed").exists():
+        print(f"ERROR: mouse_hs1940 data not found at {MOUSE_DIR}", file=sys.stderr)
+        sys.exit(1)
+
+    print_hardware_header(args.runs)
+
+    plink, phenotypes, kinship, snp_info, covariates_4 = load_inputs()
+
+    timing = run_benchmarks(
+        gemma_path,
+        gemma_accel_path,
+        plink,
+        phenotypes,
+        kinship,
+        snp_info,
+        covariates_4,
+        args.runs,
+    )
+
+    print_results_table(timing, covariates_4)
 
 
 if __name__ == "__main__":

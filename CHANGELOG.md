@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **`scripts/regenerate_fixture_manifest.py` is
+  `scripts/check_fixture_manifest.py --write`.** The regenerator already
+  imported every helper from the checker; `--write` is that second half.
+  The manifest header and every message that named the old script now name
+  the new command.
+- **Five fixture generators are one `scripts/generate_gemma_fixtures.sh`.**
+  `generate_all_gemma_fixtures.sh`, `generate_all_tests_reference.sh`,
+  `generate_score_reference.sh`, `generate_covariate_reference.sh` and
+  `generate_loco_fixtures.sh` are replaced by one script with an 18-row cell
+  table, one `run_gemma` (local binary first, docker image with
+  `--platform linux/amd64` second) and `--list`, `--dry-run`, `--only`. The
+  LOCO kinship heredoc is `generate_loco_synthetic.py --loco-kinship`, with
+  the subtraction formula unchanged; the old heredoc could not run on
+  current code (it indexed `PlinkMetadata` as a dict and wrote `.npy` where
+  GEMMA needed `.cXX.txt`). No committed fixture changed.
+
 - **`gwas()` returns `PipelineResult`; `GWASResult` and `GWASTiming` are
   gone.** The API result was a copy of five of the runner's fields, so the
   runner's result is returned as is. `result.timing` keeps `kinship_s`,
@@ -41,6 +57,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`scripts/demonstrate_equivalence.py` uses `compare_assoc_results`.** The
+  report kept its own field-diff code beside the validation package the
+  tier1 suite uses; it now compares with `compare_assoc_results` and
+  `compare_kinship_matrices` under the same `ToleranceConfig` overrides the
+  tests pass, so `af` is compared on every section and `logl_H1` on the
+  mouse `-lmm 4` fixtures. Its rank correlation is computed over
+  `np.argsort`, so the script no longer imports scipy.
+- **`scripts/_bench_common.py`** holds what `bench_all_backends.py` and
+  `bench_loco.py` had each carried: the mouse fixture paths, `fmt_seconds`,
+  `load_fam_phenotypes`, `add_gemma_args`, `find_gemma`,
+  `print_hardware_header` and one `best_of` in place of six inlined timing
+  loops. `bench_all_backends.py` runs as named phases over a `Timing`
+  dataclass and `bench_loco.py` returns a `LocoTiming` in place of two
+  differently shaped dicts. Flags and printed tables are unchanged.
+- **The pre-push freshness check reads `LMM_ACCEL_SOURCES`.**
+  `check_c_extension_freshness.py` watched its own `_lmm_*.c` glob beside
+  the build's source tuple; it now loads `compile_and_link.py` by path and
+  watches exactly the files the build compiles, plus the headers.
 - **The CLI builds `PipelineConfig` once.** `_run_lmm` and `_run_gk` no
   longer mirror the config as 26 and 12 keyword parameters; `main` builds
   `OutputConfig` and `PipelineConfig` inside one `try` and hands them over.

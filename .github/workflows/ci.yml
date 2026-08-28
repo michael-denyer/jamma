@@ -34,9 +34,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-
       - name: Cache cppcheck ${{ env.CPPCHECK_VERSION }}
         id: cppcheck-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -72,9 +69,6 @@ jobs:
           # with a message buried in the hook output.
           cppcheck --errorlist > /dev/null
 
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-
       # Node is required by prek hooks that use language: node
       # (markdownlint-cli2) and by the maid-mermaid wrapper script which
       # shells out to `npx @probelabs/maid`.
@@ -98,9 +92,12 @@ jobs:
       # That is not hypothetical: pyproject moved to pyrefly 1.2.0 while
       # uv.lock still recorded 1.1.1, and every run since was green.
       # --locked makes the install itself the assertion, so no future
-      # reordering can reopen the hole.
-      - name: Install dependencies (uv.lock must be in sync)
-        run: uv sync --locked
+      # reordering can reopen the hole. Lint reads only .pyi stubs, so it
+      # never needs the C extensions built.
+      - name: Set up JAMMA
+        uses: ./.github/actions/setup-jamma
+        with:
+          build-extensions: "false"
 
       # Ruff check and format split into separate steps so a failure
       # report names the exact rule set that failed (check rules vs
@@ -159,35 +156,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+      - name: Set up JAMMA
+        uses: ./.github/actions/setup-jamma
+        with:
+          python-version: ${{ matrix.python-version }}
+          ilp64-numpy: ${{ matrix.ilp64_numpy && 'true' || 'false' }}
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Install MKL ILP64 numpy
+      - name: Report numpy BLAS config
         if: matrix.ilp64_numpy
         run: |
-          uv run pip install numpy \
-            --index-url https://michael-denyer.github.io/numpy-mkl \
-            --force-reinstall --upgrade
           uv run python -c "
           import numpy as np
           cfg = np.show_config('dicts')
           blas = cfg.get('Build Dependencies', {}).get('blas', {})
           print(f'numpy BLAS: {blas}')
           "
-
-      - name: Compile C extensions
-        run: |
-          uv run python -m jamma.lmm._compile_accel
-
-      - name: Compile jlinalg extension
-        run: |
-          uv run python -m jamma.jlinalg._compile_jlinalg
 
       - name: Verify BLAS backend
         env:
@@ -327,22 +310,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Compile C extensions
-        run: |
-          uv run python -m jamma.lmm._compile_accel
-
-      - name: Compile jlinalg extension
-        run: |
-          uv run python -m jamma.jlinalg._compile_jlinalg
+      - name: Set up JAMMA
+        uses: ./.github/actions/setup-jamma
 
       - name: Run tests with slipcover
         run: |

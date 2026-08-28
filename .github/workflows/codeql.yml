@@ -70,23 +70,9 @@ jobs:
       # actual compiler invocations, so we reproduce CI's two compile
       # entry points exactly (see CLAUDE.md "_build_support" gotcha).
       # python uses build-mode: none and skips this block.
-      - name: Install uv
+      - name: Set up JAMMA
         if: matrix.language == 'c-cpp'
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-
-      - name: Set up Python 3.12
-        if: matrix.language == 'c-cpp'
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        if: matrix.language == 'c-cpp'
-        run: uv sync
-
-      - name: Compile C extensions (_lmm_accel + jlinalg)
-        if: matrix.language == 'c-cpp'
-        run: |
-          uv run python -m jamma.lmm._compile_accel
-          uv run python -m jamma.jlinalg._compile_jlinalg
+        uses: ./.github/actions/setup-jamma
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@84498526a009a99c875e83ef4821a8ba52de7c22  # codeql-bundle-v2.25.5

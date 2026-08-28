@@ -68,21 +68,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Compile C extensions with sanitizers
-        # JAMMA_SANITIZE flows through apply_sanitizer_overrides() in
-        # _build_support/compile_and_link.py.
-        run: |
-          uv run python -m jamma.lmm._compile_accel
-          uv run python -m jamma.jlinalg._compile_jlinalg
+      # JAMMA_SANITIZE (job env, above) flows through apply_sanitizer_overrides()
+      # in _build_support/compile_and_link.py during the action's compile steps.
+      - name: Set up JAMMA
+        uses: ./.github/actions/setup-jamma
 
       - name: Run pytest under ASAN/UBSAN
         # `shell: bash` makes GitHub run this with `bash --noprofile --norc
@@ -175,9 +164,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-      - run: uv python install 3.12
-      - run: uv sync
+
+      # build-extensions: false — this job compiles only _lmm_accel (below),
+      # never jlinalg. JAMMA_SENTINEL_UB is accel-only (compile_and_link.py's
+      # reads_sentinel_env), so a jlinalg build here would just spend time
+      # instrumenting a module the sentinel test never touches.
+      - name: Set up JAMMA
+        uses: ./.github/actions/setup-jamma
+        with:
+          build-extensions: "false"
 
       - name: Compile _lmm_accel with -DJAMMA_SENTINEL_UB
         # JAMMA_SENTINEL_UB env var causes _compile_accel.py to inject
@@ -298,47 +293,32 @@ jobs:
       contents: read
       issues: write  # to file a triage issue on sanitizer detection
     steps:
-      - name: Open or update sanitizer-triage issue
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v8.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
         with:
-          script: |
-            const asanResult = `${{ needs.asan-ubsan.result }}`;
-            const sentinelResult = `${{ needs.asan-sentinel-meta-test.result }}`;
-            const failedJobs = [];
-            if (asanResult === 'failure') failedJobs.push('asan-ubsan');
-            if (sentinelResult === 'failure') failedJobs.push('asan-sentinel-meta-test');
-            const title = 'Sanitizers (ASAN/UBSAN): weekly run failed';
-            const body = [
-              `Sanitizer run [#${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) failed.`,
-              ``,
-              `Failed jobs: ${failedJobs.join(', ')}`,
-              ``,
-              `Inspect the workflow logs and the uploaded sanitizer-logs-${context.runId} / sentinel-logs-${context.runId} artifacts.`,
-              ``,
-              `Reproduce locally with the steps in docs/TESTING.md §1.10.`,
-              `This is a non-blocking triage signal — not a merge regression.`,
-            ].join('\n');
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'sanitizer',
-              per_page: 10,
-            });
-            const existing = issues.find(i => i.title === title);
-            if (existing) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-                labels: ['sanitizer', 'triage'],
-              });
-            }
+          persist-credentials: false
+
+      - name: List failed jobs
+        id: failed
+        env:
+          ASAN_RESULT: ${{ needs.asan-ubsan.result }}
+          SENTINEL_RESULT: ${{ needs.asan-sentinel-meta-test.result }}
+        run: |
+          jobs=()
+          [ "$ASAN_RESULT" = "failure" ] && jobs+=("asan-ubsan")
+          [ "$SENTINEL_RESULT" = "failure" ] && jobs+=("asan-sentinel-meta-test")
+          IFS=', '; echo "list=${jobs[*]}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update sanitizer-triage issue
+        uses: ./.github/actions/triage-issue
+        with:
+          title: "Sanitizers (ASAN/UBSAN): weekly run failed"
+          label: sanitizer
+          body: |
+            Sanitizer run [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) failed.
+
+            Failed jobs: ${{ steps.failed.outputs.list }}
+
+            Inspect the workflow logs and the uploaded sanitizer-logs-${{ github.run_id }} / sentinel-logs-${{ github.run_id }} artifacts.
+
+            Reproduce locally with the steps in docs/TESTING.md §1.10.
+            This is a non-blocking triage signal — not a merge regression.

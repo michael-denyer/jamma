@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -f src/jamma/lmm/_lmm_accel*.so
-          uv sync
+          uv sync --locked
           uv run python -m jamma.lmm._compile_accel
           "${RUNNER_TEMP}/run-fingerprint.sh" "${RUNNER_TEMP}/head.txt"
 
@@ -101,7 +101,7 @@ jobs:
           git checkout --detach "${BASE_SHA}"
           install -m 644 "${RUNNER_TEMP}/lmm_accel_fingerprint.py" scripts/lmm_accel_fingerprint.py
           rm -f src/jamma/lmm/_lmm_accel*.so
-          uv sync
+          uv sync --locked
           uv run python -m jamma.lmm._compile_accel
           "${RUNNER_TEMP}/run-fingerprint.sh" "${RUNNER_TEMP}/base.txt"
 

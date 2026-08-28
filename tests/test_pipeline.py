@@ -50,7 +50,7 @@ def test_data_classes_still_importable_from_jamma_pipeline():
         )
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestPipelineConfig:
     """Tests for PipelineConfig defaults."""
 
@@ -101,7 +101,7 @@ class TestPipelineConfig:
             PipelineConfig(bfile=BFILE, output_prefix="a/b")
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestValidateInputs:
     """Tests for PipelineRunner.validate_inputs."""
 
@@ -161,7 +161,7 @@ def _first_phenotype(runner: PipelineRunner) -> tuple[np.ndarray, int]:
     return data[columns[0]]
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestParsePhenotypes:
     """Tests for the .fam phenotype parsing behind run()."""
 
@@ -179,7 +179,7 @@ class TestParsePhenotypes:
         assert n_analyzed <= 100
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestCheckMemory:
     """Tests for pipeline_memory.memory_preflight."""
 
@@ -235,7 +235,7 @@ def _copy_plink_genotypes(dest: Path) -> Path:
     return dest / "test"
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestPhenotypeColumnSelection:
     """Tests for phenotype column selection via PipelineConfig.phenotype_columns."""
 
@@ -323,7 +323,7 @@ class TestPhenotypeColumnSelection:
             _first_phenotype(runner)
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestPipelineConfigSnpsFields:
     """Tests for PipelineConfig SNP filtering fields."""
 
@@ -347,7 +347,7 @@ class TestPipelineConfigSnpsFields:
         assert config.hwe_threshold == 0.001
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestValidateInputsSnpsFields:
     """Tests for validate_inputs SNP filtering validation."""
 
@@ -400,7 +400,7 @@ class TestValidateInputsSnpsFields:
             )
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestPipelineConfigLambdaBounds:
     """Tests for PipelineConfig lambda bounds (l_min, l_max)."""
 
@@ -440,7 +440,7 @@ class TestPipelineConfigLambdaBounds:
             PipelineConfig(bfile=BFILE, l_min=l_min, l_max=l_max, check_memory=False)
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 class TestPipelineConfigGridResolution:
     """Tests for PipelineConfig n_grid validation.
 

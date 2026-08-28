@@ -23,7 +23,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
-pytestmark = [pytest.mark.tier1, pytest.mark.slow]
+pytestmark = [pytest.mark.tier0, pytest.mark.slow]
 
 
 @pytest.fixture(scope="module")

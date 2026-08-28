@@ -13,8 +13,9 @@ runner = CliRunner()
 
 EXAMPLE_BFILE = SYNTHETIC.bfile
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier1
+
 @pytest.mark.parametrize(
     "flag",
     [
@@ -45,7 +46,6 @@ def test_cli_help_shows_flag(flag: str):
     assert flag in result.output
 
 
-@pytest.mark.tier1
 @pytest.mark.parametrize(
     "flag,description_fragment",
     [
@@ -61,7 +61,6 @@ def test_cli_help_shows_description(flag: str, description_fragment: str):
     assert description_fragment in result.output
 
 
-@pytest.mark.tier1
 def test_cli_version():
     """Test that --version shows version number."""
     import jamma
@@ -71,7 +70,6 @@ def test_cli_version():
     assert jamma.__version__ in result.output
 
 
-@pytest.mark.tier1
 def test_cli_gk_invalid_bfile(tmp_path: Path):
     """Test that gk command fails gracefully with nonexistent bfile."""
     outdir = tmp_path / "output"
@@ -85,7 +83,6 @@ def test_cli_gk_invalid_bfile(tmp_path: Path):
     assert "not found" in result.output.lower() or "error" in result.output.lower()
 
 
-@pytest.mark.tier1
 def test_cli_lmm_requires_kinship():
     """Test that lmm command requires -k (kinship) flag."""
     result = runner.invoke(main, ["-lmm", "1", "-bfile", str(EXAMPLE_BFILE)])
@@ -94,7 +91,6 @@ def test_cli_lmm_requires_kinship():
     assert "-k" in result.output or "kinship" in result.output.lower()
 
 
-@pytest.mark.tier1
 def test_cli_lmm_mode_2_accepted():
     """Test that lmm mode 2 (LRT) is accepted and doesn't show 'not implemented'."""
     result = runner.invoke(
@@ -107,7 +103,6 @@ def test_cli_lmm_mode_2_accepted():
     assert "kinship matrix file not found" in result.output.lower()
 
 
-@pytest.mark.tier1
 def test_cli_gk_ksnps_missing_file_error(tmp_path: Path):
     """CLI gk command exits gracefully when -ksnps file doesn't exist."""
     result = runner.invoke(
@@ -127,7 +122,6 @@ def test_cli_gk_ksnps_missing_file_error(tmp_path: Path):
     assert "Error:" in result.output
 
 
-@pytest.mark.tier1
 def test_cli_gk_lmm_mutually_exclusive():
     """Providing both -gk and -lmm should fail with a usage error."""
     result = runner.invoke(
@@ -137,7 +131,6 @@ def test_cli_gk_lmm_mutually_exclusive():
     assert "mutually exclusive" in result.output
 
 
-@pytest.mark.tier1
 def test_cli_requires_gk_or_lmm():
     """Providing -bfile without -gk or -lmm should fail with a usage error."""
     result = runner.invoke(main, ["-bfile", str(EXAMPLE_BFILE)])
@@ -145,7 +138,6 @@ def test_cli_requires_gk_or_lmm():
     assert "One of -gk or -lmm is required" in result.output
 
 
-@pytest.mark.tier1
 @pytest.mark.parametrize("flag", ["-wsnp", "-gxe", "-mk", "-mvlmm"])
 def test_cli_rejects_gemma_flags_jamma_does_not_implement(flag: str):
     """GEMMA flags with no JAMMA implementation are unknown options, not stubs.
@@ -159,7 +151,6 @@ def test_cli_rejects_gemma_flags_jamma_does_not_implement(flag: str):
     assert "not yet implemented" not in result.output.lower()
 
 
-@pytest.mark.tier1
 def test_lmin_validation():
     """CLI rejects invalid -lmin values."""
     # lmin = 0 should fail
@@ -188,7 +179,6 @@ def test_lmin_validation():
     assert "l_min must be positive" in result.output
 
 
-@pytest.mark.tier1
 def test_lmax_validation():
     """CLI rejects -lmax less than or equal to -lmin."""
     result = runner.invoke(
@@ -210,7 +200,6 @@ def test_lmax_validation():
     assert "l_max (0.0001) must be greater than l_min (0.001)" in result.output
 
 
-@pytest.mark.tier1
 def test_invalid_lmm_mode_reports_cli_error():
     """A knob rejected at config construction reads as a usage error.
 
@@ -227,7 +216,6 @@ def test_invalid_lmm_mode_reports_cli_error():
     assert "Traceback" not in result.output
 
 
-@pytest.mark.tier1
 def test_cli_help_shows_lmin_lmax():
     """CLI --help shows -lmin and -lmax flags with defaults."""
     result = runner.invoke(main, ["--help"])
@@ -238,7 +226,6 @@ def test_cli_help_shows_lmin_lmax():
     assert "1e5" in result.output
 
 
-@pytest.mark.tier1
 def test_gk_mode_outside_1_2_is_a_usage_error():
     """-gk 3 is rejected by the option itself, before any file is read."""
     result = runner.invoke(main, ["-bfile", str(EXAMPLE_BFILE), "-gk", "3"])
@@ -247,7 +234,6 @@ def test_gk_mode_outside_1_2_is_a_usage_error():
     assert "1<=x<=2" in result.output
 
 
-@pytest.mark.tier1
 def test_gk2_with_loco_reports_cli_error(tmp_path: Path):
     """The -gk 2 with -loco guard moved into compute_kinship; still a CLI error."""
     result = runner.invoke(
@@ -258,7 +244,6 @@ def test_gk2_with_loco_reports_cli_error(tmp_path: Path):
     assert "-gk 2 (standardized) is not supported with -loco" in result.output
 
 
-@pytest.mark.tier1
 def test_cli_help_shows_widv():
     """CLI --help shows -widv flag."""
     result = runner.invoke(main, ["--help"])
@@ -267,7 +252,6 @@ def test_cli_help_shows_widv():
     assert "weight" in result.output.lower()
 
 
-@pytest.mark.tier1
 def test_cat_requires_covariate_file(tmp_path: Path):
     """CLI rejects -cat without -c (covariate file)."""
     # Use a dummy file for -k (validation fails on -cat before kinship load)
@@ -291,7 +275,6 @@ def test_cat_requires_covariate_file(tmp_path: Path):
     assert "-cat requires -c" in result.output
 
 
-@pytest.mark.tier1
 def test_cat_comma_separated_reaches_pipeline_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -320,7 +303,6 @@ def test_cat_comma_separated_reaches_pipeline_config(
     assert factory.last_config.cat_columns == [1, 3]
 
 
-@pytest.mark.tier1
 @pytest.mark.parametrize("value", ["x", ""])
 def test_cat_rejects_non_integer_and_empty(value: str) -> None:
     """-cat with a non-integer or nothing is a usage error naming the flag."""
@@ -332,7 +314,6 @@ def test_cat_rejects_non_integer_and_empty(value: str) -> None:
     assert "-cat" in result.output
 
 
-@pytest.mark.tier1
 def test_cli_help_shows_cat():
     """CLI --help shows -cat flag."""
     result = runner.invoke(main, ["--help"])
@@ -349,7 +330,6 @@ KINSHIP_FILE = SYNTHETIC.kinship
 # ===========================================================================
 
 
-@pytest.mark.tier1
 class TestMultiNParsing:
     """Tests for CLI -n multi-value parsing."""
 
@@ -523,7 +503,6 @@ def _mock_pipeline_result(outdir: Path):
     )
 
 
-@pytest.mark.tier1
 @pytest.mark.slow
 def test_cli_gk_end_to_end(tmp_path: Path):
     """CLI -gk 1 computes kinship and writes output file."""
@@ -550,7 +529,6 @@ def test_cli_gk_end_to_end(tmp_path: Path):
     assert kinship_path.stat().st_size > 0, "Kinship output file should be non-empty"
 
 
-@pytest.mark.tier1
 @pytest.mark.slow
 def test_cli_lmm_with_covariates(tmp_path: Path):
     """CLI -lmm 1 -c <covariate_file> runs end-to-end with covariates."""
@@ -595,7 +573,6 @@ def test_cli_lmm_with_covariates(tmp_path: Path):
     assert len(lines) > 1, "Association file should have header + data lines"
 
 
-@pytest.mark.tier1
 def test_lmm_numpy_backend(tmp_path: Path):
     """CLI with --backend numpy runs LMM mode 1 end-to-end.
 
@@ -627,7 +604,6 @@ def test_lmm_numpy_backend(tmp_path: Path):
     assert len(lines) > 1, "Association file should have more than just the header line"
 
 
-@pytest.mark.tier1
 def test_cli_backend_numpy_streaming_accepted():
     """CLI accepts --backend numpy-streaming."""
     result = runner.invoke(main, ["--help"])
@@ -635,7 +611,6 @@ def test_cli_backend_numpy_streaming_accepted():
     assert "numpy-streaming" in result.output
 
 
-@pytest.mark.tier1
 def test_cli_backend_numpy_streaming_wires_to_pipeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -662,7 +637,6 @@ def test_cli_backend_numpy_streaming_wires_to_pipeline(
     assert factory.last_config.backend == "numpy-streaming"
 
 
-@pytest.mark.tier1
 def test_cli_eigen_dir_without_loco_errors():
     """--eigen-dir is rejected outside -loco mode."""
     result = runner.invoke(
@@ -684,7 +658,6 @@ def test_cli_eigen_dir_without_loco_errors():
     assert "--eigen-dir is only supported with -loco mode" in result.output
 
 
-@pytest.mark.tier1
 def test_cli_loco_eigen_defaults_eigen_dir_to_outdir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -714,7 +687,6 @@ def test_cli_loco_eigen_defaults_eigen_dir_to_outdir(
     assert factory.last_config.eigen_dir == factory.last_config.output_dir
 
 
-@pytest.mark.tier1
 def test_cli_legacy_text_wires_to_pipeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -741,7 +713,6 @@ def test_cli_legacy_text_wires_to_pipeline(
     assert factory.last_config.legacy_text is True
 
 
-@pytest.mark.tier1
 def test_output_prefix_with_separator_reports_a_usage_error():
     """`-o a/b` must read as a usage error, not a Python traceback.
 

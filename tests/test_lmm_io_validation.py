@@ -468,7 +468,7 @@ def test_jax_free_export_surface() -> None:
         )
 
 
-@pytest.mark.tier1
+@pytest.mark.tier0
 def test_batch_hwe_matches_streaming_hwe() -> None:
     """Batch HWE filtering removes the same SNPs streaming removes.
 

@@ -89,6 +89,7 @@ def test_runner_fused_score_dispatch():
     rng = np.random.default_rng(200)
     eigenvalues, genotypes, phenotypes, snp_info, U = _make_runner_test_data(rng)
 
+    # allow-patch: dispatch spy; wraps the real kernel to observe the runner reach it
     with patch(
         "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
         wraps=_c().compute_score_fused_ws_c,
@@ -161,6 +162,7 @@ def test_runner_fused_lrt_dispatch():
     rng = np.random.default_rng(201)
     eigenvalues, genotypes, phenotypes, snp_info, U = _make_runner_test_data(rng)
 
+    # allow-patch: dispatch spy; wraps the real kernel to observe the runner reach it
     with patch(
         "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
         wraps=_c().compute_lrt_fused_ws_c,

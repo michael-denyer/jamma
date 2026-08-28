@@ -369,7 +369,9 @@ boundaries. Everywhere else, write a fake.
 | `psutil.virtual_memory`, `psutil.Process(...).memory_info` | OS state; cannot be set without large allocations |
 | `gc.collect` | Process-level side effect |
 | `jamma.core.memory._check_available` | Thin wrapper around OS memory probe |
-| `jlinalg.blas_is_ilp64` | Library detection that cannot be flipped at runtime |
+| `jlinalg.blas_is_ilp64`, `blas_has_dsyevd`, `blas_has_dsyevr`, `blas_backend` | Library detection that cannot be flipped at runtime |
+| `jlinalg.set_n_threads` | Thread control; a process-level side effect |
+| `jamma.lmm.eigen.jlinalg`, replaced by `FakeJlinalg` | Vendor LAPACK cannot be made to raise `MemoryError` on a 20x20 matrix; see §2.3 |
 | `os.environ` setters | Process state |
 | `subprocess.run` / `subprocess.Popen` | Spawns external processes |
 | `progressbar.ProgressBar` | External UI library — see §2.4 |
@@ -389,9 +391,14 @@ Shared fakes live in the
 `MagicMock()` for the `IncrementalAssocWriter` interface and captures
 `write_arrays_batch` calls in a list. The package also ships
 `FakeProgressBar`/`FakeProgressbarModule`
-([`progress.py`](../tests/fakes/progress.py)) and
+([`progress.py`](../tests/fakes/progress.py)),
 `FakePipelineRunnerFactory`
-([`pipeline.py`](../tests/fakes/pipeline.py)). Each fake's self-tests are
+([`pipeline.py`](../tests/fakes/pipeline.py)) and `FakeJlinalg`
+([`jlinalg.py`](../tests/fakes/jlinalg.py)), which stands in for
+`jamma.jlinalg` at the `jamma.lmm.eigen` import site through
+`use_fake_jlinalg(monkeypatch, FakeJlinalg(eigh_error=MemoryError()))`;
+its self-tests check the declared names against the real module and
+against every `jlinalg.<name>` read in `eigen.py`. Each fake's self-tests are
 in [`tests/fakes/test_fakes.py`](../tests/fakes/test_fakes.py); accessing
 an undeclared attribute raises `AttributeError` (the contract that
 distinguishes a fake from `MagicMock`).
@@ -404,7 +411,7 @@ catch. The carve-out is:
 
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
-| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` ([`tests/test_safety_gates.py:278`](../tests/test_safety_gates.py#L278)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
+| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` (`TestLOCOIteratorRuntimeError`, [`tests/test_safety_gates.py:239`](../tests/test_safety_gates.py#L239)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
 | Compile-flag literals not in three forbidden entry points ([`scripts/check_compile_flag_literals.py`](../scripts/check_compile_flag_literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
 | `_lmm_accel.c` reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 
@@ -442,17 +449,27 @@ behavior. Not for internal functions.
 
 The "mocking numerical functions" anti-pattern is enforced by
 [`scripts/check_forbidden_patches.py`](../scripts/check_forbidden_patches.py),
-an AST-based pre-commit hook. It bans patching `numpy.linalg.*`,
-`scipy.*`, and JAMMA's own numerical modules
-(`compute_numpy`/`cn`, `likelihood`, `jlinalg`/`jl`,
-`kinship_compute`/`kc`). The capability seam `compute_numpy._accel` and
-`_*_ENABLED` constants are excluded. To exercise the pure-NumPy path, set
-`_accel` to None; that is one bit, because the ABI-equality gate admits all
-of the C extension's `methods[]` table or none of it, so there is no build
-that exports some kernels and not others. If you have a legitimate reason to
-patch something else here, add an inline `# allow-patch:` comment explaining
-why. Read failures (`OSError`, `UnicodeDecodeError`) exit
-non-zero rather than passing vacuously.
+a pre-commit hook that walks each test module's `ast`. It collects every
+`patch(...)`, `patch.object(...)`, `mocker.patch(...)` and
+`monkeypatch.setattr(...)` call, resolves a module-object first argument
+through the test's own import table, and then canonicalises the target
+through the source tree's import tables, so
+`patch("jamma.lmm.eigen.jlinalg.eigh")` and `patch.object(jl, "eigh")` are
+both `jamma.jlinalg.eigh`, and `jamma.pipeline.eigendecompose_kinship` is
+`jamma.lmm.eigen.eigendecompose_kinship`. The gate keys on that canonical
+name, so line wrapping and aliasing cannot hide a target from it (the
+regex gate it replaced missed 38 sites that way). It bans `numpy.linalg`,
+`numpy.matmul`, `scipy`, `jamma.jlinalg`, `jamma.kinship.compute` and the
+`jamma.lmm` numerical modules (`likelihood`, `likelihood_numpy`,
+`compute_numpy`, `uab`, `special`, `prepare_common`, `eigen`). ALL_CAPS
+knobs (`_CF_MAX_ITER`) and the documented seams are allowed: `_accel`,
+which is one bit because the ABI-equality gate admits all of the C
+extension's `methods[]` table or none of it, and the `jlinalg.blas_*`
+detection flags and thread setters. Where delegation is the contract
+under test (a spy that wraps the real function to observe dispatch), put
+`# allow-patch: <reason>` on the call or the line above it.
+`--list` prints every resolved site. Read failures (`OSError`,
+`UnicodeDecodeError`) exit non-zero rather than passing vacuously.
 
 ### 2.6 When `pytest.skip` is acceptable
 

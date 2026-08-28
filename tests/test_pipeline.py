@@ -1130,6 +1130,7 @@ class TestMultiPhenotypeSingleEigen:
             backend="numpy",
         )
 
+        # allow-patch: dispatch spy; one eigendecomposition per run is the contract
         with patch(
             "jamma.pipeline.eigendecompose_kinship",
             wraps=eigendecompose_kinship,

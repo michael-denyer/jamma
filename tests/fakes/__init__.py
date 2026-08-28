@@ -9,13 +9,16 @@ See docs/TESTING.md §2.3 for the policy.
 """
 
 from tests.fakes.assoc_writer import FakeAssocWriter
+from tests.fakes.jlinalg import FakeJlinalg, use_fake_jlinalg
 from tests.fakes.pipeline import FakePipelineRunner, FakePipelineRunnerFactory
 from tests.fakes.progress import FakeProgressBar, FakeProgressbarModule
 
 __all__ = [
     "FakeAssocWriter",
+    "FakeJlinalg",
     "FakePipelineRunner",
     "FakePipelineRunnerFactory",
     "FakeProgressBar",
     "FakeProgressbarModule",
+    "use_fake_jlinalg",
 ]

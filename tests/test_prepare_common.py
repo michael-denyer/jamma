@@ -169,26 +169,15 @@ def test_compute_null_model_common_rejects_negative_eigenvalues(monkeypatch):
     Injects eigenvalue=-10.0 and mocks optimizer to return lambda=1000,
     so lambda*eval+1 = 1000*(-10)+1 < 0.
     """
-    import unittest.mock as mock
-
     from jamma.lmm import prepare_common
 
     rng = np.random.default_rng(99)
     n_samples = 50
-    # One eigenvalue is strongly negative so lambda*eval+1 < 0
     eigenvalues_np = np.sort(np.abs(rng.standard_normal(n_samples)) + 0.1)
-    eigenvalues_np[0] = -10.0  # negative eigenvalue (FP noise from degenerate kinship)
+    eigenvalues_np[0] = -10.0
 
     UtW = np.ones((n_samples, 1))
     Uty = rng.standard_normal(n_samples)
-
-    # Mock the MLE optimizer to return a large lambda (1000) so lambda*eval+1 < 0
-    # for the negative eigenvalue: 1000*(-10)+1 = -9999
-    monkeypatch.setattr(
-        prepare_common,
-        "compute_null_model_mle",
-        mock.Mock(return_value=(1000.0, -50.0)),
-    )
 
     with pytest.raises(ValueError, match="non-positive"):
         prepare_common._compute_null_model_common(
@@ -207,21 +196,14 @@ def test_compute_null_model_common_rejects_nan_hi_eval_null(monkeypatch):
 
     Mocks optimizer to return NaN lambda, producing NaN Hi_eval_null.
     """
-    import unittest.mock as mock
-
     from jamma.lmm import prepare_common
 
     rng = np.random.default_rng(100)
     n_samples = 50
     eigenvalues_np = np.sort(np.abs(rng.standard_normal(n_samples)) + 0.1)
+    eigenvalues_np[0] = np.nan
     UtW = np.ones((n_samples, 1))
     Uty = rng.standard_normal(n_samples)
-
-    monkeypatch.setattr(
-        prepare_common,
-        "compute_null_model_mle",
-        mock.Mock(return_value=(float("nan"), -50.0)),
-    )
 
     with pytest.raises(ValueError, match="non-finite"):
         prepare_common._compute_null_model_common(

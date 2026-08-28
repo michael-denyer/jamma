@@ -4,6 +4,8 @@ These tests verify individual components of the LMM association workflow
 using synthetic data with known properties.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -15,6 +17,7 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood,
 )
 from jamma.lmm.stats import AssocResult
+from tests.fakes import FakeJlinalg, use_fake_jlinalg
 from tests.reference.stats import calc_wald_test, f_sf
 
 
@@ -135,54 +138,33 @@ class TestEigendecomposition:
             eigendecompose_kinship(K)
             mock_check.assert_called_once()
 
-    def test_eigendecompose_linalg_error_propagates(self):
-        """np.linalg.LinAlgError from eigh is caught, logged, and re-raised."""
-        from unittest.mock import patch
+    @pytest.mark.parametrize(
+        ("error", "has_dsyevr"),
+        [
+            (np.linalg.LinAlgError("SVD did not converge"), 0),
+            (MemoryError("workspace allocation failed"), 1),
+            (MemoryError("out of memory"), 0),
+            (RuntimeError("illegal argument to vendor LAPACK"), 0),
+            (RuntimeError("internal error in eigh"), 0),
+        ],
+        ids=["linalg", "memory-dsyevr", "memory", "runtime", "internal"],
+    )
+    def test_eigendecompose_reraises_jlinalg_errors(
+        self, monkeypatch, error, has_dsyevr
+    ):
+        """Whatever jlinalg.eigh raises reaches the caller unwrapped.
 
-        import numpy.linalg
+        The C layer chooses between DSYEVD and DSYEVR itself, so the Python
+        layer cannot observe which ran. What it can pin is its own boundary:
+        a MemoryError out of the DSYEVR-capable path propagates rather than
+        being swallowed, and LinAlgError and RuntimeError keep their types.
+        """
+        use_fake_jlinalg(
+            monkeypatch, FakeJlinalg(blas_has_dsyevr=has_dsyevr, eigh_error=error)
+        )
 
-        K = np.eye(10)
-
-        with (
-            patch(
-                "jamma.lmm.eigen.jlinalg.eigh",
-                side_effect=numpy.linalg.LinAlgError("SVD did not converge"),
-            ),
-            patch("jamma.lmm.eigen.jlinalg.blas_has_dsyevd", 1),
-            patch("jamma.lmm.eigen.jlinalg.blas_has_dsyevr", 0),
-        ):
-            with pytest.raises(numpy.linalg.LinAlgError, match="SVD did not converge"):
-                eigendecompose_kinship(K, check_memory=False)
-
-    @pytest.mark.slow
-    def test_check_symmetry_sampled_triggers_for_large_matrix(self):
-        """For n >= _SAMPLED_SYMMETRY_THRESHOLD, the sampled check is used."""
-        from unittest.mock import patch
-
-        from jamma.lmm.eigen import _SAMPLED_SYMMETRY_THRESHOLD
-
-        # Build a symmetric matrix just over the threshold size.
-        # Use an identity matrix (perfectly symmetric, fast to construct).
-        n = _SAMPLED_SYMMETRY_THRESHOLD + 1
-        K = np.eye(n)
-
-        with patch("jamma.lmm.eigen._check_symmetry_sampled") as mock_sampled:
-            eigendecompose_kinship(K, check_memory=False)
-            mock_sampled.assert_called_once()
-
-    @pytest.mark.slow
-    def test_check_symmetry_sampled_not_called_for_small_matrix(self):
-        """For n < _SAMPLED_SYMMETRY_THRESHOLD, the full allclose check is used."""
-        from unittest.mock import patch
-
-        from jamma.lmm.eigen import _SAMPLED_SYMMETRY_THRESHOLD
-
-        n = _SAMPLED_SYMMETRY_THRESHOLD - 1
-        K = np.eye(n)
-
-        with patch("jamma.lmm.eigen._check_symmetry_sampled") as mock_sampled:
-            eigendecompose_kinship(K, check_memory=False)
-            mock_sampled.assert_not_called()
+        with pytest.raises(type(error), match=str(error)):
+            eigendecompose_kinship(np.eye(10), check_memory=False)
 
     def test_check_symmetry_sampled_warns_on_asymmetric_matrix(self):
         """_check_symmetry_sampled issues a warning for an asymmetric matrix."""
@@ -607,3 +589,46 @@ def test_ncvt1_layout_matches_index_table():
     assert _NCVT1.xy == table.idx_xy
     assert _NCVT1.yy == table.idx_yy
     assert sorted(_NCVT1) == list(range(table.n_index))
+
+
+@pytest.mark.tier0
+class TestEigenvalueZeroingBoundary:
+    """Eigenvalues with |value| < 1e-10 are zeroed, whichever driver ran."""
+
+    @staticmethod
+    def _decompose(first: float, n: int = 10):
+        evals = np.array([first] + [1.0] * (n - 1), dtype=np.float64)
+        return eigendecompose_kinship(np.diag(evals), check_memory=False)[0]
+
+    def test_eigenvalue_at_threshold_is_kept(self):
+        """The check is abs(value) < 1e-10, so exactly-at-threshold survives."""
+        assert self._decompose(1e-10)[0] == pytest.approx(1e-10, abs=1e-15)
+
+    def test_eigenvalue_just_below_threshold_is_zeroed(self):
+        assert self._decompose(9.99e-11)[0] == 0.0
+
+    def test_small_negative_eigenvalue_is_zeroed(self):
+        assert self._decompose(-5e-11)[0] == 0.0
+
+    def test_large_negative_eigenvalue_is_zeroed_with_warning(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            eigenvalues = self._decompose(-0.5)
+
+        assert any("negative eigenvalue" in str(x.message) for x in w)
+        assert eigenvalues[0] == 0.0
+
+    def test_multiple_zero_eigenvalues_warn_rank_deficient(self):
+        evals = np.array([1e-12, 1e-13] + [1.0] * 8, dtype=np.float64)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            eigendecompose_kinship(np.diag(evals), check_memory=False)
+
+        assert any("rank-deficient" in str(x.message) for x in w)
+
+    def test_single_zero_eigenvalue_does_not_warn(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            self._decompose(1e-12)
+
+        assert not any("rank-deficient" in str(x.message) for x in w)

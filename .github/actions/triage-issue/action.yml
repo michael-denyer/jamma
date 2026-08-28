@@ -1,0 +1,54 @@
+name: Triage issue
+description: >-
+  Open a labeled triage issue on failure, or comment on the existing open
+  one with the same title.
+
+inputs:
+  title:
+    description: Exact issue title used to find or create the triage issue.
+    required: true
+  label:
+    description: Label used both to scope the search and to tag a new issue.
+    required: true
+  body:
+    description: Issue body / comment body, already formatted.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Open or update triage issue
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v8.0.0
+      env:
+        TRIAGE_TITLE: ${{ inputs.title }}
+        TRIAGE_LABEL: ${{ inputs.label }}
+        TRIAGE_BODY: ${{ inputs.body }}
+      with:
+        script: |
+          const title = process.env.TRIAGE_TITLE;
+          const label = process.env.TRIAGE_LABEL;
+          const body = process.env.TRIAGE_BODY;
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            labels: label,
+            per_page: 10,
+          });
+          const existing = issues.find(i => i.title === title);
+          if (existing) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existing.number,
+              body,
+            });
+          } else {
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: [label, 'triage'],
+            });
+          }

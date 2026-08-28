@@ -23,22 +23,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Compile C extensions
-        run: |
-          uv run python -m jamma.lmm._compile_accel
-
-      - name: Compile jlinalg extension
-        run: |
-          uv run python -m jamma.jlinalg._compile_jlinalg
+      - name: Set up JAMMA
+        uses: ./.github/actions/setup-jamma
 
       - name: Run slow and tier2 tests
         run: uv run pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov

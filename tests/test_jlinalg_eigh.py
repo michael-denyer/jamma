@@ -951,7 +951,7 @@ def _call_eigh_with_status(
     not _HAS_VENDOR_LAPACK,
     reason="Vendor LAPACK (DSYEVD/DSYEVR) required to reach jlinalg_eigh_c",
 )
-class TestEighViaCApiAtScale:
+class TestEighViaCtypesAtScale:
     """Reconstruction and orthogonality via ctypes, bypassing the Python wrapper.
 
     Everything above calls ``eigh()``, which validates input, may copy, and
@@ -959,39 +959,34 @@ class TestEighViaCApiAtScale:
     ``jlinalg_eigh_c`` directly instead, so a defect introduced by the wrapper
     (a bad stride, a missed transpose) cannot mask a defect in the C layer or
     the other way round.
+
+    Sizes 5, 64, 65 straddle vendor LAPACK's internal blocking switch at 64.
     """
 
-    def test_recon_and_ortho_n200(self) -> None:
-        """N=200 through the C entry point: reconstruction and orthogonality < 1e-8."""
+    @pytest.mark.parametrize("n", [5, 64, 65])
+    def test_recon_and_ortho(self, n: int) -> None:
+        """Reconstruction, orthogonality, and driver outcome at each size."""
         rng = np.random.default_rng(42)
-        N = 200
-        K = _random_spd(N, rng)
+        K = _random_spd(n, rng)
         K_copy = K.copy()
-        w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, f"C API N={N}")
-        _assert_orthogonality(v, 1e-8, f"C API N={N}")
+        w, v, status = _call_eigh_with_status(K_copy)
+        _assert_reconstruction(K, w, v, 1e-8, f"C API N={n}")
+        _assert_orthogonality(v, 1e-8, f"C API N={n}")
+        assert status.vendor_lapack_skipped == 0, (
+            f"C API N={n}: vendor LAPACK was skipped (fell through to the "
+            "NumPy fallback path) when it should have run"
+        )
 
     @pytest.mark.slow
-    def test_recon_and_ortho_n500(self) -> None:
-        """N=500 through the C entry point: reconstruction and orthogonality < 1e-8."""
+    @pytest.mark.parametrize("n", [500, 1000])
+    def test_recon_and_ortho_large(self, n: int) -> None:
+        """Reconstruction and orthogonality at larger N through the C entry point."""
         rng = np.random.default_rng(42)
-        N = 500
-        K = _random_spd(N, rng)
+        K = _random_spd(n, rng)
         K_copy = K.copy()
         w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, f"C API N={N}")
-        _assert_orthogonality(v, 1e-8, f"C API N={N}")
-
-    @pytest.mark.slow
-    def test_recon_and_ortho_n1000(self) -> None:
-        """N=1000 through the C entry point: reconstruction and orthogonality < 1e-8."""
-        rng = np.random.default_rng(42)
-        N = 1000
-        K = _random_spd(N, rng)
-        K_copy = K.copy()
-        w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, f"C API N={N}")
-        _assert_orthogonality(v, 1e-8, f"C API N={N}")
+        _assert_reconstruction(K, w, v, 1e-8, f"C API N={n}")
+        _assert_orthogonality(v, 1e-8, f"C API N={n}")
 
 
 # ---------------------------------------------------------------------------

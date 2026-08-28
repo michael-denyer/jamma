@@ -272,11 +272,9 @@ def apply_sanitizer_overrides(
     unset or empty, returns the inputs unchanged plus an empty
     ``lapack_cflags``. Reads ``os.environ`` ONCE per call; ``run_build`` is the
     one production caller (every compile entry point, including runtime
-    recompile via ``core/recompile.py``, routes through it). The Unity test
-    harness in ``_compile_jlinalg.py`` calls this directly for a second,
-    unrelated build (the C test binary, not a `.so`). No caller may duplicate
-    the env-var read — that would defeat the single-source-of-truth invariant
-    for compile flags.
+    recompile via ``core/recompile.py``, routes through it). No caller may
+    duplicate the env-var read — that would defeat the single-source-of-truth
+    invariant for compile flags.
 
     JAMMA_SANITIZE format: comma-separated ``-fsanitize`` values, e.g.
     ``"address,undefined"`` or ``"address"`` alone. Trailing ``-O1`` wins
@@ -343,8 +341,7 @@ def resolve_cflags_for(
       * Here in ``resolve_cflags_for`` it is ``list[str]`` (paths for THIS one
         source).
       * In ``compile_jlinalg`` it is ``dict[str, list[str]]`` keyed by source
-        filename. The dict form lets callers specify per-source includes (e.g.
-        compile_test_harness passes tests_dir only to test_*.c sources).
+        filename. The dict form lets callers specify per-source includes.
         ``compile_jlinalg`` looks up each source in the dict and forwards the
         matching list to ``resolve_cflags_for``.
     """
@@ -484,13 +481,10 @@ def compile_jlinalg(
             ``-O2 -fno-fast-math`` baseline; the trailing ``-O1`` from the
             sanitizer override wins because gcc/clang honour the last ``-O``.
         extra_source_includes: Per-source extra ``-I<d>`` flags keyed by
-            source filename (``src.name``). Used by compile_test_harness
-            to supply tests_dir only to test_*.c sources.
+            source filename (``src.name``).
         link_shared: When True (default), link as a shared library with
             ``-shared -fPIC``. When False, link as a plain executable (no
-            ``-shared`` / ``-fPIC`` at link time). Used by
-            compile_test_harness to produce the Unity test binary, which
-            must be a runnable executable rather than a .so.
+            ``-shared`` / ``-fPIC`` at link time).
         on_retry: Optional callback invoked with a human-readable reason
             string when a retry path is taken. Intended for warning logs.
             For retry paths with underlying compiler output, the first-attempt

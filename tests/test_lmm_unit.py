@@ -20,8 +20,9 @@ from jamma.lmm.stats import AssocResult
 from tests.fakes import FakeJlinalg, use_fake_jlinalg
 from tests.reference.stats import calc_wald_test, f_sf
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestEigendecomposition:
     """Tests for kinship eigendecomposition."""
 
@@ -219,7 +220,6 @@ class TestEigendecomposition:
         assert warning_messages == []
 
 
-@pytest.mark.tier0
 class TestUabComputation:
     """Tests for U'ab matrix computation."""
 
@@ -260,7 +260,6 @@ class TestUabComputation:
         assert idx_12 == idx_21, "Index should be symmetric"
 
 
-@pytest.mark.tier0
 class TestPabComputation:
     """Tests for weighted Pab computation."""
 
@@ -303,7 +302,6 @@ class TestPabComputation:
         assert Pab[0, idx_33] > 0, f"Pab[0, {idx_33}] should be positive"
 
 
-@pytest.mark.tier0
 class TestRemlLogLikelihood:
     """Tests for REML log-likelihood computation."""
 
@@ -376,7 +374,6 @@ class TestRemlLogLikelihood:
         )
 
 
-@pytest.mark.tier0
 class TestFDistributionSF:
     """Tests for F-distribution survival function."""
 
@@ -450,7 +447,6 @@ def wald_test_inputs():
     }
 
 
-@pytest.mark.tier0
 class TestWaldTest:
     """Tests for Wald test statistics computation."""
 
@@ -478,7 +474,6 @@ class TestWaldTest:
         assert 0.0 <= p_wald <= 1.0, f"P-value {p_wald} not in [0, 1]"
 
 
-@pytest.mark.tier0
 class TestGetAbIndex:
     """Tests for Pab array indexing using GEMMA's GetabIndex."""
 
@@ -515,7 +510,6 @@ class TestGetAbIndex:
         assert get_ab_index(3, 3, n_cvt) == 5
 
 
-@pytest.mark.tier0
 class TestAssocResult:
     """Tests for AssocResult dataclass."""
 
@@ -576,7 +570,6 @@ class TestAssocResult:
             assert hasattr(result, field), f"Missing field: {field}"
 
 
-@pytest.mark.tier0
 def test_ncvt1_layout_matches_index_table():
     """_NCVT1 names the columns build_index_table(1) packs, in its order."""
     from jamma.lmm.likelihood import _NCVT1, build_index_table, get_ab_index
@@ -591,7 +584,6 @@ def test_ncvt1_layout_matches_index_table():
     assert sorted(_NCVT1) == list(range(table.n_index))
 
 
-@pytest.mark.tier0
 class TestEigenvalueZeroingBoundary:
     """Eigenvalues with |value| < 1e-10 are zeroed, whichever driver ran."""
 

@@ -8,6 +8,8 @@ side parameter choice.
 import numpy as np
 import pytest
 
+pytestmark = pytest.mark.tier0
+
 
 def naive_chunk_filter(
     snp_indices: np.ndarray, file_start: int, file_end: int
@@ -65,7 +67,6 @@ def _assert_filters_equal(
     np.testing.assert_array_equal(fast_col, naive_col)
 
 
-@pytest.mark.tier0
 class TestSearchsortedChunkFilter:
     """Validate searchsorted produces identical results to naive linear scan."""
 
@@ -150,7 +151,6 @@ class TestSearchsortedChunkFilter:
             _assert_filters_equal(snp_indices, file_start=int(start), file_end=int(end))
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize(
     "file_start,file_end",
     [

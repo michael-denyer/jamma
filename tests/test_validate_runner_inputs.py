@@ -11,10 +11,11 @@ from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.lmm.prepare_common import RunnerSetup, validate_runner_inputs
 from jamma.lmm.schema import LmmConfig
 
+pytestmark = pytest.mark.tier0
+
 # ── validate_runner_inputs ─────────────────────────────────────────
 
 
-@pytest.mark.tier0
 class TestValidateRunnerInputsErrors:
     """Error branches in validate_runner_inputs."""
 
@@ -78,7 +79,6 @@ class TestValidateRunnerInputsErrors:
             validate_runner_inputs(y, None, None, evals, evecs, lmm_mode=1)
 
 
-@pytest.mark.tier0
 class TestValidateRunnerInputsHappyPath:
     """Happy-path behaviour of validate_runner_inputs."""
 
@@ -161,7 +161,6 @@ class TestValidateRunnerInputsHappyPath:
 # ── LmmConfig ──────────────────────────────────────────────────────
 
 
-@pytest.mark.tier0
 class TestLmmConfigValidation:
     """LmmConfig __post_init__ validation."""
 

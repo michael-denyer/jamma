@@ -19,8 +19,9 @@ from jamma.lmm.likelihood import (
 from jamma.lmm.prepare_common import _build_covariate_matrix
 from tests.reference.stats import safe_sqrt
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestSafeSqrt:
     """T1: safe_sqrt boundary behavior."""
 
@@ -51,7 +52,6 @@ class TestSafeSqrt:
         assert result == pytest.approx(np.sqrt(1e-15))
 
 
-@pytest.mark.tier0
 class TestClampPyy:
     """T2: P_yy clamping helper."""
 
@@ -73,7 +73,6 @@ class TestClampPyy:
         assert result == 1e-8
 
 
-@pytest.mark.tier0
 class TestPyyInLogLikelihood:
     """T2 continued: P_yy clamping produces finite log-likelihood."""
 
@@ -122,7 +121,6 @@ class TestPyyInLogLikelihood:
         assert np.isfinite(result)
 
 
-@pytest.mark.tier0
 class TestBuildCovariateMatrixOverparameterized:
     """T3: Over-parameterization guard."""
 
@@ -148,7 +146,6 @@ class TestBuildCovariateMatrixOverparameterized:
         assert W.shape == (10, 2)
 
 
-@pytest.mark.tier0
 class TestGoldenSectionMinimize:
     """T4: Golden section optimizer standalone behavior."""
 

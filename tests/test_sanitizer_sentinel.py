@@ -24,6 +24,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.tier0
+
 
 @pytest.mark.skipif(
     os.environ.get("JAMMA_SANITIZE_EXPECT_FAIL") != "1",
@@ -35,7 +37,6 @@ import pytest
         "docs/TESTING.md §1.10."
     ),
 )
-@pytest.mark.tier0
 def test_sentinel_heap_oob_under_asan() -> None:
     """Calls jamma_sentinel_oob() — under ASAN this aborts the process.
 

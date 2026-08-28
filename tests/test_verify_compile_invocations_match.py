@@ -19,6 +19,8 @@ from textwrap import dedent
 
 import pytest
 
+pytestmark = pytest.mark.tier0
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO_ROOT / "scripts" / "verify_compile_invocations_match.py"
 
@@ -74,25 +76,21 @@ def _write_tree(
 # -------- _has_run_build_call: AST-based detection --------
 
 
-@pytest.mark.tier0
 def test_ast_detects_bare_call():
     assert _VERIFIER._has_run_build_call("run_build(spec, pkg)")
 
 
-@pytest.mark.tier0
 def test_ast_detects_attribute_call():
     src = "from x import y\ncompile_and_link.run_build(spec, pkg)"
     assert _VERIFIER._has_run_build_call(src)
 
 
-@pytest.mark.tier0
 def test_ast_rejects_mention_in_comment():
     """A commented-out call must NOT satisfy the check."""
     src = "# run_build(spec, pkg)\nreturn None"
     assert not _VERIFIER._has_run_build_call(src)
 
 
-@pytest.mark.tier0
 def test_ast_rejects_mention_in_docstring():
     """A docstring mention must NOT satisfy the check — this is the
     exact weakness the old substring-match verifier had."""
@@ -100,13 +98,11 @@ def test_ast_rejects_mention_in_docstring():
     assert not _VERIFIER._has_run_build_call(src)
 
 
-@pytest.mark.tier0
 def test_ast_rejects_mention_in_string_literal():
     src = 'msg = "run run_build(x) for help"'
     assert not _VERIFIER._has_run_build_call(src)
 
 
-@pytest.mark.tier0
 def test_ast_accepts_local_definition_that_also_calls_itself():
     """Edge case: a local ``def run_build`` that ALSO calls itself satisfies
     the check — the call is real, even though the definition shadows the
@@ -120,7 +116,6 @@ def test_ast_accepts_local_definition_that_also_calls_itself():
     assert _VERIFIER._has_run_build_call(src)
 
 
-@pytest.mark.tier0
 def test_ast_handles_syntax_error_gracefully():
     """Malformed source should return False, not crash. The verifier
     treating unparsable entry points as 'no call' causes a violation,
@@ -131,7 +126,6 @@ def test_ast_handles_syntax_error_gracefully():
 # -------- check() end-to-end: synthetic trees --------
 
 
-@pytest.mark.tier0
 def test_valid_tree_passes(tmp_path):
     """All three entry points call run_build properly — verifier returns 0."""
     entry = "from x import y\ncompile_and_link.run_build(spec, pkg)\n"
@@ -148,7 +142,6 @@ def test_valid_tree_passes(tmp_path):
     assert failures == []
 
 
-@pytest.mark.tier0
 def test_entry_point_with_no_call_fails(tmp_path):
     """An entry point that imports but never calls run_build is a drift:
     someone might have deleted the call accidentally."""
@@ -167,7 +160,6 @@ def test_entry_point_with_no_call_fails(tmp_path):
     assert any("no run_build call" in f for f in failures)
 
 
-@pytest.mark.tier0
 def test_commented_out_call_is_caught(tmp_path):
     """The KEY adversarial case: the old substring verifier accepted
     `# run_build(` in a comment. The AST-based verifier must flag this
@@ -183,7 +175,6 @@ def test_commented_out_call_is_caught(tmp_path):
     assert any("no run_build call" in f for f in failures)
 
 
-@pytest.mark.tier0
 def test_docstring_mention_is_caught(tmp_path):
     """Same class as commented-out: a docstring mention looks like a
     call textually but isn't one."""
@@ -198,7 +189,6 @@ def test_docstring_mention_is_caught(tmp_path):
     assert any("no run_build call" in f for f in failures)
 
 
-@pytest.mark.tier0
 def test_missing_run_build_in_helper_is_flagged(tmp_path):
     """If compile_and_link stops exporting run_build, the shared driver is
     gone and the guarantee is void — surface it rather than passing."""
@@ -213,7 +203,6 @@ def test_missing_run_build_in_helper_is_flagged(tmp_path):
     assert any("run_build not found" in f for f in failures)
 
 
-@pytest.mark.tier0
 def test_missing_entry_point_is_flagged(tmp_path):
     """A deleted entry point is drift — maybe someone renamed a file
     without updating the verifier. Must surface as a failure, not
@@ -226,7 +215,6 @@ def test_missing_entry_point_is_flagged(tmp_path):
     assert any("entry point missing" in f for f in failures)
 
 
-@pytest.mark.tier0
 def test_multiple_failures_all_reported(tmp_path):
     """Verifier reports every failure, not just the first."""
     bs, eps = _write_tree(

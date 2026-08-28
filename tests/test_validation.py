@@ -11,8 +11,9 @@ from jamma.validation import (
     load_gemma_kinship,
 )
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestToleranceConfig:
     """Tests for ToleranceConfig dataclass."""
 
@@ -67,7 +68,6 @@ class TestToleranceConfig:
         assert relaxed.atol > default.atol
 
 
-@pytest.mark.tier0
 class TestCompareArrays:
     """Tests for compare_arrays function."""
 
@@ -137,7 +137,6 @@ class TestCompareArrays:
         assert result.passed is True
 
 
-@pytest.mark.tier0
 class TestCompareKinshipMatrices:
     """Tests for compare_kinship_matrices function."""
 
@@ -184,7 +183,6 @@ class TestCompareKinshipMatrices:
         assert result_relaxed.passed is True
 
 
-@pytest.mark.tier0
 class TestLoadGemmaKinship:
     """Tests for load_gemma_kinship function."""
 
@@ -220,7 +218,6 @@ class TestLoadGemmaKinship:
             load_gemma_kinship(nonexistent)
 
 
-@pytest.mark.tier0
 class TestComparisonResult:
     """Tests for ComparisonResult dataclass structure."""
 

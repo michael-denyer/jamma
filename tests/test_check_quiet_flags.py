@@ -16,6 +16,8 @@ import pytest
 
 from tests.conftest import install_lint_script
 
+pytestmark = pytest.mark.tier0
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO_ROOT / "scripts" / "check_quiet_flags.py"
 
@@ -36,21 +38,18 @@ def _run(tmp_path: Path, rel_path: str, content: str) -> subprocess.CompletedPro
     )
 
 
-@pytest.mark.tier0
 def test_long_quiet_flag_is_detected(tmp_path):
     result = _run(tmp_path, "foo.sh", "pip install numpy --quiet\n")
     assert result.returncode == 1
     assert "--quiet" in result.stderr
 
 
-@pytest.mark.tier0
 def test_silent_flag_is_detected(tmp_path):
     result = _run(tmp_path, "foo.py", 'subprocess.run(["curl", "--silent", url])\n')
     assert result.returncode == 1
     assert "--silent" in result.stderr
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize(
     "cmd",
     ["pip", "uv", "apt-get", "pytest", "ruff", "npm", "curl"],
@@ -61,7 +60,6 @@ def test_short_q_after_known_command_is_detected(tmp_path, cmd):
     assert "-q" in result.stderr
 
 
-@pytest.mark.tier0
 def test_short_q_in_unrelated_context_is_not_flagged(tmp_path):
     """`-q` on a non-command line (not preceded by a known tool) is not
     flagged — too noisy, and CLAUDE.md's concern is CI tool silencing,
@@ -70,7 +68,6 @@ def test_short_q_in_unrelated_context_is_not_flagged(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize(
     "flag_line,marker",
     [
@@ -85,7 +82,6 @@ def test_hook_skip_flags_are_detected(tmp_path, flag_line, marker):
     assert marker in result.stderr
 
 
-@pytest.mark.tier0
 def test_flag_in_comment_is_ignored(tmp_path):
     """A documentation mention like `# do NOT pass --quiet` is not a
     real invocation. The lint strips trailing comments before matching."""
@@ -95,7 +91,6 @@ def test_flag_in_comment_is_ignored(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_allow_quiet_escape_hatch(tmp_path):
     """A line with `# allow-quiet:` opts out. Reserved for documented
     exceptions."""
@@ -107,7 +102,6 @@ def test_allow_quiet_escape_hatch(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_multiple_violations_on_one_line_all_reported(tmp_path):
     result = _run(tmp_path, "bad.sh", "git commit --no-verify --no-gpg-sign -m foo\n")
     assert result.returncode == 1
@@ -115,13 +109,11 @@ def test_multiple_violations_on_one_line_all_reported(tmp_path):
     assert "--no-gpg-sign" in result.stderr
 
 
-@pytest.mark.tier0
 def test_clean_file_passes(tmp_path):
     result = _run(tmp_path, "good.sh", "pip install numpy\npytest tests/\n")
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_shebang_line_is_ignored(tmp_path):
     """The shebang `#!/usr/bin/env ...` is not a comment for our purposes,
     but also not a place where banned flags would appear. Explicitly
@@ -130,7 +122,6 @@ def test_shebang_line_is_ignored(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
     """A file the lint cannot decode must fail the gate, not be skipped.
 

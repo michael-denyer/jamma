@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.tier0
+
 
 def _load_script_module():
     """Import check_c_extension_freshness as a module under test."""
@@ -26,7 +28,6 @@ def _load_script_module():
     return freshness
 
 
-@pytest.mark.tier0
 def test_check_extension_reports_fresh_when_so_is_newer(tmp_path: Path) -> None:
     """so_mtime > source_mtime => is_stale False."""
     freshness = _load_script_module()
@@ -55,7 +56,6 @@ def test_check_extension_reports_fresh_when_so_is_newer(tmp_path: Path) -> None:
     assert result.is_stale is False
 
 
-@pytest.mark.tier0
 def test_check_extension_reports_stale_when_source_is_newer(tmp_path: Path) -> None:
     """source_mtime > so_mtime => is_stale True, newest_source populated."""
     freshness = _load_script_module()
@@ -84,7 +84,6 @@ def test_check_extension_reports_stale_when_source_is_newer(tmp_path: Path) -> N
     assert result.newest_source == c_file
 
 
-@pytest.mark.tier0
 def test_check_extension_reports_missing_so_as_not_stale(tmp_path: Path) -> None:
     """Missing .so is not a drift failure — nothing has been built yet."""
     freshness = _load_script_module()
@@ -105,7 +104,6 @@ def test_check_extension_reports_missing_so_as_not_stale(tmp_path: Path) -> None
     assert result.is_stale is False
 
 
-@pytest.mark.tier0
 def test_check_extension_picks_newest_of_multiple_sources(tmp_path: Path) -> None:
     """When multiple sources exist, newest one wins (and determines staleness)."""
     freshness = _load_script_module()
@@ -138,7 +136,6 @@ def test_check_extension_picks_newest_of_multiple_sources(tmp_path: Path) -> Non
     assert result.newest_source == new_file
 
 
-@pytest.mark.tier0
 def test_check_extension_scans_multiple_source_globs(tmp_path: Path) -> None:
     """Extensions with both .c and .h source globs must check both."""
     freshness = _load_script_module()
@@ -171,7 +168,6 @@ def test_check_extension_scans_multiple_source_globs(tmp_path: Path) -> None:
     assert result.newest_source == h_file
 
 
-@pytest.mark.tier0
 def test_lmm_accel_spec_checks_every_build_source_and_the_headers() -> None:
     """The _lmm_accel spec names each LMM_ACCEL_SOURCES file plus _lmm_*.h.
 
@@ -190,7 +186,6 @@ def test_lmm_accel_spec_checks_every_build_source_and_the_headers() -> None:
         assert (lmm_dir / name).is_file(), name
 
 
-@pytest.mark.tier0
 def test_discover_extensions_returns_known_targets() -> None:
     """Smoke test: the shipped discovery returns exactly the two real
     extensions JAMMA builds. Guards against an accidental rename or
@@ -201,7 +196,6 @@ def test_discover_extensions_returns_known_targets() -> None:
     assert labels == {"_lmm_accel", "_jlinalg"}
 
 
-@pytest.mark.tier0
 def test_check_extension_degrades_to_not_stale_on_oserror(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -260,7 +254,6 @@ def test_check_extension_degrades_to_not_stale_on_oserror(
     assert results[0].is_stale is False
 
 
-@pytest.mark.tier0
 def test_main_returns_zero_on_real_tree() -> None:
     """The real tree should pass (the dev venv already built .so files).
 
@@ -279,7 +272,6 @@ def test_main_returns_zero_on_real_tree() -> None:
     )
 
 
-@pytest.mark.tier0
 def test_unreadable_source_is_reported_not_reported_as_fresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -319,7 +311,6 @@ def test_unreadable_source_is_reported_not_reported_as_fresh(
     assert result.is_stale is False
 
 
-@pytest.mark.tier0
 def test_main_fails_when_an_extension_could_not_be_checked(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

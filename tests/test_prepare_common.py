@@ -18,8 +18,9 @@ from jamma.lmm.prepare_common import (
 )
 from jamma.lmm.schema import LmmConfig
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 def test_compute_null_model_common_wald_returns_nones():
     """Wald mode (lmm_mode=1) should return (None, None, None) from common path."""
     rng = np.random.default_rng(0)
@@ -41,7 +42,6 @@ def test_compute_null_model_common_wald_returns_nones():
     assert Hi_eval is None
 
 
-@pytest.mark.tier0
 def test_compute_null_model_common_lrt_returns_no_hi_eval():
     """LRT mode (lmm_mode=2) returns logl_H0 and lambda but no Hi_eval."""
     rng = np.random.default_rng(1)
@@ -63,7 +63,6 @@ def test_compute_null_model_common_lrt_returns_no_hi_eval():
     assert Hi_eval is None
 
 
-@pytest.mark.tier0
 def test_build_covariate_matrix_from_common():
     """_build_covariate_matrix(None, 100) returns intercept-only W of shape (100, 1)."""
     W, n_cvt = _build_covariate_matrix(None, 100)
@@ -73,7 +72,6 @@ def test_build_covariate_matrix_from_common():
     np.testing.assert_array_equal(W, np.ones((100, 1)))
 
 
-@pytest.mark.tier0
 def test_eigendecompose_or_reuse_passthrough():
     """Pre-computed eigenvalues/eigenvectors are returned unchanged."""
     eigenvalues = np.array([1.0, 2.0, 3.0])
@@ -92,7 +90,6 @@ def test_eigendecompose_or_reuse_passthrough():
     assert result_evecs is eigenvectors
 
 
-@pytest.mark.tier0
 def test_eigendecompose_or_reuse_raises_when_all_none():
     """Must raise ValueError when kinship=None and no pre-computed eigen provided."""
     with pytest.raises(ValueError, match="Must provide either"):
@@ -105,7 +102,6 @@ def test_eigendecompose_or_reuse_raises_when_all_none():
         )
 
 
-@pytest.mark.tier0
 def test_build_covariate_matrix_with_user_covariates():
     """_build_covariate_matrix passes through user covariates as-is."""
     rng = np.random.default_rng(99)
@@ -118,7 +114,6 @@ def test_build_covariate_matrix_with_user_covariates():
     np.testing.assert_array_equal(W, user_cov.astype(np.float64))
 
 
-@pytest.mark.tier0
 def test_build_covariate_matrix_over_parameterized():
     """Over-parameterized model (n_samples <= n_cvt + 1) must raise ValueError."""
     # 3 samples with 3 covariates → df = 3 - 3 - 1 = -1
@@ -127,7 +122,6 @@ def test_build_covariate_matrix_over_parameterized():
         _build_covariate_matrix(W, 3)
 
 
-@pytest.mark.tier0
 def test_build_covariate_matrix_rank_deficient():
     """Rank-deficient covariate matrix must raise ValueError."""
     # Two identical columns → rank 1, n_cvt 2
@@ -136,7 +130,6 @@ def test_build_covariate_matrix_rank_deficient():
         _build_covariate_matrix(W, 50)
 
 
-@pytest.mark.tier0
 def test_compute_null_model_common_score_returns_hi_eval():
     """T6: Score mode (lmm_mode=3) returns logl_H0, lambda, and Hi_eval."""
     rng = np.random.default_rng(7)
@@ -162,7 +155,6 @@ def test_compute_null_model_common_score_returns_hi_eval():
     assert np.all(Hi_eval > 0), "Hi_eval should be all positive"
 
 
-@pytest.mark.tier0
 def test_compute_null_model_common_rejects_negative_eigenvalues(monkeypatch):
     """_compute_null_model_common raises ValueError on non-positive Hi_eval_null.
 
@@ -190,7 +182,6 @@ def test_compute_null_model_common_rejects_negative_eigenvalues(monkeypatch):
         )
 
 
-@pytest.mark.tier0
 def test_compute_null_model_common_rejects_nan_hi_eval_null(monkeypatch):
     """_compute_null_model_common raises ValueError on non-finite Hi_eval_null.
 
@@ -216,7 +207,6 @@ def test_compute_null_model_common_rejects_nan_hi_eval_null(monkeypatch):
         )
 
 
-@pytest.mark.tier0
 def test_compute_null_model_common_accepts_near_zero_eigenvalues():
     """_compute_null_model_common does NOT raise for near-zero non-negative eigenvalues.
 
@@ -245,7 +235,6 @@ def test_compute_null_model_common_accepts_near_zero_eigenvalues():
     )
 
 
-@pytest.mark.tier0
 def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
     """Python fallback Score path rejects non-positive Hi_eval_null."""
     import jamma.lmm.compute_numpy as compute_numpy
@@ -272,7 +261,6 @@ def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
         )
 
 
-@pytest.mark.tier0
 def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
     """Python fallback Score path rejects NaN Hi_eval_null."""
     import jamma.lmm.compute_numpy as compute_numpy
@@ -299,7 +287,6 @@ def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
         )
 
 
-@pytest.mark.tier0
 def test_eigenvector_shape_mismatch_raises():
     """T7: Mismatched eigenvector dimensions raise ValueError in the runner."""
     from jamma.lmm.runner_numpy import run_lmm_association_numpy

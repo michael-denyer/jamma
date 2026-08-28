@@ -14,16 +14,16 @@ from jamma.jlinalg import (
     jlinalg_isa,
 )
 
+pytestmark = pytest.mark.tier0
+
 _VALID_ISA_STRINGS = {"AVX2", "NEON", "generic", "numpy-fallback"}
 
 
-@pytest.mark.tier0
 def test_import():
     """jlinalg_isa is a string and the module is importable."""
     assert isinstance(jlinalg_isa, str), f"Expected str, got {type(jlinalg_isa)}"
 
 
-@pytest.mark.tier0
 def test_isa_detection():
     """jlinalg_isa is one of the known ISA strings."""
     assert jlinalg_isa in _VALID_ISA_STRINGS, (
@@ -31,7 +31,6 @@ def test_isa_detection():
     )
 
 
-@pytest.mark.tier0
 def test_has_c_extension_type():
     """HAS_C_EXTENSION is a bool."""
     assert isinstance(HAS_C_EXTENSION, bool), (
@@ -39,13 +38,11 @@ def test_has_c_extension_type():
     )
 
 
-@pytest.mark.tier0
 def test_has_openmp_type():
     """HAS_OPENMP is a bool."""
     assert isinstance(HAS_OPENMP, bool), f"Expected bool, got {type(HAS_OPENMP)}"
 
 
-@pytest.mark.tier0
 def test_all_exports_present():
     """All documented exports are present in jamma.jlinalg.__all__."""
     expected = {
@@ -71,7 +68,6 @@ def test_all_exports_present():
     assert not missing, f"Missing exports: {missing}"
 
 
-@pytest.mark.tier0
 def test_abi_version():
     """ABI_VERSION is 18 after offsetting the JLINALG_EXT_* return sentinels."""
     from jamma.jlinalg import ABI_VERSION
@@ -79,7 +75,6 @@ def test_abi_version():
     assert ABI_VERSION == 18, f"Expected ABI_VERSION=18, got {ABI_VERSION}"
 
 
-@pytest.mark.tier0
 def test_dgemm_exported():
     """dgemm is callable and C extension exports it when available."""
     from jamma.jlinalg import HAS_C_EXTENSION, dgemm

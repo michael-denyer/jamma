@@ -24,12 +24,13 @@ from jamma._build_support.openmp_detect import (
     _openmp_flags_for_libiomp5,
 )
 
+pytestmark = pytest.mark.tier0
+
 # ---------------------------------------------------------------------------
 # Darwin: brew probe
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_darwin_brew_timeout_returns_empty_and_logs():
     """A wedged ``brew`` must not hang the build — the 10s timeout trips and
     the detector returns empty flags with a log explaining why."""
@@ -54,7 +55,6 @@ def test_darwin_brew_timeout_returns_empty_and_logs():
     )
 
 
-@pytest.mark.tier0
 def test_darwin_brew_not_found_returns_empty_and_logs():
     """On a box without Homebrew, ``brew`` raises FileNotFoundError —
     detector must degrade gracefully, not propagate."""
@@ -84,7 +84,6 @@ def test_darwin_brew_not_found_returns_empty_and_logs():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_find_libiomp5_logs_numpy_import_error(monkeypatch):
     """If numpy cannot be imported during the probe (the exact ILP64 ABI
     mismatch runtime recompile exists to fix), log it and fall through to
@@ -120,7 +119,6 @@ def test_find_libiomp5_logs_numpy_import_error(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_openmp_flags_for_libiomp5_clang_timeout_falls_back_to_gcc(
     monkeypatch, tmp_path
 ):
@@ -163,7 +161,6 @@ def test_openmp_flags_for_libiomp5_clang_timeout_falls_back_to_gcc(
     )
 
 
-@pytest.mark.tier0
 def test_openmp_flags_for_libiomp5_clang_oserror_falls_back_to_gcc(
     monkeypatch, tmp_path
 ):

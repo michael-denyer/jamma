@@ -10,6 +10,8 @@ import pytest
 
 from tests.conftest import install_lint_script
 
+pytestmark = pytest.mark.tier0
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO_ROOT / "scripts" / "check_test_timeouts.py"
 
@@ -28,20 +30,17 @@ def _run(tmp_path: Path, test_file_contents: str) -> subprocess.CompletedProcess
     )
 
 
-@pytest.mark.tier0
 def test_short_timeout_passes(tmp_path):
     result = _run(tmp_path, "@pytest.mark.timeout(30)\ndef test_x(): pass\n")
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_long_timeout_without_justification_fails(tmp_path):
     result = _run(tmp_path, "@pytest.mark.timeout(600)\ndef test_x(): pass\n")
     assert result.returncode == 1
     assert "600" in result.stderr
 
 
-@pytest.mark.tier0
 def test_long_timeout_with_same_line_justified_passes(tmp_path):
     result = _run(
         tmp_path,
@@ -50,7 +49,6 @@ def test_long_timeout_with_same_line_justified_passes(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_long_timeout_with_preceding_justified_passes(tmp_path):
     result = _run(
         tmp_path,
@@ -63,7 +61,6 @@ def test_long_timeout_with_preceding_justified_passes(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_threshold_boundary_is_exactly_120s(tmp_path):
     """120 passes, 121 fails — documents the boundary."""
     pass_result = _run(
@@ -76,7 +73,6 @@ def test_threshold_boundary_is_exactly_120s(tmp_path):
     assert fail_result.returncode == 1
 
 
-@pytest.mark.tier0
 def test_justified_too_far_above_does_not_count(tmp_path):
     """Justification must be within 3 lines above — further is too
     decoupled and could be unrelated."""
@@ -95,7 +91,6 @@ def test_justified_too_far_above_does_not_count(tmp_path):
     assert result.returncode == 1
 
 
-@pytest.mark.tier0
 def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
     """A test file the lint cannot decode must fail the gate, not be skipped.
 
@@ -128,7 +123,6 @@ def test_unreadable_file_fails_instead_of_passing_silently(tmp_path):
     ) in result.stderr
 
 
-@pytest.mark.tier0
 def test_missing_tests_dir_fails_instead_of_passing_silently(tmp_path):
     """A repo root with no tests/ directory must fail the gate, not report
     success over a tree it never looked at (the #188 lesson: a gate that
@@ -151,7 +145,6 @@ def test_missing_tests_dir_fails_instead_of_passing_silently(tmp_path):
     assert "tests" in result.stderr
 
 
-@pytest.mark.tier0
 def test_unexpected_argv_fails_instead_of_being_ignored(tmp_path):
     """An argument must fail the gate, not be silently ignored.
 
@@ -179,7 +172,6 @@ def test_unexpected_argv_fails_instead_of_being_ignored(tmp_path):
     assert "takes no arguments" in result.stderr
 
 
-@pytest.mark.tier0
 def test_unreadable_file_does_not_hide_violations_elsewhere(tmp_path):
     """One undecodable file must not stop the other files being checked.
 

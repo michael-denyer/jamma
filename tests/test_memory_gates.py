@@ -20,10 +20,11 @@ from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
 from tests.fixture_paths import SYNTHETIC
 
+pytestmark = pytest.mark.tier0
+
 BFILE = SYNTHETIC.bfile
 
 
-@pytest.mark.tier0
 class TestMemoryGates:
     """Integration tests for memory gate OOM prevention."""
 
@@ -128,7 +129,6 @@ class TestMemoryGates:
         assert result is True
 
 
-@pytest.mark.tier0
 class TestBatchPreflightThreadsNcvt:
     """Regression: batch LMM memory preflight must propagate n_cvt.
 
@@ -286,7 +286,6 @@ class TestBatchPreflightThreadsNcvt:
             )
 
 
-@pytest.mark.tier0
 class TestKinshipOnlyPreflight:
     """The kinship gate must size the kinship phase, not the whole workflow.
 
@@ -335,7 +334,6 @@ class TestKinshipOnlyPreflight:
                 _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
 
 
-@pytest.mark.tier0
 class TestNumpyFallbackKinshipMemory:
     """The NumPy DSYRK fallback must hold no more than it declares.
 

@@ -10,8 +10,9 @@ import pytest
 
 from jamma.io.snp_list import read_snp_list_file, resolve_snp_list_to_indices
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestReadSnpListFile:
     """Tests for read_snp_list_file."""
 
@@ -70,7 +71,6 @@ class TestReadSnpListFile:
             read_snp_list_file(snp_file)
 
 
-@pytest.mark.tier0
 class TestResolveSnpListToIndices:
     """Tests for resolve_snp_list_to_indices."""
 

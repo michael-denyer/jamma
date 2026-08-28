@@ -12,6 +12,8 @@ import pytest
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.schema import SnpMeta
 
+pytestmark = pytest.mark.tier0
+
 
 def open_handle(writer: IncrementalAssocWriter) -> TextIOWrapper:
     """Return an open writer's file handle, for injecting I/O failures.
@@ -123,7 +125,6 @@ def sample_results() -> SampleBatch:
     )
 
 
-@pytest.mark.tier0
 class TestIncrementalAssocWriter:
     """Tests for IncrementalAssocWriter class."""
 
@@ -596,7 +597,6 @@ class TestIncrementalAssocWriter:
                 open_handle(writer).close = failing_close
                 raise KeyboardInterrupt()
 
-    @pytest.mark.tier0
     def test_write_buf_retries_enospc_and_succeeds(
         self, tmp_path: Path, sample_result: SampleBatch
     ):
@@ -643,7 +643,6 @@ class TestIncrementalAssocWriter:
         content = output_path.read_text()
         assert "rs12345" in content
 
-    @pytest.mark.tier0
     def test_write_buf_deletes_partial_on_non_retryable_rollback_failure(
         self, tmp_path: Path, sample_result: SampleBatch
     ):
@@ -683,7 +682,6 @@ class TestIncrementalAssocWriter:
             "Partial output file should be deleted when EPERM + rollback both fail"
         )
 
-    @pytest.mark.tier0
     def test_write_buf_tell_failure_surfaces_as_oserror(
         self, tmp_path: Path, sample_result: SampleBatch
     ):
@@ -714,7 +712,6 @@ class TestIncrementalAssocWriter:
             "Partial output file should be deleted when tell() fails"
         )
 
-    @pytest.mark.tier0
     def test_write_buf_rollback_discards_debris_before_retry(
         self, tmp_path: Path, sample_result: SampleBatch
     ):

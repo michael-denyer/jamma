@@ -12,10 +12,11 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.tier0
+
 _IN_CI = os.environ.get("CI") == "true"
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(not _IN_CI, reason="C extension CI smoke test (skipped locally)")
 class TestCExtensionsAvailable:
     """Assert C extensions are importable in CI."""

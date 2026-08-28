@@ -14,6 +14,8 @@ from jamma.validation.compare import (
 )
 from jamma.validation.tolerances import ToleranceConfig
 
+pytestmark = pytest.mark.tier0
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -210,7 +212,6 @@ def _write_all_tests_full(path, rows):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 class TestLoadGemmaAssoc:
     """Tests for load_gemma_assoc file parser."""
 
@@ -533,7 +534,6 @@ class TestLoadGemmaAssoc:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 class TestCompareAssocResults:
     """Tests for compare_assoc_results comparison logic."""
 

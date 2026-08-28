@@ -13,8 +13,9 @@ from tests.lmm_accel._helpers import (
     _run_general_ncvt_c_vs_python,
 )
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )
@@ -33,7 +34,6 @@ def test_general_wald_identity_pab_optimization(synthetic_covariate_data_ncvt2):
     assert np.sum(~np.isnan(betas)) > 0, "No valid SNPs, so the test is vacuous"
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )
@@ -75,7 +75,6 @@ def test_ncvt_101_rejected_by_c_extension():
         )
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )
@@ -94,7 +93,6 @@ def test_general_ncvt_reml_wald_ncvt20():
     _run_general_ncvt_c_vs_python(data)
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )

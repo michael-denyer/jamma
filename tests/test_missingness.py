@@ -13,8 +13,9 @@ from numpy.testing import assert_allclose, assert_array_equal
 
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestHeterogeneousMissingness:
     """Tests for varying missing rates across SNPs and samples."""
 
@@ -142,7 +143,6 @@ class TestHeterogeneousMissingness:
         assert_array_equal(col_vars, col_vars2)
 
 
-@pytest.mark.tier0
 class TestMissingSNPEdgeCases:
     """Tests for all-missing and near-all-missing SNP edge cases."""
 

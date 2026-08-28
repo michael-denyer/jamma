@@ -20,8 +20,9 @@ from jamma.io.matrix_reader import (
     read_matrix_parallel,
 )
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestParallelReaderParity:
     """Verify parallel reader matches np.loadtxt exactly."""
 
@@ -82,7 +83,6 @@ class TestParallelReaderParity:
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
 
 
-@pytest.mark.tier0
 class TestSmallMatrixFallback:
     """Verify small matrices use np.loadtxt fallback."""
 
@@ -99,7 +99,6 @@ class TestSmallMatrixFallback:
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
 
 
-@pytest.mark.tier0
 class TestEdgeCases:
     """Edge cases for matrix reader."""
 
@@ -171,7 +170,6 @@ class TestEdgeCases:
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
 
 
-@pytest.mark.tier0
 class TestCsvDelimiter:
     """Verify CSV (comma-delimited) files are handled correctly."""
 
@@ -200,7 +198,6 @@ class TestCsvDelimiter:
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
 
 
-@pytest.mark.tier0
 class TestBlankAndCommentLines:
     """Verify blank and comment lines are skipped, matching np.loadtxt."""
 
@@ -276,7 +273,6 @@ class TestBlankAndCommentLines:
             read_matrix_parallel(path, min_rows_for_parallel=500)
 
 
-@pytest.mark.tier0
 class TestBlockCopyMemmap:
     """Verify block-copy memmap-to-dense path for matrices exceeding block size."""
 
@@ -295,7 +291,6 @@ class TestBlockCopyMemmap:
         assert result.flags["C_CONTIGUOUS"]
 
 
-@pytest.mark.tier0
 class TestBoundedMemoryBehavior:
     """Verify memory-bounded parsing: no BytesIO buffer, correct block copy."""
 
@@ -356,7 +351,93 @@ class TestBoundedMemoryBehavior:
 # =============================================================================
 
 
-@pytest.mark.tier0
+class TestMemmapReturn:
+    """Verify copy=False returns np.memmap and copy=True returns dense array."""
+
+    def test_copy_false_returns_memmap(self, tmp_path: Path) -> None:
+        """copy=False on parallel path returns np.memmap instance."""
+        rng = np.random.default_rng(42)
+        matrix = rng.standard_normal((600, 10))
+        path = tmp_path / "memmap_test.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result = read_matrix_parallel(
+            path, copy=False, n_workers=2, min_rows_for_parallel=500
+        )
+        assert isinstance(result, np.memmap), (
+            f"Expected np.memmap, got {type(result).__name__}"
+        )
+        assert not result.flags.writeable, (
+            "copy=False memmap should be read-only (mode='r')"
+        )
+        np.testing.assert_array_equal(
+            result, np.atleast_2d(np.loadtxt(path, dtype=np.float64))
+        )
+        assert result.dtype == np.float64
+
+    def test_copy_true_returns_dense(self, tmp_path: Path) -> None:
+        """copy=True (default) on parallel path returns dense C-contiguous array."""
+        rng = np.random.default_rng(43)
+        matrix = rng.standard_normal((600, 10))
+        path = tmp_path / "dense_test.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result = read_matrix_parallel(
+            path, copy=True, n_workers=2, min_rows_for_parallel=500
+        )
+        assert not isinstance(result, np.memmap), (
+            "copy=True should return dense ndarray, not np.memmap"
+        )
+        assert result.flags["C_CONTIGUOUS"]
+
+    def test_copy_false_small_matrix_still_works(self, tmp_path: Path) -> None:
+        """copy=False on small matrix (below threshold) returns dense array.
+
+        The np.loadtxt fallback path always returns a dense array regardless
+        of the copy flag. This documents the expected behavior.
+        """
+        rng = np.random.default_rng(44)
+        matrix = rng.standard_normal((10, 10))
+        path = tmp_path / "small_memmap.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result = read_matrix_parallel(path, copy=False, min_rows_for_parallel=500)
+        # Small path uses np.loadtxt which always returns dense
+        assert not isinstance(result, np.memmap), (
+            "copy=False on small matrix should return dense array, not np.memmap"
+        )
+        expected = np.atleast_2d(np.loadtxt(path, dtype=np.float64))
+        np.testing.assert_array_equal(result, expected)
+
+    def test_copy_false_memmap_rejects_write(self, tmp_path: Path) -> None:
+        """copy=False memmap raises ValueError on write attempt."""
+        rng = np.random.default_rng(48)
+        matrix = rng.standard_normal((600, 10))
+        path = tmp_path / "readonly_test.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result = read_matrix_parallel(
+            path, copy=False, n_workers=2, min_rows_for_parallel=500
+        )
+        with pytest.raises(ValueError, match="read-only"):
+            result[0, 0] = 999.0
+
+    def test_copy_false_values_match_copy_true(self, tmp_path: Path) -> None:
+        """copy=False and copy=True produce identical values on same matrix."""
+        rng = np.random.default_rng(45)
+        matrix = rng.standard_normal((600, 10))
+        path = tmp_path / "parity_test.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        result_memmap = read_matrix_parallel(
+            path, copy=False, n_workers=2, min_rows_for_parallel=500
+        )
+        result_dense = read_matrix_parallel(
+            path, copy=True, n_workers=2, min_rows_for_parallel=500
+        )
+        np.testing.assert_array_equal(result_memmap, result_dense)
+
+
 class TestMemmapLifecycle:
     """Verify temp memmap backing files are cleaned up after parsing."""
 
@@ -427,7 +508,6 @@ class TestMemmapLifecycle:
             _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")
 
 
-@pytest.mark.tier0
 class TestParseChunkRowCountMismatch:
     """Verify _parse_chunk_to_memmap raises on row-count mismatch."""
 
@@ -462,7 +542,6 @@ class TestParseChunkRowCountMismatch:
             _parse_chunk_to_memmap(args)
 
 
-@pytest.mark.tier0
 class TestMultiWorkerCorrectness:
     """Verify multi-worker and single-worker parsing produces correct results."""
 

@@ -15,6 +15,8 @@ from jamma.core.eigen_plan import (
 )
 from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevd
 
+pytestmark = pytest.mark.tier0
+
 # In-place requires vendor DSYEVD — the D&C pipeline rejects K==eigenvectors.
 _skip_no_dsyevd = pytest.mark.skipif(
     not HAS_C_EXTENSION or not blas_has_dsyevd,
@@ -30,7 +32,6 @@ def _make_symmetric(n: int, seed: int = 42) -> np.ndarray:
 
 
 @_skip_no_dsyevd
-@pytest.mark.tier0
 class TestEighInplaceCorrectness:
     """Verify in-place eigh produces correct eigendecomposition."""
 
@@ -68,7 +69,6 @@ class TestEighInplaceCorrectness:
 
 
 @_skip_no_dsyevd
-@pytest.mark.tier0
 class TestEighInplaceBufferIdentity:
     """Verify buffer sharing behavior for inplace=True/False."""
 
@@ -97,7 +97,6 @@ class TestEighInplaceBufferIdentity:
         )
 
 
-@pytest.mark.tier0
 class TestMemoryEstimateInplaceVsDefault:
     """Verify in-place memory estimate saves exactly one N x N matrix."""
 

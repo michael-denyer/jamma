@@ -24,6 +24,8 @@ import jamma.lmm.compute_numpy as compute_numpy
 from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
 from jamma.lmm.schema import MIN_N_GRID
 
+pytestmark = pytest.mark.tier0
+
 
 def _make_workspace(
     fused_data,
@@ -57,7 +59,6 @@ def _make_workspace(
     )
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_extension_importable():
     """The kernels the dispatch table names are importable and callable."""
@@ -77,7 +78,6 @@ def test_c_extension_importable():
         assert callable(fn)
 
 
-@pytest.mark.tier0
 def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch):
     """With no extension loaded, the Python path runs without error."""
     eigenvalues, Uab_batch, n_samples = synthetic_wald_data
@@ -98,7 +98,6 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
     )
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_extension_single_snp(fused_data):
     """Minimal case: n_snps=1 works without index errors."""
@@ -111,7 +110,6 @@ def test_c_extension_single_snp(fused_data):
     assert not np.isnan(result["lambdas"][0]), "Single SNP lambda should not be NaN"
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_c_extension_all_degenerate_snps(fused_data):
     """Every SNP degenerate: the whole output is NaN rather than a crash."""
@@ -127,7 +125,6 @@ def test_c_extension_all_degenerate_snps(fused_data):
         assert np.all(np.isnan(result[key])), f"Expected all-NaN {key}"
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 class TestFusedWorkspaceInputValidation:
     """The kernel raises clean errors on invalid array arguments."""
@@ -158,7 +155,6 @@ class TestFusedWorkspaceInputValidation:
             _c().compute_lmm_chunk_fused_c(ws, np.ascontiguousarray(utg_t[:, :10]), 1)
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 class TestFusedWorkspaceScalarValidation:
     """The kernel validates its scalar parameters."""

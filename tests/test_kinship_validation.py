@@ -20,6 +20,8 @@ from tests.reference.kinship import (
     compute_standardized_kinship,
 )
 
+pytestmark = pytest.mark.tier1
+
 
 @pytest.fixture
 def mouse_genotypes():
@@ -34,7 +36,6 @@ def reference_kinship():
     return load_gemma_kinship(SYNTHETIC.kinship)
 
 
-@pytest.mark.tier1
 class TestKinshipValidation:
     """Tests validating JAMMA kinship against reference."""
 
@@ -92,7 +93,6 @@ class TestKinshipValidation:
         )
 
 
-@pytest.mark.tier1
 class TestKinshipSmallScale:
     """Tests with smaller synthetic data for faster CI."""
 
@@ -125,7 +125,6 @@ class TestKinshipSmallScale:
         assert np.array_equal(K1, K2)
 
 
-@pytest.mark.tier1
 class TestKinshipWithMissingData:
     """Tests for kinship computation with missing values."""
 
@@ -190,7 +189,6 @@ def _numpy_standardized_kinship(genotypes: np.ndarray) -> np.ndarray:
     return Z @ Z.T / p_used
 
 
-@pytest.mark.tier1
 class TestStandardizedKinshipValidation:
     """Tests validating JAMMA standardized kinship against NumPy reference."""
 
@@ -262,7 +260,6 @@ class TestStandardizedKinshipValidation:
         )
 
 
-@pytest.mark.tier1
 class TestStandardizedKinshipStreaming:
     """The streaming -gk 2 path matches the in-memory path and the NumPy oracle."""
 

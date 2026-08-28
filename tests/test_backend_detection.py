@@ -11,12 +11,13 @@ from jamma.core.backend import get_backend_info
 from jamma.core.memory import MemoryBreakdown
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode
 
+pytestmark = pytest.mark.tier0
+
 # Stands in for a loaded extension. Only `is not None` is read on
 # the paths under test, so the object's identity is all that matters.
 _EXTENSION_LOADED = object()
 
 
-@pytest.mark.tier0
 class TestBackendInfo:
     """Tests for get_backend_info function."""
 
@@ -34,7 +35,6 @@ class TestBackendInfo:
         assert info["selected"] == "numpy"
 
 
-@pytest.mark.tier0
 def test_import_jamma_succeeds():
     """Smoke test: importing jamma should not raise."""
     import jamma
@@ -72,7 +72,6 @@ def _make_insufficient_estimate() -> MemoryBreakdown:
     )
 
 
-@pytest.mark.tier0
 class TestExecutionMode:
     """Tests for ExecutionPlan and select_execution_mode in runner.py."""
 

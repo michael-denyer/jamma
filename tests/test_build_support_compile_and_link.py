@@ -21,6 +21,8 @@ from jamma._build_support.compile_and_link import (
     resolve_cflags_for,
 )
 
+pytestmark = pytest.mark.tier0
+
 # ---------------------------------------------------------------------------
 # Constants: exhaustive value checks — any drift breaks the three entry
 # points (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) that
@@ -28,7 +30,6 @@ from jamma._build_support.compile_and_link import (
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_base_cflags_exact_sequence():
     assert BASE_CFLAGS == (
         "-O3",
@@ -43,12 +44,10 @@ def test_base_cflags_exact_sequence():
     )
 
 
-@pytest.mark.tier0
 def test_base_cflags_is_tuple_immutable():
     assert isinstance(BASE_CFLAGS, tuple)
 
 
-@pytest.mark.tier0
 def test_lapack_cflags_exact_sequence():
     assert LAPACK_CFLAGS == (
         "-O2",
@@ -60,12 +59,10 @@ def test_lapack_cflags_exact_sequence():
     )
 
 
-@pytest.mark.tier0
 def test_lapack_cflags_is_tuple_immutable():
     assert isinstance(LAPACK_CFLAGS, tuple)
 
 
-@pytest.mark.tier0
 def test_baseline_sources_exact():
     assert BASELINE_SOURCES == (
         "platform.c",
@@ -75,17 +72,14 @@ def test_baseline_sources_exact():
     )
 
 
-@pytest.mark.tier0
 def test_lapack_sources_exact():
     assert LAPACK_SOURCES == ("eigh.c",)
 
 
-@pytest.mark.tier0
 def test_link_flags_linux():
     assert LINK_FLAGS_BY_PLATFORM["Linux"] == ("-ldl", "-lpthread")
 
 
-@pytest.mark.tier0
 def test_link_flags_darwin():
     assert LINK_FLAGS_BY_PLATFORM["Darwin"] == ("-undefined", "dynamic_lookup")
 
@@ -95,7 +89,6 @@ def test_link_flags_darwin():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_resolve_cflags_lapack_source_gets_strict_ieee_flags():
     flags = resolve_cflags_for(
         Path("eigh.c"),
@@ -112,7 +105,6 @@ def test_resolve_cflags_lapack_source_gets_strict_ieee_flags():
     assert "-funroll-loops" not in flags
 
 
-@pytest.mark.tier0
 def test_resolve_cflags_baseline_source_gets_fast_flags():
     flags = resolve_cflags_for(
         Path("platform.c"),
@@ -128,7 +120,6 @@ def test_resolve_cflags_baseline_source_gets_fast_flags():
     assert "-O2" not in flags
 
 
-@pytest.mark.tier0
 def test_extra_cflags_precede_fno_finite_math_only():
     """Load-bearing ordering: user CFLAGS (-Ofast) must come BEFORE
     -fno-finite-math-only so the trailing explicit flag overrides -Ofast's
@@ -148,7 +139,6 @@ def test_extra_cflags_precede_fno_finite_math_only():
     )
 
 
-@pytest.mark.tier0
 def test_extra_source_includes_appended():
     flags = resolve_cflags_for(
         Path("platform.c"),
@@ -160,7 +150,6 @@ def test_extra_source_includes_appended():
     assert "-I/tmp/test" in flags
 
 
-@pytest.mark.tier0
 def test_lapack_path_ignores_extra_cflags_for_ieee_safety():
     """LAPACK split is strict IEEE 754. Caller-supplied -Ofast would defeat
     the split, so extra_cflags is deliberately NOT merged into the LAPACK path.
@@ -175,7 +164,6 @@ def test_lapack_path_ignores_extra_cflags_for_ieee_safety():
     assert "-O2" in flags
 
 
-@pytest.mark.tier0
 def test_resolve_cflags_none_args_accepted():
     """None inputs for extra_cflags / extra_source_includes should be OK."""
     flags = resolve_cflags_for(
@@ -194,7 +182,6 @@ def test_resolve_cflags_none_args_accepted():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_compile_result_fields():
     r = CompileResult(success=True, used_openmp=True, used_openmp_link=True)
     assert r.success is True
@@ -217,7 +204,6 @@ class _FakeCompleted:
         self.stdout = ""
 
 
-@pytest.mark.tier0
 def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
     """Construct a compile_jlinalg call with stub paths; assert CompileResult
     fields after a monkeypatched subprocess.run that always returns success.
@@ -287,7 +273,6 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
     assert "-lm" in link_cmd, f"link missing -lm: {link_cmd}"
 
 
-@pytest.mark.tier0
 def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_path):
     """When the first compile fails WITH omp_compile active, compile_jlinalg
     should retry once WITHOUT OpenMP and invoke on_retry().
@@ -355,7 +340,6 @@ def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_pat
     )
 
 
-@pytest.mark.tier0
 def test_atomic_replace_failure_preserves_used_openmp_link(monkeypatch, tmp_path):
     """When link succeeded but atomic os.replace fails, the returned
     ``used_openmp_link`` must reflect the REAL link-time state (True here),

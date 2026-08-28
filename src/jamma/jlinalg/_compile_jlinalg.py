@@ -19,11 +19,7 @@ The jlinalg extension compiles per-file to enable per-source-group compiler flag
 from __future__ import annotations
 
 import os
-import platform
-import shutil
 import sys
-import sysconfig
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -34,14 +30,7 @@ from pathlib import Path
 #   2. Wheel install: runtime ABI-mismatch recompile via
 #      ``jamma.core.recompile.auto_recompile_c_extension`` calls
 #      ``compile_extension()`` from this module.
-from jamma._build_support.compile_and_link import (
-    BASELINE_SOURCES,
-    JLINALG_SPEC,
-    LAPACK_SOURCES,
-    apply_sanitizer_overrides,
-    compile_jlinalg,
-    run_build,
-)
+from jamma._build_support.compile_and_link import JLINALG_SPEC, run_build
 from jamma._build_support.find_compiler import find_c_compiler
 from jamma._build_support.openmp_detect import detect_openmp_flags
 
@@ -145,159 +134,6 @@ def compile_extension(
         _print(f"ERROR: compiled but import failed ({type(e).__name__}): {e}")
         _print(traceback.format_exc())
         return False
-
-
-def compile_test_harness(verbose: bool = True) -> Path:
-    """Compile the Unity C test harness into a standalone executable.
-
-    Routes through ``jamma._build_support.compile_and_link.compile_jlinalg``
-    with ``link_shared=False`` to produce a native executable (not a .so).
-    Compiles test_boundaries.c + unity.c + all jlinalg .c source files
-    (minus pymodule.c, which is Python-module glue and not needed for the
-    standalone binary). Per-source flag split (LAPACK vs baseline) is
-    identical to ``compile_extension``.
-
-    Args:
-        verbose: Print progress and diagnostics to stderr.
-
-    Returns:
-        Path to the compiled test binary.
-
-    Raises:
-        RuntimeError: If compilation fails.
-    """
-
-    def _print(*args: object) -> None:
-        if verbose:
-            print(*args, file=sys.stderr, flush=True)
-
-    def _warn(*args: object) -> None:
-        """Always visible — used for OMP downgrade + similar warnings."""
-        print(*args, file=sys.stderr, flush=True)
-
-    jlinalg_dir = Path(__file__).parent
-    jlinalg_src_dir = jlinalg_dir / "src"
-    jlinalg_inc_dir = jlinalg_dir / "include"
-    tests_dir = jlinalg_dir / "tests"
-    unity_dir = tests_dir / "unity"
-
-    # Verify Unity framework is vendored
-    for f in ("unity.h", "unity.c", "unity_internals.h"):
-        if not (unity_dir / f).exists():
-            raise RuntimeError(f"Unity framework file missing: {unity_dir / f}")
-
-    # Source files: same as main extension minus pymodule.c (no Python API)
-    # plus test_boundaries.c and unity.c. BASELINE_SOURCES includes
-    # pymodule.c, so filter it out here; the test harness links as a
-    # standalone executable and pymodule.c only exports PyInit symbols.
-    baseline_names = tuple(n for n in BASELINE_SOURCES if n != "pymodule.c")
-    baseline_prod_sources = [jlinalg_src_dir / name for name in baseline_names]
-    lapack_sources = [jlinalg_src_dir / name for name in LAPACK_SOURCES]
-
-    # Test-specific sources (excluded from BASELINE_SOURCES — they live
-    # in jlinalg/tests/, not in jlinalg/src/).
-    test_sources = [
-        tests_dir / "test_boundaries.c",
-        unity_dir / "unity.c",
-    ]
-
-    all_sources = baseline_prod_sources + lapack_sources + test_sources
-
-    # NumPy headers (for npy_intp)
-    try:
-        import numpy as np
-    except ImportError as exc:
-        raise RuntimeError("numpy not installed -- required for test harness") from exc
-
-    numpy_inc = np.get_include()
-    python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
-
-    # Compiler
-    cc_result = find_c_compiler()
-    if not cc_result:
-        raise RuntimeError(
-            "No C compiler found on PATH (tried $CC, sysconfig, cc, clang, gcc). "
-            "Install: apt-get install -y gcc (Linux) or xcode-select --install (macOS)"
-        )
-    cc_cmd, cc_extra = cc_result
-
-    # Link against libpython (blas_dispatch.c uses Python C API for numpy discovery).
-    python_libdir = sysconfig.get_config_var("LIBDIR") or ""
-    python_version = sysconfig.get_config_var("VERSION") or ""
-
-    ldflags: list[str] = ["-lm"]
-    if python_libdir:
-        ldflags.extend([f"-L{python_libdir}", f"-lpython{python_version}"])
-        ldflags.append(f"-Wl,-rpath,{python_libdir}")
-    if platform.system() == "Linux":
-        # snp_stats.c uses pthreads directly, hence -lpthread alongside -ldl.
-        ldflags.extend(("-ldl", "-lpthread"))
-
-    # OpenMP detection (same as compile_extension — split compile/link).
-    # _warn is always-visible so the GCC-libiomp5 downgrade and GNU-libgomp
-    # fallback warnings surface even when verbose=False.
-    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-        cc_cmd, platform.system(), _print, _warn=_warn
-    )
-
-    # Per-source extra includes: test_boundaries.c needs -I<tests_dir> to
-    # reach unity.h and other test headers. unity.c lives under unity_dir
-    # and already finds its own headers relative to the source path.
-    extra_source_includes: dict[str, list[str]] = {
-        "test_boundaries.c": [str(tests_dir)],
-    }
-
-    # -DUNITY_INCLUDE_DOUBLE tells Unity to enable double-precision
-    # assertions. It's a no-op on non-Unity sources (platform.c, etc.),
-    # so passing it globally via extra_cflags is safe. (extra_cflags is
-    # not applied to LAPACK sources by resolve_cflags_for, which is fine
-    # — eigh.c doesn't use Unity.)
-    extra_cflags = ["-DUNITY_INCLUDE_DOUBLE"]
-
-    # Harness builds run under JAMMA_SANITIZE too — the .o
-    # files for the test binary need the same instrumentation as the
-    # production .so so the harness exercises the sanitizer-instrumented
-    # code path. Pass extra_cflags as the first arg so -DUNITY_INCLUDE_DOUBLE
-    # is preserved alongside any -fsanitize=... appended by the helper.
-    extra_cflags, extra_link_flags_for_call, extra_lapack_cflags = (
-        apply_sanitizer_overrides(extra_cflags, [])
-    )
-
-    # Output path — executable under tests_dir.
-    out = tests_dir / "test_boundaries"
-    if platform.system() == "Windows":
-        out = out.with_suffix(".exe")
-
-    tmp_dir = Path(tempfile.mkdtemp(prefix="jlinalg_test_"))
-    try:
-        result = compile_jlinalg(
-            sources=all_sources,
-            lapack_sources=lapack_sources,
-            include_dirs=[python_inc, numpy_inc, str(jlinalg_inc_dir)],
-            cc_cmd=cc_cmd,
-            cc_extra=cc_extra,
-            omp_compile=omp_compile,
-            omp_link=omp_link,
-            ldflags=ldflags,
-            output=out,
-            tmp_dir=tmp_dir,
-            extra_cflags=extra_cflags,
-            extra_link_flags=extra_link_flags_for_call,
-            extra_lapack_cflags=extra_lapack_cflags,
-            extra_source_includes=extra_source_includes,
-            link_shared=False,
-            on_retry=_warn,
-            verbose_print=_print,
-            error_print=_warn,
-        )
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    if not result.success:
-        raise RuntimeError(f"jlinalg test harness compilation failed: {result.error}")
-
-    _print(f"Test harness compiled: {out}")
-    return out
 
 
 if __name__ == "__main__":

@@ -150,13 +150,6 @@ NumPy, never to a translated C routine. The `LAPACK_SOURCES` tuple in
 `_build_support/compile_and_link.py` holds only the `eigh.c` dispatcher (it
 gets strict IEEE 754 flags) -- no translated LAPACK routines are listed.
 
-### Test Infrastructure
-
-| File | Purpose |
-|------|---------|
-| `tests/test_boundaries.c` | C-level boundary tests (compiled against Unity test framework) |
-| `tests/unity/unity.c` | Unity test framework (embedded) |
-
 ## Thread Model
 
 jlinalg delegates threading to the vendor BLAS library. Thread count is
@@ -196,9 +189,6 @@ uv run pytest tests/test_jlinalg_*.py -x
 
 # With benchmarks (must use -n0 to avoid parallel interference)
 uv run pytest tests/test_jlinalg_*.py -x -n0 --benchmark-only -m benchmark
-
-# C-level boundary tests
-uv run pytest tests/test_jlinalg_unity.py -x
 
 # Full project test suite
 uv run pytest tests/ -x

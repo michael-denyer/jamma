@@ -49,7 +49,7 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
     """Serve warmed benchmark measurements over a line-oriented protocol."""
     sys.path.insert(0, str(source_root / "src"))
     from jamma.lmm._lmm_accel import (
-        compute_mode4_chunk_fused_c,
+        compute_lmm_chunk_fused_c,
         create_workspace_ncvt1_c,
     )
 
@@ -72,7 +72,7 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
 
     # Exercise the full working set once before any timed command. A small
     # warmup leaves first-touch and OpenMP effects in the first measurement.
-    compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
+    compute_lmm_chunk_fused_c(workspace, utg_t, n_threads)
     print("ready", flush=True)
     for command in sys.stdin:
         if command.strip() == "stop":
@@ -80,7 +80,7 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
         if command.strip() != "run":
             raise ValueError(f"unknown worker command: {command.strip()}")
         start = time.perf_counter()
-        result = compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
+        result = compute_lmm_chunk_fused_c(workspace, utg_t, n_threads)
         elapsed = time.perf_counter() - start
         print(
             json.dumps({"seconds": elapsed, "output_sha256": _digest_result(result)}),

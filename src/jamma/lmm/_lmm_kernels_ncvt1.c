@@ -558,42 +558,6 @@ double refine_lambda_ncvt1_split(
 }
 
 
-double golden_section_lambda_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    double logdet_iab,
-    int n_samples,
-    const double *lambda_grid,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
-    int df, double reml_const,
-    double *logl_out,
-    double *beta_out, double *se_out, double *f_stat_out,
-    int *is_valid_out
-)
-{
-    int best_idx = coarse_grid_reml_ncvt1_split(
-        var_wx, var_xx, var_xy, n_samples,
-        hi_eval_grid, logdet_h_grid, grid_inv, n_grid,
-        logdet_iab, df, reml_const
-    );
-    return refine_lambda_ncvt1_split(
-        var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
-        eigenvalues, logdet_iab, n_samples, lambda_grid,
-        log_l_min, step, n_grid, n_refine, best_idx,
-        df, reml_const, logl_out, beta_out, se_out, f_stat_out,
-        is_valid_out
-    );
-}
-
 /* -------------------------------------------------------------------------
  * mle_finish
  *

@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **One compute entry point per kernel family, taking `lmm_mode` 1 or 4;
+  `ABI_VERSION` 14 -> 15.** `compute_lmm_chunk_fused_c` and
+  `compute_lmm_chunk_fused_general_c` now serve Wald and mode 4 both, reading
+  the mode off the workspace they were handed. `compute_mode4_chunk_fused_c`
+  and `compute_mode4_chunk_fused_general_c` are gone; callers pass the mode-4
+  workspace to the surviving name instead. The returned dict carries the five
+  Wald keys under `lmm_mode` 1, and those plus `p_scores`, `lambdas_mle` and
+  `p_lrts` under 4, in the order the Python engine already reads them. Each
+  merged function's per-SNP body is the mode-4 function's text unchanged, with
+  the Score block and the LRT block under an `if (ws->mode == 4)` guard, so no
+  arithmetic was reordered or re-associated. The n_cvt=1 Wald path now runs
+  `coarse_grid_mode4_ncvt1_split` followed by `refine_lambda_ncvt1_split`,
+  which performs the same REML operations in the same order as the
+  `golden_section_lambda_ncvt1_split` forwarder it replaces; that forwarder had
+  no other caller and is deleted. The Wald-only `output_arrays_t` and its
+  alloc/decref/build triple are gone, and `mode4_output_t` is now `lmm_output_t`
+  with `alloc_lmm_output(out, n_snps, with_mode4)`, `decref_lmm_output` and
+  `build_lmm_result_dict`; the three mode-4 arrays stay NULL under `with_mode4`
+  0 and the dict then omits their keys. Mode-4-only scratch (`thread_bufs` in
+  the n_cvt=1 family) is allocated only under mode 4. Every compute-entry
+  fingerprint key is bit-identical across the merge, all 87 shared keys over 94
+  records, and `.assoc.txt` is byte-identical for all four `-lmm` modes at
+  n_cvt 1, 2 and 4.
 - **One general (n_cvt >= 2) workspace creator on the Pab table dict;
   `ABI_VERSION` 13 -> 14.** `create_workspace_general_c(eigenvalues,
   uab_invariant, UtW, Uty, n_samples, l_min, l_max, n_grid, n_refine,

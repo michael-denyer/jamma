@@ -5,15 +5,13 @@ from typing import NewType
 import numpy as np
 import numpy.typing as npt
 
-from jamma.lmm.compute_numpy import WaldResult
-
 ABI_VERSION: int
 HAS_OPENMP: int
 
 # One n_cvt=1 workspace type. The creator's lmm_mode fixes which compute
 # accepts it: 1 or 4 -> compute_lmm_chunk_fused_c, 2 -> compute_lrt_fused_ws_c,
-# 3 -> compute_score_fused_ws_c, 4 -> compute_mode4_chunk_fused_c. Any other
-# pairing raises ValueError at the call.
+# 3 -> compute_score_fused_ws_c. Any other pairing raises ValueError at the
+# call. Under lmm_mode 4 the returned dict carries three extra keys.
 NcvtOneWorkspace = NewType("NcvtOneWorkspace", object)
 
 def create_workspace_ncvt1_c(
@@ -32,11 +30,6 @@ def create_workspace_ncvt1_c(
     logl_H0: float | None = None,
 ) -> NcvtOneWorkspace: ...
 def compute_lmm_chunk_fused_c(
-    workspace: NcvtOneWorkspace,
-    utg_t: npt.NDArray[np.float64],
-    n_threads: int,
-) -> WaldResult: ...
-def compute_mode4_chunk_fused_c(
     workspace: NcvtOneWorkspace,
     utg_t: npt.NDArray[np.float64],
     n_threads: int,
@@ -74,11 +67,6 @@ def create_workspace_general_c(
     logl_H0: float | None = None,
 ) -> GeneralWorkspace: ...
 def compute_lmm_chunk_fused_general_c(
-    workspace: GeneralWorkspace,
-    utg_t: npt.NDArray[np.float64],
-    n_threads: int,
-) -> dict[str, npt.NDArray[np.float64]]: ...
-def compute_mode4_chunk_fused_general_c(
     workspace: GeneralWorkspace,
     utg_t: npt.NDArray[np.float64],
     n_threads: int,

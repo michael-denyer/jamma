@@ -105,57 +105,6 @@ int warn_betainc_convergence(
     return 0;
 }
 
-int alloc_output_arrays(output_arrays_t *out, npy_intp n_snps)
-{
-    npy_intp dims[1] = { n_snps };
-    out->lambdas = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->logls   = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->betas   = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->ses     = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->pwalds  = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-
-    if (!out->lambdas || !out->logls || !out->betas || !out->ses || !out->pwalds) {
-        Py_XDECREF(out->lambdas);
-        Py_XDECREF(out->logls);
-        Py_XDECREF(out->betas);
-        Py_XDECREF(out->ses);
-        Py_XDECREF(out->pwalds);
-        return -1;
-    }
-    return 0;
-}
-
-void decref_output_arrays(output_arrays_t *out)
-{
-    Py_DECREF(out->lambdas);
-    Py_DECREF(out->logls);
-    Py_DECREF(out->betas);
-    Py_DECREF(out->ses);
-    Py_DECREF(out->pwalds);
-}
-
-PyObject *build_result_dict(output_arrays_t *out)
-{
-    PyObject *result = PyDict_New();
-    if (!result) {
-        decref_output_arrays(out);
-        return NULL;
-    }
-
-    if (PyDict_SetItemString(result, "lambdas",  (PyObject *)out->lambdas)  < 0 ||
-        PyDict_SetItemString(result, "logls",    (PyObject *)out->logls)    < 0 ||
-        PyDict_SetItemString(result, "betas",    (PyObject *)out->betas)    < 0 ||
-        PyDict_SetItemString(result, "ses",      (PyObject *)out->ses)      < 0 ||
-        PyDict_SetItemString(result, "pwalds",   (PyObject *)out->pwalds)   < 0) {
-        Py_DECREF(result);
-        decref_output_arrays(out);
-        return NULL;
-    }
-
-    decref_output_arrays(out);
-    return result;
-}
-
 int alloc_score_output(score_output_t *out, npy_intp n_snps)
 {
     npy_intp dims[1] = { n_snps };
@@ -238,7 +187,7 @@ PyObject *build_lrt_result_dict(lrt_output_t *out)
     return result;
 }
 
-int alloc_mode4_output(mode4_output_t *out, npy_intp n_snps)
+int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int with_mode4)
 {
     npy_intp dims[1] = { n_snps };
     out->lambdas     = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
@@ -246,26 +195,24 @@ int alloc_mode4_output(mode4_output_t *out, npy_intp n_snps)
     out->betas       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
     out->ses         = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
     out->pwalds      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->p_scores    = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
 
-    if (!out->lambdas || !out->logls || !out->betas || !out->ses ||
-        !out->pwalds || !out->p_scores || !out->lambdas_mle || !out->p_lrts) {
-        Py_XDECREF(out->lambdas);
-        Py_XDECREF(out->logls);
-        Py_XDECREF(out->betas);
-        Py_XDECREF(out->ses);
-        Py_XDECREF(out->pwalds);
-        Py_XDECREF(out->p_scores);
-        Py_XDECREF(out->lambdas_mle);
-        Py_XDECREF(out->p_lrts);
+    int ok = out->lambdas && out->logls && out->betas && out->ses && out->pwalds;
+
+    if (with_mode4) {
+        out->p_scores    = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        ok = ok && out->p_scores && out->lambdas_mle && out->p_lrts;
+    }
+
+    if (!ok) {
+        decref_lmm_output(out);
         return -1;
     }
     return 0;
 }
 
-void decref_mode4_output(mode4_output_t *out)
+void decref_lmm_output(lmm_output_t *out)
 {
     Py_XDECREF(out->lambdas);
     Py_XDECREF(out->logls);
@@ -277,28 +224,35 @@ void decref_mode4_output(mode4_output_t *out)
     Py_XDECREF(out->p_lrts);
 }
 
-PyObject *build_mode4_result_dict(mode4_output_t *out)
+PyObject *build_lmm_result_dict(lmm_output_t *out)
 {
     PyObject *result = PyDict_New();
     if (!result) {
-        decref_mode4_output(out);
+        decref_lmm_output(out);
         return NULL;
     }
 
-    if (PyDict_SetItemString(result, "lambdas",     (PyObject *)out->lambdas)     < 0 ||
-        PyDict_SetItemString(result, "logls",       (PyObject *)out->logls)       < 0 ||
-        PyDict_SetItemString(result, "betas",       (PyObject *)out->betas)       < 0 ||
-        PyDict_SetItemString(result, "ses",         (PyObject *)out->ses)         < 0 ||
-        PyDict_SetItemString(result, "pwalds",      (PyObject *)out->pwalds)      < 0 ||
-        PyDict_SetItemString(result, "p_scores",    (PyObject *)out->p_scores)    < 0 ||
-        PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
-        PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0) {
+    int failed =
+        PyDict_SetItemString(result, "lambdas", (PyObject *)out->lambdas) < 0 ||
+        PyDict_SetItemString(result, "logls",   (PyObject *)out->logls)   < 0 ||
+        PyDict_SetItemString(result, "betas",   (PyObject *)out->betas)   < 0 ||
+        PyDict_SetItemString(result, "ses",     (PyObject *)out->ses)     < 0 ||
+        PyDict_SetItemString(result, "pwalds",  (PyObject *)out->pwalds)  < 0;
+
+    if (!failed && out->p_scores) {
+        failed =
+            PyDict_SetItemString(result, "p_scores",    (PyObject *)out->p_scores)    < 0 ||
+            PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
+            PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0;
+    }
+
+    if (failed) {
         Py_DECREF(result);
-        decref_mode4_output(out);
+        decref_lmm_output(out);
         return NULL;
     }
 
-    decref_mode4_output(out);
+    decref_lmm_output(out);
     return result;
 }
 

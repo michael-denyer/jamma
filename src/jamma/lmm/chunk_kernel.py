@@ -177,13 +177,14 @@ def make_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
             assert_never(inv.dispatch)
 
 
-# The C compute entry point and kernel label for each n_cvt=1 lmm_mode. The
+# The C compute entry point and kernel label for each n_cvt=1 lmm_mode. Modes 1
+# and 4 share one entry point, which reads the mode off the workspace. The
 # labels are what a failure reports, so mode 4 keeps its own.
 _NCVT1_COMPUTE: dict[int, tuple[str, str]] = {
     1: ("compute_lmm_chunk_fused_c", "Fused Uab dispatch"),
     2: ("compute_lrt_fused_ws_c", "Fused LRT WS dispatch"),
     3: ("compute_score_fused_ws_c", "Fused Score WS dispatch"),
-    4: ("compute_mode4_chunk_fused_c", "Fused mode-4 Uab dispatch"),
+    4: ("compute_lmm_chunk_fused_c", "Fused mode-4 Uab dispatch"),
 }
 
 
@@ -218,7 +219,7 @@ def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
 
 _GENERAL_COMPUTE: dict[int, tuple[str, str]] = {
     1: ("compute_lmm_chunk_fused_general_c", "Fused general Uab dispatch"),
-    4: ("compute_mode4_chunk_fused_general_c", "Fused general mode-4 Uab dispatch"),
+    4: ("compute_lmm_chunk_fused_general_c", "Fused general mode-4 Uab dispatch"),
 }
 
 

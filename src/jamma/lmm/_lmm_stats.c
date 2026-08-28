@@ -122,7 +122,7 @@ double f_to_pvalue(
 }
 
 /* Wald statistics from a populated pab array.
- * Shared by golden_section_lambda_ncvt1 and golden_section_lambda_ncvt1_split.
+ * Shared by golden_section_lambda_ncvt1 and refine_lambda_ncvt1_split.
  *
  * Returns 1 if the SNP is valid (P_XX > 0), 0 if degenerate (P_XX <= 0).
  * Degenerate SNPs get beta = se = f_stat = NaN.

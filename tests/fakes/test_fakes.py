@@ -21,6 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
+import psutil
 import pytest
 
 import jamma.jlinalg
@@ -30,10 +31,12 @@ from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
 from tests.fakes import (
     FakeAssocWriter,
     FakeJlinalg,
+    FakeMemoryInfo,
     FakePipelineRunner,
     FakePipelineRunnerFactory,
     FakeProgressBar,
     FakeProgressbarModule,
+    FakeVirtualMemory,
 )
 
 pytestmark = pytest.mark.tier0
@@ -276,3 +279,28 @@ class TestFakeJlinalg:
         real = TestFakeProductionDrift._param_names(jamma.jlinalg.eigh)
         fake = TestFakeProductionDrift._param_names(FakeJlinalg.eigh)
         assert fake == real, f"FakeJlinalg.eigh drift:\n  real: {real}\n  fake: {fake}"
+
+
+class TestFakePsutil:
+    def test_virtual_memory_fields_exist_on_psutil(self) -> None:
+        declared = {f.name for f in dataclasses.fields(FakeVirtualMemory)}
+        missing = declared - set(psutil.virtual_memory()._fields)
+        assert not missing, f"psutil.virtual_memory() has no {missing}"
+
+    def test_memory_info_fields_exist_on_psutil(self) -> None:
+        declared = {f.name for f in dataclasses.fields(FakeMemoryInfo)}
+        missing = declared - set(psutil.Process().memory_info()._fields)
+        assert not missing, f"psutil memory_info() has no {missing}"
+
+    def test_use_fake_psutil_pins_both_reads(self, monkeypatch) -> None:
+        from tests.fakes import use_fake_psutil
+
+        use_fake_psutil(monkeypatch, available=5.0, total=7.0, rss=1.0, vms=2.0)
+        assert psutil.virtual_memory().available == 5.0
+        assert psutil.virtual_memory().total == 7.0
+        assert psutil.Process().memory_info().rss == 1.0
+        assert psutil.Process().memory_info().vms == 2.0
+
+    def test_undeclared_attribute_raises(self) -> None:
+        with pytest.raises(AttributeError):
+            _ = FakeVirtualMemory(available=1.0, total=1.0).percent  # type: ignore[attr-defined]

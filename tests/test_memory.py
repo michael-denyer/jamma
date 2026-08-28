@@ -1,7 +1,5 @@
 """Tests for memory estimation module."""
 
-from unittest.mock import MagicMock, patch
-
 import numpy as np
 import pytest
 
@@ -18,6 +16,7 @@ from jamma.core.memory import (
     _uab_iab_gb,
     estimate_lmm_memory,
 )
+from tests.fakes.memory import use_fake_psutil
 
 
 @pytest.mark.tier0
@@ -53,7 +52,7 @@ class TestCheckMemoryAvailable:
 class TestEigendecompMemoryGate:
     """Integration: eigendecompose_kinship respects check_memory flag."""
 
-    def test_eigendecomp_raises_on_insufficient_memory(self):
+    def test_eigendecomp_raises_on_insufficient_memory(self, monkeypatch):
         """MemoryError raised when memory is scarce.
 
         Mocks psutil.virtual_memory to report 1 byte available.
@@ -66,15 +65,10 @@ class TestEigendecompMemoryGate:
         K = rng.standard_normal((50, 50))
         K = (K + K.T) / 2
 
-        # Build a mock that satisfies both get_memory_snapshot() and
-        # check_memory_available(). Must have numeric .available and .total.
-        mock_vmem = MagicMock()
-        mock_vmem.available = 1  # 1 byte — definitely not enough
-        mock_vmem.total = 1
+        use_fake_psutil(monkeypatch, available=1, total=1)
 
-        with patch("jamma.core.memory.psutil.virtual_memory", return_value=mock_vmem):
-            with pytest.raises(MemoryError, match="Insufficient memory"):
-                eigendecompose_kinship(K, check_memory=True)
+        with pytest.raises(MemoryError, match="Insufficient memory"):
+            eigendecompose_kinship(K, check_memory=True)
 
     def test_eigendecomp_skips_check_when_disabled(self):
         """eigendecompose_kinship with check_memory=False skips memory check."""
@@ -330,91 +324,75 @@ class TestKinshipDtypeAccounting:
 class TestGateCorrectnessLmmMemory:
     """Tests that LMM batch runner memory gate correctly blocks/passes."""
 
-    def test_lmm_gate_passes_with_ample_memory(self):
+    def test_lmm_gate_passes_with_ample_memory(self, monkeypatch):
         """Memory check should pass when plenty of memory is available."""
 
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
-            mock_obj = mock_mem.return_value
-            mock_obj.available = 500 * 1e9  # 500GB
+        use_fake_psutil(monkeypatch, available=500 * 1e9)  # 500GB
 
-            est = estimate_lmm_memory(1_000, 1_000)
-            assert est.sufficient is True
+        est = estimate_lmm_memory(1_000, 1_000)
+        assert est.sufficient is True
 
-    def test_lmm_gate_blocks_with_scarce_memory(self):
+    def test_lmm_gate_blocks_with_scarce_memory(self, monkeypatch):
         """Memory check should fail when memory is insufficient."""
 
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
-            mock_obj = mock_mem.return_value
-            mock_obj.available = 1 * 1e9  # 1GB
+        use_fake_psutil(monkeypatch, available=1 * 1e9)  # 1GB
 
-            # 100k samples needs ~80GB eigenvectors alone
-            est = estimate_lmm_memory(100_000, 10_000)
-            assert est.sufficient is False
+        # 100k samples needs ~80GB eigenvectors alone
+        est = estimate_lmm_memory(100_000, 10_000)
+        assert est.sufficient is False
 
-    def test_lmm_gate_threshold_boundary(self):
+    def test_lmm_gate_threshold_boundary(self, monkeypatch):
         """Memory check should account for safety margin (10% capped at 10GB).
 
         _check_available uses: (total_gb + min(total_gb * 0.1, 10)) < available_gb.
         """
 
-        # Compute total_gb deterministically (mock memory so it doesn't affect total)
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
-            mock_obj = mock_mem.return_value
-            mock_obj.available = 1000 * 1e9
-            est_dry = estimate_lmm_memory(100, 100)
+        # Compute total_gb deterministically (pin memory so it doesn't affect total)
+        use_fake_psutil(monkeypatch, available=1000 * 1e9)
+        est_dry = estimate_lmm_memory(100, 100)
 
         margin = min(est_dry.total_gb * 0.1, 10.0)
         needed_with_margin = est_dry.total_gb + margin
 
         # Set available to just above the margin (should pass)
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
-            mock_obj = mock_mem.return_value
-            mock_obj.available = (needed_with_margin + 0.001) * 1e9
-
-            est = estimate_lmm_memory(100, 100)
-            assert est.sufficient is True
+        use_fake_psutil(monkeypatch, available=(needed_with_margin + 0.001) * 1e9)
+        est = estimate_lmm_memory(100, 100)
+        assert est.sufficient is True
 
         # Set available to just under the margin (should fail)
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_mem:
-            mock_obj = mock_mem.return_value
-            mock_obj.available = (needed_with_margin - 0.001) * 1e9
-
-            est = estimate_lmm_memory(100, 100)
-            assert est.sufficient is False
+        use_fake_psutil(monkeypatch, available=(needed_with_margin - 0.001) * 1e9)
+        est = estimate_lmm_memory(100, 100)
+        assert est.sufficient is False
 
 
 @pytest.mark.tier0
 class TestSafetyMarginCap:
     """Verify 10GB absolute cap on safety margin."""
 
-    def test_margin_capped_at_10gb_for_large_requirements(self):
+    def test_margin_capped_at_10gb_for_large_requirements(self, monkeypatch):
         """Safety margin caps at 10GB for large memory requirements."""
 
         # 500GB required: old formula = 500*1.1 = 550GB needed
         # new formula = 500 + min(50, 10) = 510GB needed
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
-            mock_vm.return_value.available = 515 * 1e9  # 515GB
-            # Should PASS with capped margin (510GB < 515GB)
-            assert check_memory_available(500.0) is True
+        use_fake_psutil(monkeypatch, available=515 * 1e9)  # 515GB
+        # Should PASS with capped margin (510GB < 515GB)
+        assert check_memory_available(500.0) is True
 
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
-            mock_vm.return_value.available = 505 * 1e9  # 505GB
-            # Should FAIL (510GB > 505GB)
-            with pytest.raises(MemoryError):
-                check_memory_available(500.0)
+        use_fake_psutil(monkeypatch, available=505 * 1e9)  # 505GB
+        # Should FAIL (510GB > 505GB)
+        with pytest.raises(MemoryError):
+            check_memory_available(500.0)
 
-    def test_small_requirements_use_percentage_margin(self):
+    def test_small_requirements_use_percentage_margin(self, monkeypatch):
         """Small requirements use 10% margin (not capped)."""
 
         # 10GB required: margin = min(1, 10) = 1GB, total = 11GB
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
-            mock_vm.return_value.available = 11.5 * 1e9
-            assert check_memory_available(10.0) is True
+        use_fake_psutil(monkeypatch, available=11.5 * 1e9)
+        assert check_memory_available(10.0) is True
 
-        with patch("jamma.core.memory.psutil.virtual_memory") as mock_vm:
-            mock_vm.return_value.available = 10.5 * 1e9  # 10.5 < 11
-            with pytest.raises(MemoryError):
-                check_memory_available(10.0)
+        use_fake_psutil(monkeypatch, available=10.5 * 1e9)  # 10.5 < 11
+        with pytest.raises(MemoryError):
+            check_memory_available(10.0)
 
 
 class TestFormatDuration:

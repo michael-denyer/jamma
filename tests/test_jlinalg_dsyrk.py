@@ -3,8 +3,7 @@
 Tests cover:
 - Correctness vs NumPy reference at multiple sizes (BL3-05)
 - Bitwise symmetry of dsyrk result (BL3-06)
-- Boundary sizes: MR-1/MR/MR+1 for AVX2 (MR=6) and NEON (MR=8),
-  MC-1/MC/MC+1 for AVX2 (MC=72) and NEON (MC=64), KC boundaries (KC=256)
+- Boundary sizes (tests.builders.BOUNDARY_SIZES)
 - Zero-dimension edge cases (N=0, K=0)
 - Throughput benchmark scaffold (skipped until C extension)
 - Input validation: ValueError on bad shapes
@@ -20,46 +19,9 @@ import numpy.testing as npt
 import pytest
 
 from jamma.jlinalg import HAS_C_EXTENSION, dsyrk
+from tests.builders import BOUNDARY_SIZES
 
 pytestmark = pytest.mark.tier0
-
-# ---------------------------------------------------------------------------
-# Boundary size parameters
-# ---------------------------------------------------------------------------
-
-# Sizes chosen to cover MR-1/MR/MR+1 for both AVX2 (MR=6) and NEON (MR=8),
-# plus MC boundaries (AVX2 MC=72, NEON MC=64), KC boundaries (KC=256),
-# NC boundaries (NC=4096), and a selection of prime dimensions.
-BOUNDARY_SIZES = [
-    1,
-    3,
-    5,
-    6,
-    7,  # MR-1/MR/MR+1 for AVX2 (MR=6)
-    7,
-    8,
-    9,  # MR-1/MR/MR+1 for NEON (MR=8)
-    11,
-    13,
-    63,
-    64,
-    65,  # MC-1/MC/MC+1 for NEON (MC=64)
-    71,
-    72,
-    73,  # MC-1/MC/MC+1 for AVX2 (MC=72)
-    127,
-    128,
-    129,  # KC/2 boundaries
-    255,
-    256,
-    257,  # KC-1/KC/KC+1 (KC=256)
-    500,
-    1000,
-]
-
-# Deduplicate while preserving order
-_seen: set[int] = set()
-BOUNDARY_SIZES = [x for x in BOUNDARY_SIZES if not (x in _seen or _seen.add(x))]  # type: ignore[func-returns-value]
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +140,7 @@ class TestDsyrkSymmetry:
         )
 
     def test_symmetric_after_blocking(self) -> None:
-        """Symmetry holds after multiple MC/KC blocking passes (N=300, K=400)."""
+        """Symmetry holds across several blocking passes (N=300, K=400)."""
         rng = np.random.default_rng(99)
         X = rng.standard_normal((300, 400))
         result = dsyrk(X)
@@ -236,47 +198,47 @@ class TestDsyrkBoundary:
         )
 
     def test_mr_boundary_avx2(self) -> None:
-        """N = MR-1/MR/MR+1 for AVX2 (MR=6): K=256."""
+        """N = 5, 6, 7 with K=256."""
         rng = np.random.default_rng(200)
         for N in [5, 6, 7]:
             X = rng.standard_normal((N, 256))
             result = dsyrk(X)
             expected = _reference_dsyrk(X)
             npt.assert_allclose(
-                result, expected, rtol=1e-10, err_msg=f"dsyrk AVX2 MR boundary N={N}"
+                result, expected, rtol=1e-10, err_msg=f"dsyrk boundary N={N}"
             )
 
     def test_mr_boundary_neon(self) -> None:
-        """N = MR-1/MR/MR+1 for NEON (MR=8): K=256."""
+        """N = 7, 8, 9 with K=256."""
         rng = np.random.default_rng(201)
         for N in [7, 8, 9]:
             X = rng.standard_normal((N, 256))
             result = dsyrk(X)
             expected = _reference_dsyrk(X)
             npt.assert_allclose(
-                result, expected, rtol=1e-10, err_msg=f"dsyrk NEON MR boundary N={N}"
+                result, expected, rtol=1e-10, err_msg=f"dsyrk boundary N={N}"
             )
 
     def test_mc_boundary_avx2(self) -> None:
-        """N = MC-1/MC/MC+1 for AVX2 (MC=72): K=256."""
+        """N = 71, 72, 73 with K=256."""
         rng = np.random.default_rng(202)
         for N in [71, 72, 73]:
             X = rng.standard_normal((N, 256))
             result = dsyrk(X)
             expected = _reference_dsyrk(X)
             npt.assert_allclose(
-                result, expected, rtol=1e-10, err_msg=f"dsyrk AVX2 MC boundary N={N}"
+                result, expected, rtol=1e-10, err_msg=f"dsyrk boundary N={N}"
             )
 
     def test_kc_boundary(self) -> None:
-        """K = KC-1/KC/KC+1 (KC=256): N=72."""
+        """K = 255, 256, 257 with N=72."""
         rng = np.random.default_rng(203)
         for K in [255, 256, 257]:
             X = rng.standard_normal((72, K))
             result = dsyrk(X)
             expected = _reference_dsyrk(X)
             npt.assert_allclose(
-                result, expected, rtol=1e-10, err_msg=f"dsyrk KC boundary K={K}"
+                result, expected, rtol=1e-10, err_msg=f"dsyrk boundary K={K}"
             )
 
     def test_prime_dimensions(self) -> None:
@@ -728,45 +690,3 @@ def test_dsyrk_throughput() -> None:
         )
     elif _isa in ("NEON", "generic"):
         print(f"{_isa}: throughput assertion skipped (ratio={ratio:.3f}x vs np.matmul)")
-
-
-# ---------------------------------------------------------------------------
-# TestDsyrkVendorDispatch — vendor dsyrk dispatch parity tests
-# ---------------------------------------------------------------------------
-
-
-class TestDsyrkVendorDispatch:
-    """Verify dsyrk produces correct results regardless of vendor dispatch path."""
-
-    def test_dsyrk_vendor_parity_small(self):
-        """dsyrk result matches numpy at N=10, K=5."""
-        rng = np.random.default_rng(42)
-        X = np.ascontiguousarray(rng.standard_normal((10, 5)), dtype=np.float64)
-        K = dsyrk(X)
-        expected = X @ X.T
-        npt.assert_allclose(K, expected, rtol=1e-12)
-
-    def test_dsyrk_vendor_parity_medium(self):
-        """dsyrk result matches numpy at N=200, K=100."""
-        rng = np.random.default_rng(123)
-        X = np.ascontiguousarray(rng.standard_normal((200, 100)), dtype=np.float64)
-        K = dsyrk(X)
-        expected = X @ X.T
-        npt.assert_allclose(K, expected, rtol=1e-12)
-
-    def test_dsyrk_vendor_symmetry(self):
-        """Vendor dsyrk produces bitwise-symmetric result."""
-        rng = np.random.default_rng(456)
-        X = np.ascontiguousarray(rng.standard_normal((50, 30)), dtype=np.float64)
-        K = dsyrk(X)
-        # Bitwise symmetry: K[i,j] == K[j,i] exactly
-        npt.assert_array_equal(K, K.T)
-
-    def test_dsyrk_vendor_parity_boundary_sizes(self):
-        """dsyrk matches numpy at small boundary sizes."""
-        rng = np.random.default_rng(789)
-        for n in [1, 2, 3, 4, 5]:
-            X = np.ascontiguousarray(rng.standard_normal((n, 10)), dtype=np.float64)
-            K = dsyrk(X)
-            expected = X @ X.T
-            npt.assert_allclose(K, expected, rtol=1e-12, err_msg=f"Failed at N={n}")

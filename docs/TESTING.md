@@ -366,7 +366,7 @@ boundaries. Everywhere else, write a fake.
 
 | Allowed mock target | Why it qualifies |
 |---|---|
-| `psutil.virtual_memory`, `psutil.Process(...).memory_info` | OS state; cannot be set without large allocations |
+| `psutil.virtual_memory`, `psutil.Process(...).memory_info`, through `use_fake_psutil` | OS state; cannot be set without large allocations |
 | `gc.collect` | Process-level side effect |
 | `jamma.core.memory._check_available` | Thin wrapper around OS memory probe |
 | `jlinalg.blas_is_ilp64`, `blas_has_dsyevd`, `blas_has_dsyevr`, `blas_backend` | Library detection that cannot be flipped at runtime |
@@ -398,7 +398,10 @@ Shared fakes live in the
 `jamma.jlinalg` at the `jamma.lmm.eigen` import site through
 `use_fake_jlinalg(monkeypatch, FakeJlinalg(eigh_error=MemoryError()))`;
 its self-tests check the declared names against the real module and
-against every `jlinalg.<name>` read in `eigen.py`. Each fake's self-tests are
+against every `jlinalg.<name>` read in `eigen.py`. `use_fake_psutil(monkeypatch, available=..., total=..., rss=..., vms=...)`
+([`memory.py`](../tests/fakes/memory.py)) pins both psutil reads with
+`FakeVirtualMemory` and `FakeProcess`, whose fields are checked against
+psutil's result types. Each fake's self-tests are
 in [`tests/fakes/test_fakes.py`](../tests/fakes/test_fakes.py); accessing
 an undeclared attribute raises `AttributeError` (the contract that
 distinguishes a fake from `MagicMock`).
@@ -590,12 +593,12 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 | Subsystem | Test files | What's covered |
 |---|---|---|
 | **LMM core** | `lmm_accel/` (10 per-kernel-family modules), `test_lmm_unit.py`, `test_lmm_score.py`, `test_lmm_dispatch.py`, `test_lmm_compute_dispatch.py`, `test_lmm_audit.py`, `test_lmm_io_validation.py`, `test_likelihood_numpy.py`, `test_likelihood_derivatives.py` | C accelerator parity vs NumPy reference; Pab/Uab math; Wald/score/LRT statistics; dispatch routing; numerical guards; assoc-line/dispatch-table validation; REML 2nd/3rd derivatives |
-| **LMM runners** | `test_runner_numpy.py`, `test_runner_dispatch.py`, `test_numpy_streaming.py`, `test_compute_numpy.py`, `test_chunk_runner_guards.py`, `test_pipeline.py`, `test_pipeline_helpers.py`, `test_pipeline_banner.py`, `test_pipeline_validation_order.py` | Batch + streaming runners; shared chunk runner and its guards; backend selection; pipeline orchestration and validation ordering; CLI banner |
+| **LMM runners** | `test_runner_numpy.py`, `test_runner_dispatch.py`, `test_chunk_dispatch.py`, `test_chunk_sizing.py`, `test_lmm_results.py`, `test_numpy_streaming.py`, `test_compute_numpy.py`, `test_chunk_runner_guards.py`, `test_pipeline.py`, `test_pipeline_helpers.py`, `test_pipeline_banner.py`, `test_pipeline_validation_order.py` | Batch + streaming runners; GEMMA parity and covariate runs; dispatch-path selection and the kernel each path builds; `compute_chunk_size_numpy` sizing policy; lambda diagnostics, streamed output and chunk-failure messages; shared chunk runner and its guards; backend selection; pipeline orchestration and validation ordering; CLI banner |
 | **Kinship** | `test_kinship_numpy.py`, `test_kinship_io.py`, `test_kinship_validation.py` | DSYRK-based kinship computation; .cXX.txt I/O; GEMMA parity |
 | **jlinalg (BLAS dispatch)** | `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py`, `test_jlinalg_dispatch.py`, `test_jlinalg_unity.py`, `test_jlinalg_build.py`, `test_eigh_inplace.py` | DGEMM/DSYRK/eigh wrappers; LP64 vs ILP64 dispatch; vendor BLAS/LAPACK dispatch correctness; build artefact sanity |
-| **LOCO** | `test_loco_numpy.py`, `test_loco_eigen_cache.py`, `test_loco_orchestration.py` | Leave-one-chromosome-out orchestration; per-chromosome eigen cache |
+| **LOCO** | `test_loco_numpy.py`, `test_loco_eigen_cache.py`, `test_eigen_cache_key.py`, `test_loco_orchestration.py` | Leave-one-chromosome-out orchestration; per-chromosome eigen cache; cache-key derivation and manifest validation |
 | **I/O** | `test_io.py`, `test_io_error_paths.py`, `test_error_paths.py`, `test_eigen_io.py`, `test_matrix_reader.py`, `test_matrix_writer.py`, `test_incremental_writer.py`, `test_kinship_io.py`, `test_snp_list.py`, `test_plink_validation.py` | PLINK reader; eigenvector cache I/O; incremental .assoc.txt writer; SNP filters; error and rollback paths |
-| **Memory & gates** | `test_memory.py`, `test_memory_gates.py`, `test_memory_chunk_coupling.py`, `test_eigendecomp_memory.py`, `test_safety_gates.py`, `test_auto_tune_chunk.py` | Memory estimation; OOM gates; `compute_chunk_size_numpy` chunk sizing and pipeline-buffer pricing |
+| **Memory & gates** | `test_memory.py`, `test_memory_gates.py`, `test_memory_chunk_coupling.py`, `test_eigendecomp_memory.py`, `test_safety_gates.py` | Memory estimation; OOM gates. `compute_chunk_size_numpy` sizing and its pipeline-buffer pricing moved to `test_chunk_sizing.py` under LMM runners |
 | **CLI / API** | `test_cli.py`, `test_cli_memory.py`, `test_gwas_api.py` | Click entry point; `-lmm` flag handling; programmatic GWAS API |
 | **Backend / hardware** | `test_backend_detection.py`, `test_hardware_context.py`, `test_threading.py`, `test_jlinalg_dispatch.py`, `test_force_numpy_fallback.py` | Backend autodetection; physical core count; threading limits; the `JAMMA_FORCE_NUMPY_FALLBACK` escape hatch |
 | **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_build_support_sanitizer_override.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_check_doc_anchors.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_c_include_order.py`, `test_c_lint_coverage.py`, `test_core_recompile.py` | Compile-flag invariants; OpenMP detection; wheel packaging; sanitizer flag injection; include order; cppcheck coverage; doc line anchors; runtime recompile |
@@ -625,7 +628,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 Counted at v7.2.0.
 
 - 107 test files, ~44k lines.
-- Largest: `test_likelihood_numpy.py` (~2,100 lines). `test_lmm_accel.py` was
+- Largest: `test_likelihood_numpy.py` (~1,500 lines). `test_lmm_accel.py` was
   split into `tests/lmm_accel/`, eleven modules by kernel family, in 6.0.0.
 - ~220 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
 - 11 files use `@patch`/`MagicMock` (~25 occurrences). Four of them are the `tests/fakes/` package itself. The rest sit at the boundaries catalogued in §2.2.

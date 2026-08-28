@@ -57,6 +57,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Giant test files split along the src seams they mirror.**
+  `test_runner_numpy.py` gives its chunk-sizing tests to a new
+  `test_chunk_sizing.py` (absorbing `test_auto_tune_chunk.py` and
+  `test_chunk_sizing_cap.py`), its dispatch-selection tests to
+  `test_chunk_dispatch.py` and its results and output tests to
+  `test_lmm_results.py`; `test_likelihood_numpy.py` gives its
+  `compute_numpy` dispatch tests to `test_compute_numpy.py`;
+  `test_loco_eigen_cache.py` gives its pure cache-key and manifest tests to
+  `test_eigen_cache_key.py`, which no longer needs the mouse fixture. Pure
+  moves; the set of test ids is unchanged.
+- **One `BOUNDARY_SIZES` for the jlinalg BLAS tests** in `tests/builders.py`,
+  with `EIGH_BOUNDARY_SIZES` capped at 200. The three copies were annotated
+  with the MR/MC/KC of the own-BLAS kernel deleted at `663a22b`; the comment
+  now says why the sizes are kept. `test_jlinalg_dgemm.py` sweeps 63, 64
+  and 65 as well (three more parametrised cases). `TestDsyrkVendorDispatch`
+  is deleted: its four tests repeated `TestDsyrkCorrectness`,
+  `TestDsyrkSymmetry` and `TestDsyrkBoundary` at smaller sizes.
+- **`tests/fakes/memory.py`.** `use_fake_psutil(monkeypatch, available=,
+  total=, rss=, vms=)` pins both psutil reads JAMMA makes with
+  `FakeVirtualMemory` and `FakeProcess`, replacing the 18
+  `patch("jamma.core.memory.psutil.virtual_memory")` MagicMocks in
+  `test_memory.py` and `test_eigendecomp_memory.py`; the fakes declare only
+  the fields the code reads and their self-tests check those names against
+  psutil's result types.
 - **`jamma.io.read_fam_phenotypes(fam_path, column=1)`** and
   `parse_fam_phenotype_column(fam_data, column)` are the one `.fam`
   phenotype parser. `PipelineRunner._parse_phenotype_column` calls the

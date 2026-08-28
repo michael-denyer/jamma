@@ -18,7 +18,7 @@ instead are backend-independent:
 - **Layout** — shapes, float64 dtype, C-contiguity
 - **Error contract** — which exception type each failure mode raises
 
-Sizes are parametrised across ``BOUNDARY_SIZES`` because vendor LAPACK picks
+Sizes are parametrised across ``EIGH_BOUNDARY_SIZES`` because vendor LAPACK picks
 different internal blocking and different kernels by size, so a bug that only
 appears at one blocking boundary stays visible.
 
@@ -42,6 +42,7 @@ from jamma.jlinalg import (
     get_n_threads,
     set_n_threads,
 )
+from tests.builders import EIGH_BOUNDARY_SIZES
 from tests.fixture_paths import KINSHIP_DIR
 
 pytestmark = pytest.mark.tier0
@@ -108,48 +109,6 @@ def _assert_orthogonality(
         msg = f"{label}: {msg}"
     assert norm_off < tol, msg
     return float(norm_off)
-
-
-# ---------------------------------------------------------------------------
-# Boundary size parameters
-# ---------------------------------------------------------------------------
-
-# Degenerate and tiny sizes, then powers of two and their neighbours, then a
-# few primes.  Vendor LAPACK selects blocking and kernels by size, so an
-# off-by-one in a blocked path shows up at N and not at N+-1; keeping both
-# neighbours of each power of two is what makes that visible.  The exact
-# values are historical — they were chosen against a blocking scheme that no
-# longer ships — but they remain a good spread and cost little to keep.
-# Capped at 200 because eigendecomposition is O(N^3); larger sizes are in the
-# ``slow``-marked tests below.
-BOUNDARY_SIZES = [
-    1,
-    2,
-    3,
-    5,
-    6,
-    7,
-    8,
-    9,
-    11,
-    13,
-    31,
-    63,
-    64,
-    65,
-    71,
-    72,
-    73,
-    100,
-    127,
-    128,
-    129,
-    200,
-]
-
-# Deduplicate while preserving order
-_seen: set[int] = set()
-BOUNDARY_SIZES = [x for x in BOUNDARY_SIZES if not (x in _seen or _seen.add(x))]  # type: ignore[func-returns-value]
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +190,7 @@ class TestEigh:
                 err_msg=f"Eigenvector {j} not unit at N={N}",
             )
 
-    @pytest.mark.parametrize("N", BOUNDARY_SIZES)
+    @pytest.mark.parametrize("N", EIGH_BOUNDARY_SIZES)
     def test_random_spd(self, N: int) -> None:
         """eigh on random SPD: eigenvalues ascending, eigenvectors unit norm."""
         rng = np.random.default_rng(42 + N * 7)

@@ -7,10 +7,9 @@
  *                  compute_lmm_chunk_fused_c (mode 1 or 4),
  *                  compute_lrt_fused_ws_c (2), compute_score_fused_ws_c (3),
  *                  compute_mode4_chunk_fused_c (4)
- *   FUSED_GENERAL  create_workspace_fused_general_c,
- *                  compute_lmm_chunk_fused_general_c,
- *                  create_workspace_mode4_fused_general_c,
- *                  compute_mode4_chunk_fused_general_c
+ *   n_cvt >= 2     create_workspace_general_c(..., pab_table, lmm_mode=1|4),
+ *                  then compute_lmm_chunk_fused_general_c (mode 1 or 4),
+ *                  compute_mode4_chunk_fused_general_c (4)
  *   SOA_SPLIT      compute_score_split_general_c, compute_lrt_split_general_c
  *
  * -DJAMMA_SENTINEL_UB enables a heap-OOB sentinel function
@@ -89,7 +88,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 13  /* v13: one n_cvt=1 workspace and creator, keyed by lmm_mode */
+#define ABI_VERSION 14  /* v14: one general creator on the Pab table dict, keyed by lmm_mode */
 
 /* P_YY_MIN and REML_SENTINEL moved to _lmm_types.h when the general kernels
  * left this file: both units read them, and two copies could drift. */
@@ -272,8 +271,6 @@ typedef struct {
     const double *UtW;          /* points to utw_transposed (column-major) */
     const double *Uty;          /* (n_samples,) borrowed */
     int n_cvt;                  /* stored for loop bounds */
-    int *var_a_cols;            /* (n_var,) 0-based column indices. Owned. */
-    int *var_b_cols;            /* (n_var,) 0-based column indices. Owned. */
     double *scratch_flat;       /* (actual_threads * n_var * n_samples) owned */
     int actual_threads;         /* for scratch deallocation sizing */
     /* Per-thread heap buffers for Pab recursion (replaces stack arrays) */
@@ -303,18 +300,10 @@ static void lmm_workspace_general_free(lmm_workspace_general_t *ws)
     free(ws->inv_sums_grid);
     free(ws->eigenvalues);
     free(ws->inv_identity_sums);
-    free(ws->table.invariant_indices);
-    free(ws->table.varying_indices);
-    free(ws->table.logdet_diag_rows);
-    free(ws->table.logdet_diag_cols);
-    free(ws->table.level_offsets);
-    free(ws->table.level_counts);
-    free(ws->table.entries);
+    free_pab_table(&ws->table);
     Py_XDECREF(ws->uab_inv_ref);
     /* Fused general fields */
     free(ws->utw_transposed);
-    free(ws->var_a_cols);
-    free(ws->var_b_cols);
     free(ws->scratch_flat);
     free(ws->pab_per_thread);
     free(ws->row0_per_thread);
@@ -330,6 +319,23 @@ static void lmm_workspace_general_destructor(PyObject *cap)
 {
     lmm_workspace_general_free((lmm_workspace_general_t *)
         PyCapsule_GetPointer(cap, "lmm_workspace_general"));
+}
+
+/* The workspace behind a capsule, or NULL with ValueError set when it was
+ * created for an lmm_mode that fn does not compute. */
+static lmm_workspace_general_t *general_workspace(
+    PyObject *cap, const char *fn, int mode_a, int mode_b)
+{
+    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)
+        PyCapsule_GetPointer(cap, "lmm_workspace_general");
+    if (!ws) return NULL;
+    if (ws->mode != mode_a && ws->mode != mode_b) {
+        PyErr_Format(PyExc_ValueError,
+            "%s cannot use a workspace created with lmm_mode=%d",
+            fn, ws->mode);
+        return NULL;
+    }
+    return ws;
 }
 
 
@@ -1013,202 +1019,29 @@ static inline const double *get_fused_vector(
     return ws->Uty;  /* col_0based == n_cvt + 1 */
 }
 
-/* -------------------------------------------------------------------------
- * init_fused_general_workspace — shared initialization for Wald-only and
- * mode-4 fused general workspace creators.
- *
- * Populates all common fields of a calloc'd lmm_workspace_general_t:
- * table, eigenvalues, uab_inv, UtW (transposed), Uty, scratch, lambda grid,
- * hi_eval_grid, logdet_h_grid, inv_sums_grid, inv_identity_sums, beta/REML
- * constants, and var_a/var_b column indices.
- *
- * Caller must calloc ws before calling. On success returns 0. On failure
- * returns -1 with Python exception set; caller must free ws via the
- * destructor (all fields are NULL-safe via calloc + free(NULL)).
- *
- * Does NOT set mode-4 fields (hi_eval_null, null_inv_sums, logl_H0,
- * mle_const, mode) — the mode-4 caller sets those after this returns.
- * ------------------------------------------------------------------------- */
+/* Fill a calloc'd general workspace whose table has already been parsed:
+ * eigenvalues, uab_inv, UtW (transposed), Uty, per-thread scratch, the
+ * lambda grid and its invariant sums, and the beta/REML constants. 0, or -1
+ * with PyErr set; the caller frees ws through lmm_workspace_general_free. */
 static int init_fused_general_workspace(
     lmm_workspace_general_t *ws,
     PyArrayObject *eigenvalues_arr,
     PyArrayObject *uab_inv_arr,
     PyArrayObject *UtW_arr,
     PyArrayObject *Uty_arr,
-    PyObject *inv_idx_obj, PyObject *var_idx_obj,
-    PyObject *diag_rows_obj, PyObject *diag_cols_obj,
-    PyObject *offsets_obj, PyObject *counts_obj, PyObject *entries_obj,
-    PyObject *var_a_obj, PyObject *var_b_obj,
     int n_samples, double l_min, double l_max,
-    int n_grid, int n_refine, int n_threads, int n_cvt,
-    int idx_xx, int idx_xy, int idx_yy)
+    int n_grid, int n_refine, int n_threads)
 {
-    int n_index = (n_cvt + 3) * (n_cvt + 2) / 2;
-    int n_rows  = n_cvt + 2;
+    int n_cvt   = ws->table.n_cvt;
+    int n_index = ws->table.n_index;
+    int n_rows  = ws->table.n_rows;
+    int n_inv   = ws->table.n_inv;
+    int n_var   = ws->table.n_var;
 
-    /* Parse invariant_indices to determine n_inv */
-    PyArrayObject *inv_idx_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        inv_idx_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
-    if (!inv_idx_arr) return -1;
-    int n_inv = (int)PyArray_SIZE(inv_idx_arr);
-    Py_DECREF(inv_idx_arr);
-
-    PyArrayObject *var_idx_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        var_idx_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
-    if (!var_idx_arr) return -1;
-    int n_var = (int)PyArray_SIZE(var_idx_arr);
-    Py_DECREF(var_idx_arr);
-
-    if (n_inv + n_var != n_index) {
-        PyErr_Format(PyExc_ValueError,
-            "n_inv (%d) + n_var (%d) != n_index (%d)", n_inv, n_var, n_index);
-        return -1;
-    }
-
-    /* Parse entries to get total count */
-    PyArrayObject *entries_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        entries_obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
-    if (!entries_arr) return -1;
-    int entries_len = (int)PyArray_SIZE(entries_arr);
-    Py_DECREF(entries_arr);
-    if (entries_len % 4 != 0) {
-        PyErr_Format(PyExc_ValueError,
-            "entries length (%d) not a multiple of 4", entries_len);
-        return -1;
-    }
-    int n_entries = entries_len / 4;
-
-    /* Store scalars */
     ws->n_samples = n_samples;
     ws->n_grid = n_grid;
     ws->n_refine = n_refine;
     ws->n_cvt = n_cvt;
-
-    /* Fill table */
-    ws->table.n_cvt = n_cvt;
-    ws->table.n_index = n_index;
-    ws->table.n_rows = n_rows;
-    ws->table.n_inv = n_inv;
-    ws->table.n_var = n_var;
-    ws->table.idx_xx = idx_xx;
-    ws->table.idx_xy = idx_xy;
-    ws->table.idx_yy = idx_yy;
-    ws->table.df = n_samples - n_cvt - 1;
-    ws->table.n_entries = n_entries;
-
-    /* Parse index arrays into owned copies */
-    ws->table.invariant_indices = parse_int32_array(inv_idx_obj, n_inv, "invariant_indices");
-    if (!ws->table.invariant_indices) return -1;
-    ws->table.varying_indices   = parse_int32_array(var_idx_obj, n_var, "varying_indices");
-    if (!ws->table.varying_indices) return -1;
-    ws->table.logdet_diag_rows  = parse_int32_array(diag_rows_obj, n_cvt + 1, "logdet_diag_rows");
-    if (!ws->table.logdet_diag_rows) return -1;
-    ws->table.logdet_diag_cols  = parse_int32_array(diag_cols_obj, n_cvt + 1, "logdet_diag_cols");
-    if (!ws->table.logdet_diag_cols) return -1;
-    ws->table.level_offsets     = parse_int32_array(offsets_obj, n_rows, "level_offsets");
-    if (!ws->table.level_offsets) return -1;
-    ws->table.level_counts      = parse_int32_array(counts_obj, n_rows, "level_counts");
-    if (!ws->table.level_counts) return -1;
-
-    /* Parse entries (stride-4) into pab_entry_t array */
-    {
-        int *raw_entries = parse_int32_array(entries_obj, n_entries * 4, "entries");
-        if (!raw_entries) return -1;
-        ws->table.entries = (pab_entry_t *)malloc(
-            (size_t)n_entries * sizeof(pab_entry_t));
-        if (!ws->table.entries) {
-            free(raw_entries);
-            PyErr_NoMemory();
-            return -1;
-        }
-        for (int i = 0; i < n_entries; i++) {
-            ws->table.entries[i].index_ab = raw_entries[i * 4 + 0];
-            ws->table.entries[i].index_aw = raw_entries[i * 4 + 1];
-            ws->table.entries[i].index_bw = raw_entries[i * 4 + 2];
-            ws->table.entries[i].index_ww = raw_entries[i * 4 + 3];
-        }
-        free(raw_entries);
-    }
-
-    /* Validate table indices */
-    for (int i = 0; i < n_inv; i++) {
-        if (ws->table.invariant_indices[i] < 0 ||
-            ws->table.invariant_indices[i] >= n_index) {
-            PyErr_Format(PyExc_ValueError,
-                "invariant_indices[%d] = %d out of range [0, %d)",
-                i, ws->table.invariant_indices[i], n_index);
-            return -1;
-        }
-    }
-    for (int i = 0; i < n_var; i++) {
-        if (ws->table.varying_indices[i] < 0 ||
-            ws->table.varying_indices[i] >= n_index) {
-            PyErr_Format(PyExc_ValueError,
-                "varying_indices[%d] = %d out of range [0, %d)",
-                i, ws->table.varying_indices[i], n_index);
-            return -1;
-        }
-    }
-    for (int d = 0; d < n_cvt + 1; d++) {
-        if (ws->table.logdet_diag_rows[d] < 0 ||
-            ws->table.logdet_diag_rows[d] >= n_rows) {
-            PyErr_Format(PyExc_ValueError,
-                "logdet_diag_rows[%d] = %d out of range [0, %d)",
-                d, ws->table.logdet_diag_rows[d], n_rows);
-            return -1;
-        }
-        if (ws->table.logdet_diag_cols[d] < 0 ||
-            ws->table.logdet_diag_cols[d] >= n_index) {
-            PyErr_Format(PyExc_ValueError,
-                "logdet_diag_cols[%d] = %d out of range [0, %d)",
-                d, ws->table.logdet_diag_cols[d], n_index);
-            return -1;
-        }
-    }
-    for (int p = 0; p < n_rows; p++) {
-        if (ws->table.level_offsets[p] < 0 ||
-            ws->table.level_counts[p] < 0 ||
-            (int64_t)ws->table.level_offsets[p] + ws->table.level_counts[p] > n_entries) {
-            PyErr_Format(PyExc_ValueError,
-                "level_offsets[%d]=%d + level_counts[%d]=%d exceeds n_entries=%d",
-                p, ws->table.level_offsets[p], p, ws->table.level_counts[p], n_entries);
-            return -1;
-        }
-    }
-    if (idx_xx < 0 || idx_xx >= n_index ||
-        idx_xy < 0 || idx_xy >= n_index ||
-        idx_yy < 0 || idx_yy >= n_index) {
-        PyErr_SetString(PyExc_ValueError, "idx_xx/xy/yy out of range [0, n_index)");
-        return -1;
-    }
-    for (int i = 0; i < n_entries; i++) {
-        const pab_entry_t *e = &ws->table.entries[i];
-        if (e->index_ab < 0 || e->index_ab >= n_index ||
-            e->index_aw < 0 || e->index_aw >= n_index ||
-            e->index_bw < 0 || e->index_bw >= n_index ||
-            e->index_ww < 0 || e->index_ww >= n_index) {
-            PyErr_Format(PyExc_ValueError,
-                "entries[%d] has index out of range [0, %d)", i, n_index);
-            return -1;
-        }
-    }
-
-    /* Parse var_a_cols and var_b_cols */
-    ws->var_a_cols = parse_int32_array(var_a_obj, n_var, "var_a_cols");
-    if (!ws->var_a_cols) return -1;
-    ws->var_b_cols = parse_int32_array(var_b_obj, n_var, "var_b_cols");
-    if (!ws->var_b_cols) return -1;
-
-    /* Validate var_a/var_b column indices */
-    for (int v = 0; v < n_var; v++) {
-        if (ws->var_a_cols[v] < 0 || ws->var_a_cols[v] > n_cvt + 1 ||
-            ws->var_b_cols[v] < 0 || ws->var_b_cols[v] > n_cvt + 1) {
-            PyErr_Format(PyExc_ValueError,
-                "var_a_cols[%d]=%d or var_b_cols[%d]=%d out of range [0, %d]",
-                v, ws->var_a_cols[v], v, ws->var_b_cols[v], n_cvt + 1);
-            return -1;
-        }
-    }
 
     /* Copy eigenvalues (owned) */
     ws->eigenvalues = (double *)malloc((size_t)n_samples * sizeof(double));
@@ -1216,17 +1049,6 @@ static int init_fused_general_workspace(
     memcpy(ws->eigenvalues, PyArray_DATA(eigenvalues_arr),
            (size_t)n_samples * sizeof(double));
 
-    /* Validate and borrow invariant Uab pointer */
-    if (PyArray_NDIM(uab_inv_arr) != 2 ||
-        PyArray_DIM(uab_inv_arr, 0) != n_inv ||
-        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "uab_invariant must be shape (%d, %d), got (%lld, %lld)",
-            n_inv, n_samples,
-            (long long)(PyArray_NDIM(uab_inv_arr) >= 1 ? PyArray_DIM(uab_inv_arr, 0) : -1),
-            (long long)(PyArray_NDIM(uab_inv_arr) >= 2 ? PyArray_DIM(uab_inv_arr, 1) : -1));
-        return -1;
-    }
     Py_INCREF(uab_inv_arr);
     ws->uab_inv_ref = (PyObject *)uab_inv_arr;
     ws->uab_inv = (const double *)PyArray_DATA(uab_inv_arr);
@@ -1339,103 +1161,147 @@ static int init_fused_general_workspace(
 }
 
 /* -------------------------------------------------------------------------
- * create_workspace_fused_general_c
- *
- * Allocates the per-run general-n_cvt Wald workspace. Beyond the invariant
- * Uab block it stores UtW (transposed to column-major), Uty, and
- * var_a_cols/var_b_cols, which the chunk kernel needs to form the varying dot
- * products on-the-fly. Allocates per-thread scratch buffers.
+ * create_workspace_general_c
  *
  * Python signature:
- *   create_workspace_fused_general_c(
+ *   create_workspace_general_c(
  *       eigenvalues,      # (n_samples,) float64
  *       uab_invariant,    # (n_inv, n_samples) float64 — SoA
  *       UtW,              # (n_samples, n_cvt) float64 — row-major
  *       Uty,              # (n_samples,) float64
- *       n_samples,        # int
- *       l_min, l_max,     # float
- *       n_grid, n_refine, n_threads,  # int
- *       n_cvt,            # int
- *       invariant_indices, varying_indices,    # int32
- *       logdet_diag_rows, logdet_diag_cols,    # int32
- *       level_offsets, level_counts, entries,   # int32
- *       idx_xx, idx_xy, idx_yy,                # int
- *       var_a_cols, var_b_cols                  # int32
- *   ) -> PyCapsule wrapping lmm_workspace_general_t
+ *       n_samples, l_min, l_max, n_grid, n_refine, n_threads,
+ *       pab_table,        # dict, PabCTable._asdict()
+ *       *, lmm_mode, hi_eval_null=None, logl_H0=None,
+ *   ) -> PyCapsule
+ *
+ * n_cvt and every index array come from pab_table. lmm_mode is 1 (Wald) or
+ * 4 (Wald, Score and LRT, which needs hi_eval_null and logl_H0); the general
+ * Score-only and LRT-only paths take no workspace.
  * ------------------------------------------------------------------------- */
-static PyObject *create_workspace_fused_general_c_py(
+static PyObject *create_workspace_general_c_py(
     PyObject *self, PyObject *args, PyObject *kwargs)
 {
     static const char *kwlist[] = {
         "eigenvalues", "uab_invariant", "UtW", "Uty",
         "n_samples", "l_min", "l_max", "n_grid", "n_refine", "n_threads",
-        "n_cvt",
-        "invariant_indices", "varying_indices",
-        "logdet_diag_rows", "logdet_diag_cols",
-        "level_offsets", "level_counts", "entries",
-        "idx_xx", "idx_xy", "idx_yy",
-        "var_a_cols", "var_b_cols",
+        "pab_table", "lmm_mode", "hi_eval_null", "logl_H0",
         NULL
     };
 
-    PyObject *eigenvalues_obj, *uab_inv_obj, *UtW_obj, *Uty_obj;
-    PyObject *inv_idx_obj, *var_idx_obj;
-    PyObject *diag_rows_obj, *diag_cols_obj;
-    PyObject *offsets_obj, *counts_obj, *entries_obj;
-    PyObject *var_a_obj, *var_b_obj;
-    int n_samples, n_grid, n_refine, n_threads, n_cvt;
-    int idx_xx, idx_xy, idx_yy;
-    double l_min, l_max;
+    PyObject *eigenvalues_obj, *uab_inv_obj, *UtW_obj, *Uty_obj, *pab_table;
+    PyObject *hi_eval_null_obj = NULL, *logl_H0_obj = NULL;
+    int n_samples, n_grid, n_refine, n_threads, lmm_mode = 0;
+    double l_min, l_max, logl_H0 = 0.0;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOOOiddiiiiOOOOOOOiiiOO", (char **)kwlist,
+            args, kwargs, "OOOOiddiiiO|$iOO", (char **)kwlist,
             &eigenvalues_obj, &uab_inv_obj, &UtW_obj, &Uty_obj,
             &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads,
-            &n_cvt,
-            &inv_idx_obj, &var_idx_obj,
-            &diag_rows_obj, &diag_cols_obj,
-            &offsets_obj, &counts_obj, &entries_obj,
-            &idx_xx, &idx_xy, &idx_yy,
-            &var_a_obj, &var_b_obj)) {
+            &pab_table, &lmm_mode, &hi_eval_null_obj, &logl_H0_obj)) {
         return NULL;
     }
-
-    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
+    if (lmm_mode != 1 && lmm_mode != 4) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode must be 1 or 4 for a general workspace, got %d", lmm_mode);
         return NULL;
-    if (validate_n_cvt(n_cvt) < 0)
+    }
+    int wants_null = (lmm_mode == 4);
+    if (hi_eval_null_obj == Py_None) hi_eval_null_obj = NULL;
+    if (logl_H0_obj == Py_None) logl_H0_obj = NULL;
+    if (wants_null != (hi_eval_null_obj != NULL)) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode=%d %s hi_eval_null", lmm_mode,
+            wants_null ? "requires" : "does not take");
+        return NULL;
+    }
+    if (wants_null != (logl_H0_obj != NULL)) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode=%d %s logl_H0", lmm_mode,
+            wants_null ? "requires" : "does not take");
+        return NULL;
+    }
+    if (wants_null) {
+        logl_H0 = PyFloat_AsDouble(logl_H0_obj);
+        if (logl_H0 == -1.0 && PyErr_Occurred()) return NULL;
+        if (validate_logl_H0(logl_H0) < 0) return NULL;
+    }
+    if (!PyDict_Check(pab_table)) {
+        PyErr_SetString(PyExc_TypeError, "pab_table must be a dict");
+        return NULL;
+    }
+    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
 
     PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
     PyArrayObject *UtW_arr = NULL, *Uty_arr = NULL;
+    PyArrayObject *hi_eval_null_arr = NULL;
     lmm_workspace_general_t *ws = NULL;
     PyObject *capsule = NULL;
 
-    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
-    if (!eigenvalues_arr) goto err_input;
-    if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
-        goto err_input;
-    /* uab_invariant has n_inv rows, known only once the index table is
-     * parsed; init_fused_general_workspace checks its shape. */
-    uab_inv_arr = take_array(uab_inv_obj);
-    if (!uab_inv_arr) goto err_input;
-    UtW_arr = take_matrix(UtW_obj, n_samples, n_cvt, "UtW");
-    if (!UtW_arr) goto err_input;
-    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
-    if (!Uty_arr) goto err_input;
-
     ws = (lmm_workspace_general_t *)calloc(1, sizeof(lmm_workspace_general_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
+    ws->mode = lmm_mode;
+    if (parse_pab_table_from_dict(pab_table, &ws->table, n_samples) < 0)
+        goto err_ws;
+    int n_cvt = ws->table.n_cvt;
+
+    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
+    if (!eigenvalues_arr) goto err_ws;
+    if (validate_eigenvalues(
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+        goto err_ws;
+    uab_inv_arr = take_matrix(uab_inv_obj, ws->table.n_inv, n_samples, "uab_invariant");
+    if (!uab_inv_arr) goto err_ws;
+    UtW_arr = take_matrix(UtW_obj, n_samples, n_cvt, "UtW");
+    if (!UtW_arr) goto err_ws;
+    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
+    if (!Uty_arr) goto err_ws;
+    if (wants_null) {
+        hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
+        if (!hi_eval_null_arr) goto err_ws;
+        if (validate_hi_eval_null(
+                (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
+            goto err_ws;
+    }
+
     if (init_fused_general_workspace(
             ws, eigenvalues_arr, uab_inv_arr, UtW_arr, Uty_arr,
-            inv_idx_obj, var_idx_obj,
-            diag_rows_obj, diag_cols_obj,
-            offsets_obj, counts_obj, entries_obj,
-            var_a_obj, var_b_obj,
-            n_samples, l_min, l_max,
-            n_grid, n_refine, n_threads, n_cvt,
-            idx_xx, idx_xy, idx_yy) < 0)
+            n_samples, l_min, l_max, n_grid, n_refine, n_threads) < 0)
         goto err_ws;
+
+    if (wants_null) {
+        ws->logl_H0 = logl_H0;
+        ws->mle_const = 0.5 * (double)n_samples
+                        * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
+
+        ws->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
+        if (!ws->hi_eval_null) { PyErr_NoMemory(); goto err_ws; }
+        memcpy(ws->hi_eval_null,
+               (const double *)PyArray_DATA(hi_eval_null_arr),
+               (size_t)n_samples * sizeof(double));
+
+        /* Precompute null-model invariant sums */
+        int n_inv = ws->table.n_inv;
+        ws->null_inv_sums = (double *)malloc((size_t)n_inv * sizeof(double));
+        if (!ws->null_inv_sums) { PyErr_NoMemory(); goto err_ws; }
+        for (int c = 0; c < n_inv; c++) {
+            double s = 0.0;
+            const double *col = ws->uab_inv + (size_t)c * n_samples;
+            for (int i = 0; i < n_samples; i++)
+                s += ws->hi_eval_null[i] * col[i];
+            ws->null_inv_sums[c] = s;
+        }
+
+        /* Pre-allocate per-thread LRT buffer (avoids per-SNP malloc in OpenMP loop).
+         * Each thread needs (n_index * n_samples) doubles for row-major uab_snp. */
+        {
+            int n_index = ws->table.n_index;
+            ws->uab_snp_flat = (double *)malloc(
+                (size_t)ws->actual_threads * (size_t)n_index
+                * (size_t)n_samples * sizeof(double));
+            if (!ws->uab_snp_flat) { PyErr_NoMemory(); goto err_ws; }
+        }
+    }
 
     capsule = PyCapsule_New(
         ws, "lmm_workspace_general", lmm_workspace_general_destructor);
@@ -1445,6 +1311,7 @@ static PyObject *create_workspace_fused_general_c_py(
     Py_DECREF(uab_inv_arr);
     Py_DECREF(UtW_arr);
     Py_DECREF(Uty_arr);
+    Py_XDECREF(hi_eval_null_arr);
     return capsule;
 
 err_ws:
@@ -1454,6 +1321,7 @@ err_input:
     Py_XDECREF(uab_inv_arr);
     Py_XDECREF(UtW_arr);
     Py_XDECREF(Uty_arr);
+    Py_XDECREF(hi_eval_null_arr);
     return NULL;
 }
 
@@ -1466,7 +1334,7 @@ err_input:
  *
  * Python signature:
  *   compute_lmm_chunk_fused_general_c(
- *       workspace,   # PyCapsule from create_workspace_fused_general_c
+ *       workspace,   # PyCapsule from create_workspace_general_c, lmm_mode 1 or 4
  *       utg_t,       # (n_snps, n_samples) float64
  *       n_threads,   # int
  *   ) -> dict {lambdas, logls, betas, ses, pwalds}
@@ -1486,17 +1354,9 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
         return NULL;
     }
 
-    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)PyCapsule_GetPointer(
-        capsule_obj, "lmm_workspace_general");
+    lmm_workspace_general_t *ws = general_workspace(
+        capsule_obj, "compute_lmm_chunk_fused_general_c", 1, 4);
     if (!ws) return NULL;
-
-    /* Validate workspace has fused fields */
-    if (!ws->UtW || !ws->Uty) {
-        PyErr_SetString(PyExc_ValueError,
-            "compute_lmm_chunk_fused_general_c requires a fused general workspace "
-            "(UtW/Uty pointers are NULL). Use create_workspace_fused_general_c.");
-        return NULL;
-    }
 
     PyArrayObject *utg_t_arr = NULL;
     output_arrays_t out = {0};
@@ -1563,8 +1423,8 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
         /* Compute n_var varying columns on-the-fly */
         for (int v = 0; v < n_var; v++) {
             double *out_v = scratch + (size_t)v * n_samples;
-            const double *a = get_fused_vector(ws, ws->var_a_cols[v], x);
-            const double *b = get_fused_vector(ws, ws->var_b_cols[v], x);
+            const double *a = get_fused_vector(ws, ws->table.var_a_cols[v], x);
+            const double *b = get_fused_vector(ws, ws->table.var_b_cols[v], x);
             #pragma omp simd
             for (int i = 0; i < n_samples; i++)
                 out_v[i] = a[i] * b[i];
@@ -1629,154 +1489,6 @@ err_input_fg:
 }
 
 /* -------------------------------------------------------------------------
- * create_workspace_mode4_fused_general_c
- *
- * Extends fused general workspace with mode-4 fields: hi_eval_null,
- * logl_H0, mle_const, and null_inv_sums for Score and LRT.
- *
- * Python signature: same as create_workspace_fused_general_c plus
- *   hi_eval_null (n_samples,) float64, logl_H0 float
- * ------------------------------------------------------------------------- */
-static PyObject *create_workspace_mode4_fused_general_c_py(
-    PyObject *self, PyObject *args, PyObject *kwargs)
-{
-    static const char *kwlist[] = {
-        "eigenvalues", "uab_invariant", "UtW", "Uty",
-        "n_samples", "l_min", "l_max", "n_grid", "n_refine", "n_threads",
-        "n_cvt",
-        "invariant_indices", "varying_indices",
-        "logdet_diag_rows", "logdet_diag_cols",
-        "level_offsets", "level_counts", "entries",
-        "idx_xx", "idx_xy", "idx_yy",
-        "var_a_cols", "var_b_cols",
-        "hi_eval_null", "logl_H0",
-        NULL
-    };
-
-    PyObject *eigenvalues_obj, *uab_inv_obj, *UtW_obj, *Uty_obj;
-    PyObject *inv_idx_obj, *var_idx_obj;
-    PyObject *diag_rows_obj, *diag_cols_obj;
-    PyObject *offsets_obj, *counts_obj, *entries_obj;
-    PyObject *var_a_obj, *var_b_obj;
-    PyObject *hi_eval_null_obj;
-    int n_samples, n_grid, n_refine, n_threads, n_cvt;
-    int idx_xx, idx_xy, idx_yy;
-    double l_min, l_max, logl_H0;
-
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOOOiddiiiiOOOOOOOiiiOOOd", (char **)kwlist,
-            &eigenvalues_obj, &uab_inv_obj, &UtW_obj, &Uty_obj,
-            &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads,
-            &n_cvt,
-            &inv_idx_obj, &var_idx_obj,
-            &diag_rows_obj, &diag_cols_obj,
-            &offsets_obj, &counts_obj, &entries_obj,
-            &idx_xx, &idx_xy, &idx_yy,
-            &var_a_obj, &var_b_obj,
-            &hi_eval_null_obj, &logl_H0)) {
-        return NULL;
-    }
-
-    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
-        return NULL;
-    if (validate_n_cvt(n_cvt) < 0)
-        return NULL;
-    if (validate_logl_H0(logl_H0) < 0)
-        return NULL;
-
-    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
-    PyArrayObject *UtW_arr = NULL, *Uty_arr = NULL;
-    PyArrayObject *hi_eval_null_arr = NULL;
-    lmm_workspace_general_t *ws = NULL;
-    PyObject *capsule = NULL;
-
-    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
-    if (!eigenvalues_arr) goto err_input;
-    if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
-        goto err_input;
-    uab_inv_arr = take_array(uab_inv_obj);
-    if (!uab_inv_arr) goto err_input;
-    UtW_arr = take_matrix(UtW_obj, n_samples, n_cvt, "UtW");
-    if (!UtW_arr) goto err_input;
-    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
-    if (!Uty_arr) goto err_input;
-    hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
-    if (!hi_eval_null_arr) goto err_input;
-    if (validate_hi_eval_null(
-            (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
-        goto err_input;
-
-    ws = (lmm_workspace_general_t *)calloc(1, sizeof(lmm_workspace_general_t));
-    if (!ws) { PyErr_NoMemory(); goto err_input; }
-    if (init_fused_general_workspace(
-            ws, eigenvalues_arr, uab_inv_arr, UtW_arr, Uty_arr,
-            inv_idx_obj, var_idx_obj,
-            diag_rows_obj, diag_cols_obj,
-            offsets_obj, counts_obj, entries_obj,
-            var_a_obj, var_b_obj,
-            n_samples, l_min, l_max,
-            n_grid, n_refine, n_threads, n_cvt,
-            idx_xx, idx_xy, idx_yy) < 0)
-        goto err_ws;
-
-    /* Mode-4 specific fields */
-    ws->mode = 4;
-    ws->logl_H0 = logl_H0;
-    ws->mle_const = 0.5 * (double)n_samples
-                    * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
-
-    ws->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
-    if (!ws->hi_eval_null) { PyErr_NoMemory(); goto err_ws; }
-    memcpy(ws->hi_eval_null,
-           (const double *)PyArray_DATA(hi_eval_null_arr),
-           (size_t)n_samples * sizeof(double));
-
-    /* Precompute null-model invariant sums */
-    int n_inv = ws->table.n_inv;
-    ws->null_inv_sums = (double *)malloc((size_t)n_inv * sizeof(double));
-    if (!ws->null_inv_sums) { PyErr_NoMemory(); goto err_ws; }
-    for (int c = 0; c < n_inv; c++) {
-        double s = 0.0;
-        const double *col = ws->uab_inv + (size_t)c * n_samples;
-        for (int i = 0; i < n_samples; i++)
-            s += ws->hi_eval_null[i] * col[i];
-        ws->null_inv_sums[c] = s;
-    }
-
-    /* Pre-allocate per-thread LRT buffer (avoids per-SNP malloc in OpenMP loop).
-     * Each thread needs (n_index * n_samples) doubles for row-major uab_snp. */
-    {
-        int n_index = ws->table.n_index;
-        ws->uab_snp_flat = (double *)malloc(
-            (size_t)ws->actual_threads * (size_t)n_index
-            * (size_t)n_samples * sizeof(double));
-        if (!ws->uab_snp_flat) { PyErr_NoMemory(); goto err_ws; }
-    }
-
-    capsule = PyCapsule_New(
-        ws, "lmm_workspace_general", lmm_workspace_general_destructor);
-    if (!capsule) goto err_ws;
-
-    Py_DECREF(eigenvalues_arr);
-    Py_DECREF(uab_inv_arr);
-    Py_DECREF(UtW_arr);
-    Py_DECREF(Uty_arr);
-    Py_DECREF(hi_eval_null_arr);
-    return capsule;
-
-err_ws:
-    lmm_workspace_general_free(ws);
-err_input:
-    Py_XDECREF(eigenvalues_arr);
-    Py_XDECREF(uab_inv_arr);
-    Py_XDECREF(UtW_arr);
-    Py_XDECREF(Uty_arr);
-    Py_XDECREF(hi_eval_null_arr);
-    return NULL;
-}
-
-/* -------------------------------------------------------------------------
  * compute_mode4_chunk_fused_general_c
  *
  * Fused per-chunk mode-4 for general n_cvt: Score + Wald + LRT from UtG_T.
@@ -1785,7 +1497,7 @@ err_input:
  *
  * Python signature:
  *   compute_mode4_chunk_fused_general_c(
- *       workspace,   # PyCapsule from create_workspace_mode4_fused_general_c
+ *       workspace,   # PyCapsule from create_workspace_general_c, lmm_mode 4
  *       utg_t,       # (n_snps, n_samples) float64
  *       n_threads,   # int
  *   ) -> dict {lambdas, logls, betas, ses, pwalds, p_scores, lambdas_mle, p_lrts}
@@ -1805,21 +1517,9 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
         return NULL;
     }
 
-    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)PyCapsule_GetPointer(
-        capsule_obj, "lmm_workspace_general");
+    lmm_workspace_general_t *ws = general_workspace(
+        capsule_obj, "compute_mode4_chunk_fused_general_c", 4, 4);
     if (!ws) return NULL;
-
-    if (ws->mode != 4) {
-        PyErr_Format(PyExc_ValueError,
-            "compute_mode4_chunk_fused_general_c requires a mode-4 workspace "
-            "(got mode=%d).", ws->mode);
-        return NULL;
-    }
-    if (!ws->UtW || !ws->Uty) {
-        PyErr_SetString(PyExc_ValueError,
-            "compute_mode4_chunk_fused_general_c requires a fused general workspace.");
-        return NULL;
-    }
 
     PyArrayObject *utg_t_arr = NULL;
     mode4_output_t out = {0};
@@ -1889,8 +1589,8 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
         /* Compute n_var varying columns on-the-fly */
         for (int v = 0; v < n_var; v++) {
             double *out_v = scratch + (size_t)v * n_samples;
-            const double *a = get_fused_vector(ws, ws->var_a_cols[v], x);
-            const double *b = get_fused_vector(ws, ws->var_b_cols[v], x);
+            const double *a = get_fused_vector(ws, ws->table.var_a_cols[v], x);
+            const double *b = get_fused_vector(ws, ws->table.var_b_cols[v], x);
             #pragma omp simd
             for (int i = 0; i < n_samples; i++)
                 out_v[i] = a[i] * b[i];
@@ -2961,13 +2661,15 @@ static PyMethodDef methods[] = {
         "                    lambdas_mle, p_lrts — each (n_snps,) float64\n"
     },
     {
-        "create_workspace_fused_general_c",
-        (PyCFunction)create_workspace_fused_general_c_py,
+        "create_workspace_general_c",
+        (PyCFunction)create_workspace_general_c_py,
         METH_VARARGS | METH_KEYWORDS,
-        "Create fused general workspace for n_cvt >= 2 Wald computation.\n"
+        "Create the per-run general (n_cvt >= 2) workspace for lmm_mode 1 or 4.\n"
         "\n"
-        "Stores UtW (transposed to column-major), Uty, and var_a/b_cols\n"
-        "for on-the-fly varying Uab computation from UtG_T.\n"
+        "Takes the Pab table as the dict PabCTable._asdict() returns, and\n"
+        "stores UtW (transposed to column-major), Uty and the varying-column\n"
+        "map for on-the-fly Uab computation from UtG_T. Mode 4 also takes\n"
+        "hi_eval_null and logl_H0.\n"
     },
     {
         "compute_lmm_chunk_fused_general_c",
@@ -2978,15 +2680,6 @@ static PyMethodDef methods[] = {
         "Per-SNP varying dot products computed on-the-fly.\n"
         "Forms the varying Uab columns from UtW/Uty rather than taking them\n"
         "prebuilt; the arithmetic and its order are unchanged.\n"
-    },
-    {
-        "create_workspace_mode4_fused_general_c",
-        (PyCFunction)create_workspace_mode4_fused_general_c_py,
-        METH_VARARGS | METH_KEYWORDS,
-        "Create mode-4 fused general workspace for n_cvt >= 2.\n"
-        "\n"
-        "Extends fused general workspace with Hi_eval_null and logl_H0\n"
-        "for Score/LRT computation.\n"
     },
     {
         "compute_mode4_chunk_fused_general_c",

@@ -144,11 +144,14 @@ PyObject *build_mode4_result_dict(mode4_output_t *out);
 /* Malloc'd copy of a length-checked int32 array; caller frees. */
 int *parse_int32_array(PyObject *obj, int expected_len, const char *name);
 
-/* 0 on success, -1 with PyErr set. On success the caller must free_pab_table.
- * On failure everything already taken is released. */
+/* Parse and fully validate the dict PabCTable._asdict() produces: every
+ * index in range, the level table consistent with entries. 0 on success, -1
+ * with PyErr set. On success the caller must free_pab_table. On failure
+ * everything already taken is released and the struct is zeroed. */
 int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples);
 
-/* Release the owned fields. Does NOT free the struct itself. */
+/* Release the owned fields and zero the struct, so a second call is a no-op.
+ * Does NOT free the struct itself. */
 void free_pab_table(pab_table_t *t);
 
 /* ---------------------------------------------------------------------------

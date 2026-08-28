@@ -64,14 +64,14 @@ def test_c_extension_importable():
     from jamma.lmm._lmm_accel import (
         compute_lmm_chunk_fused_c,
         compute_lmm_chunk_fused_general_c,
-        create_workspace_fused_general_c,
+        create_workspace_general_c,
         create_workspace_ncvt1_c,
     )
 
     for fn in (
         create_workspace_ncvt1_c,
         compute_lmm_chunk_fused_c,
-        create_workspace_fused_general_c,
+        create_workspace_general_c,
         compute_lmm_chunk_fused_general_c,
     ):
         assert callable(fn)

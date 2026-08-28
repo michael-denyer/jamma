@@ -10,6 +10,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -371,6 +372,8 @@ int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples)
     t->level_offsets     = NULL;
     t->level_counts      = NULL;
     t->entries           = NULL;
+    t->var_a_cols        = NULL;
+    t->var_b_cols        = NULL;
 
     /* Parse array fields — free_pab_table on failure (safe: pointers NULL-init'd) */
 #define GETARR(key, field, len) do { \
@@ -386,7 +389,54 @@ int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples)
     GETARR("logdet_diag_cols",  t->logdet_diag_cols,  t->n_cvt + 1);
     GETARR("level_offsets",     t->level_offsets,      t->n_rows);
     GETARR("level_counts",      t->level_counts,       t->n_rows);
+    GETARR("var_a_cols",        t->var_a_cols,         t->n_var);
+    GETARR("var_b_cols",        t->var_b_cols,         t->n_var);
 #undef GETARR
+
+    for (int i = 0; i < t->n_inv; i++) {
+        if (t->invariant_indices[i] < 0 || t->invariant_indices[i] >= t->n_index) {
+            PyErr_Format(PyExc_ValueError,
+                "invariant_indices[%d] = %d out of range [0, %d)",
+                i, t->invariant_indices[i], t->n_index);
+            free_pab_table(t);
+            return -1;
+        }
+    }
+    for (int i = 0; i < t->n_var; i++) {
+        if (t->varying_indices[i] < 0 || t->varying_indices[i] >= t->n_index) {
+            PyErr_Format(PyExc_ValueError,
+                "varying_indices[%d] = %d out of range [0, %d)",
+                i, t->varying_indices[i], t->n_index);
+            free_pab_table(t);
+            return -1;
+        }
+    }
+    for (int d = 0; d < t->n_cvt + 1; d++) {
+        if (t->logdet_diag_rows[d] < 0 || t->logdet_diag_rows[d] >= t->n_rows) {
+            PyErr_Format(PyExc_ValueError,
+                "logdet_diag_rows[%d] = %d out of range [0, %d)",
+                d, t->logdet_diag_rows[d], t->n_rows);
+            free_pab_table(t);
+            return -1;
+        }
+        if (t->logdet_diag_cols[d] < 0 || t->logdet_diag_cols[d] >= t->n_index) {
+            PyErr_Format(PyExc_ValueError,
+                "logdet_diag_cols[%d] = %d out of range [0, %d)",
+                d, t->logdet_diag_cols[d], t->n_index);
+            free_pab_table(t);
+            return -1;
+        }
+    }
+    for (int v = 0; v < t->n_var; v++) {
+        if (t->var_a_cols[v] < 0 || t->var_a_cols[v] > t->n_cvt + 1 ||
+            t->var_b_cols[v] < 0 || t->var_b_cols[v] > t->n_cvt + 1) {
+            PyErr_Format(PyExc_ValueError,
+                "var_a_cols[%d]=%d or var_b_cols[%d]=%d out of range [0, %d]",
+                v, t->var_a_cols[v], v, t->var_b_cols[v], t->n_cvt + 1);
+            free_pab_table(t);
+            return -1;
+        }
+    }
 
     /* Parse entries (stride-4 flat int32 array) */
     {
@@ -443,7 +493,7 @@ int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples)
         for (int p = 0; p < t->n_rows; p++) {
             if (t->level_offsets[p] < 0 ||
                 t->level_counts[p] < 0 ||
-                t->level_offsets[p] + t->level_counts[p] > t->n_entries) {
+                (int64_t)t->level_offsets[p] + t->level_counts[p] > t->n_entries) {
                 PyErr_Format(PyExc_ValueError,
                     "level_offsets[%d]=%d + level_counts[%d]=%d exceeds n_entries=%d",
                     p, t->level_offsets[p], p, t->level_counts[p], t->n_entries);
@@ -465,6 +515,9 @@ void free_pab_table(pab_table_t *t)
     free(t->level_offsets);
     free(t->level_counts);
     free(t->entries);
+    free(t->var_a_cols);
+    free(t->var_b_cols);
+    memset(t, 0, sizeof(*t));
 }
 
 PyArrayObject *take_array(PyObject *obj)

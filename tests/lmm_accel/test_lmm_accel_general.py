@@ -8,11 +8,7 @@ import numpy as np
 import pytest
 
 from jamma.lmm import compute_numpy
-from jamma.lmm.compute_numpy import (
-    _c,
-    compute_lmm_chunk_numpy,
-    compute_wald_fused_general_c_ws,
-)
+from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
 from jamma.lmm.schema import LmmConfig
 from tests.lmm_accel._helpers import (
     _fused_general_workspace,
@@ -57,14 +53,14 @@ def test_general_ncvt_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     assert ws is not None
 
     mid = n_snps // 2
-    r1 = compute_wald_fused_general_c_ws(ws, utg_t[:mid], 1)
+    r1 = _c().compute_lmm_chunk_fused_general_c(ws, utg_t[:mid], 1)
     assert r1["lambdas"].shape == (mid,)
 
     # Reuse the same workspace for the second chunk.
-    r2 = compute_wald_fused_general_c_ws(ws, utg_t[mid:], 1)
+    r2 = _c().compute_lmm_chunk_fused_general_c(ws, utg_t[mid:], 1)
     assert r2["lambdas"].shape == (n_snps - mid,)
 
-    r_full = compute_wald_fused_general_c_ws(ws, utg_t, 1)
+    r_full = _c().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
     np.testing.assert_allclose(
         np.concatenate([r1["lambdas"], r2["lambdas"]]),
         r_full["lambdas"],
@@ -225,8 +221,8 @@ def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
     data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
     ws = _fused_general_workspace(data)
 
-    r1 = compute_wald_fused_general_c_ws(ws, data["utg_t"], 1)
-    rn = compute_wald_fused_general_c_ws(ws, data["utg_t"], n_threads)
+    r1 = _c().compute_lmm_chunk_fused_general_c(ws, data["utg_t"], 1)
+    rn = _c().compute_lmm_chunk_fused_general_c(ws, data["utg_t"], n_threads)
 
     for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
         np.testing.assert_allclose(
@@ -254,7 +250,7 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
     utg_t[[0, 2]] = 0.0
 
     ws = _fused_general_workspace(data)
-    result = compute_wald_fused_general_c_ws(ws, utg_t, 1)
+    result = _c().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
 
     for snp_idx in (0, 2):
         assert np.isnan(result["betas"][snp_idx]), f"SNP {snp_idx}: expected NaN beta"
@@ -270,10 +266,10 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_general_ncvt_abi_version():
-    """C-GEN-07: ABI version is 13 after the four n_cvt=1 creators became one."""
+    """C-GEN-07: ABI version is 14 after the four n_cvt=1 creators became one."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 13, f"Expected ABI_VERSION=13, got {ABI_VERSION}"
+    assert ABI_VERSION == 14, f"Expected ABI_VERSION=14, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0

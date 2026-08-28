@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **One general (n_cvt >= 2) workspace creator on the Pab table dict;
+  `ABI_VERSION` 13 -> 14.** `create_workspace_general_c(eigenvalues,
+  uab_invariant, UtW, Uty, n_samples, l_min, l_max, n_grid, n_refine,
+  n_threads, pab_table, *, lmm_mode, hi_eval_null=None, logl_H0=None)`
+  replaces `create_workspace_fused_general_c` and
+  `create_workspace_mode4_fused_general_c`. `pab_table` is the dict
+  `PabCTable._asdict()` returns, the same one `compute_*_split_general_c`
+  already take, so `n_cvt` and the twelve index arguments are gone from the
+  signature and `PabCTable.workspace_kwargs()` with them. `lmm_mode` is 1 or
+  4 (Score-only and LRT-only at n_cvt >= 2 take no workspace), and mode 4
+  requires `hi_eval_null` and `logl_H0`. `pab_table_t` carries
+  `var_a_cols`/`var_b_cols`, and `parse_pab_table_from_dict` now performs
+  every check the flat path did, including the four per-element range loops
+  it lacked (`invariant_indices`, `varying_indices`, `logdet_diag_rows`,
+  `logdet_diag_cols`) and the `int64` widening on the level-offset sum;
+  `free_pab_table` zeroes the struct so a second call is a no-op. The two
+  general compute entry points keep their names and check the workspace's
+  `lmm_mode`. The Python wrappers `create_lmm_workspace_fused_general`,
+  `create_lmm_workspace_mode4_fused_general`,
+  `compute_wald_fused_general_c_ws` and `compute_mode4_fused_general_c_ws`
+  are gone. Bit-identical on `.assoc.txt` for all four `-lmm` modes at n_cvt
+  1, 2 and 4 and on every compute-entry fingerprint key.
 - **One n_cvt=1 workspace creator in `_lmm_accel`; `ABI_VERSION` 12 -> 13.**
   `create_workspace_ncvt1_c(eigenvalues, uab_invariant, w, Uty, n_samples,
   l_min, l_max, n_grid, n_refine, *, lmm_mode, hi_eval_null=None,
@@ -262,11 +284,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with it. `likelihood.py` drops from 1216 to 895 lines.
 - **`PabIndexTable` and `PabCTable` replace the two untyped table dicts.**
   `build_index_table` and `build_pab_table_for_c` return NamedTuples;
-  consumers read `table.idx_yy`. `PabCTable.workspace_kwargs()` is the one
-  statement of what the general C workspace constructors take, replacing
-  three hand-maintained copies of the same twelve names. The C table parser
-  still reads a dict, so the two calls into `compute_*_split_general_c` pass
-  `._asdict()`. The scalar `calc_pab`, the general `compute_Uab` and the REML
+  consumers read `table.idx_yy`. `PabCTable._asdict()` is the dict every C
+  entry point that takes a Pab table reads. The scalar `calc_pab`, the
+  general `compute_Uab` and the REML
   logdet loop walk the same table the batch code walks: same integers, same
   arithmetic, same order.
 - **`batch_compute_uab_numpy` takes `utg_t` of shape `(n_snps,

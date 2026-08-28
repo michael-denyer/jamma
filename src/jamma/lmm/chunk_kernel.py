@@ -25,10 +25,6 @@ from jamma.lmm.compute_numpy import (
     _compute_lrt_split_numpy,
     _compute_score_split_numpy,
     compute_lmm_chunk_numpy,
-    compute_mode4_fused_general_c_ws,
-    compute_wald_fused_general_c_ws,
-    create_lmm_workspace_fused_general,
-    create_lmm_workspace_mode4_fused_general,
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood import build_pab_table_for_c
@@ -220,16 +216,19 @@ def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
     )
 
 
+_GENERAL_COMPUTE: dict[int, tuple[str, str]] = {
+    1: ("compute_lmm_chunk_fused_general_c", "Fused general Uab dispatch"),
+    4: ("compute_mode4_chunk_fused_general_c", "Fused general mode-4 Uab dispatch"),
+}
+
+
 def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
-    """n_cvt>=2 Wald or mode 4: same shape, plus the Pab table the kernel walks."""
-    is_mode4 = inv.lmm_mode == 4
-    pab_kwargs = build_pab_table_for_c(inv.n_cvt).workspace_kwargs()
-    create = (
-        create_lmm_workspace_mode4_fused_general
-        if is_mode4
-        else create_lmm_workspace_fused_general
-    )
-    workspace = create(
+    """n_cvt>=2 Wald or mode 4: same shape as n_cvt=1, plus the Pab table.
+
+    The workspace sizes its per-thread scratch from *n_threads* once, so the
+    run-level thread count is part of its construction here.
+    """
+    workspace = _c().create_workspace_general_c(
         inv.eigenvalues,
         inv.require_invariant_soa(),
         inv.UtW,
@@ -240,20 +239,12 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         inv.n_grid,
         inv.n_refine,
         n_threads,
-        n_cvt=inv.n_cvt,
-        **pab_kwargs,
+        build_pab_table_for_c(inv.n_cvt)._asdict(),
+        lmm_mode=inv.lmm_mode,
         **_null_model_kwargs(inv),
     )
-    compute = (
-        compute_mode4_fused_general_c_ws
-        if is_mode4
-        else compute_wald_fused_general_c_ws
-    )
-    label = (
-        "Fused general mode-4 Uab dispatch"
-        if is_mode4
-        else "Fused general Uab dispatch"
-    )
+    compute_name, label = _GENERAL_COMPUTE[inv.lmm_mode]
+    compute = getattr(_c(), compute_name)
     return Kernel(
         label=label,
         n_filtered=inv.n_filtered,
@@ -333,8 +324,7 @@ def _null_model_kwargs(inv: RunInvariants) -> dict[str, Any]:
     """The null-model inputs a C workspace creator takes for this mode.
 
     Score (3) needs ``hi_eval_null``, LRT (2) needs ``logl_H0``, mode 4 both,
-    Wald (1) neither. The creators reject an input their mode does not use,
-    and the general creators take the pair only for mode 4.
+    Wald (1) neither. Both creators reject an input their mode does not use.
     """
     kwargs: dict[str, Any] = {}
     if inv.lmm_mode in (3, 4):

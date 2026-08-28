@@ -3,13 +3,7 @@
 import numpy as np
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    WaldResult,
-    _compute_wald_numpy,
-    compute_wald_fused_general_c_ws,
-    create_lmm_workspace_fused_general,
-    create_lmm_workspace_mode4_fused_general,
-)
+from jamma.lmm.compute_numpy import WaldResult, _c, _compute_wald_numpy
 from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
@@ -49,7 +43,7 @@ def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
     """
     if "pab_c" not in data:
         data = _prepare_fused_general_data(data)
-    return create_lmm_workspace_fused_general(
+    return _c().create_workspace_general_c(
         data["eigenvalues"],
         data["uab_inv_soa"],
         data["UtW"],
@@ -60,8 +54,8 @@ def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
         50,
         20,
         n_threads,
-        n_cvt=data["n_cvt"],
-        **data["pab_c"].workspace_kwargs(),
+        data["pab_c"]._asdict(),
+        lmm_mode=1,
     )
 
 
@@ -73,7 +67,7 @@ def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
     """
     if "pab_c" not in data:
         data = _prepare_fused_general_data(data)
-    return create_lmm_workspace_mode4_fused_general(
+    return _c().create_workspace_general_c(
         data["eigenvalues"],
         data["uab_inv_soa"],
         data["UtW"],
@@ -84,8 +78,8 @@ def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
         50,
         20,
         n_threads,
-        n_cvt=data["n_cvt"],
-        **data["pab_c"].workspace_kwargs(),
+        data["pab_c"]._asdict(),
+        lmm_mode=4,
         hi_eval_null=data["Hi_eval_null"],
         logl_H0=data["logl_H0"],
     )
@@ -121,7 +115,7 @@ def _fused_general_wald(data: dict, n_threads: int = 1) -> WaldResult:
     if "pab_c" not in data:
         data = _prepare_fused_general_data(data)
     ws = _fused_general_workspace(data, n_threads)
-    return compute_wald_fused_general_c_ws(ws, data["utg_t"], n_threads)
+    return _c().compute_lmm_chunk_fused_general_c(ws, data["utg_t"], n_threads)
 
 
 def _numpy_general_wald(data: dict) -> WaldResult:

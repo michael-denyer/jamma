@@ -29,7 +29,7 @@ from __future__ import annotations
 import functools
 import threading
 from collections.abc import Callable, Sequence
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
@@ -135,17 +135,6 @@ class PabCTable(NamedTuple):
     entries: np.ndarray
     var_a_cols: np.ndarray
     var_b_cols: np.ndarray
-
-    def workspace_kwargs(self) -> dict[str, Any]:
-        """The kwargs ``create_workspace_*_general_c`` take.
-
-        Those constructors receive ``n_cvt`` on their own and derive the
-        other shape scalars themselves.
-        """
-        kwargs = self._asdict()
-        for name in ("n_cvt", "n_index", "n_rows", "n_inv", "n_var"):
-            del kwargs[name]
-        return kwargs
 
 
 class _Ncvt1Layout(NamedTuple):

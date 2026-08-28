@@ -57,6 +57,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`_lmm_accel.c` marshals arguments through `_lmm_support.c`.**
+  `take_vector`, `take_matrix`, `take_chunk` and `take_array` replace 33 of
+  the 43 inline `PyArray_FROM_OTF` + shape-check + `INT_MAX` blocks;
+  `validate_hi_eval_null`, `validate_logl_H0` and `validate_n_cvt` replace
+  the four wordings of each guard; `build_grid_ncvt1` is the one n_cvt=1
+  lambda grid, moved verbatim from the three identical copies. The two
+  n_cvt=1 creators share `init_ncvt1_workspace` the way the general pair
+  already shared theirs. Every workspace struct has one `*_free()` that the
+  capsule destructor and every creator error path call, and every creator
+  now creates its capsule before releasing the local array references. That
+  ordering removes a double `Py_DECREF` in the Score and LRT creators'
+  `PyCapsule_New` failure path, which released each input array once more
+  than it owned. Error labels are `err_input`, `err_output` and `err_ws`.
+  Bit-identical on the 79-key accel fingerprint and on `.assoc.txt` for all
+  four `-lmm` modes at n_cvt 1, 2 and 4. `_lmm_accel.c` 4098 -> 3512 lines.
+- **`_lmm_tests.{c,h}` are part of `_lmm_stats.{c,h}`.** The four
+  Pab-to-statistic functions (`wald_from_pab`, `score_from_pab` and their
+  general forms) sit beside the statistic-to-p-value ones they feed; both
+  halves are pure double arithmetic that runs once per SNP after the
+  optimizer. `LMM_ACCEL_SOURCES` drops one entry. Bit-identical on both
+  digest levers.
 - **Giant test files split along the src seams they mirror.**
   `test_runner_numpy.py` gives its chunk-sizing tests to a new
   `test_chunk_sizing.py` (absorbing `test_auto_tune_chunk.py` and

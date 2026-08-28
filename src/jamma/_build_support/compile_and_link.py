@@ -52,7 +52,6 @@ LMM_ACCEL_SOURCES: tuple[str, ...] = (
     "_lmm_accel.c",
     "_lmm_support.c",
     "_lmm_stats.c",
-    "_lmm_tests.c",
     "_lmm_kernels_general.c",
     "_lmm_kernels_ncvt1.c",
 )

@@ -72,7 +72,6 @@
 #include "_lmm_support.h"
 
 #include "_lmm_stats.h"
-#include "_lmm_tests.h"
 #include "_lmm_kernels_ncvt1.h"
 #include "_lmm_kernels_general.h"
 #include <assert.h>
@@ -174,11 +173,11 @@ typedef struct {
     PyObject *Uty_ref;        /* keeps Uty array alive */
 } lmm_workspace_t;
 
-/* PyCapsule destructor: free owned allocations, release Python array refs. */
-static void lmm_workspace_destructor(PyObject *cap)
+/* Owner of every allocation and array ref in the struct. NULL-safe on
+ * every field, so it serves both the capsule destructor and each creator's
+ * error path. */
+static void lmm_workspace_free(lmm_workspace_t *ws)
 {
-    lmm_workspace_t *ws =
-        (lmm_workspace_t *)PyCapsule_GetPointer(cap, "lmm_workspace");
     if (!ws) return;
     free(ws->lambda_grid);
     free(ws->hi_eval_grid);
@@ -190,6 +189,12 @@ static void lmm_workspace_destructor(PyObject *cap)
     Py_XDECREF(ws->w_ref);
     Py_XDECREF(ws->Uty_ref);
     free(ws);
+}
+
+static void lmm_workspace_destructor(PyObject *cap)
+{
+    lmm_workspace_free(
+        (lmm_workspace_t *)PyCapsule_GetPointer(cap, "lmm_workspace"));
 }
 
 
@@ -263,10 +268,8 @@ typedef struct {
 } lmm_workspace_general_t;
 
 /* PyCapsule destructor for general workspace */
-static void lmm_workspace_general_destructor(PyObject *cap)
+static void lmm_workspace_general_free(lmm_workspace_general_t *ws)
 {
-    lmm_workspace_general_t *ws =
-        (lmm_workspace_general_t *)PyCapsule_GetPointer(cap, "lmm_workspace_general");
     if (!ws) return;
     free(ws->lambda_grid);
     free(ws->hi_eval_grid);
@@ -295,6 +298,12 @@ static void lmm_workspace_general_destructor(PyObject *cap)
     free(ws->null_inv_sums);
     free(ws->uab_snp_flat);
     free(ws);
+}
+
+static void lmm_workspace_general_destructor(PyObject *cap)
+{
+    lmm_workspace_general_free((lmm_workspace_general_t *)
+        PyCapsule_GetPointer(cap, "lmm_workspace_general"));
 }
 
 
@@ -330,6 +339,112 @@ static void lmm_workspace_general_destructor(PyObject *cap)
  *       n_threads,        # int
  *   ) -> PyCapsule wrapping lmm_workspace_t
  * ------------------------------------------------------------------------- */
+/* Fill a calloc'd n_cvt=1 workspace from validated inputs: the scalar
+ * constants, the borrowed array pointers (INCREF'd here, released by
+ * lmm_workspace_free), the invariant Iab scalar and the lambda grid.
+ * 0, or -1 with PyErr set. */
+static int init_ncvt1_workspace(
+    lmm_workspace_t *ws,
+    PyArrayObject *eigenvalues_arr, PyArrayObject *uab_inv_arr,
+    PyArrayObject *w_arr, PyArrayObject *Uty_arr,
+    int n_samples, double l_min, double l_max, int n_grid, int n_refine)
+{
+    ws->n_samples = n_samples;
+    ws->n_grid    = n_grid;
+    ws->n_refine  = n_refine;
+    ws->l_min     = l_min;
+    ws->l_max     = l_max;
+    ws->df        = n_samples - 2;
+
+    ws->beta_a   = (double)ws->df / 2.0;
+    ws->beta_b   = 0.5;
+    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
+                   - lgamma(ws->beta_a + ws->beta_b);
+
+    ws->log_l_min   = log(l_min);
+    double log_l_max = log(l_max);
+    ws->step        = (log_l_max - ws->log_l_min) / (double)(n_grid - 1);
+    ws->reml_const  = 0.5 * ws->df * (log((double)ws->df)
+                       - log(2.0 * M_PI) - 1.0);
+
+    Py_INCREF(eigenvalues_arr);
+    Py_INCREF(uab_inv_arr);
+    ws->eigenvalues_ref = (PyObject *)eigenvalues_arr;
+    ws->uab_inv_ref     = (PyObject *)uab_inv_arr;
+
+    ws->eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
+    ws->inv_ww = (const double *)PyArray_DATA(uab_inv_arr);
+    ws->inv_wy = ws->inv_ww + (size_t)n_samples;
+    ws->inv_yy = ws->inv_ww + (size_t)2 * n_samples;
+
+    Py_INCREF(w_arr);
+    Py_INCREF(Uty_arr);
+    ws->w = (const double *)PyArray_DATA(w_arr);
+    ws->Uty = (const double *)PyArray_DATA(Uty_arr);
+    ws->w_ref = (PyObject *)w_arr;
+    ws->Uty_ref = (PyObject *)Uty_arr;
+
+    {
+        double s_ww = 0.0;
+        for (int i = 0; i < n_samples; i++) s_ww += ws->inv_ww[i];
+        ws->iab_s_ww   = s_ww;
+        ws->iab_inv_ww = (s_ww != 0.0) ? 1.0 / s_ww : 0.0;
+        ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
+    }
+
+    ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
+    ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    ws->grid_inv      = (grid_invariant_t *)malloc(
+        (size_t)n_grid * sizeof(grid_invariant_t));
+    if (!ws->lambda_grid || !ws->hi_eval_grid ||
+        !ws->logdet_h_grid || !ws->grid_inv) {
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    build_grid_ncvt1(n_grid, n_samples, ws->log_l_min, ws->step,
+                     ws->eigenvalues, ws->inv_ww, ws->inv_wy, ws->inv_yy,
+                     ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
+                     ws->grid_inv);
+    return 0;
+}
+
+/* Mode-4 extras on an initialised n_cvt=1 workspace: the owned copy of the
+ * null-model Hi_eval, its invariant dot products, and the MLE constant.
+ * 0, or -1 with PyErr set. */
+static int init_ncvt1_null_model(
+    lmm_workspace_t *ws, const double *hi_eval_null, double logl_H0)
+{
+    int n_samples = ws->n_samples;
+    ws->mode = 4;
+    ws->logl_H0 = logl_H0;
+    ws->mle_const = 0.5 * (double)n_samples
+                    * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
+
+    ws->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
+    if (!ws->hi_eval_null) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    memcpy(ws->hi_eval_null, hi_eval_null, (size_t)n_samples * sizeof(double));
+
+    {
+        double ns_ww = 0.0, ns_wy = 0.0, ns_yy = 0.0;
+        for (int i = 0; i < n_samples; i++) {
+            double h = ws->hi_eval_null[i];
+            ns_ww += h * ws->inv_ww[i];
+            ns_wy += h * ws->inv_wy[i];
+            ns_yy += h * ws->inv_yy[i];
+        }
+        ws->null_s_ww   = ns_ww;
+        ws->null_s_wy   = ns_wy;
+        ws->null_s_yy   = ns_yy;
+        ws->null_inv_ww  = (ns_ww != 0.0) ? 1.0 / ns_ww : 0.0;
+    }
+    return 0;
+}
+
 static PyObject *create_workspace_fused_c_py(
     PyObject *self, PyObject *args, PyObject *kwargs)
 {
@@ -358,147 +473,27 @@ static PyObject *create_workspace_fused_c_py(
     lmm_workspace_t *ws = NULL;
     PyObject *capsule = NULL;
 
-    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!eigenvalues_arr) return NULL;
-
-    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
+    if (!eigenvalues_arr) goto err_input;
+    uab_inv_arr = take_matrix(uab_inv_obj, 3, n_samples, "uab_invariant");
     if (!uab_inv_arr) goto err_input;
-
-    w_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        w_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    w_arr = take_vector(w_obj, n_samples, "w");
     if (!w_arr) goto err_input;
-
-    Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
     if (!Uty_arr) goto err_input;
-
-    /* Validate shapes */
-    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
-        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "eigenvalues must be shape (n_samples,)");
-        goto err_input;
-    }
-    if (PyArray_NDIM(uab_inv_arr) != 2 ||
-        PyArray_DIM(uab_inv_arr, 0) != 3 ||
-        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "uab_invariant must be shape (3, n_samples)");
-        goto err_input;
-    }
-    if (PyArray_NDIM(w_arr) != 1 ||
-        PyArray_DIM(w_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "w must be shape (n_samples,)");
-        goto err_input;
-    }
-    if (PyArray_NDIM(Uty_arr) != 1 ||
-        PyArray_DIM(Uty_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "Uty must be shape (n_samples,)");
-        goto err_input;
-    }
-
     if (validate_eigenvalues(
             (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
         goto err_input;
 
     ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
-
-    /* Fill scalar fields */
-    ws->n_samples = n_samples;
-    ws->n_grid    = n_grid;
-    ws->n_refine  = n_refine;
-    ws->l_min     = l_min;
-    ws->l_max     = l_max;
-    ws->df        = n_samples - 2;
-
-    ws->beta_a   = (double)ws->df / 2.0;
-    ws->beta_b   = 0.5;
-    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
-                   - lgamma(ws->beta_a + ws->beta_b);
-
-    ws->log_l_min   = log(l_min);
-    double log_l_max = log(l_max);
-    ws->step        = (log_l_max - ws->log_l_min) / (double)(n_grid - 1);
-    ws->reml_const  = 0.5 * ws->df * (log((double)ws->df)
-                       - log(2.0 * M_PI) - 1.0);
-
-    /* Borrow pointers — arrays kept alive via Py_INCREF */
-    Py_INCREF(eigenvalues_arr);
-    Py_INCREF(uab_inv_arr);
-    ws->eigenvalues_ref = (PyObject *)eigenvalues_arr;
-    ws->uab_inv_ref     = (PyObject *)uab_inv_arr;
-
-    ws->eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
-    ws->inv_ww = (const double *)PyArray_DATA(uab_inv_arr);
-    ws->inv_wy = ws->inv_ww + (size_t)n_samples;
-    ws->inv_yy = ws->inv_ww + (size_t)2 * n_samples;
-
-    /* Store w and Uty for fused on-the-fly Uab computation */
-    Py_INCREF(w_arr);
-    Py_INCREF(Uty_arr);
-    ws->w = (const double *)PyArray_DATA(w_arr);
-    ws->Uty = (const double *)PyArray_DATA(Uty_arr);
-    ws->w_ref = (PyObject *)w_arr;
-    ws->Uty_ref = (PyObject *)Uty_arr;
-
-    /* Compute invariant Iab scalar: sum(inv_ww) */
-    {
-        double s_ww = 0.0;
-        for (int i = 0; i < n_samples; i++) s_ww += ws->inv_ww[i];
-        ws->iab_s_ww   = s_ww;
-        ws->iab_inv_ww = (s_ww != 0.0) ? 1.0 / s_ww : 0.0;
-        ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
-    }
-
-    /* Allocate grid arrays */
-    ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
-    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
-    ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
-    ws->grid_inv      = (grid_invariant_t *)malloc(
-        (size_t)n_grid * sizeof(grid_invariant_t));
-
-    if (!ws->lambda_grid || !ws->hi_eval_grid ||
-        !ws->logdet_h_grid || !ws->grid_inv) {
-        PyErr_NoMemory();
+    if (init_ncvt1_workspace(ws, eigenvalues_arr, uab_inv_arr, w_arr, Uty_arr,
+                             n_samples, l_min, l_max, n_grid, n_refine) < 0)
         goto err_ws;
-    }
 
-    /* Build lambda grid + invariant dot products */
-    for (int g = 0; g < n_grid; g++) {
-        ws->lambda_grid[g] = exp(ws->log_l_min + g * ws->step);
-    }
-    for (int g = 0; g < n_grid; g++) {
-        double lam    = ws->lambda_grid[g];
-        double *hi_row = ws->hi_eval_grid + (size_t)g * n_samples;
-        double logdet = 0.0;
-        double sw = 0.0, swy = 0.0, sy = 0.0;
-        for (int i = 0; i < n_samples; i++) {
-            double v = lam * ws->eigenvalues[i] + 1.0;
-            double h = 1.0 / v;
-            hi_row[i] = h;
-            logdet += log(v);
-            sw  += h * ws->inv_ww[i];
-            swy += h * ws->inv_wy[i];
-            sy  += h * ws->inv_yy[i];
-        }
-        ws->logdet_h_grid[g] = logdet;
-
-        ws->grid_inv[g].s_ww    = sw;
-        ws->grid_inv[g].s_wy    = swy;
-        ws->grid_inv[g].s_yy    = sy;
-        ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
-    }
-
-    /* Wrap in PyCapsule */
     capsule = PyCapsule_New(ws, "lmm_workspace", lmm_workspace_destructor);
     if (!capsule) goto err_ws;
 
-    /* Release local refs — capsule now owns ws->*_ref via destructor */
     Py_DECREF(eigenvalues_arr);
     Py_DECREF(uab_inv_arr);
     Py_DECREF(w_arr);
@@ -506,17 +501,7 @@ static PyObject *create_workspace_fused_c_py(
     return capsule;
 
 err_ws:
-    if (ws) {
-        Py_XDECREF(ws->eigenvalues_ref);
-        Py_XDECREF(ws->uab_inv_ref);
-        Py_XDECREF(ws->w_ref);
-        Py_XDECREF(ws->Uty_ref);
-        free(ws->lambda_grid);
-        free(ws->hi_eval_grid);
-        free(ws->logdet_h_grid);
-        free(ws->grid_inv);
-        free(ws);
-    }
+    lmm_workspace_free(ws);
 err_input:
     Py_XDECREF(eigenvalues_arr);
     Py_XDECREF(uab_inv_arr);
@@ -571,30 +556,10 @@ static PyObject *compute_lmm_chunk_fused_c_py(
     output_arrays_t out = {0};
     PyObject *result = NULL;
 
-    utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!utg_t_arr) return NULL;
-
     int n_samples = ws->n_samples;
-
-    /* Validate shape: must be 2D (n_snps, n_samples) */
-    if (PyArray_NDIM(utg_t_arr) != 2 ||
-        PyArray_DIM(utg_t_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "utg_t must be shape (n_snps, %d), got (%d, %d)",
-            n_samples,
-            (int)(PyArray_NDIM(utg_t_arr) >= 1 ? PyArray_DIM(utg_t_arr, 0) : -1),
-            (int)(PyArray_NDIM(utg_t_arr) >= 2 ? PyArray_DIM(utg_t_arr, 1) : -1));
-        goto err_input;
-    }
-
-    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
-    if (n_snps_raw > INT_MAX) {
-        PyErr_Format(PyExc_OverflowError,
-            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
-        goto err_input;
-    }
-    int n_snps = (int)n_snps_raw;
+    int n_snps;
+    utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
+    if (!utg_t_arr) return NULL;
 
     if (alloc_output_arrays(&out, n_snps) < 0)
         goto err_input;
@@ -762,12 +727,8 @@ static PyObject *create_workspace_mode4_fused_c_py(
 
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
-
-    if (!isfinite(logl_H0)) {
-        PyErr_SetString(PyExc_ValueError,
-            "logl_H0 must be finite (got NaN or Inf from null model)");
+    if (validate_logl_H0(logl_H0) < 0)
         return NULL;
-    }
 
     PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
     PyArrayObject *w_arr = NULL, *Uty_arr = NULL;
@@ -775,208 +736,32 @@ static PyObject *create_workspace_mode4_fused_c_py(
     lmm_workspace_t *ws = NULL;
     PyObject *capsule = NULL;
 
-    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!eigenvalues_arr) return NULL;
-
-    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
+    if (!eigenvalues_arr) goto err_input;
+    uab_inv_arr = take_matrix(uab_inv_obj, 3, n_samples, "uab_invariant");
     if (!uab_inv_arr) goto err_input;
-
-    w_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        w_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    w_arr = take_vector(w_obj, n_samples, "w");
     if (!w_arr) goto err_input;
-
-    Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
     if (!Uty_arr) goto err_input;
-
-    hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
+    hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
     if (!hi_eval_null_arr) goto err_input;
-
-    /* Validate shapes */
-    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
-        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "eigenvalues must be shape (n_samples,)");
-        goto err_input;
-    }
-    if (PyArray_NDIM(uab_inv_arr) != 2 ||
-        PyArray_DIM(uab_inv_arr, 0) != 3 ||
-        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "uab_invariant must be shape (3, n_samples)");
-        goto err_input;
-    }
-    if (PyArray_NDIM(w_arr) != 1 ||
-        PyArray_DIM(w_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "w must be shape (n_samples,)");
-        goto err_input;
-    }
-    if (PyArray_NDIM(Uty_arr) != 1 ||
-        PyArray_DIM(Uty_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "Uty must be shape (n_samples,)");
-        goto err_input;
-    }
-    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
-        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "hi_eval_null must be shape (n_samples,)");
-        goto err_input;
-    }
-
     if (validate_eigenvalues(
             (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
         goto err_input;
-
-    /* Validate Hi_eval_null for NaN/Inf and non-positive values */
-    {
-        const double *hi_null = (const double *)PyArray_DATA(hi_eval_null_arr);
-        for (int i = 0; i < n_samples; i++) {
-            char buf[64];
-            if (!isfinite(hi_null[i])) {
-                snprintf(buf, sizeof(buf), "%g", hi_null[i]);
-                PyErr_Format(PyExc_ValueError,
-                    "Hi_eval_null[%d] = %s is not finite. "
-                    "Null model optimization may have failed.", i, buf);
-                goto err_input;
-            }
-            if (hi_null[i] <= 0.0) {
-                snprintf(buf, sizeof(buf), "%g", hi_null[i]);
-                PyErr_Format(PyExc_ValueError,
-                    "Hi_eval_null[%d] = %s is not positive. "
-                    "Check kinship matrix conditioning.",
-                    i, buf);
-                goto err_input;
-            }
-        }
-    }
+    if (validate_hi_eval_null(
+            (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
+        goto err_input;
 
     ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
-
-    /* Fill scalar fields */
-    ws->n_samples = n_samples;
-    ws->n_grid    = n_grid;
-    ws->n_refine  = n_refine;
-    ws->l_min     = l_min;
-    ws->l_max     = l_max;
-    ws->df        = n_samples - 2;
-
-    ws->beta_a   = (double)ws->df / 2.0;
-    ws->beta_b   = 0.5;
-    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
-                   - lgamma(ws->beta_a + ws->beta_b);
-
-    ws->log_l_min   = log(l_min);
-    double log_l_max_m4 = log(l_max);
-    ws->step        = (log_l_max_m4 - ws->log_l_min) / (double)(n_grid - 1);
-    ws->reml_const  = 0.5 * ws->df * (log((double)ws->df)
-                       - log(2.0 * M_PI) - 1.0);
-
-    /* Borrow pointers */
-    Py_INCREF(eigenvalues_arr);
-    Py_INCREF(uab_inv_arr);
-    ws->eigenvalues_ref = (PyObject *)eigenvalues_arr;
-    ws->uab_inv_ref     = (PyObject *)uab_inv_arr;
-
-    ws->eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
-    ws->inv_ww = (const double *)PyArray_DATA(uab_inv_arr);
-    ws->inv_wy = ws->inv_ww + (size_t)n_samples;
-    ws->inv_yy = ws->inv_ww + (size_t)2 * n_samples;
-
-    /* Store w and Uty for fused on-the-fly Uab computation */
-    Py_INCREF(w_arr);
-    Py_INCREF(Uty_arr);
-    ws->w = (const double *)PyArray_DATA(w_arr);
-    ws->Uty = (const double *)PyArray_DATA(Uty_arr);
-    ws->w_ref = (PyObject *)w_arr;
-    ws->Uty_ref = (PyObject *)Uty_arr;
-
-    /* Compute invariant Iab scalar */
-    {
-        double s_ww = 0.0;
-        for (int i = 0; i < n_samples; i++) s_ww += ws->inv_ww[i];
-        ws->iab_s_ww   = s_ww;
-        ws->iab_inv_ww = (s_ww != 0.0) ? 1.0 / s_ww : 0.0;
-        ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
-    }
-
-    /* Allocate grid arrays */
-    ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
-    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
-    ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
-    ws->grid_inv      = (grid_invariant_t *)malloc(
-        (size_t)n_grid * sizeof(grid_invariant_t));
-
-    if (!ws->lambda_grid || !ws->hi_eval_grid ||
-        !ws->logdet_h_grid || !ws->grid_inv) {
-        PyErr_NoMemory();
+    if (init_ncvt1_workspace(ws, eigenvalues_arr, uab_inv_arr, w_arr, Uty_arr,
+                             n_samples, l_min, l_max, n_grid, n_refine) < 0)
         goto err_ws;
-    }
-
-    /* Build lambda grid + invariant dot products */
-    for (int g = 0; g < n_grid; g++) {
-        ws->lambda_grid[g] = exp(ws->log_l_min + g * ws->step);
-    }
-    for (int g = 0; g < n_grid; g++) {
-        double lam    = ws->lambda_grid[g];
-        double *hi_row = ws->hi_eval_grid + (size_t)g * n_samples;
-        double logdet = 0.0;
-        double sw = 0.0, swy = 0.0, sy = 0.0;
-        for (int i = 0; i < n_samples; i++) {
-            double v = lam * ws->eigenvalues[i] + 1.0;
-            double h = 1.0 / v;
-            hi_row[i] = h;
-            logdet += log(v);
-            sw  += h * ws->inv_ww[i];
-            swy += h * ws->inv_wy[i];
-            sy  += h * ws->inv_yy[i];
-        }
-        ws->logdet_h_grid[g] = logdet;
-
-        ws->grid_inv[g].s_ww    = sw;
-        ws->grid_inv[g].s_wy    = swy;
-        ws->grid_inv[g].s_yy    = sy;
-        ws->grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
-    }
-
-    /* Mode-4 specific fields */
-    ws->mode = 4;
-    ws->logl_H0 = logl_H0;
-    ws->mle_const = 0.5 * (double)n_samples
-                    * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
-
-    /* Copy hi_eval_null into workspace-owned buffer */
-    ws->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
-    if (!ws->hi_eval_null) {
-        PyErr_NoMemory();
+    if (init_ncvt1_null_model(
+            ws, (const double *)PyArray_DATA(hi_eval_null_arr), logl_H0) < 0)
         goto err_ws;
-    }
-    {
-        const double *src = (const double *)PyArray_DATA(hi_eval_null_arr);
-        memcpy(ws->hi_eval_null, src, (size_t)n_samples * sizeof(double));
-    }
 
-    /* Precompute null-model invariant dot products */
-    {
-        double ns_ww = 0.0, ns_wy = 0.0, ns_yy = 0.0;
-        for (int i = 0; i < n_samples; i++) {
-            double h = ws->hi_eval_null[i];
-            ns_ww += h * ws->inv_ww[i];
-            ns_wy += h * ws->inv_wy[i];
-            ns_yy += h * ws->inv_yy[i];
-        }
-        ws->null_s_ww   = ns_ww;
-        ws->null_s_wy   = ns_wy;
-        ws->null_s_yy   = ns_yy;
-        ws->null_inv_ww  = (ns_ww != 0.0) ? 1.0 / ns_ww : 0.0;
-    }
-
-    /* Wrap in PyCapsule */
     capsule = PyCapsule_New(ws, "lmm_workspace", lmm_workspace_destructor);
     if (!capsule) goto err_ws;
 
@@ -988,18 +773,7 @@ static PyObject *create_workspace_mode4_fused_c_py(
     return capsule;
 
 err_ws:
-    if (ws) {
-        Py_XDECREF(ws->eigenvalues_ref);
-        Py_XDECREF(ws->uab_inv_ref);
-        Py_XDECREF(ws->w_ref);
-        Py_XDECREF(ws->Uty_ref);
-        free(ws->lambda_grid);
-        free(ws->hi_eval_grid);
-        free(ws->logdet_h_grid);
-        free(ws->grid_inv);
-        free(ws->hi_eval_null);
-        free(ws);
-    }
+    lmm_workspace_free(ws);
 err_input:
     Py_XDECREF(eigenvalues_arr);
     Py_XDECREF(uab_inv_arr);
@@ -1059,27 +833,10 @@ static PyObject *compute_mode4_chunk_fused_c_py(
     mode4_output_t out = {0};
     PyObject *result = NULL;
 
-    utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!utg_t_arr) return NULL;
-
     int n_samples = ws->n_samples;
-
-    /* Validate shape: must be 2D (n_snps, n_samples) */
-    if (PyArray_NDIM(utg_t_arr) != 2 ||
-        PyArray_DIM(utg_t_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "utg_t must be shape (n_snps, %d)", n_samples);
-        goto err_input;
-    }
-
-    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
-    if (n_snps_raw > INT_MAX) {
-        PyErr_Format(PyExc_OverflowError,
-            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
-        goto err_input;
-    }
-    int n_snps = (int)n_snps_raw;
+    int n_snps;
+    utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
+    if (!utg_t_arr) return NULL;
 
     if (alloc_mode4_output(&out, (npy_intp)n_snps) < 0) {
         if (!PyErr_Occurred()) PyErr_NoMemory();
@@ -1614,43 +1371,6 @@ static int init_fused_general_workspace(
 }
 
 /* -------------------------------------------------------------------------
- * free_fused_general_workspace — cleanup helper for error paths in
- * create_workspace_fused_general_c_py and create_workspace_mode4_fused_general_c_py.
- *
- * Frees all workspace fields and the workspace itself. All pointers are
- * NULL-safe (ws was calloc'd, so unset fields are NULL → free(NULL) is no-op).
- * ------------------------------------------------------------------------- */
-static void free_fused_general_workspace(lmm_workspace_general_t *ws)
-{
-    if (!ws) return;
-    free(ws->lambda_grid);
-    free(ws->hi_eval_grid);
-    free(ws->logdet_h_grid);
-    free(ws->inv_sums_grid);
-    free(ws->eigenvalues);
-    free(ws->inv_identity_sums);
-    free(ws->table.invariant_indices);
-    free(ws->table.varying_indices);
-    free(ws->table.logdet_diag_rows);
-    free(ws->table.logdet_diag_cols);
-    free(ws->table.level_offsets);
-    free(ws->table.level_counts);
-    free(ws->table.entries);
-    Py_XDECREF(ws->uab_inv_ref);
-    free(ws->utw_transposed);
-    free(ws->var_a_cols);
-    free(ws->var_b_cols);
-    free(ws->scratch_flat);
-    free(ws->pab_per_thread);
-    free(ws->row0_per_thread);
-    Py_XDECREF(ws->Uty_ref);
-    free(ws->hi_eval_null);
-    free(ws->null_inv_sums);
-    free(ws->uab_snp_flat);
-    free(ws);
-}
-
-/* -------------------------------------------------------------------------
  * create_workspace_fused_general_c
  *
  * Allocates the per-run general-n_cvt Wald workspace. Beyond the invariant
@@ -1714,74 +1434,30 @@ static PyObject *create_workspace_fused_general_c_py(
 
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
-    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
-        PyErr_Format(PyExc_ValueError,
-            "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+    if (validate_n_cvt(n_cvt) < 0)
         return NULL;
-    }
 
-    /* Convert NumPy arrays (needed for shape validation and data access) */
-    PyArrayObject *eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!eigenvalues_arr) return NULL;
+    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
+    PyArrayObject *UtW_arr = NULL, *Uty_arr = NULL;
+    lmm_workspace_general_t *ws = NULL;
+    PyObject *capsule = NULL;
 
-    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
-        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "eigenvalues must be shape (n_samples,)");
-        Py_DECREF(eigenvalues_arr);
-        return NULL;
-    }
+    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
+    if (!eigenvalues_arr) goto err_input;
     if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0) {
-        Py_DECREF(eigenvalues_arr);
-        return NULL;
-    }
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+        goto err_input;
+    /* uab_invariant has n_inv rows, known only once the index table is
+     * parsed; init_fused_general_workspace checks its shape. */
+    uab_inv_arr = take_array(uab_inv_obj);
+    if (!uab_inv_arr) goto err_input;
+    UtW_arr = take_matrix(UtW_obj, n_samples, n_cvt, "UtW");
+    if (!UtW_arr) goto err_input;
+    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
+    if (!Uty_arr) goto err_input;
 
-    PyArrayObject *uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!uab_inv_arr) { Py_DECREF(eigenvalues_arr); return NULL; }
-
-    /* n_inv not yet known — validated inside init_fused_general_workspace */
-
-    PyArrayObject *UtW_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        UtW_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!UtW_arr) { Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr); return NULL; }
-
-    if (PyArray_NDIM(UtW_arr) != 2 ||
-        PyArray_DIM(UtW_arr, 0) != n_samples ||
-        PyArray_DIM(UtW_arr, 1) != n_cvt) {
-        PyErr_Format(PyExc_ValueError,
-            "UtW must be shape (%d, %d)", n_samples, n_cvt);
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr); Py_DECREF(UtW_arr);
-        return NULL;
-    }
-
-    PyArrayObject *Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!Uty_arr) {
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr); Py_DECREF(UtW_arr);
-        return NULL;
-    }
-
-    if (PyArray_NDIM(Uty_arr) != 1 ||
-        PyArray_DIM(Uty_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "Uty must be shape (n_samples,)");
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-        Py_DECREF(UtW_arr); Py_DECREF(Uty_arr);
-        return NULL;
-    }
-
-    /* Allocate workspace (calloc zeros all pointers for safe cleanup) */
-    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)calloc(
-        1, sizeof(lmm_workspace_general_t));
-    if (!ws) {
-        PyErr_NoMemory();
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-        Py_DECREF(UtW_arr); Py_DECREF(Uty_arr);
-        return NULL;
-    }
-
-    /* Delegate common initialization */
+    ws = (lmm_workspace_general_t *)calloc(1, sizeof(lmm_workspace_general_t));
+    if (!ws) { PyErr_NoMemory(); goto err_input; }
     if (init_fused_general_workspace(
             ws, eigenvalues_arr, uab_inv_arr, UtW_arr, Uty_arr,
             inv_idx_obj, var_idx_obj,
@@ -1790,28 +1466,27 @@ static PyObject *create_workspace_fused_general_c_py(
             var_a_obj, var_b_obj,
             n_samples, l_min, l_max,
             n_grid, n_refine, n_threads, n_cvt,
-            idx_xx, idx_xy, idx_yy) < 0) {
-        free_fused_general_workspace(ws);
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-        Py_DECREF(UtW_arr); Py_DECREF(Uty_arr);
-        return NULL;
-    }
+            idx_xx, idx_xy, idx_yy) < 0)
+        goto err_ws;
 
-    /* Wrap in PyCapsule */
-    PyObject *capsule = PyCapsule_New(
+    capsule = PyCapsule_New(
         ws, "lmm_workspace_general", lmm_workspace_general_destructor);
-    if (!capsule) {
-        free_fused_general_workspace(ws);
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-        Py_DECREF(UtW_arr); Py_DECREF(Uty_arr);
-        return NULL;
-    }
+    if (!capsule) goto err_ws;
 
     Py_DECREF(eigenvalues_arr);
     Py_DECREF(uab_inv_arr);
     Py_DECREF(UtW_arr);
     Py_DECREF(Uty_arr);
     return capsule;
+
+err_ws:
+    lmm_workspace_general_free(ws);
+err_input:
+    Py_XDECREF(eigenvalues_arr);
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(UtW_arr);
+    Py_XDECREF(Uty_arr);
+    return NULL;
 }
 
 /* -------------------------------------------------------------------------
@@ -1859,29 +1534,12 @@ static PyObject *compute_lmm_chunk_fused_general_c_py(
     output_arrays_t out = {0};
     PyObject *result = NULL;
 
-    utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!utg_t_arr) return NULL;
-
     int n_samples = ws->n_samples;
     int n_var = ws->table.n_var;
     int n_inv = ws->table.n_inv;
-
-    /* Validate shape: must be 2D (n_snps, n_samples) */
-    if (PyArray_NDIM(utg_t_arr) != 2 ||
-        PyArray_DIM(utg_t_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "utg_t must be shape (n_snps, %d)", n_samples);
-        goto err_input_fg;
-    }
-
-    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
-    if (n_snps_raw > INT_MAX) {
-        PyErr_Format(PyExc_OverflowError,
-            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
-        goto err_input_fg;
-    }
-    int n_snps = (int)n_snps_raw;
+    int n_snps;
+    utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
+    if (!utg_t_arr) return NULL;
     if (n_snps == 0) {
         PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
         goto err_input_fg;
@@ -2053,98 +1711,36 @@ static PyObject *create_workspace_mode4_fused_general_c_py(
 
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
-    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
-        PyErr_Format(PyExc_ValueError,
-            "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+    if (validate_n_cvt(n_cvt) < 0)
         return NULL;
-    }
-    if (!isfinite(logl_H0)) {
-        PyErr_SetString(PyExc_ValueError,
-            "logl_H0 must be finite (got NaN or Inf from null model)");
+    if (validate_logl_H0(logl_H0) < 0)
         return NULL;
-    }
 
-    /* Convert NumPy arrays */
-    PyArrayObject *eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!eigenvalues_arr) return NULL;
-    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
-        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "eigenvalues must be shape (n_samples,)");
-        Py_DECREF(eigenvalues_arr); return NULL;
-    }
+    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
+    PyArrayObject *UtW_arr = NULL, *Uty_arr = NULL;
+    PyArrayObject *hi_eval_null_arr = NULL;
+    lmm_workspace_general_t *ws = NULL;
+    PyObject *capsule = NULL;
+
+    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
+    if (!eigenvalues_arr) goto err_input;
     if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0) {
-        Py_DECREF(eigenvalues_arr); return NULL;
-    }
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+        goto err_input;
+    uab_inv_arr = take_array(uab_inv_obj);
+    if (!uab_inv_arr) goto err_input;
+    UtW_arr = take_matrix(UtW_obj, n_samples, n_cvt, "UtW");
+    if (!UtW_arr) goto err_input;
+    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
+    if (!Uty_arr) goto err_input;
+    hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
+    if (!hi_eval_null_arr) goto err_input;
+    if (validate_hi_eval_null(
+            (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
+        goto err_input;
 
-    PyArrayObject *uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!uab_inv_arr) { Py_DECREF(eigenvalues_arr); return NULL; }
-
-    PyArrayObject *UtW_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        UtW_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!UtW_arr) { Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr); return NULL; }
-    if (PyArray_NDIM(UtW_arr) != 2 ||
-        PyArray_DIM(UtW_arr, 0) != n_samples || PyArray_DIM(UtW_arr, 1) != n_cvt) {
-        PyErr_Format(PyExc_ValueError, "UtW must be shape (%d, %d)", n_samples, n_cvt);
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr); Py_DECREF(UtW_arr);
-        return NULL;
-    }
-
-    PyArrayObject *Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!Uty_arr) {
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr); Py_DECREF(UtW_arr);
-        return NULL;
-    }
-    if (PyArray_NDIM(Uty_arr) != 1 || PyArray_DIM(Uty_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "Uty must be shape (n_samples,)");
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-        Py_DECREF(UtW_arr); Py_DECREF(Uty_arr); return NULL;
-    }
-
-    PyArrayObject *hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!hi_eval_null_arr) {
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-        Py_DECREF(UtW_arr); Py_DECREF(Uty_arr); return NULL;
-    }
-    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
-        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "hi_eval_null must be shape (n_samples,)");
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-        Py_DECREF(UtW_arr); Py_DECREF(Uty_arr); Py_DECREF(hi_eval_null_arr);
-        return NULL;
-    }
-
-    /* Validate Hi_eval_null */
-    {
-        const double *hi_null = (const double *)PyArray_DATA(hi_eval_null_arr);
-        for (int i = 0; i < n_samples; i++) {
-            if (!isfinite(hi_null[i]) || hi_null[i] <= 0.0) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "%g", hi_null[i]);
-                PyErr_Format(PyExc_ValueError,
-                    "Hi_eval_null[%d] = %s is not finite positive.", i, buf);
-                Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-                Py_DECREF(UtW_arr); Py_DECREF(Uty_arr); Py_DECREF(hi_eval_null_arr);
-                return NULL;
-            }
-        }
-    }
-
-    /* Allocate workspace (calloc zeros all pointers for safe cleanup) */
-    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)calloc(
-        1, sizeof(lmm_workspace_general_t));
-    if (!ws) {
-        PyErr_NoMemory();
-        Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-        Py_DECREF(UtW_arr); Py_DECREF(Uty_arr); Py_DECREF(hi_eval_null_arr);
-        return NULL;
-    }
-
-    /* Delegate common initialization */
+    ws = (lmm_workspace_general_t *)calloc(1, sizeof(lmm_workspace_general_t));
+    if (!ws) { PyErr_NoMemory(); goto err_input; }
     if (init_fused_general_workspace(
             ws, eigenvalues_arr, uab_inv_arr, UtW_arr, Uty_arr,
             inv_idx_obj, var_idx_obj,
@@ -2153,9 +1749,8 @@ static PyObject *create_workspace_mode4_fused_general_c_py(
             var_a_obj, var_b_obj,
             n_samples, l_min, l_max,
             n_grid, n_refine, n_threads, n_cvt,
-            idx_xx, idx_xy, idx_yy) < 0) {
-        goto err_ws_m4fg;
-    }
+            idx_xx, idx_xy, idx_yy) < 0)
+        goto err_ws;
 
     /* Mode-4 specific fields */
     ws->mode = 4;
@@ -2163,9 +1758,8 @@ static PyObject *create_workspace_mode4_fused_general_c_py(
     ws->mle_const = 0.5 * (double)n_samples
                     * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
 
-    /* Copy hi_eval_null */
     ws->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
-    if (!ws->hi_eval_null) { PyErr_NoMemory(); goto err_ws_m4fg; }
+    if (!ws->hi_eval_null) { PyErr_NoMemory(); goto err_ws; }
     memcpy(ws->hi_eval_null,
            (const double *)PyArray_DATA(hi_eval_null_arr),
            (size_t)n_samples * sizeof(double));
@@ -2173,7 +1767,7 @@ static PyObject *create_workspace_mode4_fused_general_c_py(
     /* Precompute null-model invariant sums */
     int n_inv = ws->table.n_inv;
     ws->null_inv_sums = (double *)malloc((size_t)n_inv * sizeof(double));
-    if (!ws->null_inv_sums) { PyErr_NoMemory(); goto err_ws_m4fg; }
+    if (!ws->null_inv_sums) { PyErr_NoMemory(); goto err_ws; }
     for (int c = 0; c < n_inv; c++) {
         double s = 0.0;
         const double *col = ws->uab_inv + (size_t)c * n_samples;
@@ -2189,22 +1783,28 @@ static PyObject *create_workspace_mode4_fused_general_c_py(
         ws->uab_snp_flat = (double *)malloc(
             (size_t)ws->actual_threads * (size_t)n_index
             * (size_t)n_samples * sizeof(double));
-        if (!ws->uab_snp_flat) { PyErr_NoMemory(); goto err_ws_m4fg; }
+        if (!ws->uab_snp_flat) { PyErr_NoMemory(); goto err_ws; }
     }
 
-    /* Wrap in PyCapsule */
-    PyObject *capsule = PyCapsule_New(
+    capsule = PyCapsule_New(
         ws, "lmm_workspace_general", lmm_workspace_general_destructor);
-    if (!capsule) goto err_ws_m4fg;
+    if (!capsule) goto err_ws;
 
-    Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-    Py_DECREF(UtW_arr); Py_DECREF(Uty_arr); Py_DECREF(hi_eval_null_arr);
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(uab_inv_arr);
+    Py_DECREF(UtW_arr);
+    Py_DECREF(Uty_arr);
+    Py_DECREF(hi_eval_null_arr);
     return capsule;
 
-err_ws_m4fg:
-    free_fused_general_workspace(ws);
-    Py_DECREF(eigenvalues_arr); Py_DECREF(uab_inv_arr);
-    Py_DECREF(UtW_arr); Py_DECREF(Uty_arr); Py_DECREF(hi_eval_null_arr);
+err_ws:
+    lmm_workspace_general_free(ws);
+err_input:
+    Py_XDECREF(eigenvalues_arr);
+    Py_XDECREF(uab_inv_arr);
+    Py_XDECREF(UtW_arr);
+    Py_XDECREF(Uty_arr);
+    Py_XDECREF(hi_eval_null_arr);
     return NULL;
 }
 
@@ -2257,28 +1857,12 @@ static PyObject *compute_mode4_chunk_fused_general_c_py(
     mode4_output_t out = {0};
     PyObject *result = NULL;
 
-    utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!utg_t_arr) return NULL;
-
     int n_samples = ws->n_samples;
     int n_var = ws->table.n_var;
     int n_inv = ws->table.n_inv;
-
-    if (PyArray_NDIM(utg_t_arr) != 2 ||
-        PyArray_DIM(utg_t_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "utg_t must be shape (n_snps, %d)", n_samples);
-        goto err_input_m4fg;
-    }
-
-    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
-    if (n_snps_raw > INT_MAX) {
-        PyErr_Format(PyExc_OverflowError,
-            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
-        goto err_input_m4fg;
-    }
-    int n_snps = (int)n_snps_raw;
+    int n_snps;
+    utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
+    if (!utg_t_arr) return NULL;
     if (n_snps == 0) {
         PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
         goto err_input_m4fg;
@@ -2500,10 +2084,8 @@ typedef struct {
     PyObject *eigenvalues_ref;
 } lmm_workspace_score_t;
 
-static void lmm_workspace_score_destructor(PyObject *cap)
+static void lmm_workspace_score_free(lmm_workspace_score_t *ws)
 {
-    lmm_workspace_score_t *ws =
-        (lmm_workspace_score_t *)PyCapsule_GetPointer(cap, "lmm_workspace_score_fused");
     if (!ws) return;
     free(ws->h_null_w);
     free(ws->h_null_Uty);
@@ -2511,6 +2093,12 @@ static void lmm_workspace_score_destructor(PyObject *cap)
     Py_XDECREF(ws->uab_inv_ref);
     Py_XDECREF(ws->eigenvalues_ref);
     free(ws);
+}
+
+static void lmm_workspace_score_destructor(PyObject *cap)
+{
+    lmm_workspace_score_free((lmm_workspace_score_t *)
+        PyCapsule_GetPointer(cap, "lmm_workspace_score_fused"));
 }
 
 /* -------------------------------------------------------------------------
@@ -2547,77 +2135,27 @@ static PyObject *create_workspace_score_fused_c_py(
     PyArrayObject *w_arr = NULL, *Uty_arr = NULL, *hi_eval_null_arr = NULL;
     PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
     lmm_workspace_score_t *ws = NULL;
+    PyObject *capsule = NULL;
 
-    w_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        w_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!w_arr) return NULL;
-
-    Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!Uty_arr) goto err_score_ws_create;
-
-    hi_eval_null_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        hi_eval_null_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!hi_eval_null_arr) goto err_score_ws_create;
-
-    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!eigenvalues_arr) goto err_score_ws_create;
-
-    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!uab_inv_arr) goto err_score_ws_create;
-
-    /* Validate shapes */
-    if (PyArray_NDIM(w_arr) != 1 || PyArray_DIM(w_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "w must be shape (n_samples,)");
-        goto err_score_ws_create;
-    }
-    if (PyArray_NDIM(Uty_arr) != 1 || PyArray_DIM(Uty_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "Uty must be shape (n_samples,)");
-        goto err_score_ws_create;
-    }
-    if (PyArray_NDIM(hi_eval_null_arr) != 1 ||
-        PyArray_DIM(hi_eval_null_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "Hi_eval_null must be shape (n_samples,)");
-        goto err_score_ws_create;
-    }
-    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
-        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "eigenvalues must be shape (n_samples,)");
-        goto err_score_ws_create;
-    }
-    if (PyArray_NDIM(uab_inv_arr) != 2 ||
-        PyArray_DIM(uab_inv_arr, 0) != 3 ||
-        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "uab_invariant_soa must be shape (3, %d)", n_samples);
-        goto err_score_ws_create;
-    }
-
-    /* Validate Hi_eval_null values */
-    {
-        const double *hi = (const double *)PyArray_DATA(hi_eval_null_arr);
-        for (int i = 0; i < n_samples; i++) {
-            if (!isfinite(hi[i]) || hi[i] <= 0.0) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "%g", hi[i]);
-                PyErr_Format(PyExc_ValueError,
-                    "Hi_eval_null[%d] = %s is not finite positive.", i, buf);
-                goto err_score_ws_create;
-            }
-        }
-    }
-
+    w_arr = take_vector(w_obj, n_samples, "w");
+    if (!w_arr) goto err_input;
+    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
+    if (!Uty_arr) goto err_input;
+    hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "Hi_eval_null");
+    if (!hi_eval_null_arr) goto err_input;
+    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
+    if (!eigenvalues_arr) goto err_input;
+    uab_inv_arr = take_matrix(uab_inv_obj, 3, n_samples, "uab_invariant_soa");
+    if (!uab_inv_arr) goto err_input;
+    if (validate_hi_eval_null(
+            (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
+        goto err_input;
     if (validate_eigenvalues(
             (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
-        goto err_score_ws_create;
+        goto err_input;
 
-    /* Allocate workspace */
     ws = (lmm_workspace_score_t *)calloc(1, sizeof(lmm_workspace_score_t));
-    if (!ws) { PyErr_NoMemory(); goto err_score_ws_create; }
+    if (!ws) { PyErr_NoMemory(); goto err_input; }
 
     ws->n_samples = n_samples;
     ws->df = n_samples - 2;
@@ -2630,7 +2168,7 @@ static PyObject *create_workspace_score_fused_c_py(
     ws->h_null_Uty = alloc_aligned_doubles((size_t)n_samples);
     if (!ws->h_null_w || !ws->h_null_Uty) {
         PyErr_NoMemory();
-        goto err_score_ws_alloc;
+        goto err_ws;
     }
 
     {
@@ -2670,29 +2208,20 @@ static PyObject *create_workspace_score_fused_c_py(
     ws->uab_inv_data = (const double *)PyArray_DATA(uab_inv_arr);
     ws->eigenvalues  = (const double *)PyArray_DATA(eigenvalues_arr);
 
-    /* Release OTF refs — workspace holds its own Py_INCREF'd refs */
-    Py_DECREF(hi_eval_null_arr);
-    Py_DECREF(uab_inv_arr);
-    Py_DECREF(eigenvalues_arr);
+    capsule = PyCapsule_New(ws, "lmm_workspace_score_fused",
+                            lmm_workspace_score_destructor);
+    if (!capsule) goto err_ws;
 
-    /* Release input arrays that are NOT stored in workspace */
     Py_DECREF(w_arr);
     Py_DECREF(Uty_arr);
-
-    PyObject *capsule = PyCapsule_New(ws, "lmm_workspace_score_fused",
-                                      lmm_workspace_score_destructor);
-    if (!capsule) goto err_score_ws_alloc;
+    Py_DECREF(hi_eval_null_arr);
+    Py_DECREF(eigenvalues_arr);
+    Py_DECREF(uab_inv_arr);
     return capsule;
 
-err_score_ws_alloc:
-    free(ws->h_null_w);
-    free(ws->h_null_Uty);
-    /* Defensive: XDECREF borrowed refs (NULL from calloc if INCREF not yet reached) */
-    Py_XDECREF(ws->hi_eval_null_ref);
-    Py_XDECREF(ws->uab_inv_ref);
-    Py_XDECREF(ws->eigenvalues_ref);
-    free(ws);
-err_score_ws_create:
+err_ws:
+    lmm_workspace_score_free(ws);
+err_input:
     Py_XDECREF(w_arr);
     Py_XDECREF(Uty_arr);
     Py_XDECREF(hi_eval_null_arr);
@@ -2720,28 +2249,10 @@ static PyObject *compute_score_fused_ws_c_py(PyObject *self, PyObject *args)
         PyCapsule_GetPointer(capsule_obj, "lmm_workspace_score_fused");
     if (!ws) return NULL;  /* PyCapsule_GetPointer sets ValueError on name mismatch */
 
-    PyArrayObject *utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!utg_t_arr) return NULL;
-
     int n_samples = ws->n_samples;
-
-    if (PyArray_NDIM(utg_t_arr) != 2 ||
-        PyArray_DIM(utg_t_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "utg_t must be shape (n_snps, %d)", n_samples);
-        Py_DECREF(utg_t_arr);
-        return NULL;
-    }
-
-    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
-    if (n_snps_raw > INT_MAX) {
-        PyErr_Format(PyExc_OverflowError,
-            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
-        Py_DECREF(utg_t_arr);
-        return NULL;
-    }
-    int n_snps = (int)n_snps_raw;
+    int n_snps;
+    PyArrayObject *utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
+    if (!utg_t_arr) return NULL;
     if (n_snps == 0) {
         PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
         Py_DECREF(utg_t_arr);
@@ -2865,10 +2376,8 @@ static PyObject *compute_score_split_general_c(PyObject *self, PyObject *args)
         PyErr_SetString(PyExc_ValueError, "n_samples must be >= 3");
         return NULL;
     }
-    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
-        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+    if (validate_n_cvt(n_cvt) < 0)
         return NULL;
-    }
     if (!PyDict_Check(pab_table_dict)) {
         PyErr_SetString(PyExc_TypeError, "pab_table_dict must be a dict");
         return NULL;
@@ -2949,16 +2458,9 @@ static PyObject *compute_score_split_general_c(PyObject *self, PyObject *args)
             goto err_input_score_split_gen;
         }
 
-        /* Validate Hi_eval_null */
-        for (int i = 0; i < n_samples; i++) {
-            if (!isfinite(hi_eval_null[i]) || hi_eval_null[i] <= 0.0) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "%g", hi_eval_null[i]);
-                PyErr_Format(PyExc_ValueError,
-                    "Hi_eval_null[%d] = %s is not finite/positive.", i, buf);
-                free_pab_table(&table);
-                goto err_input_score_split_gen;
-            }
+        if (validate_hi_eval_null(hi_eval_null, n_samples) < 0) {
+            free_pab_table(&table);
+            goto err_input_score_split_gen;
         }
 
         int n_inv = table.n_inv;
@@ -3130,15 +2632,10 @@ static PyObject *compute_lrt_split_general_c(PyObject *self, PyObject *args)
 
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
-    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
-        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
+    if (validate_n_cvt(n_cvt) < 0)
         return NULL;
-    }
-    if (!isfinite(logl_H0)) {
-        PyErr_SetString(PyExc_ValueError,
-            "logl_H0 must be finite (got NaN or Inf from null model)");
+    if (validate_logl_H0(logl_H0) < 0)
         return NULL;
-    }
     if (!PyDict_Check(pab_table_dict)) {
         PyErr_SetString(PyExc_TypeError, "pab_table_dict must be a dict");
         return NULL;
@@ -3399,10 +2896,8 @@ typedef struct {
     PyObject *Uty_ref;
 } lmm_workspace_lrt_t;
 
-static void lmm_workspace_lrt_destructor(PyObject *cap)
+static void lmm_workspace_lrt_free(lmm_workspace_lrt_t *ws)
 {
-    lmm_workspace_lrt_t *ws =
-        (lmm_workspace_lrt_t *)PyCapsule_GetPointer(cap, "lmm_workspace_lrt_fused");
     if (!ws) return;
     free(ws->lambda_grid);
     free(ws->hi_eval_grid);
@@ -3413,6 +2908,12 @@ static void lmm_workspace_lrt_destructor(PyObject *cap)
     Py_XDECREF(ws->w_ref);
     Py_XDECREF(ws->Uty_ref);
     free(ws);
+}
+
+static void lmm_workspace_lrt_destructor(PyObject *cap)
+{
+    lmm_workspace_lrt_free((lmm_workspace_lrt_t *)
+        PyCapsule_GetPointer(cap, "lmm_workspace_lrt_fused"));
 }
 
 /* -------------------------------------------------------------------------
@@ -3448,63 +2949,28 @@ static PyObject *create_workspace_lrt_fused_c_py(
 
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
-
-    if (!isfinite(logl_H0)) {
-        PyErr_SetString(PyExc_ValueError,
-            "logl_H0 must be finite (got NaN or Inf from null model)");
+    if (validate_logl_H0(logl_H0) < 0)
         return NULL;
-    }
 
     PyArrayObject *w_arr = NULL, *Uty_arr = NULL;
     PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
     lmm_workspace_lrt_t *ws = NULL;
+    PyObject *capsule = NULL;
 
-    w_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        w_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!w_arr) return NULL;
-
-    Uty_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        Uty_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!Uty_arr) goto err_lrt_ws_create;
-
-    eigenvalues_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        eigenvalues_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!eigenvalues_arr) goto err_lrt_ws_create;
-
-    uab_inv_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        uab_inv_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!uab_inv_arr) goto err_lrt_ws_create;
-
-    /* Validate shapes */
-    if (PyArray_NDIM(w_arr) != 1 || PyArray_DIM(w_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "w must be shape (n_samples,)");
-        goto err_lrt_ws_create;
-    }
-    if (PyArray_NDIM(Uty_arr) != 1 || PyArray_DIM(Uty_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError, "Uty must be shape (n_samples,)");
-        goto err_lrt_ws_create;
-    }
-    if (PyArray_NDIM(eigenvalues_arr) != 1 ||
-        PyArray_DIM(eigenvalues_arr, 0) != n_samples) {
-        PyErr_SetString(PyExc_ValueError,
-            "eigenvalues must be shape (n_samples,)");
-        goto err_lrt_ws_create;
-    }
-    if (PyArray_NDIM(uab_inv_arr) != 2 ||
-        PyArray_DIM(uab_inv_arr, 0) != 3 ||
-        PyArray_DIM(uab_inv_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "uab_invariant_soa must be shape (3, %d)", n_samples);
-        goto err_lrt_ws_create;
-    }
-
+    w_arr = take_vector(w_obj, n_samples, "w");
+    if (!w_arr) goto err_input;
+    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
+    if (!Uty_arr) goto err_input;
+    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
+    if (!eigenvalues_arr) goto err_input;
+    uab_inv_arr = take_matrix(uab_inv_obj, 3, n_samples, "uab_invariant_soa");
+    if (!uab_inv_arr) goto err_input;
     if (validate_eigenvalues(
             (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
-        goto err_lrt_ws_create;
+        goto err_input;
 
-    /* Allocate workspace */
     ws = (lmm_workspace_lrt_t *)calloc(1, sizeof(lmm_workspace_lrt_t));
-    if (!ws) { PyErr_NoMemory(); goto err_lrt_ws_create; }
+    if (!ws) { PyErr_NoMemory(); goto err_input; }
 
     ws->n_samples = n_samples;
     ws->n_grid    = n_grid;
@@ -3535,74 +3001,39 @@ static PyObject *create_workspace_lrt_fused_c_py(
     ws->inv_wy = uab_data + (size_t)n_samples;
     ws->inv_yy = uab_data + (size_t)2 * n_samples;
 
-    /* Allocate grid arrays */
     ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
     ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
     ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
     ws->grid_inv      = (grid_invariant_t *)malloc(
         (size_t)n_grid * sizeof(grid_invariant_t));
-
     if (!ws->lambda_grid || !ws->hi_eval_grid ||
         !ws->logdet_h_grid || !ws->grid_inv) {
         PyErr_NoMemory();
-        goto err_lrt_ws_alloc;
+        goto err_ws;
     }
-
-    /* Build lambda grid + invariant dot products */
-    for (int g = 0; g < n_grid; g++) {
-        ws->lambda_grid[g] = exp(ws->log_l_min + g * ws->step);
-    }
-    for (int g = 0; g < n_grid; g++) {
-        double lam = ws->lambda_grid[g];
-        double *hi = ws->hi_eval_grid + (size_t)g * n_samples;
-        double logdet = 0.0;
-        double gs_ww = 0.0, gs_wy = 0.0, gs_yy = 0.0;
-        for (int i = 0; i < n_samples; i++) {
-            double v = lam * ws->eigenvalues[i] + 1.0;
-            double h = 1.0 / v;
-            hi[i] = h;
-            logdet += log(v);
-            gs_ww += h * ws->inv_ww[i];
-            gs_wy += h * ws->inv_wy[i];
-            gs_yy += h * ws->inv_yy[i];
-        }
-        ws->logdet_h_grid[g] = logdet;
-        ws->grid_inv[g].s_ww = gs_ww;
-        ws->grid_inv[g].s_wy = gs_wy;
-        ws->grid_inv[g].s_yy = gs_yy;
-        ws->grid_inv[g].log_s_ww = (gs_ww > 0.0) ? log(gs_ww) : 0.0;
-    }
+    build_grid_ncvt1(n_grid, n_samples, ws->log_l_min, ws->step,
+                     ws->eigenvalues, ws->inv_ww, ws->inv_wy, ws->inv_yy,
+                     ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
+                     ws->grid_inv);
 
     /* n_threads is accepted for API symmetry but not stored — scratch buffers
      * are allocated per-call in compute_lrt_fused_ws_c to avoid thread-safety
      * issues and to allow adaptive thread retuning between chunks. */
     (void)n_threads;
 
-    /* Release the OTF refs (workspace has its own Py_INCREF'd refs) */
+    capsule = PyCapsule_New(ws, "lmm_workspace_lrt_fused",
+                            lmm_workspace_lrt_destructor);
+    if (!capsule) goto err_ws;
+
     Py_DECREF(w_arr);
     Py_DECREF(Uty_arr);
     Py_DECREF(eigenvalues_arr);
     Py_DECREF(uab_inv_arr);
-
-    PyObject *capsule = PyCapsule_New(ws, "lmm_workspace_lrt_fused",
-                                      lmm_workspace_lrt_destructor);
-    if (!capsule) goto err_lrt_ws_alloc;
     return capsule;
 
-err_lrt_ws_alloc:
-    /* Manual cleanup — ws was calloc'd so NULL fields are safe to free/skip */
-    free(ws->lambda_grid);
-    free(ws->hi_eval_grid);
-    free(ws->logdet_h_grid);
-    free(ws->grid_inv);
-    /* Release INCREF'd refs (already INCREF'd before goto) */
-    Py_XDECREF(ws->eigenvalues_ref);
-    Py_XDECREF(ws->uab_inv_ref);
-    Py_XDECREF(ws->w_ref);
-    Py_XDECREF(ws->Uty_ref);
-    free(ws);
-    /* Fall through to release OTF array refs */
-err_lrt_ws_create:
+err_ws:
+    lmm_workspace_lrt_free(ws);
+err_input:
     Py_XDECREF(w_arr);
     Py_XDECREF(Uty_arr);
     Py_XDECREF(eigenvalues_arr);
@@ -3629,28 +3060,10 @@ static PyObject *compute_lrt_fused_ws_c_py(PyObject *self, PyObject *args)
         PyCapsule_GetPointer(capsule_obj, "lmm_workspace_lrt_fused");
     if (!ws) return NULL;  /* PyCapsule_GetPointer sets ValueError on name mismatch */
 
-    PyArrayObject *utg_t_arr = (PyArrayObject *)PyArray_FROM_OTF(
-        utg_t_obj, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!utg_t_arr) return NULL;
-
     int n_samples = ws->n_samples;
-
-    if (PyArray_NDIM(utg_t_arr) != 2 ||
-        PyArray_DIM(utg_t_arr, 1) != n_samples) {
-        PyErr_Format(PyExc_ValueError,
-            "utg_t must be shape (n_snps, %d)", n_samples);
-        Py_DECREF(utg_t_arr);
-        return NULL;
-    }
-
-    npy_intp n_snps_raw = PyArray_DIM(utg_t_arr, 0);
-    if (n_snps_raw > INT_MAX) {
-        PyErr_Format(PyExc_OverflowError,
-            "n_snps (%" NPY_INTP_FMT ") exceeds INT_MAX", n_snps_raw);
-        Py_DECREF(utg_t_arr);
-        return NULL;
-    }
-    int n_snps = (int)n_snps_raw;
+    int n_snps;
+    PyArrayObject *utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
+    if (!utg_t_arr) return NULL;
     if (n_snps == 0) {
         PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
         Py_DECREF(utg_t_arr);

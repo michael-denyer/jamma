@@ -55,7 +55,7 @@ void calc_pab_general(
  * logdet_pab from logdet_diag entries, P_yy guard, return full REML formula
  * including logdet_h.
  * ------------------------------------------------------------------------- */
-double reml_finish_general(
+static double reml_finish_general(
     const double *pab,
     const pab_table_t *t,
     double logdet_h,
@@ -95,7 +95,7 @@ double reml_finish_general(
  * For cached grid points: invariant sums already computed, just compute
  * varying dot products, reconstruct row0, calc_pab, reml_finish.
  * ------------------------------------------------------------------------- */
-double reml_logl_general_cached(
+static double reml_logl_general_cached(
     const double *inv_sums_cached,
     const double *uab_var,
     const double *hi_eval,
@@ -141,7 +141,7 @@ double reml_logl_general_cached(
  * (fused loop), then calc_pab + reml_finish.
  * Used during golden section refinement where lambda is SNP-specific.
  * ------------------------------------------------------------------------- */
-double reml_logl_general_fresh(
+static double reml_logl_general_fresh(
     const double *uab_inv,
     const double *uab_var,
     const double *eigenvalues,
@@ -332,7 +332,7 @@ double golden_section_lambda_general(
  *
  * Uses full Uab row (n_samples * n_index) in AoS layout.
  * ------------------------------------------------------------------------- */
-double mle_logl_general(
+static double mle_logl_general(
     const double *uab_snp,     /* (n_samples, n_index) row-major */
     const double *eigenvalues,
     int n_samples,
@@ -370,7 +370,7 @@ double mle_logl_general(
 /* -------------------------------------------------------------------------
  * mle_logl_general_cached — MLE using cached hi_eval for coarse grid search.
  * ------------------------------------------------------------------------- */
-double mle_logl_general_cached(
+static double mle_logl_general_cached(
     const double *uab_snp,
     const double *cached_hi_eval,
     double cached_logdet_h,

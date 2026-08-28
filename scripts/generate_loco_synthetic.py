@@ -165,7 +165,7 @@ def write_loco_kinship_fixtures(bfile: Path, outdir: Path) -> None:
     from jamma.io import load_plink_binary
     from jamma.io.plink import get_plink_metadata
     from jamma.kinship import write_kinship_matrix
-    from jamma.kinship.compute import compute_centered_kinship
+    from tests.reference.kinship import compute_centered_kinship
 
     outdir.mkdir(parents=True, exist_ok=True)
 

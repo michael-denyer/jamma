@@ -26,9 +26,9 @@ import numpy as np
 # Project root
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
 
 from jamma.io import load_plink_binary  # noqa: E402
-from jamma.kinship import compute_centered_kinship  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
 from jamma.lmm.runner_numpy import run_lmm_association_numpy  # noqa: E402
 from jamma.lmm.schema import LmmConfig, LmmMode  # noqa: E402
@@ -40,6 +40,7 @@ from jamma.validation import (  # noqa: E402
     load_gemma_kinship,
 )
 from jamma.validation.compare import ComparisonResult  # noqa: E402
+from tests.reference.kinship import compute_centered_kinship  # noqa: E402
 
 # Common runner config knobs, merged with each spec's mode at the call site.
 RUNNER_CONFIG_KWARGS = {

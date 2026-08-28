@@ -8,14 +8,11 @@ import numpy as np
 import pytest
 
 from jamma.io import load_plink_binary
-from jamma.kinship import (
-    compute_centered_kinship,
-    impute_and_center,
-    impute_center_and_standardize,
-)
+from jamma.kinship import impute_and_center, impute_center_and_standardize
 from jamma.validation import compare_kinship_matrices, load_gemma_kinship
 from tests.conftest import require_fixture
 from tests.fixture_paths import SYNTHETIC
+from tests.reference.kinship import compute_centered_kinship
 
 
 @pytest.mark.tier0

@@ -220,7 +220,7 @@ The goal is a **drop-in replacement**: same CLI, same output format, same scient
 from jamma.core.memory_snapshot import log_memory_snapshot
 
 log_memory_snapshot("kinship:before")  # Logs RSS + free RAM
-kinship = compute_centered_kinship(genotypes)
+kinship = compute_kinship_streaming(bfile)
 log_memory_snapshot("kinship:after")
 ```
 

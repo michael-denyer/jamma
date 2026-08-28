@@ -239,7 +239,7 @@ def bench_numpy_streaming(phenotypes, kinship, covariates_4, runs: int) -> OpTim
 # ---------------------------------------------------------------------------
 def bench_kinship(plink, runs: int) -> OpTimings:
     """Benchmark kinship computation (NumPy/BLAS via compute_centered_kinship)."""
-    from jamma.kinship import compute_centered_kinship
+    from tests.reference.kinship import compute_centered_kinship
 
     # Warmup
     compute_centered_kinship(plink.genotypes, check_memory=False)

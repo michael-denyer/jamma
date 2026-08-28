@@ -172,6 +172,25 @@ def test_check_extension_scans_multiple_source_globs(tmp_path: Path) -> None:
 
 
 @pytest.mark.tier0
+def test_lmm_accel_spec_checks_every_build_source_and_the_headers() -> None:
+    """The _lmm_accel spec names each LMM_ACCEL_SOURCES file plus _lmm_*.h.
+
+    The build reads that tuple; a kernel added there must be watched here
+    with no second list to update. A .c file in src/jamma/lmm that is not in
+    the tuple is not built either, so not watching it is correct.
+    """
+    from jamma._build_support.compile_and_link import LMM_ACCEL_SOURCES
+
+    freshness = _load_script_module()
+    (spec,) = [e for e in freshness._discover_extensions() if e.label == "_lmm_accel"]
+    lmm_dir = freshness._project_root() / "src/jamma/lmm"
+    patterns = [pattern for base, pattern in spec.source_globs if base == lmm_dir]
+    assert patterns == [*LMM_ACCEL_SOURCES, "_lmm_*.h"]
+    for name in LMM_ACCEL_SOURCES:
+        assert (lmm_dir / name).is_file(), name
+
+
+@pytest.mark.tier0
 def test_discover_extensions_returns_known_targets() -> None:
     """Smoke test: the shipped discovery returns exactly the two real
     extensions JAMMA builds. Guards against an accidental rename or

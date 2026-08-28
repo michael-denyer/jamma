@@ -400,7 +400,9 @@ than skip if a path is wrong (see [TESTING.md](TESTING.md) §1.11). Regenerate
 the PLINK files with
 [`scripts/generate_loco_synthetic.py`](../scripts/generate_loco_synthetic.py)
 and the GEMMA references with
-[`scripts/generate_loco_fixtures.sh`](../scripts/generate_loco_fixtures.sh).
+[`scripts/generate_gemma_fixtures.sh`](../scripts/generate_gemma_fixtures.sh)
+(`--only 'gemma_loco_*'`), which computes the per-chromosome LOCO kinship via
+`generate_loco_synthetic.py --loco-kinship` before running GEMMA.
 
 ---
 

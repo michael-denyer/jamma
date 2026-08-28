@@ -46,7 +46,7 @@ After regenerating, refresh the fixture manifest so the pre-commit gate
 accepts the new SHA-256:
 
 ```bash
-uv run python scripts/regenerate_fixture_manifest.py
+uv run python scripts/check_fixture_manifest.py --write
 ```
 
 The manifest (`tests/fixtures/MANIFEST.toml`) tracks the SHA-256 of every

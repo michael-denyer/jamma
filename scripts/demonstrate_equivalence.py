@@ -5,7 +5,10 @@ Runs JAMMA's NumPy runner against GEMMA reference data on two datasets:
   2. mouse_hs1940 (1940 samples, 12226 SNPs) — real data, wider tolerances
 
 Produces per-field max difference tables, scientific equivalence metrics,
-and per-section performance timing.
+and per-section performance timing. The per-field comparison is the same
+``compare_assoc_results`` the tier1 parity tests use, with the same
+``ToleranceConfig`` overrides, so the report and the suite cannot disagree
+about what "within tolerance" means.
 
 Usage:
     uv run python scripts/demonstrate_equivalence.py
@@ -20,12 +23,6 @@ from pathlib import Path
 
 import numpy as np
 
-try:
-    from scipy.stats import spearmanr
-except ImportError:
-    sys.exit("scipy required: pip install scipy (may overwrite ILP64 numpy)")
-
-
 # Project root
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -36,9 +33,13 @@ from jamma.kinship.io import read_kinship_matrix  # noqa: E402
 from jamma.lmm.runner_numpy import run_lmm_association_numpy  # noqa: E402
 from jamma.lmm.schema import LmmConfig, LmmMode  # noqa: E402
 from jamma.validation import (  # noqa: E402
+    ToleranceConfig,
+    compare_assoc_results,
+    compare_kinship_matrices,
     load_gemma_assoc,
     load_gemma_kinship,
 )
+from jamma.validation.compare import ComparisonResult  # noqa: E402
 
 # Common runner config knobs, merged with each spec's mode at the call site.
 RUNNER_CONFIG_KWARGS = {
@@ -68,7 +69,7 @@ class DatasetConfig:
     plink_prefix: Path
     kinship_path: Path
     covariate_path: Path | None
-    tolerances: dict[str, float]
+    tolerances: ToleranceConfig
     tests: list[TestSpec]
     compare_kinship: bool = True
     prepend_intercept: bool = False
@@ -80,17 +81,9 @@ SYNTHETIC = DatasetConfig(
     plink_prefix=ROOT / "tests/fixtures/gemma_synthetic/test",
     kinship_path=ROOT / "tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt",
     covariate_path=ROOT / "tests/fixtures/gemma_covariate/covariates.txt",
-    tolerances={
-        "kinship": 1e-8,
-        "beta": 1e-2,
-        "se": 1e-5,
-        "p_wald": 1e-4,
-        "p_score": 1e-4,
-        "p_lrt": 5e-3,
-        "logl": 1e-6,
-        "lambda": 5e-5,
-        "atol": 1e-12,
-    },
+    # Golden section vs Brent: ~6.6e-5 per 20-iteration bracket, same value
+    # the tier1 suite uses on this dataset.
+    tolerances=ToleranceConfig(lambda_rtol=5e-5),
     tests=[
         TestSpec(
             "Wald (-lmm 1)",
@@ -137,17 +130,15 @@ MOUSE_HS1940 = DatasetConfig(
     compare_kinship=False,  # GEMMA kinship used as input, not compared
     # covariates.txt lacks intercept column; CI tests prepend it
     prepend_intercept=True,
-    tolerances={
-        "kinship": 1e-8,
-        "beta": 1e-2,
-        "se": 5e-4,
-        "p_wald": 1e-2,
-        "p_score": 1e-2,
-        "p_lrt": 1e-2,
-        "logl": 5e-3,
-        "lambda": 1e-3,
-        "atol": 1e-4,
-    },
+    # The same overrides tests/test_runner_numpy.py::NUMPY_GEMMA_TOLERANCES
+    # applies to this dataset.
+    tolerances=ToleranceConfig(
+        lambda_rtol=1e-3,
+        pvalue_rtol=1e-2,
+        se_rtol=5e-4,
+        logl_rtol=5e-3,
+        atol=1e-4,
+    ),
     tests=[
         TestSpec("LRT (-lmm 2)", MOUSE_DIR / "mouse_hs1940_lrt.assoc.txt", 2),
         TestSpec("Score (-lmm 3)", MOUSE_DIR / "mouse_hs1940_score.assoc.txt", 3),
@@ -181,46 +172,43 @@ MOUSE_HS1940 = DatasetConfig(
 
 
 @dataclass
-class FieldResult:
-    field: str
-    n_values: int
-    max_abs_diff: float
-    max_rel_diff: float
-    tolerance: float
-    passed: bool
-
-
-@dataclass
 class SectionTiming:
     name: str
     elapsed: float
     n_snps: int
 
 
-def _compute_field_diffs(
-    actual: np.ndarray,
-    expected: np.ndarray,
-    field_name: str,
-    rtol: float,
-    atol: float = 0.0,
-) -> FieldResult:
-    mask = np.isfinite(actual) & np.isfinite(expected)
-    a, e = actual[mask], expected[mask]
-    if len(a) == 0:
-        return FieldResult(field_name, 0, 0.0, 0.0, rtol, True)
+# Report order for the AssocComparisonResult columns, with the ToleranceConfig
+# field each one is judged against.
+_ASSOC_COLUMNS = (
+    ("beta", "beta_rtol"),
+    ("se", "se_rtol"),
+    ("af", "af_rtol"),
+    ("p_wald", "pvalue_rtol"),
+    ("p_score", "pvalue_rtol"),
+    ("p_lrt", "p_lrt_rtol"),
+    ("l_remle", "lambda_rtol"),
+    ("l_mle", "lambda_rtol"),
+    ("logl_H1", "logl_rtol"),
+)
 
-    abs_diff = np.abs(a - e)
-    max_abs = float(np.max(abs_diff))
+# Which p-value the scientific-equivalence block reads, per LMM mode.
+_PRIMARY_P_FIELD = {2: "p_lrt", 3: "p_score"}
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        rel_diff = abs_diff / np.abs(e)
-        rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
-    max_rel = float(np.max(rel_diff))
 
-    # Match numpy.testing.assert_allclose: |a-e| <= atol + rtol * |e|
-    passed = bool(np.all(abs_diff <= atol + rtol * np.abs(e)))
+def _rank_correlation(x: np.ndarray, y: np.ndarray) -> float:
+    """Return Spearman's rho on ordinal ranks (ties ranked by position).
 
-    return FieldResult(field_name, len(a), max_abs, max_rel, rtol, passed)
+    Written over ``np.argsort`` so this script imports no scipy: installing
+    scipy overwrites the ILP64 numpy build (CLAUDE.md, "No scipy at runtime"),
+    and the tier1 suite runs this script. ``-log10(p)`` inputs are continuous,
+    so ordinal and average ranks agree for all practical purposes.
+    """
+    if len(x) < 2:
+        return float("nan")
+    rx = np.argsort(np.argsort(x)).astype(np.float64)
+    ry = np.argsort(np.argsort(y)).astype(np.float64)
+    return float(np.corrcoef(rx, ry)[0, 1])
 
 
 def _print_scientific_equivalence(jamma: list, gemma: list, p_field: str) -> None:
@@ -235,7 +223,7 @@ def _print_scientific_equivalence(jamma: list, gemma: list, p_field: str) -> Non
     mask = np.isfinite(j_p) & np.isfinite(g_p) & (j_p > 0) & (g_p > 0)
     j_p, g_p = j_p[mask], g_p[mask]
 
-    rho, _ = spearmanr(-np.log10(j_p), -np.log10(g_p))
+    rho = _rank_correlation(-np.log10(j_p), -np.log10(g_p))
 
     def sig_agree(thresh):
         agree = int(np.sum((j_p < thresh) == (g_p < thresh)))
@@ -258,20 +246,6 @@ def _print_scientific_equivalence(jamma: list, gemma: list, p_field: str) -> Non
     print(f"    Significance (p < 0.001):   {sig_agree(0.001)}")
     print(f"    Significance (p < 5e-8):    {sig_agree(5e-8)}")
     print(f"    Effect direction agreement: {dir_agree * 100:.1f}%")
-
-
-def _extract(results, field_name):
-    """Pull one field across results, mapping only a missing value to NaN.
-
-    Truthiness would read a real 0.0 as missing, which drops no-effect SNPs
-    out of every comparison this feeds.
-    """
-    return np.array(
-        [
-            np.nan if (value := getattr(r, field_name)) is None else value
-            for r in results
-        ]
-    )
 
 
 def _build_snp_info(plink_data):
@@ -309,17 +283,18 @@ def print_section(title: str):
     print(f"{'=' * 70}")
 
 
-def print_field_table(fields: list[FieldResult]):
+def print_field_table(rows: list[tuple[str, float, ComparisonResult]]) -> None:
+    """Print one line per compared column: (field, tolerance, result)."""
     print(
-        f"  {'Field':<14} {'N':>6}  {'Max Abs Diff':>14}  "
+        f"  {'Field':<14}  {'Max Abs Diff':>14}  "
         f"{'Max Rel Diff':>14}  {'Tolerance':>12}  {'Result':>6}"
     )
-    print(f"  {'-' * 14} {'-' * 6}  {'-' * 14}  {'-' * 14}  {'-' * 12}  {'-' * 6}")
-    for f in fields:
-        status = "PASS" if f.passed else "FAIL"
+    print(f"  {'-' * 14}  {'-' * 14}  {'-' * 14}  {'-' * 12}  {'-' * 6}")
+    for field, tolerance, r in rows:
+        status = "PASS" if r.passed else "FAIL"
         print(
-            f"  {f.field:<14} {f.n_values:>6}  {_fmt_sci(f.max_abs_diff):>14}  "
-            f"{_fmt_sci(f.max_rel_diff):>14}  {_fmt_sci(f.tolerance):>12}  {status:>6}"
+            f"  {field:<14}  {_fmt_sci(r.max_abs_diff):>14}  "
+            f"{_fmt_sci(r.max_rel_diff):>14}  {_fmt_sci(tolerance):>12}  {status:>6}"
         )
 
 
@@ -338,40 +313,27 @@ def print_performance_summary(timings: list[SectionTiming], total: float):
     print(f"  {'Total':<32} {'':>6}  {total:>10.3f}")
 
 
-# (field_name, tolerance_key, modes) — which fields to compare for each LMM mode
-_FIELD_SPECS = [
-    ("beta", "beta", {1, 4}),
-    ("p_wald", "p_wald", {1, 4}),
-    ("se", "se", {1}),  # mode 4 doesn't need separate SE check
-    ("p_lrt", "p_lrt", {2, 4}),
-    ("p_score", "p_score", {3, 4}),
-    ("l_remle", "lambda", {1, 4}),
-    ("l_mle", "lambda", {2, 4}),
-    ("logl_H1", "logl", {1}),
-]
+def _assoc_rows(
+    jamma: list, gemma: list, tol: ToleranceConfig
+) -> tuple[bool, list[tuple[str, float, ComparisonResult]]]:
+    """Compare one mode's results and lay the active columns out as rows.
 
-
-def _compare_fields(
-    lmm_mode: int, jamma: list, gemma: list, tol: dict
-) -> list[FieldResult]:
-    """Build field comparison list based on LMM mode."""
-    atol = tol.get("atol", 0.0)
-    return [
-        _compute_field_diffs(
-            _extract(jamma, name), _extract(gemma, name), name, tol[tol_key], atol
-        )
-        for name, tol_key, modes in _FIELD_SPECS
-        if lmm_mode in modes
-    ]
-
-
-def _primary_p_field(lmm_mode: int) -> str:
-    """Which p-value field to use for scientific equivalence."""
-    if lmm_mode == 2:
-        return "p_lrt"
-    if lmm_mode == 3:
-        return "p_score"
-    return "p_wald"
+    Columns compare_assoc_results skipped for the detected mode (a
+    vacuously-passing result with no measured difference) stay out of the
+    table, so each mode shows only the fields GEMMA wrote for it.
+    """
+    comparison = compare_assoc_results(jamma, gemma, tol)
+    rows = []
+    for field, tol_field in _ASSOC_COLUMNS:
+        r = getattr(comparison, field)
+        if r is None or (
+            r.passed and r.worst_location is None and "skipped" in r.message
+        ):
+            continue
+        rows.append((field, getattr(tol, tol_field), r))
+    if comparison.mismatched_snps:
+        print(f"  SNP id mismatches: {len(comparison.mismatched_snps)}")
+    return comparison.passed, rows
 
 
 def run_dataset(
@@ -420,27 +382,10 @@ def run_dataset(
         t_kinship = time.perf_counter() - t0
         timings.append(SectionTiming(f"[{config.name[:8]}] Kinship", t_kinship, n_snps))
 
-        abs_diff = np.abs(jamma_K - gemma_K)
-        max_abs = float(np.max(abs_diff))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            rel_diff = abs_diff / np.abs(gemma_K)
-            rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
-        max_rel = float(np.max(rel_diff))
-
-        k_tol = config.tolerances["kinship"]
-        fields = [
-            FieldResult(
-                "kinship",
-                n_samples * n_samples,
-                max_abs,
-                max_rel,
-                k_tol,
-                max_rel <= k_tol,
-            )
-        ]
-        print_field_table(fields)
+        k_result = compare_kinship_matrices(jamma_K, gemma_K, config.tolerances)
+        print_field_table([("kinship", config.tolerances.kinship_rtol, k_result)])
         print(f"\n  Time: {t_kinship:.3f}s")
-        if not fields[0].passed:
+        if not k_result.passed:
             all_passed = False
 
     # LMM mode tests
@@ -479,17 +424,15 @@ def run_dataset(
             )
         )
 
-        fields = _compare_fields(
-            spec.lmm_mode, jamma_results, gemma_ref, config.tolerances
-        )
-        print_field_table(fields)
+        passed, rows = _assoc_rows(jamma_results, gemma_ref, config.tolerances)
+        print_field_table(rows)
         print(f"\n  Time: {t_elapsed:.3f}s ({len(jamma_results)} SNPs)")
 
-        if any(not f.passed for f in fields):
+        if not passed:
             all_passed = False
 
         _print_scientific_equivalence(
-            jamma_results, gemma_ref, _primary_p_field(spec.lmm_mode)
+            jamma_results, gemma_ref, _PRIMARY_P_FIELD.get(spec.lmm_mode, "p_wald")
         )
 
     return all_passed, timings

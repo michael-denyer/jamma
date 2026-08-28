@@ -614,10 +614,9 @@ by two gates:
 
 After intentionally regenerating fixtures (e.g. updating the GEMMA
 reference assoc files, regenerating the kinship reference matrix), run
-[`scripts/regenerate_fixture_manifest.py`](../scripts/regenerate_fixture_manifest.py)
-to rebuild the manifest. The regen script auto-extracts `GEMMA Version`
-and `Command Line Input` from `.log.txt` headers, so the manifest also
-serves as a provenance record.
+`uv run python scripts/check_fixture_manifest.py --write` to rebuild the
+manifest. `--write` auto-extracts `GEMMA Version` and `Command Line Input`
+from `.log.txt` headers, so the manifest also serves as a provenance record.
 
 Editing or adding a fixture without updating the manifest will fail the
 pre-commit gate with a `sha256 drift` message that points at the stale

@@ -3,8 +3,20 @@
 
 JAMMA ships two C extensions built from `src/jamma/**/*.c` and `*.h`:
 
-  - src/jamma/lmm/_lmm_accel.<EXT_SUFFIX>  <- src/jamma/lmm/_lmm_*.c + _lmm_*.h
+  - src/jamma/lmm/_lmm_accel.<EXT_SUFFIX>  <- LMM_ACCEL_SOURCES + _lmm_*.h
   - src/jamma/jlinalg/_jlinalg.<EXT_SUFFIX> <- src/jamma/jlinalg/src/*.c + include/*.h
+
+The _lmm_accel source list is read from ``LMM_ACCEL_SOURCES`` in
+``src/jamma/_build_support/compile_and_link.py``, the tuple both build entry
+points compile, so a kernel file added there is checked here without a
+second list. The module is loaded by path rather than imported through
+``jamma``: importing the package loads ``_lmm_accel`` and may trigger the
+ABI-mismatch auto-rebuild of the very .so this script is about to inspect.
+The headers keep a glob because no build constant lists them (the compiler
+finds them by include). The jlinalg globs are deliberately wider than any
+one constant: its source set is BASELINE_SOURCES minus pymodule.c plus
+LAPACK_SOURCES plus the test sources, and every one of them lives under
+``src/jamma/jlinalg/src``.
 
 Editable installs (``uv sync``) build these once. Python source edits are
 picked up immediately by the editable install, but C source edits are
@@ -32,6 +44,7 @@ so they can rebuild before noticing weird test output.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import sysconfig
 from dataclasses import dataclass
@@ -57,17 +70,32 @@ def _ext_suffix() -> str:
     return sysconfig.get_config_var("EXT_SUFFIX") or ".so"
 
 
+def _lmm_accel_sources(root: Path) -> tuple[str, ...]:
+    """Read LMM_ACCEL_SOURCES from compile_and_link.py without importing jamma."""
+    path = root / "src/jamma/_build_support/compile_and_link.py"
+    spec = importlib.util.spec_from_file_location("_freshness_compile_and_link", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    # Registered before exec: the file defines dataclasses, and the decorator
+    # resolves annotations through sys.modules[cls.__module__].
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return tuple(module.LMM_ACCEL_SOURCES)
+
+
 def _discover_extensions() -> list[ExtensionSpec]:
     """Enumerate the C extensions JAMMA builds."""
     root = _project_root()
     ext = _ext_suffix()
+    lmm_dir = root / "src/jamma/lmm"
     return [
         ExtensionSpec(
             label="_lmm_accel",
             so_path=root / f"src/jamma/lmm/_lmm_accel{ext}",
             source_globs=(
-                (root / "src/jamma/lmm", "_lmm_*.c"),
-                (root / "src/jamma/lmm", "_lmm_*.h"),
+                *((lmm_dir, name) for name in _lmm_accel_sources(root)),
+                (lmm_dir, "_lmm_*.h"),
             ),
             rebuild_command="uv run python -m jamma.lmm._compile_accel",
         ),

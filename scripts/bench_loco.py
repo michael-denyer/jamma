@@ -13,65 +13,54 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
+from _bench_common import (
+    MOUSE_DIR,
+    MOUSE_KINSHIP,
+    MOUSE_PREFIX,
+    add_gemma_args,
+    best_of,
+    find_gemma,
+    fmt_seconds,
+    load_covariates_4,
+    load_fam_phenotypes,
+    print_hardware_header,
+    speedup,
+)
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_MOUSE_DIR = _REPO_ROOT / "tests" / "fixtures" / "mouse_hs1940"
-_MOUSE_PREFIX = _MOUSE_DIR / "mouse_hs1940"
-_MOUSE_KINSHIP = _MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt"
-_MOUSE_COVAR_4 = _MOUSE_DIR / "covariates_4.txt"
-_DEFAULT_GEMMA = Path.home() / ".local" / "bin" / "gemma"
-_DEFAULT_GEMMA_ACCELERATE = Path.home() / ".local" / "bin" / "gemma-accelerate"
+
+@dataclass(frozen=True)
+class LocoTiming:
+    """Best-of-N LOCO timing for one backend.
+
+    A backend that failed has no timing at all, so callers get None in
+    place of the whole object rather than a ``LocoTiming`` with an empty
+    total.
+
+    Attributes:
+        total: Fastest whole-run wall-clock seconds.
+        per_chr: First run's seconds per chromosome, keyed by the
+            chromosome label from the ``.bim``. None for backends that do
+            not run chromosomes separately.
+    """
+
+    total: float
+    per_chr: dict[str, float] | None = None
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _fmt(seconds: float) -> str:
-    if seconds < 1.0:
-        return f"{seconds * 1000:.0f}ms"
-    if seconds < 60.0:
-        return f"{seconds:.1f}s"
-    m, s = divmod(seconds, 60)
-    return f"{int(m)}m{s:.0f}s"
-
-
-def _speedup(ref: float | None, fast: float) -> str:
-    if ref is None:
-        return "—"
-    return f"{ref / fast:.1f}x"
-
-
-def _load_phenotypes() -> np.ndarray:
-    from jamma.core.constants import PHENOTYPE_MISSING
-
-    fam_data = np.loadtxt(_MOUSE_PREFIX.with_suffix(".fam"), usecols=5, dtype=str)
-    missing = np.isin(fam_data, [str(int(PHENOTYPE_MISSING)), "NA"])
-    phenotypes = np.where(missing, "0", fam_data).astype(np.float64)
-    phenotypes[missing] = np.nan
-    return phenotypes
-
-
-def _load_covariates_4() -> np.ndarray | None:
-    if _MOUSE_COVAR_4.exists():
-        return np.loadtxt(_MOUSE_COVAR_4)
-    return None
-
-
 def _generate_annotation_file(output_path: Path) -> None:
     """Generate BIMBAM annotation file from .bim for GEMMA -loco."""
-    bim = np.loadtxt(_MOUSE_PREFIX.with_suffix(".bim"), dtype=str, usecols=(0, 1, 3))
+    bim = np.loadtxt(MOUSE_PREFIX.with_suffix(".bim"), dtype=str, usecols=(0, 1, 3))
     # BIMBAM format: rs, position, chr
     with open(output_path, "w") as f:
         for row in bim:
@@ -84,8 +73,17 @@ def _generate_annotation_file(output_path: Path) -> None:
 # ---------------------------------------------------------------------------
 def bench_gemma_loco(
     gemma_path: Path, chromosomes: list[str], runs: int
-) -> dict[str, Any]:
-    """Benchmark GEMMA LOCO: runs -loco for each chromosome sequentially."""
+) -> LocoTiming | None:
+    """Benchmark GEMMA LOCO, running -loco for each chromosome sequentially.
+
+    Args:
+        gemma_path: GEMMA binary to run.
+        chromosomes: Chromosome labels to leave out, one run each.
+        runs: Repetitions of the whole chromosome sweep.
+
+    Returns:
+        The best-of-N timing, or None when any chromosome's run failed.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         annot_path = tmpdir_path / "mouse_hs1940.annot"
@@ -100,9 +98,9 @@ def bench_gemma_loco(
                 cmd = [
                     str(gemma_path),
                     "-bfile",
-                    str(_MOUSE_PREFIX),
+                    str(MOUSE_PREFIX),
                     "-k",
-                    str(_MOUSE_KINSHIP),
+                    str(MOUSE_KINSHIP),
                     "-a",
                     str(annot_path),
                     "-loco",
@@ -124,7 +122,7 @@ def bench_gemma_loco(
                         f"  GEMMA LOCO chr{chrom} failed: {err[:200]}",
                         file=sys.stderr,
                     )
-                    return {"loco_total": None}
+                    return None
 
                 run_total += elapsed
                 if run_idx == 0:
@@ -133,10 +131,7 @@ def bench_gemma_loco(
             if run_total < best_total:
                 best_total = run_total
 
-        return {
-            "loco_total": best_total,
-            "per_chr": per_chr_times,
-        }
+        return LocoTiming(total=best_total, per_chr=per_chr_times)
 
 
 # ---------------------------------------------------------------------------
@@ -146,26 +141,31 @@ def bench_jamma_loco(
     phenotypes: np.ndarray,
     covariates: np.ndarray | None,
     runs: int,
-) -> dict[str, float]:
-    """Benchmark JAMMA LOCO (all chromosomes in one call)."""
+) -> float:
+    """Benchmark JAMMA LOCO, running all chromosomes in one call.
+
+    Args:
+        phenotypes: Per-sample phenotypes.
+        covariates: Covariate matrix, or None.
+        runs: Repetitions.
+
+    Returns:
+        Wall-clock seconds for the fastest repetition.
+    """
     from jamma.lmm.loco import run_lmm_loco
     from jamma.lmm.schema import LmmConfig
 
-    best = float("inf")
-    for _ in range(runs):
-        t0 = time.perf_counter()
+    def one_run():
         with tempfile.TemporaryDirectory() as tmpdir:
             run_lmm_loco(
-                bed_path=_MOUSE_PREFIX,
+                bed_path=MOUSE_PREFIX,
                 phenotypes=phenotypes,
                 covariates=covariates,
                 config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=True),
                 output_path=Path(tmpdir) / "loco_results.assoc.txt",
             )
-        elapsed = time.perf_counter() - t0
-        best = min(best, elapsed)
 
-    return {"loco_total": best}
+    return best_of(one_run, runs)
 
 
 # ---------------------------------------------------------------------------
@@ -173,27 +173,7 @@ def bench_jamma_loco(
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--gemma-path",
-        type=Path,
-        default=None,
-        help=f"Path to GEMMA binary (default: auto-detect at {_DEFAULT_GEMMA})",
-    )
-    parser.add_argument(
-        "--gemma-accelerate-path",
-        type=Path,
-        default=None,
-        help=(
-            "Path to GEMMA+Accelerate binary"
-            f" (default: auto-detect at {_DEFAULT_GEMMA_ACCELERATE})"
-        ),
-    )
-    parser.add_argument(
-        "--runs",
-        type=int,
-        default=1,
-        help="Number of runs, report best (default: 1)",
-    )
+    add_gemma_args(parser)
     parser.add_argument(
         "--covariates",
         action="store_true",
@@ -202,66 +182,35 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve GEMMA paths
-    gemma_path = args.gemma_path
-    if gemma_path is None:
-        if _DEFAULT_GEMMA.exists():
-            gemma_path = _DEFAULT_GEMMA
-        else:
-            found = shutil.which("gemma")
-            if found:
-                gemma_path = Path(found)
+    gemma_path = find_gemma(args.gemma_path, "gemma")
+    gemma_accel_path = find_gemma(args.gemma_accelerate_path, "gemma-accelerate")
 
-    gemma_accel_path = args.gemma_accelerate_path
-    if gemma_accel_path is None:
-        if _DEFAULT_GEMMA_ACCELERATE.exists():
-            gemma_accel_path = _DEFAULT_GEMMA_ACCELERATE
-        else:
-            found = shutil.which("gemma-accelerate")
-            if found:
-                gemma_accel_path = Path(found)
-
-    # Validate user-supplied GEMMA paths exist
     for label, path in [("GEMMA", gemma_path), ("GEMMA+Accelerate", gemma_accel_path)]:
         if path is not None and not path.exists():
             print(f"ERROR: {label} binary not found at {path}", file=sys.stderr)
             sys.exit(1)
 
-    # Validate data exists
-    if not _MOUSE_PREFIX.with_suffix(".bed").exists():
-        print(f"ERROR: mouse_hs1940 data not found at {_MOUSE_DIR}", file=sys.stderr)
+    if not MOUSE_PREFIX.with_suffix(".bed").exists():
+        print(f"ERROR: mouse_hs1940 data not found at {MOUSE_DIR}", file=sys.stderr)
         sys.exit(1)
 
-    # Print hardware context
-    from jamma.core.hardware import get_hardware_context
+    print_hardware_header(args.runs)
 
-    ctx = get_hardware_context()
-    phys, log = ctx["cpu_count_physical"], ctx["cpu_count_logical"]
-    print(f"CPU: {ctx['cpu_model']} ({phys}P/{log}L)")
-    print(f"BLAS: {ctx['blas_backend']} ({ctx['blas_threads']} threads)")
-    print(f"NumPy: {ctx['numpy_version']}")
-    print(f"Platform: {ctx['platform']}")
-    print(f"Runs: {args.runs} (best of)")
-    print()
-
-    # Get chromosome list
-    bim_chr = np.loadtxt(_MOUSE_PREFIX.with_suffix(".bim"), dtype=str, usecols=0)
+    bim_chr = np.loadtxt(MOUSE_PREFIX.with_suffix(".bim"), dtype=str, usecols=0)
     chromosomes = sorted(set(bim_chr), key=lambda c: int(c) if c.isdigit() else 99)
     print(f"Dataset: {len(bim_chr)} SNPs across {len(chromosomes)} chromosomes")
     print(f"Chromosomes: {', '.join(chromosomes)}")
     print()
 
-    phenotypes = _load_phenotypes()
-    covariates_4 = _load_covariates_4() if args.covariates else None
+    phenotypes = load_fam_phenotypes(MOUSE_PREFIX.with_suffix(".fam"))
+    covariates_4 = load_covariates_4() if args.covariates else None
 
-    # Build benchmark configurations
     configs: list[tuple[str, np.ndarray | None]] = [
         ("Wald", None),
     ]
     if covariates_4 is not None:
         configs.append(("Wald+4cov", covariates_4))
 
-    # Build list of GEMMA variants to benchmark: (label, results_key, path)
     gemma_variants: list[tuple[str, str, Path]] = []
     if gemma_accel_path:
         gemma_variants.append(
@@ -277,43 +226,40 @@ def main():
         print(f"=== LOCO {config_label} ===")
         print()
 
-        results: dict[str, dict] = {}
+        results: dict[str, LocoTiming | None] = {}
 
-        # GEMMA variants
         for gemma_label, gemma_key, gpath in gemma_variants:
             print(f"Benchmarking {gemma_label} LOCO {config_label}...", flush=True)
-            gemma_results = bench_gemma_loco(gpath, chromosomes, args.runs)
-            results[gemma_key] = gemma_results
-            gt = gemma_results.get("loco_total")
-            if gt is not None:
-                print(f"  {gemma_label} total: {_fmt(gt)}")
-                per_chr = gemma_results.get("per_chr", {})
+            gemma_timing = bench_gemma_loco(gpath, chromosomes, args.runs)
+            results[gemma_key] = gemma_timing
+            if gemma_timing is not None:
+                print(f"  {gemma_label} total: {fmt_seconds(gemma_timing.total)}")
+                per_chr = gemma_timing.per_chr or {}
                 if per_chr:
-                    slowest = max(per_chr, key=per_chr.get)
-                    fastest = min(per_chr, key=per_chr.get)
+                    slowest = max(per_chr, key=lambda c: per_chr[c])
+                    fastest = min(per_chr, key=lambda c: per_chr[c])
                     print(
-                        f"  Per-chr range: {_fmt(per_chr[fastest])} (chr{fastest})"
-                        f" – {_fmt(per_chr[slowest])} (chr{slowest})"
+                        f"  Per-chr range: {fmt_seconds(per_chr[fastest])}"
+                        f" (chr{fastest})"
+                        f" – {fmt_seconds(per_chr[slowest])} (chr{slowest})"
                     )
             else:
                 print(f"  {gemma_label} LOCO failed")
             print()
 
-        # JAMMA NumPy+C backend
         backends_to_run = ["numpy"]
 
+        jamma_totals: dict[str, float] = {}
         for backend in backends_to_run:
             label = "NumPy+C"
             print(f"Benchmarking JAMMA LOCO ({label}) {config_label}...", flush=True)
-            jamma_results = bench_jamma_loco(phenotypes, covars, args.runs)
-            results[f"jamma_{backend}"] = jamma_results
-            jt = jamma_results["loco_total"]
-            print(f"  JAMMA ({label}): {_fmt(jt)}")
+            jamma_total = bench_jamma_loco(phenotypes, covars, args.runs)
+            jamma_totals[backend] = jamma_total
+            print(f"  JAMMA ({label}): {fmt_seconds(jamma_total)}")
             print()
 
-        # Summary table
-        # Note: GEMMA -loco tests ALL SNPs per chromosome (redundant),
-        # while JAMMA tests only each chromosome's own SNPs.
+        # GEMMA -loco tests ALL SNPs per chromosome (redundant), while JAMMA
+        # tests only each chromosome's own SNPs.
         n_total_snps = len(bim_chr)
         n_chr = len(chromosomes)
         gemma_tests = n_chr * n_total_snps
@@ -324,11 +270,10 @@ def main():
         print(f"  JAMMA tests each SNP once ({jamma_tests:,} total SNP-tests)")
         print()
 
-        # Use fastest GEMMA variant as reference for speedup
         gemma_times = [
-            gt
+            timing.total
             for _, gk, _ in gemma_variants
-            if (gt := results.get(gk, {}).get("loco_total")) is not None
+            if (timing := results[gk]) is not None
         ]
         gemma_ref = min(gemma_times) if gemma_times else None
 
@@ -340,14 +285,16 @@ def main():
         )
 
         for gemma_label, gemma_key, _ in gemma_variants:
-            gt = results.get(gemma_key, {}).get("loco_total")
-            if gt is not None:
-                print(f"| {gemma_label} | {_fmt(gt)} | {_speedup(gemma_ref, gt)} |")
+            timing = results[gemma_key]
+            if timing is not None:
+                gt = timing.total
+                print(
+                    f"| {gemma_label} | {fmt_seconds(gt)} | {speedup(gemma_ref, gt)} |"
+                )
 
         for backend in backends_to_run:
-            key = f"jamma_{backend}"
-            jt = results[key]["loco_total"]
-            print(f"| JAMMA NumPy+C | {_fmt(jt)} | {_speedup(gemma_ref, jt)} |")
+            jt = jamma_totals[backend]
+            print(f"| JAMMA NumPy+C | {fmt_seconds(jt)} | {speedup(gemma_ref, jt)} |")
 
         print()
 

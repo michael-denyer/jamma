@@ -181,6 +181,41 @@ class TestEncodeCategoricalBasic:
         # Intercept column should be unchanged
         np.testing.assert_array_equal(result[:, 0], [1.0, 1.0, 1.0, 1.0])
 
+    def test_encode_two_columns_non_adjacent(self) -> None:
+        """Two categorical columns at non-adjacent positions encode correctly.
+
+        Regression test for the in-place splice rewrite (F-F11): columns
+        1 and 3 in a 5-column array are not adjacent, so a bug in either
+        the index bookkeeping or the output ordering would show up as a
+        column permutation rather than a shape mismatch.
+        """
+        # cols: intercept, cat_A(1,2,3), continuous, cat_B(10,20), continuous2
+        covariates = np.array(
+            [
+                [1.0, 1.0, 5.0, 10.0, 100.0],
+                [1.0, 2.0, 6.0, 20.0, 200.0],
+                [1.0, 3.0, 7.0, 10.0, 300.0],
+                [1.0, 1.0, 8.0, 20.0, 400.0],
+                [1.0, 2.0, 9.0, 10.0, 500.0],
+            ]
+        )
+
+        result = encode_categorical_covariates(covariates, cat_columns=[2, 4])
+
+        # Col 2 (1,2,3) -> ref=1, dummies for 2 and 3 (2 columns)
+        # Col 4 (10,20) -> ref=10, dummy for 20 (1 column)
+        # Output order: intercept, dummy_2, dummy_3, continuous, dummy_20, continuous2
+        expected = np.array(
+            [
+                [1.0, 0.0, 0.0, 5.0, 0.0, 100.0],
+                [1.0, 1.0, 0.0, 6.0, 1.0, 200.0],
+                [1.0, 0.0, 1.0, 7.0, 0.0, 300.0],
+                [1.0, 0.0, 0.0, 8.0, 1.0, 400.0],
+                [1.0, 1.0, 0.0, 9.0, 0.0, 500.0],
+            ]
+        )
+        np.testing.assert_array_equal(result, expected)
+
     def test_encode_duplicate_cat_columns_deduplicated(self) -> None:
         """Duplicate -cat indices are deduplicated, not double-encoded.
 

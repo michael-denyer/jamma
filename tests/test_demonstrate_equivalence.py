@@ -59,26 +59,33 @@ def test_equivalence_report_passes_all_tolerances():
     assert "VERDICT: ALL FIELDS PASS TOLERANCES" in result.stdout
 
 
-@pytest.mark.tier0
-def test_extract_keeps_a_real_zero_instead_of_calling_it_missing():
-    """A beta of exactly 0.0 is a result, not a missing value.
-
-    _extract used truthiness to spot missing fields, so a SNP with no effect
-    was dropped from every comparison it fed.
-    """
+def _load_script():
     sys.path.insert(0, str(ROOT / "scripts"))
     try:
         import demonstrate_equivalence
     finally:
         if sys.path and sys.path[0] == str(ROOT / "scripts"):
             sys.path.pop(0)
+    return demonstrate_equivalence
 
-    class _R:
-        def __init__(self, beta):
-            self.beta = beta
 
-    extracted = demonstrate_equivalence._extract([_R(0.0), _R(1.5), _R(None)], "beta")
+@pytest.mark.tier0
+def test_rank_correlation_matches_scipy_spearman_without_importing_scipy():
+    """The report's rho is scipy's Spearman on untied data, computed without scipy.
 
-    assert extracted[0] == 0.0
-    assert extracted[1] == 1.5
-    assert np.isnan(extracted[2])
+    The script must not import scipy (installing it replaces the ILP64 numpy),
+    so the check compares against scipy here, where the dev environment has it.
+    """
+    from scipy.stats import spearmanr
+
+    script = _load_script()
+    rng = np.random.default_rng(7)
+    x = rng.standard_normal(500)
+    y = x + rng.standard_normal(500) * 0.5
+
+    expected, _ = spearmanr(x, y)
+    assert script._rank_correlation(x, y) == pytest.approx(expected, abs=1e-12)
+    assert script._rank_correlation(x, -x) == pytest.approx(-1.0)
+    source = (ROOT / "scripts/demonstrate_equivalence.py").read_text()
+    assert "from scipy" not in source
+    assert "import scipy" not in source

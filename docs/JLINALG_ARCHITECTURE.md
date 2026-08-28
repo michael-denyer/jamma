@@ -139,7 +139,7 @@ results that diverge from GEMMA's validation tolerances.
 | `src/pymodule.c` | Python/NumPy bridge (buffer extraction, GIL release, error translation) |
 | `src/platform.c` | ISA detection (CPUID/hwcap), vendor BLAS dispatch init |
 | `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym, dispatch wrappers |
-| `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. |
+| `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. `jlinalg_eigh_c` requires tightly packed row-major storage (`ldk == ldz == N`); a padded stride returns `JLINALG_EXT_BAD_STRIDE` rather than being serviced by a second code path, since no caller in the tree ever passes one. |
 | `src/snp_stats.c` | SNP statistics kernel (chunked mean/variance/MAF) |
 
 There are no hand-rolled LAPACK implementations in the tree. As of commit

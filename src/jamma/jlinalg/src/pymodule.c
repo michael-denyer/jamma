@@ -361,11 +361,7 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
     Py_END_ALLOW_THREADS
 
         if (ret != 0) {
-        if (ret == JLINALG_EXT_INPLACE_UNSUPPORTED) {
-            PyErr_Format(PyExc_RuntimeError, "jlinalg eigh: inplace=True requires vendor LAPACK "
-                                             "(DSYEVD or DSYEVR); neither is available. "
-                                             "Use inplace=False or install ILP64 numpy.");
-        } else if (ret == JLINALG_EXT_UNAVAILABLE) {
+        if (ret == JLINALG_EXT_UNAVAILABLE) {
             PyErr_Format(PyExc_RuntimeError, "jlinalg eigh: no vendor LAPACK available "
                                              "(DSYEVD and DSYEVR both unavailable). "
                                              "Use numpy.linalg.eigh instead.");
@@ -376,9 +372,10 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
             PyErr_Format(PyExc_RuntimeError,
                          "jlinalg eigh: vendor LAPACK DSYEVR returned fewer eigenvalues "
                          "than expected -- this indicates an ABI mismatch or vendor bug");
-        } else if (ret == JLINALG_EXT_INTERNAL_ERROR) {
+        } else if (ret == JLINALG_EXT_BAD_STRIDE) {
             PyErr_Format(PyExc_RuntimeError,
-                         "jlinalg eigh: internal error -- this is a jlinalg bug, please report it");
+                         "jlinalg eigh: internal error -- padded stride passed to "
+                         "jlinalg_eigh_c, this is a jlinalg bug, please report it");
         } else if (ret < 0) {
             PyErr_Format(PyExc_RuntimeError,
                          "jlinalg eigh: illegal argument to vendor LAPACK (info=%d) -- "

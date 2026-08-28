@@ -17,8 +17,9 @@
  * CBLAS backends handle row-major natively; Fortran backends use the A/B
  * swap trick for column-major conversion.
  *
- * The dlopen machinery is Unix-only (#if !defined(_WIN32)); on Windows
- * blas_dispatch_init() returns 0 immediately (no external dispatch).
+ * The dlopen machinery is POSIX-only. `run_build()` refuses to compile the
+ * C extensions on Windows at all (see `compile_and_link.py`), so this file
+ * carries no Windows stub path.
  */
 
 /* _GNU_SOURCE required on glibc for RTLD_DEFAULT in <dlfcn.h>. Must be
@@ -42,8 +43,6 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/arrayobject.h>
 #include "jlinalg.h"
-
-#if !defined(_WIN32)
 
 #include <dlfcn.h>
 #include <dirent.h>
@@ -1372,126 +1371,3 @@ void jlinalg_dgemm_ext(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_
                     "Results would be silently wrong. Aborting.\n");
     abort();
 }
-
-void jlinalg_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
-                          const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
-                          int transb, double alpha, double beta) {
-    if (g_has_vendor_dgemm &&
-        _dgemm_external_full(M, N, K, A, lda, B, ldb, C, ldc, transa, transb, alpha, beta)) {
-        return;
-    }
-    /* No external BLAS -- caller should use numpy fallback. */
-    fprintf(stderr, "FATAL: jlinalg_dgemm_ext_ws called without vendor BLAS. "
-                    "Results would be silently wrong. Aborting.\n");
-    abort();
-}
-
-#else /* _WIN32 */
-
-/* Windows: no external dispatch -- numpy fallback */
-int blas_dispatch_init(void) {
-    return 0;
-}
-
-const char *blas_backend_name(void) {
-    return "numpy-fallback";
-}
-
-int blas_is_ilp64(void) {
-    return 0;
-}
-
-int blas_has_external(void) {
-    return 0;
-}
-
-int blas_has_dsyrk(void) {
-    return 0;
-}
-
-int blas_has_dsyevd(void) {
-    return 0;
-}
-
-int blas_has_dsyevr(void) {
-    return 0;
-}
-
-int blas_has_lapacke_dsyevd(void) {
-    return 0;
-}
-
-int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk, double *eigenvalues,
-                       double *eigenvectors, npy_intp ldz) {
-    (void)N;
-    (void)K;
-    (void)ldk;
-    (void)eigenvalues;
-    (void)eigenvectors;
-    (void)ldz;
-    return JLINALG_EXT_UNAVAILABLE;
-}
-
-void jlinalg_dsyrk_ext(npy_intp N, npy_intp K, const double *X, npy_intp ldx, double *C,
-                       npy_intp ldc, double beta) {
-    (void)N;
-    (void)K;
-    (void)X;
-    (void)ldx;
-    (void)C;
-    (void)ldc;
-    (void)beta;
-    fprintf(stderr, "FATAL: jlinalg_dsyrk_ext called without vendor BLAS. "
-                    "Results would be silently wrong. Aborting.\n");
-    abort();
-}
-
-int jlinalg_dsyevd_ext(npy_intp N, double *K, npy_intp ldk, double *eigenvalues) {
-    (void)N;
-    (void)K;
-    (void)ldk;
-    (void)eigenvalues;
-    return JLINALG_EXT_UNAVAILABLE;
-}
-
-void jlinalg_dgemm_ext(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
-                       const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
-                       int transb) {
-    (void)A;
-    (void)B;
-    (void)K;
-    (void)lda;
-    (void)ldb;
-    (void)transa;
-    (void)transb;
-    (void)M;
-    (void)N;
-    (void)C;
-    (void)ldc;
-    fprintf(stderr, "FATAL: jlinalg_dgemm_ext called without vendor BLAS. "
-                    "Results would be silently wrong. Aborting.\n");
-    abort();
-}
-
-void jlinalg_dgemm_ext_ws(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
-                          const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
-                          int transb, double alpha, double beta) {
-    (void)M;
-    (void)N;
-    (void)K;
-    (void)A;
-    (void)lda;
-    (void)B;
-    (void)ldb;
-    (void)C;
-    (void)ldc;
-    (void)transa;
-    (void)transb;
-    (void)alpha;
-    (void)beta;
-    fprintf(stderr, "FATAL: jlinalg_dgemm_ext_ws called without vendor BLAS. "
-                    "Results would be silently wrong. Aborting.\n");
-    abort();
-}
-
-#endif /* !_WIN32 */

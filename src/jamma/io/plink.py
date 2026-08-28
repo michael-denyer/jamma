@@ -364,3 +364,35 @@ def stream_genotype_chunks(
         for start in iterator:
             end = min(start + chunk_size, n_total)
             yield read_chunk(start, end), start, end
+
+
+def parse_fam_phenotype_column(fam_data: np.ndarray, column: int) -> np.ndarray:
+    """Return phenotype ``column`` (1-based) of a ``.fam`` read as strings.
+
+    ``-9`` and ``NA`` become NaN. Columns 1 to 5 of the file are FID, IID,
+    father, mother and sex, so phenotype column 1 is file column 6.
+
+    Raises:
+        ValueError: If the file has fewer phenotype columns than ``column``.
+    """
+    col_index = 4 + column
+    n_cols = fam_data.shape[1]
+    if col_index >= n_cols:
+        n_pheno_cols = n_cols - 5
+        raise ValueError(
+            f"phenotype column {column} exceeds available columns "
+            f"in .fam file ({n_pheno_cols} phenotype column"
+            f"{'s' if n_pheno_cols != 1 else ''} available)"
+        )
+    values = fam_data[:, col_index].copy()
+    missing = np.isin(values, ["-9", "NA"])
+    values[missing] = "0"
+    phenotypes = values.astype(np.float64)
+    phenotypes[missing] = np.nan
+    return phenotypes
+
+
+def read_fam_phenotypes(fam_path: Path, column: int = 1) -> np.ndarray:
+    """Read one phenotype column of a PLINK ``.fam`` file, NaN for missing."""
+    fam_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
+    return parse_fam_phenotype_column(fam_data, column)

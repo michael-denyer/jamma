@@ -7,12 +7,10 @@ files (see GEMMA_EQUIVALENCE.md for tolerance rationale).
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-from jamma.io import load_plink_binary
+from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import compute_numpy
 from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
@@ -25,80 +23,13 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.conftest import load_phenotypes_from_fam, require_fixture
-
-# ---------------------------------------------------------------------------
-# Tolerance configurations
-# ---------------------------------------------------------------------------
-
-# NumPy backend vs GEMMA tolerances.
-# Cephes betainc is close to GSL betainc for large a (n_samples > 1000).
-# Lambda optimization uses golden section algorithm.
-# See GEMMA_EQUIVALENCE.md for tolerance derivation.
-NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
-    lambda_rtol=1e-3,  # Golden section vs Brent
-    pvalue_rtol=1e-2,  # Cephes vs GSL betainc
-    se_rtol=5e-4,  # Pab arithmetic propagation
-    logl_rtol=5e-3,  # Golden section vs Brent on flat optima
-    atol=1e-4,  # Near-zero values
+from tests.conftest import require_fixture
+from tests.fixture_paths import (
+    MOUSE,
+    NUMPY_GEMMA_TOLERANCES,
+    SYNTHETIC,
+    build_snp_info,
 )
-
-# ---------------------------------------------------------------------------
-# Fixture paths
-# ---------------------------------------------------------------------------
-
-_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
-MOUSE_HS1940_DIR = _FIXTURE_ROOT / "mouse_hs1940"
-MOUSE_HS1940_DATA = MOUSE_HS1940_DIR / "mouse_hs1940"
-MOUSE_HS1940_KINSHIP = MOUSE_HS1940_DIR / "mouse_hs1940_kinship.cXX.txt"
-MOUSE_HS1940_ALL = MOUSE_HS1940_DIR / "mouse_hs1940_all.assoc.txt"
-MOUSE_HS1940_LRT = MOUSE_HS1940_DIR / "mouse_hs1940_lrt.assoc.txt"
-MOUSE_HS1940_SCORE = MOUSE_HS1940_DIR / "mouse_hs1940_score.assoc.txt"
-MOUSE_HS1940_COVARIATES = MOUSE_HS1940_DIR / "covariates.txt"
-MOUSE_HS1940_COVAR_WALD = MOUSE_HS1940_DIR / "mouse_hs1940_covar_wald.assoc.txt"
-MOUSE_HS1940_COVAR_LRT = MOUSE_HS1940_DIR / "mouse_hs1940_covar_lrt.assoc.txt"
-MOUSE_HS1940_COVAR_SCORE = MOUSE_HS1940_DIR / "mouse_hs1940_covar_score.assoc.txt"
-MOUSE_HS1940_COVAR_ALL = MOUSE_HS1940_DIR / "mouse_hs1940_covar_all.assoc.txt"
-
-SYNTHETIC_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
-SYNTHETIC_KINSHIP = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_kinship.cXX.txt"
-SYNTHETIC_REFERENCE = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_assoc.assoc.txt"
-SYNTHETIC_LRT_REFERENCE = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_lrt.assoc.txt"
-SCORE_REFERENCE = _FIXTURE_ROOT / "gemma_score" / "gemma_score.assoc.txt"
-ALL_TESTS_REFERENCE = _FIXTURE_ROOT / "gemma_all_tests" / "gemma_all.assoc.txt"
-
-COVARIATE_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_covariate"
-COVARIATE_FILE = COVARIATE_FIXTURE_DIR / "covariates.txt"
-COVARIATE_WALD_REFERENCE = COVARIATE_FIXTURE_DIR / "gemma_covariate.assoc.txt"
-COVARIATE_LRT_REFERENCE = COVARIATE_FIXTURE_DIR / "gemma_covariate_lrt.assoc.txt"
-COVARIATE_SCORE_REFERENCE = COVARIATE_FIXTURE_DIR / "gemma_covariate_score.assoc.txt"
-ALL_TESTS_COVAR_REFERENCE = (
-    _FIXTURE_ROOT / "gemma_all_tests" / "gemma_all_covar.assoc.txt"
-)
-
-
-def _build_snp_info(plink_data) -> list[dict]:
-    """Build snp_info list from PlinkData object.
-
-    Args:
-        plink_data: PlinkData with chromosome, sid, bp_position, allele_1, allele_2.
-
-    Returns:
-        List of dicts with keys: chr, rs, pos, a1, a0, maf, n_miss.
-    """
-    return [
-        {
-            "chr": str(plink_data.chromosome[i]),
-            "rs": plink_data.sid[i],
-            "pos": plink_data.bp_position[i],
-            "a1": plink_data.allele_1[i],
-            "a0": plink_data.allele_2[i],
-            "maf": 0.0,
-            "n_miss": 0,
-        }
-        for i in range(plink_data.n_snps)
-    ]
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -108,20 +39,20 @@ def _build_snp_info(plink_data) -> list[dict]:
 @pytest.fixture
 def synthetic_data():
     """Load gemma_synthetic PLINK data, kinship, phenotypes, and snp_info."""
-    plink = load_plink_binary(SYNTHETIC_DATA)
-    kinship = read_kinship_matrix(SYNTHETIC_KINSHIP)
-    phenotypes = load_phenotypes_from_fam(SYNTHETIC_DATA.with_suffix(".fam"))
-    snp_info = _build_snp_info(plink)
+    plink = load_plink_binary(SYNTHETIC.bfile)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship)
+    phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
+    snp_info = build_snp_info(plink)
     return plink, kinship, phenotypes, snp_info
 
 
 @pytest.fixture
 def mouse_hs1940_data():
     """Load mouse_hs1940 PLINK data, kinship, phenotypes, and snp_info."""
-    plink = load_plink_binary(MOUSE_HS1940_DATA)
-    kinship = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
-    phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_DATA.with_suffix(".fam"))
-    snp_info = _build_snp_info(plink)
+    plink = load_plink_binary(MOUSE.bfile)
+    kinship = read_kinship_matrix(MOUSE.kinship)
+    phenotypes = read_fam_phenotypes(MOUSE.fam)
+    snp_info = build_snp_info(plink)
     return plink, kinship, phenotypes, snp_info
 
 
@@ -134,7 +65,7 @@ def mouse_hs1940_data_with_covariates(mouse_hs1940_data):
     of 1s to match GEMMA's internal representation.
     """
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
-    raw_covariates = np.loadtxt(MOUSE_HS1940_COVARIATES)
+    raw_covariates = np.loadtxt(MOUSE.covariates)
     n_samples = raw_covariates.shape[0]
     covariates = np.hstack([np.ones((n_samples, 1)), raw_covariates])
     return plink, kinship, phenotypes, snp_info, covariates
@@ -414,10 +345,10 @@ def test_runner_mode4_uses_fused_dispatch():
 
 
 _SYNTHETIC_MODE_REFS = [
-    pytest.param(1, SYNTHETIC_REFERENCE, id="wald"),
-    pytest.param(2, SYNTHETIC_LRT_REFERENCE, id="lrt"),
-    pytest.param(3, SCORE_REFERENCE, id="score"),
-    pytest.param(4, ALL_TESTS_REFERENCE, id="all"),
+    pytest.param(1, SYNTHETIC.ref("wald"), id="wald"),
+    pytest.param(2, SYNTHETIC.ref("lrt"), id="lrt"),
+    pytest.param(3, SYNTHETIC.ref("score"), id="score"),
+    pytest.param(4, SYNTHETIC.ref("all"), id="all"),
 ]
 
 
@@ -443,9 +374,9 @@ def test_numpy_runner_synthetic(synthetic_data, lmm_mode, reference_path):
 
 
 _MOUSE_HS1940_MODE_REFS = [
-    pytest.param(2, MOUSE_HS1940_LRT, id="lrt"),
-    pytest.param(3, MOUSE_HS1940_SCORE, id="score"),
-    pytest.param(4, MOUSE_HS1940_ALL, id="all"),
+    pytest.param(2, MOUSE.ref("lrt"), id="lrt"),
+    pytest.param(3, MOUSE.ref("score"), id="score"),
+    pytest.param(4, MOUSE.ref("all"), id="all"),
 ]
 
 
@@ -483,15 +414,15 @@ def synthetic_data_with_covariates(synthetic_data):
     is all 1.0), matching GEMMA's internal representation when -c is used.
     """
     plink, kinship, phenotypes, snp_info = synthetic_data
-    covariates = np.loadtxt(COVARIATE_FILE)
+    covariates = np.loadtxt(SYNTHETIC.covariates)
     return plink, kinship, phenotypes, snp_info, covariates
 
 
 _SYNTHETIC_COVAR_MODE_REFS = [
-    pytest.param(1, COVARIATE_WALD_REFERENCE, id="wald"),
-    pytest.param(2, COVARIATE_LRT_REFERENCE, id="lrt"),
-    pytest.param(3, COVARIATE_SCORE_REFERENCE, id="score"),
-    pytest.param(4, ALL_TESTS_COVAR_REFERENCE, id="all"),
+    pytest.param(1, SYNTHETIC.ref("covar_wald"), id="wald"),
+    pytest.param(2, SYNTHETIC.ref("covar_lrt"), id="lrt"),
+    pytest.param(3, SYNTHETIC.ref("covar_score"), id="score"),
+    pytest.param(4, SYNTHETIC.ref("covar_all"), id="all"),
 ]
 
 
@@ -524,10 +455,10 @@ def test_numpy_runner_covar_synthetic(
 # ---------------------------------------------------------------------------
 
 _MOUSE_HS1940_COVAR_MODE_REFS = [
-    pytest.param(1, MOUSE_HS1940_COVAR_WALD, id="wald"),
-    pytest.param(2, MOUSE_HS1940_COVAR_LRT, id="lrt"),
-    pytest.param(3, MOUSE_HS1940_COVAR_SCORE, id="score"),
-    pytest.param(4, MOUSE_HS1940_COVAR_ALL, id="all"),
+    pytest.param(1, MOUSE.ref("covar_wald"), id="wald"),
+    pytest.param(2, MOUSE.ref("covar_lrt"), id="lrt"),
+    pytest.param(3, MOUSE.ref("covar_score"), id="score"),
+    pytest.param(4, MOUSE.ref("covar_all"), id="all"),
 ]
 
 
@@ -570,15 +501,15 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     ensure the only difference is the chunking path.
     """
     require_fixture(
-        MOUSE_HS1940_DATA.with_suffix(".bed"),
-        MOUSE_HS1940_DATA.with_suffix(".fam"),
-        MOUSE_HS1940_KINSHIP,
+        MOUSE.bed,
+        MOUSE.fam,
+        MOUSE.kinship,
     )
 
-    plink = load_plink_binary(MOUSE_HS1940_DATA)
-    kinship = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
-    phenotypes = load_phenotypes_from_fam(MOUSE_HS1940_DATA.with_suffix(".fam"))
-    snp_info = _build_snp_info(plink)
+    plink = load_plink_binary(MOUSE.bfile)
+    kinship = read_kinship_matrix(MOUSE.kinship)
+    phenotypes = read_fam_phenotypes(MOUSE.fam)
+    snp_info = build_snp_info(plink)
 
     # Filter to valid (non-NaN) samples then pre-compute eigendecomp once
     # on the filtered kinship — passed to both runs so the only variable is
@@ -1574,7 +1505,7 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
         )
 
     # Compare against GEMMA reference
-    reference = load_gemma_assoc(COVARIATE_LRT_REFERENCE)
+    reference = load_gemma_assoc(SYNTHETIC.ref("covar_lrt"))
     tolerances = ToleranceConfig(lambda_rtol=5e-5)
     comparison = compare_assoc_results(results, reference, tolerances)
     assert comparison.passed, (
@@ -1615,7 +1546,7 @@ def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
         )
 
     # Compare against GEMMA reference
-    reference = load_gemma_assoc(COVARIATE_SCORE_REFERENCE)
+    reference = load_gemma_assoc(SYNTHETIC.ref("covar_score"))
     tolerances = ToleranceConfig(lambda_rtol=5e-5)
     comparison = compare_assoc_results(results, reference, tolerances)
     assert comparison.passed, (

@@ -16,19 +16,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.io import read_fam_phenotypes
 from jamma.lmm.eigen_cache import EigenCacheComponents
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.loco import LocoConfig
 from jamma.lmm.loco_eigen import _find_loco_eigen_cache
 from jamma.lmm.schema import LmmConfig
 from tests.conftest import require_fixture
+from tests.fixture_paths import MOUSE
 
 # ---------------------------------------------------------------------------
 # Fixture paths
 # ---------------------------------------------------------------------------
-_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
-MOUSE_HS1940_DIR = _FIXTURE_ROOT / "mouse_hs1940"
-MOUSE_HS1940_BFILE = MOUSE_HS1940_DIR / "mouse_hs1940"
+MOUSE_HS1940_DIR = MOUSE.dir
+MOUSE_HS1940_BFILE = MOUSE.bfile
 
 
 # Asserted at import rather than by a per-class skipif: the fixture is
@@ -235,10 +236,9 @@ class TestLocoWriteEigen:
         from jamma.io.plink import get_plink_metadata, partitions_from_metadata
         from jamma.lmm.loco import run_lmm_loco
         from jamma.lmm.prepare_common import compute_valid_mask
-        from tests.conftest import load_phenotypes_from_fam
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-        phenotypes = load_phenotypes_from_fam(fam_path)
+        phenotypes = read_fam_phenotypes(fam_path)
         meta = get_plink_metadata(MOUSE_HS1940_BFILE)
         partitions = partitions_from_metadata(meta)
         unique_chrs = sorted(partitions.keys())
@@ -288,10 +288,9 @@ class TestLocoEigenCacheIntegration:
 
         from jamma.lmm.loco import run_lmm_loco
         from jamma.validation.compare import load_gemma_assoc
-        from tests.conftest import load_phenotypes_from_fam
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-        phenotypes = load_phenotypes_from_fam(fam_path)
+        phenotypes = read_fam_phenotypes(fam_path)
         eigen_dir = tmp_path / "eigen_cache"
         eigen_dir.mkdir()
 
@@ -388,10 +387,9 @@ class TestLocoEigenCacheFallback:
     def test_empty_eigen_dir_falls_back_to_compute(self, tmp_path: Path) -> None:
         """LOCO with eigen_dir pointing to empty dir runs normally."""
         from jamma.lmm.loco import run_lmm_loco
-        from tests.conftest import load_phenotypes_from_fam
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-        phenotypes = load_phenotypes_from_fam(fam_path)
+        phenotypes = read_fam_phenotypes(fam_path)
         empty_dir = tmp_path / "empty_eigen"
         empty_dir.mkdir()
 
@@ -408,10 +406,9 @@ class TestLocoEigenCacheFallback:
         """Partial cache (some chrs missing) falls back to full compute."""
         from jamma.io.plink import get_plink_metadata, partitions_from_metadata
         from jamma.lmm.loco import run_lmm_loco
-        from tests.conftest import load_phenotypes_from_fam
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-        phenotypes = load_phenotypes_from_fam(fam_path)
+        phenotypes = read_fam_phenotypes(fam_path)
         meta = get_plink_metadata(MOUSE_HS1940_BFILE)
         partitions = partitions_from_metadata(meta)
         unique_chrs = sorted(partitions.keys())
@@ -611,10 +608,9 @@ class TestLocoLegacyText:
         """legacy_text=True writes .txt eigen and kinship files."""
         from jamma.io.plink import get_plink_metadata, partitions_from_metadata
         from jamma.lmm.loco import run_lmm_loco
-        from tests.conftest import load_phenotypes_from_fam
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-        phenotypes = load_phenotypes_from_fam(fam_path)
+        phenotypes = read_fam_phenotypes(fam_path)
         meta = get_plink_metadata(MOUSE_HS1940_BFILE)
         unique_chrs = sorted(partitions_from_metadata(meta).keys())
 
@@ -989,10 +985,9 @@ class TestLocoEigenCacheStaleDetection:
         """
         from jamma.lmm.loco import run_lmm_loco
         from jamma.validation.compare import load_gemma_assoc
-        from tests.conftest import load_phenotypes_from_fam
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-        phenotypes = load_phenotypes_from_fam(fam_path)
+        phenotypes = read_fam_phenotypes(fam_path)
         eigen_dir = tmp_path / "eigen_cache"
         eigen_dir.mkdir()
 
@@ -1064,10 +1059,9 @@ class TestLocoEigenCacheStaleDetection:
         import jamma.lmm.loco_eigen as loco_eigen_mod
         from jamma.lmm.eigen_cache import eigen_cache_manifest_path
         from jamma.lmm.loco import run_lmm_loco
-        from tests.conftest import load_phenotypes_from_fam
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
-        phenotypes = load_phenotypes_from_fam(fam_path)
+        phenotypes = read_fam_phenotypes(fam_path)
         eigen_dir = tmp_path / "eigen_cache"
         eigen_dir.mkdir()
 

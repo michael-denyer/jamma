@@ -22,11 +22,10 @@ from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
 from jamma.lmm.schema import SnpMeta, get_spec
 from jamma.lmm.stats import AssocResult
 from tests.conftest import require_fixture
+from tests.fixture_paths import LOCO, SYNTHETIC
 
-FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-BFILE = FIXTURES / "test"
-LOCO_FIXTURES = Path(__file__).parent / "fixtures" / "gemma_loco"
-LOCO_BFILE = LOCO_FIXTURES / "test"
+BFILE = SYNTHETIC.bfile
+LOCO_BFILE = LOCO.bfile
 
 
 @pytest.mark.tier0
@@ -42,24 +41,24 @@ class TestPlinkIOErrorPaths:
 
     def test_missing_bed_raises(self, tmp_path: Path) -> None:
         """Missing .bed (with .bim and .fam present) raises FileNotFoundError."""
-        shutil.copy(FIXTURES / "test.bim", tmp_path / "test.bim")
-        shutil.copy(FIXTURES / "test.fam", tmp_path / "test.fam")
+        shutil.copy(SYNTHETIC.bim, tmp_path / "test.bim")
+        shutil.copy(SYNTHETIC.fam, tmp_path / "test.fam")
 
         with pytest.raises(FileNotFoundError, match=r"\.bed"):
             validate_plink_dimensions(tmp_path / "test")
 
     def test_missing_bim_raises(self, tmp_path: Path) -> None:
         """Missing .bim (with .bed and .fam present) raises FileNotFoundError."""
-        shutil.copy(FIXTURES / "test.bed", tmp_path / "test.bed")
-        shutil.copy(FIXTURES / "test.fam", tmp_path / "test.fam")
+        shutil.copy(SYNTHETIC.bed, tmp_path / "test.bed")
+        shutil.copy(SYNTHETIC.fam, tmp_path / "test.fam")
 
         with pytest.raises(FileNotFoundError, match=r"\.bim"):
             validate_plink_dimensions(tmp_path / "test")
 
     def test_missing_fam_raises(self, tmp_path: Path) -> None:
         """Missing .fam (with .bed and .bim present) raises FileNotFoundError."""
-        shutil.copy(FIXTURES / "test.bed", tmp_path / "test.bed")
-        shutil.copy(FIXTURES / "test.bim", tmp_path / "test.bim")
+        shutil.copy(SYNTHETIC.bed, tmp_path / "test.bed")
+        shutil.copy(SYNTHETIC.bim, tmp_path / "test.bim")
 
         with pytest.raises(FileNotFoundError, match=r"\.fam"):
             validate_plink_dimensions(tmp_path / "test")

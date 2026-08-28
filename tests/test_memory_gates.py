@@ -18,9 +18,9 @@ from jamma.lmm.runner import ExecutionPlan
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
+from tests.fixture_paths import SYNTHETIC
 
-FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-BFILE = FIXTURES / "test"
+BFILE = SYNTHETIC.bfile
 
 
 @pytest.mark.tier0
@@ -156,8 +156,7 @@ class TestBatchPreflightThreadsNcvt:
 
         # Use a real 3-column covariate file so n_cvt=3 reaches the
         # preflight through the normal pipeline code path.
-        fixtures = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-        bfile = fixtures / "test"
+        bfile = SYNTHETIC.bfile
 
         # Read sample count from .fam to build a matching covariate file.
         fam_path = bfile.with_suffix(".fam")

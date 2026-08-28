@@ -12,15 +12,15 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.schema import MIN_N_GRID
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
+from tests.builders import write_fam
 from tests.conftest import require_fixture
+from tests.fixture_paths import LOCO, MOUSE, SYNTHETIC
 
-# Fixture paths for gemma_synthetic dataset
-FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-BFILE = FIXTURES / "test"
+BFILE = SYNTHETIC.bfile
 
 # mouse_hs1940 has SNPs that MAF/missingness filtering actually removes, unlike
 # the tiny synthetic set where every SNP passes.
-_MOUSE_BFILE = Path(__file__).parent / "fixtures" / "mouse_hs1940" / "mouse_hs1940"
+_MOUSE_BFILE = MOUSE.bfile
 
 
 @pytest.mark.tier0
@@ -222,7 +222,7 @@ def _copy_plink_genotypes(dest: Path) -> Path:
         bfile prefix (dest / "test")
     """
     for ext in (".bed", ".bim"):
-        shutil.copy(FIXTURES / f"test{ext}", dest / f"test{ext}")
+        shutil.copy(SYNTHETIC.dir / f"test{ext}", dest / f"test{ext}")
     return dest / "test"
 
 
@@ -259,14 +259,12 @@ class TestPhenotypeColumnSelection:
         # Column 8 (pheno 3): 7.0, 8.0, 9.0, ...
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                pheno1 = 1.0 + i
-                pheno2 = 4.0 + i
-                pheno3 = 7.0 + i
-                f.write(
-                    f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\t{pheno3}\n"
-                )
+        write_fam(
+            fam_path,
+            [1.0 + i for i in range(n_samples)],
+            [4.0 + i for i in range(n_samples)],
+            [7.0 + i for i in range(n_samples)],
+        )
 
         config1 = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[1])
         pheno1, _ = _first_phenotype(PipelineRunner(config1))
@@ -481,7 +479,7 @@ class TestPipelineConfigWeightFile:
 
     def test_weight_file_with_loco_raises(self) -> None:
         """validate_inputs raises ValueError for -widv with -loco."""
-        weight_path = FIXTURES / "test.fam"  # Use any existing file
+        weight_path = SYNTHETIC.fam  # Use any existing file
         config = PipelineConfig(
             bfile=BFILE,
             weight_file=weight_path,
@@ -494,7 +492,7 @@ class TestPipelineConfigWeightFile:
 
     def test_weight_file_with_eigen_raises(self, tmp_path: Path) -> None:
         """validate_inputs raises ValueError for -widv with -d/-u."""
-        weight_path = FIXTURES / "test.fam"  # Use any existing file
+        weight_path = SYNTHETIC.fam  # Use any existing file
         # Create dummy eigen files
         d_file = tmp_path / "test.eigenD.txt"
         u_file = tmp_path / "test.eigenU.txt"
@@ -558,16 +556,6 @@ _N_SAMPLES = 100
 _NAN_INDICES = {5, 10, 15}
 
 
-def _write_fam(
-    fam_path: Path, n_samples: int = _N_SAMPLES, nan_indices: set[int] | None = None
-) -> None:
-    """Write a .fam file with optional NaN phenotypes at specified indices."""
-    with open(fam_path, "w") as f:
-        for i in range(n_samples):
-            pheno = "NA" if nan_indices and i in nan_indices else str(1.0 + i * 0.1)
-            f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno}\n")
-
-
 def _valid_indices_excluding(
     n_samples: int = _N_SAMPLES, exclude: set[int] | None = None
 ) -> np.ndarray:
@@ -590,7 +578,11 @@ class TestEarlySampleFiltering:
         from jamma.kinship.compute import compute_kinship_streaming
 
         bfile = _copy_plink_genotypes(tmp_path)
-        _write_fam(tmp_path / "test.fam", nan_indices=_NAN_INDICES)
+        write_fam(
+            tmp_path / "test.fam",
+            [1.0 + i * 0.1 for i in range(_N_SAMPLES)],
+            missing_at=_NAN_INDICES,
+        )
         valid_indices = _valid_indices_excluding()
 
         out = tmp_path / "output_early"
@@ -630,7 +622,7 @@ class TestEarlySampleFiltering:
     def test_save_kinship_full_size(self, tmp_path: Path) -> None:
         """save_kinship=True: the file is full-size, the return is the subset."""
         bfile = _copy_plink_genotypes(tmp_path)
-        _write_fam(tmp_path / "test.fam")
+        write_fam(tmp_path / "test.fam", [1.0 + i * 0.1 for i in range(_N_SAMPLES)])
 
         out = tmp_path / "output_save"
         out.mkdir()
@@ -701,7 +693,7 @@ class TestEarlySampleFiltering:
     def test_weight_file_valid_indices(self, tmp_path: Path) -> None:
         """Weights filtered to match valid_indices under early filtering."""
         bfile = _copy_plink_genotypes(tmp_path)
-        _write_fam(tmp_path / "test.fam")
+        write_fam(tmp_path / "test.fam", [1.0 + i * 0.1 for i in range(_N_SAMPLES)])
 
         weight_file = tmp_path / "weights.txt"
         np.savetxt(weight_file, np.arange(1.0, _N_SAMPLES + 1.0))
@@ -729,7 +721,7 @@ class TestEarlySampleFiltering:
         from jamma.kinship.compute import compute_kinship_streaming
 
         bfile = _copy_plink_genotypes(tmp_path)
-        _write_fam(tmp_path / "test.fam")
+        write_fam(tmp_path / "test.fam", [1.0 + i * 0.1 for i in range(_N_SAMPLES)])
 
         K_full = compute_kinship_streaming(
             bfile, check_memory=False, show_progress=False
@@ -763,7 +755,11 @@ class TestEarlySampleFiltering:
     def test_run_end_to_end_with_nan_phenotypes(self, tmp_path: Path) -> None:
         """Full run() with NaN phenotypes triggers early filtering and completes."""
         bfile = _copy_plink_genotypes(tmp_path)
-        _write_fam(tmp_path / "test.fam", nan_indices=_NAN_INDICES)
+        write_fam(
+            tmp_path / "test.fam",
+            [1.0 + i * 0.1 for i in range(_N_SAMPLES)],
+            missing_at=_NAN_INDICES,
+        )
         n_valid = _N_SAMPLES - len(_NAN_INDICES)
 
         out = tmp_path / "output_e2e"
@@ -792,7 +788,11 @@ class TestEarlySampleFiltering:
         filtered kinship is saved and eigenpairs match the non-save path.
         """
         bfile = _copy_plink_genotypes(tmp_path)
-        _write_fam(tmp_path / "test.fam", nan_indices=_NAN_INDICES)
+        write_fam(
+            tmp_path / "test.fam",
+            [1.0 + i * 0.1 for i in range(_N_SAMPLES)],
+            missing_at=_NAN_INDICES,
+        )
         n_valid = _N_SAMPLES - len(_NAN_INDICES)
 
         # backend stays out of the dict: splatting it would widen the literal
@@ -848,16 +848,11 @@ class TestPhenotypeColumnMissingValues:
         # Write .fam with 2 phenotype columns; column 7 (pheno 2) has missing values
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                pheno1 = 1.0 + i
-                if i == 0:
-                    pheno2_str = "NA"
-                elif i == 1:
-                    pheno2_str = "-9"
-                else:
-                    pheno2_str = str(10.0 + i)
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2_str}\n")
+        write_fam(
+            fam_path,
+            [1.0 + i for i in range(n_samples)],
+            ["NA", "-9", *[10.0 + i for i in range(2, n_samples)]],
+        )
 
         config = PipelineConfig(bfile=bfile, check_memory=False, phenotype_columns=[2])
         phenotypes, n_analyzed = _first_phenotype(PipelineRunner(config))
@@ -964,7 +959,7 @@ def test_pipeline_output_path_content_matches_n_tested(
 def test_pipeline_loco_numpy(tmp_path: Path) -> None:
     """LOCO + NumPy backend completes end-to-end without error."""
     # gemma_loco fixture: 100 samples, 500 SNPs across 3 chromosomes
-    loco_bfile = Path(__file__).parent / "fixtures" / "gemma_loco" / "test"
+    loco_bfile = LOCO.bfile
     config = PipelineConfig(
         bfile=loco_bfile,
         lmm_mode=1,
@@ -1077,11 +1072,11 @@ class TestMultiPhenotypeOutputNaming:
         # Write a .fam with 2 phenotype columns
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                pheno1 = 1.0 + i * 0.1
-                pheno2 = 2.0 + i * 0.1
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+        write_fam(
+            fam_path,
+            [1.0 + i * 0.1 for i in range(n_samples)],
+            [2.0 + i * 0.1 for i in range(n_samples)],
+        )
 
         out = tmp_path / "output"
         config = PipelineConfig(
@@ -1112,11 +1107,11 @@ class TestMultiPhenotypeSingleEigen:
         # Write a .fam with 2 phenotype columns
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                pheno1 = 1.0 + i * 0.1
-                pheno2 = 2.0 + i * 0.1
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+        write_fam(
+            fam_path,
+            [1.0 + i * 0.1 for i in range(n_samples)],
+            [2.0 + i * 0.1 for i in range(n_samples)],
+        )
 
         from unittest.mock import patch
 
@@ -1153,15 +1148,11 @@ class TestMultiPhenotypeMaskIntersection:
         # Write .fam with 2 phenotype columns; samples 0 and 1 missing in BOTH
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                if i < 2:
-                    pheno1 = "NA"
-                    pheno2 = "NA"
-                else:
-                    pheno1 = str(1.0 + i * 0.1)
-                    pheno2 = str(2.0 + i * 0.1)
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+        write_fam(
+            fam_path,
+            ["NA" if i < 2 else 1.0 + i * 0.1 for i in range(n_samples)],
+            ["NA" if i < 2 else 2.0 + i * 0.1 for i in range(n_samples)],
+        )
 
         out = tmp_path / "output"
         config = PipelineConfig(
@@ -1183,15 +1174,11 @@ class TestMultiPhenotypeMaskIntersection:
         # Write .fam where every sample is missing in at least one phenotype
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                if i % 2 == 0:
-                    pheno1 = "NA"
-                    pheno2 = str(2.0 + i * 0.1)
-                else:
-                    pheno1 = str(1.0 + i * 0.1)
-                    pheno2 = "NA"
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+        write_fam(
+            fam_path,
+            ["NA" if i % 2 == 0 else 1.0 + i * 0.1 for i in range(n_samples)],
+            [2.0 + i * 0.1 if i % 2 == 0 else "NA" for i in range(n_samples)],
+        )
 
         out = tmp_path / "output"
         config = PipelineConfig(
@@ -1211,11 +1198,11 @@ class TestMultiPhenotypeMaskIntersection:
 
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                pheno1 = 1.0 + i * 0.1
-                pheno2 = 2.0 + i * 0.1
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno1}\t{pheno2}\n")
+        write_fam(
+            fam_path,
+            [1.0 + i * 0.1 for i in range(n_samples)],
+            [2.0 + i * 0.1 for i in range(n_samples)],
+        )
 
         out = tmp_path / "output"
         config = PipelineConfig(
@@ -1258,9 +1245,7 @@ class TestMultiPhenotypeMaskIntersection:
         # Write .fam with only 1 phenotype column (column index 5)
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{1.0 + i * 0.1}\n")
+        write_fam(fam_path, [1.0 + i * 0.1 for i in range(n_samples)])
 
         out = tmp_path / "output"
         config = PipelineConfig(
@@ -1422,10 +1407,7 @@ class TestNSamplesReflectsCovariateFiltering:
         # Write a .fam with all valid phenotypes
         n_samples = 100
         fam_path = tmp_path / "test.fam"
-        with open(fam_path, "w") as f:
-            for i in range(n_samples):
-                pheno = 1.0 + i * 0.1
-                f.write(f"FAM{i:03d}\tIND{i:03d}\t0\t0\t0\t{pheno}\n")
+        write_fam(fam_path, [1.0 + i * 0.1 for i in range(n_samples)])
 
         # Write a covariate file with intercept + one covariate, 10 rows NaN
         n_nan_covariates = 10

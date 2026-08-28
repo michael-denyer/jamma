@@ -13,16 +13,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.io import read_fam_phenotypes
 from jamma.io.plink import get_plink_metadata
 from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.schema import LmmConfig
 from jamma.validation.compare import compare_assoc_results, load_gemma_assoc
 from jamma.validation.tolerances import ToleranceConfig
-from tests.conftest import load_phenotypes_from_fam, require_fixture
+from tests.conftest import require_fixture
+from tests.fixture_paths import LOCO
 
 # Fixture with 3 chromosomes — required for LOCO (needs >1 chromosome to leave one out)
-_LOCO_FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "gemma_loco"
-_LOCO_BFILE = _LOCO_FIXTURE_ROOT / "test"
+_LOCO_BFILE = LOCO.bfile
 
 
 @pytest.mark.tier1
@@ -104,7 +105,7 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
         call_count += 1
         return original_open_bed(*args, **kwargs)
 
-    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
 
     # Patch at the plink.py import site (stream_genotype_chunks uses it for kinship
     # PASS 1 and PASS 2, and get_plink_metadata for metadata reads)
@@ -164,7 +165,7 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
 
     monkeypatch.setattr(runner_mod, "run_lmm_chunk_source_numpy", spy)
 
-    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
     loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
         phenotypes=phenotypes,
@@ -192,7 +193,7 @@ def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
     from unittest.mock import patch
 
     monkeypatch.setenv("JAMMA_LOCO_WORKERS", "4")
-    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
 
     logged_warnings: list[str] = []
 
@@ -232,7 +233,7 @@ def test_loco_numpy_multipass_equivalence():
 
     from jamma.kinship import compute_loco_kinship_streaming
 
-    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
 
     # Single-pass baseline (default behaviour, all chromosomes fit in memory)
     loco_single = run_lmm_loco(
@@ -301,7 +302,7 @@ def test_loco_numpy_covariates_threaded_and_effective():
     """
     require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
-    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
     n = phenotypes.shape[0]
     rng = np.random.default_rng(0)
     # First column is the intercept (required); second is a real covariate.
@@ -450,7 +451,7 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
     import jamma.lmm.loco_eigen as loco_eigen_module
     from jamma.kinship import LocoKinshipStream, compute_loco_kinship_streaming
 
-    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
     pheno = phenotypes.copy()
     pheno[::9] = np.nan  # drop ~12 samples -> analyzed != all
 
@@ -647,7 +648,7 @@ def test_loco_numpy_show_progress_true():
     """
     require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
-    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
 
     loco = run_lmm_loco(
         bed_path=_LOCO_BFILE,
@@ -674,10 +675,10 @@ def test_loco_gemma_equivalence():
     require_fixture(
         _LOCO_BFILE.with_suffix(".bed"),
         _LOCO_BFILE.with_suffix(".fam"),
-        *(_LOCO_FIXTURE_ROOT / f"gemma_loco_chr{c}.assoc.txt" for c in ("1", "2", "3")),
+        *(LOCO.ref(f"chr{c}") for c in ("1", "2", "3")),
     )
 
-    phenotypes = load_phenotypes_from_fam(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
     # LOCO recomputes kinship per chromosome, amplifying Brent optimizer
     # divergence on lambda. Use 5e-5 (calibrated JAMMA-vs-GEMMA bound,
     # see GEMMA_EQUIVALENCE.md).
@@ -697,9 +698,7 @@ def test_loco_gemma_equivalence():
         by_chr.setdefault(r.chr, []).append(r)
 
     for chr_name in ["1", "2", "3"]:
-        gemma_ref = load_gemma_assoc(
-            _LOCO_FIXTURE_ROOT / f"gemma_loco_chr{chr_name}.assoc.txt"
-        )
+        gemma_ref = load_gemma_assoc(LOCO.ref(f"chr{chr_name}"))
         jamma_chr = by_chr.get(chr_name, [])
         result = compare_assoc_results(jamma_chr, gemma_ref, config=tol)
         assert result.passed, (

@@ -7,11 +7,11 @@ from click.testing import CliRunner
 
 from jamma.cli import main
 from tests.fakes import FakePipelineRunnerFactory
+from tests.fixture_paths import SYNTHETIC
 
 runner = CliRunner()
 
-# Path to example PLINK data
-EXAMPLE_BFILE = Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
+EXAMPLE_BFILE = SYNTHETIC.bfile
 
 
 @pytest.mark.tier1
@@ -341,10 +341,7 @@ def test_cli_help_shows_cat():
     assert "Categorical" in result.output
 
 
-# Path to pre-computed GEMMA kinship for synthetic data (avoids -gk step in NumPy CI)
-KINSHIP_FILE = (
-    Path(__file__).parent / "fixtures" / "gemma_synthetic" / "gemma_kinship.cXX.txt"
-)
+KINSHIP_FILE = SYNTHETIC.kinship
 
 
 # ===========================================================================

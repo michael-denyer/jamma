@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.io import read_fam_phenotypes
 from jamma.lmm.eigen_io import (
     _load_npy_cache,
     _read_eigenvalues,
@@ -27,7 +28,7 @@ from jamma.lmm.eigen_io import (
     read_eigen_files,
     write_eigen_files,
 )
-from tests.conftest import load_phenotypes_from_fam
+from tests.fixture_paths import MOUSE
 
 # =============================================================================
 # File format tests
@@ -571,9 +572,8 @@ class TestAtomicCacheWrite:
 # =============================================================================
 
 # Fixture paths for mouse_hs1940 dataset
-FIXTURES = Path(__file__).parent / "fixtures" / "mouse_hs1940"
-BFILE = FIXTURES / "mouse_hs1940"
-KINSHIP_FILE = FIXTURES / "mouse_hs1940_kinship.cXX.txt"
+BFILE = MOUSE.bfile
+KINSHIP_FILE = MOUSE.kinship
 
 
 @pytest.mark.slow
@@ -611,7 +611,7 @@ class TestLMMEquivalence:
         K = read_kinship_matrix(KINSHIP_FILE, n_samples=meta.n_samples)
 
         # Subset to valid-phenotype samples (same as runner does internally)
-        pheno = load_phenotypes_from_fam(Path(f"{BFILE}.fam"))
+        pheno = read_fam_phenotypes(MOUSE.fam)
         valid_mask = ~np.isnan(pheno) & (pheno != -9.0)
         K_valid = K[np.ix_(valid_mask, valid_mask)]
 

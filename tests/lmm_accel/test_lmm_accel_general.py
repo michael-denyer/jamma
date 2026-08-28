@@ -88,9 +88,7 @@ def test_general_ncvt_gemma_covariate_match():
     NumPy runner (which uses the general C workspace for n_cvt=2 Wald), and
     compares against GEMMA's covariate reference output.
     """
-    from pathlib import Path
-
-    from jamma.io import load_plink_binary
+    from jamma.io import load_plink_binary, read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.validation import (
@@ -98,17 +96,12 @@ def test_general_ncvt_gemma_covariate_match():
         compare_assoc_results,
         load_gemma_assoc,
     )
-    from tests.conftest import load_phenotypes_from_fam
+    from tests.fixture_paths import SYNTHETIC
 
-    # parents[1] is tests/: this module lives one level down in lmm_accel/.
-    fixture_root = Path(__file__).parents[1] / "fixtures"
-    synthetic_dir = fixture_root / "gemma_synthetic"
-    covariate_dir = fixture_root / "gemma_covariate"
-
-    plink = load_plink_binary(synthetic_dir / "test")
-    kinship = read_kinship_matrix(synthetic_dir / "gemma_kinship.cXX.txt")
-    phenotypes = load_phenotypes_from_fam(synthetic_dir / "test.fam")
-    covariates = np.loadtxt(covariate_dir / "covariates.txt")
+    plink = load_plink_binary(SYNTHETIC.bfile)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship)
+    phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
+    covariates = np.loadtxt(SYNTHETIC.covariates)
     snp_info = [
         {
             "chr": str(plink.chromosome[i]),
@@ -132,7 +125,7 @@ def test_general_ncvt_gemma_covariate_match():
     )
     results = run_result.associations
 
-    reference = load_gemma_assoc(covariate_dir / "gemma_covariate.assoc.txt")
+    reference = load_gemma_assoc(SYNTHETIC.ref("covar_wald"))
     tolerances = ToleranceConfig(lambda_rtol=5e-5)
     comparison = compare_assoc_results(results, reference, tolerances)
     assert comparison.passed, (

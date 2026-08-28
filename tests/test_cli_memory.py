@@ -9,11 +9,10 @@ from pathlib import Path
 import pytest
 
 from jamma.io import get_plink_metadata
+from tests.fixture_paths import SYNTHETIC
 
-# Test fixture path
-FIXTURE_DIR = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-PLINK_PREFIX = FIXTURE_DIR / "test"
-KINSHIP_FILE = FIXTURE_DIR / "gemma_kinship.cXX.txt"
+PLINK_PREFIX = SYNTHETIC.bfile
+KINSHIP_FILE = SYNTHETIC.kinship
 
 
 @pytest.mark.tier0

@@ -12,6 +12,7 @@ from click.testing import CliRunner
 from jamma.cli import main
 from jamma.kinship import write_kinship_matrix
 from jamma.kinship.io import write_loco_kinship_matrices
+from tests.fixture_paths import SYNTHETIC
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def runner():
 @pytest.fixture
 def example_plink_path() -> Path:
     """Path prefix for example PLINK files."""
-    return Path(__file__).parent / "fixtures" / "gemma_synthetic" / "test"
+    return SYNTHETIC.bfile
 
 
 @pytest.mark.tier0

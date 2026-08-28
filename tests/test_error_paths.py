@@ -18,9 +18,9 @@ import pytest
 
 from jamma.io.covariate import encode_categorical_covariates, read_covariate_file
 from jamma.pipeline import PipelineConfig, PipelineRunner
+from tests.fixture_paths import SYNTHETIC
 
-FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-BFILE = FIXTURES / "test"
+BFILE = SYNTHETIC.bfile
 
 
 @pytest.mark.tier0
@@ -144,7 +144,7 @@ class TestPipelineErrorPaths:
     def test_all_phenotypes_missing_raises(self, tmp_path: Path) -> None:
         """The phenotype loader raises ValueError when every phenotype is -9."""
         for ext in (".bed", ".bim", ".fam"):
-            shutil.copy(FIXTURES / f"test{ext}", tmp_path / f"test{ext}")
+            shutil.copy(SYNTHETIC.dir / f"test{ext}", tmp_path / f"test{ext}")
 
         fam_path = tmp_path / "test.fam"
         n_samples = len(fam_path.read_text().strip().splitlines())

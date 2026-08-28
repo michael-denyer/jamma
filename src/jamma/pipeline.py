@@ -36,6 +36,7 @@ from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import (
     get_plink_metadata,
+    parse_fam_phenotype_column,
     validate_plink_dimensions,
 )
 from jamma.io.snp_list import resolve_snp_list_file
@@ -236,25 +237,8 @@ class PipelineRunner:
                 trusted to be >= 1; PipelineConfig.__post_init__ is where that
                 is enforced.
         """
-        # Columns 0-4 are FID, IID, father, mother, sex
-        col_index = 4 + pheno_col
-        all_data = fam_data
-        n_cols = all_data.shape[1]
-        if col_index >= n_cols:
-            n_pheno_cols = n_cols - 5
-            raise ValueError(
-                f"phenotype column {pheno_col} exceeds available columns "
-                f"in .fam file ({n_pheno_cols} phenotype column"
-                f"{'s' if n_pheno_cols != 1 else ''} available)"
-            )
-
-        logger.info(f"Using phenotype column {pheno_col} (file column {col_index + 1})")
-
-        fam_data = all_data[:, col_index]
-        missing_mask = np.isin(fam_data, ["-9", "NA"])
-        fam_data[missing_mask] = "0"
-        phenotypes = fam_data.astype(np.float64)
-        phenotypes[missing_mask] = np.nan
+        phenotypes = parse_fam_phenotype_column(fam_data, pheno_col)
+        logger.info(f"Using phenotype column {pheno_col} (file column {pheno_col + 5})")
 
         valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
         n_analyzed = int(valid_mask.sum())

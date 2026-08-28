@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.io import load_plink_binary
+from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import compute_numpy
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
@@ -27,22 +27,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.conftest import load_phenotypes_from_fam
-
-
-def _build_snp_info(plink_data) -> list[dict]:
-    """Build snp_info list from PlinkData object."""
-    return [
-        {
-            "chr": str(plink_data.chromosome[i]),
-            "rs": plink_data.sid[i],
-            "pos": plink_data.bp_position[i],
-            "a1": plink_data.allele_1[i],
-            "a0": plink_data.allele_2[i],
-        }
-        for i in range(plink_data.n_snps)
-    ]
-
+from tests.fixture_paths import SYNTHETIC, build_snp_info
 
 # ---------------------------------------------------------------------------
 # Sanitizer-aware tolerances
@@ -58,36 +43,6 @@ _SANITIZER_BUILD = bool(os.environ.get("JAMMA_SANITIZE", "").strip())
 _FP_PARITY_RTOL_MODE1 = 1e-8 if _SANITIZER_BUILD else 1e-12
 _FP_PARITY_RTOL_MODE4 = 1e-8 if _SANITIZER_BUILD else 1e-10
 
-
-# ---------------------------------------------------------------------------
-# Fixture paths
-# ---------------------------------------------------------------------------
-
-_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
-
-SYNTHETIC_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
-SYNTHETIC_KINSHIP = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_kinship.cXX.txt"
-SYNTHETIC_WALD_REF = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_assoc.assoc.txt"
-SYNTHETIC_LRT_REF = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_lrt.assoc.txt"
-SCORE_REF = _FIXTURE_ROOT / "gemma_score" / "gemma_score.assoc.txt"
-ALL_TESTS_REF = _FIXTURE_ROOT / "gemma_all_tests" / "gemma_all.assoc.txt"
-
-COVARIATE_FIXTURE_DIR = _FIXTURE_ROOT / "gemma_covariate"
-COVARIATE_FILE = COVARIATE_FIXTURE_DIR / "covariates.txt"
-COVARIATE_WALD_REFERENCE = COVARIATE_FIXTURE_DIR / "gemma_covariate.assoc.txt"
-
-MOUSE_HS1940_DIR = _FIXTURE_ROOT / "mouse_hs1940"
-MOUSE_HS1940_DATA = MOUSE_HS1940_DIR / "mouse_hs1940"
-MOUSE_HS1940_KINSHIP = MOUSE_HS1940_DIR / "mouse_hs1940_kinship.cXX.txt"
-
-# Tolerances matching the NumPy batch runner
-NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
-    lambda_rtol=1e-3,
-    pvalue_rtol=1e-2,
-    se_rtol=5e-4,
-    logl_rtol=5e-3,
-    atol=1e-4,
-)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -185,9 +140,9 @@ def test_streaming_rejects_a_chunk_size_below_one_before_reading_the_bed(bad, tm
 @pytest.fixture
 def synthetic_data():
     """Load gemma_synthetic PLINK data, kinship, phenotypes."""
-    plink = load_plink_binary(SYNTHETIC_DATA)
-    kinship = read_kinship_matrix(SYNTHETIC_KINSHIP)
-    phenotypes = load_phenotypes_from_fam(SYNTHETIC_DATA.with_suffix(".fam"))
+    plink = load_plink_binary(SYNTHETIC.bfile)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship)
+    phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
     return plink, kinship, phenotypes
 
 
@@ -216,7 +171,7 @@ def synthetic_data_with_covariates(synthetic_data):
     calls.
     """
     plink, kinship, phenotypes = synthetic_data
-    covariates = np.loadtxt(COVARIATE_FILE)
+    covariates = np.loadtxt(SYNTHETIC.covariates)
     valid_mask = ~np.isnan(phenotypes)
     kinship_filtered = kinship[np.ix_(valid_mask, valid_mask)]
     eigenvalues, eigenvectors = np.linalg.eigh(kinship_filtered)
@@ -228,10 +183,10 @@ def synthetic_data_with_covariates(synthetic_data):
 # ---------------------------------------------------------------------------
 
 _SYNTHETIC_MODE_REFS = [
-    pytest.param(1, SYNTHETIC_WALD_REF, id="wald"),
-    pytest.param(2, SYNTHETIC_LRT_REF, id="lrt"),
-    pytest.param(3, SCORE_REF, id="score"),
-    pytest.param(4, ALL_TESTS_REF, id="all"),
+    pytest.param(1, SYNTHETIC.ref("wald"), id="wald"),
+    pytest.param(2, SYNTHETIC.ref("lrt"), id="lrt"),
+    pytest.param(3, SYNTHETIC.ref("score"), id="score"),
+    pytest.param(4, SYNTHETIC.ref("all"), id="all"),
 ]
 
 
@@ -244,7 +199,7 @@ class TestNumpyStreamingGemmaParity:
         """Streaming runner matches GEMMA reference on synthetic data."""
         plink, kinship, phenotypes = synthetic_data
         run_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(
@@ -279,7 +234,7 @@ class TestBatchEquivalence:
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Batch run
-        snp_info = _build_snp_info(plink)
+        snp_info = build_snp_info(plink)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -293,7 +248,7 @@ class TestBatchEquivalence:
 
         # Streaming run
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -322,7 +277,7 @@ class TestBatchEquivalence:
         """Mode-4 results match between batch and streaming within BLAS tolerance."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        snp_info = _build_snp_info(plink)
+        snp_info = build_snp_info(plink)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -335,7 +290,7 @@ class TestBatchEquivalence:
         batch_assoc = batch_result.associations
 
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -375,7 +330,7 @@ class TestStreamingCovariates:
         )
 
         # Batch run (pre-computed eigen for identical path)
-        snp_info = _build_snp_info(plink)
+        snp_info = build_snp_info(plink)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -390,7 +345,7 @@ class TestStreamingCovariates:
 
         # Streaming run
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             covariates=covariates,
@@ -419,10 +374,10 @@ class TestStreamingCovariates:
     def test_streaming_covar_matches_gemma_wald(self, synthetic_data):
         """Streaming + covariates matches GEMMA reference (Wald mode)."""
         plink, kinship, phenotypes = synthetic_data
-        covariates = np.loadtxt(COVARIATE_FILE)
+        covariates = np.loadtxt(SYNTHETIC.covariates)
 
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
             covariates=covariates,
@@ -433,7 +388,7 @@ class TestStreamingCovariates:
         assert len(results) > 0, "Expected results"
         assert stream_result.n_tested == len(results)
 
-        reference = load_gemma_assoc(COVARIATE_WALD_REFERENCE)
+        reference = load_gemma_assoc(SYNTHETIC.ref("covar_wald"))
         tolerances = ToleranceConfig(lambda_rtol=5e-5)
         comparison = compare_assoc_results(results, reference, tolerances)
         assert comparison.passed, (
@@ -448,7 +403,7 @@ class TestStreamingCovariates:
 
         # Many small chunks
         small_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             covariates=covariates,
@@ -460,7 +415,7 @@ class TestStreamingCovariates:
 
         # Single chunk
         big_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             covariates=covariates,
@@ -500,7 +455,7 @@ class TestStreamingMechanics:
         out_file = tmp_path / "streaming_out.assoc.txt"
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -527,7 +482,7 @@ class TestStreamingMechanics:
         plink, kinship, phenotypes = synthetic_data
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -543,7 +498,7 @@ class TestStreamingMechanics:
         plink, kinship, phenotypes = synthetic_data
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -563,7 +518,7 @@ class TestStreamingMechanics:
         plink, kinship, phenotypes = synthetic_data
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -591,7 +546,7 @@ class TestChunkingEdgeCases:
         """chunk_size larger than total SNPs (single chunk) matches batch."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        snp_info = _build_snp_info(plink)
+        snp_info = build_snp_info(plink)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -603,7 +558,7 @@ class TestChunkingEdgeCases:
         )
 
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -620,7 +575,7 @@ class TestChunkingEdgeCases:
         """chunk_size=50 (many small chunks) matches batch."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        snp_info = _build_snp_info(plink)
+        snp_info = build_snp_info(plink)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -632,7 +587,7 @@ class TestChunkingEdgeCases:
         )
 
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -652,7 +607,7 @@ class TestChunkingEdgeCases:
         # An empty -snps restriction leaves nothing to test. MAF cannot express
         # this: it is min(af, 1-af) and so never exceeds 0.5.
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=kinship,
             snps_indices=np.array([], dtype=np.int64),
@@ -685,7 +640,7 @@ class TestStreamingPipeline:
         sink_id = _logger.add(log_buffer, level="DEBUG", format="{message}")
         try:
             result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC_DATA,
+                bed_path=SYNTHETIC.bfile,
                 phenotypes=phenotypes,
                 kinship=None,
                 eigenvalues=eigenvalues,
@@ -708,7 +663,7 @@ class TestStreamingPipeline:
 
         # Sequential: single chunk (no pipeline)
         seq_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -719,7 +674,7 @@ class TestStreamingPipeline:
 
         # Pipeline: many chunks
         pipe_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -750,7 +705,7 @@ class TestStreamingPipeline:
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -768,7 +723,7 @@ class TestStreamingPipeline:
         # Sequential: single chunk -> disk
         seq_file = tmp_path / "seq.assoc.txt"
         seq_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -781,7 +736,7 @@ class TestStreamingPipeline:
         # Pipeline: many chunks -> disk
         pipe_file = tmp_path / "pipe.assoc.txt"
         pipe_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -816,7 +771,7 @@ class TestStreamingPipeline:
 
         # Sequential: single chunk
         seq_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -827,7 +782,7 @@ class TestStreamingPipeline:
 
         # Pipeline: many chunks
         pipe_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC_DATA,
+            bed_path=SYNTHETIC.bfile,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -877,7 +832,7 @@ class TestStreamingFusedScoreDispatch:
             wraps=_c().compute_score_fused_ws_c,
         ) as mock_fused:
             fused_result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC_DATA,
+                bed_path=SYNTHETIC.bfile,
                 phenotypes=phenotypes,
                 kinship=None,
                 eigenvalues=eigenvalues,
@@ -890,7 +845,7 @@ class TestStreamingFusedScoreDispatch:
         # Split path (disable all fused Score variants)
         with patch("jamma.lmm.compute_numpy._accel", None):
             split_result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC_DATA,
+                bed_path=SYNTHETIC.bfile,
                 phenotypes=phenotypes,
                 kinship=None,
                 eigenvalues=eigenvalues,
@@ -934,7 +889,7 @@ class TestStreamingFusedLrtDispatch:
             wraps=_c().compute_lrt_fused_ws_c,
         ) as mock_fused:
             fused_result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC_DATA,
+                bed_path=SYNTHETIC.bfile,
                 phenotypes=phenotypes,
                 kinship=None,
                 eigenvalues=eigenvalues,
@@ -947,7 +902,7 @@ class TestStreamingFusedLrtDispatch:
         # Split path (disable all fused LRT variants)
         with patch("jamma.lmm.compute_numpy._accel", None):
             split_result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC_DATA,
+                bed_path=SYNTHETIC.bfile,
                 phenotypes=phenotypes,
                 kinship=None,
                 eigenvalues=eigenvalues,

@@ -12,6 +12,8 @@ from jamma.io.plink import (
     PlinkMetadata,
     get_plink_metadata,
     load_plink_binary,
+    parse_fam_phenotype_column,
+    read_fam_phenotypes,
     stream_genotype_chunks,
 )
 from jamma.io.snp_list import (
@@ -26,7 +28,9 @@ __all__ = [
     "PlinkMetadata",
     "get_plink_metadata",
     "load_plink_binary",
+    "parse_fam_phenotype_column",
     "read_covariate_file",
+    "read_fam_phenotypes",
     "read_snp_list_file",
     "read_weight_file",
     "resolve_snp_list_file",

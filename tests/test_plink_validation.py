@@ -13,10 +13,9 @@ from jamma.io.plink import (
     validate_genotype_values,
     validate_plink_dimensions,
 )
+from tests.fixture_paths import SYNTHETIC
 
-# Fixture paths for gemma_synthetic dataset
-FIXTURES = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-BFILE = FIXTURES / "test"
+BFILE = SYNTHETIC.bfile
 
 
 @pytest.mark.tier0
@@ -31,7 +30,7 @@ class TestValidatePlinkDimensions:
         """Truncated .bed file raises ValueError with dimension mismatch message."""
         # Copy all three PLINK files
         for ext in (".bed", ".bim", ".fam"):
-            shutil.copy(FIXTURES / f"test{ext}", tmp_path / f"test{ext}")
+            shutil.copy(SYNTHETIC.dir / f"test{ext}", tmp_path / f"test{ext}")
 
         # Truncate the .bed file by 10 bytes
         bed_path = tmp_path / "test.bed"

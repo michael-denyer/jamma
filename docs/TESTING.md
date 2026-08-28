@@ -166,6 +166,7 @@ computation.
 | `ci.yml` → `link-check` | push/PR | lychee `--offline` over every `.md`, sharing `lychee.toml` with the pre-commit hook |
 | `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
 | `fingerprint.yml` | PR touching `_lmm_*.c`, `_lmm_*.h`, `_build_support/`, or the fingerprint scripts | Builds both sides of the merge base and diffs per-entry-point result digests. Tolerance-based tests do not catch last-bit drift |
+| `kinship-digest.yml` | dispatch only | Builds a base ref and HEAD, runs `scripts/kinship_digest.py --out` on each, diffs with `--diff`. `fingerprint.yml` does not path-match `src/jamma/kinship/compute.py`, so this is the only bit-exactness check a kinship or eigendecomposition change gets. Never a required check |
 | `sanitizers.yml` | Wednesday cron + dispatch | `pytest -m "not benchmark and not slow" -n 0 -p no:randomly` (under ASAN/UBSAN) |
 | `flaky-detect.yml` | Sunday 06:00 UTC + dispatch | `pytest` under five distinct `--randomly-seed` values, opens an issue on disagreement |
 

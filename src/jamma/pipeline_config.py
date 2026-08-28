@@ -193,6 +193,19 @@ class PipelineConfig:
         if self.loco and self.write_eigen and self.eigen_dir is None:
             self.eigen_dir = self.output_dir
 
+    @property
+    def log_path(self) -> Path:
+        """Path to the GEMMA-compatible log file.
+
+        Returns:
+            Path to {output_dir}/{output_prefix}.log.txt
+        """
+        return self.output_dir / f"{self.output_prefix}.log.txt"
+
+    def ensure_outdir(self) -> None:
+        """Create the output directory if it doesn't exist."""
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
     def lmm_config(self, *, check_memory: bool = False) -> LmmConfig:
         """Project the LMM knobs onto the config the runners take.
 

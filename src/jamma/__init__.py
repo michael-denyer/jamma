@@ -13,7 +13,7 @@ Key features:
 Example:
     >>> from jamma import gwas
     >>> result = gwas("data/my_study", kinship_file="data/kinship.cXX.txt")
-    >>> print(f"{result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
+    >>> print(f"{result.n_snps_tested} SNPs in {result.timing.total_s:.1f}s")
 """
 
 import os

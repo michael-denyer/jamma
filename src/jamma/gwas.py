@@ -6,7 +6,7 @@ load data, compute or load kinship, run LMM association, write results.
 Example:
     >>> from jamma import gwas
     >>> result = gwas("data/my_study", kinship_file="data/kinship.cXX.txt")
-    >>> print(f"Tested {result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
+    >>> print(f"Tested {result.n_snps_tested} SNPs in {result.timing.total_s:.1f}s")
 """
 
 from __future__ import annotations
@@ -160,7 +160,7 @@ def gwas(
     Example:
         >>> from jamma import gwas
         >>> result = gwas("data/mouse_hs1940", loco=True)
-        >>> print(f"{result.n_snps_tested} SNPs, {result.timing['total_s']:.1f}s")
+        >>> print(f"{result.n_snps_tested} SNPs, {result.timing.total_s:.1f}s")
     """
     config = PipelineConfig(
         bfile=Path(bfile),

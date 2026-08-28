@@ -49,6 +49,7 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.prepare_common import compute_valid_mask
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
+from jamma.lmm.schema import PipelineTiming
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
     VALID_BACKENDS,
@@ -134,10 +135,10 @@ class PipelineRunner:
                 "lmm_mode": self.config.lmm_mode,
                 "loco": self.config.loco,
             }
-            for key in ("kinship_s", "lmm_s", "total_s", "rotation_s"):
-                val = result.timing.get(key)
-                if val is not None:
-                    record[key] = val  # type: ignore[literal-required]
+            record["kinship_s"] = result.timing.kinship_s
+            record["lmm_s"] = result.timing.lmm_s
+            record["total_s"] = result.timing.total_s
+            record["rotation_s"] = result.timing.rotation_s
             append_benchmark_record(record)
         except Exception:  # noqa: BLE001 — telemetry must never break the pipeline; log and continue
             logger.warning("Telemetry emission failed", exc_info=True)
@@ -516,13 +517,13 @@ class PipelineRunner:
             n_snps_tested=outcome.n_tested,
             assoc_path=outcome.assoc_paths[-1],
             assoc_paths=outcome.assoc_paths,
-            timing={
-                "kinship_s": kinship_s,
-                "load_s": load_s,
-                "lmm_s": outcome.lmm_s,
-                "total_s": total_s,
-                "rotation_s": outcome.runner_timing.get("rotation_s", 0.0),
-            },
+            timing=PipelineTiming(
+                kinship_s=kinship_s,
+                load_s=load_s,
+                lmm_s=outcome.lmm_s,
+                total_s=total_s,
+                rotation_s=outcome.runner_timing.get("rotation_s", 0.0),
+            ),
             n_covariates=n_cvt,
             pve_estimate=outcome.pve,
             pve_se=outcome.pve_se,
@@ -747,12 +748,10 @@ class PipelineRunner:
             n_snps_tested=loco.n_tested,
             assoc_path=assoc_path,
             assoc_paths=[assoc_path],
-            timing={
-                "kinship_s": 0.0,
-                "load_s": 0.0,
-                "lmm_s": loco_s,
-                "total_s": total_s,
-            },
+            timing=PipelineTiming(
+                lmm_s=loco_s,
+                total_s=total_s,
+            ),
             n_covariates=n_cvt,
             pve_estimate=loco.pve,
             pve_se=loco.pve_se,

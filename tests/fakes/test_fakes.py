@@ -27,6 +27,7 @@ import pytest
 import jamma.jlinalg
 from jamma.lmm import eigen
 from jamma.lmm.io import IncrementalAssocWriter
+from jamma.lmm.schema import PipelineTiming
 from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
 from tests.fakes import (
     FakeAssocWriter,
@@ -56,7 +57,7 @@ def _make_result() -> PipelineResult:
         n_snps_tested=0,
         assoc_path=Path("/tmp/jamma_fake.assoc.txt"),
         assoc_paths=[Path("/tmp/jamma_fake.assoc.txt")],
-        timing={"total_s": 0.0},
+        timing=PipelineTiming(total_s=0.0),
         n_covariates=1,
     )
 

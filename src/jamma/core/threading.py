@@ -14,15 +14,12 @@ from __future__ import annotations
 
 import functools
 import os
-import threading as _py_threading
 from collections.abc import Generator
 from contextlib import contextmanager
 
 import psutil
 from loguru import logger
 from threadpoolctl import threadpool_info, threadpool_limits
-
-_JLINALG_THREAD_LOCK = _py_threading.RLock()
 
 
 def get_blas_backend() -> str:
@@ -184,55 +181,6 @@ def blas_threads(n_threads: int | None = None) -> Generator[None, None, None]:
 
     with threadpool_limits(limits=n_threads, user_api="blas"):
         yield
-
-
-@contextmanager
-def jlinalg_threads(n_threads: int | None = None) -> Generator[None, None, None]:
-    """Temporarily set jlinalg's internal thread count.
-
-    jlinalg's snp_stats pthread pool does not use threadpoolctl; it is
-    controlled by ``jlinalg.set_n_threads()``. The setting is process-global,
-    so callers must scope changes carefully. A module-level lock serialises
-    the set + compute window so concurrent pipeline workers cannot race
-    thread-count changes.
-
-    Args:
-        n_threads: jlinalg thread count. None uses all physical cores.
-    """
-    if n_threads is None:
-        n_threads = get_physical_core_count()
-    n_threads = max(1, int(n_threads))
-
-    try:
-        from jamma import jlinalg
-    except ImportError:
-        yield
-        return
-
-    with _JLINALG_THREAD_LOCK:
-        old_threads: int | None = None
-        try:
-            old_threads = jlinalg.set_n_threads(n_threads)
-        except AttributeError:
-            logger.warning(
-                "jlinalg.set_n_threads() not available — build may be stale. "
-                "Thread control disabled; run: python -m jamma.jlinalg._compile_jlinalg"
-            )
-            yield
-            return
-        except ValueError as exc:
-            logger.warning(
-                f"jlinalg.set_n_threads({n_threads}) failed: {exc}. "
-                "Running with default thread count."
-            )
-            yield
-            return
-
-        try:
-            yield
-        finally:
-            if old_threads is not None:
-                jlinalg.set_n_threads(old_threads)
 
 
 @functools.cache

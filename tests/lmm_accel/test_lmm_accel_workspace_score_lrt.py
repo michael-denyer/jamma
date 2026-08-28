@@ -112,22 +112,22 @@ class TestScoreWorkspaceParity:
         """Workspace creation returns a non-None PyCapsule."""
         from jamma.lmm.compute_numpy import _c
 
-        assert (
-            _c().create_workspace_score_fused_c is not None
-        )  # narrowed: skipif gates this
-
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        ws = _c().create_workspace_score_fused_c(
-            w,
-            Uty,
-            Hi_eval_null,
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
-            1,
+            1e-5,
+            1e5,
+            50,
+            20,
+            lmm_mode=3,
+            hi_eval_null=Hi_eval_null,
         )
         assert ws is not None
 
@@ -144,14 +144,18 @@ class TestScoreWorkspaceParity:
             score_ws_data
         )
 
-        ws = _c().create_workspace_score_fused_c(
-            w,
-            Uty,
-            Hi_eval_null,
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
-            1,
+            1e-5,
+            1e5,
+            50,
+            20,
+            lmm_mode=3,
+            hi_eval_null=Hi_eval_null,
         )
         result = _c().compute_score_fused_ws_c(ws, utg_t, 1)
 
@@ -174,14 +178,18 @@ class TestScoreWorkspaceParity:
             score_ws_data
         )
 
-        ws = _c().create_workspace_score_fused_c(
-            w,
-            Uty,
-            Hi_eval_null,
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
-            1,
+            1e-5,
+            1e5,
+            50,
+            20,
+            lmm_mode=3,
+            hi_eval_null=Hi_eval_null,
         )
 
         result1 = _c().compute_score_fused_ws_c(ws, utg_t, 1)
@@ -206,28 +214,32 @@ class TestScoreWorkspaceParity:
         reason="Score fused workspace C not available",
     )
     def test_score_workspace_capsule_type_safety(self, score_ws_data):
-        """Passing an LRT workspace to Score compute raises ValueError."""
+        """A workspace built with lmm_mode=2 is rejected by the Score compute.
+
+        One capsule type carries every n_cvt=1 workspace, so the check that
+        fires is the lmm_mode the creator recorded, not the capsule's name.
+        """
         from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        lrt_ws = _c().create_workspace_lrt_fused_c(
-            w,
-            Uty,
+        lrt_ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             5,
-            -150.0,
-            1,
+            lmm_mode=2,
+            logl_H0=-150.0,
         )
 
-        with pytest.raises(ValueError, match="PyCapsule_GetPointer"):
+        with pytest.raises(ValueError, match="lmm_mode"):
             _c().compute_score_fused_ws_c(lrt_ws, utg_t, 1)
 
     @pytest.mark.tier0
@@ -246,14 +258,18 @@ class TestScoreWorkspaceParity:
         utg_degen = utg_t.copy()
         utg_degen[0, :] = 0.0
 
-        ws = _c().create_workspace_score_fused_c(
-            w,
-            Uty,
-            Hi_eval_null,
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
-            1,
+            1e-5,
+            1e5,
+            50,
+            20,
+            lmm_mode=3,
+            hi_eval_null=Hi_eval_null,
         )
         result = _c().compute_score_fused_ws_c(ws, utg_degen, 1)
 
@@ -277,14 +293,18 @@ class TestScoreWorkspaceParity:
             score_ws_data
         )
 
-        ws = _c().create_workspace_score_fused_c(
-            w,
-            Uty,
-            Hi_eval_null,
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
-            1,
+            1e-5,
+            1e5,
+            50,
+            20,
+            lmm_mode=3,
+            hi_eval_null=Hi_eval_null,
         )
         single = _c().compute_score_fused_ws_c(ws, utg_t, 1)
         multi = _c().compute_score_fused_ws_c(ws, utg_t, 2)
@@ -341,18 +361,18 @@ class TestLrtWorkspaceParity:
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
-        ws = _c().create_workspace_lrt_fused_c(
-            w,
-            Uty,
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             5,
-            -150.0,
-            1,
+            lmm_mode=2,
+            logl_H0=-150.0,
         )
         assert ws is not None
 
@@ -369,18 +389,18 @@ class TestLrtWorkspaceParity:
 
         logl_H0 = -150.0
 
-        ws = _c().create_workspace_lrt_fused_c(
-            w,
-            Uty,
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             5,
-            logl_H0,
-            1,
+            lmm_mode=2,
+            logl_H0=logl_H0,
         )
         result = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
 
@@ -402,18 +422,18 @@ class TestLrtWorkspaceParity:
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
         logl_H0 = -150.0
-        ws = _c().create_workspace_lrt_fused_c(
-            w,
-            Uty,
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             5,
-            logl_H0,
-            1,
+            lmm_mode=2,
+            logl_H0=logl_H0,
         )
 
         result1 = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
@@ -454,8 +474,18 @@ class TestLrtWorkspaceParity:
         # p_lrt value is only interpretable against the model it is testing.
         _, logl_H0 = _null_model_ncvt1(eigenvalues, w, Uty)
 
-        ws = _c().create_workspace_lrt_fused_c(
-            w, Uty, eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 20, logl_H0, 1
+        ws = _c().create_workspace_ncvt1_c(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            lmm_mode=2,
+            logl_H0=logl_H0,
         )
         result = _c().compute_lrt_fused_ws_c(ws, utg_degen, 1)
 
@@ -477,8 +507,18 @@ class TestLrtWorkspaceParity:
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
-        ws = _c().create_workspace_lrt_fused_c(
-            w, Uty, eigenvalues, uab_inv_soa, n_samples, 1e-5, 1e5, 50, 5, -150.0, 1
+        ws = _c().create_workspace_ncvt1_c(
+            eigenvalues,
+            uab_inv_soa,
+            w,
+            Uty,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            5,
+            lmm_mode=2,
+            logl_H0=-150.0,
         )
         single = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
         multi = _c().compute_lrt_fused_ws_c(ws, utg_t, 2)
@@ -496,7 +536,11 @@ class TestLrtWorkspaceParity:
         reason="LRT fused workspace C not available",
     )
     def test_lrt_workspace_capsule_type_safety(self, lrt_ws_data):
-        """Passing a Score workspace to LRT compute raises ValueError."""
+        """A workspace built with lmm_mode=3 is rejected by the LRT compute.
+
+        One capsule type carries every n_cvt=1 workspace, so the check that
+        fires is the lmm_mode the creator recorded, not the capsule's name.
+        """
         from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
@@ -504,16 +548,20 @@ class TestLrtWorkspaceParity:
         # Hi_eval_null needed for Score workspace creation
         Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
 
-        # Create a Score workspace (wrong type for LRT)
-        score_ws = _c().create_workspace_score_fused_c(
-            w,
-            Uty,
-            Hi_eval_null,
+        # A Score-mode workspace, which the LRT compute must refuse
+        score_ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
+            w,
+            Uty,
             n_samples,
-            1,
+            1e-5,
+            1e5,
+            50,
+            20,
+            lmm_mode=3,
+            hi_eval_null=Hi_eval_null,
         )
 
-        with pytest.raises(ValueError, match="PyCapsule_GetPointer"):
+        with pytest.raises(ValueError, match="lmm_mode"):
             _c().compute_lrt_fused_ws_c(score_ws, utg_t, 1)

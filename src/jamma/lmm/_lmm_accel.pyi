@@ -7,16 +7,16 @@ import numpy.typing as npt
 
 from jamma.lmm.compute_numpy import WaldResult
 
-LmmWorkspace = NewType("LmmWorkspace", object)
-LmmWorkspaceGeneral = NewType("LmmWorkspaceGeneral", object)
-Mode4Workspace = NewType("Mode4Workspace", object)
-
 ABI_VERSION: int
 HAS_OPENMP: int
-FusedWorkspace = NewType("FusedWorkspace", object)
-FusedMode4Workspace = NewType("FusedMode4Workspace", object)
 
-def create_workspace_fused_c(
+# One n_cvt=1 workspace type. The creator's lmm_mode fixes which compute
+# accepts it: 1 or 4 -> compute_lmm_chunk_fused_c, 2 -> compute_lrt_fused_ws_c,
+# 3 -> compute_score_fused_ws_c, 4 -> compute_mode4_chunk_fused_c. Any other
+# pairing raises ValueError at the call.
+NcvtOneWorkspace = NewType("NcvtOneWorkspace", object)
+
+def create_workspace_ncvt1_c(
     eigenvalues: npt.NDArray[np.float64],
     uab_invariant: npt.NDArray[np.float64],
     w: npt.NDArray[np.float64],
@@ -26,29 +26,28 @@ def create_workspace_fused_c(
     l_max: float,
     n_grid: int,
     n_refine: int,
-    n_threads: int,
-) -> FusedWorkspace: ...
+    *,
+    lmm_mode: int,
+    hi_eval_null: npt.NDArray[np.float64] | None = None,
+    logl_H0: float | None = None,
+) -> NcvtOneWorkspace: ...
 def compute_lmm_chunk_fused_c(
-    workspace: FusedWorkspace,
+    workspace: NcvtOneWorkspace,
     utg_t: npt.NDArray[np.float64],
     n_threads: int,
 ) -> WaldResult: ...
-def create_workspace_mode4_fused_c(
-    eigenvalues: npt.NDArray[np.float64],
-    uab_invariant: npt.NDArray[np.float64],
-    w: npt.NDArray[np.float64],
-    Uty: npt.NDArray[np.float64],
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    n_threads: int,
-    hi_eval_null: npt.NDArray[np.float64],
-    logl_H0: float,
-) -> FusedMode4Workspace: ...
 def compute_mode4_chunk_fused_c(
-    workspace: FusedMode4Workspace,
+    workspace: NcvtOneWorkspace,
+    utg_t: npt.NDArray[np.float64],
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...
+def compute_score_fused_ws_c(
+    workspace: NcvtOneWorkspace,
+    utg_t: npt.NDArray[np.float64],
+    n_threads: int,
+) -> dict[str, npt.NDArray[np.float64]]: ...
+def compute_lrt_fused_ws_c(
+    workspace: NcvtOneWorkspace,
     utg_t: npt.NDArray[np.float64],
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
@@ -140,42 +139,6 @@ def compute_lrt_split_general_c(
     n_grid: int,
     n_refine: int,
     logl_H0: float,
-    n_threads: int,
-) -> dict[str, npt.NDArray[np.float64]]: ...
-
-ScoreFusedWorkspace = NewType("ScoreFusedWorkspace", object)
-LrtFusedWorkspace = NewType("LrtFusedWorkspace", object)
-
-def create_workspace_score_fused_c(
-    w: npt.NDArray[np.float64],
-    Uty: npt.NDArray[np.float64],
-    Hi_eval_null: npt.NDArray[np.float64],
-    eigenvalues: npt.NDArray[np.float64],
-    uab_invariant_soa: npt.NDArray[np.float64],
-    n_samples: int,
-    n_threads: int,
-) -> ScoreFusedWorkspace: ...
-def compute_score_fused_ws_c(
-    workspace: ScoreFusedWorkspace,
-    utg_t: npt.NDArray[np.float64],
-    n_threads: int,
-) -> dict[str, npt.NDArray[np.float64]]: ...
-def create_workspace_lrt_fused_c(
-    w: npt.NDArray[np.float64],
-    Uty: npt.NDArray[np.float64],
-    eigenvalues: npt.NDArray[np.float64],
-    uab_invariant_soa: npt.NDArray[np.float64],
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    logl_H0: float,
-    n_threads: int,
-) -> LrtFusedWorkspace: ...
-def compute_lrt_fused_ws_c(
-    workspace: LrtFusedWorkspace,
-    utg_t: npt.NDArray[np.float64],
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
 

@@ -269,12 +269,12 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:380](../src/jamma/lmm/runner_numpy.py#L380) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:301](../src/jamma/lmm/chunk_runner_numpy.py#L301) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:121](../src/jamma/lmm/chunk_runner_numpy.py#L121) |
-| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:51](../src/jamma/lmm/chunk_kernel.py#L51) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:166](../src/jamma/lmm/chunk_kernel.py#L166) |
+| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:47](../src/jamma/lmm/chunk_kernel.py#L47) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:162](../src/jamma/lmm/chunk_kernel.py#L162) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:118](../src/jamma/lmm/chunk_pipeline.py#L118) |
 | 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:83](../src/jamma/lmm/chunk_sizing.py#L83) |
-| 4Nc | `create_lmm_workspace_fused()` | Allocate the reusable per-chunk Wald workspace (n_cvt=1 fused path) | [compute_numpy.py:125](../src/jamma/lmm/compute_numpy.py#L125) |
-| 4Nc | `compute_wald_fused_c_ws()` | Workspace-based Wald compute, dispatched to the C extension | [compute_numpy.py:168](../src/jamma/lmm/compute_numpy.py#L168) |
+| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:194](../src/jamma/lmm/chunk_kernel.py#L194) |
+| 4Nc | `create_workspace_ncvt1_c()` | C extension: the per-run n_cvt=1 workspace, keyed by `lmm_mode` | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `compute_lmm_chunk_fused_c()` | C extension: chunked REML Wald for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:26](../src/jamma/lmm/_lmm_support.c#L26) |
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |

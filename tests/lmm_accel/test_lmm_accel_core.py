@@ -21,11 +21,7 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    compute_lmm_chunk_numpy,
-    compute_wald_fused_c_ws,
-    create_lmm_workspace_fused,
-)
+from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
 from jamma.lmm.schema import MIN_N_GRID
 
 
@@ -39,7 +35,6 @@ def _make_workspace(
     l_max=1e5,
     n_grid=50,
     n_refine=20,
-    n_threads=1,
 ):
     """Build the fused workspace, with any argument overridden by keyword.
 
@@ -48,7 +43,7 @@ def _make_workspace(
     dict's types and pyrefly rejects the call.
     """
     fixture_eigenvalues, w, Uty, _, fixture_inv_soa, _, fixture_n = fused_data
-    return create_lmm_workspace_fused(
+    return _c().create_workspace_ncvt1_c(
         fixture_eigenvalues if eigenvalues is None else eigenvalues,
         fixture_inv_soa if uab_invariant_soa is None else uab_invariant_soa,
         w,
@@ -58,7 +53,7 @@ def _make_workspace(
         l_max,
         n_grid,
         n_refine,
-        n_threads,
+        lmm_mode=1,
     )
 
 
@@ -69,12 +64,12 @@ def test_c_extension_importable():
     from jamma.lmm._lmm_accel import (
         compute_lmm_chunk_fused_c,
         compute_lmm_chunk_fused_general_c,
-        create_workspace_fused_c,
         create_workspace_fused_general_c,
+        create_workspace_ncvt1_c,
     )
 
     for fn in (
-        create_workspace_fused_c,
+        create_workspace_ncvt1_c,
         compute_lmm_chunk_fused_c,
         create_workspace_fused_general_c,
         compute_lmm_chunk_fused_general_c,
@@ -109,7 +104,7 @@ def test_c_extension_single_snp(fused_data):
     """Minimal case: n_snps=1 works without index errors."""
     _, _, _, utg_t, _, _, _ = fused_data
 
-    result = compute_wald_fused_c_ws(_make_workspace(fused_data), utg_t[:1], 1)
+    result = _c().compute_lmm_chunk_fused_c(_make_workspace(fused_data), utg_t[:1], 1)
 
     for key in ("lambdas", "betas", "ses", "pwalds"):
         assert result[key].shape == (1,), f"{key} shape {result[key].shape} != (1,)"
@@ -126,7 +121,7 @@ def test_c_extension_all_degenerate_snps(fused_data):
     # P_XX to zero. Zeroing every row makes the entire batch degenerate.
     utg_degen = np.zeros_like(utg_t)
 
-    result = compute_wald_fused_c_ws(_make_workspace(fused_data), utg_degen, 1)
+    result = _c().compute_lmm_chunk_fused_c(_make_workspace(fused_data), utg_degen, 1)
 
     for key in ("betas", "ses", "pwalds"):
         assert np.all(np.isnan(result[key])), f"Expected all-NaN {key}"
@@ -160,7 +155,7 @@ class TestFusedWorkspaceInputValidation:
         _, _, _, utg_t, _, _, _ = fused_data
         ws = _make_workspace(fused_data)
         with pytest.raises(ValueError, match="utg_t"):
-            compute_wald_fused_c_ws(ws, np.ascontiguousarray(utg_t[:, :10]), 1)
+            _c().compute_lmm_chunk_fused_c(ws, np.ascontiguousarray(utg_t[:, :10]), 1)
 
 
 @pytest.mark.tier0

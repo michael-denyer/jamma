@@ -40,7 +40,7 @@ class TestCExtensionsAvailable:
 
         from jamma.lmm._lmm_accel import (
             compute_lmm_chunk_fused_c,
-            create_workspace_fused_c,
+            create_workspace_ncvt1_c,
         )
 
         rng = np.random.default_rng(42)
@@ -55,8 +55,8 @@ class TestCExtensionsAvailable:
         uab_inv_soa[1] = w * Uty
         uab_inv_soa[2] = Uty * Uty
 
-        ws = create_workspace_fused_c(
-            eigenvalues, uab_inv_soa, w, Uty, n, 1e-5, 1e5, 50, 20, 1
+        ws = create_workspace_ncvt1_c(
+            eigenvalues, uab_inv_soa, w, Uty, n, 1e-5, 1e5, 50, 20, lmm_mode=1
         )
         result = compute_lmm_chunk_fused_c(ws, utg_t, 1)
         assert np.isfinite(result["lambdas"]).all()

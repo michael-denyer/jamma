@@ -22,11 +22,7 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    compute_lmm_chunk_numpy,
-    compute_mode4_fused_c_ws,
-    create_lmm_workspace_mode4_fused,
-)
+from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
 from tests.lmm_accel._helpers import _null_model_ncvt1
 
 _MODE4_KEYS = (
@@ -41,7 +37,7 @@ _MODE4_KEYS = (
 )
 
 
-def _mode4_workspace(fused_data, n_threads=1):
+def _mode4_workspace(fused_data):
     """Build the live fused mode-4 workspace and the genotypes to run it over.
 
     Driven from ``fused_data`` rather than ``score_lrt_data``. The latter builds
@@ -52,7 +48,7 @@ def _mode4_workspace(fused_data, n_threads=1):
     """
     eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
     Hi_eval_null, logl_H0 = _null_model_ncvt1(eigenvalues, w, Uty)
-    ws = create_lmm_workspace_mode4_fused(
+    ws = _c().create_workspace_ncvt1_c(
         eigenvalues,
         uab_inv_soa,
         w,
@@ -62,7 +58,7 @@ def _mode4_workspace(fused_data, n_threads=1):
         1e5,
         50,
         20,
-        n_threads,
+        lmm_mode=4,
         hi_eval_null=Hi_eval_null,
         logl_H0=logl_H0,
     )
@@ -110,7 +106,7 @@ def test_mode4_fused_workspace_api(fused_data):
     ws, utg_t, n_snps = _mode4_workspace(fused_data)
     assert ws is not None
 
-    cr = compute_mode4_fused_c_ws(ws, utg_t, 1)
+    cr = _c().compute_mode4_chunk_fused_c(ws, utg_t, 1)
 
     for key in _MODE4_KEYS:
         assert key in cr, f"Missing key '{key}' in fused mode-4 result"
@@ -137,7 +133,7 @@ def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(fused_data):
     the 50 SNPs here, so there is no sign to pin.
     """
     ws, utg_t, _ = _mode4_workspace(fused_data)
-    cr = compute_mode4_fused_c_ws(ws, utg_t, 1)
+    cr = _c().compute_mode4_chunk_fused_c(ws, utg_t, 1)
 
     log_separation = np.abs(np.log(cr["lambdas"]) - np.log(cr["lambdas_mle"]))
 
@@ -156,7 +152,7 @@ def test_mode4_fused_degenerate_snps(fused_data):
     utg_degen = utg_t.copy()
     utg_degen[0, :] = 0.0
 
-    cr = compute_mode4_fused_c_ws(ws, utg_degen, 1)
+    cr = _c().compute_mode4_chunk_fused_c(ws, utg_degen, 1)
 
     for key in ("betas", "ses", "pwalds", "p_scores"):
         assert np.isnan(cr[key][0]), f"degenerate SNP should have NaN {key}"
@@ -169,17 +165,19 @@ def test_mode4_fused_degenerate_snps(fused_data):
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_rejects_wald_workspace(fused_data):
-    """Passing a Wald workspace to fused mode-4 compute raises ValueError."""
-    from jamma.lmm.compute_numpy import create_lmm_workspace_fused
+    """A workspace built with lmm_mode=1 is rejected by the mode-4 compute.
 
+    One capsule type now carries every n_cvt=1 workspace, so the check that
+    fires is the workspace's recorded lmm_mode, not the capsule's name.
+    """
     eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
 
-    wald_ws = create_lmm_workspace_fused(
-        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, 1
+    wald_ws = _c().create_workspace_ncvt1_c(
+        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
     )
 
-    with pytest.raises(ValueError, match="mode-4 workspace"):
-        compute_mode4_fused_c_ws(wald_ws, utg_t, 1)
+    with pytest.raises(ValueError, match="lmm_mode"):
+        _c().compute_mode4_chunk_fused_c(wald_ws, utg_t, 1)
 
 
 @pytest.mark.tier0
@@ -197,8 +195,8 @@ def test_mode4_fused_multithreaded_parity(fused_data):
         pytest.skip("Need >=2 cores for multi-threaded test")
 
     ws, utg_t, _ = _mode4_workspace(fused_data)
-    single = compute_mode4_fused_c_ws(ws, utg_t, 1)
-    multi = compute_mode4_fused_c_ws(ws, utg_t, n_threads)
+    single = _c().compute_mode4_chunk_fused_c(ws, utg_t, 1)
+    multi = _c().compute_mode4_chunk_fused_c(ws, utg_t, n_threads)
 
     for key in _MODE4_KEYS:
         np.testing.assert_array_equal(

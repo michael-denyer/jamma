@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 
     from jamma.lmm.dispatch import DispatchPath
 
-_EXPECTED_ABI_VERSION = 12  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 13  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
 
 # Load and validate the C accelerator through the one shared seam in
@@ -120,136 +120,6 @@ class WaldResult(TypedDict):
     betas: np.ndarray
     ses: np.ndarray
     pwalds: np.ndarray
-
-
-def create_lmm_workspace_fused(
-    eigenvalues: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    w: np.ndarray,
-    Uty: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    n_threads: int,
-) -> object:
-    """Create fused workspace that holds w/Uty for on-the-fly Uab computation.
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_invariant_soa: Invariant Uab (3, n_samples) -- SoA [ww, wy, yy].
-        w: UtW[:,0] (n_samples,).
-        Uty: Rotated phenotype (n_samples,).
-        n_samples: Number of samples.
-        l_min: Minimum lambda.
-        l_max: Maximum lambda.
-        n_grid: Number of coarse grid points.
-        n_refine: Golden section iterations.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        PyCapsule wrapping lmm_workspace_t (fused).
-    """
-    return _c().create_workspace_fused_c(
-        eigenvalues,
-        uab_invariant_soa,
-        w,
-        Uty,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        n_threads,
-    )
-
-
-def compute_wald_fused_c_ws(
-    workspace: object,
-    utg_t: np.ndarray,
-    n_threads: int,
-) -> WaldResult:
-    """Compute REML Wald from UtG_T directly -- no uab_varying_soa needed.
-
-    Args:
-        workspace: PyCapsule from create_lmm_workspace_fused.
-        utg_t: Rotated genotypes transposed (n_snps, n_samples).
-        n_threads: OpenMP thread count.
-
-    Returns:
-        WaldResult dict with lambdas, logls, betas, ses, pwalds.
-    """
-    return _c().compute_lmm_chunk_fused_c(workspace, utg_t, n_threads)
-
-
-def create_lmm_workspace_mode4_fused(
-    eigenvalues: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    w: np.ndarray,
-    Uty: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    n_threads: int,
-    *,
-    hi_eval_null: np.ndarray,
-    logl_H0: float,
-) -> object:
-    """Create fused mode-4 workspace with w/Uty + null model for Score/LRT.
-
-    Args:
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_invariant_soa: Invariant Uab (3, n_samples) -- SoA [ww, wy, yy].
-        w: UtW[:,0] (n_samples,).
-        Uty: Rotated phenotype (n_samples,).
-        n_samples: Number of samples.
-        l_min: Minimum lambda.
-        l_max: Maximum lambda.
-        n_grid: Number of coarse grid points.
-        n_refine: Golden section iterations.
-        n_threads: OpenMP thread count.
-        hi_eval_null: Null-model Hi_eval (n_samples,).
-        logl_H0: Null MLE log-likelihood.
-
-    Returns:
-        PyCapsule wrapping lmm_workspace_t (mode=4, fused).
-    """
-    return _c().create_workspace_mode4_fused_c(
-        eigenvalues,
-        uab_invariant_soa,
-        w,
-        Uty,
-        n_samples,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        n_threads,
-        hi_eval_null,
-        logl_H0,
-    )
-
-
-def compute_mode4_fused_c_ws(
-    workspace: object,
-    utg_t: np.ndarray,
-    n_threads: int,
-) -> dict:
-    """Compute fused mode-4 from UtG_T directly -- no uab_varying_soa needed.
-
-    Args:
-        workspace: PyCapsule from create_lmm_workspace_mode4_fused.
-        utg_t: Rotated genotypes transposed (n_snps, n_samples).
-        n_threads: OpenMP thread count.
-
-    Returns:
-        Dict with lambdas, logls, betas, ses, pwalds, p_scores,
-        lambdas_mle, p_lrts.
-    """
-    return _c().compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
 
 
 def create_lmm_workspace_fused_general(

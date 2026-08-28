@@ -9,10 +9,9 @@ import pytest
 
 from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import (
+    _c,
     compute_lmm_chunk_numpy,
-    compute_wald_fused_c_ws,
     compute_wald_fused_general_c_ws,
-    create_lmm_workspace_fused,
 )
 from jamma.lmm.schema import LmmConfig
 from tests.lmm_accel._helpers import (
@@ -271,10 +270,10 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_general_ncvt_abi_version():
-    """C-GEN-07: ABI version is 12 after the unreachable entry points were cut."""
+    """C-GEN-07: ABI version is 13 after the four n_cvt=1 creators became one."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 12, f"Expected ABI_VERSION=12, got {ABI_VERSION}"
+    assert ABI_VERSION == 13, f"Expected ABI_VERSION=13, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0
@@ -298,10 +297,10 @@ def test_existing_ncvt1_regression(synthetic_wald_data):
         [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
     )
 
-    ws = create_lmm_workspace_fused(
-        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, 1
+    ws = _c().create_workspace_ncvt1_c(
+        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
     )
-    result = compute_wald_fused_c_ws(ws, utg_t, 1)
+    result = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
 
     assert result["lambdas"].shape == (Uab_batch.shape[0],)
     assert result["betas"].shape == (Uab_batch.shape[0],)

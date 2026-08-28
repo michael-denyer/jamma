@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **One n_cvt=1 workspace creator in `_lmm_accel`; `ABI_VERSION` 12 -> 13.**
+  `create_workspace_ncvt1_c(eigenvalues, uab_invariant, w, Uty, n_samples,
+  l_min, l_max, n_grid, n_refine, *, lmm_mode, hi_eval_null=None,
+  logl_H0=None)` replaces `create_workspace_fused_c`,
+  `create_workspace_mode4_fused_c`, `create_workspace_score_fused_c` and
+  `create_workspace_lrt_fused_c`. `lmm_mode` decides the null-model inputs
+  (2 needs `logl_H0`, 3 needs `hi_eval_null`, 4 both, 1 neither) and the
+  creator rejects an input the mode does not use. The four compute entry
+  points keep their names and signatures; each now checks the workspace's
+  `lmm_mode` instead of a per-family capsule name, so feeding a workspace to
+  the wrong compute raises `ValueError` naming the mode. The four C structs
+  behind those creators are one `lmm_workspace_t` (the LRT struct had no
+  field the Wald struct lacked; the Score struct had two, `h_null_w` and
+  `h_null_Uty`, which stay mode-3 only). The Score kernel's `(h*w)*x`
+  association is untouched. The Python wrappers
+  `create_lmm_workspace_fused`, `create_lmm_workspace_mode4_fused`,
+  `compute_wald_fused_c_ws` and `compute_mode4_fused_c_ws` are gone;
+  `chunk_kernel._ncvt1_kernel` binds the creator and the per-mode compute
+  in one place. Bit-identical on `.assoc.txt` for all four `-lmm` modes at
+  n_cvt 1, 2 and 4, and on every compute-entry fingerprint key.
 - **`scripts/regenerate_fixture_manifest.py` is
   `scripts/check_fixture_manifest.py --write`.** The regenerator already
   imported every helper from the checker; `--write` is that second half.

@@ -48,14 +48,14 @@ def _digest_result(result: dict[str, np.ndarray]) -> str:
 def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> None:
     """Serve warmed benchmark measurements over a line-oriented protocol."""
     sys.path.insert(0, str(source_root / "src"))
-    from jamma.lmm.compute_numpy import (
-        compute_mode4_fused_c_ws,
-        create_lmm_workspace_mode4_fused,
+    from jamma.lmm._lmm_accel import (
+        compute_mode4_chunk_fused_c,
+        create_workspace_ncvt1_c,
     )
 
     eigenvalues, uab_inv, w, Uty, utg_t = build_inputs(n_samples, n_snps)
     hi_eval_null = 1.0 / (eigenvalues + 1.0)
-    workspace = create_lmm_workspace_mode4_fused(
+    workspace = create_workspace_ncvt1_c(
         eigenvalues,
         uab_inv,
         w,
@@ -65,14 +65,14 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
         1e5,
         50,
         20,
-        n_threads,
+        lmm_mode=4,
         hi_eval_null=hi_eval_null,
         logl_H0=0.0,
     )
 
     # Exercise the full working set once before any timed command. A small
     # warmup leaves first-touch and OpenMP effects in the first measurement.
-    compute_mode4_fused_c_ws(workspace, utg_t, n_threads)
+    compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
     print("ready", flush=True)
     for command in sys.stdin:
         if command.strip() == "stop":
@@ -80,7 +80,7 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
         if command.strip() != "run":
             raise ValueError(f"unknown worker command: {command.strip()}")
         start = time.perf_counter()
-        result = compute_mode4_fused_c_ws(workspace, utg_t, n_threads)
+        result = compute_mode4_chunk_fused_c(workspace, utg_t, n_threads)
         elapsed = time.perf_counter() - start
         print(
             json.dumps({"seconds": elapsed, "output_sha256": _digest_result(result)}),

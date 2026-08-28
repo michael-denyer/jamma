@@ -16,10 +16,7 @@ import numpy as np
 import pytest
 
 from jamma.lmm import compute_numpy
-from jamma.lmm.compute_numpy import (
-    compute_wald_fused_c_ws,
-    create_lmm_workspace_fused,
-)
+from jamma.lmm.compute_numpy import _c
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.uab import (
     batch_compute_iab_numpy,
@@ -251,14 +248,14 @@ def test_fused_workspace_reuse_across_chunks(fused_data):
     """
     eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
 
-    ws = create_lmm_workspace_fused(
-        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, 1
+    ws = _c().create_workspace_ncvt1_c(
+        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
     )
 
     mid = utg_t.shape[0] // 2
-    first = compute_wald_fused_c_ws(ws, utg_t[:mid], 1)
-    second = compute_wald_fused_c_ws(ws, utg_t[mid:], 1)
-    full = compute_wald_fused_c_ws(ws, utg_t, 1)
+    first = _c().compute_lmm_chunk_fused_c(ws, utg_t[:mid], 1)
+    second = _c().compute_lmm_chunk_fused_c(ws, utg_t[mid:], 1)
+    full = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
 
     for key in ("lambdas", "betas"):
         np.testing.assert_allclose(

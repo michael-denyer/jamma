@@ -2,15 +2,15 @@
  * _lmm_accel.c — C extension implementing per-SNP REML/MLE pipelines
  * for Wald, Score, and LRT tests (n_cvt=1 and general n_cvt).
  *
- * Exported functions, one per DispatchPath the runner can select:
- *   FUSED          create_workspace_fused_c, compute_lmm_chunk_fused_c,
- *                  create_workspace_mode4_fused_c, compute_mode4_chunk_fused_c
+ * Exported functions, one workspace per family plus one compute per test:
+ *   n_cvt = 1      create_workspace_ncvt1_c(..., lmm_mode=1|2|3|4), then
+ *                  compute_lmm_chunk_fused_c (mode 1 or 4),
+ *                  compute_lrt_fused_ws_c (2), compute_score_fused_ws_c (3),
+ *                  compute_mode4_chunk_fused_c (4)
  *   FUSED_GENERAL  create_workspace_fused_general_c,
  *                  compute_lmm_chunk_fused_general_c,
  *                  create_workspace_mode4_fused_general_c,
  *                  compute_mode4_chunk_fused_general_c
- *   FUSED_SCORE_WS create_workspace_score_fused_c, compute_score_fused_ws_c
- *   FUSED_LRT_WS   create_workspace_lrt_fused_c, compute_lrt_fused_ws_c
  *   SOA_SPLIT      compute_score_split_general_c, compute_lrt_split_general_c
  *
  * -DJAMMA_SENTINEL_UB enables a heap-OOB sentinel function
@@ -89,7 +89,7 @@
 
 /* ABI version: bump when function signatures or array layout expectations change.
  * The Python side checks this at import time to detect stale .so files. */
-#define ABI_VERSION 12  /* v12: Unreachable batch/split entry points removed */
+#define ABI_VERSION 13  /* v13: one n_cvt=1 workspace and creator, keyed by lmm_mode */
 
 /* P_YY_MIN and REML_SENTINEL moved to _lmm_types.h when the general kernels
  * left this file: both units read them, and two copies could drift. */
@@ -124,14 +124,16 @@
  * kernels there read it, so it spans the boundary. */
 
 /* =========================================================================
- * Workspace API — persistent cross-chunk state for split-Uab pipeline
+ * n_cvt = 1 workspace: the per-run state every n_cvt=1 test shares.
  *
- * Eliminates per-chunk malloc + grid precomputation overhead:
- *   - lambda_grid, hi_eval_grid, logdet_h_grid built once per run
- *   - grid_inv (invariant dot products) built once per run
- *   - iab_s_ww / iab_log_ww precomputed from invariant column sums
- *   - Python arrays kept alive via Py_INCREF until workspace freed
+ * One struct for Wald (mode 1), LRT (2), Score (3) and all three (4). The
+ * lambda grid, its per-grid invariant dot products and the Iab scalars are
+ * built once per run; the null-model block is filled only for modes that use
+ * it and stays NULL otherwise. Python arrays are kept alive via Py_INCREF
+ * until the workspace is freed.
  * ========================================================================= */
+
+#define NCVT1_CAPSULE "lmm_workspace_ncvt1"
 
 typedef struct {
     int n_samples;
@@ -157,8 +159,11 @@ typedef struct {
     const double *inv_yy;   /* uab_invariant_soa row 2 */
     PyObject *eigenvalues_ref;  /* keeps eigenvalues array alive */
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
-    /* Mode-4 fused fields (only populated when mode=4) */
-    int mode;                   /* 0=Wald-only (default from calloc zero-init), 4=fused mode-4 */
+    /* The lmm_mode the workspace was created for: 1 Wald, 2 LRT, 3 Score,
+     * 4 all three. Each compute entry point checks it. */
+    int mode;
+    /* Null-model block: modes 3 and 4 carry hi_eval_null and the null dot
+     * products; modes 2 and 4 carry logl_H0 and mle_const. */
     double *hi_eval_null;       /* (n_samples,) null-model Hi_eval, owned */
     double logl_H0;             /* null MLE log-likelihood */
     double mle_const;           /* 0.5 * n * (log(n) - log(2*pi) - 1) */
@@ -166,6 +171,8 @@ typedef struct {
     double null_s_wy;
     double null_s_yy;
     double null_inv_ww;         /* 1/null_s_ww */
+    double *h_null_w;           /* (n_samples,) hi_eval_null * w, mode 3 only */
+    double *h_null_Uty;         /* (n_samples,) hi_eval_null * Uty, mode 3 only */
     /* Fused Uab fields -- w and Uty stored for on-the-fly wx/xx/xy computation */
     const double *w;          /* UtW[:,0] for n_cvt=1 -- (n_samples,) borrowed */
     const double *Uty;        /* rotated phenotype -- (n_samples,) borrowed */
@@ -184,6 +191,8 @@ static void lmm_workspace_free(lmm_workspace_t *ws)
     free(ws->logdet_h_grid);
     free(ws->grid_inv);
     free(ws->hi_eval_null);
+    free(ws->h_null_w);
+    free(ws->h_null_Uty);
     Py_XDECREF(ws->eigenvalues_ref);
     Py_XDECREF(ws->uab_inv_ref);
     Py_XDECREF(ws->w_ref);
@@ -194,7 +203,24 @@ static void lmm_workspace_free(lmm_workspace_t *ws)
 static void lmm_workspace_destructor(PyObject *cap)
 {
     lmm_workspace_free(
-        (lmm_workspace_t *)PyCapsule_GetPointer(cap, "lmm_workspace"));
+        (lmm_workspace_t *)PyCapsule_GetPointer(cap, NCVT1_CAPSULE));
+}
+
+/* The workspace behind a capsule, or NULL with ValueError set when it was
+ * created for an lmm_mode that fn does not compute. */
+static lmm_workspace_t *ncvt1_workspace(
+    PyObject *cap, const char *fn, int mode_a, int mode_b)
+{
+    lmm_workspace_t *ws =
+        (lmm_workspace_t *)PyCapsule_GetPointer(cap, NCVT1_CAPSULE);
+    if (!ws) return NULL;
+    if (ws->mode != mode_a && ws->mode != mode_b) {
+        PyErr_Format(PyExc_ValueError,
+            "%s cannot use a workspace created with lmm_mode=%d",
+            fn, ws->mode);
+        return NULL;
+    }
+    return ws;
 }
 
 
@@ -317,37 +343,17 @@ static void lmm_workspace_general_destructor(PyObject *cap)
  * — results are bitwise-identical.
  * ========================================================================= */
 
-/* -------------------------------------------------------------------------
- * create_workspace_fused_c
- *
- * Allocates the per-run Wald workspace, holding the invariant Uab block plus
- * the two vectors the chunk kernel forms the varying columns from:
- *   w   (ndarray, shape (n_samples,)) — UtW[:,0]
- *   Uty (ndarray, shape (n_samples,)) — rotated phenotype
- *
- * Python signature:
- *   create_workspace_fused_c(
- *       eigenvalues,      # (n_samples,) float64
- *       uab_invariant,    # (3, n_samples) float64 — SoA [ww, wy, yy]
- *       w,                # (n_samples,) float64 — UtW[:,0]
- *       Uty,              # (n_samples,) float64 — rotated phenotype
- *       n_samples,        # int
- *       l_min,            # float
- *       l_max,            # float
- *       n_grid,           # int
- *       n_refine,         # int
- *       n_threads,        # int
- *   ) -> PyCapsule wrapping lmm_workspace_t
- * ------------------------------------------------------------------------- */
 /* Fill a calloc'd n_cvt=1 workspace from validated inputs: the scalar
  * constants, the borrowed array pointers (INCREF'd here, released by
- * lmm_workspace_free), the invariant Iab scalar and the lambda grid.
+ * lmm_workspace_free), the invariant Iab scalar and, unless with_grid is 0,
+ * the lambda grid. Score (mode 3) does no lambda search and skips the grid.
  * 0, or -1 with PyErr set. */
 static int init_ncvt1_workspace(
     lmm_workspace_t *ws,
     PyArrayObject *eigenvalues_arr, PyArrayObject *uab_inv_arr,
     PyArrayObject *w_arr, PyArrayObject *Uty_arr,
-    int n_samples, double l_min, double l_max, int n_grid, int n_refine)
+    int n_samples, double l_min, double l_max, int n_grid, int n_refine,
+    int with_grid)
 {
     ws->n_samples = n_samples;
     ws->n_grid    = n_grid;
@@ -392,6 +398,8 @@ static int init_ncvt1_workspace(
         ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
     }
 
+    if (!with_grid) return 0;
+
     ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
     ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
     ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
@@ -410,18 +418,11 @@ static int init_ncvt1_workspace(
     return 0;
 }
 
-/* Mode-4 extras on an initialised n_cvt=1 workspace: the owned copy of the
- * null-model Hi_eval, its invariant dot products, and the MLE constant.
- * 0, or -1 with PyErr set. */
-static int init_ncvt1_null_model(
-    lmm_workspace_t *ws, const double *hi_eval_null, double logl_H0)
+/* The owned copy of the null-model Hi_eval and its invariant dot products,
+ * for the Score test (modes 3, 4). 0, or -1 with PyErr set. */
+static int init_ncvt1_null_hi(lmm_workspace_t *ws, const double *hi_eval_null)
 {
     int n_samples = ws->n_samples;
-    ws->mode = 4;
-    ws->logl_H0 = logl_H0;
-    ws->mle_const = 0.5 * (double)n_samples
-                    * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
-
     ws->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
     if (!ws->hi_eval_null) {
         PyErr_NoMemory();
@@ -445,24 +446,97 @@ static int init_ncvt1_null_model(
     return 0;
 }
 
-static PyObject *create_workspace_fused_c_py(
+/* The null MLE log-likelihood and the MLE constant, for the LRT (modes 2, 4). */
+static void set_ncvt1_null_logl(lmm_workspace_t *ws, double logl_H0)
+{
+    int n_samples = ws->n_samples;
+    ws->logl_H0 = logl_H0;
+    ws->mle_const = 0.5 * (double)n_samples
+                    * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
+}
+
+/* Score (mode 3) folds hi_eval_null into w and Uty once per run. The kernel
+ * then sums (h*w)*x per SNP; mode 4 sums h*(w*x) instead, and the two
+ * associations are not bit-identical, so this stays a mode-3 block.
+ * Requires init_ncvt1_null_hi first. 0, or -1 with PyErr set. */
+static int init_ncvt1_score_vectors(lmm_workspace_t *ws)
+{
+    int n_samples = ws->n_samples;
+    ws->h_null_w = alloc_aligned_doubles((size_t)n_samples);
+    ws->h_null_Uty = alloc_aligned_doubles((size_t)n_samples);
+    if (!ws->h_null_w || !ws->h_null_Uty) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    const double *hi = ws->hi_eval_null;
+    for (int i = 0; i < n_samples; i++) {
+        ws->h_null_w[i]   = hi[i] * ws->w[i];
+        ws->h_null_Uty[i] = hi[i] * ws->Uty[i];
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * create_workspace_ncvt1_c
+ *
+ * Python signature:
+ *   create_workspace_ncvt1_c(
+ *       eigenvalues, uab_invariant, w, Uty,
+ *       n_samples, l_min, l_max, n_grid, n_refine,
+ *       *, lmm_mode, hi_eval_null=None, logl_H0=None,
+ *   ) -> PyCapsule
+ *
+ * lmm_mode picks the null-model inputs: 2 (LRT) needs logl_H0, 3 (Score)
+ * needs hi_eval_null, 4 needs both, 1 (Wald) takes neither. An input the
+ * mode does not use is rejected rather than ignored.
+ * ------------------------------------------------------------------------- */
+static PyObject *create_workspace_ncvt1_c_py(
     PyObject *self, PyObject *args, PyObject *kwargs)
 {
     static const char *kwlist[] = {
         "eigenvalues", "uab_invariant", "w", "Uty",
-        "n_samples", "l_min", "l_max", "n_grid", "n_refine", "n_threads",
+        "n_samples", "l_min", "l_max", "n_grid", "n_refine",
+        "lmm_mode", "hi_eval_null", "logl_H0",
         NULL
     };
 
     PyObject *eigenvalues_obj, *uab_inv_obj, *w_obj, *Uty_obj;
-    int n_samples, n_grid, n_refine, n_threads;
-    double l_min, l_max;
+    PyObject *hi_eval_null_obj = NULL, *logl_H0_obj = NULL;
+    int n_samples, n_grid, n_refine, lmm_mode = 0;
+    double l_min, l_max, logl_H0 = 0.0;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOOOiddiii", (char **)kwlist,
+            args, kwargs, "OOOOiddii|$iOO", (char **)kwlist,
             &eigenvalues_obj, &uab_inv_obj, &w_obj, &Uty_obj,
-            &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads)) {
+            &n_samples, &l_min, &l_max, &n_grid, &n_refine,
+            &lmm_mode, &hi_eval_null_obj, &logl_H0_obj)) {
         return NULL;
+    }
+    if (lmm_mode < 1 || lmm_mode > 4) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode must be 1, 2, 3 or 4, got %d", lmm_mode);
+        return NULL;
+    }
+    int wants_hi = (lmm_mode == 3 || lmm_mode == 4);
+    int wants_logl = (lmm_mode == 2 || lmm_mode == 4);
+    if (hi_eval_null_obj == Py_None) hi_eval_null_obj = NULL;
+    if (logl_H0_obj == Py_None) logl_H0_obj = NULL;
+    if (wants_hi != (hi_eval_null_obj != NULL)) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode=%d %s hi_eval_null", lmm_mode,
+            wants_hi ? "requires" : "does not take");
+        return NULL;
+    }
+    if (wants_logl != (logl_H0_obj != NULL)) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode=%d %s logl_H0", lmm_mode,
+            wants_logl ? "requires" : "does not take");
+        return NULL;
+    }
+    if (wants_logl) {
+        logl_H0 = PyFloat_AsDouble(logl_H0_obj);
+        if (logl_H0 == -1.0 && PyErr_Occurred()) return NULL;
+        if (validate_logl_H0(logl_H0) < 0) return NULL;
     }
 
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
@@ -470,6 +544,7 @@ static PyObject *create_workspace_fused_c_py(
 
     PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
     PyArrayObject *w_arr = NULL, *Uty_arr = NULL;
+    PyArrayObject *hi_eval_null_arr = NULL;
     lmm_workspace_t *ws = NULL;
     PyObject *capsule = NULL;
 
@@ -481,23 +556,40 @@ static PyObject *create_workspace_fused_c_py(
     if (!w_arr) goto err_input;
     Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
     if (!Uty_arr) goto err_input;
+    if (wants_hi) {
+        hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
+        if (!hi_eval_null_arr) goto err_input;
+    }
     if (validate_eigenvalues(
             (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+        goto err_input;
+    if (wants_hi && validate_hi_eval_null(
+            (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
         goto err_input;
 
     ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
+    ws->mode = lmm_mode;
     if (init_ncvt1_workspace(ws, eigenvalues_arr, uab_inv_arr, w_arr, Uty_arr,
-                             n_samples, l_min, l_max, n_grid, n_refine) < 0)
+                             n_samples, l_min, l_max, n_grid, n_refine,
+                             lmm_mode != 3) < 0)
+        goto err_ws;
+    if (wants_hi && init_ncvt1_null_hi(
+            ws, (const double *)PyArray_DATA(hi_eval_null_arr)) < 0)
+        goto err_ws;
+    if (wants_logl)
+        set_ncvt1_null_logl(ws, logl_H0);
+    if (lmm_mode == 3 && init_ncvt1_score_vectors(ws) < 0)
         goto err_ws;
 
-    capsule = PyCapsule_New(ws, "lmm_workspace", lmm_workspace_destructor);
+    capsule = PyCapsule_New(ws, NCVT1_CAPSULE, lmm_workspace_destructor);
     if (!capsule) goto err_ws;
 
     Py_DECREF(eigenvalues_arr);
     Py_DECREF(uab_inv_arr);
     Py_DECREF(w_arr);
     Py_DECREF(Uty_arr);
+    Py_XDECREF(hi_eval_null_arr);
     return capsule;
 
 err_ws:
@@ -507,6 +599,7 @@ err_input:
     Py_XDECREF(uab_inv_arr);
     Py_XDECREF(w_arr);
     Py_XDECREF(Uty_arr);
+    Py_XDECREF(hi_eval_null_arr);
     return NULL;
 }
 
@@ -520,7 +613,7 @@ err_input:
  *
  * Python signature:
  *   compute_lmm_chunk_fused_c(
- *       workspace,   # PyCapsule from create_workspace_fused_c
+ *       workspace,   # PyCapsule from create_workspace_ncvt1_c, lmm_mode 1 or 4
  *       utg_t,       # (n_snps, n_samples) float64 — UtG.T
  *       n_threads,   # int
  *   ) -> dict {lambdas, logls, betas, ses, pwalds}  each (n_snps,) float64
@@ -540,17 +633,9 @@ static PyObject *compute_lmm_chunk_fused_c_py(
         return NULL;
     }
 
-    lmm_workspace_t *ws = (lmm_workspace_t *)PyCapsule_GetPointer(
-        capsule_obj, "lmm_workspace");
+    lmm_workspace_t *ws = ncvt1_workspace(
+        capsule_obj, "compute_lmm_chunk_fused_c", 1, 4);
     if (!ws) return NULL;
-
-    /* Validate workspace has w/Uty (fused workspace) */
-    if (!ws->w || !ws->Uty) {
-        PyErr_SetString(PyExc_ValueError,
-            "compute_lmm_chunk_fused_c requires a fused workspace "
-            "(w/Uty pointers are NULL). Use create_workspace_fused_c.");
-        return NULL;
-    }
 
     PyArrayObject *utg_t_arr = NULL;
     output_arrays_t out = {0};
@@ -681,109 +766,6 @@ err_input:
 }
 
 /* -------------------------------------------------------------------------
- * create_workspace_mode4_fused_c
- *
- * Mode-4 fused workspace: extends standard mode-4 workspace with w/Uty
- * for on-the-fly Uab computation from UtG_T.
- *
- * Python signature:
- *   create_workspace_mode4_fused_c(
- *       eigenvalues,      # (n_samples,) float64
- *       uab_invariant,    # (3, n_samples) float64 — SoA [ww, wy, yy]
- *       w,                # (n_samples,) float64 — UtW[:,0]
- *       Uty,              # (n_samples,) float64 — rotated phenotype
- *       n_samples,        # int
- *       l_min,            # float
- *       l_max,            # float
- *       n_grid,           # int
- *       n_refine,         # int
- *       n_threads,        # int
- *       hi_eval_null,     # (n_samples,) float64 — null-model Hi_eval
- *       logl_H0,          # float — null MLE log-likelihood
- *   ) -> PyCapsule wrapping lmm_workspace_t (mode=4)
- * ------------------------------------------------------------------------- */
-static PyObject *create_workspace_mode4_fused_c_py(
-    PyObject *self, PyObject *args, PyObject *kwargs)
-{
-    static const char *kwlist[] = {
-        "eigenvalues", "uab_invariant", "w", "Uty",
-        "n_samples", "l_min", "l_max", "n_grid", "n_refine", "n_threads",
-        "hi_eval_null", "logl_H0",
-        NULL
-    };
-
-    PyObject *eigenvalues_obj, *uab_inv_obj, *w_obj, *Uty_obj;
-    PyObject *hi_eval_null_obj;
-    int n_samples, n_grid, n_refine, n_threads;
-    double l_min, l_max, logl_H0;
-
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOOOiddiiiOd", (char **)kwlist,
-            &eigenvalues_obj, &uab_inv_obj, &w_obj, &Uty_obj,
-            &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads,
-            &hi_eval_null_obj, &logl_H0)) {
-        return NULL;
-    }
-
-    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
-        return NULL;
-    if (validate_logl_H0(logl_H0) < 0)
-        return NULL;
-
-    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
-    PyArrayObject *w_arr = NULL, *Uty_arr = NULL;
-    PyArrayObject *hi_eval_null_arr = NULL;
-    lmm_workspace_t *ws = NULL;
-    PyObject *capsule = NULL;
-
-    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
-    if (!eigenvalues_arr) goto err_input;
-    uab_inv_arr = take_matrix(uab_inv_obj, 3, n_samples, "uab_invariant");
-    if (!uab_inv_arr) goto err_input;
-    w_arr = take_vector(w_obj, n_samples, "w");
-    if (!w_arr) goto err_input;
-    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
-    if (!Uty_arr) goto err_input;
-    hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
-    if (!hi_eval_null_arr) goto err_input;
-    if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
-        goto err_input;
-    if (validate_hi_eval_null(
-            (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
-        goto err_input;
-
-    ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
-    if (!ws) { PyErr_NoMemory(); goto err_input; }
-    if (init_ncvt1_workspace(ws, eigenvalues_arr, uab_inv_arr, w_arr, Uty_arr,
-                             n_samples, l_min, l_max, n_grid, n_refine) < 0)
-        goto err_ws;
-    if (init_ncvt1_null_model(
-            ws, (const double *)PyArray_DATA(hi_eval_null_arr), logl_H0) < 0)
-        goto err_ws;
-
-    capsule = PyCapsule_New(ws, "lmm_workspace", lmm_workspace_destructor);
-    if (!capsule) goto err_ws;
-
-    Py_DECREF(eigenvalues_arr);
-    Py_DECREF(uab_inv_arr);
-    Py_DECREF(w_arr);
-    Py_DECREF(Uty_arr);
-    Py_DECREF(hi_eval_null_arr);
-    return capsule;
-
-err_ws:
-    lmm_workspace_free(ws);
-err_input:
-    Py_XDECREF(eigenvalues_arr);
-    Py_XDECREF(uab_inv_arr);
-    Py_XDECREF(w_arr);
-    Py_XDECREF(Uty_arr);
-    Py_XDECREF(hi_eval_null_arr);
-    return NULL;
-}
-
-/* -------------------------------------------------------------------------
  * compute_mode4_chunk_fused_c
  *
  * Fused per-chunk mode-4 compute: Score + Wald + LRT from UtG_T directly,
@@ -791,7 +773,7 @@ err_input:
  *
  * Python signature:
  *   compute_mode4_chunk_fused_c(
- *       workspace,   # PyCapsule from create_workspace_mode4_fused_c
+ *       workspace,   # PyCapsule from create_workspace_ncvt1_c, lmm_mode 4
  *       utg_t,       # (n_snps, n_samples) float64 — UtG.T
  *       n_threads,   # int
  *   ) -> dict {lambdas, logls, betas, ses, pwalds, p_scores, lambdas_mle, p_lrts}
@@ -811,23 +793,9 @@ static PyObject *compute_mode4_chunk_fused_c_py(
         return NULL;
     }
 
-    lmm_workspace_t *ws = (lmm_workspace_t *)PyCapsule_GetPointer(
-        capsule_obj, "lmm_workspace");
+    lmm_workspace_t *ws = ncvt1_workspace(
+        capsule_obj, "compute_mode4_chunk_fused_c", 4, 4);
     if (!ws) return NULL;
-
-    /* Validate workspace mode and fused fields */
-    if (ws->mode != 4) {
-        PyErr_Format(PyExc_ValueError,
-            "compute_mode4_chunk_fused_c requires a mode-4 workspace "
-            "(got mode=%d). Use create_workspace_mode4_fused_c.", ws->mode);
-        return NULL;
-    }
-    if (!ws->w || !ws->Uty) {
-        PyErr_SetString(PyExc_ValueError,
-            "compute_mode4_chunk_fused_c requires a fused workspace "
-            "(w/Uty pointers are NULL). Use create_workspace_mode4_fused_c.");
-        return NULL;
-    }
 
     PyArrayObject *utg_t_arr = NULL;
     mode4_output_t out = {0};
@@ -2059,176 +2027,8 @@ err_input_m4fg:
 }
 
 /* =========================================================================
- * PERSISTENT SCORE WORKSPACE — create_workspace_score_fused_c / compute_score_fused_ws_c
- *
- * Moves all SNP-invariant state into a PyCapsule workspace, eliminating
- * per-chunk malloc/free and redundant precomputation of h_null_w, h_null_Uty,
- * null dot products, and F-distribution constants.
+ * Score (lmm_mode 3) from an n_cvt=1 workspace.
  * ========================================================================= */
-
-typedef struct {
-    int n_samples;
-    int df;
-    double a, b, lbeta_ab;
-    /* Precomputed invariant vectors (owned) */
-    double *h_null_w;       /* (n_samples,) hi_eval_null * w */
-    double *h_null_Uty;     /* (n_samples,) hi_eval_null * Uty */
-    /* Precomputed invariant dot products */
-    double null_s_ww, null_s_wy, null_s_yy;
-    /* Raw data pointers into INCREF'd arrays (refs owned by workspace) */
-    const double *hi_eval_null;
-    const double *uab_inv_data;
-    const double *eigenvalues;
-    PyObject *hi_eval_null_ref;
-    PyObject *uab_inv_ref;
-    PyObject *eigenvalues_ref;
-} lmm_workspace_score_t;
-
-static void lmm_workspace_score_free(lmm_workspace_score_t *ws)
-{
-    if (!ws) return;
-    free(ws->h_null_w);
-    free(ws->h_null_Uty);
-    Py_XDECREF(ws->hi_eval_null_ref);
-    Py_XDECREF(ws->uab_inv_ref);
-    Py_XDECREF(ws->eigenvalues_ref);
-    free(ws);
-}
-
-static void lmm_workspace_score_destructor(PyObject *cap)
-{
-    lmm_workspace_score_free((lmm_workspace_score_t *)
-        PyCapsule_GetPointer(cap, "lmm_workspace_score_fused"));
-}
-
-/* -------------------------------------------------------------------------
- * create_workspace_score_fused_c
- *
- * Python signature:
- *   create_workspace_score_fused_c(
- *       w,                # (n_samples,) float64
- *       Uty,              # (n_samples,) float64
- *       Hi_eval_null,     # (n_samples,) float64
- *       eigenvalues,      # (n_samples,) float64
- *       uab_invariant_soa,# (3, n_samples) float64
- *       n_samples,        # int
- *       n_threads,        # int
- *   ) -> PyCapsule wrapping lmm_workspace_score_t
- * ------------------------------------------------------------------------- */
-static PyObject *create_workspace_score_fused_c_py(
-    PyObject *self, PyObject *args)
-{
-    PyObject *w_obj, *Uty_obj, *hi_eval_null_obj;
-    PyObject *eigenvalues_obj, *uab_inv_obj;
-    int n_samples, n_threads;
-
-    if (!PyArg_ParseTuple(args, "OOOOOii",
-            &w_obj, &Uty_obj, &hi_eval_null_obj,
-            &eigenvalues_obj, &uab_inv_obj, &n_samples, &n_threads))
-        return NULL;
-
-    if (n_samples < 3) {
-        PyErr_SetString(PyExc_ValueError, "n_samples must be >= 3");
-        return NULL;
-    }
-
-    PyArrayObject *w_arr = NULL, *Uty_arr = NULL, *hi_eval_null_arr = NULL;
-    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
-    lmm_workspace_score_t *ws = NULL;
-    PyObject *capsule = NULL;
-
-    w_arr = take_vector(w_obj, n_samples, "w");
-    if (!w_arr) goto err_input;
-    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
-    if (!Uty_arr) goto err_input;
-    hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "Hi_eval_null");
-    if (!hi_eval_null_arr) goto err_input;
-    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
-    if (!eigenvalues_arr) goto err_input;
-    uab_inv_arr = take_matrix(uab_inv_obj, 3, n_samples, "uab_invariant_soa");
-    if (!uab_inv_arr) goto err_input;
-    if (validate_hi_eval_null(
-            (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
-        goto err_input;
-    if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
-        goto err_input;
-
-    ws = (lmm_workspace_score_t *)calloc(1, sizeof(lmm_workspace_score_t));
-    if (!ws) { PyErr_NoMemory(); goto err_input; }
-
-    ws->n_samples = n_samples;
-    ws->df = n_samples - 2;
-    ws->a = (double)ws->df / 2.0;
-    ws->b = 0.5;
-    ws->lbeta_ab = lgamma(ws->a) + lgamma(ws->b) - lgamma(ws->a + ws->b);
-
-    /* Precompute h_null_w and h_null_Uty */
-    ws->h_null_w = alloc_aligned_doubles((size_t)n_samples);
-    ws->h_null_Uty = alloc_aligned_doubles((size_t)n_samples);
-    if (!ws->h_null_w || !ws->h_null_Uty) {
-        PyErr_NoMemory();
-        goto err_ws;
-    }
-
-    {
-        const double *w_data = (const double *)PyArray_DATA(w_arr);
-        const double *Uty_data = (const double *)PyArray_DATA(Uty_arr);
-        const double *hi = (const double *)PyArray_DATA(hi_eval_null_arr);
-        const double *inv_ww = (const double *)PyArray_DATA(uab_inv_arr);
-        const double *inv_wy = inv_ww + (size_t)n_samples;
-        const double *inv_yy = inv_ww + (size_t)2 * n_samples;
-
-        for (int i = 0; i < n_samples; i++) {
-            ws->h_null_w[i]   = hi[i] * w_data[i];
-            ws->h_null_Uty[i] = hi[i] * Uty_data[i];
-        }
-
-        /* Precompute invariant null-model dot products */
-        double s_ww = 0.0, s_wy = 0.0, s_yy = 0.0;
-        for (int i = 0; i < n_samples; i++) {
-            double h = hi[i];
-            s_ww += h * inv_ww[i];
-            s_wy += h * inv_wy[i];
-            s_yy += h * inv_yy[i];
-        }
-        ws->null_s_ww = s_ww;
-        ws->null_s_wy = s_wy;
-        ws->null_s_yy = s_yy;
-    }
-
-    /* Borrow array pointers via Py_INCREF */
-    Py_INCREF(hi_eval_null_arr);
-    Py_INCREF(uab_inv_arr);
-    Py_INCREF(eigenvalues_arr);
-    ws->hi_eval_null_ref = (PyObject *)hi_eval_null_arr;
-    ws->uab_inv_ref      = (PyObject *)uab_inv_arr;
-    ws->eigenvalues_ref  = (PyObject *)eigenvalues_arr;
-    ws->hi_eval_null = (const double *)PyArray_DATA(hi_eval_null_arr);
-    ws->uab_inv_data = (const double *)PyArray_DATA(uab_inv_arr);
-    ws->eigenvalues  = (const double *)PyArray_DATA(eigenvalues_arr);
-
-    capsule = PyCapsule_New(ws, "lmm_workspace_score_fused",
-                            lmm_workspace_score_destructor);
-    if (!capsule) goto err_ws;
-
-    Py_DECREF(w_arr);
-    Py_DECREF(Uty_arr);
-    Py_DECREF(hi_eval_null_arr);
-    Py_DECREF(eigenvalues_arr);
-    Py_DECREF(uab_inv_arr);
-    return capsule;
-
-err_ws:
-    lmm_workspace_score_free(ws);
-err_input:
-    Py_XDECREF(w_arr);
-    Py_XDECREF(Uty_arr);
-    Py_XDECREF(hi_eval_null_arr);
-    Py_XDECREF(eigenvalues_arr);
-    Py_XDECREF(uab_inv_arr);
-    return NULL;
-}
 
 /* -------------------------------------------------------------------------
  * compute_score_fused_ws_c
@@ -2245,9 +2045,9 @@ static PyObject *compute_score_fused_ws_c_py(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "OOi", &capsule_obj, &utg_t_obj, &n_threads))
         return NULL;
 
-    lmm_workspace_score_t *ws = (lmm_workspace_score_t *)
-        PyCapsule_GetPointer(capsule_obj, "lmm_workspace_score_fused");
-    if (!ws) return NULL;  /* PyCapsule_GetPointer sets ValueError on name mismatch */
+    lmm_workspace_t *ws = ncvt1_workspace(
+        capsule_obj, "compute_score_fused_ws_c", 3, 3);
+    if (!ws) return NULL;
 
     int n_samples = ws->n_samples;
     int n_snps;
@@ -2280,8 +2080,8 @@ static PyObject *compute_score_fused_ws_c_py(PyObject *self, PyObject *args)
     double null_s_wy = ws->null_s_wy;
     double null_s_yy = ws->null_s_yy;
     int df       = ws->df;
-    double a     = ws->a;
-    double b_val = ws->b;
+    double a     = ws->beta_a;
+    double b_val = ws->beta_b;
     double lbeta_ab = ws->lbeta_ab;
 
     int actual_threads = 1;
@@ -2865,181 +2665,9 @@ err_input_lrt_split_gen:
 }
 
 /* =========================================================================
- * PERSISTENT LRT WORKSPACE — create_workspace_lrt_fused_c / compute_lrt_fused_ws_c
- *
- * Moves all SNP-invariant state into a PyCapsule workspace, eliminating
- * per-chunk malloc/free of lambda_grid, hi_eval_grid, logdet_h_grid,
- * and grid_inv.  Per-thread scratch buffers are allocated per-call in
- * compute_lrt_fused_ws_c for thread safety and adaptive retuning.
+ * LRT (lmm_mode 2) from an n_cvt=1 workspace. Per-thread scratch is
+ * allocated per call so the thread count can be retuned between chunks.
  * ========================================================================= */
-
-typedef struct {
-    int n_samples;
-    int n_grid;
-    int n_refine;
-    double log_l_min, step, mle_const, logl_H0;
-    /* Precomputed grid data (owned) */
-    double *lambda_grid;      /* (n_grid,) */
-    double *hi_eval_grid;     /* (n_grid * n_samples) */
-    double *logdet_h_grid;    /* (n_grid,) */
-    grid_invariant_t *grid_inv;  /* (n_grid,) */
-    /* Raw data pointers into INCREF'd arrays (refs owned by workspace) */
-    const double *eigenvalues;
-    const double *inv_ww;
-    const double *inv_wy;
-    const double *inv_yy;
-    const double *w_data;
-    const double *Uty_data;
-    PyObject *eigenvalues_ref;
-    PyObject *uab_inv_ref;
-    PyObject *w_ref;
-    PyObject *Uty_ref;
-} lmm_workspace_lrt_t;
-
-static void lmm_workspace_lrt_free(lmm_workspace_lrt_t *ws)
-{
-    if (!ws) return;
-    free(ws->lambda_grid);
-    free(ws->hi_eval_grid);
-    free(ws->logdet_h_grid);
-    free(ws->grid_inv);
-    Py_XDECREF(ws->eigenvalues_ref);
-    Py_XDECREF(ws->uab_inv_ref);
-    Py_XDECREF(ws->w_ref);
-    Py_XDECREF(ws->Uty_ref);
-    free(ws);
-}
-
-static void lmm_workspace_lrt_destructor(PyObject *cap)
-{
-    lmm_workspace_lrt_free((lmm_workspace_lrt_t *)
-        PyCapsule_GetPointer(cap, "lmm_workspace_lrt_fused"));
-}
-
-/* -------------------------------------------------------------------------
- * create_workspace_lrt_fused_c
- *
- * Python signature:
- *   create_workspace_lrt_fused_c(
- *       w,                # (n_samples,) float64
- *       Uty,              # (n_samples,) float64
- *       eigenvalues,      # (n_samples,) float64
- *       uab_invariant_soa,# (3, n_samples) float64
- *       n_samples,        # int
- *       l_min,            # float
- *       l_max,            # float
- *       n_grid,           # int
- *       n_refine,         # int
- *       logl_H0,          # float
- *       n_threads,        # int
- *   ) -> PyCapsule wrapping lmm_workspace_lrt_t
- * ------------------------------------------------------------------------- */
-static PyObject *create_workspace_lrt_fused_c_py(
-    PyObject *self, PyObject *args)
-{
-    PyObject *w_obj, *Uty_obj, *eigenvalues_obj, *uab_inv_obj;
-    int n_samples, n_grid, n_refine, n_threads;
-    double l_min, l_max, logl_H0;
-
-    if (!PyArg_ParseTuple(args, "OOOOiddiidi",
-            &w_obj, &Uty_obj, &eigenvalues_obj, &uab_inv_obj,
-            &n_samples, &l_min, &l_max, &n_grid, &n_refine,
-            &logl_H0, &n_threads))
-        return NULL;
-
-    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
-        return NULL;
-    if (validate_logl_H0(logl_H0) < 0)
-        return NULL;
-
-    PyArrayObject *w_arr = NULL, *Uty_arr = NULL;
-    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
-    lmm_workspace_lrt_t *ws = NULL;
-    PyObject *capsule = NULL;
-
-    w_arr = take_vector(w_obj, n_samples, "w");
-    if (!w_arr) goto err_input;
-    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
-    if (!Uty_arr) goto err_input;
-    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
-    if (!eigenvalues_arr) goto err_input;
-    uab_inv_arr = take_matrix(uab_inv_obj, 3, n_samples, "uab_invariant_soa");
-    if (!uab_inv_arr) goto err_input;
-    if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
-        goto err_input;
-
-    ws = (lmm_workspace_lrt_t *)calloc(1, sizeof(lmm_workspace_lrt_t));
-    if (!ws) { PyErr_NoMemory(); goto err_input; }
-
-    ws->n_samples = n_samples;
-    ws->n_grid    = n_grid;
-    ws->n_refine  = n_refine;
-    ws->logl_H0   = logl_H0;
-
-    double n = (double)n_samples;
-    ws->mle_const  = 0.5 * n * (log(n) - log(2.0 * M_PI) - 1.0);
-    ws->log_l_min  = log(l_min);
-    double log_l_max = log(l_max);
-    ws->step       = (log_l_max - ws->log_l_min) / (double)(n_grid - 1);
-
-    /* Borrow array pointers via Py_INCREF */
-    Py_INCREF(eigenvalues_arr);
-    Py_INCREF(uab_inv_arr);
-    Py_INCREF(w_arr);
-    Py_INCREF(Uty_arr);
-    ws->eigenvalues_ref = (PyObject *)eigenvalues_arr;
-    ws->uab_inv_ref     = (PyObject *)uab_inv_arr;
-    ws->w_ref           = (PyObject *)w_arr;
-    ws->Uty_ref         = (PyObject *)Uty_arr;
-
-    ws->eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
-    ws->w_data      = (const double *)PyArray_DATA(w_arr);
-    ws->Uty_data    = (const double *)PyArray_DATA(Uty_arr);
-    const double *uab_data = (const double *)PyArray_DATA(uab_inv_arr);
-    ws->inv_ww = uab_data;
-    ws->inv_wy = uab_data + (size_t)n_samples;
-    ws->inv_yy = uab_data + (size_t)2 * n_samples;
-
-    ws->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
-    ws->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
-    ws->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
-    ws->grid_inv      = (grid_invariant_t *)malloc(
-        (size_t)n_grid * sizeof(grid_invariant_t));
-    if (!ws->lambda_grid || !ws->hi_eval_grid ||
-        !ws->logdet_h_grid || !ws->grid_inv) {
-        PyErr_NoMemory();
-        goto err_ws;
-    }
-    build_grid_ncvt1(n_grid, n_samples, ws->log_l_min, ws->step,
-                     ws->eigenvalues, ws->inv_ww, ws->inv_wy, ws->inv_yy,
-                     ws->lambda_grid, ws->hi_eval_grid, ws->logdet_h_grid,
-                     ws->grid_inv);
-
-    /* n_threads is accepted for API symmetry but not stored — scratch buffers
-     * are allocated per-call in compute_lrt_fused_ws_c to avoid thread-safety
-     * issues and to allow adaptive thread retuning between chunks. */
-    (void)n_threads;
-
-    capsule = PyCapsule_New(ws, "lmm_workspace_lrt_fused",
-                            lmm_workspace_lrt_destructor);
-    if (!capsule) goto err_ws;
-
-    Py_DECREF(w_arr);
-    Py_DECREF(Uty_arr);
-    Py_DECREF(eigenvalues_arr);
-    Py_DECREF(uab_inv_arr);
-    return capsule;
-
-err_ws:
-    lmm_workspace_lrt_free(ws);
-err_input:
-    Py_XDECREF(w_arr);
-    Py_XDECREF(Uty_arr);
-    Py_XDECREF(eigenvalues_arr);
-    Py_XDECREF(uab_inv_arr);
-    return NULL;
-}
 
 /* -------------------------------------------------------------------------
  * compute_lrt_fused_ws_c
@@ -3056,9 +2684,9 @@ static PyObject *compute_lrt_fused_ws_c_py(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "OOi", &capsule_obj, &utg_t_obj, &n_threads))
         return NULL;
 
-    lmm_workspace_lrt_t *ws = (lmm_workspace_lrt_t *)
-        PyCapsule_GetPointer(capsule_obj, "lmm_workspace_lrt_fused");
-    if (!ws) return NULL;  /* PyCapsule_GetPointer sets ValueError on name mismatch */
+    lmm_workspace_t *ws = ncvt1_workspace(
+        capsule_obj, "compute_lrt_fused_ws_c", 2, 2);
+    if (!ws) return NULL;
 
     int n_samples = ws->n_samples;
     int n_snps;
@@ -3126,9 +2754,9 @@ static PyObject *compute_lrt_fused_ws_c_py(PyObject *self, PyObject *args)
 
         /* Compute vwx/vxx/vxy on-the-fly from utg_t column */
         for (int i = 0; i < n_samples; i++) {
-            vwx_local[i] = ws->w_data[i] * x[i];
+            vwx_local[i] = ws->w[i] * x[i];
             vxx_local[i] = x[i] * x[i];
-            vxy_local[i] = ws->Uty_data[i] * x[i];
+            vxy_local[i] = ws->Uty[i] * x[i];
         }
 
         double logl_H1;
@@ -3268,13 +2896,13 @@ static PyMethodDef methods[] = {
         "    dict with keys: lambdas_mle, p_lrts — each (n_snps,) float64\n"
     },
     {
-        "create_workspace_fused_c",
-        (PyCFunction)create_workspace_fused_c_py,
+        "create_workspace_ncvt1_c",
+        (PyCFunction)create_workspace_ncvt1_c_py,
         METH_VARARGS | METH_KEYWORDS,
-        "Create a fused workspace holding w/Uty for on-the-fly Uab computation.\n"
+        "Create the per-run n_cvt=1 workspace for one lmm_mode.\n"
         "\n"
-        "Eliminates the (n_snps, 3, n_samples) uab_varying_soa intermediate\n"
-        "by computing wx/xx/xy from UtG_T columns in thread-local scratch.\n"
+        "Holds w/Uty for on-the-fly Uab computation, the lambda grid and its\n"
+        "invariant dot products, and the null-model block the mode needs.\n"
         "\n"
         "Args:\n"
         "    eigenvalues:   (n_samples,) float64\n"
@@ -3286,10 +2914,14 @@ static PyMethodDef methods[] = {
         "    l_max:         float\n"
         "    n_grid:        int\n"
         "    n_refine:      int\n"
-        "    n_threads:     int\n"
+        "    lmm_mode:      int, keyword-only — 1 Wald, 2 LRT, 3 Score, 4 all\n"
+        "    hi_eval_null:  (n_samples,) float64 — modes 3 and 4 only\n"
+        "    logl_H0:       float — modes 2 and 4 only\n"
         "\n"
         "Returns:\n"
-        "    PyCapsule wrapping lmm_workspace_t (fused)\n"
+        "    PyCapsule for compute_lmm_chunk_fused_c (modes 1, 4),\n"
+        "    compute_lrt_fused_ws_c (2), compute_score_fused_ws_c (3),\n"
+        "    compute_mode4_chunk_fused_c (4)\n"
     },
     {
         "compute_lmm_chunk_fused_c",
@@ -3302,37 +2934,12 @@ static PyMethodDef methods[] = {
         "prebuilt; the arithmetic and its order are unchanged.\n"
         "\n"
         "Args:\n"
-        "    workspace:  PyCapsule from create_workspace_fused_c\n"
+        "    workspace:  PyCapsule from create_workspace_ncvt1_c, lmm_mode 1 or 4\n"
         "    utg_t:      (n_snps, n_samples) float64 — UtG.T\n"
         "    n_threads:  int\n"
         "\n"
         "Returns:\n"
         "    dict with keys: lambdas, logls, betas, ses, pwalds\n"
-    },
-    {
-        "create_workspace_mode4_fused_c",
-        (PyCFunction)create_workspace_mode4_fused_c_py,
-        METH_VARARGS | METH_KEYWORDS,
-        "Create a fused mode-4 workspace with w/Uty + null model.\n"
-        "\n"
-        "Extends fused workspace with Hi_eval_null, logl_H0 for Score/LRT.\n"
-        "\n"
-        "Args:\n"
-        "    eigenvalues:   (n_samples,) float64\n"
-        "    uab_invariant: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
-        "    w:             (n_samples,) float64 — UtW[:,0]\n"
-        "    Uty:           (n_samples,) float64 — rotated phenotype\n"
-        "    n_samples:     int\n"
-        "    l_min:         float\n"
-        "    l_max:         float\n"
-        "    n_grid:        int\n"
-        "    n_refine:      int\n"
-        "    n_threads:     int\n"
-        "    hi_eval_null:  (n_samples,) float64 — null-model Hi_eval\n"
-        "    logl_H0:       float — null MLE log-likelihood\n"
-        "\n"
-        "Returns:\n"
-        "    PyCapsule wrapping lmm_workspace_t (mode=4, fused)\n"
     },
     {
         "compute_mode4_chunk_fused_c",
@@ -3345,7 +2952,7 @@ static PyMethodDef methods[] = {
         "prebuilt; the arithmetic and its order are unchanged.\n"
         "\n"
         "Args:\n"
-        "    workspace:  PyCapsule from create_workspace_mode4_fused_c\n"
+        "    workspace:  PyCapsule from create_workspace_ncvt1_c, lmm_mode 4\n"
         "    utg_t:      (n_snps, n_samples) float64 — UtG.T\n"
         "    n_threads:  int\n"
         "\n"
@@ -3396,64 +3003,18 @@ static PyMethodDef methods[] = {
         "Debug: return address of an aligned_alloc buffer for alignment testing."
     },
     {
-        "create_workspace_score_fused_c",
-        (PyCFunction)create_workspace_score_fused_c_py,
-        METH_VARARGS,
-        "Create a persistent Score workspace (PyCapsule).\n"
-        "\n"
-        "Precomputes h_null_w, h_null_Uty, null dot products, and\n"
-        "F-distribution constants once per run.\n"
-        "\n"
-        "Args:\n"
-        "    w:                 (n_samples,) float64 — UtW[:,0]\n"
-        "    Uty:               (n_samples,) float64 — rotated phenotype\n"
-        "    Hi_eval_null:      (n_samples,) float64 — null-model weights\n"
-        "    eigenvalues:       (n_samples,) float64\n"
-        "    uab_invariant_soa: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
-        "    n_samples:         int\n"
-        "    n_threads:         int\n"
-        "\n"
-        "Returns:\n"
-        "    PyCapsule wrapping lmm_workspace_score_t\n"
-    },
-    {
         "compute_score_fused_ws_c",
         (PyCFunction)compute_score_fused_ws_c_py,
         METH_VARARGS,
         "Compute Score test using a pre-built workspace.\n"
         "\n"
         "Args:\n"
-        "    workspace: PyCapsule from create_workspace_score_fused_c\n"
+        "    workspace: PyCapsule from create_workspace_ncvt1_c, lmm_mode 3\n"
         "    utg_t:     (n_snps, n_samples) float64 — UtG.T\n"
         "    n_threads: int\n"
         "\n"
         "Returns:\n"
         "    dict with keys: betas, ses, p_scores — each (n_snps,) float64\n"
-    },
-    {
-        "create_workspace_lrt_fused_c",
-        (PyCFunction)create_workspace_lrt_fused_c_py,
-        METH_VARARGS,
-        "Create a persistent LRT workspace (PyCapsule).\n"
-        "\n"
-        "Precomputes lambda_grid, hi_eval_grid, logdet_h_grid, grid_inv,\n"
-        "and per-thread scratch buffers once per run.\n"
-        "\n"
-        "Args:\n"
-        "    w:                 (n_samples,) float64\n"
-        "    Uty:               (n_samples,) float64\n"
-        "    eigenvalues:       (n_samples,) float64\n"
-        "    uab_invariant_soa: (3, n_samples) float64\n"
-        "    n_samples:         int\n"
-        "    l_min:             float\n"
-        "    l_max:             float\n"
-        "    n_grid:            int\n"
-        "    n_refine:          int\n"
-        "    logl_H0:           float\n"
-        "    n_threads:         int\n"
-        "\n"
-        "Returns:\n"
-        "    PyCapsule wrapping lmm_workspace_lrt_t\n"
     },
     {
         "compute_lrt_fused_ws_c",
@@ -3462,7 +3023,7 @@ static PyMethodDef methods[] = {
         "Compute LRT using a pre-built workspace.\n"
         "\n"
         "Args:\n"
-        "    workspace: PyCapsule from create_workspace_lrt_fused_c\n"
+        "    workspace: PyCapsule from create_workspace_ncvt1_c, lmm_mode 2\n"
         "    utg_t:     (n_snps, n_samples) float64 — UtG.T\n"
         "    n_threads: int\n"
         "\n"

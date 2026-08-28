@@ -30,6 +30,20 @@ from tests.lmm_accel._helpers import (
 _WALD_KEYS = ("lambdas", "logls", "betas", "ses", "pwalds")
 
 
+def _ncvt1_workspace(fused_data, **kwargs):
+    """Build an n_cvt=1 workspace from the fixture, with the grid defaults.
+
+    Every mode shares one creator, so the mode and its extra inputs are the
+    only thing a caller varies.
+    """
+    from jamma.lmm.compute_numpy import _c
+
+    eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+    return _c().create_workspace_ncvt1_c(
+        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, **kwargs
+    )
+
+
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 class TestHiEvalNullPositivity:
@@ -39,53 +53,34 @@ class TestHiEvalNullPositivity:
     the null model is broken upstream. The kernels divide by it, so the check has
     to be at the boundary rather than left to produce infinities downstream.
 
-    The three sites here are the ones dispatch reaches. Two earlier ones,
-    create_workspace_mode4_split_c and compute_score_batch_c, are unreachable and
-    have gone; the checks they covered live in the same C validation helper.
+    The two n_cvt=1 sites are one creator called in mode 4 and in mode 3, plus
+    the general split kernel. Earlier unreachable entry points have gone; the
+    checks they covered live in the same C validation helper.
     """
 
     @pytest.mark.parametrize("bad", [0.0, -0.5], ids=["zero", "negative"])
     def test_mode4_fused_workspace_rejects(self, fused_data, score_lrt_data, bad):
-        """create_workspace_mode4_fused_c rejects a non-positive hi_eval_null."""
-        from jamma.lmm.compute_numpy import create_lmm_workspace_mode4_fused
-
-        eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+        """create_workspace_ncvt1_c rejects a non-positive hi_eval_null in mode 4."""
         _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
 
         hi_bad = Hi_eval_null.copy()
         hi_bad[5] = bad
 
         with pytest.raises(ValueError, match="positive"):
-            create_lmm_workspace_mode4_fused(
-                eigenvalues,
-                uab_inv_soa,
-                w,
-                Uty,
-                n_samples,
-                1e-5,
-                1e5,
-                50,
-                20,
-                1,
-                hi_eval_null=hi_bad,
-                logl_H0=logl_H0,
+            _ncvt1_workspace(
+                fused_data, lmm_mode=4, hi_eval_null=hi_bad, logl_H0=logl_H0
             )
 
     @pytest.mark.parametrize("bad", [0.0, -1.0], ids=["zero", "negative"])
     def test_score_fused_workspace_rejects(self, fused_data, score_lrt_data, bad):
-        """create_workspace_score_fused_c rejects a non-positive hi_eval_null."""
-        from jamma.lmm.compute_numpy import _c
-
-        eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+        """create_workspace_ncvt1_c rejects a non-positive hi_eval_null in mode 3."""
         _, _, _, Hi_eval_null, _ = score_lrt_data
 
         hi_bad = Hi_eval_null.copy()
         hi_bad[3] = bad
 
         with pytest.raises(ValueError, match="positive"):
-            _c().create_workspace_score_fused_c(
-                w, Uty, hi_bad, eigenvalues, uab_inv_soa, n_samples, 1
-            )
+            _ncvt1_workspace(fused_data, lmm_mode=3, hi_eval_null=hi_bad)
 
     @pytest.mark.parametrize("bad", [0.0, -2.0], ids=["zero", "negative"])
     def test_score_split_general_rejects(self, synthetic_covariate_data_ncvt2, bad):
@@ -115,28 +110,48 @@ _fused_c_available = compute_numpy._accel is not None
 
 
 @pytest.mark.tier0
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@pytest.mark.parametrize(
+    ("lmm_mode", "extra"),
+    [
+        (1, {"hi_eval_null": True}),
+        (1, {"logl_H0": True}),
+        (2, {}),
+        (3, {}),
+    ],
+    ids=[
+        "wald_given_hi_eval_null",
+        "wald_given_logl_H0",
+        "lrt_no_logl_H0",
+        "score_no_hi_eval_null",
+    ],
+)
+def test_ncvt1_creator_rejects_wrong_inputs_for_mode(fused_data, lmm_mode, extra):
+    """The one creator takes exactly the inputs its lmm_mode uses.
+
+    Mode 1 takes neither hi_eval_null nor logl_H0, mode 2 requires logl_H0 and
+    mode 3 requires hi_eval_null. Anything else is a caller confusing two modes,
+    which the single capsule type can no longer catch on its own.
+    """
+    eigenvalues = fused_data[0]
+    kwargs = {}
+    if extra.get("hi_eval_null"):
+        kwargs["hi_eval_null"] = 1.0 / (0.5 * eigenvalues + 1.0)
+    if extra.get("logl_H0"):
+        kwargs["logl_H0"] = -100.0
+
+    with pytest.raises(ValueError, match="lmm_mode="):
+        _ncvt1_workspace(fused_data, lmm_mode=lmm_mode, **kwargs)
+
+
+@pytest.mark.tier0
 @pytest.mark.skipif(not _fused_c_available, reason="Fused C extension not available")
 class TestFusedParity:
     """Verify the fused Uab path against the NumPy implementations."""
 
     def test_fused_workspace_creation(self, fused_data):
-        """create_workspace_fused_c returns a PyCapsule."""
-        from jamma.lmm.compute_numpy import create_lmm_workspace_fused
-
-        eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
-        ws = create_lmm_workspace_fused(
-            eigenvalues,
-            uab_inv_soa,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-        assert ws is not None
+        """create_workspace_ncvt1_c returns a PyCapsule."""
+        assert _ncvt1_workspace(fused_data, lmm_mode=1) is not None
 
     def test_wald_parity(self, fused_data):
         """Fused Wald matches the NumPy REML Wald path.
@@ -145,26 +160,12 @@ class TestFusedParity:
         but no dispatch path reaches that kernel. NumPy is an independent
         implementation, so the assertion carries the measured tolerance.
         """
-        from jamma.lmm.compute_numpy import (
-            compute_wald_fused_c_ws,
-            create_lmm_workspace_fused,
-        )
+        from jamma.lmm.compute_numpy import _c
 
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
 
-        ws_fused = create_lmm_workspace_fused(
-            eigenvalues,
-            uab_inv_soa,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-        result = compute_wald_fused_c_ws(ws_fused, utg_t, 1)
+        ws_fused = _ncvt1_workspace(fused_data, lmm_mode=1)
+        result = _c().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
         reference = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
 
         assert_matches_numpy(
@@ -178,27 +179,13 @@ class TestFusedParity:
         thread-local state corruption shows up as a difference here. This stays
         a bitwise comparison because both sides are the same kernel.
         """
-        from jamma.lmm.compute_numpy import (
-            compute_wald_fused_c_ws,
-            create_lmm_workspace_fused,
-        )
+        from jamma.lmm.compute_numpy import _c
 
-        eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
+        _, _, _, utg_t, _, _, _ = fused_data
 
-        ws_fused = create_lmm_workspace_fused(
-            eigenvalues,
-            uab_inv_soa,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-        single = compute_wald_fused_c_ws(ws_fused, utg_t, 1)
-        multi = compute_wald_fused_c_ws(ws_fused, utg_t, 4)
+        ws_fused = _ncvt1_workspace(fused_data, lmm_mode=1)
+        single = _c().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
+        multi = _c().compute_lmm_chunk_fused_c(ws_fused, utg_t, 4)
 
         for key in _WALD_KEYS:
             np.testing.assert_array_equal(
@@ -208,53 +195,25 @@ class TestFusedParity:
             )
 
     def test_mode4_fused_workspace_creation(self, fused_data, score_lrt_data):
-        """create_workspace_mode4_fused_c returns a PyCapsule."""
-        from jamma.lmm.compute_numpy import create_lmm_workspace_mode4_fused
-
-        eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+        """create_workspace_ncvt1_c returns a PyCapsule in mode 4."""
         _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
 
-        ws = create_lmm_workspace_mode4_fused(
-            eigenvalues,
-            uab_inv_soa,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-            hi_eval_null=Hi_eval_null,
-            logl_H0=logl_H0,
+        ws = _ncvt1_workspace(
+            fused_data, lmm_mode=4, hi_eval_null=Hi_eval_null, logl_H0=logl_H0
         )
         assert ws is not None
 
     def test_mode4_parity(self, fused_data, score_lrt_data):
         """Fused mode-4 matches the NumPy Wald, Score and LRT statistics."""
-        from jamma.lmm.compute_numpy import (
-            compute_mode4_fused_c_ws,
-            create_lmm_workspace_mode4_fused,
-        )
+        from jamma.lmm.compute_numpy import _c
 
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
         _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
 
-        ws_fused = create_lmm_workspace_mode4_fused(
-            eigenvalues,
-            uab_inv_soa,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-            hi_eval_null=Hi_eval_null,
-            logl_H0=logl_H0,
+        ws_fused = _ncvt1_workspace(
+            fused_data, lmm_mode=4, hi_eval_null=Hi_eval_null, logl_H0=logl_H0
         )
-        result = compute_mode4_fused_c_ws(ws_fused, utg_t, 1)
+        result = _c().compute_mode4_chunk_fused_c(ws_fused, utg_t, 1)
 
         wald = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
         reference = {k: wald[k] for k in _WALD_KEYS}
@@ -267,37 +226,23 @@ class TestFusedParity:
 
     def test_fused_wrong_utg_t_shape(self, fused_data):
         """Fused compute raises ValueError for wrong UtG_T shape."""
-        from jamma.lmm.compute_numpy import (
-            compute_wald_fused_c_ws,
-            create_lmm_workspace_fused,
-        )
+        from jamma.lmm.compute_numpy import _c
 
-        eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+        _, _, _, utg_t, _, _, _ = fused_data
 
-        ws = create_lmm_workspace_fused(
-            eigenvalues,
-            uab_inv_soa,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
+        ws = _ncvt1_workspace(fused_data, lmm_mode=1)
 
         # 3D instead of 2D
         bad_utg = utg_t.reshape(utg_t.shape[0], 1, utg_t.shape[1])
         with pytest.raises(ValueError, match="utg_t"):
-            compute_wald_fused_c_ws(ws, bad_utg, 1)
+            _c().compute_lmm_chunk_fused_c(ws, bad_utg, 1)
 
     def test_fused_workspace_refcount(self, fused_data):
         """w and Uty arrays not garbage collected while workspace alive."""
         import gc
         import sys
 
-        from jamma.lmm.compute_numpy import create_lmm_workspace_fused
+        from jamma.lmm.compute_numpy import _c
 
         eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
 
@@ -307,7 +252,7 @@ class TestFusedParity:
         initial_w_ref = sys.getrefcount(w_tracked)
         initial_Uty_ref = sys.getrefcount(Uty_tracked)
 
-        ws = create_lmm_workspace_fused(
+        ws = _c().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w_tracked,
@@ -317,7 +262,7 @@ class TestFusedParity:
             1e5,
             50,
             20,
-            1,
+            lmm_mode=1,
         )
 
         # Workspace should hold a reference to w and Uty
@@ -333,30 +278,16 @@ class TestFusedParity:
 
     def test_fused_degenerate_snps(self, fused_data):
         """Fused Wald handles degenerate (constant) SNPs: NaN beta/se/pwald."""
-        from jamma.lmm.compute_numpy import (
-            compute_wald_fused_c_ws,
-            create_lmm_workspace_fused,
-        )
+        from jamma.lmm.compute_numpy import _c
 
-        eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+        _, _, _, utg_t, _, _, _ = fused_data
 
         # Make first SNP degenerate: constant genotype -> all zeros after rotation
         utg_t_degen = utg_t.copy()
         utg_t_degen[0, :] = 0.0
 
-        ws = create_lmm_workspace_fused(
-            eigenvalues,
-            uab_inv_soa,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-        cr = compute_wald_fused_c_ws(ws, utg_t_degen, 1)
+        ws = _ncvt1_workspace(fused_data, lmm_mode=1)
+        cr = _c().compute_lmm_chunk_fused_c(ws, utg_t_degen, 1)
 
         # Degenerate SNP: should produce NaN
         assert np.isnan(cr["betas"][0]), "degenerate SNP should have NaN beta"
@@ -364,43 +295,28 @@ class TestFusedParity:
         assert np.isnan(cr["pwalds"][0]), "degenerate SNP should have NaN p_wald"
 
         # Non-degenerate SNPs should still be valid (compare against reference)
-        ws_ref = create_lmm_workspace_fused(
-            eigenvalues,
-            uab_inv_soa,
-            w,
-            Uty,
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-        )
-        cr_ref = compute_wald_fused_c_ws(ws_ref, utg_t, 1)
+        ws_ref = _ncvt1_workspace(fused_data, lmm_mode=1)
+        cr_ref = _c().compute_lmm_chunk_fused_c(ws_ref, utg_t, 1)
         finite_mask = np.isfinite(cr_ref["betas"][1:])
         assert np.all(np.isfinite(cr["betas"][1:][finite_mask])), (
             "non-degenerate betas should be finite"
         )
 
     def test_fused_rejects_foreign_workspace(self, fused_data):
-        """compute_wald_fused_c_ws rejects a workspace of another kernel's type.
+        """compute_lmm_chunk_fused_c rejects a workspace built for another mode.
 
-        This used to pass the split Wald workspace, which shares a capsule name
-        with the fused one and differs by having NULL w/Uty, so it exercised the
-        kernel's own is-this-fused check. Nothing builds that capsule any more.
-        What remains testable is the capsule-name check, which is what the Score
-        and LRT workspace tests assert for their own kernels.
+        One capsule type now carries every n_cvt=1 workspace, so the capsule
+        name no longer separates them. The check that fires is the lmm_mode the
+        creator recorded.
         """
-        from jamma.lmm.compute_numpy import _c, compute_wald_fused_c_ws
+        from jamma.lmm.compute_numpy import _c
 
-        eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+        eigenvalues, _, _, utg_t, _, _, _ = fused_data
         Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
 
-        score_ws = _c().create_workspace_score_fused_c(
-            w, Uty, Hi_eval_null, eigenvalues, uab_inv_soa, n_samples, 1
-        )
-        with pytest.raises(ValueError, match="PyCapsule_GetPointer"):
-            compute_wald_fused_c_ws(score_ws, utg_t, 1)
+        score_ws = _ncvt1_workspace(fused_data, lmm_mode=3, hi_eval_null=Hi_eval_null)
+        with pytest.raises(ValueError, match="lmm_mode"):
+            _c().compute_lmm_chunk_fused_c(score_ws, utg_t, 1)
 
 
 def _run_fused_general_wald_vs_numpy(data: dict) -> None:

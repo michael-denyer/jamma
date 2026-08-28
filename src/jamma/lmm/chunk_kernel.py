@@ -25,13 +25,9 @@ from jamma.lmm.compute_numpy import (
     _compute_lrt_split_numpy,
     _compute_score_split_numpy,
     compute_lmm_chunk_numpy,
-    compute_mode4_fused_c_ws,
     compute_mode4_fused_general_c_ws,
-    compute_wald_fused_c_ws,
     compute_wald_fused_general_c_ws,
-    create_lmm_workspace_fused,
     create_lmm_workspace_fused_general,
-    create_lmm_workspace_mode4_fused,
     create_lmm_workspace_mode4_fused_general,
 )
 from jamma.lmm.dispatch import DispatchPath
@@ -171,14 +167,12 @@ def make_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
     may change after the pipeline profiles its first chunk.
     """
     match inv.dispatch:
-        case DispatchPath.FUSED:
-            return _fused_kernel(inv, n_threads)
+        case (
+            DispatchPath.FUSED | DispatchPath.FUSED_SCORE_WS | DispatchPath.FUSED_LRT_WS
+        ):
+            return _ncvt1_kernel(inv)
         case DispatchPath.FUSED_GENERAL:
             return _fused_general_kernel(inv, n_threads)
-        case DispatchPath.FUSED_SCORE_WS:
-            return _score_ws_kernel(inv, n_threads)
-        case DispatchPath.FUSED_LRT_WS:
-            return _lrt_ws_kernel(inv, n_threads)
         case DispatchPath.SOA_SPLIT:
             return _soa_split_kernel(inv)
         case DispatchPath.NUMPY_FALLBACK:
@@ -187,13 +181,24 @@ def make_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
             assert_never(inv.dispatch)
 
 
-def _fused_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
-    """n_cvt=1 Wald or mode 4: the workspace packs w, and takes utg_t per chunk."""
-    is_mode4 = inv.lmm_mode == 4
-    create = (
-        create_lmm_workspace_mode4_fused if is_mode4 else create_lmm_workspace_fused
-    )
-    workspace = create(
+# The C compute entry point and kernel label for each n_cvt=1 lmm_mode. The
+# labels are what a failure reports, so mode 4 keeps its own.
+_NCVT1_COMPUTE: dict[int, tuple[str, str]] = {
+    1: ("compute_lmm_chunk_fused_c", "Fused Uab dispatch"),
+    2: ("compute_lrt_fused_ws_c", "Fused LRT WS dispatch"),
+    3: ("compute_score_fused_ws_c", "Fused Score WS dispatch"),
+    4: ("compute_mode4_chunk_fused_c", "Fused mode-4 Uab dispatch"),
+}
+
+
+def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
+    """n_cvt=1, any mode: one workspace keyed by lmm_mode, one compute per mode.
+
+    The workspace packs w, the lambda grid and the null-model block the mode
+    needs, built once; each chunk hands in utg_t. Scratch is sized per call,
+    so the run-level thread count plays no part here.
+    """
+    workspace = _c().create_workspace_ncvt1_c(
         inv.eigenvalues,
         inv.require_invariant_soa(),
         inv.require_null_w(),
@@ -203,14 +208,11 @@ def _fused_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         inv.l_max,
         inv.n_grid,
         inv.n_refine,
-        n_threads,
+        lmm_mode=inv.lmm_mode,
         **_null_model_kwargs(inv),
     )
-    compute = compute_mode4_fused_c_ws if is_mode4 else compute_wald_fused_c_ws
-    # Mode 4 gets its own label, as it already did on the general path. The
-    # table this replaced gave both n_cvt=1 kernels the same one, so a segfault
-    # in the mode-4 kernel reported as a Wald failure.
-    label = "Fused mode-4 Uab dispatch" if is_mode4 else "Fused Uab dispatch"
+    compute_name, label = _NCVT1_COMPUTE[inv.lmm_mode]
+    compute = getattr(_c(), compute_name)
     return Kernel(
         label=label,
         n_filtered=inv.n_filtered,
@@ -254,48 +256,6 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
     )
     return Kernel(
         label=label,
-        n_filtered=inv.n_filtered,
-        call=lambda chunk, threads: compute(workspace, chunk, threads),
-    )
-
-
-def _score_ws_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
-    """n_cvt=1 Score: null-model dot products and F constants, computed once."""
-    workspace = _c().create_workspace_score_fused_c(
-        inv.require_null_w(),
-        inv.Uty,
-        inv.Hi_eval_null,
-        inv.eigenvalues,
-        inv.require_invariant_soa(),
-        inv.n_samples,
-        n_threads,
-    )
-    compute = _c().compute_score_fused_ws_c
-    return Kernel(
-        label="Fused Score WS dispatch",
-        n_filtered=inv.n_filtered,
-        call=lambda chunk, threads: compute(workspace, chunk, threads),
-    )
-
-
-def _lrt_ws_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
-    """n_cvt=1 LRT: lambda grids and per-thread scratch, allocated once."""
-    workspace = _c().create_workspace_lrt_fused_c(
-        inv.require_null_w(),
-        inv.Uty,
-        inv.eigenvalues,
-        inv.require_invariant_soa(),
-        inv.n_samples,
-        inv.l_min,
-        inv.l_max,
-        inv.n_grid,
-        inv.n_refine,
-        inv.logl_H0,
-        n_threads,
-    )
-    compute = _c().compute_lrt_fused_ws_c
-    return Kernel(
-        label="Fused LRT WS dispatch",
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
     )
@@ -370,7 +330,15 @@ def _numpy_kernel(inv: RunInvariants) -> Kernel:
 
 
 def _null_model_kwargs(inv: RunInvariants) -> dict[str, Any]:
-    """Mode 4 constructors take the null model; their Wald twins reject it."""
-    if inv.lmm_mode != 4:
-        return {}
-    return {"hi_eval_null": inv.Hi_eval_null, "logl_H0": inv.logl_H0}
+    """The null-model inputs a C workspace creator takes for this mode.
+
+    Score (3) needs ``hi_eval_null``, LRT (2) needs ``logl_H0``, mode 4 both,
+    Wald (1) neither. The creators reject an input their mode does not use,
+    and the general creators take the pair only for mode 4.
+    """
+    kwargs: dict[str, Any] = {}
+    if inv.lmm_mode in (3, 4):
+        kwargs["hi_eval_null"] = inv.Hi_eval_null
+    if inv.lmm_mode in (2, 4):
+        kwargs["logl_H0"] = inv.logl_H0
+    return kwargs

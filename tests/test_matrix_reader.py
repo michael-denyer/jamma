@@ -352,138 +352,22 @@ class TestBoundedMemoryBehavior:
 
 
 # =============================================================================
-# Memmap return path tests
+# Temp memmap cleanup tests
 # =============================================================================
 
 
 @pytest.mark.tier0
-class TestMemmapReturn:
-    """Verify copy=False returns np.memmap and copy=True returns dense array."""
-
-    def test_copy_false_returns_memmap(self, tmp_path: Path) -> None:
-        """copy=False on parallel path returns np.memmap instance."""
-        rng = np.random.default_rng(42)
-        matrix = rng.standard_normal((600, 10))
-        path = tmp_path / "memmap_test.txt"
-        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
-
-        result = read_matrix_parallel(
-            path, copy=False, n_workers=2, min_rows_for_parallel=500
-        )
-        assert isinstance(result, np.memmap), (
-            f"Expected np.memmap, got {type(result).__name__}"
-        )
-        assert not result.flags.writeable, (
-            "copy=False memmap should be read-only (mode='r')"
-        )
-        np.testing.assert_array_equal(
-            result, np.atleast_2d(np.loadtxt(path, dtype=np.float64))
-        )
-        assert result.dtype == np.float64
-
-    def test_copy_true_returns_dense(self, tmp_path: Path) -> None:
-        """copy=True (default) on parallel path returns dense C-contiguous array."""
-        rng = np.random.default_rng(43)
-        matrix = rng.standard_normal((600, 10))
-        path = tmp_path / "dense_test.txt"
-        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
-
-        result = read_matrix_parallel(
-            path, copy=True, n_workers=2, min_rows_for_parallel=500
-        )
-        assert not isinstance(result, np.memmap), (
-            "copy=True should return dense ndarray, not np.memmap"
-        )
-        assert result.flags["C_CONTIGUOUS"]
-
-    def test_copy_false_small_matrix_still_works(self, tmp_path: Path) -> None:
-        """copy=False on small matrix (below threshold) returns dense array.
-
-        The np.loadtxt fallback path always returns a dense array regardless
-        of the copy flag. This documents the expected behavior.
-        """
-        rng = np.random.default_rng(44)
-        matrix = rng.standard_normal((10, 10))
-        path = tmp_path / "small_memmap.txt"
-        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
-
-        result = read_matrix_parallel(path, copy=False, min_rows_for_parallel=500)
-        # Small path uses np.loadtxt which always returns dense
-        assert not isinstance(result, np.memmap), (
-            "copy=False on small matrix should return dense array, not np.memmap"
-        )
-        expected = np.atleast_2d(np.loadtxt(path, dtype=np.float64))
-        np.testing.assert_array_equal(result, expected)
-
-    def test_copy_false_memmap_rejects_write(self, tmp_path: Path) -> None:
-        """copy=False memmap raises ValueError on write attempt."""
-        rng = np.random.default_rng(48)
-        matrix = rng.standard_normal((600, 10))
-        path = tmp_path / "readonly_test.txt"
-        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
-
-        result = read_matrix_parallel(
-            path, copy=False, n_workers=2, min_rows_for_parallel=500
-        )
-        with pytest.raises(ValueError, match="read-only"):
-            result[0, 0] = 999.0
-
-    def test_copy_false_values_match_copy_true(self, tmp_path: Path) -> None:
-        """copy=False and copy=True produce identical values on same matrix."""
-        rng = np.random.default_rng(45)
-        matrix = rng.standard_normal((600, 10))
-        path = tmp_path / "parity_test.txt"
-        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
-
-        result_memmap = read_matrix_parallel(
-            path, copy=False, n_workers=2, min_rows_for_parallel=500
-        )
-        result_dense = read_matrix_parallel(
-            path, copy=True, n_workers=2, min_rows_for_parallel=500
-        )
-        np.testing.assert_array_equal(result_memmap, result_dense)
-
-
-@pytest.mark.tier0
 class TestMemmapLifecycle:
-    """Verify weakref.finalize cleanup of copy=False memmap backing file."""
-
-    def test_weakref_finalize_cleans_temp_file(self, tmp_path: Path) -> None:
-        """Backing file is removed after copy=False memmap is garbage collected."""
-        import gc
-
-        rng = np.random.default_rng(46)
-        matrix = rng.standard_normal((600, 10))
-        path = tmp_path / "lifecycle_test.txt"
-        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
-
-        result = read_matrix_parallel(
-            path, copy=False, n_workers=2, min_rows_for_parallel=500
-        )
-        assert isinstance(result, np.memmap)
-
-        # Capture backing file path while memmap is alive
-        assert result.filename is not None, "copy=False memmap must be file-backed"
-        backing_file = Path(result.filename)
-        assert backing_file.exists(), "Backing file should exist while memmap is alive"
-
-        # Delete reference and force GC to trigger weakref.finalize
-        del result
-        gc.collect()
-
-        assert not backing_file.exists(), (
-            f"Backing file {backing_file} should be removed after GC, "
-            "but it still exists"
-        )
+    """Verify temp memmap backing files are cleaned up after parsing."""
 
     def test_copy_true_no_temp_file_leak(self, tmp_path: Path) -> None:
-        """copy=True leaves no .jamma_mread_ temp directories after completion."""
+        """Reading leaves no .jamma_mread_ temp directories after completion."""
         rng = np.random.default_rng(47)
         matrix = rng.standard_normal((600, 10))
         path = tmp_path / "no_leak_test.txt"
         np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
 
-        read_matrix_parallel(path, copy=True, n_workers=2, min_rows_for_parallel=500)
+        read_matrix_parallel(path, n_workers=2, min_rows_for_parallel=500)
 
         # Verify no .jamma_mread_ temp dirs remain in the matrix file's directory
         leftover_dirs = [
@@ -492,60 +376,12 @@ class TestMemmapLifecycle:
             if d.is_dir() and d.name.startswith(".jamma_mread_")
         ]
         assert leftover_dirs == [], (
-            f"Found leftover temp dirs after copy=True: {leftover_dirs}"
-        )
-
-    def test_copy_false_cleanup_on_parse_failure(self, tmp_path: Path) -> None:
-        """copy=False cleans up temp files when parallel parse fails mid-way."""
-        rng = np.random.default_rng(49)
-        matrix = rng.standard_normal((600, 10))
-        path = tmp_path / "fail_cleanup.txt"
-        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
-
-        # Inject a non-numeric line at row ~400 to cause a parse error
-        lines = path.read_text().splitlines()
-        lines[400] = "not_a_number\t" * 10
-        path.write_text("\n".join(lines) + "\n")
-
-        with pytest.raises(RuntimeError):
-            read_matrix_parallel(
-                path, copy=False, n_workers=2, min_rows_for_parallel=500
-            )
-
-        # Verify no temp dirs leaked
-        leftover_dirs = [
-            d
-            for d in tmp_path.iterdir()
-            if d.is_dir() and d.name.startswith(".jamma_mread_")
-        ]
-        assert leftover_dirs == [], (
-            f"Found leftover temp dirs after failed copy=False parse: {leftover_dirs}"
+            f"Found leftover temp dirs after read: {leftover_dirs}"
         )
 
     def test_cleanup_temp_memmap_nonexistent_paths(self) -> None:
         """_cleanup_temp_memmap does not raise when files/dirs are already gone."""
         _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")
-
-    def test_copy_false_os_error_during_memmap_creation(self, tmp_path: Path) -> None:
-        """OSError during memmap creation propagates cleanly (no hang, no silent drop).
-
-        Patches np.memmap so the initial w+ creation at parallel parse time
-        raises OSError("No space left on device").  The caller receives either
-        the raw OSError or a RuntimeError wrapping it — either is acceptable.
-        """
-        from unittest.mock import patch
-
-        rng = np.random.default_rng(50)
-        matrix = rng.standard_normal((600, 3))
-        path = tmp_path / "os_error_test.txt"
-        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
-
-        with patch(
-            "jamma.io.matrix_reader.np.memmap",
-            side_effect=OSError("No space left on device"),
-        ):
-            with pytest.raises((RuntimeError, OSError)):
-                read_matrix_parallel(path, copy=False, min_rows_for_parallel=500)
 
     def test_cleanup_temp_memmap_permission_error(self) -> None:
         """_cleanup_temp_memmap does not raise when os.unlink raises PermissionError.

@@ -9,7 +9,7 @@
 
 /* wald_from_pab and score_from_pab live with the other statistic extractors
  * in the tests unit; the optimizers call them once per SNP on convergence. */
-#include "_lmm_tests.h"
+#include "_lmm_stats.h"
 
 #include <math.h>
 #include <string.h>

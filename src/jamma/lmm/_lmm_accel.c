@@ -72,7 +72,6 @@
 #include "_lmm_support.h"
 
 #include "_lmm_stats.h"
-#include "_lmm_tests.h"
 #include "_lmm_kernels_ncvt1.h"
 #include "_lmm_kernels_general.h"
 #include <assert.h>

@@ -9,7 +9,7 @@
 
 /* wald_from_pab_general lives with the other statistic extractors in the
  * tests unit; the fused-general REML path calls it once per SNP. */
-#include "_lmm_tests.h"
+#include "_lmm_stats.h"
 
 #include <math.h>
 #include <string.h>

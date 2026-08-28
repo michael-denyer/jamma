@@ -1,21 +1,32 @@
 /*
- * _lmm_stats.h — test statistic to p-value conversion.
+ * _lmm_stats.h — from a populated Pab array to a test statistic, and from a
+ * test statistic to a p-value.
  *
- * The C side of src/jamma/lmm/special.py: the regularized incomplete beta
- * behind the Wald F test, and the chi-squared survival function behind the
- * LRT. Pure double arithmetic with no CPython, NumPy, OpenMP or workspace
- * state, so unlike _lmm_support.h this header needs none of the
+ * The C side of src/jamma/lmm/stats.py and special.py. The first half reads
+ * the Pab layout and turns it into an effect size, a standard error and an F
+ * statistic; the second half is the regularized incomplete beta behind the
+ * Wald F test and the chi-squared survival function behind the LRT. Pure
+ * double arithmetic with no CPython, NumPy, OpenMP or workspace state, so
+ * unlike _lmm_support.h this header needs none of the
  * PY_ARRAY_UNIQUE_SYMBOL / NO_IMPORT_ARRAY handling.
  *
- * Every caller invokes these once per SNP, after the lambda optimizer has
- * finished, to turn a finished statistic into a p-value. None of them sits in
- * an inner loop, which is why the continued fraction can live out of line.
+ * Every caller invokes these once per SNP, in the output block after the
+ * lambda optimizer has converged, not inside the optimizer's inner loop. None
+ * of them sits in a hot loop, which is why they can live out of line; the
+ * kernels the optimizer calls ~70 times per SNP are a different problem and
+ * stay inline.
+ *
+ * The Pab functions each return 1 for a usable SNP and 0 for a degenerate
+ * one, and callers test that return rather than isnan(beta): relying on NaN
+ * propagating through comparisons is the more fragile check.
  */
 
 #ifndef JAMMA_LMM_STATS_H
 #define JAMMA_LMM_STATS_H
 
 #include <math.h>
+
+#include "_lmm_types.h"
 
 /* ---------------------------------------------------------------------------
  * Regularized incomplete beta I_z(a, b), with the symmetry relation applied.
@@ -53,5 +64,52 @@ static inline double chi2_sf_c(double x)
     if (!isfinite(x)) return 0.0;   /* +inf → 0 */
     return erfc(sqrt(x / 2.0));
 }
+
+
+/* ---------------------------------------------------------------------------
+ * n_cvt = 1. Pab is the fixed 3x6 layout.
+ * ------------------------------------------------------------------------- */
+
+/* Wald: F = (P_yy - Px_yy) / Px_yy * df, beta and se from level 2. */
+int wald_from_pab(
+    const double pab[3][6],
+    int df,
+    double *beta_out, double *se_out, double *f_stat_out
+);
+
+/* Score: F = n_samples * P_xy^2 / (P_yy * P_xx), so it uses n_samples rather
+ * than df and needs no per-SNP lambda. beta and se still come from level 2. */
+int score_from_pab(
+    const double pab[3][6],
+    int n_samples,
+    int df,
+    double *beta_out, double *se_out, double *f_stat_out
+);
+
+/* ---------------------------------------------------------------------------
+ * General n_cvt. Pab is flat and indexed through the table.
+ * ------------------------------------------------------------------------- */
+
+int score_from_pab_general(
+    const double *pab,
+    const pab_table_t *t,
+    int n_samples,
+    double *beta_out, double *se_out, double *f_stat_out
+);
+
+/* -------------------------------------------------------------------------
+ * wald_from_pab_general — Extract Wald stats from general-n_cvt Pab.
+ *
+ * P_XX = Pab[n_cvt, idx_xx], P_XY = Pab[n_cvt, idx_xy],
+ * P_YY = Pab[n_cvt, idx_yy] (pre-genotype-projection),
+ * Px_YY = Pab[n_cvt+1, idx_yy] (fully projected).
+ * Same Wald formula as existing wald_from_pab.
+ * Returns 1 if valid, 0 if degenerate.
+ * ------------------------------------------------------------------------- */
+int wald_from_pab_general(
+    const double *pab,
+    const pab_table_t *t,
+    double *beta_out, double *se_out, double *f_stat_out
+);
 
 #endif /* JAMMA_LMM_STATS_H */

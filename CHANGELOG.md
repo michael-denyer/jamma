@@ -72,6 +72,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than it owned. Error labels are `err_input`, `err_output` and `err_ws`.
   Bit-identical on the 79-key accel fingerprint and on `.assoc.txt` for all
   four `-lmm` modes at n_cvt 1, 2 and 4. `_lmm_accel.c` 4098 -> 3512 lines.
+- **`_lmm_tests.{c,h}` are part of `_lmm_stats.{c,h}`.** The four
+  Pab-to-statistic functions (`wald_from_pab`, `score_from_pab` and their
+  general forms) sit beside the statistic-to-p-value ones they feed; both
+  halves are pure double arithmetic that runs once per SNP after the
+  optimizer. `LMM_ACCEL_SOURCES` drops one entry. Bit-identical on both
+  digest levers.
 - **Giant test files split along the src seams they mirror.**
   `test_runner_numpy.py` gives its chunk-sizing tests to a new
   `test_chunk_sizing.py` (absorbing `test_auto_tune_chunk.py` and

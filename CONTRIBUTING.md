@@ -73,9 +73,12 @@ manifest, forbidden-patches gate), see [`docs/TESTING.md`](docs/TESTING.md).
 ### GEMMA Validation
 
 Some tests compare JAMMA output against GEMMA reference data in
-`tests/fixtures/`. Build [GEMMA 0.98.5](https://github.com/genetics-statistics/GEMMA)
-locally (or use a prebuilt binary) and run it directly against the same
-PLINK fixtures -- no Docker workflow is maintained in-tree. After
+`tests/fixtures/`. [`scripts/generate_gemma_fixtures.sh`](scripts/generate_gemma_fixtures.sh)
+regenerates every one of them from a table of cells, running either a local
+[GEMMA 0.98.5](https://github.com/genetics-statistics/GEMMA) binary
+(`--gemma-path`, `$GEMMA`, or `gemma` on `PATH`) or a docker image
+(`$GEMMA_IMAGE`, default `gemma`). Use `--list` to see the cells, `--dry-run`
+to print the commands, and `--only <glob>` to regenerate one directory. After
 regenerating any fixture, refresh the manifest:
 
 ```bash

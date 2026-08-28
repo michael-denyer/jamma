@@ -4,6 +4,10 @@ Creates tests/fixtures/gemma_loco/ with:
   - test.bed / test.bim / test.fam  (100 samples, 500 SNPs, 3 chromosomes)
   - test_snps.txt                   (GEMMA annotation file: SNP_ID, bp_pos, chr)
 
+The --loco-kinship subcommand writes the per-chromosome LOCO kinship matrices
+and SNP lists that scripts/generate_gemma_fixtures.sh feeds to GEMMA as -k and
+-snps inputs.
+
 The annotation file (test_snps.txt) uses GEMMA's annotation format.
 Not used by the current fixture generation pipeline (which uses -snps
 per-chromosome filtering), but kept for potential GEMMA -loco -a usage.
@@ -18,10 +22,13 @@ Design:
 
 Usage:
     uv run python scripts/generate_loco_synthetic.py
+    uv run python scripts/generate_loco_synthetic.py --loco-kinship <bfile> <outdir>
 """
 
 from __future__ import annotations
 
+import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -137,5 +144,78 @@ def generate_synthetic_plink() -> None:
     print(f"  {annotation_path}")
 
 
+def write_loco_kinship_fixtures(bfile: Path, outdir: Path) -> None:
+    """Write per-chromosome LOCO kinship matrices and SNP lists for GEMMA.
+
+    The LOCO kinship is derived by subtraction rather than by recomputing from
+    the retained SNPs:
+
+        K_loco_c = (p * K_full - p_c * K_c) / (p - p_c)
+
+    Recomputing from ``G[:, chr != c]`` is a different operation and changes the
+    committed fixture bytes, so the subtraction stands.
+
+    Kinship is written with ``legacy_text=True`` because GEMMA reads only the
+    ``.cXX.txt`` format; the JAMMA default would emit ``.npy``.
+
+    Args:
+        bfile: PLINK binary prefix (no extension).
+        outdir: Directory receiving the ``.cXX.txt`` and SNP-list files.
+    """
+    from jamma.io import load_plink_binary
+    from jamma.io.plink import get_plink_metadata
+    from jamma.kinship import write_kinship_matrix
+    from jamma.kinship.compute import compute_centered_kinship
+
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    pdata = load_plink_binary(bfile)
+    meta = get_plink_metadata(bfile)
+    genotypes = pdata.genotypes
+    chr_labels = meta.chromosome.astype(str)
+
+    n_full = genotypes.shape[1]
+    k_full = compute_centered_kinship(genotypes, check_memory=False)
+    print(f"Full kinship: {n_full} SNPs, trace={np.trace(k_full):.4f}")
+
+    for chrom in sorted(set(chr_labels)):
+        chr_mask = chr_labels == chrom
+        n_chr = int(chr_mask.sum())
+        n_loco = n_full - n_chr
+
+        k_chr = compute_centered_kinship(genotypes[:, chr_mask], check_memory=False)
+        k_loco = (n_full * k_full - n_chr * k_chr) / n_loco
+
+        kinship_path = outdir / f"loco_chr{chrom}_kinship.cXX.txt"
+        write_kinship_matrix(k_loco, kinship_path, legacy_text=True)
+        print(
+            f"chr{chrom}: {n_chr} SNPs excluded, {n_loco} retained, "
+            f"trace={np.trace(k_loco):.4f} -> {kinship_path.name}"
+        )
+
+        snp_ids = meta.sid[chr_mask]
+        snp_list_path = outdir / f"chr{chrom}_snps.txt"
+        snp_list_path.write_text("\n".join(snp_ids) + "\n")
+        print(f"  SNP list: {snp_list_path.name} ({len(snp_ids)} SNPs)")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--loco-kinship",
+        nargs=2,
+        metavar=("BFILE", "OUTDIR"),
+        help="Write per-chromosome LOCO kinship matrices and SNP lists.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.loco_kinship:
+        bfile, outdir = args.loco_kinship
+        write_loco_kinship_fixtures(Path(bfile), Path(outdir))
+    else:
+        generate_synthetic_plink()
+    return 0
+
+
 if __name__ == "__main__":
-    generate_synthetic_plink()
+    sys.exit(main())

@@ -8,10 +8,7 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import (
-    compute_mode4_fused_general_c_ws,
-    compute_wald_fused_general_c_ws,
-)
+from jamma.lmm.compute_numpy import _c
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.uab import compute_uab_invariant_soa
 from tests.lmm_accel._helpers import (
@@ -327,7 +324,7 @@ def _run_fused_general_wald_vs_numpy(data: dict) -> None:
     reference is now an independent implementation with a tolerance.
     """
     prepared = _prepare_fused_general_data(data)
-    result = compute_wald_fused_general_c_ws(
+    result = _c().compute_lmm_chunk_fused_general_c(
         _fused_general_workspace(prepared), prepared["utg_t"], 1
     )
     reference = _numpy_general_wald(prepared)
@@ -375,7 +372,7 @@ def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
     shape and range here, and against NumPy in the two tests below.
     """
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = compute_mode4_fused_general_c_ws(
+    result = _c().compute_mode4_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
     reference = _numpy_general_wald(data)
@@ -407,10 +404,6 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
     mle_const in the workspace. This test verifies the fix: all non-degenerate
     SNPs must have finite lambda_mle values.
     """
-    from jamma.lmm.compute_numpy import (
-        compute_mode4_fused_general_c_ws,
-        create_lmm_workspace_mode4_fused_general,
-    )
     from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
 
     data = general_score_lrt_ncvt2
@@ -427,10 +420,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
     inv_indices, _ = classify_uab_columns(n_cvt)
     uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
     utg_t = np.ascontiguousarray(UtG.T)
-    pab_c = build_pab_table_for_c(n_cvt)
-    pab_kwargs = pab_c.workspace_kwargs()
-
-    ws_fused = create_lmm_workspace_mode4_fused_general(
+    ws_fused = _c().create_workspace_general_c(
         eigenvalues,
         uab_inv_soa,
         UtW,
@@ -441,12 +431,12 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
         50,
         20,
         1,
-        n_cvt=n_cvt,
-        **pab_kwargs,
+        build_pab_table_for_c(n_cvt)._asdict(),
+        lmm_mode=4,
         hi_eval_null=Hi_eval_null,
         logl_H0=logl_H0,
     )
-    result = compute_mode4_fused_general_c_ws(ws_fused, utg_t, 1)
+    result = _c().compute_mode4_chunk_fused_general_c(ws_fused, utg_t, 1)
 
     # All non-degenerate SNPs must have finite lambda_mle
     lambdas_mle = result["lambdas_mle"]
@@ -466,7 +456,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
 def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
     """FGEN-08: Fused general mode-4 LRT matches the NumPy MLE lambdas and p-values."""
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = compute_mode4_fused_general_c_ws(
+    result = _c().compute_mode4_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
 
@@ -487,7 +477,7 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
     mix-up between the three shows here and not in the single-mode tests.
     """
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = compute_mode4_fused_general_c_ws(
+    result = _c().compute_mode4_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
 
@@ -506,10 +496,6 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
 )
 def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """FGEN-04: Fused general workspace creates, computes, and destroys cleanly."""
-    from jamma.lmm.compute_numpy import (
-        compute_wald_fused_general_c_ws,
-        create_lmm_workspace_fused_general,
-    )
     from jamma.lmm.likelihood import build_pab_table_for_c
 
     data = synthetic_covariate_data_ncvt2
@@ -522,10 +508,7 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
 
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt)
     utg_t = np.ascontiguousarray(UtG.T)
-    pab_c = build_pab_table_for_c(n_cvt)
-    pab_kwargs = pab_c.workspace_kwargs()
-
-    ws = create_lmm_workspace_fused_general(
+    ws = _c().create_workspace_general_c(
         eigenvalues,
         uab_inv_soa,
         UtW,
@@ -536,22 +519,22 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
         50,
         20,
         1,
-        n_cvt=n_cvt,
-        **pab_kwargs,
+        build_pab_table_for_c(n_cvt)._asdict(),
+        lmm_mode=1,
     )
     assert ws is not None
 
     # Compute first half
     mid = UtG.shape[1] // 2
-    r1 = compute_wald_fused_general_c_ws(ws, utg_t[:mid], 1)
+    r1 = _c().compute_lmm_chunk_fused_general_c(ws, utg_t[:mid], 1)
     assert r1["lambdas"].shape == (mid,)
 
     # Reuse workspace for second half
-    r2 = compute_wald_fused_general_c_ws(ws, utg_t[mid:], 1)
+    r2 = _c().compute_lmm_chunk_fused_general_c(ws, utg_t[mid:], 1)
     assert r2["lambdas"].shape == (UtG.shape[1] - mid,)
 
     # Full batch
-    r_full = compute_wald_fused_general_c_ws(ws, utg_t, 1)
+    r_full = _c().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
     combined = np.concatenate([r1["lambdas"], r2["lambdas"]])
     np.testing.assert_allclose(
         combined,
@@ -588,7 +571,7 @@ def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
     )
 
     prepared = _prepare_fused_general_data(data)
-    result = compute_wald_fused_general_c_ws(
+    result = _c().compute_lmm_chunk_fused_general_c(
         _fused_general_workspace(prepared), prepared["utg_t"], 1
     )
     reference = _numpy_general_wald(prepared)
@@ -631,7 +614,7 @@ def test_runner_fused_general_ncvt2_dispatch():
     """Runner integration: n_cvt=2 dispatches fused general path end-to-end.
 
     Exercises the full build_pab_table_for_c → create_workspace_fused_general →
-    compute_wald_fused_general_c_ws pipeline through run_lmm_association_numpy.
+    compute_lmm_chunk_fused_general_c pipeline through run_lmm_association_numpy.
     Compares fused general results (n_cvt=2 with the C extension) against the
     NumPy path, reached by dropping the extension.
     """
@@ -724,4 +707,79 @@ def test_runner_fused_general_ncvt2_dispatch():
             rtol=1e-8,
             atol=1e-14,
             err_msg=f"beta mismatch for {a_f.rs}",
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@pytest.mark.parametrize(
+    "key",
+    [
+        "invariant_indices",
+        "varying_indices",
+        "logdet_diag_rows",
+        "logdet_diag_cols",
+        "var_a_cols",
+    ],
+)
+def test_general_creator_rejects_out_of_range_table(
+    synthetic_covariate_data_ncvt2, key
+):
+    """The Pab table parser range-checks every index array it is handed.
+
+    The general creator takes the table as one dict, so a corrupt entry has
+    to be caught there rather than by the workspace filling code that used
+    to read the arrays one by one.
+    """
+    from jamma.lmm.likelihood import build_pab_table_for_c
+
+    data = synthetic_covariate_data_ncvt2
+    n_cvt = data["n_cvt"]
+    table = build_pab_table_for_c(n_cvt)._asdict()
+    bad = np.array(table[key], dtype=np.int32).copy()
+    bad[0] = 10**6
+    table[key] = bad
+
+    with pytest.raises(ValueError, match=rf"{key}\[0\].*out of range"):
+        _c().create_workspace_general_c(
+            data["eigenvalues"],
+            compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt),
+            data["UtW"],
+            data["Uty"],
+            data["n_samples"],
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+            table,
+            lmm_mode=1,
+        )
+
+
+@pytest.mark.tier0
+@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@pytest.mark.parametrize("lmm_mode", [2, 3])
+def test_general_creator_rejects_score_and_lrt_modes(
+    synthetic_covariate_data_ncvt2, lmm_mode
+):
+    """Score-only and LRT-only at n_cvt >= 2 take no workspace (SOA_SPLIT)."""
+    from jamma.lmm.likelihood import build_pab_table_for_c
+
+    data = synthetic_covariate_data_ncvt2
+    n_cvt = data["n_cvt"]
+    with pytest.raises(ValueError, match="lmm_mode must be 1 or 4"):
+        _c().create_workspace_general_c(
+            data["eigenvalues"],
+            compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt),
+            data["UtW"],
+            data["Uty"],
+            data["n_samples"],
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+            build_pab_table_for_c(n_cvt)._asdict(),
+            lmm_mode=lmm_mode,
         )

@@ -228,13 +228,13 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3c' | `jlinalg.eigh()` | Vendor DSYEVD/DSYEVR dispatch with NumPy fallback | [jlinalg/\_\_init\_\_.py](../src/jamma/jlinalg/__init__.py) |
 | 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n^2) workspace) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
 | 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
-| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:482](../src/jamma/lmm/likelihood.py#L482) |
-| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:846](../src/jamma/lmm/likelihood.py#L846) |
-| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:263](../src/jamma/lmm/likelihood.py#L263) |
-| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [likelihood.py:352](../src/jamma/lmm/likelihood.py#L352) |
-| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [likelihood.py:242](../src/jamma/lmm/likelihood.py#L242) |
-| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:804](../src/jamma/lmm/likelihood.py#L804) |
-| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:906](../src/jamma/lmm/likelihood.py#L906) |
+| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:471](../src/jamma/lmm/likelihood.py#L471) |
+| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:835](../src/jamma/lmm/likelihood.py#L835) |
+| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:252](../src/jamma/lmm/likelihood.py#L252) |
+| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [likelihood.py:341](../src/jamma/lmm/likelihood.py#L341) |
+| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [likelihood.py:231](../src/jamma/lmm/likelihood.py#L231) |
+| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:793](../src/jamma/lmm/likelihood.py#L793) |
+| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:895](../src/jamma/lmm/likelihood.py#L895) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3e | `golden_section_optimize_lambda_mle_numpy()` | MLE optimization per SNP (LRT) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:20](../src/jamma/lmm/stats.py#L20) |
@@ -269,14 +269,14 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:380](../src/jamma/lmm/runner_numpy.py#L380) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:301](../src/jamma/lmm/chunk_runner_numpy.py#L301) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:121](../src/jamma/lmm/chunk_runner_numpy.py#L121) |
-| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:47](../src/jamma/lmm/chunk_kernel.py#L47) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:162](../src/jamma/lmm/chunk_kernel.py#L162) |
+| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:43](../src/jamma/lmm/chunk_kernel.py#L43) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:158](../src/jamma/lmm/chunk_kernel.py#L158) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:118](../src/jamma/lmm/chunk_pipeline.py#L118) |
 | 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:83](../src/jamma/lmm/chunk_sizing.py#L83) |
-| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:194](../src/jamma/lmm/chunk_kernel.py#L194) |
+| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:190](../src/jamma/lmm/chunk_kernel.py#L190) |
 | 4Nc | `create_workspace_ncvt1_c()` | C extension: the per-run n_cvt=1 workspace, keyed by `lmm_mode` | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `compute_lmm_chunk_fused_c()` | C extension: chunked REML Wald for n_cvt=1 with OpenMP | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
-| 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:26](../src/jamma/lmm/_lmm_support.c#L26) |
+| 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:27](../src/jamma/lmm/_lmm_support.c#L27) |
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 | 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
@@ -564,7 +564,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Matrix writer | [io/matrix_writer.py:87](../src/jamma/io/matrix_writer.py#L87) |
 | Kinship compute | [compute.py:386](../src/jamma/kinship/compute.py#L386) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
-| REML likelihood (`reml_log_likelihood()`) | [likelihood.py:482](../src/jamma/lmm/likelihood.py#L482) |
+| REML likelihood (`reml_log_likelihood()`) | [likelihood.py:471](../src/jamma/lmm/likelihood.py#L471) |
 | Uab/Pab/Iab batches | [uab.py](../src/jamma/lmm/uab.py) |
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | Wald/Score/LRT tests | [stats.py](../src/jamma/lmm/stats.py) |

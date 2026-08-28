@@ -68,6 +68,10 @@ typedef struct {
     int *level_counts;       /* (n_rows,) — count per level */
     pab_entry_t *entries;    /* all entries concatenated */
     int n_entries;
+    /* The two fused-vector columns whose product is each varying Uab column,
+     * 0..n_cvt-1 for UtW columns, n_cvt for x, n_cvt+1 for Uty. (n_var,) */
+    int *var_a_cols;
+    int *var_b_cols;
 } pab_table_t;
 
 #endif /* JAMMA_LMM_TYPES_H */

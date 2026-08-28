@@ -53,13 +53,13 @@ def _fused_score_lrt_null_model(split_wald_data):
 
 
 @pytest.mark.tier0
-def test_abi_version_13():
-    """ABI_VERSION is 13 after one n_cvt=1 workspace and creator, keyed by lmm_mode."""
+def test_abi_version_14():
+    """ABI_VERSION is 14 after one n_cvt=1 workspace and creator, keyed by lmm_mode."""
     if compute_numpy._accel is None:
         pytest.skip("C extension not available")
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 13
+    assert ABI_VERSION == 14
 
 
 def _make_runner_test_data(rng, n_samples=50, n_snps=20):

@@ -216,6 +216,23 @@ class TestEncodeCategoricalBasic:
         )
         np.testing.assert_array_equal(result, expected)
 
+    def test_encode_all_columns_constant_categorical_returns_empty(self) -> None:
+        """All columns categorical and constant with no NaN rows drops every column.
+
+        Regression test: the ascending-order block-list rewrite builds
+        `result` from a list of per-column blocks. When every column is
+        categorical, constant, and has no NaN rows, no block is ever
+        appended, and naively calling np.hstack on an empty list raises
+        ValueError. The prior in-place np.delete implementation returned
+        an (n_samples, 0) array for this input; the rewrite must match.
+        """
+        covariates = np.array([[1.0], [1.0], [1.0]])
+
+        result = encode_categorical_covariates(covariates, cat_columns=[1])
+
+        assert result.shape == (3, 0)
+        assert result.dtype == np.float64
+
     def test_encode_duplicate_cat_columns_deduplicated(self) -> None:
         """Duplicate -cat indices are deduplicated, not double-encoded.
 

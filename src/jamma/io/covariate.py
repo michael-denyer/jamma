@@ -199,7 +199,7 @@ def encode_categorical_covariates(
         blocks.append(dummies)
         is_dummy.extend([True] * n_dummies)
 
-    result = np.hstack(blocks)
+    result = np.hstack(blocks) if blocks else np.empty((n_samples, 0), dtype=np.float64)
 
     # Check for zero-variance among ONLY the newly created dummy columns
     dummy_col_indices = [i for i, d in enumerate(is_dummy) if d]

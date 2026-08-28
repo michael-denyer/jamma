@@ -379,6 +379,36 @@ class TestMemmapLifecycle:
             f"Found leftover temp dirs after read: {leftover_dirs}"
         )
 
+    def test_cleanup_on_parse_failure(self, tmp_path: Path) -> None:
+        """Temp dir is cleaned up when a parallel parse fails mid-way.
+
+        Regression coverage for the finally-block cleanup path now that
+        the copy=False mode (and its separate weakref.finalize cleanup)
+        is gone: this is the only cleanup path left, so a parse failure
+        must still not leak the .jamma_mread_ temp directory.
+        """
+        rng = np.random.default_rng(49)
+        matrix = rng.standard_normal((600, 10))
+        path = tmp_path / "fail_cleanup.txt"
+        np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
+
+        # Inject a non-numeric line at row ~400 to cause a parse error
+        lines = path.read_text().splitlines()
+        lines[400] = "not_a_number\t" * 10
+        path.write_text("\n".join(lines) + "\n")
+
+        with pytest.raises(RuntimeError):
+            read_matrix_parallel(path, n_workers=2, min_rows_for_parallel=500)
+
+        leftover_dirs = [
+            d
+            for d in tmp_path.iterdir()
+            if d.is_dir() and d.name.startswith(".jamma_mread_")
+        ]
+        assert leftover_dirs == [], (
+            f"Found leftover temp dirs after failed parse: {leftover_dirs}"
+        )
+
     def test_cleanup_temp_memmap_nonexistent_paths(self) -> None:
         """_cleanup_temp_memmap does not raise when files/dirs are already gone."""
         _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")

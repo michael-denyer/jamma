@@ -38,60 +38,6 @@ void calc_pab_general(
 );
 
 /* -------------------------------------------------------------------------
- * reml_finish_general — REML tail for general n_cvt.
- *
- * logdet_pab from logdet_diag entries, P_yy guard, return full REML formula
- * including logdet_h.
- * ------------------------------------------------------------------------- */
-double reml_finish_general(
-    const double *pab,
-    const pab_table_t *t,
-    double logdet_h,
-    double logdet_iab,
-    double reml_const
-);
-
-/* -------------------------------------------------------------------------
- * reml_logl_general_cached — REML using cached grid hi_eval + invariant sums.
- *
- * For cached grid points: invariant sums already computed, just compute
- * varying dot products, reconstruct row0, calc_pab, reml_finish.
- * ------------------------------------------------------------------------- */
-double reml_logl_general_cached(
-    const double *inv_sums_cached,
-    const double *uab_var,
-    const double *hi_eval,
-    int n_samples,
-    double logdet_h,
-    double logdet_iab,
-    double reml_const,
-    const pab_table_t *t,
-    double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
-);
-
-/* -------------------------------------------------------------------------
- * reml_logl_general_fresh — Full REML evaluation for a specific lambda.
- *
- * Computes hi_eval + logdet_h + all dot products in single n_samples pass
- * (fused loop), then calc_pab + reml_finish.
- * Used during golden section refinement where lambda is SNP-specific.
- * ------------------------------------------------------------------------- */
-double reml_logl_general_fresh(
-    const double *uab_inv,
-    const double *uab_var,
-    const double *eigenvalues,
-    int n_samples,
-    double lambda,
-    double logdet_iab,
-    double reml_const,
-    const pab_table_t *t,
-    double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
-);
-
-
-/* -------------------------------------------------------------------------
  * golden_section_lambda_general — Grid + golden section for general n_cvt.
  *
  * Mirrors the coarse-grid plus refine_lambda_ncvt1_split pair. Grid phase uses
@@ -115,40 +61,6 @@ double golden_section_lambda_general(
     double *logl_out,
     double *beta_out, double *se_out, double *f_stat_out,
     int *is_valid_out,
-    double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
-);
-
-
-/* -------------------------------------------------------------------------
- * mle_logl_general — MLE log-likelihood for one SNP at one lambda (general n_cvt).
- *
- * MLE formula: -0.5 * n * log(P_yy_full) - 0.5 * logdet_h + mle_const
- * where P_yy_full is at level n_cvt+1 (fully projected).
- *
- * Uses full Uab row (n_samples * n_index) in AoS layout.
- * ------------------------------------------------------------------------- */
-double mle_logl_general(
-    const double *uab_snp,     /* (n_samples, n_index) row-major */
-    const double *eigenvalues,
-    int n_samples,
-    double lambda,
-    double mle_const,
-    const pab_table_t *t,
-    double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
-);
-
-/* -------------------------------------------------------------------------
- * mle_logl_general_cached — MLE using cached hi_eval for coarse grid search.
- * ------------------------------------------------------------------------- */
-double mle_logl_general_cached(
-    const double *uab_snp,
-    const double *cached_hi_eval,
-    double cached_logdet_h,
-    int n_samples,
-    double mle_const,
-    const pab_table_t *t,
     double *row0,          /* caller-provided, at least n_index doubles */
     double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 );

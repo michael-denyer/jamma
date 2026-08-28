@@ -18,7 +18,6 @@ another the moment the live subject changed.
 from __future__ import annotations
 
 import contextlib
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -33,6 +32,7 @@ from jamma.lmm.uab import (
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
 )
+from tests.fixture_paths import MOUSE
 
 
 @contextlib.contextmanager
@@ -58,15 +58,6 @@ pytestmark = pytest.mark.tier0
 # batch that carries the degenerate SNPs.
 _C_VS_NUMPY_RTOL = 1e-7
 
-# ---------------------------------------------------------------------------
-# Fixture paths
-# ---------------------------------------------------------------------------
-
-_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
-MOUSE_HS1940_DIR = _FIXTURE_ROOT / "mouse_hs1940"
-MOUSE_HS1940_DATA = MOUSE_HS1940_DIR / "mouse_hs1940"
-MOUSE_HS1940_KINSHIP = MOUSE_HS1940_DIR / "mouse_hs1940_kinship.cXX.txt"
-
 
 @pytest.fixture(scope="module")
 def mouse_data():
@@ -76,9 +67,9 @@ def mouse_data():
     MLE null model (finite logl_H0). The mouse_hs1940 column-1 phenotype
     produces a degenerate MLE landscape (NaN logl_H0 at boundary lambda).
     """
-    plink_data = load_plink_binary(MOUSE_HS1940_DATA)
+    plink_data = load_plink_binary(MOUSE.bfile)
     genotypes = plink_data.genotypes
-    K = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
+    K = read_kinship_matrix(MOUSE.kinship)
 
     n_samples = genotypes.shape[0]
     # n_cvt=2, because SOA_SPLIT is only selected for n_cvt>=2.
@@ -256,9 +247,9 @@ def degenerate_data(mouse_data):
     n_samples = d["n_samples"]
 
     # Load the original rotated genotypes for the first 10 well-conditioned SNPs
-    plink_data = load_plink_binary(MOUSE_HS1940_DATA)
+    plink_data = load_plink_binary(MOUSE.bfile)
     genotypes = plink_data.genotypes
-    K = read_kinship_matrix(MOUSE_HS1940_KINSHIP)
+    K = read_kinship_matrix(MOUSE.kinship)
     eigenvalues, U = np.linalg.eigh(K)
 
     geno_subset = genotypes[:, :10].astype(np.float64)

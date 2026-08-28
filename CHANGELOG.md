@@ -57,6 +57,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`jamma.io.read_fam_phenotypes(fam_path, column=1)`** and
+  `parse_fam_phenotype_column(fam_data, column)` are the one `.fam`
+  phenotype parser. `PipelineRunner._parse_phenotype_column` calls the
+  latter; the test suite's own copy, `conftest.load_phenotypes_from_fam`,
+  is deleted and its 28 callers read through `jamma.io`.
+- **`tests/fixture_paths.py` and `tests/builders.py`.** Twenty-two test
+  files each derived their own `fixtures` root and spelling of the mouse
+  and synthetic paths, two carried verbatim copies of
+  `NUMPY_GEMMA_TOLERANCES` and of `_build_snp_info`; the datasets are now
+  frozen `FixtureDataset`s named once. `rotated_lmm_inputs` replaces the
+  inline synthetic-input recipe in `test_likelihood_numpy.py` with
+  bit-identical arrays, and `write_fam` replaces the ten `.fam` writers in
+  `test_pipeline.py`.
 - **`scripts/check_forbidden_patches.py` walks the AST.** The gate that bans
   patching numerical functions in tests matched line regexes, so a target
   wrapped by ruff or reached through `patch.object(cn, "name")` passed it;

@@ -411,7 +411,7 @@ catch. The carve-out is:
 
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
-| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` (`TestLOCOIteratorRuntimeError`, [`tests/test_safety_gates.py:239`](../tests/test_safety_gates.py#L239)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
+| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` (`TestLOCOIteratorRuntimeError`, [`tests/test_safety_gates.py:240`](../tests/test_safety_gates.py#L240)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
 | Compile-flag literals not in three forbidden entry points ([`scripts/check_compile_flag_literals.py`](../scripts/check_compile_flag_literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
 | `_lmm_accel.c` reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 
@@ -551,6 +551,22 @@ Defined in [`tests/conftest.py`](../tests/conftest.py):
 | `synthetic_covariate_data_ncvt4` | Rotated data with 4 covariates (200 samples, 50 SNPs) |
 
 If you add a fixture, also add a row here.
+
+Two modules beside `conftest.py` hold what the fixtures do not:
+
+- [`tests/fixture_paths.py`](../tests/fixture_paths.py) names every
+  committed dataset once. `SYNTHETIC`, `MOUSE` and `LOCO` are frozen
+  `FixtureDataset`s with `.bfile`, `.bed`, `.bim`, `.fam`, `.kinship`,
+  `.covariates` and `.ref("covar_lrt")` for the recorded GEMMA outputs;
+  `NUMPY_GEMMA_TOLERANCES` and `build_snp_info` live there too. Do not
+  derive a `fixtures` root in a test file.
+- [`tests/builders.py`](../tests/builders.py) builds synthetic inputs.
+  `rotated_lmm_inputs(n_samples, n_snps, n_cvt=1, seed=42)` returns an
+  `LmmInputs` (eigenvalues, `UtW`, `Uty`, `UtG`, `uab_batch()`) drawn in
+  the order the inline recipe used, so a migrated test sees bit-identical
+  arrays. `write_fam(path, *columns, missing_at=...)` writes a `.fam`.
+  Phenotypes are read back with `jamma.io.read_fam_phenotypes`, the same
+  parser the pipeline uses.
 
 ### 2.12 Property-based tests
 

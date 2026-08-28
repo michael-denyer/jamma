@@ -18,12 +18,10 @@ kinship matrix and reports se(pve) = 0.032753. The two are not
 interchangeable.
 """
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-from jamma.io import load_plink_binary
+from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
@@ -34,7 +32,8 @@ from jamma.lmm.likelihood import (
     reml_log_likelihood,
 )
 from jamma.lmm.prepare_common import compute_and_log_pve, compute_valid_mask
-from tests.conftest import load_phenotypes_from_fam, require_fixture
+from tests.conftest import require_fixture
+from tests.fixture_paths import MOUSE, SYNTHETIC
 from tests.reference.likelihood import (
     calc_ppab,
     calc_pppab,
@@ -47,25 +46,19 @@ pytestmark = pytest.mark.tier1
 GEMMA_SE_PVE = 0.0327788
 GEMMA_N_ANALYZED = 1410
 
-# Fixture paths
-MOUSE_FIXTURE = Path(__file__).parent / "fixtures" / "mouse_hs1940"
-SYNTHETIC_FIXTURE = Path(__file__).parent / "fixtures" / "gemma_synthetic"
-
 
 @pytest.fixture
 def synthetic_null_model():
     """Load synthetic test data and compute null model quantities."""
     require_fixture(
-        SYNTHETIC_FIXTURE / "test.bed",
-        SYNTHETIC_FIXTURE / "test.fam",
-        SYNTHETIC_FIXTURE / "gemma_kinship.cXX.txt",
+        SYNTHETIC.bed,
+        SYNTHETIC.fam,
+        SYNTHETIC.kinship,
     )
 
-    plink = load_plink_binary(SYNTHETIC_FIXTURE / "test")
-    kinship = read_kinship_matrix(
-        SYNTHETIC_FIXTURE / "gemma_kinship.cXX.txt", n_samples=plink.n_samples
-    )
-    phenotypes = load_phenotypes_from_fam(SYNTHETIC_FIXTURE / "test.fam")
+    plink = load_plink_binary(SYNTHETIC.bfile)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship, n_samples=plink.n_samples)
+    phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
     eigenvalues, U = eigendecompose_kinship(kinship)
 
     W = np.ones((plink.n_samples, 1))
@@ -90,16 +83,14 @@ def synthetic_null_model():
 def mouse_null_model():
     """Load mouse_hs1940 data and compute null model quantities."""
     require_fixture(
-        MOUSE_FIXTURE / "mouse_hs1940.bed",
-        MOUSE_FIXTURE / "mouse_hs1940.fam",
-        MOUSE_FIXTURE / "mouse_hs1940_kinship.cXX.txt",
+        MOUSE.bed,
+        MOUSE.fam,
+        MOUSE.kinship,
     )
 
-    plink = load_plink_binary(MOUSE_FIXTURE / "mouse_hs1940")
-    kinship = read_kinship_matrix(
-        MOUSE_FIXTURE / "mouse_hs1940_kinship.cXX.txt", n_samples=plink.n_samples
-    )
-    phenotypes = load_phenotypes_from_fam(MOUSE_FIXTURE / "mouse_hs1940.fam")
+    plink = load_plink_binary(MOUSE.bfile)
+    kinship = read_kinship_matrix(MOUSE.kinship, n_samples=plink.n_samples)
+    phenotypes = read_fam_phenotypes(MOUSE.fam)
 
     # 530 of the 1940 mouse_hs1940 phenotypes are missing. GEMMA drops those
     # samples before eigendecomposition; keeping them makes Uty, and then

@@ -29,6 +29,7 @@ import pytest
 
 from jamma.core.memory_snapshot import MemorySnapshot
 from tests.fakes import FakeJlinalg, use_fake_jlinalg
+from tests.fixture_paths import LOCO
 
 pytestmark = pytest.mark.tier0
 
@@ -233,7 +234,7 @@ class TestLP64OverflowWarning:
             )
 
 
-LOCO_BFILE = Path(__file__).parent / "fixtures" / "gemma_loco" / "test"
+LOCO_BFILE = LOCO.bfile
 
 
 class TestLOCOIteratorRuntimeError:

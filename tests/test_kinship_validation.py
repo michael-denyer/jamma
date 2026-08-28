@@ -4,8 +4,6 @@ These tests verify JAMMA produces numerically consistent kinship matrices
 that match the expected output format and properties.
 """
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -20,24 +18,20 @@ from jamma.validation import (
     load_gemma_kinship,
 )
 from tests.conftest import require_fixture
-
-# Test data paths - use gemma_synthetic which has matching PLINK + reference outputs
-_FIXTURE_ROOT = Path(__file__).parent / "fixtures"
-EXAMPLE_DATA = _FIXTURE_ROOT / "gemma_synthetic" / "test"
-REFERENCE_KINSHIP = _FIXTURE_ROOT / "gemma_synthetic" / "gemma_kinship.cXX.txt"
+from tests.fixture_paths import SYNTHETIC
 
 
 @pytest.fixture
 def mouse_genotypes():
     """Load gemma_synthetic genotypes."""
-    plink_data = load_plink_binary(EXAMPLE_DATA)
+    plink_data = load_plink_binary(SYNTHETIC.bfile)
     return plink_data.genotypes
 
 
 @pytest.fixture
 def reference_kinship():
     """Load reference kinship matrix."""
-    return load_gemma_kinship(REFERENCE_KINSHIP)
+    return load_gemma_kinship(SYNTHETIC.kinship)
 
 
 @pytest.mark.tier1
@@ -279,13 +273,11 @@ class TestStandardizedKinshipStreaming:
         which shifts dsyrk accumulation order. On gemma_synthetic (one chunk) they
         are bit-identical; the tolerance covers multi-chunk datasets.
         """
-        require_fixture(
-            EXAMPLE_DATA.with_suffix(".bed"), EXAMPLE_DATA.with_suffix(".fam")
-        )
-        genotypes = load_plink_binary(EXAMPLE_DATA).genotypes
+        require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
+        genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
 
         K_stream = compute_standardized_kinship_streaming(
-            EXAMPLE_DATA, check_memory=False, show_progress=False
+            SYNTHETIC.bfile, check_memory=False, show_progress=False
         )
         K_inmem = compute_standardized_kinship(genotypes, check_memory=False)
 
@@ -296,13 +288,11 @@ class TestStandardizedKinshipStreaming:
 
     def test_streaming_matches_numpy_reference(self):
         """Streaming -gk 2 matches the per-SNP NumPy oracle at the -gk 2 tolerance."""
-        require_fixture(
-            EXAMPLE_DATA.with_suffix(".bed"), EXAMPLE_DATA.with_suffix(".fam")
-        )
-        genotypes = load_plink_binary(EXAMPLE_DATA).genotypes
+        require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
+        genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
 
         K_stream = compute_standardized_kinship_streaming(
-            EXAMPLE_DATA, check_memory=False, show_progress=False
+            SYNTHETIC.bfile, check_memory=False, show_progress=False
         )
         K_ref = _numpy_standardized_kinship(genotypes)
 
@@ -311,15 +301,16 @@ class TestStandardizedKinshipStreaming:
 
     def test_streaming_valid_indices_subsets(self):
         """valid_indices accumulates at n_valid size and matches an in-memory subset."""
-        require_fixture(
-            EXAMPLE_DATA.with_suffix(".bed"), EXAMPLE_DATA.with_suffix(".fam")
-        )
-        genotypes = load_plink_binary(EXAMPLE_DATA).genotypes
+        require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
+        genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
         n_samples = genotypes.shape[0]
         valid = np.arange(0, n_samples - 3)
 
         K_stream = compute_standardized_kinship_streaming(
-            EXAMPLE_DATA, check_memory=False, show_progress=False, valid_indices=valid
+            SYNTHETIC.bfile,
+            check_memory=False,
+            show_progress=False,
+            valid_indices=valid,
         )
         K_inmem = compute_standardized_kinship(genotypes[valid, :], check_memory=False)
 
@@ -331,11 +322,9 @@ class TestStandardizedKinshipStreaming:
 
     def test_streaming_maf_filter(self):
         """Streaming -gk 2 honors the MAF filter and stays symmetric and finite."""
-        require_fixture(
-            EXAMPLE_DATA.with_suffix(".bed"), EXAMPLE_DATA.with_suffix(".fam")
-        )
+        require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
         K = compute_standardized_kinship_streaming(
-            EXAMPLE_DATA, maf_threshold=0.05, check_memory=False, show_progress=False
+            SYNTHETIC.bfile, maf_threshold=0.05, check_memory=False, show_progress=False
         )
         assert np.allclose(K, K.T)
         assert not np.any(np.isnan(K))

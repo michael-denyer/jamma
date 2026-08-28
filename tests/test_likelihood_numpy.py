@@ -36,6 +36,7 @@ from jamma.lmm.uab import (
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
 )
+from tests.builders import rotated_lmm_inputs
 
 
 @pytest.fixture
@@ -45,13 +46,8 @@ def synthetic_data():
     Returns:
         (eigenvalues, UtW, Uty, UtG) with n_samples=50, n_snps=10.
     """
-    rng = np.random.default_rng(42)
-    n_samples, n_snps = 50, 10
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
-    UtW = np.ones((n_samples, 1))  # intercept-only
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
-    return eigenvalues, UtW, Uty, UtG
+    d = rotated_lmm_inputs(50, 10, seed=42)
+    return d.eigenvalues, d.UtW, d.Uty, d.UtG
 
 
 # ---------------------------------------------------------------------------
@@ -215,14 +211,12 @@ def test_mle_scalar_pab_ncvt1():
         get_ab_index,
     )
 
-    rng = np.random.default_rng(123)
     n_samples = 50
     n_cvt = 1
 
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    Utx = rng.standard_normal(n_samples)
+    d = rotated_lmm_inputs(n_samples, 1, seed=123)
+    eigenvalues, UtW, Uty = d.eigenvalues, d.UtW, d.Uty
+    Utx = d.UtG[:, 0]
 
     lambda_val = 0.5
     v_temp = lambda_val * eigenvalues + 1.0
@@ -428,12 +422,9 @@ def test_golden_section_eval_count(monkeypatch):
     """
     import jamma.lmm.likelihood_numpy as ln
 
-    rng = np.random.default_rng(42)
     n_samples, n_snps = 50, 10
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
+    d = rotated_lmm_inputs(n_samples, n_snps, seed=42)
+    eigenvalues, UtW, Uty, UtG = d.eigenvalues, d.UtW, d.Uty, d.UtG
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
@@ -486,12 +477,8 @@ def split_uab_data():
         (eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch)
         with n_samples=100, n_snps=50.
     """
-    rng = np.random.default_rng(99)
-    n_samples, n_snps = 100, 50
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
+    d = rotated_lmm_inputs(100, 50, seed=99)
+    eigenvalues, UtW, Uty, UtG = d.eigenvalues, d.UtW, d.Uty, d.UtG
 
     uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty, 1)
     uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
@@ -770,12 +757,9 @@ def wald_pab_data():
     Returns:
         (eigenvalues, Uab_batch, Iab_batch, n_samples) with n_samples=80, n_snps=20.
     """
-    rng = np.random.default_rng(99)
-    n_samples, n_snps = 80, 20
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
+    n_samples = 80
+    d = rotated_lmm_inputs(n_samples, 20, seed=99)
+    eigenvalues, UtW, Uty, UtG = d.eigenvalues, d.UtW, d.Uty, d.UtG
 
     from jamma.lmm.uab import batch_compute_iab_numpy, batch_compute_uab_numpy
 
@@ -872,12 +856,9 @@ def compute_wald_data():
     Returns:
         (eigenvalues, Uab_batch, n_samples) with n_samples=80, n_snps=30.
     """
-    rng = np.random.default_rng(123)
-    n_samples, n_snps = 80, 30
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n_samples))
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
+    n_samples = 80
+    d = rotated_lmm_inputs(n_samples, 30, seed=123)
+    eigenvalues, UtW, Uty, UtG = d.eigenvalues, d.UtW, d.Uty, d.UtG
 
     from jamma.lmm.uab import batch_compute_uab_numpy
 
@@ -928,12 +909,9 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
     )
 
     # Also verify n_cvt=2 uses generic, not split
-    rng = np.random.default_rng(456)
-    n_samples2, n_snps2 = 80, 10
-    eigenvalues2 = np.sort(rng.uniform(0.1, 5.0, n_samples2))
-    UtW2 = rng.standard_normal((n_samples2, 2))
-    Uty2 = rng.standard_normal(n_samples2)
-    UtG2 = rng.standard_normal((n_samples2, n_snps2))
+    n_samples2 = 80
+    d2 = rotated_lmm_inputs(n_samples2, 10, n_cvt=2, seed=456)
+    eigenvalues2, UtW2, Uty2, UtG2 = d2.eigenvalues, d2.UtW, d2.Uty, d2.UtG
     from jamma.lmm.uab import batch_compute_uab_numpy
 
     Uab_batch2 = batch_compute_uab_numpy(2, UtW2, Uty2, UtG2.T)
@@ -1416,14 +1394,12 @@ def test_scalar_vs_batch_reml_single_snp_parity():
     _golden_section_minimize + reml_log_likelihood (scalar path) agree on
     the optimal lambda for a single SNP within rtol=1e-4.
     """
-    rng = np.random.default_rng(42)
     n = 30
     n_cvt = 1
 
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
-    UtW = np.ones((n, 1))
-    Uty = rng.standard_normal(n)
-    Utx = rng.standard_normal(n)
+    d = rotated_lmm_inputs(n, 1, seed=42)
+    eigenvalues, UtW, Uty = d.eigenvalues, d.UtW, d.Uty
+    Utx = d.UtG[:, 0]
 
     # Scalar path
     Uab_scalar = compute_Uab(UtW, Uty, Utx)
@@ -1460,14 +1436,11 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
     each SNP in the batch should get the same optimal lambda as the scalar
     path processing that SNP individually.
     """
-    rng = np.random.default_rng(7)
     n, n_snps = 30, 10
     n_cvt = 1
 
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
-    UtW = np.ones((n, 1))
-    Uty = rng.standard_normal(n)
-    UtG = rng.standard_normal((n, n_snps))
+    d = rotated_lmm_inputs(n, n_snps, seed=7)
+    eigenvalues, UtW, Uty, UtG = d.eigenvalues, d.UtW, d.Uty, d.UtG
 
     # Batch path — all 10 SNPs at once
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
@@ -1522,14 +1495,12 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
     - logl: rtol=1e-10 — evaluated at the same lambda point via the same REML
       arithmetic; any discrepancy would indicate a divergence in Pab/Iab logic.
     """
-    rng = np.random.default_rng(123)
     n = 50
     n_cvt = 1
 
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
-    UtW = np.ones((n, 1))
-    Uty = rng.standard_normal(n)
-    Utx = rng.standard_normal(n)
+    d = rotated_lmm_inputs(n, 1, seed=123)
+    eigenvalues, UtW, Uty = d.eigenvalues, d.UtW, d.Uty
+    Utx = d.UtG[:, 0]
 
     # --- Scalar path ---
     Uab_scalar = compute_Uab(UtW, Uty, Utx)

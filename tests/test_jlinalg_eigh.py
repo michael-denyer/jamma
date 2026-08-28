@@ -29,7 +29,6 @@ Run with ``-n0`` to avoid interference with the OpenMP threading tests:
 from __future__ import annotations
 
 import ctypes
-from pathlib import Path
 
 import numpy as np
 import numpy.testing as npt
@@ -43,6 +42,7 @@ from jamma.jlinalg import (
     get_n_threads,
     set_n_threads,
 )
+from tests.fixture_paths import KINSHIP_DIR
 
 pytestmark = pytest.mark.tier0
 
@@ -471,8 +471,7 @@ def test_vs_mouse_hs1940_kinship() -> None:
       vendor path reaches, because it must also hold for the NumPy fallback
       on a matrix this ill-conditioned.
     """
-    fixtures_dir = Path(__file__).parent / "fixtures" / "kinship"
-    kinship_path = fixtures_dir / "mouse_hs1940.cXX.txt"
+    kinship_path = KINSHIP_DIR / "mouse_hs1940.cXX.txt"
     K = np.loadtxt(kinship_path)
     assert K.ndim == 2, f"Kinship matrix must be 2-D, got {K.ndim}-D"
     assert K.shape[0] == K.shape[1], f"Kinship matrix must be square, got {K.shape}"
@@ -510,8 +509,7 @@ def test_mouse_hs1940_eigendecomp_strict() -> None:
     fallback does not reliably, which is why this one is gated on vendor
     LAPACK rather than loosening the bound for everyone.
     """
-    fixtures_dir = Path(__file__).parent / "fixtures" / "kinship"
-    kinship_path = fixtures_dir / "mouse_hs1940.cXX.txt"
+    kinship_path = KINSHIP_DIR / "mouse_hs1940.cXX.txt"
     K = np.loadtxt(kinship_path)
     K_copy = K.copy()
 

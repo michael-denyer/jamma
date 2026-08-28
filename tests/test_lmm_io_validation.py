@@ -10,7 +10,6 @@ batch-stat functions.
 import math
 import subprocess
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -477,18 +476,19 @@ def test_batch_hwe_matches_streaming_hwe() -> None:
     through the same filter_snp_stats call. If batch silently ignored the
     threshold, its count would match the unfiltered run and this fails.
     """
-    from jamma.io import load_plink_binary
+    from jamma.io import load_plink_binary, read_fam_phenotypes
     from jamma.kinship.compute import compute_centered_kinship
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
-    from tests.conftest import load_phenotypes_from_fam, require_fixture
+    from tests.conftest import require_fixture
+    from tests.fixture_paths import LOCO
 
-    bed = Path("tests/fixtures/gemma_loco/test")
+    bed = LOCO.bfile
     require_fixture(
         bed.with_suffix(".bed"), bed.with_suffix(".bim"), bed.with_suffix(".fam")
     )
     plink = load_plink_binary(bed)
-    phen = load_phenotypes_from_fam(bed.with_suffix(".fam"))
+    phen = read_fam_phenotypes(bed.with_suffix(".fam"))
     genotypes = plink.genotypes.astype(np.float64)
     kinship = compute_centered_kinship(genotypes.copy())
     snp_info = [

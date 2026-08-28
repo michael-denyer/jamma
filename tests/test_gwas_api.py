@@ -10,16 +10,12 @@ import pytest
 
 from jamma.gwas import gwas
 from jamma.pipeline import PipelineConfig, PipelineResult
+from tests.fixture_paths import LOCO, MOUSE
 
-# Fixture paths for mouse_hs1940 dataset
-FIXTURES = Path(__file__).parent / "fixtures" / "mouse_hs1940"
-BFILE = FIXTURES / "mouse_hs1940"
-KINSHIP_FILE = FIXTURES / "mouse_hs1940_kinship.cXX.txt"
-COVARIATE_FILE = FIXTURES / "covariates.txt"
-
-# Fixture paths for gemma_loco dataset (3 chromosomes — required for LOCO tests)
-SYNTHETIC_DIR = Path(__file__).parent / "fixtures" / "gemma_loco"
-SYNTHETIC_BFILE = SYNTHETIC_DIR / "test"
+BFILE = MOUSE.bfile
+KINSHIP_FILE = MOUSE.kinship
+COVARIATE_FILE = MOUSE.covariates
+SYNTHETIC_BFILE = LOCO.bfile
 
 
 @pytest.mark.slow

@@ -2,8 +2,7 @@
 
 Tests cover:
 - Correctness vs NumPy reference (all sizes, special cases)
-- Boundary sizes: MR-1/MR/MR+1 for AVX2 (MR=6) and NEON (MR=8),
-  MC-1/MC/MC+1 for AVX2 (MC=72), KC boundaries (KC=256)
+- Boundary sizes (tests.builders.BOUNDARY_SIZES)
 - Transpose variants (NN, TN, NT, TT)
 - Thread safety (OMP_NUM_THREADS=1 vs 4 gives bitwise-identical results)
 - Throughput benchmark (skipped if C extension not present)
@@ -24,41 +23,9 @@ import numpy.testing as npt
 import pytest
 
 from jamma.jlinalg import HAS_C_EXTENSION, _dgemm_numpy, dgemm
+from tests.builders import BOUNDARY_SIZES
 
 pytestmark = pytest.mark.tier0
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-BOUNDARY_SIZES = [
-    1,
-    3,
-    5,
-    6,
-    7,  # MR-1/MR/MR+1 for AVX2 (MR=6)
-    8,
-    9,  # MR for NEON (MR=8), MR+1
-    11,
-    13,
-    71,
-    72,
-    73,  # MC-1/MC/MC+1 for AVX2 (MC=72)
-    127,
-    128,
-    129,  # KC/2 boundaries
-    255,
-    256,
-    257,  # KC-1/KC/KC+1 (KC=256)
-    500,
-    1000,
-]
-
-
-@pytest.fixture
-def boundary_sizes() -> list[int]:
-    """Sizes covering MR/NR/MC/KC +/- 1 for both AVX2 and NEON parameters."""
-    return BOUNDARY_SIZES
 
 
 def _reference_dgemm(
@@ -250,9 +217,8 @@ class TestDgemmZeroDimension:
 class TestDgemmBoundary:
     """Boundary size tests to catch packing buffer overruns.
 
-    BL3-08: M % MR != 0 is the most common first-implementation bug;
-    must test MR-1/MR/MR+1 for both AVX2 (MR=6) and NEON (MR=8),
-    as well as MC and KC boundaries.
+    A dimension that is not a multiple of the backend's block size is the
+    classic packing bug, so every size in the sweep runs square.
     """
 
     @pytest.mark.parametrize("size", BOUNDARY_SIZES)
@@ -278,7 +244,7 @@ class TestDgemmBoundary:
 
     @pytest.mark.parametrize("m", [5, 6, 7])
     def test_mr_boundary_avx2(self, m: int) -> None:
-        """M = MR-1/MR/MR+1 for AVX2 (MR=6), K=256, N=8."""
+        """M = 5, 6, 7 with K=256, N=8."""
         rng = np.random.default_rng(100 + m)
         A = rng.standard_normal((m, 256))
         B = rng.standard_normal((256, 8))
@@ -288,7 +254,7 @@ class TestDgemmBoundary:
 
     @pytest.mark.parametrize("m", [7, 8, 9])
     def test_mr_boundary_neon(self, m: int) -> None:
-        """M = MR-1/MR/MR+1 for NEON (MR=8), K=256, N=4."""
+        """M = 7, 8, 9 with K=256, N=4."""
         rng = np.random.default_rng(200 + m)
         A = rng.standard_normal((m, 256))
         B = rng.standard_normal((256, 4))
@@ -308,7 +274,7 @@ class TestDgemmBoundary:
 
     @pytest.mark.parametrize("m", [71, 72, 73])
     def test_mc_boundary(self, m: int) -> None:
-        """M = MC-1/MC/MC+1 for AVX2 (MC=72), K=256, N=8."""
+        """M = 71, 72, 73 with K=256, N=8."""
         rng = np.random.default_rng(400 + m)
         A = rng.standard_normal((m, 256))
         B = rng.standard_normal((256, 8))
@@ -318,7 +284,7 @@ class TestDgemmBoundary:
 
     @pytest.mark.parametrize("k", [255, 256, 257])
     def test_kc_boundary(self, k: int) -> None:
-        """K = KC-1/KC/KC+1 (KC=256), M=72, N=8."""
+        """K = 255, 256, 257 with M=72, N=8."""
         rng = np.random.default_rng(500 + k)
         A = rng.standard_normal((72, k))
         B = rng.standard_normal((k, 8))

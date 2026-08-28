@@ -32,6 +32,7 @@ from jamma.lmm.uab import (
     batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
 )
+from tests.builders import rotated_lmm_inputs
 from tests.fixture_paths import MOUSE
 
 
@@ -403,3 +404,438 @@ class TestDegenerateSplitParity:
             equal_nan=True,
             err_msg="LRT degenerate lambdas_mle: split vs batch mismatch",
         )
+
+
+# ---------------------------------------------------------------------------
+# Plan 53-03 Task 2: _compute_wald_numpy dispatch tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def compute_wald_data():
+    """Synthetic data for _compute_wald_numpy dispatch tests.
+
+    Returns:
+        (eigenvalues, Uab_batch, n_samples) with n_samples=80, n_snps=30.
+    """
+    n_samples = 80
+    d = rotated_lmm_inputs(n_samples, 30, seed=123)
+    eigenvalues, UtW, Uty, UtG = d.eigenvalues, d.UtW, d.Uty, d.UtG
+
+    from jamma.lmm.uab import batch_compute_uab_numpy
+
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
+    return eigenvalues, Uab_batch, n_samples
+
+
+@pytest.mark.tier0
+def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
+    """_compute_wald_numpy with n_cvt=1 (C ext disabled) calls split optimizer."""
+    from unittest.mock import patch
+
+    from jamma.lmm import compute_numpy as cn
+    from jamma.lmm.likelihood_numpy import (
+        golden_section_optimize_lambda_split_ncvt1_numpy,
+    )
+
+    eigenvalues, Uab_batch, n_samples = compute_wald_data
+
+    call_log = []
+    real_split_fn = golden_section_optimize_lambda_split_ncvt1_numpy
+
+    def spy_split(*args, **kwargs):
+        call_log.append("split")
+        return real_split_fn(*args, **kwargs)
+
+    split_generic_log = []
+    real_generic_fn = cn.golden_section_optimize_lambda_numpy
+
+    def spy_generic(*args, **kwargs):
+        split_generic_log.append("generic")
+        return real_generic_fn(*args, **kwargs)
+
+    # allow-patch: dispatch spy. Which optimiser _compute_wald_numpy selects
+    # for n_cvt is the contract; both spies forward to the real function.
+    with (
+        patch.object(cn, "_accel", None),
+        patch.object(cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split),
+        patch.object(cn, "golden_section_optimize_lambda_numpy", spy_generic),
+    ):
+        cn._compute_wald_numpy(1, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20)
+
+    assert len(call_log) == 1, (
+        f"Split optimizer called {len(call_log)} times for n_cvt=1, expected 1"
+    )
+    assert len(split_generic_log) == 0, (
+        "Generic optimizer should NOT be called for n_cvt=1 Python path"
+    )
+
+    # Also verify n_cvt=2 uses generic, not split
+    n_samples2 = 80
+    d2 = rotated_lmm_inputs(n_samples2, 10, n_cvt=2, seed=456)
+    eigenvalues2, UtW2, Uty2, UtG2 = d2.eigenvalues, d2.UtW, d2.Uty, d2.UtG
+    from jamma.lmm.uab import batch_compute_uab_numpy
+
+    Uab_batch2 = batch_compute_uab_numpy(2, UtW2, Uty2, UtG2.T)
+
+    call_log2 = []
+    generic_log2 = []
+
+    def spy_split2(*args, **kwargs):
+        call_log2.append("split")
+        return real_split_fn(*args, **kwargs)
+
+    def spy_generic2(*args, **kwargs):
+        generic_log2.append("generic")
+        return real_generic_fn(*args, **kwargs)
+
+    # allow-patch: dispatch spy, as above.
+    with (
+        patch.object(cn, "_accel", None),
+        patch.object(
+            cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split2
+        ),
+        patch.object(cn, "golden_section_optimize_lambda_numpy", spy_generic2),
+    ):
+        cn._compute_wald_numpy(
+            2, eigenvalues2, Uab_batch2, n_samples2, 1e-5, 1e5, 50, 20
+        )
+
+    assert len(call_log2) == 0, "Split should NOT be called for n_cvt=2"
+    assert len(generic_log2) == 1, "Generic should be called exactly once for n_cvt=2"
+
+
+@pytest.mark.tier0
+def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
+    """split path (n_cvt=1) in _compute_wald_numpy produces same results as generic."""
+    from unittest.mock import patch
+
+    from jamma.lmm import compute_numpy as cn
+    from jamma.lmm.uab import batch_compute_iab_numpy
+
+    eigenvalues, Uab_batch, n_samples = compute_wald_data
+    n_cvt = 1
+    Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
+
+    # Split path (n_cvt=1 Python branch)
+    with patch.object(cn, "_accel", None):
+        result_split = cn._compute_wald_numpy(
+            n_cvt, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
+        )
+
+    # Generic path: bypass n_cvt==1 branch by calling generic optimizer directly
+    import jamma.lmm.likelihood_numpy as ln
+    from jamma.lmm import stats
+
+    lambdas_gen, logls_gen, Pab_gen = ln.golden_section_optimize_lambda_numpy(
+        n_cvt,
+        eigenvalues,
+        Uab_batch,
+        Iab_batch,
+        l_min=1e-5,
+        l_max=1e5,
+        n_grid=50,
+        n_iter=20,
+    )
+    betas_gen, ses_gen, pwalds_gen = stats.batch_calc_wald_stats_from_pab_numpy(
+        n_cvt, Pab_gen, n_samples
+    )
+
+    np.testing.assert_allclose(
+        result_split["lambdas"],
+        lambdas_gen,
+        rtol=1e-10,
+        err_msg="lambdas: split path vs generic path",
+    )
+    np.testing.assert_allclose(
+        result_split["betas"],
+        betas_gen,
+        rtol=1e-12,
+        err_msg="betas: split path vs generic path",
+    )
+    np.testing.assert_allclose(
+        result_split["ses"],
+        ses_gen,
+        rtol=1e-12,
+        err_msg="ses: split path vs generic path",
+    )
+    np.testing.assert_allclose(
+        result_split["pwalds"],
+        pwalds_gen,
+        rtol=1e-12,
+        err_msg="pwalds: split path vs generic path",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Score/LRT C dispatch via general C path for n_cvt > 1 (Plan 70-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("n_cvt", [2, 3, 4])
+def test_vectorized_general_uab_parity(n_cvt):
+    """Vectorized _batch_compute_uab_general_numpy matches reference per-SNP loop."""
+    from jamma.lmm.likelihood import build_index_table
+    from jamma.lmm.uab import _batch_compute_uab_general_numpy
+
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 60, 15
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # Reference: per-SNP loop (the old implementation)
+    table = build_index_table(n_cvt)
+    n_index = table.n_index
+    Uab_ref = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
+    vectors_base = np.column_stack([UtW, np.zeros(n_samples), Uty])
+    for snp_idx in range(n_snps):
+        vectors = vectors_base.copy()
+        vectors[:, n_cvt] = UtG[:, snp_idx]
+        for a_col, b_col, idx in table.uab_pairs:
+            Uab_ref[snp_idx, :, idx] = vectors[:, a_col] * vectors[:, b_col]
+
+    # Vectorized implementation
+    Uab_vec = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
+
+    np.testing.assert_allclose(
+        Uab_vec,
+        Uab_ref,
+        rtol=1e-14,
+        atol=1e-14,
+        err_msg=f"Vectorized general Uab (n_cvt={n_cvt}) does not match per-SNP loop",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("n_cvt", [2, 3, 4])
+def test_direct_soa_varying_general_parity(n_cvt):
+    """_batch_compute_uab_varying_general_numpy matches extract-from-full-Uab."""
+    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.uab import (
+        _batch_compute_uab_general_numpy,
+        _batch_compute_uab_varying_general_numpy,
+    )
+
+    rng = np.random.default_rng(101)
+    n_samples, n_snps = 60, 15
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # Reference: compute full Uab then extract varying columns to SoA
+    _inv_indices, var_indices = classify_uab_columns(n_cvt)
+    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
+    ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
+
+    # Direct SoA varying — utg_t is (n_snps, n_samples)
+    out = np.empty((n_snps, len(var_indices), n_samples), dtype=np.float64)
+    direct_soa = _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, UtG.T, out)
+
+    np.testing.assert_allclose(
+        direct_soa,
+        ref_soa,
+        rtol=1e-14,
+        atol=1e-14,
+        err_msg=f"Direct SoA varying (n_cvt={n_cvt}) does not match extract-from-full",
+    )
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("n_cvt", [2, 3, 4])
+def test_invariant_columns_constant_across_snps(n_cvt):
+    """Uab columns classified as invariant are actually constant across SNPs."""
+    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.uab import _batch_compute_uab_general_numpy
+
+    rng = np.random.default_rng(123)
+    n_samples, n_snps = 40, 20
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    inv_indices, _var_indices = classify_uab_columns(n_cvt)
+    Uab = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
+
+    for col_idx in inv_indices:
+        first_snp = Uab[0, :, col_idx]
+        for snp_i in range(1, n_snps):
+            np.testing.assert_array_equal(
+                Uab[snp_i, :, col_idx],
+                first_snp,
+                err_msg=(
+                    f"Invariant column {col_idx} differs at SNP {snp_i} (n_cvt={n_cvt})"
+                ),
+            )
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("n_cvt", [2, 3, 4])
+def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
+    """batch_compute_uab_varying_soa_numpy general path uses direct computation."""
+    rng = np.random.default_rng(55)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+
+    # The function should produce identical results regardless of path
+    var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
+
+    # Reference: full Uab -> extract varying -> SoA
+    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.uab import _batch_compute_uab_general_numpy
+
+    _inv, var_indices = classify_uab_columns(n_cvt)
+    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
+    ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
+
+    np.testing.assert_allclose(
+        var_soa,
+        ref_soa,
+        rtol=1e-14,
+        atol=1e-14,
+        err_msg=f"batch_compute_uab_varying_soa_numpy general (n_cvt={n_cvt}) mismatch",
+    )
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_numpy_rejects_wrong_layout():
+    """batch_compute_uab_numpy raises ValueError when given (n_samples, n_snps)."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))  # wrong layout for this fn
+
+    with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
+        batch_compute_uab_numpy(1, UtW, Uty, UtG)
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape():
+    """batch_compute_uab_varying_soa_numpy raises ValueError for wrong out= shape."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+    wrong_out = np.empty((n_snps + 1, 3, n_samples), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="out shape"):
+        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, utg_t, out=wrong_out)
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_varying_soa_ncvt1_rejects_wrong_out_dtype_and_layout():
+    """The n_cvt=1 branch validates out= dtype and contiguity like the general one."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+
+    with pytest.raises(ValueError, match="out dtype"):
+        batch_compute_uab_varying_soa_numpy(
+            1, UtW, Uty, utg_t, out=np.empty((n_snps, 3, n_samples), dtype=np.float32)
+        )
+    fortran_out = np.asfortranarray(np.empty((n_snps, 3, n_samples), dtype=np.float64))
+    with pytest.raises(ValueError, match="C-contiguous"):
+        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, utg_t, out=fortran_out)
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape_general_ncvt():
+    """Raises ValueError for wrong out= shape with n_cvt > 1."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps, n_cvt = 50, 10, 2
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+    # n_cvt=2 has n_var=4, so 6 is wrong
+    out = np.empty((n_snps, 6, n_samples), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="out shape"):
+        batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
+
+
+@pytest.mark.tier0
+def test_batch_compute_uab_varying_soa_rejects_wrong_layout():
+    """batch_compute_uab_varying_soa_numpy raises ValueError when given old layout."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps = 50, 10
+    UtW = rng.standard_normal((n_samples, 1))
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))  # wrong layout for this fn
+
+    with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
+        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+
+
+# --------------------------------------------------------------------------- #
+# out= buffer support for general n_cvt (n_cvt > 1)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.tier0
+def test_varying_soa_out_buffer_general_ncvt2():
+    """out= buffer works for n_cvt=2 and result is the same buffer object."""
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    rng = np.random.default_rng(42)
+    n_samples, n_snps, n_cvt = 50, 10, 2
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+
+    _, var_cols = classify_uab_columns(n_cvt)
+    n_var = len(var_cols)
+
+    # Compute without out= for reference
+    expected = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
+
+    # Compute with out= buffer
+    out = np.empty((n_snps, n_var, n_samples), dtype=np.float64)
+    result = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
+
+    assert result is out, "result should be the same buffer object"
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.tier0
+def test_varying_soa_out_buffer_general_ncvt4():
+    """out= buffer works for n_cvt=4 and result is the same buffer object."""
+    from jamma.lmm.likelihood import classify_uab_columns
+
+    rng = np.random.default_rng(77)
+    n_samples, n_snps, n_cvt = 40, 8, 4
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+
+    _, var_cols = classify_uab_columns(n_cvt)
+    n_var = len(var_cols)
+
+    expected = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
+
+    out = np.empty((n_snps, n_var, n_samples), dtype=np.float64)
+    result = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
+
+    assert result is out, "result should be the same buffer object"
+    np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.tier0
+def test_varying_soa_out_buffer_general_shape_mismatch():
+    """Wrong-shape out= raises ValueError with 'out shape' in message."""
+    rng = np.random.default_rng(99)
+    n_samples, n_snps, n_cvt = 50, 10, 2
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    utg_t = rng.standard_normal((n_snps, n_samples))
+
+    wrong_out = np.empty((n_snps, 99, n_samples), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="out shape"):
+        batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=wrong_out)

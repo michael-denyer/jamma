@@ -675,3 +675,47 @@ def synthetic_covariate_data_ncvt4() -> dict:
     eigenvalues, UtW, Uty, UtG, Uab_batch, n_samples, n_snps, n_cvt.
     """
     return _build_synthetic_covariate_data(n_cvt=4, seed=99)
+
+
+def make_runner_synthetic_data(
+    n_samples: int = 100, n_snps: int = 50, seed: int = 42
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
+    """Create synthetic data for runner-level tests."""
+    rng = np.random.default_rng(seed)
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = np.corrcoef(genotypes) + np.eye(n_samples) * 0.1
+    kinship = (kinship + kinship.T) / 2
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+        for i in range(n_snps)
+    ]
+    return genotypes, phenotypes, kinship, snp_info
+
+
+@pytest.fixture
+def synthetic_data_with_covariates(synthetic_data):
+    """Load gemma_synthetic data plus covariates from gemma_covariate fixture.
+
+    The covariates.txt file already includes the intercept column (first column
+    is all 1.0), matching GEMMA's internal representation when -c is used.
+    """
+    from tests.fixture_paths import SYNTHETIC
+
+    plink, kinship, phenotypes, snp_info = synthetic_data
+    covariates = np.loadtxt(SYNTHETIC.covariates)
+    return plink, kinship, phenotypes, snp_info, covariates
+
+
+@pytest.fixture
+def synthetic_data():
+    """Load gemma_synthetic PLINK data, kinship, phenotypes, and snp_info."""
+    from jamma.io import load_plink_binary, read_fam_phenotypes
+    from jamma.kinship.io import read_kinship_matrix
+    from tests.fixture_paths import SYNTHETIC, build_snp_info
+
+    plink = load_plink_binary(SYNTHETIC.bfile)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship)
+    phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
+    snp_info = build_snp_info(plink)
+    return plink, kinship, phenotypes, snp_info

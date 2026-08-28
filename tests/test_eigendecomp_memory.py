@@ -1,7 +1,5 @@
 """Tests for eigendecomposition memory pre-flight check."""
 
-from unittest.mock import patch
-
 import numpy as np
 import pytest
 
@@ -14,6 +12,7 @@ from jamma.core.eigen_plan import (
     plan_eigen_driver,
 )
 from jamma.lmm.eigen import eigendecompose_kinship
+from tests.fakes.memory import use_fake_psutil
 
 
 @pytest.mark.tier0
@@ -258,73 +257,51 @@ class TestEigendecompMemoryEstimate:
 class TestEigendecompPreflightCheck:
     """Tests for pre-flight memory check in eigendecompose_kinship."""
 
-    def test_raises_memory_error_when_insufficient(self):
+    def test_raises_memory_error_when_insufficient(self, monkeypatch):
         """Should raise MemoryError before LAPACK call when memory insufficient."""
         # Create small matrix (won't actually be decomposed if check fails)
         K = np.eye(100, dtype=np.float64)
 
         # 100x100 matrix needs ~0.0002GB, mock available memory well below that
         # With 10% safety margin, need < required_gb * 1.1 = 0.0002 * 1.1 = 0.00022GB
-        with (
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_process,
-        ):
-            mock_vm.return_value.available = 100  # 100 bytes (way too small)
-            mock_vm.return_value.total = 100
-            mock_process.return_value.memory_info.return_value.rss = 10
-            mock_process.return_value.memory_info.return_value.vms = 20
+        use_fake_psutil(monkeypatch, available=100, total=100, rss=10, vms=20)
 
-            with pytest.raises(MemoryError) as exc_info:
-                eigendecompose_kinship(K)
+        with pytest.raises(MemoryError) as exc_info:
+            eigendecompose_kinship(K)
 
-            # Verify error message is informative
-            error_msg = str(exc_info.value)
-            assert "Insufficient memory" in error_msg
-            assert "100" in error_msg or "100x100" in error_msg
+        # Verify error message is informative
+        error_msg = str(exc_info.value)
+        assert "Insufficient memory" in error_msg
+        assert "100" in error_msg or "100x100" in error_msg
 
-    def test_succeeds_when_memory_sufficient(self):
+    def test_succeeds_when_memory_sufficient(self, monkeypatch):
         """Should proceed when sufficient memory available."""
         # Create small matrix
         K = np.eye(100, dtype=np.float64)
 
-        # Mock psutil to report ample memory (1TB)
-        # Need to mock both virtual_memory and Process for log_memory_snapshot
-        with (
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_process,
-        ):
-            mock_vm.return_value.available = 1e12  # 1TB
-            mock_vm.return_value.total = 1e12
-            mock_process.return_value.memory_info.return_value.rss = 1e9  # 1GB
-            mock_process.return_value.memory_info.return_value.vms = 2e9  # 2GB
+        # Pin psutil to report ample memory (1TB)
+        use_fake_psutil(monkeypatch, available=1e12, total=1e12, rss=1e9, vms=2e9)
 
-            eigenvalues, eigenvectors = eigendecompose_kinship(K)
+        eigenvalues, eigenvectors = eigendecompose_kinship(K)
 
-            assert eigenvalues.shape == (100,)
-            assert eigenvectors.shape == (100, 100)
+        assert eigenvalues.shape == (100,)
+        assert eigenvectors.shape == (100, 100)
 
-    def test_error_message_includes_required_and_available(self):
+    def test_error_message_includes_required_and_available(self, monkeypatch):
         """Error message should include required GB, available GB."""
         K = np.eye(1000, dtype=np.float64)
 
-        with (
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_process,
-        ):
-            mock_vm.return_value.available = 1e6  # 1MB (way too small)
-            mock_vm.return_value.total = 1e6
-            mock_process.return_value.memory_info.return_value.rss = 1e5
-            mock_process.return_value.memory_info.return_value.vms = 2e5
+        use_fake_psutil(monkeypatch, available=1e6, total=1e6, rss=1e5, vms=2e5)
 
-            with pytest.raises(MemoryError) as exc_info:
-                eigendecompose_kinship(K)
+        with pytest.raises(MemoryError) as exc_info:
+            eigendecompose_kinship(K)
 
-            error_msg = str(exc_info.value)
-            assert "GB" in error_msg  # Should mention GB
-            has_need = "Need" in error_msg or "required" in error_msg.lower()
-            assert has_need
+        error_msg = str(exc_info.value)
+        assert "GB" in error_msg  # Should mention GB
+        has_need = "Need" in error_msg or "required" in error_msg.lower()
+        assert has_need
 
-    def test_jlinalg_eigh_returns_correct_results(self):
+    def test_jlinalg_eigh_returns_correct_results(self, monkeypatch):
         """jlinalg.eigh returns correct eigendecomp via eigendecompose_kinship."""
         n = 50
         rng = np.random.default_rng(42)
@@ -332,16 +309,9 @@ class TestEigendecompPreflightCheck:
         K = (A @ A.T) / n
         K_ref = K.copy()
 
-        with (
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_proc,
-        ):
-            mock_vm.return_value.available = 1e12
-            mock_vm.return_value.total = 1e12
-            mock_proc.return_value.memory_info.return_value.rss = 1e9
-            mock_proc.return_value.memory_info.return_value.vms = 2e9
+        use_fake_psutil(monkeypatch, available=1e12, total=1e12, rss=1e9, vms=2e9)
 
-            eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
+        eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
 
         K_reconstructed = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
         np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)
@@ -357,7 +327,7 @@ class TestSymmetryThreshold:
 
         assert _SYMMETRY_ATOL == 1e-11
 
-    def test_passes_below_threshold(self):
+    def test_passes_below_threshold(self, monkeypatch):
         """Matrix with max asymmetry 5e-12 passes without warning."""
         n = 50
         rng = np.random.default_rng(42)
@@ -366,25 +336,18 @@ class TestSymmetryThreshold:
         # Inject small asymmetry: 5e-12 < 1e-11 threshold
         K[0, 1] += 5e-12
 
-        with (
-            patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-            patch("jamma.core.memory.psutil.Process") as mock_proc,
-        ):
-            mock_vm.return_value.available = 1e12
-            mock_vm.return_value.total = 1e12
-            mock_proc.return_value.memory_info.return_value.rss = 1e9
-            mock_proc.return_value.memory_info.return_value.vms = 2e9
+        use_fake_psutil(monkeypatch, available=1e12, total=1e12, rss=1e9, vms=2e9)
 
-            import warnings
+        import warnings
 
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                eigendecompose_kinship(K.copy(), check_memory=False)
-            # No symmetry warning (negative eigenvalue warnings are fine)
-            sym_warnings = [x for x in w if "not symmetric" in str(x.message)]
-            assert len(sym_warnings) == 0
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            eigendecompose_kinship(K.copy(), check_memory=False)
+        # No symmetry warning (negative eigenvalue warnings are fine)
+        sym_warnings = [x for x in w if "not symmetric" in str(x.message)]
+        assert len(sym_warnings) == 0
 
-    def test_warns_above_threshold(self):
+    def test_warns_above_threshold(self, monkeypatch):
         """Matrix with max asymmetry 5e-11 triggers symmetry warning."""
         from loguru import logger
 
@@ -403,16 +366,9 @@ class TestSymmetryThreshold:
             format="{message}",
         )
         try:
-            with (
-                patch("jamma.core.memory.psutil.virtual_memory") as mock_vm,
-                patch("jamma.core.memory.psutil.Process") as mock_proc,
-            ):
-                mock_vm.return_value.available = 1e12
-                mock_vm.return_value.total = 1e12
-                mock_proc.return_value.memory_info.return_value.rss = 1e9
-                mock_proc.return_value.memory_info.return_value.vms = 2e9
+            use_fake_psutil(monkeypatch, available=1e12, total=1e12, rss=1e9, vms=2e9)
 
-                eigendecompose_kinship(K.copy(), check_memory=False)
+            eigendecompose_kinship(K.copy(), check_memory=False)
         finally:
             logger.remove(handler_id)
 

@@ -17,6 +17,38 @@ import numpy as np
 
 from jamma.lmm.likelihood import compute_Uab
 
+# Matrix sizes the jlinalg BLAS tests sweep. The values were chosen around
+# the MR/MC/KC blocking of the own-BLAS kernel deleted at 663a22b; they are
+# kept because a spread of powers of two with both neighbours and a few
+# primes is what vendor BLAS blocking still trips on. The eigh list stops at
+# 200 because eigendecomposition is O(N^3).
+BOUNDARY_SIZES = [
+    1,
+    3,
+    5,
+    6,
+    7,
+    8,
+    9,
+    11,
+    13,
+    63,
+    64,
+    65,
+    71,
+    72,
+    73,
+    127,
+    128,
+    129,
+    255,
+    256,
+    257,
+    500,
+    1000,
+]
+EIGH_BOUNDARY_SIZES = sorted({*(s for s in BOUNDARY_SIZES if s < 200), 2, 31, 100, 200})
+
 
 @dataclass(frozen=True)
 class LmmInputs:

@@ -15,6 +15,8 @@ from jamma.core import memory
 from jamma.lmm.chunk_sizing import _MAX_CHUNK, compute_chunk_size_numpy
 from jamma.lmm.dispatch import DispatchPath
 
+pytestmark = pytest.mark.tier0
+
 # ---------------------------------------------------------------------------
 # Chunk size computation
 # ---------------------------------------------------------------------------
@@ -250,7 +252,6 @@ def test_chunk_size_bound_by_ram_budget_below_cap(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 class TestStreamingMemoryPipelineBuffers:
     """Tests for pipeline_buffers parameter in streaming memory estimators."""
 

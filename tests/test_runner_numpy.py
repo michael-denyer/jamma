@@ -63,6 +63,7 @@ def mouse_hs1940_data_with_covariates(mouse_hs1940_data):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
     """Type check: NumPy runner returns LmmRunResult with AssocResult items."""
     from jamma.lmm.schema import LmmConfig, LmmRunResult
@@ -91,6 +92,7 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
     assert run_result.pve_se > 0, f"PVE SE should be positive, got {run_result.pve_se}"
 
 
+@pytest.mark.tier0
 def test_numpy_runner_empty_after_filter(synthetic_data):
     """Edge case: returns LmmRunResult with empty associations."""
     plink, kinship, phenotypes, snp_info = synthetic_data

@@ -13,6 +13,8 @@ from jamma.lmm.likelihood_numpy import (
 )
 from jamma.lmm.schema import LmmConfig
 
+pytestmark = pytest.mark.tier0
+
 _score_fused_available = compute_numpy._accel is not None
 
 _lrt_fused_available = compute_numpy._accel is not None
@@ -52,7 +54,6 @@ def _fused_score_lrt_null_model(split_wald_data):
     return Hi_eval_null, logl_H0
 
 
-@pytest.mark.tier0
 def test_abi_version_16():
     """ABI_VERSION is 16 after the general workspace stores its lambda bracket."""
     if compute_numpy._accel is None:

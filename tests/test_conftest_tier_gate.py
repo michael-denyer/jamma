@@ -1,10 +1,19 @@
 """Self-tests for the tier-marker enforcement gate in conftest.py.
 
-The gate is a meta-rule: every test file in this suite must declare a tier
+The gate is a meta-rule: every test *item* in this suite must declare a tier
 marker. If the gate silently fails-open (e.g. a future refactor inverts the
 predicate, swaps the marker check for ``True``, or wraps the raise in
 ``contextlib.suppress``), unmarked tests would silently re-enter the default
 CI run.
+
+The gate is per-item, not per-file: it unions the module ``pytestmark``, the
+enclosing class's decorators, and the function's own decorators for every
+``test_*`` item, and reports the function when that union carries no tier
+marker. A file-granular predecessor of this gate passed a file the moment
+any one test in it carried a marker, so a sibling test with none went
+unnoticed; ``test_one_marked_one_unmarked_function_reports_only_the_unmarked_one``
+and ``test_gate_fires_under_xdist`` below both pin that a mixed file reports
+exactly the gap, not a false pass.
 
 The gate is implemented as **source-parsing** in ``pytest_configure``
 (not ``pytest_collection_modifyitems``) because xdist forks workers AFTER
@@ -28,9 +37,9 @@ import pytest
 
 from tests.conftest import (
     _enforce_tier_markers,
-    _file_declares_tier_marker,
+    _file_untiered_functions,
     _module_level_marker_names,
-    _per_test_marker_names,
+    _untiered_test_functions,
 )
 
 pytestmark = pytest.mark.tier0
@@ -80,50 +89,108 @@ class TestModuleLevelMarkerNames:
         assert _module_level_marker_names(tree) == set()
 
 
-class TestPerTestMarkerNames:
-    def test_function_decorator(self) -> None:
+class TestUntieredTestFunctions:
+    """Per-item marker union: module ∪ class ∪ function, reported by name."""
+
+    def test_module_pytestmark_covers_every_function(self) -> None:
+        tree = _parse(
+            """
+            import pytest
+            pytestmark = pytest.mark.tier0
+
+            def test_a(): pass
+            def test_b(): pass
+            """
+        )
+        assert _untiered_test_functions(tree) == []
+
+    def test_per_function_marker_passes(self) -> None:
         tree = _parse(
             """
             import pytest
 
             @pytest.mark.tier1
-            def test_x():
-                pass
+            def test_a(): pass
             """
         )
-        assert "tier1" in _per_test_marker_names(tree)
+        assert _untiered_test_functions(tree) == []
 
-    def test_class_decorator(self) -> None:
+    def test_no_markers_reports_the_function(self) -> None:
+        tree = _parse("def test_a(): pass\n")
+        assert _untiered_test_functions(tree) == ["test_a"]
+
+    def test_one_marked_one_unmarked_function_reports_only_the_unmarked_one(
+        self,
+    ) -> None:
+        """A module with mixed per-function coverage: only the gap is named.
+
+        This is exactly the case the old file-granular gate could not see:
+        the file *has* a tier marker (on ``test_a``), so it passed, while
+        ``test_b`` ran untiered.
+        """
         tree = _parse(
             """
             import pytest
 
-            @pytest.mark.benchmark
+            @pytest.mark.tier0
+            def test_a(): pass
+
+            def test_b(): pass
+            """
+        )
+        assert _untiered_test_functions(tree) == ["test_b"]
+
+    def test_class_decorator_covers_its_methods(self) -> None:
+        tree = _parse(
+            """
+            import pytest
+
+            @pytest.mark.tier0
             class TestY:
                 def test_a(self): pass
+                def test_b(self): pass
             """
         )
-        assert "benchmark" in _per_test_marker_names(tree)
+        assert _untiered_test_functions(tree) == []
 
-    def test_call_form_decorator(self) -> None:
-        """``@pytest.mark.skipif(...)`` decorator with args."""
+    def test_one_tiered_class_one_untiered_class_reports_only_the_gap(self) -> None:
         tree = _parse(
             """
             import pytest
 
-            @pytest.mark.skipif(True, reason="r")
-            def test_x():
-                pass
+            @pytest.mark.tier0
+            class TestMarked:
+                def test_a(self): pass
+
+            class TestUnmarked:
+                def test_b(self): pass
             """
         )
-        assert "skipif" in _per_test_marker_names(tree)
+        assert _untiered_test_functions(tree) == ["TestUnmarked.test_b"]
 
-    def test_no_decorators(self) -> None:
-        tree = _parse("def test_x(): pass\n")
-        assert _per_test_marker_names(tree) == set()
+    def test_unrelated_marker_does_not_satisfy_the_gate(self) -> None:
+        """``custom`` is not in the required-tier set."""
+        tree = _parse(
+            """
+            import pytest
+
+            @pytest.mark.custom
+            def test_a(): pass
+            """
+        )
+        assert _untiered_test_functions(tree) == ["test_a"]
+
+    def test_non_test_functions_are_ignored(self) -> None:
+        tree = _parse(
+            """
+            def helper(): pass
+            def test_a(): pass
+            """
+        )
+        assert _untiered_test_functions(tree) == ["test_a"]
 
 
-class TestFileDeclaresTierMarker:
+class TestFileUntieredFunctions:
     def _write(self, tmp_path, src: str):
         path = tmp_path / "test_target.py"
         path.write_text(textwrap.dedent(src))
@@ -138,7 +205,7 @@ class TestFileDeclaresTierMarker:
             def test_a(): pass
             """,
         )
-        assert _file_declares_tier_marker(path)
+        assert _file_untiered_functions(path) == []
 
     def test_per_test_marker_passes(self, tmp_path) -> None:
         path = self._write(
@@ -150,7 +217,7 @@ class TestFileDeclaresTierMarker:
             def test_a(): pass
             """,
         )
-        assert _file_declares_tier_marker(path)
+        assert _file_untiered_functions(path) == []
 
     def test_no_markers_fails(self, tmp_path) -> None:
         path = self._write(
@@ -159,7 +226,23 @@ class TestFileDeclaresTierMarker:
             def test_a(): pass
             """,
         )
-        assert not _file_declares_tier_marker(path)
+        assert _file_untiered_functions(path) == ["test_a"]
+
+    def test_one_marked_one_unmarked_function_fails_naming_the_function(
+        self, tmp_path
+    ) -> None:
+        path = self._write(
+            tmp_path,
+            """
+            import pytest
+
+            @pytest.mark.tier0
+            def test_a(): pass
+
+            def test_b(): pass
+            """,
+        )
+        assert _file_untiered_functions(path) == ["test_b"]
 
     def test_unrelated_marker_fails(self, tmp_path) -> None:
         """``custom`` is not in the required-tier set."""
@@ -172,13 +255,13 @@ class TestFileDeclaresTierMarker:
             def test_a(): pass
             """,
         )
-        assert not _file_declares_tier_marker(path)
+        assert _file_untiered_functions(path) == ["test_a"]
 
     def test_syntax_error_treated_as_missing(self, tmp_path) -> None:
         """Unparsable source surfaces via the gate, not a swallowed exception."""
         path = tmp_path / "test_broken.py"
         path.write_text("def test_a(:\n    pass\n")
-        assert not _file_declares_tier_marker(path)
+        assert _file_untiered_functions(path) == ["<unparsable file>"]
 
 
 class TestEnforceTierMarkersInProcess:
@@ -295,4 +378,40 @@ class TestGateUnderXdist:
         assert result.ret == 0, (
             f"Gate should pass on marked file. ret={result.ret}\n"
             f"stdout={result.outlines!r}\nstderr={result.errlines!r}"
+        )
+
+    def test_untiered_function_in_tiered_module_fails_naming_the_function(
+        self, pytester: pytest.Pytester
+    ) -> None:
+        """A module `pytestmark` does not paper over one function with none.
+
+        Regression for the file-granular predecessor: it passed the moment
+        the file had *a* marker anywhere, so a lone ``@pytest.mark.tier0``
+        decorator on one function made the whole file (including untiered
+        siblings) look fully covered. The per-item gate must instead name
+        the specific function that carries no marker.
+        """
+        pytester.makeini(self._INI)
+        pytester.makeconftest(self._GATE_CONFTEST)
+        pytester.makepyfile(
+            test_mixed="""
+            import pytest
+
+            @pytest.mark.tier0
+            def test_covered(): pass
+
+            def test_gap(): pass
+            """,
+        )
+        result = pytester.runpytest_subprocess("-n", "2")
+        assert result.ret != 0, (
+            "Gate should fail: test_gap has no tier marker even though "
+            "test_covered in the same file does."
+        )
+        combined = "\n".join([*result.errlines, *result.outlines])
+        assert "test_mixed.py" in combined
+        assert "test_gap" in combined
+        assert "test_covered" not in combined.replace("test_covered.py", ""), (
+            "Only the untiered function should be named, not its "
+            "correctly-marked sibling."
         )

@@ -814,6 +814,7 @@ class TestStreamingPipeline:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="Fused Score C not available")
 class TestStreamingFusedScoreDispatch:
     """Streaming runner dispatches fused Score path for mode 3."""
@@ -871,6 +872,7 @@ class TestStreamingFusedScoreDispatch:
                 )
 
 
+@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="Fused LRT C not available")
 class TestStreamingFusedLrtDispatch:
     """Streaming runner dispatches fused LRT path for mode 2."""

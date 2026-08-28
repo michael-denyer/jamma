@@ -20,10 +20,11 @@ pytestmark = pytest.mark.tier0
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOWS_DIR = _REPO_ROOT / ".github" / "workflows"
 
-# fingerprint.yml rebuilds from nothing on both the PR head and the merge
-# base within one job, so it cannot route through one setup-jamma call
-# and is the one file allowed a bare `uv sync`.
-_ALLOWED_BARE_UV_SYNC = frozenset({"fingerprint.yml"})
+# fingerprint.yml and kinship-digest.yml each rebuild from nothing on both
+# the PR head and the merge base within one job, checking out the base
+# mid-job, so neither can route through one setup-jamma call. They are the
+# only files allowed a bare `uv sync`, and it must pass --locked.
+_ALLOWED_BARE_UV_SYNC = frozenset({"fingerprint.yml", "kinship-digest.yml"})
 
 
 def _iter_run_lines(step: dict) -> list[str]:
@@ -58,12 +59,14 @@ def test_no_job_step_runs_uv_sync_outside_the_composite_action(workflow_paths):
                         violations.append(f"{path.name}:{job_name}: {line.strip()}")
     assert not violations, (
         "uv sync must run only inside .github/actions/setup-jamma, or in "
-        "fingerprint.yml's documented per-side rebuild:\n" + "\n".join(violations)
+        "a documented per-side rebuild (fingerprint.yml, kinship-digest.yml):\n"
+        + "\n".join(violations)
     )
 
 
-def test_fingerprint_bare_uv_sync_is_locked(workflow_paths):
-    path = _WORKFLOWS_DIR / "fingerprint.yml"
+@pytest.mark.parametrize("name", sorted(_ALLOWED_BARE_UV_SYNC))
+def test_allowed_bare_uv_sync_is_locked(name):
+    path = _WORKFLOWS_DIR / name
     workflow = _load_workflow(path)
     sync_lines = [
         line
@@ -72,13 +75,9 @@ def test_fingerprint_bare_uv_sync_is_locked(workflow_paths):
         for line in _iter_run_lines(step)
         if "uv sync" in line
     ]
-    assert sync_lines, (
-        "fingerprint.yml no longer runs uv sync — update the exception list"
-    )
+    assert sync_lines, f"{name} no longer runs uv sync — update the exception list"
     for line in sync_lines:
-        assert "--locked" in line, (
-            f"fingerprint.yml: uv sync not locked: {line.strip()}"
-        )
+        assert "--locked" in line, f"{name}: uv sync not locked: {line.strip()}"
 
 
 def test_setup_jamma_action_exists():

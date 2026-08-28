@@ -58,7 +58,7 @@ jobs:
       - name: Digest the head
         run: |
           set -euo pipefail
-          uv sync
+          uv sync --locked
           uv run python -m jamma.lmm._compile_accel
           uv run python -m jamma.jlinalg._compile_jlinalg
           uv run python scripts/kinship_digest.py --out "${RUNNER_TEMP}/head.json"
@@ -70,7 +70,7 @@ jobs:
           set -euo pipefail
           git checkout --detach "${BASE_SHA}"
           install -m 755 "${RUNNER_TEMP}/kinship_digest.py" scripts/kinship_digest.py
-          uv sync
+          uv sync --locked
           uv run python -m jamma.lmm._compile_accel
           uv run python -m jamma.jlinalg._compile_jlinalg
           uv run python scripts/kinship_digest.py --out "${RUNNER_TEMP}/base.json"

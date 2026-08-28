@@ -107,12 +107,16 @@ def test_artifact_upload_runs_on_failure(workflow):
 
 
 def test_actions_pinned_to_sha(workflow):
-    """All ``uses:`` lines must be 40-char SHA, not @vN tag — CLAUDE.md."""
+    """All ``uses:`` lines must be 40-char SHA, not @vN tag — CLAUDE.md.
+
+    A local composite action (``./.github/actions/...``) is exempt: it has
+    no upstream ref to pin, it is this repo's own commit.
+    """
     sha40 = re.compile(r"@[0-9a-f]{40}\b")
     for job_name, job in workflow["jobs"].items():
         for step in job["steps"]:
             uses = step.get("uses")
-            if uses:
+            if uses and not uses.startswith("./"):
                 assert sha40.search(uses), f"{job_name}: action not SHA-pinned: {uses}"
 
 

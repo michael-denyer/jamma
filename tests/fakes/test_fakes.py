@@ -14,6 +14,8 @@ signature check fails loudly in that case.
 
 from __future__ import annotations
 
+import ast
+import dataclasses
 import inspect
 from collections.abc import Callable
 from pathlib import Path
@@ -21,10 +23,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import jamma.jlinalg
+from jamma.lmm import eigen
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
 from tests.fakes import (
     FakeAssocWriter,
+    FakeJlinalg,
     FakePipelineRunner,
     FakePipelineRunnerFactory,
     FakeProgressBar,
@@ -226,3 +231,48 @@ class TestFakeProductionDrift:
             f"The fake must accept every real __init__ parameter "
             f"(extra trailing test-seam params like 'result' are fine)."
         )
+
+
+class TestFakeJlinalg:
+    def test_eigh_computes_real_decomposition_by_default(self) -> None:
+        K = np.diag([1.0, 2.0, 3.0])
+        w, v = FakeJlinalg().eigh(K)
+        np.testing.assert_allclose(w, [1.0, 2.0, 3.0])
+        np.testing.assert_allclose(v @ np.diag(w) @ v.T, K)
+
+    def test_eigh_raises_the_configured_error(self) -> None:
+        with pytest.raises(MemoryError, match="boom"):
+            FakeJlinalg(eigh_error=MemoryError("boom")).eigh(np.eye(2))
+
+    def test_eigh_returns_the_configured_result(self) -> None:
+        result = (np.ones(2), np.eye(2))
+        assert FakeJlinalg(eigh_result=result).eigh(np.eye(2)) is result
+
+    def test_undeclared_attribute_raises(self) -> None:
+        with pytest.raises(AttributeError):
+            _ = FakeJlinalg().dsyrk  # type: ignore[attr-defined]
+
+    def test_declares_only_names_the_real_module_has(self) -> None:
+        declared = {f.name for f in dataclasses.fields(FakeJlinalg)} | {"eigh"}
+        declared -= {"eigh_result", "eigh_error"}
+        missing = declared - set(dir(jamma.jlinalg))
+        assert not missing, f"FakeJlinalg declares names jamma.jlinalg lacks: {missing}"
+
+    def test_declares_every_name_eigen_reads(self) -> None:
+        """A new ``jlinalg.<name>`` read in eigen.py must be added to the fake."""
+        tree = ast.parse(Path(eigen.__file__).read_text())
+        read = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "jlinalg"
+        }
+        declared = {f.name for f in dataclasses.fields(FakeJlinalg)} | {"eigh"}
+        missing = read - declared
+        assert not missing, f"eigen.py reads jlinalg names the fake lacks: {missing}"
+
+    def test_eigh_signature_matches_real(self) -> None:
+        real = TestFakeProductionDrift._param_names(jamma.jlinalg.eigh)
+        fake = TestFakeProductionDrift._param_names(FakeJlinalg.eigh)
+        assert fake == real, f"FakeJlinalg.eigh drift:\n  real: {real}\n  fake: {fake}"

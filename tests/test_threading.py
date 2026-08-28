@@ -9,7 +9,6 @@ from jamma.core.threading import (
     blas_threads,
     get_blas_thread_count,
     get_c_extension_thread_count,
-    jlinalg_threads,
 )
 
 
@@ -77,49 +76,6 @@ class TestCExtensionThreads:
         monkeypatch.setattr("jamma.core.threading.get_physical_core_count", lambda: 48)
         monkeypatch.setattr("jamma.core.threading.is_blas_controllable", lambda: False)
         assert get_c_extension_thread_count(True, True) == 24
-
-
-@pytest.mark.tier0
-class TestJlinalgThreads:
-    """Tests for jlinalg thread scoping."""
-
-    def test_sets_and_restores_thread_count(self, monkeypatch):
-        state = {"threads": 8}
-        calls: list[int] = []
-
-        def fake_set_n_threads(n: int) -> int:
-            old = state["threads"]
-            state["threads"] = n
-            calls.append(n)
-            return old
-
-        monkeypatch.setattr("jamma.jlinalg.set_n_threads", fake_set_n_threads)
-
-        with jlinalg_threads(3):
-            assert state["threads"] == 3
-
-        assert state["threads"] == 8
-        assert calls == [3, 8]
-
-    def test_restores_thread_count_on_exception(self, monkeypatch):
-        state = {"threads": 8}
-        calls: list[int] = []
-
-        def fake_set_n_threads(n: int) -> int:
-            old = state["threads"]
-            state["threads"] = n
-            calls.append(n)
-            return old
-
-        monkeypatch.setattr("jamma.jlinalg.set_n_threads", fake_set_n_threads)
-
-        with pytest.raises(RuntimeError, match="boom"):
-            with jlinalg_threads(4):
-                assert state["threads"] == 4
-                raise RuntimeError("boom")
-
-        assert state["threads"] == 8
-        assert calls == [4, 8]
 
 
 @pytest.mark.tier0

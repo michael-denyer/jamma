@@ -29,7 +29,6 @@ from jamma.core.progress import progress_iterator
 from jamma.core.threading import (
     blas_threads,
     get_c_extension_thread_count,
-    jlinalg_threads,
 )
 from jamma.lmm import compute_numpy
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
@@ -207,8 +206,7 @@ class _ChunkEngine:
         )
 
         utg_out = self.utg_bufs[buf_idx][:actual_len, :]
-        with jlinalg_threads(self.rot_threads):
-            utg_t = jlinalg.dgemm(raw.genotypes, self.U, transa="T", out=utg_out)
+        utg_t = jlinalg.dgemm(raw.genotypes, self.U, transa="T", out=utg_out)
 
         return _PreparedLmmChunk(
             self._kernel_input(utg_t, buf_idx, actual_len), chunk_range

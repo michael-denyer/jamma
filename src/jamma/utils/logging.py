@@ -7,10 +7,14 @@ log file output.
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
 import jamma
+
+if TYPE_CHECKING:
+    from jamma.pipeline_config import PipelineConfig
 
 
 def setup_logging(
@@ -49,7 +53,7 @@ def setup_logging(
 
 
 def write_gemma_log(
-    output_config: "jamma.core.config.OutputConfig",
+    config: "PipelineConfig",
     params: dict,
     timing: dict,
     command_line: str,
@@ -60,7 +64,7 @@ def write_gemma_log(
     for section headers.
 
     Args:
-        output_config: Output configuration specifying directory and prefix.
+        config: Pipeline configuration specifying output directory and prefix.
         params: Dictionary of parameters to log (e.g., n_samples, n_snps).
         timing: Dictionary of timing information (expects 'total' key in seconds).
         command_line: The command line used to invoke the program.
@@ -84,9 +88,9 @@ def write_gemma_log(
         ##
     """
     # Ensure output directory exists
-    output_config.ensure_outdir()
+    config.ensure_outdir()
 
-    log_path = output_config.log_path
+    log_path = config.log_path
 
     with open(log_path, "w") as f:
         # Header

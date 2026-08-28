@@ -91,6 +91,15 @@ class TestPipelineConfig:
         assert config.maf == 0.05
         assert config.mem_budget == 64.0
 
+    def test_prefix_with_separator_rejected(self) -> None:
+        """A prefix containing a path separator is rejected at construction.
+
+        The output-config dataclass this rule used to live on is gone; the
+        message must stay identical since the CLI matches on it.
+        """
+        with pytest.raises(ValueError, match="must not contain path separators"):
+            PipelineConfig(bfile=BFILE, output_prefix="a/b")
+
 
 @pytest.mark.tier1
 class TestValidateInputs:

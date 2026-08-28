@@ -506,6 +506,7 @@ class TestMultiNParsing:
 
 def _mock_pipeline_result(outdir: Path):
     """Create a minimal mock PipelineResult for CLI tests."""
+    from jamma.lmm.schema import PipelineTiming
     from jamma.pipeline import PipelineResult
 
     outdir.mkdir(parents=True, exist_ok=True)
@@ -517,7 +518,7 @@ def _mock_pipeline_result(outdir: Path):
         n_snps_tested=500,
         assoc_path=assoc_path,
         assoc_paths=[assoc_path],
-        timing={"total_s": 1.0, "load_s": 0.1, "lmm_s": 0.9},
+        timing=PipelineTiming(total_s=1.0, load_s=0.1, lmm_s=0.9),
         n_covariates=1,
     )
 
@@ -744,7 +745,7 @@ def test_cli_legacy_text_wires_to_pipeline(
 def test_output_prefix_with_separator_reports_a_usage_error():
     """`-o a/b` must read as a usage error, not a Python traceback.
 
-    OutputConfig rejects a prefix containing a path separator. Building it
+    PipelineConfig rejects a prefix containing a path separator. Building it
     outside the CLI's error handling let that ValueError reach the user raw.
     """
     result = runner.invoke(main, ["-lmm", "1", "-o", "a/b", "-bfile", "nope"])

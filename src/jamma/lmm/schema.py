@@ -51,10 +51,12 @@ class RunnerTiming(TypedDict, total=False):
     result_write_s: float
 
 
-class PipelineTiming(TypedDict, total=False):
+@dataclass
+class PipelineTiming:
     """Timing breakdown from pipeline execution.
 
-    All keys are optional; keys from the runner are merged at pipeline exit.
+    All fields default to 0.0; fields from the runner are merged at
+    pipeline exit.
 
     Attributes:
         kinship_s: Kinship load/compute time (seconds).
@@ -64,11 +66,11 @@ class PipelineTiming(TypedDict, total=False):
         rotation_s: UT@G rotation time from the runner (seconds).
     """
 
-    kinship_s: float
-    load_s: float
-    lmm_s: float
-    total_s: float
-    rotation_s: float
+    kinship_s: float = 0.0
+    load_s: float = 0.0
+    lmm_s: float = 0.0
+    total_s: float = 0.0
+    rotation_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

@@ -452,10 +452,10 @@ class TestRunLoco:
 
         result = self._call(runner, tmp_path, phenos, covs)
 
-        assert result.timing["kinship_s"] == 0.0
-        assert result.timing["load_s"] == 0.0
-        assert result.timing["lmm_s"] >= 0.0
-        assert result.timing["total_s"] >= 0.0
+        assert result.timing.kinship_s == 0.0
+        assert result.timing.load_s == 0.0
+        assert result.timing.lmm_s >= 0.0
+        assert result.timing.total_s >= 0.0
 
     def test_lmm_config_handed_to_runner_is_the_shared_projection(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

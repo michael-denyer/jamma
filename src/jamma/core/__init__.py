@@ -5,7 +5,6 @@ threading, hardware context, and telemetry.
 """
 
 from jamma.core.backend import get_backend_info
-from jamma.core.config import OutputConfig
 from jamma.core.memory import (
     MemoryBreakdown,
     StreamingMemoryBreakdown,
@@ -23,7 +22,6 @@ from jamma.core.memory_snapshot import (
 __all__ = [
     "MemoryBreakdown",
     "MemorySnapshot",
-    "OutputConfig",
     "StreamingMemoryBreakdown",
     "check_memory_available",
     "cleanup_memory",

@@ -46,7 +46,6 @@ flowchart TB
     end
 
     subgraph L5["🔧 Infrastructure"]
-        CONFIG["Output Config<br/><small>5a</small>"]
         MEM["Memory Manager<br/><small>5c</small>"]
         LOG["Logging<br/><small>5d</small>"]
         THREAD["Threading<br/><small>5e</small>"]
@@ -65,7 +64,6 @@ flowchart TB
     CLI --> PLINK
     CLI --> KIO
     CLI --> SNPLIST
-    CLI --> CONFIG
     CLI --> LOG
 
     PIPE --> PLINK
@@ -151,7 +149,6 @@ flowchart TB
     style RESULTS fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
     style LOCO fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
 
-    style CONFIG fill:#a29bfe,stroke:#7c73d9,color:#fff
     style MEM fill:#a29bfe,stroke:#7c73d9,color:#fff
     style LOG fill:#a29bfe,stroke:#7c73d9,color:#fff
     style THREAD fill:#a29bfe,stroke:#7c73d9,color:#fff
@@ -171,8 +168,8 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 1a | `main()` | Click command — all flags (`-gk`, `-lmm`, `-bfile`, `-o`, `-outdir`) | [cli.py](../src/jamma/cli.py) |
-| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:332](../src/jamma/cli.py#L332) |
-| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:376](../src/jamma/cli.py#L376) |
+| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:330](../src/jamma/cli.py#L330) |
+| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:374](../src/jamma/cli.py#L374) |
 | 1b | `gwas()` | One-call GWAS pipeline (load -> kinship -> LMM -> results) | [gwas.py:37](../src/jamma/gwas.py#L37) |
 | 1c | `PipelineRunner` | `-lmm` orchestration (validate -> parse -> memory -> kinship -> LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
 | 1c | `run_phenotype_loop()` | Per-phenotype loop; dispatches each column to the batch or streaming runner | [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py) |
@@ -283,8 +280,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:34](../src/jamma/lmm/runner_numpy_streaming.py#L34) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:107](../src/jamma/lmm/runner_numpy_streaming.py#L107) |
 | 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:102](../src/jamma/lmm/runner.py#L102) |
-| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:75](../src/jamma/lmm/schema.py#L75) |
-| 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:101](../src/jamma/lmm/schema.py#L101) |
+| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:77](../src/jamma/lmm/schema.py#L77) |
+| 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:103](../src/jamma/lmm/schema.py#L103) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:34](../src/jamma/lmm/results.py#L34) |
 | 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:179](../src/jamma/lmm/results.py#L179) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:145](../src/jamma/lmm/loco.py#L145) |
@@ -298,13 +295,12 @@ Configuration, memory management, threading, and logging.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 5a | `OutputConfig` | Output directory + prefix + verbose flag | [config.py:13](../src/jamma/core/config.py#L13) |
 | 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:43](../src/jamma/core/memory.py#L43) |
 | 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:100](../src/jamma/core/memory.py#L100) |
 | 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:28](../src/jamma/core/memory_snapshot.py#L28) |
 | 5c | `cleanup_memory()` | GC + clear caches | [memory_snapshot.py:79](../src/jamma/core/memory_snapshot.py#L79) |
-| 5d | `setup_logging()` | Loguru console + optional file | [logging.py:16](../src/jamma/utils/logging.py#L16) |
-| 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:51](../src/jamma/utils/logging.py#L51) |
+| 5d | `setup_logging()` | Loguru console + optional file | [logging.py:20](../src/jamma/utils/logging.py#L20) |
+| 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:55](../src/jamma/utils/logging.py#L55) |
 | 5c | `log_memory_snapshot()` | RSS + free-RAM snapshot at phase boundaries | [memory_snapshot.py](../src/jamma/core/memory_snapshot.py) |
 | 5e | `get_physical_core_count()` | Physical core detection (consolidated helper) | [threading.py:43](../src/jamma/core/threading.py#L43) |
 | 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:162](../src/jamma/core/threading.py#L162) |
@@ -557,7 +553,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | `gwas()` API | [gwas.py:37](../src/jamma/gwas.py#L37) |
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
-| CLI dispatch (`main`) | [cli.py:213](../src/jamma/cli.py#L213) |
+| CLI dispatch (`main`) | [cli.py:212](../src/jamma/cli.py#L212) |
 | Load genotypes | [plink.py:52](../src/jamma/io/plink.py#L52) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
@@ -569,7 +565,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | Wald/Score/LRT tests | [stats.py](../src/jamma/lmm/stats.py) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
-| Output schema (`StatColumn`) | [lmm/schema.py:75](../src/jamma/lmm/schema.py#L75) |
+| Output schema (`StatColumn`) | [lmm/schema.py:77](../src/jamma/lmm/schema.py#L77) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | NumPy streaming runner | [runner_numpy_streaming.py](../src/jamma/lmm/runner_numpy_streaming.py) |
 | Shared NumPy chunk-loop orchestrator | [chunk_runner_numpy.py](../src/jamma/lmm/chunk_runner_numpy.py) |

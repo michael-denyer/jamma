@@ -33,10 +33,9 @@ def test_gwas_basic(tmp_path: Path) -> None:
     assert isinstance(result, PipelineResult)
     assert result.n_samples > 0
     assert result.n_snps_tested > 0
-    assert "kinship_s" in result.timing
-    assert "lmm_s" in result.timing
-    assert "total_s" in result.timing
-    assert result.timing["total_s"] > 0
+    assert result.timing.kinship_s >= 0
+    assert result.timing.lmm_s >= 0
+    assert result.timing.total_s > 0
 
     # Check output file exists and is non-empty
     assoc_file = tmp_path / "result.assoc.txt"

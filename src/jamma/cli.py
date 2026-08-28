@@ -15,7 +15,6 @@ import click
 from loguru import logger
 
 import jamma
-from jamma.core import OutputConfig
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_MISS
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_kinship import compute_kinship
@@ -280,7 +279,6 @@ def main(
             )
 
     try:
-        output_config = OutputConfig(outdir=outdir, prefix=o, verbose=verbose)
         pipeline_config = PipelineConfig(
             bfile=bfile,
             kinship_file=k,
@@ -313,7 +311,7 @@ def main(
         raise click.UsageError(str(e)) from e
 
     if gk is not None:
-        _run_gk(pipeline_config, output_config, gk)
+        _run_gk(pipeline_config, gk)
         return
 
     # The CLI requires a kinship source up front; the Python API computes one
@@ -326,13 +324,13 @@ def main(
     if eigen_dir is not None and not loco:
         _cli_error("--eigen-dir is only supported with -loco mode")
 
-    _run_lmm(pipeline_config, output_config)
+    _run_lmm(pipeline_config)
 
 
-def _run_gk(config: PipelineConfig, output: OutputConfig, mode: Literal[1, 2]) -> None:
+def _run_gk(config: PipelineConfig, mode: Literal[1, 2]) -> None:
     """Run kinship matrix computation (thin shell over compute_kinship)."""
     start_time = time.perf_counter()
-    output.ensure_outdir()
+    config.ensure_outdir()
     command_line = " ".join(sys.argv)
 
     try:
@@ -369,11 +367,11 @@ def _run_gk(config: PipelineConfig, output: OutputConfig, mode: Literal[1, 2]) -
             "miss_threshold": config.miss,
         }
     timing = {"total": elapsed, "kinship": result.kinship_s}
-    log_path = write_gemma_log(output, params, timing, command_line)
+    log_path = write_gemma_log(config, params, timing, command_line)
     click.echo(f"Log written to {log_path}")
 
 
-def _run_lmm(config: PipelineConfig, output: OutputConfig) -> None:
+def _run_lmm(config: PipelineConfig) -> None:
     """Run LMM association testing (thin shell over PipelineRunner)."""
     try:
         if config.check_memory:
@@ -398,18 +396,17 @@ def _run_lmm(config: PipelineConfig, output: OutputConfig) -> None:
         "mem_budget": config.mem_budget,
     }
     timing = {
-        "total": result.timing.get("total_s", 0.0),
-        "load": result.timing.get("load_s", 0.0),
-        "lmm": result.timing.get("lmm_s", 0.0),
+        "total": result.timing.total_s,
+        "load": result.timing.load_s,
+        "lmm": result.timing.lmm_s,
     }
 
-    output.ensure_outdir()
-    log_path = write_gemma_log(output, params, timing, command_line)
+    config.ensure_outdir()
+    log_path = write_gemma_log(config, params, timing, command_line)
     click.echo(f"Log written to {log_path}")
 
     click.echo(
-        f"\nAnalyzed {result.n_snps_tested} SNPs "
-        f"in {result.timing.get('total_s', 0.0):.2f} seconds"
+        f"\nAnalyzed {result.n_snps_tested} SNPs in {result.timing.total_s:.2f} seconds"
     )
 
 

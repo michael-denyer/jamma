@@ -274,6 +274,7 @@ class TestBatchEquivalence:
                 err_msg=f"{field} values differ",
             )
 
+    @requires_c
     def test_mode4_fp_identical(self, synthetic_eigen):
         """Mode-4 results match between batch and streaming within BLAS tolerance."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
@@ -628,6 +629,7 @@ class TestChunkingEdgeCases:
 class TestStreamingPipeline:
     """Pipeline overlapping rotation/compute in NumPy streaming runner (SC-05)."""
 
+    @requires_c
     def test_streaming_pipeline_activates(self, synthetic_eigen):
         """Pipeline activates with chunk_size=1 (forces >= 8 chunks)."""
         import io

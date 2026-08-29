@@ -82,6 +82,7 @@ def eigen_pairs_for(
     partitions: dict[str, np.ndarray],
     check_memory: bool,
     show_progress: bool,
+    mem_budget: float | None = None,
 ) -> EigenPairSource:
     """Choose the eigenpair source for one LOCO run.
 
@@ -100,6 +101,8 @@ def eigen_pairs_for(
         partitions: chr_name -> global SNP indices, for progress output.
         check_memory: Passed to the kinship streamer and eigendecomposition.
         show_progress: Whether to log per-chromosome progress.
+        mem_budget: User-set ceiling in GB, passed to the kinship streamer's
+            veto. None for no ceiling.
     """
     n_valid = int(np.sum(valid_mask))
     all_samples_valid = n_valid == len(valid_mask)
@@ -156,6 +159,7 @@ def eigen_pairs_for(
         show_progress=show_progress,
         ksnps_indices=loco.ksnps_indices,
         valid_indices=kinship_valid_indices,
+        mem_budget=mem_budget,
     )
     pairs = _computed_eigen_pairs(
         stream,

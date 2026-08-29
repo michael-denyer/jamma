@@ -387,6 +387,7 @@ def run_lmm_association_numpy(
     config: LmmConfig = DEFAULT_LMM_CONFIG,
     output_path: Path | None = None,
     hwe_threshold: float = 0.0,
+    max_chunk_size: int | None = None,
 ) -> LmmRunResult:
     """Run LMM association tests using pure-NumPy batch processing.
 
@@ -415,6 +416,10 @@ def run_lmm_association_numpy(
             empty associations, with n_tested counting the SNPs written.
         hwe_threshold: HWE p-value threshold; SNPs with p < threshold are
             removed. 0.0 disables HWE filtering (default).
+        max_chunk_size: A caller-planned chunk size (e.g. from a pipeline
+            preflight's MemoryPlan) to allocate directly, skipping this
+            call's own plan_lmm_chunks re-derivation. None (default) plans
+            the chunk here, as before.
 
     Returns:
         LmmRunResult with per-SNP associations, n_tested, and PVE from the
@@ -431,40 +436,54 @@ def run_lmm_association_numpy(
     # covariates are passed.
     n_cvt = covariates.shape[1] if covariates is not None else 1
 
-    # Plan the chunk once, from the same sizer the engine allocates from, and
-    # give both the memory gate and the engine that one number. Otherwise the
-    # gate prices a chunk it never actually allocates: this call has no
-    # MemoryPlan from a pipeline preflight to inherit, so without this it
-    # priced estimate_lmm_memory's lmm_batch_size=20_000 default while the
-    # engine sized its own chunk from the real RAM budget and dispatch path.
-    dispatch = select_current_dispatch_path(n_cvt, config.lmm_mode, log_choices=False)
-    chunk_plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
+    if max_chunk_size is not None:
+        # A caller (the pipeline) already planned this chunk from a
+        # MemoryPlan and gated on it; re-deriving and re-checking here would
+        # price a second, possibly different, chunk. This mirrors the
+        # pipeline's own contract: it always passes check_memory=False on
+        # this path (see PipelineConfig.lmm_config's docstring), because its
+        # preflight already gated the run this chunk came from.
+        chunk_size = max_chunk_size
+    else:
+        # Plan the chunk once, from the same sizer the engine allocates from,
+        # and give both the memory gate and the engine that one number.
+        # Otherwise the gate prices a chunk it never actually allocates: this
+        # call has no MemoryPlan from a pipeline preflight to inherit, so
+        # without this it priced estimate_lmm_memory's lmm_batch_size=20_000
+        # default while the engine sized its own chunk from the real RAM
+        # budget and dispatch path.
+        dispatch = select_current_dispatch_path(
+            n_cvt, config.lmm_mode, log_choices=False
+        )
+        chunk_plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
+        chunk_size = chunk_plan.chunk_size
 
-    if config.check_memory:
-        # Propagate n_cvt so the preflight correctly sizes Uab/Iab for
-        # multi-covariate runs. Otherwise the estimator silently uses its
-        # n_cvt=1 default and can let a multi-covariate run pass preflight
-        # before OOMing at the real allocation.
-        est = estimate_lmm_memory(
-            n_samples,
-            n_snps,
-            lmm_batch_size=chunk_plan.chunk_size,
-            n_cvt=n_cvt,
-            n_buffers=chunk_plan.n_buffers,
-        )
-        logger.info(
-            f"LMM memory: estimated {est.total_gb:.1f}GB, "
-            f"available {est.available_gb:.1f}GB"
-        )
-        if not est.sufficient:
-            raise MemoryError(
-                f"Insufficient memory for LMM workflow with {n_samples:,} samples × "
-                f"{n_snps:,} SNPs.\n"
-                f"Need: {est.total_gb:.1f}GB, Available: {est.available_gb:.1f}GB\n"
-                f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
-                f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
-                f"genotypes={est.genotypes_gb:.1f}GB"
+        if config.check_memory:
+            # Propagate n_cvt so the preflight correctly sizes Uab/Iab for
+            # multi-covariate runs. Otherwise the estimator silently uses its
+            # n_cvt=1 default and can let a multi-covariate run pass
+            # preflight before OOMing at the real allocation.
+            est = estimate_lmm_memory(
+                n_samples,
+                n_snps,
+                lmm_batch_size=chunk_plan.chunk_size,
+                n_cvt=n_cvt,
+                n_buffers=chunk_plan.n_buffers,
             )
+            logger.info(
+                f"LMM memory: estimated {est.total_gb:.1f}GB, "
+                f"available {est.available_gb:.1f}GB"
+            )
+            if not est.sufficient:
+                raise MemoryError(
+                    f"Insufficient memory for LMM workflow with "
+                    f"{n_samples:,} samples × {n_snps:,} SNPs.\n"
+                    f"Need: {est.total_gb:.1f}GB, Available: "
+                    f"{est.available_gb:.1f}GB\n"
+                    f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
+                    f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
+                    f"genotypes={est.genotypes_gb:.1f}GB"
+                )
 
     snp_meta = (
         snp_info if isinstance(snp_info, SnpMeta) else SnpMeta.from_dicts(snp_info)
@@ -480,7 +499,7 @@ def run_lmm_association_numpy(
         config=config,
         output_path=output_path,
         hwe_threshold=hwe_threshold,
-        max_chunk_size=chunk_plan.chunk_size,
+        max_chunk_size=chunk_size,
         banner="NumPy batch",
         label="lmm_numpy",
     )

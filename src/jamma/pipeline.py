@@ -26,7 +26,6 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 from loguru import logger
@@ -48,7 +47,7 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.prepare_common import compute_valid_mask
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
-from jamma.lmm.schema import PipelineTiming
+from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
     VALID_BACKENDS,
@@ -395,11 +394,12 @@ class PipelineRunner:
         3. Resolve SNP list files, prepare the output directory
         4. Load covariates, then every phenotype column (one .fam read) and
            intersect their valid-sample masks
-        5. LOCO returns here to its own orchestrator, which owns
+        5. Select the execution plan once, with the post-mask sample count
+        6. LOCO returns here to its own orchestrator, which owns
            per-chromosome kinship, eigendecomposition and the memory gate
-        6. Re-select the plan for the filtered sample count, check memory
-        7. Load eigen files or kinship matrix (once, shared)
-        8. Per-phenotype loop: run LMM association and write results
+        7. Check memory against the selected plan
+        8. Load eigen files or kinship matrix (once, shared)
+        9. Per-phenotype loop: run LMM association and write results
 
         Returns:
             PipelineResult with associations, counts, output path, and timing.
@@ -421,20 +421,12 @@ class PipelineRunner:
         # (sid, chromosome, bp_position and both allele arrays).
         meta = get_plink_metadata(self.config.bfile)
 
-        # Route through select_execution_mode for all backend requests.
-        plan = select_execution_mode(
-            n_samples=meta.n_samples,
-            n_snps=meta.n_snps,
-            requested=requested,
-        )
-
         if env_backend is not None:
             logger.info(f"Backend: numpy (from JAMMA_BACKEND={env_backend})")
         elif self.config.backend != "auto":
             logger.info("Backend: numpy (explicitly requested)")
         else:
             logger.info("Backend: numpy (auto-selected)")
-        logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
         self.validate_inputs()
 
@@ -466,6 +458,21 @@ class PipelineRunner:
         )
         warn_if_small_sample(n_valid)
 
+        # Select the plan once, with the post-mask sample count and the real
+        # n_cvt: masking can reduce n_valid below the PLINK-header n_samples,
+        # and Uab sizing depends on n_cvt. A prior version selected twice
+        # (once here with the pre-mask n_samples, once again after masking),
+        # re-running estimate_lmm_memory both times; this is the single call.
+        plan = select_execution_mode(
+            n_samples=n_valid,
+            n_snps=n_snps,
+            requested=requested,
+            n_cvt=n_cvt,
+            lmm_mode=parse_lmm_mode(self.config.lmm_mode),
+            mem_budget=self.config.mem_budget,
+        )
+        logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
+
         # LOCO is single-phenotype (PipelineConfig rejects more) and owns its
         # own per-chromosome kinship, eigendecomposition and memory gate, so it
         # leaves before the shared preflight below.
@@ -483,15 +490,9 @@ class PipelineRunner:
                 ksnps_indices=ksnps_indices,
             )
 
-        # Re-evaluate the plan with the post-filter sample count (valid_mask
-        # intersection can reduce n_valid below the PLINK-header n_samples, and
-        # may flip batch<->streaming). Banner after, so it shows the final plan.
-        plan = self._reselect_plan_after_filtering(
-            plan, n_valid, n_snps, n_cvt, requested
-        )
         log_pipeline_banner(plan)
 
-        memory_preflight(self.config, plan, n_valid, n_snps, n_cvt)
+        mem_plan = memory_preflight(self.config, plan, n_valid, n_snps, n_cvt)
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes). The
         # kinship matrix is consumed here; runners use the eigen arrays directly.
@@ -510,6 +511,9 @@ class PipelineRunner:
             eigenvectors,
             assoc_path,
             snps_indices,
+            compute_chunk_size=None
+            if mem_plan is None
+            else mem_plan.compute_chunk_size,
         )
 
         total_s = time.perf_counter() - t_start
@@ -597,37 +601,6 @@ class PipelineRunner:
             )
 
         return all_pheno_data, valid_mask, n_valid
-
-    def _reselect_plan_after_filtering(
-        self,
-        initial_plan: ExecutionPlan,
-        n_valid: int,
-        n_snps: int,
-        n_cvt: int,
-        requested: Literal["auto", "numpy", "numpy-streaming"],
-    ) -> ExecutionPlan:
-        """Re-select the execution plan using the post-filter sample count.
-
-        The initial plan used raw ``n_samples`` from the PLINK header; the
-        valid-mask intersection can reduce it (and flip batch<->streaming).
-        Re-selects with ``n_valid`` and ``n_cvt`` (so memory estimates account
-        for a larger Uab at n_cvt>1) and logs any change.
-
-        Returns:
-            The post-filter ExecutionPlan (unchanged when filtering had no
-            effect on mode selection).
-        """
-        plan = select_execution_mode(n_valid, n_snps, requested=requested, n_cvt=n_cvt)
-        if plan != initial_plan:
-            logger.info(
-                f"Execution plan changed after sample filtering: "
-                f"{initial_plan.runner_name} -> {plan.runner_name} ({plan.reason})"
-            )
-        else:
-            logger.debug(
-                f"Execution plan (post-filter): {plan.runner_name} ({plan.reason})"
-            )
-        return plan
 
     def _acquire_eigendecomposition(
         self,

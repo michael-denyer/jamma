@@ -151,6 +151,7 @@ def plan_lmm_chunks(
     dispatch: DispatchPath,
     *,
     max_chunk_size: int | None = None,
+    mem_budget_bytes: int | None = None,
 ) -> LmmChunkPlan:
     """Decide chunk size, chunk count, and pipelining for one LMM run.
 
@@ -173,6 +174,9 @@ def plan_lmm_chunks(
         dispatch: The run's active kernel path.
         max_chunk_size: Optional cap applied before chunk-count recomputation
             (e.g. LOCO's disk-read chunk width).
+        mem_budget_bytes: Explicit per-chunk memory budget in bytes, from
+            the user's ``--mem-budget``. None auto-scales against available
+            RAM as before.
 
     Returns:
         The plan's chunk size, chunk count, live buffer count, and whether
@@ -187,6 +191,7 @@ def plan_lmm_chunks(
             n_filtered,
             n_cvt,
             dispatch=dispatch,
+            mem_budget_bytes=mem_budget_bytes,
             pipeline_buffers=pipeline_buffers,
         )
         if max_chunk_size is not None:

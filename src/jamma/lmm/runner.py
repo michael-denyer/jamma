@@ -27,6 +27,9 @@ from loguru import logger
 
 from jamma.core.memory import estimate_lmm_memory
 from jamma.lmm import accel
+from jamma.lmm.chunk_sizing import plan_lmm_chunks
+from jamma.lmm.dispatch import select_dispatch_path
+from jamma.lmm.schema import LmmMode, parse_lmm_mode
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +97,8 @@ def select_execution_mode(
     *,
     requested: Literal["auto", "numpy", "numpy-streaming"] = "auto",
     n_cvt: int = 1,
+    lmm_mode: LmmMode = 1,
+    mem_budget: float | None = None,
 ) -> ExecutionPlan:
     """Select the optimal execution backend and mode.
 
@@ -120,6 +125,15 @@ def select_execution_mode(
             accurate memory estimates (Uab is larger with more covariates)
             and to guard against numpy-batch when the C general extension is
             unavailable for n_cvt > 1.
+        lmm_mode: Test type (1=Wald, 2=LRT, 3=Score, 4=All). Selects the
+            dispatch path the real chunk plan is sized against, so the
+            estimate here matches the chunk the engine will actually
+            allocate instead of ``estimate_lmm_memory``'s 20,000-row
+            default.
+        mem_budget: User-set ceiling in GB, or None. Feeds the same chunk
+            sizer the engine allocates from, so a tight budget narrows the
+            chunk this estimate is priced against rather than only vetoing
+            the run afterward.
 
     Returns:
         ExecutionPlan with backend, mode, and reason.
@@ -147,7 +161,20 @@ def select_execution_mode(
 
     # Auto selection
     c_ext_available = accel.available()
-    est = estimate_lmm_memory(n_samples, n_snps, n_cvt=n_cvt)
+    dispatch = select_dispatch_path(
+        n_cvt, parse_lmm_mode(lmm_mode), accel=c_ext_available, log_choices=False
+    )
+    mem_budget_bytes = None if mem_budget is None else int(mem_budget * 1e9)
+    chunk_plan = plan_lmm_chunks(
+        n_samples, n_snps, n_cvt, dispatch, mem_budget_bytes=mem_budget_bytes
+    )
+    est = estimate_lmm_memory(
+        n_samples,
+        n_snps,
+        lmm_batch_size=chunk_plan.chunk_size,
+        n_cvt=n_cvt,
+        n_buffers=chunk_plan.n_buffers,
+    )
 
     # No covariate-count guard here. A loaded extension exports the general
     # n_cvt kernels too, so the check that used to sit here read a second

@@ -209,7 +209,7 @@ class PipelineConfig:
     def lmm_config(self, *, check_memory: bool = False) -> LmmConfig:
         """Project the LMM knobs onto the config the runners take.
 
-        The one place these nine fields are mapped onto LmmConfig — every
+        The one place these fields are mapped onto LmmConfig — every
         dispatch path goes through here, so a knob added to LmmConfig cannot
         reach one runner and miss another.
 
@@ -240,6 +240,7 @@ class PipelineConfig:
             check_memory=check_memory,
             show_progress=self.show_progress,
             lmm_mode=parse_lmm_mode(self.lmm_mode),
+            mem_budget=self.mem_budget,
         )
 
 

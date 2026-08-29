@@ -24,9 +24,9 @@ import sys
 import sysconfig
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import Literal, TextIO
 
 # ---------------------------------------------------------------------------
 # Data constants — THE single source of truth. The three entry points
@@ -380,6 +380,139 @@ def resolve_cflags_for(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class Toolchain:
+    """The host C toolchain, detected once per process.
+
+    Carries everything ``run_build`` needs that depends on the host rather
+    than on which ``BuildSpec`` is being built: the compiler command, the
+    Python/NumPy include directories, and the OpenMP compile/link flags.
+    Building two specs (``_lmm_accel``, ``_jlinalg``) in the same process —
+    as ``hatch_build.py`` and CI both do — detects this once and reuses it,
+    rather than re-probing the compiler and re-running the OpenMP libiomp5
+    dance for every spec.
+    """
+
+    cc_cmd: str
+    cc_extra: tuple[str, ...]
+    python_inc: str
+    numpy_inc: str
+    system: str
+    omp_compile: tuple[str, ...]
+    omp_link: tuple[str, ...]
+
+
+def detect_toolchain(
+    *,
+    verbose_print: Callable[..., None] = print,
+    error_print: Callable[..., None] | None = None,
+) -> Toolchain | str:
+    """Detect the host C toolchain once, or return the reason it is unusable.
+
+    Performs every preflight step that depends on the host rather than on a
+    particular ``BuildSpec``: numpy availability and version, compiler
+    discovery (``$CC``, sysconfig, ``cc``/``clang``/``gcc`` fallbacks),
+    ``Python.h`` presence, the Windows reject, and OpenMP flag detection.
+    ``run_build`` calls this once per process and passes the result to every
+    spec it builds; it no longer takes ``find_c_compiler`` or
+    ``detect_openmp_flags`` as injected parameters.
+
+    The imports of ``find_compiler`` and ``openmp_detect`` are lazy and
+    relative so this module keeps working when ``hatch_build.py`` loads it
+    by file path under ``importlib.util.spec_from_file_location`` (the PEP
+    517 build backend registers all three ``_build_support`` helper modules
+    on ``sys.modules`` before calling anything, so the relative import
+    resolves via the ``sys.modules`` short-circuit rather than a package
+    lookup that would fail under build isolation).
+
+    Returns:
+        A ``Toolchain`` on success, or a human-readable string naming the
+        reason detection failed (no compiler, no numpy, missing headers,
+        Windows). The string is not printed here — the caller decides
+        whether to log it as a dev-mode error or a wheel-build warning.
+    """
+    if error_print is None:
+        error_print = verbose_print
+    system = _platform.system()
+
+    try:
+        import numpy as np
+    except ImportError:
+        return "numpy not available"
+    if int(np.__version__.split(".")[0]) < 2:
+        return (
+            f"numpy {np.__version__} is 1.x — C extension requires numpy >= 2.0 "
+            "headers (build with numpy >= 2.0 to avoid an ABI mismatch)"
+        )
+
+    from .find_compiler import find_c_compiler  # lazy relative import
+
+    compiler = find_c_compiler()
+    if compiler is None:
+        return (
+            "no usable C compiler found on PATH (tried $CC, sysconfig, cc, "
+            "clang, gcc). Install: apt-get install -y gcc (Linux) or "
+            "xcode-select --install (macOS)"
+        )
+    cc_cmd, cc_extra = compiler
+
+    python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
+    python_h = Path(python_inc) / "Python.h" if python_inc else None
+    if not python_h or not python_h.exists():
+        return (
+            f"Python.h not found at {python_inc}. Install development headers: "
+            "apt-get install -y python3-dev (Linux)"
+        )
+
+    if system == "Windows":
+        return "Windows is not supported for C extension compilation"
+
+    from .openmp_detect import detect_openmp_flags  # lazy relative import
+
+    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
+        cc_cmd, system, verbose_print, _warn=error_print
+    )
+
+    return Toolchain(
+        cc_cmd=cc_cmd,
+        cc_extra=tuple(cc_extra),
+        python_inc=python_inc,
+        numpy_inc=np.get_include(),
+        system=system,
+        omp_compile=tuple(omp_compile),
+        omp_link=tuple(omp_link),
+    )
+
+
+def link_cmd(
+    cc_cmd: str,
+    cc_extra: list[str],
+    link_mode_flags: tuple[str, ...],
+    objs: list[Path],
+    out: Path,
+    ldflags: list[str],
+    omp_link: list[str],
+    extra: list[str],
+) -> list[str]:
+    """Build one link command. Called for the first attempt and, on link
+    failure with ``omp_link`` non-empty, for the OMP-free retry — the two
+    calls in ``compile_jlinalg`` used to differ only by ``omp_link``, and a
+    hand-edit to one link command (e.g. adding a flag) used to require the
+    same edit twice.
+    """
+    return [
+        cc_cmd,
+        *cc_extra,
+        *link_mode_flags,
+        *[str(o) for o in objs],
+        "-o",
+        str(out),
+        *ldflags,
+        *omp_link,
+        *extra,
+    ]
+
+
 @dataclass
 class CompileResult:
     """Result of a two-phase compile+link invocation.
@@ -393,9 +526,6 @@ class CompileResult:
             without OMP runtime.
         output_path: Path to the final shared library on success, None otherwise.
         error: Human-readable error message on failure, None on success.
-        obj_files: List of .o files produced during the compile phase. Caller
-            is responsible for cleanup (helpers create a temp dir that the
-            caller may delete after link; see `tmp_dir` parameter).
     """
 
     success: bool
@@ -403,7 +533,6 @@ class CompileResult:
     used_openmp_link: bool
     output_path: Path | None = None
     error: str | None = None
-    obj_files: list[Path] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -604,19 +733,18 @@ def compile_jlinalg(
     # Databricks tasks) can never observe a half-written .so. The PID suffix
     # also guarantees parallel linkers don't clobber each other's tmp file.
     link_tmp = output.with_name(f"{output.name}.tmp.{os.getpid()}")
-    link_cmd = [
+    first_link_cmd = link_cmd(
         cc_cmd,
-        *cc_extra,
-        *link_mode_flags,
-        *[str(o) for o in compile_objs],
-        "-o",
-        str(link_tmp),
-        *ldflags,
-        *current_omp_link,
-        *extra_link_flags,
-    ]
-    verbose_print(f"link: {' '.join(link_cmd)}")
-    link_result = subprocess.run(link_cmd, capture_output=True, text=True)
+        cc_extra,
+        link_mode_flags,
+        compile_objs,
+        link_tmp,
+        ldflags,
+        current_omp_link,
+        extra_link_flags,
+    )
+    verbose_print(f"link: {' '.join(first_link_cmd)}")
+    link_result = subprocess.run(first_link_cmd, capture_output=True, text=True)
 
     used_openmp_link = bool(current_omp_link)
 
@@ -633,16 +761,16 @@ def compile_jlinalg(
         if on_retry is not None:
             on_retry(msg)
         verbose_print(msg + "...")
-        retry_link_cmd = [
+        retry_link_cmd = link_cmd(
             cc_cmd,
-            *cc_extra,
-            *link_mode_flags,
-            *[str(o) for o in compile_objs],
-            "-o",
-            str(link_tmp),
-            *ldflags,
-            *extra_link_flags,
-        ]
+            cc_extra,
+            link_mode_flags,
+            compile_objs,
+            link_tmp,
+            ldflags,
+            [],
+            extra_link_flags,
+        )
         verbose_print(f"link: {' '.join(retry_link_cmd)}")
         link_result = subprocess.run(retry_link_cmd, capture_output=True, text=True)
         used_openmp_link = False
@@ -656,7 +784,6 @@ def compile_jlinalg(
             used_openmp=used_openmp,
             used_openmp_link=False,
             error=f"link failed: {link_result.stderr}",
-            obj_files=compile_objs,
         )
 
     # Atomic publish — readers see either the old .so or the new one, never
@@ -675,7 +802,6 @@ def compile_jlinalg(
             used_openmp=used_openmp,
             used_openmp_link=used_openmp_link,
             error=f"atomic replace of {output} failed: {e}",
-            obj_files=compile_objs,
         )
 
     return CompileResult(
@@ -683,7 +809,6 @@ def compile_jlinalg(
         used_openmp=used_openmp,
         used_openmp_link=used_openmp_link,
         output_path=output,
-        obj_files=compile_objs,
     )
 
 
@@ -692,26 +817,43 @@ def compile_jlinalg(
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class BuildOutcome:
-    """Result of ``run_build``.
+BuildPhase = Literal["preflight", "compile", "link", "publish", "ok"]
 
-    ``ok`` is True only when compile and link both succeeded. ``skipped`` marks
-    a preflight guard firing (no numpy, no compiler, missing headers/sources,
-    Windows) as distinct from a compile/link failure — the wheel path turns
-    both into a pure-Python fallback, while the dev path returns False either
-    way. ``output_path`` and ``out_name`` are populated only on the final
-    return, after every preflight has passed and ``compile_jlinalg`` has run;
-    every ``_skip()`` path — including one after the sources were found, such
-    as a missing compiler — leaves them at their defaults (``None`` and
-    ``""``).
+
+@dataclass(frozen=True)
+class BuildResult:
+    """Result of ``run_build``. One type, no ``Optional`` field a caller reads.
+
+    ``phase`` says how far the build got: ``"preflight"`` for a guard firing
+    before any source was touched (no numpy, no compiler, missing
+    headers/sources, Windows — the wheel path turns this into a pure-Python
+    fallback, the dev path treats it as an error), ``"compile"``/``"link"``
+    for a failure in ``compile_jlinalg``, ``"publish"`` for the atomic
+    ``os.replace`` failing after a successful link, and ``"ok"`` for success.
+    ``error`` is ``""`` on success and a human-readable message otherwise —
+    callers read it directly, with no ``result.error if result else
+    "unknown"`` guard. ``output_path`` is set only when ``phase == "ok"``.
     """
 
-    ok: bool
-    result: CompileResult | None = None
+    phase: BuildPhase
+    error: str = ""
     output_path: Path | None = None
-    out_name: str = ""
-    skipped: bool = False
+    used_openmp: bool = False
+    used_openmp_link: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.phase == "ok"
+
+    @property
+    def skipped(self) -> bool:
+        """True for a preflight guard — no compiler, no numpy, etc.
+
+        Distinguishes "nothing was attempted" from "compile or link failed",
+        which the wheel build reports differently (a warning + silent
+        pure-Python fallback vs. an error naming the failed phase).
+        """
+        return self.phase == "preflight"
 
 
 def _diagnose_flags(cc_cmd: str) -> list[str]:
@@ -732,49 +874,53 @@ def _diagnose_flags(cc_cmd: str) -> list[str]:
     return ["-fopt-info-vec-all"]
 
 
+def _result_phase(result: CompileResult) -> BuildPhase:
+    """Classify a failed ``CompileResult`` by which stage its error names."""
+    error = result.error or ""
+    if error.startswith("atomic replace"):
+        return "publish"
+    if error.startswith("link failed"):
+        return "link"
+    return "compile"
+
+
 def run_build(
     spec: BuildSpec,
     package_dir: Path,
+    toolchain: Toolchain,
     *,
     dev_mode: bool,
-    find_c_compiler: Callable[[], tuple[str, list[str]] | None],
-    detect_openmp_flags: Callable[..., tuple[list[str], list[str], str]],
     diagnose: bool = False,
     on_retry: Callable[[str], None] | None = None,
     verbose_print: Callable[..., None] = print,
     error_print: Callable[..., None] | None = None,
     env: dict[str, str] | os._Environ[str] | None = None,
-) -> BuildOutcome:
-    """Run the preflight checks and the two-phase compile for one ``BuildSpec``.
+) -> BuildResult:
+    """Run the spec-specific preflight checks and two-phase compile.
 
-    The twelve steps every compile entry point used to hand-write:
-    sources-exist check, numpy>=2 check, compiler discovery, Python.h,
-    Windows reject, ``EXT_SUFFIX``, numpy include, OpenMP detection,
-    ``resolve_build_spec``, sanitizer overrides, platform link flags, and the
-    ``compile_jlinalg`` call under a temp dir. The import probe stays with
-    the caller; ``hatch_build.py`` skips it and instead registers
-    ``force_include`` for the wheel, while the dev-mode callers import the
-    freshly built module to confirm it loads. ``find_c_compiler`` and
-    ``detect_openmp_flags`` are injected so this module never imports its
-    ``_build_support`` siblings — the PEP 517 backend loads it by file path,
-    where such an import would fail.
+    Toolchain detection (compiler, Python/NumPy includes, OpenMP flags) has
+    already happened once in ``toolchain`` — the caller detects it via
+    ``detect_toolchain()`` and reuses it across every ``BuildSpec`` it builds
+    in this process. What remains here is spec-specific: the sources-exist
+    check, the ``EXT_SUFFIX``/output path, ``resolve_build_spec``, sanitizer
+    overrides, platform link flags, and the ``compile_jlinalg`` call under a
+    temp dir.
 
     Preflight failures print through ``error_print`` — as ``WARNING`` and a
     pure-Python-fallback note under the wheel build, as ``ERROR`` in dev mode —
-    and return ``BuildOutcome(ok=False, skipped=True)``. Platform link flags are
+    and return ``BuildResult(phase="preflight", ...)``. Platform link flags are
     taken once from ``LINK_FLAGS_BY_PLATFORM``; the wheel path no longer adds a
     second ``-undefined dynamic_lookup`` on macOS.
     """
     resolved_env = os.environ if env is None else env
     if error_print is None:
         error_print = verbose_print
-    system = _platform.system()
     lead = "WARNING" if not dev_mode else "ERROR"
     tail = " (pure-Python fallback)." if not dev_mode else ""
 
-    def _skip(message: str) -> BuildOutcome:
+    def _skip(message: str) -> BuildResult:
         error_print(f"{lead}: {message}{tail}")
-        return BuildOutcome(ok=False, skipped=True)
+        return BuildResult(phase="preflight", error=message)
 
     pkg_dir = package_dir.joinpath(*spec.package_parts)
     src_dir = pkg_dir.joinpath(*spec.source_parts)
@@ -788,53 +934,15 @@ def run_build(
             "verify the archive is complete"
         )
 
-    try:
-        import numpy as np
-    except ImportError:
-        return _skip("numpy not available")
-    if int(np.__version__.split(".")[0]) < 2:
-        return _skip(
-            f"numpy {np.__version__} is 1.x — C extension requires numpy >= 2.0 "
-            "headers (build with numpy >= 2.0 to avoid an ABI mismatch)"
-        )
-
-    cc_env = resolved_env.get("CC")
-    if cc_env is not None and not cc_env.strip():
-        return _skip("CC is set but empty")
-    compiler = find_c_compiler()
-    if compiler is None:
-        return _skip(
-            "no usable C compiler found on PATH (tried $CC, sysconfig, cc, "
-            "clang, gcc). Install: apt-get install -y gcc (Linux) or "
-            "xcode-select --install (macOS)"
-        )
-    cc_cmd, cc_extra = compiler
-
-    python_inc = sysconfig.get_config_var("INCLUDEPY") or ""
-    python_h = Path(python_inc) / "Python.h" if python_inc else None
-    if not python_h or not python_h.exists():
-        return _skip(
-            f"Python.h not found at {python_inc}. Install development headers: "
-            "apt-get install -y python3-dev (Linux)"
-        )
-
-    if system == "Windows":
-        return _skip("Windows is not supported for C extension compilation")
-
     ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
     out_name = f"{spec.output_stem}{ext_suffix}"
     out_path = pkg_dir / out_name
 
-    numpy_inc = np.get_include()
-    include_dirs = [python_inc, numpy_inc]
+    include_dirs = [toolchain.python_inc, toolchain.numpy_inc]
     include_dirs.extend(str(pkg_dir.joinpath(*parts)) for parts in spec.include_parts)
 
-    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-        cc_cmd, system, verbose_print, _warn=error_print
-    )
-
     diag_flags = tuple(
-        _diagnose_flags(cc_cmd) if spec.supports_diagnose and diagnose else ()
+        _diagnose_flags(toolchain.cc_cmd) if spec.supports_diagnose and diagnose else ()
     )
     base_extras = resolve_build_spec(
         spec, dev_mode=dev_mode, env=resolved_env, diagnose_flags=diag_flags
@@ -848,7 +956,7 @@ def run_build(
 
     # Platform link flags taken ONCE — the macOS -undefined dynamic_lookup that
     # the wheel path used to append twice is now a single copy for every caller.
-    ldflags = list(LINK_FLAGS_BY_PLATFORM.get(system, ()))
+    ldflags = list(LINK_FLAGS_BY_PLATFORM.get(toolchain.system, ()))
 
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"{spec.output_stem.lstrip('_')}_build_"))
     try:
@@ -856,10 +964,10 @@ def run_build(
             sources=sources,
             lapack_sources=lapack_sources,
             include_dirs=include_dirs,
-            cc_cmd=cc_cmd,
-            cc_extra=cc_extra,
-            omp_compile=omp_compile,
-            omp_link=omp_link,
+            cc_cmd=toolchain.cc_cmd,
+            cc_extra=list(toolchain.cc_extra),
+            omp_compile=list(toolchain.omp_compile),
+            omp_link=list(toolchain.omp_link),
             ldflags=ldflags,
             output=out_path,
             tmp_dir=tmp_dir,
@@ -873,11 +981,19 @@ def run_build(
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return BuildOutcome(
-        ok=result.success,
-        result=result,
+    if not result.success:
+        return BuildResult(
+            phase=_result_phase(result),
+            error=result.error or "unknown",
+            used_openmp=result.used_openmp,
+            used_openmp_link=result.used_openmp_link,
+        )
+
+    return BuildResult(
+        phase="ok",
         output_path=out_path,
-        out_name=out_name,
+        used_openmp=result.used_openmp,
+        used_openmp_link=result.used_openmp_link,
     )
 
 
@@ -885,14 +1001,12 @@ def compile_extension(
     spec: BuildSpec,
     package_dir: Path,
     *,
-    find_c_compiler: Callable[[], tuple[str, list[str]] | None],
-    detect_openmp_flags: Callable[..., tuple[list[str], list[str], str]],
     verbose: bool = False,
     diagnose: bool = False,
     on_retry: Callable[[str], None] | None = None,
     out: TextIO | None = None,
 ) -> bool:
-    """Drive ``run_build`` for one ``BuildSpec`` and report the outcome.
+    """Detect the toolchain and drive ``run_build`` for one ``BuildSpec``.
 
     The one dev-mode compile entry point both ``_lmm_accel`` and ``_jlinalg``
     call. Evicts only ``spec.sys_module_key`` from ``sys.modules`` on success
@@ -907,8 +1021,6 @@ def compile_extension(
     Args:
         spec: The ``BuildSpec`` to build (``LMM_ACCEL_SPEC`` / ``JLINALG_SPEC``).
         package_dir: The installed ``jamma/`` package directory.
-        find_c_compiler: Injected compiler discovery, forwarded to ``run_build``.
-        detect_openmp_flags: Injected OpenMP detection, forwarded to ``run_build``.
         verbose: Print per-command compile details. When False (default), only
             errors and a one-line summary print.
         diagnose: Emit compiler vectorization reports (accel only; ignored when
@@ -936,27 +1048,28 @@ def compile_extension(
         else:
             _say(msg)
 
-    outcome = run_build(
+    toolchain = detect_toolchain(verbose_print=_detail, error_print=_say)
+    if isinstance(toolchain, str):
+        _say(f"ERROR: {spec.output_stem} compilation failed: {toolchain}")
+        return False
+
+    result = run_build(
         spec,
         package_dir,
+        toolchain,
         dev_mode=True,
-        find_c_compiler=find_c_compiler,
-        detect_openmp_flags=detect_openmp_flags,
         diagnose=diagnose,
         on_retry=_retry,
         verbose_print=_detail,
         error_print=_say,
     )
-    if not outcome.ok:
-        error = outcome.result.error if outcome.result else "unknown"
-        if not outcome.skipped:
-            _say(f"ERROR: {spec.output_stem} compilation failed: {error}")
+    if not result.ok:
+        if not result.skipped:
+            _say(f"ERROR: {spec.output_stem} compilation failed: {result.error}")
         return False
 
     sys.modules.pop(spec.sys_module_key, None)
 
-    omp_status = (
-        "OpenMP" if outcome.result and outcome.result.used_openmp else "single-threaded"
-    )
-    _say(f"{spec.output_stem} compiled: {outcome.output_path} ({omp_status})")
+    omp_status = "OpenMP" if result.used_openmp else "single-threaded"
+    _say(f"{spec.output_stem} compiled: {result.output_path} ({omp_status})")
     return True

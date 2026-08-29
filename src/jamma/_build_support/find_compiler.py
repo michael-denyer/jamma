@@ -70,20 +70,22 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
         Tuple of (compiler_command, extra_flags) where extra_flags are
         additional arguments split from the compiler string (e.g.
         ``CC="gcc -pthread"`` yields ``("gcc", ["-pthread"])``).
-        None if no usable compiler found.
+        None if no usable compiler found. Also None if ``$CC`` is set but
+        blank — an explicit-but-empty ``$CC`` is a caller error, not an
+        unset one, so this does not fall through to auto-detection.
     """
     # $CC is explicit — honour it or fail, don't silently substitute.
     cc_env = os.environ.get("CC")
+    if cc_env is not None and not cc_env.strip():
+        print(
+            f"$CC is set but empty/whitespace-only ({cc_env!r}); "
+            "returning None rather than silently auto-detecting.",
+            file=sys.stderr,
+        )
+        return None
     if cc_env:
-        parts = cc_env.split()
-        if not parts:
-            print(
-                f"$CC is set but empty/whitespace-only ({cc_env!r}); "
-                "returning None rather than silently auto-detecting.",
-                file=sys.stderr,
-            )
-            return None
-        cmd, extra = parts[0], parts[1:]
+        # cc_env.strip() is non-empty (checked above), so split() is non-empty too.
+        cmd, *extra = cc_env.split()
         if _probe_compiler(cmd):
             return cmd, extra
         print(

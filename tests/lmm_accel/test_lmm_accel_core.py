@@ -64,15 +64,15 @@ def _make_workspace(
 def test_c_extension_importable():
     """The kernels the dispatch table names are importable and callable."""
     from jamma.lmm._lmm_accel import (
-        compute_lmm_chunk_fused_c,
         compute_lmm_chunk_fused_general_c,
+        compute_lmm_chunk_ncvt1_c,
         create_workspace_general_c,
         create_workspace_ncvt1_c,
     )
 
     for fn in (
         create_workspace_ncvt1_c,
-        compute_lmm_chunk_fused_c,
+        compute_lmm_chunk_ncvt1_c,
         create_workspace_general_c,
         compute_lmm_chunk_fused_general_c,
     ):
@@ -104,7 +104,7 @@ def test_c_extension_single_snp(fused_data):
     """Minimal case: n_snps=1 works without index errors."""
     _, _, _, utg_t, _, _, _ = fused_data
 
-    result = accel.require().compute_lmm_chunk_fused_c(
+    result = accel.require().compute_lmm_chunk_ncvt1_c(
         _make_workspace(fused_data), utg_t[:1], 1
     )
 
@@ -122,7 +122,7 @@ def test_c_extension_all_degenerate_snps(fused_data):
     # P_XX to zero. Zeroing every row makes the entire batch degenerate.
     utg_degen = np.zeros_like(utg_t)
 
-    result = accel.require().compute_lmm_chunk_fused_c(
+    result = accel.require().compute_lmm_chunk_ncvt1_c(
         _make_workspace(fused_data), utg_degen, 1
     )
 
@@ -157,7 +157,7 @@ class TestFusedWorkspaceInputValidation:
         _, _, _, utg_t, _, _, _ = fused_data
         ws = _make_workspace(fused_data)
         with pytest.raises(ValueError, match="utg_t"):
-            accel.require().compute_lmm_chunk_fused_c(
+            accel.require().compute_lmm_chunk_ncvt1_c(
                 ws, np.ascontiguousarray(utg_t[:, :10]), 1
             )
 

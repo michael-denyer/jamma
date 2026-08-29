@@ -165,9 +165,9 @@ def test_fused_workspace_reuse_across_chunks(fused_data):
     )
 
     mid = utg_t.shape[0] // 2
-    first = accel.require().compute_lmm_chunk_fused_c(ws, utg_t[:mid], 1)
-    second = accel.require().compute_lmm_chunk_fused_c(ws, utg_t[mid:], 1)
-    full = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    first = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t[:mid], 1)
+    second = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t[mid:], 1)
+    full = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
 
     for key in ("lambdas", "betas"):
         np.testing.assert_allclose(

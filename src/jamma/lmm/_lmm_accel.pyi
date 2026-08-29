@@ -8,10 +8,9 @@ import numpy.typing as npt
 ABI_VERSION: int
 HAS_OPENMP: int
 
-# One n_cvt=1 workspace type. The creator's lmm_mode fixes which compute
-# accepts it: 1 or 4 -> compute_lmm_chunk_fused_c, 2 -> compute_lrt_fused_ws_c,
-# 3 -> compute_score_fused_ws_c. Any other pairing raises ValueError at the
-# call. Under lmm_mode 4 the returned dict carries three extra keys.
+# One n_cvt=1 workspace type. The creator's lmm_mode picks which loop
+# compute_lmm_chunk_ncvt1_c runs: 1 Wald, 2 LRT, 3 Score, 4 all three. Under
+# lmm_mode 4 the returned dict carries three extra keys.
 NcvtOneWorkspace = NewType("NcvtOneWorkspace", object)
 
 def create_workspace_ncvt1_c(
@@ -29,17 +28,7 @@ def create_workspace_ncvt1_c(
     hi_eval_null: npt.NDArray[np.float64] | None = None,
     logl_H0: float | None = None,
 ) -> NcvtOneWorkspace: ...
-def compute_lmm_chunk_fused_c(
-    workspace: NcvtOneWorkspace,
-    utg_t: npt.NDArray[np.float64],
-    n_threads: int,
-) -> dict[str, npt.NDArray[np.float64]]: ...
-def compute_score_fused_ws_c(
-    workspace: NcvtOneWorkspace,
-    utg_t: npt.NDArray[np.float64],
-    n_threads: int,
-) -> dict[str, npt.NDArray[np.float64]]: ...
-def compute_lrt_fused_ws_c(
+def compute_lmm_chunk_ncvt1_c(
     workspace: NcvtOneWorkspace,
     utg_t: npt.NDArray[np.float64],
     n_threads: int,

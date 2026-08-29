@@ -156,7 +156,6 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2, monkeypatch):
         "eigenvalues": eigenvalues,
         "Uab_batch": Uab_batch,
         "n_samples": n_samples,
-        "n_threads": 1,
     }
 
     result = compute_lmm_chunk_numpy(

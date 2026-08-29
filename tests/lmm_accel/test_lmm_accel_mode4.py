@@ -93,7 +93,6 @@ def test_mode4_numpy_fallback_returns_all_keys(score_lrt_data, monkeypatch):
         n_samples=n_samples,
         Hi_eval_null=Hi_eval_null,
         logl_H0=logl_H0,
-        n_threads=1,
     )
 
     for key in _MODE4_KEYS:

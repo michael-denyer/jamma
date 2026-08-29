@@ -59,7 +59,6 @@ class TestCExtensionPerformance:
             n_samples,
             **wald_kwargs,
             Iab_batch=Iab_batch[:50],
-            n_threads=n_threads,
         )
 
         # pytest-benchmark times the C path; speedup vs the Python path is
@@ -72,7 +71,6 @@ class TestCExtensionPerformance:
             n_samples,
             **wald_kwargs,
             Iab_batch=Iab_batch,
-            n_threads=n_threads,
         )
 
         # Numerical parity is the actual correctness invariant. Build the

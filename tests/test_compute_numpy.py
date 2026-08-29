@@ -192,7 +192,6 @@ class TestScoreSplitParity:
                 d["Hi_eval_null"],
                 d["Uab_batch"],
                 d["n_samples"],
-                n_threads=1,
             )
 
         general_result = _general_score_only_result(d)
@@ -238,7 +237,6 @@ class TestLrtSplitParity:
                 n_grid,
                 n_refine,
                 d["logl_H0"],
-                n_threads=1,
             )
 
         general_result = _general_lrt_only_result(d, l_min, l_max, n_grid, n_refine)
@@ -337,7 +335,6 @@ class TestDegenerateSplitParity:
                 d["Hi_eval_null"],
                 d["Uab_batch"],
                 d["n_samples"],
-                n_threads=1,
             )
         general_result = _general_score_only_result(d)
 
@@ -374,7 +371,6 @@ class TestDegenerateSplitParity:
                 n_grid,
                 n_refine,
                 d["logl_H0"],
-                n_threads=1,
             )
         general_result = _general_lrt_only_result(d, l_min, l_max, n_grid, n_refine)
 

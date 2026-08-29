@@ -203,10 +203,15 @@ uv run pytest tests/ -x
 
 1. **Add function pointer typedef** in `include/jlinalg.h`
 2. **Add vendor-dispatch wrapper** in `src/blas_dispatch.c`
-3. **Add Python bridge** in `src/pymodule.c` (buffer extraction, GIL release,
-   error code to exception translation)
-4. **Add fallback** in `__init__.py` (NumPy implementation in the
-   `except ImportError` block)
+3. **Add Python bridge** in `src/pymodule.c`. Keep it to memory-safety
+   checks only (dtype, contiguity, alignment, writeability) and error-code
+   translation; put the semantic contract (argument values, shape math) in
+   the Python validator in step 4, so a bad call raises identical text
+   whether or not the C extension is loaded (`dgemm`/`dsyrk` are the model).
+4. **Add a public Python function** in `__init__.py`: a `_validate_<op>`
+   that raises on a bad call, a `_<op>_numpy_impl` (unchecked NumPy compute),
+   and the public `<op>()` that validates once and dispatches to whichever
+   backend the module bound (`_<op>_backend`).
 5. **Register source files** in `src/jamma/_build_support/compile_and_link.py`
    -- add to `BASELINE_SOURCES` for routines that should compile with the
    default flags, or `LAPACK_SOURCES` for LAPACK routines that need strict
@@ -248,8 +253,9 @@ duplicating flag/source lists.
   NumPy reference.
 - Set `JLINALG_NO_VENDOR_DGEMM=1` to leave vendor dgemm unwired while the
   extension stays loaded, so `blas_has_dgemm` reports 0. Reproduces an
-  LP64-only host, where `py_dgemm` would raise and the Python layer has to
-  route `dgemm` to NumPy instead.
+  LP64-only host: `dgemm()` binds `_dgemm_backend` to the NumPy
+  implementation rather than `py_dgemm`, so the C entry point is never
+  called and never has the chance to raise.
 - Set `JAMMA_SANITIZE=address,undefined` (or any subset) at build time to
   rebuild C extensions with `-fsanitize=...`. Used by
   `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10.

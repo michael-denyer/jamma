@@ -264,7 +264,7 @@ class TestDgemmShapeValidation:
 
         A = np.ones((3, 4), dtype=np.float64)
         B = np.ones((5, 6), dtype=np.float64)  # 4 != 5
-        with pytest.raises(ValueError, match="mismatch"):
+        with pytest.raises(ValueError, match="must match"):
             dgemm(A, B)
 
     def test_incompatible_transposed(self):

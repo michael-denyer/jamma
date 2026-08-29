@@ -35,6 +35,23 @@ def parse_lmm_mode(value: int) -> LmmMode:
     return cast(LmmMode, value)
 
 
+@dataclass(frozen=True, slots=True)
+class NullModel:
+    """The null-model MLE, computed unconditionally for every LMM run.
+
+    The MLE optimization costs 0.8 ms at n=2k and 28.8 ms at n=100k, so
+    gating it by lmm_mode saves nothing. Every runner computes both fields
+    regardless of which test the run reports.
+
+    Attributes:
+        logl_H0: Null-model MLE log-likelihood.
+        hi_eval_null: 1/(lambda_null_mle * eigenvalues + 1), per sample.
+    """
+
+    logl_H0: float
+    hi_eval_null: np.ndarray
+
+
 class RunnerTiming(TypedDict, total=False):
     """Timing breakdown from LMM runner execution.
 

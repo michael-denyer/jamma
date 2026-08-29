@@ -155,9 +155,8 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2, monkeypatch):
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
     n_snps = Uab_batch.shape[0]
 
-    logl_H0, _lambda_mle, Hi_eval_null = _compute_null_model_common(
-        4, eigenvalues, UtW, Uty, n_cvt, False
-    )
+    null_model = _compute_null_model_common(eigenvalues, UtW, Uty, n_cvt, False)
+    logl_H0, Hi_eval_null = null_model.logl_H0, null_model.hi_eval_null
 
     monkeypatch.setattr(compute_numpy, "_accel", None)
 

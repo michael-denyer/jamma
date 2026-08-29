@@ -283,7 +283,6 @@ def _run_numpy_lmm(
         phenotypes=phenotypes,
         W=W,
         n_cvt=n_cvt,
-        lmm_mode=lmm_mode,
         l_min=l_min,
         l_max=l_max,
         show_progress=show_progress,

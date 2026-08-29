@@ -89,7 +89,8 @@ FORBIDDEN: tuple[tuple[str, str], ...] = (
         "Patches null-model preparation. Drive it with inputs.",
     ),
     ("jamma.lmm.eigen", "Patches eigendecomposition. Use synthetic data."),
-    ("jamma.kinship.compute", "Patches kinship computation. Use synthetic data."),
+    ("jamma.kinship.stream", "Patches kinship computation. Use synthetic data."),
+    ("jamma.kinship.loco", "Patches LOCO kinship computation. Use synthetic data."),
 )
 
 # Canonical attribute names that select a dispatch path rather than compute

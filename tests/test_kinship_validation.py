@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from jamma.io import load_plink_binary
-from jamma.kinship import compute_standardized_kinship_streaming
+from jamma.kinship import compute_kinship_streaming
 from jamma.validation import (
     compare_kinship_matrices,
     load_gemma_kinship,
@@ -273,8 +273,11 @@ class TestStandardizedKinshipStreaming:
         require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
         genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
 
-        K_stream = compute_standardized_kinship_streaming(
-            SYNTHETIC.bfile, check_memory=False, show_progress=False
+        K_stream = compute_kinship_streaming(
+            SYNTHETIC.bfile,
+            check_memory=False,
+            show_progress=False,
+            mode="standardized",
         )
         K_inmem = compute_standardized_kinship(genotypes, check_memory=False)
 
@@ -288,8 +291,11 @@ class TestStandardizedKinshipStreaming:
         require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
         genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
 
-        K_stream = compute_standardized_kinship_streaming(
-            SYNTHETIC.bfile, check_memory=False, show_progress=False
+        K_stream = compute_kinship_streaming(
+            SYNTHETIC.bfile,
+            check_memory=False,
+            show_progress=False,
+            mode="standardized",
         )
         K_ref = _numpy_standardized_kinship(genotypes)
 
@@ -303,11 +309,12 @@ class TestStandardizedKinshipStreaming:
         n_samples = genotypes.shape[0]
         valid = np.arange(0, n_samples - 3)
 
-        K_stream = compute_standardized_kinship_streaming(
+        K_stream = compute_kinship_streaming(
             SYNTHETIC.bfile,
             check_memory=False,
             show_progress=False,
             valid_indices=valid,
+            mode="standardized",
         )
         K_inmem = compute_standardized_kinship(genotypes[valid, :], check_memory=False)
 
@@ -320,8 +327,12 @@ class TestStandardizedKinshipStreaming:
     def test_streaming_maf_filter(self):
         """Streaming -gk 2 honors the MAF filter and stays symmetric and finite."""
         require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
-        K = compute_standardized_kinship_streaming(
-            SYNTHETIC.bfile, maf_threshold=0.05, check_memory=False, show_progress=False
+        K = compute_kinship_streaming(
+            SYNTHETIC.bfile,
+            maf_threshold=0.05,
+            check_memory=False,
+            show_progress=False,
+            mode="standardized",
         )
         assert np.allclose(K, K.T)
         assert not np.any(np.isnan(K))

@@ -543,6 +543,40 @@ def test_loco_stream_materialize_matches_iteration():
 
 
 @pytest.mark.tier1
+def test_loco_batch_size_n_chr_matches_batch_size_one_bit_for_bit():
+    """The single batch loop is bit-identical whether it runs one pass or many.
+
+    ``_max_batch_chrs=n_chr`` forces one batch covering every chromosome (the
+    single-pass shape); ``_max_batch_chrs=1`` forces one chromosome per batch
+    (the multi-pass shape). Since #235 merged both into one batch loop keyed by
+    ``S_full_accum=(i == 0)``, the two must produce bit-identical K_loco matrices,
+    not just equivalent downstream association statistics.
+    """
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
+
+    from jamma.kinship import compute_loco_kinship_streaming
+
+    n_chr = 3  # fixture has 3 chromosomes; keep in sync with the BED file
+
+    one_batch = compute_loco_kinship_streaming(
+        _LOCO_BFILE,
+        check_memory=False,
+        show_progress=False,
+        _max_batch_chrs=n_chr,
+    ).materialize()
+    many_batches = compute_loco_kinship_streaming(
+        _LOCO_BFILE,
+        check_memory=False,
+        show_progress=False,
+        _max_batch_chrs=1,
+    ).materialize()
+
+    assert set(one_batch) == set(many_batches) == {"1", "2", "3"}
+    for chr_name in one_batch:
+        np.testing.assert_array_equal(one_batch[chr_name], many_batches[chr_name])
+
+
+@pytest.mark.tier1
 def test_loco_kinship_streaming_mem_budget_reaches_the_gate():
     """mem_budget must reach compute_loco_kinship_streaming's own veto.
 
@@ -622,7 +656,7 @@ def test_decide_loco_passes_reserves_eigendecomp_at_valid_size():
     the n_mat-vs-n_samples reserve difference is material.
     """
     from jamma.core.eigen_plan import _memory_margin_gb, dsyevr_peak_gb
-    from jamma.kinship.compute import _decide_loco_passes
+    from jamma.kinship.loco import _decide_loco_passes
 
     n_samples = 100_000
     n_mat = 70_000  # 30k samples filtered out
@@ -657,7 +691,7 @@ def test_decide_loco_passes_reserves_eigendecomp_at_valid_size():
 @pytest.mark.tier0
 def test_decide_loco_passes_unfiltered_matches_full_size():
     """With no sample filtering (n_mat == n_samples) the reserve fix is a no-op."""
-    from jamma.kinship.compute import _decide_loco_passes
+    from jamma.kinship.loco import _decide_loco_passes
 
     plan = _decide_loco_passes(100_000, 100_000, 22, 10_000, 300.0, max_batch_chrs=None)
     assert not plan.single_pass

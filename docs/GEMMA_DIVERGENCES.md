@@ -156,7 +156,7 @@ if (n_total == 0 || n_aa == n_total || n_bb == n_total) {
 
 **Behavior**: Count genotype classes (AA, AB, BB) and flag as monomorphic if only one class exists.
 
-### JAMMA (kinship/compute.py)
+### JAMMA (kinship/stream.py)
 
 ```python
 # Variance-based detection

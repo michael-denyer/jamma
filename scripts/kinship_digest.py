@@ -1,6 +1,7 @@
 """Bit-exactness digest lever for kinship and eigendecomposition.
 
-``fingerprint.yml`` does not path-match ``src/jamma/kinship/compute.py``, so
+``fingerprint.yml`` does not path-match ``src/jamma/kinship/stream.py`` or
+``src/jamma/kinship/loco.py``, so
 this script is the only bit-exactness gate a kinship change gets. It
 self-baselines the same way ``scripts/run-fingerprint.sh`` does for the C
 accelerator: there is no committed expected-digest file, because digests
@@ -56,7 +57,6 @@ from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship import (  # noqa: E402
     compute_kinship_streaming,
     compute_loco_kinship_streaming,
-    compute_standardized_kinship_streaming,
 )
 from tests.fixture_paths import LOCO, MOUSE, SYNTHETIC  # noqa: E402
 from tests.reference.kinship import (  # noqa: E402
@@ -143,12 +143,13 @@ def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
             )
             digests[f"{key_prefix}/gk1/streaming"] = digest_array(k_gk1_stream)
 
-            k_gk2_stream = compute_standardized_kinship_streaming(
+            k_gk2_stream = compute_kinship_streaming(
                 bfile,
                 maf_threshold=maf,
                 check_memory=False,
                 show_progress=False,
                 valid_indices=valid_indices,
+                mode="standardized",
             )
             digests[f"{key_prefix}/gk2/streaming"] = digest_array(k_gk2_stream)
 

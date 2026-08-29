@@ -19,7 +19,6 @@ from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
     compute_loco_kinship_streaming,
-    compute_standardized_kinship_streaming,
     write_kinship_matrix,
     write_loco_kinship_matrices,
 )
@@ -115,24 +114,17 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
 
     if mode == 1:
         logger.info("Computing centered kinship matrix (streaming)")
-        K = compute_kinship_streaming(
-            config.bfile,
-            maf_threshold=config.maf,
-            miss_threshold=config.miss,
-            check_memory=config.check_memory,
-            show_progress=config.show_progress,
-            ksnps_indices=ksnps_indices,
-        )
     else:
         logger.info("Computing standardized kinship matrix (streaming)")
-        K = compute_standardized_kinship_streaming(
-            config.bfile,
-            maf_threshold=config.maf,
-            miss_threshold=config.miss,
-            check_memory=config.check_memory,
-            show_progress=config.show_progress,
-            ksnps_indices=ksnps_indices,
-        )
+    K = compute_kinship_streaming(
+        config.bfile,
+        maf_threshold=config.maf,
+        miss_threshold=config.miss,
+        check_memory=config.check_memory,
+        show_progress=config.show_progress,
+        ksnps_indices=ksnps_indices,
+        mode="centered" if mode == 1 else "standardized",
+    )
 
     kinship_s = time.perf_counter() - t_kinship
 

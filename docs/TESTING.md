@@ -181,7 +181,7 @@ computation.
 | `ci.yml` → `numpy-fallback-parity` | push/PR | `JAMMA_FORCE_NUMPY_FALLBACK=1 pytest -m tier1 tests/ -x -n 3`. GEMMA parity had never once run under the forced fallback; this job closes that gap for the tier1 selection. Not yet a required context — it waits for a week of green on master before joining the branch protection ruleset by name |
 | `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
 | `fingerprint.yml` | PR touching `_lmm_*.c`, `_lmm_*.h`, `_build_support/`, or the fingerprint scripts | Builds both sides of the merge base and diffs per-entry-point result digests. Tolerance-based tests do not catch last-bit drift |
-| `kinship-digest.yml` | dispatch only | Builds a base ref and HEAD, runs `scripts/kinship_digest.py --out` on each, diffs with `--diff`. `fingerprint.yml` does not path-match `src/jamma/kinship/compute.py`, so this is the only bit-exactness check a kinship or eigendecomposition change gets. Never a required check |
+| `kinship-digest.yml` | dispatch only | Builds a base ref and HEAD, runs `scripts/kinship_digest.py --out` on each, diffs with `--diff`. `fingerprint.yml` does not path-match `src/jamma/kinship/stream.py` or `src/jamma/kinship/loco.py`, so this is the only bit-exactness check a kinship or eigendecomposition change gets. Never a required check |
 | `sanitizers.yml` | Wednesday cron + dispatch | `pytest -m "not benchmark and not slow" -n 0 -p no:randomly` (under ASAN/UBSAN) |
 | `flaky-detect.yml` | Sunday 06:00 UTC + dispatch | `pytest` under five distinct `--randomly-seed` values, opens an issue on disagreement |
 
@@ -480,7 +480,7 @@ both `jamma.jlinalg.eigh`, and `jamma.pipeline.eigendecompose_kinship` is
 `jamma.lmm.eigen.eigendecompose_kinship`. The gate keys on that canonical
 name, so line wrapping and aliasing cannot hide a target from it (the
 regex gate it replaced missed 38 sites that way). It bans `numpy.linalg`,
-`numpy.matmul`, `scipy`, `jamma.jlinalg`, `jamma.kinship.compute` and the
+`numpy.matmul`, `scipy`, `jamma.jlinalg`, `jamma.kinship.stream`, `jamma.kinship.loco` and the
 `jamma.lmm` numerical modules (`likelihood`, `likelihood_numpy`,
 `compute_numpy`, `uab`, `special`, `prepare_common`, `eigen`). ALL_CAPS
 knobs (`_CF_MAX_ITER`) and the documented seams are allowed: `accel._accel`,

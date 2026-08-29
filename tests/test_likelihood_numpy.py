@@ -29,8 +29,9 @@ from jamma.lmm.likelihood_numpy import (
     _batch_reml_at_lambda_numpy,
     golden_section_optimize_lambda_numpy,
 )
-from jamma.lmm.stats import batch_calc_wald_stats_numpy
+from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
 from jamma.lmm.uab import (
+    _batch_compute_pab_varying_numpy,
     batch_compute_iab_numpy,
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
@@ -39,6 +40,17 @@ from jamma.lmm.uab import (
 from tests.builders import rotated_lmm_inputs
 
 pytestmark = pytest.mark.tier0
+
+
+def _wald_stats_from_lambdas(n_cvt, lambdas, eigenvalues, Uab_batch, n_samples):
+    """Wald stats from optimized lambdas, for tests that hold lambdas, not Pab.
+
+    Production code holds Pab from the optimizer and calls
+    batch_calc_wald_stats_from_pab_numpy directly.
+    """
+    Hi_eval_batch = 1.0 / (lambdas[:, None] * eigenvalues[None, :] + 1.0)
+    Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
+    return batch_calc_wald_stats_from_pab_numpy(n_cvt, Pab_batch, n_samples)
 
 
 @pytest.fixture
@@ -783,51 +795,6 @@ def test_optimizer_returns_pab(wald_pab_data):
     assert np.all(np.isfinite(Pab_final)), "Pab_final contains non-finite values"
 
 
-def test_wald_from_pab_matches_original(wald_pab_data):
-    """Wald stats from pre-computed Pab match original path to rtol=1e-14."""
-    from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
-
-    eigenvalues, Uab_batch, Iab_batch, n_samples = wald_pab_data
-    n_cvt = 1
-
-    lambdas, _logls, Pab_final = golden_section_optimize_lambda_numpy(
-        n_cvt, eigenvalues, Uab_batch, Iab_batch
-    )
-
-    # Path A: reconstruct Hi_eval and Pab from the optimal lambdas.
-    betas_orig, ses_orig, pwalds_orig = batch_calc_wald_stats_numpy(
-        n_cvt, lambdas, eigenvalues, Uab_batch, n_samples
-    )
-
-    # Path B: reuse the Pab the optimizer already evaluated at those lambdas.
-    betas_pab, ses_pab, pwalds_pab = batch_calc_wald_stats_from_pab_numpy(
-        n_cvt, Pab_final, n_samples
-    )
-
-    # Wald stats should be identical to machine precision
-    np.testing.assert_allclose(
-        betas_pab,
-        betas_orig,
-        rtol=1e-14,
-        atol=1e-15,
-        err_msg="betas from Pab path differ from original",
-    )
-    np.testing.assert_allclose(
-        ses_pab,
-        ses_orig,
-        rtol=1e-14,
-        atol=1e-15,
-        err_msg="ses from Pab path differ from original",
-    )
-    np.testing.assert_allclose(
-        pwalds_pab,
-        pwalds_orig,
-        rtol=1e-14,
-        atol=1e-15,
-        err_msg="p_walds from Pab path differ from original",
-    )
-
-
 # ---------------------------------------------------------------------------
 # All-NaN grid test for _batch_golden_section_numpy
 # ---------------------------------------------------------------------------
@@ -913,8 +880,6 @@ def test_batch_numpy_all_degenerate_snps_return_lmin():
     lambda change), so the optimizer converges to l_min (the lower bound).
     The critical downstream behavior is that Wald stats return NaN.
     """
-    from jamma.lmm.stats import batch_calc_wald_stats_numpy
-
     rng = np.random.default_rng(42)
     n, n_snps = 30, 5
     l_min = 1e-5
@@ -929,9 +894,7 @@ def test_batch_numpy_all_degenerate_snps_return_lmin():
     lambdas, logls, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
     )
-    betas, ses, pwalds = batch_calc_wald_stats_numpy(
-        1, lambdas, eigenvalues, Uab_batch, n
-    )
+    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
 
     assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
 
@@ -957,8 +920,6 @@ def test_batch_numpy_mixed_degenerate_and_valid_snps():
     valid SNPs produce finite stats. Both run in the same batch without
     cross-SNP contamination.
     """
-    from jamma.lmm.stats import batch_calc_wald_stats_numpy
-
     rng = np.random.default_rng(99)
     n, n_snps = 30, 5
     l_min = 1e-5
@@ -976,9 +937,7 @@ def test_batch_numpy_mixed_degenerate_and_valid_snps():
     lambdas, logls, _ = golden_section_optimize_lambda_numpy(
         1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
     )
-    betas, ses, pwalds = batch_calc_wald_stats_numpy(
-        1, lambdas, eigenvalues, Uab_batch, n
-    )
+    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
 
     degenerate_idxs = [0, 2, 4]
     valid_idxs = [1, 3]
@@ -1023,7 +982,6 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
     from jamma.lmm.likelihood_numpy import (
         golden_section_optimize_lambda_split_ncvt1_numpy,
     )
-    from jamma.lmm.stats import batch_calc_wald_stats_numpy
     from jamma.lmm.uab import (
         batch_compute_uab_varying_soa_numpy,
         compute_iab_invariant_scalars_ncvt1,
@@ -1069,9 +1027,7 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
 
     # Reconstruct full Uab for Wald stats
     Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa, 1)
-    betas, ses, pwalds = batch_calc_wald_stats_numpy(
-        1, lambdas, eigenvalues, Uab_batch, n
-    )
+    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
 
     # P_XX = 0 -> all Wald stats NaN
     assert np.all(np.isnan(betas)), f"Expected all-NaN betas, got {betas}"
@@ -1090,7 +1046,6 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
     from jamma.lmm.likelihood_numpy import (
         golden_section_optimize_lambda_split_ncvt1_numpy,
     )
-    from jamma.lmm.stats import batch_calc_wald_stats_numpy
     from jamma.lmm.uab import (
         batch_compute_uab_varying_soa_numpy,
         compute_iab_invariant_scalars_ncvt1,
@@ -1128,9 +1083,7 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
     )
 
     Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa, 1)
-    betas, ses, pwalds = batch_calc_wald_stats_numpy(
-        1, lambdas, eigenvalues, Uab_batch, n
-    )
+    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
 
     degenerate_idxs = [0, 2, 4]
     valid_idxs = [1, 3]
@@ -1190,9 +1143,7 @@ def test_generic_batch_numpy_fallback_degenerate_wald_nan():
     )
 
     # Wald stats: P_XX=0 -> all NaN
-    betas, ses, pwalds = batch_calc_wald_stats_numpy(
-        1, lambdas, eigenvalues, Uab_batch, n
-    )
+    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
     assert np.all(np.isnan(betas)), f"Expected all-NaN betas, got {betas}"
     assert np.all(np.isnan(ses)), f"Expected all-NaN ses, got {ses}"
     assert np.all(np.isnan(pwalds)), f"Expected all-NaN pwalds, got {pwalds}"

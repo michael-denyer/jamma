@@ -1,10 +1,9 @@
-"""_lmm_accel C extension tests: SoA split Uab/Iab construction, and workspace guards.
+"""_lmm_accel C extension tests: workspace guards and alignment.
 
 Split from the original single test_lmm_accel module. Shared fixtures
 live in tests/lmm_accel_helpers.py.
 
-The SoA Uab and Iab construction tested at the top is pure NumPy and still feeds
-the live kernels. The C kernels this module used to drive, compute_lmm_batch_split_c
+The C kernels this module used to drive, compute_lmm_batch_split_c
 and the create_workspace_split_c workspace, are not reachable from any
 DispatchPath, and the fused workspace has taken their place. Their parity,
 degenerate-SNP and thread-determinism checks are covered on the fused kernel in
@@ -18,85 +17,6 @@ import pytest
 from jamma.lmm import compute_numpy
 from jamma.lmm.compute_numpy import _c
 from jamma.lmm.schema import LmmConfig
-from jamma.lmm.uab import (
-    batch_compute_iab_numpy,
-    batch_compute_iab_split_ncvt1,
-    batch_compute_uab_split_numpy,
-)
-
-
-@pytest.mark.tier0
-def test_split_uab_matches_full_uab(split_wald_data):
-    """Split Uab construction matches the full 6-column Uab."""
-    from jamma.lmm.uab import batch_compute_uab_numpy
-
-    _, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-    uab_var, uab_inv = batch_compute_uab_split_numpy(1, UtW, Uty, UtG)
-
-    # Varying columns: wx(1), xx(3), xy(4) in full -> 0,1,2 in split
-    np.testing.assert_allclose(
-        uab_var[:, :, 0],
-        full_uab[:, :, 1],
-        rtol=1e-14,
-        err_msg="wx column mismatch",
-    )
-    np.testing.assert_allclose(
-        uab_var[:, :, 1],
-        full_uab[:, :, 3],
-        rtol=1e-14,
-        err_msg="xx column mismatch",
-    )
-    np.testing.assert_allclose(
-        uab_var[:, :, 2],
-        full_uab[:, :, 4],
-        rtol=1e-14,
-        err_msg="xy column mismatch",
-    )
-
-    # Invariant columns: ww(0), wy(2), yy(5) in full -> 0,1,2 in inv
-    # These should be identical across all SNPs in full_uab
-    np.testing.assert_allclose(
-        uab_inv[:, 0],
-        full_uab[0, :, 0],
-        rtol=1e-14,
-        err_msg="ww column mismatch",
-    )
-    np.testing.assert_allclose(
-        uab_inv[:, 1],
-        full_uab[0, :, 2],
-        rtol=1e-14,
-        err_msg="wy column mismatch",
-    )
-    np.testing.assert_allclose(
-        uab_inv[:, 2],
-        full_uab[0, :, 5],
-        rtol=1e-14,
-        err_msg="yy column mismatch",
-    )
-
-
-@pytest.mark.tier0
-def test_split_iab_matches_full_iab(split_wald_data):
-    """Split Iab construction matches the full Iab."""
-    from jamma.lmm.uab import batch_compute_uab_numpy
-
-    _, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
-
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-    full_iab = batch_compute_iab_numpy(1, full_uab)
-
-    uab_var, uab_inv = batch_compute_uab_split_numpy(1, UtW, Uty, UtG)
-    split_iab = batch_compute_iab_split_ncvt1(uab_var, uab_inv)
-
-    np.testing.assert_allclose(
-        split_iab,
-        full_iab,
-        rtol=1e-12,
-        atol=1e-14,
-        err_msg="Split Iab does not match full Iab",
-    )
 
 
 @pytest.mark.tier1

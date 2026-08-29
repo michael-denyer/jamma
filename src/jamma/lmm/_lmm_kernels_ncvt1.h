@@ -34,6 +34,10 @@
  *
  * SoA layout: varying and invariant columns are contiguous (stride-1),
  * enabling SIMD vectorized loads instead of stride-3 gathers.
+ *
+ * pab_out is NULL during refinement iteration; the final evaluation passes
+ * its own buffer to read the Pab this call computed for Wald extraction,
+ * without a second n_samples pass.
  * ------------------------------------------------------------------------- */
 double reml_logl_ncvt1_split(
     const double * restrict var_wx,
@@ -46,7 +50,8 @@ double reml_logl_ncvt1_split(
     double logdet_iab,
     int n_samples,
     double lambda,
-    double reml_const
+    double reml_const,
+    double (*pab_out)[6]
 );
 
 /* -------------------------------------------------------------------------

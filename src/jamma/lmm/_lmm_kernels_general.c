@@ -7,8 +7,8 @@
 
 #include "_lmm_kernels_general.h"
 
-/* wald_from_pab_general lives with the other statistic extractors in the
- * tests unit; the fused-general REML path calls it once per SNP. */
+/* wald_from_pab_general lives with the other statistic extractors in
+ * _lmm_stats.c; the fused-general REML path calls it once per SNP. */
 #include "_lmm_stats.h"
 
 #include <math.h>
@@ -286,39 +286,14 @@ double golden_section_lambda_general(
     double log_opt = (a + b) / 2.0;
     double lambda_opt = exp(log_opt);
 
-    /* Final: compute REML logl + Pab at optimal lambda for Wald extraction */
-    {
-        int ni = t->n_index;
-        int n_var = t->n_var;
-
-        double logdet_h = 0.0;
-        double inv_sums_final[MAX_N_INDEX];
-        double var_sums_final[MAX_N_INDEX];
-        for (int cc = 0; cc < n_inv; cc++) inv_sums_final[cc] = 0.0;
-        for (int cc = 0; cc < n_var; cc++) var_sums_final[cc] = 0.0;
-
-        for (int i = 0; i < n_samples; i++) {
-            double v = lambda_opt * eigenvalues[i] + 1.0;
-            double h = 1.0 / v;
-            logdet_h += log(v);
-            for (int cc = 0; cc < n_inv; cc++)
-                inv_sums_final[cc] += h * uab_inv[cc * n_samples + i];
-            for (int cc = 0; cc < n_var; cc++)
-                var_sums_final[cc] += h * uab_var[cc * n_samples + i];
-        }
-
-        for (int i = 0; i < ni; i++) row0[i] = 0.0;
-        for (int cc = 0; cc < n_inv; cc++)
-            row0[t->invariant_indices[cc]] = inv_sums_final[cc];
-        for (int cc = 0; cc < n_var; cc++)
-            row0[t->varying_indices[cc]] = var_sums_final[cc];
-
-        calc_pab_general(row0, t, pab_scratch);
-
-        *logl_out = reml_finish_general(pab_scratch, t, logdet_h, logdet_iab, reml_const);
-        *is_valid_out = wald_from_pab_general(
-            pab_scratch, t, beta_out, se_out, f_stat_out);
-    }
+    /* Final evaluation: reml_logl_general_fresh fills pab_scratch as a side
+     * effect (the caller's own buffer), so the Wald extraction below reads
+     * the same Pab the logl was computed from without a second pass. */
+    *logl_out = reml_logl_general_fresh(
+        uab_inv, uab_var, eigenvalues, n_samples, lambda_opt,
+        logdet_iab, reml_const, t, row0, pab_scratch);
+    *is_valid_out = wald_from_pab_general(
+        pab_scratch, t, beta_out, se_out, f_stat_out);
 
     return lambda_opt;
 }

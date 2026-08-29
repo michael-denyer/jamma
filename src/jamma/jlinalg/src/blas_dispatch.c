@@ -530,10 +530,79 @@ static int scan_proc_maps_for_blas_candidate(blas_candidate_t *c) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Directory probing -- delegates to jamma.jlinalg._blas_dirs.probe_plan()
+ *
+ * Finding candidate directories is pathlib/importlib work with no need for
+ * dlopen, so it lives in Python. This C side keeps every dlopen/dlsym call;
+ * it only asks Python where to look. `_run_probe_plan` calls the plan once
+ * and hands each `(kind, path)` pair to `visit` in order, stopping early
+ * when `visit` resolves dgemm (mirrors the early-return shape the callers
+ * already had).
+ * ---------------------------------------------------------------------------
+ */
+typedef int (*blas_dir_visitor_fn)(const char *kind, const char *dirpath, blas_candidate_t *c);
+
+static int _run_probe_plan(blas_dir_visitor_fn visit, blas_candidate_t *c) {
+    int dbg = _debug_enabled();
+    int found = 0;
+
+    PyObject *dirs_mod = PyImport_ImportModule("jamma.jlinalg._blas_dirs");
+    if (!dirs_mod) {
+        if (dbg) fprintf(stderr, "jlinalg_dispatch: _blas_dirs import failed\n");
+        PyErr_Clear();
+        return 0;
+    }
+
+    PyObject *plan = PyObject_CallMethod(dirs_mod, "probe_plan", NULL);
+    Py_DECREF(dirs_mod);
+    if (!plan) {
+        if (dbg) fprintf(stderr, "jlinalg_dispatch: probe_plan() failed\n");
+        PyErr_Clear();
+        return 0;
+    }
+
+    Py_ssize_t n = PySequence_Length(plan);
+    for (Py_ssize_t i = 0; i < n && !found; i++) {
+        PyObject *entry = PySequence_GetItem(plan, i);
+        if (!entry) {
+            PyErr_Clear();
+            continue;
+        }
+        PyObject *kind_obj = PySequence_GetItem(entry, 0);
+        PyObject *path_obj = PySequence_GetItem(entry, 1);
+        if (kind_obj && path_obj) {
+            const char *kind = PyUnicode_AsUTF8(kind_obj);
+            const char *dirpath = PyUnicode_AsUTF8(path_obj);
+            if (kind && dirpath) {
+                if (dbg)
+                    fprintf(stderr, "jlinalg_dispatch: probe_plan entry kind=%s path=%s\n", kind,
+                            dirpath);
+                found = visit(kind, dirpath, c);
+            } else {
+                PyErr_Clear();
+            }
+        } else {
+            PyErr_Clear();
+        }
+        Py_XDECREF(kind_obj);
+        Py_XDECREF(path_obj);
+        Py_DECREF(entry);
+    }
+
+    Py_DECREF(plan);
+    return found;
+}
+
+/* ---------------------------------------------------------------------------
  * discover_system_blas -- Full system BLAS discovery (4-step pattern)
  * Populates a blas_candidate_t instead of setting globals.
  * ---------------------------------------------------------------------------
  */
+static int _visit_system_blas_dir(const char *kind, const char *dirpath, blas_candidate_t *c) {
+    if (strcmp(kind, "openblas_or_mkl") != 0) return 0;
+    return scan_dir_for_blas_candidate(dirpath, c);
+}
+
 static void discover_system_blas(blas_candidate_t *c) {
     int dbg = _debug_enabled();
 
@@ -569,285 +638,81 @@ static void discover_system_blas(blas_candidate_t *c) {
         return;
     }
 
-    /* Step 4: Scan numpy's lib directories */
+    /* Step 4: Scan numpy's lib directories (candidate dirs come from Python) */
     if (dbg) fprintf(stderr, "jlinalg_dispatch: step 4 -- numpy dir scan\n");
-    PyObject *np2 = PyImport_ImportModule("numpy");
-    if (!np2) {
-        PyErr_Clear();
-        return;
-    }
-
-    PyObject *np_file = PyObject_GetAttrString(np2, "__file__");
-    if (!np_file) {
-        PyErr_Clear();
-        Py_DECREF(np2);
-        return;
-    }
-
-    PyObject *pathlib = PyImport_ImportModule("pathlib");
-    if (!pathlib) {
-        PyErr_Clear();
-        Py_DECREF(np_file);
-        Py_DECREF(np2);
-        return;
-    }
-
-    PyObject *Path = PyObject_GetAttrString(pathlib, "Path");
-    if (!Path) {
-        PyErr_Clear();
-        Py_DECREF(pathlib);
-        Py_DECREF(np_file);
-        Py_DECREF(np2);
-        return;
-    }
-
-    PyObject *p = PyObject_CallFunctionObjArgs(Path, np_file, NULL);
-    Py_DECREF(np_file);
-    if (!p) {
-        PyErr_Clear();
-        Py_DECREF(Path);
-        Py_DECREF(pathlib);
-        Py_DECREF(np2);
-        return;
-    }
-
-    PyObject *resolved = PyObject_CallMethod(p, "resolve", NULL);
-    Py_DECREF(p);
-    if (!resolved) {
-        PyErr_Clear();
-        Py_DECREF(Path);
-        Py_DECREF(pathlib);
-        Py_DECREF(np2);
-        return;
-    }
-
-    PyObject *np_dir = PyObject_GetAttrString(resolved, "parent");
-    Py_DECREF(resolved);
-    if (!np_dir) {
-        PyErr_Clear();
-        Py_DECREF(Path);
-        Py_DECREF(pathlib);
-        Py_DECREF(np2);
-        return;
-    }
-
-    const char *subpaths[] = {".libs", "_core/.libs", NULL};
-    for (int si = 0; subpaths[si]; si++) {
-        PyObject *candidate = PyObject_CallMethod(np_dir, "__truediv__", "s", subpaths[si]);
-        if (!candidate) {
-            PyErr_Clear();
-            continue;
-        }
-        PyObject *cstr = PyObject_Str(candidate);
-        Py_DECREF(candidate);
-        if (!cstr) {
-            PyErr_Clear();
-            continue;
-        }
-        const char *dirpath = PyUnicode_AsUTF8(cstr);
-        if (dirpath && scan_dir_for_blas_candidate(dirpath, c)) {
-            Py_DECREF(cstr);
-            Py_DECREF(np_dir);
-            Py_DECREF(Path);
-            Py_DECREF(pathlib);
-            Py_DECREF(np2);
-            return;
-        }
-        Py_DECREF(cstr);
-    }
-
-    /* np_dir.parent / 'numpy.libs' */
-    PyObject *np_parent = PyObject_GetAttrString(np_dir, "parent");
-    if (np_parent) {
-        PyObject *candidate = PyObject_CallMethod(np_parent, "__truediv__", "s", "numpy.libs");
-        if (candidate) {
-            PyObject *cstr = PyObject_Str(candidate);
-            Py_DECREF(candidate);
-            if (cstr) {
-                const char *dirpath = PyUnicode_AsUTF8(cstr);
-                if (dirpath && scan_dir_for_blas_candidate(dirpath, c)) {
-                    Py_DECREF(cstr);
-                    Py_DECREF(np_parent);
-                    Py_DECREF(np_dir);
-                    Py_DECREF(Path);
-                    Py_DECREF(pathlib);
-                    Py_DECREF(np2);
-                    return;
-                }
-                Py_DECREF(cstr);
-            }
-        } else {
-            PyErr_Clear();
-        }
-        Py_DECREF(np_parent);
-    } else {
-        PyErr_Clear();
-    }
-
-    Py_DECREF(np_dir);
-    Py_DECREF(Path);
-    Py_DECREF(pathlib);
-    Py_DECREF(np2);
+    _run_probe_plan(_visit_system_blas_dir, c);
 }
 
 /* ---------------------------------------------------------------------------
  * discover_pip_mkl -- Look for pip-installed MKL (site-packages/mkl)
  * ---------------------------------------------------------------------------
  */
+static int _visit_pip_mkl_dir(const char *kind, const char *dirpath, blas_candidate_t *c) {
+    int dbg = _debug_enabled();
+    if (strcmp(kind, "mkl") != 0) return 0;
+
+    if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- trying dir: %s\n", dirpath);
+
+    /* MKL libraries must be loaded in dependency order:
+     * core first, then sequential, then ilp64 */
+    const char *mkl_libs[] = {"libmkl_core", "libmkl_sequential", "libmkl_intel_ilp64", NULL};
+    void *last_handle = NULL;
+
+    for (int li = 0; mkl_libs[li]; li++) {
+        /* Scan directory for matching .so/.dylib */
+        DIR *dir = opendir(dirpath);
+        if (!dir) break;
+
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (!strstr(entry->d_name, mkl_libs[li])) continue;
+            if (!strstr(entry->d_name, ".so") && !strstr(entry->d_name, ".dylib")) continue;
+
+            char fullpath[4096];
+            snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
+            if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- dlopen %s\n", fullpath);
+
+            void *h = dlopen(fullpath, RTLD_LAZY | RTLD_GLOBAL);
+            if (h) {
+                last_handle = h;
+                if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- loaded %s\n", entry->d_name);
+            } else {
+                if (dbg)
+                    fprintf(stderr, "jlinalg_dispatch: pip-mkl -- dlopen failed: %s\n", dlerror());
+            }
+            break;
+        }
+        closedir(dir);
+    }
+
+    if (!last_handle) return 0;
+
+    /* Try to resolve symbols from RTLD_DEFAULT (all loaded globally) */
+    if (!try_resolve_dgemm_candidate(RTLD_DEFAULT, dirpath, c)) return 0;
+
+    if (!c->is_ilp64) {
+        /* Loaded ILP64 MKL libs but only resolved LP64 symbols.
+         * Don't label as ILP64 — would cause ABI mismatch. */
+        if (dbg)
+            fprintf(stderr, "jlinalg_dispatch: pip-mkl -- "
+                            "WARNING: resolved LP64 dgemm from ILP64 MKL path, skipping\n");
+        c->found = 0;
+        return 0;
+    }
+
+    c->name = "MKL-ILP64";
+    resolve_secondary_ops(RTLD_DEFAULT, c);
+    if (dbg)
+        fprintf(stderr, "jlinalg_dispatch: pip-mkl -- resolved (ilp64=%d, lapack=%d)\n",
+                c->is_ilp64, c->has_lapack);
+    return 1;
+}
+
 static void discover_pip_mkl(blas_candidate_t *c) {
     int dbg = _debug_enabled();
-    if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- trying import mkl\n");
-
-    PyObject *mkl = PyImport_ImportModule("mkl");
-    if (!mkl) {
-        PyErr_Clear();
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- mkl module not found\n");
-        return;
+    if (!_run_probe_plan(_visit_pip_mkl_dir, c)) {
+        if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- not found\n");
     }
-
-    PyObject *mkl_file = PyObject_GetAttrString(mkl, "__file__");
-    Py_DECREF(mkl);
-    if (!mkl_file) {
-        PyErr_Clear();
-        if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- mkl.__file__ not found\n");
-        return;
-    }
-
-    PyObject *pathlib = PyImport_ImportModule("pathlib");
-    if (!pathlib) {
-        PyErr_Clear();
-        Py_DECREF(mkl_file);
-        return;
-    }
-
-    PyObject *Path = PyObject_GetAttrString(pathlib, "Path");
-    Py_DECREF(pathlib);
-    if (!Path) {
-        PyErr_Clear();
-        Py_DECREF(mkl_file);
-        return;
-    }
-
-    PyObject *mkl_path = PyObject_CallFunctionObjArgs(Path, mkl_file, NULL);
-    Py_DECREF(mkl_file);
-    if (!mkl_path) {
-        PyErr_Clear();
-        Py_DECREF(Path);
-        return;
-    }
-
-    PyObject *mkl_dir = PyObject_GetAttrString(mkl_path, "parent");
-    Py_DECREF(mkl_path);
-    if (!mkl_dir) {
-        PyErr_Clear();
-        Py_DECREF(Path);
-        return;
-    }
-
-    /* Try mkl_dir / 'mkl.libs' and mkl_dir.parent / 'mkl.libs' */
-    const char *mkl_lib_paths[] = {"mkl.libs", NULL};
-
-    for (int attempt = 0; attempt < 2; attempt++) {
-        PyObject *base = attempt == 0 ? mkl_dir : PyObject_GetAttrString(mkl_dir, "parent");
-        if (!base) {
-            PyErr_Clear();
-            continue;
-        }
-
-        for (int pi = 0; mkl_lib_paths[pi]; pi++) {
-            PyObject *libs_dir = PyObject_CallMethod(base, "__truediv__", "s", mkl_lib_paths[pi]);
-            if (!libs_dir) {
-                PyErr_Clear();
-                continue;
-            }
-            PyObject *libs_str = PyObject_Str(libs_dir);
-            Py_DECREF(libs_dir);
-            if (!libs_str) {
-                PyErr_Clear();
-                continue;
-            }
-            const char *dirpath = PyUnicode_AsUTF8(libs_str);
-            if (!dirpath) {
-                Py_DECREF(libs_str);
-                continue;
-            }
-
-            if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- trying dir: %s\n", dirpath);
-
-            /* MKL libraries must be loaded in dependency order:
-             * core first, then sequential, then ilp64 */
-            const char *mkl_libs[] = {"libmkl_core", "libmkl_sequential", "libmkl_intel_ilp64",
-                                      NULL};
-            void *last_handle = NULL;
-
-            for (int li = 0; mkl_libs[li]; li++) {
-                /* Scan directory for matching .so/.dylib */
-                DIR *dir = opendir(dirpath);
-                if (!dir) break;
-
-                struct dirent *entry;
-                while ((entry = readdir(dir)) != NULL) {
-                    if (!strstr(entry->d_name, mkl_libs[li])) continue;
-                    if (!strstr(entry->d_name, ".so") && !strstr(entry->d_name, ".dylib")) continue;
-
-                    char fullpath[4096];
-                    snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, entry->d_name);
-                    if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- dlopen %s\n", fullpath);
-
-                    void *h = dlopen(fullpath, RTLD_LAZY | RTLD_GLOBAL);
-                    if (h) {
-                        last_handle = h;
-                        if (dbg)
-                            fprintf(stderr, "jlinalg_dispatch: pip-mkl -- loaded %s\n",
-                                    entry->d_name);
-                    } else {
-                        if (dbg)
-                            fprintf(stderr, "jlinalg_dispatch: pip-mkl -- dlopen failed: %s\n",
-                                    dlerror());
-                    }
-                    break;
-                }
-                closedir(dir);
-            }
-
-            if (last_handle) {
-                /* Try to resolve symbols from RTLD_DEFAULT (all loaded globally) */
-                if (try_resolve_dgemm_candidate(RTLD_DEFAULT, dirpath, c)) {
-                    if (!c->is_ilp64) {
-                        /* Loaded ILP64 MKL libs but only resolved LP64 symbols.
-                         * Don't label as ILP64 — would cause ABI mismatch. */
-                        if (dbg)
-                            fprintf(stderr,
-                                    "jlinalg_dispatch: pip-mkl -- "
-                                    "WARNING: resolved LP64 dgemm from ILP64 MKL path, skipping\n");
-                        c->found = 0;
-                        Py_DECREF(libs_str);
-                        if (attempt == 1) Py_DECREF(base);
-                        Py_DECREF(mkl_dir);
-                        Py_DECREF(Path);
-                        return;
-                    }
-                    c->name = "MKL-ILP64";
-                    resolve_secondary_ops(RTLD_DEFAULT, c);
-                    if (dbg)
-                        fprintf(stderr,
-                                "jlinalg_dispatch: pip-mkl -- resolved (ilp64=%d, lapack=%d)\n",
-                                c->is_ilp64, c->has_lapack);
-                    Py_DECREF(libs_str);
-                    if (attempt == 1) Py_DECREF(base);
-                    Py_DECREF(mkl_dir);
-                    Py_DECREF(Path);
-                    return;
-                }
-            }
-            Py_DECREF(libs_str);
-        }
-        if (attempt == 1) Py_DECREF(base);
-    }
-
-    Py_DECREF(mkl_dir);
-    Py_DECREF(Path);
-    if (dbg) fprintf(stderr, "jlinalg_dispatch: pip-mkl -- not found\n");
 }
 
 /* ---------------------------------------------------------------------------

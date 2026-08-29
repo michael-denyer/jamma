@@ -22,6 +22,7 @@ from tests.lmm_accel._helpers import (
     _numpy_ncvt1_score,
     _numpy_ncvt1_wald,
     _prepare_fused_general_data,
+    assert_fused_matches_reference,
     assert_matches_numpy,
 )
 
@@ -621,7 +622,11 @@ def test_runner_fused_general_ncvt2_dispatch():
     Exercises the full build_pab_table_for_c → create_workspace_fused_general →
     compute_lmm_chunk_fused_general_c pipeline through run_lmm_association_numpy.
     Compares fused general results (n_cvt=2 with the C extension) against the
-    NumPy path, reached by dropping the extension.
+    NumPy path, reached by dropping the extension. Not bitwise: the reference
+    run is the NumPy path, not a second C path. Dropping the fused general
+    kernel used to leave the general split kernel in place, and the two agreed
+    to the last bit; no build exports one without the other, so the honest
+    reference is NumPy, which accumulates in a different order.
     """
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
 
@@ -640,31 +645,8 @@ def test_runner_fused_general_ncvt2_dispatch():
     ]
     U = np.linalg.qr(rng.standard_normal((n_samples, n_samples)))[0]
 
-    # Run with fused general enabled (default)
-    result_fused = run_lmm_association_numpy(
-        genotypes=genotypes,
-        phenotypes=phenotypes,
-        kinship=None,
-        snp_info=snp_info,
-        covariates=covariates,
-        eigenvalues=eigenvalues,
-        eigenvectors=U,
-        config=LmmConfig(
-            maf_threshold=0.0,
-            miss_threshold=1.0,
-            check_memory=False,
-            show_progress=False,
-            lmm_mode=1,
-            n_refine=20,
-        ),
-    )
-
-    # Run with fused general disabled → falls back to non-fused general path.
-    # Patch the loader module (accel), which owns dispatch capability flags.
-    from unittest.mock import patch
-
-    with patch("jamma.lmm.accel._accel", None):
-        result_nonfused = run_lmm_association_numpy(
+    def run():
+        return run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=None,
@@ -682,37 +664,16 @@ def test_runner_fused_general_ncvt2_dispatch():
             ),
         )
 
-    assoc_fused = result_fused.associations
-    assoc_nonfused = result_nonfused.associations
-
-    assert len(assoc_fused) == len(assoc_nonfused), (
-        f"Fused: {len(assoc_fused)}, Non-fused: {len(assoc_nonfused)}"
+    # No single spy target: dropping the extension leaves no second C path,
+    # so the reference run is the NumPy path itself (kernel=None skips the
+    # dispatch-reached assertion the other fused tests make).
+    assert_fused_matches_reference(
+        run,
+        fields={"p_wald": 1e-8, "beta": 1e-8},
+        kernel=None,
+        min_count=n_snps * 0.8,
+        atol=1e-14,
     )
-    assert len(assoc_fused) > n_snps * 0.8, (
-        f"Too many SNPs filtered: {len(assoc_fused)} of {n_snps}"
-    )
-
-    # Not bitwise: the reference run is now the NumPy path, not a second C
-    # path. Dropping the fused general kernel used to leave the general split
-    # kernel in place, and the two agreed to the last bit; no build exports one
-    # without the other, so the honest reference is NumPy, which accumulates in
-    # a different order.
-    for a_f, a_nf in zip(assoc_fused, assoc_nonfused, strict=True):
-        assert a_f.rs == a_nf.rs, f"SNP order mismatch: {a_f.rs} vs {a_nf.rs}"
-        np.testing.assert_allclose(
-            a_f.p_wald,
-            a_nf.p_wald,
-            rtol=1e-8,
-            atol=1e-14,
-            err_msg=f"p_wald mismatch for {a_f.rs}",
-        )
-        np.testing.assert_allclose(
-            a_f.beta,
-            a_nf.beta,
-            rtol=1e-8,
-            atol=1e-14,
-            err_msg=f"beta mismatch for {a_f.rs}",
-        )
 
 
 @pytest.mark.tier0

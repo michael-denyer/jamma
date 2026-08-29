@@ -14,6 +14,16 @@ from jamma.validation.compare import (
     load_gemma_assoc,
 )
 from jamma.validation.tolerances import ToleranceConfig
+from tests.fakes.assoc_files import (
+    ALL_TESTS_COLS,
+    ALL_TESTS_FULL_COLS,
+    LRT_COLS,
+    LRT_FULL_COLS,
+    SCORE_COLS,
+    WALD_FULL_COLS,
+    WALD_SHORT_COLS,
+    write_assoc,
+)
 
 pytestmark = pytest.mark.tier0
 
@@ -67,147 +77,6 @@ _SENTINEL_P_LRT = 0.0088
 _SENTINEL_P_SCORE = 0.0099
 
 
-def _write_wald_full(path, rows):
-    """Write Wald-full format (.assoc.txt) with logl_H1."""
-    cols = [
-        "chr",
-        "rs",
-        "ps",
-        "n_miss",
-        "allele1",
-        "allele0",
-        "af",
-        "beta",
-        "se",
-        "logl_H1",
-        "l_remle",
-        "p_wald",
-    ]
-    with open(path, "w") as f:
-        f.write("\t".join(cols) + "\n")
-        for r in rows:
-            f.write("\t".join(str(v) for v in r) + "\n")
-
-
-def _write_wald_short(path, rows):
-    """Write Wald-short format (no logl_H1)."""
-    cols = [
-        "chr",
-        "rs",
-        "ps",
-        "n_miss",
-        "allele1",
-        "allele0",
-        "af",
-        "beta",
-        "se",
-        "l_remle",
-        "p_wald",
-    ]
-    with open(path, "w") as f:
-        f.write("\t".join(cols) + "\n")
-        for r in rows:
-            f.write("\t".join(str(v) for v in r) + "\n")
-
-
-def _write_score(path, rows):
-    """Write Score format."""
-    cols = [
-        "chr",
-        "rs",
-        "ps",
-        "n_miss",
-        "allele1",
-        "allele0",
-        "af",
-        "beta",
-        "se",
-        "p_score",
-    ]
-    with open(path, "w") as f:
-        f.write("\t".join(cols) + "\n")
-        for r in rows:
-            f.write("\t".join(str(v) for v in r) + "\n")
-
-
-def _write_lrt(path, rows):
-    """Write LRT format (no logl_H1)."""
-    cols = ["chr", "rs", "ps", "n_miss", "allele1", "allele0", "af", "l_mle", "p_lrt"]
-    with open(path, "w") as f:
-        f.write("\t".join(cols) + "\n")
-        for r in rows:
-            f.write("\t".join(str(v) for v in r) + "\n")
-
-
-def _write_lrt_full(path, rows):
-    """Write LRT-full format with logl_H1."""
-    cols = [
-        "chr",
-        "rs",
-        "ps",
-        "n_miss",
-        "allele1",
-        "allele0",
-        "af",
-        "logl_H1",
-        "l_mle",
-        "p_lrt",
-    ]
-    with open(path, "w") as f:
-        f.write("\t".join(cols) + "\n")
-        for r in rows:
-            f.write("\t".join(str(v) for v in r) + "\n")
-
-
-def _write_all_tests(path, rows):
-    """Write all-tests format (no logl_H1)."""
-    cols = [
-        "chr",
-        "rs",
-        "ps",
-        "n_miss",
-        "allele1",
-        "allele0",
-        "af",
-        "beta",
-        "se",
-        "l_remle",
-        "l_mle",
-        "p_wald",
-        "p_lrt",
-        "p_score",
-    ]
-    with open(path, "w") as f:
-        f.write("\t".join(cols) + "\n")
-        for r in rows:
-            f.write("\t".join(str(v) for v in r) + "\n")
-
-
-def _write_all_tests_full(path, rows):
-    """Write all-tests-full format with logl_H1."""
-    cols = [
-        "chr",
-        "rs",
-        "ps",
-        "n_miss",
-        "allele1",
-        "allele0",
-        "af",
-        "beta",
-        "se",
-        "logl_H1",
-        "l_remle",
-        "l_mle",
-        "p_wald",
-        "p_lrt",
-        "p_score",
-    ]
-    with open(path, "w") as f:
-        f.write("\t".join(cols) + "\n")
-        for r in rows:
-            f.write("\t".join(str(v) for v in r) + "\n")
-
-
 # ---------------------------------------------------------------------------
 # load_gemma_assoc
 # ---------------------------------------------------------------------------
@@ -219,8 +88,9 @@ class TestLoadGemmaAssoc:
     def test_wald_full_format(self, tmp_path):
         """Parse Wald-full format with logl_H1 column."""
         path = tmp_path / "result.assoc.txt"
-        _write_wald_full(
+        write_assoc(
             path,
+            WALD_FULL_COLS,
             [
                 [
                     "1",
@@ -256,8 +126,9 @@ class TestLoadGemmaAssoc:
     def test_wald_short_format(self, tmp_path):
         """Parse Wald-short format (no logl_H1)."""
         path = tmp_path / "result.assoc.txt"
-        _write_wald_short(
+        write_assoc(
             path,
+            WALD_SHORT_COLS,
             [
                 [
                     "1",
@@ -288,8 +159,9 @@ class TestLoadGemmaAssoc:
     def test_score_format(self, tmp_path):
         """Parse Score test format."""
         path = tmp_path / "result.assoc.txt"
-        _write_score(
+        write_assoc(
             path,
+            SCORE_COLS,
             [
                 [
                     "1",
@@ -319,8 +191,9 @@ class TestLoadGemmaAssoc:
     def test_lrt_format(self, tmp_path):
         """Parse LRT format."""
         path = tmp_path / "result.assoc.txt"
-        _write_lrt(
+        write_assoc(
             path,
+            LRT_COLS,
             [
                 [
                     "1",
@@ -349,8 +222,9 @@ class TestLoadGemmaAssoc:
     def test_lrt_full_format(self, tmp_path):
         """Parse LRT-full format with logl_H1 column."""
         path = tmp_path / "result.assoc.txt"
-        _write_lrt_full(
+        write_assoc(
             path,
+            LRT_FULL_COLS,
             [
                 [
                     "1",
@@ -382,8 +256,9 @@ class TestLoadGemmaAssoc:
     def test_all_tests_format(self, tmp_path):
         """Parse all-tests format (-lmm 4)."""
         path = tmp_path / "result.assoc.txt"
-        _write_all_tests(
+        write_assoc(
             path,
+            ALL_TESTS_COLS,
             [
                 [
                     "1",
@@ -420,8 +295,9 @@ class TestLoadGemmaAssoc:
     def test_all_tests_full_format(self, tmp_path):
         """Parse all-tests-full format with logl_H1 column."""
         path = tmp_path / "result.assoc.txt"
-        _write_all_tests_full(
+        write_assoc(
             path,
+            ALL_TESTS_FULL_COLS,
             [
                 [
                     "1",
@@ -459,8 +335,9 @@ class TestLoadGemmaAssoc:
     def test_multiple_snps(self, tmp_path):
         """Parse file with multiple SNPs."""
         path = tmp_path / "result.assoc.txt"
-        _write_wald_full(
+        write_assoc(
             path,
+            WALD_FULL_COLS,
             [
                 [
                     "1",

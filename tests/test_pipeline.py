@@ -8,150 +8,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.io import read_fam_phenotypes
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.schema import MIN_N_GRID
+from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.pipeline import PipelineConfig, PipelineRunner
-from jamma.pipeline_memory import memory_preflight
 from tests.builders import write_fam
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, MOUSE, SYNTHETIC
 
 BFILE = SYNTHETIC.bfile
-
-# mouse_hs1940 has SNPs that MAF/missingness filtering actually removes, unlike
-# the tiny synthetic set where every SNP passes.
-_MOUSE_BFILE = MOUSE.bfile
-
-
-@pytest.mark.tier0
-def test_data_classes_still_importable_from_jamma_pipeline():
-    """The three data classes moved to ``pipeline_config`` but the old path stays.
-
-    ``from jamma.pipeline import PipelineConfig`` is not a courtesy re-export.
-    It is what ``jamma.cli`` and ``jamma.gwas`` use, and it is also the import
-    the jamma-databricks notebooks use
-    (``databricks_jamma_vs_gemma_numpy.py`` builds a ``PipelineConfig`` and
-    hands it to ``PipelineRunner``). That consumer lives outside this repo, so
-    nothing here would fail if the re-export were dropped during a later tidy-up.
-
-    Identity rather than importability: a second class definition with the same
-    name would satisfy an import check while breaking ``isinstance``.
-    """
-    from jamma import pipeline, pipeline_config
-
-    for name in ("PipelineConfig", "PipelineResult", "KinshipResult"):
-        assert hasattr(pipeline, name), (
-            f"jamma.pipeline.{name} disappeared; jamma-databricks imports it"
-        )
-        assert getattr(pipeline, name) is getattr(pipeline_config, name), (
-            f"jamma.pipeline.{name} is not the same object as "
-            f"jamma.pipeline_config.{name}; isinstance checks across the two "
-            "import paths would silently disagree"
-        )
-
-
-@pytest.mark.tier0
-class TestPipelineConfig:
-    """Tests for PipelineConfig defaults."""
-
-    def test_defaults(self) -> None:
-        """PipelineConfig has expected default values."""
-        config = PipelineConfig(bfile=Path("test"))
-        assert config.kinship_file is None
-        assert config.covariate_file is None
-        assert config.lmm_mode == 1
-        assert config.maf == 0.01
-        assert config.miss == 0.05
-        assert config.output_dir == Path("output")
-        assert config.output_prefix == "result"
-        assert config.save_kinship is False
-        assert config.check_memory is True
-        assert config.show_progress is True
-        assert config.mem_budget is None
-        assert config.legacy_text is False
-        assert config.phenotype_columns == [1]
-
-    def test_custom_values(self) -> None:
-        """PipelineConfig accepts custom values."""
-        config = PipelineConfig(
-            bfile=Path("data/study"),
-            kinship_file=Path("k.txt"),
-            lmm_mode=4,
-            maf=0.05,
-            miss=0.1,
-            output_dir=Path("results"),
-            output_prefix="my_run",
-            save_kinship=True,
-            check_memory=False,
-            mem_budget=64.0,
-        )
-        assert config.bfile == Path("data/study")
-        assert config.kinship_file == Path("k.txt")
-        assert config.lmm_mode == 4
-        assert config.maf == 0.05
-        assert config.mem_budget == 64.0
-
-    def test_prefix_with_separator_rejected(self) -> None:
-        """A prefix containing a path separator is rejected at construction.
-
-        The output-config dataclass this rule used to live on is gone; the
-        message must stay identical since the CLI matches on it.
-        """
-        with pytest.raises(ValueError, match="must not contain path separators"):
-            PipelineConfig(bfile=BFILE, output_prefix="a/b")
-
-
-@pytest.mark.tier0
-class TestValidateInputs:
-    """Tests for PipelineRunner.validate_inputs."""
-
-    def test_missing_plink_files(self, tmp_path: Path) -> None:
-        """validate_inputs raises FileNotFoundError for missing PLINK files."""
-        config = PipelineConfig(
-            bfile=tmp_path / "nonexistent",
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(FileNotFoundError, match=r"PLINK .bed file"):
-            runner.validate_inputs()
-
-    def test_invalid_lmm_mode(self) -> None:
-        """Construction raises ValueError for invalid lmm_mode."""
-        with pytest.raises(ValueError, match="lmm_mode must be"):
-            PipelineConfig(bfile=BFILE, lmm_mode=99, check_memory=False)
-
-    def test_valid_lmm_modes(self) -> None:
-        """validate_inputs accepts all valid lmm_mode values."""
-        for mode in (1, 2, 3, 4):
-            config = PipelineConfig(
-                bfile=BFILE,
-                lmm_mode=mode,
-                check_memory=False,
-            )
-            runner = PipelineRunner(config)
-            runner.validate_inputs()  # Should not raise
-
-    def test_missing_kinship_file(self, tmp_path: Path) -> None:
-        """validate_inputs raises FileNotFoundError for missing kinship file."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            kinship_file=tmp_path / "nonexistent.cXX.txt",
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(FileNotFoundError, match="Kinship matrix file"):
-            runner.validate_inputs()
-
-    def test_missing_covariate_file(self, tmp_path: Path) -> None:
-        """validate_inputs raises FileNotFoundError for missing covariate file."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            covariate_file=tmp_path / "nonexistent.txt",
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(FileNotFoundError, match="Covariate file"):
-            runner.validate_inputs()
 
 
 def _first_phenotype(runner: PipelineRunner) -> tuple[np.ndarray, int]:
@@ -177,51 +41,6 @@ class TestParsePhenotypes:
         assert len(phenotypes) == 100  # gemma_synthetic has 100 samples
         assert n_analyzed > 0
         assert n_analyzed <= 100
-
-
-@pytest.mark.tier0
-class TestCheckMemory:
-    """Tests for pipeline_memory.memory_preflight."""
-
-    def test_returns_none_when_disabled(self) -> None:
-        """memory_preflight returns None when check_memory=False."""
-        from jamma.lmm.runner import ExecutionPlan
-
-        config = PipelineConfig(
-            bfile=BFILE,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        result = memory_preflight(
-            runner.config,
-            ExecutionPlan(mode="streaming", reason="test"),
-            n_valid=100,
-            n_snps=500,
-            n_cvt=1,
-        )
-        assert result is None
-
-    def test_returns_plan_when_enabled(self) -> None:
-        """memory_preflight returns a MemoryPlan for the streaming mode."""
-        from jamma.lmm.runner import ExecutionPlan
-        from jamma.pipeline_memory import MemoryPlan
-
-        config = PipelineConfig(
-            bfile=BFILE,
-            check_memory=True,
-        )
-        runner = PipelineRunner(config)
-        result = memory_preflight(
-            runner.config,
-            ExecutionPlan(mode="streaming", reason="test"),
-            n_valid=100,
-            n_snps=500,
-            n_cvt=1,
-        )
-
-        assert isinstance(result, MemoryPlan)
-        assert result.total_peak_gb >= 0
-        assert result.available_gb >= 0
 
 
 def _copy_plink_genotypes(dest: Path) -> Path:
@@ -323,149 +142,6 @@ class TestPhenotypeColumnSelection:
             _first_phenotype(runner)
 
 
-@pytest.mark.tier0
-class TestPipelineConfigSnpsFields:
-    """Tests for PipelineConfig SNP filtering fields."""
-
-    def test_snps_fields_defaults(self) -> None:
-        """PipelineConfig has correct defaults for SNP filtering fields."""
-        config = PipelineConfig(bfile=Path("test"))
-        assert config.snps_file is None
-        assert config.ksnps_file is None
-        assert config.hwe_threshold == 0.0
-
-    def test_snps_fields_custom(self) -> None:
-        """PipelineConfig accepts custom SNP filtering values."""
-        config = PipelineConfig(
-            bfile=Path("test"),
-            snps_file=Path("snps.txt"),
-            ksnps_file=Path("ksnps.txt"),
-            hwe_threshold=0.001,
-        )
-        assert config.snps_file == Path("snps.txt")
-        assert config.ksnps_file == Path("ksnps.txt")
-        assert config.hwe_threshold == 0.001
-
-
-@pytest.mark.tier0
-class TestValidateInputsSnpsFields:
-    """Tests for validate_inputs SNP filtering validation."""
-
-    def test_snps_file_not_found(self, tmp_path: Path) -> None:
-        """validate_inputs raises FileNotFoundError for missing snps_file."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            snps_file=tmp_path / "nonexistent_snps.txt",
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(FileNotFoundError, match="SNP list file not found"):
-            runner.validate_inputs()
-
-    def test_ksnps_file_not_found(self, tmp_path: Path) -> None:
-        """validate_inputs raises FileNotFoundError for missing ksnps_file."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            ksnps_file=tmp_path / "nonexistent_ksnps.txt",
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        with pytest.raises(FileNotFoundError, match="Kinship SNP list file not found"):
-            runner.validate_inputs()
-
-    @pytest.mark.parametrize("hwe", [-0.1, 1.5])
-    def test_hwe_outside_unit_interval_fails_at_construction(self, hwe: float):
-        """hwe_threshold is a p-value; anything outside [0, 1] is a config error."""
-        with pytest.raises(ValueError, match="hwe_threshold must be in"):
-            PipelineConfig(bfile=BFILE, hwe_threshold=hwe, check_memory=False)
-
-    def test_hwe_with_loco_fails_at_construction(self) -> None:
-        """-hwe combined with -loco is rejected before any file is read."""
-        with pytest.raises(ValueError, match="not yet supported with -loco"):
-            PipelineConfig(
-                bfile=BFILE, hwe_threshold=0.001, loco=True, check_memory=False
-            )
-
-    def test_cat_requires_covariate_file_at_construction(self) -> None:
-        with pytest.raises(ValueError, match="-cat requires -c"):
-            PipelineConfig(bfile=BFILE, cat_columns=[1], check_memory=False)
-
-    def test_cat_column_below_one_fails_at_construction(self, tmp_path: Path):
-        with pytest.raises(ValueError, match=r"-cat column indices must be >= 1"):
-            PipelineConfig(
-                bfile=BFILE,
-                covariate_file=tmp_path / "cov.txt",
-                cat_columns=[0],
-                check_memory=False,
-            )
-
-
-@pytest.mark.tier0
-class TestPipelineConfigLambdaBounds:
-    """Tests for PipelineConfig lambda bounds (l_min, l_max)."""
-
-    def test_lambda_bounds_defaults(self) -> None:
-        """PipelineConfig has correct defaults for lambda bounds."""
-        config = PipelineConfig(bfile=Path("test"))
-        assert config.l_min == 1e-5
-        assert config.l_max == 1e5
-
-    def test_lambda_bounds_custom(self) -> None:
-        """PipelineConfig accepts custom lambda bounds."""
-        config = PipelineConfig(
-            bfile=BFILE,
-            l_min=1e-3,
-            l_max=1e3,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
-        runner.validate_inputs()  # Should not raise
-        assert config.l_min == 1e-3
-        assert config.l_max == 1e3
-
-    @pytest.mark.parametrize("l_min", [0, -1e-5], ids=["zero", "negative"])
-    def test_lambda_lmin_not_positive_raises(self, l_min: float) -> None:
-        """Construction rejects a non-positive l_min."""
-        with pytest.raises(ValueError, match="l_min must be positive"):
-            PipelineConfig(bfile=BFILE, l_min=l_min, check_memory=False)
-
-    @pytest.mark.parametrize(
-        ("l_min", "l_max"), [(1e-3, 1e-4), (1.0, 1.0)], ids=["less", "equal"]
-    )
-    def test_lambda_lmax_not_above_lmin_raises(
-        self, l_min: float, l_max: float
-    ) -> None:
-        """Construction rejects l_max <= l_min."""
-        with pytest.raises(ValueError, match="must be greater than l_min"):
-            PipelineConfig(bfile=BFILE, l_min=l_min, l_max=l_max, check_memory=False)
-
-
-@pytest.mark.tier0
-class TestPipelineConfigGridResolution:
-    """Tests for PipelineConfig n_grid validation.
-
-    Regression: LmmConfig rejected n_grid < 2, but the LOCO branch used to
-    forward PipelineConfig.n_grid to run_lmm_loco without ever building an
-    LmmConfig, so a one-point grid reached the kernel — after kinship and
-    eigendecomposition on the C path, and silently as lambda = l_min on the
-    NumPy path. Both branches now build one; PipelineConfig.__post_init__
-    builds a throwaway too, which is what makes the failure land here at
-    construction rather than mid-run.
-    """
-
-    @pytest.mark.parametrize("n_grid", [-5, 0, 1])
-    @pytest.mark.parametrize("loco", [False, True], ids=["batch", "loco"])
-    def test_n_grid_below_two_raises(self, n_grid: int, loco: bool) -> None:
-        """Construction fails for both branches, before any compute happens."""
-        with pytest.raises(ValueError, match="n_grid must be >= 2"):
-            PipelineConfig(bfile=Path("test"), n_grid=n_grid, loco=loco)
-
-    def test_minimum_grid_accepted(self) -> None:
-        """n_grid == MIN_N_GRID is the smallest grid that still brackets."""
-        config = PipelineConfig(bfile=Path("test"), n_grid=MIN_N_GRID)
-        assert config.n_grid == 2
-
-
 @pytest.mark.tier1
 class TestPipelineConfigWeightFile:
     """Tests for PipelineConfig weight_file and pipeline weight application."""
@@ -518,332 +194,6 @@ class TestPipelineConfigWeightFile:
         runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="cannot be used with -d/-u"):
             runner.validate_inputs()
-
-    def test_weight_file_applied_to_kinship(self, tmp_path: Path) -> None:
-        """Pipeline applies weights to kinship matrix when weight_file is set."""
-        # Create a weight file with non-trivial weights
-        weight_file = tmp_path / "weights.txt"
-        with open(weight_file, "w") as f:
-            for _ in range(100):
-                f.write("4.0\n")  # All weights = 4.0
-
-        # Run pipeline with weights
-        config_weighted = PipelineConfig(
-            bfile=BFILE,
-            lmm_mode=1,
-            maf=0.01,
-            miss=0.05,
-            output_dir=tmp_path / "weighted",
-            check_memory=False,
-            show_progress=False,
-            weight_file=weight_file,
-        )
-
-        # Run pipeline without weights for comparison
-        config_unweighted = PipelineConfig(
-            bfile=BFILE,
-            lmm_mode=1,
-            maf=0.01,
-            miss=0.05,
-            output_dir=tmp_path / "unweighted",
-            check_memory=False,
-            show_progress=False,
-        )
-
-        runner_w = PipelineRunner(config_weighted)
-        runner_u = PipelineRunner(config_unweighted)
-
-        # Load kinship with and without weights
-        K_weighted = runner_w.load_kinship(100)
-        K_unweighted = runner_u.load_kinship(100)
-
-        # With uniform weights=4.0, K_weighted[i,j] = K[i,j] / sqrt(4*4) = K[i,j] / 4
-        np.testing.assert_allclose(K_weighted, K_unweighted / 4.0, rtol=1e-10)
-
-
-_N_SAMPLES = 100
-_NAN_INDICES = {5, 10, 15}
-
-
-def _valid_indices_excluding(
-    n_samples: int = _N_SAMPLES, exclude: set[int] | None = None
-) -> np.ndarray:
-    """Return sorted array of sample indices excluding the given set."""
-    exclude = exclude or _NAN_INDICES
-    return np.array([i for i in range(n_samples) if i not in exclude])
-
-
-@pytest.mark.tier1
-class TestEarlySampleFiltering:
-    """Tests for early sample filtering before kinship computation."""
-
-    def test_early_sample_filter_pipeline(self, tmp_path: Path) -> None:
-        """Early filtering: NaN phenotypes + save_kinship=False.
-
-        Verifies the pipeline computes valid_mask before kinship and
-        passes valid_indices, producing identical eigenvalues to a
-        direct valid-subset kinship computation.
-        """
-        from jamma.kinship.compute import compute_kinship_streaming
-
-        bfile = _copy_plink_genotypes(tmp_path)
-        write_fam(
-            tmp_path / "test.fam",
-            [1.0 + i * 0.1 for i in range(_N_SAMPLES)],
-            missing_at=_NAN_INDICES,
-        )
-        valid_indices = _valid_indices_excluding()
-
-        out = tmp_path / "output_early"
-        out.mkdir()
-        config = PipelineConfig(
-            bfile=bfile,
-            lmm_mode=1,
-            output_dir=out,
-            check_memory=False,
-            show_progress=False,
-            save_kinship=False,
-            backend="numpy",
-        )
-
-        runner = PipelineRunner(config)
-        K_with_vi = runner.load_kinship(_N_SAMPLES, valid_indices=valid_indices)
-        n_valid = len(valid_indices)
-        assert K_with_vi.shape == (n_valid, n_valid), (
-            f"Expected ({n_valid}, {n_valid}) kinship, got {K_with_vi.shape}"
-        )
-
-        K_ref = compute_kinship_streaming(
-            bfile,
-            maf_threshold=config.maf,
-            miss_threshold=config.miss,
-            check_memory=False,
-            show_progress=False,
-            valid_indices=valid_indices,
-        )
-        np.testing.assert_allclose(
-            K_with_vi,
-            K_ref,
-            rtol=1e-12,
-            err_msg="load_kinship with valid_indices must match direct streaming",
-        )
-
-    def test_save_kinship_full_size(self, tmp_path: Path) -> None:
-        """save_kinship=True: the file is full-size, the return is the subset."""
-        bfile = _copy_plink_genotypes(tmp_path)
-        write_fam(tmp_path / "test.fam", [1.0 + i * 0.1 for i in range(_N_SAMPLES)])
-
-        out = tmp_path / "output_save"
-        out.mkdir()
-        config = PipelineConfig(
-            bfile=bfile,
-            lmm_mode=1,
-            output_dir=out,
-            check_memory=False,
-            show_progress=False,
-            save_kinship=True,
-            backend="numpy",
-        )
-
-        valid_indices = np.array([0, 1, 2, 3, 4, 6, 7, 8, 9])
-        K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
-        assert K.shape == (len(valid_indices), len(valid_indices))
-
-        K_saved = np.load(out / "result.cXX.npy")
-        assert K_saved.shape == (_N_SAMPLES, _N_SAMPLES)
-        np.testing.assert_array_equal(K, K_saved[np.ix_(valid_indices, valid_indices)])
-
-    @pytest.mark.tier1
-    def test_lmm_kinship_applies_config_maf_miss(self) -> None:
-        """-lmm internally-computed kinship applies config MAF/missing filters.
-
-        Regression for Bug 6: load_kinship built the kinship with no MAF or
-        missingness filter (thresholds defaulted to 0.0 / 1.0), while -gk applied
-        them. On mouse_hs1940 the default maf=0.01 removes SNPs, so the filtered
-        kinship differs from the unfiltered one, and load_kinship must match the
-        filtered computation, not the unfiltered one.
-        """
-        from jamma.kinship.compute import compute_kinship_streaming
-
-        require_fixture(
-            _MOUSE_BFILE.with_suffix(".bed"), _MOUSE_BFILE.with_suffix(".fam")
-        )
-
-        config = PipelineConfig(
-            bfile=_MOUSE_BFILE,
-            maf=0.01,
-            miss=0.05,
-            check_memory=False,
-            show_progress=False,
-        )
-        K_load = PipelineRunner(config).load_kinship(1940)
-
-        K_filtered = compute_kinship_streaming(
-            _MOUSE_BFILE,
-            maf_threshold=0.01,
-            miss_threshold=0.05,
-            check_memory=False,
-            show_progress=False,
-        )
-        K_unfiltered = compute_kinship_streaming(
-            _MOUSE_BFILE, check_memory=False, show_progress=False
-        )
-
-        # The filter must actually change the kinship, or the test proves nothing.
-        assert not np.allclose(K_filtered, K_unfiltered, rtol=1e-8)
-        np.testing.assert_allclose(
-            K_load,
-            K_filtered,
-            rtol=1e-12,
-            atol=1e-14,
-            err_msg="load_kinship must apply config maf/miss like -gk does",
-        )
-
-    def test_weight_file_valid_indices(self, tmp_path: Path) -> None:
-        """Weights filtered to match valid_indices under early filtering."""
-        bfile = _copy_plink_genotypes(tmp_path)
-        write_fam(tmp_path / "test.fam", [1.0 + i * 0.1 for i in range(_N_SAMPLES)])
-
-        weight_file = tmp_path / "weights.txt"
-        np.savetxt(weight_file, np.arange(1.0, _N_SAMPLES + 1.0))
-
-        out = tmp_path / "output_wt"
-        out.mkdir()
-        config = PipelineConfig(
-            bfile=bfile,
-            lmm_mode=1,
-            output_dir=out,
-            check_memory=False,
-            show_progress=False,
-            weight_file=weight_file,
-        )
-
-        valid_indices = _valid_indices_excluding()
-        K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
-        n_valid = len(valid_indices)
-        assert K.shape == (n_valid, n_valid), (
-            f"Expected ({n_valid}, {n_valid}) with valid_indices, got {K.shape}"
-        )
-
-    def test_precomputed_kinship_still_works(self, tmp_path: Path) -> None:
-        """Pre-computed kinship from file is subsetted post-load with valid_indices."""
-        from jamma.kinship.compute import compute_kinship_streaming
-
-        bfile = _copy_plink_genotypes(tmp_path)
-        write_fam(tmp_path / "test.fam", [1.0 + i * 0.1 for i in range(_N_SAMPLES)])
-
-        K_full = compute_kinship_streaming(
-            bfile, check_memory=False, show_progress=False
-        )
-        kinship_file = tmp_path / "kinship.cXX.txt"
-        np.savetxt(kinship_file, K_full)
-
-        out = tmp_path / "output_precomp"
-        out.mkdir()
-        config = PipelineConfig(
-            bfile=bfile,
-            lmm_mode=1,
-            output_dir=out,
-            check_memory=False,
-            show_progress=False,
-            kinship_file=kinship_file,
-        )
-
-        valid_indices = _valid_indices_excluding()
-        K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
-
-        n_valid = len(valid_indices)
-        assert K.shape == (n_valid, n_valid)
-        np.testing.assert_allclose(
-            K,
-            K_full[np.ix_(valid_indices, valid_indices)],
-            rtol=1e-12,
-            err_msg="Pre-computed kinship with valid_indices must match np.ix_",
-        )
-
-    def test_run_end_to_end_with_nan_phenotypes(self, tmp_path: Path) -> None:
-        """Full run() with NaN phenotypes triggers early filtering and completes."""
-        bfile = _copy_plink_genotypes(tmp_path)
-        write_fam(
-            tmp_path / "test.fam",
-            [1.0 + i * 0.1 for i in range(_N_SAMPLES)],
-            missing_at=_NAN_INDICES,
-        )
-        n_valid = _N_SAMPLES - len(_NAN_INDICES)
-
-        out = tmp_path / "output_e2e"
-        out.mkdir()
-        config = PipelineConfig(
-            bfile=bfile,
-            lmm_mode=1,
-            output_dir=out,
-            check_memory=False,
-            show_progress=False,
-            save_kinship=False,
-            backend="numpy",
-        )
-
-        result = PipelineRunner(config).run()
-
-        assert result.n_samples == n_valid, (
-            f"Expected {n_valid} samples after NaN filtering, got {result.n_samples}"
-        )
-        assert result.n_snps_tested > 0, "Should test at least some SNPs"
-
-    def test_run_end_to_end_save_kinship_with_nan(self, tmp_path: Path) -> None:
-        """Full run() with save_kinship=True and NaN phenotypes.
-
-        Verifies save_kinship does not change statistical results: the
-        filtered kinship is saved and eigenpairs match the non-save path.
-        """
-        bfile = _copy_plink_genotypes(tmp_path)
-        write_fam(
-            tmp_path / "test.fam",
-            [1.0 + i * 0.1 for i in range(_N_SAMPLES)],
-            missing_at=_NAN_INDICES,
-        )
-        n_valid = _N_SAMPLES - len(_NAN_INDICES)
-
-        # backend stays out of the dict: splatting it would widen the literal
-        # to str and no longer satisfy PipelineConfig's Literal[...] field.
-        common_kwargs = {
-            "bfile": bfile,
-            "lmm_mode": 1,
-            "check_memory": False,
-            "show_progress": False,
-        }
-
-        out_no_save = tmp_path / "output_nosave"
-        out_no_save.mkdir()
-        result_no_save = PipelineRunner(
-            PipelineConfig(
-                **common_kwargs,
-                backend="numpy",
-                output_dir=out_no_save,
-                save_kinship=False,
-            )
-        ).run()
-
-        out_save = tmp_path / "output_save"
-        out_save.mkdir()
-        result_save = PipelineRunner(
-            PipelineConfig(
-                **common_kwargs,
-                backend="numpy",
-                output_dir=out_save,
-                save_kinship=True,
-            )
-        ).run()
-
-        assert result_save.n_samples == result_no_save.n_samples == n_valid
-        assert result_save.n_snps_tested == result_no_save.n_snps_tested
-
-        # Saved kinship should be full (n_samples, n_samples) for reuse
-        K_saved = np.load(out_save / "result.cXX.npy")
-        assert K_saved.shape == (_N_SAMPLES, _N_SAMPLES), (
-            f"save_kinship must write full ({_N_SAMPLES}, {_N_SAMPLES}) "
-            f"kinship for reuse, got {K_saved.shape}"
-        )
 
 
 @pytest.mark.tier1
@@ -1026,13 +376,6 @@ def test_pipeline_loco_numpy(tmp_path: Path) -> None:
     assert result.assoc_path.exists()
 
 
-@pytest.mark.tier0
-def test_pipeline_config_backend_validation() -> None:
-    """PipelineConfig raises ValueError for invalid backend value."""
-    with pytest.raises(ValueError, match="backend must be"):
-        PipelineConfig(bfile=Path("dummy"), backend="invalid")  # type: ignore[bad-argument-type]
-
-
 @pytest.mark.tier1
 @pytest.mark.parametrize("lmm_mode", [2, 3, 4], ids=["LRT", "Score", "All"])
 def test_pipeline_numpy_backend_modes(
@@ -1059,43 +402,6 @@ def test_pipeline_numpy_backend_modes(
 # ===========================================================================
 # Multi-Phenotype Tests
 # ===========================================================================
-
-
-@pytest.mark.tier1
-class TestMultiPhenotypeConfig:
-    """Tests for PipelineConfig multi-phenotype support."""
-
-    def test_phenotype_columns_default_single(self) -> None:
-        """PipelineConfig() has phenotype_columns==[1] by default."""
-        config = PipelineConfig(bfile=Path("test"))
-        assert config.phenotype_columns == [1]
-
-    def test_phenotype_columns_explicit(self) -> None:
-        """An explicit list is kept in the order it was given."""
-        config = PipelineConfig(bfile=Path("test"), phenotype_columns=[1, 2, 3])
-        assert config.phenotype_columns == [1, 2, 3]
-
-    def test_empty_phenotype_columns_raises(self) -> None:
-        """An empty list is a config error, not a stand-in for the default."""
-        with pytest.raises(ValueError, match="must name at least one column"):
-            PipelineConfig(bfile=Path("test"), phenotype_columns=[])
-
-    def test_every_phenotype_column_is_range_checked(self) -> None:
-        """A bad index is caught wherever it sits, not only at the front."""
-        with pytest.raises(ValueError, match="phenotype_columns indices must be >= 1"):
-            PipelineConfig(bfile=Path("test"), phenotype_columns=[1, 0])
-
-    def test_loco_multi_phenotype_error(self) -> None:
-        """PipelineConfig(loco=True, phenotype_columns=[1,2]) raises ValueError."""
-        with pytest.raises(
-            ValueError, match=r"LOCO mode.*does not support multi-phenotype"
-        ):
-            PipelineConfig(bfile=Path("test"), loco=True, phenotype_columns=[1, 2])
-
-    def test_loco_single_phenotype_ok(self) -> None:
-        """PipelineConfig(loco=True, phenotype_columns=[1]) is valid."""
-        config = PipelineConfig(bfile=Path("test"), loco=True, phenotype_columns=[1])
-        assert config.phenotype_columns == [1]
 
 
 @pytest.mark.tier1
@@ -1485,3 +791,119 @@ class TestNSamplesReflectsCovariateFiltering:
             f"got {result.n_samples}"
         )
         assert result.n_samples < n_samples
+
+
+# =============================================================================
+# LMM equivalence tests
+# =============================================================================
+
+# Fixture paths for mouse_hs1940 dataset
+MOUSE_BFILE = MOUSE.bfile
+MOUSE_KINSHIP_FILE = MOUSE.kinship
+
+
+@pytest.mark.slow
+@pytest.mark.tier1
+class TestLMMEquivalence:
+    """Verify loaded-eigen LMM results match fresh-eigen results."""
+
+    @pytest.mark.tier1
+    def test_loaded_eigen_matches_fresh_eigen_lmm(self, tmp_path: Path) -> None:
+        """LMM with loaded eigen files matches LMM with fresh eigendecomp.
+
+        This is the key validation: proves the multi-phenotype eigen reuse
+        workflow produces correct results.
+        """
+        from jamma.kinship import read_kinship_matrix
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.pipeline import PipelineConfig, PipelineRunner
+
+        # 1. Run fresh-eigen pipeline (standard path with kinship)
+        fresh_dir = tmp_path / "fresh"
+        fresh_config = PipelineConfig(
+            bfile=MOUSE_BFILE,
+            kinship_file=MOUSE_KINSHIP_FILE,
+            output_dir=fresh_dir,
+            output_prefix="fresh",
+            check_memory=False,
+            show_progress=False,
+        )
+        fresh_result = PipelineRunner(fresh_config).run()
+
+        # 2. Compute eigen from kinship (subsetted to valid-phenotype samples)
+        from jamma.io.plink import get_plink_metadata
+
+        meta = get_plink_metadata(MOUSE_BFILE)
+        K = read_kinship_matrix(MOUSE_KINSHIP_FILE, n_samples=meta.n_samples)
+
+        # Subset to valid-phenotype samples (same as runner does internally)
+        pheno = read_fam_phenotypes(MOUSE.fam)
+        valid_mask = ~np.isnan(pheno) & (pheno != -9.0)
+        K_valid = K[np.ix_(valid_mask, valid_mask)]
+
+        eigenvalues, eigenvectors = eigendecompose_kinship(K_valid)
+
+        eigen_dir = tmp_path / "eigen"
+        d_path, u_path = write_eigen_files(
+            eigenvalues, eigenvectors, eigen_dir, prefix="test"
+        )
+
+        # 3. Run loaded-eigen pipeline (no kinship, just eigen files)
+        loaded_dir = tmp_path / "loaded"
+        loaded_config = PipelineConfig(
+            bfile=MOUSE_BFILE,
+            eigenvalue_file=d_path,
+            eigenvector_file=u_path,
+            output_dir=loaded_dir,
+            output_prefix="loaded",
+            check_memory=False,
+            show_progress=False,
+        )
+        loaded_result = PipelineRunner(loaded_config).run()
+
+        # 4. Compare results. ToleranceConfig defaults (beta_rtol=1e-2,
+        # se_rtol=1e-5, pvalue_rtol=1e-4) are the same values this test used
+        # to hardcode from the GEMMA_EQUIVALENCE.md tolerance table.
+        from jamma.validation import compare_assoc_results, load_gemma_assoc
+
+        assert fresh_result.n_samples == loaded_result.n_samples
+        assert fresh_result.n_snps_tested == loaded_result.n_snps_tested
+
+        fresh_assoc = load_gemma_assoc(fresh_dir / "fresh.assoc.txt")
+        loaded_assoc = load_gemma_assoc(loaded_dir / "loaded.assoc.txt")
+        comparison = compare_assoc_results(loaded_assoc, fresh_assoc)
+        assert comparison.passed, (
+            f"beta={comparison.beta}, se={comparison.se}, "
+            f"p_wald={comparison.p_wald}, mismatched={comparison.mismatched_snps}"
+        )
+
+    @pytest.mark.tier1
+    def test_write_eigen_flag_creates_files(self, tmp_path: Path) -> None:
+        """PipelineRunner with write_eigen=True creates eigenD/eigenU files."""
+        from jamma.pipeline import PipelineConfig, PipelineRunner
+
+        config = PipelineConfig(
+            bfile=MOUSE_BFILE,
+            kinship_file=MOUSE_KINSHIP_FILE,
+            output_dir=tmp_path,
+            output_prefix="test",
+            check_memory=False,
+            show_progress=False,
+            write_eigen=True,
+        )
+        PipelineRunner(config).run()
+
+        # Default binary format writes .npy files
+        d_path = tmp_path / "test.eigenD.npy"
+        u_path = tmp_path / "test.eigenU.npy"
+
+        assert d_path.exists(), "eigenD file not created"
+        assert u_path.exists(), "eigenU file not created"
+        assert d_path.stat().st_size > 0
+        assert u_path.stat().st_size > 0
+
+        # Verify files are loadable
+        eigenvalues, eigenvectors = read_eigen_files(d_path, u_path)
+        assert eigenvalues.shape[0] > 0
+        assert eigenvectors.shape[0] == eigenvectors.shape[1]
+        assert eigenvalues.shape[0] == eigenvectors.shape[0]

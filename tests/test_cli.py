@@ -330,156 +330,92 @@ KINSHIP_FILE = SYNTHETIC.kinship
 # ===========================================================================
 
 
+def _invoke_multi_n(
+    n_value: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple:
+    """Invoke the CLI with -n n_value against a faked pipeline run.
+
+    Returns (result, factory) so a caller can assert on both the CLI exit
+    and the phenotype_columns the fake pipeline recorded.
+    """
+    outdir = tmp_path / "output"
+    factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(outdir))
+    monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
+
+    result = runner.invoke(
+        main,
+        [
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-lmm",
+            "1",
+            "-k",
+            str(KINSHIP_FILE),
+            "-n",
+            n_value,
+            "-outdir",
+            str(outdir),
+            "--no-check-memory",
+        ],
+    )
+    return result, factory
+
+
+def _invoke_with_n(n_value: str, *, gk: str | None = None):
+    """Invoke the CLI with -n n_value, without a fake pipeline.
+
+    For the -n argument-parsing errors below, which never reach the
+    pipeline. -gk swaps in kinship mode instead of -lmm/-k.
+    """
+    args = ["-bfile", str(EXAMPLE_BFILE)]
+    if gk is not None:
+        args += ["-gk", gk]
+    else:
+        args += ["-lmm", "1", "-k", str(KINSHIP_FILE)]
+    args += ["-n", n_value]
+    return runner.invoke(main, args)
+
+
 class TestMultiNParsing:
     """Tests for CLI -n multi-value parsing."""
 
-    def test_multi_n_space_separated(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("n_value", "expected_columns"),
+        [("1 2 3", [1, 2, 3]), ("1,2,3", [1, 2, 3]), ("1", [1])],
+        ids=["space_separated", "comma_separated", "single_backward_compat"],
+    )
+    def test_multi_n_parses(
+        self,
+        n_value: str,
+        expected_columns: list[int],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """CLI -n '1 2 3' parses to phenotype_columns=[1, 2, 3]."""
-        outdir = tmp_path / "output"
-        factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(outdir))
-        monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
-
-        result = runner.invoke(
-            main,
-            [
-                "-bfile",
-                str(EXAMPLE_BFILE),
-                "-lmm",
-                "1",
-                "-k",
-                str(KINSHIP_FILE),
-                "-n",
-                "1 2 3",
-                "-outdir",
-                str(outdir),
-                "--no-check-memory",
-            ],
-        )
+        """-n accepts space- and comma-separated lists, and a bare single value."""
+        result, factory = _invoke_multi_n(n_value, monkeypatch, tmp_path)
         assert result.exit_code == 0, result.output
-        assert factory.last_config.phenotype_columns == [1, 2, 3]
-
-    def test_multi_n_comma_separated(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """CLI -n '1,2,3' parses to phenotype_columns=[1, 2, 3]."""
-        outdir = tmp_path / "output"
-        factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(outdir))
-        monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
-
-        result = runner.invoke(
-            main,
-            [
-                "-bfile",
-                str(EXAMPLE_BFILE),
-                "-lmm",
-                "1",
-                "-k",
-                str(KINSHIP_FILE),
-                "-n",
-                "1,2,3",
-                "-outdir",
-                str(outdir),
-                "--no-check-memory",
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        assert factory.last_config.phenotype_columns == [1, 2, 3]
-
-    def test_single_n_backward_compat(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """CLI -n 1 still works as before."""
-        outdir = tmp_path / "output"
-        factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(outdir))
-        monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
-
-        result = runner.invoke(
-            main,
-            [
-                "-bfile",
-                str(EXAMPLE_BFILE),
-                "-lmm",
-                "1",
-                "-k",
-                str(KINSHIP_FILE),
-                "-n",
-                "1",
-                "-outdir",
-                str(outdir),
-                "--no-check-memory",
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        assert factory.last_config.phenotype_columns == [1]
+        assert factory.last_config.phenotype_columns == expected_columns
 
     def test_duplicate_n_error(self) -> None:
         """CLI -n '1 1 3' produces a clear error about duplicates."""
-        result = runner.invoke(
-            main,
-            [
-                "-bfile",
-                str(EXAMPLE_BFILE),
-                "-lmm",
-                "1",
-                "-k",
-                str(KINSHIP_FILE),
-                "-n",
-                "1 1 3",
-            ],
-        )
+        result = _invoke_with_n("1 1 3")
         assert result.exit_code != 0
         assert "duplicate" in result.output.lower()
 
     def test_invalid_n_error(self) -> None:
         """CLI -n 'abc' produces a clear error."""
-        result = runner.invoke(
-            main,
-            [
-                "-bfile",
-                str(EXAMPLE_BFILE),
-                "-lmm",
-                "1",
-                "-k",
-                str(KINSHIP_FILE),
-                "-n",
-                "abc",
-            ],
-        )
+        result = _invoke_with_n("abc")
         assert result.exit_code != 0
         assert "integer" in result.output.lower()
 
     def test_empty_n_error(self) -> None:
         """CLI -n '' produces a clear error."""
-        result = runner.invoke(
-            main,
-            [
-                "-bfile",
-                str(EXAMPLE_BFILE),
-                "-lmm",
-                "1",
-                "-k",
-                str(KINSHIP_FILE),
-                "-n",
-                "",
-            ],
-        )
+        result = _invoke_with_n("")
         assert result.exit_code != 0
 
     def test_multi_n_with_gk_error(self) -> None:
         """CLI -n '1 2' -gk 1 produces a clear error."""
-        result = runner.invoke(
-            main,
-            [
-                "-bfile",
-                str(EXAMPLE_BFILE),
-                "-gk",
-                "1",
-                "-n",
-                "1 2",
-            ],
-        )
+        result = _invoke_with_n("1 2", gk="1")
         assert result.exit_code != 0
         assert "not supported" in result.output.lower()
 
@@ -723,3 +659,16 @@ def test_output_prefix_with_separator_reports_a_usage_error():
     assert result.exit_code == 2
     assert "path separators" in result.output
     assert "Traceback" not in result.output
+
+
+class TestCLIFlags:
+    """Verify CLI help shows eigen flags."""
+
+    def test_lmm_help_shows_eigen_flags(self) -> None:
+        """--help output contains -d, -u, and -eigen flags."""
+        result = runner.invoke(main, ["--help"])
+
+        assert result.exit_code == 0
+        assert "-d" in result.output
+        assert "-u" in result.output
+        assert "-eigen" in result.output

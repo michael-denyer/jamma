@@ -5,9 +5,9 @@ Validates:
 - Round-trip precision for eigenvalues and eigenvectors
 - Dimension validation on read
 - Edge cases (empty files, single value, nested dirs)
-- LMM equivalence between fresh and loaded eigendecomposition
-- Flag interaction rules (-d/-u pairing, -loco incompatibility)
-- CLI help output for new flags
+
+Pipeline-level LMM equivalence moved to test_pipeline.py, -d/-u/-loco flag
+validation to test_pipeline_config.py, and the CLI help test to test_cli.py.
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
-from jamma.io import read_fam_phenotypes
 from jamma.lmm.eigen_io import (
     _load_npy_cache,
     _read_eigenvalues,
@@ -28,7 +29,32 @@ from jamma.lmm.eigen_io import (
     read_eigen_files,
     write_eigen_files,
 )
-from tests.fixture_paths import MOUSE
+
+
+@st.composite
+def genotype_matrix(draw, min_samples=10, max_samples=100, min_snps=5, max_snps=50):
+    """Generate realistic genotype matrices (values in {0, 1, 2}).
+
+    Uses a random seed to generate genotypes with realistic variance.
+    """
+    n_samples = draw(st.integers(min_value=min_samples, max_value=max_samples))
+    n_snps = draw(st.integers(min_value=min_snps, max_value=max_snps))
+    seed = draw(st.integers(min_value=0, max_value=2**32 - 1))
+
+    rng = np.random.default_rng(seed)
+
+    # Use varying MAFs to ensure non-constant columns
+    mafs = rng.uniform(0.1, 0.5, n_snps)
+    genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+
+    for j in range(n_snps):
+        p = mafs[j]
+        # Hardy-Weinberg genotype frequencies
+        probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
+        genotypes[:, j] = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=probs)
+
+    return genotypes
+
 
 # =============================================================================
 # File format tests
@@ -572,256 +598,9 @@ class TestAtomicCacheWrite:
 # =============================================================================
 
 # Fixture paths for mouse_hs1940 dataset
-BFILE = MOUSE.bfile
-KINSHIP_FILE = MOUSE.kinship
-
-
-@pytest.mark.slow
-@pytest.mark.tier1
-class TestLMMEquivalence:
-    """Verify loaded-eigen LMM results match fresh-eigen results."""
-
-    @pytest.mark.tier1
-    def test_loaded_eigen_matches_fresh_eigen_lmm(self, tmp_path: Path) -> None:
-        """LMM with loaded eigen files matches LMM with fresh eigendecomp.
-
-        This is the key validation: proves the multi-phenotype eigen reuse
-        workflow produces correct results.
-        """
-        from jamma.kinship import read_kinship_matrix
-        from jamma.lmm.eigen import eigendecompose_kinship
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        # 1. Run fresh-eigen pipeline (standard path with kinship)
-        fresh_dir = tmp_path / "fresh"
-        fresh_config = PipelineConfig(
-            bfile=BFILE,
-            kinship_file=KINSHIP_FILE,
-            output_dir=fresh_dir,
-            output_prefix="fresh",
-            check_memory=False,
-            show_progress=False,
-        )
-        fresh_result = PipelineRunner(fresh_config).run()
-
-        # 2. Compute eigen from kinship (subsetted to valid-phenotype samples)
-        from jamma.io.plink import get_plink_metadata
-
-        meta = get_plink_metadata(BFILE)
-        K = read_kinship_matrix(KINSHIP_FILE, n_samples=meta.n_samples)
-
-        # Subset to valid-phenotype samples (same as runner does internally)
-        pheno = read_fam_phenotypes(MOUSE.fam)
-        valid_mask = ~np.isnan(pheno) & (pheno != -9.0)
-        K_valid = K[np.ix_(valid_mask, valid_mask)]
-
-        eigenvalues, eigenvectors = eigendecompose_kinship(K_valid)
-
-        eigen_dir = tmp_path / "eigen"
-        d_path, u_path = write_eigen_files(
-            eigenvalues, eigenvectors, eigen_dir, prefix="test"
-        )
-
-        # 3. Run loaded-eigen pipeline (no kinship, just eigen files)
-        loaded_dir = tmp_path / "loaded"
-        loaded_config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=u_path,
-            output_dir=loaded_dir,
-            output_prefix="loaded",
-            check_memory=False,
-            show_progress=False,
-        )
-        loaded_result = PipelineRunner(loaded_config).run()
-
-        # 4. Compare results
-        assert fresh_result.n_samples == loaded_result.n_samples
-        assert fresh_result.n_snps_tested == loaded_result.n_snps_tested
-
-        # Read output files and compare columns
-        fresh_lines = (fresh_dir / "fresh.assoc.txt").read_text().strip().splitlines()
-        loaded_lines = (
-            (loaded_dir / "loaded.assoc.txt").read_text().strip().splitlines()
-        )
-
-        assert len(fresh_lines) == len(loaded_lines)
-        assert len(fresh_lines) > 1  # header + data
-
-        # Parse header
-        header = fresh_lines[0].split("\t")
-        beta_idx = header.index("beta")
-        se_idx = header.index("se")
-        p_wald_idx = header.index("p_wald")
-
-        # Compare every SNP
-        for i in range(1, len(fresh_lines)):
-            fresh_cols = fresh_lines[i].split("\t")
-            loaded_cols = loaded_lines[i].split("\t")
-
-            # SNP identity must match
-            assert fresh_cols[1] == loaded_cols[1], f"SNP mismatch at line {i}"
-
-            fresh_beta = float(fresh_cols[beta_idx])
-            loaded_beta = float(loaded_cols[beta_idx])
-            fresh_se = float(fresh_cols[se_idx])
-            loaded_se = float(loaded_cols[se_idx])
-            fresh_p = float(fresh_cols[p_wald_idx])
-            loaded_p = float(loaded_cols[p_wald_idx])
-
-            # Handle NaN SNPs (degenerate)
-            if np.isnan(fresh_beta):
-                assert np.isnan(loaded_beta)
-                continue
-
-            # Standard tolerances from GEMMA_EQUIVALENCE.md tolerance table
-            np.testing.assert_allclose(
-                loaded_beta,
-                fresh_beta,
-                rtol=1e-2,
-                err_msg=f"beta mismatch at SNP {fresh_cols[1]}",
-            )
-            np.testing.assert_allclose(
-                loaded_se,
-                fresh_se,
-                rtol=1e-5,
-                err_msg=f"se mismatch at SNP {fresh_cols[1]}",
-            )
-            np.testing.assert_allclose(
-                loaded_p,
-                fresh_p,
-                rtol=1e-4,
-                err_msg=f"p_wald mismatch at SNP {fresh_cols[1]}",
-            )
-
-    @pytest.mark.tier1
-    def test_write_eigen_flag_creates_files(self, tmp_path: Path) -> None:
-        """PipelineRunner with write_eigen=True creates eigenD/eigenU files."""
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        config = PipelineConfig(
-            bfile=BFILE,
-            kinship_file=KINSHIP_FILE,
-            output_dir=tmp_path,
-            output_prefix="test",
-            check_memory=False,
-            show_progress=False,
-            write_eigen=True,
-        )
-        PipelineRunner(config).run()
-
-        # Default binary format writes .npy files
-        d_path = tmp_path / "test.eigenD.npy"
-        u_path = tmp_path / "test.eigenU.npy"
-
-        assert d_path.exists(), "eigenD file not created"
-        assert u_path.exists(), "eigenU file not created"
-        assert d_path.stat().st_size > 0
-        assert u_path.stat().st_size > 0
-
-        # Verify files are loadable
-        eigenvalues, eigenvectors = read_eigen_files(d_path, u_path)
-        assert eigenvalues.shape[0] > 0
-        assert eigenvectors.shape[0] == eigenvectors.shape[1]
-        assert eigenvalues.shape[0] == eigenvectors.shape[0]
 
 
 # =============================================================================
-# Flag interaction tests (unit-level)
-# =============================================================================
-
-
-@pytest.mark.tier0
-class TestFlagInteractions:
-    """Verify flag validation rules for eigen reuse."""
-
-    def test_validate_d_without_u_raises(self, tmp_path: Path) -> None:
-        """Eigenvalue file without eigenvector file raises ValueError."""
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        # Create a dummy eigenvalue file
-        d_path = tmp_path / "test.eigenD.txt"
-        d_path.write_text("1.0\n2.0\n")
-
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=None,
-            check_memory=False,
-        )
-        with pytest.raises(ValueError, match=r"Both -d.*and -u.*must be provided"):
-            PipelineRunner(config).validate_inputs()
-
-    def test_validate_u_without_d_raises(self, tmp_path: Path) -> None:
-        """Eigenvector file without eigenvalue file raises ValueError."""
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        u_path = tmp_path / "test.eigenU.txt"
-        u_path.write_text("1.0\t0.0\n0.0\t1.0\n")
-
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=None,
-            eigenvector_file=u_path,
-            check_memory=False,
-        )
-        with pytest.raises(ValueError, match=r"Both -d.*and -u.*must be provided"):
-            PipelineRunner(config).validate_inputs()
-
-    def test_validate_eigen_with_loco_raises(self, tmp_path: Path) -> None:
-        """Eigen files with -loco raises ValueError (use --eigen-dir instead)."""
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        d_path = tmp_path / "test.eigenD.txt"
-        u_path = tmp_path / "test.eigenU.txt"
-        d_path.write_text("1.0\n")
-        u_path.write_text("1.0\n")
-
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=u_path,
-            loco=True,
-            check_memory=False,
-        )
-        with pytest.raises(ValueError, match="not supported with -loco"):
-            PipelineRunner(config).validate_inputs()
-
-    def test_validate_eigen_files_not_found_raises(self, tmp_path: Path) -> None:
-        """Nonexistent eigenvalue file raises FileNotFoundError."""
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        d_path = tmp_path / "nonexistent.eigenD.txt"
-        u_path = tmp_path / "test.eigenU.txt"
-        u_path.write_text("1.0\n")
-
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=u_path,
-            check_memory=False,
-        )
-        with pytest.raises(FileNotFoundError, match="Eigenvalue file not found"):
-            PipelineRunner(config).validate_inputs()
-
-    def test_kinship_not_required_with_eigen_files(self, tmp_path: Path) -> None:
-        """Kinship is optional when eigen files are provided."""
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        d_path = tmp_path / "test.eigenD.txt"
-        u_path = tmp_path / "test.eigenU.txt"
-        d_path.write_text("1.0\n2.0\n")
-        u_path.write_text("1.0\t0.0\n0.0\t1.0\n")
-
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=u_path,
-            kinship_file=None,
-            check_memory=False,
-        )
-        # Should NOT raise -- kinship is optional with eigen files
-        PipelineRunner(config).validate_inputs()
 
 
 # =============================================================================
@@ -925,25 +704,151 @@ class TestBinaryEigenIO:
         assert not txt_u.exists(), ".eigenU.txt should NOT be written in binary mode"
 
 
-# =============================================================================
-# CLI flag tests
-# =============================================================================
-
-
 @pytest.mark.tier0
-class TestCLIFlags:
-    """Verify CLI help shows eigen flags."""
+class TestEigenIoRoundTrip:
+    """Property tests for eigendecomposition file I/O precision."""
 
-    def test_lmm_help_shows_eigen_flags(self) -> None:
-        """--help output contains -d, -u, and -eigen flags."""
-        from click.testing import CliRunner
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=10, max_samples=30, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_eigen_roundtrip_reconstruction(self, genotypes, tmp_path_factory):
+        """K = U @ diag(D) @ U.T should hold after write -> read."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+        from tests.reference.kinship import compute_centered_kinship
 
-        from jamma.cli import main
+        K = compute_centered_kinship(genotypes, check_memory=False)
+        # eigendecomp overwrites K in-place; save copy for reconstruction check
+        K_original = K.copy()
+        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 
-        runner = CliRunner()
-        result = runner.invoke(main, ["--help"])
+        d_path, u_path = write_eigen_files(
+            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
+        )
+        D_read, U_read = read_eigen_files(d_path, u_path)
 
-        assert result.exit_code == 0
-        assert "-d" in result.output
-        assert "-u" in result.output
-        assert "-eigen" in result.output
+        # Reconstruct from round-tripped values
+        K_reconstructed = U_read @ np.diag(D_read) @ U_read.T
+
+        # Binary .npy is lossless; tolerance handles eigendecomp float precision
+        scale = max(np.abs(K_original).max(), 1e-10)
+        np.testing.assert_allclose(
+            K_original,
+            K_reconstructed,
+            rtol=1e-7,
+            atol=scale * 1e-8,
+            err_msg="Round-trip reconstruction failed",
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=10, max_samples=30, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_eigen_roundtrip_orthonormality(self, genotypes, tmp_path_factory):
+        """U.T @ U = I should hold after write -> read."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+        from tests.reference.kinship import compute_centered_kinship
+
+        K = compute_centered_kinship(genotypes, check_memory=False)
+        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
+
+        d_path, u_path = write_eigen_files(
+            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
+        )
+        _, U_read = read_eigen_files(d_path, u_path)
+
+        # Binary .npy is lossless; tolerance handles eigendecomp float precision
+        n = U_read.shape[0]
+        np.testing.assert_allclose(
+            U_read.T @ U_read,
+            np.eye(n),
+            rtol=1e-6,
+            atol=n * 1e-9,
+            err_msg="Orthonormality lost after round-trip",
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=10, max_samples=30, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_eigen_roundtrip_eigenvalue_precision(self, genotypes, tmp_path_factory):
+        """Individual eigenvalues survive binary round-trip exactly."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+        from tests.reference.kinship import compute_centered_kinship
+
+        K = compute_centered_kinship(genotypes, check_memory=False)
+        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
+
+        d_path, u_path = write_eigen_files(
+            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
+        )
+        D_read, _ = read_eigen_files(d_path, u_path)
+
+        # Binary .npy is lossless; small tolerance for float round-trip
+        np.testing.assert_allclose(
+            eigenvalues,
+            D_read,
+            rtol=1e-9,
+            err_msg="Eigenvalue precision lost in round-trip",
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=10, max_samples=30, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_eigen_roundtrip_text_precision(self, genotypes, tmp_path_factory):
+        """Eigenvalues survive legacy text (.10g) round-trip within precision limits."""
+        from jamma.lmm.eigen import eigendecompose_kinship
+        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+        from tests.reference.kinship import compute_centered_kinship
+
+        K = compute_centered_kinship(genotypes, check_memory=False)
+        K_original = K.copy()
+        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
+
+        d_path, u_path = write_eigen_files(
+            eigenvalues,
+            U,
+            tmp_path_factory.mktemp("eigen_roundtrip"),
+            prefix="test",
+            legacy_text=True,
+        )
+        D_read, U_read = read_eigen_files(d_path, u_path)
+
+        # .10g format gives ~10 significant digits
+        np.testing.assert_allclose(
+            eigenvalues,
+            D_read,
+            rtol=5e-10,
+            err_msg="Eigenvalue precision lost in text round-trip",
+        )
+
+        # Reconstruction: .10g rounding accumulates through matrix products
+        K_reconstructed = U_read @ np.diag(D_read) @ U_read.T
+        scale = max(np.abs(K_original).max(), 1e-10)
+        np.testing.assert_allclose(
+            K_original,
+            K_reconstructed,
+            rtol=1e-6,
+            atol=scale * 1e-7,
+            err_msg="Text round-trip reconstruction failed",
+        )

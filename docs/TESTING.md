@@ -618,7 +618,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 | Subsystem | Test files | What's covered |
 |---|---|---|
 | **LMM core** | `lmm_accel/` (10 per-kernel-family modules), `test_lmm_unit.py`, `test_lmm_score.py`, `test_lmm_dispatch.py`, `test_lmm_compute_dispatch.py`, `test_lmm_audit.py`, `test_lmm_io_validation.py`, `test_likelihood_numpy.py`, `test_likelihood_derivatives.py` | C accelerator parity vs NumPy reference; Pab/Uab math; Wald/score/LRT statistics; dispatch routing; numerical guards; assoc-line/dispatch-table validation; REML 2nd/3rd derivatives |
-| **LMM runners** | `test_runner_numpy.py`, `test_runner_dispatch.py`, `test_chunk_dispatch.py`, `test_chunk_sizing.py`, `test_lmm_results.py`, `test_numpy_streaming.py`, `test_compute_numpy.py`, `test_chunk_runner_guards.py`, `test_pipeline.py`, `test_pipeline_helpers.py`, `test_pipeline_banner.py`, `test_pipeline_validation_order.py` | Batch + streaming runners; GEMMA parity and covariate runs; dispatch-path selection and the kernel each path builds; `compute_chunk_size_numpy` sizing policy; lambda diagnostics, streamed output and chunk-failure messages; shared chunk runner and its guards; backend selection; pipeline orchestration and validation ordering; CLI banner |
+| **LMM runners** | `test_runner_numpy.py`, `test_runner_dispatch.py`, `test_chunk_dispatch.py`, `test_chunk_sizing.py`, `test_lmm_results.py`, `test_numpy_streaming.py`, `test_compute_numpy.py`, `test_chunk_runner_guards.py`, `test_pipeline.py`, `test_pipeline_config.py`, `test_pipeline_kinship.py`, `test_pipeline_helpers.py`, `test_pipeline_banner.py`, `test_pipeline_validation_order.py` | Batch + streaming runners; GEMMA parity and covariate runs; dispatch-path selection and the kernel each path builds; `compute_chunk_size_numpy` sizing policy; lambda diagnostics, streamed output and chunk-failure messages; shared chunk runner and its guards; backend selection; `PipelineConfig` construction/validation and `load_kinship`/`compute_kinship` behaviour split out of `test_pipeline.py`; pipeline orchestration and validation ordering; CLI banner |
 | **Kinship** | `test_kinship_numpy.py`, `test_kinship_io.py`, `test_kinship_validation.py` | DSYRK-based kinship computation; .cXX.txt I/O; GEMMA parity |
 | **jlinalg (BLAS dispatch)** | `test_jlinalg_dgemm.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py`, `test_jlinalg_dispatch.py`, `test_jlinalg_build.py`, `test_eigh_inplace.py` | DGEMM/DSYRK/eigh wrappers; LP64 vs ILP64 dispatch; vendor BLAS/LAPACK dispatch correctness; build artefact sanity |
 | **LOCO** | `test_loco_numpy.py`, `test_loco_eigen_cache.py`, `test_eigen_cache_key.py`, `test_loco_orchestration.py` | Leave-one-chromosome-out orchestration; per-chromosome eigen cache; cache-key derivation and manifest validation |
@@ -652,9 +652,14 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 Counted at v7.2.0.
 
-- 107 test files, ~44k lines.
-- Largest: `test_likelihood_numpy.py` (~1,500 lines). `test_lmm_accel.py` was
-  split into `tests/lmm_accel/`, eleven modules by kernel family, in 6.0.0.
+- 107 test files, ~44k lines. These file-count and line-count figures drift
+  every time a file splits or folds; treat them as a snapshot, not a gate.
+- `test_lmm_accel.py` was split into `tests/lmm_accel/`, eleven modules by
+  kernel family, in 6.0.0. `test_pipeline.py` and `test_hypothesis.py`
+  crossed 1,000 lines and were split along source seams into
+  `test_pipeline_config.py`, `test_pipeline_kinship.py`, and their existing
+  subsystem files (`test_kinship_numpy.py`, `test_snp_filter.py`,
+  `test_eigen_io.py`).
 - ~220 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
 - 11 files use `@patch`/`MagicMock` (~25 occurrences). Four of them are the `tests/fakes/` package itself. The rest sit at the boundaries catalogued in §2.2.
 - `inspect.getsource()`: zero uses. The ban holds.

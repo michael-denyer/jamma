@@ -20,11 +20,13 @@ import os
 import platform as _platform
 import shutil
 import subprocess
+import sys
 import sysconfig
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TextIO
 
 # ---------------------------------------------------------------------------
 # Data constants — THE single source of truth. The three entry points
@@ -145,7 +147,6 @@ class BuildSpec:
     # auto_recompile_c_extension when a stale/missing .so must be reimported or
     # rebuilt. Stored rather than derived so tests can inject synthetic keys.
     module_name: str = ""  # log name, e.g. "_lmm_accel"
-    compiler_module: str = ""  # dotted path to the compile module
     sys_module_key: str = ""  # sys.modules key of the built extension
     fallback_label: str = ""  # human label for the pure-Python fallback path
     # Symbols a valid, ABI-matched build always exports. Their absence means a
@@ -169,7 +170,6 @@ LMM_ACCEL_SPEC = BuildSpec(
     reads_sentinel_env=True,
     supports_diagnose=True,
     module_name="_lmm_accel",
-    compiler_module="jamma.lmm._compile_accel",
     sys_module_key="jamma.lmm._lmm_accel",
     fallback_label="LMM",
     required_attrs=(
@@ -192,7 +192,6 @@ JLINALG_SPEC = BuildSpec(
     reads_sentinel_env=False,
     supports_diagnose=False,
     module_name="_jlinalg",
-    compiler_module="jamma.jlinalg._compile_jlinalg",
     sys_module_key="jamma.jlinalg._jlinalg",
     fallback_label="jlinalg",
     required_attrs=(
@@ -880,3 +879,84 @@ def run_build(
         output_path=out_path,
         out_name=out_name,
     )
+
+
+def compile_extension(
+    spec: BuildSpec,
+    package_dir: Path,
+    *,
+    find_c_compiler: Callable[[], tuple[str, list[str]] | None],
+    detect_openmp_flags: Callable[..., tuple[list[str], list[str], str]],
+    verbose: bool = False,
+    diagnose: bool = False,
+    on_retry: Callable[[str], None] | None = None,
+    out: TextIO | None = None,
+) -> bool:
+    """Drive ``run_build`` for one ``BuildSpec`` and report the outcome.
+
+    The one dev-mode compile entry point both ``_lmm_accel`` and ``_jlinalg``
+    call. Evicts only ``spec.sys_module_key`` from ``sys.modules`` on success
+    — never the parent package — so callers relying on a stale ``jamma.lmm``
+    or ``jamma.jlinalg`` import are not affected and the module re-execution
+    that caused the #181 self-deadlock cannot happen. Whether the freshly
+    built ``.so`` actually loads is left to the caller: ``python -m`` shims
+    prove it in a fresh subprocess, and ``auto_recompile_c_extension`` proves
+    it by calling ``_import_and_validate`` on the current process immediately
+    after.
+
+    Args:
+        spec: The ``BuildSpec`` to build (``LMM_ACCEL_SPEC`` / ``JLINALG_SPEC``).
+        package_dir: The installed ``jamma/`` package directory.
+        find_c_compiler: Injected compiler discovery, forwarded to ``run_build``.
+        detect_openmp_flags: Injected OpenMP detection, forwarded to ``run_build``.
+        verbose: Print per-command compile details. When False (default), only
+            errors and a one-line summary print.
+        diagnose: Emit compiler vectorization reports (accel only; ignored when
+            ``spec.supports_diagnose`` is False).
+        on_retry: Optional callback invoked with a message when the build
+            retries without OpenMP. Defaults to the same output stream as
+            everything else this function prints.
+        out: Stream to print to. Defaults to ``sys.stderr``.
+
+    Returns:
+        True if compilation succeeded, False otherwise.
+    """
+    stream = sys.stderr if out is None else out
+
+    def _say(*args: object) -> None:
+        print(*args, file=stream, flush=True)
+
+    def _detail(*args: object) -> None:
+        if verbose:
+            _say(*args)
+
+    def _retry(msg: str) -> None:
+        if on_retry is not None:
+            on_retry(msg)
+        else:
+            _say(msg)
+
+    outcome = run_build(
+        spec,
+        package_dir,
+        dev_mode=True,
+        find_c_compiler=find_c_compiler,
+        detect_openmp_flags=detect_openmp_flags,
+        diagnose=diagnose,
+        on_retry=_retry,
+        verbose_print=_detail,
+        error_print=_say,
+    )
+    if not outcome.ok:
+        error = outcome.result.error if outcome.result else "unknown"
+        if not outcome.skipped:
+            _say(f"ERROR: {spec.output_stem} compilation failed: {error}")
+        return False
+
+    sys.modules.pop(spec.sys_module_key, None)
+
+    omp_status = (
+        "OpenMP" if outcome.result and outcome.result.used_openmp else "single-threaded"
+    )
+    _say(f"{spec.output_stem} compiled: {outcome.output_path} ({omp_status})")
+    return True

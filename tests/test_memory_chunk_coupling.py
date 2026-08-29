@@ -72,9 +72,9 @@ def test_uab_iab_gb_scales_with_n_cvt():
     observable GB output, not by inspecting call arguments.
     """
     chunk = 10_000
-    gb_n1 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=1, use_fused=False)
-    gb_n5 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=5, use_fused=False)
-    gb_n10 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=10, use_fused=False)
+    gb_n1 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=1)
+    gb_n5 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=5)
+    gb_n10 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=10)
 
     assert gb_n1 < gb_n5 < gb_n10, (
         f"Uab/Iab must grow with n_cvt, got n_cvt=1:{gb_n1} < 5:{gb_n5} < 10:{gb_n10}"

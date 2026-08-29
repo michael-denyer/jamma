@@ -185,8 +185,6 @@ def estimate_eigendecomp_seconds(
 def estimate_eigendecomp_time(
     n_samples: int,
     n_cores: int | None = None,
-    *,
-    use_dsyevr: bool = False,
 ) -> str:
     """Estimate eigendecomposition wall time as a human-readable string.
 
@@ -196,7 +194,6 @@ def estimate_eigendecomp_time(
     Args:
         n_samples: Number of samples.
         n_cores: Physical core count. None auto-detects.
-        use_dsyevr: Accepted for API compatibility. No multiplier applied.
 
     Returns:
         Minimum estimate string like ">=1h 47m", with BLAS caveat if applicable.

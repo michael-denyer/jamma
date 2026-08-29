@@ -204,10 +204,7 @@ def eigendecompose_kinship(
     )
 
     est_seconds = estimate_eigendecomp_seconds(n_samples, n_threads)
-    logger.info(
-        f"  Estimated time: "
-        f"{estimate_eigendecomp_time(n_samples, n_threads, use_dsyevr=plan.use_dsyevr)}"
-    )
+    logger.info(f"  Estimated time: {estimate_eigendecomp_time(n_samples, n_threads)}")
 
     eigh_driver = "dsyevr" if plan.use_dsyevr else "auto"
 

@@ -224,13 +224,13 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3c' | `jlinalg.eigh()` | Vendor DSYEVD/DSYEVR dispatch with NumPy fallback | [jlinalg/\_\_init\_\_.py](../src/jamma/jlinalg/__init__.py) |
 | 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n^2) workspace) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
 | 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
-| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:471](../src/jamma/lmm/likelihood.py#L471) |
-| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:835](../src/jamma/lmm/likelihood.py#L835) |
-| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:252](../src/jamma/lmm/likelihood.py#L252) |
-| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [likelihood.py:341](../src/jamma/lmm/likelihood.py#L341) |
-| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [likelihood.py:231](../src/jamma/lmm/likelihood.py#L231) |
-| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:793](../src/jamma/lmm/likelihood.py#L793) |
-| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:895](../src/jamma/lmm/likelihood.py#L895) |
+| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:463](../src/jamma/lmm/likelihood.py#L463) |
+| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:827](../src/jamma/lmm/likelihood.py#L827) |
+| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:244](../src/jamma/lmm/likelihood.py#L244) |
+| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [likelihood.py:333](../src/jamma/lmm/likelihood.py#L333) |
+| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [likelihood.py:223](../src/jamma/lmm/likelihood.py#L223) |
+| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:785](../src/jamma/lmm/likelihood.py#L785) |
+| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:887](../src/jamma/lmm/likelihood.py#L887) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3e | `golden_section_optimize_lambda_mle_numpy()` | MLE optimization per SNP (LRT) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:20](../src/jamma/lmm/stats.py#L20) |
@@ -259,10 +259,10 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:143](../src/jamma/lmm/runner_numpy.py#L143) |
-| 4Nb | `GenotypeSource` | Protocol a run's genotype provider implements (stats + chunk stream) | [runner_numpy.py:51](../src/jamma/lmm/runner_numpy.py#L51) |
-| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:78](../src/jamma/lmm/runner_numpy.py#L78) |
-| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:379](../src/jamma/lmm/runner_numpy.py#L379) |
+| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:144](../src/jamma/lmm/runner_numpy.py#L144) |
+| 4Nb | `GenotypeSource` | Protocol a run's genotype provider implements (stats + chunk stream) | [runner_numpy.py:52](../src/jamma/lmm/runner_numpy.py#L52) |
+| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:79](../src/jamma/lmm/runner_numpy.py#L79) |
+| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:380](../src/jamma/lmm/runner_numpy.py#L380) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:274](../src/jamma/lmm/chunk_runner_numpy.py#L274) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:119](../src/jamma/lmm/chunk_runner_numpy.py#L119) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:39](../src/jamma/lmm/chunk_kernel.py#L39) |
@@ -298,8 +298,8 @@ Configuration, memory management, threading, and logging.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:43](../src/jamma/core/memory.py#L43) |
-| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:100](../src/jamma/core/memory.py#L100) |
+| 5c | `MemoryBreakdown` | Estimated memory per workflow stage | [memory.py:104](../src/jamma/core/memory.py#L104) |
+| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:145](../src/jamma/core/memory.py#L145) |
 | 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:28](../src/jamma/core/memory_snapshot.py#L28) |
 | 5c | `cleanup_memory()` | GC + clear caches | [memory_snapshot.py:79](../src/jamma/core/memory_snapshot.py#L79) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:20](../src/jamma/utils/logging.py#L20) |
@@ -311,7 +311,7 @@ Configuration, memory management, threading, and logging.
 | 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:94](../src/jamma/core/progress.py#L94) |
 | 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/core/estimates.py#L149) |
 | 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:185](../src/jamma/core/estimates.py#L185) |
-| 5i | `PHENOTYPE_MISSING` | Missing phenotype sentinel (-9.0) | [constants.py:9](../src/jamma/core/constants.py#L9) |
+| 5i | `PHENOTYPE_MISSING` | Missing phenotype sentinel (-9.0) | [constants.py:10](../src/jamma/core/constants.py#L10) |
 
 ---
 
@@ -563,7 +563,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Matrix writer | [io/matrix_writer.py:87](../src/jamma/io/matrix_writer.py#L87) |
 | Kinship compute | [stream.py:425](../src/jamma/kinship/stream.py#L425) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
-| REML likelihood (`reml_log_likelihood()`) | [likelihood.py:471](../src/jamma/lmm/likelihood.py#L471) |
+| REML likelihood (`reml_log_likelihood()`) | [likelihood.py:463](../src/jamma/lmm/likelihood.py#L463) |
 | Uab/Pab/Iab batches | [uab.py](../src/jamma/lmm/uab.py) |
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | Wald/Score/LRT tests | [stats.py](../src/jamma/lmm/stats.py) |
@@ -581,7 +581,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO config and artifact naming | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
 | Result writer | [lmm/io.py:75](../src/jamma/lmm/io.py#L75) |
-| Memory estimation | [memory.py:273](../src/jamma/core/memory.py#L273) |
+| Memory estimation | [memory.py:357](../src/jamma/core/memory.py#L357) |
 | Threading | [threading.py:42](../src/jamma/core/threading.py#L42) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
 | Validation comparison | [compare.py:432](../src/jamma/validation/compare.py#L432) |

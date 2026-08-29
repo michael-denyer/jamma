@@ -458,7 +458,7 @@ def compute_kinship_streaming(
         maf_threshold: Minimum MAF for SNP inclusion (default 0.0 = no filter).
         miss_threshold: Maximum missing rate (default 1.0 = no filter).
         check_memory: If True (default), check available memory before allocation
-            and raise MemoryError if insufficient.
+            and reject the run if insufficient (see ``core.memory.require``).
         show_progress: If True (default), show progress bar during iteration.
         ksnps_indices: Pre-resolved column indices for -ksnps restriction, or None.
         valid_indices: Optional array of sample indices to keep. When provided,

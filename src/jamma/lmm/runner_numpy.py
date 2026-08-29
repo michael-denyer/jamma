@@ -18,6 +18,7 @@ from typing import Protocol
 import numpy as np
 from loguru import logger
 
+from jamma.core import memory
 from jamma.core.memory import estimate_lmm_memory
 from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.snp_filter import _SNP_STATS_CHUNK_SIZE
@@ -474,16 +475,14 @@ def run_lmm_association_numpy(
                 f"LMM memory: estimated {est.total_gb:.1f}GB, "
                 f"available {est.available_gb:.1f}GB"
             )
-            if not est.sufficient:
-                raise MemoryError(
-                    f"Insufficient memory for LMM workflow with "
-                    f"{n_samples:,} samples × {n_snps:,} SNPs.\n"
-                    f"Need: {est.total_gb:.1f}GB, Available: "
-                    f"{est.available_gb:.1f}GB\n"
-                    f"Breakdown: kinship={est.kinship_gb:.1f}GB, "
-                    f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
-                    f"genotypes={est.genotypes_gb:.1f}GB"
-                )
+            memory.require(
+                est.total_gb,
+                est.available_gb,
+                f"LMM workflow with {n_samples:,} samples x {n_snps:,} SNPs "
+                f"(kinship={est.kinship_gb:.1f}GB, "
+                f"eigenvectors={est.eigenvectors_gb:.1f}GB, "
+                f"genotypes={est.genotypes_gb:.1f}GB)",
+            )
 
     snp_meta = (
         snp_info if isinstance(snp_info, SnpMeta) else SnpMeta.from_dicts(snp_info)

@@ -525,21 +525,13 @@ def compute_loco_kinship_streaming(
         logger.info(f"  Memory budget: {mem_budget:.1f}GB")
 
     if check_memory:
-        if mem_budget is not None and plan.min_required_gb > mem_budget:
-            raise MemoryError(
-                f"Estimated LOCO kinship memory ({plan.min_required_gb:.1f}GB) "
-                f"exceeds budget ({mem_budget}GB). "
-                f"Use --no-check-memory to override."
-            )
-        if plan.min_required_gb + _memory_margin_gb(plan.min_required_gb) > (
-            available_gb
-        ):
-            raise MemoryError(
-                f"Insufficient memory for LOCO kinship: need at least "
-                f"{plan.min_required_gb:.1f}GB for S_full + K_loco_buf + one "
-                f"S_chr + eigendecomp ({plan.eigendecomp_min_gb:.1f}GB), "
-                f"available {available_gb:.1f}GB"
-            )
+        memory.require(
+            plan.min_required_gb,
+            available_gb,
+            f"LOCO kinship (S_full + K_loco_buf + one S_chr + eigendecomp "
+            f"{plan.eigendecomp_min_gb:.1f}GB)",
+            budget_gb=mem_budget,
+        )
 
     batch_size = plan.batch_size
     # At least one batch always runs, even when n_chr_with_snps == 0 (every

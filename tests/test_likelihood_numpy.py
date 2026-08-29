@@ -18,7 +18,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.likelihood import (
     _golden_section_minimize,
     compute_Uab,
@@ -65,110 +64,7 @@ def synthetic_data():
 
 
 # ---------------------------------------------------------------------------
-# Mode dispatch
-# ---------------------------------------------------------------------------
-
-
-def testcompute_lmm_chunk_numpy_all_modes(synthetic_data, monkeypatch):
-    """compute_lmm_chunk_numpy must return non-None expected keys for each mode.
-
-    The extension is cleared because this function is the full-Uab NumPy path,
-    and the runner reaches it only on NUMPY_FALLBACK, which is selected only
-    when the extension is absent.
-    """
-    from jamma.lmm import compute_numpy as cn
-
-    monkeypatch.setattr(cn, "_accel", None)
-
-    eigenvalues, UtW, Uty, UtG = synthetic_data
-    n_samples = eigenvalues.shape[0]
-
-    lambda_null = 0.1
-    Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
-    logl_H0 = -25.0
-
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-
-    # Mode 1: Wald — expects lambdas, logls, betas, ses, pwalds
-    result1 = compute_lmm_chunk_numpy(1, 1, eigenvalues, Uab_batch, n_samples)
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        assert result1[key] is not None, f"Mode 1: key '{key}' is None"
-    assert result1["lambdas_mle"] is None
-    assert result1["p_lrts"] is None
-    assert result1["p_scores"] is None
-
-    # Mode 2: LRT — expects lambdas_mle, p_lrts
-    result2 = compute_lmm_chunk_numpy(
-        2, 1, eigenvalues, Uab_batch, n_samples, logl_H0=logl_H0
-    )
-    for key in ("lambdas_mle", "p_lrts"):
-        assert result2[key] is not None, f"Mode 2: key '{key}' is None"
-    assert result2["lambdas"] is None
-    assert result2["logls"] is None
-    assert result2["betas"] is None
-    assert result2["ses"] is None
-    assert result2["pwalds"] is None
-    assert result2["p_scores"] is None
-
-    # Mode 3: Score — expects betas, ses, p_scores
-    result3 = compute_lmm_chunk_numpy(
-        3, 1, eigenvalues, Uab_batch, n_samples, Hi_eval_null=Hi_eval_null
-    )
-    for key in ("betas", "ses", "p_scores"):
-        assert result3[key] is not None, f"Mode 3: key '{key}' is None"
-    assert result3["lambdas"] is None
-    assert result3["logls"] is None
-    assert result3["pwalds"] is None
-    assert result3["lambdas_mle"] is None
-    assert result3["p_lrts"] is None
-
-    # Mode 4: All — all keys non-None
-    result4 = compute_lmm_chunk_numpy(
-        4,
-        1,
-        eigenvalues,
-        Uab_batch,
-        n_samples,
-        Hi_eval_null=Hi_eval_null,
-        logl_H0=logl_H0,
-    )
-    for key in (
-        "lambdas",
-        "logls",
-        "betas",
-        "ses",
-        "pwalds",
-        "lambdas_mle",
-        "p_lrts",
-        "p_scores",
-    ):
-        assert result4[key] is not None, f"Mode 4: key '{key}' is None"
-
-
-def testcompute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
-    """compute_lmm_chunk_numpy must raise ValueError when required args are absent."""
-    eigenvalues, UtW, Uty, UtG = synthetic_data
-    n_samples = eigenvalues.shape[0]
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-
-    with pytest.raises(ValueError, match="logl_H0 is required"):
-        compute_lmm_chunk_numpy(2, 1, eigenvalues, Uab_batch, n_samples)
-
-    with pytest.raises(ValueError, match="Hi_eval_null is required"):
-        compute_lmm_chunk_numpy(3, 1, eigenvalues, Uab_batch, n_samples)
-
-    # Mode 4 (All) requires both logl_H0 and Hi_eval_null.
-    # Missing logl_H0 is checked first (line order in source).
-    with pytest.raises(ValueError, match="logl_H0 is required"):
-        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples)
-
-    # Providing logl_H0 but omitting Hi_eval_null also raises.
-    with pytest.raises(ValueError, match="Hi_eval_null is required"):
-        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples, logl_H0=-50.0)
-
-
-# ---------------------------------------------------------------------------
-# Scalar P_yy warning deduplication (LIK-07)
+# Scalar P_yy warning deduplication
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +104,7 @@ def test_p_yy_warn_once_scalar():
 
 
 # ---------------------------------------------------------------------------
-# Scalar MLE P_yy without full Pab (LIK-08)
+# Scalar MLE P_yy without full Pab
 # ---------------------------------------------------------------------------
 
 
@@ -370,7 +266,7 @@ def test_mle_scalar_degenerate_p1_xx_zero():
 
 
 # ---------------------------------------------------------------------------
-# Task 1: Precompute REML constants, Iab invariant scalars, golden section fix
+# Precomputed REML constants, Iab invariant scalars, and golden section
 # ---------------------------------------------------------------------------
 
 
@@ -468,7 +364,7 @@ def test_golden_section_accuracy_no_final_eval(synthetic_data):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: Split-Uab REML path for grid and refinement (n_cvt=1)
+# Split-Uab REML path for grid and refinement (n_cvt=1)
 # ---------------------------------------------------------------------------
 
 
@@ -492,34 +388,55 @@ def split_uab_data():
     return eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch
 
 
-def test_grid_reml_split_matches_full(split_uab_data):
-    """_batch_grid_reml_split_ncvt1_numpy must match _batch_grid_reml_numpy."""
-    from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
+@pytest.fixture
+def split_reml_inputs(split_uab_data):
+    """Precomputed split-REML scalars for n_cvt=1: invariant, varying, and const.
+
+    Runs the chain every split-path test needs before it can call the kernel
+    under test: ``compute_iab_invariant_scalars_ncvt1`` for the invariant
+    scalars, its reciprocal ``iab_inv_s_ww``, ``_compute_iab_varying_ncvt1``
+    for the per-SNP varying scalars, and ``_compute_reml_const`` for the
+    degrees-of-freedom constant.
+
+    Returns:
+        (iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, df)
+    """
+    from jamma.lmm.likelihood_numpy import (
+        _compute_iab_varying_ncvt1,
+        _compute_reml_const,
+    )
     from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
 
-    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
+    eigenvalues, uab_varying_soa, uab_invariant_soa, _Uab_batch, _Iab_batch = (
         split_uab_data
     )
-    n_grid = 20
-    lambdas_grid = np.exp(np.linspace(np.log(1e-5), np.log(1e5), n_grid))
+    n_samples = eigenvalues.shape[0]
+    df = n_samples - 2  # n_cvt=1
 
     iab_s_ww, _iab_s_wy, _iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
         uab_invariant_soa
     )
     iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
-
-    n_samples = eigenvalues.shape[0]
-    df = n_samples - 2  # n_cvt=1
-
-    from jamma.lmm.likelihood_numpy import (
-        _compute_iab_varying_ncvt1,
-        _compute_reml_const,
-    )
-
     iab_p1_xx, iab_logdet_var = _compute_iab_varying_ncvt1(
         uab_varying_soa, iab_inv_s_ww
     )
     reml_const = _compute_reml_const(df)
+
+    return iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, df
+
+
+def test_grid_reml_split_matches_full(split_uab_data, split_reml_inputs):
+    """_batch_grid_reml_split_ncvt1_numpy must match _batch_grid_reml_numpy."""
+    from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
+
+    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
+        split_uab_data
+    )
+    iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, _df = (
+        split_reml_inputs
+    )
+    n_grid = 20
+    lambdas_grid = np.exp(np.linspace(np.log(1e-5), np.log(1e5), n_grid))
 
     logls_split = _batch_grid_reml_split_ncvt1_numpy(
         lambdas_grid,
@@ -545,36 +462,21 @@ def test_grid_reml_split_matches_full(split_uab_data):
     )
 
 
-def test_refinement_reml_split_matches_full(split_uab_data):
+def test_refinement_reml_split_matches_full(split_uab_data, split_reml_inputs):
     """_batch_reml_at_lambda_split_ncvt1_numpy must match full path."""
-    from jamma.lmm.likelihood_numpy import (
-        _batch_reml_at_lambda_split_ncvt1_numpy,
-        _compute_reml_const,
-    )
-    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
+    from jamma.lmm.likelihood_numpy import _batch_reml_at_lambda_split_ncvt1_numpy
 
     eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
         split_uab_data
     )
+    iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, _df = (
+        split_reml_inputs
+    )
     n_snps = uab_varying_soa.shape[0]
-    n_samples = eigenvalues.shape[0]
-    df = n_samples - 2
 
     # Per-SNP lambda values (different for each SNP)
     rng = np.random.default_rng(7)
     lambda_vals = np.exp(rng.uniform(np.log(1e-4), np.log(1e3), n_snps))
-
-    iab_s_ww, _iab_s_wy, _iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
-        uab_invariant_soa
-    )
-    iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
-    reml_const = _compute_reml_const(df)
-
-    from jamma.lmm.likelihood_numpy import _compute_iab_varying_ncvt1
-
-    iab_p1_xx, iab_logdet_var = _compute_iab_varying_ncvt1(
-        uab_varying_soa, iab_inv_s_ww
-    )
 
     logls_split, _ = _batch_reml_at_lambda_split_ncvt1_numpy(
         lambda_vals,
@@ -683,20 +585,20 @@ def test_split_pab_matches_generic_pab(split_uab_data):
     )
 
 
-def test_invariant_computed_once_per_lambda(split_uab_data):
+def test_invariant_computed_once_per_lambda(split_uab_data, split_reml_inputs):
     """Invariant dot products must be (n_grid,), not (n_grid, n_snps)."""
-    from jamma.lmm.likelihood_numpy import _compute_reml_const
-    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
+    from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
 
     # Verify structural property: function produces (n_grid, n_snps) output
     # while internally computing (n_grid,) invariant sums.
-    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
+    eigenvalues, uab_varying_soa, uab_invariant_soa, _Uab_batch, _Iab_batch = (
         split_uab_data
+    )
+    iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, _df = (
+        split_reml_inputs
     )
     n_grid = 15
     n_snps = uab_varying_soa.shape[0]
-    n_samples = eigenvalues.shape[0]
-    df = n_samples - 2
 
     lambdas_grid = np.exp(np.linspace(np.log(1e-5), np.log(1e5), n_grid))
 
@@ -713,20 +615,6 @@ def test_invariant_computed_once_per_lambda(split_uab_data):
     )
 
     # Also verify the split function itself returns (n_grid, n_snps) output
-    from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
-
-    iab_s_ww, _iab_s_wy, _iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
-        uab_invariant_soa
-    )
-    iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
-    reml_const = _compute_reml_const(df)
-
-    from jamma.lmm.likelihood_numpy import _compute_iab_varying_ncvt1
-
-    iab_p1_xx, iab_logdet_var = _compute_iab_varying_ncvt1(
-        uab_varying_soa, iab_inv_s_ww
-    )
-
     logls = _batch_grid_reml_split_ncvt1_numpy(
         lambdas_grid,
         eigenvalues,
@@ -744,7 +632,7 @@ def test_invariant_computed_once_per_lambda(split_uab_data):
 
 
 # ---------------------------------------------------------------------------
-# Plan 53-03: Merged Wald path (optimizer returns Pab, no redundant Hi_eval)
+# Merged Wald path (optimizer returns Pab, no redundant Hi_eval)
 # ---------------------------------------------------------------------------
 
 
@@ -872,13 +760,38 @@ def test_batch_golden_section_numpy_all_nan_grid():
 # ---------------------------------------------------------------------------
 
 
-def test_batch_numpy_all_degenerate_snps_return_lmin():
-    """NumPy batch REML returns l_min for all-degenerate SNPs (UtG=0, P_XX=0).
+def _degenerate_snp_inputs(rng, n, n_snps, pattern):
+    """Build UtG under one of two degeneracy patterns.
+
+    Args:
+        rng: NumPy random generator.
+        n: Number of samples.
+        n_snps: Number of SNPs.
+        pattern: "all_zero" (every SNP degenerate, P_XX=0) or "mixed"
+            (columns 1 and 3 live, the rest degenerate).
+
+    Returns:
+        (UtG, degenerate_idxs, valid_idxs).
+    """
+    if pattern == "all_zero":
+        UtG = np.zeros((n, n_snps))
+        return UtG, list(range(n_snps)), []
+    UtG = np.zeros((n, n_snps))
+    UtG[:, 1] = rng.standard_normal(n)
+    UtG[:, 3] = rng.standard_normal(n)
+    return UtG, [0, 2, 4], [1, 3]
+
+
+@pytest.mark.parametrize("pattern", ["all_zero", "mixed"])
+def test_batch_numpy_degenerate_snps_wald_nan(pattern):
+    """Generic-path NumPy batch REML: degenerate SNPs return l_min and NaN Wald.
 
     Constant genotypes produce zero Uab columns for genotype interactions.
     The log-likelihood is driven by phenotype variance only (constant w.r.t.
-    lambda change), so the optimizer converges to l_min (the lower bound).
-    The critical downstream behavior is that Wald stats return NaN.
+    lambda change), so the optimizer converges to l_min (the lower bound) and
+    Wald stats return NaN (P_XX=0).  ``pattern="mixed"`` additionally checks
+    that valid SNPs (columns 1, 3) produce finite stats in the same batch,
+    without cross-SNP contamination from the degenerate columns.
     """
     rng = np.random.default_rng(42)
     n, n_snps = 30, 5
@@ -887,50 +800,7 @@ def test_batch_numpy_all_degenerate_snps_return_lmin():
     eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
     UtW = np.ones((n, 1))
     Uty = rng.standard_normal(n)
-    UtG_degen = np.zeros((n, n_snps))  # all-zero genotype → P_XX = 0
-
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen.T)
-    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
-    lambdas, logls, _ = golden_section_optimize_lambda_numpy(
-        1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
-    )
-    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
-
-    assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
-
-    # Optimizer converges to l_min when genotype has no variance
-    np.testing.assert_allclose(
-        lambdas,
-        l_min,
-        rtol=1e-4,
-        err_msg="All-degenerate SNPs should return l_min lambda",
-    )
-
-    # P_XX = 0 → Wald stats all NaN (critical downstream behavior)
-    assert np.all(np.isnan(betas)), f"All betas should be NaN, got {betas}"
-    assert np.all(np.isnan(ses)), f"All ses should be NaN, got {ses}"
-    assert np.all(np.isnan(pwalds)), f"All p_walds should be NaN, got {pwalds}"
-
-
-def test_batch_numpy_mixed_degenerate_and_valid_snps():
-    """NumPy batch REML handles a mix of degenerate and valid SNPs correctly.
-
-    Columns 0, 2, 4 are zero (degenerate, P_XX=0); columns 1, 3 are normal (valid).
-    Degenerate SNPs produce NaN Wald stats (beta/se/p_wald = NaN);
-    valid SNPs produce finite stats. Both run in the same batch without
-    cross-SNP contamination.
-    """
-    rng = np.random.default_rng(99)
-    n, n_snps = 30, 5
-    l_min = 1e-5
-
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
-    UtW = np.ones((n, 1))
-    Uty = rng.standard_normal(n)
-
-    UtG = np.zeros((n, n_snps))
-    UtG[:, 1] = rng.standard_normal(n)  # valid
-    UtG[:, 3] = rng.standard_normal(n)  # valid
+    UtG, degenerate_idxs, valid_idxs = _degenerate_snp_inputs(rng, n, n_snps, pattern)
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
@@ -939,45 +809,53 @@ def test_batch_numpy_mixed_degenerate_and_valid_snps():
     )
     betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
 
-    degenerate_idxs = [0, 2, 4]
-    valid_idxs = [1, 3]
+    assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
 
-    # Degenerate SNPs: P_XX=0 → NaN Wald stats (beta/se/p_wald)
+    if pattern == "all_zero":
+        np.testing.assert_allclose(
+            lambdas,
+            l_min,
+            rtol=1e-4,
+            err_msg="All-degenerate SNPs should return l_min lambda",
+        )
+
     assert np.all(np.isnan(betas[degenerate_idxs])), (
-        f"Degenerate SNP betas should be NaN, got {betas[degenerate_idxs]}"
+        f"Degenerate betas should be NaN, got {betas[degenerate_idxs]}"
     )
     assert np.all(np.isnan(ses[degenerate_idxs])), (
-        f"Degenerate SNP ses should be NaN, got {ses[degenerate_idxs]}"
+        f"Degenerate ses should be NaN, got {ses[degenerate_idxs]}"
     )
     assert np.all(np.isnan(pwalds[degenerate_idxs])), (
-        f"Degenerate SNP p_walds should be NaN, got {pwalds[degenerate_idxs]}"
+        f"Degenerate p_walds should be NaN, got {pwalds[degenerate_idxs]}"
     )
-
-    # Valid SNPs: finite Wald stats
-    assert np.all(np.isfinite(betas[valid_idxs])), (
-        f"Valid SNP betas should be finite, got {betas[valid_idxs]}"
-    )
-    assert np.all(np.isfinite(ses[valid_idxs])), (
-        f"Valid SNP ses should be finite, got {ses[valid_idxs]}"
-    )
-    assert np.all(np.isfinite(pwalds[valid_idxs])), (
-        f"Valid SNP p_walds should be finite, got {pwalds[valid_idxs]}"
-    )
+    if valid_idxs:
+        assert np.all(np.isfinite(betas[valid_idxs])), (
+            f"Valid betas should be finite, got {betas[valid_idxs]}"
+        )
+        assert np.all(np.isfinite(ses[valid_idxs])), (
+            f"Valid ses should be finite, got {ses[valid_idxs]}"
+        )
+        assert np.all(np.isfinite(pwalds[valid_idxs])), (
+            f"Valid p_walds should be finite, got {pwalds[valid_idxs]}"
+        )
 
 
 # ---------------------------------------------------------------------------
-# Degenerate SNP tests — Python fallback (split ncvt1 and generic batch paths)
+# Degenerate SNP tests — Python fallback (split ncvt1 path)
 # ---------------------------------------------------------------------------
 
 
-def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
+@pytest.mark.parametrize("pattern", ["all_zero", "mixed"])
+def test_split_ncvt1_fallback_degenerate_snps_wald_nan(pattern):
     """Split ncvt1 Python fallback path: degenerate SNPs produce NaN Wald stats.
 
     golden_section_optimize_lambda_split_ncvt1_numpy is the Python fallback
     when the C extension is unavailable.  When UtG is all-zero (constant
     genotype), the varying columns [wx, xx, xy] are zero for every SNP.
     The optimizer returns lambdas near l_min; downstream Wald stats must
-    produce NaN for every SNP because P_XX = 0.
+    produce NaN for every SNP because P_XX = 0.  ``pattern="mixed"``
+    additionally checks that valid SNPs (columns 1, 3) produce finite stats
+    in the same batch.
     """
     from jamma.lmm.likelihood_numpy import (
         golden_section_optimize_lambda_split_ncvt1_numpy,
@@ -996,74 +874,7 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
     eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
     UtW = np.ones((n, 1))
     Uty = rng.standard_normal(n)
-    UtG_degen = np.zeros((n, n_snps))  # constant genotype -> P_XX = 0
-
-    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty, 1)
-    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG_degen.T)
-    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
-        uab_invariant_soa
-    )
-
-    lambdas, logls, _ = golden_section_optimize_lambda_split_ncvt1_numpy(
-        eigenvalues,
-        uab_varying_soa,
-        uab_invariant_soa,
-        iab_s_ww,
-        iab_s_wy,
-        iab_s_yy,
-        iab_logdet,
-        l_min=l_min,
-    )
-
-    assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
-
-    # Optimizer converges to l_min when genotype has no variance
-    np.testing.assert_allclose(
-        lambdas,
-        l_min,
-        rtol=1e-4,
-        err_msg="Split ncvt1 all-degenerate SNPs should return l_min lambda",
-    )
-
-    # Reconstruct full Uab for Wald stats
-    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa, 1)
-    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
-
-    # P_XX = 0 -> all Wald stats NaN
-    assert np.all(np.isnan(betas)), f"Expected all-NaN betas, got {betas}"
-    assert np.all(np.isnan(ses)), f"Expected all-NaN ses, got {ses}"
-    assert np.all(np.isnan(pwalds)), f"Expected all-NaN pwalds, got {pwalds}"
-
-
-def test_split_ncvt1_fallback_mixed_degenerate_valid():
-    """Split ncvt1 Python fallback: mixed batch, degenerate NaN, valid finite.
-
-    SNPs at indices 1 and 3 have non-zero genotypes (valid).
-    SNPs at indices 0, 2, 4 are zero-genotype (degenerate, P_XX=0).
-    The split optimizer must process them in the same batch without
-    cross-SNP contamination.
-    """
-    from jamma.lmm.likelihood_numpy import (
-        golden_section_optimize_lambda_split_ncvt1_numpy,
-    )
-    from jamma.lmm.uab import (
-        batch_compute_uab_varying_soa_numpy,
-        compute_iab_invariant_scalars_ncvt1,
-        compute_uab_invariant_soa,
-        reconstruct_uab_from_soa,
-    )
-
-    rng = np.random.default_rng(99)
-    n, n_snps = 30, 5
-    l_min = 1e-5
-
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
-    UtW = np.ones((n, 1))
-    Uty = rng.standard_normal(n)
-
-    UtG = np.zeros((n, n_snps))
-    UtG[:, 1] = rng.standard_normal(n)  # valid
-    UtG[:, 3] = rng.standard_normal(n)  # valid
+    UtG, degenerate_idxs, valid_idxs = _degenerate_snp_inputs(rng, n, n_snps, pattern)
 
     uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty, 1)
     uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
@@ -1082,11 +893,19 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
         l_min=l_min,
     )
 
+    assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
+
+    if pattern == "all_zero":
+        np.testing.assert_allclose(
+            lambdas,
+            l_min,
+            rtol=1e-4,
+            err_msg="Split ncvt1 all-degenerate SNPs should return l_min lambda",
+        )
+
+    # Reconstruct full Uab for Wald stats
     Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa, 1)
     betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
-
-    degenerate_idxs = [0, 2, 4]
-    valid_idxs = [1, 3]
 
     assert np.all(np.isnan(betas[degenerate_idxs])), (
         f"Degenerate betas should be NaN, got {betas[degenerate_idxs]}"
@@ -1097,102 +916,21 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
     assert np.all(np.isnan(pwalds[degenerate_idxs])), (
         f"Degenerate p_walds should be NaN, got {pwalds[degenerate_idxs]}"
     )
-    assert np.all(np.isfinite(betas[valid_idxs])), (
-        f"Valid betas should be finite, got {betas[valid_idxs]}"
-    )
-    assert np.all(np.isfinite(ses[valid_idxs])), (
-        f"Valid ses should be finite, got {ses[valid_idxs]}"
-    )
-    assert np.all(np.isfinite(pwalds[valid_idxs])), (
-        f"Valid p_walds should be finite, got {pwalds[valid_idxs]}"
-    )
-
-
-def test_generic_batch_numpy_fallback_degenerate_wald_nan():
-    """golden_section_optimize_lambda_numpy (generic path) with degenerate SNPs.
-
-    This tests the Python fallback path (golden_section_optimize_lambda_numpy
-    with n_cvt=1) independently from the C-extension path.  Degenerate SNPs
-    (UtG=0) should produce NaN Wald stats downstream regardless of which
-    low-level optimizer is used.
-    """
-    rng = np.random.default_rng(55)
-    n, n_snps = 30, 5
-    l_min = 1e-5
-
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
-    UtW = np.ones((n, 1))
-    Uty = rng.standard_normal(n)
-    UtG_degen = np.zeros((n, n_snps))  # constant genotype
-
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG_degen.T)
-    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
-
-    lambdas, logls, _ = golden_section_optimize_lambda_numpy(
-        1, eigenvalues, Uab_batch, Iab_batch, l_min=l_min
-    )
-
-    assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
-
-    # Degenerate SNPs: optimizer should converge to l_min (no SNP signal)
-    np.testing.assert_allclose(
-        lambdas,
-        l_min,
-        rtol=1e-4,
-        err_msg="Generic fallback: all-degenerate SNPs should return l_min lambda",
-    )
-
-    # Wald stats: P_XX=0 -> all NaN
-    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
-    assert np.all(np.isnan(betas)), f"Expected all-NaN betas, got {betas}"
-    assert np.all(np.isnan(ses)), f"Expected all-NaN ses, got {ses}"
-    assert np.all(np.isnan(pwalds)), f"Expected all-NaN pwalds, got {pwalds}"
+    if valid_idxs:
+        assert np.all(np.isfinite(betas[valid_idxs])), (
+            f"Valid betas should be finite, got {betas[valid_idxs]}"
+        )
+        assert np.all(np.isfinite(ses[valid_idxs])), (
+            f"Valid ses should be finite, got {ses[valid_idxs]}"
+        )
+        assert np.all(np.isfinite(pwalds[valid_idxs])), (
+            f"Valid p_walds should be finite, got {pwalds[valid_idxs]}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Scalar-vs-batch REML optimizer parity tests
 # ---------------------------------------------------------------------------
-
-
-def test_scalar_vs_batch_reml_single_snp_parity():
-    """Scalar and batch REML optimizer paths produce matching lambda for single SNP.
-
-    Verifies that golden_section_optimize_lambda_numpy (batch path) and
-    _golden_section_minimize + reml_log_likelihood (scalar path) agree on
-    the optimal lambda for a single SNP within rtol=1e-4.
-    """
-    n = 30
-    n_cvt = 1
-
-    d = rotated_lmm_inputs(n, 1, seed=42)
-    eigenvalues, UtW, Uty = d.eigenvalues, d.UtW, d.Uty
-    Utx = d.UtG[:, 0]
-
-    # Scalar path
-    Uab_scalar = compute_Uab(UtW, Uty, Utx)
-
-    def scalar_obj(lam):
-        return -reml_log_likelihood(
-            lam, eigenvalues, Uab_scalar, n_cvt=n_cvt, nc_total=n_cvt + 1
-        )
-
-    lambda_scalar, _ = _golden_section_minimize(
-        scalar_obj, 1e-5, 1e5, n_grid=50, n_iter=20
-    )
-
-    # Batch path (single SNP, shape (n, 1))
-    Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, Utx.reshape(1, n))
-    Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
-    lambdas_batch, _, _ = golden_section_optimize_lambda_numpy(
-        n_cvt, eigenvalues, Uab_batch, Iab_batch
-    )
-
-    np.testing.assert_allclose(
-        lambda_scalar,
-        lambdas_batch[0],
-        rtol=1e-4,
-        err_msg="Scalar and batch REML paths should agree on optimal lambda",
-    )
 
 
 def test_scalar_vs_batch_reml_multi_snp_consistency():
@@ -1238,7 +976,7 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
 
 
 # ---------------------------------------------------------------------------
-# Scalar-vs-batch REML optimizer: tight lambda and logl parity (jamma-68j0)
+# Scalar-vs-batch REML optimizer: tight lambda and logl parity
 # ---------------------------------------------------------------------------
 
 
@@ -1311,7 +1049,7 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
 
 
 # ---------------------------------------------------------------------------
-# reconstruct_uab_from_soa generalization for n_cvt > 1 (Plan 70-02)
+# reconstruct_uab_from_soa generalization for n_cvt > 1
 # ---------------------------------------------------------------------------
 
 
@@ -1343,21 +1081,22 @@ def test_reconstruct_uab_from_soa_ncvt1_fast_path():
     )
 
 
-def test_reconstruct_uab_from_soa_ncvt2():
-    """reconstruct_uab_from_soa with n_cvt=2 round-trips via classify_uab_columns."""
+@pytest.mark.parametrize(
+    ("n_cvt", "seed", "n_samples", "n_snps"),
+    [(2, 7, 40, 6), (4, 13, 30, 5)],
+)
+def test_reconstruct_uab_from_soa_multi_cvt(n_cvt, seed, n_samples, n_snps):
+    """reconstruct_uab_from_soa round-trips via classify_uab_columns for n_cvt > 1."""
     from jamma.lmm.likelihood import classify_uab_columns
     from jamma.lmm.uab import reconstruct_uab_from_soa
 
-    rng = np.random.default_rng(7)
-    n_samples, n_snps = 40, 6
-    n_cvt = 2
+    rng = np.random.default_rng(seed)
     UtW = rng.standard_normal((n_samples, n_cvt))
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
 
     # Full reference Uab
     Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
-    # n_index = (n_cvt+3)*(n_cvt+2)//2 = 5*4//2 = 10
 
     inv_indices, var_indices = classify_uab_columns(n_cvt)
 
@@ -1381,41 +1120,5 @@ def test_reconstruct_uab_from_soa_ncvt2():
         Uab_ref,
         rtol=1e-14,
         atol=0,
-        err_msg="reconstruct_uab_from_soa failed to round-trip for n_cvt=2",
-    )
-
-
-def test_reconstruct_uab_from_soa_ncvt4():
-    """reconstruct_uab_from_soa with n_cvt=4 matches batch_compute_uab_numpy."""
-    from jamma.lmm.likelihood import classify_uab_columns
-    from jamma.lmm.uab import reconstruct_uab_from_soa
-
-    rng = np.random.default_rng(13)
-    n_samples, n_snps = 30, 5
-    n_cvt = 4
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
-
-    # Full reference Uab
-    Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
-    # n_index = (4+3)*(4+2)//2 = 7*6//2 = 21
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-
-    inv_list = list(inv_indices)
-    uab_invariant_soa = np.ascontiguousarray(Uab_ref[0, :, inv_list])
-    uab_varying_soa = np.ascontiguousarray(
-        Uab_ref[:, :, list(var_indices)].transpose(0, 2, 1)
-    )
-
-    Uab_recon = reconstruct_uab_from_soa(
-        uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
-    )
-    np.testing.assert_allclose(
-        Uab_recon,
-        Uab_ref,
-        rtol=1e-14,
-        atol=0,
-        err_msg="reconstruct_uab_from_soa failed to round-trip for n_cvt=4",
+        err_msg=f"reconstruct_uab_from_soa failed to round-trip for n_cvt={n_cvt}",
     )

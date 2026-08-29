@@ -25,7 +25,12 @@ import pytest
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import compute_numpy
-from jamma.lmm.compute_numpy import _c, _compute_lrt_numpy, _compute_score_numpy
+from jamma.lmm.compute_numpy import (
+    _c,
+    _compute_lrt_numpy,
+    _compute_score_numpy,
+    compute_lmm_chunk_numpy,
+)
 from jamma.lmm.likelihood import build_pab_table_for_c, compute_null_model_mle
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
@@ -704,3 +709,115 @@ def test_batch_compute_uab_varying_soa_rejects_wrong_layout():
 
     with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
         batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
+
+
+# ---------------------------------------------------------------------------
+# Mode dispatch for compute_lmm_chunk_numpy
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def chunk_dispatch_data():
+    """Small synthetic dataset for compute_lmm_chunk_numpy dispatch tests.
+
+    Returns:
+        (eigenvalues, UtW, Uty, UtG) with n_samples=50, n_snps=10.
+    """
+    d = rotated_lmm_inputs(50, 10, seed=42)
+    return d.eigenvalues, d.UtW, d.Uty, d.UtG
+
+
+def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
+    """compute_lmm_chunk_numpy must return non-None expected keys for each mode.
+
+    The extension is cleared because this function is the full-Uab NumPy path,
+    and the runner reaches it only on NUMPY_FALLBACK, which is selected only
+    when the extension is absent.
+    """
+    monkeypatch.setattr(compute_numpy, "_accel", None)
+
+    eigenvalues, UtW, Uty, UtG = chunk_dispatch_data
+    n_samples = eigenvalues.shape[0]
+
+    lambda_null = 0.1
+    Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
+    logl_H0 = -25.0
+
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
+
+    # Mode 1: Wald — expects lambdas, logls, betas, ses, pwalds
+    result1 = compute_lmm_chunk_numpy(1, 1, eigenvalues, Uab_batch, n_samples)
+    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
+        assert result1[key] is not None, f"Mode 1: key '{key}' is None"
+    assert result1["lambdas_mle"] is None
+    assert result1["p_lrts"] is None
+    assert result1["p_scores"] is None
+
+    # Mode 2: LRT — expects lambdas_mle, p_lrts
+    result2 = compute_lmm_chunk_numpy(
+        2, 1, eigenvalues, Uab_batch, n_samples, logl_H0=logl_H0
+    )
+    for key in ("lambdas_mle", "p_lrts"):
+        assert result2[key] is not None, f"Mode 2: key '{key}' is None"
+    assert result2["lambdas"] is None
+    assert result2["logls"] is None
+    assert result2["betas"] is None
+    assert result2["ses"] is None
+    assert result2["pwalds"] is None
+    assert result2["p_scores"] is None
+
+    # Mode 3: Score — expects betas, ses, p_scores
+    result3 = compute_lmm_chunk_numpy(
+        3, 1, eigenvalues, Uab_batch, n_samples, Hi_eval_null=Hi_eval_null
+    )
+    for key in ("betas", "ses", "p_scores"):
+        assert result3[key] is not None, f"Mode 3: key '{key}' is None"
+    assert result3["lambdas"] is None
+    assert result3["logls"] is None
+    assert result3["pwalds"] is None
+    assert result3["lambdas_mle"] is None
+    assert result3["p_lrts"] is None
+
+    # Mode 4: All — all keys non-None
+    result4 = compute_lmm_chunk_numpy(
+        4,
+        1,
+        eigenvalues,
+        Uab_batch,
+        n_samples,
+        Hi_eval_null=Hi_eval_null,
+        logl_H0=logl_H0,
+    )
+    for key in (
+        "lambdas",
+        "logls",
+        "betas",
+        "ses",
+        "pwalds",
+        "lambdas_mle",
+        "p_lrts",
+        "p_scores",
+    ):
+        assert result4[key] is not None, f"Mode 4: key '{key}' is None"
+
+
+def test_compute_lmm_chunk_numpy_missing_args_raise(chunk_dispatch_data):
+    """compute_lmm_chunk_numpy must raise ValueError when required args are absent."""
+    eigenvalues, UtW, Uty, UtG = chunk_dispatch_data
+    n_samples = eigenvalues.shape[0]
+    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
+
+    with pytest.raises(ValueError, match="logl_H0 is required"):
+        compute_lmm_chunk_numpy(2, 1, eigenvalues, Uab_batch, n_samples)
+
+    with pytest.raises(ValueError, match="Hi_eval_null is required"):
+        compute_lmm_chunk_numpy(3, 1, eigenvalues, Uab_batch, n_samples)
+
+    # Mode 4 (All) requires both logl_H0 and Hi_eval_null.
+    # Missing logl_H0 is checked first (line order in source).
+    with pytest.raises(ValueError, match="logl_H0 is required"):
+        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples)
+
+    # Providing logl_H0 but omitting Hi_eval_null also raises.
+    with pytest.raises(ValueError, match="Hi_eval_null is required"):
+        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples, logl_H0=-50.0)

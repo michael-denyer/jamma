@@ -73,9 +73,7 @@ def _stub_compile(result):
     """Build a fake ``compile_extension(spec, package_dir, ..., on_retry=...)``
     that ignores every argument and returns ``result``."""
 
-    def _fake(
-        spec, package_dir, *, find_c_compiler, detect_openmp_flags, on_retry=None
-    ):
+    def _fake(spec, package_dir, *, on_retry=None):
         return result
 
     return _fake
@@ -106,9 +104,7 @@ def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     """
     sys_key = "jamma._fake_ext_raises"
 
-    def _raises(
-        spec, package_dir, *, find_c_compiler, detect_openmp_flags, on_retry=None
-    ):
+    def _raises(spec, package_dir, *, on_retry=None):
         raise RuntimeError("fake failure")
 
     _patch_compile_extension(monkeypatch, _raises)
@@ -197,9 +193,7 @@ def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
     sys_key = "jamma._fake_ext_retry"
     captured_retry: list[object] = []
 
-    def _compile(
-        spec, package_dir, *, find_c_compiler, detect_openmp_flags, on_retry=None
-    ):
+    def _compile(spec, package_dir, *, on_retry=None):
         captured_retry.append(on_retry)
         if on_retry is not None:
             on_retry("OpenMP compilation failed, retrying without OpenMP")
@@ -258,9 +252,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
     intervals: list[tuple[int, int]] = []
     intervals_lock = threading.Lock()
 
-    def slow_compile(
-        spec, package_dir, *, find_c_compiler, detect_openmp_flags, on_retry=None
-    ):
+    def slow_compile(spec, package_dir, *, on_retry=None):
         enter_ns = time.monotonic_ns()
         time.sleep(critical_sleep_s)
         exit_ns = time.monotonic_ns()
@@ -343,9 +335,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
     intervals: list[tuple[int, int]] = []
     intervals_lock = threading.Lock()
 
-    def slow_compile(
-        spec, package_dir, *, find_c_compiler, detect_openmp_flags, on_retry=None
-    ):
+    def slow_compile(spec, package_dir, *, on_retry=None):
         enter_ns = time.monotonic_ns()
         time.sleep(critical_sleep_s)
         exit_ns = time.monotonic_ns()
@@ -476,9 +466,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
 
     compile_calls = [0]
 
-    def should_not_compile(
-        spec, package_dir, *, find_c_compiler, detect_openmp_flags, on_retry=None
-    ):
+    def should_not_compile(spec, package_dir, *, on_retry=None):
         compile_calls[0] += 1
         return True
 

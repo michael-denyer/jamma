@@ -38,8 +38,6 @@ from pathlib import Path
 #      ``compile_extension()`` from this module.
 from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
 from jamma._build_support.compile_and_link import compile_extension as _compile
-from jamma._build_support.find_compiler import find_c_compiler
-from jamma._build_support.openmp_detect import detect_openmp_flags
 
 
 def compile_extension(
@@ -71,8 +69,6 @@ def compile_extension(
     return _compile(
         LMM_ACCEL_SPEC,
         Path(__file__).parents[1],  # the installed jamma/ package directory
-        find_c_compiler=find_c_compiler,
-        detect_openmp_flags=detect_openmp_flags,
         verbose=verbose,
         diagnose=diagnose,
         on_retry=on_retry,

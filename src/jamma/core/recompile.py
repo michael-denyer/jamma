@@ -120,8 +120,6 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     from loguru import logger
 
     from jamma._build_support.compile_and_link import compile_extension
-    from jamma._build_support.find_compiler import find_c_compiler
-    from jamma._build_support.openmp_detect import detect_openmp_flags
 
     module_name = spec.module_name
     sys_module_key = spec.sys_module_key
@@ -177,8 +175,6 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
             success = compile_extension(
                 spec,
                 Path(__file__).parents[1],  # the installed jamma/ package dir
-                find_c_compiler=find_c_compiler,
-                detect_openmp_flags=detect_openmp_flags,
                 on_retry=_on_retry,
             )
         except (OSError, subprocess.SubprocessError, RuntimeError) as e:

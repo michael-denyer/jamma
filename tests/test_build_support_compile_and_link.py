@@ -16,9 +16,12 @@ from jamma._build_support.compile_and_link import (
     LAPACK_CFLAGS,
     LAPACK_SOURCES,
     LINK_FLAGS_BY_PLATFORM,
+    BuildSpec,
     CompileResult,
+    Toolchain,
     compile_jlinalg,
     resolve_cflags_for,
+    run_build,
 )
 
 pytestmark = pytest.mark.tier0
@@ -403,3 +406,75 @@ def test_atomic_replace_failure_preserves_used_openmp_link(monkeypatch, tmp_path
         "by the os.replace failure"
     )
     assert result.used_openmp is True
+
+
+# ---------------------------------------------------------------------------
+# Toolchain detected once, reused across a run_build of both specs (F2).
+# ---------------------------------------------------------------------------
+
+
+def test_toolchain_detected_once_across_run_build_of_both_specs(monkeypatch, tmp_path):
+    """detect_toolchain() must run exactly once per process; run_build takes
+    the resulting Toolchain as a plain parameter rather than re-detecting
+    the compiler and OpenMP flags for every BuildSpec it builds.
+    """
+    find_calls = []
+    omp_calls = []
+
+    def _fake_find_c_compiler():
+        find_calls.append(1)
+        return ("cc", [])
+
+    def _fake_detect_openmp_flags(cc_cmd, system, _print, _warn=None):
+        omp_calls.append(1)
+        return ([], [], cc_cmd)
+
+    monkeypatch.setattr(
+        "jamma._build_support.find_compiler.find_c_compiler",
+        _fake_find_c_compiler,
+    )
+    monkeypatch.setattr(
+        "jamma._build_support.openmp_detect.detect_openmp_flags",
+        _fake_detect_openmp_flags,
+    )
+
+    from jamma._build_support.compile_and_link import detect_toolchain
+
+    toolchain = detect_toolchain()
+    assert isinstance(toolchain, Toolchain)
+    assert len(find_calls) == 1
+    assert len(omp_calls) == 1
+
+    def _fake_run(cmd, **kwargs):
+        if "-o" in cmd:
+            out_idx = cmd.index("-o") + 1
+            if out_idx < len(cmd):
+                Path(cmd[out_idx]).write_bytes(b"")
+        return _FakeCompleted(returncode=0)
+
+    monkeypatch.setattr(
+        "jamma._build_support.compile_and_link.subprocess.run", _fake_run
+    )
+
+    def _make_spec(name: str) -> BuildSpec:
+        src_dir = tmp_path / name
+        src_dir.mkdir()
+        (src_dir / "one.c").write_text("// stub\n")
+        return BuildSpec(
+            package_parts=(name,),
+            source_parts=(),
+            include_parts=(),
+            sources=("one.c",),
+            lapack_sources=(),
+            output_stem=f"_{name}",
+        )
+
+    package_dir = tmp_path
+    result_a = run_build(_make_spec("target_a"), package_dir, toolchain, dev_mode=True)
+    result_b = run_build(_make_spec("target_b"), package_dir, toolchain, dev_mode=True)
+
+    assert result_a.ok, result_a.error
+    assert result_b.ok, result_b.error
+    # Both builds used the one Toolchain detected above — no second probe.
+    assert len(find_calls) == 1
+    assert len(omp_calls) == 1

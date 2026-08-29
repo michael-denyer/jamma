@@ -26,13 +26,18 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 # trigger src/jamma/__init__.py, which pulls in the full runtime
 # (loguru, numpy, jamma.lmm, ...) that is not in the build env.
 #
-# Load the three helper modules by file path instead, register them on
+# Load the helper module by file path instead, register it on
 # sys.modules under "jamma_build_support.*" (a namespace distinct from
 # the real jamma package so there's no collision), then import the
 # symbols we need. This keeps the build backend deps minimal while
-# letting us treat the helpers as reusable, importable modules at build
-# time. The same files ship inside the wheel under their regular
+# letting us treat the helper as a reusable, importable module at build
+# time. The same file ships inside the wheel under its regular
 # jamma._build_support.* name for runtime recompile use.
+#
+# Only compile_and_link.py needs loading directly: detect_toolchain()
+# imports find_compiler and openmp_detect itself via a lazy relative
+# import, which resolves against the sys.modules registration below
+# rather than a package lookup that build isolation would break.
 
 
 def _load_build_support_module(name: str, filename: str):
@@ -50,21 +55,16 @@ def _load_build_support_module(name: str, filename: str):
     return module
 
 
+_load_build_support_module("jamma_build_support.find_compiler", "find_compiler.py")
+_load_build_support_module("jamma_build_support.openmp_detect", "openmp_detect.py")
 _cal = _load_build_support_module(
     "jamma_build_support.compile_and_link", "compile_and_link.py"
-)
-_fc = _load_build_support_module(
-    "jamma_build_support.find_compiler", "find_compiler.py"
-)
-_omp = _load_build_support_module(
-    "jamma_build_support.openmp_detect", "openmp_detect.py"
 )
 
 LMM_ACCEL_SPEC = _cal.LMM_ACCEL_SPEC
 JLINALG_SPEC = _cal.JLINALG_SPEC
 run_build = _cal.run_build
-find_c_compiler = _fc.find_c_compiler
-detect_openmp_flags = _omp.detect_openmp_flags
+detect_toolchain = _cal.detect_toolchain
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -98,12 +98,25 @@ class CustomBuildHook(BuildHookInterface):
             f'BUILD_DATE = "{date_str}"\n'
         )
 
+        # Detect the toolchain ONCE and reuse it for both specs — a wheel
+        # build used to probe the compiler and re-run OpenMP detection twice.
+        def _err(*a, **kw):
+            print(*a, **{"file": sys.stderr, **kw})
+
+        toolchain = detect_toolchain(verbose_print=_err, error_print=_err)
+        if isinstance(toolchain, str):
+            print(
+                f"WARNING: {toolchain} (pure-Python fallback).",
+                file=sys.stderr,
+            )
+            return
+
         # Compile C extensions (graceful fallback if unavailable).
         # _lmm_accel is more critical — compile first so its errors are visible.
-        self._build_extension(LMM_ACCEL_SPEC, build_data)
-        self._build_extension(JLINALG_SPEC, build_data)
+        self._build_extension(LMM_ACCEL_SPEC, toolchain, build_data)
+        self._build_extension(JLINALG_SPEC, toolchain, build_data)
 
-    def _build_extension(self, spec, build_data):
+    def _build_extension(self, spec, toolchain, build_data):
         """Compile one C extension from ``spec`` and register it in the wheel.
 
         Drives ``run_build`` (wheel mode) for both ``_lmm_accel`` and
@@ -115,6 +128,7 @@ class CustomBuildHook(BuildHookInterface):
         Args:
             spec: The ``BuildSpec`` for the target (``LMM_ACCEL_SPEC`` /
                 ``JLINALG_SPEC``).
+            toolchain: The ``Toolchain`` detected once in ``initialize``.
             build_data: Hatchling build data dict. Updated with the
                 ``force_include`` entry mapping the compiled ``.so`` into the
                 wheel.
@@ -123,53 +137,50 @@ class CustomBuildHook(BuildHookInterface):
         def _err(*a, **kw):
             print(*a, **{"file": sys.stderr, **kw})
 
-        outcome = run_build(
+        result = run_build(
             spec,
             Path(self.root) / "src" / "jamma",
+            toolchain,
             dev_mode=False,  # portable wheel: honour CFLAGS, never -march=native
-            find_c_compiler=find_c_compiler,
-            detect_openmp_flags=detect_openmp_flags,
             on_retry=lambda msg: print(msg, file=sys.stderr),
             verbose_print=_err,
             error_print=_err,
         )
-        if outcome.skipped:
+        if result.skipped:
             return  # run_build already printed the WARNING + pure-Python note
-        if not outcome.ok:
-            error = outcome.result.error if outcome.result else "unknown"
+        if not result.ok:
             print(
-                f"WARNING: {spec.output_stem} compilation failed: {error}. "
+                f"WARNING: {spec.output_stem} compilation failed: {result.error}. "
                 "Producing pure-Python wheel as fallback.",
                 file=sys.stderr,
             )
             return
 
-        result = outcome.result
         # Surface an OMP downgrade explicitly — otherwise a silent serial build
         # ships and the user sees 1/N the expected parallel speed with no
         # diagnostic. ``used_openmp`` reflects the compile phase; the link phase
         # is reported separately.
-        if result and not result.used_openmp:
+        if not result.used_openmp:
             print(
                 f"WARNING: {spec.output_stem} was built WITHOUT OpenMP. "
                 "The C compute path will run single-threaded.",
                 file=sys.stderr,
             )
-        elif result and not result.used_openmp_link:
+        elif not result.used_openmp_link:
             print(
                 f"WARNING: {spec.output_stem} compiled with OpenMP but linked "
                 "WITHOUT the OpenMP runtime. Threads will not spawn at runtime.",
                 file=sys.stderr,
             )
-        print(f"C extension compiled: {outcome.output_path}", file=sys.stderr)
+        print(f"C extension compiled: {result.output_path}", file=sys.stderr)
 
         # Register the compiled .so as a forced wheel inclusion. force_include
         # maps absolute_source_path -> distribution_path, the latter relative to
         # the package root within the wheel, e.g.
         # "jamma/lmm/_lmm_accel.cpython-311-darwin.so".
         build_data.setdefault("force_include", {})
-        dist_path = f"jamma/{'/'.join(spec.package_parts)}/{outcome.out_name}"
-        build_data["force_include"][str(outcome.output_path)] = dist_path
+        dist_path = f"jamma/{'/'.join(spec.package_parts)}/{result.output_path.name}"
+        build_data["force_include"][str(result.output_path)] = dist_path
 
         # Tell hatchling this is a platform wheel (not pure-Python), so the tag
         # reflects the current platform/ABI (e.g. cp311-cp311-macosx_14_0_arm64)

@@ -650,19 +650,42 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 
 ### 3.4 Suite-wide stats (snapshot)
 
-Counted at v7.2.0.
+Snapshot at commit `26afdf8` (2026-08-29), package version 7.2.0. These
+figures drift every time a file splits or folds; treat them as a snapshot,
+not a gate. Each line names the exact command that produced it, so a future
+reader can re-run it against the current tree.
 
-- 107 test files, ~44k lines. These file-count and line-count figures drift
-  every time a file splits or folds; treat them as a snapshot, not a gate.
-- `test_lmm_accel.py` was split into `tests/lmm_accel/`, eleven modules by
-  kernel family, in 6.0.0. `test_pipeline.py` and `test_hypothesis.py`
-  crossed 1,000 lines and were split along source seams into
-  `test_pipeline_config.py`, `test_pipeline_kinship.py`, and their existing
-  subsystem files (`test_kinship_numpy.py`, `test_snp_filter.py`,
-  `test_eigen_io.py`).
-- ~220 `skip`/`skipif`/`xfail` calls — most legitimate (vendor LAPACK, optional fixtures).
-- 11 files use `@patch`/`MagicMock` (~25 occurrences). Four of them are the `tests/fakes/` package itself. The rest sit at the boundaries catalogued in §2.2.
-- `inspect.getsource()`: zero uses. The ban holds.
+- 117 test files, 39238 lines:
+  `find tests -name 'test_*.py' ! -path '*__pycache__*' | wc -l` and
+  `find tests -name 'test_*.py' ! -path '*__pycache__*' | xargs wc -l | tail -1`.
+- `test_lmm_accel.py` no longer exists; `tests/lmm_accel/` holds ten modules
+  by kernel family plus `_helpers.py` and `conftest.py`
+  (`ls tests/lmm_accel/test_*.py | wc -l`). `test_pipeline.py` (909 lines)
+  and `test_hypothesis.py` (483 lines) both stay under 1,000 lines today
+  (`wc -l tests/test_pipeline.py tests/test_hypothesis.py`); their earlier
+  split produced `test_pipeline_config.py` and `test_pipeline_kinship.py`,
+  both of which still exist (`ls tests/test_pipeline_config.py
+  tests/test_pipeline_kinship.py`).
+- 98 `skip`/`skipif`/`xfail` calls:
+  `grep -rE '@pytest\.mark\.skip\b|@pytest\.mark\.skipif\b|@pytest\.mark\.xfail\b|pytest\.skip\(' tests --include='*.py' | wc -l`
+  (43 `skipif`, 3 `xfail`, 52 `pytest.skip(`, 0 bare `mark.skip`) — most
+  legitimate (vendor LAPACK, optional fixtures).
+- 11 files use real `patch`/`patch.object`/`MagicMock` calls (71
+  occurrences), counted per file with
+  `grep -oE '\bpatch\(|\bpatch\.object\(|MagicMock\(' <file> | wc -l` and
+  summed: `test_backend_detection.py` (21), `test_incremental_writer.py`
+  (13), `test_memory_gates.py` (8), `test_blas_dirs.py` (7),
+  `test_telemetry.py` (6), `test_loco_numpy.py` (5), `test_lmm_unit.py` (3),
+  `test_pipeline.py` (3), `test_chunk_sizing.py` (2),
+  `lmm_accel/_helpers.py` (2), `test_memory.py` (1). None of the
+  `tests/fakes/` files make the list: every `patch(`/`MagicMock` hit there
+  is a docstring contrasting the fake with `MagicMock`, not an executable
+  call, so a naive `grep -l` overcounts by nine files. The eleven real
+  files sit at the boundaries catalogued in §2.2.
+  `tests/test_check_forbidden_patches.py` is excluded for the same reason:
+  its `patch(`/`MagicMock` text is fixture source embedded in triple-quoted
+  strings for the lint script under test, not real mock usage.
+- `inspect.getsource()`: zero uses (`grep -rn "getsource" tests/ | wc -l`). The ban holds.
 
 ### 3.5 Fixture manifest
 

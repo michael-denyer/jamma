@@ -285,12 +285,12 @@ jobs:
           from jamma.cli import main
           print('CLI entry point imports OK')
 
-          from jamma.lmm import compute_numpy
-          assert compute_numpy._accel is not None, (
+          from jamma.lmm import accel
+          assert accel.available(), (
               'wheel shipped without a working _lmm_accel — the C build '
               'silently fell back to pure Python'
           )
-          print('jamma.lmm.compute_numpy._accel loaded OK')
+          print('jamma.lmm.accel.available()=True')
 
           import jamma.jlinalg as jlinalg
           assert jlinalg.HAS_C_EXTENSION, (

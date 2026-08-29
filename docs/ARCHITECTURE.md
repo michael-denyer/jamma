@@ -22,7 +22,7 @@ graph TD
     Stats["lmm/stats.py (AssocResult, batch Wald/LRT/Score)"]
     LOCO["lmm/loco.py (LOCO orchestrator)"]
     jlinalg["jlinalg/ (BLAS/LAPACK dispatch)"]
-    Core["core/ (Memory, backend, progress)"]
+    Core["core/ (Memory, progress)"]
 
     CLI --> Pipeline
     API --> Pipeline
@@ -98,15 +98,14 @@ src/jamma/
 │   ├── compile_and_link.py # BuildSpec, LMM_ACCEL_SOURCES/JLINALG_SPEC, run_build driver
 │   ├── find_compiler.py    # C compiler discovery for build-time and runtime recompile
 │   └── openmp_detect.py    # OpenMP flag detection for C extension compilation
-├── core/                   # Cross-cutting concerns: memory estimation, backend
-│   │                       # selection, progress bars, SNP filtering, threading
+├── core/                   # Cross-cutting concerns: memory estimation,
+│   │                       # progress bars, SNP filtering, threading
 │   ├── config.py           # Configuration dataclasses shared across JAMMA
 │   ├── constants.py        # Domain constants (e.g. GEMMA's -9 missing-phenotype code)
 │   ├── estimates.py        # Wall-clock time estimates for GWAS pipeline phases
 │   ├── memory.py           # Cost model: estimators, RAM seam, sufficiency check
 │   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives
 │   ├── memory_snapshot.py  # Process RSS / free-RAM snapshots and cleanup
-│   ├── backend.py          # Backend detection and banner formatting
 │   ├── hardware.py         # Hardware/software context collection for benchmark repro
 │   ├── progress.py         # timed_progress() and progress_iterator() wrappers
 │   ├── recompile.py        # _load_c_module(): the one runtime C-import seam, auto-recompile-once

@@ -1,10 +1,9 @@
 """Core infrastructure modules for JAMMA.
 
-This package contains backend detection, configuration, memory estimation,
-threading, hardware context, and telemetry.
+This package contains configuration, memory estimation, threading, hardware
+context, and telemetry.
 """
 
-from jamma.core.backend import get_backend_info
 from jamma.core.memory import (
     MemoryBreakdown,
     StreamingMemoryBreakdown,
@@ -27,7 +26,6 @@ __all__ = [
     "cleanup_memory",
     "estimate_lmm_memory",
     "estimate_streaming_memory",
-    "get_backend_info",
     "get_memory_snapshot",
     "log_memory_snapshot",
 ]

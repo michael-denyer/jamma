@@ -31,7 +31,6 @@ from typing import Literal
 import numpy as np
 from loguru import logger
 
-from jamma.core.backend import log_backend_selection
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import (
@@ -429,7 +428,12 @@ class PipelineRunner:
             requested=requested,
         )
 
-        log_backend_selection(self.config.backend, env_backend)
+        if env_backend is not None:
+            logger.info(f"Backend: numpy (from JAMMA_BACKEND={env_backend})")
+        elif self.config.backend != "auto":
+            logger.info("Backend: numpy (explicitly requested)")
+        else:
+            logger.info("Backend: numpy (auto-selected)")
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
         self.validate_inputs()

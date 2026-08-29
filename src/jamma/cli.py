@@ -44,11 +44,8 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     """Print version and backend info, then exit."""
     if not value or ctx.resilient_parsing:
         return
-    from jamma.core.backend import get_backend_info
-
-    info = get_backend_info()
     click.echo(f"JAMMA version {jamma.__version__} ({jamma.__release_date__})")
-    click.echo(f"Backend: {info['selected']}")
+    click.echo("Backend: numpy")
     ctx.exit()
 
 

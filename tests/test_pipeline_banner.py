@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from jamma.core.backend import format_pipeline_banner
+from jamma.pipeline_banner import format_pipeline_banner
 
 pytestmark = pytest.mark.tier0
 

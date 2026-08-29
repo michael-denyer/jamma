@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import pytest
 
-from jamma.core.backend import get_backend_info
 from jamma.core.memory import MemoryBreakdown
 from jamma.lmm.runner import ExecutionPlan, select_execution_mode
 
@@ -16,23 +15,6 @@ pytestmark = pytest.mark.tier0
 # Stands in for a loaded extension. Only `is not None` is read on
 # the paths under test, so the object's identity is all that matters.
 _EXTENSION_LOADED = object()
-
-
-class TestBackendInfo:
-    """Tests for get_backend_info function."""
-
-    def test_returns_dict(self):
-        """Should return a dictionary with expected keys."""
-        info = get_backend_info()
-
-        assert isinstance(info, dict)
-        assert "selected" in info
-        assert set(info.keys()) == {"selected"}
-
-    def test_selected_is_numpy(self):
-        """Selected backend should always be 'numpy'."""
-        info = get_backend_info()
-        assert info["selected"] == "numpy"
 
 
 def test_import_jamma_succeeds():

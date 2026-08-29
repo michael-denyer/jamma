@@ -16,12 +16,22 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
+from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
+from jamma.lmm.likelihood import build_pab_table_for_c
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.lmm_accel._helpers import _null_model_ncvt1
 
 pytestmark = pytest.mark.tier0
+
+# General workspace (n_cvt>=2) vs NumPy: peak deviation measured on
+# general_score_lrt_ncvt2 is 9.3e-13 for Score, 3.8e-5 relative for the MLE
+# lambda (an argmin on a flat surface for weak-signal SNPs, same story as
+# _LAMBDA_MLE_RTOL in tests/lmm_accel/_helpers.py) while the p_lrt it feeds
+# still agrees to 1.3e-12.
+_GENERAL_SCORE_RTOL = 1e-10
+_GENERAL_LRT_RTOL = 5e-5
 
 _C_RTOL = 1e-11
 _C_ATOL = 1e-14
@@ -555,3 +565,135 @@ class TestLrtWorkspaceParity:
 
         with pytest.raises(ValueError, match="lmm_mode"):
             _c().compute_lrt_fused_ws_c(score_ws, utg_t, 1)
+
+
+# ---------------------------------------------------------------------------
+# General workspace (n_cvt>=2), standalone lmm_mode 2 and 3.
+#
+# D2 gave the general workspace a standalone LRT-only (2) and Score-only (3)
+# mode, replacing the SoA-split entry points that used to serve them. These
+# compare the general workspace's mode 2/3 output against the NumPy fallback,
+# same as the n_cvt=1 classes above compare the ncvt1 workspace.
+# ---------------------------------------------------------------------------
+
+
+class TestGeneralWorkspaceScoreParity:
+    """General workspace (n_cvt>=2), lmm_mode=3 (Score only) vs NumPy."""
+
+    @pytest.mark.skipif(
+        compute_numpy._accel is None, reason="General C extension unavailable"
+    )
+    def test_general_score_only_matches_numpy(self, general_score_lrt_ncvt2):
+        """Score-only general workspace matches the NumPy Score statistics."""
+        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm.likelihood import classify_uab_columns
+
+        data = general_score_lrt_ncvt2
+        n_cvt = data["n_cvt"]
+        n_samples = data["n_samples"]
+        pab_dict = build_pab_table_for_c(n_cvt)._asdict()
+
+        inv_indices, _var_indices = classify_uab_columns(n_cvt)
+        Uab_batch = data["Uab_batch"]
+        uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+        utg_t = np.ascontiguousarray(data["UtG"].T)
+
+        ws = _c().create_workspace_general_c(
+            data["eigenvalues"],
+            uab_inv_soa,
+            data["UtW"],
+            data["Uty"],
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+            pab_dict,
+            lmm_mode=3,
+            hi_eval_null=data["Hi_eval_null"],
+        )
+        result = _c().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+
+        assert set(result.keys()) == {"betas", "ses", "p_scores"}
+
+        reference = _compute_score_numpy(
+            n_cvt, data["eigenvalues"], data["Hi_eval_null"], Uab_batch, n_samples
+        )
+        for key in ("betas", "ses", "p_scores"):
+            np.testing.assert_allclose(
+                result[key],
+                reference[key],
+                rtol=_GENERAL_SCORE_RTOL,
+                atol=1e-14,
+                equal_nan=True,
+                err_msg=f"general Score-only {key} vs NumPy mismatch",
+            )
+
+
+class TestGeneralWorkspaceLrtParity:
+    """General workspace (n_cvt>=2), lmm_mode=2 (LRT only) vs NumPy."""
+
+    @pytest.mark.skipif(
+        compute_numpy._accel is None, reason="General C extension unavailable"
+    )
+    def test_general_lrt_only_matches_numpy(self, general_score_lrt_ncvt2):
+        """LRT-only general workspace matches the NumPy MLE lambdas and p_lrts."""
+        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm.likelihood import classify_uab_columns
+
+        data = general_score_lrt_ncvt2
+        n_cvt = data["n_cvt"]
+        n_samples = data["n_samples"]
+        pab_dict = build_pab_table_for_c(n_cvt)._asdict()
+
+        inv_indices, _var_indices = classify_uab_columns(n_cvt)
+        Uab_batch = data["Uab_batch"]
+        uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
+        utg_t = np.ascontiguousarray(data["UtG"].T)
+
+        ws = _c().create_workspace_general_c(
+            data["eigenvalues"],
+            uab_inv_soa,
+            data["UtW"],
+            data["Uty"],
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            1,
+            pab_dict,
+            lmm_mode=2,
+            logl_H0=data["logl_H0"],
+        )
+        result = _c().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+
+        assert set(result.keys()) == {"lambdas_mle", "p_lrts"}
+
+        reference = _compute_lrt_numpy(
+            n_cvt,
+            data["eigenvalues"],
+            Uab_batch,
+            1e-5,
+            1e5,
+            50,
+            20,
+            data["logl_H0"],
+        )
+        np.testing.assert_allclose(
+            result["lambdas_mle"],
+            reference["lambdas_mle"],
+            rtol=_GENERAL_LRT_RTOL,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg="general LRT-only lambdas_mle vs NumPy mismatch",
+        )
+        np.testing.assert_allclose(
+            result["p_lrts"],
+            reference["p_lrts"],
+            rtol=_GENERAL_LRT_RTOL,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg="general LRT-only p_lrts vs NumPy mismatch",
+        )

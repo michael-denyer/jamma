@@ -45,7 +45,7 @@ def compute_lrt_fused_ws_c(
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
 
-# One general (n_cvt >= 2) workspace type, for lmm_mode 1 or 4. pab_table is
+# One general (n_cvt >= 2) workspace type, for any lmm_mode. pab_table is
 # the dict PabCTable._asdict() returns.
 GeneralWorkspace = NewType("GeneralWorkspace", object)
 
@@ -69,30 +69,6 @@ def create_workspace_general_c(
 def compute_lmm_chunk_fused_general_c(
     workspace: GeneralWorkspace,
     utg_t: npt.NDArray[np.float64],
-    n_threads: int,
-) -> dict[str, npt.NDArray[np.float64]]: ...
-def compute_score_split_general_c(
-    eigenvalues: npt.NDArray[np.float64],
-    uab_varying_soa: npt.NDArray[np.float64],
-    uab_invariant_soa: npt.NDArray[np.float64],
-    Hi_eval_null: npt.NDArray[np.float64],
-    n_samples: int,
-    n_cvt: int,
-    pab_table_dict: dict,
-    n_threads: int,
-) -> dict[str, npt.NDArray[np.float64]]: ...
-def compute_lrt_split_general_c(
-    eigenvalues: npt.NDArray[np.float64],
-    uab_varying_soa: npt.NDArray[np.float64],
-    uab_invariant_soa: npt.NDArray[np.float64],
-    n_samples: int,
-    n_cvt: int,
-    pab_table_dict: dict,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    logl_H0: float,
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
 

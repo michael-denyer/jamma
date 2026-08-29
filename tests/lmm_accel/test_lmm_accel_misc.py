@@ -40,38 +40,33 @@ def test_general_wald_identity_pab_optimization(synthetic_covariate_data_ncvt2):
 def test_ncvt_101_rejected_by_c_extension():
     """C extension raises ValueError for n_cvt=101 (exceeds MAX_N_CVT=100).
 
-    Uses compute_score_split_general_c as a representative entry point, since it
-    takes n_cvt as a direct parameter rather than hidden inside a workspace.
+    Uses create_workspace_general_c as the representative entry point: it
+    parses the Pab table, which carries n_cvt, before anything else.
     """
-    from jamma.lmm._lmm_accel import compute_score_split_general_c
-    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+    from jamma.lmm._lmm_accel import create_workspace_general_c
+    from jamma.lmm.likelihood import build_pab_table_for_c
 
     n_cvt = 101
     n_samples = 200
-    n_snps = 5
 
     rng = np.random.default_rng(777)
     eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]
-
-    # Minimal arrays, shaped for n_cvt=101 so the n_cvt bound is what rejects
-    # the call rather than a shape check firing first. build_pab_table_for_c is
-    # pure Python with no limit, so the table is built at the maximum n_cvt the
-    # C side accepts.
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    uab_var = np.zeros((n_snps, len(var_indices), n_samples), dtype=np.float64)
-    uab_inv = np.zeros((len(inv_indices), n_samples), dtype=np.float64)
-    Hi_eval_null = np.ones(n_samples, dtype=np.float64)
+    pab_table = build_pab_table_for_c(n_cvt)._asdict()
 
     with pytest.raises(ValueError, match=r"n_cvt must be 1\.\.100, got 101"):
-        compute_score_split_general_c(
+        create_workspace_general_c(
             eigenvalues,
-            uab_var,
-            uab_inv,
-            Hi_eval_null,
+            np.zeros((pab_table["n_inv"], n_samples), dtype=np.float64),
+            np.zeros((n_samples, n_cvt), dtype=np.float64),
+            np.zeros(n_samples, dtype=np.float64),
             n_samples,
-            n_cvt,
-            build_pab_table_for_c(100)._asdict(),
+            1e-5,
+            1e5,
+            50,
+            20,
             1,
+            pab_table,
+            lmm_mode=1,
         )
 
 

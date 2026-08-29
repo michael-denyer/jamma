@@ -25,7 +25,7 @@ from jamma.lmm.chunk_sizing import (
     plan_lmm_chunks,
 )
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.likelihood import classify_uab_columns, n_index
+from jamma.lmm.likelihood import n_index
 from jamma.lmm.runner import ExecutionPlan
 from jamma.lmm.runner_numpy_streaming import _DEFAULT_STATS_CHUNK
 from jamma.pipeline_config import PipelineConfig
@@ -97,17 +97,19 @@ def test_estimate_streaming_memory_peak_scales_with_n_cvt():
 def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
     """Regression for jamma-ca6p: the preflight gate must thread n_cvt.
 
-    Mode 2 with n_cvt >= 2 dispatches to SOA_SPLIT, whose per-SNP varying
-    Uab columns grow with n_cvt (fused paths hold no per-SNP batch arrays,
-    so n_cvt=200 there is rejected by the kernel's own n_cvt cap, not by
-    memory). n_cvt=1 fits comfortably in the pinned budget; n_cvt=90
-    inflates the varying columns past it. If the preflight silently
-    defaults n_cvt back to 1, both calls succeed — only a correctly
-    threaded n_cvt produces the asymmetric pass/raise this asserts. The
-    asymmetry holds under JAMMA_FORCE_NUMPY_FALLBACK too, where both legs
-    price the full Uab batch instead.
+    Every C dispatch path now holds no per-SNP batch array (the general
+    workspace forms Uab on the fly), so n_cvt no longer inflates a C-path
+    preflight. The NumPy fallback still materialises the full Uab batch,
+    which grows with n_cvt, so this pins the bug there instead: n_cvt=1
+    fits comfortably in the pinned budget; n_cvt=90 inflates the full Uab
+    batch past it. If the preflight silently defaults n_cvt back to 1, both
+    calls succeed — only a correctly threaded n_cvt produces the asymmetric
+    pass/raise this asserts.
     """
     from jamma.core import memory
+    from jamma.lmm import compute_numpy
+
+    monkeypatch.setattr(compute_numpy, "_accel", None)  # force NUMPY_FALLBACK
 
     # Pin available memory to a small fixed value to make the threshold
     # deterministic across machines. Both the chunk sizer and the
@@ -120,7 +122,7 @@ def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
     # With n_cvt=1, peak should be well under 1.0GB available.
     _streaming_preflight(n_samples, n_snps, n_cvt=1, lmm_mode=2)
 
-    # With n_cvt=90, the split path's varying columns inflate past it.
+    # With n_cvt=90, the full Uab batch inflates past it.
     with pytest.raises(MemoryError):
         _streaming_preflight(n_samples, n_snps, n_cvt=90, lmm_mode=2)
 
@@ -159,15 +161,15 @@ def test_preflight_accepts_moderate_n_cvt(monkeypatch):
 
 
 # n_cvt=1 selects FUSED/FUSED_SCORE_WS/FUSED_LRT_WS depending on lmm_mode;
-# n_cvt>=2 selects FUSED_GENERAL or SOA_SPLIT; accel=False always selects
+# n_cvt>=2 selects FUSED_GENERAL for every mode; accel=False always selects
 # NUMPY_FALLBACK regardless of n_cvt/lmm_mode. One representative lmm_mode
 # per path, matching select_dispatch_path's own resolution table.
 _DISPATCH_CASES = [
     pytest.param(1, 1, True, DispatchPath.FUSED, id="fused"),
     pytest.param(2, 1, True, DispatchPath.FUSED_GENERAL, id="fused_general"),
+    pytest.param(2, 2, True, DispatchPath.FUSED_GENERAL, id="fused_general_lrt"),
     pytest.param(1, 3, True, DispatchPath.FUSED_SCORE_WS, id="fused_score_ws"),
     pytest.param(1, 2, True, DispatchPath.FUSED_LRT_WS, id="fused_lrt_ws"),
-    pytest.param(2, 2, True, DispatchPath.SOA_SPLIT, id="soa_split"),
     pytest.param(4, 1, False, DispatchPath.NUMPY_FALLBACK, id="numpy_fallback"),
 ]
 
@@ -188,8 +190,6 @@ def _engine_allocation_gb(
 
     - Every path: ``utg_bufs``, ``_ChunkEngine``'s rotation output buffer,
       shape ``(chunk_size, n_samples)`` per live buffer.
-    - SOA_SPLIT: ``uab_var_bufs``, shape ``(chunk_size, n_var, n_samples)``
-      per live buffer (``classify_uab_columns``' varying-column count).
     - NUMPY_FALLBACK: the kernel holds ``Uab_batch`` (shape
       ``(chunk_size, n_samples, n_index)``, from
       ``uab.batch_compute_uab_numpy``'s documented return
@@ -211,10 +211,7 @@ def _engine_allocation_gb(
     """
     utg_bytes = plan.chunk_size * n_samples * 8 * plan.n_buffers
     extra_bytes = 0
-    if dispatch is DispatchPath.SOA_SPLIT:
-        n_var = len(classify_uab_columns(n_cvt)[1])
-        extra_bytes = plan.chunk_size * n_var * n_samples * 8 * plan.n_buffers
-    elif dispatch is DispatchPath.NUMPY_FALLBACK:
+    if dispatch is DispatchPath.NUMPY_FALLBACK:
         idx = n_index(n_cvt)
         uab_batch_bytes = plan.chunk_size * n_samples * idx * 8
         iab_batch_bytes = plan.chunk_size * (n_cvt + 2) * idx * 8
@@ -357,8 +354,8 @@ class TestChunkPlanMatchesEngine:
         """estimate_streaming_memory's real peak_lmm_gb equals the engine's
         real buffer allocation, to the byte, across every dispatch path.
 
-        Regression for the P6 finding (SOA_SPLIT's uab_var_bufs priced at
-        one buffer while the engine allocates n_buffers) and for the
+        Regression for the P6 finding (a per-SNP batch buffer priced at one
+        buffer while the engine allocates n_buffers) and for the
         coordinator-flagged Gap A (pipeline_buffers hardcoded to 2 in
         plan_memory's streaming branch regardless of whether the plan
         actually pipelines). Both would surface here because this drives
@@ -500,39 +497,6 @@ class TestChunkPlanMatchesEngine:
             f"plan_memory total {mem_plan.total_peak_gb:.3f}GB != "
             f"engine allocation {allocated_gb:.3f}GB"
         )
-
-    def test_soa_split_pipelined_priced_extra_is_double_sequential(self, monkeypatch):
-        """Direct regression for the measured 17.1GB vs 34.3GB gap (#finding 1).
-
-        n=50000, n_cvt=4 dispatches to SOA_SPLIT under LRT (mode 2) and
-        pipelines at this scale, so the engine allocates uab_var_bufs twice
-        (n_buffers=2). The extra must price at exactly double the
-        n_buffers=1 figure, not the same figure the pre-fix preflight priced
-        regardless of whether the run pipelines.
-        """
-        monkeypatch.setattr(memory, "available_ram_gb", lambda: 640.0)
-
-        n_samples = 50_000
-        n_snps = 500_000
-        n_cvt = 4
-        lmm_mode = 2  # LRT: n_cvt >= 2 dispatches to SOA_SPLIT
-
-        plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, DispatchPath.SOA_SPLIT)
-        assert plan.use_pipeline, "this case must pipeline for the regression to bite"
-        assert plan.n_buffers == 2
-
-        _, extra_gb = _compute_chunk(n_samples, n_snps, n_cvt, lmm_mode)
-
-        from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
-
-        sequential_extra_gb = (
-            plan.chunk_size
-            * lmm_extra_bytes_per_snp(
-                n_samples, n_cvt, DispatchPath.SOA_SPLIT, n_buffers=1
-            )
-            / 1e9
-        )
-        assert extra_gb == pytest.approx(2 * sequential_extra_gb, rel=1e-9)
 
     def test_run_lmm_association_numpy_threads_real_n_buffers(self, monkeypatch):
         """Call-site regression: run_lmm_association_numpy's check_memory gate

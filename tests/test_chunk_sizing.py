@@ -155,10 +155,9 @@ def test_chunk_size_auto_scales_with_memory():
 def test_chunk_size_accounting_by_dispatch_path():
     """Each path's column count, named by path rather than by mode.
 
-    Every n_cvt=1 C path is in the fused family and hands ``utg_t`` straight to
-    its kernel, so all three size identically at one column per SNP. The
-    SoA-split accounting adds the three varying Uab columns beside it, and the
-    NumPy fallback materialises the whole six-column table.
+    Every C path is in the fused family and hands ``utg_t`` straight to its
+    kernel, so all four size identically at one column per SNP. The NumPy
+    fallback materialises the whole six-column table (at n_cvt=1).
 
     This replaced a test that called the sizer three times with identical
     arguments and asserted the three results matched. It could not fail, and
@@ -179,14 +178,14 @@ def test_chunk_size_accounting_by_dispatch_path():
 
     fused = [
         size(DispatchPath.FUSED),
+        size(DispatchPath.FUSED_GENERAL),
         size(DispatchPath.FUSED_SCORE_WS),
         size(DispatchPath.FUSED_LRT_WS),
     ]
     assert len(set(fused)) == 1, f"fused family must size alike, got {fused}"
 
-    # 1 column vs 4 (3 varying + utg_t) vs 6 ((n_cvt+3)(n_cvt+2)/2 at n_cvt=1).
-    # Floor division on both sides: the sizer truncates budget/bytes_per_snp.
-    assert size(DispatchPath.SOA_SPLIT) == fused[0] // 4
+    # 1 column vs 6 ((n_cvt+3)(n_cvt+2)/2 at n_cvt=1).
+    # Floor division: the sizer truncates budget/bytes_per_snp.
     assert size(DispatchPath.NUMPY_FALLBACK) == fused[0] // 6
 
 

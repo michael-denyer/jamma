@@ -31,8 +31,8 @@ _EXPECTED = {
     (True, 2): DispatchPath.FUSED_LRT_WS,
     (False, 1): DispatchPath.FUSED_GENERAL,
     (False, 4): DispatchPath.FUSED_GENERAL,
-    (False, 3): DispatchPath.SOA_SPLIT,
-    (False, 2): DispatchPath.SOA_SPLIT,
+    (False, 3): DispatchPath.FUSED_GENERAL,
+    (False, 2): DispatchPath.FUSED_GENERAL,
 }
 
 _FEEDS_RAW_UTG = {
@@ -62,7 +62,7 @@ def test_every_input_maps_to_the_documented_path():
         )
 
 
-def test_only_six_paths_are_reachable():
+def test_every_path_is_reachable():
     """A member no input can select is dead weight, and this is what catches it."""
     reached = {
         _select(n_cvt, mode, accel=accel)
@@ -87,9 +87,8 @@ def test_mode_and_ncvt_gating():
     """Each C path is wired for particular modes and covariate counts."""
     for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
         path = _select(n_cvt, mode)
-        if path in (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL):
-            assert mode in (1, 4)
         if path is DispatchPath.FUSED:
+            assert mode in (1, 4)
             assert n_cvt == 1
         if path is DispatchPath.FUSED_GENERAL:
             assert n_cvt >= 2

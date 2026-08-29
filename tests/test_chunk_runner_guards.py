@@ -1,8 +1,8 @@
 """Guard/precondition tests for the shared NumPy LMM chunk runner.
 
-These cover the cheap, isolated failure paths that the end-to-end parity suites
-never exercise: the ``run_lmm_chunk_source_numpy`` argument preconditions and
-the SoA-split kernel's mode guard.
+These cover the cheap, isolated failure paths that the end-to-end parity
+suites never exercise: the ``run_lmm_chunk_source_numpy`` argument
+preconditions.
 """
 
 from __future__ import annotations
@@ -10,9 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jamma.lmm.chunk_kernel import RunInvariants, make_kernel
 from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
-from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
 
@@ -80,44 +78,6 @@ def test_empty_filtered_returns_zeroed_stats():
         lmm_mode=1, **_run_kwargs(n_filtered=0, filtered_means=np.zeros(0))
     )
     assert stats == (0, 0.0, 0.0, 0.0)
-
-
-# ---------------------------------------------------------------------------
-# SoA-split kernel mode guard
-# ---------------------------------------------------------------------------
-
-
-def _forced_split_invariants(lmm_mode):
-    """RunInvariants pinned to the split path, whatever the mode would select."""
-    n_samples = 4
-    return RunInvariants.build(
-        dispatch=DispatchPath.SOA_SPLIT,
-        lmm_mode=lmm_mode,
-        n_cvt=1,
-        n_samples=n_samples,
-        n_filtered=5,
-        eigenvalues=np.ones(n_samples),
-        UtW=np.ones((n_samples, 1)),
-        Uty=np.ones(n_samples),
-        Hi_eval_null=np.ones(n_samples),
-        logl_H0=-1.0,
-        l_min=1e-5,
-        l_max=1e5,
-        n_grid=50,
-        n_refine=20,
-    )
-
-
-def test_soa_split_kernel_rejects_modes_it_cannot_serve():
-    """Only modes 2 and 3 reach this path; 1 and 4 take the fused general kernel.
-
-    The guard fires when the kernel is built, before any chunk arrives, so a
-    dispatch table that ever routed a Wald or mode-4 run here fails on the
-    first line of the run rather than partway through the loop.
-    """
-    for mode in (1, 4, 99):
-        with pytest.raises(ValueError, match=f"Unexpected lmm_mode={mode}"):
-            make_kernel(_forced_split_invariants(mode), 1)
 
 
 def test_shared_chunk_entry_resets_the_p_yy_warning():

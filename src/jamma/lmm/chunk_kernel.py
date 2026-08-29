@@ -20,12 +20,7 @@ from typing import Any, assert_never
 
 import numpy as np
 
-from jamma.lmm.compute_numpy import (
-    _c,
-    _compute_lrt_split_numpy,
-    _compute_score_split_numpy,
-    compute_lmm_chunk_numpy,
-)
+from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood import build_pab_table_for_c
 from jamma.lmm.schema import LmmMode
@@ -169,8 +164,6 @@ def make_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
             return _ncvt1_kernel(inv)
         case DispatchPath.FUSED_GENERAL:
             return _fused_general_kernel(inv, n_threads)
-        case DispatchPath.SOA_SPLIT:
-            return _soa_split_kernel(inv)
         case DispatchPath.NUMPY_FALLBACK:
             return _numpy_kernel(inv)
         case _:
@@ -219,12 +212,14 @@ def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
 
 _GENERAL_COMPUTE: dict[int, tuple[str, str]] = {
     1: ("compute_lmm_chunk_fused_general_c", "Fused general Uab dispatch"),
+    2: ("compute_lmm_chunk_fused_general_c", "Fused general LRT Uab dispatch"),
+    3: ("compute_lmm_chunk_fused_general_c", "Fused general Score Uab dispatch"),
     4: ("compute_lmm_chunk_fused_general_c", "Fused general mode-4 Uab dispatch"),
 }
 
 
 def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
-    """n_cvt>=2 Wald or mode 4: same shape as n_cvt=1, plus the Pab table.
+    """n_cvt>=2, any mode: same shape as n_cvt=1, plus the Pab table.
 
     The workspace sizes its per-thread scratch from *n_threads* once, so the
     run-level thread count is part of its construction here.
@@ -251,52 +246,6 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
     )
-
-
-def _soa_split_kernel(inv: RunInvariants) -> Kernel:
-    """n_cvt>=2 Score or LRT: no persistent workspace, varying Uab SoA per chunk.
-
-    The mode guard fires here rather than per chunk, so a dispatch table that
-    ever routed Wald or mode 4 this way fails before the loop starts instead of
-    on its first chunk.
-    """
-    invariant = inv.require_invariant_soa()
-    if inv.lmm_mode == 3:
-
-        def call(chunk: np.ndarray, threads: int) -> KernelResult:
-            return _compute_score_split_numpy(
-                inv.n_cvt,
-                inv.eigenvalues,
-                inv.Hi_eval_null,
-                chunk,
-                invariant,
-                inv.n_samples,
-                threads,
-            )
-    elif inv.lmm_mode == 2:
-
-        def call(chunk: np.ndarray, threads: int) -> KernelResult:
-            return _compute_lrt_split_numpy(
-                inv.n_cvt,
-                inv.eigenvalues,
-                chunk,
-                invariant,
-                inv.n_samples,
-                inv.l_min,
-                inv.l_max,
-                inv.n_grid,
-                inv.n_refine,
-                inv.logl_H0,
-                threads,
-            )
-    else:
-        raise ValueError(
-            f"Unexpected lmm_mode={inv.lmm_mode} in SoA split dispatch. This path "
-            f"serves n_cvt>=2 modes 2 (LRT) and 3 (Score); modes 1 and 4 take the "
-            f"fused general kernel."
-        )
-
-    return Kernel(label="SoA split dispatch", n_filtered=inv.n_filtered, call=call)
 
 
 def _numpy_kernel(inv: RunInvariants) -> Kernel:

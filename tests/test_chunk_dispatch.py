@@ -27,15 +27,14 @@ from tests.fixture_paths import SYNTHETIC
 
 @pytest.mark.tier0
 def test_runner_mode4_uses_fused_dispatch():
-    """Mode 4 takes a fused path, and the SoA-split kernel refuses to serve it.
+    """Mode 4 takes the fused path at n_cvt=1 and the fused general path at n_cvt>=2.
 
     This used to wrap _compose_mode4_from_split and assert it was never called.
-    That helper has gone, and so has the standalone split dispatcher that
-    replaced it as this test's second half; the mode guard now lives in kernel
-    construction, so a dispatch table that ever routed mode 4 to the split path
-    fails before the chunk loop rather than on its first chunk.
+    That helper has gone, and so has the standalone split dispatcher and its
+    kernel-construction mode guard that replaced it as this test's second half:
+    D2 gave the general workspace's one compute every lmm_mode, so there is no
+    longer a split path for mode 4 to be refused by.
     """
-    from jamma.lmm.chunk_kernel import RunInvariants, make_kernel
     from jamma.lmm.dispatch import DispatchPath
 
     if compute_numpy._accel is None:
@@ -46,27 +45,6 @@ def test_runner_mode4_uses_fused_dispatch():
             compute_numpy.select_current_dispatch_path(n_cvt, 4, log_choices=False)
             is expected
         )
-
-    n_samples = 8
-    for refused_mode in (1, 4):
-        forced_split = RunInvariants.build(
-            dispatch=DispatchPath.SOA_SPLIT,
-            lmm_mode=refused_mode,
-            n_cvt=2,
-            n_samples=n_samples,
-            n_filtered=5,
-            eigenvalues=np.linspace(0.1, 2.0, n_samples),
-            UtW=np.ones((n_samples, 2)) * np.arange(1, 3),
-            Uty=np.linspace(-1.0, 1.0, n_samples),
-            Hi_eval_null=np.ones(n_samples),
-            logl_H0=-1.0,
-            l_min=1e-5,
-            l_max=1e5,
-            n_grid=50,
-            n_refine=20,
-        )
-        with pytest.raises(ValueError, match="modes 1 and 4 take the fused"):
-            make_kernel(forced_split, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -432,8 +410,8 @@ def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
 def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
     """LRT (mode 2) with n_cvt=2 uses C general path and matches GEMMA reference.
 
-    Verifies the full path: use_split=True -> SoA split ->
-    _compute_lrt_split_numpy -> compute_lrt_split_general_c.
+    Verifies the full path: FUSED_GENERAL dispatch -> a general workspace
+    created with lmm_mode=2 -> compute_lmm_chunk_fused_general_c.
     """
     from jamma.lmm import compute_numpy as cn
 
@@ -473,8 +451,8 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
 def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
     """Score (mode 3) with n_cvt=2 uses C general path and matches GEMMA reference.
 
-    Verifies the full path: use_split=True -> SoA split ->
-    _compute_score_split_numpy -> compute_score_split_general_c.
+    Verifies the full path: FUSED_GENERAL dispatch -> a general workspace
+    created with lmm_mode=3 -> compute_lmm_chunk_fused_general_c.
     """
     from jamma.lmm import compute_numpy as cn
 

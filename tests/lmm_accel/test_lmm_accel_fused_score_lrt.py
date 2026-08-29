@@ -54,13 +54,13 @@ def _fused_score_lrt_null_model(split_wald_data):
     return Hi_eval_null, logl_H0
 
 
-def test_abi_version_16():
-    """ABI_VERSION is 16 after the general workspace stores its lambda bracket."""
+def test_abi_version_17():
+    """ABI_VERSION is 17 after the general workspace accepts every lmm_mode."""
     if compute_numpy._accel is None:
         pytest.skip("C extension not available")
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 16
+    assert ABI_VERSION == 17
 
 
 def _make_runner_test_data(rng, n_samples=50, n_snps=20):
@@ -231,15 +231,15 @@ def test_runner_fused_lrt_dispatch():
 
 @pytest.mark.skipif(not _score_fused_available, reason="Fused Score C not available")
 def test_runner_fused_score_chunk_size():
-    """Fused Score uses 1-col accounting (4x larger chunks at same budget)."""
+    """Fused Score uses 1-col accounting (6x larger chunks than NumPy fallback)."""
     from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
     from jamma.lmm.dispatch import DispatchPath
 
     n_samples = 1000
     n_filtered = 200_000
     # Budget large enough that both paths exceed the 100-SNP floor.
-    # Split needs n_samples * 4 * 8 = 32KB/SNP; fused needs n_samples * 8 = 8KB/SNP.
-    # At 16 MB: split → 500 SNPs, fused → 2000 SNPs.
+    # NUMPY_FALLBACK needs n_samples * 6 * 8 = 48KB/SNP (n_cvt=1, 6 Uab
+    # columns); fused needs n_samples * 8 = 8KB/SNP (utg_t alone).
     budget = 16_000_000
 
     chunk_fused = compute_chunk_size_numpy(
@@ -249,22 +249,23 @@ def test_runner_fused_score_chunk_size():
         dispatch=DispatchPath.FUSED_SCORE_WS,
         mem_budget_bytes=budget,
     )
-    chunk_split = compute_chunk_size_numpy(
+    chunk_fallback = compute_chunk_size_numpy(
         n_samples,
         n_filtered,
         n_cvt=1,
-        dispatch=DispatchPath.SOA_SPLIT,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=budget,
     )
 
-    assert chunk_fused >= 3 * chunk_split, (
-        f"Fused chunk ({chunk_fused}) should be >= 3x split chunk ({chunk_split})"
+    assert chunk_fused >= 5 * chunk_fallback, (
+        f"Fused chunk ({chunk_fused}) should be >= 5x NumPy fallback chunk "
+        f"({chunk_fallback})"
     )
 
 
 @pytest.mark.skipif(not _lrt_fused_available, reason="Fused LRT C not available")
 def test_runner_fused_lrt_chunk_size():
-    """Fused LRT uses 1-col accounting (4x larger chunks at same budget)."""
+    """Fused LRT uses 1-col accounting (6x larger chunks than NumPy fallback)."""
     from jamma.lmm.chunk_sizing import compute_chunk_size_numpy
     from jamma.lmm.dispatch import DispatchPath
 
@@ -279,14 +280,15 @@ def test_runner_fused_lrt_chunk_size():
         dispatch=DispatchPath.FUSED_LRT_WS,
         mem_budget_bytes=budget,
     )
-    chunk_split = compute_chunk_size_numpy(
+    chunk_fallback = compute_chunk_size_numpy(
         n_samples,
         n_filtered,
         n_cvt=1,
-        dispatch=DispatchPath.SOA_SPLIT,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=budget,
     )
 
-    assert chunk_fused >= 3 * chunk_split, (
-        f"Fused chunk ({chunk_fused}) should be >= 3x split chunk ({chunk_split})"
+    assert chunk_fused >= 5 * chunk_fallback, (
+        f"Fused chunk ({chunk_fused}) should be >= 5x NumPy fallback chunk "
+        f"({chunk_fallback})"
     )

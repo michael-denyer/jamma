@@ -80,9 +80,9 @@ class TestHiEvalNullPositivity:
             _ncvt1_workspace(fused_data, lmm_mode=3, hi_eval_null=hi_bad)
 
     @pytest.mark.parametrize("bad", [0.0, -2.0], ids=["zero", "negative"])
-    def test_score_split_general_rejects(self, synthetic_covariate_data_ncvt2, bad):
-        """compute_score_split_general_c rejects a non-positive hi_eval_null."""
-        from jamma.lmm._lmm_accel import compute_score_split_general_c
+    def test_general_score_workspace_rejects(self, synthetic_covariate_data_ncvt2, bad):
+        """create_workspace_general_c rejects a non-positive hi_eval_null in mode 3."""
+        from jamma.lmm._lmm_accel import create_workspace_general_c
 
         data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
         eigenvalues = data["eigenvalues"]
@@ -91,15 +91,20 @@ class TestHiEvalNullPositivity:
         hi_bad[0] = bad
 
         with pytest.raises(ValueError, match="positive"):
-            compute_score_split_general_c(
+            create_workspace_general_c(
                 eigenvalues,
-                data["uab_var_soa"],
                 data["uab_inv_soa"],
-                hi_bad,
+                data["UtW"],
+                data["Uty"],
                 data["n_samples"],
-                data["n_cvt"],
-                data["pab_c"]._asdict(),
+                1e-5,
+                1e5,
+                50,
+                20,
                 1,
+                data["pab_c"]._asdict(),
+                lmm_mode=3,
+                hi_eval_null=hi_bad,
             )
 
 
@@ -759,27 +764,34 @@ def test_general_creator_rejects_out_of_range_table(
 
 @pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
-@pytest.mark.parametrize("lmm_mode", [2, 3])
-def test_general_creator_rejects_score_and_lrt_modes(
-    synthetic_covariate_data_ncvt2, lmm_mode
-):
-    """Score-only and LRT-only at n_cvt >= 2 take no workspace (SOA_SPLIT)."""
+def test_general_creator_rejects_mode_5():
+    """lmm_mode outside 1..4 is rejected, whatever n_cvt.
+
+    D2 gave the general creator every lmm_mode 1..4 (previously 1 and 4
+    only, with modes 2 and 3 served by the now-deleted SOA_SPLIT entry
+    points); mode 2/3 acceptance is covered directly in
+    tests/lmm_accel/test_lmm_accel_workspace_score_lrt.py. This pins the
+    bound still enforced past 4.
+    """
     from jamma.lmm.likelihood import build_pab_table_for_c
 
-    data = synthetic_covariate_data_ncvt2
-    n_cvt = data["n_cvt"]
-    with pytest.raises(ValueError, match="lmm_mode must be 1 or 4"):
+    n_cvt, n_samples = 2, 20
+    rng = np.random.default_rng(1)
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+    UtW = rng.standard_normal((n_samples, n_cvt))
+    Uty = rng.standard_normal(n_samples)
+    with pytest.raises(ValueError, match="lmm_mode must be 1, 2, 3 or 4"):
         _c().create_workspace_general_c(
-            data["eigenvalues"],
-            compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt),
-            data["UtW"],
-            data["Uty"],
-            data["n_samples"],
+            eigenvalues,
+            compute_uab_invariant_soa(UtW, Uty, n_cvt),
+            UtW,
+            Uty,
+            n_samples,
             1e-5,
             1e5,
             50,
             20,
             1,
             build_pab_table_for_c(n_cvt)._asdict(),
-            lmm_mode=lmm_mode,
+            lmm_mode=5,
         )

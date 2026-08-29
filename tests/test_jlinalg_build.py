@@ -69,10 +69,10 @@ def test_all_exports_present():
 
 
 def test_abi_version():
-    """ABI_VERSION is 18 after offsetting the JLINALG_EXT_* return sentinels."""
+    """ABI_VERSION is 19 after plumbing eigh's driver parameter through."""
     from jamma.jlinalg import ABI_VERSION
 
-    assert ABI_VERSION == 18, f"Expected ABI_VERSION=18, got {ABI_VERSION}"
+    assert ABI_VERSION == 19, f"Expected ABI_VERSION=19, got {ABI_VERSION}"
 
 
 def test_dgemm_exported():

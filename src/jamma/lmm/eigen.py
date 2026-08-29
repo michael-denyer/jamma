@@ -204,11 +204,12 @@ def eigendecompose_kinship(
     )
 
     est_seconds = estimate_eigendecomp_seconds(n_samples, n_threads)
-    logger.info(f"Eigendecomp: {plan.driver}, threads={n_threads}")
     logger.info(
         f"  Estimated time: "
         f"{estimate_eigendecomp_time(n_samples, n_threads, use_dsyevr=plan.use_dsyevr)}"
     )
+
+    eigh_driver = "dsyevr" if plan.use_dsyevr else "auto"
 
     start_time = time.perf_counter()
     # jlinalg.eigh dispatches to vendor DSYEVD/DSYEVR or the NumPy fallback, and
@@ -217,8 +218,8 @@ def eigendecompose_kinship(
     # governs both vendor and NumPy BLAS, and timed_progress blocks until done.
     try:
         with blas_threads(n_threads):
-            eigenvalues, eigenvectors = timed_progress(
-                lambda: jlinalg.eigh(K, inplace=plan.use_inplace),
+            eigenvalues, eigenvectors, eigh_status = timed_progress(
+                lambda: jlinalg.eigh(K, inplace=plan.use_inplace, driver=eigh_driver),
                 estimated_seconds=est_seconds,
                 desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
             )
@@ -242,6 +243,8 @@ def eigendecompose_kinship(
             f"This may indicate a jlinalg bug — please report it."
         )
         raise
+
+    logger.info(f"Eigendecomp: {eigh_status.driver_used}, threads={n_threads}")
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")

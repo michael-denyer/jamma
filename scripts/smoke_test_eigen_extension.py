@@ -36,7 +36,7 @@ if not blas_has_dsyevd and not blas_has_dsyevr:
 n = 100
 K = np.eye(n, dtype=np.float64)
 try:
-    w, v = eigh(K)
+    w, v, _ = eigh(K)
 except RuntimeError as exc:
     # BLAS detected but LAPACK symbols missing — expected in some containers
     print(f"Vendor LAPACK unavailable at runtime: {exc}")
@@ -53,7 +53,7 @@ rng = np.random.default_rng(42)
 A = rng.standard_normal((50, 50))
 K_spd = (A @ A.T) / 50
 K_ref = K_spd.copy()
-w2, v2 = eigh(K_spd)
+w2, v2, _ = eigh(K_spd)
 
 # Reconstruction check
 K_recon = v2 @ np.diag(w2) @ v2.T

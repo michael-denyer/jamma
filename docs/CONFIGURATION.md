@@ -211,11 +211,23 @@ ILP64 uses 64-bit integers and handles arbitrarily large matrices.
 
 ### Eigendecomposition driver selection
 
-Within a run, `jlinalg.eigh` selects a driver in priority order:
+`core.eigen_plan.plan_eigen_driver` picks a driver from the available memory
+and vendor capability flags, in priority order:
 
 1. **DSYEVD** (in-place, vendor LAPACK) — fastest; requires `O(N²)` workspace (~240 GB for 100k samples)
 2. **DSYEVR** (vendor LAPACK) — lower peak memory (`O(N)` workspace, ~160 GB for 100k samples)
 3. **`np.linalg.eigh`** — used when no vendor LAPACK is available, or when `JLINALG_NO_VENDOR_LAPACK` is set
+
+`eigendecompose_kinship` (`lmm/eigen.py`) passes that choice through to
+`jlinalg.eigh(K, driver=...)`: `driver="dsyevr"` when the plan picked DSYEVR,
+`driver="auto"` otherwise. `jlinalg_eigh_c` honours it directly -- when
+`driver="dsyevr"` it skips the DSYEVD attempt outright rather than trying
+DSYEVD first and falling back to DSYEVR only on an allocation failure, so a
+memory-constrained run never touches pages the plan did not reserve. `eigh`
+returns the driver that actually ran as `status.driver_used`, and
+`eigendecompose_kinship` logs that value (`Eigendecomp: dsyevr`), not the
+planned one, since a DSYEVD allocation failure can still fall through to
+DSYEVR even under `driver="auto"`.
 
 Set `JLINALG_NO_VENDOR_LAPACK=1` to force the NumPy fallback for debugging.
 

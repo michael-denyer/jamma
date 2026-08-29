@@ -142,7 +142,7 @@ class TestEigh:
         """eigh(eye(N)) returns all-ones eigenvalues and orthogonal eigenvectors."""
         K = np.eye(N)
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         # All eigenvalues should be 1.0
         npt.assert_allclose(
             w, np.ones(N), rtol=1e-14, err_msg=f"Identity eigenvalues wrong at N={N}"
@@ -164,7 +164,7 @@ class TestEigh:
         d_unsorted = rng.uniform(0.1, 10.0, size=N)
         K = np.diag(d_unsorted)
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         # Eigenvalues must be sorted ascending
         d_sorted = np.sort(d_unsorted)
         npt.assert_allclose(
@@ -194,7 +194,7 @@ class TestEigh:
         rng = np.random.default_rng(42 + N * 7)
         K = _random_spd(N, rng)
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         # Eigenvalues must be ascending
         if N > 1:
             assert np.all(w[:-1] <= w[1:] + 1e-14), (
@@ -214,7 +214,7 @@ class TestEigh:
         rng = np.random.default_rng(1234)
         K = _random_spd(50, rng)
         K_copy = K.copy()
-        w, _ = eigh(K_copy)
+        w, _, _ = eigh(K_copy)
         diffs = np.diff(w)
         assert np.all(diffs >= -1e-14), (
             f"Eigenvalues not ascending: min diff = {diffs.min()}"
@@ -223,7 +223,7 @@ class TestEigh:
     def test_empty_matrix(self) -> None:
         """eigh on 0x0 matrix returns empty eigenvalues and eigenvectors."""
         K = np.zeros((0, 0), dtype=np.float64)
-        w, v = eigh(K)
+        w, v, _ = eigh(K)
         assert w.shape == (0,), f"Expected (0,) eigenvalues, got {w.shape}"
         assert v.shape == (0, 0), f"Expected (0,0) eigenvectors, got {v.shape}"
 
@@ -233,7 +233,7 @@ class TestEigh:
         N = 20
         K = _random_spd(N, rng)
         K_f = np.asfortranarray(K.copy())
-        w, v = eigh(K_f)
+        w, v, _ = eigh(K_f)
         _assert_reconstruction(K, w, v, 1e-13, "Fortran-order")
 
 
@@ -253,7 +253,7 @@ def test_reconstruction_accuracy() -> None:
     N = 1000
     K = _random_spd(N, rng)
     K_copy = K.copy()
-    w, v = eigh(K_copy)
+    w, v, _ = eigh(K_copy)
     _assert_reconstruction(K, w, v, 1e-8, "N=1000")
 
 
@@ -264,7 +264,7 @@ def test_orthogonality() -> None:
     N = 1000
     K = _random_spd(N, rng)
     K_copy = K.copy()
-    _, v = eigh(K_copy)
+    _, v, _ = eigh(K_copy)
     _assert_orthogonality(v, 1e-12, "N=1000")
 
 
@@ -285,7 +285,7 @@ def test_eigh_nan_inf_input(bad_value: float) -> None:
     K[3, 3] = bad_value
     K_copy = K.copy()
     try:
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         # If it didn't raise, eigenvalues must contain NaN/Inf — not
         # silently finite values from a corrupted decomposition.
         assert not np.all(np.isfinite(w)), (
@@ -305,7 +305,7 @@ def test_eigh_memory_layout() -> None:
     N = 20
     K = _random_spd(N, rng)
     K_copy = K.copy()
-    w, v = eigh(K_copy)
+    w, v, _ = eigh(K_copy)
     # Shape checks
     assert w.shape == (N,), f"Eigenvalues shape {w.shape} != ({N},)"
     assert v.shape == (N, N), f"Eigenvectors shape {v.shape} != ({N}, {N})"
@@ -335,7 +335,7 @@ def test_no_vendor_lapack_env_forces_numpy_path(
     N = 40
     K = _random_spd(N, rng)
     monkeypatch.setenv("JLINALG_NO_VENDOR_LAPACK", "1")
-    w, v = eigh(K.copy())
+    w, v, _ = eigh(K.copy())
     _assert_reconstruction(K, w, v, 1e-10, "NO_VENDOR_LAPACK forced")
     assert np.all(np.diff(w) >= -1e-12), "eigenvalues not ascending on forced path"
 
@@ -349,7 +349,7 @@ def test_no_vendor_lapack_off_values_do_not_force(
     N = 30
     K = _random_spd(N, rng)
     monkeypatch.setenv("JLINALG_NO_VENDOR_LAPACK", off_value)
-    w, v = eigh(K.copy())
+    w, v, _ = eigh(K.copy())
     _assert_reconstruction(K, w, v, 1e-10, f"NO_VENDOR_LAPACK={off_value!r}")
 
 
@@ -383,7 +383,7 @@ def test_block_diagonal_stress() -> None:
         K[start:end, start:end] = block
 
     K_copy = K.copy()
-    w, v = eigh(K_copy)
+    w, v, _ = eigh(K_copy)
 
     _assert_reconstruction(K, w, v, 1e-8, "Block-diagonal")
     _assert_orthogonality(v, 1e-8, "Block-diagonal")
@@ -426,7 +426,7 @@ def test_vs_mouse_hs1940_kinship() -> None:
 
     # jlinalg eigh
     K_jlinalg = K.copy()
-    w_jlinalg, v_jlinalg = eigh(K_jlinalg)
+    w_jlinalg, v_jlinalg, _ = eigh(K_jlinalg)
 
     # Compare eigenvalues: use atol for near-zero eigenvalues, rtol for large ones
     npt.assert_allclose(
@@ -458,7 +458,7 @@ def test_mouse_hs1940_eigendecomp_strict() -> None:
     K = np.loadtxt(kinship_path)
     K_copy = K.copy()
 
-    w, v = eigh(K_copy)
+    w, v, _ = eigh(K_copy)
 
     ortho_err = _assert_orthogonality(v, 1e-12, "mouse_hs1940 strict")
 
@@ -492,7 +492,7 @@ class TestEighReconstructionMidSize:
         N = 64
         K = _random_spd(N, rng)
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-13, "N=64")
 
 
@@ -524,14 +524,14 @@ class TestEighDegenerateSpectra:
         rng = np.random.default_rng(202 + N)
         K = _random_spd(N, rng)
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-8, f"boundary N={N}")
 
     def test_degenerate_eigenvalues(self) -> None:
         """Matrix with exact repeated eigenvalues still yields an orthogonal basis."""
         # diag([1,1,1,2,2,3]) — exact multiplicity
         K = np.diag([1.0, 1.0, 1.0, 2.0, 2.0, 3.0])
-        w, v = eigh(K.copy())
+        w, v, _ = eigh(K.copy())
         npt.assert_allclose(w, [1, 1, 1, 2, 2, 3], atol=1e-14)
         VtV = v.T @ v
         npt.assert_allclose(VtV, np.eye(6), atol=1e-14)
@@ -540,7 +540,7 @@ class TestEighDegenerateSpectra:
         """Zero matrix: all eigenvalues 0, eigenvectors form orthonormal basis."""
         N = 10
         K = np.zeros((N, N))
-        w, v = eigh(K.copy())
+        w, v, _ = eigh(K.copy())
         npt.assert_allclose(w, np.zeros(N), atol=1e-15)
         VtV = v.T @ v
         npt.assert_allclose(VtV, np.eye(N), atol=1e-14)
@@ -548,7 +548,7 @@ class TestEighDegenerateSpectra:
     def test_indefinite_matrix(self) -> None:
         """Matrix with negative eigenvalues."""
         K = np.array([[1.0, 2.0], [2.0, 1.0]])  # eigenvalues: -1, 3
-        w, v = eigh(K.copy())
+        w, v, _ = eigh(K.copy())
         npt.assert_allclose(w, [-1.0, 3.0], atol=1e-14)
         VtV = v.T @ v
         npt.assert_allclose(VtV, np.eye(2), atol=1e-14)
@@ -578,7 +578,7 @@ class TestEighEigenpairResidual:
         N = 100
         K = _random_spd(N, rng)
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         for j in range(min(5, N)):
             residual = np.linalg.norm(K @ v[:, j] - w[j] * v[:, j])
             assert residual < 1e-7, (
@@ -622,7 +622,7 @@ class TestEighReconstructionAtScale:
         rng = np.random.default_rng(seed)
         K = _random_spd(N, rng)
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
 
         _assert_reconstruction(K, w, v, 1e-8, f"N={N}")
         _assert_orthogonality(v, ortho_tol, f"N={N}")
@@ -684,7 +684,7 @@ class TestEighThroughput:
         A = rng.standard_normal((N, N))
         K = A @ A.T + np.eye(N)
 
-        vals, vecs = eigh(K.copy())
+        vals, vecs, _ = eigh(K.copy())
         np_vals, _ = np.linalg.eigh(K.copy())
 
         # Eigenvalues agree with numpy to ~1e-10 in practice; 1e-8 for margin.
@@ -710,7 +710,7 @@ class TestEighBoundarySizeLoop:
         for N in [128, 200]:
             K = _random_spd(N, rng)
             K_copy = K.copy()
-            w, v = eigh(K_copy)
+            w, v, _ = eigh(K_copy)
             _assert_reconstruction(K, w, v, 1e-8, f"sequential N={N}")
 
 
@@ -740,6 +740,12 @@ class TestEighErrors:
         with pytest.raises(ValueError):
             eigh(K)
 
+    def test_invalid_driver_raises(self):
+        """An unrecognised driver name must raise ValueError."""
+        K = np.eye(4)
+        with pytest.raises(ValueError, match="driver"):
+            eigh(K, driver="bogus")  # type: ignore[bad-argument-type]
+
 
 # ---------------------------------------------------------------------------
 # ctypes helpers for direct C function access
@@ -758,6 +764,7 @@ class _EighStatus(ctypes.Structure):
 
     _fields_ = [
         ("vendor_lapack_skipped", ctypes.c_int),
+        ("driver_used", ctypes.c_int),
     ]
 
 
@@ -779,6 +786,7 @@ def _load_jlinalg_eigh_c():
         ctypes.c_void_p,  # double *eigenvalues
         ctypes.c_void_p,  # double *eigenvectors
         ctypes.c_longlong,  # npy_intp ldz
+        ctypes.c_int,  # int prefer_dsyevr
         ctypes.POINTER(_EighStatus),  # jlinalg_eigh_status_t *status
     ]
     return fn
@@ -790,12 +798,13 @@ def _ptr(arr: np.ndarray) -> ctypes.c_void_p:
 
 
 def _call_eigh_with_status(
-    K: np.ndarray,
+    K: np.ndarray, *, prefer_dsyevr: bool = False
 ) -> tuple[np.ndarray, np.ndarray, _EighStatus]:
     """Call jlinalg_eigh_c via ctypes, returning eigenvalues, eigenvectors, status.
 
     Args:
         K: Symmetric matrix (N x N, float64, C-contiguous). Modified in place.
+        prefer_dsyevr: Skip the DSYEVD attempt and require DSYEVR directly.
 
     Returns:
         Tuple of (eigenvalues, eigenvectors, status).
@@ -807,7 +816,14 @@ def _call_eigh_with_status(
 
     fn = _load_jlinalg_eigh_c()
     ret = fn(
-        N, _ptr(K), N, _ptr(eigenvalues), _ptr(eigenvectors), N, ctypes.byref(status)
+        N,
+        _ptr(K),
+        N,
+        _ptr(eigenvalues),
+        _ptr(eigenvectors),
+        N,
+        int(prefer_dsyevr),
+        ctypes.byref(status),
     )
     assert ret == 0, f"jlinalg_eigh_c returned {ret}"
     return eigenvalues, eigenvectors, status
@@ -854,7 +870,7 @@ class TestEighViaCtypesAtScale:
         rng = np.random.default_rng(42)
         K = _random_spd(n, rng)
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-8, f"N={n}")
         _assert_orthogonality(v, 1e-8, f"N={n}")
 
@@ -887,6 +903,7 @@ class TestEighPaddedStrideRejected:
             _ptr(eigenvalues),
             _ptr(eigenvectors),
             n,
+            0,  # prefer_dsyevr
             ctypes.byref(status),
         )
         assert ret == _JLINALG_EXT_BAD_STRIDE
@@ -908,6 +925,7 @@ class TestEighPaddedStrideRejected:
             _ptr(eigenvalues),
             _ptr(eigenvectors),
             n + 1,  # ldz != N
+            0,  # prefer_dsyevr
             ctypes.byref(status),
         )
         assert ret == _JLINALG_EXT_BAD_STRIDE
@@ -951,7 +969,7 @@ class TestEighDifficultInputs:
         tolerance is far tighter than the large-N cases.
         """
         K_copy = K.copy()
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "N=2")
         _assert_orthogonality(v, 1e-12, "N=2")
         # Eigenvalues ascending
@@ -972,7 +990,7 @@ class TestEighDifficultInputs:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "Clustered eigenvalues")
 
     def test_large_gap_ratio(self) -> None:
@@ -986,7 +1004,7 @@ class TestEighDifficultInputs:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-10, "Large gap ratio")
 
     def test_boundary_eigenvalue(self) -> None:
@@ -1002,7 +1020,7 @@ class TestEighDifficultInputs:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "Boundary eigenvalue")
 
     def test_negative_offdiagonal(self) -> None:
@@ -1023,7 +1041,7 @@ class TestEighDifficultInputs:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-8, "negative off-diagonal")
         _assert_orthogonality(v, 1e-8, "negative off-diagonal")
 
@@ -1039,7 +1057,7 @@ class TestEighDifficultInputs:
         for N in [50, 200, 500]:
             A = rng.standard_normal((N, N))
             A = (A + A.T) / 2
-            w, V = eigh(A.copy())
+            w, V, _ = eigh(A.copy())
 
             recon = np.linalg.norm(A - V @ np.diag(w) @ V.T) / np.linalg.norm(A)
             assert recon < 1e-8, f"Reconstruction {recon:.2e} at N={N} (threshold 1e-8)"
@@ -1066,7 +1084,7 @@ class TestEighVendorDispatch:
         A = rng.standard_normal((100, 100))
         K = np.ascontiguousarray(A @ A.T + np.eye(100), dtype=np.float64)
         K_orig = K.copy()
-        w, v = eigh(K)
+        w, v, _ = eigh(K)
         recon = v @ np.diag(w) @ v.T
         rel_err = np.linalg.norm(K_orig - recon) / np.linalg.norm(K_orig)
         assert rel_err < 1e-9, f"Reconstruction error {rel_err:.2e}"
@@ -1076,7 +1094,7 @@ class TestEighVendorDispatch:
         rng = np.random.default_rng(123)
         A = rng.standard_normal((100, 100))
         K = np.ascontiguousarray(A @ A.T + np.eye(100), dtype=np.float64)
-        w, v = eigh(K)
+        w, v, _ = eigh(K)
         orth_err = np.linalg.norm(v.T @ v - np.eye(100))
         assert orth_err < 1e-13, f"Orthogonality error {orth_err:.2e}"
 
@@ -1085,7 +1103,7 @@ class TestEighVendorDispatch:
         rng = np.random.default_rng(456)
         A = rng.standard_normal((50, 50))
         K = np.ascontiguousarray(A @ A.T + np.eye(50), dtype=np.float64)
-        w, v = eigh(K)
+        w, v, _ = eigh(K)
         assert np.all(np.diff(w) >= 0), "Eigenvalues not ascending"
 
     def test_eigh_vendor_matches_numpy(self):
@@ -1094,7 +1112,7 @@ class TestEighVendorDispatch:
         A = rng.standard_normal((50, 50))
         K = np.ascontiguousarray(A @ A.T + np.eye(50), dtype=np.float64)
         K_copy = K.copy()
-        w_jlinalg, _ = eigh(K)
+        w_jlinalg, _, _ = eigh(K)
         w_numpy, _ = np.linalg.eigh(K_copy)
         npt.assert_allclose(w_jlinalg, w_numpy, rtol=1e-12)
 
@@ -1126,7 +1144,7 @@ class TestEighVendorDispatch:
         )
         K_orig = K.copy()
         try:
-            w, v = eigh(K)
+            w, v, _ = eigh(K)
         except (RuntimeError, np.linalg.LinAlgError) as e:
             if "convergence failure" in str(e):
                 # Vendor dsyevd failed on degenerate matrix (OpenBLAS).
@@ -1152,7 +1170,7 @@ class TestEighVendorDispatch:
     def test_eigh_vendor_size_1(self):
         """Size-1 matrix: edge case."""
         K = np.array([[3.14]], dtype=np.float64)
-        w, v = eigh(K)
+        w, v, _ = eigh(K)
         assert abs(w[0] - 3.14) < 1e-15
         assert abs(v[0, 0] - 1.0) < 1e-15
 
@@ -1198,7 +1216,7 @@ class TestEighDsyevrFallback:
         K = np.ascontiguousarray(A @ A.T + np.eye(80), dtype=np.float64)
         K_orig = K.copy()
 
-        w, v = eigh(K)
+        w, v, _ = eigh(K)
 
         # Reconstruction check — DSYEVR on Linux gives ~6e-9, so use 1e-8
         recon = v @ np.diag(w) @ v.T
@@ -1207,3 +1225,54 @@ class TestEighDsyevrFallback:
 
         # Eigenvalues ascending
         assert np.all(np.diff(w) >= 0), "Eigenvalues not ascending"
+
+
+# ---------------------------------------------------------------------------
+# driver= plumbing: the memory plan's DSYEVR choice must reach jlinalg_eigh_c
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not (HAS_C_EXTENSION and blas_has_dsyevr),
+    reason="Vendor DSYEVR required to force the driver='dsyevr' path",
+)
+class TestEighDriverForcesDsyevr:
+    """driver='dsyevr' skips DSYEVD and reports DSYEVR as the driver used.
+
+    Guards the C1 fix: the memory plan picks DSYEVR for its smaller O(N)
+    footprint, and jlinalg_eigh_c must run DSYEVR directly rather than
+    silently retrying DSYEVD first and only falling back on an allocation
+    failure the plan already ruled out.
+    """
+
+    def test_forced_dsyevr_reports_driver_used(self):
+        rng = np.random.default_rng(2024)
+        A = rng.standard_normal((64, 64))
+        K = np.ascontiguousarray(A @ A.T + np.eye(64), dtype=np.float64)
+
+        _, _, status = eigh(K.copy(), driver="dsyevr")
+
+        assert status.driver_used == "dsyevr"
+
+    def test_forced_dsyevr_matches_dsyevd_eigenvalues(self):
+        """DSYEVR and DSYEVD agree on the same matrix within 1e-12 relative."""
+        rng = np.random.default_rng(2024)
+        A = rng.standard_normal((64, 64))
+        K = np.ascontiguousarray(A @ A.T + np.eye(64), dtype=np.float64)
+
+        w_dsyevr, _, status_dsyevr = eigh(K.copy(), driver="dsyevr")
+        w_dsyevd, _, status_dsyevd = eigh(K.copy(), driver="dsyevd")
+
+        assert status_dsyevr.driver_used == "dsyevr"
+        assert status_dsyevd.driver_used == "dsyevd"
+        npt.assert_allclose(w_dsyevr, w_dsyevd, rtol=1e-12)
+
+    def test_default_driver_reports_dsyevd(self):
+        """driver='auto' (the default) runs DSYEVD when it is available."""
+        rng = np.random.default_rng(7)
+        A = rng.standard_normal((64, 64))
+        K = np.ascontiguousarray(A @ A.T + np.eye(64), dtype=np.float64)
+
+        _, _, status = eigh(K)
+
+        assert status.driver_used == "dsyevd"

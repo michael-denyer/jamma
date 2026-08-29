@@ -240,7 +240,7 @@ class TestFakeProductionDrift:
 class TestFakeJlinalg:
     def test_eigh_computes_real_decomposition_by_default(self) -> None:
         K = np.diag([1.0, 2.0, 3.0])
-        w, v = FakeJlinalg().eigh(K)
+        w, v, _ = FakeJlinalg().eigh(K)
         np.testing.assert_allclose(w, [1.0, 2.0, 3.0])
         np.testing.assert_allclose(v @ np.diag(w) @ v.T, K)
 
@@ -249,7 +249,7 @@ class TestFakeJlinalg:
             FakeJlinalg(eigh_error=MemoryError("boom")).eigh(np.eye(2))
 
     def test_eigh_returns_the_configured_result(self) -> None:
-        result = (np.ones(2), np.eye(2))
+        result = (np.ones(2), np.eye(2), jamma.jlinalg.EighStatus(driver_used="dsyevd"))
         assert FakeJlinalg(eigh_result=result).eigh(np.eye(2)) is result
 
     def test_undeclared_attribute_raises(self) -> None:

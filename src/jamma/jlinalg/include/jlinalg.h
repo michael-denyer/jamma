@@ -20,7 +20,7 @@
 /* Bump this constant whenever the public ABI changes (new fields in
  * structs, changed function signatures, etc.). pymodule.c exposes
  * this as a Python-level integer so callers can guard against ABI mismatches. */
-#define JLINALG_ABI_VERSION 18
+#define JLINALG_ABI_VERSION 19
 
 /* ---------------------------------------------------------------------------
  * External BLAS dispatch (vendor BLAS / LAPACK discovery)
@@ -224,7 +224,13 @@ int  jlinalg_set_n_threads(int n);
  */
 typedef struct {
     int vendor_lapack_skipped;   /* 1 if vendor LAPACK (dsyevd/dsyevr) alloc failed */
+    int driver_used;             /* 1 = DSYEVD ran, 2 = DSYEVR ran, 0 = neither (numpy fallback) */
 } jlinalg_eigh_status_t;
+
+/* jlinalg_eigh_status_t.driver_used values. */
+#define JLINALG_DRIVER_NONE   0
+#define JLINALG_DRIVER_DSYEVD 1
+#define JLINALG_DRIVER_DSYEVR 2
 
 /* ---------------------------------------------------------------------------
  * eigh function declaration (vendor LAPACK eigendecomposition)
@@ -238,7 +244,12 @@ typedef struct {
  * eigenvalues: caller-allocated N doubles (ascending order on return).
  * eigenvectors: caller-allocated N x N doubles, row-major. U[:,j] is the
  *               eigenvector for eigenvalues[j].
- * status: if non-NULL, populated with diagnostic flags.
+ * prefer_dsyevr: when nonzero and vendor DSYEVR is available, skip the DSYEVD
+ *                attempt and go straight to DSYEVR. The plan that decided a
+ *                DSYEVR-sized memory footprint owns this call, so the driver
+ *                that runs must match the one that was budgeted for.
+ * status: if non-NULL, populated with diagnostic flags, including which
+ *         driver ran (status->driver_used).
  * ldk, ldz: must equal N. Padded strides are rejected with JLINALG_EXT_BAD_STRIDE.
  *
  * Returns 0 on success, JLINALG_EXT_UNAVAILABLE if no vendor LAPACK,
@@ -250,6 +261,7 @@ int jlinalg_eigh_c(npy_intp N,
                  double *K, npy_intp ldk,
                  double *eigenvalues,
                  double *eigenvectors, npy_intp ldz,
+                 int prefer_dsyevr,
                  jlinalg_eigh_status_t *status);
 
 /* ---------------------------------------------------------------------------

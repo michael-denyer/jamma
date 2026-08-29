@@ -41,7 +41,7 @@ class TestEighInplaceCorrectness:
         K = _make_symmetric(n)
         K_ref = K.copy()
 
-        w_inplace, v_inplace = jlinalg.eigh(K, inplace=True)
+        w_inplace, v_inplace, _ = jlinalg.eigh(K, inplace=True)
         w_ref, _ = np.linalg.eigh(K_ref)
 
         # Eigenvalue accuracy is bounded by Weyl's theorem at O(eps * ||K||_2):
@@ -75,7 +75,7 @@ class TestEighInplaceBufferIdentity:
     def test_eigh_inplace_returns_same_buffer(self):
         """When inplace=True, eigenvectors share memory with input K."""
         K = _make_symmetric(50)
-        _, v = jlinalg.eigh(K, inplace=True)
+        _, v, _ = jlinalg.eigh(K, inplace=True)
         assert v.ctypes.data == K.ctypes.data, (
             "inplace=True should return eigenvectors in the same buffer as K"
         )
@@ -83,7 +83,7 @@ class TestEighInplaceBufferIdentity:
     def test_eigh_default_returns_separate_buffer(self):
         """Default (no inplace arg) returns eigenvectors in a new buffer."""
         K = _make_symmetric(50)
-        _, v = jlinalg.eigh(K)
+        _, v, _ = jlinalg.eigh(K)
         assert v.ctypes.data != K.ctypes.data, (
             "default eigh should return eigenvectors in a separate buffer"
         )
@@ -91,7 +91,7 @@ class TestEighInplaceBufferIdentity:
     def test_eigh_inplace_false_returns_separate_buffer(self):
         """Explicit inplace=False returns eigenvectors in a new buffer."""
         K = _make_symmetric(50)
-        _, v = jlinalg.eigh(K, inplace=False)
+        _, v, _ = jlinalg.eigh(K, inplace=False)
         assert v.ctypes.data != K.ctypes.data, (
             "inplace=False should return eigenvectors in a separate buffer"
         )

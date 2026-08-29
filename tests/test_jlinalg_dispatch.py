@@ -307,7 +307,7 @@ class TestCapabilityBasedSelection:
         K = A @ A.T  # SPD matrix
         K_copy = K.copy()  # eigh overwrites input
 
-        w, v = eigh(K_copy)
+        w, v, _ = eigh(K_copy)
 
         # Verify reconstruction: ||K - v @ diag(w) @ v.T|| / ||K|| < 1e-13
         reconstructed = v @ np.diag(w) @ v.T

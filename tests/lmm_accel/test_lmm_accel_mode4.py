@@ -111,7 +111,7 @@ def test_mode4_fused_workspace_api(fused_data):
     ws, utg_t, n_snps = _mode4_workspace(fused_data)
     assert ws is not None
 
-    cr = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    cr = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
 
     for key in _MODE4_KEYS:
         assert key in cr, f"Missing key '{key}' in fused mode-4 result"
@@ -137,7 +137,7 @@ def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(fused_data):
     the 50 SNPs here, so there is no sign to pin.
     """
     ws, utg_t, _ = _mode4_workspace(fused_data)
-    cr = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    cr = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
 
     log_separation = np.abs(np.log(cr["lambdas"]) - np.log(cr["lambdas_mle"]))
 
@@ -155,7 +155,7 @@ def test_mode4_fused_degenerate_snps(fused_data):
     utg_degen = utg_t.copy()
     utg_degen[0, :] = 0.0
 
-    cr = accel.require().compute_lmm_chunk_fused_c(ws, utg_degen, 1)
+    cr = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_degen, 1)
 
     for key in ("betas", "ses", "pwalds", "p_scores"):
         assert np.isnan(cr[key][0]), f"degenerate SNP should have NaN {key}"
@@ -178,11 +178,11 @@ def test_wald_workspace_yields_wald_keys_only(fused_data):
     wald_ws = accel.require().create_workspace_ncvt1_c(
         eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
     )
-    wald_result = accel.require().compute_lmm_chunk_fused_c(wald_ws, utg_t, 1)
+    wald_result = accel.require().compute_lmm_chunk_ncvt1_c(wald_ws, utg_t, 1)
     assert set(wald_result) == set(_WALD_KEYS)
 
     mode4_ws, mode4_utg_t, _ = _mode4_workspace(fused_data)
-    mode4_result = accel.require().compute_lmm_chunk_fused_c(mode4_ws, mode4_utg_t, 1)
+    mode4_result = accel.require().compute_lmm_chunk_ncvt1_c(mode4_ws, mode4_utg_t, 1)
     assert set(mode4_result) == set(_MODE4_KEYS)
 
 
@@ -200,8 +200,8 @@ def test_mode4_fused_multithreaded_parity(fused_data):
         pytest.skip("Need >=2 cores for multi-threaded test")
 
     ws, utg_t, _ = _mode4_workspace(fused_data)
-    single = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
-    multi = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, n_threads)
+    single = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
+    multi = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, n_threads)
 
     for key in _MODE4_KEYS:
         np.testing.assert_array_equal(

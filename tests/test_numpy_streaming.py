@@ -830,8 +830,8 @@ class TestStreamingFusedScoreDispatch:
 
         # allow-patch: dispatch spy; wraps the real kernel to see the runner reach it
         with patch(
-            "jamma.lmm.accel._accel.compute_score_fused_ws_c",
-            wraps=accel.require().compute_score_fused_ws_c,
+            "jamma.lmm.accel._accel.compute_lmm_chunk_ncvt1_c",
+            wraps=accel.require().compute_lmm_chunk_ncvt1_c,
         ) as mock_fused:
             fused_result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC.bfile,
@@ -886,8 +886,8 @@ class TestStreamingFusedLrtDispatch:
 
         # allow-patch: dispatch spy; wraps the real kernel to see the runner reach it
         with patch(
-            "jamma.lmm.accel._accel.compute_lrt_fused_ws_c",
-            wraps=accel.require().compute_lrt_fused_ws_c,
+            "jamma.lmm.accel._accel.compute_lmm_chunk_ncvt1_c",
+            wraps=accel.require().compute_lmm_chunk_ncvt1_c,
         ) as mock_fused:
             fused_result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC.bfile,

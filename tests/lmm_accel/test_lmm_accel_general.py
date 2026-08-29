@@ -252,10 +252,10 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 @pytest.mark.tier0
 @requires_c
 def test_general_ncvt_abi_version():
-    """C-GEN-07: ABI is 17 after the general workspace accepts every lmm_mode."""
+    """C-GEN-07: ABI is >= 17, set when the general workspace took every lmm_mode."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 17, f"Expected ABI_VERSION=17, got {ABI_VERSION}"
+    assert ABI_VERSION >= 17, f"Expected ABI_VERSION>=17, got {ABI_VERSION}"
 
 
 @pytest.mark.tier0
@@ -282,7 +282,7 @@ def test_existing_ncvt1_regression(synthetic_wald_data):
     ws = accel.require().create_workspace_ncvt1_c(
         eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
     )
-    result = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    result = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
 
     assert result["lambdas"].shape == (Uab_batch.shape[0],)
     assert result["betas"].shape == (Uab_batch.shape[0],)

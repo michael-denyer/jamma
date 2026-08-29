@@ -165,7 +165,7 @@ class TestFusedParity:
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
 
         ws_fused = _ncvt1_workspace(fused_data, lmm_mode=1)
-        result = accel.require().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_ncvt1_c(ws_fused, utg_t, 1)
         reference = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
 
         assert_matches_numpy(
@@ -184,8 +184,8 @@ class TestFusedParity:
         _, _, _, utg_t, _, _, _ = fused_data
 
         ws_fused = _ncvt1_workspace(fused_data, lmm_mode=1)
-        single = accel.require().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
-        multi = accel.require().compute_lmm_chunk_fused_c(ws_fused, utg_t, 4)
+        single = accel.require().compute_lmm_chunk_ncvt1_c(ws_fused, utg_t, 1)
+        multi = accel.require().compute_lmm_chunk_ncvt1_c(ws_fused, utg_t, 4)
 
         for key in _WALD_KEYS:
             np.testing.assert_array_equal(
@@ -213,7 +213,7 @@ class TestFusedParity:
         ws_fused = _ncvt1_workspace(
             fused_data, lmm_mode=4, hi_eval_null=Hi_eval_null, logl_H0=logl_H0
         )
-        result = accel.require().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_ncvt1_c(ws_fused, utg_t, 1)
 
         wald = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
         reference = {k: wald[k] for k in _WALD_KEYS}
@@ -235,7 +235,7 @@ class TestFusedParity:
         # 3D instead of 2D
         bad_utg = utg_t.reshape(utg_t.shape[0], 1, utg_t.shape[1])
         with pytest.raises(ValueError, match="utg_t"):
-            accel.require().compute_lmm_chunk_fused_c(ws, bad_utg, 1)
+            accel.require().compute_lmm_chunk_ncvt1_c(ws, bad_utg, 1)
 
     def test_fused_workspace_refcount(self, fused_data):
         """w and Uty arrays not garbage collected while workspace alive."""
@@ -287,7 +287,7 @@ class TestFusedParity:
         utg_t_degen[0, :] = 0.0
 
         ws = _ncvt1_workspace(fused_data, lmm_mode=1)
-        cr = accel.require().compute_lmm_chunk_fused_c(ws, utg_t_degen, 1)
+        cr = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t_degen, 1)
 
         # Degenerate SNP: should produce NaN
         assert np.isnan(cr["betas"][0]), "degenerate SNP should have NaN beta"
@@ -296,27 +296,28 @@ class TestFusedParity:
 
         # Non-degenerate SNPs should still be valid (compare against reference)
         ws_ref = _ncvt1_workspace(fused_data, lmm_mode=1)
-        cr_ref = accel.require().compute_lmm_chunk_fused_c(ws_ref, utg_t, 1)
+        cr_ref = accel.require().compute_lmm_chunk_ncvt1_c(ws_ref, utg_t, 1)
         finite_mask = np.isfinite(cr_ref["betas"][1:])
         assert np.all(np.isfinite(cr["betas"][1:][finite_mask])), (
             "non-degenerate betas should be finite"
         )
 
-    def test_fused_rejects_foreign_workspace(self, fused_data):
-        """compute_lmm_chunk_fused_c rejects a workspace built for another mode.
+    def test_ncvt1_dispatches_by_workspace_mode(self, fused_data):
+        """compute_lmm_chunk_ncvt1_c reads the loop to run off the workspace.
 
-        One capsule type now carries every n_cvt=1 workspace, so the capsule
-        name no longer separates them. The check that fires is the lmm_mode the
-        creator recorded.
+        One entry point now serves every n_cvt=1 workspace mode; the mode the
+        creator recorded picks the loop, not which name the caller used.
         """
         from jamma.lmm import accel
 
-        eigenvalues, _, _, utg_t, _, _, _ = fused_data
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
         Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
 
         score_ws = _ncvt1_workspace(fused_data, lmm_mode=3, hi_eval_null=Hi_eval_null)
-        with pytest.raises(ValueError, match="lmm_mode"):
-            accel.require().compute_lmm_chunk_fused_c(score_ws, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_ncvt1_c(score_ws, utg_t, 1)
+
+        reference = _numpy_ncvt1_score(w, Uty, utg_t, Hi_eval_null, n_samples)
+        assert_matches_numpy(result, reference, "ncvt1 dispatch, mode 3")
 
 
 def _run_fused_general_wald_vs_numpy(data: dict) -> None:

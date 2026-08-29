@@ -52,11 +52,11 @@ def _fused_score_lrt_null_model(split_wald_data):
 
 
 @requires_c
-def test_abi_version_17():
-    """ABI_VERSION is 17 after the general workspace accepts every lmm_mode."""
+def test_abi_version_18():
+    """ABI_VERSION is 18 after the ncvt1 family collapses to one compute entry."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 17
+    assert ABI_VERSION == 18
 
 
 def _make_runner_test_data(rng, n_samples=50, n_snps=20):
@@ -84,8 +84,8 @@ def test_runner_fused_score_dispatch():
 
     # allow-patch: dispatch spy; wraps the real kernel to observe the runner reach it
     with patch(
-        "jamma.lmm.accel._accel.compute_score_fused_ws_c",
-        wraps=accel.require().compute_score_fused_ws_c,
+        "jamma.lmm.accel._accel.compute_lmm_chunk_ncvt1_c",
+        wraps=accel.require().compute_lmm_chunk_ncvt1_c,
     ) as mock_fused:
         result_fused = run_lmm_association_numpy(
             genotypes=genotypes,
@@ -153,8 +153,8 @@ def test_runner_fused_lrt_dispatch():
 
     # allow-patch: dispatch spy; wraps the real kernel to observe the runner reach it
     with patch(
-        "jamma.lmm.accel._accel.compute_lrt_fused_ws_c",
-        wraps=accel.require().compute_lrt_fused_ws_c,
+        "jamma.lmm.accel._accel.compute_lmm_chunk_ncvt1_c",
+        wraps=accel.require().compute_lmm_chunk_ncvt1_c,
     ) as mock_fused:
         result_fused = run_lmm_association_numpy(
             genotypes=genotypes,

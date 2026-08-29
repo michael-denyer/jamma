@@ -77,7 +77,7 @@ def compile_extension(
 
 
 def _load_proof(
-    import_code: str = "from jamma.lmm._lmm_accel import compute_lmm_chunk_fused_c",
+    import_code: str = "from jamma.lmm._lmm_accel import compute_lmm_chunk_ncvt1_c",
 ) -> bool:
     """Prove the freshly compiled extension imports, in a fresh subprocess.
 

@@ -172,19 +172,19 @@ def make_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
             assert_never(inv.dispatch)
 
 
-# The C compute entry point and kernel label for each n_cvt=1 lmm_mode. Modes 1
-# and 4 share one entry point, which reads the mode off the workspace. The
-# labels are what a failure reports, so mode 4 keeps its own.
-_NCVT1_COMPUTE: dict[int, tuple[str, str]] = {
-    1: ("compute_lmm_chunk_fused_c", "Fused Uab dispatch"),
-    2: ("compute_lrt_fused_ws_c", "Fused LRT WS dispatch"),
-    3: ("compute_score_fused_ws_c", "Fused Score WS dispatch"),
-    4: ("compute_lmm_chunk_fused_c", "Fused mode-4 Uab dispatch"),
+# The kernel label for each n_cvt=1 lmm_mode. One C entry point serves every
+# mode, reading the mode off the workspace; the label is what a failure
+# reports, so mode 4 keeps its own.
+_NCVT1_LABEL: dict[int, str] = {
+    1: "Fused Uab dispatch",
+    2: "Fused LRT WS dispatch",
+    3: "Fused Score WS dispatch",
+    4: "Fused mode-4 Uab dispatch",
 }
 
 
 def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
-    """n_cvt=1, any mode: one workspace keyed by lmm_mode, one compute per mode.
+    """n_cvt=1, any mode: one workspace keyed by lmm_mode, one compute.
 
     The workspace packs w, the lambda grid and the null-model block the mode
     needs, built once; each chunk hands in utg_t. Scratch is sized per call,
@@ -203,21 +203,20 @@ def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
         lmm_mode=inv.lmm_mode,
         **_null_model_kwargs(inv),
     )
-    compute_name, label = _NCVT1_COMPUTE[inv.lmm_mode]
-    compute = getattr(accel.require(), compute_name)
+    compute = accel.require().compute_lmm_chunk_ncvt1_c
     return Kernel(
-        label=label,
+        label=_NCVT1_LABEL[inv.lmm_mode],
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         uses_c=True,
     )
 
 
-_GENERAL_COMPUTE: dict[int, tuple[str, str]] = {
-    1: ("compute_lmm_chunk_fused_general_c", "Fused general Uab dispatch"),
-    2: ("compute_lmm_chunk_fused_general_c", "Fused general LRT Uab dispatch"),
-    3: ("compute_lmm_chunk_fused_general_c", "Fused general Score Uab dispatch"),
-    4: ("compute_lmm_chunk_fused_general_c", "Fused general mode-4 Uab dispatch"),
+_GENERAL_LABEL: dict[int, str] = {
+    1: "Fused general Uab dispatch",
+    2: "Fused general LRT Uab dispatch",
+    3: "Fused general Score Uab dispatch",
+    4: "Fused general mode-4 Uab dispatch",
 }
 
 
@@ -242,10 +241,9 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         lmm_mode=inv.lmm_mode,
         **_null_model_kwargs(inv),
     )
-    compute_name, label = _GENERAL_COMPUTE[inv.lmm_mode]
-    compute = getattr(accel.require(), compute_name)
+    compute = accel.require().compute_lmm_chunk_fused_general_c
     return Kernel(
-        label=label,
+        label=_GENERAL_LABEL[inv.lmm_mode],
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         uses_c=True,

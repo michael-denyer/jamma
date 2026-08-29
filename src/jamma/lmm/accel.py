@@ -25,7 +25,7 @@ from jamma.core.recompile import _load_c_module
 if TYPE_CHECKING:
     from types import ModuleType
 
-_EXPECTED_ABI_VERSION = 17  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 18  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
 
 # Load and validate the C accelerator through the one shared seam in

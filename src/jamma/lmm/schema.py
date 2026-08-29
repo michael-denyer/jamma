@@ -242,6 +242,9 @@ class LmmConfig:
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
+        mem_budget: User-set memory ceiling in GB, or None for no ceiling.
+            Reaches LOCO's and -gk's chunk sizers the same way the pipeline's
+            preflight already reaches the batch/streaming path.
     """
 
     maf_threshold: float = DEFAULT_MAF
@@ -253,6 +256,7 @@ class LmmConfig:
     check_memory: bool = True
     show_progress: bool = True
     lmm_mode: LmmMode = 1
+    mem_budget: float | None = None
 
     def __post_init__(self) -> None:
         if self.lmm_mode not in (1, 2, 3, 4):

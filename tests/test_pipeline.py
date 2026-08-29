@@ -886,6 +886,49 @@ class TestPhenotypeColumnMissingValues:
 
 
 @pytest.mark.tier1
+def test_pipeline_selects_execution_mode_once(
+    sample_plink_data: Path, output_dir: Path, monkeypatch
+) -> None:
+    """PipelineRunner.run() calls select_execution_mode exactly once.
+
+    A prior version called it twice: once before the phenotype/covariate
+    masks existed (pricing the pre-mask n_samples), and again after masking
+    to catch a post-filter mode flip. Both calls ran estimate_lmm_memory.
+    Now there is a single call, made after the masks exist so it never needs
+    a second pass.
+    """
+    import jamma.pipeline as pipeline_module
+
+    kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=kinship_file,
+        lmm_mode=1,
+        output_dir=output_dir,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+
+    call_count = 0
+    real_select_execution_mode = pipeline_module.select_execution_mode
+
+    def _counting_select_execution_mode(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_select_execution_mode(*args, **kwargs)
+
+    monkeypatch.setattr(
+        pipeline_module, "select_execution_mode", _counting_select_execution_mode
+    )
+
+    result = PipelineRunner(config).run()
+
+    assert result.n_snps_tested > 0
+    assert call_count == 1, f"expected select_execution_mode once, got {call_count}"
+
+
+@pytest.mark.tier1
 def test_pipeline_numpy_backend(sample_plink_data: Path, output_dir: Path) -> None:
     """Pipeline completes with NumPy backend and writes assoc file."""
     kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"

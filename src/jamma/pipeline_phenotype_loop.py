@@ -51,6 +51,7 @@ def run_phenotype_loop(
     eigenvectors: np.ndarray,
     assoc_path: Path,
     snps_indices: np.ndarray | None,
+    compute_chunk_size: int | None = None,
 ) -> PhenoLoopOutcome:
     """Run the per-phenotype LMM loop and aggregate its results.
 
@@ -59,6 +60,13 @@ def run_phenotype_loop(
     per the plan, and collecting associations, counts, and output paths.
     PVE and the runner timing breakdown are taken from the final phenotype's
     result.
+
+    Args:
+        compute_chunk_size: The chunk size the pipeline's memory preflight
+            already planned, or None when the preflight was skipped
+            (check_memory=False). Passed straight to the runner so the chunk
+            engine allocates the plan's chunk instead of re-deriving it from
+            plan_lmm_chunks a second time.
 
     Returns:
         A PhenoLoopOutcome bundling associations, total SNPs tested, the
@@ -115,6 +123,7 @@ def run_phenotype_loop(
                 eigenvectors,
                 col_path,
                 snps_indices,
+                chunk_size=compute_chunk_size,
             )
         else:
             run_result = _run_batch(
@@ -126,6 +135,7 @@ def run_phenotype_loop(
                 col_path,
                 snps_indices,
                 plink_data=_plink_data,
+                max_chunk_size=compute_chunk_size,
             )
 
         all_results.extend(run_result.associations)
@@ -157,12 +167,18 @@ def _run_batch(
     assoc_path: Path,
     snps_indices: np.ndarray | None,
     plink_data: PlinkData | None = None,
+    max_chunk_size: int | None = None,
 ) -> LmmRunResult:
     """Run LMM association using the pure-NumPy batch backend.
 
     Args:
         plink_data: Pre-loaded PLINK data. If None, loads from disk.
             Pass this to avoid reloading genotypes in multi-phenotype runs.
+        max_chunk_size: The pipeline preflight's already-planned chunk size,
+            or None to let the runner plan its own (its plan matches the
+            preflight's when the SNP count agrees, per plan_lmm_chunks; see
+            pipeline_memory.py's module docstring for why n_snps stands in
+            for n_filtered there).
     """
     from jamma.io import load_plink_binary
     from jamma.lmm import run_lmm_association_numpy
@@ -194,6 +210,7 @@ def _run_batch(
         config=config.lmm_config(),
         output_path=assoc_path,
         hwe_threshold=config.hwe_threshold,
+        max_chunk_size=max_chunk_size,
     )
 
     return run_result
@@ -207,8 +224,14 @@ def _run_streaming(
     eigenvectors: np.ndarray,
     assoc_path: Path,
     snps_indices: np.ndarray | None,
+    chunk_size: int | None = None,
 ) -> LmmRunResult:
-    """Run LMM via NumPy streaming backend (disk I/O + C extension)."""
+    """Run LMM via NumPy streaming backend (disk I/O + C extension).
+
+    Args:
+        chunk_size: The pipeline preflight's already-planned association
+            chunk size, or None to let the runner size its own.
+    """
     from jamma.lmm.runner_numpy_streaming import (
         run_lmm_association_numpy_streaming,
     )
@@ -223,4 +246,5 @@ def _run_streaming(
         snps_indices=snps_indices,
         hwe_threshold=config.hwe_threshold,
         config=config.lmm_config(),
+        chunk_size=chunk_size,
     )

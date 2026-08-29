@@ -216,7 +216,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 |----|-----------|-------------|-----------|
 | 3a | `compute_standardized_kinship_streaming()` | -gk 2 from disk; two-pass, standardize transform, shared `_stream_kinship_two_pass` | [compute.py:256](../src/jamma/kinship/compute.py#L256) |
 | 3a | `compute_kinship_streaming()` | 2-pass streaming (stats -> accumulate); accepts `valid_indices` for early sample filtering; canonical streaming kinship (LOCO streaming merged in) | [compute.py:424](../src/jamma/kinship/compute.py#L424) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship, returns a consume-once `LocoKinshipStream` | [compute.py:987](../src/jamma/kinship/compute.py#L987) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship, returns a consume-once `LocoKinshipStream` | [compute.py:988](../src/jamma/kinship/compute.py#L988) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L170) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |
 | 3b | `impute_and_center()` | NaN -> mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
@@ -280,7 +280,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:34](../src/jamma/lmm/runner_numpy_streaming.py#L34) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:107](../src/jamma/lmm/runner_numpy_streaming.py#L107) |
-| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:91](../src/jamma/lmm/runner.py#L91) |
+| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:94](../src/jamma/lmm/runner.py#L94) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:94](../src/jamma/lmm/schema.py#L94) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:120](../src/jamma/lmm/schema.py#L120) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:34](../src/jamma/lmm/results.py#L34) |

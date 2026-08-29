@@ -26,10 +26,11 @@ from jamma.lmm.chunk_sizing import (
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood import n_index
-from jamma.lmm.runner import ExecutionPlan
+from jamma.lmm.runner import ExecutionPlan, select_execution_mode
 from jamma.lmm.runner_numpy_streaming import _DEFAULT_STATS_CHUNK
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_memory import _compute_chunk, memory_preflight, plan_memory
+from tests.fakes import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
 
@@ -572,3 +573,70 @@ class TestChunkPlanMatchesEngine:
             f"expected lmm_batch_size={forced_chunk_size} (the plan's chunk "
             f"size), got {call.get('lmm_batch_size')!r}"
         )
+
+
+def test_select_execution_mode_sizes_against_the_real_chunk(monkeypatch):
+    """select_execution_mode must price the chunk the run will allocate, not 20,000.
+
+    At n=50000, snps=500000, ``estimate_lmm_memory``'s ``lmm_batch_size=20_000``
+    default estimates 276.0GB; the chunk ``plan_lmm_chunks`` actually plans for
+    this dispatch path allocates enough per-SNP state that the real estimate is
+    500.0GB. A machine with 288GB available sits strictly between the two
+    thresholds: the stale default says "fits" (batch), the real chunk says "does
+    not fit" (streaming). At trunk, ``runner.py`` called ``estimate_lmm_memory``
+    without ``lmm_batch_size``/``n_buffers`` and picked batch here; that flips
+    the execution mode a machine near this line gets, in the direction that
+    silently under-estimates memory.
+    """
+    use_fake_psutil(monkeypatch, available=288e9)
+
+    plan = select_execution_mode(50_000, 500_000, n_cvt=1, lmm_mode=1)
+
+    assert plan.mode == "streaming", (
+        f"expected streaming (the real chunk needs ~500GB > 288GB available), "
+        f"got {plan.mode!r} ({plan.reason})"
+    )
+
+
+def test_select_execution_mode_mem_budget_narrows_the_chunk(monkeypatch):
+    """--mem-budget must narrow the chunk select_execution_mode prices.
+
+    A tight ``mem_budget`` should shrink the chunk plan feeds into the memory
+    estimate, in turn shrinking the estimated total. At trunk, ``mem_budget``
+    never reached ``select_execution_mode`` at all.
+    """
+    use_fake_psutil(monkeypatch, available=288e9)
+
+    unbudgeted = select_execution_mode(50_000, 500_000, n_cvt=1, lmm_mode=1)
+    budgeted = select_execution_mode(
+        50_000, 500_000, n_cvt=1, lmm_mode=1, mem_budget=1.0
+    )
+
+    # Unbudgeted: the real chunk needs ~500GB, exceeding 288GB -> streaming.
+    assert unbudgeted.mode == "streaming"
+    assert "500.0GB" in unbudgeted.reason
+    # A 1GB chunk budget shrinks the chunk the estimate is priced against so
+    # much the run fits comfortably -> batch. This proves mem_budget reached
+    # the chunk sizer, rather than only vetoing the run afterward (its only
+    # other reach, through memory_preflight's _reject_if_over_budget).
+    assert budgeted.mode == "batch"
+    assert "500.0GB" not in budgeted.reason
+
+
+def test_plan_lmm_chunks_honors_mem_budget_bytes():
+    """plan_lmm_chunks must narrow the chunk when given mem_budget_bytes.
+
+    compute_chunk_size_numpy already accepted mem_budget_bytes, but
+    plan_lmm_chunks (the single sizing decision the engine allocates from
+    and the preflight prices from) had no parameter to pass it through, so
+    every production caller's chunk plan ignored --mem-budget.
+    """
+    dispatch = DispatchPath.FUSED
+    n_samples, n_snps, n_cvt = 50_000, 500_000, 1
+
+    auto = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
+    budgeted = plan_lmm_chunks(
+        n_samples, n_snps, n_cvt, dispatch, mem_budget_bytes=int(1e9)
+    )
+
+    assert budgeted.chunk_size < auto.chunk_size

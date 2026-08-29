@@ -274,6 +274,7 @@ def run_lmm_loco(
             partitions=partitions,
             check_memory=config.check_memory,
             show_progress=show_progress,
+            mem_budget=config.mem_budget,
         )
 
         first_chr_pve: float | None = None

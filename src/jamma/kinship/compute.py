@@ -33,7 +33,7 @@ from loguru import logger
 
 from jamma import jlinalg
 from jamma.core import memory
-from jamma.core.eigen_plan import array_gb, square_matrix_gb
+from jamma.core.eigen_plan import _memory_margin_gb, array_gb, square_matrix_gb
 from jamma.core.estimates import estimate_kinship_seconds
 from jamma.core.memory import check_memory_available, estimate_streaming_memory
 from jamma.core.progress import progress_iterator
@@ -958,7 +958,7 @@ def _decide_loco_passes(
         batch_size = max_batch_chrs
         single_pass = n_chr_with_snps <= batch_size
     else:
-        single_pass = single_pass_gb <= available_gb * 0.9
+        single_pass = single_pass_gb + _memory_margin_gb(single_pass_gb) <= available_gb
         if single_pass:
             batch_size = n_chr_with_snps  # unused in the single-pass branch
         else:
@@ -968,7 +968,8 @@ def _decide_loco_passes(
             # the batch doesn't exhaust memory before eigendecomp can run.
             eigendecomp_reserve_gb = dsyevr_peak_gb(n_mat)
             usable_gb = (
-                available_gb * 0.9
+                available_gb
+                - _memory_margin_gb(available_gb)
                 - 2 * matrix_gb
                 - chunk_buffer_gb
                 - eigendecomp_reserve_gb
@@ -993,6 +994,7 @@ def compute_loco_kinship_streaming(
     show_progress: bool = True,
     ksnps_indices: np.ndarray | None = None,
     valid_indices: np.ndarray | None = None,
+    mem_budget: float | None = None,
     *,
     _max_batch_chrs: int | None = None,
 ) -> LocoKinshipStream:
@@ -1023,6 +1025,9 @@ def compute_loco_kinship_streaming(
             (n_valid, n_valid) where n_valid = len(valid_indices), eliminating
             the post-hoc np.ix_ copy. When None, K_loco has shape
             (n_samples, n_samples) (default, backward-compatible).
+        mem_budget: User-set ceiling in GB, or None for no ceiling. Vetoes the
+            run the same way ``_reject_if_over_budget`` vetoes the batch and
+            streaming paths; it does not resize the chromosome batch.
         _max_batch_chrs: Debug override forcing a fixed chromosomes-per-pass
             batch size (bypasses memory-based sizing). Used by tests to exercise
             multi-pass without mocking psutil.
@@ -1040,7 +1045,8 @@ def compute_loco_kinship_streaming(
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory for even
-            S_full + one S_chr.
+            S_full + one S_chr, or if mem_budget is set and the estimate
+            exceeds it.
         FileNotFoundError: If the PLINK .bed file does not exist.
         ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
             a single chromosome.
@@ -1165,13 +1171,25 @@ def compute_loco_kinship_streaming(
         max_batch_chrs=_max_batch_chrs,
     )
 
-    if check_memory and plan.min_required_gb > available_gb * 0.9:
-        raise MemoryError(
-            f"Insufficient memory for LOCO kinship: need at least "
-            f"{plan.min_required_gb:.1f}GB for S_full + K_loco_buf + one S_chr + "
-            f"eigendecomp ({plan.eigendecomp_min_gb:.1f}GB), "
-            f"available {available_gb:.1f}GB"
-        )
+    if mem_budget is not None:
+        logger.info(f"  Memory budget: {mem_budget:.1f}GB")
+
+    if check_memory:
+        if mem_budget is not None and plan.min_required_gb > mem_budget:
+            raise MemoryError(
+                f"Estimated LOCO kinship memory ({plan.min_required_gb:.1f}GB) "
+                f"exceeds budget ({mem_budget}GB). "
+                f"Use --no-check-memory to override."
+            )
+        if plan.min_required_gb + _memory_margin_gb(plan.min_required_gb) > (
+            available_gb
+        ):
+            raise MemoryError(
+                f"Insufficient memory for LOCO kinship: need at least "
+                f"{plan.min_required_gb:.1f}GB for S_full + K_loco_buf + one "
+                f"S_chr + eigendecomp ({plan.eigendecomp_min_gb:.1f}GB), "
+                f"available {available_gb:.1f}GB"
+            )
 
     single_pass = plan.single_pass
     batch_size = plan.batch_size

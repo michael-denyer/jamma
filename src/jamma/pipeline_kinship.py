@@ -88,6 +88,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             check_memory=config.check_memory,
             show_progress=config.show_progress,
             ksnps_indices=ksnps_indices,
+            mem_budget=config.mem_budget,
         )
         written_paths = write_loco_kinship_matrices(
             loco_stream,

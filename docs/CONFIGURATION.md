@@ -116,7 +116,7 @@ or `-lmm` is required.
 |---|---|---|---|
 | `--backend` | choice | `auto` | Compute backend: `auto`, `numpy`, or `numpy-streaming`. Overridden by `JAMMA_BACKEND` env var. |
 | `--check-memory` / `--no-check-memory` | flag | on | Enable/disable pre-flight memory check before eigendecomposition. |
-| `--mem-budget` | float | — | Hard memory budget in GB. Overrides auto-detected available memory for backend selection. |
+| `--mem-budget` | float | — | Ceiling in GB. Narrows the chunk size the batch/streaming preflight and LOCO/`-gk` size against (so a tight budget can shrink the plan's chunk rather than only reject it), and still raises `MemoryError` if the plan cannot fit within it. |
 | `-v` / `--verbose` | flag | off | Verbose logging output |
 | `--no-telemetry` | flag | off | Disable benchmark telemetry for this run (equivalent to `JAMMA_NO_TELEMETRY=1`) |
 | `--version` | flag | — | Print version and backend info, then exit |

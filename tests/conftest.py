@@ -780,10 +780,11 @@ def synthetic_data():
     """Load gemma_synthetic PLINK data, kinship, phenotypes, and snp_info."""
     from jamma.io import load_plink_binary, read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
-    from tests.fixture_paths import SYNTHETIC, build_snp_info
+    from jamma.lmm.schema import SnpMeta
+    from tests.fixture_paths import SYNTHETIC
 
     plink = load_plink_binary(SYNTHETIC.bfile)
     kinship = read_kinship_matrix(SYNTHETIC.kinship)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
-    snp_info = build_snp_info(plink)
+    snp_info = SnpMeta.from_plink_meta(plink.meta)
     return plink, kinship, phenotypes, snp_info

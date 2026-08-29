@@ -21,8 +21,9 @@ leaves REML and MLE with independent brackets.
 import numpy as np
 import pytest
 
-import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
+from jamma.lmm import accel
+from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
+from tests.conftest import requires_c
 from tests.lmm_accel._helpers import _null_model_ncvt1
 
 pytestmark = pytest.mark.tier0
@@ -54,7 +55,7 @@ def _mode4_workspace(fused_data):
     """
     eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
     Hi_eval_null, logl_H0 = _null_model_ncvt1(eigenvalues, w, Uty)
-    ws = _c().create_workspace_ncvt1_c(
+    ws = accel.require().create_workspace_ncvt1_c(
         eigenvalues,
         uab_inv_soa,
         w,
@@ -71,7 +72,7 @@ def _mode4_workspace(fused_data):
     return ws, utg_t, utg_t.shape[0]
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_mode4_numpy_fallback_returns_all_keys(score_lrt_data, monkeypatch):
     """Mode 4 through the NumPy fallback returns all 8 keys, correctly shaped.
 
@@ -82,7 +83,7 @@ def test_mode4_numpy_fallback_returns_all_keys(score_lrt_data, monkeypatch):
     """
     eigenvalues, Uab_batch, n_samples, Hi_eval_null, logl_H0 = score_lrt_data
 
-    monkeypatch.setattr(compute_numpy, "_accel", None)
+    monkeypatch.setattr(accel, "_accel", None)
 
     result = compute_lmm_chunk_numpy(
         lmm_mode=4,
@@ -104,13 +105,13 @@ def test_mode4_numpy_fallback_returns_all_keys(score_lrt_data, monkeypatch):
         )
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_mode4_fused_workspace_api(fused_data):
     """Fused mode-4 workspace creation and compute returns all 8 keys."""
     ws, utg_t, n_snps = _mode4_workspace(fused_data)
     assert ws is not None
 
-    cr = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    cr = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
 
     for key in _MODE4_KEYS:
         assert key in cr, f"Missing key '{key}' in fused mode-4 result"
@@ -120,7 +121,7 @@ def test_mode4_fused_workspace_api(fused_data):
         )
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(fused_data):
     """The shared coarse grid still leaves REML and MLE with separate brackets.
 
@@ -136,7 +137,7 @@ def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(fused_data):
     the 50 SNPs here, so there is no sign to pin.
     """
     ws, utg_t, _ = _mode4_workspace(fused_data)
-    cr = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    cr = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
 
     log_separation = np.abs(np.log(cr["lambdas"]) - np.log(cr["lambdas_mle"]))
 
@@ -147,14 +148,14 @@ def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(fused_data):
     )
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_mode4_fused_degenerate_snps(fused_data):
     """A constant genotype gives NaN Wald and Score outputs, and p_lrt near 1."""
     ws, utg_t, _ = _mode4_workspace(fused_data)
     utg_degen = utg_t.copy()
     utg_degen[0, :] = 0.0
 
-    cr = _c().compute_lmm_chunk_fused_c(ws, utg_degen, 1)
+    cr = accel.require().compute_lmm_chunk_fused_c(ws, utg_degen, 1)
 
     for key in ("betas", "ses", "pwalds", "p_scores"):
         assert np.isnan(cr[key][0]), f"degenerate SNP should have NaN {key}"
@@ -164,7 +165,7 @@ def test_mode4_fused_degenerate_snps(fused_data):
     assert np.all(np.isfinite(cr["betas"][1:])), "non-degenerate betas should be finite"
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_wald_workspace_yields_wald_keys_only(fused_data):
     """One compute serves both modes, and the workspace decides what comes back.
 
@@ -174,18 +175,18 @@ def test_wald_workspace_yields_wald_keys_only(fused_data):
     """
     eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
 
-    wald_ws = _c().create_workspace_ncvt1_c(
+    wald_ws = accel.require().create_workspace_ncvt1_c(
         eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
     )
-    wald_result = _c().compute_lmm_chunk_fused_c(wald_ws, utg_t, 1)
+    wald_result = accel.require().compute_lmm_chunk_fused_c(wald_ws, utg_t, 1)
     assert set(wald_result) == set(_WALD_KEYS)
 
     mode4_ws, mode4_utg_t, _ = _mode4_workspace(fused_data)
-    mode4_result = _c().compute_lmm_chunk_fused_c(mode4_ws, mode4_utg_t, 1)
+    mode4_result = accel.require().compute_lmm_chunk_fused_c(mode4_ws, mode4_utg_t, 1)
     assert set(mode4_result) == set(_MODE4_KEYS)
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_mode4_fused_multithreaded_parity(fused_data):
     """Fused mode-4 is bitwise deterministic across thread counts.
 
@@ -199,8 +200,8 @@ def test_mode4_fused_multithreaded_parity(fused_data):
         pytest.skip("Need >=2 cores for multi-threaded test")
 
     ws, utg_t, _ = _mode4_workspace(fused_data)
-    single = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
-    multi = _c().compute_lmm_chunk_fused_c(ws, utg_t, n_threads)
+    single = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    multi = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, n_threads)
 
     for key in _MODE4_KEYS:
         np.testing.assert_array_equal(

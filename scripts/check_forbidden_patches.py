@@ -29,7 +29,7 @@ Policy: a numerical module in `FORBIDDEN` may not be patched, as a whole
 or attribute by attribute. ALL_CAPS attributes are configuration knobs
 (``_CF_MAX_ITER``, ``_SAMPLED_SYMMETRY_THRESHOLD``) and are allowed.
 The attributes in `SEAMS` are the documented capability seams a test drives
-to select a dispatch path (``compute_numpy._accel`` to reach the NumPy
+to select a dispatch path (``accel._accel`` to reach the NumPy
 path, the ``jlinalg.blas_*`` detection flags) and are allowed.
 
 Escape hatch: ``# allow-patch: <reason>`` on any line of the call, or in
@@ -79,7 +79,8 @@ FORBIDDEN: tuple[tuple[str, str], ...] = (
     ),
     (
         "jamma.lmm.compute_numpy",
-        "Patches a compute function. Set _accel to None to reach the NumPy path.",
+        "Patches a compute function. Set jamma.lmm.accel._accel to None (or use "
+        "the no_c_kernels fixture) to reach the NumPy path.",
     ),
     ("jamma.lmm.uab", "Patches a Uab/Iab kernel. Use synthetic data."),
     ("jamma.lmm.special", "Patches a special function. Drive it with inputs."),
@@ -95,7 +96,7 @@ FORBIDDEN: tuple[tuple[str, str], ...] = (
 # a number. Toggling them is how a test reaches the other path.
 SEAMS: frozenset[str] = frozenset(
     {
-        "jamma.lmm.compute_numpy._accel",
+        "jamma.lmm.accel._accel",
         "jamma.jlinalg.blas_has_dsyevd",
         "jamma.jlinalg.blas_has_dsyevr",
         "jamma.jlinalg.blas_has_dsyrk",

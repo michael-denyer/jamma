@@ -4,7 +4,9 @@ import numpy as np
 import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm import accel
+from jamma.lmm.dispatch import DispatchPath, select_current
+from tests.conftest import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -22,15 +24,12 @@ def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
     NUMPY_FALLBACK, which is selected only when the extension is absent. The
     decision the runner actually makes is this one.
     """
-    monkeypatch.setattr(compute_numpy, "_accel", _EXTENSION_LOADED)
+    monkeypatch.setattr(accel, "_accel", _EXTENSION_LOADED)
 
-    assert (
-        compute_numpy.select_current_dispatch_path(n_cvt, 1, log_choices=False)
-        is DispatchPath.FUSED_GENERAL
-    )
+    assert select_current(n_cvt, 1, log_choices=False) is DispatchPath.FUSED_GENERAL
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
     """Past MAX_C_N_CVT the kernel refuses rather than the dispatcher diverting.
 
@@ -80,9 +79,9 @@ def test_full_uab_helpers_never_touch_the_extension(monkeypatch, helper):
     that path is selected only when the extension is absent. So the ladders were
     dead by construction and have been removed.
 
-    Reaching the extension is detected by making `_c` raise. It is the single
-    accessor, so a helper that calls it fails loudly here rather than quietly
-    reintroducing a branch no caller can reach.
+    Reaching the extension is detected by making `accel.require` raise. It is
+    the single accessor, so a helper that calls it fails loudly here rather
+    than quietly reintroducing a branch no caller can reach.
     """
 
     def _extension_is_off_limits():
@@ -91,12 +90,12 @@ def test_full_uab_helpers_never_touch_the_extension(monkeypatch, helper):
             "extension is absent, so a C branch here is unreachable."
         )
 
-    monkeypatch.setattr(compute_numpy, "_accel", _EXTENSION_LOADED)
-    # allow-patch: sentinel-on-call is the assertion. _c is the single
-    # accessor, so raising there is how "never reaches C" is detected.
-    monkeypatch.setattr(  # allow-patch: see above
-        compute_numpy, "_c", _extension_is_off_limits
-    )
+    monkeypatch.setattr(accel, "_accel", _EXTENSION_LOADED)
+    # allow-patch: sentinel-on-call is the assertion. accel.require is the
+    # single accessor, so raising there is how "never reaches C" is detected.
+    monkeypatch.setattr(
+        accel, "require", _extension_is_off_limits
+    )  # allow-patch: see above
 
     n_cvt, n_samples, n_snps = 2, 40, 3
     n_index = (n_cvt + 3) * (n_cvt + 2) // 2

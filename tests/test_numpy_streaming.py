@@ -15,7 +15,7 @@ import pytest
 
 from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm import compute_numpy
+from jamma.lmm import accel
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import (
     run_lmm_association_numpy_streaming,
@@ -27,6 +27,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
+from tests.conftest import requires_c
 from tests.fixture_paths import SYNTHETIC, build_snp_info
 
 # ---------------------------------------------------------------------------
@@ -815,7 +816,7 @@ class TestStreamingPipeline:
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="Fused Score C not available")
+@requires_c
 class TestStreamingFusedScoreDispatch:
     """Streaming runner dispatches fused Score path for mode 3."""
 
@@ -823,14 +824,12 @@ class TestStreamingFusedScoreDispatch:
         """Streaming fused Score matches split Score and calls fused WS C."""
         from unittest.mock import patch
 
-        from jamma.lmm.compute_numpy import _c
-
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # allow-patch: dispatch spy; wraps the real kernel to see the runner reach it
         with patch(
-            "jamma.lmm.compute_numpy._accel.compute_score_fused_ws_c",
-            wraps=_c().compute_score_fused_ws_c,
+            "jamma.lmm.accel._accel.compute_score_fused_ws_c",
+            wraps=accel.require().compute_score_fused_ws_c,
         ) as mock_fused:
             fused_result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC.bfile,
@@ -844,7 +843,7 @@ class TestStreamingFusedScoreDispatch:
         assert mock_fused.called, "Fused Score WS C function was not called (streaming)"
 
         # Split path (disable all fused Score variants)
-        with patch("jamma.lmm.compute_numpy._accel", None):
+        with patch("jamma.lmm.accel._accel", None):
             split_result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC.bfile,
                 phenotypes=phenotypes,
@@ -873,7 +872,7 @@ class TestStreamingFusedScoreDispatch:
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="Fused LRT C not available")
+@requires_c
 class TestStreamingFusedLrtDispatch:
     """Streaming runner dispatches fused LRT path for mode 2."""
 
@@ -881,14 +880,12 @@ class TestStreamingFusedLrtDispatch:
         """Streaming fused LRT matches split LRT and calls fused WS C."""
         from unittest.mock import patch
 
-        from jamma.lmm.compute_numpy import _c
-
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # allow-patch: dispatch spy; wraps the real kernel to see the runner reach it
         with patch(
-            "jamma.lmm.compute_numpy._accel.compute_lrt_fused_ws_c",
-            wraps=_c().compute_lrt_fused_ws_c,
+            "jamma.lmm.accel._accel.compute_lrt_fused_ws_c",
+            wraps=accel.require().compute_lrt_fused_ws_c,
         ) as mock_fused:
             fused_result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC.bfile,
@@ -902,7 +899,7 @@ class TestStreamingFusedLrtDispatch:
         assert mock_fused.called, "Fused LRT WS C function was not called (streaming)"
 
         # Split path (disable all fused LRT variants)
-        with patch("jamma.lmm.compute_numpy._accel", None):
+        with patch("jamma.lmm.accel._accel", None):
             split_result = run_lmm_association_numpy_streaming(
                 bed_path=SYNTHETIC.bfile,
                 phenotypes=phenotypes,

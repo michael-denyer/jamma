@@ -139,18 +139,18 @@ def _bench_numpy_inner(
     plink, phenotypes, kinship, snp_info, covariates_4, runs: int, *, disable_c: bool
 ) -> OpTimings:
     """Benchmark NumPy backend with or without C acceleration."""
-    import jamma.lmm.compute_numpy as cn
+    from jamma.lmm import accel
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.schema import LmmConfig, LmmMode
 
     results: OpTimings = {}
 
-    # compute_numpy is the single source of truth: chunk_runner_numpy reads
-    # it live when it selects the dispatch path, so dropping the extension
-    # here forces the NumPy fallback everywhere.
-    cn_saved = cn._accel
+    # accel is the single source of truth: chunk_runner_numpy reads it live
+    # when it selects the dispatch path, so dropping the extension here
+    # forces the NumPy fallback everywhere.
+    accel_saved = accel._accel
     if disable_c:
-        cn._accel = None
+        accel._accel = None
 
     try:
         ops: list[tuple[str, LmmMode, np.ndarray | None]] = [
@@ -176,7 +176,7 @@ def _bench_numpy_inner(
 
             results[op] = best_of(one_run, runs)
     finally:
-        cn._accel = cn_saved
+        accel._accel = accel_saved
 
     return results
 

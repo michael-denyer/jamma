@@ -410,12 +410,12 @@ class TestMode4WaldOverwritesScore:
         Driven through the full-Uab NumPy path with the extension cleared, which
         is the only state the runner reaches compute_lmm_chunk_numpy in.
         """
-        from jamma.lmm import compute_numpy as cn
+        from jamma.lmm import accel
         from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
         from jamma.lmm.prepare_common import _compute_null_model_common
         from jamma.lmm.uab import batch_compute_uab_numpy
 
-        monkeypatch.setattr(cn, "_accel", None)
+        monkeypatch.setattr(accel, "_accel", None)
 
         rng = np.random.default_rng(99)
         n_samples, n_snps, n_cvt = 50, 10, 1

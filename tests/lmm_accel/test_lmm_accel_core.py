@@ -20,9 +20,10 @@ cases, and the validation the kernel does on its arguments.
 import numpy as np
 import pytest
 
-import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
+from jamma.lmm import accel
+from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.schema import MIN_N_GRID
+from tests.conftest import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -45,7 +46,7 @@ def _make_workspace(
     dict's types and pyrefly rejects the call.
     """
     fixture_eigenvalues, w, Uty, _, fixture_inv_soa, _, fixture_n = fused_data
-    return _c().create_workspace_ncvt1_c(
+    return accel.require().create_workspace_ncvt1_c(
         fixture_eigenvalues if eigenvalues is None else eigenvalues,
         fixture_inv_soa if uab_invariant_soa is None else uab_invariant_soa,
         w,
@@ -59,7 +60,7 @@ def _make_workspace(
     )
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_c_extension_importable():
     """The kernels the dispatch table names are importable and callable."""
     from jamma.lmm._lmm_accel import (
@@ -82,7 +83,7 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
     """With no extension loaded, the Python path runs without error."""
     eigenvalues, Uab_batch, n_samples = synthetic_wald_data
 
-    monkeypatch.setattr(compute_numpy, "_accel", None)
+    monkeypatch.setattr(accel, "_accel", None)
 
     result = compute_lmm_chunk_numpy(
         lmm_mode=1,
@@ -98,19 +99,21 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
     )
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_c_extension_single_snp(fused_data):
     """Minimal case: n_snps=1 works without index errors."""
     _, _, _, utg_t, _, _, _ = fused_data
 
-    result = _c().compute_lmm_chunk_fused_c(_make_workspace(fused_data), utg_t[:1], 1)
+    result = accel.require().compute_lmm_chunk_fused_c(
+        _make_workspace(fused_data), utg_t[:1], 1
+    )
 
     for key in ("lambdas", "betas", "ses", "pwalds"):
         assert result[key].shape == (1,), f"{key} shape {result[key].shape} != (1,)"
     assert not np.isnan(result["lambdas"][0]), "Single SNP lambda should not be NaN"
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_c_extension_all_degenerate_snps(fused_data):
     """Every SNP degenerate: the whole output is NaN rather than a crash."""
     _, _, _, utg_t, _, _, _ = fused_data
@@ -119,13 +122,15 @@ def test_c_extension_all_degenerate_snps(fused_data):
     # P_XX to zero. Zeroing every row makes the entire batch degenerate.
     utg_degen = np.zeros_like(utg_t)
 
-    result = _c().compute_lmm_chunk_fused_c(_make_workspace(fused_data), utg_degen, 1)
+    result = accel.require().compute_lmm_chunk_fused_c(
+        _make_workspace(fused_data), utg_degen, 1
+    )
 
     for key in ("betas", "ses", "pwalds"):
         assert np.all(np.isnan(result[key])), f"Expected all-NaN {key}"
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 class TestFusedWorkspaceInputValidation:
     """The kernel raises clean errors on invalid array arguments."""
 
@@ -152,10 +157,12 @@ class TestFusedWorkspaceInputValidation:
         _, _, _, utg_t, _, _, _ = fused_data
         ws = _make_workspace(fused_data)
         with pytest.raises(ValueError, match="utg_t"):
-            _c().compute_lmm_chunk_fused_c(ws, np.ascontiguousarray(utg_t[:, :10]), 1)
+            accel.require().compute_lmm_chunk_fused_c(
+                ws, np.ascontiguousarray(utg_t[:, :10]), 1
+            )
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 class TestFusedWorkspaceScalarValidation:
     """The kernel validates its scalar parameters."""
 

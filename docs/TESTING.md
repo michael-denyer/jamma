@@ -345,9 +345,11 @@ kernel skipped from that merge onward, on machines with the extension fully
 built.
 
 **Gate on the capability, not on the name.** For the C extension that is
-`compute_numpy._accel is not None`, which is the one bit the ABI-equality gate
-actually admits. If a test needs a specific attribute to be present, `assert` it:
-the assert fails when the name goes, which is the whole point.
+`accel.available()` (`jamma.lmm.accel`), which is the one bit the ABI-equality
+gate actually admits. Use the `requires_c` marker and `no_c_kernels` fixture
+from `tests/conftest.py` rather than spelling the check out per test. If a
+test needs a specific attribute to be present, `assert` it: the assert fails
+when the name goes, which is the whole point.
 
 - **Skips about the environment are untouched.** `C extension not available`,
   `uv not available on PATH`, an absent optional import and an env-var gate are
@@ -480,7 +482,7 @@ regex gate it replaced missed 38 sites that way). It bans `numpy.linalg`,
 `numpy.matmul`, `scipy`, `jamma.jlinalg`, `jamma.kinship.compute` and the
 `jamma.lmm` numerical modules (`likelihood`, `likelihood_numpy`,
 `compute_numpy`, `uab`, `special`, `prepare_common`, `eigen`). ALL_CAPS
-knobs (`_CF_MAX_ITER`) and the documented seams are allowed: `_accel`,
+knobs (`_CF_MAX_ITER`) and the documented seams are allowed: `accel._accel`,
 which is one bit because the ABI-equality gate admits all of the C
 extension's `methods[]` table or none of it, and the `jlinalg.blas_*`
 detection flags and thread setters. Where delegation is the contract
@@ -498,6 +500,14 @@ two are acceptable:
    active, BLAS backend mismatch. Use module-level
    `pytestmark = pytest.mark.skipif(...)` so the file skips at collection
    time. Example: [`tests/test_jlinalg_dispatch.py:13`](../tests/test_jlinalg_dispatch.py#L13).
+   For the `_lmm_accel` C extension specifically, use the `requires_c` marker
+   from `tests/conftest.py` (`@requires_c` above the test or class) rather
+   than a hand-written `skipif(not accel.available(), ...)`; it is one
+   spelling for the one capability bit. To hold the extension out for a test
+   that exercises the NumPy fallback deliberately, use the `no_c_kernels`
+   fixture, or `monkeypatch.setattr(accel, "_accel", None)` directly where a
+   fixture does not fit the test's shape (a `with` block driving both the C
+   and the NumPy path in one test body, for instance).
 2. **Optional fixture absent** — a dataset too large to commit. There is no
    fixture in this category, and §1.11's gate now rejects any skip reason that
    names a fixture, whatever the wording. `gemma_loco` and `mouse_hs1940` are

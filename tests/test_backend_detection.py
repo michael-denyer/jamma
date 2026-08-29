@@ -84,7 +84,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
+            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
             plan = select_execution_mode(100, 1000)
         assert plan.mode == "batch"
@@ -96,7 +96,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
-            patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
+            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
             plan = select_execution_mode(200_000, 100_000)
         assert plan.mode == "streaming"
@@ -108,7 +108,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.compute_numpy._accel", None),
+            patch("jamma.lmm.accel._accel", None),
         ):
             plan = select_execution_mode(100, 1000)
         assert plan.mode == "batch"
@@ -120,7 +120,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
-            patch("jamma.lmm.compute_numpy._accel", None),
+            patch("jamma.lmm.accel._accel", None),
             patch("jamma.lmm.runner.logger") as mock_logger,
         ):
             plan = select_execution_mode(n_samples=100, n_snps=1000)
@@ -136,7 +136,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
-            patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
+            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
             plan = select_execution_mode(200_000, 100_000, requested="numpy")
         assert plan.mode == "batch"
@@ -152,13 +152,13 @@ class TestExecutionMode:
 
     def test_explicit_numpy_streaming_returns_numpy_streaming(self):
         """explicit 'numpy-streaming' -> numpy-streaming directly."""
-        with patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED):
+        with patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
             plan = select_execution_mode(100, 1000, requested="numpy-streaming")
         assert plan.mode == "streaming"
 
     def test_explicit_numpy_streaming_no_c_ext_raises(self):
         """explicit 'numpy-streaming' + no C extension -> ValueError."""
-        with patch("jamma.lmm.compute_numpy._accel", None):
+        with patch("jamma.lmm.accel._accel", None):
             with pytest.raises(ValueError, match="C extension"):
                 select_execution_mode(100, 1000, requested="numpy-streaming")
 
@@ -225,7 +225,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 side_effect=[sufficient, insufficient],
             ),
-            patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
+            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
             plan1 = select_execution_mode(100, 1000)
             plan2 = select_execution_mode(100, 1000)
@@ -247,7 +247,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 side_effect=capturing_estimate,
             ),
-            patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
+            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
             select_execution_mode(1000, 10000, n_cvt=4)
 
@@ -263,7 +263,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.compute_numpy._accel", None),
+            patch("jamma.lmm.accel._accel", None),
         ):
             plan_n_cvt4 = select_execution_mode(1000, 10000, n_cvt=4)
             plan_n_cvt1 = select_execution_mode(1000, 10000, n_cvt=1)
@@ -280,7 +280,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
+            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
             plan = select_execution_mode(1000, 10000, n_cvt=4)
 

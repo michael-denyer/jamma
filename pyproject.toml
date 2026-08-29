@@ -98,6 +98,7 @@ markers = [
     "tier2: scale tests (memory/time intensive), requires large memory or long runtime",
     "slow: independent slow marker (long but not memory-bound) — runs in test-slow.yml",
     "benchmark: marks tests that require pytest-benchmark (run with '--benchmark-only')",
+    "requires_c: skips when the _lmm_accel C extension is not available",
 ]
 
 [tool.hatch.build.hooks.custom]

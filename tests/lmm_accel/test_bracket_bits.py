@@ -31,7 +31,7 @@ computes from the one loaded extension, so no cross-compiler drift enters.
 import numpy as np
 import pytest
 
-from jamma.lmm.compute_numpy import _c
+from jamma.lmm import accel
 from tests.conftest import _build_synthetic_covariate_data
 from tests.lmm_accel._helpers import (
     _fused_general_mode4_workspace,
@@ -56,9 +56,9 @@ def test_mode2_workspace_matches_mode4_workspace_bracket():
     pab_dict = data["pab_c"]._asdict()
 
     ws4 = _fused_general_mode4_workspace(data, n_threads=1)
-    result4 = _c().compute_lmm_chunk_fused_general_c(ws4, data["utg_t"], 1)
+    result4 = accel.require().compute_lmm_chunk_fused_general_c(ws4, data["utg_t"], 1)
 
-    ws2 = _c().create_workspace_general_c(
+    ws2 = accel.require().create_workspace_general_c(
         data["eigenvalues"],
         data["uab_inv_soa"],
         data["UtW"],
@@ -73,7 +73,7 @@ def test_mode2_workspace_matches_mode4_workspace_bracket():
         lmm_mode=2,
         logl_H0=data["logl_H0"],
     )
-    result2 = _c().compute_lmm_chunk_fused_general_c(ws2, data["utg_t"], 1)
+    result2 = accel.require().compute_lmm_chunk_fused_general_c(ws2, data["utg_t"], 1)
 
     np.testing.assert_array_equal(
         result2["lambdas_mle"],

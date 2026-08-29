@@ -111,12 +111,12 @@ def _compute_chunk(
         buffer count the plan (and the engine) actually use, rather than
         assuming pipelining unconditionally.
     """
-    from jamma.lmm import compute_numpy  # deferred: loads the C extension
+    from jamma.lmm import accel  # deferred: loads the C extension
 
     dispatch = select_dispatch_path(
         n_cvt,
         parse_lmm_mode(lmm_mode),
-        accel=compute_numpy._accel is not None,
+        accel=accel.available(),
         log_choices=False,
     )
     plan = plan_lmm_chunks(n_valid, n_snps, n_cvt, dispatch)

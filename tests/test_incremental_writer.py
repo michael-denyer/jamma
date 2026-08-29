@@ -1,6 +1,7 @@
 """Tests for incremental association result writer."""
 
 import errno
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import TextIOWrapper
 from pathlib import Path
@@ -26,6 +27,46 @@ def open_handle(writer: IncrementalAssocWriter) -> TextIOWrapper:
     handle = writer._file
     assert handle is not None, "writer must be open before patching its handle"
     return handle
+
+
+@contextmanager
+def _inject_write_failure(
+    writer: IncrementalAssocWriter,
+    *,
+    message: str,
+    fail_on: int | None = None,
+    always: bool = False,
+    tab_only: bool = False,
+    errno_code: int | None = None,
+):
+    """Replace the writer's file handle ``.write`` with one that fails on cue.
+
+    Exactly one of ``fail_on`` (fail on the Nth matching call, then delegate
+    to the original for every other call) or ``always`` (fail on every
+    matching call) selects when. ``tab_only`` restricts matching to data
+    lines, which contain a tab, so the header write is never counted or
+    failed. ``errno_code`` attaches an errno to the raised ``OSError`` so a
+    retry-eligibility test can target a specific one.
+    """
+    assert fail_on is not None or always, "must set fail_on or always"
+    handle = open_handle(writer)
+    original_write = handle.write
+    call_count = 0
+
+    def patched_write(data):
+        nonlocal call_count
+        if tab_only and "\t" not in data:
+            return original_write(data)
+        call_count += 1
+        if always or call_count == fail_on:
+            err = OSError(message)
+            if errno_code is not None:
+                err.errno = errno_code
+            raise err
+        return original_write(data)
+
+    handle.write = patched_write
+    yield
 
 
 @dataclass
@@ -250,26 +291,13 @@ class TestIncrementalAssocWriter:
     def test_retries_on_oserror(self, tmp_path: Path, sample_result: SampleBatch):
         """Should retry on OSError and succeed on second attempt."""
         output_path = tmp_path / "test.assoc.txt"
-        call_count = 0
 
         with IncrementalAssocWriter(output_path) as writer:
-            original_write = open_handle(writer).write
-
-            def flaky_write(data):
-                nonlocal call_count
-                call_count += 1
-                # First call to this patched write is the data line -- fail it.
-                # Second call (retry) succeeds.
-                if call_count == 1:
-                    raise OSError("Disk full")
-                return original_write(data)
-
-            open_handle(writer).write = flaky_write
-
-            with patch("jamma.lmm.io.time.sleep") as mock_sleep:
-                writer.write_arrays_batch(*sample_result.as_call_args())
-                # Should have slept once with 0.1s (first retry backoff)
-                mock_sleep.assert_called_once_with(0.1)
+            with _inject_write_failure(writer, message="Disk full", fail_on=1):
+                with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                    writer.write_arrays_batch(*sample_result.as_call_args())
+                    # Should have slept once with 0.1s (first retry backoff)
+                    mock_sleep.assert_called_once_with(0.1)
 
         assert writer.count == 1
 
@@ -282,16 +310,10 @@ class TestIncrementalAssocWriter:
         with patch("jamma.lmm.io.time.sleep"):
             with pytest.raises(OSError):
                 with IncrementalAssocWriter(output_path) as writer:
-                    # Make every write after header fail
-                    original_write = open_handle(writer).write
-
-                    def always_fail(data):
-                        if "\t" in data:  # data lines have tabs
-                            raise OSError("Disk full")
-                        return original_write(data)
-
-                    open_handle(writer).write = always_fail
-                    writer.write_arrays_batch(*sample_result.as_call_args())
+                    with _inject_write_failure(
+                        writer, message="Disk full", always=True, tab_only=True
+                    ):
+                        writer.write_arrays_batch(*sample_result.as_call_args())
 
         # Partial file should be cleaned up
         assert not output_path.exists(), "Partial output file should be deleted"
@@ -323,15 +345,10 @@ class TestIncrementalAssocWriter:
         with patch("jamma.lmm.io.time.sleep"):
             with pytest.raises(OSError):
                 with IncrementalAssocWriter(output_path) as writer:
-                    original_write = open_handle(writer).write
-
-                    def always_fail(data):
-                        if "\t" in data:
-                            raise OSError("Disk full")
-                        return original_write(data)
-
-                    open_handle(writer).write = always_fail
-                    writer.write_arrays_batch(*sample_result.as_call_args())
+                    with _inject_write_failure(
+                        writer, message="Disk full", always=True, tab_only=True
+                    ):
+                        writer.write_arrays_batch(*sample_result.as_call_args())
 
         # File should be cleaned up by __exit__
         assert not output_path.exists(), (
@@ -388,24 +405,14 @@ class TestIncrementalAssocWriter:
     ):
         """write_arrays_batch retries on first OSError, succeeds on the second."""
         output_path = tmp_path / "test.assoc.txt"
-        call_count = 0
 
         with IncrementalAssocWriter(output_path) as writer:
-            original_write = open_handle(writer).write
-
-            def flaky_write(data):
-                nonlocal call_count
-                call_count += 1
-                # First write of data (not header) fails; retry succeeds
-                if call_count == 1 and "\t" in data:
-                    raise OSError("Transient I/O error")
-                return original_write(data)
-
-            open_handle(writer).write = flaky_write
-
-            with patch("jamma.lmm.io.time.sleep") as mock_sleep:
-                writer.write_arrays_batch(*sample_results.as_call_args())
-                mock_sleep.assert_called_once_with(0.1)
+            with _inject_write_failure(
+                writer, message="Transient I/O error", fail_on=1, tab_only=True
+            ):
+                with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                    writer.write_arrays_batch(*sample_results.as_call_args())
+                    mock_sleep.assert_called_once_with(0.1)
 
         assert writer.count == len(sample_results)
 
@@ -430,28 +437,15 @@ class TestIncrementalAssocWriter:
         Injects a transient errno.EIO on first write attempt. The writer
         should retry and succeed on the second attempt.
         """
-        import errno as errno_mod
-
         output_path = tmp_path / "test.assoc.txt"
-        call_count = 0
 
         with IncrementalAssocWriter(output_path) as writer:
-            original_write = open_handle(writer).write
-
-            def eio_write(data):
-                nonlocal call_count
-                call_count += 1
-                if call_count == 1:
-                    err = OSError("I/O error")
-                    err.errno = errno_mod.EIO
-                    raise err
-                return original_write(data)
-
-            open_handle(writer).write = eio_write
-
-            with patch("jamma.lmm.io.time.sleep") as mock_sleep:
-                writer.write_arrays_batch(*sample_result.as_call_args())
-                mock_sleep.assert_called_once_with(0.1)
+            with _inject_write_failure(
+                writer, message="I/O error", fail_on=1, errno_code=errno.EIO
+            ):
+                with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                    writer.write_arrays_batch(*sample_result.as_call_args())
+                    mock_sleep.assert_called_once_with(0.1)
 
         assert writer.count == 1
         # Verify file has header + 1 result
@@ -466,24 +460,19 @@ class TestIncrementalAssocWriter:
         EACCES is not in _RETRYABLE_ERRNOS, so the writer should fail
         after a single attempt with no retry backoff.
         """
-        import errno as errno_mod
-
         output_path = tmp_path / "test.assoc.txt"
 
         with patch("jamma.lmm.io.time.sleep") as mock_sleep:
             with pytest.raises(OSError):
                 with IncrementalAssocWriter(output_path) as writer:
-                    original_write = open_handle(writer).write
-
-                    def eacces_write(data):
-                        if "\t" in data:
-                            err = OSError("Permission denied")
-                            err.errno = errno_mod.EACCES
-                            raise err
-                        return original_write(data)
-
-                    open_handle(writer).write = eacces_write
-                    writer.write_arrays_batch(*sample_result.as_call_args())
+                    with _inject_write_failure(
+                        writer,
+                        message="Permission denied",
+                        always=True,
+                        tab_only=True,
+                        errno_code=errno.EACCES,
+                    ):
+                        writer.write_arrays_batch(*sample_result.as_call_args())
 
             # No retry sleeps should have occurred
             mock_sleep.assert_not_called()
@@ -501,7 +490,6 @@ class TestIncrementalAssocWriter:
         is cleaned up (partial file deleted).
         """
         output_path = tmp_path / "test.assoc.txt"
-        write_call_count = 0
 
         with patch("jamma.lmm.io.time.sleep"):
             with pytest.raises(OSError):
@@ -513,16 +501,13 @@ class TestIncrementalAssocWriter:
                     assert writer.count == 1
 
                     # Now make all subsequent writes fail permanently
-                    def fail_after_first(data):
-                        nonlocal write_call_count
-                        write_call_count += 1
-                        raise OSError("Disk full")
-
-                    open_handle(writer).write = fail_after_first
-                    # This should fail after retries and clean up
-                    writer.write_arrays_batch(
-                        *sample_results.slice_one(1).as_call_args()
-                    )
+                    with _inject_write_failure(
+                        writer, message="Disk full", always=True
+                    ):
+                        # This should fail after retries and clean up
+                        writer.write_arrays_batch(
+                            *sample_results.slice_one(1).as_call_args()
+                        )
 
         # _cleanup_partial deletes the file after exhausting retries
         assert not output_path.exists(), (

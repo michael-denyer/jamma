@@ -13,7 +13,7 @@ import numpy as np
 
 from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
-from jamma.lmm.uab import _batch_compute_pab_varying_numpy, batch_compute_pab_numpy
+from jamma.lmm.uab import batch_compute_pab_numpy
 
 
 @dataclass
@@ -111,34 +111,6 @@ def _f_to_pvalue(f_stat: np.ndarray, df: int, is_valid: np.ndarray) -> np.ndarra
     return np.where(is_valid, p_val, np.nan)
 
 
-def batch_calc_wald_stats_numpy(
-    n_cvt: int,
-    lambdas: np.ndarray,
-    eigenvalues: np.ndarray,
-    Uab_batch: np.ndarray,
-    n_samples: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute Wald test statistics for a batch of SNPs.
-
-    Compute batch Wald test statistics. Computes per-SNP
-    Hi_eval from optimized lambdas, constructs Pab, then delegates to
-    batch_calc_wald_stats_from_pab_numpy for the statistics.
-
-    Args:
-        n_cvt: Number of covariates.
-        lambdas: Optimized REML lambda per SNP (n_snps,).
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        Uab_batch: Uab matrices (n_snps, n_samples, n_index).
-        n_samples: Number of samples.
-
-    Returns:
-        Tuple of (betas, ses, p_walds) each shape (n_snps,).
-    """
-    Hi_eval_batch = 1.0 / (lambdas[:, None] * eigenvalues[None, :] + 1.0)
-    Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
-    return batch_calc_wald_stats_from_pab_numpy(n_cvt, Pab_batch, n_samples)
-
-
 def batch_calc_wald_stats_from_pab_numpy(
     n_cvt: int,
     Pab_batch: np.ndarray,
@@ -147,8 +119,8 @@ def batch_calc_wald_stats_from_pab_numpy(
     """Compute Wald test statistics from pre-computed Pab batch.
 
     The REML optimizers always return the Pab batch they evaluated at the
-    optimal lambda, so this avoids the redundant Hi_eval + Pab construction in
-    batch_calc_wald_stats_numpy.
+    optimal lambda, so callers pass it straight through instead of
+    reconstructing Hi_eval and Pab from the optimized lambdas.
 
     Args:
         n_cvt: Number of covariates.
@@ -169,7 +141,7 @@ def batch_calc_wald_stats_from_pab_numpy(
     P_YY = Pab_batch[:, n_cvt, idx_yy]
     Px_YY = Pab_batch[:, n_cvt + 1, idx_yy]
 
-    # Clamp Px_YY (matches batch_calc_wald_stats_numpy behaviour)
+    # Clamp Px_YY to avoid division by near-zero for degenerate SNPs.
     Px_YY = np.where((Px_YY >= 0.0) & (Px_YY < _P_YY_MIN), _P_YY_MIN, Px_YY)
 
     beta, se, is_valid = _beta_se_from_pab(P_XX, P_XY, Px_YY, df)

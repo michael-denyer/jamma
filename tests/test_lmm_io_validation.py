@@ -243,10 +243,14 @@ class TestDegenerateSNPNaN:
     """NumPy batch stat functions must return NaN for degenerate (constant) SNPs."""
 
     def test_wald_degenerate_snps_return_nan(self) -> None:
-        """batch_calc_wald_stats_numpy returns NaN for zero-variance SNPs."""
+        """batch_calc_wald_stats_from_pab_numpy returns NaN for zero-variance SNPs."""
         from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_numpy
-        from jamma.lmm.stats import batch_calc_wald_stats_numpy
-        from jamma.lmm.uab import batch_compute_iab_numpy, batch_compute_uab_numpy
+        from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
+        from jamma.lmm.uab import (
+            _batch_compute_pab_varying_numpy,
+            batch_compute_iab_numpy,
+            batch_compute_uab_numpy,
+        )
 
         rng = np.random.default_rng(42)
         n_samples, n_snps, n_cvt = 50, 5, 1
@@ -264,8 +268,10 @@ class TestDegenerateSNPNaN:
         lambdas, _, _ = golden_section_optimize_lambda_numpy(
             n_cvt, eigenvalues, Uab, Iab
         )
-        betas, ses, pwalds = batch_calc_wald_stats_numpy(
-            n_cvt, lambdas, eigenvalues, Uab, n_samples
+        Hi_eval_batch = 1.0 / (lambdas[:, None] * eigenvalues[None, :] + 1.0)
+        Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab)
+        betas, ses, pwalds = batch_calc_wald_stats_from_pab_numpy(
+            n_cvt, Pab_batch, n_samples
         )
 
         # Degenerate SNPs should be NaN

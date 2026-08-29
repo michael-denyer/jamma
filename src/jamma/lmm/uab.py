@@ -3,16 +3,14 @@
 Uab holds the element-wise products of the rotated vectors (covariates,
 genotype, phenotype) for a chunk of SNPs; Pab is the H-inverse weighted
 projection GEMMA's CalcPab recurses over; Iab is Pab with unit weights. The
-split and SoA layouts separate the columns that vary per SNP from the ones
-that do not, so the C kernels and the n_cvt=1 fallback read stride-1 rows.
+SoA layout separates the columns that vary per SNP from the ones that do
+not, so the C kernels and the n_cvt=1 fallback read stride-1 rows.
 
 Every walker here iterates the ``PabIndexTable`` from ``build_index_table``,
 the same integers in the same order as the scalar ``calc_pab``.
 """
 
 from __future__ import annotations
-
-from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
@@ -23,40 +21,6 @@ from jamma.lmm.likelihood import (
     build_index_table,
     classify_uab_columns,
 )
-
-
-class SplitUab(NamedTuple):
-    """Split Uab components for n_cvt=1 — separates SNP-varying from invariant columns.
-
-    Zero runtime cost (NamedTuple is just a tuple subclass). Prevents silent
-    argument swaps between varying and invariant at call sites.
-    """
-
-    varying: np.ndarray
-    """SNP-varying columns (n_snps, n_samples, 3) with order [wx, xx, xy]."""
-    invariant: np.ndarray
-    """SNP-invariant columns (n_samples, 3) with order [ww, wy, yy]."""
-
-
-class SplitUabSoA(NamedTuple):
-    """Split Uab in SoA layout for n_cvt=1 — optimised for SIMD C inner loops.
-
-    SoA (Structure-of-Arrays) layout gives stride-1 access to each column,
-    enabling AVX-512 contiguous loads instead of stride-N gathers.
-
-    Zero runtime cost (NamedTuple is just a tuple subclass).
-    """
-
-    varying: np.ndarray
-    """SNP-varying columns (n_snps, 3, n_samples) with axis-1 order [wx, xx, xy].
-
-    Axis-1 columns are contiguous in memory (stride-1 over n_samples).
-    """
-    invariant: np.ndarray
-    """SNP-invariant columns (3, n_samples) with axis-0 order [ww, wy, yy].
-
-    Each row is contiguous in memory (stride-1 over n_samples).
-    """
 
 
 def batch_compute_uab_numpy(
@@ -364,94 +328,6 @@ def batch_compute_iab_numpy(
     return batch_compute_pab_numpy(n_cvt, ones, Uab_batch)
 
 
-def batch_compute_uab_split_numpy(
-    n_cvt: int,
-    UtW: np.ndarray,
-    Uty: np.ndarray,
-    UtG: np.ndarray,
-) -> SplitUab:
-    """Compute split Uab: SNP-varying and SNP-invariant components.
-
-    For n_cvt=1, columns ww(0), wy(2), yy(5) are identical across all SNPs.
-    This function returns them as a shared (n_samples, 3) array instead of
-    broadcasting into every SNP row — halving Uab memory.
-
-    Args:
-        n_cvt: Number of covariates (must be 1).
-        UtW: Rotated covariates (n_samples, 1).
-        Uty: Rotated phenotype (n_samples,).
-        UtG: Rotated genotypes (n_samples, n_snps).
-
-    Returns:
-        SplitUab(varying, invariant) where:
-        - varying: (n_snps, n_samples, 3) — wx, xx, xy columns.
-        - invariant: (n_samples, 3) — ww, wy, yy (shared).
-    """
-    if n_cvt != 1:
-        raise ValueError("batch_compute_uab_split_numpy requires n_cvt=1")
-    return _batch_compute_uab_split_ncvt1_numpy(UtW, Uty, UtG)
-
-
-def _batch_compute_uab_split_ncvt1_numpy(
-    UtW: np.ndarray,
-    Uty: np.ndarray,
-    UtG: np.ndarray,
-) -> SplitUab:
-    """Fast-path split Uab for n_cvt=1.
-
-    Returns:
-        SplitUab(varying, invariant):
-        - varying: (n_snps, n_samples, 3) with col order [wx, xx, xy].
-        - invariant: (n_samples, 3) with col order [ww, wy, yy].
-    """
-    n_samples, n_snps = UtG.shape
-    w = UtW[:, 0]
-    UtG_T = UtG.T  # (n_snps, n_samples)
-
-    uab_varying = np.empty((n_snps, n_samples, 3), dtype=np.float64)
-    uab_varying[:, :, 0] = w[None, :] * UtG_T  # wx
-    uab_varying[:, :, 1] = UtG_T * UtG_T  # xx
-    uab_varying[:, :, 2] = UtG_T * Uty[None, :]  # xy
-
-    uab_invariant = np.empty((n_samples, 3), dtype=np.float64)
-    uab_invariant[:, 0] = w * w  # ww
-    uab_invariant[:, 1] = w * Uty  # wy
-    uab_invariant[:, 2] = Uty * Uty  # yy
-
-    return SplitUab(uab_varying, uab_invariant)
-
-
-def batch_compute_uab_split_soa_numpy(
-    n_cvt: int,
-    UtW: np.ndarray,
-    Uty: np.ndarray,
-    utg_t: np.ndarray,
-) -> SplitUabSoA:
-    """Compute split Uab in SoA layout — eliminates per-chunk AoS->SoA transpose.
-
-    Produces the SoA layout (n_snps, 3, n_samples) for varying and
-    (3, n_samples) for invariant directly, without intermediate AoS allocation.
-    The C extension's inner loops read stride-1 columns, enabling SIMD loads.
-
-    Args:
-        n_cvt: Number of covariates (must be 1).
-        UtW: Rotated covariates (n_samples, 1).
-        Uty: Rotated phenotype (n_samples,).
-        utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
-            from jlinalg.dgemm(chunk, U, transa="T").
-
-    Returns:
-        SplitUabSoA(varying, invariant) where:
-        - varying: (n_snps, 3, n_samples) — rows are wx, xx, xy.
-        - invariant: (3, n_samples) — rows are ww, wy, yy (shared).
-    """
-    if n_cvt != 1:
-        raise ValueError("batch_compute_uab_split_soa_numpy requires n_cvt=1")
-    inv = compute_uab_invariant_soa(UtW, Uty, 1)
-    var = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
-    return SplitUabSoA(var, inv)
-
-
 def compute_uab_invariant_soa(
     UtW: np.ndarray,
     Uty: np.ndarray,
@@ -617,111 +493,6 @@ def reconstruct_uab_from_soa(
         Uab[:, :, col_idx] = uab_varying_soa[:, row_i, :]
 
     return Uab
-
-
-def batch_compute_iab_split_ncvt1_soa(
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-) -> np.ndarray:
-    """Compute Iab from split Uab in SoA layout (n_cvt=1 only).
-
-    SoA variant of batch_compute_iab_split_ncvt1. Sums over axis=2 (n_samples)
-    instead of axis=1 because SoA columns are on axis=2 rather than axis=1.
-    Produces identical numerical results.
-
-    Args:
-        uab_varying_soa: (n_snps, 3, n_samples) — rows [wx, xx, xy].
-        uab_invariant_soa: (3, n_samples) — rows [ww, wy, yy].
-
-    Returns:
-        Iab batch (n_snps, 3, 6).
-    """
-    n_snps = uab_varying_soa.shape[0]
-
-    # Row 0: column sums (Hi_eval = ones -> just sum over samples, axis=2 for SoA)
-    s_ww = uab_invariant_soa[0, :].sum()
-    s_wy = uab_invariant_soa[1, :].sum()
-    s_yy = uab_invariant_soa[2, :].sum()
-    s_wx = uab_varying_soa[:, 0, :].sum(axis=1)  # (n_snps,)
-    s_xx = uab_varying_soa[:, 1, :].sum(axis=1)
-    s_xy = uab_varying_soa[:, 2, :].sum(axis=1)
-
-    iab = np.zeros((n_snps, 3, 6), dtype=np.float64)
-    iab[:, 0, _NCVT1.ww] = s_ww
-    iab[:, 0, _NCVT1.wx] = s_wx
-    iab[:, 0, _NCVT1.wy] = s_wy
-    iab[:, 0, _NCVT1.xx] = s_xx
-    iab[:, 0, _NCVT1.xy] = s_xy
-    iab[:, 0, _NCVT1.yy] = s_yy
-
-    # Row 1: project out W (Schur complement)
-    inv_ww = 1.0 / s_ww if s_ww != 0 else 0.0
-    iab[:, 1, _NCVT1.xx] = s_xx - s_wx * s_wx * inv_ww
-    iab[:, 1, _NCVT1.xy] = s_xy - s_wx * s_wy * inv_ww
-    iab[:, 1, _NCVT1.yy] = s_yy - s_wy * s_wy * inv_ww
-
-    # Row 2: project out X
-    ps_xx = iab[:, 1, _NCVT1.xx]
-    with np.errstate(divide="ignore"):
-        inv_xx = np.where(ps_xx != 0, 1.0 / ps_xx, 0.0)
-    iab[:, 2, _NCVT1.yy] = (
-        iab[:, 1, _NCVT1.yy] - iab[:, 1, _NCVT1.xy] * iab[:, 1, _NCVT1.xy] * inv_xx
-    )
-
-    return iab
-
-
-def batch_compute_iab_split_ncvt1(
-    uab_varying: np.ndarray,
-    uab_invariant: np.ndarray,
-) -> np.ndarray:
-    """Compute Iab from split Uab components (n_cvt=1 only).
-
-    Equivalent to batch_compute_iab_numpy(1, full_uab) but avoids
-    constructing the full 6-column Uab.
-
-    Args:
-        uab_varying: (n_snps, n_samples, 3) — [wx, xx, xy].
-        uab_invariant: (n_samples, 3) — [ww, wy, yy].
-
-    Returns:
-        Iab batch (n_snps, 3, 6).
-    """
-    n_snps = uab_varying.shape[0]
-
-    # Row 0: column sums (Hi_eval = ones → just sum over samples)
-    s_ww, s_wy, s_yy = (
-        uab_invariant[:, 0].sum(),
-        uab_invariant[:, 1].sum(),
-        uab_invariant[:, 2].sum(),
-    )
-    s_wx = uab_varying[:, :, 0].sum(axis=1)  # (n_snps,)
-    s_xx = uab_varying[:, :, 1].sum(axis=1)
-    s_xy = uab_varying[:, :, 2].sum(axis=1)
-
-    iab = np.zeros((n_snps, 3, 6), dtype=np.float64)
-    iab[:, 0, _NCVT1.ww] = s_ww
-    iab[:, 0, _NCVT1.wx] = s_wx
-    iab[:, 0, _NCVT1.wy] = s_wy
-    iab[:, 0, _NCVT1.xx] = s_xx
-    iab[:, 0, _NCVT1.xy] = s_xy
-    iab[:, 0, _NCVT1.yy] = s_yy
-
-    # Row 1: project out W (Schur complement)
-    inv_ww = 1.0 / s_ww if s_ww != 0 else 0.0
-    iab[:, 1, _NCVT1.xx] = s_xx - s_wx * s_wx * inv_ww
-    iab[:, 1, _NCVT1.xy] = s_xy - s_wx * s_wy * inv_ww
-    iab[:, 1, _NCVT1.yy] = s_yy - s_wy * s_wy * inv_ww
-
-    # Row 2: project out X
-    ps_xx = iab[:, 1, _NCVT1.xx]
-    with np.errstate(divide="ignore"):
-        inv_xx = np.where(ps_xx != 0, 1.0 / ps_xx, 0.0)
-    iab[:, 2, _NCVT1.yy] = (
-        iab[:, 1, _NCVT1.yy] - iab[:, 1, _NCVT1.xy] * iab[:, 1, _NCVT1.xy] * inv_xx
-    )
-
-    return iab
 
 
 def compute_iab_invariant_scalars_ncvt1(

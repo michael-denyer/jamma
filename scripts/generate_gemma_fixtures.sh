@@ -66,24 +66,18 @@ done
 # %ROOT% expands to the data root: the repository when running locally, /data
 # inside the container. %OUTDIR% expands to the row's output directory under
 # that root. A row whose args carry no -outdir leaves GEMMA writing to ./output.
+#
+# The rows themselves come from tests/fixtures/MANIFEST.toml's generation_cmd
+# field on each fixture's .log.txt entry, so this table cannot drift from the
+# provenance already recorded there. scripts/_gemma_fixture_cells.py is the
+# single place that reads MANIFEST.toml and rewrites each generation_cmd back
+# into %ROOT%/%OUTDIR% form. It excludes fixtures recorded as generated from a
+# no-longer-regenerable source tree (a stray /data/legacy or /data/input path,
+# or a jamma-binary provenance record rather than a gemma one) and the three
+# gemma_loco_chr* fixtures, whose .log.txt entries carry no generation_cmd at
+# all; those are appended by the chromosome loop below instead.
 
-read -r -d '' CELLS <<'TABLE' || true
-gemma_lrt|tests/fixtures/gemma_synthetic|gemma_lrt|-bfile %ROOT%/tests/fixtures/gemma_synthetic/test -k %ROOT%/tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -lmm 2 -o gemma_lrt -outdir %OUTDIR%
-gemma_score|tests/fixtures/gemma_score|gemma_score|-bfile %ROOT%/tests/fixtures/gemma_synthetic/test -k %ROOT%/tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -lmm 3 -o gemma_score -outdir %OUTDIR%
-gemma_covariate|tests/fixtures/gemma_covariate|gemma_covariate|-bfile %ROOT%/tests/fixtures/gemma_synthetic/test -k %ROOT%/tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -c %ROOT%/tests/fixtures/gemma_covariate/covariates.txt -lmm 1 -o gemma_covariate
-gemma_covariate_lrt|tests/fixtures/gemma_covariate|gemma_covariate_lrt|-bfile %ROOT%/tests/fixtures/gemma_synthetic/test -k %ROOT%/tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -c %ROOT%/tests/fixtures/gemma_covariate/covariates.txt -lmm 2 -o gemma_covariate_lrt -outdir %OUTDIR%
-gemma_covariate_score|tests/fixtures/gemma_covariate|gemma_covariate_score|-bfile %ROOT%/tests/fixtures/gemma_synthetic/test -k %ROOT%/tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -c %ROOT%/tests/fixtures/gemma_covariate/covariates.txt -lmm 3 -o gemma_covariate_score -outdir %OUTDIR%
-gemma_all|tests/fixtures/gemma_all_tests|gemma_all|-bfile %ROOT%/tests/fixtures/gemma_synthetic/test -k %ROOT%/tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -lmm 4 -o gemma_all -outdir %OUTDIR%
-gemma_all_covar|tests/fixtures/gemma_all_tests|gemma_all_covar|-bfile %ROOT%/tests/fixtures/gemma_synthetic/test -k %ROOT%/tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt -c %ROOT%/tests/fixtures/gemma_covariate/covariates.txt -lmm 4 -o gemma_all_covar -outdir %OUTDIR%
-mouse_hs1940_kinship|tests/fixtures/mouse_hs1940|mouse_hs1940_kinship|-bfile %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940 -gk 1 -o mouse_hs1940_kinship -outdir %OUTDIR%
-mouse_hs1940_lrt|tests/fixtures/mouse_hs1940|mouse_hs1940_lrt|-bfile %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940 -k %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -lmm 2 -o mouse_hs1940_lrt -outdir %OUTDIR%
-mouse_hs1940_score|tests/fixtures/mouse_hs1940|mouse_hs1940_score|-bfile %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940 -k %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -lmm 3 -o mouse_hs1940_score -outdir %OUTDIR%
-mouse_hs1940_all|tests/fixtures/mouse_hs1940|mouse_hs1940_all|-bfile %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940 -k %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -lmm 4 -o mouse_hs1940_all -outdir %OUTDIR%
-mouse_hs1940_covar_wald|tests/fixtures/mouse_hs1940|mouse_hs1940_covar_wald|-bfile %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940 -k %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -c %ROOT%/tests/fixtures/mouse_hs1940/covariates.txt -lmm 1 -o mouse_hs1940_covar_wald -outdir %OUTDIR%
-mouse_hs1940_covar_lrt|tests/fixtures/mouse_hs1940|mouse_hs1940_covar_lrt|-bfile %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940 -k %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -c %ROOT%/tests/fixtures/mouse_hs1940/covariates.txt -lmm 2 -o mouse_hs1940_covar_lrt -outdir %OUTDIR%
-mouse_hs1940_covar_score|tests/fixtures/mouse_hs1940|mouse_hs1940_covar_score|-bfile %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940 -k %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -c %ROOT%/tests/fixtures/mouse_hs1940/covariates.txt -lmm 3 -o mouse_hs1940_covar_score -outdir %OUTDIR%
-mouse_hs1940_covar_all|tests/fixtures/mouse_hs1940|mouse_hs1940_covar_all|-bfile %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940 -k %ROOT%/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -c %ROOT%/tests/fixtures/mouse_hs1940/covariates.txt -lmm 4 -o mouse_hs1940_covar_all -outdir %OUTDIR%
-TABLE
+CELLS="$(uv run python3 "$PROJECT_ROOT/scripts/_gemma_fixture_cells.py" "$PROJECT_ROOT/tests/fixtures/MANIFEST.toml")"
 
 # The LOCO rows share one shape, so they expand from a chromosome loop rather
 # than being typed out three times. They depend on the kinship and SNP-list

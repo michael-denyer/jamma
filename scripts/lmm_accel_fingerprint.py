@@ -11,20 +11,26 @@ inputs the maintainers already care about, and writes one sorted line per
 distinct ``(function, args digest, result digest)`` triple. Two runs across a
 refactor that differ by one bit produce different files.
 
-Usage::
+Usage, via ``scripts/run-fingerprint.sh`` (the invocation both sides of a
+comparison must share, so it lives in one file rather than being typed twice)::
+
+    bash scripts/run-fingerprint.sh /tmp/before.txt
+    # ... make the change, rebuild the extension ...
+    bash scripts/run-fingerprint.sh /tmp/after.txt
+    uv run python scripts/compare_fingerprints.py /tmp/before.txt /tmp/after.txt
+
+which runs, equivalently::
 
     JAMMA_FINGERPRINT_OUT=/tmp/before.txt \\
-      uv run pytest tests/lmm_accel/ -n0 -p no:randomly \\
+      uv run pytest tests/lmm_accel/ -n0 --randomly-seed=1234 \\
       -p scripts.lmm_accel_fingerprint
-    # ... make the change, rebuild the extension ...
-    JAMMA_FINGERPRINT_OUT=/tmp/after.txt \\
-      uv run pytest tests/lmm_accel/ -n0 -p no:randomly \\
-      -p scripts.lmm_accel_fingerprint
-    diff /tmp/before.txt /tmp/after.txt && echo "bit-identical"
 
 ``-n0`` is required: under xdist each worker would write over the same file.
-``-p no:randomly`` is not required for correctness (the output is a sorted set)
-but keeps a failing run's ordering reproducible.
+A fixed ``--randomly-seed`` is not required for correctness (the output is a
+sorted set) but keeps both sides driving the accelerator with the identical
+input ordering, and keeps a failing run's ordering reproducible. See
+``docs/CONFIGURATION.md`` "Bit-Exactness Fingerprint Reproduce Recipe" for the
+full local reproduce recipe, including how to diff against another commit.
 
 Digests cover raw float64 bytes, so ``-0.0`` vs ``0.0`` and differing NaN
 payloads both register as changes. That is deliberate. Judge such a diff on its

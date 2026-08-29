@@ -861,64 +861,21 @@ class TestLMMEquivalence:
         )
         loaded_result = PipelineRunner(loaded_config).run()
 
-        # 4. Compare results
+        # 4. Compare results. ToleranceConfig defaults (beta_rtol=1e-2,
+        # se_rtol=1e-5, pvalue_rtol=1e-4) are the same values this test used
+        # to hardcode from the GEMMA_EQUIVALENCE.md tolerance table.
+        from jamma.validation import compare_assoc_results, load_gemma_assoc
+
         assert fresh_result.n_samples == loaded_result.n_samples
         assert fresh_result.n_snps_tested == loaded_result.n_snps_tested
 
-        # Read output files and compare columns
-        fresh_lines = (fresh_dir / "fresh.assoc.txt").read_text().strip().splitlines()
-        loaded_lines = (
-            (loaded_dir / "loaded.assoc.txt").read_text().strip().splitlines()
+        fresh_assoc = load_gemma_assoc(fresh_dir / "fresh.assoc.txt")
+        loaded_assoc = load_gemma_assoc(loaded_dir / "loaded.assoc.txt")
+        comparison = compare_assoc_results(loaded_assoc, fresh_assoc)
+        assert comparison.passed, (
+            f"beta={comparison.beta}, se={comparison.se}, "
+            f"p_wald={comparison.p_wald}, mismatched={comparison.mismatched_snps}"
         )
-
-        assert len(fresh_lines) == len(loaded_lines)
-        assert len(fresh_lines) > 1  # header + data
-
-        # Parse header
-        header = fresh_lines[0].split("\t")
-        beta_idx = header.index("beta")
-        se_idx = header.index("se")
-        p_wald_idx = header.index("p_wald")
-
-        # Compare every SNP
-        for i in range(1, len(fresh_lines)):
-            fresh_cols = fresh_lines[i].split("\t")
-            loaded_cols = loaded_lines[i].split("\t")
-
-            # SNP identity must match
-            assert fresh_cols[1] == loaded_cols[1], f"SNP mismatch at line {i}"
-
-            fresh_beta = float(fresh_cols[beta_idx])
-            loaded_beta = float(loaded_cols[beta_idx])
-            fresh_se = float(fresh_cols[se_idx])
-            loaded_se = float(loaded_cols[se_idx])
-            fresh_p = float(fresh_cols[p_wald_idx])
-            loaded_p = float(loaded_cols[p_wald_idx])
-
-            # Handle NaN SNPs (degenerate)
-            if np.isnan(fresh_beta):
-                assert np.isnan(loaded_beta)
-                continue
-
-            # Standard tolerances from GEMMA_EQUIVALENCE.md tolerance table
-            np.testing.assert_allclose(
-                loaded_beta,
-                fresh_beta,
-                rtol=1e-2,
-                err_msg=f"beta mismatch at SNP {fresh_cols[1]}",
-            )
-            np.testing.assert_allclose(
-                loaded_se,
-                fresh_se,
-                rtol=1e-5,
-                err_msg=f"se mismatch at SNP {fresh_cols[1]}",
-            )
-            np.testing.assert_allclose(
-                loaded_p,
-                fresh_p,
-                rtol=1e-4,
-                err_msg=f"p_wald mismatch at SNP {fresh_cols[1]}",
-            )
 
     @pytest.mark.tier1
     def test_write_eigen_flag_creates_files(self, tmp_path: Path) -> None:

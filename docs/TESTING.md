@@ -575,7 +575,6 @@ Defined in [`tests/conftest.py`](../tests/conftest.py):
 |---------|-------------|
 | `sample_plink_data` | Path prefix for synthetic PLINK files (`tests/fixtures/gemma_synthetic/test`) |
 | `output_dir` | Temporary output directory wrapping `tmp_path` |
-| `tolerance_config` | `ToleranceConfig()` for numerical comparisons |
 | `synthetic_covariate_data_ncvt2` | Rotated data with 2 covariates (200 samples, 50 SNPs) |
 | `synthetic_covariate_data_ncvt4` | Rotated data with 4 covariates (200 samples, 50 SNPs) |
 
@@ -587,8 +586,8 @@ Two modules beside `conftest.py` hold what the fixtures do not:
   committed dataset once. `SYNTHETIC`, `MOUSE` and `LOCO` are frozen
   `FixtureDataset`s with `.bfile`, `.bed`, `.bim`, `.fam`, `.kinship`,
   `.covariates` and `.ref("covar_lrt")` for the recorded GEMMA outputs;
-  `NUMPY_GEMMA_TOLERANCES` and `build_snp_info` live there too. Do not
-  derive a `fixtures` root in a test file.
+  `NUMPY_GEMMA_TOLERANCES` lives there too. Do not derive a `fixtures`
+  root in a test file. Build `snp_info` with `SnpMeta.from_plink_meta(plink.meta)`.
 - [`tests/builders.py`](../tests/builders.py) builds synthetic inputs.
   `rotated_lmm_inputs(n_samples, n_snps, n_cvt=1, seed=42)` returns an
   `LmmInputs` (eigenvalues, `UtW`, `Uty`, `UtG`, `uab_batch()`) drawn in

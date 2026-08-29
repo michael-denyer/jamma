@@ -13,7 +13,7 @@ import pytest
 from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
-from jamma.lmm.schema import LmmConfig
+from jamma.lmm.schema import LmmConfig, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     ToleranceConfig,
@@ -25,7 +25,6 @@ from tests.fixture_paths import (
     MOUSE,
     NUMPY_GEMMA_TOLERANCES,
     SYNTHETIC,
-    build_snp_info,
 )
 
 # ---------------------------------------------------------------------------
@@ -39,7 +38,7 @@ def mouse_hs1940_data():
     plink = load_plink_binary(MOUSE.bfile)
     kinship = read_kinship_matrix(MOUSE.kinship)
     phenotypes = read_fam_phenotypes(MOUSE.fam)
-    snp_info = build_snp_info(plink)
+    snp_info = SnpMeta.from_plink_meta(plink.meta)
     return plink, kinship, phenotypes, snp_info
 
 
@@ -269,7 +268,7 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     plink = load_plink_binary(MOUSE.bfile)
     kinship = read_kinship_matrix(MOUSE.kinship)
     phenotypes = read_fam_phenotypes(MOUSE.fam)
-    snp_info = build_snp_info(plink)
+    snp_info = SnpMeta.from_plink_meta(plink.meta)
 
     # Filter to valid (non-NaN) samples then pre-compute eigendecomp once
     # on the filtered kinship — passed to both runs so the only variable is

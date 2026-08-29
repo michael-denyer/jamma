@@ -6,7 +6,6 @@ import ast
 import shutil
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -602,9 +601,6 @@ def install_lint_script(script: Path, scripts_dir: Path) -> Path:
     return destination
 
 
-if TYPE_CHECKING:
-    from jamma.validation import ToleranceConfig
-
 # Tier marker policy lives in docs/TESTING.md §1.5 (source of truth) and
 # pyproject.toml [tool.pytest.ini_options].markers. The enforcement gate at
 # the top of this file fails collection if a test lacks tier0/tier1/tier2.
@@ -633,18 +629,6 @@ def output_dir(tmp_path: Path) -> Path:
     out = tmp_path / "output"
     out.mkdir()
     return out
-
-
-@pytest.fixture
-def tolerance_config() -> ToleranceConfig:
-    """Default tolerance configuration for numerical comparisons.
-
-    Returns:
-        ToleranceConfig with default tolerance values for different comparison types
-    """
-    from jamma.validation import ToleranceConfig
-
-    return ToleranceConfig()
 
 
 # The one C-extension seam every LMM test drives through. Replaces 26
@@ -780,10 +764,11 @@ def synthetic_data():
     """Load gemma_synthetic PLINK data, kinship, phenotypes, and snp_info."""
     from jamma.io import load_plink_binary, read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
-    from tests.fixture_paths import SYNTHETIC, build_snp_info
+    from jamma.lmm.schema import SnpMeta
+    from tests.fixture_paths import SYNTHETIC
 
     plink = load_plink_binary(SYNTHETIC.bfile)
     kinship = read_kinship_matrix(SYNTHETIC.kinship)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
-    snp_info = build_snp_info(plink)
+    snp_info = SnpMeta.from_plink_meta(plink.meta)
     return plink, kinship, phenotypes, snp_info

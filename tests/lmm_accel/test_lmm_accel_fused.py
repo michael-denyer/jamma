@@ -10,6 +10,7 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.uab import compute_uab_invariant_soa
+from tests.builders import rotated_lmm_inputs
 from tests.conftest import requires_c
 from tests.lmm_accel._helpers import (
     _fused_general_mode4_workspace,
@@ -775,10 +776,10 @@ def test_general_creator_rejects_mode_5():
     from jamma.lmm.likelihood import build_pab_table_for_c
 
     n_cvt, n_samples = 2, 20
-    rng = np.random.default_rng(1)
-    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
+    inputs = rotated_lmm_inputs(
+        n_samples=n_samples, n_cvt=n_cvt, seed=1, n_snps=1, eig_range=(0.1, 2.0)
+    )
+    eigenvalues, UtW, Uty = inputs.eigenvalues, inputs.UtW, inputs.Uty
     with pytest.raises(ValueError, match="lmm_mode must be 1, 2, 3 or 4"):
         accel.require().create_workspace_general_c(
             eigenvalues,

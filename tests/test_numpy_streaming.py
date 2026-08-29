@@ -20,7 +20,7 @@ from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import (
     run_lmm_association_numpy_streaming,
 )
-from jamma.lmm.schema import LmmConfig
+from jamma.lmm.schema import LmmConfig, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.validation import (
     ToleranceConfig,
@@ -28,7 +28,7 @@ from jamma.validation import (
     load_gemma_assoc,
 )
 from tests.conftest import requires_c
-from tests.fixture_paths import SYNTHETIC, build_snp_info
+from tests.fixture_paths import SYNTHETIC
 
 # ---------------------------------------------------------------------------
 # Sanitizer-aware tolerances
@@ -235,7 +235,7 @@ class TestBatchEquivalence:
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Batch run
-        snp_info = build_snp_info(plink)
+        snp_info = SnpMeta.from_plink_meta(plink.meta)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -279,7 +279,7 @@ class TestBatchEquivalence:
         """Mode-4 results match between batch and streaming within BLAS tolerance."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        snp_info = build_snp_info(plink)
+        snp_info = SnpMeta.from_plink_meta(plink.meta)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -332,7 +332,7 @@ class TestStreamingCovariates:
         )
 
         # Batch run (pre-computed eigen for identical path)
-        snp_info = build_snp_info(plink)
+        snp_info = SnpMeta.from_plink_meta(plink.meta)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -548,7 +548,7 @@ class TestChunkingEdgeCases:
         """chunk_size larger than total SNPs (single chunk) matches batch."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        snp_info = build_snp_info(plink)
+        snp_info = SnpMeta.from_plink_meta(plink.meta)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,
@@ -577,7 +577,7 @@ class TestChunkingEdgeCases:
         """chunk_size=50 (many small chunks) matches batch."""
         plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        snp_info = build_snp_info(plink)
+        snp_info = SnpMeta.from_plink_meta(plink.meta)
         batch_result = run_lmm_association_numpy(
             genotypes=plink.genotypes,
             phenotypes=phenotypes,

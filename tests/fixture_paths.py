@@ -124,17 +124,3 @@ NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
     logl_rtol=5e-3,
     atol=1e-4,
 )
-
-
-def build_snp_info(plink_data) -> list[dict]:
-    """The ``snp_info`` list a runner takes, from a loaded ``PlinkData``."""
-    return [
-        {
-            "chr": str(plink_data.chromosome[i]),
-            "rs": plink_data.sid[i],
-            "pos": plink_data.bp_position[i],
-            "a1": plink_data.allele_1[i],
-            "a0": plink_data.allele_2[i],
-        }
-        for i in range(plink_data.n_snps)
-    ]

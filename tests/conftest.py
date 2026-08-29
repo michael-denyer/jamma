@@ -6,7 +6,6 @@ import ast
 import shutil
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -602,9 +601,6 @@ def install_lint_script(script: Path, scripts_dir: Path) -> Path:
     return destination
 
 
-if TYPE_CHECKING:
-    from jamma.validation import ToleranceConfig
-
 # Tier marker policy lives in docs/TESTING.md §1.5 (source of truth) and
 # pyproject.toml [tool.pytest.ini_options].markers. The enforcement gate at
 # the top of this file fails collection if a test lacks tier0/tier1/tier2.
@@ -633,18 +629,6 @@ def output_dir(tmp_path: Path) -> Path:
     out = tmp_path / "output"
     out.mkdir()
     return out
-
-
-@pytest.fixture
-def tolerance_config() -> ToleranceConfig:
-    """Default tolerance configuration for numerical comparisons.
-
-    Returns:
-        ToleranceConfig with default tolerance values for different comparison types
-    """
-    from jamma.validation import ToleranceConfig
-
-    return ToleranceConfig()
 
 
 # The one C-extension seam every LMM test drives through. Replaces 26

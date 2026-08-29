@@ -15,79 +15,6 @@ from loguru import logger
 from jamma.core.progress import progress_iterator
 
 
-@dataclass
-class PlinkData:
-    """Container for PLINK binary data.
-
-    Attributes:
-        genotypes: Genotype matrix with shape (n_samples, n_snps).
-            Values are 0.0 (hom ref), 1.0 (het), 2.0 (hom alt), or NaN (missing).
-        iid: Sample IDs as 2D array with columns [FID, IID].
-        sid: SNP IDs (variant identifiers).
-        chromosome: Chromosome for each SNP.
-        bp_position: Base pair position for each SNP.
-        allele_1: Reference allele for each SNP.
-        allele_2: Alternate allele for each SNP.
-    """
-
-    genotypes: np.ndarray
-    iid: np.ndarray
-    sid: np.ndarray
-    chromosome: np.ndarray
-    bp_position: np.ndarray
-    allele_1: np.ndarray
-    allele_2: np.ndarray
-
-    @property
-    def n_samples(self) -> int:
-        """Number of samples in the dataset."""
-        return self.genotypes.shape[0]
-
-    @property
-    def n_snps(self) -> int:
-        """Number of SNPs in the dataset."""
-        return self.genotypes.shape[1]
-
-
-def load_plink_binary(bfile: Path) -> PlinkData:
-    """Load PLINK binary files (.bed/.bim/.fam).
-
-    Args:
-        bfile: Path prefix for PLINK files (without .bed/.bim/.fam extension).
-            For example, if files are data.bed, data.bim, data.fam, pass Path("data").
-
-    Returns:
-        PlinkData container with genotypes and metadata.
-
-    Raises:
-        FileNotFoundError: If the .bed file does not exist.
-
-    Example:
-        >>> data = load_plink_binary(Path("tests/fixtures/mouse_hs1940/mouse_hs1940"))
-        >>> print(f"{data.n_samples} samples, {data.n_snps} SNPs")
-        1940 samples, 12226 SNPs
-    """
-    bed_path = Path(f"{bfile}.bed")
-
-    if not bed_path.exists():
-        raise FileNotFoundError(f"PLINK .bed file not found: {bed_path}")
-
-    with open_bed(bed_path) as bed:
-        # read() returns (n_samples, n_snps) float array
-        # Values: 0.0 = hom ref, 1.0 = het, 2.0 = hom alt, NaN = missing
-        genotypes = bed.read(dtype=np.float32)
-
-        return PlinkData(
-            genotypes=genotypes,
-            iid=bed.iid,
-            sid=bed.sid,
-            chromosome=bed.chromosome,
-            bp_position=bed.bp_position,
-            allele_1=bed.allele_1,
-            allele_2=bed.allele_2,
-        )
-
-
 @dataclass(frozen=True)
 class PlinkMetadata:
     """PLINK file metadata read without loading genotypes.
@@ -150,6 +77,97 @@ def get_plink_metadata(bfile: Path) -> PlinkMetadata:
             allele_1=bed.allele_1,
             allele_2=bed.allele_2,
         )
+
+
+@dataclass(frozen=True)
+class PlinkData:
+    """PLINK binary data: metadata plus the loaded genotype matrix.
+
+    Attributes:
+        meta: Sample and SNP metadata (dimensions, IDs, chromosome,
+            position, alleles).
+        genotypes: Genotype matrix with shape (n_samples, n_snps).
+            Values are 0.0 (hom ref), 1.0 (het), 2.0 (hom alt), or NaN (missing).
+    """
+
+    meta: PlinkMetadata
+    genotypes: np.ndarray
+
+    @property
+    def n_samples(self) -> int:
+        """Number of samples in the dataset."""
+        return self.meta.n_samples
+
+    @property
+    def n_snps(self) -> int:
+        """Number of SNPs in the dataset."""
+        return self.meta.n_snps
+
+    @property
+    def iid(self) -> np.ndarray:
+        """Sample IDs as 2D array with columns [FID, IID]."""
+        return self.meta.iid
+
+    @property
+    def sid(self) -> np.ndarray:
+        """SNP IDs (variant identifiers)."""
+        return self.meta.sid
+
+    @property
+    def chromosome(self) -> np.ndarray:
+        """Chromosome for each SNP."""
+        return self.meta.chromosome
+
+    @property
+    def bp_position(self) -> np.ndarray:
+        """Base pair position for each SNP."""
+        return self.meta.bp_position
+
+    @property
+    def allele_1(self) -> np.ndarray:
+        """Reference allele for each SNP."""
+        return self.meta.allele_1
+
+    @property
+    def allele_2(self) -> np.ndarray:
+        """Alternate allele for each SNP."""
+        return self.meta.allele_2
+
+
+def load_plink_binary(bfile: Path, meta: PlinkMetadata | None = None) -> PlinkData:
+    """Load PLINK binary files (.bed/.bim/.fam).
+
+    Args:
+        bfile: Path prefix for PLINK files (without .bed/.bim/.fam extension).
+            For example, if files are data.bed, data.bim, data.fam, pass Path("data").
+        meta: Metadata already parsed by get_plink_metadata, to avoid a second
+            .bim/.fam parse. None re-parses from disk.
+
+    Returns:
+        PlinkData container with genotypes and metadata.
+
+    Raises:
+        FileNotFoundError: If the .bed file does not exist.
+
+    Example:
+        >>> data = load_plink_binary(Path("tests/fixtures/mouse_hs1940/mouse_hs1940"))
+        >>> print(f"{data.n_samples} samples, {data.n_snps} SNPs")
+        1940 samples, 12226 SNPs
+    """
+    bed_path = Path(f"{bfile}.bed")
+
+    if not bed_path.exists():
+        raise FileNotFoundError(f"PLINK .bed file not found: {bed_path}")
+
+    if meta is None:
+        meta = get_plink_metadata(bfile)
+
+    with open_bed(bed_path) as bed:
+        # read() returns (n_samples, n_snps) float array
+        # Values: 0.0 = hom ref, 1.0 = het, 2.0 = hom alt, NaN = missing
+        genotypes = bed.read(dtype=np.float32)
+
+    return PlinkData(meta=meta, genotypes=genotypes)
 
 
 def partitions_from_metadata(meta: PlinkMetadata) -> dict[str, np.ndarray]:

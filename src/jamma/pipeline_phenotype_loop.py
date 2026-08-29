@@ -18,7 +18,7 @@ from loguru import logger
 
 from jamma.io.plink import PlinkData
 from jamma.lmm.runner import ExecutionPlan
-from jamma.lmm.schema import LmmRunResult, RunnerTiming
+from jamma.lmm.schema import LmmRunResult, RunnerTiming, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import PipelineConfig
 
@@ -47,8 +47,8 @@ def run_phenotype_loop(
     all_pheno_data: dict[int, tuple[np.ndarray, int]],
     valid_mask: np.ndarray,
     covariates: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
     assoc_path: Path,
     snps_indices: np.ndarray | None,
 ) -> PhenoLoopOutcome:
@@ -152,8 +152,8 @@ def _run_batch(
     config: PipelineConfig,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
     assoc_path: Path,
     snps_indices: np.ndarray | None,
     plink_data: PlinkData | None = None,
@@ -177,19 +177,9 @@ def _run_batch(
     genotypes = plink_data.genotypes
 
     # Apply snps_indices filter before passing to runner
-    indices = snps_indices if snps_indices is not None else range(plink_data.n_snps)
     if snps_indices is not None:
         genotypes = genotypes[:, snps_indices]
-    snp_info = [
-        {
-            "chr": str(plink_data.chromosome[i]),
-            "rs": plink_data.sid[i],
-            "pos": int(plink_data.bp_position[i]),
-            "a1": plink_data.allele_1[i],
-            "a0": plink_data.allele_2[i],
-        }
-        for i in indices
-    ]
+    snp_meta = SnpMeta.from_plink_meta(plink_data.meta, snps_indices)
 
     run_result = run_lmm_association_numpy(
         genotypes=genotypes,
@@ -197,7 +187,7 @@ def _run_batch(
         # The runner takes the eigenpairs; the pipeline consumes the kinship
         # matrix during eigendecomposition and has none left to pass.
         kinship=None,
-        snp_info=snp_info,
+        snp_info=snp_meta,
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
@@ -213,8 +203,8 @@ def _run_streaming(
     config: PipelineConfig,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
     assoc_path: Path,
     snps_indices: np.ndarray | None,
 ) -> LmmRunResult:

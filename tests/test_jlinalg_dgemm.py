@@ -933,3 +933,29 @@ class TestDgemmOutParameter:
         out_f32 = np.empty((5, 5), dtype=np.float32)
         with pytest.raises((ValueError, TypeError)):
             dgemm(A, B, out=out_f32)  # type: ignore[bad-argument-type]
+
+    @pytest.mark.skipif(
+        not HAS_C_EXTENSION, reason="C extension required for native out regression"
+    )
+    def test_native_unaligned_out_is_rejected(self) -> None:
+        """Native dgemm must not replace an unaligned out array with a copy."""
+        from jamma.jlinalg import _jlinalg
+
+        if not _jlinalg.blas_has_dgemm:
+            pytest.skip("vendor DGEMM required for native-path regression")
+
+        A = np.arange(12, dtype=np.float64).reshape(4, 3)
+        B = np.arange(12, dtype=np.float64).reshape(3, 4)
+        sentinel = 999.0
+        storage = bytearray(4 + 4 * 4 * np.dtype(np.float64).itemsize)
+        out = np.frombuffer(storage, dtype=np.float64, count=16, offset=4).reshape(4, 4)
+        out[:] = sentinel
+        assert not out.flags["ALIGNED"]
+
+        with pytest.raises(ValueError, match="aligned"):
+            _jlinalg.dgemm(A, B, out=out)
+        npt.assert_array_equal(out, sentinel)
+
+        with pytest.raises(ValueError, match="aligned"):
+            dgemm(A, B, out=out)
+        npt.assert_array_equal(out, sentinel)

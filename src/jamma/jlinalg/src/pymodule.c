@@ -135,6 +135,12 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
             Py_DECREF(aB);
             return NULL;
         }
+        if (!PyArray_ISALIGNED(tmp)) {
+            PyErr_SetString(PyExc_ValueError, "dgemm: out must be aligned");
+            Py_DECREF(aA);
+            Py_DECREF(aB);
+            return NULL;
+        }
         aC = (PyArrayObject *)PyArray_FROM_OTF(
             oOut, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE | NPY_ARRAY_ALIGNED);
         if (!aC) {

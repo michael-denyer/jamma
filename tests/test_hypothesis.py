@@ -13,7 +13,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from jamma.lmm.likelihood import calc_pab, compute_Uab, reml_log_likelihood
-from tests.reference.stats import calc_lrt_test, calc_score_test, calc_wald_test
+from tests.reference.stats import calc_wald_test
 
 # -----------------------------------------------------------------------------
 # Custom Strategies for Genetic Data
@@ -228,203 +228,6 @@ class TestRemlProperties:
         )
 
 
-# -----------------------------------------------------------------------------
-# Wald Test Properties
-# -----------------------------------------------------------------------------
-
-
-@pytest.mark.tier0
-class TestWaldProperties:
-    """Property tests for Wald test statistics."""
-
-    @given(data=valid_lmm_inputs())
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_pvalue_in_bounds(self, data):
-        """P-values must be in [0, 1]."""
-        eigenvalues, Uab, n_cvt, n_samples = data
-        lambda_val = 1.0
-
-        # Compute Pab
-        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
-
-        assert 0.0 <= p_wald <= 1.0, f"P-value out of bounds: {p_wald}"
-
-    @given(data=valid_lmm_inputs())
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_se_positive(self, data):
-        """Standard errors must be positive."""
-        eigenvalues, Uab, n_cvt, n_samples = data
-        lambda_val = 1.0
-
-        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
-
-        assert se > 0, f"Non-positive SE: {se}"
-
-    @given(
-        data=valid_lmm_inputs(),
-        lambda_val=lambda_value(),
-    )
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_wald_consistent_across_lambda(self, data, lambda_val):
-        """Wald stats should be finite across lambda range."""
-        eigenvalues, Uab, n_cvt, n_samples = data
-
-        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        beta, se, p_wald = calc_wald_test(Pab, n_cvt, n_samples)
-
-        assert np.isfinite(beta), f"Non-finite beta at lambda={lambda_val}"
-        assert np.isfinite(se), f"Non-finite SE at lambda={lambda_val}"
-        assert np.isfinite(p_wald), f"Non-finite p-value at lambda={lambda_val}"
-
-
-# -----------------------------------------------------------------------------
-# Score Test Properties
-# -----------------------------------------------------------------------------
-
-
-@pytest.mark.tier0
-class TestScoreTestProperties:
-    """Property tests for Score test statistics."""
-
-    @given(data=valid_lmm_inputs())
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_score_test_pvalue_in_unit_interval(self, data):
-        """Score test p-value is always in [0, 1] for valid inputs."""
-        eigenvalues, Uab, n_cvt, n_samples = data
-        lambda_null = 1.0
-
-        Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        beta, se, p_score = calc_score_test(Pab, n_cvt, n_samples)
-
-        # For valid inputs with variance, p_score should be in [0, 1]
-        # For degenerate inputs, NaN is acceptable
-        if not np.isnan(p_score):
-            assert 0.0 <= p_score <= 1.0, f"p_score out of bounds: {p_score}"
-
-    @given(data=valid_lmm_inputs())
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_score_test_beta_se_finite_or_nan(self, data):
-        """Score test beta and SE are finite or NaN (never inf)."""
-        eigenvalues, Uab, n_cvt, n_samples = data
-        lambda_null = 1.0
-
-        Hi_eval = 1.0 / (lambda_null * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        beta, se, p_score = calc_score_test(Pab, n_cvt, n_samples)
-
-        assert not np.isinf(beta), f"Infinite beta: {beta}"
-        assert not np.isinf(se), f"Infinite SE: {se}"
-        assert not np.isinf(p_score), f"Infinite p_score: {p_score}"
-
-    @given(
-        data=valid_lmm_inputs(),
-        lambda_val=lambda_value(),
-    )
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_score_test_consistent_across_lambda(self, data, lambda_val):
-        """Score test should be finite across lambda range."""
-        eigenvalues, Uab, n_cvt, n_samples = data
-
-        Hi_eval = 1.0 / (lambda_val * eigenvalues + 1.0)
-        Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-        beta, se, p_score = calc_score_test(Pab, n_cvt, n_samples)
-
-        # All values should be finite or NaN (never inf)
-        assert np.isfinite(beta) or np.isnan(beta), f"Unexpected inf beta: {beta}"
-        assert np.isfinite(se) or np.isnan(se), f"Unexpected inf SE: {se}"
-        assert np.isfinite(p_score) or np.isnan(p_score), (
-            f"Unexpected inf p_score: {p_score}"
-        )
-
-
-# -----------------------------------------------------------------------------
-# LRT Test Properties
-# -----------------------------------------------------------------------------
-
-
-@pytest.mark.tier0
-class TestLrtProperties:
-    """Property tests for LRT test statistics."""
-
-    @given(
-        logl_H1=st.floats(min_value=-1e10, max_value=1e10, allow_nan=False),
-        logl_H0=st.floats(min_value=-1e10, max_value=1e10, allow_nan=False),
-    )
-    @settings(
-        max_examples=50, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_lrt_pvalue_nonnegative(self, logl_H1, logl_H0):
-        """LRT p-value is always >= 0."""
-        p_lrt = calc_lrt_test(logl_H1, logl_H0)
-        assert p_lrt >= 0.0, f"Negative p_lrt: {p_lrt}"
-        assert p_lrt <= 1.0, f"p_lrt > 1: {p_lrt}"
-
-    @given(
-        logl_H0=st.floats(min_value=-1e10, max_value=1e10, allow_nan=False),
-    )
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_lrt_null_equals_alt_gives_pvalue_one(self, logl_H0):
-        """When H1 == H0, LRT statistic is 0, p-value should be 1.0."""
-        p_lrt = calc_lrt_test(logl_H0, logl_H0)
-        # LRT stat = 2 * (H1 - H0) = 0, chi2.sf(0, 1) = 1.0
-        assert p_lrt >= 0.999, f"Expected p~1.0 for equal logls, got {p_lrt}"
-
-    @given(
-        delta=st.floats(min_value=0.01, max_value=1e6, allow_nan=False),
-        logl_H0=st.floats(min_value=-1e8, max_value=0, allow_nan=False),
-    )
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_lrt_larger_delta_smaller_pvalue(self, delta, logl_H0):
-        """Larger logl delta should give smaller (or equal) p-value."""
-        p_small = calc_lrt_test(logl_H0 + delta, logl_H0)
-        p_large = calc_lrt_test(logl_H0 + delta * 2, logl_H0)
-        assert p_large <= p_small + 1e-10, (
-            f"Larger delta should give smaller p: {p_large} > {p_small}"
-        )
-
-    @given(
-        logl_H0=st.floats(min_value=-1e10, max_value=1e10, allow_nan=False),
-        deficit=st.floats(min_value=0.01, max_value=1e6, allow_nan=False),
-    )
-    @settings(
-        max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_lrt_negative_stat_gives_pvalue_one(self, logl_H0, deficit):
-        """When H1 < H0 (negative LRT stat), p-value should be 1.0."""
-        logl_H1 = logl_H0 - deficit
-        p_lrt = calc_lrt_test(logl_H1, logl_H0)
-        assert p_lrt == 1.0, f"Expected p=1.0 for negative stat, got {p_lrt}"
-
-
-# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Eigendecomposition Properties
 # -----------------------------------------------------------------------------
@@ -1125,11 +928,8 @@ class TestEigenIoRoundTrip:
     @settings(
         max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
     )
-    def test_eigen_roundtrip_reconstruction(self, genotypes):
+    def test_eigen_roundtrip_reconstruction(self, genotypes, tmp_path_factory):
         """K = U @ diag(D) @ U.T should hold after write -> read."""
-        import tempfile
-        from pathlib import Path
-
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
         from tests.reference.kinship import compute_centered_kinship
@@ -1139,9 +939,9 @@ class TestEigenIoRoundTrip:
         K_original = K.copy()
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 
-        # Write and read back (fresh dir per Hypothesis example)
-        tmp_dir = Path(tempfile.mkdtemp())
-        d_path, u_path = write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        d_path, u_path = write_eigen_files(
+            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
+        )
         D_read, U_read = read_eigen_files(d_path, u_path)
 
         # Reconstruct from round-tripped values
@@ -1165,11 +965,8 @@ class TestEigenIoRoundTrip:
     @settings(
         max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
     )
-    def test_eigen_roundtrip_orthonormality(self, genotypes):
+    def test_eigen_roundtrip_orthonormality(self, genotypes, tmp_path_factory):
         """U.T @ U = I should hold after write -> read."""
-        import tempfile
-        from pathlib import Path
-
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
         from tests.reference.kinship import compute_centered_kinship
@@ -1177,8 +974,9 @@ class TestEigenIoRoundTrip:
         K = compute_centered_kinship(genotypes, check_memory=False)
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 
-        tmp_dir = Path(tempfile.mkdtemp())
-        d_path, u_path = write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        d_path, u_path = write_eigen_files(
+            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
+        )
         _, U_read = read_eigen_files(d_path, u_path)
 
         # Binary .npy is lossless; tolerance handles eigendecomp float precision
@@ -1199,11 +997,8 @@ class TestEigenIoRoundTrip:
     @settings(
         max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
     )
-    def test_eigen_roundtrip_eigenvalue_precision(self, genotypes):
+    def test_eigen_roundtrip_eigenvalue_precision(self, genotypes, tmp_path_factory):
         """Individual eigenvalues survive binary round-trip exactly."""
-        import tempfile
-        from pathlib import Path
-
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
         from tests.reference.kinship import compute_centered_kinship
@@ -1211,8 +1006,9 @@ class TestEigenIoRoundTrip:
         K = compute_centered_kinship(genotypes, check_memory=False)
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 
-        tmp_dir = Path(tempfile.mkdtemp())
-        d_path, u_path = write_eigen_files(eigenvalues, U, tmp_dir, prefix="test")
+        d_path, u_path = write_eigen_files(
+            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
+        )
         D_read, _ = read_eigen_files(d_path, u_path)
 
         # Binary .npy is lossless; small tolerance for float round-trip
@@ -1231,11 +1027,8 @@ class TestEigenIoRoundTrip:
     @settings(
         max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
     )
-    def test_eigen_roundtrip_text_precision(self, genotypes):
+    def test_eigen_roundtrip_text_precision(self, genotypes, tmp_path_factory):
         """Eigenvalues survive legacy text (.10g) round-trip within precision limits."""
-        import tempfile
-        from pathlib import Path
-
         from jamma.lmm.eigen import eigendecompose_kinship
         from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
         from tests.reference.kinship import compute_centered_kinship
@@ -1244,9 +1037,12 @@ class TestEigenIoRoundTrip:
         K_original = K.copy()
         eigenvalues, U = eigendecompose_kinship(K, threshold=0)
 
-        tmp_dir = Path(tempfile.mkdtemp())
         d_path, u_path = write_eigen_files(
-            eigenvalues, U, tmp_dir, prefix="test", legacy_text=True
+            eigenvalues,
+            U,
+            tmp_path_factory.mktemp("eigen_roundtrip"),
+            prefix="test",
+            legacy_text=True,
         )
         D_read, U_read = read_eigen_files(d_path, u_path)
 

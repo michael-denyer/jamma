@@ -6,13 +6,16 @@ core symbols, and rebuilds it once on a stale or missing ``.so`` before falling
 back to pure Python. ``jamma.lmm.compute_numpy`` and ``jamma.jlinalg`` used to
 each own a copy of that import/ABI/recompile/retry machine; now they call this.
 
-``auto_recompile_c_extension(spec)`` is the rebuild half: it invokes the
-matching compile module (``jamma.lmm._compile_accel`` or
-``jamma.jlinalg._compile_jlinalg``), serialises concurrent callers on a file
-lock, evicts the stale ``sys.modules`` entry, and returns True on success. Both
-compile modules import their helpers from ``jamma._build_support`` — which ships
-inside the wheel — so ABI-mismatch recompile succeeds on wheel installs as it
-does from a source checkout.
+``auto_recompile_c_extension(spec)`` is the rebuild half: it calls
+``jamma._build_support.compile_and_link.compile_extension(spec, ...)``,
+serialises concurrent callers on a file lock, evicts the stale ``sys.modules``
+entry, and returns True on success. ``compile_extension`` ships inside the
+wheel, so ABI-mismatch recompile succeeds on wheel installs as it does from a
+source checkout. It evicts only the extension module itself, never the parent
+package, so nothing here re-enters its own import machinery: the #181
+self-deadlock (flock is per open-file-description, so a re-entrant second
+acquisition on the same thread blocks forever) cannot recur because there is
+no re-import of the parent package to trigger it.
 
 Called from:
     src/jamma/jlinalg/__init__.py  — at import, to load _jlinalg
@@ -30,7 +33,6 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
-import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,34 +41,6 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from jamma._build_support.compile_and_link import BuildSpec
-
-# Extensions this thread is part-way through recompiling. The file lock below
-# serialises separate callers; this guards one call stack against itself,
-# because flock is per open-file-description and a second acquisition on a new
-# fd blocks rather than nesting.
-#
-# Thread-local, not global: two threads racing on the same extension are a real
-# race the file lock exists to serialise, and must still block. Only a call that
-# re-enters on its own stack can deadlock, and only that call may decline.
-_recompile_state = threading.local()
-
-
-def _recompiling(module_name: str) -> bool:
-    """Report whether this thread is already recompiling ``module_name``."""
-    return module_name in getattr(_recompile_state, "active", ())
-
-
-@contextlib.contextmanager
-def _reentrancy_guard(module_name: str) -> Iterator[None]:
-    """Mark ``module_name`` as being recompiled on this thread for the block."""
-    active = getattr(_recompile_state, "active", None)
-    if active is None:
-        active = _recompile_state.active = set()
-    active.add(module_name)
-    try:
-        yield
-    finally:
-        active.discard(module_name)
 
 
 def _lock_path_for(sys_module_key: str) -> Path:
@@ -133,14 +107,11 @@ def _file_lock(lock_path: Path) -> Iterator[None]:
 def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     """Auto-recompile a C extension when its import or ABI check failed.
 
-    Imports the compile module named by ``spec``, invokes
-    ``compile_extension(verbose=False, on_retry=...)``, evicts the stale module
-    from ``sys.modules``, and returns True on success. ``ImportError`` from the
-    compile module is handled gracefully (returns False).
+    Calls ``compile_extension(spec, ..., on_retry=...)`` directly, evicts the
+    stale module from ``sys.modules``, and returns True on success.
 
     Args:
         spec: The ``BuildSpec`` for the target. Uses ``module_name`` (log name),
-            ``compiler_module`` (dotted path to the compile module),
             ``sys_module_key`` (the key to evict), and ``fallback_label``.
 
     Returns:
@@ -148,37 +119,13 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     """
     from loguru import logger
 
+    from jamma._build_support.compile_and_link import compile_extension
+    from jamma._build_support.find_compiler import find_c_compiler
+    from jamma._build_support.openmp_detect import detect_openmp_flags
+
     module_name = spec.module_name
-    compiler_module = spec.compiler_module
     sys_module_key = spec.sys_module_key
     label = spec.fallback_label
-
-    # Refuse to recurse. compile_extension verifies its build by evicting
-    # jamma.<pkg>* from sys.modules and re-importing, which re-executes the
-    # package __init__ that called us. If that __init__ still cannot load the
-    # extension it calls straight back in here, and the second call opens a
-    # second fd on the lock file below. flock is per open-file-description, so
-    # the process blocks against its own lock forever: 0% CPU, two fds, and the
-    # .so already written. Returning False instead leaves this interpreter on
-    # the pure-Python fallback while the freshly built .so serves the next one.
-    if _recompiling(module_name):
-        logger.info(
-            f"auto-recompile of {module_name} re-entered from the build's own "
-            f"import probe; not recursing. The .so was rebuilt successfully "
-            f"and takes effect the next time this process (or a new one) "
-            f"imports {module_name} — this call reports failure only because "
-            f"the current import probe cannot use it yet."
-        )
-        return False
-
-    try:
-        compiler = importlib.import_module(compiler_module)
-    except ImportError as e:
-        logger.warning(
-            f"{compiler_module} not available ({e}) — auto-recompilation of "
-            f"{module_name} not possible. Falling back to pure-Python."
-        )
-        return False
 
     logger.info(
         f"C extension {module_name} needs recompilation "
@@ -198,7 +145,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     # inside compile_and_link is the secondary defense for code paths that bypass
     # this shim (e.g. ``python -m jamma.jlinalg._compile_jlinalg`` invoked twice).
     lock_path = _lock_path_for(sys_module_key)
-    with _reentrancy_guard(module_name), _file_lock(lock_path):
+    with _file_lock(lock_path):
         # Re-check after acquiring the lock — a sibling process may have already
         # recompiled while we were blocked. If the import now succeeds, skip the
         # redundant build.
@@ -227,20 +174,23 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
                 )
 
         try:
-            # Both in-tree compile targets accept on_retry, and they ship in the
-            # same wheel as this shim, so there is no legacy signature to sniff.
-            success = compiler.compile_extension(verbose=False, on_retry=_on_retry)
-        except (OSError, subprocess.SubprocessError, ImportError, RuntimeError) as e:
+            success = compile_extension(
+                spec,
+                Path(__file__).parents[1],  # the installed jamma/ package dir
+                find_c_compiler=find_c_compiler,
+                detect_openmp_flags=detect_openmp_flags,
+                on_retry=_on_retry,
+            )
+        except (OSError, subprocess.SubprocessError, RuntimeError) as e:
             # Narrow catch: genuine build-environment failures (missing compiler,
-            # broken subprocess, unimportable helper, the compile driver's own
-            # RuntimeError). Programming bugs (AttributeError, KeyError,
-            # TypeError) propagate so they surface as real tracebacks instead of
-            # a silent pure-Python fallback.
+            # broken subprocess, the compile driver's own RuntimeError).
+            # Programming bugs (AttributeError, KeyError, TypeError) propagate
+            # so they surface as real tracebacks instead of a silent
+            # pure-Python fallback.
             logger.warning(
                 f"Auto-recompilation of {module_name} raised "
                 f"{type(e).__name__}: {e}. "
-                f"Falling back to pure-Python ({label}). "
-                f"To diagnose, run: python -m {compiler_module}",
+                f"Falling back to pure-Python ({label}).",
                 exc_info=True,
             )
             return False
@@ -248,8 +198,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
         if not success:
             logger.warning(
                 f"Auto-recompilation of {module_name} failed. "
-                f"Falling back to pure-Python ({label}). "
-                f"To diagnose, run: python -m {compiler_module}"
+                f"Falling back to pure-Python ({label})."
             )
             return False
 
@@ -319,7 +268,7 @@ def _load_c_module(spec: BuildSpec, expected_abi: int) -> ModuleType | None:
     extension, and on failure rebuilds it once and retries.
 
     Args:
-        spec: The ``BuildSpec`` naming the extension and its compile module.
+        spec: The ``BuildSpec`` naming the extension to load and rebuild.
         expected_abi: The ABI version the caller was built against. Kept a
             parameter, not a spec field, because the constant lives next to the
             C source's ABI in the caller module.

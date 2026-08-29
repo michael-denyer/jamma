@@ -28,7 +28,7 @@ uv run python -m jamma.jlinalg._compile_jlinalg
 
 JAMMA falls back to pure Python if extensions are absent, but compiled extensions are required for meaningful test coverage and performance.
 
-**Important:** Compile flags, source lists, and link flags are centralised in `src/jamma/_build_support/compile_and_link.py` and consumed by all three entry points — `hatch_build.py` (wheel builds), `_compile_jlinalg.py`, and `_compile_accel.py` (dev-mode and runtime recompile). Add new sources or flags there, not in the entry points. LAPACK sources inside `jlinalg/src/` are compiled with strict IEEE 754 flags (`-O2 -fno-fast-math`); a pre-commit hook (`scripts/check_compile_flag_literals.py`) rejects bare flag literals (`-O3`, `-fno-fast-math`, etc.) outside `_build_support/`.
+**Important:** Compile flags, source lists, link flags, and the dev-mode compile driver itself are centralised in `src/jamma/_build_support/compile_and_link.py` — `run_build` runs the preflight-and-compile steps, and `compile_extension` wraps it for the dev-mode entry points. `hatch_build.py` (wheel builds) calls `run_build` directly; `_compile_jlinalg.py` and `_compile_accel.py` (dev-mode and runtime recompile) are thin shims that bind `compile_extension` to their `BuildSpec` and, in their `__main__` block, prove the freshly compiled `.so` imports in a fresh subprocess rather than in-process. Add new sources or flags to `compile_and_link.py`, not the entry points. LAPACK sources inside `jlinalg/src/` are compiled with strict IEEE 754 flags (`-O2 -fno-fast-math`); a pre-commit hook (`scripts/check_compile_flag_literals.py`) rejects bare flag literals (`-O3`, `-fno-fast-math`, etc.) outside `_build_support/`.
 
 After modifying C source, recompile in place:
 

@@ -2,18 +2,20 @@
 """Verify every compile entry point routes through the shared build driver.
 
 Structural guarantee (not empirical trace capture): if the three ENTRY_POINTS
-all reach ``jamma._build_support.compile_and_link.run_build``, their compile
-invocations differ only by the ``BuildSpec`` they pass and the package
-directory they build in — the flags, source lists, and the twelve preflight
-steps all live in one place.
+all reach ``jamma._build_support.compile_and_link.run_build`` — directly, or
+through ``compile_and_link.compile_extension``, which is itself one
+``run_build`` call — their compile invocations differ only by the
+``BuildSpec`` they pass and the package directory they build in. The flags,
+source lists, and the twelve preflight steps all live in one place.
 
 This lint used to also scan the entry points for bare compile-flag literals.
 That duplicated ``check_compile_flag_literals.py`` (which owns the check and
 carries the ``# allow-compile-flag-literal`` escape hatch), so the scan was
-dropped; the AST "calls ``run_build``" check is all that remains here.
+dropped; the AST "calls ``run_build`` or ``compile_extension``" check is all
+that remains here.
 
 ``src/jamma/core/recompile.py`` is deliberately EXCLUDED from ENTRY_POINTS. It
-is an import-retry shim that delegates to ``_compile_jlinalg`` / ``_compile_accel``
+is an import-retry shim that delegates to ``compile_and_link.compile_extension``
 rather than driving ``run_build`` itself.
 """
 
@@ -51,8 +53,12 @@ def _load_compile_and_link(path: Path):
     return module
 
 
+_DRIVER_NAMES = frozenset({"run_build", "compile_extension"})
+
+
 def _has_run_build_call(source: str) -> bool:
-    """Return True iff ``source`` has a real call to ``run_build``.
+    """Return True iff ``source`` has a real call to ``run_build`` or
+    ``compile_extension`` (which itself makes exactly one ``run_build`` call).
 
     Uses AST inspection rather than substring matching, so the following
     do NOT count as calls:
@@ -61,8 +67,8 @@ def _has_run_build_call(source: str) -> bool:
       - a mention inside a string literal or docstring
       - a local ``def run_build(...):`` with the same name
 
-    A call matches if the callee is ``run_build`` (bare name) or
-    ``<anything>.run_build`` (attribute access).
+    A call matches if the callee is one of ``_DRIVER_NAMES`` (bare name) or
+    ``<anything>.<name>`` (attribute access) for one of those names.
     """
     try:
         tree = ast.parse(source)
@@ -73,9 +79,9 @@ def _has_run_build_call(source: str) -> bool:
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Name) and func.id == "run_build":
+        if isinstance(func, ast.Name) and func.id in _DRIVER_NAMES:
             return True
-        if isinstance(func, ast.Attribute) and func.attr == "run_build":
+        if isinstance(func, ast.Attribute) and func.attr in _DRIVER_NAMES:
             return True
     return False
 

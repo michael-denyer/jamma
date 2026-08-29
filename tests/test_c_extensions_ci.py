@@ -23,9 +23,9 @@ class TestCExtensionsAvailable:
 
     def test_lmm_accel_available(self):
         """_lmm_accel C extension must be compiled and importable in CI."""
-        from jamma.lmm import compute_numpy
+        from jamma.lmm import accel
 
-        assert compute_numpy._accel is not None, (
+        assert accel.available(), (
             "_lmm_accel C extension not available in CI. "
             "The 'Compile C extensions' step may have failed silently."
         )

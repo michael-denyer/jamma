@@ -27,6 +27,7 @@ _SRC = {
         "def eigh(K, inplace=False): ...\nblas_has_dsyevd = 1\n"
     ),
     "jamma/lmm/__init__.py": "",
+    "jamma/lmm/accel.py": "_accel = None\n",
     "jamma/lmm/eigen.py": (
         "from jamma import jlinalg\n"
         "from jamma.core.memory import check_memory_available\n"
@@ -101,9 +102,9 @@ _ALLOWED = {
         patch("jamma.lmm.eigen.check_memory_available")
         """,
     "accel-seam": """
-        from jamma.lmm import compute_numpy as cn
+        from jamma.lmm import accel
         def test(monkeypatch):
-            monkeypatch.setattr(cn, "_accel", None)
+            monkeypatch.setattr(accel, "_accel", None)
         """,
     "detection-flag": """
         from unittest.mock import patch

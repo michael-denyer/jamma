@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
+from jamma.lmm import accel
+
 # Tier markers every test file must declare (per-test or via pytestmark).
 # Mirrors the markers list in pyproject.toml [tool.pytest.ini_options].
 # See docs/TESTING.md §1.6 for the policy.
@@ -464,9 +466,9 @@ def _enforce_no_dormant_skips() -> None:
             "hasattr and getattr answer False for a name that was deleted just "
             "as readily as for one that was never built, so the guard turns "
             "itself off during an unrelated rename and the run stays green. "
-            "Gate on the capability instead (compute_numpy._accel is not None "
-            "for the C extension), and assert the attribute if the test needs "
-            "it to be there."
+            "Gate on the capability instead (accel.available() for the C "
+            "extension), and assert the attribute if the test needs it to be "
+            "there."
         )
     parts.append("See docs/TESTING.md §1.11.")
     raise pytest.UsageError("\n\n".join(parts))
@@ -643,6 +645,36 @@ def tolerance_config() -> ToleranceConfig:
     from jamma.validation import ToleranceConfig
 
     return ToleranceConfig()
+
+
+# The one C-extension seam every LMM test drives through. Replaces 26
+# `skipif(compute_numpy._accel is None, ...)` decorators, 5 module-level flags
+# that all re-spelled the same bit, 14 inline `pytest.skip("C extension ...")`
+# calls, and ~24 hand-written `orig = ...; try: ... finally:` or
+# `monkeypatch.setattr(cn, "_accel", None)` hold-outs across 12 files. See
+# docs/TESTING.md §2.7.
+#
+# Read once at collection, same as jlinalg's HAS_C_EXTENSION: the extension
+# does not appear or disappear mid-session, only ``no_c_kernels`` below holds
+# it out for the span of one test.
+requires_c = pytest.mark.skipif(
+    not accel.available(), reason="C extension _lmm_accel not available"
+)
+
+
+@pytest.fixture
+def no_c_kernels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hold the C extension out for this test, so the NumPy path runs for real.
+
+    ``jamma.lmm.accel.available()`` and ``jamma.lmm.dispatch.select_current``
+    read ``accel._accel`` at call time, not at import time, so clearing it
+    here drives the fallback path rather than merely describing it. Every
+    module that decides on C-vs-NumPy reads through ``accel``, so this one
+    monkeypatch is the whole seam.
+    """
+    from jamma.lmm import accel
+
+    monkeypatch.setattr(accel, "_accel", None)
 
 
 def _build_synthetic_covariate_data(

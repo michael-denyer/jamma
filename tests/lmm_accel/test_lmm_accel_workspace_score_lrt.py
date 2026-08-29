@@ -15,12 +15,13 @@ different compiler and CPU in CI.
 import numpy as np
 import pytest
 
-import jamma.lmm.compute_numpy as compute_numpy
+from jamma.lmm import accel
 from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
 from jamma.lmm.likelihood import build_pab_table_for_c
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
+from tests.conftest import requires_c
 from tests.lmm_accel._helpers import _null_model_ncvt1
 
 pytestmark = pytest.mark.tier0
@@ -35,8 +36,6 @@ _GENERAL_LRT_RTOL = 5e-5
 
 _C_RTOL = 1e-11
 _C_ATOL = 1e-14
-
-_score_fused_ws_available = compute_numpy._accel is not None
 
 
 def _uab_from_fused_inputs(w, Uty, utg_t):
@@ -115,19 +114,15 @@ class TestScoreWorkspaceParity:
             n_snps,
         )
 
-    @pytest.mark.skipif(
-        not _score_fused_ws_available,
-        reason="Score fused workspace C not available",
-    )
+    @requires_c
     def test_score_workspace_create(self, score_ws_data):
         """Workspace creation returns a non-None PyCapsule."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -142,19 +137,15 @@ class TestScoreWorkspaceParity:
         )
         assert ws is not None
 
-    @pytest.mark.skipif(
-        not _score_fused_ws_available,
-        reason="Score fused workspace C not available",
-    )
+    @requires_c
     def test_score_workspace_parity(self, score_ws_data):
         """Workspace-based Score matches the NumPy Score statistics."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -167,7 +158,7 @@ class TestScoreWorkspaceParity:
             lmm_mode=3,
             hi_eval_null=Hi_eval_null,
         )
-        result = _c().compute_score_fused_ws_c(ws, utg_t, 1)
+        result = accel.require().compute_score_fused_ws_c(ws, utg_t, 1)
 
         _assert_matches_numpy(
             result,
@@ -175,19 +166,15 @@ class TestScoreWorkspaceParity:
             "Score workspace",
         )
 
-    @pytest.mark.skipif(
-        not _score_fused_ws_available,
-        reason="Score fused workspace C not available",
-    )
+    @requires_c
     def test_score_workspace_multi_chunk(self, score_ws_data):
         """Same workspace produces correct results for two different utg_t chunks."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -201,7 +188,7 @@ class TestScoreWorkspaceParity:
             hi_eval_null=Hi_eval_null,
         )
 
-        result1 = _c().compute_score_fused_ws_c(ws, utg_t, 1)
+        result1 = accel.require().compute_score_fused_ws_c(ws, utg_t, 1)
         _assert_matches_numpy(
             result1,
             _numpy_score_reference(w, Uty, utg_t, Hi_eval_null, n_samples),
@@ -210,30 +197,26 @@ class TestScoreWorkspaceParity:
 
         rng2 = np.random.default_rng(99999)
         utg_t2 = rng2.standard_normal((15, n_samples))
-        result2 = _c().compute_score_fused_ws_c(ws, utg_t2, 1)
+        result2 = accel.require().compute_score_fused_ws_c(ws, utg_t2, 1)
         _assert_matches_numpy(
             result2,
             _numpy_score_reference(w, Uty, utg_t2, Hi_eval_null, n_samples),
             "Score workspace chunk2",
         )
 
-    @pytest.mark.skipif(
-        not _score_fused_ws_available,
-        reason="Score fused workspace C not available",
-    )
+    @requires_c
     def test_score_workspace_capsule_type_safety(self, score_ws_data):
         """A workspace built with lmm_mode=2 is rejected by the Score compute.
 
         One capsule type carries every n_cvt=1 workspace, so the check that
         fires is the lmm_mode the creator recorded, not the capsule's name.
         """
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        lrt_ws = _c().create_workspace_ncvt1_c(
+        lrt_ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -248,15 +231,11 @@ class TestScoreWorkspaceParity:
         )
 
         with pytest.raises(ValueError, match="lmm_mode"):
-            _c().compute_score_fused_ws_c(lrt_ws, utg_t, 1)
+            accel.require().compute_score_fused_ws_c(lrt_ws, utg_t, 1)
 
-    @pytest.mark.skipif(
-        not _score_fused_ws_available,
-        reason="Score fused workspace C not available",
-    )
+    @requires_c
     def test_score_workspace_degenerate_snps(self, score_ws_data):
         """A constant genotype (P_xx <= 0) yields NaN beta/se/p_score for that SNP."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
@@ -265,7 +244,7 @@ class TestScoreWorkspaceParity:
         utg_degen = utg_t.copy()
         utg_degen[0, :] = 0.0
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -278,7 +257,7 @@ class TestScoreWorkspaceParity:
             lmm_mode=3,
             hi_eval_null=Hi_eval_null,
         )
-        result = _c().compute_score_fused_ws_c(ws, utg_degen, 1)
+        result = accel.require().compute_score_fused_ws_c(ws, utg_degen, 1)
 
         assert np.isnan(result["betas"][0]), "degenerate SNP should have NaN beta"
         assert np.isnan(result["ses"][0]), "degenerate SNP should have NaN se"
@@ -287,19 +266,15 @@ class TestScoreWorkspaceParity:
             "non-degenerate SNPs should be finite"
         )
 
-    @pytest.mark.skipif(
-        not _score_fused_ws_available,
-        reason="Score fused workspace C not available",
-    )
+    @requires_c
     def test_score_workspace_multithreaded(self, score_ws_data):
         """Score is bitwise deterministic across thread counts."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, Hi_eval_null, n_samples, n_snps) = (
             score_ws_data
         )
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -312,8 +287,8 @@ class TestScoreWorkspaceParity:
             lmm_mode=3,
             hi_eval_null=Hi_eval_null,
         )
-        single = _c().compute_score_fused_ws_c(ws, utg_t, 1)
-        multi = _c().compute_score_fused_ws_c(ws, utg_t, 2)
+        single = accel.require().compute_score_fused_ws_c(ws, utg_t, 1)
+        multi = accel.require().compute_score_fused_ws_c(ws, utg_t, 2)
 
         for key in ("betas", "ses", "p_scores"):
             np.testing.assert_array_equal(
@@ -321,9 +296,6 @@ class TestScoreWorkspaceParity:
                 multi[key],
                 err_msg=f"Score {key}: 2-thread vs 1-thread mismatch",
             )
-
-
-_lrt_fused_ws_available = compute_numpy._accel is not None
 
 
 class TestLrtWorkspaceParity:
@@ -356,17 +328,13 @@ class TestLrtWorkspaceParity:
             n_snps,
         )
 
-    @pytest.mark.skipif(
-        not _lrt_fused_ws_available,
-        reason="LRT fused workspace C not available",
-    )
+    @requires_c
     def test_lrt_workspace_create(self, lrt_ws_data):
         """Workspace creation returns a non-None PyCapsule."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -381,19 +349,15 @@ class TestLrtWorkspaceParity:
         )
         assert ws is not None
 
-    @pytest.mark.skipif(
-        not _lrt_fused_ws_available,
-        reason="LRT fused workspace C not available",
-    )
+    @requires_c
     def test_lrt_workspace_parity(self, lrt_ws_data):
         """Workspace-based LRT matches the NumPy MLE lambdas and LRT p-values."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
         logl_H0 = -150.0
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -406,7 +370,7 @@ class TestLrtWorkspaceParity:
             lmm_mode=2,
             logl_H0=logl_H0,
         )
-        result = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
+        result = accel.require().compute_lrt_fused_ws_c(ws, utg_t, 1)
 
         _assert_matches_numpy(
             result,
@@ -414,18 +378,14 @@ class TestLrtWorkspaceParity:
             "LRT workspace",
         )
 
-    @pytest.mark.skipif(
-        not _lrt_fused_ws_available,
-        reason="LRT fused workspace C not available",
-    )
+    @requires_c
     def test_lrt_workspace_multi_chunk(self, lrt_ws_data):
         """Same workspace produces correct results for two different utg_t chunks."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
         logl_H0 = -150.0
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -439,7 +399,7 @@ class TestLrtWorkspaceParity:
             logl_H0=logl_H0,
         )
 
-        result1 = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
+        result1 = accel.require().compute_lrt_fused_ws_c(ws, utg_t, 1)
         _assert_matches_numpy(
             result1,
             _numpy_lrt_reference(w, Uty, utg_t, eigenvalues, logl_H0, 5),
@@ -448,24 +408,20 @@ class TestLrtWorkspaceParity:
 
         rng2 = np.random.default_rng(88888)
         utg_t2 = rng2.standard_normal((15, n_samples))
-        result2 = _c().compute_lrt_fused_ws_c(ws, utg_t2, 1)
+        result2 = accel.require().compute_lrt_fused_ws_c(ws, utg_t2, 1)
         _assert_matches_numpy(
             result2,
             _numpy_lrt_reference(w, Uty, utg_t2, eigenvalues, logl_H0, 5),
             "LRT workspace chunk2",
         )
 
-    @pytest.mark.skipif(
-        not _lrt_fused_ws_available,
-        reason="LRT fused workspace C not available",
-    )
+    @requires_c
     def test_lrt_workspace_degenerate_snps(self, lrt_ws_data):
         """A constant genotype carries no signal, so its p_lrt sits at 1.
 
         lambda_mle is left unasserted: with the likelihood flat, its argmin is
         not determined.
         """
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
@@ -476,7 +432,7 @@ class TestLrtWorkspaceParity:
         # p_lrt value is only interpretable against the model it is testing.
         _, logl_H0 = _null_model_ncvt1(eigenvalues, w, Uty)
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -489,7 +445,7 @@ class TestLrtWorkspaceParity:
             lmm_mode=2,
             logl_H0=logl_H0,
         )
-        result = _c().compute_lrt_fused_ws_c(ws, utg_degen, 1)
+        result = accel.require().compute_lrt_fused_ws_c(ws, utg_degen, 1)
 
         assert result["p_lrts"][0] >= 0.99, (
             f"degenerate SNP p_lrt={result['p_lrts'][0]}, expected near 1"
@@ -498,17 +454,13 @@ class TestLrtWorkspaceParity:
             "non-degenerate p_lrts should be finite"
         )
 
-    @pytest.mark.skipif(
-        not _lrt_fused_ws_available,
-        reason="LRT fused workspace C not available",
-    )
+    @requires_c
     def test_lrt_workspace_multithreaded(self, lrt_ws_data):
         """LRT is bitwise deterministic across thread counts."""
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -521,8 +473,8 @@ class TestLrtWorkspaceParity:
             lmm_mode=2,
             logl_H0=-150.0,
         )
-        single = _c().compute_lrt_fused_ws_c(ws, utg_t, 1)
-        multi = _c().compute_lrt_fused_ws_c(ws, utg_t, 2)
+        single = accel.require().compute_lrt_fused_ws_c(ws, utg_t, 1)
+        multi = accel.require().compute_lrt_fused_ws_c(ws, utg_t, 2)
 
         for key in ("lambdas_mle", "p_lrts"):
             np.testing.assert_array_equal(
@@ -531,17 +483,13 @@ class TestLrtWorkspaceParity:
                 err_msg=f"LRT {key}: 2-thread vs 1-thread mismatch",
             )
 
-    @pytest.mark.skipif(
-        not _lrt_fused_ws_available,
-        reason="LRT fused workspace C not available",
-    )
+    @requires_c
     def test_lrt_workspace_capsule_type_safety(self, lrt_ws_data):
         """A workspace built with lmm_mode=3 is rejected by the LRT compute.
 
         One capsule type carries every n_cvt=1 workspace, so the check that
         fires is the lmm_mode the creator recorded, not the capsule's name.
         """
-        from jamma.lmm.compute_numpy import _c
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
@@ -549,7 +497,7 @@ class TestLrtWorkspaceParity:
         Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
 
         # A Score-mode workspace, which the LRT compute must refuse
-        score_ws = _c().create_workspace_ncvt1_c(
+        score_ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w,
@@ -564,7 +512,7 @@ class TestLrtWorkspaceParity:
         )
 
         with pytest.raises(ValueError, match="lmm_mode"):
-            _c().compute_lrt_fused_ws_c(score_ws, utg_t, 1)
+            accel.require().compute_lrt_fused_ws_c(score_ws, utg_t, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -580,12 +528,9 @@ class TestLrtWorkspaceParity:
 class TestGeneralWorkspaceScoreParity:
     """General workspace (n_cvt>=2), lmm_mode=3 (Score only) vs NumPy."""
 
-    @pytest.mark.skipif(
-        compute_numpy._accel is None, reason="General C extension unavailable"
-    )
+    @requires_c
     def test_general_score_only_matches_numpy(self, general_score_lrt_ncvt2):
         """Score-only general workspace matches the NumPy Score statistics."""
-        from jamma.lmm.compute_numpy import _c
         from jamma.lmm.likelihood import classify_uab_columns
 
         data = general_score_lrt_ncvt2
@@ -598,7 +543,7 @@ class TestGeneralWorkspaceScoreParity:
         uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
         utg_t = np.ascontiguousarray(data["UtG"].T)
 
-        ws = _c().create_workspace_general_c(
+        ws = accel.require().create_workspace_general_c(
             data["eigenvalues"],
             uab_inv_soa,
             data["UtW"],
@@ -613,7 +558,7 @@ class TestGeneralWorkspaceScoreParity:
             lmm_mode=3,
             hi_eval_null=data["Hi_eval_null"],
         )
-        result = _c().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
 
         assert set(result.keys()) == {"betas", "ses", "p_scores"}
 
@@ -634,12 +579,9 @@ class TestGeneralWorkspaceScoreParity:
 class TestGeneralWorkspaceLrtParity:
     """General workspace (n_cvt>=2), lmm_mode=2 (LRT only) vs NumPy."""
 
-    @pytest.mark.skipif(
-        compute_numpy._accel is None, reason="General C extension unavailable"
-    )
+    @requires_c
     def test_general_lrt_only_matches_numpy(self, general_score_lrt_ncvt2):
         """LRT-only general workspace matches the NumPy MLE lambdas and p_lrts."""
-        from jamma.lmm.compute_numpy import _c
         from jamma.lmm.likelihood import classify_uab_columns
 
         data = general_score_lrt_ncvt2
@@ -652,7 +594,7 @@ class TestGeneralWorkspaceLrtParity:
         uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
         utg_t = np.ascontiguousarray(data["UtG"].T)
 
-        ws = _c().create_workspace_general_c(
+        ws = accel.require().create_workspace_general_c(
             data["eigenvalues"],
             uab_inv_soa,
             data["UtW"],
@@ -667,7 +609,7 @@ class TestGeneralWorkspaceLrtParity:
             lmm_mode=2,
             logl_H0=data["logl_H0"],
         )
-        result = _c().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
 
         assert set(result.keys()) == {"lambdas_mle", "p_lrts"}
 

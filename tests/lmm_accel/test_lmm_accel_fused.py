@@ -7,10 +7,10 @@ live in tests/lmm_accel_helpers.py.
 import numpy as np
 import pytest
 
-import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import _c
+from jamma.lmm import accel
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.uab import compute_uab_invariant_soa
+from tests.conftest import requires_c
 from tests.lmm_accel._helpers import (
     _fused_general_mode4_workspace,
     _fused_general_workspace,
@@ -33,16 +33,14 @@ def _ncvt1_workspace(fused_data, **kwargs):
     Every mode shares one creator, so the mode and its extra inputs are the
     only thing a caller varies.
     """
-    from jamma.lmm.compute_numpy import _c
-
     eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
-    return _c().create_workspace_ncvt1_c(
+    return accel.require().create_workspace_ncvt1_c(
         eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, **kwargs
     )
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 class TestHiEvalNullPositivity:
     """C extension rejects non-positive hi_eval_null at every site that takes it.
 
@@ -108,11 +106,11 @@ class TestHiEvalNullPositivity:
             )
 
 
-_fused_c_available = compute_numpy._accel is not None
+_fused_c_available = accel.available()
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 @pytest.mark.parametrize(
     ("lmm_mode", "extra"),
     [
@@ -162,12 +160,12 @@ class TestFusedParity:
         but no dispatch path reaches that kernel. NumPy is an independent
         implementation, so the assertion carries the measured tolerance.
         """
-        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm import accel
 
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
 
         ws_fused = _ncvt1_workspace(fused_data, lmm_mode=1)
-        result = _c().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
         reference = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
 
         assert_matches_numpy(
@@ -181,13 +179,13 @@ class TestFusedParity:
         thread-local state corruption shows up as a difference here. This stays
         a bitwise comparison because both sides are the same kernel.
         """
-        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm import accel
 
         _, _, _, utg_t, _, _, _ = fused_data
 
         ws_fused = _ncvt1_workspace(fused_data, lmm_mode=1)
-        single = _c().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
-        multi = _c().compute_lmm_chunk_fused_c(ws_fused, utg_t, 4)
+        single = accel.require().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
+        multi = accel.require().compute_lmm_chunk_fused_c(ws_fused, utg_t, 4)
 
         for key in _WALD_KEYS:
             np.testing.assert_array_equal(
@@ -207,7 +205,7 @@ class TestFusedParity:
 
     def test_mode4_parity(self, fused_data, score_lrt_data):
         """Fused mode-4 matches the NumPy Wald, Score and LRT statistics."""
-        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm import accel
 
         eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
         _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
@@ -215,7 +213,7 @@ class TestFusedParity:
         ws_fused = _ncvt1_workspace(
             fused_data, lmm_mode=4, hi_eval_null=Hi_eval_null, logl_H0=logl_H0
         )
-        result = _c().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_fused_c(ws_fused, utg_t, 1)
 
         wald = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
         reference = {k: wald[k] for k in _WALD_KEYS}
@@ -228,7 +226,7 @@ class TestFusedParity:
 
     def test_fused_wrong_utg_t_shape(self, fused_data):
         """Fused compute raises ValueError for wrong UtG_T shape."""
-        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm import accel
 
         _, _, _, utg_t, _, _, _ = fused_data
 
@@ -237,14 +235,14 @@ class TestFusedParity:
         # 3D instead of 2D
         bad_utg = utg_t.reshape(utg_t.shape[0], 1, utg_t.shape[1])
         with pytest.raises(ValueError, match="utg_t"):
-            _c().compute_lmm_chunk_fused_c(ws, bad_utg, 1)
+            accel.require().compute_lmm_chunk_fused_c(ws, bad_utg, 1)
 
     def test_fused_workspace_refcount(self, fused_data):
         """w and Uty arrays not garbage collected while workspace alive."""
         import gc
         import sys
 
-        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm import accel
 
         eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
 
@@ -254,7 +252,7 @@ class TestFusedParity:
         initial_w_ref = sys.getrefcount(w_tracked)
         initial_Uty_ref = sys.getrefcount(Uty_tracked)
 
-        ws = _c().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_ncvt1_c(
             eigenvalues,
             uab_inv_soa,
             w_tracked,
@@ -280,7 +278,7 @@ class TestFusedParity:
 
     def test_fused_degenerate_snps(self, fused_data):
         """Fused Wald handles degenerate (constant) SNPs: NaN beta/se/pwald."""
-        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm import accel
 
         _, _, _, utg_t, _, _, _ = fused_data
 
@@ -289,7 +287,7 @@ class TestFusedParity:
         utg_t_degen[0, :] = 0.0
 
         ws = _ncvt1_workspace(fused_data, lmm_mode=1)
-        cr = _c().compute_lmm_chunk_fused_c(ws, utg_t_degen, 1)
+        cr = accel.require().compute_lmm_chunk_fused_c(ws, utg_t_degen, 1)
 
         # Degenerate SNP: should produce NaN
         assert np.isnan(cr["betas"][0]), "degenerate SNP should have NaN beta"
@@ -298,7 +296,7 @@ class TestFusedParity:
 
         # Non-degenerate SNPs should still be valid (compare against reference)
         ws_ref = _ncvt1_workspace(fused_data, lmm_mode=1)
-        cr_ref = _c().compute_lmm_chunk_fused_c(ws_ref, utg_t, 1)
+        cr_ref = accel.require().compute_lmm_chunk_fused_c(ws_ref, utg_t, 1)
         finite_mask = np.isfinite(cr_ref["betas"][1:])
         assert np.all(np.isfinite(cr["betas"][1:][finite_mask])), (
             "non-degenerate betas should be finite"
@@ -311,14 +309,14 @@ class TestFusedParity:
         name no longer separates them. The check that fires is the lmm_mode the
         creator recorded.
         """
-        from jamma.lmm.compute_numpy import _c
+        from jamma.lmm import accel
 
         eigenvalues, _, _, utg_t, _, _, _ = fused_data
         Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
 
         score_ws = _ncvt1_workspace(fused_data, lmm_mode=3, hi_eval_null=Hi_eval_null)
         with pytest.raises(ValueError, match="lmm_mode"):
-            _c().compute_lmm_chunk_fused_c(score_ws, utg_t, 1)
+            accel.require().compute_lmm_chunk_fused_c(score_ws, utg_t, 1)
 
 
 def _run_fused_general_wald_vs_numpy(data: dict) -> None:
@@ -329,7 +327,7 @@ def _run_fused_general_wald_vs_numpy(data: dict) -> None:
     reference is now an independent implementation with a tolerance.
     """
     prepared = _prepare_fused_general_data(data)
-    result = _c().compute_lmm_chunk_fused_general_c(
+    result = accel.require().compute_lmm_chunk_fused_general_c(
         _fused_general_workspace(prepared), prepared["utg_t"], 1
     )
     reference = _numpy_general_wald(prepared)
@@ -343,7 +341,7 @@ def _run_fused_general_wald_vs_numpy(data: dict) -> None:
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Fused general C not available",
 )
 def test_fused_general_ncvt2_wald(synthetic_covariate_data_ncvt2):
@@ -355,7 +353,7 @@ def test_fused_general_ncvt2_wald(synthetic_covariate_data_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Fused general C not available",
 )
 def test_fused_general_ncvt4_wald(synthetic_covariate_data_ncvt4):
@@ -367,7 +365,7 @@ def test_fused_general_ncvt4_wald(synthetic_covariate_data_ncvt4):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Mode-4 fused general C not available",
 )
 def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
@@ -377,7 +375,7 @@ def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
     shape and range here, and against NumPy in the two tests below.
     """
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = _c().compute_lmm_chunk_fused_general_c(
+    result = accel.require().compute_lmm_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
     reference = _numpy_general_wald(data)
@@ -399,7 +397,7 @@ def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Fused general C not available",
 )
 def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
@@ -425,7 +423,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
     inv_indices, _ = classify_uab_columns(n_cvt)
     uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
     utg_t = np.ascontiguousarray(UtG.T)
-    ws_fused = _c().create_workspace_general_c(
+    ws_fused = accel.require().create_workspace_general_c(
         eigenvalues,
         uab_inv_soa,
         UtW,
@@ -441,7 +439,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
         hi_eval_null=Hi_eval_null,
         logl_H0=logl_H0,
     )
-    result = _c().compute_lmm_chunk_fused_general_c(ws_fused, utg_t, 1)
+    result = accel.require().compute_lmm_chunk_fused_general_c(ws_fused, utg_t, 1)
 
     # All non-degenerate SNPs must have finite lambda_mle
     lambdas_mle = result["lambdas_mle"]
@@ -455,13 +453,13 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Fused general C not available",
 )
 def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
     """FGEN-08: Fused general mode-4 LRT matches the NumPy MLE lambdas and p-values."""
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = _c().compute_lmm_chunk_fused_general_c(
+    result = accel.require().compute_lmm_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
 
@@ -472,7 +470,7 @@ def test_fused_general_mode4_lrt_parity_ncvt2(general_score_lrt_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Fused general C not available",
 )
 def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
@@ -482,7 +480,7 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
     mix-up between the three shows here and not in the single-mode tests.
     """
     data = _prepare_fused_general_data(general_score_lrt_ncvt2)
-    result = _c().compute_lmm_chunk_fused_general_c(
+    result = accel.require().compute_lmm_chunk_fused_general_c(
         _fused_general_mode4_workspace(data), data["utg_t"], 1
     )
 
@@ -496,7 +494,7 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Fused general C not available",
 )
 def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
@@ -513,7 +511,7 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
 
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt)
     utg_t = np.ascontiguousarray(UtG.T)
-    ws = _c().create_workspace_general_c(
+    ws = accel.require().create_workspace_general_c(
         eigenvalues,
         uab_inv_soa,
         UtW,
@@ -531,15 +529,15 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
 
     # Compute first half
     mid = UtG.shape[1] // 2
-    r1 = _c().compute_lmm_chunk_fused_general_c(ws, utg_t[:mid], 1)
+    r1 = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t[:mid], 1)
     assert r1["lambdas"].shape == (mid,)
 
     # Reuse workspace for second half
-    r2 = _c().compute_lmm_chunk_fused_general_c(ws, utg_t[mid:], 1)
+    r2 = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t[mid:], 1)
     assert r2["lambdas"].shape == (UtG.shape[1] - mid,)
 
     # Full batch
-    r_full = _c().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+    r_full = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
     combined = np.concatenate([r1["lambdas"], r2["lambdas"]])
     np.testing.assert_allclose(
         combined,
@@ -555,7 +553,7 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Fused general C not available",
 )
 def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
@@ -576,7 +574,7 @@ def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
     )
 
     prepared = _prepare_fused_general_data(data)
-    result = _c().compute_lmm_chunk_fused_general_c(
+    result = accel.require().compute_lmm_chunk_fused_general_c(
         _fused_general_workspace(prepared), prepared["utg_t"], 1
     )
     reference = _numpy_general_wald(prepared)
@@ -600,7 +598,7 @@ def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
 
 @pytest.mark.tier0
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="C extension not available",
 )
 def test_fused_general_abi_version_9():
@@ -612,7 +610,7 @@ def test_fused_general_abi_version_9():
 
 @pytest.mark.tier1
 @pytest.mark.skipif(
-    compute_numpy._accel is None,
+    not accel.available(),
     reason="Fused general C not available",
 )
 def test_runner_fused_general_ncvt2_dispatch():
@@ -660,10 +658,10 @@ def test_runner_fused_general_ncvt2_dispatch():
     )
 
     # Run with fused general disabled → falls back to non-fused general path.
-    # Patch the source module (compute_numpy), which owns dispatch capability flags.
+    # Patch the loader module (accel), which owns dispatch capability flags.
     from unittest.mock import patch
 
-    with patch("jamma.lmm.compute_numpy._accel", None):
+    with patch("jamma.lmm.accel._accel", None):
         result_nonfused = run_lmm_association_numpy(
             genotypes=genotypes,
             phenotypes=phenotypes,
@@ -716,7 +714,7 @@ def test_runner_fused_general_ncvt2_dispatch():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 @pytest.mark.parametrize(
     "key",
     [
@@ -746,7 +744,7 @@ def test_general_creator_rejects_out_of_range_table(
     table[key] = bad
 
     with pytest.raises(ValueError, match=rf"{key}\[0\].*out of range"):
-        _c().create_workspace_general_c(
+        accel.require().create_workspace_general_c(
             data["eigenvalues"],
             compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt),
             data["UtW"],
@@ -763,7 +761,7 @@ def test_general_creator_rejects_out_of_range_table(
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_general_creator_rejects_mode_5():
     """lmm_mode outside 1..4 is rejected, whatever n_cvt.
 
@@ -781,7 +779,7 @@ def test_general_creator_rejects_mode_5():
     UtW = rng.standard_normal((n_samples, n_cvt))
     Uty = rng.standard_normal(n_samples)
     with pytest.raises(ValueError, match="lmm_mode must be 1, 2, 3 or 4"):
-        _c().create_workspace_general_c(
+        accel.require().create_workspace_general_c(
             eigenvalues,
             compute_uab_invariant_soa(UtW, Uty, n_cvt),
             UtW,

@@ -20,7 +20,8 @@ from typing import Any, assert_never
 
 import numpy as np
 
-from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
+from jamma.lmm import accel
+from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood import build_pab_table_for_c
 from jamma.lmm.schema import LmmMode
@@ -127,6 +128,7 @@ class Kernel:
     label: str
     n_filtered: int
     call: Callable[[np.ndarray, int], KernelResult]
+    uses_c: bool  # True for every path but NUMPY_FALLBACK; see make_kernel
 
     def compute_chunk(
         self, chunk_data: np.ndarray, n_threads: int, write_offset: int
@@ -188,7 +190,7 @@ def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
     needs, built once; each chunk hands in utg_t. Scratch is sized per call,
     so the run-level thread count plays no part here.
     """
-    workspace = _c().create_workspace_ncvt1_c(
+    workspace = accel.require().create_workspace_ncvt1_c(
         inv.eigenvalues,
         inv.require_invariant_soa(),
         inv.require_null_w(),
@@ -202,11 +204,12 @@ def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
         **_null_model_kwargs(inv),
     )
     compute_name, label = _NCVT1_COMPUTE[inv.lmm_mode]
-    compute = getattr(_c(), compute_name)
+    compute = getattr(accel.require(), compute_name)
     return Kernel(
         label=label,
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
+        uses_c=True,
     )
 
 
@@ -224,7 +227,7 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
     The workspace sizes its per-thread scratch from *n_threads* once, so the
     run-level thread count is part of its construction here.
     """
-    workspace = _c().create_workspace_general_c(
+    workspace = accel.require().create_workspace_general_c(
         inv.eigenvalues,
         inv.require_invariant_soa(),
         inv.UtW,
@@ -240,11 +243,12 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         **_null_model_kwargs(inv),
     )
     compute_name, label = _GENERAL_COMPUTE[inv.lmm_mode]
-    compute = getattr(_c(), compute_name)
+    compute = getattr(accel.require(), compute_name)
     return Kernel(
         label=label,
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
+        uses_c=True,
     )
 
 
@@ -267,7 +271,9 @@ def _numpy_kernel(inv: RunInvariants) -> Kernel:
             n_threads=threads,
         )
 
-    return Kernel(label="LMM chunk compute", n_filtered=inv.n_filtered, call=call)
+    return Kernel(
+        label="LMM chunk compute", n_filtered=inv.n_filtered, call=call, uses_c=False
+    )
 
 
 def _null_model_kwargs(inv: RunInvariants) -> dict[str, Any]:

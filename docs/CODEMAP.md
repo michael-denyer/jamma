@@ -264,13 +264,14 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `GenotypeSource` | Protocol a run's genotype provider implements (stats + chunk stream) | [runner_numpy.py:51](../src/jamma/lmm/runner_numpy.py#L51) |
 | 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:78](../src/jamma/lmm/runner_numpy.py#L78) |
 | 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:379](../src/jamma/lmm/runner_numpy.py#L379) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:276](../src/jamma/lmm/chunk_runner_numpy.py#L276) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:274](../src/jamma/lmm/chunk_runner_numpy.py#L274) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:119](../src/jamma/lmm/chunk_runner_numpy.py#L119) |
-| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:38](../src/jamma/lmm/chunk_kernel.py#L38) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:153](../src/jamma/lmm/chunk_kernel.py#L153) |
+| 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:39](../src/jamma/lmm/chunk_kernel.py#L39) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:155](../src/jamma/lmm/chunk_kernel.py#L155) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:118](../src/jamma/lmm/chunk_pipeline.py#L118) |
 | 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:74](../src/jamma/lmm/chunk_sizing.py#L74) |
-| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:184](../src/jamma/lmm/chunk_kernel.py#L184) |
+| 4Nb | `available()` / `require()` | The one loader for `_lmm_accel`: import, ABI-validate, auto-recompile once, expose the module or raise | [accel.py](../src/jamma/lmm/accel.py) |
+| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:186](../src/jamma/lmm/chunk_kernel.py#L186) |
 | 4Nc | `create_workspace_ncvt1_c()` | C extension: the per-run n_cvt=1 workspace, keyed by `lmm_mode` | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `compute_lmm_chunk_fused_c()` | C extension: chunked compute for n_cvt=1 with OpenMP, REML Wald under `lmm_mode` 1 and Wald + Score + LRT under 4 | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:27](../src/jamma/lmm/_lmm_support.c#L27) |
@@ -279,7 +280,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:34](../src/jamma/lmm/runner_numpy_streaming.py#L34) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:107](../src/jamma/lmm/runner_numpy_streaming.py#L107) |
-| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:102](../src/jamma/lmm/runner.py#L102) |
+| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:91](../src/jamma/lmm/runner.py#L91) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:94](../src/jamma/lmm/schema.py#L94) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:120](../src/jamma/lmm/schema.py#L120) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:34](../src/jamma/lmm/results.py#L34) |

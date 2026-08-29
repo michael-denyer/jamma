@@ -107,9 +107,9 @@ def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
     pass/raise this asserts.
     """
     from jamma.core import memory
-    from jamma.lmm import compute_numpy
+    from jamma.lmm import accel
 
-    monkeypatch.setattr(compute_numpy, "_accel", None)  # force NUMPY_FALLBACK
+    monkeypatch.setattr(accel, "_accel", None)  # force NUMPY_FALLBACK
 
     # Pin available memory to a small fixed value to make the threshold
     # deterministic across machines. Both the chunk sizer and the
@@ -243,13 +243,13 @@ def _priced_streaming_lmm_phase_gb(
     field rather than recomputing the LMM-phase formula here, so a
     regression in either ``plan_memory`` or ``estimate_streaming_memory``
     itself is visible. ``_compute_chunk`` derives its dispatch from the
-    real loaded ``compute_numpy._accel``, so ``accel`` is pinned here to
+    real loaded ``jamma.lmm.accel._accel``, so ``accel`` is pinned here to
     match the case under test rather than whatever extension state this
     test process happens to have loaded.
     """
-    from jamma.lmm import compute_numpy
+    from jamma.lmm import accel as accel_module
 
-    monkeypatch.setattr(compute_numpy, "_accel", object() if accel else None)
+    monkeypatch.setattr(accel_module, "_accel", object() if accel else None)
     chunk_plan, uab_iab_gb = _compute_chunk(n_samples, n_snps, n_cvt, lmm_mode)
     est = estimate_streaming_memory(
         n_samples,
@@ -455,10 +455,10 @@ class TestChunkPlanMatchesEngine:
         the hardcoded literal this regression is about is the thing under
         test.
         """
-        from jamma.lmm import compute_numpy
+        from jamma.lmm import accel
 
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 8.0)
-        monkeypatch.setattr(compute_numpy, "_accel", None)  # force NUMPY_FALLBACK
+        monkeypatch.setattr(accel, "_accel", None)  # force NUMPY_FALLBACK
 
         n_samples = 2_000
         n_snps = 300_000

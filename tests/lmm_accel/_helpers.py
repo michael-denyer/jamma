@@ -2,8 +2,8 @@
 
 import numpy as np
 
-import jamma.lmm.compute_numpy as compute_numpy
-from jamma.lmm.compute_numpy import WaldResult, _c, _compute_wald_numpy
+from jamma.lmm import accel
+from jamma.lmm.compute_numpy import WaldResult, _compute_wald_numpy
 from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
@@ -43,7 +43,7 @@ def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
     """
     if "pab_c" not in data:
         data = _prepare_fused_general_data(data)
-    return _c().create_workspace_general_c(
+    return accel.require().create_workspace_general_c(
         data["eigenvalues"],
         data["uab_inv_soa"],
         data["UtW"],
@@ -67,7 +67,7 @@ def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
     """
     if "pab_c" not in data:
         data = _prepare_fused_general_data(data)
-    return _c().create_workspace_general_c(
+    return accel.require().create_workspace_general_c(
         data["eigenvalues"],
         data["uab_inv_soa"],
         data["UtW"],
@@ -115,19 +115,21 @@ def _fused_general_wald(data: dict, n_threads: int = 1) -> WaldResult:
     if "pab_c" not in data:
         data = _prepare_fused_general_data(data)
     ws = _fused_general_workspace(data, n_threads)
-    return _c().compute_lmm_chunk_fused_general_c(ws, data["utg_t"], n_threads)
+    return accel.require().compute_lmm_chunk_fused_general_c(
+        ws, data["utg_t"], n_threads
+    )
 
 
 def _numpy_general_wald(data: dict) -> WaldResult:
     """Run the NumPy Wald path over *data*, with the extension held out.
 
-    ``_compute_wald_numpy`` consults ``compute_numpy._accel`` at call time and
+    ``_compute_wald_numpy`` consults ``accel._accel`` at call time and
     takes a C branch when it is set, so the attribute has to be cleared rather
     than the argument changed.
     """
-    orig = compute_numpy._accel
+    orig = accel._accel
     try:
-        compute_numpy._accel = None
+        accel._accel = None
         return _compute_wald_numpy(
             data["n_cvt"],
             data["eigenvalues"],
@@ -139,7 +141,7 @@ def _numpy_general_wald(data: dict) -> WaldResult:
             n_refine=20,
         )
     finally:
-        compute_numpy._accel = orig
+        accel._accel = orig
 
 
 def _run_general_ncvt_c_vs_python(data: dict) -> None:
@@ -196,9 +198,9 @@ def _uab_from_fused_inputs(w, Uty, utg_t):
 
 def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> WaldResult:
     """NumPy REML Wald for the fused kernel's n_cvt=1 inputs."""
-    orig = compute_numpy._accel
+    orig = accel._accel
     try:
-        compute_numpy._accel = None
+        accel._accel = None
         return _compute_wald_numpy(
             1,
             eigenvalues,
@@ -210,7 +212,7 @@ def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> WaldResult:
             n_refine=20,
         )
     finally:
-        compute_numpy._accel = orig
+        accel._accel = orig
 
 
 def _fused_inputs_from_uab_ncvt1(Uab_batch):

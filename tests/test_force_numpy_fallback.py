@@ -223,7 +223,7 @@ class TestForceNumpyLmmAccel:
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
         from jamma.core.recompile import _load_c_module
-        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
+        from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
         assert _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION) is None
 
@@ -232,7 +232,7 @@ class TestForceNumpyLmmAccel:
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
         from jamma.core.recompile import _load_c_module
-        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
+        from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
         sys.modules.pop("jamma.lmm._lmm_accel", None)
         _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION)
@@ -247,7 +247,7 @@ class TestForceNumpyLmmAccel:
         monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
         from jamma.core.recompile import _load_c_module
-        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
+        from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
         result = _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION)
         assert result is None or isinstance(result, ModuleType)
@@ -263,10 +263,10 @@ class TestForceNumpyLmmAccel:
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", value)
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
         from jamma.core.recompile import _load_c_module
-        from jamma.lmm import compute_numpy
-        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
+        from jamma.lmm import accel
+        from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
-        if compute_numpy._accel is None:
+        if not accel.available():
             pytest.skip("extension not built, so the gate is not observable here")
         assert _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION) is not None, (
             f"value={value!r} engaged the gate"
@@ -276,7 +276,7 @@ class TestForceNumpyLmmAccel:
         """Multiple truthy values all engage the gate."""
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
         from jamma.core.recompile import _load_c_module
-        from jamma.lmm.compute_numpy import _EXPECTED_ABI_VERSION
+        from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
         for value in ["1", "true", "yes", "TRUE", " 1 "]:
             monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", value)

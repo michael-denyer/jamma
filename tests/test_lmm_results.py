@@ -12,11 +12,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jamma.lmm import compute_numpy
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig, LmmMode
 from jamma.validation import load_gemma_assoc
-from tests.conftest import make_runner_synthetic_data
+from tests.conftest import make_runner_synthetic_data, requires_c
 
 # ---------------------------------------------------------------------------
 # Lambda boundary diagnostic tests (REGR-03)
@@ -281,8 +280,11 @@ class TestErrorMessageDifferentiation:
         def _boom(_chunk, _threads):
             raise exc
 
-        return Kernel(label=built.label, n_filtered=built.n_filtered, call=_boom)
+        return Kernel(
+            label=built.label, n_filtered=built.n_filtered, call=_boom, uses_c=True
+        )
 
+    @requires_c
     def test_every_path_has_its_own_label(self):
         """All eight (n_cvt, mode) shapes report a distinct label.
 
@@ -292,9 +294,6 @@ class TestErrorMessageDifferentiation:
         against Wald within each fused family.
         """
         from jamma.lmm.chunk_kernel import make_kernel
-
-        if compute_numpy._accel is None:
-            pytest.skip("kernel construction needs the C extension")
 
         labels = {
             (n_cvt, mode): make_kernel(_tiny_invariants(n_cvt, mode), 1).label
@@ -306,14 +305,12 @@ class TestErrorMessageDifferentiation:
         assert labels[2, 4] != labels[2, 1], "mode 4 must not report as Wald"
         assert labels[2, 2] != labels[2, 3], "LRT and Score must not share a label"
 
+    @requires_c
     @pytest.mark.parametrize(
         ("n_cvt", "lmm_mode"), [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 2)]
     )
     def test_wrapped_error_names_the_kernel_and_the_offset(self, n_cvt, lmm_mode):
         """A segfault-shaped failure reports its own label, offset, and total."""
-        if compute_numpy._accel is None:
-            pytest.skip("kernel construction needs the C extension")
-
         kernel = self._failing_kernel(n_cvt, lmm_mode, OSError("segfault"))
         with pytest.raises(RuntimeError) as exc_info:
             kernel.compute_chunk(np.zeros((1, 8)), 1, 300)
@@ -323,6 +320,7 @@ class TestErrorMessageDifferentiation:
         assert "300/500" in message
         assert "300 SNPs before failure" in message
 
+    @requires_c
     @pytest.mark.parametrize(
         "exc",
         [
@@ -334,18 +332,13 @@ class TestErrorMessageDifferentiation:
     )
     def test_diagnosable_exceptions_pass_through_unwrapped(self, exc):
         """These four say what went wrong already; wrapping would bury them."""
-        if compute_numpy._accel is None:
-            pytest.skip("kernel construction needs the C extension")
-
         kernel = self._failing_kernel(1, 1, exc)
         with pytest.raises(type(exc), match=str(exc)):
             kernel.compute_chunk(np.zeros((1, 8)), 1, 0)
 
+    @requires_c
     def test_exception_chaining_preserved(self):
         """The original exception is chained via 'from exc'."""
-        if compute_numpy._accel is None:
-            pytest.skip("kernel construction needs the C extension")
-
         kernel = self._failing_kernel(1, 1, OSError("root cause"))
         with pytest.raises(RuntimeError) as exc_info:
             kernel.compute_chunk(np.zeros((1, 8)), 1, 0)
@@ -362,5 +355,6 @@ class TestErrorMessageDifferentiation:
             label="Fused Uab dispatch",
             n_filtered=100,
             call=lambda _chunk, _threads: expected,
+            uses_c=True,
         )
         assert kernel.compute_chunk(np.zeros((1, 8)), 1, 0) is expected

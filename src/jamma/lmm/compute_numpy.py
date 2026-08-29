@@ -18,13 +18,10 @@ The caller is responsible for:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 import numpy as np
 
-from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
-from jamma.core.constants import env_flag
-from jamma.core.recompile import _load_c_module
 from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
     golden_section_optimize_lambda_numpy,
@@ -38,70 +35,7 @@ from jamma.lmm.stats import (
 )
 from jamma.lmm.uab import batch_compute_iab_numpy, compute_iab_invariant_scalars_ncvt1
 
-if TYPE_CHECKING:
-    from types import ModuleType
-
-    from jamma.lmm.dispatch import DispatchPath
-
-_EXPECTED_ABI_VERSION = 17  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
-
-# Load and validate the C accelerator through the one shared seam in
-# jamma.core.recompile. It honours JAMMA_FORCE_NUMPY_FALLBACK (returns None
-# without importing, so ASAN never dlopens the .so), checks ABI_VERSION against
-# _EXPECTED_ABI_VERSION, confirms the fused-kernel core symbols listed in
-# LMM_ACCEL_SPEC.required_attrs are present, and rebuilds a stale .so once
-# before giving up.
-_accel: ModuleType | None = _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION)
-
-if _accel is None and not env_flag("JAMMA_FORCE_NUMPY_FALLBACK"):
-    from loguru import logger as _logger
-
-    _logger.warning(
-        "C extension _lmm_accel not available — using pure-Python path "
-        "(LMM may be slower without C extension; magnitude depends on "
-        "dataset size and core count). To compile, run: "
-        "python -m jamma.lmm._compile_accel"
-    )
-    del _logger
-
-# HAS_OPENMP is a genuinely independent bit, unlike kernel availability: C
-# sets it from #ifdef _OPENMP at build time, and plan_thread_budget reads it.
-_C_HAS_OPENMP = bool(_accel is not None and _accel.HAS_OPENMP)
-
-
-def _c() -> ModuleType:
-    """Return the loaded C extension, or raise naming the fix.
-
-    Every kernel entry point below needs the same guard. Hand-writing it per
-    symbol drifted before: some sites raised while others asserted, and an
-    assert vanishes under ``python -O``, turning a clear diagnostic into a
-    ``NoneType is not callable`` from inside the C call.
-    """
-    if _accel is None:
-        raise RuntimeError(
-            "This kernel requires the _lmm_accel C extension with ABI version "
-            f"{_EXPECTED_ABI_VERSION}. Recompile: python -m jamma.lmm._compile_accel"
-        )
-    return _accel
-
-
-def select_current_dispatch_path(
-    n_cvt: int,
-    lmm_mode: LmmMode,
-    *,
-    log_choices: bool = True,
-) -> DispatchPath:
-    """Select the dispatch path for the currently loaded extension.
-
-    ``_accel`` is read at call time, not import time, so a test that drops the
-    extension drives the fallback for real rather than describing it.
-    """
-    from jamma.lmm.dispatch import select_dispatch_path
-
-    return select_dispatch_path(
-        n_cvt, lmm_mode, accel=_accel is not None, log_choices=log_choices
-    )
 
 
 class WaldResult(TypedDict):

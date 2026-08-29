@@ -14,16 +14,14 @@ What is kept here is the workspace reuse pattern the runner relies on.
 import numpy as np
 import pytest
 
-from jamma.lmm import compute_numpy
-from jamma.lmm.compute_numpy import _c
+from jamma.lmm import accel
 from jamma.lmm.schema import LmmConfig
+from tests.conftest import requires_c
 
 
 @pytest.mark.tier1
-@pytest.mark.skipif(
-    compute_numpy._accel is None, reason="Split C extension unavailable"
-)
-def test_pipeline_multi_chunk_correctness():
+@requires_c
+def test_pipeline_multi_chunk_correctness(monkeypatch):
     """Pipeline path (multi-chunk) produces identical results to sequential path.
 
     Forces multi-chunk processing by using enough SNPs to exceed chunk_size,
@@ -87,30 +85,24 @@ def test_pipeline_multi_chunk_correctness():
 
     # Run with pipeline disabled: force single chunk by using sequential path
     # We do this by monkeypatching the canonical dispatch flag to False.
-    import jamma.lmm.compute_numpy as compute_mod
-
-    orig_split = compute_mod._accel
-    try:
-        compute_mod._accel = None
-        run_result = run_lmm_association_numpy(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=None,
-            snp_info=snp_info,
-            eigenvalues=eigenvalues,
-            eigenvectors=U,
-            config=LmmConfig(
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=1,
-                n_refine=20,
-            ),
-        )
-        results_sequential = run_result.associations
-    finally:
-        compute_mod._accel = orig_split
+    monkeypatch.setattr(accel, "_accel", None)
+    run_result = run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=None,
+        snp_info=snp_info,
+        eigenvalues=eigenvalues,
+        eigenvectors=U,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=1,
+            n_refine=20,
+        ),
+    )
+    results_sequential = run_result.associations
 
     # Same number of results
     assert len(results_pipeline) == len(results_sequential), (
@@ -145,7 +137,7 @@ def test_pipeline_multi_chunk_correctness():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
+@requires_c
 def test_workspace_alignment():
     """Verify alloc_aligned_doubles returns 32-byte-aligned addresses."""
     from jamma.lmm._lmm_accel import _get_aligned_alloc_test_ptr
@@ -159,7 +151,7 @@ def test_workspace_alignment():
 
 
 @pytest.mark.tier0
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
+@requires_c
 def test_fused_workspace_reuse_across_chunks(fused_data):
     """One workspace reused across two chunks matches a single call over both.
 
@@ -168,14 +160,14 @@ def test_fused_workspace_reuse_across_chunks(fused_data):
     """
     eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
 
-    ws = _c().create_workspace_ncvt1_c(
+    ws = accel.require().create_workspace_ncvt1_c(
         eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
     )
 
     mid = utg_t.shape[0] // 2
-    first = _c().compute_lmm_chunk_fused_c(ws, utg_t[:mid], 1)
-    second = _c().compute_lmm_chunk_fused_c(ws, utg_t[mid:], 1)
-    full = _c().compute_lmm_chunk_fused_c(ws, utg_t, 1)
+    first = accel.require().compute_lmm_chunk_fused_c(ws, utg_t[:mid], 1)
+    second = accel.require().compute_lmm_chunk_fused_c(ws, utg_t[mid:], 1)
+    full = accel.require().compute_lmm_chunk_fused_c(ws, utg_t, 1)
 
     for key in ("lambdas", "betas"):
         np.testing.assert_allclose(

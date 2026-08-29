@@ -24,9 +24,8 @@ import pytest
 
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm import compute_numpy
+from jamma.lmm import accel
 from jamma.lmm.compute_numpy import (
-    _c,
     _compute_lrt_numpy,
     _compute_score_numpy,
     compute_lmm_chunk_numpy,
@@ -38,22 +37,24 @@ from jamma.lmm.uab import (
     compute_uab_invariant_soa,
 )
 from tests.builders import rotated_lmm_inputs
+from tests.conftest import requires_c
 from tests.fixture_paths import MOUSE
 
 
 @contextlib.contextmanager
 def _numpy_only():
-    """Hold the extension out, so the full-Uab helpers take their NumPy path.
+    """Hold the extension out.
 
-    They consult compute_numpy._accel at call time and take a C branch when it
-    is set, so the attribute has to be cleared rather than an argument changed.
+    Belt-and-braces: ``_compute_score_numpy``/``_compute_lrt_numpy`` are pure
+    NumPy and never read ``accel``, but this keeps the parity tests provably
+    isolated from the C path even if that changes.
     """
-    orig = compute_numpy._accel
-    compute_numpy._accel = None
+    orig = accel._accel
+    accel._accel = None
     try:
         yield
     finally:
-        compute_numpy._accel = orig
+        accel._accel = orig
 
 
 pytestmark = pytest.mark.tier0
@@ -137,7 +138,7 @@ def mouse_data():
 def _general_score_only_result(d):
     """The general workspace's lmm_mode=3 (Score only) compute for *d*."""
     pab_table = build_pab_table_for_c(d["n_cvt"])._asdict()
-    ws = _c().create_workspace_general_c(
+    ws = accel.require().create_workspace_general_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
         d["UtW"],
@@ -152,13 +153,13 @@ def _general_score_only_result(d):
         lmm_mode=3,
         hi_eval_null=d["Hi_eval_null"],
     )
-    return _c().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
+    return accel.require().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
 
 
 def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
     """The general workspace's lmm_mode=2 (LRT only) compute for *d*."""
     pab_table = build_pab_table_for_c(d["n_cvt"])._asdict()
-    ws = _c().create_workspace_general_c(
+    ws = accel.require().create_workspace_general_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
         d["UtW"],
@@ -173,10 +174,10 @@ def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
         lmm_mode=2,
         logl_H0=d["logl_H0"],
     )
-    return _c().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
+    return accel.require().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
+@requires_c
 class TestScoreSplitParity:
     """The general workspace's Score-only mode matches full-Uab Score."""
 
@@ -216,7 +217,7 @@ class TestScoreSplitParity:
         )
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
+@requires_c
 class TestLrtSplitParity:
     """The general workspace's LRT-only mode matches full-Uab LRT."""
 
@@ -322,7 +323,7 @@ def degenerate_data(mouse_data):
     }
 
 
-@pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
+@requires_c
 class TestDegenerateSplitParity:
     """The general workspace and the full-Uab path agree on NaN for degenerate SNPs."""
 
@@ -455,7 +456,6 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
     # allow-patch: dispatch spy. Which optimiser _compute_wald_numpy selects
     # for n_cvt is the contract; both spies forward to the real function.
     with (
-        patch.object(cn, "_accel", None),
         patch.object(cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split),
         patch.object(cn, "golden_section_optimize_lambda_numpy", spy_generic),
     ):
@@ -489,7 +489,6 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
 
     # allow-patch: dispatch spy, as above.
     with (
-        patch.object(cn, "_accel", None),
         patch.object(
             cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split2
         ),
@@ -506,7 +505,6 @@ def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
 @pytest.mark.tier0
 def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
     """split path (n_cvt=1) in _compute_wald_numpy produces same results as generic."""
-    from unittest.mock import patch
 
     from jamma.lmm import compute_numpy as cn
     from jamma.lmm.uab import batch_compute_iab_numpy
@@ -516,10 +514,9 @@ def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
     Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
 
     # Split path (n_cvt=1 Python branch)
-    with patch.object(cn, "_accel", None):
-        result_split = cn._compute_wald_numpy(
-            n_cvt, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
-        )
+    result_split = cn._compute_wald_numpy(
+        n_cvt, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
+    )
 
     # Generic path: bypass n_cvt==1 branch by calling generic optimizer directly
     import jamma.lmm.likelihood_numpy as ln
@@ -734,7 +731,7 @@ def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
     and the runner reaches it only on NUMPY_FALLBACK, which is selected only
     when the extension is absent.
     """
-    monkeypatch.setattr(compute_numpy, "_accel", None)
+    monkeypatch.setattr(accel, "_accel", None)
 
     eigenvalues, UtW, Uty, UtG = chunk_dispatch_data
     n_samples = eigenvalues.shape[0]

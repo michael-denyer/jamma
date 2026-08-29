@@ -26,18 +26,7 @@ from typing import Literal
 from loguru import logger
 
 from jamma.core.memory import estimate_lmm_memory
-
-
-def _c_extension_available() -> bool:
-    """Report whether the loaded C extension is usable.
-
-    Deferred import: importing compute_numpy loads the C extension
-    (_load_c_module runs at module scope), so this stays lazy until the
-    caller actually needs the answer.
-    """
-    from jamma.lmm import compute_numpy  # deferred: loads the C extension
-
-    return compute_numpy._accel is not None
+from jamma.lmm import accel
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +126,7 @@ def select_execution_mode(
     """
     # Handle compound backend requests from CLI (e.g., "numpy-streaming")
     if requested == "numpy-streaming":
-        if not _c_extension_available():
+        if not accel.available():
             raise ValueError(
                 "Backend 'numpy-streaming' requires the C extension but it is "
                 "not available. Compile it with: uv run python -c "
@@ -157,7 +146,7 @@ def select_execution_mode(
         return ExecutionPlan("batch", "NumPy backend explicitly requested")
 
     # Auto selection
-    c_ext_available = _c_extension_available()
+    c_ext_available = accel.available()
     est = estimate_lmm_memory(n_samples, n_snps, n_cvt=n_cvt)
 
     # No covariate-count guard here. A loaded extension exports the general

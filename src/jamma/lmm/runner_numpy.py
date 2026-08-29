@@ -29,7 +29,7 @@ from jamma.core.snp_stats import (
 )
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.chunk_sizing import plan_lmm_chunks
-from jamma.lmm.compute_numpy import select_current_dispatch_path
+from jamma.lmm.dispatch import select_current as select_current_dispatch_path
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.prepare_common import (
     _build_covariate_matrix,

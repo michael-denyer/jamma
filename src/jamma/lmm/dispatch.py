@@ -11,6 +11,7 @@ from enum import Enum
 
 from loguru import logger
 
+from jamma.lmm import accel
 from jamma.lmm.schema import LmmMode
 
 
@@ -105,6 +106,23 @@ def select_dispatch_path(
     if log_choices:
         _log_dispatch_choice(path, n_cvt, lmm_mode)
     return path
+
+
+def select_current(
+    n_cvt: int,
+    lmm_mode: LmmMode,
+    *,
+    log_choices: bool = True,
+) -> DispatchPath:
+    """Select the dispatch path for the currently loaded extension.
+
+    ``accel.available()`` is read at call time, not import time, so a test
+    that drops the extension (directly, or through the ``no_c_kernels``
+    fixture) drives the fallback for real rather than describing it.
+    """
+    return select_dispatch_path(
+        n_cvt, lmm_mode, accel=accel.available(), log_choices=log_choices
+    )
 
 
 def _resolve_dispatch_path(n_cvt: int, lmm_mode: LmmMode, accel: bool) -> DispatchPath:

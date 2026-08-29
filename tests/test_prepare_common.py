@@ -214,6 +214,7 @@ def test_compute_null_model_common_accepts_near_zero_eigenvalues():
 def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
     """Python fallback Score path rejects non-positive Hi_eval_null."""
     import jamma.lmm.compute_numpy as compute_numpy
+    from jamma.lmm import accel
 
     rng = np.random.default_rng(101)
     n_samples, n_snps, n_cvt = 50, 5, 1
@@ -228,7 +229,7 @@ def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
 
     # Force Python fallback by hiding C extension
     monkeypatch.setattr(
-        compute_numpy, "_accel", None
+        accel, "_accel", None
     )  # allow-patch: dropping the extension forces the NumPy path
 
     with pytest.raises(ValueError, match="non-positive"):
@@ -240,6 +241,7 @@ def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
 def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
     """Python fallback Score path rejects NaN Hi_eval_null."""
     import jamma.lmm.compute_numpy as compute_numpy
+    from jamma.lmm import accel
 
     rng = np.random.default_rng(102)
     n_samples, n_snps, n_cvt = 50, 5, 1
@@ -254,7 +256,7 @@ def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
 
     # Force Python fallback by hiding C extension
     monkeypatch.setattr(
-        compute_numpy, "_accel", None
+        accel, "_accel", None
     )  # allow-patch: dropping the extension forces the NumPy path
 
     with pytest.raises(ValueError, match="non-finite"):

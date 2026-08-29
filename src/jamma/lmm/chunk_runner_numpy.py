@@ -30,11 +30,11 @@ from jamma.core.threading import (
     blas_threads,
     get_c_extension_thread_count,
 )
-from jamma.lmm import compute_numpy
+from jamma.lmm import accel
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
 from jamma.lmm.chunk_sizing import plan_lmm_chunks
-from jamma.lmm.compute_numpy import select_current_dispatch_path
+from jamma.lmm.dispatch import select_current as select_current_dispatch_path
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood import reset_p_yy_warned
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
@@ -241,9 +241,7 @@ class _ChunkEngine:
             )
 
         t_compute_start = time.perf_counter()
-        blas_ctx = (
-            blas_threads(1) if compute_numpy._accel is not None else nullcontext()
-        )
+        blas_ctx = blas_threads(1) if self.kernel.uses_c else nullcontext()
         with blas_ctx:
             cr = self.kernel.compute_chunk(
                 prepared.data, self.omp_threads, self.processed
@@ -350,9 +348,7 @@ def run_lmm_chunk_source_numpy(
 
     threads = plan_thread_budget(
         n_samples=n_samples,
-        omp_threads=get_c_extension_thread_count(
-            compute_numpy._accel is not None, compute_numpy._C_HAS_OPENMP
-        ),
+        omp_threads=get_c_extension_thread_count(accel.available(), accel.HAS_OPENMP),
         use_pipeline=use_pipeline,
     )
     n_refine = max(n_refine, 20)

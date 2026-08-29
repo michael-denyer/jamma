@@ -12,7 +12,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jamma.lmm import compute_numpy
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.stats import AssocResult  # noqa: F401
@@ -21,10 +20,11 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.conftest import make_runner_synthetic_data
+from tests.conftest import make_runner_synthetic_data, requires_c
 from tests.fixture_paths import SYNTHETIC
 
 
+@requires_c
 @pytest.mark.tier0
 def test_runner_mode4_uses_fused_dispatch():
     """Mode 4 takes the fused path at n_cvt=1 and the fused general path at n_cvt>=2.
@@ -35,16 +35,10 @@ def test_runner_mode4_uses_fused_dispatch():
     D2 gave the general workspace's one compute every lmm_mode, so there is no
     longer a split path for mode 4 to be refused by.
     """
-    from jamma.lmm.dispatch import DispatchPath
-
-    if compute_numpy._accel is None:
-        pytest.skip("Fused mode-4 C extension not available")
+    from jamma.lmm.dispatch import DispatchPath, select_current
 
     for n_cvt, expected in ((1, DispatchPath.FUSED), (2, DispatchPath.FUSED_GENERAL)):
-        assert (
-            compute_numpy.select_current_dispatch_path(n_cvt, 4, log_choices=False)
-            is expected
-        )
+        assert select_current(n_cvt, 4, log_choices=False) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +224,7 @@ def test_runner_lrt_mode_c_vs_python():
     """LRT mode (2) via C extension matches Python fallback (RUN-07)."""
     from unittest.mock import patch
 
-    from jamma.lmm import compute_numpy
+    from jamma.lmm import accel
 
     genotypes, phenotypes, kinship, snp_info = make_runner_synthetic_data()
 
@@ -252,7 +246,7 @@ def test_runner_lrt_mode_c_vs_python():
     result_c = run_lmm_association_numpy(**kwargs)
 
     # Run with C disabled (drop the loaded extension)
-    with patch.object(compute_numpy, "_accel", None):
+    with patch.object(accel, "_accel", None):
         kwargs["kinship"] = kinship.copy()
         result_py = run_lmm_association_numpy(**kwargs)
 
@@ -272,7 +266,7 @@ def test_runner_score_mode_c_vs_python():
     """Score mode (3) via C extension matches Python fallback (RUN-07)."""
     from unittest.mock import patch
 
-    from jamma.lmm import compute_numpy
+    from jamma.lmm import accel
 
     genotypes, phenotypes, kinship, snp_info = make_runner_synthetic_data()
 
@@ -294,7 +288,7 @@ def test_runner_score_mode_c_vs_python():
     result_c = run_lmm_association_numpy(**kwargs)
 
     # Run with C disabled
-    with patch.object(compute_numpy, "_accel", None):
+    with patch.object(accel, "_accel", None):
         kwargs["kinship"] = kinship.copy()
         result_py = run_lmm_association_numpy(**kwargs)
 
@@ -343,6 +337,7 @@ def test_runner_all_mode_c_path():
         assert np.isfinite(r.p_score), f"p_score not finite: {r}"
 
 
+@requires_c
 @pytest.mark.tier1
 def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
     """LRT and Score really do take the overlapped driver once chunks are enough.
@@ -352,17 +347,16 @@ def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
     200-SNP dataset, so the run was single-chunk and the pipeline never
     engaged; the assertion held either way. Forcing a small chunk gets past the
     real threshold, and the spy is what makes the claim in the name checkable.
+
+    The overlapped pipeline only engages on a split dispatch path, and
+    DispatchPath.use_split is False for the NumPy fallback (see dispatch.py).
+    With no C accelerator, every mode takes the full-Uab path and
+    _drive_pipeline is never called, so this needs the real extension rather
+    than a C-accel-only behaviour asserted without it. This is the case the
+    ASAN workflow hits: it sets JAMMA_FORCE_NUMPY_FALLBACK to keep dlopen away
+    from ASAN, and requires_c skips there too.
     """
     from jamma.lmm import chunk_runner_numpy
-
-    # The overlapped pipeline only engages on a split dispatch path, and
-    # DispatchPath.use_split is False for the NumPy fallback (see dispatch.py).
-    # With no C accelerator, every mode takes the full-Uab path and
-    # _drive_pipeline is never called, so the spy count would be 0. Skip rather
-    # than assert a C-accel-only behaviour. This is the case the ASAN workflow
-    # hits: it sets JAMMA_FORCE_NUMPY_FALLBACK to keep dlopen away from ASAN.
-    if compute_numpy._accel is None:
-        pytest.skip("overlapped pipeline needs the C accelerator (split dispatch)")
 
     genotypes, phenotypes, kinship, snp_info = make_runner_synthetic_data(
         n_samples=50, n_snps=200
@@ -406,6 +400,7 @@ def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@requires_c
 @pytest.mark.tier0
 def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
     """LRT (mode 2) with n_cvt=2 uses C general path and matches GEMMA reference.
@@ -413,12 +408,7 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
     Verifies the full path: FUSED_GENERAL dispatch -> a general workspace
     created with lmm_mode=2 -> compute_lmm_chunk_fused_general_c.
     """
-    from jamma.lmm import compute_numpy as cn
-
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
-
-    if cn._accel is None:
-        pytest.skip("C extension not available")
 
     run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,
@@ -447,6 +437,7 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
     )
 
 
+@requires_c
 @pytest.mark.tier0
 def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
     """Score (mode 3) with n_cvt=2 uses C general path and matches GEMMA reference.
@@ -454,12 +445,7 @@ def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
     Verifies the full path: FUSED_GENERAL dispatch -> a general workspace
     created with lmm_mode=3 -> compute_lmm_chunk_fused_general_c.
     """
-    from jamma.lmm import compute_numpy as cn
-
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
-
-    if cn._accel is None:
-        pytest.skip("C extension not available")
 
     run_result = run_lmm_association_numpy(
         genotypes=plink.genotypes,

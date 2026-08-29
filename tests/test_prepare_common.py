@@ -15,48 +15,57 @@ from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
     _eigendecompose_or_reuse,
+    prepare_lmm_run,
 )
 from jamma.lmm.schema import LmmConfig
 
 pytestmark = pytest.mark.tier0
 
 
-def test_compute_null_model_common_populated_for_every_mode():
-    """NullModel is computed unconditionally, so mode 1 (Wald) gets it too.
+def test_null_model_populated_regardless_of_caller_intent():
+    """prepare_lmm_run populates NullModel the same way for every caller.
 
     The mode gate this replaced saved nothing: the null MLE costs 0.8 ms at
-    n=2k and 28.8 ms at n=100k. A NullModel computed with no downstream mode
-    in mind must equal the one a Score/All run would have produced from the
-    same inputs.
+    n=2k and 28.8 ms at n=100k. prepare_lmm_run no longer takes lmm_mode at
+    all, so a caller that only wants Wald gets the identical logl_H0 and
+    Hi_eval_null a Score/All caller would get from the same rotated inputs —
+    proven here by comparing prepare_lmm_run's populated fields directly
+    against _compute_null_model_common on the same UtW/Uty.
     """
     rng = np.random.default_rng(0)
     n_samples = 50
-    eigenvalues_np = np.abs(rng.standard_normal(n_samples)) + 0.1
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
+    kinship = np.eye(n_samples) + 0.01 * rng.standard_normal((n_samples, n_samples))
+    kinship = (kinship + kinship.T) / 2
+    phenotypes = rng.standard_normal(n_samples)
+    W = np.ones((n_samples, 1))
 
-    null_model = _compute_null_model_common(
-        eigenvalues_np=eigenvalues_np,
-        UtW=UtW,
-        Uty=Uty,
+    prepared = prepare_lmm_run(
+        kinship=kinship,
+        eigenvalues=None,
+        eigenvectors=None,
+        phenotypes=phenotypes,
+        W=W,
+        n_cvt=1,
+        l_min=1e-5,
+        l_max=1e5,
+        show_progress=False,
+        check_memory=False,
+        label="test",
+        compute_pve=False,
+    )
+    assert prepared.logl_H0 is not None
+    assert prepared.Hi_eval_null is not None
+    assert prepared.Hi_eval_null.shape == (n_samples,)
+
+    expected = _compute_null_model_common(
+        eigenvalues_np=prepared.eigenvalues,
+        UtW=prepared.UtW,
+        Uty=prepared.Uty,
         n_cvt=1,
         show_progress=False,
     )
-    assert null_model.logl_H0 is not None
-    assert null_model.hi_eval_null is not None
-    assert null_model.hi_eval_null.shape == (n_samples,)
-
-    mode4_null_model = _compute_null_model_common(
-        eigenvalues_np=eigenvalues_np,
-        UtW=UtW,
-        Uty=Uty,
-        n_cvt=1,
-        show_progress=False,
-    )
-    assert null_model.logl_H0 == mode4_null_model.logl_H0
-    np.testing.assert_array_equal(
-        null_model.hi_eval_null, mode4_null_model.hi_eval_null
-    )
+    assert prepared.logl_H0 == expected.logl_H0
+    np.testing.assert_array_equal(prepared.Hi_eval_null, expected.hi_eval_null)
 
 
 def test_build_covariate_matrix_from_common():

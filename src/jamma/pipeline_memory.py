@@ -178,41 +178,6 @@ def plan_memory(
     )
 
 
-def _reject_if_over_budget(
-    required_gb: float,
-    available_gb: float,
-    mem_budget: float | None,
-    *,
-    sufficient: bool,
-    margin_note: str = "",
-) -> None:
-    """Raise MemoryError when an estimate exceeds the budget or what is available.
-
-    Args:
-        required_gb: Estimated peak requirement.
-        available_gb: What the system reports free.
-        mem_budget: User-set ceiling in GB, or None for no ceiling.
-        sufficient: The estimator's own verdict on available memory.
-        margin_note: Appended to the requirement in the insufficient-memory
-            message, e.g. the streaming estimator's safety margin.
-
-    Raises:
-        MemoryError: Naming which of the two rules failed, and how to override.
-    """
-    if mem_budget is not None and required_gb > mem_budget:
-        raise MemoryError(
-            f"Estimated memory ({required_gb:.1f}GB) exceeds "
-            f"budget ({mem_budget}GB). "
-            f"Use --no-check-memory to override."
-        )
-    if not sufficient:
-        raise MemoryError(
-            f"Insufficient memory: need {required_gb:.1f}GB{margin_note}, "
-            f"have {available_gb:.1f}GB. "
-            f"Use --no-check-memory to override."
-        )
-
-
 def memory_preflight(
     config: PipelineConfig,
     plan: ExecutionPlan,
@@ -253,11 +218,10 @@ def memory_preflight(
         f"{mem_plan.available_gb:.1f}GB available"
         f" (compute chunk {mem_plan.compute_chunk_size}{driver_note})"
     )
-    _reject_if_over_budget(
+    memory.require(
         mem_plan.total_peak_gb,
         mem_plan.available_gb,
-        config.mem_budget,
-        sufficient=mem_plan.sufficient,
-        margin_note=" (with 10% margin)",
+        plan.runner_name,
+        budget_gb=config.mem_budget,
     )
     return mem_plan

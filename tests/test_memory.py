@@ -11,11 +11,18 @@ from jamma.core import (
     get_memory_snapshot,
     log_memory_snapshot,
 )
+from jamma.core.eigen_plan import _dsyevd_peak_gb, dsyevr_peak_gb, square_matrix_gb
 from jamma.core.estimates import _format_duration
 from jamma.core.memory import (
     _uab_iab_gb,
+    eigen_cost,
     estimate_lmm_memory,
+    fits,
+    kinship_cost,
+    lmm_cost,
+    require,
 )
+from tests.builders import BOUNDARY_SIZES
 from tests.fakes.memory import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
@@ -414,30 +421,112 @@ class TestFormatDuration:
         assert _format_duration(seconds) == expected
 
 
-class TestUabIabGbFused:
-    """Tests for fused Uab memory estimation."""
+class TestUabIabGb:
+    """Tests for Uab/Iab memory estimation."""
 
-    def test_uab_iab_gb_fused_n_cvt1(self):
-        """Fused path memory is chunk * n_samples * 8 bytes (UtG_T only)."""
-        result = _uab_iab_gb(1000, 500, n_cvt=1, use_fused=True)
-        expected = 500 * 1000 * 8 / 1e9
-        assert result == pytest.approx(expected)
-
-    def test_uab_iab_gb_fused_n_cvt_gt1_unchanged(self):
-        """Fused path with n_cvt>1 falls back to standard calculation."""
-        fused = _uab_iab_gb(1000, 500, n_cvt=2, use_fused=True)
-        standard = _uab_iab_gb(1000, 500, n_cvt=2, use_fused=False)
-        assert fused == standard
-
-    def test_uab_iab_gb_fused_vs_standard_reduction(self):
-        """Fused n_cvt=1 is strictly less than standard n_cvt=1."""
-        fused = _uab_iab_gb(1000, 500, n_cvt=1, use_fused=True)
-        standard = _uab_iab_gb(1000, 500, n_cvt=1, use_fused=False)
-        assert fused < standard
-
-    def test_uab_iab_gb_default_not_fused(self):
-        """Default use_fused=False preserves existing behavior."""
+    def test_uab_iab_gb_formula(self):
+        """_uab_iab_gb combines the Uab_batch and Iab_batch float64 buffers."""
         result = _uab_iab_gb(1000, 500, n_cvt=1)
         n_index = (1 + 3) * (1 + 2) // 2  # 6
         expected = (500 * 1000 * n_index * 8 + 500 * 3 * n_index * 8) / 1e9
         assert result == pytest.approx(expected)
+
+
+@pytest.mark.tier0
+class TestPhaseCostFunctions:
+    """Table-driven checks over the three phase cost functions.
+
+    Each phase function must reproduce the same peak a hand-rolled formula
+    gives at every size in ``BOUNDARY_SIZES`` — the same sizes the jlinalg
+    BLAS tests sweep. This is a re-homing refactor (E5): the phase functions
+    replace inline arithmetic that used to live only inside
+    ``estimate_streaming_memory``, and must not shift any estimate.
+    """
+
+    @pytest.mark.parametrize("n", BOUNDARY_SIZES)
+    def test_kinship_cost_is_accumulator_plus_chunk_plus_scratch(self, n):
+        """kinship_cost = kinship accumulator + one genotype chunk + scratch."""
+        kinship_gb = square_matrix_gb(n)
+        chunk_gb = n * 1000 * 8 / 1e9
+        scratch_gb = 1.5
+        assert kinship_cost(kinship_gb, chunk_gb, scratch_gb) == pytest.approx(
+            kinship_gb + chunk_gb + scratch_gb
+        )
+
+    @pytest.mark.parametrize("n", BOUNDARY_SIZES)
+    def test_eigen_cost_defaults_to_dsyevd_peak(self, n):
+        """With no driver-aware figure, eigen_cost is the conservative DSYEVD peak."""
+        assert eigen_cost(n) == pytest.approx(_dsyevd_peak_gb(n))
+
+    @pytest.mark.parametrize("n", BOUNDARY_SIZES)
+    def test_eigen_cost_uses_caller_supplied_peak(self, n):
+        """A caller-supplied peak (e.g. from plan_eigen_driver) wins outright."""
+        driver_peak = dsyevr_peak_gb(n)
+        assert eigen_cost(n, driver_peak) == pytest.approx(driver_peak)
+
+    @pytest.mark.parametrize("n", BOUNDARY_SIZES)
+    def test_lmm_cost_sums_its_five_components(self, n):
+        """lmm_cost = eigenvectors + chunk + rotation + grid REML + Uab/Iab."""
+        eigenvectors_gb = square_matrix_gb(n)
+        lmm_chunk_gb = n * 500 * 8 / 1e9
+        rotation_buffer_gb = n * 500 * 8 / 1e9
+        grid_reml_gb = 50 * 500 * 8 / 1e9
+        uab_iab_gb = _uab_iab_gb(n, 500, n_cvt=1)
+        assert lmm_cost(
+            eigenvectors_gb, lmm_chunk_gb, rotation_buffer_gb, grid_reml_gb, uab_iab_gb
+        ) == pytest.approx(
+            eigenvectors_gb
+            + lmm_chunk_gb
+            + rotation_buffer_gb
+            + grid_reml_gb
+            + uab_iab_gb
+        )
+
+    def test_100k_dsyevd_peak_matches_docs_user_guide(self):
+        """docs/USER_GUIDE.md's approximate-sample-limits table assumes this peak.
+
+        At n=100k: K (80GB) + U (80GB) + DSYEVD workspace (~160GB) = ~320GB.
+        """
+        assert 315 < eigen_cost(100_000) < 325
+
+    def test_100k_dsyevr_peak_matches_docs_user_guide(self):
+        """At n=100k: K (80GB) + U (80GB) + DSYEVR workspace (~0.03GB) = ~160GB."""
+        assert 155 < eigen_cost(100_000, dsyevr_peak_gb(100_000)) < 165
+
+
+@pytest.mark.tier0
+class TestFitsAndRequire:
+    """Tests for the fits predicate and the one require() raise site."""
+
+    def test_fits_true_when_ample(self):
+        assert fits(10.0, 1000.0) is True
+
+    def test_fits_false_when_scarce(self):
+        assert fits(1000.0, 10.0) is False
+
+    def test_fits_matches_check_memory_available_boundary(self, monkeypatch):
+        """fits() and check_memory_available() apply the identical margin."""
+        use_fake_psutil(monkeypatch, available=515 * 1e9)
+        assert fits(500.0, 515.0) is True
+        assert check_memory_available(500.0) is True
+
+        use_fake_psutil(monkeypatch, available=505 * 1e9)
+        assert fits(500.0, 505.0) is False
+        with pytest.raises(MemoryError):
+            check_memory_available(500.0)
+
+    def test_require_passes_when_sufficient(self):
+        require(1.0, 1000.0, "test")
+
+    def test_require_raises_insufficient_memory(self):
+        with pytest.raises(MemoryError, match="Insufficient memory"):
+            require(1000.0, 1.0, "test")
+
+    def test_require_raises_budget_exceeded(self):
+        with pytest.raises(MemoryError, match="exceeds"):
+            require(500.0, 1000.0, "test", budget_gb=10.0)
+
+    def test_require_checks_budget_before_availability(self):
+        """A budget below the requirement fails even when memory is ample."""
+        with pytest.raises(MemoryError, match="budget"):
+            require(500.0, 1e9, "test", budget_gb=10.0)

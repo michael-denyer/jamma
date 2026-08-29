@@ -74,14 +74,6 @@ def _eigendecomp_workspace_gb(n: int) -> float:
     return _dsyevd_workspace_gb(n)
 
 
-def _eigendecomp_eigvec_gb(kinship_gb: float) -> float:
-    """Return eigenvector memory (GB) for eigendecomp (non-inplace path).
-
-    The in-place path avoids this allocation — see _dsyevd_inplace_peak_gb.
-    """
-    return kinship_gb
-
-
 def _dsyevd_inplace_peak_gb(n: int) -> float:
     """Peak memory (GB) for in-place DSYEVD eigendecomposition.
 
@@ -97,12 +89,13 @@ def _dsyevd_inplace_peak_gb(n: int) -> float:
 def _dsyevd_peak_gb(n: int) -> float:
     """Peak memory (GB) for DSYEVD eigendecomposition (non-inplace).
 
-    Peak is: K (scratch) + U (eigenvectors) + DSYEVD workspace.
+    Peak is: K (scratch) + U (eigenvectors) + DSYEVD workspace. U is the same
+    (n, n) shape as K, so it costs the same ``square_matrix_gb(n)``.
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
     kinship_gb = square_matrix_gb(n)
-    return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevd_workspace_gb(n)
+    return 2 * kinship_gb + _dsyevd_workspace_gb(n)
 
 
 def dsyevr_peak_gb(n: int) -> float:
@@ -110,12 +103,12 @@ def dsyevr_peak_gb(n: int) -> float:
 
     On the Python path, jlinalg_dsyevr_ext writes vendor output directly into
     the caller-owned eigenvector buffer and transposes in place, so peak is:
-    K (overwritten as scratch) + U (caller output) + O(N).
+    K (overwritten as scratch) + U (caller output) + O(N). U is the same
+    (n, n) shape as K, so it costs the same ``square_matrix_gb(n)``.
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
-    kinship_gb = square_matrix_gb(n)
-    return kinship_gb + _eigendecomp_eigvec_gb(kinship_gb) + _dsyevr_workspace_gb(n)
+    return 2 * square_matrix_gb(n) + _dsyevr_workspace_gb(n)
 
 
 class EigenDriverPlan(NamedTuple):

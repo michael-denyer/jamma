@@ -34,6 +34,8 @@ from typing import NamedTuple
 import numpy as np
 from loguru import logger
 
+from jamma.core.constants import n_index
+
 _P_YY_MIN = 1e-8
 
 # One thread-local flag deduplicates the negative-P_yy warning across the
@@ -153,16 +155,6 @@ class _Ncvt1Layout(NamedTuple):
 
 
 _NCVT1 = _Ncvt1Layout(ww=0, wx=1, wy=2, xx=3, xy=4, yy=5)
-
-
-@functools.lru_cache(maxsize=8)
-def n_index(n_cvt: int) -> int:
-    """Total (a,b) pairs in Uab/Pab storage: (n_cvt+3)*(n_cvt+2)//2.
-
-    The one spelling of the formula; sizing code and kernels import it
-    rather than re-deriving it.
-    """
-    return (n_cvt + 3) * (n_cvt + 2) // 2
 
 
 @functools.lru_cache(maxsize=8)

@@ -15,8 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from jamma.core import memory
+from jamma.core.constants import n_index
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.likelihood import n_index
 
 # Allow large chunks — no int32 buffer constraint.
 _MAX_CHUNK = 200_000

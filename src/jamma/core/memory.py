@@ -9,6 +9,7 @@ from typing import NamedTuple
 import psutil
 from loguru import logger
 
+from jamma.core.constants import n_index
 from jamma.core.eigen_plan import (
     _dsyevd_peak_gb,
     _eigendecomp_workspace_gb,
@@ -33,11 +34,71 @@ def available_ram_gb() -> float:
     return psutil.virtual_memory().available / 1e9
 
 
+def fits(required_gb: float, available_gb: float) -> bool:
+    """Whether *required_gb* plus the shared safety margin fits in *available_gb*.
+
+    The one predicate both the estimators' sufficiency verdict and
+    ``require`` apply — see ``_memory_margin_gb`` for the margin (10% of
+    ``required_gb``, capped at 10GB absolute).
+    """
+    return (required_gb + _memory_margin_gb(required_gb)) < available_gb
+
+
 def _check_available(total_gb: float) -> tuple[float, bool]:
     """Return (available_gb, sufficient) with 10% margin capped at 10GB."""
     available = available_ram_gb()
-    margin_gb = _memory_margin_gb(total_gb)
-    return available, (total_gb + margin_gb) < available
+    return available, fits(total_gb, available)
+
+
+def require(
+    required_gb: float,
+    available_gb: float,
+    operation: str = "operation",
+    *,
+    budget_gb: float | None = None,
+) -> None:
+    """Raise ``MemoryError`` when *required_gb* does not fit the run's ceiling.
+
+    The sole place JAMMA constructs and raises a ``MemoryError``. Every other
+    memory gate (the pipeline preflight's budget/availability check, the LMM
+    batch runner, and LOCO's pass planner) calls this instead of raising its
+    own, so every insufficient-memory error looks the same and the message
+    lives in one place.
+
+    Two independent ceilings, checked in order:
+
+    1. ``budget_gb``, a user-set ``--mem-budget`` ceiling, when given.
+    2. ``available_gb``, what the machine reports free, via ``fits``.
+
+    Args:
+        required_gb: Estimated peak requirement.
+        available_gb: What the system reports free.
+        operation: Description of what needed the memory, for the message.
+        budget_gb: User-set ceiling in GB, or None for no ceiling.
+
+    Raises:
+        MemoryError: Naming which ceiling failed, and how to override.
+    """
+    over_budget = budget_gb is not None and required_gb > budget_gb
+    insufficient = not fits(required_gb, available_gb)
+    if not over_budget and not insufficient:
+        return
+
+    if over_budget:
+        message = (
+            f"Estimated memory ({required_gb:.1f}GB) for {operation} exceeds "
+            f"budget ({budget_gb}GB). Use --no-check-memory to override."
+        )
+    else:
+        margin_gb = _memory_margin_gb(required_gb)
+        message = (
+            f"Insufficient memory for {operation}. "
+            f"Need {required_gb:.1f}GB (+{margin_gb:.1f}GB margin = "
+            f"{required_gb + margin_gb:.1f}GB), but only {available_gb:.1f}GB "
+            f"available. Use --no-check-memory to override, or use a machine "
+            f"with more RAM."
+        )
+    raise MemoryError(message)
 
 
 class MemoryBreakdown(NamedTuple):
@@ -61,36 +122,20 @@ class MemoryBreakdown(NamedTuple):
     sufficient: bool  # Whether available exceeds total plus margin (10% capped at 10GB)
 
 
-def _uab_iab_gb(
-    n_samples: int,
-    chunk_size: int,
-    n_cvt: int = 1,
-    *,
-    use_fused: bool = False,
-) -> float:
+def _uab_iab_gb(n_samples: int, chunk_size: int, n_cvt: int = 1) -> float:
     """Estimate per-chunk LMM intermediate memory (GB).
 
-    Standard path: Uab_batch (chunk_size, n_samples, n_index) +
-    Iab_batch (chunk_size, n_cvt+2, n_index).
-
-    Fused path (n_cvt=1 only): UtG_T contiguous copy (chunk_size, n_samples).
-    No Uab/Iab batch arrays -- the C workspace computes them on-the-fly.
+    Uab_batch (chunk_size, n_samples, n_index) + Iab_batch
+    (chunk_size, n_cvt+2, n_index).
 
     Args:
         n_samples: Number of samples.
         chunk_size: SNPs per chunk.
         n_cvt: Number of covariates (default 1).
-        use_fused: If True and n_cvt==1, use fused Uab estimate
-            (UtG_T only, eliminates Uab_batch and Iab_batch).
 
     Returns:
         Combined memory in GB.
     """
-    if use_fused and n_cvt == 1:
-        # Fused path: only UtG_T = (chunk_size, n_samples) float64
-        return array_gb(chunk_size, n_samples)
-    from jamma.lmm.likelihood import n_index  # deferred: core stays below lmm
-
     idx = n_index(n_cvt)
     uab_bytes = chunk_size * n_samples * idx * 8
     iab_bytes = chunk_size * (n_cvt + 2) * idx * 8
@@ -270,6 +315,45 @@ def _streaming_component_sizes(
     )
 
 
+def kinship_cost(kinship_gb: float, chunk_gb: float, dsyrk_scratch_gb: float) -> float:
+    """Peak memory (GB) for the streaming kinship-accumulation phase.
+
+    Kinship accumulator + one genotype chunk + whatever scratch the active
+    dsyrk backend holds (0 on the native path).
+    """
+    return kinship_gb + chunk_gb + dsyrk_scratch_gb
+
+
+def eigen_cost(n_samples: int, eigendecomp_peak_gb: float | None = None) -> float:
+    """Peak memory (GB) for the eigendecomposition phase.
+
+    Uses the caller's driver-aware figure (from ``plan_eigen_driver``) when
+    given; otherwise the conservative non-inplace DSYEVD estimate (K + U +
+    workspace), for callers that do not yet know which driver will run.
+    """
+    if eigendecomp_peak_gb is not None:
+        return eigendecomp_peak_gb
+    return _dsyevd_peak_gb(n_samples)
+
+
+def lmm_cost(
+    eigenvectors_gb: float,
+    lmm_chunk_gb: float,
+    rotation_buffer_gb: float,
+    grid_reml_gb: float,
+    uab_iab_gb: float,
+) -> float:
+    """Peak memory (GB) for the LMM association phase.
+
+    Eigenvectors (already in memory from the eigendecomp phase) + the raw
+    genotype chunk + the rotation buffer + the grid-REML intermediate + the
+    Uab/Iab per-chunk intermediate.
+    """
+    return (
+        eigenvectors_gb + lmm_chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
+    )
+
+
 def estimate_streaming_memory(
     n_samples: int,
     chunk_size: int = 10_000,
@@ -340,22 +424,16 @@ def estimate_streaming_memory(
     if uab_iab_gb is None:
         # Conservative full Uab/Iab batch figure, for callers that do not
         # know the dispatch path (kinship's gate).
-        uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt, use_fused=False)
+        uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt)
 
-    # Peak memory calculation by workflow phase
+    # Peak memory by workflow phase, one cost function per phase.
     dsyrk_scratch_gb = _dsyrk_scratch_gb(n_samples)
-    peak_kinship = kinship_gb + chunk_gb + dsyrk_scratch_gb
-    # Eigendecomp: the caller's driver-aware figure when given, else the
-    # conservative non-inplace DSYEVD estimate (K + U + workspace).
-    peak_eigendecomp = (
-        eigendecomp_peak_gb
-        if eigendecomp_peak_gb is not None
-        else _dsyevd_peak_gb(n_samples)
-    )
+    peak_kinship = kinship_cost(kinship_gb, chunk_gb, dsyrk_scratch_gb)
+    peak_eigendecomp = eigen_cost(n_samples, eigendecomp_peak_gb)
     # lmm_chunk_gb, not chunk_gb: the association pass streams its raw
     # genotype buffer at compute_chunk_size, not the disk stats-pass width.
-    peak_lmm = (
-        eigenvectors_gb + lmm_chunk_gb + rotation_buffer_gb + grid_reml_gb + uab_iab_gb
+    peak_lmm = lmm_cost(
+        eigenvectors_gb, lmm_chunk_gb, rotation_buffer_gb, grid_reml_gb, uab_iab_gb
     )
 
     total_peak_gb = max(peak_kinship, peak_eigendecomp, peak_lmm)
@@ -389,6 +467,10 @@ def check_memory_available(
     margin (50GB) is excessive — the OS and process overhead don't scale
     with eigendecomp workspace size.
 
+    Thin wrapper over ``require`` (the sole ``MemoryError`` construction site),
+    reading ``available_ram_gb()`` itself so existing callers keep their
+    two-argument call.
+
     Args:
         required_gb: Memory required in GB.
         operation: Description for error message.
@@ -399,16 +481,5 @@ def check_memory_available(
     Raises:
         MemoryError: If insufficient memory with detailed message.
     """
-    available_gb = available_ram_gb()
-    margin_gb = _memory_margin_gb(required_gb)
-    required_with_margin = required_gb + margin_gb
-
-    if required_with_margin > available_gb:
-        raise MemoryError(
-            f"Insufficient memory for {operation}. "
-            f"Need {required_gb:.1f}GB (+{margin_gb:.1f}GB margin = "
-            f"{required_with_margin:.1f}GB), but only {available_gb:.1f}GB available. "
-            f"Consider using a machine with more RAM or reducing dataset size."
-        )
-
+    require(required_gb, available_ram_gb(), operation)
     return True

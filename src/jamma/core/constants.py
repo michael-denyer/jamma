@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import functools
 import os
 from dataclasses import dataclass
 
 # GEMMA encodes missing phenotypes as -9 in .fam files.
 PHENOTYPE_MISSING: float = -9.0
+
+
+@functools.lru_cache(maxsize=8)
+def n_index(n_cvt: int) -> int:
+    """Total (a,b) pairs in Uab/Pab storage: (n_cvt+3)*(n_cvt+2)//2.
+
+    The one spelling of the formula. Lives in ``core`` rather than
+    ``lmm.likelihood`` so the memory and chunk-sizing estimators can use it
+    without importing below ``core`` in the layering; ``lmm.likelihood``
+    re-exports it for its own callers and its Uab/Pab construction.
+    """
+    return (n_cvt + 3) * (n_cvt + 2) // 2
 
 
 def env_flag(name: str) -> bool:

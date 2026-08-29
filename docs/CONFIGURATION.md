@@ -245,6 +245,47 @@ print(blas_backend)    # e.g. "mkl-ilp64", "openblas-ilp64", "numpy-fallback"
 print(blas_is_ilp64)   # 1 if ILP64, 0 if not
 ```
 
+## Bit-Exactness Fingerprint Reproduce Recipe
+
+`.github/workflows/fingerprint.yml` gates every PR touching `src/jamma/lmm/_lmm_*.c`,
+`_lmm_*.h`, `_build_support/**`, or the fingerprint scripts themselves. It builds the
+C accelerator on both sides of the PR (head and merge base) on one CI runner, runs
+`scripts/run-fingerprint.sh` against each build, and diffs the two record files with
+`scripts/compare_fingerprints.py`. There is no committed baseline, because digests
+depend on the compiler and the CPU, and dev builds use `-march=native`.
+
+To reproduce the same comparison locally:
+
+```bash
+# 1. Fingerprint the current worktree (HEAD).
+rm -f src/jamma/lmm/_lmm_accel*.so
+uv run python -m jamma.lmm._compile_accel
+bash scripts/run-fingerprint.sh /tmp/head.txt
+
+# 2. Fingerprint the commit you want to diff against (e.g. the merge base).
+git checkout --detach <base-sha>
+rm -f src/jamma/lmm/_lmm_accel*.so
+uv run python -m jamma.lmm._compile_accel
+bash scripts/run-fingerprint.sh /tmp/base.txt
+git checkout --force -  # back to the branch
+
+# 3. Rebuild the extension for the branch you're actually working on.
+uv run python -m jamma.lmm._compile_accel
+
+# 4. Compare.
+uv run python scripts/compare_fingerprints.py /tmp/base.txt /tmp/head.txt
+```
+
+`run-fingerprint.sh` runs `tests/lmm_accel/` under the recorder plugin with `-n0`
+and a fixed `--randomly-seed=1234`, so both sides drive the accelerator with
+identical inputs. Keys present on only one side (a deleted or renamed entry point)
+do not fail the comparison; a key present on both sides whose result digest differs
+does. Step 2 checks out `<base-sha>` without staging the head's
+`scripts/lmm_accel_fingerprint.py` first, unlike the CI job, because a local
+reproduce compares two full commits rather than a head diffed against history it
+does not have; if the base predates the fingerprint harness there is nothing to
+compare against, same as the CI job's check.
+
 ## ILP64 numpy Installation (Linux/Windows)
 
 Standard numpy uses LP64 BLAS, which overflows at ~46k samples. For large-scale

@@ -14,11 +14,12 @@ adjacent-string concat (``"-O" "3"``). Anyone deliberately evading the lint
 wanted to; that's a code-review problem, not a regex problem.
 
 Deliberate exception: a line ending with ``# allow-compile-flag-literal``
-(plus optional rationale) is skipped. Reserved for the one case where
-divergence is intentional — ``-march=native`` in ``_compile_accel.py``
-must NOT move to ``_build_support`` because wheels target the lowest
-common denominator and dev builds target the local CPU. The escape
-hatch keeps the lint strict for everything else.
+(plus optional rationale) is skipped. No entry point uses it today —
+``-march=native`` lives in ``LMM_ACCEL_SPEC.dev_extra_cflags`` in
+``_build_support/compile_and_link.py``, applied only on the dev rebuild path
+and never on the wheel path, so wheels stay portable without any entry point
+needing its own escape hatch. The hatch remains for a future case where
+divergence between entry points is genuinely intentional.
 
 Target files:
   - hatch_build.py

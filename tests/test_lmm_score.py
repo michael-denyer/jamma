@@ -19,6 +19,8 @@ from jamma.lmm.likelihood import (
 )
 from tests.reference.stats import calc_score_test, f_sf
 
+pytestmark = pytest.mark.tier0
+
 
 def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):
     """Create synthetic test data for LMM tests.
@@ -59,7 +61,6 @@ def _create_test_data(n_samples: int = 100, n_cvt: int = 1, seed: int = 42):
     }
 
 
-@pytest.mark.tier0
 class TestNullModelLambda:
     """Tests for null model lambda computation."""
 
@@ -165,7 +166,6 @@ class TestNullModelLambda:
         assert np.isfinite(logl_null), "Log-likelihood should be finite"
 
 
-@pytest.mark.tier0
 class TestScoreTestMath:
     """Tests for Score test statistic computation."""
 
@@ -298,7 +298,6 @@ class TestScoreTestMath:
         )
 
 
-@pytest.mark.tier0
 class TestScoreVsWald:
     """Tests comparing Score and Wald test properties."""
 
@@ -361,7 +360,6 @@ class TestScoreVsWald:
             assert 0.0 <= p <= 1.0, f"SNP {i}: p-value {p} not in [0, 1]"
 
 
-@pytest.mark.tier0
 class TestScoreTestEdgeCases:
     """Edge case tests for Score test."""
 

@@ -14,6 +14,8 @@ from jamma.lmm.chunk_kernel import RunInvariants, make_kernel
 from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
 from jamma.lmm.dispatch import DispatchPath
 
+pytestmark = pytest.mark.tier0
+
 # ---------------------------------------------------------------------------
 # run_lmm_chunk_source_numpy preconditions
 # ---------------------------------------------------------------------------
@@ -50,13 +52,11 @@ def _run_kwargs(**overrides):
     return base
 
 
-@pytest.mark.tier0
 def test_max_chunk_size_below_one_raises():
     with pytest.raises(ValueError, match="max_chunk_size must be >= 1"):
         run_lmm_chunk_source_numpy(lmm_mode=1, **_run_kwargs(max_chunk_size=0))
 
 
-@pytest.mark.tier0
 def test_filtered_means_length_mismatch_raises():
     with pytest.raises(ValueError, match="does not match"):
         run_lmm_chunk_source_numpy(
@@ -64,19 +64,16 @@ def test_filtered_means_length_mismatch_raises():
         )
 
 
-@pytest.mark.tier0
 def test_score_mode_without_hi_eval_raises():
     with pytest.raises(RuntimeError, match="Score/All mode requires Hi_eval_null"):
         run_lmm_chunk_source_numpy(lmm_mode=3, **_run_kwargs(Hi_eval_null=None))
 
 
-@pytest.mark.tier0
 def test_lrt_mode_without_logl_h0_raises():
     with pytest.raises(RuntimeError, match="LRT/All mode requires logl_H0"):
         run_lmm_chunk_source_numpy(lmm_mode=2, **_run_kwargs(logl_H0=None))
 
 
-@pytest.mark.tier0
 def test_empty_filtered_returns_zeroed_stats():
     """No SNPs means no work and no time spent, on every field the caller reads."""
     stats = run_lmm_chunk_source_numpy(
@@ -111,7 +108,6 @@ def _forced_split_invariants(lmm_mode):
     )
 
 
-@pytest.mark.tier0
 def test_soa_split_kernel_rejects_modes_it_cannot_serve():
     """Only modes 2 and 3 reach this path; 1 and 4 take the fused general kernel.
 
@@ -124,7 +120,6 @@ def test_soa_split_kernel_rejects_modes_it_cannot_serve():
             make_kernel(_forced_split_invariants(mode), 1)
 
 
-@pytest.mark.tier0
 def test_shared_chunk_entry_resets_the_p_yy_warning():
     """Every runner reaches this entry, so the per-run reset belongs here.
 

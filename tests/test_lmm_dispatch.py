@@ -17,6 +17,8 @@ import pytest
 from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 from jamma.lmm.schema import LmmMode
 
+pytestmark = pytest.mark.tier0
+
 _MODES: tuple[LmmMode, ...] = (1, 2, 3, 4)
 _NCVT_1 = (1,)
 _NCVT_MANY = (2, 3, 5, 100, 101)
@@ -46,13 +48,11 @@ def _select(n_cvt: int, lmm_mode: LmmMode, *, accel: bool = True) -> DispatchPat
     return select_dispatch_path(n_cvt, lmm_mode, accel=accel, log_choices=False)
 
 
-@pytest.mark.tier0
 def test_no_extension_is_always_the_numpy_fallback():
     for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
         assert _select(n_cvt, mode, accel=False) is DispatchPath.NUMPY_FALLBACK
 
 
-@pytest.mark.tier0
 def test_every_input_maps_to_the_documented_path():
     for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
         expected = _EXPECTED[(n_cvt == 1, mode)]
@@ -62,7 +62,6 @@ def test_every_input_maps_to_the_documented_path():
         )
 
 
-@pytest.mark.tier0
 def test_only_six_paths_are_reachable():
     """A member no input can select is dead weight, and this is what catches it."""
     reached = {
@@ -74,7 +73,6 @@ def test_only_six_paths_are_reachable():
     )
 
 
-@pytest.mark.tier0
 def test_path_properties_agree_with_membership():
     """The derived properties must not drift from the members they describe."""
     for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False)):
@@ -85,7 +83,6 @@ def test_path_properties_agree_with_membership():
         assert path.uses_fused_score_or_lrt == (path in _SCORE_OR_LRT)
 
 
-@pytest.mark.tier0
 def test_mode_and_ncvt_gating():
     """Each C path is wired for particular modes and covariate counts."""
     for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
@@ -104,7 +101,6 @@ def test_mode_and_ncvt_gating():
             assert n_cvt == 1
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize("bad_mode", [0, 5, -1, 99])
 def test_invalid_mode_raises(bad_mode):
     with pytest.raises(ValueError, match="lmm_mode must be"):

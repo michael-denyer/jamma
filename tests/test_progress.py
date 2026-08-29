@@ -8,6 +8,8 @@ import pytest
 from jamma.core.progress import progress_iterator, timed_progress
 from tests.fakes import FakeProgressbarModule
 
+pytestmark = pytest.mark.tier0
+
 
 @pytest.fixture
 def fake_progressbar(monkeypatch: pytest.MonkeyPatch) -> FakeProgressbarModule:
@@ -21,7 +23,6 @@ def fake_progressbar(monkeypatch: pytest.MonkeyPatch) -> FakeProgressbarModule:
     return fake
 
 
-@pytest.mark.tier0
 class TestProgressBarLifecycle:
     """Tests that progress bar is finalized correctly in all scenarios."""
 
@@ -78,7 +79,6 @@ class TestProgressBarLifecycle:
         assert fake_progressbar.last_bar.update_calls == [1, 2, 3, 4, 5]
 
 
-@pytest.mark.tier0
 class TestTimedProgress:
     """Tests for timed_progress() threading and exception propagation."""
 

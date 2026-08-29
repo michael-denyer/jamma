@@ -20,8 +20,9 @@ from jamma.io.matrix_reader import (
     read_matrix_parallel,
 )
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestParallelReaderParity:
     """Verify parallel reader matches np.loadtxt exactly."""
 
@@ -82,7 +83,6 @@ class TestParallelReaderParity:
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
 
 
-@pytest.mark.tier0
 class TestSmallMatrixFallback:
     """Verify small matrices use np.loadtxt fallback."""
 
@@ -99,7 +99,6 @@ class TestSmallMatrixFallback:
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
 
 
-@pytest.mark.tier0
 class TestEdgeCases:
     """Edge cases for matrix reader."""
 
@@ -171,7 +170,6 @@ class TestEdgeCases:
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
 
 
-@pytest.mark.tier0
 class TestCsvDelimiter:
     """Verify CSV (comma-delimited) files are handled correctly."""
 
@@ -200,7 +198,6 @@ class TestCsvDelimiter:
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
 
 
-@pytest.mark.tier0
 class TestBlankAndCommentLines:
     """Verify blank and comment lines are skipped, matching np.loadtxt."""
 
@@ -276,7 +273,6 @@ class TestBlankAndCommentLines:
             read_matrix_parallel(path, min_rows_for_parallel=500)
 
 
-@pytest.mark.tier0
 class TestBlockCopyMemmap:
     """Verify block-copy memmap-to-dense path for matrices exceeding block size."""
 
@@ -295,7 +291,6 @@ class TestBlockCopyMemmap:
         assert result.flags["C_CONTIGUOUS"]
 
 
-@pytest.mark.tier0
 class TestBoundedMemoryBehavior:
     """Verify memory-bounded parsing: no BytesIO buffer, correct block copy."""
 
@@ -356,7 +351,6 @@ class TestBoundedMemoryBehavior:
 # =============================================================================
 
 
-@pytest.mark.tier0
 class TestMemmapLifecycle:
     """Verify temp memmap backing files are cleaned up after parsing."""
 
@@ -427,7 +421,6 @@ class TestMemmapLifecycle:
             _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")
 
 
-@pytest.mark.tier0
 class TestParseChunkRowCountMismatch:
     """Verify _parse_chunk_to_memmap raises on row-count mismatch."""
 
@@ -462,7 +455,6 @@ class TestParseChunkRowCountMismatch:
             _parse_chunk_to_memmap(args)
 
 
-@pytest.mark.tier0
 class TestMultiWorkerCorrectness:
     """Verify multi-worker and single-worker parsing produces correct results."""
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+pytestmark = pytest.mark.tier0
+
 scipy_special = pytest.importorskip(
     "scipy.special", reason="scipy excluded from pip dev deps to preserve ILP64 numpy"
 )
@@ -24,7 +26,6 @@ sci_chi2 = scipy_stats.chi2
 from jamma.lmm.special import betainc, chi2_sf  # noqa: E402
 
 
-@pytest.mark.tier0
 class TestBetaincInterface:
     """SPEC-01: betainc callable, result in [0,1], edge cases, raises correctly."""
 
@@ -97,7 +98,6 @@ class TestBetaincInterface:
             )
 
 
-@pytest.mark.tier0
 class TestBetaincCoreAccuracy:
     """SPEC-03: betainc validated against scipy across JAMMA parameter ranges."""
 
@@ -165,7 +165,6 @@ class TestBetaincCoreAccuracy:
             )
 
 
-@pytest.mark.tier0
 class TestBetaincComplement:
     """Complement_z argument avoids float64 cancellation when z is close to 1."""
 
@@ -206,7 +205,6 @@ class TestBetaincComplement:
         np.testing.assert_allclose(val, sci, rtol=1e-10)
 
 
-@pytest.mark.tier0
 class TestChi2SF:
     """SPEC-02: chi2_sf matches scipy.stats.chi2.sf to 2e-14 rtol, x in [0.001, 500]."""
 

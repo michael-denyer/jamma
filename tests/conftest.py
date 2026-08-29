@@ -57,6 +57,30 @@ _PATH_PREDICATES = frozenset({"exists", "is_file", "is_dir", "isfile", "isdir"})
 _ATTRIBUTE_PROBES = frozenset({"hasattr", "getattr"})
 
 
+def _marker_name_from_decorator(dec: ast.expr) -> str | None:
+    """Return ``name`` for a ``pytest.mark.<name>`` or ``...<name>(...)`` node."""
+    target = dec.func if isinstance(dec, ast.Call) else dec
+    if (
+        isinstance(target, ast.Attribute)
+        and isinstance(target.value, ast.Attribute)
+        and isinstance(target.value.value, ast.Name)
+        and target.value.value.id == "pytest"
+        and target.value.attr == "mark"
+    ):
+        return target.attr
+    return None
+
+
+def _decorator_marker_names(decorator_list: list[ast.expr]) -> set[str]:
+    """Return the ``pytest.mark.<name>`` marker names on a decorator list."""
+    names: set[str] = set()
+    for dec in decorator_list:
+        name = _marker_name_from_decorator(dec)
+        if name is not None:
+            names.add(name)
+    return names
+
+
 def _module_level_marker_names(tree: ast.Module) -> set[str]:
     """Return the set of marker names assigned to ``pytestmark`` at module level.
 
@@ -81,89 +105,101 @@ def _module_level_marker_names(tree: ast.Module) -> set[str]:
             candidates.extend(node.value.elts)
         else:
             candidates.append(node.value)
-        for c in candidates:
-            # pytest.mark.<name>
-            if (
-                isinstance(c, ast.Attribute)
-                and isinstance(c.value, ast.Attribute)
-                and isinstance(c.value.value, ast.Name)
-                and c.value.value.id == "pytest"
-                and c.value.attr == "mark"
-            ):
-                names.add(c.attr)
-            # pytest.mark.<name>(...)
-            elif (
-                isinstance(c, ast.Call)
-                and isinstance(c.func, ast.Attribute)
-                and isinstance(c.func.value, ast.Attribute)
-                and isinstance(c.func.value.value, ast.Name)
-                and c.func.value.value.id == "pytest"
-                and c.func.value.attr == "mark"
-            ):
-                names.add(c.func.attr)
+        names |= _decorator_marker_names(candidates)
     return names
 
 
-def _per_test_marker_names(tree: ast.Module) -> set[str]:
-    """Return the set of @pytest.mark.<name> decorators on any function or class."""
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            continue
-        for dec in node.decorator_list:
-            target = dec.func if isinstance(dec, ast.Call) else dec
-            if (
-                isinstance(target, ast.Attribute)
-                and isinstance(target.value, ast.Attribute)
-                and isinstance(target.value.value, ast.Name)
-                and target.value.value.id == "pytest"
-                and target.value.attr == "mark"
-            ):
-                names.add(target.attr)
-    return names
+def _untiered_test_functions(tree: ast.Module) -> list[str]:
+    """Return qualified names of ``test_*`` functions with no tier marker.
+
+    For each function, class method, or async function whose name starts
+    with ``test_``, unions the module-level ``pytestmark``, the enclosing
+    class's decorators (if any), and the function's own decorators, then
+    reports the function (as ``Class.test_x`` or ``test_x``) when that
+    union has no member in ``_REQUIRED_TIER_MARKERS``.
+
+    This is per-item, not per-file: a module ``pytestmark`` used to satisfy
+    the whole file even when one function in it carried no marker of its
+    own and the module marker didn't apply to it (there was no such case
+    before, since a module marker always applies to every item in the
+    file — the risk this closes is a *file* with per-function markers on
+    some tests and none on a sibling test, which the old file-granular
+    check could not see).
+    """
+    module_names = _module_level_marker_names(tree)
+    untiered: list[str] = []
+
+    def _check(node: ast.FunctionDef | ast.AsyncFunctionDef, prefix: str) -> None:
+        if not node.name.startswith("test_"):
+            return
+        own = _decorator_marker_names(node.decorator_list)
+        if not (module_names | own) & _REQUIRED_TIER_MARKERS:
+            untiered.append(f"{prefix}{node.name}")
+
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            _check(node, "")
+        elif isinstance(node, ast.ClassDef):
+            class_names = module_names | _decorator_marker_names(node.decorator_list)
+            for child in node.body:
+                if not isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                if not child.name.startswith("test_"):
+                    continue
+                own = _decorator_marker_names(child.decorator_list)
+                if not (class_names | own) & _REQUIRED_TIER_MARKERS:
+                    untiered.append(f"{node.name}.{child.name}")
+    return untiered
 
 
-def _file_declares_tier_marker(path: Path) -> bool:
-    """Return True if ``path`` has at least one tier/slow/benchmark marker.
+def _file_untiered_functions(path: Path) -> list[str]:
+    """Return the untiered ``test_*`` function names in ``path``.
 
     Source-parsed (not collection-based) so the check is invariant under
     xdist, ``-k``, ``-m`` filters, and any other collection-time filtering.
+    An unparsable file reports a single ``"<file>"`` sentinel entry so it
+    surfaces through the same channel rather than being silently skipped.
     """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (SyntaxError, OSError, UnicodeDecodeError):
-        # Treat unparsable test files as marker-less so the gate flags
-        # them; surfacing via the same channel keeps diagnostics together.
-        return False
-    if _module_level_marker_names(tree) & _REQUIRED_TIER_MARKERS:
-        return True
-    return bool(_per_test_marker_names(tree) & _REQUIRED_TIER_MARKERS)
+        return ["<unparsable file>"]
+    return _untiered_test_functions(tree)
 
 
 def _enforce_tier_markers() -> None:
-    """Source-parse every test file under ``tests/`` and fail on missing markers.
+    """Source-parse every test file under ``tests/`` and fail on any untiered test.
 
     Called from ``pytest_configure`` (before xdist forks workers) so the
     enforcement runs exactly once per session, regardless of distribution
-    mode or CLI filters. The previous implementation used
-    ``pytest_collection_modifyitems`` and was empirically a no-op under
-    ``-n`` (xdist's controller hook receives an empty items list — see
+    mode or CLI filters. ``pytest_collection_modifyitems`` is not used
+    because xdist forks workers AFTER ``pytest_configure``, and the
+    collection-based hook is empirically a no-op under ``-n`` (xdist's
+    controller hook receives an empty items list — see
     tests/test_conftest_tier_gate.py for the regression tests).
+
+    Per-item, not per-file: unions module, class, and function markers for
+    each ``test_*`` item and reports the function by name when that union
+    carries none of ``_REQUIRED_TIER_MARKERS``.
     """
-    missing: list[Path] = []
+    missing: dict[Path, list[str]] = {}
     for path in sorted(_TESTS_DIR.rglob("test_*.py")):
         if path.name in _TIER_MARKER_EXEMPT_FILES:
             continue
-        if not _file_declares_tier_marker(path):
-            missing.append(path)
+        untiered = _file_untiered_functions(path)
+        if untiered:
+            missing[path] = untiered
     if missing:
         repo_root = _TESTS_DIR.parent
-        listing = "\n  ".join(str(p.relative_to(repo_root)) for p in missing)
+        listing = "\n  ".join(
+            f"{path.relative_to(repo_root)}: {', '.join(names)}"
+            for path, names in missing.items()
+        )
         raise pytest.UsageError(
-            "The following test files have no tier marker "
+            "The following tests have no tier marker "
             "(tier0/tier1/tier2/slow/benchmark):\n  "
             f"{listing}\n\n"
-            "Add `pytestmark = pytest.mark.tier0` (or per-test markers). "
+            "Add `pytestmark = pytest.mark.tier0` (or a per-test marker). "
             "See docs/TESTING.md §1.6."
         )
 

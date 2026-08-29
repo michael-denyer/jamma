@@ -31,6 +31,8 @@ from jamma.lmm.runner_numpy_streaming import _DEFAULT_STATS_CHUNK
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_memory import _compute_chunk, memory_preflight, plan_memory
 
+pytestmark = pytest.mark.tier0
+
 
 def _streaming_preflight(
     n_valid: int, n_snps: int, n_cvt: int, lmm_mode: int = 1
@@ -40,7 +42,6 @@ def _streaming_preflight(
     memory_preflight(config, ExecutionPlan("streaming", "test"), n_valid, n_snps, n_cvt)
 
 
-@pytest.mark.tier0
 def test_chunk_size_varies_with_scale():
     """The sizer returns different values as the sample count scales."""
     small = compute_chunk_size_numpy(1_410, 12_000, dispatch=DispatchPath.FUSED)
@@ -48,7 +49,6 @@ def test_chunk_size_varies_with_scale():
     assert small != large, "Chunk size should vary with scale"
 
 
-@pytest.mark.tier0
 def test_memory_estimate_uses_computed_chunk():
     """Memory estimates differ when using computed chunk sizes at different scales."""
     small_chunk = compute_chunk_size_numpy(1_410, 12_000, dispatch=DispatchPath.FUSED)
@@ -62,7 +62,6 @@ def test_memory_estimate_uses_computed_chunk():
     assert est_small.total_peak_gb != est_large.total_peak_gb
 
 
-@pytest.mark.tier0
 def test_uab_iab_gb_scales_with_n_cvt():
     """Observable invariant: Uab/Iab buffers grow with n_cvt.
 
@@ -81,7 +80,6 @@ def test_uab_iab_gb_scales_with_n_cvt():
     )
 
 
-@pytest.mark.tier0
 def test_estimate_streaming_memory_peak_scales_with_n_cvt():
     """estimate_streaming_memory's peak output differs for different n_cvt.
 
@@ -96,7 +94,6 @@ def test_estimate_streaming_memory_peak_scales_with_n_cvt():
     )
 
 
-@pytest.mark.tier0
 def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
     """Regression for jamma-ca6p: the preflight gate must thread n_cvt.
 
@@ -128,7 +125,6 @@ def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
         _streaming_preflight(n_samples, n_snps, n_cvt=90, lmm_mode=2)
 
 
-@pytest.mark.tier0
 def test_preflight_succeeds_at_low_n_cvt():
     """Sanity: the default n_cvt=1 call on a tiny dataset must pass on any
     machine with >1GB free. Exists to catch regressions where the preflight
@@ -138,7 +134,6 @@ def test_preflight_succeeds_at_low_n_cvt():
     _streaming_preflight(100, 1000, n_cvt=1)
 
 
-@pytest.mark.tier0
 def test_preflight_accepts_moderate_n_cvt(monkeypatch):
     """Regression (false-OOM): the preflight must size its compute chunk with the
     SAME n_cvt it estimates Uab with.
@@ -311,7 +306,6 @@ def _priced_batch_lmm_phase_gb(
     return est.lmm_batch_gb, chunk_plan
 
 
-@pytest.mark.tier0
 class TestChunkPlanMatchesEngine:
     """One LmmChunkPlan, computed once: the engine allocates from it, and the
     preflight prices from it. These pin that the two routes cannot diverge.

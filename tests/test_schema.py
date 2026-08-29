@@ -28,10 +28,11 @@ from jamma.lmm.schema import (
     get_spec,
 )
 
+pytestmark = pytest.mark.tier0
+
 # ── Default LMM knobs: pin the single-source-of-truth constants ────
 
 
-@pytest.mark.tier0
 class TestDefaultKnobs:
     """Pin the DEFAULT_* LMM knobs so a default cannot silently drift.
 
@@ -245,7 +246,6 @@ def _make_arrays(mode: int, n: int, rng: np.random.Generator) -> dict:
     return {key: rng.random(n) for key in RESULT_FIELDS[mode]}
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize("mode", [1, 2, 3, 4])
 def test_write_arrays_batch_matches_format_assoc_line(
     mode: int, tmp_path: Path
@@ -281,7 +281,6 @@ def test_write_arrays_batch_matches_format_assoc_line(
     )
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_with_pre_sliced_subset(tmp_path: Path) -> None:
     """write_arrays_batch works with pre-sliced subset arrays."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -312,7 +311,6 @@ def test_write_arrays_batch_with_pre_sliced_subset(tmp_path: Path) -> None:
     assert len(lines) == 4  # header + 3 data rows
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_empty(tmp_path: Path) -> None:
     """write_arrays_batch with empty snp_indices writes nothing."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -332,7 +330,6 @@ def test_write_arrays_batch_empty(tmp_path: Path) -> None:
     assert len(lines) == 1  # header only
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_nan_formatting(tmp_path: Path) -> None:
     """NaN values format identically via both paths."""
     from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
@@ -363,7 +360,6 @@ def test_write_arrays_batch_nan_formatting(tmp_path: Path) -> None:
 # ── write_arrays_batch error handling ────────────────────────────────
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_raises_if_not_opened(tmp_path: Path) -> None:
     """write_arrays_batch raises RuntimeError when writer is not opened."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -380,7 +376,6 @@ def test_write_arrays_batch_raises_if_not_opened(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_mode_mismatch_raises(tmp_path: Path) -> None:
     """write_arrays_batch raises ValueError on mode/test_type mismatch."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -398,7 +393,6 @@ def test_write_arrays_batch_mode_mismatch_raises(tmp_path: Path) -> None:
             )
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_missing_array_key_raises(tmp_path: Path) -> None:
     """write_arrays_batch raises ValueError when arrays dict is incomplete."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -416,7 +410,6 @@ def test_write_arrays_batch_missing_array_key_raises(tmp_path: Path) -> None:
             )
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_length_mismatch_raises(tmp_path: Path) -> None:
     """write_arrays_batch raises ValueError when array lengths don't match."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -434,7 +427,6 @@ def test_write_arrays_batch_length_mismatch_raises(tmp_path: Path) -> None:
             )
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_stat_array_length_mismatch_raises(tmp_path: Path) -> None:
     """write_arrays_batch raises ValueError when a stat array has wrong length."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -454,14 +446,12 @@ def test_write_arrays_batch_stat_array_length_mismatch_raises(tmp_path: Path) ->
             w.write_arrays_batch(1, np.arange(n), snp_info, afs, miss_counts, arrays)
 
 
-@pytest.mark.tier0
 def test_snp_meta_from_dicts_missing_key_raises() -> None:
     """SnpMeta.from_dicts rejects a dict missing a canonical key at the boundary."""
     with pytest.raises(KeyError, match="pos"):
         SnpMeta.from_dicts([{"chr": "1", "rs": "rs100", "a1": "A", "a0": "G"}])
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:
     """write_arrays_batch accumulates count correctly across multiple calls."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -490,7 +480,6 @@ def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:
 # ── write_arrays_batch with SnpMeta from PLINK metadata ──────────────
 
 
-@pytest.mark.tier0
 def test_write_arrays_batch_with_plink_meta(tmp_path: Path) -> None:
     """write_arrays_batch works with SnpMeta built from PLINK metadata."""
     from jamma.lmm.io import IncrementalAssocWriter
@@ -529,7 +518,6 @@ def test_write_arrays_batch_with_plink_meta(tmp_path: Path) -> None:
     assert first_data[2] == "1000"  # pos
 
 
-@pytest.mark.tier0
 class TestEnvFlag:
     """Every JAMMA toggle shares one truthiness rule.
 

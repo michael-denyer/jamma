@@ -24,6 +24,8 @@ import pytest
 
 from jamma.core.recompile import _import_and_validate, auto_recompile_c_extension
 
+pytestmark = pytest.mark.tier0
+
 
 def _fake_spec(*, module_name, compiler_module, sys_module_key, label):
     """Build a BuildSpec carrying only the load identity these tests exercise.
@@ -95,7 +97,6 @@ def _make_fake_compiler(module_name: str, *, outcome):
     return mod
 
 
-@pytest.mark.tier0
 def test_compiler_module_missing_returns_false(monkeypatch):
     """Corrupted install case: the compiler module itself is missing."""
     module_name = "jamma._compiler_that_does_not_exist"
@@ -111,7 +112,6 @@ def test_compiler_module_missing_returns_false(monkeypatch):
     assert result is False
 
 
-@pytest.mark.tier0
 def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     """Exception during compile -> False; stale module entry must remain.
 
@@ -143,7 +143,6 @@ def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     )
 
 
-@pytest.mark.tier0
 def test_compiler_returns_false_does_not_evict(monkeypatch):
     """compile_extension returned False -> shim returns False, no eviction."""
     compiler_name = "jamma._fake_compiler_false"
@@ -168,7 +167,6 @@ def test_compiler_returns_false_does_not_evict(monkeypatch):
     assert sys.modules.get(sys_key) is sentinel
 
 
-@pytest.mark.tier0
 def test_successful_recompile_evicts_stale_module(monkeypatch):
     """Success path -> returns True AND pops the stale sys.modules entry so
     subsequent import picks up the freshly compiled .so."""
@@ -198,7 +196,6 @@ def test_successful_recompile_evicts_stale_module(monkeypatch):
     )
 
 
-@pytest.mark.tier0
 def test_successful_recompile_with_no_prior_sys_modules_entry(monkeypatch):
     """pop(key, None) must not raise when the key was never present."""
     compiler_name = "jamma._fake_compiler_no_prior"
@@ -221,7 +218,6 @@ def test_successful_recompile_with_no_prior_sys_modules_entry(monkeypatch):
     assert result is True
 
 
-@pytest.mark.tier0
 def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
     """The runtime recompile shim must pass a non-None on_retry callback
     to compile_extension AND invoking it must emit a warning the user
@@ -273,7 +269,6 @@ def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
     )
 
 
-@pytest.mark.tier0
 def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
     """Regression for jamma-oy1c: N threads triggering auto_recompile must
     not interleave inside compile_extension. The file lock around the
@@ -360,7 +355,6 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
         )
 
 
-@pytest.mark.tier0
 def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
     """Negative control: if the lock is stubbed to a no-op, overlap IS
     observed. Proves the preceding test would catch a broken lock — it
@@ -442,7 +436,6 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
 # function, so they undo the monkeypatch first.
 
 
-@pytest.mark.tier0
 def test_lock_path_for_installed_package_lives_in_package_dir(monkeypatch):
     """For an installed package, the lock file is placed next to the .so so
     concurrent interpreters sharing site-packages serialize on it.
@@ -471,7 +464,6 @@ def test_lock_path_for_installed_package_lives_in_package_dir(monkeypatch):
     )
 
 
-@pytest.mark.tier0
 def test_lock_path_for_unknown_package_falls_back_to_tempdir(monkeypatch):
     """When find_spec returns None (package truly missing), the helper must
     fall back to tempdir rather than raising.
@@ -491,7 +483,6 @@ def test_lock_path_for_unknown_package_falls_back_to_tempdir(monkeypatch):
     assert path.name.endswith(".lock")
 
 
-@pytest.mark.tier0
 def test_lock_path_for_toplevel_module_falls_back_to_tempdir(monkeypatch):
     """A sys_module_key with no dot (no package) must hit the tempdir
     fallback branch — the ``if package_name:`` check gates the package-dir
@@ -510,7 +501,6 @@ def test_lock_path_for_toplevel_module_falls_back_to_tempdir(monkeypatch):
     assert path.name.endswith(".lock")
 
 
-@pytest.mark.tier0
 def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
     """After acquiring the lock, if a sibling already rebuilt the .so the
     shim must skip its own compile and return True. Avoids redundant
@@ -573,7 +563,6 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
     )
 
 
-@pytest.mark.tier0
 @pytest.mark.timeout(30)
 def test_recompile_refuses_to_recurse_into_its_own_import_probe(monkeypatch):
     """Re-entry must return False, not block on the lock this call already holds.
@@ -648,7 +637,6 @@ def _fake_build_spec(*, module_name, sys_module_key, fallback_label, required_at
     )
 
 
-@pytest.mark.tier0
 def test_compiler_module_missing_logs_warning_with_reason(monkeypatch, capsys):
     """Compiler module ImportError must be a WARNING carrying the exception
     text, not a DEBUG line the user never sees. Without this, the
@@ -680,7 +668,6 @@ def test_compiler_module_missing_logs_warning_with_reason(monkeypatch, capsys):
     )
 
 
-@pytest.mark.tier0
 def test_import_and_validate_import_error_logs_warning_with_reason(capsys):
     """A genuine import failure (dlopen error, missing .so) must be a
     WARNING carrying the exception text, not a DEBUG line the user never
@@ -710,7 +697,6 @@ def test_import_and_validate_import_error_logs_warning_with_reason(capsys):
     )
 
 
-@pytest.mark.tier0
 def test_import_and_validate_missing_abi_version_logs_warning(monkeypatch, capsys):
     """A module with no ABI_VERSION attribute must log a WARNING naming the
     missing attribute, not a silent DEBUG line.
@@ -739,7 +725,6 @@ def test_import_and_validate_missing_abi_version_logs_warning(monkeypatch, capsy
     assert "fake-fallback" in captured.err
 
 
-@pytest.mark.tier0
 def test_import_and_validate_missing_required_attrs_logs_warning_with_names(
     monkeypatch, capsys
 ):
@@ -775,7 +760,6 @@ def test_import_and_validate_missing_required_attrs_logs_warning_with_names(
     assert "fake-fallback" in captured.err
 
 
-@pytest.mark.tier0
 def test_reentrancy_decline_logs_info_that_rebuild_succeeded(monkeypatch, capsys):
     """When the reentrancy guard declines a nested recompile call, the log
     must say the .so was rebuilt successfully and takes effect next

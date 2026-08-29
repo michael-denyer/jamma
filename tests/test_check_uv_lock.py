@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.tier0
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO_ROOT / "scripts" / "check-uv-lock.sh"
 
@@ -35,20 +37,17 @@ def _run_with_fake_uv(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.mark.tier0
 def test_passes_when_uv_reports_lock_in_sync(tmp_path: Path) -> None:
     result = _run_with_fake_uv(tmp_path, "exit 0")
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_fails_when_uv_reports_drift(tmp_path: Path) -> None:
     result = _run_with_fake_uv(tmp_path, "exit 1")
     assert result.returncode == 1
     assert "Run: uv lock" in result.stdout
 
 
-@pytest.mark.tier0
 def test_uv_own_error_reaches_the_reader(tmp_path: Path) -> None:
     """uv's stderr must not be discarded.
 

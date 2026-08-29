@@ -83,6 +83,7 @@ def _write_cache_entries(
         )
 
 
+@pytest.mark.tier0
 def test_loco_config_still_importable_from_jamma_lmm_loco() -> None:
     """LocoConfig moved to ``loco_config`` but the old path stays.
 
@@ -101,6 +102,7 @@ def test_loco_config_still_importable_from_jamma_lmm_loco() -> None:
         )
 
 
+@pytest.mark.tier0
 class TestLocoConfigArtifactNaming:
     """LocoConfig owns the on-disk names for LOCO kinship and eigen artifacts.
 
@@ -152,6 +154,7 @@ class TestLocoConfigArtifactNaming:
             loco.kinship_path("1")
 
 
+@pytest.mark.tier0
 class TestFindLocoEigenCache:
     """Tests for _find_loco_eigen_cache helper function."""
 
@@ -440,6 +443,7 @@ class TestLocoEigenCacheFallback:
         assert result.n_tested > 0
 
 
+@pytest.mark.tier0
 class TestLocoEigenCacheValidation:
     """Validation and error tests for LOCO eigen cache."""
 
@@ -476,6 +480,7 @@ class TestLocoEigenCacheValidation:
             read_eigen_files(d_path, u_path, n_samples=20)
 
 
+@pytest.mark.tier0
 class TestEigenDirCLI:
     """Tests for --eigen-dir CLI flag."""
 
@@ -502,6 +507,7 @@ class TestEigenDirCLI:
         assert config.eigen_dir is None
 
 
+@pytest.mark.tier0
 class TestLocoWriteEigenAutoDefault:
     """PipelineConfig defaults eigen_dir for LOCO write_eigen (Python API parity).
 

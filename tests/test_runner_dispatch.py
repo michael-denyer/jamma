@@ -12,8 +12,9 @@ from jamma.lmm.runner import (
     warn_if_small_sample,
 )
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestSmallSampleWarning:
     """Tests for the n<50 small-sample warning.
 

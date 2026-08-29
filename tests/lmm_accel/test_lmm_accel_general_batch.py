@@ -26,6 +26,8 @@ from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_num
 from jamma.lmm.uab import batch_compute_uab_varying_soa_numpy, compute_uab_invariant_soa
 from tests.lmm_accel._helpers import _make_general_score_lrt_data
 
+pytestmark = pytest.mark.tier0
+
 _L_MIN, _L_MAX, _N_GRID, _N_REFINE = 1e-5, 1e5, 50, 20
 
 # Score statistics are a closed-form evaluation at a fixed lambda, so C and
@@ -136,7 +138,6 @@ def _check_lrt(data, uab_var, uab_inv, pab, Uab_batch, label):
     return result
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )
@@ -148,7 +149,6 @@ def test_score_split_general_matches_numpy(n_cvt, request):
     _check_score(data, uab_var, uab_inv, pab, data["Uab_batch"], f"n_cvt={n_cvt} Score")
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )
@@ -160,7 +160,6 @@ def test_lrt_split_general_matches_numpy(n_cvt, request):
     _check_lrt(data, uab_var, uab_inv, pab, data["Uab_batch"], f"n_cvt={n_cvt} LRT")
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )
@@ -179,7 +178,6 @@ def test_score_split_general_degenerate_snps(general_score_lrt_ncvt2):
     )
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(
     compute_numpy._accel is None, reason="General C extension unavailable"
 )

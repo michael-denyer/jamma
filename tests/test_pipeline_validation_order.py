@@ -28,7 +28,7 @@ from jamma.pipeline import PipelineConfig, PipelineRunner
 
 BFILE = Path(__file__).resolve().parent / "fixtures/mouse_hs1940/mouse_hs1940"
 
-pytestmark = pytest.mark.tier1
+pytestmark = pytest.mark.tier0
 
 
 def _raises(config: PipelineConfig) -> tuple[type, str]:

@@ -99,22 +99,36 @@ needs `tier2`/`slow` too — it should not run under the default filter.
 
 ### 1.6 Mandatory tier marker
 
-Every test file must declare at least one tier marker — per-test or
-module-level:
+Every `test_*` function must resolve to at least one tier marker — per-test,
+per-class, or module-level:
 
 ```python
 import pytest
 pytestmark = pytest.mark.tier0
 ```
 
-A `pytest_configure` hook in `tests/conftest.py` aborts the run with
-`tests/<name>.py: file is missing a tier marker (tier0/tier1/tier2/slow/benchmark)`
-when this is missing. The gate runs once on the controller before xdist
-forks workers (a previous collection-based gate failed open under `-n N`
-because xdist controllers skip collection of the worker test files).
-Recognises parametrised markers (`@pytest.mark.skipif(...)`) and list-form
-`pytestmark`. Promote the file to its correct tier rather than silencing
-the check.
+A `pytest_configure` hook in `tests/conftest.py` unions the module
+`pytestmark`, the enclosing class's decorators, and the function's own
+decorators for every test item, and aborts the run naming any function whose
+union carries none of `tier0`/`tier1`/`tier2`/`slow`/`benchmark`. The check
+is per-item, not per-file: a module marker or a marker on one function in a
+file does not cover a sibling test that carries none of its own. An earlier,
+file-granular version of this gate passed a file the moment *any* test in it
+had a marker, so 88 tests across nine files ran with no tier for their whole
+lifetime. The gate runs once on the controller before xdist forks workers (a
+collection-based gate failed open under `-n N` because xdist controllers
+skip collection of the worker test files). Recognises parametrised markers
+(`@pytest.mark.skipif(...)`) and list-form `pytestmark`. Promote the
+function (or its file) to its correct tier rather than silencing the check.
+
+`tier1` means the test reads a GEMMA reference: a `FixtureDataset.ref(...)`
+path, a `.kinship` fixture file, or a recorded GEMMA constant, and compares
+its own output against it. A test that only *passes* a kinship or bfile path
+through to a fake runner, or that computes its own kinship/eigendecomp
+in-process and checks internal consistency (batch vs streaming, fused-C vs
+split-C, CLI argument parsing through a fake factory), reads no reference
+and belongs in `tier0` even though a kinship-shaped path appears in its
+source.
 
 ### 1.7 Common commands
 

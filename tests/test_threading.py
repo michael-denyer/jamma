@@ -11,8 +11,9 @@ from jamma.core.threading import (
     get_c_extension_thread_count,
 )
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestGetBlasThreadCount:
     """Tests for get_blas_thread_count()."""
 
@@ -38,7 +39,6 @@ class TestGetBlasThreadCount:
         assert get_blas_thread_count() == 1
 
 
-@pytest.mark.tier0
 class TestBlasThreads:
     """Tests for blas_threads() context manager."""
 
@@ -55,7 +55,6 @@ class TestBlasThreads:
             assert result is None
 
 
-@pytest.mark.tier0
 class TestCExtensionThreads:
     """Tests for C-extension OpenMP thread sizing."""
 
@@ -78,7 +77,6 @@ class TestCExtensionThreads:
         assert get_c_extension_thread_count(True, True) == 24
 
 
-@pytest.mark.tier0
 class TestEigendecompThreading:
     """Eigendecomp uses all physical cores, not a reduced thread count.
 
@@ -169,7 +167,6 @@ class TestEigendecompThreading:
         )
 
 
-@pytest.mark.tier0
 class TestBlasThreadsKnobReachesRotation:
     """JAMMA_BLAS_THREADS must govern the rotation's thread context.
 

@@ -114,6 +114,7 @@ class TestCExtensionPerformance:
             )
 
 
+@pytest.mark.tier0
 class TestBuildPabTableForC:
     """Verify build_pab_table_for_c produces correct flat arrays for C extension."""
 

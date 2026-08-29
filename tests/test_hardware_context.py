@@ -8,8 +8,9 @@ import pytest
 
 from jamma.core.hardware import get_hardware_context
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestHardwareContext:
     """Tests for hardware context collection."""
 

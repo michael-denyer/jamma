@@ -12,6 +12,8 @@ import pytest
 from jamma.io._parallel_text import MAX_WORKERS
 from jamma.io.matrix_writer import write_matrix_parallel
 
+pytestmark = pytest.mark.tier0
+
 
 def _savetxt_bytes(
     matrix: np.ndarray,
@@ -24,7 +26,6 @@ def _savetxt_bytes(
     return path.read_bytes()
 
 
-@pytest.mark.tier0
 class TestByteIdentity:
     """Verify write_matrix_parallel is byte-identical to np.savetxt."""
 
@@ -112,7 +113,6 @@ class TestByteIdentity:
         assert parallel_path.read_bytes() == expected
 
 
-@pytest.mark.tier0
 class TestEdgeCases:
     """Edge cases for write_matrix_parallel."""
 
@@ -176,7 +176,6 @@ class TestEdgeCases:
         assert nested_path.read_bytes() == expected
 
 
-@pytest.mark.tier0
 class TestFailureHandling:
     """Verify cleanup and platform behavior of write_matrix_parallel."""
 
@@ -240,7 +239,6 @@ class TestFailureHandling:
         assert not remaining, f"Temp dirs not cleaned up after failure: {remaining}"
 
 
-@pytest.mark.tier0
 class TestAtomicPublication:
     """A failed write never destroys a pre-existing valid destination."""
 
@@ -300,7 +298,6 @@ class TestAtomicPublication:
             assert not leftovers, f"Temp artifacts not cleaned up: {leftovers}"
 
 
-@pytest.mark.tier0
 class TestWorkerCap:
     """Verify worker count is capped to avoid disk I/O bottleneck."""
 

@@ -18,8 +18,9 @@ from jamma.core.snp_filter import (
     validate_snp_indices,
 )
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestComputeHwePvalues:
     """Tests for Hardy-Weinberg equilibrium chi-squared p-values."""
 
@@ -93,7 +94,6 @@ class TestComputeHwePvalues:
         assert not np.isnan(pvalues[0])
 
 
-@pytest.mark.tier0
 class TestValidateSnpIndices:
     """Boundary validation of -snps restriction indices."""
 
@@ -113,7 +113,6 @@ class TestValidateSnpIndices:
         validate_snp_indices(np.array([], dtype=np.int64), 10, "test")
 
 
-@pytest.mark.tier0
 class TestFilterComposition:
     """Integration tests for filter composition (SNP list + HWE + MAF/miss)."""
 
@@ -208,7 +207,6 @@ class TestFilterComposition:
         np.testing.assert_array_equal(surviving, [0, 4])
 
 
-@pytest.mark.tier0
 class TestComputeSnpStats:
     """Tests for compute_snp_stats including all-NaN column handling."""
 

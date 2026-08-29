@@ -13,8 +13,9 @@ from jamma.core.snp_stats import (
     filter_snp_stats,
 )
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 def test_collect_snp_stats_from_chunks_matches_shared_stats_kernel():
     genotypes = np.array(
         [
@@ -44,7 +45,6 @@ def test_collect_snp_stats_from_chunks_matches_shared_stats_kernel():
     assert stats.hwe_counts.n_aa.shape == (4,)
 
 
-@pytest.mark.tier0
 def test_filter_snp_stats_uses_stats_sample_count_as_denominator():
     stats = SnpStats(
         col_means=np.array([1.0, 1.0]),
@@ -62,7 +62,6 @@ def test_filter_snp_stats_uses_stats_sample_count_as_denominator():
     np.testing.assert_array_equal(selection.filtered_miss, [1])
 
 
-@pytest.mark.tier0
 def test_snp_stats_cache_requires_all_sample_scope():
     with pytest.raises(ValueError, match="all-sample statistics"):
         SnpStatsCache(
@@ -74,7 +73,6 @@ def test_snp_stats_cache_requires_all_sample_scope():
         )
 
 
-@pytest.mark.tier0
 def test_filter_snp_stats_restricts_subset_by_global_indices():
     stats = SnpStats(
         col_means=np.ones(4),
@@ -98,7 +96,6 @@ def test_filter_snp_stats_restricts_subset_by_global_indices():
     np.testing.assert_array_equal(selection.local_indices, [1, 3])
 
 
-@pytest.mark.tier0
 def test_filter_snp_stats_applies_hwe_counts():
     stats = SnpStats(
         col_means=np.array([1.0, 1.0]),
@@ -125,7 +122,6 @@ def test_filter_snp_stats_applies_hwe_counts():
     assert selection.n_hwe_removed == 1
 
 
-@pytest.mark.tier0
 def test_filter_snp_stats_hwe_threshold_requires_hwe_counts():
     stats = SnpStats(
         col_means=np.array([1.0, 1.0]),

@@ -24,11 +24,12 @@ from jamma.lmm.stats import AssocResult
 from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, SYNTHETIC
 
+pytestmark = pytest.mark.tier0
+
 BFILE = SYNTHETIC.bfile
 LOCO_BFILE = LOCO.bfile
 
 
-@pytest.mark.tier0
 class TestPlinkIOErrorPaths:
     """Error-path tests for PLINK I/O validation functions.
 
@@ -87,7 +88,6 @@ class TestPlinkIOErrorPaths:
         assert total_snps == n_bim_snps
 
 
-@pytest.mark.tier0
 class TestLmmIOErrorPaths:
     """Error-path tests for LMM I/O association writer.
 

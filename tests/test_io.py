@@ -7,8 +7,9 @@ import pytest
 
 from jamma.io import load_plink_binary, read_covariate_file
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestLoadPlinkBinary:
     """Tests for load_plink_binary function."""
 
@@ -58,7 +59,6 @@ class TestLoadPlinkBinary:
             load_plink_binary(nonexistent)
 
 
-@pytest.mark.tier0
 class TestPlinkDataProperties:
     """Tests for PlinkData dataclass properties."""
 
@@ -82,7 +82,6 @@ class TestPlinkDataProperties:
         assert data.n_snps == data.genotypes.shape[1]
 
 
-@pytest.mark.tier0
 class TestReadCovariateFile:
     """Tests for read_covariate_file function."""
 

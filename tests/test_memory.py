@@ -18,9 +18,9 @@ from jamma.core.memory import (
 )
 from tests.fakes.memory import use_fake_psutil
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
-@pytest.mark.tier0
+
 class TestCheckMemoryAvailable:
     """Tests for check_memory_available function."""
 
@@ -48,7 +48,6 @@ class TestCheckMemoryAvailable:
         assert "kinship" in msg  # Operation name
 
 
-@pytest.mark.tier0
 class TestEigendecompMemoryGate:
     """Integration: eigendecompose_kinship respects check_memory flag."""
 
@@ -84,7 +83,6 @@ class TestEigendecompMemoryGate:
         assert eigenvectors.shape == (30, 30)
 
 
-@pytest.mark.tier0
 class TestMemorySnapshot:
     """Tests for memory snapshot functions."""
 
@@ -117,7 +115,6 @@ class TestMemorySnapshot:
         assert snap.rss_gb > 0
 
 
-@pytest.mark.tier0
 class TestCleanupMemory:
     """Tests for memory cleanup function."""
 
@@ -168,7 +165,6 @@ class TestCleanupMemory:
         assert after.rss_gb > 0
 
 
-@pytest.mark.tier0
 class TestLmmMemoryEstimation:
     """Tests for estimate_lmm_memory function (LMM-phase only)."""
 
@@ -210,7 +206,6 @@ class TestLmmMemoryEstimation:
         assert est.sufficient is True
 
 
-@pytest.mark.tier0
 class TestMemoryEstimateVsActualAllocation:
     """Regression tests: estimates must cover actual runtime tensor shapes.
 
@@ -271,7 +266,6 @@ class TestMemoryEstimateVsActualAllocation:
         )
 
 
-@pytest.mark.tier0
 class TestKinshipDtypeAccounting:
     """Verify memory model accounts for float64 genotype copy in kinship."""
 
@@ -320,7 +314,6 @@ class TestKinshipDtypeAccounting:
         )
 
 
-@pytest.mark.tier0
 class TestGateCorrectnessLmmMemory:
     """Tests that LMM batch runner memory gate correctly blocks/passes."""
 
@@ -365,7 +358,6 @@ class TestGateCorrectnessLmmMemory:
         assert est.sufficient is False
 
 
-@pytest.mark.tier0
 class TestSafetyMarginCap:
     """Verify 10GB absolute cap on safety margin."""
 
@@ -422,7 +414,6 @@ class TestFormatDuration:
         assert _format_duration(seconds) == expected
 
 
-@pytest.mark.tier0
 class TestUabIabGbFused:
     """Tests for fused Uab memory estimation."""
 

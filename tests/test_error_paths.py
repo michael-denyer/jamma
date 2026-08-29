@@ -20,10 +20,11 @@ from jamma.io.covariate import encode_categorical_covariates, read_covariate_fil
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from tests.fixture_paths import SYNTHETIC
 
+pytestmark = pytest.mark.tier0
+
 BFILE = SYNTHETIC.bfile
 
 
-@pytest.mark.tier0
 class TestCovariateErrorPaths:
     """Error-path tests for read_covariate_file and encode_categorical_covariates."""
 
@@ -127,7 +128,6 @@ class TestCovariateErrorPaths:
         assert np.isnan(result[3, 1])
 
 
-@pytest.mark.tier0
 class TestPipelineErrorPaths:
     """Error-path tests for PipelineConfig, PipelineResult, and PipelineRunner."""
 

@@ -21,6 +21,8 @@ from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_num
 from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.lmm_accel._helpers import _null_model_ncvt1
 
+pytestmark = pytest.mark.tier0
+
 _C_RTOL = 1e-11
 _C_ATOL = 1e-14
 
@@ -103,7 +105,6 @@ class TestScoreWorkspaceParity:
             n_snps,
         )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _score_fused_ws_available,
         reason="Score fused workspace C not available",
@@ -131,7 +132,6 @@ class TestScoreWorkspaceParity:
         )
         assert ws is not None
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _score_fused_ws_available,
         reason="Score fused workspace C not available",
@@ -165,7 +165,6 @@ class TestScoreWorkspaceParity:
             "Score workspace",
         )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _score_fused_ws_available,
         reason="Score fused workspace C not available",
@@ -208,7 +207,6 @@ class TestScoreWorkspaceParity:
             "Score workspace chunk2",
         )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _score_fused_ws_available,
         reason="Score fused workspace C not available",
@@ -242,7 +240,6 @@ class TestScoreWorkspaceParity:
         with pytest.raises(ValueError, match="lmm_mode"):
             _c().compute_score_fused_ws_c(lrt_ws, utg_t, 1)
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _score_fused_ws_available,
         reason="Score fused workspace C not available",
@@ -280,7 +277,6 @@ class TestScoreWorkspaceParity:
             "non-degenerate SNPs should be finite"
         )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _score_fused_ws_available,
         reason="Score fused workspace C not available",
@@ -350,7 +346,6 @@ class TestLrtWorkspaceParity:
             n_snps,
         )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _lrt_fused_ws_available,
         reason="LRT fused workspace C not available",
@@ -376,7 +371,6 @@ class TestLrtWorkspaceParity:
         )
         assert ws is not None
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _lrt_fused_ws_available,
         reason="LRT fused workspace C not available",
@@ -410,7 +404,6 @@ class TestLrtWorkspaceParity:
             "LRT workspace",
         )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _lrt_fused_ws_available,
         reason="LRT fused workspace C not available",
@@ -452,7 +445,6 @@ class TestLrtWorkspaceParity:
             "LRT workspace chunk2",
         )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _lrt_fused_ws_available,
         reason="LRT fused workspace C not available",
@@ -496,7 +488,6 @@ class TestLrtWorkspaceParity:
             "non-degenerate p_lrts should be finite"
         )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _lrt_fused_ws_available,
         reason="LRT fused workspace C not available",
@@ -530,7 +521,6 @@ class TestLrtWorkspaceParity:
                 err_msg=f"LRT {key}: 2-thread vs 1-thread mismatch",
             )
 
-    @pytest.mark.tier0
     @pytest.mark.skipif(
         not _lrt_fused_ws_available,
         reason="LRT fused workspace C not available",

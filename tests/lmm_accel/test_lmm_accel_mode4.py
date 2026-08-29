@@ -25,6 +25,8 @@ import jamma.lmm.compute_numpy as compute_numpy
 from jamma.lmm.compute_numpy import _c, compute_lmm_chunk_numpy
 from tests.lmm_accel._helpers import _null_model_ncvt1
 
+pytestmark = pytest.mark.tier0
+
 _MODE4_KEYS = (
     "lambdas",
     "logls",
@@ -69,7 +71,6 @@ def _mode4_workspace(fused_data):
     return ws, utg_t, utg_t.shape[0]
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_numpy_fallback_returns_all_keys(score_lrt_data, monkeypatch):
     """Mode 4 through the NumPy fallback returns all 8 keys, correctly shaped.
@@ -103,7 +104,6 @@ def test_mode4_numpy_fallback_returns_all_keys(score_lrt_data, monkeypatch):
         )
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_workspace_api(fused_data):
     """Fused mode-4 workspace creation and compute returns all 8 keys."""
@@ -120,7 +120,6 @@ def test_mode4_fused_workspace_api(fused_data):
         )
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(fused_data):
     """The shared coarse grid still leaves REML and MLE with separate brackets.
@@ -148,7 +147,6 @@ def test_mode4_shared_grid_preserves_distinct_reml_mle_brackets(fused_data):
     )
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_degenerate_snps(fused_data):
     """A constant genotype gives NaN Wald and Score outputs, and p_lrt near 1."""
@@ -166,7 +164,6 @@ def test_mode4_fused_degenerate_snps(fused_data):
     assert np.all(np.isfinite(cr["betas"][1:])), "non-degenerate betas should be finite"
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_wald_workspace_yields_wald_keys_only(fused_data):
     """One compute serves both modes, and the workspace decides what comes back.
@@ -188,7 +185,6 @@ def test_wald_workspace_yields_wald_keys_only(fused_data):
     assert set(mode4_result) == set(_MODE4_KEYS)
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_mode4_fused_multithreaded_parity(fused_data):
     """Fused mode-4 is bitwise deterministic across thread counts.

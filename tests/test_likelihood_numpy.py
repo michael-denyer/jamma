@@ -38,6 +38,8 @@ from jamma.lmm.uab import (
 )
 from tests.builders import rotated_lmm_inputs
 
+pytestmark = pytest.mark.tier0
+
 
 @pytest.fixture
 def synthetic_data():
@@ -55,7 +57,6 @@ def synthetic_data():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def testcompute_lmm_chunk_numpy_all_modes(synthetic_data, monkeypatch):
     """compute_lmm_chunk_numpy must return non-None expected keys for each mode.
 
@@ -132,7 +133,6 @@ def testcompute_lmm_chunk_numpy_all_modes(synthetic_data, monkeypatch):
         assert result4[key] is not None, f"Mode 4: key '{key}' is None"
 
 
-@pytest.mark.tier0
 def testcompute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
     """compute_lmm_chunk_numpy must raise ValueError when required args are absent."""
     eigenvalues, UtW, Uty, UtG = synthetic_data
@@ -160,7 +160,6 @@ def testcompute_lmm_chunk_numpy_missing_args_raise(synthetic_data):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_p_yy_warn_once_scalar():
     """_clamp_p_yy fires warning exactly once per run; reset restarts the counter."""
     from loguru import logger
@@ -201,7 +200,6 @@ def test_p_yy_warn_once_scalar():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_mle_scalar_pab_ncvt1():
     """_mle_p_yy_scalar_ncvt1 must match calc_pab path to rtol=1e-14."""
     from jamma.lmm.likelihood import (
@@ -241,7 +239,6 @@ def test_mle_scalar_pab_ncvt1():
     )
 
 
-@pytest.mark.tier0
 def test_mle_null_scalar_ncvt1():
     """Null-model mle_log_likelihood with n_cvt=1 matches the full Pab path."""
     from jamma.lmm.likelihood import (
@@ -290,7 +287,6 @@ def test_mle_null_scalar_ncvt1():
     )
 
 
-@pytest.mark.tier0
 def test_mle_scalar_degenerate_s_ww_zero():
     """Scalar MLE P_yy returns s_yy when s_ww == 0 (degenerate intercept)."""
     from jamma.lmm.likelihood import (
@@ -324,7 +320,6 @@ def test_mle_scalar_degenerate_s_ww_zero():
     np.testing.assert_allclose(p_yy, p_yy_full, rtol=1e-12)
 
 
-@pytest.mark.tier0
 def test_mle_scalar_degenerate_p1_xx_zero():
     """Scalar MLE P_yy returns p1_yy when p1_xx == 0 (constant genotype)."""
     from jamma.lmm.likelihood import _mle_p_yy_scalar_ncvt1, calc_pab, get_ab_index
@@ -367,7 +362,6 @@ def test_mle_scalar_degenerate_p1_xx_zero():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_reml_const_precomputed():
     """_compute_reml_const(df) must match inline computation bit-exactly."""
     from jamma.lmm.likelihood_numpy import _compute_reml_const
@@ -382,7 +376,6 @@ def test_reml_const_precomputed():
         )
 
 
-@pytest.mark.tier0
 def test_iab_invariant_scalars():
     """compute_iab_invariant_scalars_ncvt1 must match manual np.sum exactly."""
     from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
@@ -408,7 +401,6 @@ def test_iab_invariant_scalars():
     np.testing.assert_equal(logdet_iab, expected_logdet)
 
 
-@pytest.mark.tier0
 def test_golden_section_eval_count(monkeypatch):
     """The optimizer evaluates REML 2 + n_iter + 1 times (final midpoint eval).
 
@@ -444,7 +436,6 @@ def test_golden_section_eval_count(monkeypatch):
     )
 
 
-@pytest.mark.tier0
 def test_golden_section_accuracy_no_final_eval(synthetic_data):
     """Golden section without final eval must produce finite, positive lambdas."""
     eigenvalues, UtW, Uty, UtG = synthetic_data
@@ -489,7 +480,6 @@ def split_uab_data():
     return eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch
 
 
-@pytest.mark.tier0
 def test_grid_reml_split_matches_full(split_uab_data):
     """_batch_grid_reml_split_ncvt1_numpy must match _batch_grid_reml_numpy."""
     from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
@@ -543,7 +533,6 @@ def test_grid_reml_split_matches_full(split_uab_data):
     )
 
 
-@pytest.mark.tier0
 def test_refinement_reml_split_matches_full(split_uab_data):
     """_batch_reml_at_lambda_split_ncvt1_numpy must match full path."""
     from jamma.lmm.likelihood_numpy import (
@@ -599,7 +588,6 @@ def test_refinement_reml_split_matches_full(split_uab_data):
     )
 
 
-@pytest.mark.tier0
 def test_split_optimizer_matches_full(split_uab_data):
     """golden_section_optimize_lambda_split_ncvt1_numpy must match full optimizer."""
     from jamma.lmm.likelihood_numpy import (
@@ -643,7 +631,6 @@ def test_split_optimizer_matches_full(split_uab_data):
     )
 
 
-@pytest.mark.tier0
 def test_split_pab_matches_generic_pab(split_uab_data):
     """Pab from split optimizer must match generic Pab element-by-element."""
     from jamma.lmm.likelihood_numpy import (
@@ -684,7 +671,6 @@ def test_split_pab_matches_generic_pab(split_uab_data):
     )
 
 
-@pytest.mark.tier0
 def test_invariant_computed_once_per_lambda(split_uab_data):
     """Invariant dot products must be (n_grid,), not (n_grid, n_snps)."""
     from jamma.lmm.likelihood_numpy import _compute_reml_const
@@ -768,7 +754,6 @@ def wald_pab_data():
     return eigenvalues, Uab_batch, Iab_batch, n_samples
 
 
-@pytest.mark.tier0
 def test_optimizer_returns_pab(wald_pab_data):
     """The optimizer returns (lambdas, logls, Pab) with Pab of the right shape."""
     from jamma.lmm.likelihood import build_index_table
@@ -798,7 +783,6 @@ def test_optimizer_returns_pab(wald_pab_data):
     assert np.all(np.isfinite(Pab_final)), "Pab_final contains non-finite values"
 
 
-@pytest.mark.tier0
 def test_wald_from_pab_matches_original(wald_pab_data):
     """Wald stats from pre-computed Pab match original path to rtol=1e-14."""
     from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
@@ -849,7 +833,6 @@ def test_wald_from_pab_matches_original(wald_pab_data):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_batch_golden_section_numpy_all_nan_grid():
     """The bracket refinement with all-NaN grid logls brackets around l_min.
 
@@ -922,7 +905,6 @@ def test_batch_golden_section_numpy_all_nan_grid():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_batch_numpy_all_degenerate_snps_return_lmin():
     """NumPy batch REML returns l_min for all-degenerate SNPs (UtG=0, P_XX=0).
 
@@ -967,7 +949,6 @@ def test_batch_numpy_all_degenerate_snps_return_lmin():
     assert np.all(np.isnan(pwalds)), f"All p_walds should be NaN, got {pwalds}"
 
 
-@pytest.mark.tier0
 def test_batch_numpy_mixed_degenerate_and_valid_snps():
     """NumPy batch REML handles a mix of degenerate and valid SNPs correctly.
 
@@ -1030,7 +1011,6 @@ def test_batch_numpy_mixed_degenerate_and_valid_snps():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
     """Split ncvt1 Python fallback path: degenerate SNPs produce NaN Wald stats.
 
@@ -1099,7 +1079,6 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan():
     assert np.all(np.isnan(pwalds)), f"Expected all-NaN pwalds, got {pwalds}"
 
 
-@pytest.mark.tier0
 def test_split_ncvt1_fallback_mixed_degenerate_valid():
     """Split ncvt1 Python fallback: mixed batch, degenerate NaN, valid finite.
 
@@ -1176,7 +1155,6 @@ def test_split_ncvt1_fallback_mixed_degenerate_valid():
     )
 
 
-@pytest.mark.tier0
 def test_generic_batch_numpy_fallback_degenerate_wald_nan():
     """golden_section_optimize_lambda_numpy (generic path) with degenerate SNPs.
 
@@ -1225,7 +1203,6 @@ def test_generic_batch_numpy_fallback_degenerate_wald_nan():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_scalar_vs_batch_reml_single_snp_parity():
     """Scalar and batch REML optimizer paths produce matching lambda for single SNP.
 
@@ -1267,7 +1244,6 @@ def test_scalar_vs_batch_reml_single_snp_parity():
     )
 
 
-@pytest.mark.tier0
 def test_scalar_vs_batch_reml_multi_snp_consistency():
     """Batch REML optimizer agrees with scalar path for each of 10 SNPs.
 
@@ -1315,7 +1291,6 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
     """Scalar and batch REML optimizers agree on lambda and logl.
 
@@ -1389,7 +1364,6 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_reconstruct_uab_from_soa_ncvt1_fast_path():
     """reconstruct_uab_from_soa's n_cvt=1 fast path rebuilds the six-column Uab."""
     from jamma.lmm.uab import reconstruct_uab_from_soa
@@ -1418,7 +1392,6 @@ def test_reconstruct_uab_from_soa_ncvt1_fast_path():
     )
 
 
-@pytest.mark.tier0
 def test_reconstruct_uab_from_soa_ncvt2():
     """reconstruct_uab_from_soa with n_cvt=2 round-trips via classify_uab_columns."""
     from jamma.lmm.likelihood import classify_uab_columns
@@ -1461,7 +1434,6 @@ def test_reconstruct_uab_from_soa_ncvt2():
     )
 
 
-@pytest.mark.tier0
 def test_reconstruct_uab_from_soa_ncvt4():
     """reconstruct_uab_from_soa with n_cvt=4 matches batch_compute_uab_numpy."""
     from jamma.lmm.likelihood import classify_uab_columns

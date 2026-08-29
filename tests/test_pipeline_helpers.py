@@ -22,6 +22,8 @@ from jamma.lmm.runner import ExecutionPlan
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
 
+pytestmark = pytest.mark.tier0
+
 
 def _make_runner(tmp_path: Path, **overrides) -> PipelineRunner:  # type: ignore[no-untyped-def]
     """Construct a PipelineRunner with a dummy bfile and any config overrides."""
@@ -54,7 +56,6 @@ def _memory_breakdown(
     )
 
 
-@pytest.mark.tier0
 class TestMemoryPreflightStreaming:
     """Streaming mode builds and returns one MemoryPlan."""
 
@@ -107,7 +108,6 @@ class TestMemoryPreflightStreaming:
         ), f"streaming skip must log the runner label; got {records!r}"
 
 
-@pytest.mark.tier0
 class TestMemoryPreflightBatch:
     """Batch mode paths: check_memory=False short-circuit, budget, sufficiency."""
 
@@ -196,7 +196,6 @@ def _write_fam(path: Path, rows: list[list[str]]) -> None:
     path.write_text("\n".join(" ".join(r) for r in rows) + "\n")
 
 
-@pytest.mark.tier0
 class TestLoadPhenotypesAndIntersectMasks:
     """Multi-phenotype loading + mask intersection."""
 
@@ -317,7 +316,6 @@ class TestLoadPhenotypesAndIntersectMasks:
         assert n_valid == 3
 
 
-@pytest.mark.tier0
 class TestRunLoco:
     """Direct tests for the extracted _run_loco helper.
 

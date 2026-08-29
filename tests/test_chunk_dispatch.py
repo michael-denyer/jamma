@@ -25,6 +25,7 @@ from tests.conftest import make_runner_synthetic_data
 from tests.fixture_paths import SYNTHETIC
 
 
+@pytest.mark.tier0
 def test_runner_mode4_uses_fused_dispatch():
     """Mode 4 takes a fused path, and the SoA-split kernel refuses to serve it.
 

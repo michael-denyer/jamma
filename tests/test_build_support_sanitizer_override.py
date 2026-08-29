@@ -18,6 +18,8 @@ from jamma._build_support.compile_and_link import (
     resolve_cflags_for,
 )
 
+pytestmark = pytest.mark.tier0
+
 
 class _FakeCompleted:
     def __init__(self, returncode: int = 0, stderr: str = "") -> None:
@@ -31,7 +33,6 @@ class _FakeCompleted:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_no_sanitizer_returns_inputs_unchanged(monkeypatch):
     """JAMMA_SANITIZE unset: helper returns inputs verbatim plus empty lapack."""
     monkeypatch.delenv("JAMMA_SANITIZE", raising=False)
@@ -41,7 +42,6 @@ def test_no_sanitizer_returns_inputs_unchanged(monkeypatch):
     assert lapack_cflags == []
 
 
-@pytest.mark.tier0
 def test_none_inputs_normalize_to_empty_lists(monkeypatch):
     """Passing None for either input must normalise to [], not propagate None."""
     monkeypatch.delenv("JAMMA_SANITIZE", raising=False)
@@ -51,7 +51,6 @@ def test_none_inputs_normalize_to_empty_lists(monkeypatch):
     assert lapack_cflags == []
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize("value", ["", "  ", "\t"])
 def test_empty_sanitizer_treated_as_unset(monkeypatch, value):
     """Empty / whitespace-only JAMMA_SANITIZE: same behaviour as unset."""
@@ -62,7 +61,6 @@ def test_empty_sanitizer_treated_as_unset(monkeypatch, value):
     assert lapack_cflags == []
 
 
-@pytest.mark.tier0
 def test_address_undefined_appends_sanitizer_flags(monkeypatch):
     """address,undefined: cflags get -fsanitize=address,undefined,
     -fno-omit-frame-pointer, -O1; link gets the same -fsanitize=...; lapack
@@ -86,7 +84,6 @@ def test_address_undefined_appends_sanitizer_flags(monkeypatch):
     ]
 
 
-@pytest.mark.tier0
 def test_address_only(monkeypatch):
     """JAMMA_SANITIZE=address (no comma): -fsanitize=address only."""
     monkeypatch.setenv("JAMMA_SANITIZE", "address")
@@ -99,7 +96,6 @@ def test_address_only(monkeypatch):
     assert lapack_cflags[0] == "-fsanitize=address"
 
 
-@pytest.mark.tier0
 def test_lapack_cflags_returned_as_independent_list(monkeypatch):
     """Mutating the returned lapack_cflags must not leak into a subsequent
     call's cflags (defensive copy via list() in the helper).
@@ -117,7 +113,6 @@ def test_lapack_cflags_returned_as_independent_list(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_resolve_cflags_lapack_path_accepts_extra_lapack_cflags():
     """LAPACK source + extra_lapack_cflags: returned list starts with
     LAPACK_CFLAGS, then the extras, then -I includes. Trailing -O1 wins
@@ -141,7 +136,6 @@ def test_resolve_cflags_lapack_path_accepts_extra_lapack_cflags():
     assert flags[-1] == "-I/usr/include"
 
 
-@pytest.mark.tier0
 def test_resolve_cflags_lapack_path_no_extra_preserves_existing_behavior():
     """Omitting extra_lapack_cflags: result equals [*LAPACK_CFLAGS, *includes]."""
     src = Path("/src/eigh.c")
@@ -153,7 +147,6 @@ def test_resolve_cflags_lapack_path_no_extra_preserves_existing_behavior():
     assert flags == [*LAPACK_CFLAGS, "-I/usr/include"]
 
 
-@pytest.mark.tier0
 def test_resolve_cflags_lapack_path_extra_lapack_none_equivalent_to_omit():
     """extra_lapack_cflags=None must behave identically to omitting it."""
     src = Path("/src/eigh.c")
@@ -171,7 +164,6 @@ def test_resolve_cflags_lapack_path_extra_lapack_none_equivalent_to_omit():
     assert a == b
 
 
-@pytest.mark.tier0
 def test_resolve_cflags_baseline_path_unaffected_by_extra_lapack_cflags():
     """Non-LAPACK source must NOT receive extra_lapack_cflags — they belong
     to the LAPACK branch only.
@@ -196,7 +188,6 @@ def test_resolve_cflags_baseline_path_unaffected_by_extra_lapack_cflags():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 def test_compile_jlinalg_forwards_extra_lapack_cflags(monkeypatch, tmp_path):
     """A compile_jlinalg call with extra_lapack_cflags must propagate the
     extras into the LAPACK source's compile command line; baseline sources

@@ -7,8 +7,9 @@ import pytest
 
 from jamma.io.weight import apply_individual_weights, read_weight_file
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestReadWeightFile:
     """Tests for read_weight_file."""
 
@@ -84,7 +85,6 @@ class TestReadWeightFile:
             read_weight_file(weight_file)
 
 
-@pytest.mark.tier0
 class TestApplyIndividualWeights:
     """Tests for apply_individual_weights."""
 

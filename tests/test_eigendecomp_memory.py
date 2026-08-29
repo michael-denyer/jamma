@@ -14,8 +14,9 @@ from jamma.core.eigen_plan import (
 from jamma.lmm.eigen import eigendecompose_kinship
 from tests.fakes.memory import use_fake_psutil
 
+pytestmark = pytest.mark.tier0
 
-@pytest.mark.tier0
+
 class TestPlanEigenDriver:
     """Tests for plan_eigen_driver — the shared driver-selection decision.
 
@@ -162,7 +163,6 @@ class TestPlanEigenDriver:
         )
 
 
-@pytest.mark.tier0
 class TestDsyevdWorkspaceFormula:
     """Tests for _dsyevd_workspace_gb (LWORK + LIWORK upper bound)."""
 
@@ -201,7 +201,6 @@ class TestDsyevdWorkspaceFormula:
         assert ws == pytest.approx(32 / 1e9, rel=1e-12)
 
 
-@pytest.mark.tier0
 class TestDsyevrWorkspaceFormula:
     """Tests for _dsyevr_workspace_gb (linear O(N) workspace)."""
 
@@ -225,7 +224,6 @@ class TestDsyevrWorkspaceFormula:
         assert ws == pytest.approx(16 / 1e9, rel=1e-12)
 
 
-@pytest.mark.tier0
 class TestEigendecompMemoryEstimate:
     """Tests for memory estimation function."""
 
@@ -253,7 +251,6 @@ class TestEigendecompMemoryEstimate:
         assert 3.9 < ratio < 4.1
 
 
-@pytest.mark.tier0
 class TestEigendecompPreflightCheck:
     """Tests for pre-flight memory check in eigendecompose_kinship."""
 
@@ -317,7 +314,6 @@ class TestEigendecompPreflightCheck:
         np.testing.assert_allclose(K_ref, K_reconstructed, rtol=1e-10, atol=1e-14)
 
 
-@pytest.mark.tier0
 class TestSymmetryThreshold:
     """Tests for EIGEN-04: symmetry check threshold is 1e-11."""
 
@@ -377,7 +373,6 @@ class TestSymmetryThreshold:
         )
 
 
-@pytest.mark.tier0
 class TestDsyevdWorkspaceAccuracy:
     """Tests for EIGEN-05: DSYEVD workspace formula accuracy."""
 

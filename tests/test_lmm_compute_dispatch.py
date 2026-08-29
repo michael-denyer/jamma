@@ -6,12 +6,13 @@ import pytest
 import jamma.lmm.compute_numpy as compute_numpy
 from jamma.lmm.dispatch import DispatchPath
 
+pytestmark = pytest.mark.tier0
+
 # Stands in for a loaded extension. Only `is not None` is read on
 # the paths under test, so the object's identity is all that matters.
 _EXTENSION_LOADED = object()
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize("n_cvt", [2, 76, compute_numpy.MAX_C_N_CVT])
 def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
     """Wald routes to the fused general C kernel for every n_cvt up to the limit.
@@ -29,7 +30,6 @@ def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
     )
 
 
-@pytest.mark.tier0
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension not compiled")
 def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
     """Past MAX_C_N_CVT the kernel refuses rather than the dispatcher diverting.
@@ -61,7 +61,6 @@ def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
         )
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize(
     "helper",
     ["_compute_wald_numpy", "_compute_lrt_numpy", "_compute_score_numpy"],

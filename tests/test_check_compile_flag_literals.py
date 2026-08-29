@@ -23,6 +23,8 @@ import pytest
 
 from tests.conftest import install_lint_script
 
+pytestmark = pytest.mark.tier0
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO_ROOT / "scripts" / "check_compile_flag_literals.py"
 
@@ -61,14 +63,12 @@ _STUB_EMPTY_TARGETS: dict[str, str] = {
 }
 
 
-@pytest.mark.tier0
 def test_clean_tree_passes(tmp_path):
     """No flag literals anywhere -> rc=0."""
     result = _run_with_targets(tmp_path, _STUB_EMPTY_TARGETS)
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_double_quoted_literal_is_detected(tmp_path):
     files = dict(_STUB_EMPTY_TARGETS)
     files["hatch_build.py"] = dedent(
@@ -82,7 +82,6 @@ def test_double_quoted_literal_is_detected(tmp_path):
     assert "-O3" in result.stderr
 
 
-@pytest.mark.tier0
 def test_single_quoted_literal_is_detected(tmp_path):
     files = dict(_STUB_EMPTY_TARGETS)
     files["src/jamma/lmm/_compile_accel.py"] = "flags = ['-fopenmp']\n"
@@ -91,7 +90,6 @@ def test_single_quoted_literal_is_detected(tmp_path):
     assert "-fopenmp" in result.stderr
 
 
-@pytest.mark.tier0
 def test_comment_only_line_is_ignored(tmp_path):
     """Flag literal inside a comment line should NOT trip the lint —
     documentation and rationale often mention -O3 in comments."""
@@ -101,7 +99,6 @@ def test_comment_only_line_is_ignored(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_inline_comment_with_literal_on_code_line_still_flags(tmp_path):
     """A code line with a literal followed by an inline comment IS drift."""
     files = dict(_STUB_EMPTY_TARGETS)
@@ -110,7 +107,6 @@ def test_inline_comment_with_literal_on_code_line_still_flags(tmp_path):
     assert result.returncode == 1
 
 
-@pytest.mark.tier0
 @pytest.mark.parametrize(
     "flag",
     [
@@ -141,7 +137,6 @@ def test_widened_flag_set_is_detected(tmp_path, flag):
     assert flag in result.stderr
 
 
-@pytest.mark.tier0
 def test_sanitizer_flags_in_helper_file_are_not_lint_targets(tmp_path):
     """The lint inspects the four entry points only — apply_sanitizer_overrides()
     in src/jamma/_build_support/compile_and_link.py legitimately holds the
@@ -158,7 +153,6 @@ def test_sanitizer_flags_in_helper_file_are_not_lint_targets(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_allow_compile_flag_literal_escape_hatch(tmp_path):
     """A line marked with `# allow-compile-flag-literal` opts out.
     Reserved for deliberate divergence (e.g. -march=native in _compile_accel.py
@@ -172,7 +166,6 @@ def test_allow_compile_flag_literal_escape_hatch(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_allow_compile_flag_literal_on_preceding_line(tmp_path):
     """The escape hatch also accepts the marker on the immediately
     preceding comment line — needed when ruff-format splits an inline
@@ -187,7 +180,6 @@ def test_allow_compile_flag_literal_on_preceding_line(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_allow_marker_only_applies_to_next_line(tmp_path):
     """The preceding-line hatch covers exactly one line — a literal two
     lines below the marker is still flagged."""
@@ -202,7 +194,6 @@ def test_allow_marker_only_applies_to_next_line(tmp_path):
     assert "-O3" in result.stderr
 
 
-@pytest.mark.tier0
 def test_path_like_string_is_not_a_false_positive(tmp_path):
     """A string like "/usr/lib/-O3-foo" must NOT trip the lint — the
     regex requires `-` immediately after the opening quote."""
@@ -212,7 +203,6 @@ def test_path_like_string_is_not_a_false_positive(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.tier0
 def test_missing_target_file_is_reported(tmp_path):
     """If a target is absent entirely, that's a cleanup-went-wrong signal
     and must surface as a violation rather than passing silently."""
@@ -231,7 +221,6 @@ def test_missing_target_file_is_reported(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.tier0
 @pytest.mark.xfail(
     reason="Known false-negative: explicit string concat bypasses regex",
     strict=True,
@@ -243,7 +232,6 @@ def test_explicit_string_concat_bypass(tmp_path):
     assert result.returncode == 1
 
 
-@pytest.mark.tier0
 @pytest.mark.xfail(
     reason="Known false-negative: f-string interpolation bypasses regex",
     strict=True,
@@ -255,7 +243,6 @@ def test_fstring_interpolation_bypass(tmp_path):
     assert result.returncode == 1
 
 
-@pytest.mark.tier0
 @pytest.mark.xfail(
     reason="Known false-negative: implicit adjacent-string concat bypasses regex",
     strict=True,

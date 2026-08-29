@@ -15,10 +15,11 @@ from jamma.io.plink import (
 )
 from tests.fixture_paths import SYNTHETIC
 
+pytestmark = pytest.mark.tier0
+
 BFILE = SYNTHETIC.bfile
 
 
-@pytest.mark.tier0
 class TestValidatePlinkDimensions:
     """Tests for validate_plink_dimensions."""
 
@@ -47,7 +48,6 @@ class TestValidatePlinkDimensions:
             validate_plink_dimensions(tmp_path / "nonexistent")
 
 
-@pytest.mark.tier0
 class TestValidateGenotypeValues:
     """Tests for validate_genotype_values."""
 
@@ -82,7 +82,6 @@ class TestValidateGenotypeValues:
         assert validate_genotype_values(chunk_invalid) == 3
 
 
-@pytest.mark.tier0
 class TestCountLinesFast:
     """Tests for binary line counting."""
 
@@ -136,7 +135,6 @@ class TestCountLinesFast:
         # Use small chunk_size to force multiple reads
         assert _count_lines_fast(path, chunk_size=1024) == 10_000
 
-    @pytest.mark.tier0
     def test_count_lines_fast_crlf(self, tmp_path: Path) -> None:
         """CRLF (\\r\\n) line endings are counted as one line each.
 
@@ -148,7 +146,6 @@ class TestCountLinesFast:
         path.write_bytes(content.encode("ascii"))
         assert _count_lines_fast(path) == 3
 
-    @pytest.mark.tier0
     def test_count_lines_fast_mixed_endings(self, tmp_path: Path) -> None:
         """Mixed LF and CRLF line endings are each counted as one line.
 

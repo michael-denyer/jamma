@@ -33,6 +33,14 @@ static PyObject *LinAlgError = NULL;
  * A and B are 2-D float64 arrays.  transa/transb: 'N' (no transpose) or
  * 'T' (transpose).  out: optional preallocated output array (M x N, float64,
  * C-contiguous).  If None, a new array is allocated.  Returns the output array.
+ *
+ * jamma.jlinalg.dgemm validates the full public contract (transa/transb
+ * values, dimension match, out shape) once in Python before calling this
+ * entry point on either backend, so the semantic checks live there. This
+ * function keeps only what memory safety needs: dtype, contiguity,
+ * alignment, and writeability of out, none of which Python re-derives from
+ * flags a caller could still get wrong when calling this entry point
+ * directly (e.g. from C tests).
  * ---------------------------------------------------------------------------
  */
 static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
@@ -46,34 +54,8 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
                                      &transb_str, &oOut))
         return NULL;
 
-    /* Guard: vendor BLAS must be available */
-    if (!blas_has_external()) {
-        PyErr_SetString(PyExc_RuntimeError,
-                        "No vendor BLAS available for dgemm. Use numpy fallback.");
-        return NULL;
-    }
-
-    /* Validate transpose flags: exactly one char, 'N'/'n' or 'T'/'t'. */
-    if (transa_str[0] == '\0' || transa_str[1] != '\0') {
-        PyErr_Format(PyExc_ValueError, "dgemm: transa must be 'N' or 'T', got '%s'", transa_str);
-        return NULL;
-    }
-    if (transb_str[0] == '\0' || transb_str[1] != '\0') {
-        PyErr_Format(PyExc_ValueError, "dgemm: transb must be 'N' or 'T', got '%s'", transb_str);
-        return NULL;
-    }
-    char ta = transa_str[0];
-    char tb = transb_str[0];
-    if (ta != 'N' && ta != 'n' && ta != 'T' && ta != 't') {
-        PyErr_Format(PyExc_ValueError, "dgemm: transa must be 'N' or 'T', got '%s'", transa_str);
-        return NULL;
-    }
-    if (tb != 'N' && tb != 'n' && tb != 'T' && tb != 't') {
-        PyErr_Format(PyExc_ValueError, "dgemm: transb must be 'N' or 'T', got '%s'", transb_str);
-        return NULL;
-    }
-    int transa = (ta == 'T' || ta == 't') ? 1 : 0;
-    int transb = (tb == 'T' || tb == 't') ? 1 : 0;
+    int transa = (transa_str[0] == 'T' || transa_str[0] == 't') ? 1 : 0;
+    int transb = (transb_str[0] == 'T' || transb_str[0] == 't') ? 1 : 0;
 
     /* Coerce to C-contiguous float64. */
     PyArrayObject *aA = (PyArrayObject *)PyArray_FROM_OTF(oA, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
@@ -84,14 +66,8 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
         return NULL;
     }
 
-    if (PyArray_NDIM(aA) != 2) {
-        PyErr_SetString(PyExc_ValueError, "dgemm: A must be a 2-D array");
-        Py_DECREF(aA);
-        Py_DECREF(aB);
-        return NULL;
-    }
-    if (PyArray_NDIM(aB) != 2) {
-        PyErr_SetString(PyExc_ValueError, "dgemm: B must be a 2-D array");
+    if (PyArray_NDIM(aA) != 2 || PyArray_NDIM(aB) != 2) {
+        PyErr_SetString(PyExc_ValueError, "dgemm: A and B must be 2-D arrays");
         Py_DECREF(aA);
         Py_DECREF(aB);
         return NULL;
@@ -141,13 +117,8 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
             Py_DECREF(aB);
             return NULL;
         }
-        aC = (PyArrayObject *)PyArray_FROM_OTF(
-            oOut, NPY_DOUBLE, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE | NPY_ARRAY_ALIGNED);
-        if (!aC) {
-            Py_DECREF(aA);
-            Py_DECREF(aB);
-            return NULL;
-        }
+        Py_INCREF(oOut);
+        aC = (PyArrayObject *)oOut;
         if (PyArray_NDIM(aC) != 2 || PyArray_DIM(aC, 0) != M || PyArray_DIM(aC, 1) != N) {
             PyErr_Format(PyExc_ValueError,
                          "dgemm: out shape (%zd, %zd) doesn't match result shape (%zd, %zd)",
@@ -176,7 +147,9 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
     npy_intp lda = PyArray_DIM(aA, 1);
     npy_intp ldb = PyArray_DIM(aB, 1);
 
-    /* Release the GIL for the O(N^3) computation. */
+    /* Release the GIL for the O(N^3) computation. jlinalg_dgemm_ext aborts if
+     * vendor BLAS is not wired -- the bind in jamma.jlinalg only ever routes
+     * here when blas_has_dgemm is true, so that is the one guard this needs. */
     Py_BEGIN_ALLOW_THREADS jlinalg_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
     Py_END_ALLOW_THREADS
 
@@ -192,6 +165,13 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
  * X must be 2-D C-contiguous float64 of shape (N, K).
  * out, when provided, must be writable, aligned, C-contiguous float64 of shape (N, N).
  * Computes out = X @ X.T + beta*out and returns the output, bitwise symmetric.
+ *
+ * jamma.jlinalg.dsyrk validates the full public contract (beta requires out,
+ * out shape) once in Python before calling this entry point on either
+ * backend, so the semantic checks live there. This function keeps only what
+ * memory safety needs: dtype, contiguity, alignment, and writeability of
+ * out, none of which Python re-derives from flags a caller could still get
+ * wrong when calling this entry point directly (e.g. from C tests).
  * ---------------------------------------------------------------------------
  */
 static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
@@ -200,18 +180,6 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *oOut = Py_None;
     double beta = 0.0;
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|$Od", kwlist, &oX, &oOut, &beta)) return NULL;
-
-    if (oOut == Py_None && beta != 0.0) {
-        PyErr_SetString(PyExc_ValueError, "dsyrk: beta requires out");
-        return NULL;
-    }
-
-    /* Guard: vendor BLAS must be available for dsyrk */
-    if (!blas_has_dsyrk()) {
-        PyErr_SetString(PyExc_RuntimeError,
-                        "No vendor BLAS available for dsyrk. Use numpy fallback.");
-        return NULL;
-    }
 
     PyArrayObject *aX = (PyArrayObject *)PyArray_FROM_OTF(oX, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
     if (!aX) return NULL;
@@ -253,15 +221,8 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
             Py_DECREF(aX);
             return NULL;
         }
-        if (PyArray_NDIM(out) != 2) {
-            PyErr_Format(PyExc_ValueError, "dsyrk: out must be 2-D, got %d-D", PyArray_NDIM(out));
-            Py_DECREF(aX);
-            return NULL;
-        }
-        if (PyArray_DIM(out, 0) != N || PyArray_DIM(out, 1) != N) {
-            PyErr_Format(PyExc_ValueError,
-                         "dsyrk: out shape (%zd, %zd) doesn't match result shape (%zd, %zd)",
-                         (Py_ssize_t)PyArray_DIM(out, 0), (Py_ssize_t)PyArray_DIM(out, 1),
+        if (PyArray_NDIM(out) != 2 || PyArray_DIM(out, 0) != N || PyArray_DIM(out, 1) != N) {
+            PyErr_Format(PyExc_ValueError, "dsyrk: out shape doesn't match result shape (%zd, %zd)",
                          (Py_ssize_t)N, (Py_ssize_t)N);
             Py_DECREF(aX);
             return NULL;

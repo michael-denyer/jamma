@@ -170,6 +170,62 @@ class TestDgemmContract:
             assert result.dtype == np.float64
             npt.assert_allclose(result, expected, rtol=1e-6)
 
+    @pytest.mark.parametrize(
+        "kwargs,exc_type",
+        [
+            pytest.param({"transa": "X"}, ValueError, id="bad_transa"),
+            pytest.param({"transb": "X"}, ValueError, id="bad_transb"),
+            pytest.param({"transa": 0}, TypeError, id="transa_not_str"),
+            pytest.param({"transb": True}, TypeError, id="transb_not_str"),
+            pytest.param(
+                {"out": np.zeros((1, 1), dtype=np.float64)},
+                ValueError,
+                id="out_shape_mismatch",
+            ),
+            pytest.param(
+                {"out": np.zeros((4, 3), dtype=np.float32)},
+                ValueError,
+                id="out_wrong_dtype",
+            ),
+            pytest.param(
+                {"out": np.zeros((4, 3), dtype=np.float64, order="F")},
+                ValueError,
+                id="out_not_contiguous",
+            ),
+        ],
+    )
+    def test_validation_error_identical_across_backends(self, kwargs, exc_type) -> None:
+        """A bad dgemm call raises the same error text on both backends.
+
+        Regression for Finding 5 (review/03_jlinalg.md): before validate-once,
+        the native binding skipped Python's checks entirely and the vendor
+        and NumPy paths could disagree on wording for the same bad input.
+        """
+        A = np.eye(4, dtype=np.float64)
+        B = np.eye(4, dtype=np.float64)[:3]
+        messages = set()
+        for impl in (dgemm, _dgemm_numpy):
+            with pytest.raises(exc_type) as excinfo:
+                impl(A, B, **kwargs)
+            messages.add(str(excinfo.value))
+        assert len(messages) == 1, f"backends disagree on message: {messages}"
+
+    def test_dimension_mismatch_message_identical_across_backends(self) -> None:
+        messages = set()
+        for impl in (dgemm, _dgemm_numpy):
+            with pytest.raises(ValueError) as excinfo:
+                impl(np.zeros((3, 5)), np.zeros((4, 7)))
+            messages.add(str(excinfo.value))
+        assert len(messages) == 1, f"backends disagree on message: {messages}"
+
+    def test_ndim_mismatch_message_identical_across_backends(self) -> None:
+        messages = set()
+        for impl in (dgemm, _dgemm_numpy):
+            with pytest.raises(ValueError) as excinfo:
+                impl(np.ones(10), np.ones(10))
+            messages.add(str(excinfo.value))
+        assert len(messages) == 1, f"backends disagree on message: {messages}"
+
 
 # ---------------------------------------------------------------------------
 # TestDgemmZeroDimension — empty matrix edge cases

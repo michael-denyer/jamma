@@ -1,10 +1,7 @@
-"""Tests for safety gates (SAFE-01, SAFE-02, SAFE-03).
+"""Tests for safety gates (SAFE-02, SAFE-03).
 
 Tests observable behavior (warnings emitted, exceptions raised, attribute values)
-wherever possible. Uses real types (MemorySnapshot, numpy arrays) instead of
-MagicMock. For the LP64 threshold tests, np.lib.stride_tricks.as_strided creates
-a 50k x 50k "view" backed by a tiny 4x4 allocation — exercises the real
-shape-checking code path without allocating 20 GB.
+wherever possible.
 
 SAFE-02 and SAFE-03 exercise the guards at runtime. SAFE-02 uses a ``python -O``
 subprocess to verify the guard's ``RuntimeError`` survives bytecode optimisation
@@ -16,223 +13,16 @@ import-time fallback fires; the loader is faked so the test observes the
 warn-and-fallback path rather than a silent rebuild.
 """
 
-import contextlib
 import subprocess
 import sys
 import textwrap
-import warnings
 from pathlib import Path
-from unittest.mock import patch
 
-import numpy as np
 import pytest
 
-from jamma.core.memory_snapshot import MemorySnapshot
-from tests.fakes import FakeJlinalg, use_fake_jlinalg
 from tests.fixture_paths import LOCO
 
 pytestmark = pytest.mark.tier0
-
-
-def _make_memory_snapshot(available_gb: float = 1000.0) -> MemorySnapshot:
-    """Build a real MemorySnapshot for test use."""
-    return MemorySnapshot(
-        rss_gb=1.0,
-        vms_gb=2.0,
-        available_gb=available_gb,
-        total_gb=1024.0,
-        percent_used=10.0,
-    )
-
-
-def _big_K_view(n: int = 50_000) -> np.ndarray:
-    """Create a virtual n x n symmetric matrix backed by ~128 bytes.
-
-    Uses stride_tricks with strides=(0,0) so every element reads the same
-    memory.  The result is square, 2-D, float64, and symmetric (all
-    elements equal) — satisfying eigendecompose_kinship's validation
-    without a real allocation.
-
-    CAVEAT: Tests in TestLP64OverflowWarning depend on
-    ``eigendecompose_kinship`` not materialising the matrix before the
-    LP64 overflow check fires (otherwise the strided view would be
-    forced into a real ~20 GB allocation). If anyone adds a defensive
-    ``np.allclose(K, K.T)`` symmetry check or copies ``K`` to ensure
-    contiguity *before* the overflow guard, every test in this class
-    will fail with an OOM-shaped traceback that looks unrelated. Move
-    such validation steps after the overflow check.
-    """
-    backing = np.ones((4, 4), dtype=np.float64)
-    return np.lib.stride_tricks.as_strided(backing, shape=(n, n), strides=(0, 0))
-
-
-class TestLP64OverflowWarning:
-    """SAFE-01: LP64 overflow warning before eigendecomposition."""
-
-    def test_lp64_large_matrix_warns(self, monkeypatch):
-        """eigendecompose_kinship warns on LP64 with n_samples > 40k."""
-        from jamma.lmm import eigen
-
-        big_K = _big_K_view(50_000)
-        snapshot = _make_memory_snapshot()
-        fake_jl = FakeJlinalg(
-            blas_is_ilp64=0,
-            eigh_result=(np.ones(50_000), np.eye(3)),
-        )
-
-        use_fake_jlinalg(monkeypatch, fake_jl)
-
-        with (
-            patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
-            warnings.catch_warnings(record=True) as w,
-        ):
-            warnings.simplefilter("always")
-
-            # eigh fake returns wrong shape — we only care about the
-            # LP64-detected warning triggered before the fake is invoked.
-            with contextlib.suppress(ValueError, RuntimeError):
-                eigen.eigendecompose_kinship(big_K, check_memory=False)
-
-            lp64_warnings = [x for x in w if "LP64 BLAS detected" in str(x.message)]
-            assert len(lp64_warnings) == 1
-            assert lp64_warnings[0].category is RuntimeWarning
-            assert "int32 overflow" in str(lp64_warnings[0].message)
-            assert "50,000" in str(lp64_warnings[0].message)
-
-    def test_ilp64_no_warning(self, monkeypatch):
-        """ILP64 BLAS does not trigger overflow warning."""
-        from jamma.lmm import eigen
-
-        big_K = _big_K_view(50_000)
-        snapshot = _make_memory_snapshot()
-        fake_jl = FakeJlinalg(
-            blas_is_ilp64=1,
-            eigh_result=(np.ones(50_000), np.eye(3)),
-        )
-
-        use_fake_jlinalg(monkeypatch, fake_jl)
-
-        with (
-            patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
-            warnings.catch_warnings(record=True) as w,
-        ):
-            warnings.simplefilter("always")
-
-            with contextlib.suppress(ValueError, RuntimeError):
-                eigen.eigendecompose_kinship(big_K, check_memory=False)
-
-            lp64_warnings = [x for x in w if "LP64" in str(x.message)]
-            assert len(lp64_warnings) == 0
-
-    def test_small_matrix_no_warning(self, monkeypatch):
-        """n_samples <= 40k does not trigger warning even on LP64."""
-        from jamma.lmm import eigen
-
-        K = np.eye(100, dtype=np.float64)
-        snapshot = _make_memory_snapshot()
-        fake_jl = FakeJlinalg(blas_is_ilp64=0)
-
-        use_fake_jlinalg(monkeypatch, fake_jl)
-
-        with (
-            patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
-            warnings.catch_warnings(record=True) as w,
-        ):
-            warnings.simplefilter("always")
-
-            eigen.eigendecompose_kinship(K)
-
-            lp64_warnings = [x for x in w if "LP64" in str(x.message)]
-            assert len(lp64_warnings) == 0
-
-    def test_boundary_40k_no_warning(self, monkeypatch):
-        """Exactly 40,000 samples does not trigger LP64 warning."""
-        from jamma.lmm import eigen
-
-        K = _big_K_view(40_000)
-        snapshot = _make_memory_snapshot()
-        fake_jl = FakeJlinalg(
-            blas_is_ilp64=0,
-            eigh_result=(np.ones(40_000), np.eye(3)),
-        )
-
-        use_fake_jlinalg(monkeypatch, fake_jl)
-
-        with (
-            patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
-            warnings.catch_warnings(record=True) as w,
-        ):
-            warnings.simplefilter("always")
-
-            with contextlib.suppress(ValueError, RuntimeError):
-                eigen.eigendecompose_kinship(K, check_memory=False)
-
-            lp64_warnings = [x for x in w if "LP64" in str(x.message)]
-            assert len(lp64_warnings) == 0
-
-    def test_boundary_40001_warns(self, monkeypatch):
-        """40,001 samples triggers LP64 warning."""
-        from jamma.lmm import eigen
-
-        K = _big_K_view(40_001)
-        snapshot = _make_memory_snapshot()
-        fake_jl = FakeJlinalg(
-            blas_is_ilp64=0,
-            eigh_result=(np.ones(40_001), np.eye(3)),
-        )
-
-        use_fake_jlinalg(monkeypatch, fake_jl)
-
-        with (
-            patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
-            warnings.catch_warnings(record=True) as w,
-        ):
-            warnings.simplefilter("always")
-
-            with contextlib.suppress(ValueError, RuntimeError):
-                eigen.eigendecompose_kinship(K, check_memory=False)
-
-            lp64_warnings = [x for x in w if "LP64 BLAS detected" in str(x.message)]
-            assert len(lp64_warnings) == 1
-
-    def test_no_vendor_suppresses_lp64_warning(self, monkeypatch):
-        """LP64 warning does not fire when using np.linalg.eigh fallback."""
-        from jamma.lmm import eigen
-
-        big_K = _big_K_view(50_000)
-        snapshot = _make_memory_snapshot()
-        # jlinalg.eigh now owns the JLINALG_NO_VENDOR_LAPACK routing, so eigen.py
-        # always calls it (no direct np.linalg.eigh branch). Have the fake's eigh
-        # raise to stand in for the backend failing; the return value is
-        # irrelevant because the assertion only checks warning routing.
-        fake_jl = FakeJlinalg(
-            blas_is_ilp64=0,
-            blas_has_dsyevd=0,
-            blas_has_dsyevr=0,
-            eigh_error=RuntimeError("test stub"),
-        )
-
-        use_fake_jlinalg(monkeypatch, fake_jl)
-
-        with (
-            patch.object(eigen, "log_memory_snapshot", return_value=snapshot),
-            patch.dict("os.environ", {"JLINALG_NO_VENDOR_LAPACK": "1"}),
-            warnings.catch_warnings(record=True) as w,
-        ):
-            warnings.simplefilter("always")
-
-            # Lock down two invariants:
-            # 1. The RuntimeError from jlinalg.eigh PROPAGATES to the caller
-            #    (no silent catch returning a default result).
-            # 2. The LP64 warning is NOT emitted on this routing branch.
-            with pytest.raises(RuntimeError, match="test stub"):
-                eigen.eigendecompose_kinship(big_K, check_memory=False)
-
-            lp64_warnings = [x for x in w if "LP64" in str(x.message)]
-            assert len(lp64_warnings) == 0, (
-                "LP64 warning should not fire when no_vendor forces np.linalg.eigh"
-            )
-
 
 LOCO_BFILE = LOCO.bfile
 

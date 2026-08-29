@@ -317,6 +317,32 @@ class TestDsyrkValidation:
         with pytest.raises(ValueError, match=r"2-D|2D|ndim"):
             dsyrk(np.array(1.0))
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({"beta": 1.0}, id="beta_without_out"),
+            pytest.param({"out": np.zeros((1, 1))}, id="out_shape_mismatch"),
+            pytest.param(
+                {"out": np.zeros((3, 3), dtype=np.float32)}, id="out_wrong_dtype"
+            ),
+            pytest.param({"out": np.zeros((3, 3), order="F")}, id="out_not_contiguous"),
+        ],
+    )
+    def test_validation_error_identical_across_backends(self, kwargs) -> None:
+        """A bad dsyrk call raises the same error text on both backends.
+
+        dsyrk always validates once through ``_validate_dsyrk`` before either
+        backend runs; this pins that invariant alongside dgemm's equivalent
+        (Finding 5, review/03_jlinalg.md).
+        """
+        X = np.eye(3, dtype=np.float64)
+        messages = set()
+        for impl in (dsyrk, _dsyrk_numpy):
+            with pytest.raises(ValueError) as excinfo:
+                impl(X, **kwargs)
+            messages.add(str(excinfo.value))
+        assert len(messages) == 1, f"backends disagree on message: {messages}"
+
 
 class TestDsyrkOutput:
     """dsyrk can update a caller-owned symmetric output buffer."""

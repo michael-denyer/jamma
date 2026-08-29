@@ -328,6 +328,33 @@ jobs:
         # over-tested utility modules.
         run: uv run python scripts/check_subsystem_coverage.py coverage.json
 
+  # GEMMA parity under the forced NumPy fallback. No parity test had ever
+  # run with JAMMA_FORCE_NUMPY_FALLBACK=1 before this job existed, so the
+  # no-C path shipped with zero CI coverage. Scoped to tier1 (GEMMA
+  # reference comparisons), not the full suite: a handful of full-suite
+  # failures under the env var are unrelated to correctness (BLAS
+  # thread-count assumptions that don't hold under fallback, a C-only
+  # bracket-bits test with no requires_c guard) and are out of scope here.
+  #
+  # Not yet a required context — this job waits for a week of green on
+  # master before it's added to the branch protection ruleset by name.
+  numpy-fallback-parity:
+    name: numpy-fallback-parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up JAMMA
+        uses: ./.github/actions/setup-jamma
+
+      - name: Run tier1 tests under forced NumPy fallback
+        env:
+          JAMMA_FORCE_NUMPY_FALLBACK: "1"
+        run: uv run pytest -m tier1 tests/ -x -v -n 3 -o 'addopts='
+
   # Markdown link checker (offline). Runs on every PR and verifies that
   # every relative link and anchor in every .md file resolves. Does not
   # hit the network, so PRs can't be blocked by unrelated upstream hiccups.

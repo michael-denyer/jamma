@@ -178,6 +178,7 @@ computation.
 | `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` plus per-subsystem floors via `scripts/check_subsystem_coverage.py` (lmm 80%, jlinalg 18%, kinship 50%, io 80%) |
 | `ci.yml` → `package-smoke` | push/PR | `uv build`, then assert sdist and wheel both ship `_build_support/` and the wheel imports in a clean venv |
 | `ci.yml` → `link-check` | push/PR | lychee `--offline` over every `.md`, sharing `lychee.toml` with the pre-commit hook |
+| `ci.yml` → `numpy-fallback-parity` | push/PR | `JAMMA_FORCE_NUMPY_FALLBACK=1 pytest -m tier1 tests/ -x -n 3`. GEMMA parity had never once run under the forced fallback; this job closes that gap for the tier1 selection. Not yet a required context — it waits for a week of green on master before joining the branch protection ruleset by name |
 | `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
 | `fingerprint.yml` | PR touching `_lmm_*.c`, `_lmm_*.h`, `_build_support/`, or the fingerprint scripts | Builds both sides of the merge base and diffs per-entry-point result digests. Tolerance-based tests do not catch last-bit drift |
 | `kinship-digest.yml` | dispatch only | Builds a base ref and HEAD, runs `scripts/kinship_digest.py --out` on each, diffs with `--diff`. `fingerprint.yml` does not path-match `src/jamma/kinship/compute.py`, so this is the only bit-exactness check a kinship or eigendecomposition change gets. Never a required check |

@@ -1,11 +1,15 @@
 """Tests for kinship computation helpers.
 
 These tests exercise impute_and_center, impute_center_and_standardize, and
-compute_centered_kinship.
+compute_centered_kinship. The property-based classes (filtering, standardized
+kinship) moved here from test_hypothesis.py, which is organised by technique
+rather than subsystem.
 """
 
 import numpy as np
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from jamma.io import load_plink_binary
 from jamma.kinship import impute_and_center, impute_center_and_standardize
@@ -13,6 +17,31 @@ from jamma.validation import compare_kinship_matrices, load_gemma_kinship
 from tests.conftest import require_fixture
 from tests.fixture_paths import SYNTHETIC
 from tests.reference.kinship import compute_centered_kinship
+
+
+@st.composite
+def genotype_matrix(draw, min_samples=10, max_samples=100, min_snps=5, max_snps=50):
+    """Generate realistic genotype matrices (values in {0, 1, 2}).
+
+    Uses a random seed to generate genotypes with realistic variance.
+    """
+    n_samples = draw(st.integers(min_value=min_samples, max_value=max_samples))
+    n_snps = draw(st.integers(min_value=min_snps, max_value=max_snps))
+    seed = draw(st.integers(min_value=0, max_value=2**32 - 1))
+
+    rng = np.random.default_rng(seed)
+
+    # Use varying MAFs to ensure non-constant columns
+    mafs = rng.uniform(0.1, 0.5, n_snps)
+    genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+
+    for j in range(n_snps):
+        p = mafs[j]
+        # Hardy-Weinberg genotype frequencies
+        probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
+        genotypes[:, j] = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=probs)
+
+    return genotypes
 
 
 @pytest.mark.tier0
@@ -250,3 +279,296 @@ class TestImputationGemmaEquivalence:
         assert np.isnan(X).any(), "Expected NaN values before imputation"
         result = impute_and_center(X)
         assert not np.isnan(result).any(), "NaN values remain after impute_and_center"
+
+
+@pytest.mark.tier0
+class TestFilteringProperties:
+    """Property-based tests for MAF/missing/monomorphic filtering."""
+
+    @given(
+        n_samples=st.integers(min_value=50, max_value=100),
+        seed=st.integers(min_value=0, max_value=2**32 - 1),
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_monomorphic_snps_always_filtered(self, n_samples, seed):
+        """Monomorphic SNPs should always be filtered regardless of MAF threshold."""
+        from tests.reference.kinship import _filter_snps
+
+        rng = np.random.default_rng(seed)
+
+        # Create genotypes with some monomorphic SNPs
+        genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, 10))
+        # Make first 3 SNPs monomorphic
+        genotypes[:, 0] = 0.0
+        genotypes[:, 1] = 1.0
+        genotypes[:, 2] = 2.0
+
+        # Even with maf=0.0 (no MAF filtering), monomorphic should be filtered
+        filtered, n_filtered, n_original = _filter_snps(
+            genotypes, maf_threshold=0.0, miss_threshold=1.0
+        )
+
+        # Verify monomorphic SNPs are excluded
+        assert n_filtered <= n_original - 3, (
+            f"Expected at least 3 monomorphic SNPs filtered, "
+            f"got {n_original - n_filtered}"
+        )
+
+        # Check that all remaining columns have variance > 0
+        if n_filtered > 0:
+            col_vars = np.var(filtered, axis=0)
+            assert np.all(col_vars > 0), "Filtered genotypes contain monomorphic SNPs"
+
+    @given(
+        n_samples=st.integers(min_value=50, max_value=100),
+        maf_threshold=st.floats(min_value=0.0, max_value=0.49),
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_filtered_snps_meet_maf_threshold(self, n_samples, maf_threshold):
+        """All SNPs passing filter should have MAF >= threshold."""
+        from tests.reference.kinship import _filter_snps
+
+        rng = np.random.default_rng(42)
+
+        # Generate genotypes with varying MAF
+        genotypes = np.zeros((n_samples, 20), dtype=np.float64)
+        for j in range(20):
+            maf = rng.uniform(0.01, 0.5)
+            p = maf
+            probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
+            genotypes[:, j] = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=probs)
+
+        filtered, n_filtered, _ = _filter_snps(
+            genotypes, maf_threshold=maf_threshold, miss_threshold=1.0
+        )
+
+        if n_filtered > 0:
+            # Compute MAF of filtered SNPs
+            col_means = np.nanmean(filtered, axis=0)
+            allele_freqs = col_means / 2.0
+            mafs = np.minimum(allele_freqs, 1.0 - allele_freqs)
+
+            # All should be >= threshold (with small tolerance for numerical error)
+            assert np.all(mafs >= maf_threshold - 1e-10), (
+                f"SNP with MAF {mafs.min():.4f} passed threshold {maf_threshold}"
+            )
+
+    @given(
+        n_samples=st.integers(min_value=50, max_value=100),
+        miss_threshold=st.floats(min_value=0.0, max_value=1.0),
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_filtered_snps_meet_miss_threshold(self, n_samples, miss_threshold):
+        """All SNPs passing filter should have missing rate <= threshold."""
+        from tests.reference.kinship import _filter_snps
+
+        rng = np.random.default_rng(42)
+
+        # Generate genotypes with varying missing rates
+        genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, 20)).astype(np.float64)
+
+        # Add random missing values
+        for j in range(20):
+            miss_rate = rng.uniform(0.0, 0.3)
+            n_miss = int(n_samples * miss_rate)
+            if n_miss > 0:
+                miss_idx = rng.choice(n_samples, size=n_miss, replace=False)
+                genotypes[miss_idx, j] = np.nan
+
+        filtered, n_filtered, _ = _filter_snps(
+            genotypes, maf_threshold=0.0, miss_threshold=miss_threshold
+        )
+
+        if n_filtered > 0:
+            # Compute missing rate of filtered SNPs
+            miss_counts = np.sum(np.isnan(filtered), axis=0)
+            miss_rates = miss_counts / n_samples
+
+            # All should be <= threshold
+            assert np.all(miss_rates <= miss_threshold + 1e-10), (
+                f"SNP with missing rate {miss_rates.max():.4f} "
+                f"passed threshold {miss_threshold}"
+            )
+
+    @given(
+        n_samples=st.integers(min_value=50, max_value=100),
+        seed=st.integers(min_value=0, max_value=2**32 - 1),
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_filtering_deterministic(self, n_samples, seed):
+        """Filtering should be deterministic given same input."""
+        from tests.reference.kinship import _filter_snps
+
+        rng = np.random.default_rng(seed)
+        genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, 20)).astype(np.float64)
+
+        # Add some missing
+        miss_mask = rng.random(genotypes.shape) < 0.05
+        genotypes[miss_mask] = np.nan
+
+        # Run twice
+        filtered1, n1, _ = _filter_snps(genotypes, 0.01, 0.1)
+        filtered2, n2, _ = _filter_snps(genotypes, 0.01, 0.1)
+
+        assert n1 == n2, "Filtering produced different counts"
+        np.testing.assert_array_equal(
+            np.isnan(filtered1),
+            np.isnan(filtered2),
+            err_msg="Filtering not deterministic",
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.tier2
+class TestFilteringEquivalence:
+    """Tests for filtering equivalence across different code paths."""
+
+    @given(
+        n_samples=st.integers(min_value=50, max_value=80),
+        n_snps=st.integers(min_value=20, max_value=50),
+        maf_threshold=st.sampled_from([0.0, 0.01, 0.05]),
+        miss_threshold=st.sampled_from([0.05, 0.1, 1.0]),
+    )
+    @settings(
+        max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_kinship_full_load_vs_filter_function(
+        self, n_samples, n_snps, maf_threshold, miss_threshold
+    ):
+        """Full-load kinship should use same filtering as _filter_snps."""
+        from tests.reference.kinship import _filter_snps, compute_centered_kinship
+
+        rng = np.random.default_rng(42)
+
+        # Generate genotypes with varying MAF
+        genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
+        for j in range(n_snps):
+            maf = rng.uniform(0.02, 0.5)
+            p = maf
+            probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
+            genotypes[:, j] = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=probs)
+
+        # Add some missing
+        miss_mask = rng.random(genotypes.shape) < 0.03
+        genotypes[miss_mask] = np.nan
+
+        # Get filter result
+        _, n_filtered, _ = _filter_snps(genotypes, maf_threshold, miss_threshold)
+
+        if n_filtered == 0:
+            # Should raise ValueError
+            with pytest.raises(ValueError, match="No SNPs passed filtering"):
+                compute_centered_kinship(
+                    genotypes,
+                    maf_threshold=maf_threshold,
+                    miss_threshold=miss_threshold,
+                    check_memory=False,
+                )
+        else:
+            # Should succeed and produce valid kinship
+            K = compute_centered_kinship(
+                genotypes,
+                maf_threshold=maf_threshold,
+                miss_threshold=miss_threshold,
+                check_memory=False,
+            )
+            assert K.shape == (n_samples, n_samples)
+            assert np.allclose(K, K.T), "Kinship not symmetric"
+
+
+@pytest.mark.tier0
+class TestStandardizedKinshipProperties:
+    """Property tests for standardized kinship matrix (-gk 2)."""
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=20, max_samples=40, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_standardized_kinship_is_symmetric(self, genotypes):
+        """Standardized kinship must be symmetric."""
+        from tests.reference.kinship import compute_standardized_kinship
+
+        K = compute_standardized_kinship(genotypes, check_memory=False)
+        np.testing.assert_allclose(K, K.T, rtol=1e-10, atol=1e-14)
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=20, max_samples=40, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_standardized_kinship_psd(self, genotypes):
+        """Standardized kinship eigenvalues should be non-negative."""
+        from tests.reference.kinship import compute_standardized_kinship
+
+        K = compute_standardized_kinship(genotypes, check_memory=False)
+        eigenvalues = np.linalg.eigvalsh(K)
+        assert np.all(eigenvalues >= -1e-8), (
+            f"Large negative eigenvalue: {eigenvalues.min()}"
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=20, max_samples=40, min_snps=30, max_snps=50
+        )
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_standardized_kinship_trace_approximates_n(self, genotypes):
+        """Standardized kinship trace should approximate n_samples.
+
+        K = (1/p) * Z @ Z.T where each column of Z has unit variance.
+        So trace(K) = (1/p) * sum of column norms^2. Each column has
+        variance ~1 and n samples, so norm^2 ~ n, giving trace ~ n.
+        """
+        from tests.reference.kinship import compute_standardized_kinship
+
+        K = compute_standardized_kinship(genotypes, check_memory=False)
+        n_samples = genotypes.shape[0]
+        trace = np.trace(K)
+
+        # Trace should be approximately n_samples (within ~30% for small samples)
+        assert trace > 0, f"Trace should be positive, got {trace}"
+        assert abs(trace - n_samples) / n_samples < 0.5, (
+            f"Trace {trace:.2f} too far from n_samples {n_samples}"
+        )
+
+    @given(
+        genotypes=genotype_matrix(
+            min_samples=20, max_samples=40, min_snps=20, max_snps=40
+        )
+    )
+    @settings(
+        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+    )
+    def test_centered_and_standardized_same_shape(self, genotypes):
+        """Centered and standardized kinship should produce same-shaped matrices."""
+        from tests.reference.kinship import (
+            compute_centered_kinship,
+            compute_standardized_kinship,
+        )
+
+        K_centered = compute_centered_kinship(genotypes, check_memory=False)
+        K_standardized = compute_standardized_kinship(genotypes, check_memory=False)
+
+        assert K_centered.shape == K_standardized.shape
+        # Both should be symmetric
+        np.testing.assert_allclose(K_centered, K_centered.T, rtol=1e-10, atol=1e-14)
+        np.testing.assert_allclose(
+            K_standardized, K_standardized.T, rtol=1e-10, atol=1e-14
+        )

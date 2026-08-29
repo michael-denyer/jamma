@@ -723,3 +723,16 @@ def test_output_prefix_with_separator_reports_a_usage_error():
     assert result.exit_code == 2
     assert "path separators" in result.output
     assert "Traceback" not in result.output
+
+
+class TestCLIFlags:
+    """Verify CLI help shows eigen flags."""
+
+    def test_lmm_help_shows_eigen_flags(self) -> None:
+        """--help output contains -d, -u, and -eigen flags."""
+        result = runner.invoke(main, ["--help"])
+
+        assert result.exit_code == 0
+        assert "-d" in result.output
+        assert "-u" in result.output
+        assert "-eigen" in result.output

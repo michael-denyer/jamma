@@ -106,12 +106,14 @@ instead, for FP-accumulation consistency with GEMMA validation tolerances.
 paths run unconditionally:
 
 1. **System BLAS** -- `dlsym(RTLD_DEFAULT, ...)` finds BLAS symbols already
-   loaded in the process, then scans numpy's shared libraries (`numpy.libs/`,
-   `numpy/.dylibs/`) for ILP64 MKL or OpenBLAS symbols and `/proc/self/maps`
-   on Linux.
+   loaded in the process, then scans directories for ILP64 MKL or OpenBLAS
+   symbols (`numpy.libs/`, `numpy/.dylibs/`) and `/proc/self/maps` on Linux.
+   `jamma.jlinalg._blas_dirs.probe_plan()` names the candidate directories;
+   `blas_dispatch.c` still does every `opendir`/`dlopen`/`dlsym` call.
 
-2. **pip-installed MKL** -- Searches `site-packages/mkl.libs/` for
-   `libmkl_rt` and loads it with `dlopen`.
+2. **pip-installed MKL** -- Scans the `mkl.libs/` directories `probe_plan()`
+   names for `libmkl_core`, `libmkl_sequential`, and `libmkl_intel_ilp64`,
+   loaded with `dlopen` in that dependency order.
 
 3. **macOS Accelerate-ILP64** -- On macOS 13.3+, looks up the
    `$NEWLAPACK$ILP64`-suffixed symbols (`dsyevd_$NEWLAPACK$ILP64` etc.) that
@@ -130,6 +132,7 @@ results that diverge from GEMMA's validation tolerances.
 |------|---------|
 | `__init__.py` | Public API with NumPy fallbacks when C extension unavailable |
 | `_compile_jlinalg.py` | Dev-mode compiler script; calls `run_build(JLINALG_SPEC)` in `_build_support/compile_and_link.py` |
+| `_blas_dirs.py` | Candidate BLAS library directories for `blas_dispatch.c`'s discovery scans. Pure `importlib`/`pathlib`; no dlopen |
 
 ### C Extension
 
@@ -138,7 +141,7 @@ results that diverge from GEMMA's validation tolerances.
 | `include/jlinalg.h` | Public C API, ABI version, function pointer typedefs |
 | `src/pymodule.c` | Python/NumPy bridge (buffer extraction, GIL release, error translation) |
 | `src/platform.c` | ISA detection (CPUID/hwcap), vendor BLAS dispatch init |
-| `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym, dispatch wrappers |
+| `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym, dispatch wrappers. Candidate directories come from `_blas_dirs.probe_plan()` (Python); C keeps every dlopen/dlsym call |
 | `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. `jlinalg_eigh_c` requires tightly packed row-major storage (`ldk == ldz == N`); a padded stride returns `JLINALG_EXT_BAD_STRIDE` rather than being serviced by a second code path, since no caller in the tree ever passes one. |
 | `src/snp_stats.c` | SNP statistics kernel (chunked mean/variance/MAF) |
 

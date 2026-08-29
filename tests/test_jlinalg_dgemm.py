@@ -660,169 +660,100 @@ class TestDgemmValidation:
 
 
 class TestDgemmFallback:
-    """Test the NumPy fallback dgemm independently of the C extension.
+    """Test the NumPy fallback dgemm directly (jamma.jlinalg._dgemm_numpy).
 
-    These tests import the fallback functions directly from the except
-    branch by simulating a missing C extension.
+    Always exercised, independent of whether the C extension is present.
     """
-
-    @staticmethod
-    def _get_fallback_dgemm():
-        """Import the fallback dgemm by re-executing the fallback branch."""
-        import numpy as _np
-
-        def _dgemm(
-            A: np.ndarray,
-            B: np.ndarray,
-            transa: str = "N",
-            transb: str = "N",
-            out: np.ndarray | None = None,
-        ) -> np.ndarray:
-            if A.ndim != 2:
-                raise ValueError(f"dgemm: A must be a 2-D array, got {A.ndim}-D")
-            if B.ndim != 2:
-                raise ValueError(f"dgemm: B must be a 2-D array, got {B.ndim}-D")
-            if not isinstance(transa, str):
-                raise TypeError(
-                    f"dgemm: transa must be a string, got {type(transa).__name__}"
-                )
-            if not isinstance(transb, str):
-                raise TypeError(
-                    f"dgemm: transb must be a string, got {type(transb).__name__}"
-                )
-            if transa.upper() not in ("N", "T"):
-                raise ValueError(f"dgemm: transa must be 'N' or 'T', got '{transa}'")
-            if transb.upper() not in ("N", "T"):
-                raise ValueError(f"dgemm: transb must be 'N' or 'T', got '{transb}'")
-            _A = A.T if transa.upper() == "T" else A
-            _B = B.T if transb.upper() == "T" else B
-            if _A.shape[1] != _B.shape[0]:
-                raise ValueError(
-                    f"dgemm: op(A) columns ({_A.shape[1]}) must match "
-                    f"op(B) rows ({_B.shape[0]})"
-                )
-            if out is not None:
-                expected = (_A.shape[0], _B.shape[1])
-                if out.ndim != 2 or out.shape != expected:
-                    raise ValueError(
-                        f"dgemm: out shape {out.shape} doesn't match "
-                        f"result shape {expected}"
-                    )
-                if out.dtype != _np.float64:
-                    raise ValueError(f"dgemm: out must be float64, got {out.dtype}")
-                if not out.flags["C_CONTIGUOUS"]:
-                    raise ValueError("dgemm: out must be C-contiguous")
-                _np.matmul(
-                    _A.astype(_np.float64, copy=False),
-                    _B.astype(_np.float64, copy=False),
-                    out=out,
-                )
-                return out
-            return _np.asarray(
-                _np.matmul(
-                    _A.astype(_np.float64, copy=False),
-                    _B.astype(_np.float64, copy=False),
-                ),
-                dtype=_np.float64,
-            )
-
-        return _dgemm
 
     def test_fallback_transpose_nn(self) -> None:
         """Fallback NN matches reference."""
-        fb = self._get_fallback_dgemm()
         rng = np.random.default_rng(77)
         A = rng.standard_normal((30, 20))
         B = rng.standard_normal((20, 25))
-        npt.assert_allclose(fb(A, B), _reference_dgemm(A, B), rtol=1e-14)
+        npt.assert_allclose(_dgemm_numpy(A, B), _reference_dgemm(A, B), rtol=1e-14)
 
     def test_fallback_transpose_tn(self) -> None:
         """Fallback TN matches reference."""
-        fb = self._get_fallback_dgemm()
         rng = np.random.default_rng(77)
         A = rng.standard_normal((20, 30))  # physical (K, M), op(A) = (M, K)
         B = rng.standard_normal((20, 25))
         npt.assert_allclose(
-            fb(A, B, transa="T"), _reference_dgemm(A, B, transa="T"), rtol=1e-14
+            _dgemm_numpy(A, B, transa="T"),
+            _reference_dgemm(A, B, transa="T"),
+            rtol=1e-14,
         )
 
     def test_fallback_transpose_nt(self) -> None:
         """Fallback NT matches reference."""
-        fb = self._get_fallback_dgemm()
         rng = np.random.default_rng(77)
         A = rng.standard_normal((30, 20))
         B = rng.standard_normal((25, 20))  # physical (N, K), op(B) = (K, N)
         npt.assert_allclose(
-            fb(A, B, transb="T"), _reference_dgemm(A, B, transb="T"), rtol=1e-14
+            _dgemm_numpy(A, B, transb="T"),
+            _reference_dgemm(A, B, transb="T"),
+            rtol=1e-14,
         )
 
     def test_fallback_transpose_tt(self) -> None:
         """Fallback TT matches reference."""
-        fb = self._get_fallback_dgemm()
         rng = np.random.default_rng(77)
         A = rng.standard_normal((20, 30))
         B = rng.standard_normal((25, 20))
         npt.assert_allclose(
-            fb(A, B, transa="T", transb="T"),
+            _dgemm_numpy(A, B, transa="T", transb="T"),
             _reference_dgemm(A, B, transa="T", transb="T"),
             rtol=1e-14,
         )
 
     def test_fallback_non_string_transa(self) -> None:
         """Fallback raises TypeError on non-string transa."""
-        fb = self._get_fallback_dgemm()
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(TypeError, match="transa must be a string"):
-            fb(A, B, transa=0)  # type: ignore[bad-argument-type]
+            _dgemm_numpy(A, B, transa=0)  # type: ignore[bad-argument-type]
 
     def test_fallback_non_string_transb(self) -> None:
         """Fallback raises TypeError on non-string transb."""
-        fb = self._get_fallback_dgemm()
         A = np.eye(3, dtype=np.float64)
         B = np.eye(3, dtype=np.float64)
         with pytest.raises(TypeError, match="transb must be a string"):
-            fb(A, B, transb=True)  # type: ignore[bad-argument-type]
+            _dgemm_numpy(A, B, transb=True)  # type: ignore[bad-argument-type]
 
     def test_fallback_out_parameter(self) -> None:
         """Fallback dgemm(A, B, out=C) writes into C and returns C."""
-        fb = self._get_fallback_dgemm()
         rng = np.random.default_rng(2001)
         A = rng.standard_normal((50, 100))
         B = rng.standard_normal((100, 80))
         out_buf = np.empty((50, 80), dtype=np.float64)
-        result = fb(A, B, out=out_buf)
+        result = _dgemm_numpy(A, B, out=out_buf)
         assert result is out_buf
         npt.assert_allclose(result, A @ B, rtol=1e-12)
 
     def test_fallback_out_none(self) -> None:
         """Fallback dgemm(A, B, out=None) allocates fresh array."""
-        fb = self._get_fallback_dgemm()
         rng = np.random.default_rng(2002)
         A = rng.standard_normal((50, 100))
         B = rng.standard_normal((100, 80))
-        result = fb(A, B, out=None)
+        result = _dgemm_numpy(A, B, out=None)
         assert result.shape == (50, 80)
         npt.assert_allclose(result, A @ B, rtol=1e-12)
 
     def test_fallback_out_shape_mismatch(self) -> None:
         """Fallback dgemm(A, B, out=wrong_shape) raises ValueError."""
-        fb = self._get_fallback_dgemm()
         rng = np.random.default_rng(2003)
         A = rng.standard_normal((50, 100))
         B = rng.standard_normal((100, 80))
         out_bad = np.empty((10, 10), dtype=np.float64)
         with pytest.raises(ValueError, match="out shape"):
-            fb(A, B, out=out_bad)
+            _dgemm_numpy(A, B, out=out_bad)
 
     def test_fallback_out_wrong_ndim(self) -> None:
         """Fallback dgemm(A, B, out=1d_array) raises ValueError."""
-        fb = self._get_fallback_dgemm()
         A = np.eye(5, dtype=np.float64)
         B = np.eye(5, dtype=np.float64)
         out_1d = np.empty(25, dtype=np.float64)
         with pytest.raises(ValueError, match="out shape"):
-            fb(A, B, out=out_1d)
+            _dgemm_numpy(A, B, out=out_1d)
 
 
 # ---------------------------------------------------------------------------

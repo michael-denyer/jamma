@@ -98,7 +98,7 @@ def _load_proof(
             test can point the proof at a module that cannot import, without
             touching a real .so.
     """
-    if os.environ.get("JAMMA_SANITIZE", "").strip():
+    if os.environ.get("JAMMA_SANITIZE", "").strip() not in ("", "0"):
         print(
             "skipping post-link import proof — JAMMA_SANITIZE is set",
             file=sys.stderr,

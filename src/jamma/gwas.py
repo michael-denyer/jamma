@@ -65,6 +65,7 @@ def gwas(
     cat_columns: list[int] | None = None,
     backend: BackendRequest = "auto",
     legacy_text: bool = False,
+    no_telemetry: bool = False,
 ) -> PipelineResult:
     """Run a complete GWAS pipeline in a single call.
 
@@ -145,6 +146,9 @@ def gwas(
             selects the best available numpy runner.
         legacy_text: If True, write kinship and eigen files in GEMMA text
             format instead of binary .npy. The CLI's ``--legacy-text``.
+        no_telemetry: If True, skip local benchmark telemetry for this run.
+            The CLI's ``--no-telemetry``. ``JAMMA_NO_TELEMETRY`` is honoured
+            regardless of this flag.
 
     Returns:
         PipelineResult with association results, sample/SNP counts, output
@@ -192,5 +196,6 @@ def gwas(
         cat_columns=cat_columns,
         backend=backend,
         legacy_text=legacy_text,
+        no_telemetry=no_telemetry,
     )
     return PipelineRunner(config).run()

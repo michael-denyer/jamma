@@ -272,9 +272,9 @@ def _load_c_module(spec: BuildSpec, expected_abi: int) -> ModuleType | None:
     Returns:
         The validated extension module, or None to use the pure-Python fallback.
     """
-    from jamma.core.constants import env_flag
+    from jamma.core.constants import Env
 
-    if env_flag("JAMMA_FORCE_NUMPY_FALLBACK"):
+    if Env.current().force_numpy_fallback:
         return None
 
     mod = _import_and_validate(spec, expected_abi)

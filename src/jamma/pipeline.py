@@ -22,7 +22,6 @@ Example:
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,7 +29,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core.constants import PHENOTYPE_MISSING
+from jamma.core.constants import PHENOTYPE_MISSING, Env
 from jamma.io.covariate import read_covariate_file
 from jamma.io.plink import (
     get_plink_metadata,
@@ -137,7 +136,12 @@ class PipelineRunner:
             record["lmm_s"] = result.timing.lmm_s
             record["total_s"] = result.timing.total_s
             record["rotation_s"] = result.timing.rotation_s
-            append_benchmark_record(record)
+            # JAMMA_NO_TELEMETRY takes priority in all paths, matching
+            # JAMMA_BACKEND above: the CLI's --no-telemetry sets
+            # config.no_telemetry, a pure-Python-API caller only has the
+            # env var, so both must reach append_benchmark_record.
+            no_telemetry = self.config.no_telemetry or Env.current().no_telemetry
+            append_benchmark_record(record, no_telemetry=no_telemetry)
         except Exception:  # noqa: BLE001 — telemetry must never break the pipeline; log and continue
             logger.warning("Telemetry emission failed", exc_info=True)
 
@@ -410,7 +414,7 @@ class PipelineRunner:
         # It arrives as an unvalidated string, so check it here rather than
         # letting an unknown value reach select_execution_mode after the
         # pipeline has already read PLINK metadata off disk.
-        env_backend = os.environ.get("JAMMA_BACKEND")
+        env_backend = Env.current().backend_raw
         requested: BackendRequest = (
             _parse_backend_override(env_backend)
             if env_backend is not None

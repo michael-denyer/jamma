@@ -127,6 +127,7 @@ class PipelineConfig:
     backend: BackendRequest = "auto"
     legacy_text: bool = False
     phenotype_columns: list[int] = field(default_factory=lambda: [1])
+    no_telemetry: bool = False
 
     def __post_init__(self) -> None:
         if os.sep in self.output_prefix or "/" in self.output_prefix:

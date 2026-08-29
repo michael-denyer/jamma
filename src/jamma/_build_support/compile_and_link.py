@@ -268,12 +268,15 @@ def apply_sanitizer_overrides(
     """Augment compile/link flags with sanitizer flags when JAMMA_SANITIZE is set.
 
     Returns ``(cflags, link_flags, lapack_cflags)``. When ``JAMMA_SANITIZE`` is
-    unset or empty, returns the inputs unchanged plus an empty
-    ``lapack_cflags``. Reads ``os.environ`` ONCE per call; ``run_build`` is the
-    one production caller (every compile entry point, including runtime
-    recompile via ``core/recompile.py``, routes through it). No caller may
-    duplicate the env-var read — that would defeat the single-source-of-truth
-    invariant for compile flags.
+    unset, empty, or ``"0"``, returns the inputs unchanged plus an empty
+    ``lapack_cflags`` — the same presence-based truthiness every other
+    ``JAMMA_*`` toggle uses (``jamma.core.constants.env_flag``, mirrored here
+    as ``_sentinel_env_on`` above because this module cannot import the
+    runtime ``jamma`` package). Reads ``os.environ`` ONCE per call;
+    ``run_build`` is the one production caller (every compile entry point,
+    including runtime recompile via ``core/recompile.py``, routes through
+    it). No caller may duplicate the env-var read — that would defeat the
+    single-source-of-truth invariant for compile flags.
 
     JAMMA_SANITIZE format: comma-separated ``-fsanitize`` values, e.g.
     ``"address,undefined"`` or ``"address"`` alone. Trailing ``-O1`` wins
@@ -284,7 +287,7 @@ def apply_sanitizer_overrides(
     extra_cflags = list(extra_cflags or [])
     extra_link_flags = list(extra_link_flags or [])
     sanitizers = os.environ.get("JAMMA_SANITIZE", "").strip()
-    if not sanitizers:
+    if sanitizers in ("", "0"):
         return extra_cflags, extra_link_flags, []
     san_cflags = [
         f"-fsanitize={sanitizers}",

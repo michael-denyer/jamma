@@ -61,6 +61,22 @@ def test_empty_sanitizer_treated_as_unset(monkeypatch, value):
     assert lapack_cflags == []
 
 
+def test_zero_sanitizer_treated_as_unset(monkeypatch):
+    """JAMMA_SANITIZE=0: same behaviour as unset (F3).
+
+    Before F3, this fell through to ``-fsanitize=0`` — clang and gcc both
+    reject "0" as a sanitizer name, so setting JAMMA_SANITIZE=0 (the
+    documented way to turn a JAMMA_* toggle off) broke the C-extension
+    build outright. Every JAMMA_* toggle shares presence-based truthiness
+    (jamma.core.constants.env_flag): "" and "0" are off.
+    """
+    monkeypatch.setenv("JAMMA_SANITIZE", "0")
+    cflags, link_flags, lapack_cflags = apply_sanitizer_overrides(["-foo"], ["-bar"])
+    assert cflags == ["-foo"]
+    assert link_flags == ["-bar"]
+    assert lapack_cflags == []
+
+
 def test_address_undefined_appends_sanitizer_flags(monkeypatch):
     """address,undefined: cflags get -fsanitize=address,undefined,
     -fno-omit-frame-pointer, -O1; link gets the same -fsanitize=...; lapack

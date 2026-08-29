@@ -5,7 +5,6 @@ including -bfile, -gk, -lmm, -k, -o, -outdir flags for data loading,
 mode selection, and output configuration.
 """
 
-import os
 import sys
 import time
 from pathlib import Path
@@ -243,9 +242,6 @@ def main(
     """
     setup_logging(verbose=verbose)
 
-    if no_telemetry:
-        os.environ["JAMMA_NO_TELEMETRY"] = "1"
-
     # CLI policy: rules about flags PipelineConfig has no field for. Every
     # rule about a knob the config does carry lives in its __post_init__ (or
     # LmmConfig's) and surfaces below as a usage error when the config is built.
@@ -303,6 +299,7 @@ def main(
             cat_columns=cat_columns,
             backend=backend,
             legacy_text=legacy_text,
+            no_telemetry=no_telemetry,
         )
     except ValueError as e:
         raise click.UsageError(str(e)) from e

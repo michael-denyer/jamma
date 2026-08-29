@@ -3,13 +3,19 @@
 Provides :class:`BenchmarkRecord` and :func:`append_benchmark_record` for
 appending structured run data to ``~/.jamma/benchmarks.jsonl``.
 
-Telemetry is on by default.  Set ``JAMMA_NO_TELEMETRY`` to any non-empty
-value (e.g. ``JAMMA_NO_TELEMETRY=1``) or ``DO_NOT_TRACK=1`` to opt out.
+Telemetry is on by default.  ``JAMMA_NO_TELEMETRY`` set to any non-empty
+value (e.g. ``JAMMA_NO_TELEMETRY=1``) or ``DO_NOT_TRACK=1`` opts out.
 
-``JAMMA_NO_TELEMETRY`` uses "any non-empty value" semantics — ``"0"`` and
-``"false"`` also disable telemetry.  ``DO_NOT_TRACK`` follows the
-`consoledonottrack.com <https://consoledonottrack.com/>`_ convention:
-only ``DO_NOT_TRACK=1`` opts out; ``DO_NOT_TRACK=0`` explicitly opts in.
+``JAMMA_NO_TELEMETRY`` is parsed once at the boundary — the CLI's
+``--no-telemetry`` flag and the env var both resolve to
+``PipelineConfig.no_telemetry``, which callers pass in as ``no_telemetry``
+below, so this module never reads ``os.environ`` itself for it. ``"0"`` and
+``"false"`` disable telemetry, matching :func:`jamma.core.constants.env_flag`.
+``DO_NOT_TRACK`` follows the
+`consoledonottrack.com <https://consoledonottrack.com/>`_ convention instead:
+only ``DO_NOT_TRACK=1`` opts out; ``DO_NOT_TRACK=0`` explicitly opts in. That
+different truthiness rule is why it stays a direct env read here rather than
+a field on :class:`jamma.core.constants.Env`.
 
 Write failures are logged as warnings and never propagate — telemetry must
 never abort a GWAS run.
@@ -82,21 +88,25 @@ class BenchmarkRecord(_BenchmarkRequired, total=False):
 def append_benchmark_record(
     record: BenchmarkRecord,
     *,
+    no_telemetry: bool = False,
     path: Path | None = None,
 ) -> None:
     """Append one record to the benchmark JSONL file.
 
     Never raises.  Write failures are logged as warnings.
 
-    When ``JAMMA_NO_TELEMETRY`` is set to any non-empty value, or
-    ``DO_NOT_TRACK`` is set to ``"1"``, this function returns immediately
-    without writing or creating directories.
+    When ``no_telemetry`` is True, or ``DO_NOT_TRACK`` is set to ``"1"``,
+    this function returns immediately without writing or creating
+    directories.
 
     Args:
         record: Benchmark data to append.
+        no_telemetry: Resolved ``JAMMA_NO_TELEMETRY`` / ``--no-telemetry``
+            state. The caller resolves this once (``PipelineConfig.no_telemetry``)
+            rather than this module reading ``os.environ`` itself.
         path: Override the default file path.  Default: ``~/.jamma/benchmarks.jsonl``.
     """
-    if os.environ.get("JAMMA_NO_TELEMETRY") or os.environ.get("DO_NOT_TRACK") == "1":
+    if no_telemetry or os.environ.get("DO_NOT_TRACK") == "1":
         return
 
     try:

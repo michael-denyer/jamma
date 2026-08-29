@@ -9,12 +9,29 @@ image for containerised runs.
 JAMMA reads these environment variables at runtime. None are required for normal
 use — the defaults are appropriate for most analyses.
 
+Seven of them (`JAMMA_BLAS_THREADS`, `JAMMA_LOCO_WORKERS`, `JAMMA_BACKEND`,
+`JAMMA_FORCE_NUMPY_FALLBACK`, `JAMMA_NO_TELEMETRY`, `JAMMA_NO_OPENMP`,
+`JAMMA_SENTINEL_UB`) plus `JAMMA_SANITIZE` are parsed once per read through
+`jamma.core.constants.Env.current()`, rather than each call site spelling
+out its own `os.environ.get(...)`. `Env` reads fresh on every call instead of
+caching a module-level singleton, so `monkeypatch.setenv`/`delenv` in tests
+and a CI job's `env:` block both still take effect. `DO_NOT_TRACK` stays a
+direct read in `telemetry.py`: it follows a different truthiness rule (only
+`"1"` opts out) than every `JAMMA_*` toggle's presence-based one, so folding
+it into `Env` would misrepresent it. `JAMMA_SANITIZE`, `JAMMA_SENTINEL_UB`
+(build-time, read by `_build_support/compile_and_link.py` and the two
+dev-mode `_compile_*.py` recompile scripts), `JAMMA_NO_OPENMP`
+(`_build_support/openmp_detect.py`), and `CC` stay direct reads too — those
+modules run under PEP 517 build isolation, or standalone before the package
+is installed, and cannot import the runtime `jamma` package that `Env` lives
+in without pulling in the full numpy/loguru stack they are built to avoid.
+
 | Variable | Default | Description |
 |---|---|---|
 | `JAMMA_BACKEND` | `auto` | Force the compute backend: `auto`, `numpy`, or `numpy-streaming`. Auto-detect selects the C+NumPy runner, falling back to streaming when memory is insufficient. |
 | `JAMMA_BLAS_THREADS` | Physical core count | Thread count for NumPy BLAS operations (eigendecomposition, matmul). Controls MKL/OpenBLAS via `threadpoolctl`. **Linux/Windows only** — has no effect on macOS Accelerate. |
 | `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers for LOCO analysis. Each worker holds a full K_loco matrix (`n_samples² × 8` bytes), so increase with caution. |
-| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable local benchmark telemetry. |
+| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable local benchmark telemetry. Merged with the CLI's `--no-telemetry` / the Python API's `no_telemetry` argument onto `PipelineConfig.no_telemetry` in `pipeline.py`; `cli.py` no longer writes this variable into `os.environ` to reach `telemetry.py`, and `append_benchmark_record` takes the resolved value as an explicit argument rather than reading the variable itself. |
 | `DO_NOT_TRACK` | *(unset)* | Universal convention: set to `1` to disable JAMMA telemetry. |
 | `JLINALG_NO_VENDOR_LAPACK` | *(unset)* | Set to any non-empty value (not `0`) to force `np.linalg.eigh` instead of vendor LAPACK (DSYEVD/DSYEVR) for eigendecomposition only (scope: `lmm/eigen.py`). Useful for debugging numerical differences. |
 | `JLINALG_NO_VENDOR_DGEMM` | *(unset)* | Set to any non-empty value (not `0`) to leave vendor `dgemm` unwired, so `blas_has_dgemm` reports `0` while the C extension stays loaded and the rest of dispatch (`dsyrk`, DSYEVD/DSYEVR) is untouched. That is the permanent state of an LP64-only host — distro or conda numpy — which CI never reaches because PyPI numpy ships ILP64 `scipy_openblas64`. Narrower than `JAMMA_FORCE_NUMPY_FALLBACK`, which skips the `.so` import entirely. Used by `tests/test_jlinalg_dispatch.py::TestDgemmVendorGate`. |

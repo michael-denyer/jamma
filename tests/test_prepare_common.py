@@ -15,52 +15,57 @@ from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
     _eigendecompose_or_reuse,
+    prepare_lmm_run,
 )
 from jamma.lmm.schema import LmmConfig
 
 pytestmark = pytest.mark.tier0
 
 
-def test_compute_null_model_common_wald_returns_nones():
-    """Wald mode (lmm_mode=1) should return (None, None, None) from common path."""
+def test_null_model_populated_regardless_of_caller_intent():
+    """prepare_lmm_run populates NullModel the same way for every caller.
+
+    The mode gate this replaced saved nothing: the null MLE costs 0.8 ms at
+    n=2k and 28.8 ms at n=100k. prepare_lmm_run no longer takes lmm_mode at
+    all, so a caller that only wants Wald gets the identical logl_H0 and
+    Hi_eval_null a Score/All caller would get from the same rotated inputs —
+    proven here by comparing prepare_lmm_run's populated fields directly
+    against _compute_null_model_common on the same UtW/Uty.
+    """
     rng = np.random.default_rng(0)
     n_samples = 50
-    eigenvalues_np = np.abs(rng.standard_normal(n_samples)) + 0.1
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
+    kinship = np.eye(n_samples) + 0.01 * rng.standard_normal((n_samples, n_samples))
+    kinship = (kinship + kinship.T) / 2
+    phenotypes = rng.standard_normal(n_samples)
+    W = np.ones((n_samples, 1))
 
-    logl_H0, lam, Hi_eval = _compute_null_model_common(
-        lmm_mode=1,
-        eigenvalues_np=eigenvalues_np,
-        UtW=UtW,
-        Uty=Uty,
+    prepared = prepare_lmm_run(
+        kinship=kinship,
+        eigenvalues=None,
+        eigenvectors=None,
+        phenotypes=phenotypes,
+        W=W,
+        n_cvt=1,
+        l_min=1e-5,
+        l_max=1e5,
+        show_progress=False,
+        check_memory=False,
+        label="test",
+        compute_pve=False,
+    )
+    assert prepared.logl_H0 is not None
+    assert prepared.Hi_eval_null is not None
+    assert prepared.Hi_eval_null.shape == (n_samples,)
+
+    expected = _compute_null_model_common(
+        eigenvalues_np=prepared.eigenvalues,
+        UtW=prepared.UtW,
+        Uty=prepared.Uty,
         n_cvt=1,
         show_progress=False,
     )
-    assert logl_H0 is None
-    assert lam is None
-    assert Hi_eval is None
-
-
-def test_compute_null_model_common_lrt_returns_no_hi_eval():
-    """LRT mode (lmm_mode=2) returns logl_H0 and lambda but no Hi_eval."""
-    rng = np.random.default_rng(1)
-    n_samples = 50
-    eigenvalues_np = np.sort(np.abs(rng.standard_normal(n_samples)) + 0.1)
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-
-    logl_H0, lam, Hi_eval = _compute_null_model_common(
-        lmm_mode=2,
-        eigenvalues_np=eigenvalues_np,
-        UtW=UtW,
-        Uty=Uty,
-        n_cvt=1,
-        show_progress=False,
-    )
-    assert logl_H0 is not None
-    assert lam is not None
-    assert Hi_eval is None
+    assert prepared.logl_H0 == expected.logl_H0
+    np.testing.assert_array_equal(prepared.Hi_eval_null, expected.hi_eval_null)
 
 
 def test_build_covariate_matrix_from_common():
@@ -130,31 +135,6 @@ def test_build_covariate_matrix_rank_deficient():
         _build_covariate_matrix(W, 50)
 
 
-def test_compute_null_model_common_score_returns_hi_eval():
-    """T6: Score mode (lmm_mode=3) returns logl_H0, lambda, and Hi_eval."""
-    rng = np.random.default_rng(7)
-    n_samples = 50
-    eigenvalues_np = np.sort(np.abs(rng.standard_normal(n_samples)) + 0.1)
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-
-    logl_H0, lam, Hi_eval = _compute_null_model_common(
-        lmm_mode=3,
-        eigenvalues_np=eigenvalues_np,
-        UtW=UtW,
-        Uty=Uty,
-        n_cvt=1,
-        show_progress=False,
-    )
-    assert logl_H0 is not None, "logl_H0 should not be None for Score mode"
-    assert lam is not None, "lambda should not be None for Score mode"
-    assert Hi_eval is not None, "Hi_eval should not be None for Score mode"
-    assert Hi_eval.shape == (n_samples,), (
-        f"Expected ({n_samples},), got {Hi_eval.shape}"
-    )
-    assert np.all(Hi_eval > 0), "Hi_eval should be all positive"
-
-
 def test_compute_null_model_common_rejects_negative_eigenvalues(monkeypatch):
     """_compute_null_model_common raises ValueError on non-positive Hi_eval_null.
 
@@ -173,7 +153,6 @@ def test_compute_null_model_common_rejects_negative_eigenvalues(monkeypatch):
 
     with pytest.raises(ValueError, match="non-positive"):
         prepare_common._compute_null_model_common(
-            lmm_mode=3,
             eigenvalues_np=eigenvalues_np,
             UtW=UtW,
             Uty=Uty,
@@ -198,7 +177,6 @@ def test_compute_null_model_common_rejects_nan_hi_eval_null(monkeypatch):
 
     with pytest.raises(ValueError, match="non-finite"):
         prepare_common._compute_null_model_common(
-            lmm_mode=3,
             eigenvalues_np=eigenvalues_np,
             UtW=UtW,
             Uty=Uty,
@@ -221,16 +199,14 @@ def test_compute_null_model_common_accepts_near_zero_eigenvalues():
     Uty = rng.standard_normal(n_samples)
 
     # Should not raise — 1e-15 is positive so Hi_eval_null[0] > 0
-    logl_H0, lam, Hi_eval = _compute_null_model_common(
-        lmm_mode=3,
+    null_model = _compute_null_model_common(
         eigenvalues_np=eigenvalues_np,
         UtW=UtW,
         Uty=Uty,
         n_cvt=1,
         show_progress=False,
     )
-    assert Hi_eval is not None
-    assert np.all(Hi_eval > 0), (
+    assert np.all(null_model.hi_eval_null > 0), (
         "All Hi_eval_null should be positive for non-negative eigenvalues"
     )
 

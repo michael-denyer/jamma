@@ -18,7 +18,7 @@ The caller is responsible for:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypedDict, TypeVar
+from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 
@@ -294,30 +294,6 @@ def _compute_score_numpy(
 _LOGL_H0_REQUIRED = "logl_H0 is required for LRT (mode 2) and All (mode 4)"
 _HI_EVAL_NULL_REQUIRED = "Hi_eval_null is required for Score (mode 3) and All (mode 4)"
 
-_ModeInput = TypeVar("_ModeInput")
-
-
-def _require_mode_input(value: _ModeInput | None, message: str) -> _ModeInput:
-    """Return a mode-specific input, or raise naming which mode needed it.
-
-    Only some LMM modes take logl_H0 / Hi_eval_null, so both arrive optional.
-    Checking them at the point of use ties the guard to the branch that reads
-    the value, which a mode check made up front cannot express.
-
-    Args:
-        value: The optional input.
-        message: Error text naming the input and the modes that require it.
-
-    Returns:
-        The value, known to be present.
-
-    Raises:
-        ValueError: If the value is None.
-    """
-    if value is None:
-        raise ValueError(message)
-    return value
-
 
 def _store_wald(result: dict[str, np.ndarray | None], wald: WaldResult) -> None:
     """Copy a WaldResult's five arrays into the mode-agnostic result dict.
@@ -408,6 +384,8 @@ def compute_lmm_chunk_numpy(
         )
 
     elif lmm_mode == 2:
+        if logl_H0 is None:
+            raise ValueError(_LOGL_H0_REQUIRED)
         result.update(
             _compute_lrt_numpy(
                 n_cvt,
@@ -417,17 +395,19 @@ def compute_lmm_chunk_numpy(
                 l_max,
                 n_grid,
                 n_refine,
-                _require_mode_input(logl_H0, _LOGL_H0_REQUIRED),
+                logl_H0,
                 n_threads=n_threads,
             )
         )
 
     elif lmm_mode == 3:
+        if Hi_eval_null is None:
+            raise ValueError(_HI_EVAL_NULL_REQUIRED)
         result.update(
             _compute_score_numpy(
                 n_cvt,
                 eigenvalues,
-                _require_mode_input(Hi_eval_null, _HI_EVAL_NULL_REQUIRED),
+                Hi_eval_null,
                 Uab_batch,
                 n_samples,
                 n_threads=n_threads,
@@ -435,18 +415,17 @@ def compute_lmm_chunk_numpy(
         )
 
     elif lmm_mode == 4:
-        # Both mode-4 inputs are checked before any compute runs, so an omitted
-        # one still fails before the Score step rather than partway through.
-        # logl_H0 first: with both absent that is the one reported, which is
-        # the order the previous up-front guards established.
-        null_logl = _require_mode_input(logl_H0, _LOGL_H0_REQUIRED)
-        hi_eval_null = _require_mode_input(Hi_eval_null, _HI_EVAL_NULL_REQUIRED)
+        # logl_H0 checked first: with both absent, it is the one reported.
+        if logl_H0 is None:
+            raise ValueError(_LOGL_H0_REQUIRED)
+        if Hi_eval_null is None:
+            raise ValueError(_HI_EVAL_NULL_REQUIRED)
         # Compose all three tests; only take p_scores from Score —
         # Wald provides REML-optimized beta/SE below
         score_result = _compute_score_numpy(
             n_cvt,
             eigenvalues,
-            hi_eval_null,
+            Hi_eval_null,
             Uab_batch,
             n_samples,
             n_threads=n_threads,
@@ -461,7 +440,7 @@ def compute_lmm_chunk_numpy(
                 l_max,
                 n_grid,
                 n_refine,
-                null_logl,
+                logl_H0,
                 n_threads=n_threads,
             )
         )

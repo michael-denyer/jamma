@@ -281,8 +281,8 @@ def run_lmm_chunk_source_numpy(
     eigenvalues_np: np.ndarray,
     UtW: np.ndarray,
     Uty: np.ndarray,
-    Hi_eval_null: np.ndarray | None,
-    logl_H0: float | None,
+    Hi_eval_null: np.ndarray,
+    logl_H0: float,
     n_samples: int,
     n_filtered: int,
     n_cvt: int,
@@ -329,16 +329,6 @@ def run_lmm_chunk_source_numpy(
             f"filtered_means length ({len(filtered_means)}) does not match "
             f"n_filtered ({n_filtered})"
         )
-    if lmm_mode in (3, 4) and Hi_eval_null is None:
-        raise RuntimeError("LMM Score/All mode requires Hi_eval_null")
-    if lmm_mode in (2, 4) and logl_H0 is None:
-        raise RuntimeError("LMM LRT/All mode requires logl_H0")
-
-    hi_eval_for_compute = (
-        np.empty(0, dtype=np.float64) if Hi_eval_null is None else Hi_eval_null
-    )
-    logl_H0_for_compute = float("nan") if logl_H0 is None else logl_H0
-
     dispatch = select_current_dispatch_path(
         n_cvt, lmm_mode, log_choices=log_dispatch_choices
     )
@@ -376,8 +366,8 @@ def run_lmm_chunk_source_numpy(
         eigenvalues=eigenvalues_np,
         UtW=UtW,
         Uty=Uty,
-        Hi_eval_null=hi_eval_for_compute,
-        logl_H0=logl_H0_for_compute,
+        Hi_eval_null=Hi_eval_null,
+        logl_H0=logl_H0,
         l_min=l_min,
         l_max=l_max,
         n_grid=n_grid,

@@ -427,9 +427,10 @@ class TestMode4WaldOverwritesScore:
 
         Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
 
-        logl_H0, _, Hi_eval_null = _compute_null_model_common(
-            4, eigenvalues, UtW, Uty, n_cvt, show_progress=False
+        null_model = _compute_null_model_common(
+            eigenvalues, UtW, Uty, n_cvt, show_progress=False
         )
+        logl_H0, Hi_eval_null = null_model.logl_H0, null_model.hi_eval_null
 
         # Mode 1 — Wald only
         wald_only = compute_lmm_chunk_numpy(

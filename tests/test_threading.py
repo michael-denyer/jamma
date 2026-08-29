@@ -202,7 +202,6 @@ class TestBlasThreadsKnobReachesRotation:
             phenotypes=rng.standard_normal(n),
             W=np.ones((n, 1)),
             n_cvt=1,
-            lmm_mode=1,
             l_min=1e-5,
             l_max=1e5,
             show_progress=False,

@@ -62,16 +62,6 @@ def test_filtered_means_length_mismatch_raises():
         )
 
 
-def test_score_mode_without_hi_eval_raises():
-    with pytest.raises(RuntimeError, match="Score/All mode requires Hi_eval_null"):
-        run_lmm_chunk_source_numpy(lmm_mode=3, **_run_kwargs(Hi_eval_null=None))
-
-
-def test_lrt_mode_without_logl_h0_raises():
-    with pytest.raises(RuntimeError, match="LRT/All mode requires logl_H0"):
-        run_lmm_chunk_source_numpy(lmm_mode=2, **_run_kwargs(logl_H0=None))
-
-
 def test_empty_filtered_returns_zeroed_stats():
     """No SNPs means no work and no time spent, on every field the caller reads."""
     stats = run_lmm_chunk_source_numpy(

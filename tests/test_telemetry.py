@@ -6,6 +6,7 @@ Covers TEL-01 through TEL-06 plus edge cases.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -181,43 +182,29 @@ def test_each_line_independently_parseable(
 # ---------------------------------------------------------------------------
 
 
-def test_opt_out_env_var_skips_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """TEL-04: When JAMMA_NO_TELEMETRY=1, no file is created."""
+def test_opt_out_no_telemetry_arg_skips_write(tmp_path: Path) -> None:
+    """TEL-04: When no_telemetry=True, no file is created.
+
+    JAMMA_NO_TELEMETRY is resolved by the caller (PipelineConfig.no_telemetry
+    merged with Env.current().no_telemetry in pipeline.py's _emit_telemetry,
+    F3) and passed in as this explicit argument — append_benchmark_record no
+    longer reads the env var itself.
+    """
     from jamma.core.telemetry import append_benchmark_record
 
-    monkeypatch.setenv("JAMMA_NO_TELEMETRY", "1")
-    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
-    append_benchmark_record(_record(n_samples=999), path=dest)
+    append_benchmark_record(_record(n_samples=999), no_telemetry=True, path=dest)
 
     assert not dest.exists()
 
 
-def test_opt_out_env_var_any_truthy_value(
+def test_opt_out_no_telemetry_false_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TEL-04: Any non-empty value for JAMMA_NO_TELEMETRY skips write."""
+    """TEL-04: With no_telemetry=False (default), no DO_NOT_TRACK: file is created."""
     from jamma.core.telemetry import append_benchmark_record
 
-    monkeypatch.setenv("JAMMA_NO_TELEMETRY", "true")
-    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
-    dest = tmp_path / "benchmarks.jsonl"
-
-    append_benchmark_record(_record(n_samples=999), path=dest)
-
-    assert not dest.exists()
-
-
-def test_opt_out_env_var_not_set_writes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """TEL-04: Without JAMMA_NO_TELEMETRY or DO_NOT_TRACK, file IS created normally."""
-    from jamma.core.telemetry import append_benchmark_record
-
-    monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
     monkeypatch.delenv("DO_NOT_TRACK", raising=False)
     dest = tmp_path / "benchmarks.jsonl"
 
@@ -292,35 +279,40 @@ def test_do_not_track_unset_writes(
 
 
 # ---------------------------------------------------------------------------
-# TEL-06: --no-telemetry CLI flag sets JAMMA_NO_TELEMETRY
+# TEL-06: --no-telemetry CLI flag sets PipelineConfig.no_telemetry
 # ---------------------------------------------------------------------------
 
 
-def test_no_telemetry_flag_sets_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TEL-06: --no-telemetry sets JAMMA_NO_TELEMETRY=1 in the environment."""
-    import os
+def test_no_telemetry_flag_sets_config_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TEL-06: --no-telemetry reaches PipelineConfig.no_telemetry.
 
+    cli.py no longer writes JAMMA_NO_TELEMETRY into os.environ to reach
+    telemetry.py — the flag is threaded through PipelineConfig instead
+    (F3). This asserts the env var is untouched while the config field
+    is set.
+    """
     from click.testing import CliRunner
 
     from jamma.cli import main
+    from jamma.pipeline import PipelineConfig
 
     monkeypatch.delenv("JAMMA_NO_TELEMETRY", raising=False)
 
-    env_captured: dict[str, str | None] = {}
+    captured: dict[str, object] = {}
 
-    def capture_env(*_args: object) -> None:
-        env_captured["JAMMA_NO_TELEMETRY"] = os.environ.get("JAMMA_NO_TELEMETRY")
+    def capture_config(config: PipelineConfig) -> None:
+        captured["no_telemetry"] = config.no_telemetry
+        captured["env_var"] = os.environ.get("JAMMA_NO_TELEMETRY")
 
-    # Patch _run_lmm so we don't need real data files — just need to reach
-    # the point after os.environ is set.
-    with patch("jamma.cli._run_lmm", side_effect=capture_env):
+    with patch("jamma.cli._run_lmm", side_effect=capture_config):
         runner = CliRunner()
         runner.invoke(
             main,
             ["--no-telemetry", "-lmm", "1", "-bfile", "dummy", "-k", "dummy.cXX.txt"],
         )
 
-    assert env_captured.get("JAMMA_NO_TELEMETRY") == "1"
+    assert captured.get("no_telemetry") is True
+    assert captured.get("env_var") is None
 
 
 # ---------------------------------------------------------------------------

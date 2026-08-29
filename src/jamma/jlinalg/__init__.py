@@ -46,7 +46,7 @@ from typing import Literal, NamedTuple
 import numpy as _np
 
 from jamma._build_support.compile_and_link import JLINALG_SPEC
-from jamma.core.constants import env_flag
+from jamma.core.constants import Env, env_flag
 from jamma.core.recompile import _load_c_module
 
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
@@ -406,7 +406,7 @@ _eigh_backend = _eigh_numpy
 # than disabling downstream calls) means dlopen never runs, so ASAN's
 # interceptors never see the unowned BLAS-internal pointers. Truthy
 # values: anything other than "", "0".
-_FORCE_NUMPY = env_flag("JAMMA_FORCE_NUMPY_FALLBACK")
+_FORCE_NUMPY = Env.current().force_numpy_fallback
 
 # One shared seam does the import, ABI check, and recompile-then-retry that this
 # module used to hand-write twice (initial try plus post-recompile retry). It

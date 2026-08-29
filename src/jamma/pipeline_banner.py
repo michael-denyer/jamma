@@ -9,10 +9,9 @@ following the compute flow.
 
 from __future__ import annotations
 
-import os
-
 from loguru import logger
 
+from jamma.core.constants import Env
 from jamma.lmm.runner import ExecutionPlan
 
 __all__ = ["log_dataset_banner", "log_pipeline_banner"]
@@ -135,7 +134,7 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
         blas = get_blas_backend()
 
         # One parse of JAMMA_BLAS_THREADS: get_blas_thread_count owns it.
-        if os.environ.get("JAMMA_BLAS_THREADS") or is_blas_controllable():
+        if Env.current().blas_threads_raw or is_blas_controllable():
             threads = get_blas_thread_count()
         else:
             # Accelerate or no BLAS — use halved core count

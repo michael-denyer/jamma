@@ -21,6 +21,8 @@ import psutil
 from loguru import logger
 from threadpoolctl import threadpool_info, threadpool_limits
 
+from jamma.core.constants import Env
+
 
 def get_blas_backend() -> str:
     """Return the BLAS backend name from threadpool_info.
@@ -74,7 +76,7 @@ def get_blas_thread_count() -> int:
     """
     max_threads = os.cpu_count() or 64
 
-    env_override = os.environ.get("JAMMA_BLAS_THREADS")
+    env_override = Env.current().blas_threads_raw
     if env_override is not None:
         try:
             n = int(env_override)
@@ -109,7 +111,7 @@ def get_loco_worker_count() -> int:
     Returns:
         Positive integer worker count.
     """
-    env_override = os.environ.get("JAMMA_LOCO_WORKERS")
+    env_override = Env.current().loco_workers_raw
     if env_override is not None:
         try:
             n = int(env_override)

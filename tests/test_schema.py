@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.io.plink import PlinkMetadata
+from jamma.io.plink import PlinkMetadata, get_plink_metadata
 from jamma.lmm.schema import (
     ACCUM_KEYS,
     DEFAULT_L_MAX,
@@ -450,6 +450,51 @@ def test_snp_meta_from_dicts_missing_key_raises() -> None:
     """SnpMeta.from_dicts rejects a dict missing a canonical key at the boundary."""
     with pytest.raises(KeyError, match="pos"):
         SnpMeta.from_dicts([{"chr": "1", "rs": "rs100", "a1": "A", "a0": "G"}])
+
+
+def test_snp_meta_from_plink_meta_sliced_matches_from_dicts() -> None:
+    """from_plink_meta sliced by an index array equals the old dict path.
+
+    The pipeline used to build a list of per-SNP dicts for the indices it
+    kept, then parse that list back into SnpMeta via from_dicts. Fancy
+    indexing on from_plink_meta's arrays must produce identical columns.
+    """
+    from tests.fixture_paths import SYNTHETIC
+
+    meta = get_plink_metadata(SYNTHETIC.bfile)
+    indices = np.array([0, 2, 5, meta.n_snps - 1])
+
+    sliced = SnpMeta.from_plink_meta(meta, indices)
+
+    old_path = SnpMeta.from_dicts(
+        [
+            {
+                "chr": str(meta.chromosome[i]),
+                "rs": meta.sid[i],
+                "pos": int(meta.bp_position[i]),
+                "a1": meta.allele_1[i],
+                "a0": meta.allele_2[i],
+            }
+            for i in indices
+        ]
+    )
+
+    np.testing.assert_array_equal(sliced.chr, old_path.chr)
+    np.testing.assert_array_equal(sliced.rs, old_path.rs)
+    np.testing.assert_array_equal(sliced.pos, old_path.pos)
+    np.testing.assert_array_equal(sliced.a1, old_path.a1)
+    np.testing.assert_array_equal(sliced.a0, old_path.a0)
+
+
+def test_snp_meta_from_plink_meta_no_indices_keeps_every_snp() -> None:
+    """from_plink_meta with indices=None returns every SNP, unfiltered."""
+    from tests.fixture_paths import SYNTHETIC
+
+    meta = get_plink_metadata(SYNTHETIC.bfile)
+
+    full = SnpMeta.from_plink_meta(meta)
+
+    assert len(full) == meta.n_snps
 
 
 def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:

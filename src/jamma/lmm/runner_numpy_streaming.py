@@ -108,7 +108,7 @@ def run_lmm_association_numpy_streaming(
     bed_path: Path,
     phenotypes: np.ndarray,
     kinship: np.ndarray | None = None,
-    snp_info: list | None = None,
+    snp_info: list | SnpMeta | None = None,
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
     eigenvectors: np.ndarray | None = None,
@@ -130,7 +130,8 @@ def run_lmm_association_numpy_streaming(
         phenotypes: Phenotype vector (n_samples,).
         kinship: Kinship matrix (n_samples, n_samples), or None when
             pre-computed eigenvalues and eigenvectors are provided.
-        snp_info: List of SNP metadata dicts, or None to build from PLINK.
+        snp_info: SnpMeta, a list of SNP metadata dicts, or None to build
+            from PLINK.
         covariates: Covariate matrix (n_samples, n_cvt) or None for
             intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
@@ -164,12 +165,13 @@ def run_lmm_association_numpy_streaming(
     meta = get_plink_metadata(bed_path)
     validate_snp_indices(snps_indices, meta.n_snps)
 
-    # Caller-supplied list, or the PLINK metadata, parsed once into columns.
-    snp_meta = (
-        SnpMeta.from_plink_meta(meta)
-        if snp_info is None
-        else SnpMeta.from_dicts(snp_info)
-    )
+    # Caller-supplied SnpMeta or list, or the PLINK metadata parsed once.
+    if snp_info is None:
+        snp_meta = SnpMeta.from_plink_meta(meta)
+    elif isinstance(snp_info, SnpMeta):
+        snp_meta = snp_info
+    else:
+        snp_meta = SnpMeta.from_dicts(snp_info)
 
     source = BedSource(
         bed_path,

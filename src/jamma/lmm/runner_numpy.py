@@ -381,7 +381,7 @@ def run_lmm_association_numpy(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
     kinship: np.ndarray | None,
-    snp_info: list,
+    snp_info: list | SnpMeta,
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
     eigenvectors: np.ndarray | None = None,
@@ -403,7 +403,8 @@ def run_lmm_association_numpy(
             be overwritten in-place during eigendecomposition (buffer reused
             for eigenvectors). Treat as consumed; pass kinship.copy() if you
             need the original matrix after this call.
-        snp_info: List of dicts with keys: chr, rs, pos, a1, a0.
+        snp_info: SnpMeta, or a list of dicts with keys chr, rs, pos, a1, a0
+            for the public batch API.
         covariates: Covariate matrix (n_samples, n_cvt) or None for
             intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
@@ -466,6 +467,9 @@ def run_lmm_association_numpy(
                 f"genotypes={est.genotypes_gb:.1f}GB"
             )
 
+    snp_meta = (
+        snp_info if isinstance(snp_info, SnpMeta) else SnpMeta.from_dicts(snp_info)
+    )
     return _run_numpy_lmm(
         MatrixSource(genotypes),
         phenotypes=phenotypes,
@@ -473,7 +477,7 @@ def run_lmm_association_numpy(
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        snp_meta=SnpMeta.from_dicts(snp_info),
+        snp_meta=snp_meta,
         config=config,
         output_path=output_path,
         hwe_threshold=hwe_threshold,

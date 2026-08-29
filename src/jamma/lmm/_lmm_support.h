@@ -122,9 +122,12 @@ int alloc_lrt_output(lrt_output_t *out, npy_intp n_snps);
 void decref_lrt_output(lrt_output_t *out);
 PyObject *build_lrt_result_dict(lrt_output_t *out);
 
-/* with_mode4 = 0 leaves p_scores/lambdas_mle/p_lrts NULL, and
- * build_lmm_result_dict then emits the five Wald keys only. */
-int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int with_mode4);
+/* betas/ses/p_scores are always allocated: mode 1 leaves p_scores unused,
+ * mode 3 has no Wald block and writes Score's beta/se into betas/ses
+ * instead. lambdas/logls/pwalds are mode 1 and 4 only; lambdas_mle/p_lrts
+ * are mode 2 and 4 only. build_lmm_result_dict emits only the non-NULL
+ * arrays, so a mode's absent keys never reach the Python dict. */
+int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int lmm_mode);
 void decref_lmm_output(lmm_output_t *out);
 PyObject *build_lmm_result_dict(lmm_output_t *out);
 

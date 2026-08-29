@@ -1,8 +1,7 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-Exports the fused workspace APIs the runner drives: Wald and mode-4 at
-n_cvt=1 and at n_cvt>=2, plus the SoA-split Score and LRT kernels the
-n_cvt>=2 modes 2 and 3 take. Which of them a run uses is decided once by
+Exports the fused workspace APIs the runner drives: every lmm_mode at
+n_cvt=1 and at n_cvt>=2. Which of them a run uses is decided once by
 ``DispatchPath``, not re-derived here.
 
 The full-Uab helpers below (``_compute_wald_numpy`` and its LRT and Score
@@ -12,9 +11,7 @@ siblings) are pure NumPy. They are reached only through
 extension is absent.
 
 The caller is responsible for:
-- Computing Uab in the appropriate format: Uab_batch (n_snps, n_samples,
-  n_index) for chunk dispatch, or SoA-layout arrays (uab_varying_soa,
-  uab_invariant_soa) for workspace-based paths.
+- Computing Uab_batch (n_snps, n_samples, n_index) for chunk dispatch.
 - There is no async dispatch in the NumPy backend — results are immediately
   available after the call returns.
 """
@@ -28,7 +25,6 @@ import numpy as np
 from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
 from jamma.core.constants import env_flag
 from jamma.core.recompile import _load_c_module
-from jamma.lmm.likelihood import build_pab_table_for_c
 from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
     golden_section_optimize_lambda_numpy,
@@ -40,18 +36,14 @@ from jamma.lmm.stats import (
     batch_calc_score_stats_numpy,
     batch_calc_wald_stats_from_pab_numpy,
 )
-from jamma.lmm.uab import (
-    batch_compute_iab_numpy,
-    compute_iab_invariant_scalars_ncvt1,
-    reconstruct_uab_from_soa,
-)
+from jamma.lmm.uab import batch_compute_iab_numpy, compute_iab_invariant_scalars_ncvt1
 
 if TYPE_CHECKING:
     from types import ModuleType
 
     from jamma.lmm.dispatch import DispatchPath
 
-_EXPECTED_ABI_VERSION = 16  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 17  # Must match ABI_VERSION in _lmm_accel.c
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
 
 # Load and validate the C accelerator through the one shared seam in
@@ -297,124 +289,6 @@ def _compute_score_numpy(
         n_cvt, Hi_eval_null, Uab_batch, n_samples
     )
     return {"betas": betas, "ses": ses, "p_scores": p_scores}
-
-
-def _compute_score_split_numpy(
-    n_cvt: int,
-    eigenvalues: np.ndarray,
-    Hi_eval_null: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    n_samples: int,
-    n_threads: int = 1,
-) -> dict[str, np.ndarray]:
-    """Compute Score test from SoA split data (no full Uab reconstruction).
-
-    Dispatches to compute_score_split_general_c. ``DispatchPath.SOA_SPLIT`` is
-    selected only for n_cvt>=2, so there is no n_cvt=1 kernel here; modes 2 and
-    3 at n_cvt=1 take the fused workspace kernels instead. Falls back to
-    reconstruct_uab_from_soa + _compute_score_numpy when C is unavailable.
-
-    Args:
-        n_cvt: Number of covariates.
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        Hi_eval_null: Pre-computed null-model Hi_eval (n_samples,).
-        uab_varying_soa: SNP-varying Uab (n_snps, n_var, n_samples) SoA.
-        uab_invariant_soa: SNP-invariant Uab (n_inv, n_samples) SoA.
-        n_samples: Number of samples.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        Dict with keys: betas, ses, p_scores.
-    """
-    if _accel is not None:
-        return _c().compute_score_split_general_c(
-            eigenvalues,
-            uab_varying_soa,
-            uab_invariant_soa,
-            Hi_eval_null,
-            n_samples,
-            n_cvt,
-            build_pab_table_for_c(n_cvt)._asdict(),
-            n_threads,
-        )
-
-    # Fallback: reconstruct full Uab and use batch dispatch
-    Uab_batch = reconstruct_uab_from_soa(
-        uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
-    )
-    return _compute_score_numpy(
-        n_cvt, eigenvalues, Hi_eval_null, Uab_batch, n_samples, n_threads
-    )
-
-
-def _compute_lrt_split_numpy(
-    n_cvt: int,
-    eigenvalues: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    logl_H0: float,
-    n_threads: int = 1,
-) -> dict[str, np.ndarray]:
-    """Compute LRT from SoA split data (no full Uab reconstruction).
-
-    Dispatches to compute_lrt_split_general_c. ``DispatchPath.SOA_SPLIT`` is
-    selected only for n_cvt>=2, so there is no n_cvt=1 kernel here; modes 2 and
-    3 at n_cvt=1 take the fused workspace kernels instead. Falls back to
-    reconstruct_uab_from_soa + _compute_lrt_numpy when C is unavailable.
-
-    Args:
-        n_cvt: Number of covariates.
-        eigenvalues: Kinship eigenvalues (n_samples,).
-        uab_varying_soa: SNP-varying Uab (n_snps, n_var, n_samples) SoA.
-        uab_invariant_soa: SNP-invariant Uab (n_inv, n_samples) SoA.
-        n_samples: Number of samples.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        n_grid: Grid search resolution.
-        n_refine: Golden section iterations.
-        logl_H0: Null model MLE log-likelihood.
-        n_threads: OpenMP thread count.
-
-    Returns:
-        Dict with keys: lambdas_mle, p_lrts.
-    """
-    if _accel is not None:
-        return _c().compute_lrt_split_general_c(
-            eigenvalues,
-            uab_varying_soa,
-            uab_invariant_soa,
-            n_samples,
-            n_cvt,
-            build_pab_table_for_c(n_cvt)._asdict(),
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            logl_H0,
-            n_threads,
-        )
-
-    # Fallback: reconstruct full Uab and use batch dispatch
-    Uab_batch = reconstruct_uab_from_soa(
-        uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
-    )
-    return _compute_lrt_numpy(
-        n_cvt,
-        eigenvalues,
-        Uab_batch,
-        l_min,
-        l_max,
-        n_grid,
-        n_refine,
-        logl_H0,
-        n_threads,
-    )
 
 
 _LOGL_H0_REQUIRED = "logl_H0 is required for LRT (mode 2) and All (mode 4)"

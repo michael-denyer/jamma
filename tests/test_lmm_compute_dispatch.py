@@ -36,28 +36,34 @@ def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
 
     Nothing in Python bounds n_cvt any more. The guard that did lived in
     _compute_wald_numpy, on a branch the runner never reached, so the C
-    kernel's own check is the enforcement and this pins that it fires.
+    kernel's own check is the enforcement and this pins that it fires. The
+    general workspace creator parses the Pab table before anything else, so
+    it is the entry point that raises.
     """
-    from jamma.lmm._lmm_accel import compute_score_split_general_c
-    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+    from jamma.lmm._lmm_accel import create_workspace_general_c
+    from jamma.lmm.likelihood import build_pab_table_for_c
 
     n_cvt = compute_numpy.MAX_C_N_CVT + 1
-    n_samples, n_snps = 200, 5
+    n_samples = 200
 
     rng = np.random.default_rng(777)
     eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
+    pab_table = build_pab_table_for_c(n_cvt)._asdict()
 
     with pytest.raises(ValueError, match=r"n_cvt must be 1\.\.100, got 101"):
-        compute_score_split_general_c(
+        create_workspace_general_c(
             eigenvalues,
-            np.zeros((n_snps, len(var_indices), n_samples), dtype=np.float64),
-            np.zeros((len(inv_indices), n_samples), dtype=np.float64),
-            np.ones(n_samples, dtype=np.float64),
+            np.zeros((pab_table["n_inv"], n_samples), dtype=np.float64),
+            np.zeros((n_samples, n_cvt), dtype=np.float64),
+            np.zeros(n_samples, dtype=np.float64),
             n_samples,
-            n_cvt,
-            build_pab_table_for_c(compute_numpy.MAX_C_N_CVT)._asdict(),
+            1e-5,
+            1e5,
+            50,
+            20,
             1,
+            pab_table,
+            lmm_mode=1,
         )
 
 

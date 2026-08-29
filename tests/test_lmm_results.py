@@ -284,11 +284,12 @@ class TestErrorMessageDifferentiation:
         return Kernel(label=built.label, n_filtered=built.n_filtered, call=_boom)
 
     def test_every_path_has_its_own_label(self):
-        """Seven labels over eight (n_cvt, mode) shapes, and none repeat a path.
+        """All eight (n_cvt, mode) shapes report a distinct label.
 
-        Eight shapes, seven labels: SoA-split serves modes 2 and 3 with one
-        kernel, so those two share. Every other shape is distinguishable,
-        including mode 4 against Wald within each fused family.
+        D2 gave the general workspace's one compute a label per lmm_mode
+        (previously modes 2 and 3 at n_cvt>=2 shared one SoA-split kernel
+        label), so every shape is now distinguishable, including mode 4
+        against Wald within each fused family.
         """
         from jamma.lmm.chunk_kernel import make_kernel
 
@@ -300,10 +301,10 @@ class TestErrorMessageDifferentiation:
             for n_cvt in (1, 2)
             for mode in (1, 2, 3, 4)
         }
-        assert len(set(labels.values())) == 7, labels
+        assert len(set(labels.values())) == 8, labels
         assert labels[1, 4] != labels[1, 1], "mode 4 must not report as Wald"
         assert labels[2, 4] != labels[2, 1], "mode 4 must not report as Wald"
-        assert labels[2, 2] == labels[2, 3], "both are the one SoA-split kernel"
+        assert labels[2, 2] != labels[2, 3], "LRT and Score must not share a label"
 
     @pytest.mark.parametrize(
         ("n_cvt", "lmm_mode"), [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 2)]

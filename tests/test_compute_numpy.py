@@ -1,13 +1,13 @@
-"""Parity tests for SoA-native Score/LRT dispatch against the full-Uab path.
+"""Parity tests for the general workspace's Score/LRT-only modes against the
+full-Uab path.
 
-The runner feeds the SoA split kernels directly rather than reconstructing a
-full Uab per chunk. These check on real data that dropping that reconstruction
-does not change the statistics.
+The runner feeds the general workspace's compute directly rather than
+reconstructing a full Uab per chunk. These check on real data that this does
+not change the statistics.
 
-Run at n_cvt=2, which is where ``DispatchPath.SOA_SPLIT`` is actually selected:
-modes 2 and 3 at n_cvt=1 take the fused workspace kernels instead, so the
-n_cvt=1 branches inside _compute_score_split_numpy and _compute_lrt_split_numpy
-are unreachable and this file used to exercise only those.
+Run at n_cvt=2, which is where ``DispatchPath.FUSED_GENERAL`` is selected for
+every lmm_mode. modes 2 and 3 at n_cvt=1 take the n_cvt=1 fused workspace
+kernels instead (``tests/lmm_accel/test_lmm_accel_workspace_score_lrt.py``).
 
 The reference is the NumPy full-Uab path, not its C sibling. The C full-Uab
 kernels compute_score_batch_general_c and compute_lrt_batch_general_c were
@@ -25,8 +25,8 @@ import pytest
 from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import compute_numpy
-from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
-from jamma.lmm.likelihood import compute_null_model_mle
+from jamma.lmm.compute_numpy import _c, _compute_lrt_numpy, _compute_score_numpy
+from jamma.lmm.likelihood import build_pab_table_for_c, compute_null_model_mle
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
@@ -73,7 +73,7 @@ def mouse_data():
     K = read_kinship_matrix(MOUSE.kinship)
 
     n_samples = genotypes.shape[0]
-    # n_cvt=2, because SOA_SPLIT is only selected for n_cvt>=2.
+    # n_cvt=2, so the general workspace (FUSED_GENERAL) is exercised.
     n_cvt = 2
 
     # Eigendecomposition
@@ -86,8 +86,8 @@ def mouse_data():
         n_samples
     )
 
-    # Intercept plus one covariate, so the SoA split has a genuine invariant
-    # block to keep separate from the varying one.
+    # Intercept plus one covariate, so the general workspace has a genuine
+    # invariant block to keep separate from the varying one.
     W = np.column_stack([np.ones(n_samples), rng.standard_normal(n_samples)])
     UtW = U.T @ W
     Uty = U.T @ phenotypes
@@ -104,12 +104,10 @@ def mouse_data():
 
     # Rotate
     UtG = U.T @ geno_subset
+    utg_t = np.ascontiguousarray(UtG.T)
 
     # Build full Uab
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
-
-    # Build SoA split
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
 
     # Null model MLE for Score/LRT
@@ -121,7 +119,9 @@ def mouse_data():
         "n_samples": n_samples,
         "n_cvt": n_cvt,
         "Uab_batch": Uab_batch,
-        "uab_var_soa": uab_var_soa,
+        "UtW": UtW,
+        "Uty": Uty,
+        "utg_t": utg_t,
         "uab_inv_soa": uab_inv_soa,
         "Hi_eval_null": Hi_eval_null,
         "logl_H0": logl_H0,
@@ -129,14 +129,54 @@ def mouse_data():
     }
 
 
+def _general_score_only_result(d):
+    """The general workspace's lmm_mode=3 (Score only) compute for *d*."""
+    pab_table = build_pab_table_for_c(d["n_cvt"])._asdict()
+    ws = _c().create_workspace_general_c(
+        d["eigenvalues"],
+        d["uab_inv_soa"],
+        d["UtW"],
+        d["Uty"],
+        d["n_samples"],
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        pab_table,
+        lmm_mode=3,
+        hi_eval_null=d["Hi_eval_null"],
+    )
+    return _c().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
+
+
+def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
+    """The general workspace's lmm_mode=2 (LRT only) compute for *d*."""
+    pab_table = build_pab_table_for_c(d["n_cvt"])._asdict()
+    ws = _c().create_workspace_general_c(
+        d["eigenvalues"],
+        d["uab_inv_soa"],
+        d["UtW"],
+        d["Uty"],
+        d["n_samples"],
+        l_min,
+        l_max,
+        n_grid,
+        n_refine,
+        1,
+        pab_table,
+        lmm_mode=2,
+        logl_H0=d["logl_H0"],
+    )
+    return _c().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
+
+
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
 class TestScoreSplitParity:
-    """SoA Score split produces identical results to full-Uab Score."""
+    """The general workspace's Score-only mode matches full-Uab Score."""
 
     def test_score_split_parity(self, mouse_data):
-        """Score split C vs full-Uab C: betas, ses, p_scores must match."""
-        from jamma.lmm.compute_numpy import _compute_score_split_numpy
-
+        """Score-only general workspace vs full-Uab C: betas, ses, p_scores match."""
         d = mouse_data
         # Full-Uab reference, via NumPy
         with _numpy_only():
@@ -149,45 +189,34 @@ class TestScoreSplitParity:
                 n_threads=1,
             )
 
-        # SoA split path
-        split_result = _compute_score_split_numpy(
-            d["n_cvt"],
-            d["eigenvalues"],
-            d["Hi_eval_null"],
-            d["uab_var_soa"],
-            d["uab_inv_soa"],
-            d["n_samples"],
-            n_threads=1,
-        )
+        general_result = _general_score_only_result(d)
 
         np.testing.assert_allclose(
-            split_result["betas"],
+            general_result["betas"],
             full_result["betas"],
             rtol=_C_VS_NUMPY_RTOL,
-            err_msg="Score split betas differ from full-Uab",
+            err_msg="Score-only general workspace betas differ from full-Uab",
         )
         np.testing.assert_allclose(
-            split_result["ses"],
+            general_result["ses"],
             full_result["ses"],
             rtol=_C_VS_NUMPY_RTOL,
-            err_msg="Score split ses differ from full-Uab",
+            err_msg="Score-only general workspace ses differ from full-Uab",
         )
         np.testing.assert_allclose(
-            split_result["p_scores"],
+            general_result["p_scores"],
             full_result["p_scores"],
             rtol=_C_VS_NUMPY_RTOL,
-            err_msg="Score split p_scores differ from full-Uab",
+            err_msg="Score-only general workspace p_scores differ from full-Uab",
         )
 
 
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
 class TestLrtSplitParity:
-    """SoA LRT split produces identical results to full-Uab LRT."""
+    """The general workspace's LRT-only mode matches full-Uab LRT."""
 
     def test_lrt_split_parity(self, mouse_data):
-        """LRT split C vs full-Uab C: lambdas_mle and p_lrts must match."""
-        from jamma.lmm.compute_numpy import _compute_lrt_split_numpy
-
+        """LRT-only general workspace vs full-Uab C: lambdas_mle and p_lrts match."""
         d = mouse_data
         l_min, l_max = 1e-5, 1e5
         n_grid, n_refine = 50, 20
@@ -206,32 +235,19 @@ class TestLrtSplitParity:
                 n_threads=1,
             )
 
-        # SoA split path
-        split_result = _compute_lrt_split_numpy(
-            d["n_cvt"],
-            d["eigenvalues"],
-            d["uab_var_soa"],
-            d["uab_inv_soa"],
-            d["n_samples"],
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            d["logl_H0"],
-            n_threads=1,
-        )
+        general_result = _general_lrt_only_result(d, l_min, l_max, n_grid, n_refine)
 
         np.testing.assert_allclose(
-            split_result["lambdas_mle"],
+            general_result["lambdas_mle"],
             full_result["lambdas_mle"],
             rtol=5e-5,
-            err_msg="LRT split lambdas_mle differ from full-Uab",
+            err_msg="LRT-only general workspace lambdas_mle differ from full-Uab",
         )
         np.testing.assert_allclose(
-            split_result["p_lrts"],
+            general_result["p_lrts"],
             full_result["p_lrts"],
             rtol=5e-3,
-            err_msg="LRT split p_lrts differ from full-Uab",
+            err_msg="LRT-only general workspace p_lrts differ from full-Uab",
         )
 
 
@@ -240,9 +256,8 @@ def degenerate_data(mouse_data):
     """Extend mouse_data with constant-genotype (degenerate) SNP columns.
 
     Injects 3 constant columns (all-0, all-1, all-2) into the genotype
-    matrix, rebuilds Uab in both full and SoA layouts. Degenerate SNPs
-    have zero variance after covariate projection (P_xx <= 0), so
-    beta/se/p-values must be NaN.
+    matrix, rebuilds Uab. Degenerate SNPs have zero variance after covariate
+    projection (P_xx <= 0), so beta/se/p-values must be NaN.
     """
     d = mouse_data
     n_samples = d["n_samples"]
@@ -278,10 +293,10 @@ def degenerate_data(mouse_data):
         + np.random.default_rng(42).standard_normal(n_samples)
     )
     UtG = U.T @ geno_with_degen
+    utg_t = np.ascontiguousarray(UtG.T)
 
     n_cvt = 2
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
-    uab_var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
     uab_inv_soa = compute_uab_invariant_soa(UtW, Uty, n_cvt=n_cvt)
     lambda_null_mle, logl_H0 = compute_null_model_mle(eigenvalues, UtW, Uty, n_cvt)
     Hi_eval_null = 1.0 / (lambda_null_mle * eigenvalues + 1.0)
@@ -291,7 +306,9 @@ def degenerate_data(mouse_data):
         "n_samples": n_samples,
         "n_cvt": n_cvt,
         "Uab_batch": Uab_batch,
-        "uab_var_soa": uab_var_soa,
+        "UtW": UtW,
+        "Uty": Uty,
+        "utg_t": utg_t,
         "uab_inv_soa": uab_inv_soa,
         "Hi_eval_null": Hi_eval_null,
         "logl_H0": logl_H0,
@@ -302,12 +319,10 @@ def degenerate_data(mouse_data):
 
 @pytest.mark.skipif(compute_numpy._accel is None, reason="C extension unavailable")
 class TestDegenerateSplitParity:
-    """Split and batch paths agree on NaN output for degenerate SNPs."""
+    """The general workspace and the full-Uab path agree on NaN for degenerate SNPs."""
 
     def test_score_degenerate_nan_parity(self, degenerate_data):
-        """Score split produces NaN for constant-genotype SNPs, matching batch."""
-        from jamma.lmm.compute_numpy import _compute_score_split_numpy
-
+        """Score-only general workspace produces NaN for constant-genotype SNPs."""
         d = degenerate_data
         with _numpy_only():
             full_result = _compute_score_numpy(
@@ -318,37 +333,27 @@ class TestDegenerateSplitParity:
                 d["n_samples"],
                 n_threads=1,
             )
-        split_result = _compute_score_split_numpy(
-            d["n_cvt"],
-            d["eigenvalues"],
-            d["Hi_eval_null"],
-            d["uab_var_soa"],
-            d["uab_inv_soa"],
-            d["n_samples"],
-            n_threads=1,
-        )
+        general_result = _general_score_only_result(d)
 
         # Well-conditioned SNPs must match
         n = d["n_normal"]
         np.testing.assert_allclose(
-            split_result["p_scores"][:n],
+            general_result["p_scores"][:n],
             full_result["p_scores"][:n],
             rtol=_C_VS_NUMPY_RTOL,
-            err_msg="Score normal SNPs: split vs full-Uab mismatch",
+            err_msg="Score normal SNPs: general workspace vs full-Uab mismatch",
         )
 
         # Degenerate SNPs must be NaN in both paths
         assert np.all(np.isnan(full_result["p_scores"][n:])), (
             "Batch Score should return NaN for constant-genotype SNPs"
         )
-        assert np.all(np.isnan(split_result["p_scores"][n:])), (
-            "Split Score should return NaN for constant-genotype SNPs"
+        assert np.all(np.isnan(general_result["p_scores"][n:])), (
+            "General workspace Score should return NaN for constant-genotype SNPs"
         )
 
     def test_lrt_degenerate_parity(self, degenerate_data):
-        """LRT split matches batch for degenerate SNPs (zero-signal → p≈1)."""
-        from jamma.lmm.compute_numpy import _compute_lrt_split_numpy
-
+        """LRT-only general workspace matches full-Uab for degenerate SNPs (p≈1)."""
         d = degenerate_data
         l_min, l_max = 1e-5, 1e5
         n_grid, n_refine = 50, 20
@@ -365,44 +370,32 @@ class TestDegenerateSplitParity:
                 d["logl_H0"],
                 n_threads=1,
             )
-        split_result = _compute_lrt_split_numpy(
-            d["n_cvt"],
-            d["eigenvalues"],
-            d["uab_var_soa"],
-            d["uab_inv_soa"],
-            d["n_samples"],
-            l_min,
-            l_max,
-            n_grid,
-            n_refine,
-            d["logl_H0"],
-            n_threads=1,
-        )
+        general_result = _general_lrt_only_result(d, l_min, l_max, n_grid, n_refine)
 
         # Well-conditioned SNPs must match
         n = d["n_normal"]
         np.testing.assert_allclose(
-            split_result["p_lrts"][:n],
+            general_result["p_lrts"][:n],
             full_result["p_lrts"][:n],
             rtol=5e-3,
-            err_msg="LRT normal SNPs: split vs batch mismatch",
+            err_msg="LRT normal SNPs: general workspace vs batch mismatch",
         )
 
         # Degenerate SNPs: LRT finds no signal (LR≈0, p≈1). Both paths
         # must agree — NaN pattern and finite values must match exactly.
         np.testing.assert_allclose(
-            split_result["p_lrts"][n:],
+            general_result["p_lrts"][n:],
             full_result["p_lrts"][n:],
             rtol=5e-3,
             equal_nan=True,
-            err_msg="LRT degenerate SNPs: split vs batch mismatch",
+            err_msg="LRT degenerate SNPs: general workspace vs batch mismatch",
         )
         np.testing.assert_allclose(
-            split_result["lambdas_mle"][n:],
+            general_result["lambdas_mle"][n:],
             full_result["lambdas_mle"][n:],
             rtol=5e-5,
             equal_nan=True,
-            err_msg="LRT degenerate lambdas_mle: split vs batch mismatch",
+            err_msg="LRT degenerate lambdas_mle: general workspace vs batch mismatch",
         )
 
 
@@ -610,40 +603,6 @@ def test_vectorized_general_uab_parity(n_cvt):
 
 @pytest.mark.tier0
 @pytest.mark.parametrize("n_cvt", [2, 3, 4])
-def test_direct_soa_varying_general_parity(n_cvt):
-    """_batch_compute_uab_varying_general_numpy matches extract-from-full-Uab."""
-    from jamma.lmm.likelihood import classify_uab_columns
-    from jamma.lmm.uab import (
-        _batch_compute_uab_general_numpy,
-        _batch_compute_uab_varying_general_numpy,
-    )
-
-    rng = np.random.default_rng(101)
-    n_samples, n_snps = 60, 15
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
-
-    # Reference: compute full Uab then extract varying columns to SoA
-    _inv_indices, var_indices = classify_uab_columns(n_cvt)
-    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
-    ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
-
-    # Direct SoA varying — utg_t is (n_snps, n_samples)
-    out = np.empty((n_snps, len(var_indices), n_samples), dtype=np.float64)
-    direct_soa = _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, UtG.T, out)
-
-    np.testing.assert_allclose(
-        direct_soa,
-        ref_soa,
-        rtol=1e-14,
-        atol=1e-14,
-        err_msg=f"Direct SoA varying (n_cvt={n_cvt}) does not match extract-from-full",
-    )
-
-
-@pytest.mark.tier0
-@pytest.mark.parametrize("n_cvt", [2, 3, 4])
 def test_invariant_columns_constant_across_snps(n_cvt):
     """Uab columns classified as invariant are actually constant across SNPs."""
     from jamma.lmm.likelihood import classify_uab_columns
@@ -672,32 +631,21 @@ def test_invariant_columns_constant_across_snps(n_cvt):
 
 @pytest.mark.tier0
 @pytest.mark.parametrize("n_cvt", [2, 3, 4])
-def test_batch_compute_uab_varying_soa_general_uses_direct_path(n_cvt):
-    """batch_compute_uab_varying_soa_numpy general path uses direct computation."""
+def test_batch_compute_uab_varying_soa_rejects_ncvt_above_one(n_cvt):
+    """batch_compute_uab_varying_soa_numpy is n_cvt=1 only.
+
+    No production path builds this for n_cvt>1: the general dispatch path
+    (``DispatchPath.FUSED_GENERAL``) forms its varying columns on the fly
+    inside the C workspace instead.
+    """
     rng = np.random.default_rng(55)
     n_samples, n_snps = 50, 10
     UtW = rng.standard_normal((n_samples, n_cvt))
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
 
-    # The function should produce identical results regardless of path
-    var_soa = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
-
-    # Reference: full Uab -> extract varying -> SoA
-    from jamma.lmm.likelihood import classify_uab_columns
-    from jamma.lmm.uab import _batch_compute_uab_general_numpy
-
-    _inv, var_indices = classify_uab_columns(n_cvt)
-    Uab_full = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, UtG.T)
-    ref_soa = np.ascontiguousarray(Uab_full[:, :, list(var_indices)].transpose(0, 2, 1))
-
-    np.testing.assert_allclose(
-        var_soa,
-        ref_soa,
-        rtol=1e-14,
-        atol=1e-14,
-        err_msg=f"batch_compute_uab_varying_soa_numpy general (n_cvt={n_cvt}) mismatch",
-    )
+    with pytest.raises(ValueError, match="n_cvt must be 1"):
+        batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
 
 
 @pytest.mark.tier0
@@ -746,21 +694,6 @@ def test_batch_compute_uab_varying_soa_ncvt1_rejects_wrong_out_dtype_and_layout(
 
 
 @pytest.mark.tier0
-def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape_general_ncvt():
-    """Raises ValueError for wrong out= shape with n_cvt > 1."""
-    rng = np.random.default_rng(99)
-    n_samples, n_snps, n_cvt = 50, 10, 2
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
-    utg_t = rng.standard_normal((n_snps, n_samples))
-    # n_cvt=2 has n_var=4, so 6 is wrong
-    out = np.empty((n_snps, 6, n_samples), dtype=np.float64)
-
-    with pytest.raises(ValueError, match="out shape"):
-        batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
-
-
-@pytest.mark.tier0
 def test_batch_compute_uab_varying_soa_rejects_wrong_layout():
     """batch_compute_uab_varying_soa_numpy raises ValueError when given old layout."""
     rng = np.random.default_rng(99)
@@ -771,71 +704,3 @@ def test_batch_compute_uab_varying_soa_rejects_wrong_layout():
 
     with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
         batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
-
-
-# --------------------------------------------------------------------------- #
-# out= buffer support for general n_cvt (n_cvt > 1)
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.tier0
-def test_varying_soa_out_buffer_general_ncvt2():
-    """out= buffer works for n_cvt=2 and result is the same buffer object."""
-    from jamma.lmm.likelihood import classify_uab_columns
-
-    rng = np.random.default_rng(42)
-    n_samples, n_snps, n_cvt = 50, 10, 2
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
-    utg_t = rng.standard_normal((n_snps, n_samples))
-
-    _, var_cols = classify_uab_columns(n_cvt)
-    n_var = len(var_cols)
-
-    # Compute without out= for reference
-    expected = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
-
-    # Compute with out= buffer
-    out = np.empty((n_snps, n_var, n_samples), dtype=np.float64)
-    result = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
-
-    assert result is out, "result should be the same buffer object"
-    np.testing.assert_array_equal(result, expected)
-
-
-@pytest.mark.tier0
-def test_varying_soa_out_buffer_general_ncvt4():
-    """out= buffer works for n_cvt=4 and result is the same buffer object."""
-    from jamma.lmm.likelihood import classify_uab_columns
-
-    rng = np.random.default_rng(77)
-    n_samples, n_snps, n_cvt = 40, 8, 4
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
-    utg_t = rng.standard_normal((n_snps, n_samples))
-
-    _, var_cols = classify_uab_columns(n_cvt)
-    n_var = len(var_cols)
-
-    expected = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t)
-
-    out = np.empty((n_snps, n_var, n_samples), dtype=np.float64)
-    result = batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=out)
-
-    assert result is out, "result should be the same buffer object"
-    np.testing.assert_array_equal(result, expected)
-
-
-@pytest.mark.tier0
-def test_varying_soa_out_buffer_general_shape_mismatch():
-    """Wrong-shape out= raises ValueError with 'out shape' in message."""
-    rng = np.random.default_rng(99)
-    n_samples, n_snps, n_cvt = 50, 10, 2
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
-    utg_t = rng.standard_normal((n_snps, n_samples))
-
-    wrong_out = np.empty((n_snps, 99, n_samples), dtype=np.float64)
-
-    with pytest.raises(ValueError, match="out shape"):
-        batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, utg_t, out=wrong_out)

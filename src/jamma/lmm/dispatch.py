@@ -20,17 +20,16 @@ class DispatchPath(Enum):
     Derived once by ``select_dispatch_path`` from ``(n_cvt, lmm_mode, accel)``
     and consulted per chunk. Exactly one member is active, so the
     contradictory flag combinations a multi-boolean form admits are
-    unrepresentable and need no runtime guard. Wald-vs-mode-4 for the FUSED
-    and FUSED_GENERAL families is resolved from ``lmm_mode`` at the call
-    site in ``chunk_kernel.py``; SOA_SPLIT never carries Wald or mode 4.
+    unrepresentable and need no runtime guard. Every C path (FUSED,
+    FUSED_GENERAL, FUSED_SCORE_WS, FUSED_LRT_WS) resolves the mode it runs
+    from ``lmm_mode`` at workspace creation, in ``chunk_kernel.py``.
     """
 
     NUMPY_FALLBACK = "numpy_fallback"  # not split: pure-NumPy full-Uab path
     FUSED = "fused"  # n_cvt==1 fused Uab (Wald/mode-4 by lmm_mode)
-    FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab (Wald/mode-4 by lmm_mode)
-    FUSED_SCORE_WS = "fused_score_ws"  # mode 3 workspace-based
-    FUSED_LRT_WS = "fused_lrt_ws"  # mode 2 workspace-based
-    SOA_SPLIT = "soa_split"  # SoA split; n_cvt>=2 score/lrt only
+    FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab, any lmm_mode
+    FUSED_SCORE_WS = "fused_score_ws"  # n_cvt==1 mode 3 workspace-based
+    FUSED_LRT_WS = "fused_lrt_ws"  # n_cvt==1 mode 2 workspace-based
 
     @property
     def use_split(self) -> bool:
@@ -44,7 +43,7 @@ class DispatchPath(Enum):
 
     @property
     def uses_fused_score_or_lrt(self) -> bool:
-        """True when a fused Score/LRT path (mode 2/3) is active.
+        """True when the n_cvt==1 fused Score/LRT path (mode 2/3) is active.
 
         These paths take the null-model ``w`` vector as a separate argument
         rather than packing it into a Wald workspace, so the chunk runner
@@ -66,14 +65,13 @@ class DispatchPath(Enum):
     def feeds_raw_utg(self) -> bool:
         """True when chunk preparation hands raw ``utg_t`` straight to the kernel.
 
-        The whole fused family (Wald/mode-4 fused plus the workspace Score/LRT
-        variants) consumes ``utg_t`` directly, so no ``uab_varying_soa`` buffer
-        is built. The negation selects the SoA-split path, which does build it.
+        Every C path (the fused family and the workspace Score/LRT variants)
+        consumes ``utg_t`` directly. Only the negation, the NumPy fallback,
+        builds a full Uab batch instead.
         """
-        return self in _FUSED_FAMILY or self in _SCORE_LRT_FAMILY
+        return self is not DispatchPath.NUMPY_FALLBACK
 
 
-_FUSED_FAMILY = frozenset({DispatchPath.FUSED, DispatchPath.FUSED_GENERAL})
 _SCORE_LRT_FAMILY = frozenset({DispatchPath.FUSED_SCORE_WS, DispatchPath.FUSED_LRT_WS})
 
 
@@ -126,11 +124,7 @@ def _resolve_dispatch_path(n_cvt: int, lmm_mode: LmmMode, accel: bool) -> Dispat
     # extension is absent, so it never ran.
 
     if n_cvt >= 2:
-        # The general fused workspace is wired for Wald and mode 4 only; modes
-        # 2 and 3 have no general fused kernel and use the split path.
-        if lmm_mode in (1, 4):
-            return DispatchPath.FUSED_GENERAL
-        return DispatchPath.SOA_SPLIT
+        return DispatchPath.FUSED_GENERAL
 
     if lmm_mode in (1, 4):
         return DispatchPath.FUSED
@@ -169,5 +163,3 @@ def _log_dispatch_choice(path: DispatchPath, n_cvt: int, lmm_mode: LmmMode) -> N
         logger.debug("Mode-4 dispatch: fused general Uab kernel (single pass)")
     elif path is DispatchPath.FUSED:
         logger.debug("Mode-4 dispatch: fused Uab kernel (single pass)")
-    elif path is DispatchPath.SOA_SPLIT:
-        logger.debug("Mode-4 dispatch: compose fallback (no general fused kernel)")

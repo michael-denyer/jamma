@@ -138,67 +138,6 @@ def _batch_compute_uab_general_numpy(
     return Uab_batch
 
 
-def _batch_compute_uab_varying_general_numpy(
-    n_cvt: int,
-    UtW: np.ndarray,
-    Uty: np.ndarray,
-    utg_t: np.ndarray,
-    out: np.ndarray,
-) -> np.ndarray:
-    """Direct SoA varying Uab for general n_cvt -- no full Uab materialization.
-
-    Computes only the SNP-varying Uab columns directly in SoA layout
-    (n_snps, n_var, n_samples). A column is varying if its (a_col, b_col)
-    pair involves the genotype (0-based index = n_cvt).
-
-    For each varying pair:
-    - Both involve genotype (xx): utg_t * utg_t
-    - One involves genotype (wx_i, xy): covariate/phenotype * utg_t
-
-    This avoids materializing the full (n_snps, n_samples, n_index) Uab.
-
-    Args:
-        n_cvt: Number of covariates (> 1).
-        UtW: Rotated covariates (n_samples, n_cvt).
-        Uty: Rotated phenotype (n_samples,).
-        utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
-            from jlinalg.dgemm(chunk, U, transa="T").
-        out: Output buffer (n_snps, n_var, n_samples), already validated by
-            batch_compute_uab_varying_soa_numpy.
-
-    Returns:
-        ``out``, filled.
-    """
-    _inv_indices, var_indices = classify_uab_columns(n_cvt)
-    table = build_index_table(n_cvt)
-    n_samples = utg_t.shape[1]
-    genotype_col = n_cvt  # 0-based index of X in vectors array
-
-    # Map linear index -> position in var_indices for output placement
-    var_index_to_row = {idx: row for row, idx in enumerate(var_indices)}
-
-    # Build the non-genotype vectors for lookup: covariates and phenotype
-    # vectors[j] = UtW[:, j] for j < n_cvt, vectors[n_cvt+1] = Uty
-    vectors = np.column_stack([UtW, np.zeros(n_samples), Uty])  # (n_samples, n_cvt+2)
-
-    for a_col, b_col, linear_idx in table.uab_pairs:
-        if linear_idx not in var_index_to_row:
-            continue  # invariant column, skip
-        row = var_index_to_row[linear_idx]
-
-        if a_col == b_col == genotype_col:
-            # xx case: genotype * genotype
-            out[:, row, :] = utg_t * utg_t
-        elif a_col == genotype_col:
-            # genotype * other (b_col is covariate or phenotype)
-            out[:, row, :] = utg_t * vectors[:, b_col][None, :]
-        else:
-            # other * genotype (a_col is covariate or phenotype, b_col is genotype)
-            out[:, row, :] = vectors[:, a_col][None, :] * utg_t
-
-    return out
-
-
 def batch_compute_pab_numpy(
     n_cvt: int,
     Hi_eval: np.ndarray,
@@ -385,11 +324,12 @@ def batch_compute_uab_varying_soa_numpy(
 ) -> np.ndarray:
     """Compute SNP-varying Uab columns in SoA layout (n_snps, n_var, n_samples).
 
-    For n_cvt=1, n_var=3 with rows [wx, xx, xy]. For n_cvt>1, varying columns
-    are identified via classify_uab_columns and extracted from the full Uab batch.
+    n_cvt=1 only, with n_var=3 rows [wx, xx, xy]. No production path builds
+    this for n_cvt>1: the general dispatch path (``DispatchPath.FUSED_GENERAL``)
+    forms its varying columns on the fly inside the C workspace instead.
 
     Args:
-        n_cvt: Number of covariates.
+        n_cvt: Number of covariates. Must be 1.
         UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
         utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
@@ -401,9 +341,13 @@ def batch_compute_uab_varying_soa_numpy(
     Returns:
         Varying array (n_snps, n_var, n_samples) — SoA layout.
     """
+    if n_cvt != 1:
+        raise ValueError(
+            f"batch_compute_uab_varying_soa_numpy: n_cvt must be 1, got {n_cvt}"
+        )
     _check_utg_t(utg_t, UtW)
     n_snps, n_samples = utg_t.shape
-    n_var = 3 if n_cvt == 1 else len(classify_uab_columns(n_cvt)[1])
+    n_var = 3
     expected_shape = (n_snps, n_var, n_samples)
     if out is None:
         out = np.empty(expected_shape, dtype=np.float64)
@@ -423,15 +367,11 @@ def batch_compute_uab_varying_soa_numpy(
                 "batch_compute_uab_varying_soa_numpy: out must be C-contiguous"
             )
 
-    if n_cvt == 1:
-        w = UtW[:, 0]
-        out[:, 0, :] = w[None, :] * utg_t  # wx row
-        out[:, 1, :] = utg_t * utg_t  # xx row
-        out[:, 2, :] = utg_t * Uty[None, :]  # xy row
-        return out
-
-    # General n_cvt: direct SoA varying without full Uab materialization
-    return _batch_compute_uab_varying_general_numpy(n_cvt, UtW, Uty, utg_t, out)
+    w = UtW[:, 0]
+    out[:, 0, :] = w[None, :] * utg_t  # wx row
+    out[:, 1, :] = utg_t * utg_t  # xx row
+    out[:, 2, :] = utg_t * Uty[None, :]  # xy row
+    return out
 
 
 def reconstruct_uab_from_soa(

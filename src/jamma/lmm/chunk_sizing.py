@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from jamma.core import memory
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.likelihood import classify_uab_columns, n_index
+from jamma.lmm.likelihood import n_index
 
 # Allow large chunks — no int32 buffer constraint.
 _MAX_CHUNK = 200_000
@@ -32,19 +32,14 @@ _MIN_PIPELINE_CHUNKS = 8
 def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     """Live float64 bytes one SNP occupies on *dispatch*'s buffers.
 
-    Three accountings, one per shape of chunk input. The fused family hands
-    ``utg_t`` straight to its kernel, so the rotation output is the only
-    allocation. The SoA-split path adds the varying Uab columns beside it. The
-    NumPy fallback materialises the whole Uab table.
+    Two accountings. The fused family hands ``utg_t`` straight to its kernel,
+    so the rotation output is the only allocation. The NumPy fallback
+    materialises the whole Uab table.
     """
     if dispatch.feeds_raw_utg:
         # jlinalg.dgemm(chunk, U, transa="T") writes C-contiguous utg_t
-        # directly: one column per SNP, no intermediate and no varying SoA.
+        # directly: one column per SNP, no intermediate.
         return n_samples * 8
-
-    if dispatch is DispatchPath.SOA_SPLIT:
-        n_var = len(classify_uab_columns(n_cvt)[1])
-        return n_samples * (n_var + 1) * 8
 
     return n_samples * n_index(n_cvt) * 8
 
@@ -57,24 +52,20 @@ def lmm_extra_bytes_per_snp(
     The preflight prices the association phase as rotation buffers plus this
     figure, so its estimate follows the same dispatch knowledge the sizer
     uses. Fused paths hold no per-SNP batch arrays (the C workspace forms
-    Uab on the fly); SOA_SPLIT holds the varying Uab columns; the NumPy
-    fallback materialises the full Uab and Iab batches.
+    Uab on the fly); the NumPy fallback materialises the full Uab and Iab
+    batches.
 
     Args:
         n_samples: Number of samples.
         n_cvt: Number of covariates.
         dispatch: The run's active kernel path.
         n_buffers: Live buffer count from the same ``LmmChunkPlan`` the
-            engine allocates from (1 sequential, 2 pipelined). SOA_SPLIT's
-            varying-Uab buffers are allocated once per live buffer
-            (``chunk_runner_numpy._ChunkEngine.uab_var_bufs``), so the price
-            must scale the same way or it under-counts a pipelined run.
+            engine allocates from (1 sequential, 2 pipelined). Unused by
+            every current dispatch path's pricing, kept so a future
+            per-buffer-scaled path does not have to change this signature.
     """
     if dispatch.feeds_raw_utg:
         return 0
-    if dispatch is DispatchPath.SOA_SPLIT:
-        n_var = len(classify_uab_columns(n_cvt)[1])
-        return n_samples * n_var * 8 * n_buffers
     # NUMPY_FALLBACK never pipelines (dispatch.use_split is False), so
     # n_buffers is always 1 here; the full Uab+Iab batch is priced once.
     return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8

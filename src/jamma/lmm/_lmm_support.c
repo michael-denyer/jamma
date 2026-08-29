@@ -187,22 +187,34 @@ PyObject *build_lrt_result_dict(lrt_output_t *out)
     return result;
 }
 
-int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int with_mode4)
+int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int lmm_mode)
 {
     npy_intp dims[1] = { n_snps };
-    out->lambdas     = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->logls       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->betas       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->ses         = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->pwalds      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    int do_reml  = (lmm_mode == 1 || lmm_mode == 4);
+    int do_score = (lmm_mode == 3 || lmm_mode == 4);
+    int do_lrt   = (lmm_mode == 2 || lmm_mode == 4);
 
-    int ok = out->lambdas && out->logls && out->betas && out->ses && out->pwalds;
-
-    if (with_mode4) {
-        out->p_scores    = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    int ok = 1;
+    if (do_reml) {
+        out->lambdas = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        out->logls   = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        out->pwalds  = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        ok = ok && out->lambdas && out->logls && out->pwalds;
+    }
+    /* betas/ses hold Wald's beta/se (modes 1, 4) or Score's (mode 3). */
+    if (do_reml || do_score) {
+        out->betas = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        out->ses   = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        ok = ok && out->betas && out->ses;
+    }
+    if (do_score) {
+        out->p_scores = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        ok = ok && out->p_scores;
+    }
+    if (do_lrt) {
         out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-        ok = ok && out->p_scores && out->lambdas_mle && out->p_lrts;
+        ok = ok && out->lambdas_mle && out->p_lrts;
     }
 
     if (!ok) {
@@ -232,19 +244,24 @@ PyObject *build_lmm_result_dict(lmm_output_t *out)
         return NULL;
     }
 
-    int failed =
-        PyDict_SetItemString(result, "lambdas", (PyObject *)out->lambdas) < 0 ||
-        PyDict_SetItemString(result, "logls",   (PyObject *)out->logls)   < 0 ||
-        PyDict_SetItemString(result, "betas",   (PyObject *)out->betas)   < 0 ||
-        PyDict_SetItemString(result, "ses",     (PyObject *)out->ses)     < 0 ||
-        PyDict_SetItemString(result, "pwalds",  (PyObject *)out->pwalds)  < 0;
-
-    if (!failed && out->p_scores) {
-        failed =
-            PyDict_SetItemString(result, "p_scores",    (PyObject *)out->p_scores)    < 0 ||
-            PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
-            PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0;
-    }
+    int failed = 0;
+    if (out->lambdas)
+        failed |= PyDict_SetItemString(result, "lambdas", (PyObject *)out->lambdas) < 0;
+    if (out->logls)
+        failed |= PyDict_SetItemString(result, "logls", (PyObject *)out->logls) < 0;
+    if (out->betas)
+        failed |= PyDict_SetItemString(result, "betas", (PyObject *)out->betas) < 0;
+    if (out->ses)
+        failed |= PyDict_SetItemString(result, "ses", (PyObject *)out->ses) < 0;
+    if (out->pwalds)
+        failed |= PyDict_SetItemString(result, "pwalds", (PyObject *)out->pwalds) < 0;
+    if (out->p_scores)
+        failed |= PyDict_SetItemString(result, "p_scores", (PyObject *)out->p_scores) < 0;
+    if (out->lambdas_mle)
+        failed |= PyDict_SetItemString(
+            result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0;
+    if (out->p_lrts)
+        failed |= PyDict_SetItemString(result, "p_lrts", (PyObject *)out->p_lrts) < 0;
 
     if (failed) {
         Py_DECREF(result);

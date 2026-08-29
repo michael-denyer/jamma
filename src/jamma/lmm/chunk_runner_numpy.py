@@ -35,13 +35,12 @@ from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
 from jamma.lmm.chunk_sizing import plan_lmm_chunks
 from jamma.lmm.compute_numpy import select_current_dispatch_path
-from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.impute import impute_missing_inplace
-from jamma.lmm.likelihood import classify_uab_columns, reset_p_yy_warned
+from jamma.lmm.likelihood import reset_p_yy_warned
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import LmmMode
-from jamma.lmm.uab import batch_compute_uab_numpy, batch_compute_uab_varying_soa_numpy
+from jamma.lmm.uab import batch_compute_uab_numpy
 
 
 class LmmChunkRange(NamedTuple):
@@ -93,10 +92,10 @@ class _PreparedLmmChunk(NamedTuple):
     """A rotated chunk ready for compute, tagged with its filtered SNP range.
 
     ``data`` is polymorphic by dispatch path: 2-D ``utg_t`` of shape
-    ``(n_snps, n_samples)`` when ``dispatch.feeds_raw_utg`` (the fused family),
-    otherwise the 3-D varying-Uab SoA of shape ``(n_snps, n_var, n_samples)`` for
-    the SoA-split path. ``_compute_and_write`` selects the matching kernel via the
-    same ``dispatch`` flags that produced the data, so the two never disagree.
+    ``(n_snps, n_samples)`` when ``dispatch.feeds_raw_utg`` (every C path),
+    otherwise the full Uab batch the NumPy fallback consumes.
+    ``_compute_and_write`` selects the matching kernel via the same
+    ``dispatch`` flags that produced the data, so the two never disagree.
     """
 
     data: np.ndarray
@@ -159,14 +158,6 @@ class _ChunkEngine:
             np.empty((chunk_size, n_samples), dtype=np.float64)
             for _ in range(n_buffers)
         ]
-        if invariants.dispatch is DispatchPath.SOA_SPLIT:
-            n_var = len(classify_uab_columns(invariants.n_cvt)[1])
-            self.uab_var_bufs: list[np.ndarray] | None = [
-                np.empty((chunk_size, n_var, n_samples), dtype=np.float64)
-                for _ in range(n_buffers)
-            ]
-        else:
-            self.uab_var_bufs = None
 
         self.chunk_counter = 0
         self.next_expected_start = 0
@@ -208,9 +199,7 @@ class _ChunkEngine:
         utg_out = self.utg_bufs[buf_idx][:actual_len, :]
         utg_t = jlinalg.dgemm(raw.genotypes, self.U, transa="T", out=utg_out)
 
-        return _PreparedLmmChunk(
-            self._kernel_input(utg_t, buf_idx, actual_len), chunk_range
-        )
+        return _PreparedLmmChunk(self._kernel_input(utg_t), chunk_range)
 
     def _next_non_empty_chunk(self) -> RawLmmChunk | None:
         """Skip zero-length chunks, checking each keeps the contiguity contract."""
@@ -231,22 +220,10 @@ class _ChunkEngine:
             raw = self.raw_chunk_source()
         return raw
 
-    def _kernel_input(
-        self, utg_t: np.ndarray, buf_idx: int, actual_len: int
-    ) -> np.ndarray:
+    def _kernel_input(self, utg_t: np.ndarray) -> np.ndarray:
         """Shape the rotated chunk into whatever this run's kernel consumes."""
         if self.inv.dispatch.feeds_raw_utg:
             return utg_t
-
-        if self.inv.dispatch is DispatchPath.SOA_SPLIT:
-            out_var = (
-                self.uab_var_bufs[buf_idx][:actual_len, :, :]
-                if self.uab_var_bufs is not None and actual_len == self.chunk_size
-                else None
-            )
-            return batch_compute_uab_varying_soa_numpy(
-                self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t, out=out_var
-            )
 
         return batch_compute_uab_numpy(
             self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t

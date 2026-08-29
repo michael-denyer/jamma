@@ -321,7 +321,7 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 | 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:40](../src/jamma/validation/tolerances.py#L40) |
 | 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:22](../src/jamma/validation/compare.py#L22) |
 | 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:324](../src/jamma/validation/compare.py#L324) |
-| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:481](../src/jamma/validation/compare.py#L481) |
+| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:432](../src/jamma/validation/compare.py#L432) |
 | 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:145](../src/jamma/validation/compare.py#L145) |
 | 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:258](../src/jamma/validation/compare.py#L258) |
 | 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:183](../src/jamma/validation/compare.py#L183) |
@@ -582,6 +582,6 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Memory estimation | [memory.py:273](../src/jamma/core/memory.py#L273) |
 | Threading | [threading.py:40](../src/jamma/core/threading.py#L40) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
-| Validation comparison | [compare.py:481](../src/jamma/validation/compare.py#L481) |
+| Validation comparison | [compare.py:432](../src/jamma/validation/compare.py#L432) |
 | Equivalence proof | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
 | Numerical equivalence bound | [GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md](GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) |

@@ -1,9 +1,5 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-Exports the fused workspace APIs the runner drives: every lmm_mode at
-n_cvt=1 and at n_cvt>=2. Which of them a run uses is decided once by
-``DispatchPath``, not re-derived here.
-
 The full-Uab helpers below (``_compute_wald_numpy`` and its LRT and Score
 siblings) are pure NumPy. They are reached only through
 ``compute_lmm_chunk_numpy``, which the runner calls only on
@@ -58,7 +54,6 @@ def _compute_wald_numpy(
     n_grid: int,
     n_refine: int,
     Iab_batch: np.ndarray | None = None,
-    n_threads: int = 1,
 ) -> WaldResult:
     """Compute REML-optimized Wald test statistics.
 
@@ -77,7 +72,6 @@ def _compute_wald_numpy(
         n_refine: Golden section iterations (should be >= 20 for 1e-5 tolerance;
             C extension requires >= 1). Runner-level code enforces the minimum.
         Iab_batch: Pre-computed identity-weighted Pab. If None, computed internally.
-        n_threads: OpenMP thread count passed to C extension (ignored on Python path).
 
     Returns:
         Dict with keys: lambdas, logls, betas, ses, pwalds.
@@ -147,7 +141,6 @@ def _compute_lrt_numpy(
     n_grid: int,
     n_refine: int,
     logl_H0: float,
-    n_threads: int = 1,
 ) -> dict[str, np.ndarray]:
     """Compute MLE-optimized LRT statistics.
 
@@ -164,7 +157,6 @@ def _compute_lrt_numpy(
         n_grid: Grid search resolution.
         n_refine: Golden section iterations (should be >= 20 for 1e-5 tolerance).
         logl_H0: Null model MLE log-likelihood (scalar).
-        n_threads: OpenMP thread count passed to C extension (ignored on Python path).
 
     Returns:
         Dict with keys: lambdas_mle, p_lrts.
@@ -188,7 +180,6 @@ def _compute_score_numpy(
     Hi_eval_null: np.ndarray,
     Uab_batch: np.ndarray,
     n_samples: int,
-    n_threads: int = 1,
 ) -> dict[str, np.ndarray]:
     """Compute Score test statistics (no optimization needed).
 
@@ -201,7 +192,6 @@ def _compute_score_numpy(
         Hi_eval_null: Pre-computed null-model Hi_eval (n_samples,).
         Uab_batch: Pre-computed Uab matrices (n_snps, n_samples, n_index).
         n_samples: Number of samples.
-        n_threads: OpenMP thread count passed to C extension (ignored on Python path).
 
     Returns:
         Dict with keys: betas, ses, p_scores.
@@ -262,7 +252,6 @@ def compute_lmm_chunk_numpy(
     n_refine: int = 10,
     Hi_eval_null: np.ndarray | None = None,
     logl_H0: float | None = None,
-    n_threads: int = 1,
 ) -> dict[str, np.ndarray | None]:
     """Compute LMM statistics for a chunk of SNPs (NumPy backend).
 
@@ -281,7 +270,6 @@ def compute_lmm_chunk_numpy(
         n_refine: Golden section iterations (minimum 20 enforced).
         Hi_eval_null: Pre-computed 1/(lambda_null*eval+1) for Score test.
         logl_H0: Null model MLE log-likelihood for LRT.
-        n_threads: OpenMP thread count passed to C extension (Wald, LRT, Score).
 
     Returns:
         Dict with keys: lambdas, logls, betas, ses, pwalds,
@@ -313,7 +301,6 @@ def compute_lmm_chunk_numpy(
                 l_max,
                 n_grid,
                 n_refine,
-                n_threads=n_threads,
             ),
         )
 
@@ -330,7 +317,6 @@ def compute_lmm_chunk_numpy(
                 n_grid,
                 n_refine,
                 logl_H0,
-                n_threads=n_threads,
             )
         )
 
@@ -344,7 +330,6 @@ def compute_lmm_chunk_numpy(
                 Hi_eval_null,
                 Uab_batch,
                 n_samples,
-                n_threads=n_threads,
             )
         )
 
@@ -362,7 +347,6 @@ def compute_lmm_chunk_numpy(
             Hi_eval_null,
             Uab_batch,
             n_samples,
-            n_threads=n_threads,
         )
         result["p_scores"] = score_result["p_scores"]
         result.update(
@@ -375,7 +359,6 @@ def compute_lmm_chunk_numpy(
                 n_grid,
                 n_refine,
                 logl_H0,
-                n_threads=n_threads,
             )
         )
         # Pre-compute Iab once for Wald (lambda-independent)
@@ -392,7 +375,6 @@ def compute_lmm_chunk_numpy(
                 n_grid,
                 n_refine,
                 Iab_batch=Iab_batch,
-                n_threads=n_threads,
             ),
         )
 

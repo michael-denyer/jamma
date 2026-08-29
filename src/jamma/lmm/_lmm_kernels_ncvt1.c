@@ -8,7 +8,7 @@
 #include "_lmm_kernels_ncvt1.h"
 
 /* wald_from_pab and score_from_pab live with the other statistic extractors
- * in the tests unit; the optimizers call them once per SNP on convergence. */
+ * in _lmm_stats.c; the optimizers call them once per SNP on convergence. */
 #include "_lmm_stats.h"
 
 #include <math.h>
@@ -99,6 +99,10 @@ static inline double reml_finish_cached_split(
  *
  * SoA layout: varying and invariant columns are contiguous (stride-1),
  * enabling SIMD vectorized loads instead of stride-3 gathers.
+ *
+ * pab_out is NULL during refinement iteration; the final evaluation passes
+ * its own buffer to read the Pab this call computed for Wald extraction,
+ * without a second n_samples pass.
  * ------------------------------------------------------------------------- */
 double reml_logl_ncvt1_split(
     const double * restrict var_wx,
@@ -111,7 +115,8 @@ double reml_logl_ncvt1_split(
     double logdet_iab,
     int n_samples,
     double lambda,
-    double reml_const
+    double reml_const,
+    double (*pab_out)[6]
 )
 {
     int df = n_samples - 2;
@@ -145,6 +150,8 @@ double reml_logl_ncvt1_split(
     /* Pab from sums */
     double pab[3][6];
     calc_pab_ncvt1_split(s_ww, s_wx, s_wy, s_xx, s_xy, s_yy, pab);
+
+    if (pab_out) memcpy(pab_out, pab, sizeof(pab));
 
     return reml_finish(pab, logdet_h, logdet_iab, df, reml_const);
 }
@@ -205,11 +212,11 @@ double refine_lambda_ncvt1_split(
     double fc = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                        inv_ww, inv_wy, inv_yy, eigenvalues,
                                        logdet_iab, n_samples, exp(c),
-                                       reml_const);
+                                       reml_const, NULL);
     double fd = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                        inv_ww, inv_wy, inv_yy, eigenvalues,
                                        logdet_iab, n_samples, exp(d),
-                                       reml_const);
+                                       reml_const, NULL);
 
     for (int iter = 0; iter < n_refine; iter++) {
         if (fc > fd) {
@@ -218,49 +225,29 @@ double refine_lambda_ncvt1_split(
             fc = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                         inv_ww, inv_wy, inv_yy, eigenvalues,
                                         logdet_iab, n_samples, exp(c),
-                                        reml_const);
+                                        reml_const, NULL);
         } else {
             a = c; c = d; fc = fd;
             d = a + phi * (b - a);
             fd = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                         inv_ww, inv_wy, inv_yy, eigenvalues,
                                         logdet_iab, n_samples, exp(d),
-                                        reml_const);
+                                        reml_const, NULL);
         }
     }
 
     double log_opt = (a + b) / 2.0;
     double lambda_opt = exp(log_opt);
 
-    /* Final evaluation: fuse REML logl + Wald stats in single n_samples pass.
-     * This eliminates the separate calc_rl_wald_ncvt1_split call that would
-     * redundantly recompute the identical Pab sums. */
-    {
-        double logdet_h = 0.0;
-        double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
-        double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
-
-        #pragma omp simd reduction(+:logdet_h,s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
-        for (int i = 0; i < n_samples; i++) {
-            double v = lambda_opt * eigenvalues[i] + 1.0;
-            double h = 1.0 / v;
-            logdet_h += log(v);
-
-            s_wx += h * var_wx[i];
-            s_xx += h * var_xx[i];
-            s_xy += h * var_xy[i];
-
-            s_ww += h * inv_ww[i];
-            s_wy += h * inv_wy[i];
-            s_yy += h * inv_yy[i];
-        }
-
-        double pab[3][6];
-        calc_pab_ncvt1_split(s_ww, s_wx, s_wy, s_xx, s_xy, s_yy, pab);
-
-        *logl_out = reml_finish(pab, logdet_h, logdet_iab, df, reml_const);
-        *is_valid_out = wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
-    }
+    /* Final evaluation: reml_logl_ncvt1_split fills pab as a side effect, so
+     * the Wald extraction below reads the same Pab the logl was computed
+     * from without a second n_samples pass. */
+    double pab[3][6];
+    *logl_out = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
+                                       inv_ww, inv_wy, inv_yy, eigenvalues,
+                                       logdet_iab, n_samples, lambda_opt,
+                                       reml_const, pab);
+    *is_valid_out = wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
 
     return lambda_opt;
 }

@@ -254,6 +254,7 @@ def _numpy_kernel(inv: RunInvariants) -> Kernel:
     """No C extension: the full-Uab pure-NumPy path, chunk by chunk."""
 
     def call(chunk: np.ndarray, threads: int) -> KernelResult:
+        del threads
         return compute_lmm_chunk_numpy(
             inv.lmm_mode,
             inv.n_cvt,
@@ -266,7 +267,6 @@ def _numpy_kernel(inv: RunInvariants) -> Kernel:
             n_refine=inv.n_refine,
             Hi_eval_null=inv.Hi_eval_null,
             logl_H0=inv.logl_H0,
-            n_threads=threads,
         )
 
     return Kernel(

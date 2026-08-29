@@ -8,7 +8,7 @@ paths) and test_loco_eigen_cache.py (which covers cache I/O).
 import numpy as np
 import pytest
 
-from jamma.kinship.compute import (
+from jamma.kinship.loco import (
     LocoKinshipStream,
     _yield_full_kinship_fallback,
     _yield_loco_matrices,

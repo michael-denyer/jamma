@@ -53,7 +53,7 @@ A typical LMM association run proceeds as follows:
 
 2. **Data loading** — `PipelineRunner` calls `io/plink.py` to read PLINK metadata and phenotype vectors from the `.fam` file. Optional covariates are loaded from `io/covariate.py`.
 
-3. **Kinship** — If a kinship file is provided, `kinship/io.py` reads it. Otherwise `kinship/compute.py` computes the centered (or standardized) kinship matrix `K = (1/p) * X_c @ X_c.T` using `jlinalg.dsyrk` for the symmetric rank-k update.
+3. **Kinship** — If a kinship file is provided, `kinship/io.py` reads it. Otherwise `kinship/stream.py` computes the centered (or standardized) kinship matrix `K = (1/p) * X_c @ X_c.T` using `jlinalg.dsyrk` for the symmetric rank-k update; `kinship/loco.py` computes LOCO kinship by subtraction.
 
 4. **Eigendecomposition** — `lmm/eigen.py` eigendecomposes `K` via `jlinalg.eigh`, which dispatches to vendor DSYEVD (faster, O(N²) workspace) or falls back to DSYEVR (O(N) workspace) when memory is insufficient. The result is eigenvalues `D` and eigenvectors `U`.
 
@@ -121,7 +121,8 @@ src/jamma/
 │   ├── weight.py           # GEMMA-format individual weight file I/O + kinship weighting
 │   └── _parallel_text.py   # Shared multiprocess text I/O helpers for matrix_reader/matrix_writer
 ├── kinship/                # Kinship matrix computation and LOCO variants
-│   ├── compute.py          # Centered kinship (dsyrk); streaming LOCO subtraction
+│   ├── stream.py           # Streaming centered/standardized kinship (dsyrk), mode-selected
+│   ├── loco.py             # Streaming LOCO kinship via subtraction, batch loop
 │   ├── io.py               # Kinship matrix I/O (GEMMA text format and binary .npy)
 │   └── missing.py          # Genotype imputation and centring helpers
 ├── jlinalg/                # Vendor BLAS/LAPACK dispatch layer with NumPy fallback

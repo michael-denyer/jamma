@@ -1,11 +1,11 @@
 """In-memory kinship oracle.
 
 Production computes kinship by streaming genotypes from disk
-(``jamma.kinship.compute.compute_kinship_streaming`` and
-``compute_loco_kinship_streaming``). These in-memory functions have no
-production caller; they exist so tests can hold the streaming path to a
-simpler, whole-matrix-in-RAM reference implementation of the same GEMMA
--gk 1 / -gk 2 formulas.
+(``jamma.kinship.stream.compute_kinship_streaming`` and
+``jamma.kinship.loco.compute_loco_kinship_streaming``). These in-memory
+functions have no production caller; they exist so tests can hold the
+streaming path to a simpler, whole-matrix-in-RAM reference implementation of
+the same GEMMA -gk 1 / -gk 2 formulas.
 """
 
 from __future__ import annotations

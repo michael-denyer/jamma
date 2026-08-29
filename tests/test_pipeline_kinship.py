@@ -119,7 +119,7 @@ def test_lmm_kinship_applies_config_maf_miss() -> None:
     kinship differs from the unfiltered one, and load_kinship must match the
     filtered computation, not the unfiltered one.
     """
-    from jamma.kinship.compute import compute_kinship_streaming
+    from jamma.kinship.stream import compute_kinship_streaming
 
     require_fixture(_MOUSE_BFILE.with_suffix(".bed"), _MOUSE_BFILE.with_suffix(".fam"))
 
@@ -177,7 +177,7 @@ class TestEarlySampleFiltering:
         passes valid_indices, producing identical eigenvalues to a
         direct valid-subset kinship computation.
         """
-        from jamma.kinship.compute import compute_kinship_streaming
+        from jamma.kinship.stream import compute_kinship_streaming
 
         bfile = _copy_plink_genotypes(tmp_path)
         write_fam(
@@ -274,7 +274,7 @@ class TestEarlySampleFiltering:
 
     def test_precomputed_kinship_still_works(self, tmp_path: Path) -> None:
         """Pre-computed kinship from file is subsetted post-load with valid_indices."""
-        from jamma.kinship.compute import compute_kinship_streaming
+        from jamma.kinship.stream import compute_kinship_streaming
 
         bfile = _copy_plink_genotypes(tmp_path)
         write_fam(tmp_path / "test.fam", [1.0 + i * 0.1 for i in range(_N_SAMPLES)])

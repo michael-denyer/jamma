@@ -214,9 +214,8 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 3a | `compute_standardized_kinship_streaming()` | -gk 2 from disk; two-pass, standardize transform, shared `_stream_kinship_two_pass` | [compute.py:256](../src/jamma/kinship/compute.py#L256) |
-| 3a | `compute_kinship_streaming()` | 2-pass streaming (stats -> accumulate); accepts `valid_indices` for early sample filtering; canonical streaming kinship (LOCO streaming merged in) | [compute.py:424](../src/jamma/kinship/compute.py#L424) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship, returns a consume-once `LocoKinshipStream` | [compute.py:988](../src/jamma/kinship/compute.py#L988) |
+| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from disk, mode-selected transform; single-passes centered mode when unfiltered, else shared `_stream_kinship_two_pass` | [stream.py:425](../src/jamma/kinship/stream.py#L425) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:349](../src/jamma/kinship/loco.py#L349) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L170) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |
 | 3b | `impute_and_center()` | NaN -> mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
@@ -562,7 +561,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:87](../src/jamma/io/matrix_writer.py#L87) |
-| Kinship compute | [compute.py:424](../src/jamma/kinship/compute.py#L424) |
+| Kinship compute | [stream.py:425](../src/jamma/kinship/stream.py#L425) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood (`reml_log_likelihood()`) | [likelihood.py:471](../src/jamma/lmm/likelihood.py#L471) |
 | Uab/Pab/Iab batches | [uab.py](../src/jamma/lmm/uab.py) |

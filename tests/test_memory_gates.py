@@ -315,7 +315,7 @@ class TestKinshipOnlyPreflight:
         ~80 GB. With 40 GB available a kinship-only run fits and must proceed.
         """
         from jamma.core.memory import estimate_streaming_memory
-        from jamma.kinship.compute import _preflight_kinship_memory
+        from jamma.kinship.stream import _preflight_kinship_memory
 
         est = estimate_streaming_memory(50_000, chunk_size=10_000)
         assert est.peak_kinship_gb < 40.0 < est.total_peak_gb, (
@@ -327,7 +327,7 @@ class TestKinshipOnlyPreflight:
 
     def test_kinship_only_run_still_blocked_when_kinship_does_not_fit(self):
         """The gate still refuses when the kinship phase itself will not fit."""
-        from jamma.kinship.compute import _preflight_kinship_memory
+        from jamma.kinship.stream import _preflight_kinship_memory
 
         with patch("jamma.core.memory.available_ram_gb", return_value=1.0):
             with pytest.raises(MemoryError, match="Insufficient memory"):
@@ -364,7 +364,7 @@ class TestNumpyFallbackKinshipMemory:
         import tracemalloc
 
         from jamma import jlinalg
-        from jamma.kinship.compute import _accumulate_kinship
+        from jamma.kinship.stream import _accumulate_kinship
 
         monkeypatch.setattr(
             jlinalg,

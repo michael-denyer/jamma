@@ -263,12 +263,7 @@ class TestExecutionMode:
                 "jamma.lmm.runner.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
-            patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
-            patch(
-                "jamma.lmm.compute_numpy._accel",
-                None,
-                create=True,
-            ),
+            patch("jamma.lmm.compute_numpy._accel", None),
         ):
             plan_n_cvt4 = select_execution_mode(1000, 10000, n_cvt=4)
             plan_n_cvt1 = select_execution_mode(1000, 10000, n_cvt=1)
@@ -286,11 +281,6 @@ class TestExecutionMode:
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.compute_numpy._accel", _EXTENSION_LOADED),
-            patch(
-                "jamma.lmm.compute_numpy._accel",
-                _EXTENSION_LOADED,
-                create=True,
-            ),
         ):
             plan = select_execution_mode(1000, 10000, n_cvt=4)
 

@@ -18,7 +18,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from jamma.jlinalg import HAS_C_EXTENSION, dsyrk
+from jamma.jlinalg import HAS_C_EXTENSION, _dsyrk_numpy, dsyrk
 from tests.builders import BOUNDARY_SIZES
 
 pytestmark = pytest.mark.tier0
@@ -411,48 +411,26 @@ class TestDsyrkOutput:
 
 
 class TestDsyrkFallback:
-    """Test the NumPy fallback dsyrk independently.
+    """Test the NumPy fallback dsyrk (jamma.jlinalg._dsyrk_numpy) directly.
 
-    Imports the fallback logic directly (or via jamma.jlinalg when HAS_C_EXTENSION
-    is False).  The fallback is always tested since it's the active code path
-    when the C extension is missing dsyrk.
+    Always exercised, independent of whether the C extension is present.
     """
-
-    def _get_fallback_dsyrk(self):
-        """Return a pure-NumPy fallback dsyrk matching the __init__.py fallback."""
-        import numpy as _np
-
-        def _dsyrk(X: np.ndarray) -> np.ndarray:
-            if X.ndim != 2:
-                raise ValueError(f"dsyrk: X must be a 2-D array, got {X.ndim}-D")
-            X64 = _np.ascontiguousarray(X, dtype=_np.float64)
-            result = _np.dot(X64, X64.T)
-            # Mirror lower to upper for bitwise symmetry (matches production fallback)
-            il = _np.tril_indices_from(result, -1)
-            result.T[il] = result[il]
-            return result
-
-        return _dsyrk
 
     def test_fallback_correctness(self) -> None:
         """Fallback matches reference for random (30, 20) input."""
-        fb = self._get_fallback_dsyrk()
         rng = np.random.default_rng(77)
         X = rng.standard_normal((30, 20))
-        npt.assert_allclose(fb(X), _reference_dsyrk(X), rtol=1e-14)
+        npt.assert_allclose(_dsyrk_numpy(X), _reference_dsyrk(X), rtol=1e-14)
 
     def test_fallback_symmetric(self) -> None:
         """Fallback result is bitwise symmetric."""
-        fb = self._get_fallback_dsyrk()
         rng = np.random.default_rng(78)
         X = rng.standard_normal((50, 30))
-        result = fb(X)
+        result = _dsyrk_numpy(X)
         npt.assert_array_equal(result, result.T)
 
     def test_production_fallback_accumulates_into_output(self) -> None:
         """The production NumPy backend preserves the validated out contract."""
-        from jamma.jlinalg import _dsyrk_numpy
-
         X = np.arange(12, dtype=np.float64).reshape(4, 3)
         initial = np.eye(4, dtype=np.float64)
         out = initial.copy()
@@ -471,8 +449,6 @@ class TestDsyrkFallback:
         row-block divisor, so a tile boundary that dropped or double-counted a
         strip would show up as an asymmetry or a wrong entry here.
         """
-        from jamma.jlinalg import _dsyrk_numpy
-
         rng = np.random.default_rng(1234 + n)
         X = np.ascontiguousarray(rng.standard_normal((n, 7)))
         initial = rng.standard_normal((n, n))
@@ -486,15 +462,13 @@ class TestDsyrkFallback:
 
     def test_fallback_1d_raises(self) -> None:
         """Fallback raises ValueError on 1-D input."""
-        fb = self._get_fallback_dsyrk()
         with pytest.raises(ValueError, match=r"2-D|ndim"):
-            fb(np.ones(10))
+            _dsyrk_numpy(np.ones(10))
 
     def test_fallback_3d_raises(self) -> None:
         """Fallback raises ValueError on 3-D input."""
-        fb = self._get_fallback_dsyrk()
         with pytest.raises(ValueError, match=r"2-D|ndim"):
-            fb(np.ones((2, 3, 4)))
+            _dsyrk_numpy(np.ones((2, 3, 4)))
 
     def test_via_jamma_jlinalg(self) -> None:
         """jamma.jlinalg.dsyrk produces correct results (fallback or C extension)."""
@@ -506,15 +480,11 @@ class TestDsyrkFallback:
 
     def test_fallback_rejects_non_array_output(self) -> None:
         """Fallback matches the native output type contract."""
-        from jamma.jlinalg import _dsyrk_numpy
-
         with pytest.raises(TypeError, match="numpy array"):
             _dsyrk_numpy(np.ones((3, 2)), out=[[0.0] * 3] * 3)  # type: ignore[arg-type]
 
     def test_fallback_rejects_non_2d_output(self) -> None:
         """Fallback reports dimensionality before shape mismatch."""
-        from jamma.jlinalg import _dsyrk_numpy
-
         with pytest.raises(ValueError, match="2-D"):
             _dsyrk_numpy(np.ones((3, 2)), out=np.empty(3, dtype=np.float64))
 

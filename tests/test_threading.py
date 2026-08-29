@@ -10,6 +10,7 @@ from jamma.core.threading import (
     get_blas_thread_count,
     get_c_extension_thread_count,
 )
+from jamma.jlinalg import get_n_threads, set_n_threads
 
 pytestmark = pytest.mark.tier0
 
@@ -210,3 +211,39 @@ class TestBlasThreadsKnobReachesRotation:
         )
 
         assert seen == [2], f"rotation must run under JAMMA_BLAS_THREADS=2, saw {seen}"
+
+
+class TestThreadControl:
+    """Thread control API: get/set_n_threads with init-time clamping."""
+
+    def test_get_n_threads_returns_positive(self) -> None:
+        """get_n_threads returns a positive integer."""
+        n = get_n_threads()
+        assert isinstance(n, int)
+        assert n >= 1, f"get_n_threads returned {n}, expected >= 1"
+
+    def test_set_n_threads_returns_old_count(self) -> None:
+        """set_n_threads returns the previous thread count."""
+        original = get_n_threads()
+        old = set_n_threads(1)
+        assert old == original, f"set_n_threads returned {old}, expected {original}"
+        # Restore
+        set_n_threads(original)
+
+    def test_set_n_threads_accepts_large(self) -> None:
+        """set_n_threads(9999) stores the value (no clamping after own-BLAS removal)."""
+        original = get_n_threads()
+        set_n_threads(9999)
+        assert get_n_threads() == 9999
+        # Restore
+        set_n_threads(original)
+
+    def test_set_n_threads_rejects_zero(self) -> None:
+        """set_n_threads(0) raises ValueError."""
+        with pytest.raises(ValueError):
+            set_n_threads(0)
+
+    def test_set_n_threads_rejects_negative(self) -> None:
+        """set_n_threads(-1) raises ValueError."""
+        with pytest.raises(ValueError):
+            set_n_threads(-1)

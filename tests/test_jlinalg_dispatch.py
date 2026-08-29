@@ -485,3 +485,23 @@ class TestDgemmCapabilityFlag:
             assert blas_has_dgemm == 0, (
                 f"backend={blas_backend!r} but blas_has_dgemm={blas_has_dgemm}"
             )
+
+
+class TestEighBackendReporting:
+    """Verify blas_has_dsyevd is consistent with backend."""
+
+    def test_has_lapack_consistent_with_backend(self):
+        from jamma.jlinalg import blas_has_dsyevd
+
+        if blas_backend in ("Accelerate-ILP64", "MKL-ILP64"):
+            assert blas_has_dsyevd == 1, (
+                f"Backend {blas_backend} should have LAPACK "
+                f"but blas_has_dsyevd={blas_has_dsyevd}"
+            )
+
+    def test_has_dsyevr_flag_exposed(self):
+        """blas_has_dsyevr is accessible as an int constant."""
+        from jamma.jlinalg import blas_has_dsyevr
+
+        assert isinstance(blas_has_dsyevr, int)
+        assert blas_has_dsyevr in (0, 1)

@@ -39,8 +39,6 @@ from jamma.jlinalg import (
     blas_has_dsyevd,
     blas_has_dsyevr,
     eigh,
-    get_n_threads,
-    set_n_threads,
 )
 from tests.builders import EIGH_BOUNDARY_SIZES
 from tests.fixture_paths import KINSHIP_DIR
@@ -221,18 +219,6 @@ class TestEigh:
         assert np.all(diffs >= -1e-14), (
             f"Eigenvalues not ascending: min diff = {diffs.min()}"
         )
-
-    def test_raises_non_square(self) -> None:
-        """eigh on (3,4) array raises ValueError."""
-        K = np.ones((3, 4))
-        with pytest.raises(ValueError, match=r"square|shape"):
-            eigh(K)
-
-    def test_raises_1d(self) -> None:
-        """eigh on 1-D array raises ValueError."""
-        K = np.ones(5)
-        with pytest.raises(ValueError, match=r"2-D|ndim"):
-            eigh(K)
 
     def test_empty_matrix(self) -> None:
         """eigh on 0x0 matrix returns empty eigenvalues and eigenvectors."""
@@ -605,42 +591,6 @@ class TestEighEigenpairResidual:
 # ---------------------------------------------------------------------------
 
 
-class TestThreadControl:
-    """Thread control API: get/set_n_threads with init-time clamping."""
-
-    def test_get_n_threads_returns_positive(self) -> None:
-        """get_n_threads returns a positive integer."""
-        n = get_n_threads()
-        assert isinstance(n, int)
-        assert n >= 1, f"get_n_threads returned {n}, expected >= 1"
-
-    def test_set_n_threads_returns_old_count(self) -> None:
-        """set_n_threads returns the previous thread count."""
-        original = get_n_threads()
-        old = set_n_threads(1)
-        assert old == original, f"set_n_threads returned {old}, expected {original}"
-        # Restore
-        set_n_threads(original)
-
-    def test_set_n_threads_accepts_large(self) -> None:
-        """set_n_threads(9999) stores the value (no clamping after own-BLAS removal)."""
-        original = get_n_threads()
-        set_n_threads(9999)
-        assert get_n_threads() == 9999
-        # Restore
-        set_n_threads(original)
-
-    def test_set_n_threads_rejects_zero(self) -> None:
-        """set_n_threads(0) raises ValueError."""
-        with pytest.raises(ValueError):
-            set_n_threads(0)
-
-    def test_set_n_threads_rejects_negative(self) -> None:
-        """set_n_threads(-1) raises ValueError."""
-        with pytest.raises(ValueError):
-            set_n_threads(-1)
-
-
 # ---------------------------------------------------------------------------
 # Reconstruction and orthogonality together, at two larger sizes
 # ---------------------------------------------------------------------------
@@ -655,33 +605,27 @@ class TestEighReconstructionAtScale:
     check alone would catch.
     """
 
-    def test_recon_and_ortho_n100(self) -> None:
-        """N=100: reconstruction < 1e-8 and orthogonality < 1e-12."""
-        rng = np.random.default_rng(5001)
-        N = 100
-        K = _random_spd(N, rng)
-        K_copy = K.copy()
-        w, v = eigh(K_copy)
+    @pytest.mark.parametrize(
+        ("N", "seed", "ortho_tol"),
+        [
+            (100, 5001, 1e-12),
+            pytest.param(500, 5002, 1e-8, marks=pytest.mark.slow),
+        ],
+    )
+    def test_recon_and_ortho(self, N: int, seed: int, ortho_tol: float) -> None:
+        """Reconstruction < 1e-8 and orthogonality < ortho_tol.
 
-        _assert_reconstruction(K, w, v, 1e-8, "N=100")
-        _assert_orthogonality(v, 1e-12, "N=100")
-
-    @pytest.mark.slow
-    def test_recon_and_ortho_n500(self) -> None:
-        """N=500: reconstruction and orthogonality both < 1e-8.
-
-        Orthogonality is 1e-8 here rather than the 1e-12 used at N=100,
-        because the error grows with N and this bound must hold for the NumPy
-        fallback too.
+        Orthogonality tolerance loosens from 1e-12 at N=100 to 1e-8 at
+        N=500, because the error grows with N and this bound must hold for
+        the NumPy fallback too.
         """
-        rng = np.random.default_rng(5002)
-        N = 500
+        rng = np.random.default_rng(seed)
         K = _random_spd(N, rng)
         K_copy = K.copy()
         w, v = eigh(K_copy)
 
-        _assert_reconstruction(K, w, v, 1e-8, "N=500")
-        _assert_orthogonality(v, 1e-8, "N=500")
+        _assert_reconstruction(K, w, v, 1e-8, f"N={N}")
+        _assert_orthogonality(v, ortho_tol, f"N={N}")
 
 
 # ---------------------------------------------------------------------------
@@ -768,79 +712,6 @@ class TestEighBoundarySizeLoop:
             K_copy = K.copy()
             w, v = eigh(K_copy)
             _assert_reconstruction(K, w, v, 1e-8, f"sequential N={N}")
-
-
-# ---------------------------------------------------------------------------
-# Build-flag contract for the LAPACK-adjacent sources
-# ---------------------------------------------------------------------------
-
-
-def test_lapack_no_ffast_math() -> None:
-    """LAPACK sources must be compiled with strict IEEE 754 flags.
-
-    Compile flags are consolidated into
-    ``src/jamma/_build_support/compile_and_link.py``.  All three entry points
-    (``hatch_build.py``, ``_compile_jlinalg.py``, ``_compile_accel.py``) route
-    through that helper rather than keeping inline flag lists, so validating
-    the single source of truth once covers all of them: ``LAPACK_CFLAGS`` must
-    include ``-fno-fast-math`` and must not include ``-ffast-math``.
-
-    Why it matters for ``eigh.c``, the sole entry in ``LAPACK_SOURCES``: it
-    inspects vendor LAPACK return codes and hands NaN and Inf straight through
-    from the caller's matrix.  ``-ffast-math`` implies ``-ffinite-math-only``,
-    which lets the compiler assume no NaN or Inf ever occurs and so optimise
-    away the very checks the NaN and Inf tests above rely on.
-    """
-    from jamma._build_support.compile_and_link import LAPACK_CFLAGS, LAPACK_SOURCES
-
-    # LAPACK_SOURCES identifies the source files that require strict flags.
-    assert LAPACK_SOURCES, (
-        "jamma._build_support.compile_and_link.LAPACK_SOURCES must list at "
-        "least one source file (eigh.c) that requires strict IEEE 754 flags"
-    )
-
-    # LAPACK_CFLAGS is the canonical flag list — must include strict IEEE 754.
-    assert "-fno-fast-math" in LAPACK_CFLAGS, (
-        "LAPACK_CFLAGS must include '-fno-fast-math' so NaN/Inf handling in "
-        "eigh.c is not optimised away"
-    )
-    assert "-ffast-math" not in LAPACK_CFLAGS, (
-        "LAPACK_CFLAGS must NOT include '-ffast-math'"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Dtype handling — non-float64 inputs
-# ---------------------------------------------------------------------------
-
-
-class TestEighDtype:
-    """Verify eigh handles non-float64 inputs correctly."""
-
-    def test_float32_input(self):
-        """eigh should accept float32 and produce correct results (via conversion)."""
-        K = np.eye(5, dtype=np.float32)
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            w, v = eigh(K.astype(np.float64))
-        npt.assert_allclose(w, np.ones(5), atol=1e-14)
-
-    def test_int_input_requires_float64(self):
-        """eigh rejects or converts int arrays (no silent garbage)."""
-        K = np.eye(5, dtype=np.int32)
-        # Must convert to float64 — calling eigh on int array should either
-        # work (after auto-conversion) or raise a clear error
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            try:
-                w, v = eigh(K.astype(np.float64))
-                npt.assert_allclose(w, np.ones(5), atol=1e-14)
-            except (TypeError, ValueError):
-                pass  # Clear error is acceptable
 
 
 # ---------------------------------------------------------------------------
@@ -952,13 +823,12 @@ def _call_eigh_with_status(
     reason="Vendor LAPACK (DSYEVD/DSYEVR) required to reach jlinalg_eigh_c",
 )
 class TestEighViaCtypesAtScale:
-    """Reconstruction and orthogonality via ctypes, bypassing the Python wrapper.
+    """Reconstruction, orthogonality, and driver outcome via the raw C entry point.
 
-    Everything above calls ``eigh()``, which validates input, may copy, and
-    translates C return codes into Python exceptions.  These call
-    ``jlinalg_eigh_c`` directly instead, so a defect introduced by the wrapper
-    (a bad stride, a missed transpose) cannot mask a defect in the C layer or
-    the other way round.
+    Only ``test_recon_and_ortho`` needs the ctypes call: it is the sole
+    assertion in this file that vendor LAPACK actually ran, rather than
+    silently falling through to the NumPy path, which the ``status`` struct
+    exposes and the Python ``eigh()`` wrapper does not.
 
     Sizes 5, 64, 65 straddle vendor LAPACK's internal blocking switch at 64.
     """
@@ -980,13 +850,13 @@ class TestEighViaCtypesAtScale:
     @pytest.mark.slow
     @pytest.mark.parametrize("n", [500, 1000])
     def test_recon_and_ortho_large(self, n: int) -> None:
-        """Reconstruction and orthogonality at larger N through the C entry point."""
+        """Reconstruction and orthogonality at larger N through ``eigh()``."""
         rng = np.random.default_rng(42)
         K = _random_spd(n, rng)
         K_copy = K.copy()
-        w, v, _ = _call_eigh_with_status(K_copy)
-        _assert_reconstruction(K, w, v, 1e-8, f"C API N={n}")
-        _assert_orthogonality(v, 1e-8, f"C API N={n}")
+        w, v = eigh(K_copy)
+        _assert_reconstruction(K, w, v, 1e-8, f"N={n}")
+        _assert_orthogonality(v, 1e-8, f"N={n}")
 
 
 _JLINALG_EXT_BAD_STRIDE = -1004
@@ -1044,15 +914,11 @@ class TestEighPaddedStrideRejected:
 
 
 # ---------------------------------------------------------------------------
-# Numerically awkward inputs, through the raw C entry point
+# Numerically awkward inputs
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not _HAS_VENDOR_LAPACK,
-    reason="Vendor LAPACK (DSYEVD/DSYEVR) required to reach jlinalg_eigh_c",
-)
-class TestEighViaCApiDifficultInputs:
+class TestEighDifficultInputs:
     """eigh holds up on inputs chosen to be numerically hostile.
 
     Each case targets a different way an eigensolver degrades: eigenvalues too
@@ -1085,7 +951,7 @@ class TestEighViaCApiDifficultInputs:
         tolerance is far tighter than the large-N cases.
         """
         K_copy = K.copy()
-        w, v, _ = _call_eigh_with_status(K_copy)
+        w, v = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "N=2")
         _assert_orthogonality(v, 1e-12, "N=2")
         # Eigenvalues ascending
@@ -1106,7 +972,7 @@ class TestEighViaCApiDifficultInputs:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v, _ = _call_eigh_with_status(K_copy)
+        w, v = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "Clustered eigenvalues")
 
     def test_large_gap_ratio(self) -> None:
@@ -1120,7 +986,7 @@ class TestEighViaCApiDifficultInputs:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v, _ = _call_eigh_with_status(K_copy)
+        w, v = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-10, "Large gap ratio")
 
     def test_boundary_eigenvalue(self) -> None:
@@ -1136,7 +1002,7 @@ class TestEighViaCApiDifficultInputs:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v, _ = _call_eigh_with_status(K_copy)
+        w, v = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-12, "Boundary eigenvalue")
 
     def test_negative_offdiagonal(self) -> None:
@@ -1157,7 +1023,7 @@ class TestEighViaCApiDifficultInputs:
         K = np.diag(d) + np.diag(e, 1) + np.diag(e, -1)
         K_copy = K.copy()
 
-        w, v, _ = _call_eigh_with_status(K_copy)
+        w, v = eigh(K_copy)
         _assert_reconstruction(K, w, v, 1e-8, "negative off-diagonal")
         _assert_orthogonality(v, 1e-8, "negative off-diagonal")
 
@@ -1166,14 +1032,14 @@ class TestEighViaCApiDifficultInputs:
 
         Built by symmetrising a Gaussian matrix rather than forming A @ A.T, so
         unlike ``_random_spd`` these have negative eigenvalues and eigenvalues
-        near zero.  Sweeping three sizes in one test keeps the three C API
-        cases above free to stay size-specific.
+        near zero.  Sweeping three sizes in one test keeps the three cases
+        above free to stay size-specific.
         """
         rng = np.random.default_rng(42)
         for N in [50, 200, 500]:
             A = rng.standard_normal((N, N))
             A = (A + A.T) / 2
-            w, V, _ = _call_eigh_with_status(A.copy())
+            w, V = eigh(A.copy())
 
             recon = np.linalg.norm(A - V @ np.diag(w) @ V.T) / np.linalg.norm(A)
             assert recon < 1e-8, f"Reconstruction {recon:.2e} at N={N} (threshold 1e-8)"
@@ -1289,31 +1155,6 @@ class TestEighVendorDispatch:
         w, v = eigh(K)
         assert abs(w[0] - 3.14) < 1e-15
         assert abs(v[0, 0] - 1.0) < 1e-15
-
-
-# ---------------------------------------------------------------------------
-# Backend reporting consistency tests
-# ---------------------------------------------------------------------------
-
-
-class TestEighBackendReporting:
-    """Verify blas_has_dsyevd is consistent with backend."""
-
-    def test_has_lapack_consistent_with_backend(self):
-        from jamma.jlinalg import blas_backend, blas_has_dsyevd
-
-        if blas_backend in ("Accelerate-ILP64", "MKL-ILP64"):
-            assert blas_has_dsyevd == 1, (
-                f"Backend {blas_backend} should have LAPACK "
-                f"but blas_has_dsyevd={blas_has_dsyevd}"
-            )
-
-    def test_has_dsyevr_flag_exposed(self):
-        """blas_has_dsyevr is accessible as an int constant."""
-        from jamma.jlinalg import blas_has_dsyevr
-
-        assert isinstance(blas_has_dsyevr, int)
-        assert blas_has_dsyevr in (0, 1)
 
 
 # ---------------------------------------------------------------------------

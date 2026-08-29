@@ -6,6 +6,7 @@ import math
 
 import pytest
 
+from jamma.lmm.schema import MODE_SPECS
 from jamma.lmm.stats import AssocResult
 from jamma.validation.compare import (
     AssocComparisonResult,
@@ -917,3 +918,68 @@ class TestCompareAssocResults:
         assert hasattr(comparison, "l_remle")
         assert hasattr(comparison, "af")
         assert hasattr(comparison, "mismatched_snps")
+
+    @pytest.mark.parametrize(
+        ("mode", "sample"),
+        [
+            (1, _make_assoc(rs="rs1")),
+            (
+                2,
+                _make_assoc(
+                    rs="rs1",
+                    beta=float("nan"),
+                    se=float("nan"),
+                    p_wald=None,
+                    logl_H1=None,
+                    l_remle=None,
+                    p_lrt=0.02,
+                    l_mle=0.8,
+                ),
+            ),
+            (
+                3,
+                _make_assoc(
+                    rs="rs1",
+                    p_wald=None,
+                    logl_H1=None,
+                    l_remle=None,
+                    p_score=0.05,
+                ),
+            ),
+            (
+                4,
+                _make_assoc(
+                    rs="rs1",
+                    p_wald=0.01,
+                    p_lrt=0.02,
+                    p_score=0.05,
+                    l_remle=0.5,
+                    l_mle=0.8,
+                    logl_H1=-100.0,
+                ),
+            ),
+        ],
+    )
+    def test_compared_columns_match_mode_spec(self, mode, sample):
+        """The set of columns compare_assoc_results actively compares for a
+        mode equals MODE_SPECS[mode].stat_columns, so the comparator cannot
+        drift from the schema's declared column set for that mode.
+
+        beta/se are excluded from this check: they are always-present output
+        slots, not entries in MODE_SPECS[mode].stat_columns, and LRT compares
+        them too (both sides all-NaN by construction) rather than skipping
+        them outright.
+        """
+        results = [sample]
+        comparison = compare_assoc_results(results, results)
+
+        expected_columns = frozenset(
+            c.field_name for c in MODE_SPECS[mode].stat_columns
+        ) - {"beta", "se"}
+        actual_columns = frozenset(
+            field
+            for field in ("p_wald", "logl_H1", "l_remle", "p_score", "p_lrt", "l_mle")
+            if (r := getattr(comparison, field)) is not None
+            and not (r.passed and r.worst_location is None and "skipped" in r.message)
+        )
+        assert actual_columns == expected_columns

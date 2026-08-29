@@ -6,14 +6,14 @@ rather than raising exceptions, enabling programmatic validation workflows.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
 import numpy as np
 from numpy.testing import assert_allclose
 
-from jamma.lmm.schema import HEADERS, MODE_SPECS
+from jamma.lmm.schema import HEADERS, MODE_SPECS, LmmMode
 from jamma.lmm.stats import AssocResult
 from jamma.validation.tolerances import ToleranceConfig
 
@@ -360,74 +360,25 @@ _LAMBDA_LOWER_BOUND = 1e-4
 _LAMBDA_UPPER_BOUND = 1e4
 
 
-class AssocTestType(StrEnum):
-    """Which GEMMA test a reference .assoc.txt came from.
-
-    Detected from which p-value columns the reference carries, then used to
-    select the active comparison columns. Previously three mutually exclusive
-    booleans plus an implicit fourth as the ``else`` of an if/elif chain, which
-    meant the column selection and the overall-pass computation each had to
-    re-derive the same four cases and agree.
-    """
-
-    ALL = "all"
-    SCORE = "score"
-    LRT = "lrt"
-    WALD = "wald"
-
-
-# Which optional output slots each test type populates. The SNP-count-mismatch
-# early return reads this rather than re-deriving the test type conditions, so a
-# new test type cannot populate a slot in one place and leave it None in the
-# other.
-_OPTIONAL_SLOTS: dict[AssocTestType, frozenset[str]] = {
-    AssocTestType.ALL: frozenset({"p_score", "p_lrt", "l_mle"}),
-    AssocTestType.SCORE: frozenset({"p_score"}),
-    AssocTestType.LRT: frozenset({"p_lrt", "l_mle"}),
-    AssocTestType.WALD: frozenset(),
-}
-
-
-# Which columns the overall pass verdict reads, per test type. LRT omits beta and
-# se because it reports them as NaN by construction; compare_assoc_results checks
-# both sides are all-NaN instead.
-_PASS_COLUMNS: dict[AssocTestType, tuple[str, ...]] = {
-    AssocTestType.ALL: (
-        "beta",
-        "se",
-        "af",
-        "p_wald",
-        "logl_H1",
-        "l_remle",
-        "p_score",
-        "p_lrt",
-        "l_mle",
-    ),
-    AssocTestType.SCORE: ("beta", "se", "af", "p_score"),
-    AssocTestType.LRT: ("af", "p_lrt", "l_mle"),
-    AssocTestType.WALD: ("beta", "se", "af", "p_wald", "logl_H1", "l_remle"),
-}
-
-
-def _detect_assoc_test_type(sample: list[AssocResult]) -> AssocTestType:
-    """Infer the test type from which p-value columns the reference carries.
+def _detect_lmm_mode(sample: list[AssocResult]) -> LmmMode:
+    """Infer the LMM mode from which p-value columns the reference carries.
 
     Uses a sample of the first few records rather than the first alone, so a
     degenerate leading SNP with NaN columns does not decide it.
     """
     if not sample:
-        return AssocTestType.WALD
+        return 1
     if all(
         r.p_wald is not None and r.p_lrt is not None and r.p_score is not None
         for r in sample
     ):
-        return AssocTestType.ALL
+        return 4
     if all(r.p_wald is None for r in sample):
         if all(r.p_score is not None for r in sample):
-            return AssocTestType.SCORE
+            return 3
         if all(r.p_lrt is not None for r in sample):
-            return AssocTestType.LRT
-    return AssocTestType.WALD
+            return 2
+    return 1
 
 
 def _skipped_result(message: str) -> ComparisonResult:
@@ -515,8 +466,8 @@ def compare_assoc_results(
     if config is None:
         config = ToleranceConfig()
 
-    test_type = _detect_assoc_test_type(expected[: min(5, len(expected))])
-    optional_slots = _OPTIONAL_SLOTS[test_type]
+    mode = _detect_lmm_mode(expected[: min(5, len(expected))])
+    active_columns = frozenset(c.field_name for c in MODE_SPECS[mode].stat_columns)
 
     # Check for SNP count mismatch
     if len(actual) != len(expected):
@@ -538,9 +489,9 @@ def compare_assoc_results(
             l_remle=skip_result,
             af=skip_result,
             mismatched_snps=[],
-            p_score=skip_result if "p_score" in optional_slots else None,
-            p_lrt=skip_result if "p_lrt" in optional_slots else None,
-            l_mle=skip_result if "l_mle" in optional_slots else None,
+            p_score=skip_result if "p_score" in active_columns else None,
+            p_lrt=skip_result if "p_lrt" in active_columns else None,
+            l_mle=skip_result if "l_mle" in active_columns else None,
         )
 
     # Check for mismatched SNP IDs
@@ -550,31 +501,43 @@ def compare_assoc_results(
         if a.rs != e.rs
     ]
 
-    # Always-present columns. AF is normalized to MAF (<= 0.5) first because
-    # JAMMA reports MAF while GEMMA's AF can exceed 0.5 for the same allele.
-    actual_beta = np.array([r.beta for r in actual])
-    expected_beta = np.array([r.beta for r in expected])
-    actual_se = np.array([r.se for r in actual])
-    expected_se = np.array([r.se for r in expected])
+    # AF is always present and normalized to MAF (<= 0.5) first, because JAMMA
+    # reports MAF while GEMMA's AF can exceed 0.5 for the same allele.
     actual_af = np.array([r.af for r in actual])
     expected_af = np.array([r.af for r in expected])
     actual_maf = np.minimum(actual_af, 1.0 - actual_af)
     expected_maf = np.minimum(expected_af, 1.0 - expected_af)
+    af_result = compare_arrays(
+        actual_maf, expected_maf, config.af_rtol, config.atol, "af"
+    )
 
+    # beta/se are always-present output slots. LRT reports them as NaN by
+    # construction (GEMMA's LRT format has no beta/se columns); compare_arrays
+    # treats NaN as equal to NaN, so the comparison itself passes vacuously for
+    # LRT, but the overall verdict additionally verifies both sides are all-NaN
+    # rather than trusting a coincidental NaN match.
+    actual_beta = np.array([r.beta for r in actual])
+    expected_beta = np.array([r.beta for r in expected])
+    actual_se = np.array([r.se for r in actual])
+    expected_se = np.array([r.se for r in expected])
     beta_result = compare_arrays(
         actual_beta, expected_beta, config.beta_rtol, config.atol, "beta"
     )
     se_result = compare_arrays(
         actual_se, expected_se, config.se_rtol, config.atol, "se"
     )
-    af_result = compare_arrays(
-        actual_maf, expected_maf, config.af_rtol, config.atol, "af"
-    )
+    if mode == 2:
+        beta_se_ok = bool(
+            np.all(np.isnan(actual_beta)) and np.all(np.isnan(expected_beta))
+        ) and bool(np.all(np.isnan(actual_se)) and np.all(np.isnan(expected_se)))
+    else:
+        beta_se_ok = True
 
-    # Test-type-specific columns. Each closure computes one column's comparison
-    # with the right tolerance and boundary/skip rule; columns inactive for the
-    # detected mode get a skip-result (always-present output slots) or stay None
-    # (optional output slots).
+    # One rule per stat column that a mode can carry (schema.MODE_SPECS is the
+    # single source of which columns each mode carries; this is the single
+    # source of how to compare each one). A mode not carrying a column gets a
+    # skip-result for the always-present slots (p_wald, logl_H1, l_remle) or
+    # stays None for the optional slots (p_score, p_lrt, l_mle).
     def _pvalue(field: str, rtol: float) -> ComparisonResult:
         return compare_arrays(
             _column(field, actual, np.nan),
@@ -584,10 +547,10 @@ def compare_assoc_results(
             field,
         )
 
-    def _logl(skip_message: str) -> ComparisonResult:
+    def _logl() -> ComparisonResult:
         expected_logl = _column("logl_H1", expected, 0.0)
         if np.allclose(expected_logl, 0.0):
-            return _skipped_result(skip_message)
+            return _skipped_result("logl_H1 skipped (reference missing logl_H1 column)")
         return compare_arrays(
             _column("logl_H1", actual, 0.0),
             expected_logl,
@@ -612,53 +575,27 @@ def compare_assoc_results(
             actual_arr, expected_arr, mask, config.lambda_rtol, config.atol, field
         )
 
-    no_id_mismatch = len(mismatched) == 0
-
-    # Which columns the overall pass reads, per test type. Previously each branch
-    # below ended in its own hand-written conjunction of `.passed` attributes,
-    # four overlapping copies that had to stay in step with the column selection
-    # immediately above them.
-    results: dict[str, ComparisonResult] = {
-        "beta": beta_result,
-        "se": se_result,
-        "af": af_result,
+    column_rules: dict[str, Callable[[], ComparisonResult]] = {
+        "p_wald": lambda: _pvalue("p_wald", config.pvalue_rtol),
+        "p_score": lambda: _pvalue("p_score", config.pvalue_rtol),
+        "p_lrt": lambda: _pvalue("p_lrt", config.p_lrt_rtol),
+        "logl_H1": _logl,
+        "l_remle": lambda: _lambda("l_remle", check_upper=False),
+        "l_mle": lambda: _lambda("l_mle", check_upper=True),
     }
 
-    if test_type is AssocTestType.ALL:
-        results["p_wald"] = _pvalue("p_wald", config.pvalue_rtol)
-        results["p_score"] = _pvalue("p_score", config.pvalue_rtol)
-        results["p_lrt"] = _pvalue("p_lrt", config.p_lrt_rtol)
-        results["logl_H1"] = _logl("logl_H1 skipped (not in GEMMA -lmm 4 format)")
-        results["l_remle"] = _lambda("l_remle", check_upper=False)
-        results["l_mle"] = _lambda("l_mle", check_upper=True)
-    elif test_type is AssocTestType.SCORE:
-        results["p_score"] = _pvalue("p_score", config.pvalue_rtol)
-        results["p_wald"] = _skipped_result("p_wald skipped (Score test)")
-        results["logl_H1"] = _skipped_result("logl_H1 skipped (Score test)")
-        results["l_remle"] = _skipped_result("l_remle skipped (Score test)")
-    elif test_type is AssocTestType.LRT:
-        results["p_lrt"] = _pvalue("p_lrt", config.p_lrt_rtol)
-        results["l_mle"] = _lambda("l_mle", check_upper=True)
-        results["p_wald"] = _skipped_result("p_wald skipped (LRT)")
-        results["logl_H1"] = _skipped_result("logl_H1 skipped (LRT)")
-        results["l_remle"] = _skipped_result("l_remle skipped (LRT)")
-    else:
-        results["p_wald"] = _pvalue("p_wald", config.pvalue_rtol)
-        results["logl_H1"] = _logl("logl_H1 skipped (reference missing logl_H1 column)")
-        results["l_remle"] = _lambda("l_remle", check_upper=False)
+    results: dict[str, ComparisonResult] = {"beta": beta_result, "se": se_result}
+    for field, compute in column_rules.items():
+        results[field] = (
+            compute()
+            if field in active_columns
+            else _skipped_result(f"{field} skipped")
+        )
 
-    # LRT reports NaN beta/se by construction, so its pass columns omit them and
-    # it verifies both sides are all-NaN instead of reading a meaningless compare
-    # result. Every other type has nothing extra to check.
-    if test_type is AssocTestType.LRT:
-        beta_se_ok = bool(
-            np.all(np.isnan(actual_beta)) and np.all(np.isnan(expected_beta))
-        ) and bool(np.all(np.isnan(actual_se)) and np.all(np.isnan(expected_se)))
-    else:
-        beta_se_ok = True
-
+    no_id_mismatch = len(mismatched) == 0
     all_passed = (
-        all(results[column].passed for column in _PASS_COLUMNS[test_type])
+        all(results[column].passed for column in active_columns)
+        and af_result.passed
         and beta_se_ok
         and no_id_mismatch
     )
@@ -673,7 +610,7 @@ def compare_assoc_results(
         l_remle=results["l_remle"],
         af=af_result,
         mismatched_snps=mismatched,
-        p_score=results.get("p_score"),
-        p_lrt=results.get("p_lrt"),
-        l_mle=results.get("l_mle"),
+        p_score=results["p_score"] if "p_score" in active_columns else None,
+        p_lrt=results["p_lrt"] if "p_lrt" in active_columns else None,
+        l_mle=results["l_mle"] if "l_mle" in active_columns else None,
     )

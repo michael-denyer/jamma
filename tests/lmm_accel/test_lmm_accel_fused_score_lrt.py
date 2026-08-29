@@ -7,12 +7,12 @@ live in tests/lmm_accel_helpers.py.
 import numpy as np
 import pytest
 
-from jamma.lmm import accel
 from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
 )
 from jamma.lmm.schema import LmmConfig
 from tests.conftest import requires_c
+from tests.lmm_accel._helpers import assert_fused_matches_reference
 
 pytestmark = pytest.mark.tier0
 
@@ -72,149 +72,55 @@ def _make_runner_test_data(rng, n_samples=50, n_snps=20):
     return eigenvalues, genotypes, phenotypes, snp_info, U
 
 
+def _run_fused_score_lrt_dispatch(
+    eigenvalues, genotypes, phenotypes, snp_info, U, lmm_mode
+):
+    from jamma.lmm.runner_numpy import run_lmm_association_numpy
+
+    return run_lmm_association_numpy(
+        genotypes=genotypes,
+        phenotypes=phenotypes,
+        kinship=None,
+        snp_info=snp_info,
+        eigenvalues=eigenvalues,
+        eigenvectors=U,
+        config=LmmConfig(
+            maf_threshold=0.0,
+            miss_threshold=1.0,
+            check_memory=False,
+            show_progress=False,
+            lmm_mode=lmm_mode,
+            n_refine=20,
+        ),
+    )
+
+
 @requires_c
 def test_runner_fused_score_dispatch():
     """Runner dispatches fused Score WS path for mode 3, matches SoA split."""
-    from unittest.mock import patch
-
-    from jamma.lmm.runner_numpy import run_lmm_association_numpy
-
     rng = np.random.default_rng(200)
-    eigenvalues, genotypes, phenotypes, snp_info, U = _make_runner_test_data(rng)
+    data = _make_runner_test_data(rng)
 
-    # allow-patch: dispatch spy; wraps the real kernel to observe the runner reach it
-    with patch(
-        "jamma.lmm.accel._accel.compute_lmm_chunk_ncvt1_c",
-        wraps=accel.require().compute_lmm_chunk_ncvt1_c,
-    ) as mock_fused:
-        result_fused = run_lmm_association_numpy(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=None,
-            snp_info=snp_info,
-            eigenvalues=eigenvalues,
-            eigenvectors=U,
-            config=LmmConfig(
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=3,
-                n_refine=20,
-            ),
-        )
-    assert mock_fused.called, "Fused Score WS C function was not called"
-
-    # SoA split path (disable all fused Score variants)
-    with patch("jamma.lmm.accel._accel", None):
-        result_split = run_lmm_association_numpy(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=None,
-            snp_info=snp_info,
-            eigenvalues=eigenvalues,
-            eigenvectors=U,
-            config=LmmConfig(
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=3,
-                n_refine=20,
-            ),
-        )
-
-    fused = result_fused.associations
-    split = result_split.associations
-
-    assert len(fused) == len(split), f"Count mismatch: {len(fused)} vs {len(split)}"
-    assert len(fused) > 10, f"Too many SNPs filtered: {len(fused)}"
-
-    for a_f, a_s in zip(fused, split, strict=True):
-        assert a_f.rs == a_s.rs
-        if a_f.p_score is not None and a_s.p_score is not None:
-            np.testing.assert_allclose(
-                a_f.p_score,
-                a_s.p_score,
-                rtol=1e-12,
-                err_msg=f"p_score mismatch for {a_f.rs}",
-            )
+    assert_fused_matches_reference(
+        lambda: _run_fused_score_lrt_dispatch(*data, lmm_mode=3),
+        fields={"p_score": 1e-12},
+        min_count=10,
+        label=" Score WS",
+    )
 
 
 @requires_c
 def test_runner_fused_lrt_dispatch():
     """Runner dispatches fused LRT WS path for mode 2, matches SoA split."""
-    from unittest.mock import patch
-
-    from jamma.lmm.runner_numpy import run_lmm_association_numpy
-
     rng = np.random.default_rng(201)
-    eigenvalues, genotypes, phenotypes, snp_info, U = _make_runner_test_data(rng)
+    data = _make_runner_test_data(rng)
 
-    # allow-patch: dispatch spy; wraps the real kernel to observe the runner reach it
-    with patch(
-        "jamma.lmm.accel._accel.compute_lmm_chunk_ncvt1_c",
-        wraps=accel.require().compute_lmm_chunk_ncvt1_c,
-    ) as mock_fused:
-        result_fused = run_lmm_association_numpy(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=None,
-            snp_info=snp_info,
-            eigenvalues=eigenvalues,
-            eigenvectors=U,
-            config=LmmConfig(
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=2,
-                n_refine=20,
-            ),
-        )
-    assert mock_fused.called, "Fused LRT WS C function was not called"
-
-    # SoA split path (disable all fused LRT variants)
-    with patch("jamma.lmm.accel._accel", None):
-        result_split = run_lmm_association_numpy(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=None,
-            snp_info=snp_info,
-            eigenvalues=eigenvalues,
-            eigenvectors=U,
-            config=LmmConfig(
-                maf_threshold=0.0,
-                miss_threshold=1.0,
-                check_memory=False,
-                show_progress=False,
-                lmm_mode=2,
-                n_refine=20,
-            ),
-        )
-
-    fused = result_fused.associations
-    split = result_split.associations
-
-    assert len(fused) == len(split), f"Count mismatch: {len(fused)} vs {len(split)}"
-    assert len(fused) > 10, f"Too many SNPs filtered: {len(fused)}"
-
-    for a_f, a_s in zip(fused, split, strict=True):
-        assert a_f.rs == a_s.rs
-        if a_f.p_lrt is not None and a_s.p_lrt is not None:
-            np.testing.assert_allclose(
-                a_f.p_lrt,
-                a_s.p_lrt,
-                rtol=5e-5,
-                err_msg=f"p_lrt mismatch for {a_f.rs}",
-            )
-        if a_f.l_mle is not None and a_s.l_mle is not None:
-            np.testing.assert_allclose(
-                a_f.l_mle,
-                a_s.l_mle,
-                rtol=5e-5,
-                err_msg=f"l_mle mismatch for {a_f.rs}",
-            )
+    assert_fused_matches_reference(
+        lambda: _run_fused_score_lrt_dispatch(*data, lmm_mode=2),
+        fields={"p_lrt": 5e-5, "l_mle": 5e-5},
+        min_count=10,
+        label=" LRT WS",
+    )
 
 
 @requires_c

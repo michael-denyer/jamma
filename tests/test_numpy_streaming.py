@@ -15,7 +15,6 @@ import pytest
 
 from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
-from jamma.lmm import accel
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import (
     run_lmm_association_numpy_streaming,
@@ -29,6 +28,7 @@ from jamma.validation import (
 )
 from tests.conftest import requires_c
 from tests.fixture_paths import SYNTHETIC
+from tests.lmm_accel._helpers import assert_fused_matches_reference
 
 # ---------------------------------------------------------------------------
 # Sanitizer-aware tolerances
@@ -817,6 +817,18 @@ class TestStreamingPipeline:
 # ---------------------------------------------------------------------------
 
 
+def _run_streaming_fused_dispatch(eigenvalues, eigenvectors, phenotypes, lmm_mode):
+    return run_lmm_association_numpy_streaming(
+        bed_path=SYNTHETIC.bfile,
+        phenotypes=phenotypes,
+        kinship=None,
+        eigenvalues=eigenvalues,
+        eigenvectors=eigenvectors.copy(),
+        config=LmmConfig(lmm_mode=lmm_mode, show_progress=False, check_memory=False),
+        chunk_size=200,
+    )
+
+
 @pytest.mark.tier0
 @requires_c
 class TestStreamingFusedScoreDispatch:
@@ -824,53 +836,15 @@ class TestStreamingFusedScoreDispatch:
 
     def test_streaming_fused_score_matches_split(self, synthetic_eigen):
         """Streaming fused Score matches split Score and calls fused WS C."""
-        from unittest.mock import patch
-
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        # allow-patch: dispatch spy; wraps the real kernel to see the runner reach it
-        with patch(
-            "jamma.lmm.accel._accel.compute_lmm_chunk_ncvt1_c",
-            wraps=accel.require().compute_lmm_chunk_ncvt1_c,
-        ) as mock_fused:
-            fused_result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC.bfile,
-                phenotypes=phenotypes,
-                kinship=None,
-                eigenvalues=eigenvalues,
-                eigenvectors=eigenvectors.copy(),
-                config=LmmConfig(lmm_mode=3, show_progress=False, check_memory=False),
-                chunk_size=200,
-            )
-        assert mock_fused.called, "Fused Score WS C function was not called (streaming)"
-
-        # Split path (disable all fused Score variants)
-        with patch("jamma.lmm.accel._accel", None):
-            split_result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC.bfile,
-                phenotypes=phenotypes,
-                kinship=None,
-                eigenvalues=eigenvalues,
-                eigenvectors=eigenvectors.copy(),
-                config=LmmConfig(lmm_mode=3, show_progress=False, check_memory=False),
-                chunk_size=200,
-            )
-
-        assert fused_result.n_tested == split_result.n_tested, (
-            f"Count mismatch: {fused_result.n_tested} vs {split_result.n_tested}"
+        assert_fused_matches_reference(
+            lambda: _run_streaming_fused_dispatch(
+                eigenvalues, eigenvectors, phenotypes, lmm_mode=3
+            ),
+            fields={"p_score": 1e-8},
+            label=" Score WS (streaming)",
         )
-
-        fused_assoc = fused_result.associations
-        split_assoc = split_result.associations
-        for a_f, a_s in zip(fused_assoc, split_assoc, strict=True):
-            assert a_f.rs == a_s.rs
-            if a_f.p_score is not None and a_s.p_score is not None:
-                np.testing.assert_allclose(
-                    a_f.p_score,
-                    a_s.p_score,
-                    rtol=1e-8,
-                    err_msg=f"p_score mismatch for {a_f.rs} (streaming)",
-                )
 
 
 @pytest.mark.tier0
@@ -880,57 +854,12 @@ class TestStreamingFusedLrtDispatch:
 
     def test_streaming_fused_lrt_matches_split(self, synthetic_eigen):
         """Streaming fused LRT matches split LRT and calls fused WS C."""
-        from unittest.mock import patch
-
         _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
-        # allow-patch: dispatch spy; wraps the real kernel to see the runner reach it
-        with patch(
-            "jamma.lmm.accel._accel.compute_lmm_chunk_ncvt1_c",
-            wraps=accel.require().compute_lmm_chunk_ncvt1_c,
-        ) as mock_fused:
-            fused_result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC.bfile,
-                phenotypes=phenotypes,
-                kinship=None,
-                eigenvalues=eigenvalues,
-                eigenvectors=eigenvectors.copy(),
-                config=LmmConfig(lmm_mode=2, show_progress=False, check_memory=False),
-                chunk_size=200,
-            )
-        assert mock_fused.called, "Fused LRT WS C function was not called (streaming)"
-
-        # Split path (disable all fused LRT variants)
-        with patch("jamma.lmm.accel._accel", None):
-            split_result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC.bfile,
-                phenotypes=phenotypes,
-                kinship=None,
-                eigenvalues=eigenvalues,
-                eigenvectors=eigenvectors.copy(),
-                config=LmmConfig(lmm_mode=2, show_progress=False, check_memory=False),
-                chunk_size=200,
-            )
-
-        assert fused_result.n_tested == split_result.n_tested, (
-            f"Count mismatch: {fused_result.n_tested} vs {split_result.n_tested}"
+        assert_fused_matches_reference(
+            lambda: _run_streaming_fused_dispatch(
+                eigenvalues, eigenvectors, phenotypes, lmm_mode=2
+            ),
+            fields={"p_lrt": 5e-5, "l_mle": 5e-5},
+            label=" LRT WS (streaming)",
         )
-
-        fused_assoc = fused_result.associations
-        split_assoc = split_result.associations
-        for a_f, a_s in zip(fused_assoc, split_assoc, strict=True):
-            assert a_f.rs == a_s.rs
-            if a_f.p_lrt is not None and a_s.p_lrt is not None:
-                np.testing.assert_allclose(
-                    a_f.p_lrt,
-                    a_s.p_lrt,
-                    rtol=5e-5,
-                    err_msg=f"p_lrt mismatch for {a_f.rs} (streaming)",
-                )
-            if a_f.l_mle is not None and a_s.l_mle is not None:
-                np.testing.assert_allclose(
-                    a_f.l_mle,
-                    a_s.l_mle,
-                    rtol=5e-5,
-                    err_msg=f"l_mle mismatch for {a_f.rs} (streaming)",
-                )

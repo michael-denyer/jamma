@@ -1,5 +1,9 @@
 """Non-fixture helpers shared across the _lmm_accel test modules."""
 
+from collections.abc import Callable
+from typing import Any
+from unittest.mock import patch
+
 import numpy as np
 
 from jamma.lmm import accel
@@ -8,6 +12,64 @@ from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
+
+
+def assert_fused_matches_reference(
+    run: Callable[[], Any],
+    *,
+    fields: dict[str, float],
+    kernel: str | None = "compute_lmm_chunk_ncvt1_c",
+    min_count: float | None = None,
+    atol: float = 0.0,
+    label: str = "",
+) -> None:
+    """Run a fused-kernel dispatch once live, once with the C extension off.
+
+    ``run`` is a zero-argument callable returning a result with an
+    ``.associations`` sequence, each entry exposing ``.rs`` plus the field
+    names in ``fields``, whose values are its per-field ``rtol``. When
+    ``kernel`` is given, the live run is spied on ``jamma.lmm.accel._accel``
+    to assert dispatch actually reached that C entry point rather than
+    silently falling through to the reference path; pass ``kernel=None`` to
+    skip that assertion when the comparison has no single spy target (the
+    n_cvt=2 general case compares fused output against the NumPy path
+    directly, since dropping the extension leaves no second C path to spy on).
+    A field is compared only where both sides report a value, since a
+    statistic can be ``None`` on one side for a mode that skips it.
+    """
+    if kernel is not None:
+        with patch(
+            f"jamma.lmm.accel._accel.{kernel}",
+            wraps=getattr(accel.require(), kernel),
+        ) as mock_fused:
+            fused_result = run()
+        assert mock_fused.called, f"Fused{label} C function was not called"
+    else:
+        fused_result = run()
+
+    with patch("jamma.lmm.accel._accel", None):
+        reference_result = run()
+
+    fused = fused_result.associations
+    reference = reference_result.associations
+    assert len(fused) == len(reference), (
+        f"Count mismatch: {len(fused)} vs {len(reference)}"
+    )
+    if min_count is not None:
+        assert len(fused) > min_count, f"Too many SNPs filtered: {len(fused)}"
+
+    for a_f, a_r in zip(fused, reference, strict=True):
+        assert a_f.rs == a_r.rs, f"SNP order mismatch: {a_f.rs} vs {a_r.rs}"
+        for field, rtol in fields.items():
+            v_f, v_r = getattr(a_f, field), getattr(a_r, field)
+            if v_f is not None and v_r is not None:
+                np.testing.assert_allclose(
+                    v_f,
+                    v_r,
+                    rtol=rtol,
+                    atol=atol,
+                    err_msg=f"{field} mismatch for {a_f.rs}{label}",
+                )
 
 
 def _prepare_fused_general_data(data: dict) -> dict:

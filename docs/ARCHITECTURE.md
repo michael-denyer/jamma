@@ -100,7 +100,6 @@ src/jamma/
 │   └── openmp_detect.py    # OpenMP flag detection for C extension compilation
 ├── core/                   # Cross-cutting concerns: memory estimation,
 │   │                       # progress bars, SNP filtering, threading
-│   ├── config.py           # Configuration dataclasses shared across JAMMA
 │   ├── constants.py        # Domain constants (e.g. GEMMA's -9 missing-phenotype code)
 │   ├── estimates.py        # Wall-clock time estimates for GWAS pipeline phases
 │   ├── memory.py           # Cost model: estimators, RAM seam, sufficiency check
@@ -119,18 +118,22 @@ src/jamma/
 │   ├── matrix_reader.py    # read_matrix_parallel(): multiprocess large-matrix text reader
 │   ├── matrix_writer.py    # write_matrix_parallel(): multiprocess large-matrix text writer
 │   ├── snp_list.py         # GEMMA-format SNP list file I/O (one RS ID per line)
-│   └── weight.py           # GEMMA-format individual weight file I/O + kinship weighting
+│   ├── weight.py           # GEMMA-format individual weight file I/O + kinship weighting
+│   └── _parallel_text.py   # Shared multiprocess text I/O helpers for matrix_reader/matrix_writer
 ├── kinship/                # Kinship matrix computation and LOCO variants
 │   ├── compute.py          # Centered kinship (dsyrk); streaming LOCO subtraction
 │   ├── io.py               # Kinship matrix I/O (GEMMA text format and binary .npy)
 │   └── missing.py          # Genotype imputation and centring helpers
 ├── jlinalg/                # Vendor BLAS/LAPACK dispatch layer with NumPy fallback
 │   ├── __init__.py         # Public API: dgemm, dsyrk, eigh, compute_snp_stats_chunk
+│   ├── _blas_dirs.py       # Vendor BLAS/LAPACK library and include directory discovery
 │   ├── _compile_jlinalg.py # Dev-mode C extension compiler; calls run_build(JLINALG_SPEC)
 │   ├── include/            # jlinalg.h: shared C API surface for the _jlinalg extension
 │   └── src/                # C sources for _jlinalg extension (BLAS dispatch, LAPACK)
 ├── lmm/                    # LMM association subsystem
 │   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, AssocResult, SnpMeta
+│   ├── accel.py            # available()/require(): the one loader for _lmm_accel
+│   ├── io.py               # IncrementalAssocWriter and the GEMMA .assoc.txt line format
 │   ├── likelihood.py       # Index tables, scalar REML/MLE, null-model golden section search
 │   ├── uab.py              # Uab/Pab/Iab batch builders in full, split and SoA layouts
 │   ├── likelihood_numpy.py # NumPy batch REML/MLE evaluation and lambda optimisation
@@ -155,8 +158,17 @@ src/jamma/
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
 │   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)
 │   ├── _compile_accel.py   # Dev-mode/runtime compiler; calls run_build(LMM_ACCEL_SPEC)
-│   └── _lmm_accel.c        # C extension entry point: several translation units, see
-│                            # LMM_ACCEL_SOURCES in _build_support/compile_and_link.py
+│   ├── _lmm_accel.c        # CPython module init and the public compute/workspace entry
+│   │                       # points; the only unit calling import_array()
+│   ├── _lmm_support.c/.h   # Shared thread-scratch alloc/free and NumPy C-API glue
+│   ├── _lmm_stats.c/.h     # Wald/Score/LRT statistics kernels shared by both workspaces
+│   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) workspace creator and fused compute
+│   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 workspace creator and fused compute
+│   └── _lmm_types.h        # Shared workspace/result struct definitions
+│                          #
+│                          # LMM_ACCEL_SOURCES in _build_support/compile_and_link.py is the
+│                          # source list every build entry point reads; do not trust a file
+│                          # list written down anywhere else, including this one.
 ├── utils/                  # Shared utilities (logging setup, chromosome sort key)
 │   ├── logging.py          # setup_logging() + write_gemma_log(): loguru config, GEMMA .log.txt
 │   └── npy_cache.py        # Shared .npy sidecar cache validation for binary I/O

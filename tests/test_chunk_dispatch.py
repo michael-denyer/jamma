@@ -20,6 +20,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
+from tests.builders import rotated_lmm_inputs
 from tests.conftest import make_runner_synthetic_data, requires_c
 from tests.fixture_paths import SYNTHETIC
 
@@ -106,12 +107,8 @@ def test_reconstruct_uab_from_soa_matches_direct():
         reconstruct_uab_from_soa,
     )
 
-    rng = np.random.default_rng(42)
-    n_samples, n_snps = 50, 20
-
-    UtW = rng.standard_normal((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
+    inputs = rotated_lmm_inputs(n_samples=50, n_snps=20, n_cvt=1, seed=42)
+    UtW, Uty, UtG = inputs.UtW, inputs.Uty, inputs.UtG
 
     # Direct full Uab construction
     Uab_direct = batch_compute_uab_numpy(n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T)

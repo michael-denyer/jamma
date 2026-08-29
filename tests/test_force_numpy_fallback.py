@@ -120,7 +120,7 @@ def test_force_numpy_fallback_functions_callable(
     monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
     j = _reload_jlinalg()
     K = np.eye(4)
-    w, v = j.eigh(K)
+    w, v, _ = j.eigh(K)
     assert w.shape == (4,)
     assert v.shape == (4, 4)
     np.testing.assert_allclose(w, np.ones(4))

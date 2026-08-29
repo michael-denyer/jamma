@@ -251,8 +251,12 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
 /* ---------------------------------------------------------------------------
  * py_eigh -- compute eigenvalues and eigenvectors of symmetric matrix
  *
- * Signature: eigh(K: ndarray, inplace: bool = False) -> tuple[ndarray, ndarray]
+ * Signature: eigh(K: ndarray, inplace: bool = False, driver: str = "auto")
+ *   -> tuple[ndarray, ndarray, int]
  * K must be 2-D C-contiguous float64 of shape (N, N).
+ * driver: "auto" (DSYEVD, falling through to DSYEVR on alloc failure),
+ *         "dsyevd" (same as "auto" -- DSYEVD is always tried first when not
+ *         skipped), or "dsyevr" (skip the DSYEVD attempt and require DSYEVR).
  *
  * When inplace=False (default): K is used as scratch; a fresh N*N eigenvector
  * array is allocated and returned.  Backward compatible with existing callers.
@@ -260,13 +264,30 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
  * When inplace=True: K is overwritten in-place with eigenvectors.  No separate
  * N*N allocation is made (only the N eigenvalues).  The returned eigenvector
  * array IS K.  This saves N^2*8 bytes at 125k scale (~125 GB).
+ *
+ * The third return value is the driver that actually ran (1 = DSYEVD,
+ * 2 = DSYEVR, 0 = neither, e.g. N == 1). jamma.jlinalg.eigh wraps it in an
+ * EighStatus with a string driver_used for callers.
  * ---------------------------------------------------------------------------
  */
 static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
     PyObject *oK;
     int inplace = 0;
-    static char *kwlist[] = {"K", "inplace", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|p", kwlist, &oK, &inplace)) return NULL;
+    const char *driver_str = "auto";
+    static char *kwlist[] = {"K", "inplace", "driver", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|p$s", kwlist, &oK, &inplace, &driver_str))
+        return NULL;
+
+    int prefer_dsyevr;
+    if (strcmp(driver_str, "auto") == 0 || strcmp(driver_str, "dsyevd") == 0) {
+        prefer_dsyevr = 0;
+    } else if (strcmp(driver_str, "dsyevr") == 0) {
+        prefer_dsyevr = 1;
+    } else {
+        PyErr_Format(PyExc_ValueError,
+                     "eigh: driver must be 'auto', 'dsyevd', or 'dsyevr', got '%s'", driver_str);
+        return NULL;
+    }
 
     PyArrayObject *aK = (PyArrayObject *)PyArray_FROM_OTF(oK, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
     if (!aK) return NULL;
@@ -324,14 +345,18 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
     memset(&eigh_status, 0, sizeof(eigh_status));
 
     int ret;
-    Py_BEGIN_ALLOW_THREADS ret = jlinalg_eigh_c(N, pK, N, pW, pU, N, &eigh_status);
+    Py_BEGIN_ALLOW_THREADS ret = jlinalg_eigh_c(N, pK, N, pW, pU, N, prefer_dsyevr, &eigh_status);
     Py_END_ALLOW_THREADS
 
         if (ret != 0) {
         if (ret == JLINALG_EXT_UNAVAILABLE) {
-            PyErr_Format(PyExc_RuntimeError, "jlinalg eigh: no vendor LAPACK available "
-                                             "(DSYEVD and DSYEVR both unavailable). "
-                                             "Use numpy.linalg.eigh instead.");
+            PyErr_Format(PyExc_RuntimeError,
+                         prefer_dsyevr
+                             ? "jlinalg eigh: driver='dsyevr' requested but vendor DSYEVR is "
+                               "not available. Use numpy.linalg.eigh instead."
+                             : "jlinalg eigh: no vendor LAPACK available "
+                               "(DSYEVD and DSYEVR both unavailable). "
+                               "Use numpy.linalg.eigh instead.");
         } else if (ret == JLINALG_EXT_ALLOC_FAIL) {
             PyErr_Format(PyExc_MemoryError, "jlinalg eigh: workspace allocation failed -- "
                                             "matrix too large for available memory");
@@ -382,13 +407,13 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
     /* Commit writeback */
     PyArray_ResolveWritebackIfCopy(aK);
 
-    /* Build result tuple.  Py_BuildValue("(NN)") steals references. */
+    /* Build result tuple.  Py_BuildValue("(NNi)") steals the N references. */
     PyObject *result;
     if (inplace) {
-        result = Py_BuildValue("(NN)", aW, (PyObject *)aK);
+        result = Py_BuildValue("(NNi)", aW, (PyObject *)aK, eigh_status.driver_used);
     } else {
         Py_DECREF(aK);
-        result = Py_BuildValue("(NN)", aW, aU);
+        result = Py_BuildValue("(NNi)", aW, aU, eigh_status.driver_used);
     }
     return result;
 
@@ -586,11 +611,13 @@ static PyMethodDef JlinalgMethods[] = {
      "dsyrk(X, *, out=None, beta=0.0) -> ndarray\n"
      "Symmetric rank-k update: K = X @ X.T + beta*K via vendor BLAS."},
     {"eigh", (PyCFunction)py_eigh, METH_VARARGS | METH_KEYWORDS,
-     "eigh(K, inplace=False) -> (eigenvalues, eigenvectors)\n"
+     "eigh(K, inplace=False, driver='auto') -> (eigenvalues, eigenvectors, driver_used)\n"
      "Compute all eigenvalues and eigenvectors of symmetric K.\n"
      "When inplace=False (default), K is scratch and a fresh eigenvector\n"
      "array is returned.  When inplace=True, K is overwritten with\n"
-     "eigenvectors in-place (no separate N*N allocation)."},
+     "eigenvectors in-place (no separate N*N allocation).\n"
+     "driver: 'auto' (DSYEVD, falling through to DSYEVR), or 'dsyevr' to\n"
+     "require DSYEVR directly. driver_used reports which one ran (1 or 2)."},
     {"set_n_threads", py_set_n_threads, METH_VARARGS,
      "set_n_threads(n) -> int\n"
      "Set jlinalg thread count. Returns old count."},

@@ -190,7 +190,7 @@ def _loco_keys(fixture: str, bfile: Path) -> dict[str, str]:
 def _eigen_keys(fixture: str, bfile: Path) -> dict[str, str]:
     data = load_plink_binary(bfile)
     k = compute_centered_kinship(data.genotypes.copy(), check_memory=False)
-    eigenvalues, eigenvectors = jlinalg.eigh(k)
+    eigenvalues, eigenvectors, _ = jlinalg.eigh(k)
     return {
         f"{fixture}/eigen/eigenvalues": digest_array(eigenvalues),
         f"{fixture}/eigen/eigenvector0": digest_array(eigenvectors[:, 0]),

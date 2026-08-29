@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
+from jamma.jlinalg import EighStatus
 from jamma.lmm import eigen
 
 
@@ -32,18 +33,20 @@ class FakeJlinalg:
     blas_has_dsyevr: int = 0
     blas_is_ilp64: int = 1
     blas_backend: str = "fake"
-    eigh_result: tuple[np.ndarray, np.ndarray] | None = None
+    eigh_result: tuple[np.ndarray, np.ndarray, EighStatus] | None = None
     eigh_error: BaseException | None = None
 
     def eigh(
-        self, K: np.ndarray, inplace: bool = False
-    ) -> tuple[np.ndarray, np.ndarray]:
+        self, K: np.ndarray, inplace: bool = False, driver: str = "auto"
+    ) -> tuple[np.ndarray, np.ndarray, EighStatus]:
         del inplace
         if self.eigh_error is not None:
             raise self.eigh_error
         if self.eigh_result is not None:
             return self.eigh_result
-        return np.linalg.eigh(K)
+        w, v = np.linalg.eigh(K)
+        driver_used = "dsyevr" if driver == "dsyevr" else "dsyevd"
+        return w, v, EighStatus(driver_used=driver_used)
 
 
 def use_fake_jlinalg(monkeypatch: pytest.MonkeyPatch, fake: FakeJlinalg) -> FakeJlinalg:

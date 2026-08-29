@@ -411,3 +411,59 @@ class TestDsyevdWorkspaceAccuracy:
         assert actual < dominant_term_gb * 1.1, (
             "Workspace must be < 110% of dominant term"
         )
+
+
+@pytest.mark.tier0
+class TestEigendecomposeKinshipLogsDriverThatRan:
+    """The 'Eigendecomp: <driver>' log line names what ran, not what was planned.
+
+    Guards the C1 fix: plan_eigen_driver picks a driver from memory and
+    capability flags, but the log used to always name the planned driver
+    even when jlinalg_eigh_c had no way to honour a DSYEVR plan and silently
+    ran DSYEVD instead. Forcing the plan to DSYEVR and reading the driver
+    jlinalg.eigh actually reports closes that gap.
+    """
+
+    def test_forced_dsyevr_plan_logs_dsyevr(self, monkeypatch):
+        from loguru import logger
+
+        from jamma.core.eigen_plan import EigenDriverPlan
+        from jamma.jlinalg import blas_has_dsyevr
+
+        if not blas_has_dsyevr:
+            pytest.skip("Vendor DSYEVR required to exercise the DSYEVR plan path")
+
+        n = 64
+        rng = np.random.default_rng(42)
+        A = rng.standard_normal((n, n))
+        K = np.ascontiguousarray(A @ A.T + np.eye(n), dtype=np.float64)
+
+        forced_plan = EigenDriverPlan(
+            driver="DSYEVR",
+            use_inplace=False,
+            use_dsyevr=True,
+            no_vendor=False,
+            required_gb=0.001,
+            pre_fallback_gb=0.001,
+            dsyevr_peak_gb=0.001,
+            inplace_peak_gb=0.001,
+        )
+        monkeypatch.setattr(
+            "jamma.lmm.eigen.plan_eigen_driver", lambda *args, **kwargs: forced_plan
+        )
+        use_fake_psutil(monkeypatch, available=1e12, total=1e12, rss=1e9, vms=2e9)
+
+        captured_messages: list[str] = []
+        handler_id = logger.add(
+            lambda msg: captured_messages.append(msg),
+            level="INFO",
+            format="{message}",
+        )
+        try:
+            eigendecompose_kinship(K, check_memory=False)
+        finally:
+            logger.remove(handler_id)
+
+        assert any("Eigendecomp: dsyevr" in m for m in captured_messages), (
+            f"Expected an 'Eigendecomp: dsyevr' log line, got: {captured_messages}"
+        )

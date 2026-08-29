@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import importlib.util
 import warnings
+from typing import Literal, NamedTuple
 
 import numpy as _np
 
@@ -51,7 +52,7 @@ from jamma.core.recompile import _load_c_module
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 HAS_C_EXTENSION: bool = False
 
-_EXPECTED_JLINALG_ABI = 18  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
+_EXPECTED_JLINALG_ABI = 19  # Must match JLINALG_ABI_VERSION in include/jlinalg.h
 
 
 def _validate_dsyrk(X: _np.ndarray, out: _np.ndarray | None, beta: float) -> None:
@@ -301,6 +302,26 @@ def _dgemm_numpy(
 _dgemm_backend = _dgemm_numpy_impl
 
 
+class EighStatus(NamedTuple):
+    """Diagnostic outcome of one ``eigh`` call.
+
+    Attributes:
+        driver_used: Which driver actually ran: ``"dsyevd"``, ``"dsyevr"``, or
+            ``"none"`` (neither vendor routine ran, e.g. the NumPy fallback or
+            the trivial N == 1 case). See ``eigh``'s docstring for how this
+            can differ from the requested ``driver``.
+    """
+
+    driver_used: Literal["dsyevd", "dsyevr", "none"]
+
+
+_DRIVER_USED_NAMES: dict[int, Literal["dsyevd", "dsyevr", "none"]] = {
+    0: "none",
+    1: "dsyevd",
+    2: "dsyevr",
+}
+
+
 def _eigh_check_square(K: _np.ndarray) -> None:
     """Validate that K is a 2-D square array (shared eigh-fallback guard).
 
@@ -314,8 +335,10 @@ def _eigh_check_square(K: _np.ndarray) -> None:
 
 
 def _eigh_numpy(
-    K: _np.ndarray, inplace: bool = False
-) -> tuple[_np.ndarray, _np.ndarray]:
+    K: _np.ndarray,
+    inplace: bool = False,
+    driver: Literal["auto", "dsyevd", "dsyevr"] = "auto",
+) -> tuple[_np.ndarray, _np.ndarray, EighStatus]:
     """Validated NumPy eigendecomposition of a symmetric matrix.
 
     The single fallback shared by the C-present-but-no-vendor-LAPACK path and
@@ -326,14 +349,18 @@ def _eigh_numpy(
         K: Symmetric matrix, shape (N, N). Consumed on exit.
         inplace: If True, return the eigenvectors in K's buffer. Requires a
             C-contiguous writeable float64 array.
+        driver: Accepted for signature parity with the vendor backend. NumPy
+            has no DSYEVD/DSYEVR choice, so this has no effect; the returned
+            status always reports ``driver_used="none"``.
 
     Returns:
-        Tuple of (eigenvalues ascending, eigenvectors).
+        Tuple of (eigenvalues ascending, eigenvectors, status).
 
     Raises:
         ValueError: If K is not 2-D square, or ``inplace`` is set on an array
             that is not C-contiguous writeable float64.
     """
+    del driver
     _eigh_check_square(K)
     if inplace:
         if K.dtype != _np.float64:
@@ -344,14 +371,28 @@ def _eigh_numpy(
             raise ValueError("eigh: inplace=True requires a writeable array")
     K64 = _np.asarray(K, dtype=_np.float64)
     w, v = _np.linalg.eigh(K64)
+    status = EighStatus(driver_used="none")
     if inplace:
         K[:] = v
-        return w, K
+        return w, K, status
     if K.dtype == _np.float64 and K.flags["WRITEABLE"]:
         # Vendor eigh consumes K as scratch; zero it so the fallback matches
         # that contract and no caller relies on K surviving the call.
         K[:] = 0.0
-    return w, v
+    return w, v, status
+
+
+def _eigh_native_wrap(
+    native_eigh, K: _np.ndarray, inplace: bool = False, driver: str = "auto"
+) -> tuple[_np.ndarray, _np.ndarray, EighStatus]:
+    """Call the C extension's ``eigh`` and translate its int driver code.
+
+    The C function returns ``(eigenvalues, eigenvectors, driver_used: int)``;
+    this wraps the int in the same ``EighStatus`` the NumPy fallback returns,
+    so callers see one status shape regardless of backend.
+    """
+    w, v, driver_used = native_eigh(K, inplace=inplace, driver=driver)
+    return w, v, EighStatus(driver_used=_DRIVER_USED_NAMES[driver_used])
 
 
 # Default eigh backend; a usable native implementation replaces it during import.
@@ -398,7 +439,15 @@ if _mod is not None:
     # only the unchecked compute step.
     _dgemm_backend = _dgemm_native if blas_has_dgemm else _dgemm_numpy_impl
     _dsyrk_backend = _dsyrk_native if blas_has_dsyrk else _dsyrk_numpy_impl
-    _eigh_backend = _mod.eigh if (blas_has_dsyevd or blas_has_dsyevr) else _eigh_numpy
+    if blas_has_dsyevd or blas_has_dsyevr:
+        _mod_eigh = _mod.eigh
+
+        def _eigh_backend(
+            K: _np.ndarray, inplace: bool = False, driver: str = "auto"
+        ) -> tuple[_np.ndarray, _np.ndarray, EighStatus]:
+            return _eigh_native_wrap(_mod_eigh, K, inplace=inplace, driver=driver)
+    else:
+        _eigh_backend = _eigh_numpy
 
 elif _FORCE_NUMPY:
     # Skip the _jlinalg.so import entirely. HAS_C_EXTENSION stays False; the
@@ -566,7 +615,12 @@ def dsyrk(
     return _dsyrk_backend(X, out=out, beta=beta)
 
 
-def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarray]:
+def eigh(
+    K: _np.ndarray,
+    inplace: bool = False,
+    *,
+    driver: Literal["auto", "dsyevd", "dsyevr"] = "auto",
+) -> tuple[_np.ndarray, _np.ndarray, EighStatus]:
     """Eigendecompose a symmetric matrix via vendor LAPACK or NumPy.
 
     Dispatches to the bound backend (vendor DSYEVD/DSYEVR when available, else
@@ -577,23 +631,38 @@ def eigh(K: _np.ndarray, inplace: bool = False) -> tuple[_np.ndarray, _np.ndarra
     Args:
         K: Symmetric matrix, shape (N, N). Consumed on exit.
         inplace: If True, return the eigenvectors in K's buffer.
+        driver: ``"auto"`` tries DSYEVD first, falling through to DSYEVR on a
+            workspace allocation failure. ``"dsyevr"`` skips DSYEVD and
+            requires DSYEVR directly -- the caller's memory plan already
+            decided DSYEVD's footprint would not fit, so the driver that
+            runs must match the one that was budgeted. ``"dsyevd"`` is the
+            same as ``"auto"``. No effect on the NumPy fallback.
 
     Returns:
-        Tuple of (eigenvalues ascending, eigenvectors).
+        Tuple of (eigenvalues ascending, eigenvectors, status). ``status.
+        driver_used`` names the driver that actually ran.
 
     Raises:
         ValueError: If K is not 2-D square, or ``inplace`` is set on an array
-            that is not C-contiguous writeable float64.
+            that is not C-contiguous writeable float64, or ``driver`` is not
+            one of the three accepted values.
+        RuntimeError: If ``driver="dsyevr"`` is requested but vendor DSYEVR is
+            not available.
     """
+    if driver not in ("auto", "dsyevd", "dsyevr"):
+        raise ValueError(
+            f"eigh: driver must be 'auto', 'dsyevd', or 'dsyevr', got {driver!r}"
+        )
     if env_flag("JLINALG_NO_VENDOR_LAPACK"):
-        return _eigh_numpy(K, inplace=inplace)
-    return _eigh_backend(K, inplace=inplace)
+        return _eigh_numpy(K, inplace=inplace, driver=driver)
+    return _eigh_backend(K, inplace=inplace, driver=driver)
 
 
 __all__ = [
     "ABI_VERSION",
     "HAS_C_EXTENSION",
     "HAS_OPENMP",
+    "EighStatus",
     "blas_backend",
     "blas_has_dgemm",
     "blas_has_dsyevd",

@@ -10,6 +10,9 @@ implementations too; jamma.jlinalg still defines NumPy fallbacks for
 dgemm, dsyrk, eigh, compute_snp_stats_chunk, and the thread-count helpers.
 ABI 18 moved the JLINALG_EXT_* return sentinels out of the LAPACK info range
 so a raw LAPACK illegal-argument error can no longer alias one.
+ABI 19 added a ``driver`` parameter to ``eigh`` and a third return value
+naming the driver that ran, so the memory plan's DSYEVR choice can be passed
+through to the C layer instead of being decided again by allocation failure.
 """
 
 from typing import Final, Literal
@@ -100,23 +103,32 @@ def dsyrk(
 def eigh(
     K: npt.NDArray[np.float64],
     inplace: bool = False,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    driver: Literal["auto", "dsyevd", "dsyevr"] = "auto",
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], int]:
     """Compute eigenvalues and eigenvectors of a symmetric matrix.
 
-    K is overwritten as scratch by vendor DSYEVD.
+    K is overwritten as scratch by vendor DSYEVD or DSYEVR.
 
     Args:
         K: Symmetric matrix, shape (N, N), float64, C-contiguous.
         inplace: If True, overwrite K with eigenvectors (saves memory).
+        driver: "auto" tries DSYEVD first, falling through to DSYEVR on a
+            workspace allocation failure. "dsyevr" skips DSYEVD and requires
+            DSYEVR directly. "dsyevd" is the same as "auto".
 
     Returns:
-        Tuple of (eigenvalues, eigenvectors) where eigenvalues is shape (N,)
-        ascending, eigenvectors is shape (N, N) with columns as unit eigenvectors.
+        Tuple of (eigenvalues, eigenvectors, driver_used) where eigenvalues is
+        shape (N,) ascending, eigenvectors is shape (N, N) with columns as
+        unit eigenvectors, and driver_used is 1 (DSYEVD), 2 (DSYEVR), or 0
+        (neither ran, e.g. N == 1). ``jamma.jlinalg.eigh`` wraps this raw int
+        in an ``EighStatus`` with a string ``driver_used``.
 
     Raises:
-        ValueError: If K is not 2-D square float64.
+        ValueError: If K is not 2-D square float64, or driver is not one of
+            "auto", "dsyevd", "dsyevr".
         numpy.linalg.LinAlgError: If convergence fails.
-        RuntimeError: If illegal argument detected (internal jlinalg bug).
+        RuntimeError: If illegal argument detected (internal jlinalg bug), or
+            driver="dsyevr" is requested but vendor DSYEVR is unavailable.
         MemoryError: If workspace allocation fails.
     """
 

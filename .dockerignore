@@ -1,0 +1,13 @@
+.audit/
+.git/
+.github/
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+docs/
+tests/
+**/__pycache__/
+**/*.pyc
+**/*.so
+src/jamma/jlinalg/tests/

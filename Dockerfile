@@ -1,33 +1,26 @@
-# Slim JAMMA image with ILP64 numpy (MKL) for large-scale GWAS
-#
-# MKL is x86_64-only — always build with --platform linux/amd64:
-#   docker build --platform linux/amd64 -t jamma .
-#
-# Run:
-#   docker run --platform linux/amd64 -v $(pwd)/data:/data jamma -gk 1 -bfile /data/study -o /data/output
-#   docker run --platform linux/amd64 -v $(pwd)/data:/data jamma -lmm 1 -bfile /data/study -k /data/k.cXX.txt -o /data/output
-FROM python:3.11-slim
+# Reproducible linux/amd64 JAMMA image with MKL-backed ILP64 NumPy.
+# The build-capable stage compiles this checkout's native extensions; the
+# runtime stage remains slim and receives only /usr/local from the builder.
+FROM python:3.11.13-bookworm@sha256:e75be128195ec5b78912d55646e87d4638fc95234302a34472aeb2a474334cb1 AS build
 
-# Install uv for fast, reproducible installs
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /app
 
-# Install ILP64 numpy from custom index, then runtime deps and jamma:
-# 1. mkl runtime libraries
-# 2. ILP64 numpy from michael-denyer/numpy-mkl (must not be overwritten).
-#    Capped <2.5: the index also serves 2.5.x, and numba (via shap) in the
-#    downstream Databricks stack requires numpy<2.5. On this py3.11 base pip
-#    already falls back to 2.4.x (2.5.x needs >=3.12), but the explicit cap
-#    keeps that guarantee if the base image ever moves to Python 3.12+.
-# 3. Runtime deps (--no-deps on jamma to prevent numpy downgrade back to LP64)
-RUN uv pip install --system --no-cache mkl && \
-    uv pip install --system --no-cache 'numpy<2.5' \
+COPY docker/requirements-container.txt /tmp/requirements-container.txt
+RUN python -m pip install --no-cache-dir --no-deps \
+        -r /tmp/requirements-container.txt
+RUN python -m pip install --no-cache-dir --no-deps \
+        numpy==2.4.6 \
+        mkl-service==2.7.2 \
         --index-url https://michael-denyer.github.io/numpy-mkl \
-        --reinstall && \
-    uv pip install --system --no-cache \
-        psutil loguru threadpoolctl click progressbar2 bed-reader && \
-    uv pip install --system --no-cache --no-deps jamma
+        --force-reinstall
 
-# Verify ILP64 at build time
+# Copy only the inputs needed to build the checked-out project. Installing the
+# published `jamma` distribution here would decouple the image from this source.
+COPY pyproject.toml README.md hatch_build.py ./
+COPY src ./src
+RUN python -m pip install --no-cache-dir --no-deps .
+
 RUN python -c "\
 import numpy as np; \
 cfg = np.show_config(mode='dicts'); \
@@ -35,7 +28,10 @@ blas = cfg['Build Dependencies']['blas']['name']; \
 assert 'ilp64' in blas.lower(), f'Expected ILP64 BLAS, got: {blas}'; \
 print(f'ILP64 verified: {blas}')"
 
-# Run as non-root for security (volume mounts won't be owned by root)
+FROM python:3.11.13-slim-bookworm@sha256:cec9aa7aa96eea4fa036e9b82be1e6b325f2e3707f462d885868df51ec0a4b47
+
+COPY --from=build /usr/local /usr/local
+
 RUN useradd -m -u 1000 jamma && mkdir -p /data && chown jamma:jamma /data
 USER jamma
 

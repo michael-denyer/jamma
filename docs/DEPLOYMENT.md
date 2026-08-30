@@ -13,9 +13,11 @@ that builds and publishes release artifacts.
 
 ### Docker
 
-The `Dockerfile` builds a slim `python:3.11-slim` image with MKL-backed ILP64 numpy for
-large-scale GWAS (>46k samples). MKL is x86_64-only — always build and run with
-`--platform linux/amd64`.
+The `Dockerfile` uses a pinned Python 3.11 Bookworm build stage and a pinned
+slim-Bookworm runtime stage. The builder installs MKL-backed ILP64 NumPy and
+compiles both native extensions from the current checkout; only `/usr/local`
+is copied into the non-root runtime image. MKL is x86_64-only — always build
+and run with `--platform linux/amd64`.
 
 **Build:**
 
@@ -23,15 +25,18 @@ large-scale GWAS (>46k samples). MKL is x86_64-only — always build and run wit
 docker build --platform linux/amd64 -t jamma .
 ```
 
-The build installs packages in strict order to preserve the ILP64 numpy build:
+The build installs packages in strict order to preserve the ILP64 NumPy build:
 
-1. `mkl` — MKL runtime libraries
-2. `numpy` from `https://michael-denyer.github.io/numpy-mkl` — ILP64 MKL-backed numpy
-3. Runtime deps (`psutil loguru threadpoolctl click progressbar2 bed-reader`)
-4. `jamma --no-deps` — prevents numpy downgrade back to LP64
+1. Exact runtime and MKL packages from `docker/requirements-container.txt`,
+   without dependency resolution
+2. Exact `numpy` and `mkl-service` wheels from the custom ILP64 index
+3. This checkout with `--no-deps`, which compiles its native extensions and
+   cannot be replaced by a separately published JAMMA release
 
-ILP64 is verified at build time with an assertion on the BLAS name; the build fails if
-LP64 numpy is active.
+ILP64 is verified at build time with an assertion on the BLAS name; the build
+fails if LP64 NumPy is active. Base-image digests and every installed Python
+package version are pinned so rebuilding the same revision does not silently
+adopt a new runtime.
 
 **Run:**
 

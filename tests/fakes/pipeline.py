@@ -36,7 +36,7 @@ class FakePipelineRunnerFactory:
         factory = FakePipelineRunnerFactory(result=pipeline_result)
         monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
         # ... invoke CLI ...
-        assert factory.last_config.phenotype_columns == [1, 2, 3]
+        assert factory.last_config.phenotype_columns == (1, 2, 3)
 
     Records every constructed runner on ``self.runners`` and exposes the
     most recent config on ``self.last_config`` for ergonomic assertions.

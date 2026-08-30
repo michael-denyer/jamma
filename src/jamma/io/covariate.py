@@ -11,6 +11,7 @@ GEMMA covariate file format:
 - GEMMA does NOT auto-add an intercept column
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -97,7 +98,7 @@ def read_covariate_file(path: Path) -> tuple[np.ndarray, np.ndarray]:
 
 
 def encode_categorical_covariates(
-    covariates: np.ndarray, cat_columns: list[int]
+    covariates: np.ndarray, cat_columns: Sequence[int]
 ) -> np.ndarray:
     """One-hot encode specified covariate columns as dummy variables.
 

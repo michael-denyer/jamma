@@ -13,6 +13,7 @@ rather than a courtesy.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -34,7 +35,7 @@ BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
 VALID_BACKENDS: tuple[BackendRequest, ...] = ("auto", "numpy", "numpy-streaming")
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class PipelineConfig:
     """Configuration for a GWAS pipeline run.
 
@@ -123,13 +124,17 @@ class PipelineConfig:
     n_grid: int = DEFAULT_N_GRID
     n_refine: int = DEFAULT_N_REFINE
     weight_file: Path | None = None
-    cat_columns: list[int] | None = None
+    cat_columns: Sequence[int] | None = None
     backend: BackendRequest = "auto"
     legacy_text: bool = False
-    phenotype_columns: list[int] = field(default_factory=lambda: [1])
+    phenotype_columns: Sequence[int] = (1,)
     no_telemetry: bool = False
 
     def __post_init__(self) -> None:
+        if self.cat_columns is not None:
+            object.__setattr__(self, "cat_columns", tuple(self.cat_columns))
+        object.__setattr__(self, "phenotype_columns", tuple(self.phenotype_columns))
+
         if os.sep in self.output_prefix or "/" in self.output_prefix:
             raise ValueError(
                 f"output_prefix must not contain path separators, "
@@ -192,7 +197,7 @@ class PipelineConfig:
         # default) instead of raising in run_lmm_loco. The non-LOCO write_eigen
         # path writes to output_dir directly and never consults eigen_dir.
         if self.loco and self.write_eigen and self.eigen_dir is None:
-            self.eigen_dir = self.output_dir
+            object.__setattr__(self, "eigen_dir", self.output_dir)
 
     @property
     def log_path(self) -> Path:
@@ -214,8 +219,8 @@ class PipelineConfig:
         dispatch path goes through here, so a knob added to LmmConfig cannot
         reach one runner and miss another.
 
-        Built fresh on each call so a field edited after construction is still
-        picked up.
+        Built fresh on each call so the pipeline can choose whether the runner
+        repeats the memory gate without duplicating the field mapping.
 
         Args:
             check_memory: Whether the runner should run its own memory gate.

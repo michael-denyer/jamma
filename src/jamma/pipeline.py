@@ -23,6 +23,7 @@ Example:
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -545,7 +546,7 @@ class PipelineRunner:
 
     def _load_phenotypes_and_intersect_masks(
         self,
-        pheno_columns: list[int],
+        pheno_columns: Sequence[int],
         covariates: np.ndarray | None,
     ) -> tuple[dict[int, tuple[np.ndarray, int]], np.ndarray, int]:
         """Load each phenotype column and intersect their valid-sample masks.

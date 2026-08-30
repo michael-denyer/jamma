@@ -300,7 +300,7 @@ def test_cat_comma_separated_reaches_pipeline_config(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert factory.last_config.cat_columns == [1, 3]
+    assert factory.last_config.cat_columns == (1, 3)
 
 
 @pytest.mark.parametrize("value", ["x", ""])
@@ -381,13 +381,13 @@ class TestMultiNParsing:
 
     @pytest.mark.parametrize(
         ("n_value", "expected_columns"),
-        [("1 2 3", [1, 2, 3]), ("1,2,3", [1, 2, 3]), ("1", [1])],
+        [("1 2 3", (1, 2, 3)), ("1,2,3", (1, 2, 3)), ("1", (1,))],
         ids=["space_separated", "comma_separated", "single_backward_compat"],
     )
     def test_multi_n_parses(
         self,
         n_value: str,
-        expected_columns: list[int],
+        expected_columns: tuple[int, ...],
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:

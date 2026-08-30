@@ -346,6 +346,16 @@ class PreparedLmmRun:
     pve: float | None
     pve_se: float | None
 
+    @property
+    def n_samples(self) -> int:
+        """Number of samples represented by every prepared array."""
+        return self.Uty.shape[0]
+
+    @property
+    def n_cvt(self) -> int:
+        """Number of rotated covariate columns."""
+        return self.UtW.shape[1]
+
 
 def prepare_lmm_run(
     *,

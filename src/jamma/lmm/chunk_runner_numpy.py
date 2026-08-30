@@ -1,12 +1,12 @@
 """Shared NumPy LMM chunk engine (orchestrator).
 
 Owns the per-run chunk loop that the batch, disk-streaming, and LOCO NumPy
-runners share: it selects the C/Python dispatch path, sizes chunks, drives the
-optional rotate/compute pipeline, imputes missing genotypes, rotates via
+runners share. It consumes prepared genotypes, final dispatch, and chunk
+geometry, drives the optional rotate/compute pipeline, imputes missing genotypes,
+rotates via
 ``jlinalg.dgemm``, prepares Uab inputs, dispatches compute, and accumulates
-per-chunk diagnostics. Callers provide raw genotype chunks
-(``raw_chunk_source_factory``) and a result sink (``chunk_sink``); everything
-after that boundary is owned here.
+per-chunk diagnostics. Callers provide one bound genotype session and a result
+sink; everything after that boundary is owned here.
 
 The kernel and the state it needs live in ``chunk_kernel``, chunk sizing in
 ``chunk_sizing``, and the overlapped driver in ``chunk_pipeline``; this module
@@ -18,6 +18,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import numpy as np
@@ -31,15 +32,16 @@ from jamma.core.threading import (
     get_c_extension_thread_count,
 )
 from jamma.lmm import accel
+from jamma.lmm.association_plan import AssociationExecution
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
-from jamma.lmm.chunk_sizing import plan_lmm_chunks
-from jamma.lmm.dispatch import select_current as select_current_dispatch_path
+from jamma.lmm.genotype_source import PreparedGenotypes
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood import reset_p_yy_warned
+from jamma.lmm.prepare_common import PreparedLmmRun
 from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import LmmMode
+from jamma.lmm.schema import LmmConfig
 from jamma.lmm.uab import batch_compute_uab_numpy
 
 
@@ -114,6 +116,20 @@ class LmmChunkRunStats(NamedTuple):
     rotation_s: float
     compute_s: float
     result_write_s: float
+
+
+ChunkSink = Callable[[dict[str, np.ndarray], int, int], None]
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkRunOptions:
+    """Presentation choices for one shared chunk run."""
+
+    progress_label: str = "LMM association"
+    lambda_warning_prefix: str = ""
+
+
+_DEFAULT_CHUNK_RUN_OPTIONS = ChunkRunOptions()
 
 
 class _ChunkEngine:
@@ -273,37 +289,20 @@ class _ChunkEngine:
 
 def run_lmm_chunk_source_numpy(
     *,
-    raw_chunk_source_factory: Callable[[int], Callable[[], RawLmmChunk | None]],
-    chunk_sink: Callable[[dict[str, np.ndarray], int, int], None],
-    U: np.ndarray,
-    eigenvalues_np: np.ndarray,
-    UtW: np.ndarray,
-    Uty: np.ndarray,
-    Hi_eval_null: np.ndarray,
-    logl_H0: float,
-    n_samples: int,
-    n_filtered: int,
-    n_cvt: int,
-    lmm_mode: LmmMode,
-    filtered_means: np.ndarray,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    max_chunk_size: int | None = None,
-    show_progress: bool = True,
-    progress_label: str = "LMM association",
-    lambda_warning_prefix: str = "",
-    log_dispatch_choices: bool = True,
+    genotypes: PreparedGenotypes,
+    chunk_sink: ChunkSink,
+    execution: AssociationExecution,
+    prepared: PreparedLmmRun,
+    config: LmmConfig,
+    options: ChunkRunOptions = _DEFAULT_CHUNK_RUN_OPTIONS,
 ) -> LmmChunkRunStats:
     """Run LMM association over caller-provided raw genotype chunks.
 
-    The caller owns where raw genotype chunks come from and where result chunks
-    go. This function owns the canonical NumPy LMM chunk machinery: dispatch
-    selection, chunk sizing, optional pipeline driving, missing-value imputation,
-    eigen-rotation, Uab preparation, C/Python compute dispatch, diagnostics, and
-    timing. Batch and LOCO use this path so their chunk compute behavior cannot
-    drift.
+    The prepared source owns aligned imputation means and raw chunks. This
+    function consumes it with the selected dispatch and chunk geometry, then owns
+    pipeline driving, eigen-rotation, Uab preparation, C/Python compute dispatch,
+    diagnostics, and timing. Batch and LOCO use this path so their chunk compute
+    behavior cannot drift.
 
     A result field that is all NaN (e.g. a non-PSD kinship matrix, or a phenotype
     made degenerate by collinear covariates) is surfaced via ``logger.warning``
@@ -315,25 +314,27 @@ def run_lmm_chunk_source_numpy(
     # here rather than in one of them.
     reset_p_yy_warned()
 
+    n_samples = prepared.n_samples
+    n_cvt = prepared.n_cvt
+    n_filtered = genotypes.n_filtered
+    lmm_mode = config.lmm_mode
+    l_min = config.l_min
+    l_max = config.l_max
+    show_progress = config.show_progress
+
+    if genotypes.analyzed_sample_count != n_samples:
+        raise ValueError(
+            "prepared genotype sample count does not match prepared LMM run: "
+            f"got {genotypes.analyzed_sample_count} and {n_samples}"
+        )
+
     if n_filtered == 0:
         return LmmChunkRunStats(
             processed=0, rotation_s=0.0, compute_s=0.0, result_write_s=0.0
         )
 
-    if max_chunk_size is not None and max_chunk_size < 1:
-        raise ValueError(f"max_chunk_size must be >= 1, got {max_chunk_size}")
-    if len(filtered_means) != n_filtered:
-        raise ValueError(
-            f"filtered_means length ({len(filtered_means)}) does not match "
-            f"n_filtered ({n_filtered})"
-        )
-    dispatch = select_current_dispatch_path(
-        n_cvt, lmm_mode, log_choices=log_dispatch_choices
-    )
-
-    chunk_plan = plan_lmm_chunks(
-        n_samples, n_filtered, n_cvt, dispatch, max_chunk_size=max_chunk_size
-    )
+    dispatch = execution.dispatch
+    chunk_plan = execution.chunks
     chunk_size = chunk_plan.chunk_size
     n_chunks = chunk_plan.n_chunks
     use_pipeline = chunk_plan.use_pipeline
@@ -351,7 +352,7 @@ def run_lmm_chunk_source_numpy(
         omp_threads=get_c_extension_thread_count(accel.available(), accel.HAS_OPENMP),
         use_pipeline=use_pipeline,
     )
-    n_refine = max(n_refine, 20)
+    n_refine = max(config.n_refine, 20)
 
     invariants = RunInvariants.build(
         dispatch=dispatch,
@@ -359,14 +360,14 @@ def run_lmm_chunk_source_numpy(
         n_cvt=n_cvt,
         n_samples=n_samples,
         n_filtered=n_filtered,
-        eigenvalues=eigenvalues_np,
-        UtW=UtW,
-        Uty=Uty,
-        Hi_eval_null=Hi_eval_null,
-        logl_H0=logl_H0,
+        eigenvalues=prepared.eigenvalues,
+        UtW=prepared.UtW,
+        Uty=prepared.Uty,
+        Hi_eval_null=prepared.Hi_eval_null,
+        logl_H0=prepared.logl_H0,
         l_min=l_min,
         l_max=l_max,
-        n_grid=n_grid,
+        n_grid=config.n_grid,
         n_refine=n_refine,
     )
     kernel = make_kernel(invariants, threads.omp)
@@ -374,9 +375,9 @@ def run_lmm_chunk_source_numpy(
     engine = _ChunkEngine(
         invariants=invariants,
         kernel=kernel,
-        U=U,
-        filtered_means=filtered_means,
-        raw_chunk_source=raw_chunk_source_factory(chunk_size),
+        U=prepared.U,
+        filtered_means=genotypes.imputation_means,
+        raw_chunk_source=genotypes.chunks(chunk_size),
         chunk_sink=chunk_sink,
         chunk_size=chunk_size,
         n_buffers=chunk_plan.n_buffers,
@@ -393,14 +394,14 @@ def run_lmm_chunk_source_numpy(
             n_samples=n_samples,
             n_filtered=n_filtered,
             show_progress=show_progress,
-            progress_label=progress_label,
+            progress_label=options.progress_label,
         )
     else:
         if show_progress and n_chunks > 1:
             chunk_iterator = progress_iterator(
                 iter(range(n_chunks)),
                 total=n_chunks,
-                desc=progress_label,
+                desc=options.progress_label,
                 initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
             )
         else:
@@ -408,11 +409,11 @@ def run_lmm_chunk_source_numpy(
 
         for _chunk_idx in chunk_iterator:
             t_rot_start = time.perf_counter()
-            prepared = engine.prepare()
+            prepared_chunk = engine.prepare()
             rotation_s += time.perf_counter() - t_rot_start
-            if prepared is None:
+            if prepared_chunk is None:
                 break
-            engine.compute_and_write(prepared)
+            engine.compute_and_write(prepared_chunk)
 
     if engine.processed != n_filtered:
         raise RuntimeError(
@@ -427,7 +428,11 @@ def run_lmm_chunk_source_numpy(
             "check for degenerate (constant) genotypes and kinship matrix quality"
         )
     log_lambda_boundary_warning(
-        engine.n_at_lmin, engine.n_at_lmax, l_min, l_max, prefix=lambda_warning_prefix
+        engine.n_at_lmin,
+        engine.n_at_lmax,
+        l_min,
+        l_max,
+        prefix=options.lambda_warning_prefix,
     )
 
     return LmmChunkRunStats(

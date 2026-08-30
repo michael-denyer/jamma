@@ -236,10 +236,10 @@ class TestPhenotypeColumnMissingValues:
 
 
 @pytest.mark.tier1
-def test_pipeline_selects_execution_mode_once(
+def test_pipeline_builds_association_plan_once(
     sample_plink_data: Path, output_dir: Path, monkeypatch
 ) -> None:
-    """PipelineRunner.run() calls select_execution_mode exactly once.
+    """PipelineRunner.run() builds executable association policy exactly once.
 
     A prior version called it twice: once before the phenotype/covariate
     masks existed (pricing the pre-mask n_samples), and again after masking
@@ -261,21 +261,19 @@ def test_pipeline_selects_execution_mode_once(
     )
 
     call_count = 0
-    real_select_execution_mode = pipeline_module.select_execution_mode
+    real_plan_association = pipeline_module.plan_association
 
-    def _counting_select_execution_mode(*args, **kwargs):
+    def _counting_plan_association(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        return real_select_execution_mode(*args, **kwargs)
+        return real_plan_association(*args, **kwargs)
 
-    monkeypatch.setattr(
-        pipeline_module, "select_execution_mode", _counting_select_execution_mode
-    )
+    monkeypatch.setattr(pipeline_module, "plan_association", _counting_plan_association)
 
     result = PipelineRunner(config).run()
 
     assert result.n_snps_tested > 0
-    assert call_count == 1, f"expected select_execution_mode once, got {call_count}"
+    assert call_count == 1, f"expected plan_association once, got {call_count}"
 
 
 @pytest.mark.tier1
@@ -653,13 +651,13 @@ def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) 
 
 
 @pytest.mark.tier1
-def test_pipeline_re_evaluation_passes_n_cvt(
+def test_pipeline_planning_passes_n_cvt(
     tmp_path: Path, sample_plink_data: Path
 ) -> None:
     """BCKAUTO-04: Re-evaluation passes n_cvt from loaded covariates."""
     from unittest.mock import patch
 
-    from jamma.lmm.runner import select_execution_mode
+    from jamma.lmm.association_plan import plan_association
 
     n_samples = 100  # gemma_synthetic fixture has 100 samples
 
@@ -674,13 +672,13 @@ def test_pipeline_re_evaluation_passes_n_cvt(
     out = tmp_path / "output_ncvt"
     out.mkdir()
 
-    # Spy on select_execution_mode to capture all call kwargs
+    # Spy on executable planning to capture its dimensions.
     calls: list[dict] = []
-    original_sem = select_execution_mode
+    original_plan = plan_association
 
-    def spy_sem(*args, **kwargs):
+    def spy_plan(*args, **kwargs):
         calls.append(kwargs.copy())
-        return original_sem(*args, **kwargs)
+        return original_plan(*args, **kwargs)
 
     config = PipelineConfig(
         bfile=sample_plink_data,
@@ -694,12 +692,12 @@ def test_pipeline_re_evaluation_passes_n_cvt(
         show_progress=False,
         backend="numpy",
     )
-    with patch("jamma.pipeline.select_execution_mode", side_effect=spy_sem):
+    with patch("jamma.pipeline.plan_association", side_effect=spy_plan):
         PipelineRunner(config).run()
 
     # The re-evaluation call (post-covariate-load) must have n_cvt=2
     assert any(c.get("n_cvt", 1) == 2 for c in calls), (
-        f"No call to select_execution_mode had n_cvt=2; calls={calls}"
+        f"No call to plan_association had n_cvt=2; calls={calls}"
     )
 
 

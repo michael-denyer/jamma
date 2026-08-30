@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import MIN_N_GRID
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
@@ -157,8 +158,6 @@ class TestCheckMemory:
 
     def test_returns_none_when_disabled(self) -> None:
         """memory_preflight returns None when check_memory=False."""
-        from jamma.lmm.runner import ExecutionPlan
-
         config = PipelineConfig(
             bfile=BFILE,
             check_memory=False,
@@ -166,16 +165,17 @@ class TestCheckMemory:
         runner = PipelineRunner(config)
         result = memory_preflight(
             runner.config,
-            ExecutionPlan(mode="streaming", reason="test"),
-            n_valid=100,
-            n_snps=500,
-            n_cvt=1,
+            plan_association(
+                100,
+                500,
+                requested="numpy-streaming",
+                _require_streaming_accel=False,
+            ),
         )
         assert result is None
 
     def test_returns_plan_when_enabled(self) -> None:
         """memory_preflight returns a MemoryPlan for the streaming mode."""
-        from jamma.lmm.runner import ExecutionPlan
         from jamma.pipeline_memory import MemoryPlan
 
         config = PipelineConfig(
@@ -185,10 +185,12 @@ class TestCheckMemory:
         runner = PipelineRunner(config)
         result = memory_preflight(
             runner.config,
-            ExecutionPlan(mode="streaming", reason="test"),
-            n_valid=100,
-            n_snps=500,
-            n_cvt=1,
+            plan_association(
+                100,
+                500,
+                requested="numpy-streaming",
+                _require_streaming_accel=False,
+            ),
         )
 
         assert isinstance(result, MemoryPlan)

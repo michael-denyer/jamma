@@ -4,13 +4,12 @@ Picks batch vs streaming for a given problem size; callers dispatch on the
 result themselves.
 
 Components:
-- ExecutionPlan: Frozen dataclass describing the selected backend and mode.
-- select_execution_mode(): Picks (backend, mode) based on hardware, memory,
-  and user preferences.
+- ExecutionPlan: Public two-field summary of the selected mode.
+- select_execution_mode(): Compatibility selector returning that summary.
 
-PipelineRunner calls select_execution_mode() and then dispatches via its own
-_run_batch/_run_streaming methods, which handle PLINK loading, incremental
-writing, and timing at a higher abstraction level.
+PipelineRunner keeps the executable plan returned by ``plan_association`` and
+dispatches via its own batch and streaming adapters. Public callers that only
+need the selected mode use ``select_execution_mode``.
 
 This module used to also export run_lmm(), a second dispatcher for
 programmatic callers with pre-loaded data. It was removed in 7.0.0: it had no
@@ -20,42 +19,12 @@ duplicated PipelineRunner's.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Literal
 
 from loguru import logger
 
-from jamma.core.memory import estimate_lmm_memory
-from jamma.lmm import accel
-from jamma.lmm.chunk_sizing import plan_lmm_chunks
-from jamma.lmm.dispatch import select_dispatch_path
-from jamma.lmm.schema import LmmMode, parse_lmm_mode
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionPlan:
-    """Describes the selected execution mode.
-
-    Equality and hashing compare ``mode`` only — ``reason`` is diagnostic
-    metadata and must not affect dispatch or comparison logic.
-
-    Attributes:
-        mode: Execution mode ("batch" or "streaming").
-        reason: Human-readable explanation of why this plan was chosen.
-    """
-
-    mode: Literal["batch", "streaming"]
-    reason: str = field(compare=False)
-
-    def __post_init__(self) -> None:
-        if not self.reason:
-            raise ValueError("ExecutionPlan.reason must be non-empty")
-
-    @property
-    def runner_name(self) -> str:
-        """Return 'numpy-{mode}' for logging and banner display."""
-        return f"numpy-{self.mode}"
-
+from jamma.lmm.association_plan import ExecutionPlan, plan_association
+from jamma.lmm.schema import LmmMode
 
 SMALL_SAMPLE_WARNING_THRESHOLD = 50
 
@@ -138,65 +107,11 @@ def select_execution_mode(
     Returns:
         ExecutionPlan with backend, mode, and reason.
     """
-    # Handle compound backend requests from CLI (e.g., "numpy-streaming")
-    if requested == "numpy-streaming":
-        if not accel.available():
-            raise ValueError(
-                "Backend 'numpy-streaming' requires the C extension but it is "
-                "not available. Compile it with: uv run python -c "
-                "'from jamma.jlinalg._compile_jlinalg import compile_extension; "
-                "compile_extension()'"
-            )
-        return ExecutionPlan("streaming", "Explicit numpy-streaming request")
-
-    _valid_requests = ("auto", "numpy", "numpy-streaming")
-    if requested not in _valid_requests:
-        raise ValueError(
-            f"Unknown backend {requested!r}. Must be one of {_valid_requests}."
-        )
-
-    # Explicit backend selection
-    if requested == "numpy":
-        return ExecutionPlan("batch", "NumPy backend explicitly requested")
-
-    # Auto selection
-    c_ext_available = accel.available()
-    dispatch = select_dispatch_path(
-        n_cvt, parse_lmm_mode(lmm_mode), accel=c_ext_available, log_choices=False
-    )
-    mem_budget_bytes = None if mem_budget is None else int(mem_budget * 1e9)
-    chunk_plan = plan_lmm_chunks(
-        n_samples, n_snps, n_cvt, dispatch, mem_budget_bytes=mem_budget_bytes
-    )
-    est = estimate_lmm_memory(
+    return plan_association(
         n_samples,
         n_snps,
-        lmm_batch_size=chunk_plan.chunk_size,
+        requested=requested,
         n_cvt=n_cvt,
-        n_buffers=chunk_plan.n_buffers,
-    )
-
-    # No covariate-count guard here. A loaded extension exports the general
-    # n_cvt kernels too, so the check that used to sit here read a second
-    # capability flag that was always this same bit.
-    if c_ext_available:
-        if est.sufficient:
-            return ExecutionPlan(
-                "batch",
-                f"C extension available, {est.total_gb:.1f}GB fits in "
-                f"{est.available_gb:.1f}GB available",
-            )
-        return ExecutionPlan(
-            "streaming",
-            f"C extension available, {est.total_gb:.1f}GB exceeds "
-            f"{est.available_gb:.1f}GB available, using NumPy streaming",
-        )
-
-    # Fallback: pure NumPy batch (no C extension)
-    if not est.sufficient:
-        logger.warning(
-            f"No C extension available. Dataset requires ~{est.total_gb:.1f}GB "
-            f"but only {est.available_gb:.1f}GB available. "
-            "Compile the C extension for streaming support."
-        )
-    return ExecutionPlan("batch", "Fallback -- no C extension available")
+        lmm_mode=lmm_mode,
+        mem_budget=mem_budget,
+    ).summary

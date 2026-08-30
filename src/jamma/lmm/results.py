@@ -21,6 +21,7 @@ from jamma.lmm.schema import SnpMeta
 from jamma.lmm.stats import AssocResult
 
 if TYPE_CHECKING:
+    from jamma.lmm.genotype_source import PreparedGenotypes
     from jamma.lmm.io import IncrementalAssocWriter
 
 # Per-chunk result sink handed to the shared NumPy LMM chunk runner:
@@ -105,29 +106,24 @@ def _build_results(
 def make_writer_sink(
     writer: IncrementalAssocWriter,
     lmm_mode: int,
-    snp_info: SnpMeta,
-    snp_indices: np.ndarray,
-    filtered_afs: np.ndarray,
-    filtered_miss: np.ndarray,
+    genotypes: PreparedGenotypes,
 ) -> ChunkSink:
     """Build a chunk sink that streams each result chunk to disk.
 
-    Shared by the batch, streaming, and LOCO NumPy runners, which previously
-    each inlined a byte-identical ``writer.write_arrays_batch`` call. The
-    ``snp_indices`` / ``filtered_afs`` / ``filtered_miss`` arrays are the full
-    filtered-order arrays; the returned sink slices them by the
+    The returned sink slices the prepared source's bound selection by the
     ``[filtered_start, filtered_end)`` range it receives per chunk.
     """
+    selection = genotypes.selection
 
     def _sink(
         chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
     ) -> None:
         writer.write_arrays_batch(
             lmm_mode,
-            snp_indices[filtered_start:filtered_end],
-            snp_info,
-            filtered_afs[filtered_start:filtered_end],
-            filtered_miss[filtered_start:filtered_end],
+            selection.indices[filtered_start:filtered_end],
+            genotypes.snp_meta,
+            selection.filtered_afs[filtered_start:filtered_end],
+            selection.filtered_miss[filtered_start:filtered_end],
             chunk_arrays,
         )
 
@@ -137,10 +133,7 @@ def make_writer_sink(
 def make_result_list_sink(
     results: list[AssocResult],
     lmm_mode: int,
-    snp_info: SnpMeta,
-    snp_indices: np.ndarray,
-    filtered_afs: np.ndarray,
-    filtered_miss: np.ndarray,
+    genotypes: PreparedGenotypes,
 ) -> ChunkSink:
     """Build a chunk sink that appends built ``AssocResult`` objects to ``results``.
 
@@ -148,16 +141,18 @@ def make_result_list_sink(
     (no ``output_path``) path.
     """
 
+    selection = genotypes.selection
+
     def _sink(
         chunk_arrays: dict[str, np.ndarray], filtered_start: int, filtered_end: int
     ) -> None:
         results.extend(
             _build_results(
                 lmm_mode,
-                snp_indices[filtered_start:filtered_end],
-                filtered_afs[filtered_start:filtered_end],
-                filtered_miss[filtered_start:filtered_end],
-                snp_info,
+                selection.indices[filtered_start:filtered_end],
+                selection.filtered_afs[filtered_start:filtered_end],
+                selection.filtered_miss[filtered_start:filtered_end],
+                genotypes.snp_meta,
                 chunk_arrays,
             )
         )

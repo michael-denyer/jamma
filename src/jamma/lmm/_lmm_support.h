@@ -1,18 +1,18 @@
 /*
  * _lmm_support.h — allocation, validation, and Python marshalling shared by
- * every kernel family in _lmm_accel.c.
+ * every LMM accelerator translation unit.
  *
  * These are the functions that talk to CPython and the allocator rather than
  * to the numerics: scratch buffers, argument validation, the alloc/decref/build
  * triples for each result shape, and the pab-table parser. Every kernel family
  * needs them, none of them owns any floating-point pipeline, so they are the
- * one seam in _lmm_accel.c that can move without a numerical argument.
+ * one shared seam that can move without a numerical argument.
  *
- * NumPy C-API across two translation units
- * ----------------------------------------
+ * NumPy C-API across multiple translation units
+ * ---------------------------------------------
  * NumPy reaches its C API through a per-translation-unit `PyArray_API` pointer.
  * With one .c file that pointer is filled in by `import_array()` and everything
- * works. With two, the second unit's copy stays NULL and the first
+ * works. With more than one, another unit's copy stays NULL and the first
  * `PyArray_SimpleNew` segfaults. `PY_ARRAY_UNIQUE_SYMBOL` makes the pointer a
  * single shared extern instead, so:
  *

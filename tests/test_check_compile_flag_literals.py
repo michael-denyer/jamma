@@ -139,14 +139,14 @@ def test_widened_flag_set_is_detected(tmp_path, flag):
 
 def test_sanitizer_flags_in_helper_file_are_not_lint_targets(tmp_path):
     """The lint inspects the four entry points only — apply_sanitizer_overrides()
-    in src/jamma/_build_support/compile_and_link.py legitimately holds the
+    in src/jamma/_build_support/build_models.py legitimately holds the
     sanitizer flag literals. The TARGETS list does NOT include _build_support,
     so even if the helper file existed in the synthetic tree it would be
     ignored. This regression-guards against someone widening TARGETS to cover
     the helper, which would create a chicken-and-egg lint failure."""
     files = dict(_STUB_EMPTY_TARGETS)
     # Drop a sanitizer literal in a path that is NOT in TARGETS — must pass.
-    files["src/jamma/_build_support/compile_and_link.py"] = (
+    files["src/jamma/_build_support/build_models.py"] = (
         'san = ["-fsanitize=address", "-fno-omit-frame-pointer", "-O1"]\n'
     )
     result = _run_with_targets(tmp_path, files)

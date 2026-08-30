@@ -9,9 +9,8 @@
  * chosen for tidiness.
  *
  * The optimizers call the likelihood evaluations roughly 70 times per SNP and
- * both live in this unit, so that inner call still inlines. Callers left in
- * _lmm_accel.c are the batch and fused entry points, which invoke these once
- * per SNP.
+ * both live in this unit, so that inner call still inlines. Callers in
+ * _lmm_accel_ncvt1.c invoke these once per SNP.
  *
  * Pure double arithmetic: no CPython, no NumPy, no OpenMP, no workspace state.
  * It needs only the shapes in _lmm_types.h.

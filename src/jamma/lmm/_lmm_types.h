@@ -9,8 +9,8 @@
  * <Python.h> to get it.
  *
  * grid_invariant_t is here for the same reason: the workspace creators and
- * batch entry points in _lmm_accel.c fill it, the ncvt1 kernels read it, so it
- * spans the same boundary in the opposite direction.
+ * ncvt1 entry points fill it, the ncvt1 kernels read it, so it spans the same
+ * boundary in the opposite direction.
  */
 
 #ifndef JAMMA_LMM_TYPES_H

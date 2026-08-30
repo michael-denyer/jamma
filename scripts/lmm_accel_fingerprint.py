@@ -1,7 +1,8 @@
 """Bit-exact fingerprint of every _lmm_accel C entry point, as a pytest plugin.
 
-Splitting ``_lmm_accel.c`` must not move a single bit of any result. Tolerance
-based tests cannot prove that: they pass just as happily when the last mantissa
+Refactoring the multi-source ``_lmm_accel`` extension must not move a single
+bit of any result. Tolerance-based tests cannot prove that: they pass just as
+happily when the last mantissa
 bit drifts, which is exactly the failure mode a translation-unit split can
 introduce (inlining changes FMA contraction and register allocation).
 

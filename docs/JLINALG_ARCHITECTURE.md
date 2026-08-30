@@ -131,7 +131,7 @@ results that diverge from GEMMA's validation tolerances.
 | File | Purpose |
 |------|---------|
 | `__init__.py` | Public API with NumPy fallbacks when C extension unavailable |
-| `_compile_jlinalg.py` | Dev-mode compiler script; calls `run_build(JLINALG_SPEC)` in `_build_support/compile_and_link.py` |
+| `_compile_jlinalg.py` | Dev-mode compiler script; calls the `run_build(JLINALG_SPEC)` facade in `_build_support/compile_and_link.py` |
 | `_blas_dirs.py` | Candidate BLAS library directories for `blas_dispatch.c`'s discovery scans. Pure `importlib`/`pathlib`; no dlopen |
 
 ### C Extension
@@ -141,7 +141,9 @@ results that diverge from GEMMA's validation tolerances.
 | `include/jlinalg.h` | Public C API, ABI version, function pointer typedefs |
 | `src/pymodule.c` | Python/NumPy bridge (buffer extraction, GIL release, error translation) |
 | `src/platform.c` | ISA detection (CPUID/hwcap), vendor BLAS dispatch init |
-| `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym, dispatch wrappers. Candidate directories come from `_blas_dirs.probe_plan()` (Python); C keeps every dlopen/dlsym call |
+| `include/blas_dispatch_internal.h` | Private selected-backend state shared by discovery and operation wrappers |
+| `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym and selected-backend ownership. Candidate directories come from `_blas_dirs.probe_plan()` (Python); C keeps every dlopen/dlsym call |
+| `src/blas_operations.c` | DGEMM, DSYRK, DSYEVD, and DSYEVR wrappers over the selected backend |
 | `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. `jlinalg_eigh_c` requires tightly packed row-major storage (`ldk == ldz == N`); a padded stride returns `JLINALG_EXT_BAD_STRIDE` rather than being serviced by a second code path, since no caller in the tree ever passes one. A `prefer_dsyevr` flag lets the caller skip the DSYEVD attempt outright -- the memory plan that already reserved DSYEVR's smaller footprint passes it through `jlinalg.eigh(K, driver="dsyevr")` so the driver that runs matches the one that was budgeted, rather than being decided a second time by an allocation failure. `status->driver_used` reports which routine actually ran. |
 | `src/snp_stats.c` | SNP statistics kernel (chunked mean/variance/MAF) |
 
@@ -150,7 +152,7 @@ There are no hand-rolled LAPACK implementations in the tree. As of commit
 is **vendor ILP64 LAPACK > NumPy fallback** with nothing in between -- if
 vendor LAPACK is unavailable on a target platform, jlinalg falls through to
 NumPy, never to a translated C routine. The `LAPACK_SOURCES` tuple in
-`_build_support/compile_and_link.py` holds only the `eigh.c` dispatcher (it
+`_build_support/build_models.py` holds only the `eigh.c` dispatcher (it
 gets strict IEEE 754 flags) -- no translated LAPACK routines are listed.
 
 ## Thread Model
@@ -202,7 +204,8 @@ uv run pytest tests/ -x
 ### Adding a New Operation
 
 1. **Add function pointer typedef** in `include/jlinalg.h`
-2. **Add vendor-dispatch wrapper** in `src/blas_dispatch.c`
+2. **Add vendor-dispatch wrapper** in `src/blas_operations.c`; discovery and
+   selected-backend ownership stay in `src/blas_dispatch.c`
 3. **Add Python bridge** in `src/pymodule.c`. Keep it to memory-safety
    checks only (dtype, contiguity, alignment, writeability) and error-code
    translation; put the semantic contract (argument values, shape math) in
@@ -212,7 +215,7 @@ uv run pytest tests/ -x
    that raises on a bad call, a `_<op>_numpy_impl` (unchecked NumPy compute),
    and the public `<op>()` that validates once and dispatches to whichever
    backend the module bound (`_<op>_backend`).
-5. **Register source files** in `src/jamma/_build_support/compile_and_link.py`
+5. **Register source files** in `src/jamma/_build_support/build_models.py`
    -- add to `BASELINE_SOURCES` for routines that should compile with the
    default flags, or `LAPACK_SOURCES` for LAPACK routines that need strict
    IEEE 754. The three compile entry points (`hatch_build.py`,
@@ -223,7 +226,7 @@ uv run pytest tests/ -x
 
 ### Compilation Flags
 
-Compile flags are owned by `src/jamma/_build_support/compile_and_link.py`
+Compile flags are owned by `src/jamma/_build_support/build_models.py`
 (`BASE_CFLAGS`, `LAPACK_CFLAGS`, `BASELINE_SOURCES`, `LAPACK_SOURCES`,
 `LINK_FLAGS_BY_PLATFORM`). The strict-IEEE-754 split is the central
 invariant:
@@ -238,7 +241,7 @@ invariant:
 The pre-commit hook `scripts/check_compile_flag_literals.py` bans bare
 `-O3`/`-fno-fast-math`/`-fopenmp` literals anywhere outside
 `_build_support/`. The dev-mode `-march=native` flag lives in
-`LMM_ACCEL_SPEC.dev_extra_cflags` in `compile_and_link.py`, applied only on
+`LMM_ACCEL_SPEC.dev_extra_cflags` in `build_models.py`, applied only on
 the dev rebuild path so it can never reach the portable wheel build. A second hook
 (`scripts/verify_compile_invocations_match.py`) enforces that the three
 compile entry points all import from `_build_support` rather than
@@ -264,7 +267,8 @@ duplicating flag/source lists.
 
 `JLINALG_ABI_VERSION` in `jlinalg.h` must be bumped whenever:
 
-- A function pointer or global state variable is added to blas_dispatch.c
+- A function pointer or selected-backend state field is added to the BLAS
+  dispatch internals
 - A function signature changes
 - A new extern is added that pymodule.c exports
 

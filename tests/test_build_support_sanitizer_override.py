@@ -220,7 +220,7 @@ def test_compile_jlinalg_forwards_extra_lapack_cflags(monkeypatch, tmp_path):
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(
-        "jamma._build_support.compile_and_link.subprocess.run",
+        "jamma._build_support.build_execution.subprocess.run",
         _fake_run,
     )
 

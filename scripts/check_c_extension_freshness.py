@@ -7,7 +7,7 @@ JAMMA ships two C extensions built from `src/jamma/**/*.c` and `*.h`:
   - src/jamma/jlinalg/_jlinalg.<EXT_SUFFIX> <- src/jamma/jlinalg/src/*.c + include/*.h
 
 The _lmm_accel source list is read from ``LMM_ACCEL_SOURCES`` in
-``src/jamma/_build_support/compile_and_link.py``, the tuple both build entry
+``src/jamma/_build_support/build_models.py``, the tuple both build entry
 points compile, so a kernel file added there is checked here without a
 second list. The module is loaded by path rather than imported through
 ``jamma``: importing the package loads ``_lmm_accel`` and may trigger the
@@ -71,9 +71,9 @@ def _ext_suffix() -> str:
 
 
 def _lmm_accel_sources(root: Path) -> tuple[str, ...]:
-    """Read LMM_ACCEL_SOURCES from compile_and_link.py without importing jamma."""
-    path = root / "src/jamma/_build_support/compile_and_link.py"
-    spec = importlib.util.spec_from_file_location("_freshness_compile_and_link", path)
+    """Read LMM_ACCEL_SOURCES from build_models.py without importing jamma."""
+    path = root / "src/jamma/_build_support/build_models.py"
+    spec = importlib.util.spec_from_file_location("_freshness_build_models", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)

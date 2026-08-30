@@ -6,8 +6,8 @@ The verifier enforces that all three compile entry points
 A bug in the verifier would silently bless divergence, defeating its purpose.
 
 The bare-flag-literal scan was retired (it duplicated
-``check_compile_flag_literals.py``); these tests cover the remaining AST
-"calls ``run_build``" check against synthetic entry-point trees.
+``check_compile_flag_literals.py``); these tests prove the remaining AST check
+resolves calls back to the shared facade rather than trusting a callee's name.
 """
 
 from __future__ import annotations
@@ -77,11 +77,41 @@ def _write_tree(
 
 
 def test_ast_detects_bare_call():
-    assert _VERIFIER._has_run_build_call("run_build(spec, pkg)")
+    source = dedent("""
+        from jamma._build_support.compile_and_link import run_build
+
+        run_build(spec, pkg)
+    """)
+    assert _VERIFIER._has_run_build_call(source)
 
 
 def test_ast_detects_attribute_call():
-    src = "from x import y\ncompile_and_link.run_build(spec, pkg)"
+    src = dedent("""
+        import jamma._build_support.compile_and_link as compile_and_link
+
+        compile_and_link.run_build(spec, pkg)
+    """)
+    assert _VERIFIER._has_run_build_call(src)
+
+
+def test_ast_detects_imported_compile_extension_alias():
+    src = dedent("""
+        from jamma._build_support.compile_and_link import compile_extension as _compile
+
+        def compile_extension():
+            return _compile(spec, pkg)
+    """)
+    assert _VERIFIER._has_run_build_call(src)
+
+
+def test_ast_detects_isolated_build_facade_binding():
+    src = dedent("""
+        _cal = _load_build_support_module(
+            "jamma_build_support.compile_and_link", "compile_and_link.py"
+        )
+        run_build = _cal.run_build
+        run_build(spec, pkg)
+    """)
     assert _VERIFIER._has_run_build_call(src)
 
 
@@ -103,17 +133,13 @@ def test_ast_rejects_mention_in_string_literal():
     assert not _VERIFIER._has_run_build_call(src)
 
 
-def test_ast_accepts_local_definition_that_also_calls_itself():
-    """Edge case: a local ``def run_build`` that ALSO calls itself satisfies
-    the check — the call is real, even though the definition shadows the
-    imported helper. The AST check is about call-site presence, not resolving
-    WHICH run_build is called; a local reimplementation would duplicate flags
-    and trip the compile-flag drift lint."""
+def test_ast_rejects_local_definition_that_calls_itself():
+    """A same-named local function does not prove use of the shared facade."""
     src = dedent("""
         def run_build(**kwargs):
             return run_build(foo=1)  # recursion
     """)
-    assert _VERIFIER._has_run_build_call(src)
+    assert not _VERIFIER._has_run_build_call(src)
 
 
 def test_ast_handles_syntax_error_gracefully():
@@ -128,7 +154,11 @@ def test_ast_handles_syntax_error_gracefully():
 
 def test_valid_tree_passes(tmp_path):
     """All three entry points call run_build properly — verifier returns 0."""
-    entry = "from x import y\ncompile_and_link.run_build(spec, pkg)\n"
+    entry = dedent("""
+        from jamma._build_support.compile_and_link import run_build
+
+        run_build(spec, pkg)
+    """)
     bs, eps = _write_tree(
         tmp_path,
         {
@@ -145,7 +175,10 @@ def test_valid_tree_passes(tmp_path):
 def test_entry_point_with_no_call_fails(tmp_path):
     """An entry point that imports but never calls run_build is a drift:
     someone might have deleted the call accidentally."""
-    good = "run_build(spec, pkg)\n"
+    good = dedent("""
+        from jamma._build_support.compile_and_link import run_build
+        run_build(spec, pkg)
+    """)
     silent = "from jamma._build_support import compile_and_link\n# forgot to call\n"
     bs, eps = _write_tree(
         tmp_path,
@@ -195,7 +228,12 @@ def test_missing_run_build_in_helper_is_flagged(tmp_path):
     broken_support = '"""No driver here."""\n'
     bs, eps = _write_tree(
         tmp_path,
-        {"hatch_build.py": "run_build(spec, pkg)\n"},
+        {
+            "hatch_build.py": (
+                "from jamma._build_support.compile_and_link import run_build\n"
+                "run_build(spec, pkg)\n"
+            )
+        },
         build_support=broken_support,
     )
     rc, failures = _VERIFIER.check(bs, eps)
@@ -222,7 +260,10 @@ def test_multiple_failures_all_reported(tmp_path):
         {
             "hatch_build.py": "# no call here\npass\n",
             "_compile_jlinalg.py": "# also no call\npass\n",
-            "_compile_accel.py": "run_build()\n",
+            "_compile_accel.py": (
+                "from jamma._build_support.compile_and_link import run_build\n"
+                "run_build()\n"
+            ),
         },
     )
     rc, failures = _VERIFIER.check(bs, eps)

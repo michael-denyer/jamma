@@ -2,7 +2,7 @@
 """Ban bare compile-flag literals outside jamma._build_support.
 
 Single source of truth for compiler flags is
-`src/jamma/_build_support/compile_and_link.py`.
+`src/jamma/_build_support/build_models.py`.
 Any flag literal in the four compile entry points means someone duplicated a
 flag again — that's exactly the footgun this lint prevents.
 
@@ -16,7 +16,7 @@ wanted to; that's a code-review problem, not a regex problem.
 Deliberate exception: a line ending with ``# allow-compile-flag-literal``
 (plus optional rationale) is skipped. No entry point uses it today —
 ``-march=native`` lives in ``LMM_ACCEL_SPEC.dev_extra_cflags`` in
-``_build_support/compile_and_link.py``, applied only on the dev rebuild path
+``_build_support/build_models.py``, applied only on the dev rebuild path
 and never on the wheel path, so wheels stay portable without any entry point
 needing its own escape hatch. The hatch remains for a future case where
 divergence between entry points is genuinely intentional.
@@ -158,7 +158,7 @@ def main() -> int:
                 violations.append(
                     f"{target}:{i + 1}: bare compile-flag literal {flag!r} — "
                     f"add flags to src/jamma/_build_support/"
-                    f"compile_and_link.py instead"
+                    f"build_models.py instead"
                 )
 
     skipped = report_unreadable(unreadable)

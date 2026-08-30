@@ -31,7 +31,7 @@ from jamma.lmm.stats import (
 )
 from jamma.lmm.uab import batch_compute_iab_numpy, compute_iab_invariant_scalars_ncvt1
 
-MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_accel.c
+MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_types.h
 
 
 class WaldResult(TypedDict):

@@ -242,7 +242,7 @@ Eigendecomp dominates the increase: O(n^3) scaling from 90k->125k is ~2.1x (DSYE
 
 ## C Extension LMM Acceleration (NumPy Backend)
 
-The NumPy backend includes an optional C extension (`_lmm_accel.c`) with OpenMP parallelism
+The NumPy backend includes an optional multi-source `_lmm_accel` C extension with OpenMP parallelism
 that replaces the Python loop over SNPs for Wald test computation. The extension uses a
 workspace API (pre-allocated per-thread buffers). The primary path (fused kernel) takes
 utg_t in (n_snps, n_samples) layout directly from DGEMM TRANSA, computing wx/xx/xy

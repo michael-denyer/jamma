@@ -30,7 +30,6 @@ from jamma.lmm.association_plan import (
     plan_association,
 )
 from jamma.lmm.chunk_runner_numpy import (
-    ChunkRunOptions,
     RawLmmChunk,
     run_lmm_chunk_source_numpy,
 )
@@ -232,7 +231,7 @@ def _run_numpy_lmm(
         )
 
     n_filtered = genotypes.n_filtered
-    association_execution = execution.tighten_after_filter(n_filtered)
+    tightened_chunks = execution.tighten_after_filter(n_filtered)
 
     if show_progress:
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
@@ -290,13 +289,12 @@ def _run_numpy_lmm(
         chunk_stats = run_lmm_chunk_source_numpy(
             genotypes=genotypes,
             chunk_sink=chunk_sink,
-            execution=association_execution,
+            dispatch=execution.dispatch,
+            chunks=tightened_chunks,
             prepared=prepared,
             config=config,
-            options=ChunkRunOptions(
-                progress_label=progress_label,
-                lambda_warning_prefix=lambda_warning_prefix,
-            ),
+            progress_label=progress_label,
+            lambda_warning_prefix=lambda_warning_prefix,
         )
 
         if show_progress:

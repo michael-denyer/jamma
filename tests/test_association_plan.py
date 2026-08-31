@@ -7,7 +7,6 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from jamma.lmm.association_plan import (
-    AssociationExecution,
     ExecutableAssociationPlan,
     ExecutionPlan,
 )
@@ -17,7 +16,7 @@ from jamma.lmm.dispatch import DispatchPath
 pytestmark = pytest.mark.tier0
 
 
-def test_internal_plan_and_final_execution_are_frozen() -> None:
+def test_plan_is_frozen_and_tightening_returns_a_chunk_plan() -> None:
     conservative = LmmChunkPlan(100, 10, 2, True)
     plan = ExecutableAssociationPlan(
         summary=ExecutionPlan("batch", "test"),
@@ -28,13 +27,11 @@ def test_internal_plan_and_final_execution_are_frozen() -> None:
         n_cvt=1,
         mem_budget_gb=None,
     )
-    execution = plan.tighten_after_filter(500)
+    tightened = plan.tighten_after_filter(500)
 
-    assert isinstance(execution, AssociationExecution)
+    assert isinstance(tightened, LmmChunkPlan)
     with pytest.raises(FrozenInstanceError):
         plan.n_samples = 2_000  # type: ignore[misc]
-    with pytest.raises(FrozenInstanceError):
-        execution.mode = "streaming"  # type: ignore[misc]
 
 
 def test_tightening_only_decreases_width_and_preserves_policy() -> None:
@@ -48,11 +45,12 @@ def test_tightening_only_decreases_width_and_preserves_policy() -> None:
         mem_budget_gb=8.0,
     )
 
-    execution = plan.tighten_after_filter(250)
+    tightened = plan.tighten_after_filter(250)
 
-    assert execution.mode == "streaming"
-    assert execution.dispatch is DispatchPath.FUSED_GENERAL
-    assert execution.chunks == LmmChunkPlan(100, 3, 1, False)
+    # Tightening narrows geometry only; mode and dispatch stay on the plan.
+    assert plan.summary.mode == "streaming"
+    assert plan.dispatch is DispatchPath.FUSED_GENERAL
+    assert tightened == LmmChunkPlan(100, 3, 1, False)
 
 
 def test_tightening_never_turns_pipeline_on() -> None:

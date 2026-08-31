@@ -11,8 +11,7 @@ import numpy as np
 import pytest
 
 from jamma.core.snp_stats import SnpSelection
-from jamma.lmm.association_plan import AssociationExecution
-from jamma.lmm.chunk_runner_numpy import ChunkRunOptions, run_lmm_chunk_source_numpy
+from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes
@@ -67,11 +66,8 @@ def test_prepared_run_and_config_define_an_empty_chunk_run() -> None:
     stats = run_lmm_chunk_source_numpy(
         genotypes=_prepared_genotypes(n_samples, 0),
         chunk_sink=lambda _arrays, _start, _end: None,
-        execution=AssociationExecution(
-            mode="batch",
-            dispatch=DispatchPath.NUMPY_FALLBACK,
-            chunks=LmmChunkPlan(1, 0, 1, False),
-        ),
+        dispatch=DispatchPath.NUMPY_FALLBACK,
+        chunks=LmmChunkPlan(1, 0, 1, False),
         prepared=prepared,
         config=LmmConfig(show_progress=False),
     )
@@ -103,14 +99,10 @@ def _run_kwargs(**overrides):
     base = {
         "genotypes": _prepared_genotypes(n_samples, 5),
         "chunk_sink": lambda _arrays, _start, _end: None,
-        "execution": AssociationExecution(
-            mode="batch",
-            dispatch=DispatchPath.NUMPY_FALLBACK,
-            chunks=LmmChunkPlan(5, 1, 1, False),
-        ),
+        "dispatch": DispatchPath.NUMPY_FALLBACK,
+        "chunks": LmmChunkPlan(5, 1, 1, False),
         "prepared": prepared,
         "config": LmmConfig(lmm_mode=1, show_progress=False),
-        "options": ChunkRunOptions(),
     }
     base.update(overrides)
     return base

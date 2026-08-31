@@ -715,10 +715,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     """The final chunk engine requests the width allowed by mem_budget."""
     from jamma.core.snp_stats import SnpSelection
     from jamma.lmm import accel
-    from jamma.lmm.chunk_runner_numpy import (
-        ChunkRunOptions,
-        run_lmm_chunk_source_numpy,
-    )
+    from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
     from jamma.lmm.genotype_source import PreparedGenotypes
     from jamma.lmm.prepare_common import PreparedLmmRun
     from jamma.lmm.schema import LmmConfig, SnpMeta
@@ -774,24 +771,25 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
         chunk_factory=observe_geometry,
     )
 
+    exec_plan = plan_association(
+        n_samples,
+        n_snps,
+        requested="numpy",
+        n_cvt=n_cvt,
+        mem_budget=mem_budget,
+    )
     with pytest.raises(GeometryObserved):
         run_lmm_chunk_source_numpy(
             genotypes=genotypes,
             chunk_sink=lambda _arrays, _start, _end: None,
-            execution=plan_association(
-                n_samples,
-                n_snps,
-                requested="numpy",
-                n_cvt=n_cvt,
-                mem_budget=mem_budget,
-            ).tighten_after_filter(n_snps),
+            dispatch=exec_plan.dispatch,
+            chunks=exec_plan.tighten_after_filter(n_snps),
             prepared=prepared,
             config=LmmConfig(
                 lmm_mode=1,
                 mem_budget=mem_budget,
                 show_progress=False,
             ),
-            options=ChunkRunOptions(),
         )
 
     assert expected.chunk_size == 100

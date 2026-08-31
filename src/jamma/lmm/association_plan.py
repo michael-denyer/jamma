@@ -56,15 +56,6 @@ class MemoryPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class AssociationExecution:
-    """Final post-filter inputs needed by the chunk engine."""
-
-    mode: ExecutionMode
-    dispatch: DispatchPath
-    chunks: LmmChunkPlan
-
-
-@dataclass(frozen=True, slots=True)
 class ExecutableAssociationPlan:
     """Selected mode, dispatch, conservative geometry, and memory policy."""
 
@@ -126,13 +117,9 @@ class ExecutableAssociationPlan:
             eigen=None,
         )
 
-    def tighten_after_filter(self, n_filtered: int) -> AssociationExecution:
+    def tighten_after_filter(self, n_filtered: int) -> LmmChunkPlan:
         """Narrow geometry once without re-reading RAM or changing policy."""
-        return AssociationExecution(
-            mode=self.summary.mode,
-            dispatch=self.dispatch,
-            chunks=tighten_lmm_chunks(self.conservative_chunks, n_filtered),
-        )
+        return tighten_lmm_chunks(self.conservative_chunks, n_filtered)
 
 
 def plan_association(

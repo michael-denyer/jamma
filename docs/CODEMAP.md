@@ -259,18 +259,17 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:138](../src/jamma/lmm/association_plan.py#L138) |
-| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy with one-way post-filter tightening | [association_plan.py:68](../src/jamma/lmm/association_plan.py#L68) |
-| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:142](../src/jamma/lmm/runner_numpy.py#L133) |
+| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:138](../src/jamma/lmm/association_plan.py#L125) |
+| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy with one-way post-filter tightening | [association_plan.py:68](../src/jamma/lmm/association_plan.py#L59) |
+| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:142](../src/jamma/lmm/runner_numpy.py#L132) |
 | 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:104](../src/jamma/lmm/genotype_source.py#L103) |
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:28](../src/jamma/lmm/genotype_source.py#L25) |
 | 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:68](../src/jamma/lmm/genotype_source.py#L65) |
-| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:59](../src/jamma/lmm/runner_numpy.py#L61) |
-| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:351](../src/jamma/lmm/runner_numpy.py#L342) |
+| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:59](../src/jamma/lmm/runner_numpy.py#L60) |
+| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:351](../src/jamma/lmm/runner_numpy.py#L340) |
 | 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:324](../src/jamma/lmm/prepare_common.py#L324) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:290](../src/jamma/lmm/chunk_runner_numpy.py#L290) |
-| 4Nb | `ChunkRunOptions` | Resource and presentation options outside the prepared run/config | [chunk_runner_numpy.py:125](../src/jamma/lmm/chunk_runner_numpy.py#L125) |
-| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:135](../src/jamma/lmm/chunk_runner_numpy.py#L135) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:290](../src/jamma/lmm/chunk_runner_numpy.py#L279) |
+| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:135](../src/jamma/lmm/chunk_runner_numpy.py#L124) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, derived once | [chunk_kernel.py:39](../src/jamma/lmm/chunk_kernel.py#L39) |
 | 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:155](../src/jamma/lmm/chunk_kernel.py#L155) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:118](../src/jamma/lmm/chunk_pipeline.py#L118) |

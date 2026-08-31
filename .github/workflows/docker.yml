@@ -81,8 +81,13 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: jamma-ci:${{ github.sha }}
+          # mode=min, not max: the MKL layers are ~2 GB, and this repo already
+          # holds 3.7 GB of the 10 GB Actions cache in prek and uv entries that
+          # every other workflow depends on. Exporting every intermediate layer
+          # would LRU-evict those to speed up a job that runs only when the
+          # Docker inputs change.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
 
       - name: Entrypoint responds
         run: |

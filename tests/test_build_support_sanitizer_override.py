@@ -1,5 +1,5 @@
 """Tests for the JAMMA_SANITIZE env-var override and the LAPACK extra-flags
-forwarding through ``resolve_cflags_for`` and ``compile_jlinalg``.
+forwarding through ``resolve_cflags_for`` and ``execute_build``.
 
 Covers the sanitizer flag injection seam.
 """
@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from jamma._build_support.compile_and_link import (
+from jamma._build_support.build_execution import execute_build
+from jamma._build_support.build_models import (
     BASE_CFLAGS,
     LAPACK_CFLAGS,
     apply_sanitizer_overrides,
-    compile_jlinalg,
     resolve_cflags_for,
 )
 
@@ -200,12 +200,12 @@ def test_resolve_cflags_baseline_path_unaffected_by_extra_lapack_cflags():
 
 
 # ---------------------------------------------------------------------------
-# compile_jlinalg — forwarding of extra_lapack_cflags through _compile_sources
+# execute_build — forwarding of extra_lapack_cflags through _compile_sources
 # ---------------------------------------------------------------------------
 
 
-def test_compile_jlinalg_forwards_extra_lapack_cflags(monkeypatch, tmp_path):
-    """A compile_jlinalg call with extra_lapack_cflags must propagate the
+def test_execute_build_forwards_extra_lapack_cflags(monkeypatch, tmp_path):
+    """A execute_build call with extra_lapack_cflags must propagate the
     extras into the LAPACK source's compile command line; baseline sources
     must NOT receive them.
     """
@@ -230,7 +230,7 @@ def test_compile_jlinalg_forwards_extra_lapack_cflags(monkeypatch, tmp_path):
     src_lapack.write_text("// stub\n")
     out = tmp_path / "out.so"
 
-    result = compile_jlinalg(
+    result = execute_build(
         sources=[src_base, src_lapack],
         lapack_sources=[src_lapack],
         include_dirs=[],

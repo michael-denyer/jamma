@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -17,48 +16,31 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TextIO
 
-from .build_execution import (
-    CompileResult,
-    Toolchain,
-    compile_jlinalg,
-    detect_toolchain,
-    link_cmd,
-)
+from .build_execution import Toolchain, detect_toolchain, execute_build
 from .build_models import (
-    BASE_CFLAGS,
-    BASELINE_SOURCES,
     JLINALG_SPEC,
-    LAPACK_CFLAGS,
-    LAPACK_SOURCES,
     LINK_FLAGS_BY_PLATFORM,
-    LMM_ACCEL_SOURCES,
     LMM_ACCEL_SPEC,
     BuildSpec,
     apply_sanitizer_overrides,
     resolve_build_spec,
-    resolve_cflags_for,
 )
 
+#: The composition root's own surface: the two drivers, the two specs they are
+#: driven with, and the toolchain type/detector the wheel backend needs. Build
+#: policy constants live in ``build_models`` and execution internals in
+#: ``build_execution``; import those from their home module rather than adding
+#: a re-export here. ``hatch_build.py`` reads exactly ``LMM_ACCEL_SPEC``,
+#: ``JLINALG_SPEC``, ``run_build`` and ``detect_toolchain`` off this module,
+#: and ``core.recompile`` monkeypatches ``compile_extension`` on it.
 __all__ = (
-    "BASELINE_SOURCES",
-    "BASE_CFLAGS",
     "JLINALG_SPEC",
-    "LAPACK_CFLAGS",
-    "LAPACK_SOURCES",
-    "LINK_FLAGS_BY_PLATFORM",
-    "LMM_ACCEL_SOURCES",
     "LMM_ACCEL_SPEC",
     "BuildResult",
     "BuildSpec",
-    "CompileResult",
     "Toolchain",
-    "apply_sanitizer_overrides",
     "compile_extension",
-    "compile_jlinalg",
     "detect_toolchain",
-    "link_cmd",
-    "resolve_build_spec",
-    "resolve_cflags_for",
     "run_build",
 )
 
@@ -67,7 +49,7 @@ __all__ = (
 # ---------------------------------------------------------------------------
 
 
-BuildPhase = Literal["preflight", "compile", "link", "publish", "ok"]
+BuildPhase = Literal["preflight", "build", "ok"]
 
 
 @dataclass(frozen=True)
@@ -77,12 +59,14 @@ class BuildResult:
     ``phase`` says how far the build got: ``"preflight"`` for a guard firing
     before any source was touched (no numpy, no compiler, missing
     headers/sources, Windows — the wheel path turns this into a pure-Python
-    fallback, the dev path treats it as an error), ``"compile"``/``"link"``
-    for a failure in ``compile_jlinalg``, ``"publish"`` for the atomic
-    ``os.replace`` failing after a successful link, and ``"ok"`` for success.
-    ``error`` is ``""`` on success and a human-readable message otherwise —
-    callers read it directly, with no ``result.error if result else
-    "unknown"`` guard. ``output_path`` is set only when ``phase == "ok"``.
+    fallback, the dev path treats it as an error), ``"build"`` for a compile,
+    link, or atomic-publish failure inside ``execute_build``, and ``"ok"`` for
+    success. The compile/link/publish distinction is not modelled here because
+    no caller branches on it: both consumers print ``error``, which already
+    names the failing stage. ``error`` is ``""`` on success and a
+    human-readable message otherwise — callers read it directly, with no
+    ``result.error if result else "unknown"`` guard. ``output_path`` is set
+    only when ``phase == "ok"``.
     """
 
     phase: BuildPhase
@@ -106,34 +90,6 @@ class BuildResult:
         return self.phase == "preflight"
 
 
-def _diagnose_flags(cc_cmd: str) -> list[str]:
-    """Vectorization-report flags for ``cc_cmd`` (clang ``-Rpass`` vs gcc)."""
-    try:
-        probe = subprocess.run(
-            [cc_cmd, "--version"], capture_output=True, text=True, timeout=5
-        )
-        compiler_id = probe.stdout.lower() if probe.returncode == 0 else ""
-    except (subprocess.TimeoutExpired, OSError):
-        compiler_id = ""
-    if "clang" in compiler_id:
-        return [
-            "-Rpass=loop-vectorize",
-            "-Rpass-missed=loop-vectorize",
-            "-Rpass-analysis=loop-vectorize",
-        ]
-    return ["-fopt-info-vec-all"]
-
-
-def _result_phase(result: CompileResult) -> BuildPhase:
-    """Classify a failed ``CompileResult`` by which stage its error names."""
-    error = result.error or ""
-    if error.startswith("atomic replace"):
-        return "publish"
-    if error.startswith("link failed"):
-        return "link"
-    return "compile"
-
-
 def run_build(
     spec: BuildSpec,
     package_dir: Path,
@@ -153,7 +109,7 @@ def run_build(
     ``detect_toolchain()`` and reuses it across every ``BuildSpec`` it builds
     in this process. What remains here is spec-specific: the sources-exist
     check, the ``EXT_SUFFIX``/output path, ``resolve_build_spec``, sanitizer
-    overrides, platform link flags, and the ``compile_jlinalg`` call under a
+    overrides, platform link flags, and the ``execute_build`` call under a
     temp dir.
 
     Preflight failures print through ``error_print`` — as ``WARNING`` and a
@@ -191,8 +147,8 @@ def run_build(
     include_dirs = [toolchain.python_inc, toolchain.numpy_inc]
     include_dirs.extend(str(pkg_dir.joinpath(*parts)) for parts in spec.include_parts)
 
-    diag_flags = tuple(
-        _diagnose_flags(toolchain.cc_cmd) if spec.supports_diagnose and diagnose else ()
+    diag_flags = (
+        toolchain.diagnose_flags() if spec.supports_diagnose and diagnose else ()
     )
     base_extras = resolve_build_spec(
         spec, dev_mode=dev_mode, env=resolved_env, diagnose_flags=diag_flags
@@ -210,7 +166,7 @@ def run_build(
 
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"{spec.output_stem.lstrip('_')}_build_"))
     try:
-        result = compile_jlinalg(
+        result = execute_build(
             sources=sources,
             lapack_sources=lapack_sources,
             include_dirs=include_dirs,
@@ -233,7 +189,7 @@ def run_build(
 
     if not result.success:
         return BuildResult(
-            phase=_result_phase(result),
+            phase="build",
             error=result.error or "unknown",
             used_openmp=result.used_openmp,
             used_openmp_link=result.used_openmp_link,

@@ -24,8 +24,6 @@ Env vars:
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -38,6 +36,7 @@ from pathlib import Path
 #      ``compile_extension()`` from this module.
 from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
 from jamma._build_support.compile_and_link import compile_extension as _compile
+from jamma._build_support.load_proof import load_proof as _load_proof_for
 
 
 def compile_extension(
@@ -76,49 +75,14 @@ def compile_extension(
     )
 
 
-def _load_proof(
-    import_code: str = "from jamma.lmm._lmm_accel import compute_lmm_chunk_ncvt1_c",
-) -> bool:
-    """Prove the freshly compiled extension imports, in a fresh subprocess.
+def _load_proof(import_code: str | None = None) -> bool:
+    """Prove the freshly compiled ``_lmm_accel`` imports, in a subprocess.
 
-    A successful compile+link does not guarantee a usable module — bad
-    RPATH, missing runtime library, ABI mismatch with the host numpy, or a
-    missing C symbol can let the link pass but the import fail. Runs in a
-    subprocess rather than this interpreter so the proof never re-executes
-    ``jamma.lmm``'s own import machinery (the #181 self-deadlock cause).
-
-    Skipped when JAMMA_SANITIZE is set: importing an ASan-instrumented .so
-    requires LD_PRELOAD=libasan.so, which the sanitizer workflow only exports
-    for the pytest step, not this compile step — the subprocess would abort
-    with "ASan runtime does not come first in initial library list" (exit
-    134). The pytest step exercises the .so under the correct LD_PRELOAD.
-
-    Args:
-        import_code: The statement run in the subprocess. Overridable so a
-            test can point the proof at a module that cannot import, without
-            touching a real .so.
+    Bound to ``LMM_ACCEL_SPEC``; see
+    ``jamma._build_support.load_proof.load_proof`` for the behavior and why
+    the probe runs out of process.
     """
-    if os.environ.get("JAMMA_SANITIZE", "").strip() not in ("", "0"):
-        print(
-            "skipping post-link import proof — JAMMA_SANITIZE is set",
-            file=sys.stderr,
-        )
-        return True
-
-    proc = subprocess.run(
-        [sys.executable, "-c", import_code],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        print(
-            "ERROR: _lmm_accel compiled but failed to import in a fresh "
-            f"interpreter (exit {proc.returncode}):",
-            file=sys.stderr,
-        )
-        print(proc.stderr, file=sys.stderr)
-        return False
-    return True
+    return _load_proof_for(LMM_ACCEL_SPEC, import_code)
 
 
 if __name__ == "__main__":

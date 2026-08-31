@@ -175,7 +175,7 @@ def test_lmm_accel_spec_checks_every_build_source_and_the_headers() -> None:
     with no second list to update. A .c file in src/jamma/lmm that is not in
     the tuple is not built either, so not watching it is correct.
     """
-    from jamma._build_support.compile_and_link import LMM_ACCEL_SOURCES
+    from jamma._build_support.build_models import LMM_ACCEL_SOURCES
 
     freshness = _load_script_module()
     (spec,) = [e for e in freshness._discover_extensions() if e.label == "_lmm_accel"]

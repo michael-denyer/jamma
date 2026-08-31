@@ -129,7 +129,7 @@ class TestJlinalgABIValidation:
         """
         import types
 
-        from jamma._build_support.compile_and_link import BuildSpec
+        from jamma._build_support.build_models import BuildSpec
         from jamma.core.recompile import _import_and_validate
 
         key = "jamma._fake_abi_probe"

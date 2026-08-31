@@ -31,7 +31,7 @@ def _fake_spec(*, module_name, sys_module_key, label):
     The build fields are dummies — auto_recompile_c_extension reads only
     module_name / sys_module_key / fallback_label.
     """
-    from jamma._build_support.compile_and_link import BuildSpec
+    from jamma._build_support.build_models import BuildSpec
 
     return BuildSpec(
         package_parts=(),
@@ -509,7 +509,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
 
 
 def _fake_build_spec(*, module_name, sys_module_key, fallback_label, required_attrs=()):
-    from jamma._build_support.compile_and_link import BuildSpec
+    from jamma._build_support.build_models import BuildSpec
 
     return BuildSpec(
         package_parts=(),

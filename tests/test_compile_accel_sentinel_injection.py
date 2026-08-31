@@ -10,14 +10,14 @@ function exposed.
 these tests pass ``env`` as a plain dict and assert on the returned tuple. No
 compiler runs and nothing is mocked — the earlier version drove a full
 ``compile_extension`` and swallowed the post-link import failure to capture
-kwargs off a monkeypatched ``compile_jlinalg``.
+kwargs off a monkeypatched ``execute_build``.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC, resolve_build_spec
+from jamma._build_support.build_models import LMM_ACCEL_SPEC, resolve_build_spec
 
 pytestmark = pytest.mark.tier0
 

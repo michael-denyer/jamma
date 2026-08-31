@@ -147,7 +147,9 @@ def run_build(
     include_dirs = [toolchain.python_inc, toolchain.numpy_inc]
     include_dirs.extend(str(pkg_dir.joinpath(*parts)) for parts in spec.include_parts)
 
-    diag_flags = toolchain.diagnose_flags if spec.supports_diagnose and diagnose else ()
+    diag_flags = (
+        toolchain.diagnose_flags() if spec.supports_diagnose and diagnose else ()
+    )
     base_extras = resolve_build_spec(
         spec, dev_mode=dev_mode, env=resolved_env, diagnose_flags=diag_flags
     )

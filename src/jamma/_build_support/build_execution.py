@@ -40,19 +40,21 @@ class Toolchain:
     system: str
     omp_compile: tuple[str, ...]
     omp_link: tuple[str, ...]
-    #: Vectorization-report flags for this compiler, for ``diagnose=True``
-    #: builds. Determined from the compiler identity probed during detection,
-    #: so a diagnose build spends no extra ``cc --version`` subprocess.
-    diagnose_flags: tuple[str, ...] = ()
+
+    def diagnose_flags(self) -> tuple[str, ...]:
+        """Vectorization-report flags for this compiler (clang vs gcc).
+
+        Identifying the compiler is toolchain probing, so it belongs here
+        rather than in the composition root. Called only on the
+        ``diagnose=True`` path, so an ordinary build spends no ``cc
+        --version`` subprocess, and the answer is the same for every
+        ``BuildSpec`` built with this toolchain.
+        """
+        return _diagnose_flags(self.cc_cmd)
 
 
 def _diagnose_flags(cc_cmd: str) -> tuple[str, ...]:
-    """Vectorization-report flags for ``cc_cmd`` (clang ``-Rpass`` vs gcc).
-
-    Probing the compiler is toolchain detection, so this runs once inside
-    ``detect_toolchain`` and the answer rides on ``Toolchain``. Its result is
-    the same for every ``BuildSpec`` built with that compiler.
-    """
+    """Vectorization-report flags for ``cc_cmd`` (clang ``-Rpass`` vs gcc)."""
     try:
         probe = subprocess.run(
             [cc_cmd, "--version"], capture_output=True, text=True, timeout=5
@@ -148,7 +150,6 @@ def detect_toolchain(
         system=system,
         omp_compile=tuple(omp_compile),
         omp_link=tuple(omp_link),
-        diagnose_flags=_diagnose_flags(cc_cmd),
     )
 
 

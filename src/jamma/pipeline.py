@@ -574,6 +574,7 @@ class PipelineRunner:
             eigenvectors,
             assoc_path,
             snps_indices,
+            meta,
         )
 
         total_s = time.perf_counter() - t_start

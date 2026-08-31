@@ -403,7 +403,7 @@ def run_lmm_association_numpy(
         max_chunk_size=max_chunk_size,
         log_dispatch_choices=True,
     )
-    return _run_lmm_association_numpy_planned(
+    return run_lmm_association_numpy_planned(
         genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -419,7 +419,7 @@ def run_lmm_association_numpy(
     )
 
 
-def _run_lmm_association_numpy_planned(
+def run_lmm_association_numpy_planned(
     *,
     genotypes: np.ndarray,
     phenotypes: np.ndarray,

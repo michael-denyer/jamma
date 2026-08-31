@@ -193,7 +193,7 @@ def run_lmm_association_numpy_streaming(
         mem_budget=config.mem_budget,
         max_chunk_size=chunk_size,
     )
-    return _run_lmm_association_numpy_streaming_planned(
+    return run_lmm_association_numpy_streaming_planned(
         bed_path=bed_path,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -208,30 +208,34 @@ def run_lmm_association_numpy_streaming(
         validate_genotypes=validate_genotypes,
         config=config,
         execution=execution,
-        _meta=meta,
+        meta=meta,
     )
 
 
-def _run_lmm_association_numpy_streaming_planned(
+def run_lmm_association_numpy_streaming_planned(
     *,
     bed_path: Path,
     phenotypes: np.ndarray,
-    kinship: np.ndarray | None,
-    snp_info: list | SnpMeta | None,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray | None,
     eigenvectors: np.ndarray | None,
-    chunk_size: int | None,
     output_path: Path | None,
     snps_indices: np.ndarray | None,
     hwe_threshold: float,
-    validate_genotypes: bool,
     config: LmmConfig,
     execution: ExecutableAssociationPlan,
-    _meta: PlinkMetadata | None = None,
+    meta: PlinkMetadata,
+    kinship: np.ndarray | None = None,
+    snp_info: list | SnpMeta | None = None,
+    chunk_size: int | None = None,
+    validate_genotypes: bool = True,
 ) -> LmmRunResult:
-    """Run the streaming boundary with policy supplied by the pipeline."""
-    meta = get_plink_metadata(bed_path) if _meta is None else _meta
+    """Run the streaming boundary with policy supplied by the caller.
+
+    ``meta`` is required so the .bim is parsed exactly once per process:
+    the pipeline reads it at startup and passes it through every phenotype's
+    run, and the public entry above passes the copy it planned against.
+    """
     validate_snp_indices(snps_indices, meta.n_snps)
 
     # Caller-supplied SnpMeta or list, or the PLINK metadata parsed once.

@@ -8,6 +8,7 @@ test_pipeline.py; load_kinship behaviour moved to test_pipeline_kinship.py.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -67,7 +68,7 @@ class TestPipelineConfig:
         assert config.show_progress is True
         assert config.mem_budget is None
         assert config.legacy_text is False
-        assert config.phenotype_columns == [1]
+        assert config.phenotype_columns == (1,)
 
     def test_custom_values(self) -> None:
         """PipelineConfig accepts custom values."""
@@ -97,6 +98,39 @@ class TestPipelineConfig:
         """
         with pytest.raises(ValueError, match="must not contain path separators"):
             PipelineConfig(bfile=BFILE, output_prefix="a/b")
+
+    def test_validated_fields_cannot_change_after_construction(self) -> None:
+        """A valid config cannot later acquire an unvalidated output path."""
+        config = PipelineConfig(
+            bfile=BFILE,
+            output_dir=Path("safe"),
+            output_prefix="result",
+        )
+
+        with pytest.raises(FrozenInstanceError):
+            config.output_prefix = "../escaped"  # type: ignore[misc]
+
+        assert config.log_path == Path("safe/result.log.txt")
+
+    def test_collection_inputs_are_copied_into_immutable_values(self) -> None:
+        """A caller-held list cannot change validated columns after construction."""
+        columns = [1, 2]
+        config = PipelineConfig(bfile=BFILE, phenotype_columns=columns)
+
+        columns.append(0)
+
+        assert config.phenotype_columns == (1, 2)
+
+    def test_validated_variation_constructs_a_new_config(self) -> None:
+        """dataclasses.replace reruns validation instead of mutating in place."""
+        config = PipelineConfig(bfile=BFILE, output_prefix="result")
+
+        changed = replace(config, output_prefix="second")
+        assert changed.output_prefix == "second"
+        assert config.output_prefix == "result"
+
+        with pytest.raises(ValueError, match="must not contain path separators"):
+            replace(config, output_prefix="../escaped")
 
 
 @pytest.mark.tier0
@@ -353,14 +387,14 @@ class TestMultiPhenotypeConfig:
     """Tests for PipelineConfig multi-phenotype support."""
 
     def test_phenotype_columns_default_single(self) -> None:
-        """PipelineConfig() has phenotype_columns==[1] by default."""
+        """PipelineConfig() stores one default phenotype column."""
         config = PipelineConfig(bfile=Path("test"))
-        assert config.phenotype_columns == [1]
+        assert config.phenotype_columns == (1,)
 
     def test_phenotype_columns_explicit(self) -> None:
-        """An explicit list is kept in the order it was given."""
+        """An explicit sequence is stored immutably in the order given."""
         config = PipelineConfig(bfile=Path("test"), phenotype_columns=[1, 2, 3])
-        assert config.phenotype_columns == [1, 2, 3]
+        assert config.phenotype_columns == (1, 2, 3)
 
     def test_empty_phenotype_columns_raises(self) -> None:
         """An empty list is a config error, not a stand-in for the default."""
@@ -382,7 +416,7 @@ class TestMultiPhenotypeConfig:
     def test_loco_single_phenotype_ok(self) -> None:
         """PipelineConfig(loco=True, phenotype_columns=[1]) is valid."""
         config = PipelineConfig(bfile=Path("test"), loco=True, phenotype_columns=[1])
-        assert config.phenotype_columns == [1]
+        assert config.phenotype_columns == (1,)
 
 
 # ---------------------------------------------------------------------------

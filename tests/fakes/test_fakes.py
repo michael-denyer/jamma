@@ -156,7 +156,7 @@ class TestFakePipelineRunnerFactory:
 
         assert len(factory.runners) == 2
         assert factory.last_config is last
-        assert factory.last_config.phenotype_columns == [2, 3]
+        assert factory.last_config.phenotype_columns == (2, 3)
 
     def test_last_config_before_any_call_raises(self) -> None:
         factory = FakePipelineRunnerFactory(result=_make_result())

@@ -64,7 +64,7 @@ class TestPhenotypeColumnSelection:
             bfile=sample_plink_data,
             check_memory=False,
         )
-        assert config.phenotype_columns == [1]
+        assert config.phenotype_columns == (1,)
 
         runner = PipelineRunner(config)
         phenotypes, n_analyzed = _first_phenotype(runner)

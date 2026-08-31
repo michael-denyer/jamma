@@ -54,7 +54,8 @@ pip install jamma --no-deps
 
 ### Docker (Linux/amd64, ILP64 pre-configured)
 
-A pre-built Docker image includes ILP64 numpy. MKL is x86_64-only, so always use
+The Dockerfile builds an image from your checkout with ILP64 numpy preconfigured. There
+is no published image, so build it yourself. MKL is x86_64-only, so always use
 `--platform linux/amd64`:
 
 ```bash

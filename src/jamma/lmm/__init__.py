@@ -23,10 +23,14 @@ Modules:
 - io: Result file I/O
 """
 
+from jamma.lmm.association_plan import (
+    ExecutableAssociationPlan,
+    ExecutionPlan,
+    plan_association,
+)
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.loco import DEFAULT_LOCO_CONFIG, LocoConfig, run_lmm_loco
-from jamma.lmm.runner import ExecutionPlan, select_execution_mode
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
 from jamma.lmm.schema import LmmConfig, LmmRunResult
@@ -35,15 +39,16 @@ from jamma.lmm.stats import AssocResult
 __all__ = [
     "DEFAULT_LOCO_CONFIG",
     "AssocResult",
+    "ExecutableAssociationPlan",
     "ExecutionPlan",
     "LmmConfig",
     "LmmRunResult",
     "LocoConfig",
     "eigendecompose_kinship",
+    "plan_association",
     "read_eigen_files",
     "run_lmm_association_numpy",
     "run_lmm_association_numpy_streaming",
     "run_lmm_loco",
-    "select_execution_mode",
     "write_eigen_files",
 ]

@@ -16,9 +16,8 @@ wires them together.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import nullcontext
-from dataclasses import dataclass
 from typing import NamedTuple
 
 import numpy as np
@@ -32,9 +31,10 @@ from jamma.core.threading import (
     get_c_extension_thread_count,
 )
 from jamma.lmm import accel
-from jamma.lmm.association_plan import AssociationExecution
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
+from jamma.lmm.chunk_sizing import LmmChunkPlan
+from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood import reset_p_yy_warned
@@ -121,17 +121,6 @@ class LmmChunkRunStats(NamedTuple):
 ChunkSink = Callable[[dict[str, np.ndarray], int, int], None]
 
 
-@dataclass(frozen=True, slots=True)
-class ChunkRunOptions:
-    """Presentation choices for one shared chunk run."""
-
-    progress_label: str = "LMM association"
-    lambda_warning_prefix: str = ""
-
-
-_DEFAULT_CHUNK_RUN_OPTIONS = ChunkRunOptions()
-
-
 class _ChunkEngine:
     """The chunk loop's state: its buffers, its thread split, its counters.
 
@@ -150,7 +139,7 @@ class _ChunkEngine:
         kernel: Kernel,
         U: np.ndarray,
         filtered_means: np.ndarray,
-        raw_chunk_source: Callable[[], RawLmmChunk | None],
+        raw_chunks: Iterator[RawLmmChunk],
         chunk_sink: Callable[[dict[str, np.ndarray], int, int], None],
         chunk_size: int,
         n_buffers: int,
@@ -161,7 +150,7 @@ class _ChunkEngine:
         self.kernel = kernel
         self.U = U
         self.filtered_means = filtered_means
-        self.raw_chunk_source = raw_chunk_source
+        self.raw_chunks = raw_chunks
         self.chunk_sink = chunk_sink
         self.chunk_size = chunk_size
 
@@ -219,7 +208,7 @@ class _ChunkEngine:
 
     def _next_non_empty_chunk(self) -> RawLmmChunk | None:
         """Skip zero-length chunks, checking each keeps the contiguity contract."""
-        raw = self.raw_chunk_source()
+        raw = next(self.raw_chunks, None)
         while raw is not None and raw.filtered_end <= raw.filtered_start:
             empty_range = raw.filtered_range
             if empty_range.filtered_start != empty_range.filtered_end:
@@ -233,7 +222,7 @@ class _ChunkEngine:
                     f"expected {self.next_expected_start}, "
                     f"got {empty_range.filtered_start}"
                 )
-            raw = self.raw_chunk_source()
+            raw = next(self.raw_chunks, None)
         return raw
 
     def _kernel_input(self, utg_t: np.ndarray) -> np.ndarray:
@@ -291,15 +280,18 @@ def run_lmm_chunk_source_numpy(
     *,
     genotypes: PreparedGenotypes,
     chunk_sink: ChunkSink,
-    execution: AssociationExecution,
+    dispatch: DispatchPath,
+    chunks: LmmChunkPlan,
     prepared: PreparedLmmRun,
     config: LmmConfig,
-    options: ChunkRunOptions = _DEFAULT_CHUNK_RUN_OPTIONS,
+    progress_label: str = "LMM association",
+    lambda_warning_prefix: str = "",
 ) -> LmmChunkRunStats:
     """Run LMM association over caller-provided raw genotype chunks.
 
     The prepared source owns aligned imputation means and raw chunks. This
-    function consumes it with the selected dispatch and chunk geometry, then owns
+    function consumes it with the selected dispatch and chunk geometry
+    (``chunks``, already tightened to the filtered SNP count), then owns
     pipeline driving, eigen-rotation, Uab preparation, C/Python compute dispatch,
     diagnostics, and timing. Batch and LOCO use this path so their chunk compute
     behavior cannot drift.
@@ -333,11 +325,9 @@ def run_lmm_chunk_source_numpy(
             processed=0, rotation_s=0.0, compute_s=0.0, result_write_s=0.0
         )
 
-    dispatch = execution.dispatch
-    chunk_plan = execution.chunks
-    chunk_size = chunk_plan.chunk_size
-    n_chunks = chunk_plan.n_chunks
-    use_pipeline = chunk_plan.use_pipeline
+    chunk_size = chunks.chunk_size
+    n_chunks = chunks.n_chunks
+    use_pipeline = chunks.use_pipeline
 
     if show_progress:
         logger.info(f"  Analyzed individuals: {n_samples:,}")
@@ -377,10 +367,10 @@ def run_lmm_chunk_source_numpy(
         kernel=kernel,
         U=prepared.U,
         filtered_means=genotypes.imputation_means,
-        raw_chunk_source=genotypes.chunks(chunk_size),
+        raw_chunks=genotypes.chunks(chunk_size),
         chunk_sink=chunk_sink,
         chunk_size=chunk_size,
-        n_buffers=chunk_plan.n_buffers,
+        n_buffers=chunks.n_buffers,
         rot_threads=threads.rot,
         omp_threads=threads.omp,
     )
@@ -394,14 +384,14 @@ def run_lmm_chunk_source_numpy(
             n_samples=n_samples,
             n_filtered=n_filtered,
             show_progress=show_progress,
-            progress_label=options.progress_label,
+            progress_label=progress_label,
         )
     else:
         if show_progress and n_chunks > 1:
             chunk_iterator = progress_iterator(
                 iter(range(n_chunks)),
                 total=n_chunks,
-                desc=options.progress_label,
+                desc=progress_label,
                 initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
             )
         else:
@@ -432,7 +422,7 @@ def run_lmm_chunk_source_numpy(
         engine.n_at_lmax,
         l_min,
         l_max,
-        prefix=options.lambda_warning_prefix,
+        prefix=lambda_warning_prefix,
     )
 
     return LmmChunkRunStats(

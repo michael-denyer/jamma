@@ -22,7 +22,13 @@ from jamma.lmm.schema import LmmMode, parse_lmm_mode
 ExecutionMode = Literal["batch", "streaming"]
 RequestedBackend = Literal["auto", "numpy", "numpy-streaming"]
 
-_DEFAULT_STATS_CHUNK = 10_000
+# SNPs per block in the streaming statistics pass when the caller names no
+# chunk size. Pass 1 reads the .bed and accumulates per-SNP counts, so its
+# footprint is one block of genotypes rather than the rotation and grid
+# buffers the association pass carries; it needs no RAM-budgeted sizing of
+# its own. Declared here, next to the pricing that assumes it, and imported
+# by the executing side (runner_numpy_streaming) so the two cannot drift.
+DEFAULT_STATS_CHUNK = 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,24 +50,18 @@ class ExecutionPlan:
 
 @dataclass(frozen=True, slots=True)
 class MemoryPlan:
-    """Memory quote for one already-selected association plan."""
+    """Memory quote for one already-selected association plan.
 
-    mode: ExecutionMode
+    Carries exactly what the two gating call sites read: the pipeline
+    preflight logs and gates on all four fields, the batch runner on the
+    two GB figures. Sufficiency is not a field because ``memory.require``
+    derives it from the same two figures.
+    """
+
     total_peak_gb: float
     available_gb: float
-    sufficient: bool
-    disk_chunk_size: int | None
     compute_chunk_size: int
     eigen: EigenDriverPlan | None
-
-
-@dataclass(frozen=True, slots=True)
-class AssociationExecution:
-    """Final post-filter inputs needed by the chunk engine."""
-
-    mode: ExecutionMode
-    dispatch: DispatchPath
-    chunks: LmmChunkPlan
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +92,7 @@ class ExecutableAssociationPlan:
             )
             estimate = estimate_streaming_memory(
                 self.n_samples,
-                chunk_size=_DEFAULT_STATS_CHUNK,
+                chunk_size=DEFAULT_STATS_CHUNK,
                 n_cvt=self.n_cvt,
                 pipeline_buffers=chunks.n_buffers,
                 compute_chunk_size=chunks.chunk_size,
@@ -100,11 +100,8 @@ class ExecutableAssociationPlan:
                 uab_iab_gb=extra_gb,
             )
             return MemoryPlan(
-                mode="streaming",
                 total_peak_gb=estimate.total_peak_gb,
                 available_gb=estimate.available_gb,
-                sufficient=estimate.sufficient,
-                disk_chunk_size=_DEFAULT_STATS_CHUNK,
                 compute_chunk_size=chunks.chunk_size,
                 eigen=eigen,
             )
@@ -117,22 +114,15 @@ class ExecutableAssociationPlan:
             n_buffers=chunks.n_buffers,
         )
         return MemoryPlan(
-            mode="batch",
             total_peak_gb=estimate.total_gb,
             available_gb=estimate.available_gb,
-            sufficient=estimate.sufficient,
-            disk_chunk_size=None,
             compute_chunk_size=chunks.chunk_size,
             eigen=None,
         )
 
-    def tighten_after_filter(self, n_filtered: int) -> AssociationExecution:
+    def tighten_after_filter(self, n_filtered: int) -> LmmChunkPlan:
         """Narrow geometry once without re-reading RAM or changing policy."""
-        return AssociationExecution(
-            mode=self.summary.mode,
-            dispatch=self.dispatch,
-            chunks=tighten_lmm_chunks(self.conservative_chunks, n_filtered),
-        )
+        return tighten_lmm_chunks(self.conservative_chunks, n_filtered)
 
 
 def plan_association(
@@ -145,9 +135,15 @@ def plan_association(
     mem_budget: float | None = None,
     max_chunk_size: int | None = None,
     log_dispatch_choices: bool = False,
-    _require_streaming_accel: bool = True,
 ) -> ExecutableAssociationPlan:
-    """Select all association policy and conservative geometry once."""
+    """Select all association policy and conservative geometry once.
+
+    Plans unconditionally for whatever backend is requested. Whether a
+    user-facing request may ask for numpy-streaming without the C extension
+    is the requesting boundary's policy (the pipeline's
+    ``_reject_streaming_without_accel``), not the planner's: the streaming
+    runner itself works without the extension.
+    """
     valid_requests = ("auto", "numpy", "numpy-streaming")
     if requested not in valid_requests:
         raise ValueError(
@@ -155,18 +151,6 @@ def plan_association(
         )
 
     c_ext_available = accel.available()
-    if (
-        requested == "numpy-streaming"
-        and _require_streaming_accel
-        and not c_ext_available
-    ):
-        raise ValueError(
-            "Backend 'numpy-streaming' requires the C extension but it is "
-            "not available. Compile it with: uv run python -c "
-            "'from jamma.jlinalg._compile_jlinalg import compile_extension; "
-            "compile_extension()'"
-        )
-
     mode = parse_lmm_mode(lmm_mode)
     dispatch = select_dispatch_path(
         n_cvt, mode, accel=c_ext_available, log_choices=log_dispatch_choices

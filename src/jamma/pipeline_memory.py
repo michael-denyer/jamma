@@ -12,12 +12,12 @@ from jamma.core.eigen_plan import (
     forced_numpy_fallback,
     plan_eigen_driver,
 )
-from jamma.lmm.association_plan import ExecutableAssociationPlan, MemoryPlan
+from jamma.lmm.association_plan import ExecutableAssociationPlan
 
 if TYPE_CHECKING:
     from jamma.pipeline_config import PipelineConfig
 
-__all__ = ["MemoryPlan", "memory_preflight"]
+__all__ = ["memory_preflight"]
 
 
 def _eigen_driver_plan(n_valid: int) -> EigenDriverPlan:
@@ -47,14 +47,18 @@ def _eigen_driver_plan(n_valid: int) -> EigenDriverPlan:
 def memory_preflight(
     config: PipelineConfig,
     plan: ExecutableAssociationPlan,
-) -> MemoryPlan | None:
-    """Price and gate one plan without rebuilding association policy."""
+) -> None:
+    """Price and gate one plan without rebuilding association policy.
+
+    Logs the quote and raises through ``memory.require`` when it does not
+    fit; callers needing the numbers price the plan themselves.
+    """
     summary = plan.summary
     if not config.check_memory:
         logger.info(
             f"Memory preflight skipped ({summary.runner_name}): check_memory=False"
         )
-        return None
+        return
 
     eigen = _eigen_driver_plan(plan.n_samples) if summary.mode == "streaming" else None
     quote = plan.price(eigen=eigen)
@@ -71,4 +75,3 @@ def memory_preflight(
         summary.runner_name,
         budget_gb=plan.mem_budget_gb,
     )
-    return quote

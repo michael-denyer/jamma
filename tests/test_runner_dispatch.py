@@ -1,13 +1,13 @@
-"""Tests for the small-sample warning in jamma.lmm.runner.
+"""Tests for the small-sample warning emitted by the pipeline.
 
 The run_lmm() dispatcher these tests were originally written around was
-removed in 7.0.0; select_execution_mode() is covered by
+removed in 7.0.0; mode selection (plan_association) is covered by
 test_backend_detection.py and test_pipeline.py.
 """
 
 import pytest
 
-from jamma.lmm.runner import (
+from jamma.pipeline import (
     SMALL_SAMPLE_WARNING_THRESHOLD,
     warn_if_small_sample,
 )

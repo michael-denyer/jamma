@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,7 @@ from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.snp_filter import _SNP_STATS_CHUNK_SIZE
 from jamma.core.snp_stats import (
     SnpFilterSpec,
+    SnpSelection,
     collect_snp_stats_from_chunks,
 )
 from jamma.lmm.association_plan import (
@@ -28,7 +30,6 @@ from jamma.lmm.association_plan import (
     plan_association,
 )
 from jamma.lmm.chunk_runner_numpy import (
-    ChunkRunOptions,
     RawLmmChunk,
     run_lmm_chunk_source_numpy,
 )
@@ -103,39 +104,28 @@ class MatrixSource:
             sample_scope="all_samples" if samples.is_all_samples else "valid_samples",
         )
 
-        def _bind_chunks(selection):
+        def _iter_chunks(
+            selection: SnpSelection, chunk_size: int
+        ) -> Iterator[RawLmmChunk]:
             selected_columns = selection.local_indices
-
-            def _chunks(chunk_size: int):
-                n_filtered = len(selected_columns)
-                chunk_starts = iter(range(0, n_filtered, chunk_size))
-                geno_buf = np.empty((rows.shape[0], chunk_size), dtype=np.float64)
-
-                def _next_chunk() -> RawLmmChunk | None:
-                    try:
-                        chunk_start = next(chunk_starts)
-                    except StopIteration:
-                        return None
-
-                    chunk_end = min(chunk_start + chunk_size, n_filtered)
-                    actual_len = chunk_end - chunk_start
-                    geno_chunk = (
-                        geno_buf
-                        if actual_len == chunk_size
-                        else np.empty((rows.shape[0], actual_len), dtype=np.float64)
-                    )
-                    geno_chunk[:] = rows[:, selected_columns[chunk_start:chunk_end]]
-                    return RawLmmChunk(geno_chunk, chunk_start, chunk_end)
-
-                return _next_chunk
-
-            return _chunks
+            n_filtered = len(selected_columns)
+            geno_buf = np.empty((rows.shape[0], chunk_size), dtype=np.float64)
+            for chunk_start in range(0, n_filtered, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, n_filtered)
+                actual_len = chunk_end - chunk_start
+                geno_chunk = (
+                    geno_buf
+                    if actual_len == chunk_size
+                    else np.empty((rows.shape[0], actual_len), dtype=np.float64)
+                )
+                geno_chunk[:] = rows[:, selected_columns[chunk_start:chunk_end]]
+                yield RawLmmChunk(geno_chunk, chunk_start, chunk_end)
 
         return bind_prepared_genotypes(
             snp_meta=self._snp_meta,
             stats=stats,
             filters=filters,
-            chunk_factory=_bind_chunks,
+            chunk_source=_iter_chunks,
         )
 
 
@@ -241,7 +231,7 @@ def _run_numpy_lmm(
         )
 
     n_filtered = genotypes.n_filtered
-    association_execution = execution.tighten_after_filter(n_filtered)
+    tightened_chunks = execution.tighten_after_filter(n_filtered)
 
     if show_progress:
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
@@ -299,13 +289,12 @@ def _run_numpy_lmm(
         chunk_stats = run_lmm_chunk_source_numpy(
             genotypes=genotypes,
             chunk_sink=chunk_sink,
-            execution=association_execution,
+            dispatch=execution.dispatch,
+            chunks=tightened_chunks,
             prepared=prepared,
             config=config,
-            options=ChunkRunOptions(
-                progress_label=progress_label,
-                lambda_warning_prefix=lambda_warning_prefix,
-            ),
+            progress_label=progress_label,
+            lambda_warning_prefix=lambda_warning_prefix,
         )
 
         if show_progress:
@@ -412,7 +401,7 @@ def run_lmm_association_numpy(
         max_chunk_size=max_chunk_size,
         log_dispatch_choices=True,
     )
-    return _run_lmm_association_numpy_planned(
+    return run_lmm_association_numpy_planned(
         genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
@@ -428,7 +417,7 @@ def run_lmm_association_numpy(
     )
 
 
-def _run_lmm_association_numpy_planned(
+def run_lmm_association_numpy_planned(
     *,
     genotypes: np.ndarray,
     phenotypes: np.ndarray,

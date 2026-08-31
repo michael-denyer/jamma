@@ -204,33 +204,31 @@ class TestCheckMemory:
                 100,
                 500,
                 requested="numpy-streaming",
-                _require_streaming_accel=False,
             ),
         )
         assert result is None
 
-    def test_returns_plan_when_enabled(self) -> None:
-        """memory_preflight returns a MemoryPlan for the streaming mode."""
-        from jamma.pipeline_memory import MemoryPlan
+    def test_gates_without_returning_a_value(self) -> None:
+        """memory_preflight gates and logs; the quote comes from plan.price()."""
+        from jamma.lmm.association_plan import MemoryPlan
 
         config = PipelineConfig(
             bfile=BFILE,
             check_memory=True,
         )
         runner = PipelineRunner(config)
-        result = memory_preflight(
-            runner.config,
-            plan_association(
-                100,
-                500,
-                requested="numpy-streaming",
-                _require_streaming_accel=False,
-            ),
+        plan = plan_association(
+            100,
+            500,
+            requested="numpy-streaming",
         )
+        result = memory_preflight(runner.config, plan)
 
-        assert isinstance(result, MemoryPlan)
-        assert result.total_peak_gb >= 0
-        assert result.available_gb >= 0
+        assert result is None
+        quote = plan.price()
+        assert isinstance(quote, MemoryPlan)
+        assert quote.total_peak_gb >= 0
+        assert quote.available_gb >= 0
 
 
 @pytest.mark.tier0

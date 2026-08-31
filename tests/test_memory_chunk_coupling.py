@@ -19,7 +19,7 @@ from jamma.core.memory import (
     estimate_lmm_memory,
     estimate_streaming_memory,
 )
-from jamma.lmm.association_plan import plan_association
+from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, plan_association
 from jamma.lmm.chunk_sizing import (
     LmmChunkPlan,
     compute_chunk_size_numpy,
@@ -28,8 +28,6 @@ from jamma.lmm.chunk_sizing import (
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood import n_index
-from jamma.lmm.runner import select_execution_mode
-from jamma.lmm.runner_numpy_streaming import _DEFAULT_STATS_CHUNK
 from jamma.lmm.schema import LmmMode
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_memory import memory_preflight
@@ -49,7 +47,6 @@ def _streaming_preflight(
         requested="numpy-streaming",
         n_cvt=n_cvt,
         lmm_mode=lmm_mode,
-        _require_streaming_accel=False,
     )
     memory_preflight(config, plan)
 
@@ -268,7 +265,6 @@ def _priced_streaming_lmm_phase_gb(
         requested="numpy-streaming",
         n_cvt=n_cvt,
         lmm_mode=lmm_mode,
-        _require_streaming_accel=False,
     )
     chunk_plan = execution.conservative_chunks
     uab_iab_gb = (
@@ -283,7 +279,7 @@ def _priced_streaming_lmm_phase_gb(
     )
     est = estimate_streaming_memory(
         n_samples,
-        chunk_size=_DEFAULT_STATS_CHUNK,
+        chunk_size=DEFAULT_STATS_CHUNK,
         n_cvt=n_cvt,
         pipeline_buffers=chunk_plan.n_buffers,
         compute_chunk_size=chunk_plan.chunk_size,
@@ -506,7 +502,6 @@ class TestChunkPlanMatchesEngine:
             requested="numpy-streaming",
             n_cvt=n_cvt,
             lmm_mode=lmm_mode,
-            _require_streaming_accel=False,
         )
         mem_plan = exec_plan.price()
 
@@ -525,7 +520,7 @@ class TestChunkPlanMatchesEngine:
         )
         est_hardcoded_two = estimate_streaming_memory(
             n_samples,
-            chunk_size=_DEFAULT_STATS_CHUNK,
+            chunk_size=DEFAULT_STATS_CHUNK,
             n_cvt=n_cvt,
             pipeline_buffers=2,
             compute_chunk_size=chunk_plan.chunk_size,
@@ -620,8 +615,8 @@ class TestChunkPlanMatchesEngine:
         )
 
 
-def test_select_execution_mode_sizes_against_the_real_chunk(monkeypatch):
-    """select_execution_mode must price the chunk the run will allocate, not 20,000.
+def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
+    """plan_association must price the chunk the run will allocate, not 20,000.
 
     At n=50000, snps=500000, ``estimate_lmm_memory``'s ``lmm_batch_size=20_000``
     default estimates 276.0GB; the chunk ``plan_lmm_chunks`` actually plans for
@@ -635,7 +630,7 @@ def test_select_execution_mode_sizes_against_the_real_chunk(monkeypatch):
     """
     use_fake_psutil(monkeypatch, available=288e9)
 
-    plan = select_execution_mode(50_000, 500_000, n_cvt=1, lmm_mode=1)
+    plan = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
 
     assert plan.mode == "streaming", (
         f"expected streaming (the real chunk needs ~500GB > 288GB available), "
@@ -643,19 +638,19 @@ def test_select_execution_mode_sizes_against_the_real_chunk(monkeypatch):
     )
 
 
-def test_select_execution_mode_mem_budget_narrows_the_chunk(monkeypatch):
-    """--mem-budget must narrow the chunk select_execution_mode prices.
+def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
+    """--mem-budget must narrow the chunk plan_association prices.
 
     A tight ``mem_budget`` should shrink the chunk plan feeds into the memory
     estimate, in turn shrinking the estimated total. At trunk, ``mem_budget``
-    never reached ``select_execution_mode`` at all.
+    never reached the mode selector at all.
     """
     use_fake_psutil(monkeypatch, available=288e9)
 
-    unbudgeted = select_execution_mode(50_000, 500_000, n_cvt=1, lmm_mode=1)
-    budgeted = select_execution_mode(
+    unbudgeted = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
+    budgeted = plan_association(
         50_000, 500_000, n_cvt=1, lmm_mode=1, mem_budget=1.0
-    )
+    ).summary
 
     # Unbudgeted: the real chunk needs ~500GB, exceeding 288GB -> streaming.
     assert unbudgeted.mode == "streaming"
@@ -719,10 +714,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     """The final chunk engine requests the width allowed by mem_budget."""
     from jamma.core.snp_stats import SnpSelection
     from jamma.lmm import accel
-    from jamma.lmm.chunk_runner_numpy import (
-        ChunkRunOptions,
-        run_lmm_chunk_source_numpy,
-    )
+    from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
     from jamma.lmm.genotype_source import PreparedGenotypes
     from jamma.lmm.prepare_common import PreparedLmmRun
     from jamma.lmm.schema import LmmConfig, SnpMeta
@@ -778,24 +770,25 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
         chunk_factory=observe_geometry,
     )
 
+    exec_plan = plan_association(
+        n_samples,
+        n_snps,
+        requested="numpy",
+        n_cvt=n_cvt,
+        mem_budget=mem_budget,
+    )
     with pytest.raises(GeometryObserved):
         run_lmm_chunk_source_numpy(
             genotypes=genotypes,
             chunk_sink=lambda _arrays, _start, _end: None,
-            execution=plan_association(
-                n_samples,
-                n_snps,
-                requested="numpy",
-                n_cvt=n_cvt,
-                mem_budget=mem_budget,
-            ).tighten_after_filter(n_snps),
+            dispatch=exec_plan.dispatch,
+            chunks=exec_plan.tighten_after_filter(n_snps),
             prepared=prepared,
             config=LmmConfig(
                 lmm_mode=1,
                 mem_budget=mem_budget,
                 show_progress=False,
             ),
-            options=ChunkRunOptions(),
         )
 
     assert expected.chunk_size == 100

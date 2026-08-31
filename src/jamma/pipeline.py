@@ -43,11 +43,11 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm.association_plan import plan_association
+from jamma.lmm import accel
+from jamma.lmm.association_plan import ExecutionPlan, plan_association
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.prepare_common import compute_valid_mask
-from jamma.lmm.runner import ExecutionPlan, warn_if_small_sample
 from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
@@ -86,6 +86,61 @@ def _parse_backend_override(value: str) -> BackendRequest:
             f"JAMMA_BACKEND must be one of {VALID_BACKENDS}, got {value!r}"
         )
     return value
+
+
+SMALL_SAMPLE_WARNING_THRESHOLD = 50
+
+
+def warn_if_small_sample(n_samples: int) -> None:
+    """Warn once when sample size is below the practical LMM threshold.
+
+    JAMMA is designed for large-scale GWAS (thousands to hundreds of thousands
+    of samples). Below ~50 samples, two concerns apply:
+
+    1. LMM has insufficient statistical power regardless of optimizer — kinship
+       estimation and variance component inference are unreliable with so few
+       samples.
+    2. JAMMA's batch-vectorized grid+golden-section lambda optimizer assumes
+       the log-likelihood is unimodal in log-lambda space. Very small samples
+       are one of the scenarios where that assumption can fail, and unlike
+       GEMMA's Brent's method JAMMA has no mechanism to detect multimodality.
+       Results may diverge meaningfully from GEMMA on such adversarial inputs.
+
+    See docs/GEMMA_DIVERGENCES.md §6 for full context.
+
+    Args:
+        n_samples: Number of samples actually entering the LMM (post
+            phenotype/covariate filtering, not the raw PLINK header count).
+    """
+    if n_samples < SMALL_SAMPLE_WARNING_THRESHOLD:
+        logger.warning(
+            f"Small sample size ({n_samples} < {SMALL_SAMPLE_WARNING_THRESHOLD}): "
+            "LMM-based GWAS has insufficient statistical power at this scale, "
+            "and JAMMA's batch golden-section lambda optimizer may diverge from "
+            "GEMMA's Brent's method on multimodal likelihoods. "
+            "See docs/GEMMA_DIVERGENCES.md §6."
+        )
+
+
+def _reject_streaming_without_accel(requested: BackendRequest) -> None:
+    """Refuse an explicit numpy-streaming request when the C extension is absent.
+
+    A user asking for the streaming backend on a machine that cannot honor it
+    is a boundary error, so it is checked here where the request arrives (config
+    or JAMMA_BACKEND), before any file I/O. The planner itself plans
+    unconditionally: the streaming runner works without the extension, and the
+    runner's own public entry allows it.
+
+    Raises:
+        ValueError: If numpy-streaming is requested without the C extension.
+    """
+    if requested == "numpy-streaming" and not accel.available():
+        raise ValueError(
+            "Backend 'numpy-streaming' requires the C extension but it is "
+            "not available. Compile it with: uv run python -c "
+            "'from jamma.jlinalg._compile_jlinalg import compile_extension; "
+            "compile_extension()'"
+        )
 
 
 class PipelineRunner:
@@ -414,7 +469,7 @@ class PipelineRunner:
 
         # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
         # It arrives as an unvalidated string, so check it here rather than
-        # letting an unknown value reach select_execution_mode after the
+        # letting an unknown value reach plan_association after the
         # pipeline has already read PLINK metadata off disk.
         env_backend = Env.current().backend_raw
         requested: BackendRequest = (
@@ -422,6 +477,7 @@ class PipelineRunner:
             if env_backend is not None
             else self.config.backend
         )
+        _reject_streaming_without_accel(requested)
 
         # Read once and pass it down. get_plink_metadata parses the whole .bim
         # (sid, chromosome, bp_position and both allele arrays).
@@ -518,6 +574,7 @@ class PipelineRunner:
             eigenvectors,
             assoc_path,
             snps_indices,
+            meta,
         )
 
         total_s = time.perf_counter() - t_start

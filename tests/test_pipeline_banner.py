@@ -136,12 +136,12 @@ class TestLogPipelineBanner:
         from loguru import logger as _logger
 
         import jamma.jlinalg as jlinalg
-        from jamma.lmm.runner import select_execution_mode
+        from jamma.lmm.association_plan import plan_association
         from jamma.pipeline_banner import log_pipeline_banner
 
         sink_id = _logger.add(sys.stderr, level="INFO")
         try:
-            log_pipeline_banner(select_execution_mode(1_000, 10_000, n_cvt=3))
+            log_pipeline_banner(plan_association(1_000, 10_000, n_cvt=3).summary)
         finally:
             _logger.remove(sink_id)
 

@@ -123,7 +123,7 @@ def test_streaming_rejects_a_chunk_size_below_one_before_reading_the_bed(bad, tm
     """A bad chunk_size must fail before pass 1, not after it.
 
     None means "not specified"; zero does not. Deriving the statistics-pass
-    block with ``chunk_size or _DEFAULT_STATS_CHUNK`` would read zero as unset,
+    block with ``chunk_size or DEFAULT_STATS_CHUNK`` would read zero as unset,
     stream the entire .bed at the default width, and only then raise from the
     chunk runner, which on a large dataset is minutes of I/O before the
     complaint.

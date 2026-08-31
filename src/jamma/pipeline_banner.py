@@ -12,7 +12,7 @@ from __future__ import annotations
 from loguru import logger
 
 from jamma.core.constants import Env
-from jamma.lmm.runner import ExecutionPlan
+from jamma.lmm.association_plan import ExecutionPlan
 
 __all__ = ["log_dataset_banner", "log_pipeline_banner"]
 

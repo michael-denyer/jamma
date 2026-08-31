@@ -15,7 +15,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.io.matrix_writer import write_matrix_parallel
-from jamma.utils.npy_cache import npy_cache_valid
+from jamma.utils.npy_cache import npy_cache_valid, save_npy_atomic
 
 _SYMMETRY_RTOL = 1e-10
 
@@ -142,7 +142,7 @@ def write_kinship_matrix(
                 "memory doubling at large sizes. Use np.ascontiguousarray(K) first."
             )
         npy_path = path.with_suffix(".npy")
-        np.save(npy_path, K)
+        save_npy_atomic(K, npy_path)
         return npy_path
 
 

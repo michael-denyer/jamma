@@ -349,6 +349,27 @@ class TestPipelineConfigLambdaBounds:
 
 
 @pytest.mark.tier0
+class TestPipelineConfigMemBudget:
+    """Tests for PipelineConfig mem_budget validation."""
+
+    @pytest.mark.parametrize("mem_budget", [0, -1.0], ids=["zero", "negative"])
+    def test_non_positive_mem_budget_raises(self, mem_budget: float) -> None:
+        """Construction rejects a non-positive mem_budget.
+
+        chunk_sizing clamps a negative budget to the 100-SNP floor, so without
+        this the run proceeds on a budget the caller asked for and never
+        learns was discarded.
+        """
+        with pytest.raises(ValueError, match="mem_budget must be positive"):
+            PipelineConfig(bfile=BFILE, mem_budget=mem_budget, check_memory=False)
+
+    def test_positive_mem_budget_accepted(self) -> None:
+        """Construction accepts a positive mem_budget."""
+        config = PipelineConfig(bfile=BFILE, mem_budget=64.0, check_memory=False)
+        assert config.mem_budget == 64.0
+
+
+@pytest.mark.tier0
 class TestPipelineConfigGridResolution:
     """Tests for PipelineConfig n_grid validation.
 

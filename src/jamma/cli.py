@@ -252,9 +252,6 @@ def main(
     if gk is None and lmm is None:
         raise click.UsageError("One of -gk or -lmm is required")
 
-    if mem_budget is not None and mem_budget <= 0:
-        raise click.UsageError(f"--mem-budget must be positive, got {mem_budget}")
-
     phenotype_columns = _int_list(n, "-n")
     cat_columns = _int_list(cat, "-cat") if cat is not None else None
 

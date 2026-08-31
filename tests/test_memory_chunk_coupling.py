@@ -28,7 +28,6 @@ from jamma.lmm.chunk_sizing import (
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood import n_index
-from jamma.lmm.runner import select_execution_mode
 from jamma.lmm.runner_numpy_streaming import _DEFAULT_STATS_CHUNK
 from jamma.lmm.schema import LmmMode
 from jamma.pipeline_config import PipelineConfig
@@ -617,8 +616,8 @@ class TestChunkPlanMatchesEngine:
         )
 
 
-def test_select_execution_mode_sizes_against_the_real_chunk(monkeypatch):
-    """select_execution_mode must price the chunk the run will allocate, not 20,000.
+def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
+    """plan_association must price the chunk the run will allocate, not 20,000.
 
     At n=50000, snps=500000, ``estimate_lmm_memory``'s ``lmm_batch_size=20_000``
     default estimates 276.0GB; the chunk ``plan_lmm_chunks`` actually plans for
@@ -632,7 +631,7 @@ def test_select_execution_mode_sizes_against_the_real_chunk(monkeypatch):
     """
     use_fake_psutil(monkeypatch, available=288e9)
 
-    plan = select_execution_mode(50_000, 500_000, n_cvt=1, lmm_mode=1)
+    plan = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
 
     assert plan.mode == "streaming", (
         f"expected streaming (the real chunk needs ~500GB > 288GB available), "
@@ -640,19 +639,19 @@ def test_select_execution_mode_sizes_against_the_real_chunk(monkeypatch):
     )
 
 
-def test_select_execution_mode_mem_budget_narrows_the_chunk(monkeypatch):
-    """--mem-budget must narrow the chunk select_execution_mode prices.
+def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
+    """--mem-budget must narrow the chunk plan_association prices.
 
     A tight ``mem_budget`` should shrink the chunk plan feeds into the memory
     estimate, in turn shrinking the estimated total. At trunk, ``mem_budget``
-    never reached ``select_execution_mode`` at all.
+    never reached the mode selector at all.
     """
     use_fake_psutil(monkeypatch, available=288e9)
 
-    unbudgeted = select_execution_mode(50_000, 500_000, n_cvt=1, lmm_mode=1)
-    budgeted = select_execution_mode(
+    unbudgeted = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
+    budgeted = plan_association(
         50_000, 500_000, n_cvt=1, lmm_mode=1, mem_budget=1.0
-    )
+    ).summary
 
     # Unbudgeted: the real chunk needs ~500GB, exceeding 288GB -> streaming.
     assert unbudgeted.mode == "streaming"

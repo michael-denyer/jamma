@@ -8,9 +8,15 @@ from unittest.mock import patch
 import pytest
 
 from jamma.core.memory import MemoryBreakdown
-from jamma.lmm.runner import ExecutionPlan, select_execution_mode
+from jamma.lmm.association_plan import ExecutionPlan, plan_association
 
 pytestmark = pytest.mark.tier0
+
+
+def _select_mode(*args, **kwargs) -> ExecutionPlan:
+    """Plan and keep only the selected-mode summary, as the pipeline does."""
+    return plan_association(*args, **kwargs).summary
+
 
 # Stands in for a loaded extension. Only `is not None` is read on
 # the paths under test, so the object's identity is all that matters.
@@ -55,7 +61,7 @@ def _make_insufficient_estimate() -> MemoryBreakdown:
 
 
 class TestExecutionMode:
-    """Tests for ExecutionPlan and select_execution_mode in runner.py."""
+    """Tests for ExecutionPlan and plan_association mode selection."""
 
     # -- Auto selection --
 
@@ -68,7 +74,7 @@ class TestExecutionMode:
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
-            plan = select_execution_mode(100, 1000)
+            plan = _select_mode(100, 1000)
         assert plan.mode == "batch"
 
     def test_auto_c_ext_memory_insufficient_returns_numpy_streaming(self):
@@ -80,7 +86,7 @@ class TestExecutionMode:
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
-            plan = select_execution_mode(200_000, 100_000)
+            plan = _select_mode(200_000, 100_000)
         assert plan.mode == "streaming"
 
     def test_auto_no_c_ext_returns_numpy_batch(self):
@@ -92,7 +98,7 @@ class TestExecutionMode:
             ),
             patch("jamma.lmm.accel._accel", None),
         ):
-            plan = select_execution_mode(100, 1000)
+            plan = _select_mode(100, 1000)
         assert plan.mode == "batch"
 
     def test_no_c_ext_warns_for_large_dataset(self):
@@ -105,7 +111,7 @@ class TestExecutionMode:
             patch("jamma.lmm.accel._accel", None),
             patch("jamma.lmm.association_plan.logger") as mock_logger,
         ):
-            plan = select_execution_mode(n_samples=100, n_snps=1000)
+            plan = _select_mode(n_samples=100, n_snps=1000)
         assert plan.mode == "batch"
         mock_logger.warning.assert_called_once()
 
@@ -120,7 +126,7 @@ class TestExecutionMode:
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
-            plan = select_execution_mode(200_000, 100_000, requested="numpy")
+            plan = _select_mode(200_000, 100_000, requested="numpy")
         assert plan.mode == "batch"
 
     def test_explicit_numpy_bypasses_auto(self):
@@ -135,7 +141,7 @@ class TestExecutionMode:
     def test_explicit_numpy_streaming_returns_numpy_streaming(self):
         """explicit 'numpy-streaming' -> numpy-streaming directly."""
         with patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
-            plan = select_execution_mode(100, 1000, requested="numpy-streaming")
+            plan = _select_mode(100, 1000, requested="numpy-streaming")
         assert plan.mode == "streaming"
 
     def test_explicit_numpy_streaming_no_c_ext_selects_streaming(self):
@@ -145,7 +151,7 @@ class TestExecutionMode:
         below; the streaming runner itself works without the extension.
         """
         with patch("jamma.lmm.accel._accel", None):
-            plan = select_execution_mode(100, 1000, requested="numpy-streaming")
+            plan = _select_mode(100, 1000, requested="numpy-streaming")
         assert plan.mode == "streaming"
 
     def test_pipeline_rejects_numpy_streaming_without_c_ext(self):
@@ -165,12 +171,12 @@ class TestExecutionMode:
     def test_invalid_requested_backend_raises(self):
         """Unknown requested backend raises ValueError."""
         with pytest.raises(ValueError, match="Unknown backend"):
-            select_execution_mode(100, 1000, requested="gpu")  # type: ignore[bad-argument-type]
+            _select_mode(100, 1000, requested="gpu")  # type: ignore[bad-argument-type]
 
     def test_jax_requested_raises(self):
         """Requesting 'jax' backend raises ValueError (removed backend)."""
         with pytest.raises(ValueError, match="Unknown backend"):
-            select_execution_mode(100, 1000, requested="jax")  # type: ignore[bad-argument-type]
+            _select_mode(100, 1000, requested="jax")  # type: ignore[bad-argument-type]
 
     # -- ExecutionPlan invariants --
 
@@ -225,15 +231,15 @@ class TestExecutionMode:
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
-            plan1 = select_execution_mode(100, 1000)
-            plan2 = select_execution_mode(100, 1000)
+            plan1 = _select_mode(100, 1000)
+            plan2 = _select_mode(100, 1000)
         assert plan1.mode == "batch"
         assert plan2.mode == "streaming"
 
     # -- n_cvt-aware selection --
 
     def test_n_cvt_affects_memory(self):
-        """select_execution_mode passes n_cvt to estimate_lmm_memory."""
+        """plan_association passes n_cvt to estimate_lmm_memory."""
         calls = []
 
         def capturing_estimate(n_samples, n_snps, **kwargs):
@@ -247,7 +253,7 @@ class TestExecutionMode:
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
-            select_execution_mode(1000, 10000, n_cvt=4)
+            _select_mode(1000, 10000, n_cvt=4)
 
         # At least one call should have n_cvt=4
         assert any(c.get("n_cvt") == 4 for c in calls), (
@@ -263,8 +269,8 @@ class TestExecutionMode:
             ),
             patch("jamma.lmm.accel._accel", None),
         ):
-            plan_n_cvt4 = select_execution_mode(1000, 10000, n_cvt=4)
-            plan_n_cvt1 = select_execution_mode(1000, 10000, n_cvt=1)
+            plan_n_cvt4 = _select_mode(1000, 10000, n_cvt=4)
+            plan_n_cvt1 = _select_mode(1000, 10000, n_cvt=1)
 
         # n_cvt=4 without C general -> falls through to numpy-batch fallback
         assert plan_n_cvt4.mode == "batch"
@@ -280,6 +286,6 @@ class TestExecutionMode:
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
-            plan = select_execution_mode(1000, 10000, n_cvt=4)
+            plan = _select_mode(1000, 10000, n_cvt=4)
 
         assert plan.mode == "batch"

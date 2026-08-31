@@ -14,7 +14,7 @@ graph TD
     IO["io/ (PLINK I/O)"]
     Kinship["kinship/ (Kinship computation)"]
     Eigen["lmm/eigen.py (Eigendecomposition)"]
-    Runner["lmm/runner.py (Dispatch)"]
+    Planner["lmm/association_plan.py (Policy)"]
     BatchRunner["lmm/runner_numpy.py (Batch)"]
     StreamRunner["lmm/runner_numpy_streaming.py (Streaming)"]
     ChunkRunner["lmm/chunk_runner_numpy.py (Shared chunk engine)"]
@@ -29,9 +29,9 @@ graph TD
     Pipeline --> IO
     Pipeline --> Kinship
     Pipeline --> Eigen
-    Pipeline --> Runner
-    Runner --> BatchRunner
-    Runner --> StreamRunner
+    Pipeline --> Planner
+    Pipeline --> BatchRunner
+    Pipeline --> StreamRunner
     BatchRunner --> ChunkRunner
     StreamRunner --> ChunkRunner
     ChunkRunner --> Likelihood
@@ -42,7 +42,7 @@ graph TD
     Eigen --> jlinalg
     ChunkRunner --> jlinalg
     Pipeline --> Core
-    Runner --> Core
+    Planner --> Core
 ```
 
 ## Data Flow
@@ -57,7 +57,7 @@ A typical LMM association run proceeds as follows:
 
 4. **Eigendecomposition** — `lmm/eigen.py` eigendecomposes `K` via `jlinalg.eigh`, which dispatches to vendor DSYEVD (faster, O(N²) workspace) or falls back to DSYEVR (O(N) workspace) when memory is insufficient. The result is eigenvalues `D` and eigenvectors `U`.
 
-5. **Execution plan selection** — `lmm/runner.py:select_execution_mode()` checks available memory via `core/memory.py` and C extension availability to choose between `numpy-batch` (full genotype matrix in RAM) and `numpy-streaming` (two-pass disk streaming).
+5. **Execution plan selection** — `lmm/association_plan.py:plan_association()` selects all association policy once: it checks available memory via `core/memory.py` and C extension availability to choose between `numpy-batch` (full genotype matrix in RAM) and `numpy-streaming` (two-pass disk streaming), selects the compute dispatch path, and plans conservative chunk geometry. The pipeline calls it once and passes the frozen `ExecutableAssociationPlan` down; runners consume the plan rather than re-deriving policy.
 
 6. **Null model** — The rotated data `U.T @ Y` and covariates are used to optimize the variance component `lambda` via a 50-point grid search followed by golden section refinement (`lmm/likelihood.py` REML path).
 
@@ -72,7 +72,8 @@ A typical LMM association run proceeds as follows:
 | `PipelineRunner` | `src/jamma/pipeline.py` | Orchestrates the `-lmm` pipeline; both CLI and Python API delegate here |
 | `PipelineConfig` / `PipelineResult` / `KinshipResult` | `src/jamma/pipeline_config.py` | Frozen configuration and result dataclasses for the pipeline; `KinshipResult` is also re-exported from `jamma.pipeline` |
 | `gwas()` | `src/jamma/gwas.py` | Public Python API for single-call GWAS; builds a `PipelineConfig` and returns `PipelineRunner`'s `PipelineResult` |
-| `ExecutionPlan` | `src/jamma/lmm/runner.py` | Frozen dataclass encoding backend (`numpy`) and mode (`batch` or `streaming`) with a human-readable reason |
+| `ExecutionPlan` | `src/jamma/lmm/association_plan.py` | Frozen two-field summary of the selected mode (`batch` or `streaming`) with a human-readable reason |
+| `ExecutableAssociationPlan` | `src/jamma/lmm/association_plan.py` | Frozen full plan from `plan_association()`: mode summary, dispatch path, conservative chunk geometry, and memory pricing |
 | `LmmConfig` | `src/jamma/lmm/schema.py` | Frozen configuration dataclass shared by all LMM runners (MAF, lambda bounds, test type, etc.) |
 | `LmmRunResult` | `src/jamma/lmm/schema.py` | Return type for all runners; bundles association list, PVE estimate, and SNP count |
 | `AssocResult` | `src/jamma/lmm/stats.py` | Per-SNP association result dataclass matching GEMMA's output columns |
@@ -147,7 +148,7 @@ src/jamma/
 │   ├── impute.py           # In-place mean imputation for genotype chunks
 │   ├── prepare_common.py   # Covariate matrix construction shared by NumPy LMM runners
 │   ├── results.py          # AssocResult building and per-chunk result sinks
-│   ├── runner.py           # ExecutionPlan; select_execution_mode()
+│   ├── association_plan.py # plan_association(); ExecutionPlan, ExecutableAssociationPlan
 │   ├── runner_numpy.py     # Shared run body (_run_numpy_lmm) + GenotypeSource + batch wrapper
 │   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming wrapper
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
@@ -214,7 +215,7 @@ Two compiled C extensions accelerate the hot paths:
 | `jamma.jlinalg._jlinalg` | `src/jamma/jlinalg/src/` | BLAS dispatch (DGEMM, DSYRK), LAPACK dispatch (DSYEVD, DSYEVR), single-pass per-SNP statistics |
 | `jamma.lmm._lmm_accel` | `src/jamma/lmm/_lmm_*.c` | Per-SNP REML Wald pipeline with OpenMP parallelism over SNP chunks |
 
-Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). The streaming runner is only selected by `select_execution_mode()` when `_lmm_accel` is available; explicit `--backend numpy-streaming` raises `ValueError` if the extension is missing.
+Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). The streaming runner is only auto-selected by `plan_association()` when `_lmm_accel` is available; an explicit `--backend numpy-streaming` request is rejected with `ValueError` at the pipeline boundary if the extension is missing.
 
 ## LOCO Mode
 

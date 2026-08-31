@@ -19,8 +19,7 @@ import numpy as np
 import pytest
 
 from jamma.core.memory import MemoryBreakdown
-from jamma.lmm.association_plan import plan_association
-from jamma.lmm.runner import ExecutionPlan
+from jamma.lmm.association_plan import ExecutionPlan, plan_association
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
 

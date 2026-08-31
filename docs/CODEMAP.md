@@ -290,7 +290,6 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:42](../src/jamma/lmm/runner_numpy_streaming.py#L42) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:139](../src/jamma/lmm/runner_numpy_streaming.py#L139) |
-| 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:63](../src/jamma/lmm/runner.py#L63) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:94](../src/jamma/lmm/schema.py#L94) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:120](../src/jamma/lmm/schema.py#L120) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:35](../src/jamma/lmm/results.py#L35) |
@@ -492,12 +491,12 @@ flowchart TD
 
 ## Backend Architecture
 
-`PipelineRunner` always uses the NumPy backend. `select_execution_mode()` chooses batch or streaming mode based on memory availability. In [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py), `_run_batch` handles in-memory genotypes and `_run_streaming` reads chunks from disk.
+`PipelineRunner` always uses the NumPy backend. `plan_association()` chooses batch or streaming mode based on memory availability. In [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py), `_run_batch` handles in-memory genotypes and `_run_streaming` reads chunks from disk.
 
 ```mermaid
 flowchart TD
     PIPE["PipelineRunner<br/><small>1c</small>"]
-    SEL["select_execution_mode()<br/><small>4Nf</small>"]
+    SEL["plan_association()<br/><small>4Nb</small>"]
     PREP["prepare_common.py<br/><small>3h</small>"]
 
     subgraph NP["⚡ NumPy Backend"]

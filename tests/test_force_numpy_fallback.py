@@ -298,10 +298,10 @@ def test_gate_holds_across_the_whole_backend_selection_path():
     """
     code = textwrap.dedent("""
         import sys
-        from jamma.lmm.runner import select_execution_mode
+        from jamma.lmm.association_plan import plan_association
         from jamma.pipeline_banner import log_pipeline_banner
 
-        log_pipeline_banner(select_execution_mode(1_000, 10_000, n_cvt=3))
+        log_pipeline_banner(plan_association(1_000, 10_000, n_cvt=3).summary)
         print("LOADED" if "jamma.lmm._lmm_accel" in sys.modules else "CLEAN")
     """)
     proc = subprocess.run(

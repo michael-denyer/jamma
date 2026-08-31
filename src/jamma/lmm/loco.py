@@ -20,7 +20,6 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
-from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,6 +29,7 @@ from loguru import logger
 
 from jamma.core.snp_filter import validate_snp_indices
 from jamma.core.snp_stats import (
+    SnpFilterSpec,
     SnpStats,
     collect_snp_stats_from_chunks,
 )
@@ -39,7 +39,13 @@ from jamma.io.plink import (
     partitions_from_metadata,
 )
 from jamma.kinship import SnpStatsCache
+from jamma.lmm.association_plan import plan_association
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
+from jamma.lmm.genotype_source import (
+    PreparedGenotypes,
+    SampleBasis,
+    bind_prepared_genotypes,
+)
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig
 from jamma.lmm.loco_eigen import eigen_pairs_for
@@ -353,11 +359,11 @@ def run_lmm_loco(
 class _LocoChrSource:
     """One chromosome's .bed columns as a GenotypeSource.
 
-    Pre-bound to the analysed-sample rows: LOCO's phenotypes are already
-    filtered, so the body's valid mask arrives all-True and disk reads go
-    through the captured ``valid_indices``. Statistics stay float64 BED
-    reads on the analysed-sample basis GEMMA uses (or the kinship PASS-1
-    cache slice when every sample is analysed); see _chr_snp_stats_for_loco.
+    LOCO captures original BED row positions for its pre-filtered phenotype
+    view. ``prepare`` maps the runner's run-local sample basis through those
+    positions. Statistics stay float64 BED reads on the analyzed-sample basis
+    GEMMA uses, or reuse the kinship PASS-1 cache when the physical basis is
+    exactly every original sample.
     """
 
     def __init__(
@@ -366,14 +372,18 @@ class _LocoChrSource:
         chr_snp_indices: np.ndarray,
         valid_indices: np.ndarray,
         *,
-        all_samples_valid: bool,
+        snp_meta: SnpMeta,
         col_chunk_size: int,
         snp_stats_cache: SnpStatsCache | None,
     ) -> None:
+        if len(chr_snp_indices) > 0 and (
+            chr_snp_indices[0] < 0 or chr_snp_indices[-1] >= len(snp_meta)
+        ):
+            raise ValueError("chromosome SNP identities fall outside paired SnpMeta")
         self._bed_path = bed_path
         self._chr_snp_indices = chr_snp_indices
         self._valid_indices = valid_indices
-        self._all_samples_valid = all_samples_valid
+        self._snp_meta = snp_meta
         self._col_chunk_size = col_chunk_size
         self._snp_stats_cache = snp_stats_cache
 
@@ -381,47 +391,75 @@ class _LocoChrSource:
     def n_snps(self) -> int:
         return len(self._chr_snp_indices)
 
-    def snp_stats(self, valid_mask: np.ndarray, *, include_hwe: bool) -> SnpStats:
-        if include_hwe:
+    def prepare(
+        self, samples: SampleBasis, filters: SnpFilterSpec
+    ) -> PreparedGenotypes:
+        if samples.source_row_count != len(self._valid_indices):
+            raise ValueError(
+                "sample basis row count must match LOCO run-local rows: "
+                f"got {samples.source_row_count} and {len(self._valid_indices)}"
+            )
+        if filters.hwe_threshold > 0:
             # PipelineRunner rejects -hwe with -loco before this runs
             # (pipeline.py); a direct caller reaching here would silently
             # get unfiltered results.
             raise ValueError("HWE filtering is not supported in LOCO")
-        return _chr_snp_stats_for_loco(
+        physical_rows = self._valid_indices[samples.positions]
+        cache = self._snp_stats_cache
+        all_physical_samples = bool(
+            cache is not None
+            and len(physical_rows) == cache.n_samples
+            and np.array_equal(physical_rows, np.arange(cache.n_samples))
+        )
+        stats = _chr_snp_stats_for_loco(
             self._snp_stats_cache,
             self._bed_path,
             self._chr_snp_indices,
-            self._valid_indices,
-            all_samples_valid=self._all_samples_valid,
+            physical_rows,
+            all_samples_valid=all_physical_samples,
             col_chunk_size=self._col_chunk_size,
         )
 
-    def chunks(
-        self, chunk_size: int, snp_indices: np.ndarray, valid_mask: np.ndarray
-    ) -> Callable[[], RawLmmChunk | None]:
-        n_filtered = len(snp_indices)
-        chunk_offsets = iter(range(0, n_filtered, chunk_size))
-        # Held open across the chunk loop and closed when the stream drains;
-        # open_bed re-parses metadata on every open, so per-chunk opens would
-        # re-read the .bim once per chunk.
-        stack = contextlib.ExitStack()
-        bed = stack.enter_context(open_bed(Path(f"{self._bed_path}.bed")))
+        def _bind_chunks(selection):
+            selected_columns = selection.indices
 
-        def _next_chunk() -> RawLmmChunk | None:
-            try:
-                chunk_start = next(chunk_offsets)
-            except StopIteration:
-                stack.close()
-                return None
+            def _chunks(chunk_size: int):
+                n_filtered = len(selected_columns)
+                chunk_offsets = iter(range(0, n_filtered, chunk_size))
+                # Keep one BED handle for the session instead of re-reading BIM
+                # metadata for every chunk.
+                stack = contextlib.ExitStack()
+                bed = stack.enter_context(open_bed(Path(f"{self._bed_path}.bed")))
 
-            chunk_end = min(chunk_start + chunk_size, n_filtered)
-            geno_chunk = bed.read(
-                index=np.s_[self._valid_indices, snp_indices[chunk_start:chunk_end]],
-                dtype=np.float64,
-            )
-            return RawLmmChunk(np.ascontiguousarray(geno_chunk), chunk_start, chunk_end)
+                def _next_chunk() -> RawLmmChunk | None:
+                    try:
+                        chunk_start = next(chunk_offsets)
+                    except StopIteration:
+                        stack.close()
+                        return None
 
-        return _next_chunk
+                    chunk_end = min(chunk_start + chunk_size, n_filtered)
+                    geno_chunk = bed.read(
+                        index=np.s_[
+                            physical_rows,
+                            selected_columns[chunk_start:chunk_end],
+                        ],
+                        dtype=np.float64,
+                    )
+                    return RawLmmChunk(
+                        np.ascontiguousarray(geno_chunk), chunk_start, chunk_end
+                    )
+
+                return _next_chunk
+
+            return _chunks
+
+        return bind_prepared_genotypes(
+            snp_meta=self._snp_meta,
+            stats=stats,
+            filters=filters,
+            chunk_factory=_bind_chunks,
+        )
 
 
 def _run_lmm_for_chromosome_numpy(
@@ -475,9 +513,20 @@ def _run_lmm_for_chromosome_numpy(
         bed_path,
         chr_snp_indices,
         np.where(valid_mask)[0],
-        all_samples_valid=bool(valid_mask.all()),
+        snp_meta=snp_meta,
         col_chunk_size=col_chunk_size,
         snp_stats_cache=snp_stats_cache,
+    )
+    n_cvt = covariates.shape[1] if covariates is not None else 1
+    execution = plan_association(
+        phenotypes.shape[0],
+        len(chr_snp_indices),
+        requested="numpy",
+        n_cvt=n_cvt,
+        lmm_mode=config.lmm_mode,
+        mem_budget=config.mem_budget,
+        max_chunk_size=col_chunk_size,
+        log_dispatch_choices=True,
     )
     return _run_numpy_lmm(
         source,
@@ -486,12 +535,11 @@ def _run_lmm_for_chromosome_numpy(
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        snp_meta=snp_meta,
         config=replace(config, show_progress=False),
         output_path=None,
         writer=writer,
         snps_indices=snps_indices,
-        max_chunk_size=col_chunk_size,
+        execution=execution,
         compute_pve=compute_pve,
         banner="NumPy LOCO",
         label="lmm_loco",

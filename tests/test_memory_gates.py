@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from jamma.core.memory import check_memory_available
-from jamma.lmm.runner import ExecutionPlan
+from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
@@ -23,6 +23,16 @@ from tests.fixture_paths import SYNTHETIC
 pytestmark = pytest.mark.tier0
 
 BFILE = SYNTHETIC.bfile
+
+
+def _streaming_plan(*, mem_budget: float | None = None):  # type: ignore[no-untyped-def]
+    return plan_association(
+        100,
+        500,
+        requested="numpy-streaming",
+        mem_budget=mem_budget,
+        _require_streaming_accel=False,
+    )
 
 
 class TestMemoryGates:
@@ -40,10 +50,7 @@ class TestMemoryGates:
         with pytest.raises(MemoryError, match="exceeds"):
             memory_preflight(
                 runner.config,
-                ExecutionPlan(mode="streaming", reason="test"),
-                n_valid=100,
-                n_snps=500,
-                n_cvt=1,
+                _streaming_plan(mem_budget=config.mem_budget),
             )
 
     @patch("jamma.core.memory._check_available", return_value=(0.001, False))
@@ -60,10 +67,7 @@ class TestMemoryGates:
         with pytest.raises(MemoryError, match="Insufficient"):
             memory_preflight(
                 runner.config,
-                ExecutionPlan(mode="streaming", reason="test"),
-                n_valid=100,
-                n_snps=500,
-                n_cvt=1,
+                _streaming_plan(),
             )
 
     @patch("jamma.core.memory._check_available", return_value=(1000.0, True))
@@ -78,10 +82,7 @@ class TestMemoryGates:
 
         result = memory_preflight(
             runner.config,
-            ExecutionPlan(mode="streaming", reason="test"),
-            n_valid=100,
-            n_snps=500,
-            n_cvt=1,
+            _streaming_plan(),
         )
 
         assert result is not None
@@ -99,10 +100,7 @@ class TestMemoryGates:
 
         result = memory_preflight(
             runner.config,
-            ExecutionPlan(mode="streaming", reason="test"),
-            n_valid=100,
-            n_snps=500,
-            n_cvt=1,
+            _streaming_plan(),
         )
 
         assert result is None
@@ -203,7 +201,7 @@ class TestBatchPreflightThreadsNcvt:
             # jamma.core.memory worked by accident of import placement; a
             # module-level import there would have silently un-patched this.
             with patch(
-                "jamma.pipeline_memory.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 side_effect=capturing_estimator,
             ):
                 with pytest.raises(RuntimeError, match="stop-at-preflight-sentinel"):
@@ -259,7 +257,7 @@ class TestBatchPreflightThreadsNcvt:
             raise sentinel
 
         with patch(
-            "jamma.lmm.runner_numpy.estimate_lmm_memory",
+            "jamma.lmm.association_plan.estimate_lmm_memory",
             side_effect=capturing_estimator,
         ):
             with pytest.raises(RuntimeError, match="stop-at-preflight-sentinel"):

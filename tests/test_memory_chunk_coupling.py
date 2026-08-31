@@ -19,28 +19,39 @@ from jamma.core.memory import (
     estimate_lmm_memory,
     estimate_streaming_memory,
 )
+from jamma.lmm.association_plan import plan_association
 from jamma.lmm.chunk_sizing import (
     LmmChunkPlan,
     compute_chunk_size_numpy,
+    lmm_extra_bytes_per_snp,
     plan_lmm_chunks,
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood import n_index
-from jamma.lmm.runner import ExecutionPlan, select_execution_mode
+from jamma.lmm.runner import select_execution_mode
 from jamma.lmm.runner_numpy_streaming import _DEFAULT_STATS_CHUNK
+from jamma.lmm.schema import LmmMode
 from jamma.pipeline_config import PipelineConfig
-from jamma.pipeline_memory import _compute_chunk, memory_preflight, plan_memory
+from jamma.pipeline_memory import memory_preflight
 from tests.fakes import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
 
 
 def _streaming_preflight(
-    n_valid: int, n_snps: int, n_cvt: int, lmm_mode: int = 1
+    n_valid: int, n_snps: int, n_cvt: int, lmm_mode: LmmMode = 1
 ) -> None:
     """Drive the live preflight gate the way the pipeline does."""
     config = PipelineConfig(bfile=Path("unused"), lmm_mode=lmm_mode)
-    memory_preflight(config, ExecutionPlan("streaming", "test"), n_valid, n_snps, n_cvt)
+    plan = plan_association(
+        n_valid,
+        n_snps,
+        requested="numpy-streaming",
+        n_cvt=n_cvt,
+        lmm_mode=lmm_mode,
+        _require_streaming_accel=False,
+    )
+    memory_preflight(config, plan)
 
 
 def test_chunk_size_varies_with_scale():
@@ -233,7 +244,7 @@ def _priced_streaming_lmm_phase_gb(
     n_samples: int,
     n_snps: int,
     n_cvt: int,
-    lmm_mode: int,
+    lmm_mode: LmmMode,
     accel: bool,
 ) -> float:
     """The streaming preflight's real priced LMM-phase total.
@@ -251,7 +262,25 @@ def _priced_streaming_lmm_phase_gb(
     from jamma.lmm import accel as accel_module
 
     monkeypatch.setattr(accel_module, "_accel", object() if accel else None)
-    chunk_plan, uab_iab_gb = _compute_chunk(n_samples, n_snps, n_cvt, lmm_mode)
+    execution = plan_association(
+        n_samples,
+        n_snps,
+        requested="numpy-streaming",
+        n_cvt=n_cvt,
+        lmm_mode=lmm_mode,
+        _require_streaming_accel=False,
+    )
+    chunk_plan = execution.conservative_chunks
+    uab_iab_gb = (
+        chunk_plan.chunk_size
+        * lmm_extra_bytes_per_snp(
+            n_samples,
+            n_cvt,
+            execution.dispatch,
+            n_buffers=chunk_plan.n_buffers,
+        )
+        / 1e9
+    )
     est = estimate_streaming_memory(
         n_samples,
         chunk_size=_DEFAULT_STATS_CHUNK,
@@ -471,13 +500,29 @@ class TestChunkPlanMatchesEngine:
         assert not plan.use_pipeline, "this case must not pipeline (plan.n_buffers=1)"
         assert plan.n_buffers == 1
 
-        config = PipelineConfig(bfile=Path("unused"), lmm_mode=lmm_mode)
-        exec_plan = ExecutionPlan("streaming", "test")
-        mem_plan = plan_memory(config, exec_plan, n_samples, n_snps, n_cvt)
+        exec_plan = plan_association(
+            n_samples,
+            n_snps,
+            requested="numpy-streaming",
+            n_cvt=n_cvt,
+            lmm_mode=lmm_mode,
+            _require_streaming_accel=False,
+        )
+        mem_plan = exec_plan.price()
 
         # Reference: the same estimate built with pipeline_buffers hardcoded
         # to 2, the pre-fix behavior, to prove the two would have disagreed.
-        chunk_plan, uab_iab_gb = _compute_chunk(n_samples, n_snps, n_cvt, lmm_mode)
+        chunk_plan = exec_plan.conservative_chunks
+        uab_iab_gb = (
+            chunk_plan.chunk_size
+            * lmm_extra_bytes_per_snp(
+                n_samples,
+                n_cvt,
+                exec_plan.dispatch,
+                n_buffers=chunk_plan.n_buffers,
+            )
+            / 1e9
+        )
         est_hardcoded_two = estimate_streaming_memory(
             n_samples,
             chunk_size=_DEFAULT_STATS_CHUNK,
@@ -519,7 +564,7 @@ class TestChunkPlanMatchesEngine:
         (the real auto-scaling budget floor is 2GB per chunk, which no
         unit-test-sized matrix clears without this).
         """
-        from jamma.lmm import runner_numpy
+        from jamma.lmm import association_plan, runner_numpy
         from jamma.lmm.schema import LmmConfig
 
         n_samples = 30
@@ -542,14 +587,14 @@ class TestChunkPlanMatchesEngine:
         ]
 
         recorded_calls: list[dict] = []
-        real_estimate_lmm_memory = runner_numpy.estimate_lmm_memory
+        real_estimate_lmm_memory = association_plan.estimate_lmm_memory
 
         def _recording_estimate_lmm_memory(*args, **kwargs):
             recorded_calls.append(kwargs)
             return real_estimate_lmm_memory(*args, **kwargs)
 
         monkeypatch.setattr(
-            runner_numpy, "estimate_lmm_memory", _recording_estimate_lmm_memory
+            association_plan, "estimate_lmm_memory", _recording_estimate_lmm_memory
         )
 
         result = runner_numpy.run_lmm_association_numpy(
@@ -640,3 +685,118 @@ def test_plan_lmm_chunks_honors_mem_budget_bytes():
     )
 
     assert budgeted.chunk_size < auto.chunk_size
+
+
+def test_pipeline_memory_plan_honors_mem_budget(monkeypatch):
+    """The pipeline preflight prices the budget-aware chunk geometry."""
+    from jamma.lmm import accel
+
+    monkeypatch.setattr(accel, "_accel", None)
+    n_samples, n_snps, n_cvt = 30, 200, 1
+    mem_budget = 12e-6
+    expected = plan_lmm_chunks(
+        n_samples,
+        n_snps,
+        n_cvt,
+        DispatchPath.NUMPY_FALLBACK,
+        mem_budget_bytes=int(mem_budget * 1e9),
+    )
+
+    execution = plan_association(
+        n_samples,
+        n_snps,
+        requested="numpy",
+        n_cvt=n_cvt,
+        mem_budget=mem_budget,
+    )
+    planned = execution.price()
+
+    assert expected.chunk_size == 100
+    assert planned.compute_chunk_size == expected.chunk_size
+
+
+def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
+    """The final chunk engine requests the width allowed by mem_budget."""
+    from jamma.core.snp_stats import SnpSelection
+    from jamma.lmm import accel
+    from jamma.lmm.chunk_runner_numpy import (
+        ChunkRunOptions,
+        run_lmm_chunk_source_numpy,
+    )
+    from jamma.lmm.genotype_source import PreparedGenotypes
+    from jamma.lmm.prepare_common import PreparedLmmRun
+    from jamma.lmm.schema import LmmConfig, SnpMeta
+
+    monkeypatch.setattr(accel, "_accel", None)
+    n_samples, n_snps, n_cvt = 30, 200, 1
+    mem_budget = 12e-6
+    expected = plan_lmm_chunks(
+        n_samples,
+        n_snps,
+        n_cvt,
+        DispatchPath.NUMPY_FALLBACK,
+        mem_budget_bytes=int(mem_budget * 1e9),
+    )
+    prepared = PreparedLmmRun(
+        eigenvalues=np.ones(n_samples),
+        U=np.eye(n_samples),
+        UtW=np.ones((n_samples, n_cvt)),
+        Uty=np.ones(n_samples),
+        logl_H0=-1.0,
+        Hi_eval_null=np.ones(n_samples),
+        pve=None,
+        pve_se=None,
+    )
+    requested: list[int] = []
+
+    class GeometryObserved(Exception):
+        pass
+
+    def observe_geometry(chunk_size: int):
+        requested.append(chunk_size)
+        raise GeometryObserved
+
+    indices = np.arange(n_snps, dtype=np.intp)
+    genotypes = PreparedGenotypes(
+        snp_meta=SnpMeta(
+            chr=np.full(n_snps, "1"),
+            rs=np.array([f"rs{i}" for i in indices]),
+            pos=indices,
+            a1=np.full(n_snps, "A"),
+            a0=np.full(n_snps, "G"),
+        ),
+        selection=SnpSelection(
+            indices=indices,
+            local_indices=indices,
+            mask=np.ones(n_snps, dtype=bool),
+            filtered_afs=np.zeros(n_snps),
+            filtered_miss=np.zeros(n_snps, dtype=int),
+            filtered_means=np.zeros(n_snps),
+        ),
+        n_unexpected=0,
+        analyzed_sample_count=n_samples,
+        chunk_factory=observe_geometry,
+    )
+
+    with pytest.raises(GeometryObserved):
+        run_lmm_chunk_source_numpy(
+            genotypes=genotypes,
+            chunk_sink=lambda _arrays, _start, _end: None,
+            execution=plan_association(
+                n_samples,
+                n_snps,
+                requested="numpy",
+                n_cvt=n_cvt,
+                mem_budget=mem_budget,
+            ).tighten_after_filter(n_snps),
+            prepared=prepared,
+            config=LmmConfig(
+                lmm_mode=1,
+                mem_budget=mem_budget,
+                show_progress=False,
+            ),
+            options=ChunkRunOptions(),
+        )
+
+    assert expected.chunk_size == 100
+    assert requested == [expected.chunk_size]

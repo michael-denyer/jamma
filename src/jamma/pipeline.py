@@ -23,6 +23,7 @@ Example:
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -42,10 +43,11 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
+from jamma.lmm.association_plan import plan_association
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.lmm.prepare_common import compute_valid_mask
-from jamma.lmm.runner import ExecutionPlan, select_execution_mode, warn_if_small_sample
+from jamma.lmm.runner import ExecutionPlan, warn_if_small_sample
 from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
@@ -467,7 +469,7 @@ class PipelineRunner:
         # and Uab sizing depends on n_cvt. A prior version selected twice
         # (once here with the pre-mask n_samples, once again after masking),
         # re-running estimate_lmm_memory both times; this is the single call.
-        plan = select_execution_mode(
+        execution = plan_association(
             n_samples=n_valid,
             n_snps=n_snps,
             requested=requested,
@@ -475,6 +477,7 @@ class PipelineRunner:
             lmm_mode=parse_lmm_mode(self.config.lmm_mode),
             mem_budget=self.config.mem_budget,
         )
+        plan = execution.summary
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
         # LOCO is single-phenotype (PipelineConfig rejects more) and owns its
@@ -496,7 +499,7 @@ class PipelineRunner:
 
         log_pipeline_banner(plan)
 
-        mem_plan = memory_preflight(self.config, plan, n_valid, n_snps, n_cvt)
+        memory_preflight(self.config, execution)
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes). The
         # kinship matrix is consumed here; runners use the eigen arrays directly.
@@ -507,7 +510,7 @@ class PipelineRunner:
 
         outcome = run_phenotype_loop(
             self.config,
-            plan,
+            execution,
             all_pheno_data,
             valid_mask,
             covariates,
@@ -515,9 +518,6 @@ class PipelineRunner:
             eigenvectors,
             assoc_path,
             snps_indices,
-            compute_chunk_size=None
-            if mem_plan is None
-            else mem_plan.compute_chunk_size,
         )
 
         total_s = time.perf_counter() - t_start
@@ -545,7 +545,7 @@ class PipelineRunner:
 
     def _load_phenotypes_and_intersect_masks(
         self,
-        pheno_columns: list[int],
+        pheno_columns: Sequence[int],
         covariates: np.ndarray | None,
     ) -> tuple[dict[int, tuple[np.ndarray, int]], np.ndarray, int]:
         """Load each phenotype column and intersect their valid-sample masks.

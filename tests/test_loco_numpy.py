@@ -160,7 +160,10 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
     captured: list[dict[str, int]] = []
 
     def spy(*args, **kwargs):
-        captured.append({"n_grid": kwargs["n_grid"], "n_refine": kwargs["n_refine"]})
+        chunk_config = kwargs["config"]
+        captured.append(
+            {"n_grid": chunk_config.n_grid, "n_refine": chunk_config.n_refine}
+        )
         return real_chunk_runner(*args, **kwargs)
 
     monkeypatch.setattr(runner_mod, "run_lmm_chunk_source_numpy", spy)

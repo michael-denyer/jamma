@@ -13,16 +13,36 @@ Covers the helpers extracted out of ``_run_inner``:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pytest
 
 from jamma.core.memory import MemoryBreakdown
+from jamma.lmm.association_plan import plan_association
 from jamma.lmm.runner import ExecutionPlan
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
 
 pytestmark = pytest.mark.tier0
+
+
+def _association_plan(
+    mode: Literal["batch", "streaming"],
+    *,
+    n_valid: int,
+    n_snps: int,
+    n_cvt: int,
+    mem_budget: float | None = None,
+):  # type: ignore[no-untyped-def]
+    return plan_association(
+        n_valid,
+        n_snps,
+        requested="numpy-streaming" if mode == "streaming" else "numpy",
+        n_cvt=n_cvt,
+        mem_budget=mem_budget,
+        _require_streaming_accel=False,
+    )
 
 
 def _make_runner(tmp_path: Path, **overrides) -> PipelineRunner:  # type: ignore[no-untyped-def]
@@ -68,11 +88,9 @@ class TestMemoryPreflightStreaming:
 
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
         runner = _make_runner(tmp_path, check_memory=True)
-        plan = ExecutionPlan(mode="streaming", reason="test")
+        plan = _association_plan("streaming", n_valid=1000, n_snps=50_000, n_cvt=3)
 
-        mem_plan = memory_preflight(
-            runner.config, plan, n_valid=1000, n_snps=50_000, n_cvt=3
-        )
+        mem_plan = memory_preflight(runner.config, plan)
 
         assert mem_plan is not None
         assert mem_plan.mode == "streaming"
@@ -91,14 +109,12 @@ class TestMemoryPreflightStreaming:
         from loguru import logger
 
         runner = _make_runner(tmp_path, check_memory=False)
-        plan = ExecutionPlan(mode="streaming", reason="test")
+        plan = _association_plan("streaming", n_valid=1000, n_snps=50_000, n_cvt=3)
 
         records: list[str] = []
         handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
         try:
-            result = memory_preflight(
-                runner.config, plan, n_valid=1000, n_snps=50_000, n_cvt=3
-            )
+            result = memory_preflight(runner.config, plan)
         finally:
             logger.remove(handler_id)
 
@@ -128,13 +144,15 @@ class TestMemoryPreflightBatch:
             nonlocal called
             called = True
 
-        monkeypatch.setattr("jamma.pipeline_memory.estimate_lmm_memory", fake_estimate)
-        plan = ExecutionPlan(mode="batch", reason="test")
+        monkeypatch.setattr(
+            "jamma.lmm.association_plan.estimate_lmm_memory", fake_estimate
+        )
+        plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
 
         records: list[str] = []
         handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
         try:
-            memory_preflight(runner.config, plan, n_valid=1000, n_snps=100, n_cvt=1)
+            memory_preflight(runner.config, plan)
         finally:
             logger.remove(handler_id)
 
@@ -158,12 +176,14 @@ class TestMemoryPreflightBatch:
         runner = _make_runner(tmp_path, check_memory=True, mem_budget=8.0)
         est = _memory_breakdown(total_gb=16.0, available_gb=128.0, sufficient=True)
         monkeypatch.setattr(
-            "jamma.pipeline_memory.estimate_lmm_memory", lambda *a, **k: est
+            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: est
         )
-        plan = ExecutionPlan(mode="batch", reason="test")
+        plan = _association_plan(
+            "batch", n_valid=1000, n_snps=100, n_cvt=1, mem_budget=8.0
+        )
 
         with pytest.raises(MemoryError, match=r"exceeds .*budget \(8\.0GB\)"):
-            memory_preflight(runner.config, plan, n_valid=1000, n_snps=100, n_cvt=1)
+            memory_preflight(runner.config, plan)
 
     def test_insufficient_memory_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -171,12 +191,12 @@ class TestMemoryPreflightBatch:
         runner = _make_runner(tmp_path, check_memory=True)
         est = _memory_breakdown(total_gb=200.0, available_gb=64.0, sufficient=False)
         monkeypatch.setattr(
-            "jamma.pipeline_memory.estimate_lmm_memory", lambda *a, **k: est
+            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: est
         )
-        plan = ExecutionPlan(mode="batch", reason="test")
+        plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
 
         with pytest.raises(MemoryError, match=r"Insufficient memory"):
-            memory_preflight(runner.config, plan, n_valid=1000, n_snps=100, n_cvt=1)
+            memory_preflight(runner.config, plan)
 
     def test_sufficient_passes_silently(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -184,11 +204,11 @@ class TestMemoryPreflightBatch:
         runner = _make_runner(tmp_path, check_memory=True)
         est = _memory_breakdown(total_gb=32.0, available_gb=128.0, sufficient=True)
         monkeypatch.setattr(
-            "jamma.pipeline_memory.estimate_lmm_memory", lambda *a, **k: est
+            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: est
         )
-        plan = ExecutionPlan(mode="batch", reason="test")
+        plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
 
-        memory_preflight(runner.config, plan, n_valid=1000, n_snps=100, n_cvt=1)
+        memory_preflight(runner.config, plan)
 
 
 def _write_fam(path: Path, rows: list[list[str]]) -> None:

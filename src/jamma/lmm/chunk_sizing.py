@@ -216,3 +216,22 @@ def plan_lmm_chunks(
         n_buffers=2 if use_pipeline else 1,
         use_pipeline=use_pipeline,
     )
+
+
+def tighten_lmm_chunks(
+    conservative: LmmChunkPlan,
+    n_filtered: int,
+) -> LmmChunkPlan:
+    """Narrow a conservative plan after filtering without selecting policy."""
+    if n_filtered < 0:
+        raise ValueError(f"n_filtered must be >= 0, got {n_filtered}")
+
+    chunk_size = min(conservative.chunk_size, max(1, n_filtered))
+    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+    use_pipeline = conservative.use_pipeline and n_chunks >= _MIN_PIPELINE_CHUNKS
+    return LmmChunkPlan(
+        chunk_size=chunk_size,
+        n_chunks=n_chunks,
+        n_buffers=2 if use_pipeline else 1,
+        use_pipeline=use_pipeline,
+    )

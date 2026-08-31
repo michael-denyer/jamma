@@ -7,15 +7,23 @@ itself is the shared body in ``runner_numpy``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 
 from jamma.core.snp_filter import validate_snp_indices
-from jamma.core.snp_stats import SnpStats, collect_streamed_snp_stats
-from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
+from jamma.core.snp_stats import SnpFilterSpec, collect_streamed_snp_stats
+from jamma.io.plink import PlinkMetadata, get_plink_metadata, stream_genotype_chunks
+from jamma.lmm.association_plan import (
+    ExecutableAssociationPlan,
+    plan_association,
+)
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
+from jamma.lmm.genotype_source import (
+    PreparedGenotypes,
+    SampleBasis,
+    bind_prepared_genotypes,
+)
 from jamma.lmm.runner_numpy import _run_numpy_lmm
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
@@ -32,7 +40,7 @@ _DEFAULT_STATS_CHUNK = 10_000
 
 
 class BedSource:
-    """A PLINK .bed file as a :class:`~jamma.lmm.runner_numpy.GenotypeSource`.
+    """A PLINK .bed file as a genotype source.
 
     The statistics pass reads float32 blocks (lightweight, counts only); the
     association pass streams float64 chunks and row-filters each one, since
@@ -43,13 +51,20 @@ class BedSource:
         self,
         bed_path: Path,
         *,
+        snp_meta: SnpMeta,
         n_samples: int,
         n_snps: int,
         stats_chunk_size: int,
         validate_genotypes: bool,
         show_progress: bool,
     ) -> None:
+        if len(snp_meta) != n_snps:
+            raise ValueError(
+                "BED SNP count must match paired SnpMeta: "
+                f"got {n_snps} SNPs and {len(snp_meta)} metadata rows"
+            )
         self._bed_path = bed_path
+        self._snp_meta = snp_meta
         self._n_samples = n_samples
         self._n_snps = n_snps
         self._stats_chunk_size = stats_chunk_size
@@ -60,48 +75,65 @@ class BedSource:
     def n_snps(self) -> int:
         return self._n_snps
 
-    def snp_stats(self, valid_mask: np.ndarray, *, include_hwe: bool) -> SnpStats:
-        needs_filter = not bool(np.all(valid_mask))
-        return collect_streamed_snp_stats(
+    def prepare(
+        self, samples: SampleBasis, filters: SnpFilterSpec
+    ) -> PreparedGenotypes:
+        if samples.source_row_count != self._n_samples:
+            raise ValueError(
+                "sample basis row count must match BED rows: "
+                f"got {samples.source_row_count} and {self._n_samples}"
+            )
+        stats = collect_streamed_snp_stats(
             self._bed_path,
             n_snps=self._n_snps,
             n_samples=self._n_samples,
             chunk_size=self._stats_chunk_size,
-            sample_indices=np.where(valid_mask)[0] if needs_filter else None,
-            include_hwe=include_hwe,
+            sample_indices=None if samples.is_all_samples else samples.positions,
+            include_hwe=filters.hwe_threshold > 0,
             validate_genotypes=self._validate_genotypes,
             show_progress=self._show_progress,
             progress_label="Computing SNP statistics",
             dtype=np.float32,
-            sample_scope="valid_samples" if needs_filter else "all_samples",
+            sample_scope="all_samples" if samples.is_all_samples else "valid_samples",
         )
 
-    def chunks(
-        self, chunk_size: int, snp_indices: np.ndarray, valid_mask: np.ndarray
-    ) -> Callable[[], RawLmmChunk | None]:
-        needs_filter = not bool(np.all(valid_mask))
-        chunk_iter = iter(
-            stream_genotype_chunks(
-                self._bed_path,
-                chunk_size=chunk_size,
-                dtype=np.float64,
-                show_progress=False,
-                snp_indices=snp_indices,
-            )
+        def _bind_chunks(selection):
+            selected_columns = selection.indices
+
+            def _chunks(chunk_size: int):
+                chunk_iter = iter(
+                    stream_genotype_chunks(
+                        self._bed_path,
+                        chunk_size=chunk_size,
+                        dtype=np.float64,
+                        show_progress=False,
+                        snp_indices=selected_columns,
+                    )
+                )
+
+                def _next_chunk() -> RawLmmChunk | None:
+                    try:
+                        chunk, filt_start, filt_end = next(chunk_iter)
+                    except StopIteration:
+                        return None
+
+                    if not samples.is_all_samples:
+                        chunk = chunk[samples.positions, :]
+
+                    return RawLmmChunk(
+                        np.ascontiguousarray(chunk), filt_start, filt_end
+                    )
+
+                return _next_chunk
+
+            return _chunks
+
+        return bind_prepared_genotypes(
+            snp_meta=self._snp_meta,
+            stats=stats,
+            filters=filters,
+            chunk_factory=_bind_chunks,
         )
-
-        def _next_chunk() -> RawLmmChunk | None:
-            try:
-                chunk, filt_start, filt_end = next(chunk_iter)
-            except StopIteration:
-                return None
-
-            if needs_filter:
-                chunk = chunk[valid_mask, :]
-
-            return RawLmmChunk(np.ascontiguousarray(chunk), filt_start, filt_end)
-
-        return _next_chunk
 
 
 def run_lmm_association_numpy_streaming(
@@ -163,6 +195,56 @@ def run_lmm_association_numpy_streaming(
         raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
 
     meta = get_plink_metadata(bed_path)
+    n_cvt = covariates.shape[1] if covariates is not None else 1
+    execution = plan_association(
+        meta.n_samples,
+        meta.n_snps,
+        requested="numpy-streaming",
+        n_cvt=n_cvt,
+        lmm_mode=config.lmm_mode,
+        mem_budget=config.mem_budget,
+        max_chunk_size=chunk_size,
+        _require_streaming_accel=False,
+    )
+    return _run_lmm_association_numpy_streaming_planned(
+        bed_path=bed_path,
+        phenotypes=phenotypes,
+        kinship=kinship,
+        snp_info=snp_info,
+        covariates=covariates,
+        eigenvalues=eigenvalues,
+        eigenvectors=eigenvectors,
+        chunk_size=chunk_size,
+        output_path=output_path,
+        snps_indices=snps_indices,
+        hwe_threshold=hwe_threshold,
+        validate_genotypes=validate_genotypes,
+        config=config,
+        execution=execution,
+        _meta=meta,
+    )
+
+
+def _run_lmm_association_numpy_streaming_planned(
+    *,
+    bed_path: Path,
+    phenotypes: np.ndarray,
+    kinship: np.ndarray | None,
+    snp_info: list | SnpMeta | None,
+    covariates: np.ndarray | None,
+    eigenvalues: np.ndarray | None,
+    eigenvectors: np.ndarray | None,
+    chunk_size: int | None,
+    output_path: Path | None,
+    snps_indices: np.ndarray | None,
+    hwe_threshold: float,
+    validate_genotypes: bool,
+    config: LmmConfig,
+    execution: ExecutableAssociationPlan,
+    _meta: PlinkMetadata | None = None,
+) -> LmmRunResult:
+    """Run the streaming boundary with policy supplied by the pipeline."""
+    meta = get_plink_metadata(bed_path) if _meta is None else _meta
     validate_snp_indices(snps_indices, meta.n_snps)
 
     # Caller-supplied SnpMeta or list, or the PLINK metadata parsed once.
@@ -175,6 +257,7 @@ def run_lmm_association_numpy_streaming(
 
     source = BedSource(
         bed_path,
+        snp_meta=snp_meta,
         n_samples=meta.n_samples,
         n_snps=meta.n_snps,
         stats_chunk_size=_DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
@@ -188,14 +271,12 @@ def run_lmm_association_numpy_streaming(
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        snp_meta=snp_meta,
         config=config,
         output_path=output_path,
         snps_indices=snps_indices,
         hwe_threshold=hwe_threshold,
-        max_chunk_size=chunk_size,
+        execution=execution,
         banner="NumPy streaming",
         label="lmm_numpy_streaming",
         progress_label="LMM association (streaming)",
-        log_dispatch_choices=False,
     )

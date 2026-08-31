@@ -336,11 +336,13 @@ class LocoResult:
 
 @dataclass(frozen=True, slots=True)
 class SnpMeta:
-    """SNP metadata as one array per column, indexed by global SNP index.
+    """SNP metadata as one array per column in its paired source coordinate.
 
     Writers and result builders slice these arrays directly; nothing
     materialises a per-SNP dict. ``pos`` is normalised to int64 and ``chr``
-    to str at construction, so downstream formatting needs no coercion.
+    to str at construction, so downstream formatting needs no coercion. A full
+    BED source uses file-global positions; a pre-sliced matrix may use local
+    positions. The source paired with this value defines the identity.
 
     Attributes:
         chr: Chromosome identifier per SNP (str).

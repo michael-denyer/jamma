@@ -63,7 +63,7 @@ class TestExecutionMode:
         """auto + C ext + memory sufficient -> numpy-batch."""
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
@@ -75,7 +75,7 @@ class TestExecutionMode:
         """auto + C ext + memory insufficient -> numpy-streaming."""
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
@@ -87,7 +87,7 @@ class TestExecutionMode:
         """auto + no C ext -> numpy-batch fallback."""
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.accel._accel", None),
@@ -99,11 +99,11 @@ class TestExecutionMode:
         """No C extension + insufficient memory logs warning."""
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
             patch("jamma.lmm.accel._accel", None),
-            patch("jamma.lmm.runner.logger") as mock_logger,
+            patch("jamma.lmm.association_plan.logger") as mock_logger,
         ):
             plan = select_execution_mode(n_samples=100, n_snps=1000)
         assert plan.mode == "batch"
@@ -115,7 +115,7 @@ class TestExecutionMode:
         """explicit 'numpy' -> numpy-batch regardless of memory."""
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 return_value=_make_insufficient_estimate(),
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
@@ -204,7 +204,7 @@ class TestExecutionMode:
         # First call returns numpy-batch, second returns numpy-streaming
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 side_effect=[sufficient, insufficient],
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
@@ -226,7 +226,7 @@ class TestExecutionMode:
 
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 side_effect=capturing_estimate,
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
@@ -242,7 +242,7 @@ class TestExecutionMode:
         """No C general + n_cvt>1 -> numpy-batch fallback."""
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.accel._accel", None),
@@ -259,7 +259,7 @@ class TestExecutionMode:
         """C general available + n_cvt>1 + sufficient -> numpy-batch."""
         with (
             patch(
-                "jamma.lmm.runner.estimate_lmm_memory",
+                "jamma.lmm.association_plan.estimate_lmm_memory",
                 return_value=_make_sufficient_estimate(),
             ),
             patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),

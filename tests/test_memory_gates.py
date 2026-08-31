@@ -71,22 +71,20 @@ class TestMemoryGates:
 
     @patch("jamma.core.memory._check_available", return_value=(1000.0, True))
     def test_memory_check_passes_when_sufficient(self, mock_check):
-        """Sufficient memory (1 TB available) returns StreamingMemoryBreakdown.
+        """Sufficient memory (1 TB available) passes the gate.
 
         Mocks _check_available to return (1000.0 GB, True), simulating ample
-        memory. memory_preflight must return the plan, not raise.
+        memory. memory_preflight must not raise, and the plan's own quote
+        must show the fit the gate approved.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=True)
         runner = PipelineRunner(config)
+        plan = _streaming_plan()
 
-        result = memory_preflight(
-            runner.config,
-            _streaming_plan(),
-        )
+        memory_preflight(runner.config, plan)
 
-        assert result is not None
-        assert result.mode == "streaming"
-        assert result.sufficient is True
+        quote = plan.price()
+        assert quote.total_peak_gb <= quote.available_gb
 
     def test_memory_check_disabled_returns_none(self):
         """check_memory=False returns None without performing any memory check.

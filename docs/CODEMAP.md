@@ -259,8 +259,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:138](../src/jamma/lmm/association_plan.py#L125) |
-| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy with one-way post-filter tightening | [association_plan.py:68](../src/jamma/lmm/association_plan.py#L59) |
+| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:138](../src/jamma/lmm/association_plan.py#L122) |
+| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy with one-way post-filter tightening | [association_plan.py:68](../src/jamma/lmm/association_plan.py#L62) |
 | 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:142](../src/jamma/lmm/runner_numpy.py#L132) |
 | 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:104](../src/jamma/lmm/genotype_source.py#L103) |
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:28](../src/jamma/lmm/genotype_source.py#L25) |

@@ -75,29 +75,27 @@ def _memory_breakdown(
 
 
 class TestMemoryPreflightStreaming:
-    """Streaming mode builds and returns one MemoryPlan."""
+    """Streaming mode prices the plan's own geometry and passes the gate."""
 
-    def test_returns_streaming_plan(
+    def test_prices_streaming_geometry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The returned plan carries the chunk the engine will size and the
-        driver-aware eigendecomposition figure."""
+        """The quote carries the chunk the engine will size and the
+        driver-aware eigendecomposition figure, and the gate passes."""
         from jamma.core import memory
+        from jamma.pipeline_memory import _eigen_driver_plan
 
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
         runner = _make_runner(tmp_path, check_memory=True)
         plan = _association_plan("streaming", n_valid=1000, n_snps=50_000, n_cvt=3)
 
-        mem_plan = memory_preflight(runner.config, plan)
+        memory_preflight(runner.config, plan)  # gate must pass, not raise
 
-        assert mem_plan is not None
-        assert mem_plan.mode == "streaming"
-        assert mem_plan.disk_chunk_size == 10_000
-        assert mem_plan.compute_chunk_size is not None
-        assert mem_plan.compute_chunk_size >= 100
-        assert mem_plan.eigen is not None
-        assert mem_plan.eigen.required_gb > 0
-        assert mem_plan.sufficient
+        quote = plan.price(eigen=_eigen_driver_plan(plan.n_samples))
+        assert quote.compute_chunk_size >= 100
+        assert quote.eigen is not None
+        assert quote.eigen.required_gb > 0
+        assert quote.total_peak_gb <= quote.available_gb
 
     def test_streaming_check_memory_false_logs_skip(self, tmp_path: Path) -> None:
         """Streaming path with check_memory=False must log the skip with the

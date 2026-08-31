@@ -44,13 +44,16 @@ class ExecutionPlan:
 
 @dataclass(frozen=True, slots=True)
 class MemoryPlan:
-    """Memory quote for one already-selected association plan."""
+    """Memory quote for one already-selected association plan.
 
-    mode: ExecutionMode
+    Carries exactly what the two gating call sites read: the pipeline
+    preflight logs and gates on all four fields, the batch runner on the
+    two GB figures. Sufficiency is not a field because ``memory.require``
+    derives it from the same two figures.
+    """
+
     total_peak_gb: float
     available_gb: float
-    sufficient: bool
-    disk_chunk_size: int | None
     compute_chunk_size: int
     eigen: EigenDriverPlan | None
 
@@ -91,11 +94,8 @@ class ExecutableAssociationPlan:
                 uab_iab_gb=extra_gb,
             )
             return MemoryPlan(
-                mode="streaming",
                 total_peak_gb=estimate.total_peak_gb,
                 available_gb=estimate.available_gb,
-                sufficient=estimate.sufficient,
-                disk_chunk_size=_DEFAULT_STATS_CHUNK,
                 compute_chunk_size=chunks.chunk_size,
                 eigen=eigen,
             )
@@ -108,11 +108,8 @@ class ExecutableAssociationPlan:
             n_buffers=chunks.n_buffers,
         )
         return MemoryPlan(
-            mode="batch",
             total_peak_gb=estimate.total_gb,
             available_gb=estimate.available_gb,
-            sufficient=estimate.sufficient,
-            disk_chunk_size=None,
             compute_chunk_size=chunks.chunk_size,
             eigen=None,
         )

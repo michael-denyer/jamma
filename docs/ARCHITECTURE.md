@@ -93,7 +93,7 @@ src/jamma/
 ├── pipeline_banner.py      # GEMMA-style dataset and execution-plan banners
 ├── pipeline_phenotype_loop.py  # Per-phenotype loop + the batch/streaming runner calls
 ├── pipeline_kinship.py     # The -gk path: compute a kinship matrix and write it
-├── pipeline_memory.py      # MemoryPlan: the preflight gate, priced per dispatch path and eigen driver
+├── pipeline_memory.py      # The preflight gate: prices the plan per dispatch path and eigen driver
 ├── _build_support/         # Canonical compile flags, source lists, and the
 │   │                       # build/load seam: BuildSpec, run_build, find_c_compiler
 │   ├── build_models.py     # BuildSpec values, source manifests, and flag policy

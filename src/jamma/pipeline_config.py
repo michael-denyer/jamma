@@ -176,6 +176,8 @@ class PipelineConfig:
                 f"phenotype_columns contains duplicate indices: "
                 f"{self.phenotype_columns}"
             )
+        if self.mem_budget is not None and self.mem_budget <= 0:
+            raise ValueError(f"mem_budget must be positive (GB), got {self.mem_budget}")
         if not 0 <= self.hwe_threshold <= 1:
             raise ValueError(
                 f"hwe_threshold must be in [0, 1] (p-value threshold), "

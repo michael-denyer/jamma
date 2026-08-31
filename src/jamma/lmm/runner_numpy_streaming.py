@@ -7,12 +7,17 @@ itself is the shared body in ``runner_numpy``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 
 from jamma.core.snp_filter import validate_snp_indices
-from jamma.core.snp_stats import SnpFilterSpec, collect_streamed_snp_stats
+from jamma.core.snp_stats import (
+    SnpFilterSpec,
+    SnpSelection,
+    collect_streamed_snp_stats,
+)
 from jamma.io.plink import PlinkMetadata, get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
@@ -97,42 +102,25 @@ class BedSource:
             sample_scope="all_samples" if samples.is_all_samples else "valid_samples",
         )
 
-        def _bind_chunks(selection):
-            selected_columns = selection.indices
-
-            def _chunks(chunk_size: int):
-                chunk_iter = iter(
-                    stream_genotype_chunks(
-                        self._bed_path,
-                        chunk_size=chunk_size,
-                        dtype=np.float64,
-                        show_progress=False,
-                        snp_indices=selected_columns,
-                    )
-                )
-
-                def _next_chunk() -> RawLmmChunk | None:
-                    try:
-                        chunk, filt_start, filt_end = next(chunk_iter)
-                    except StopIteration:
-                        return None
-
-                    if not samples.is_all_samples:
-                        chunk = chunk[samples.positions, :]
-
-                    return RawLmmChunk(
-                        np.ascontiguousarray(chunk), filt_start, filt_end
-                    )
-
-                return _next_chunk
-
-            return _chunks
+        def _iter_chunks(
+            selection: SnpSelection, chunk_size: int
+        ) -> Iterator[RawLmmChunk]:
+            for chunk, filt_start, filt_end in stream_genotype_chunks(
+                self._bed_path,
+                chunk_size=chunk_size,
+                dtype=np.float64,
+                show_progress=False,
+                snp_indices=selection.indices,
+            ):
+                if not samples.is_all_samples:
+                    chunk = chunk[samples.positions, :]
+                yield RawLmmChunk(np.ascontiguousarray(chunk), filt_start, filt_end)
 
         return bind_prepared_genotypes(
             snp_meta=self._snp_meta,
             stats=stats,
             filters=filters,
-            chunk_factory=_bind_chunks,
+            chunk_source=_iter_chunks,
         )
 
 

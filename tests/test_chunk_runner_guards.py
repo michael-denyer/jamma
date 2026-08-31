@@ -46,7 +46,7 @@ def _prepared_genotypes(n_samples: int, n_filtered: int) -> PreparedGenotypes:
         ),
         n_unexpected=0,
         analyzed_sample_count=n_samples,
-        chunk_factory=lambda _chunk_size: lambda: None,
+        chunk_factory=lambda _chunk_size: iter(()),
     )
 
 

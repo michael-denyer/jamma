@@ -171,10 +171,9 @@ def test_prepared_source_binds_rows_statistics_identity_and_chunks(
     actual_ids = prepared.snp_meta.rs[prepared.selection.indices]
     np.testing.assert_array_equal(actual_ids, source_case.expected_rs)
 
-    chunks = prepared.chunks(2)
     expected_start = 0
     observed: list[np.ndarray] = []
-    while (chunk := chunks()) is not None:
+    for chunk in prepared.chunks(2):
         assert chunk.filtered_start == expected_start
         assert chunk.filtered_end > chunk.filtered_start
         assert chunk.genotypes.dtype == np.float64
@@ -224,7 +223,7 @@ def test_matrix_source_reuse_does_not_reuse_analyzed_rows() -> None:
 
     np.testing.assert_allclose(first.selection.filtered_means, [1.0, 1.0, 1.0])
     np.testing.assert_allclose(second.selection.filtered_means, [5 / 3, 5 / 3, 2 / 3])
-    second_chunk = second.chunks(3)()
+    second_chunk = next(second.chunks(3), None)
     assert second_chunk is not None
     np.testing.assert_array_equal(
         second_chunk.genotypes,

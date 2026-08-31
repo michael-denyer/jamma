@@ -16,7 +16,7 @@ wires them together.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -150,7 +150,7 @@ class _ChunkEngine:
         kernel: Kernel,
         U: np.ndarray,
         filtered_means: np.ndarray,
-        raw_chunk_source: Callable[[], RawLmmChunk | None],
+        raw_chunks: Iterator[RawLmmChunk],
         chunk_sink: Callable[[dict[str, np.ndarray], int, int], None],
         chunk_size: int,
         n_buffers: int,
@@ -161,7 +161,7 @@ class _ChunkEngine:
         self.kernel = kernel
         self.U = U
         self.filtered_means = filtered_means
-        self.raw_chunk_source = raw_chunk_source
+        self.raw_chunks = raw_chunks
         self.chunk_sink = chunk_sink
         self.chunk_size = chunk_size
 
@@ -219,7 +219,7 @@ class _ChunkEngine:
 
     def _next_non_empty_chunk(self) -> RawLmmChunk | None:
         """Skip zero-length chunks, checking each keeps the contiguity contract."""
-        raw = self.raw_chunk_source()
+        raw = next(self.raw_chunks, None)
         while raw is not None and raw.filtered_end <= raw.filtered_start:
             empty_range = raw.filtered_range
             if empty_range.filtered_start != empty_range.filtered_end:
@@ -233,7 +233,7 @@ class _ChunkEngine:
                     f"expected {self.next_expected_start}, "
                     f"got {empty_range.filtered_start}"
                 )
-            raw = self.raw_chunk_source()
+            raw = next(self.raw_chunks, None)
         return raw
 
     def _kernel_input(self, utg_t: np.ndarray) -> np.ndarray:
@@ -377,7 +377,7 @@ def run_lmm_chunk_source_numpy(
         kernel=kernel,
         U=prepared.U,
         filtered_means=genotypes.imputation_means,
-        raw_chunk_source=genotypes.chunks(chunk_size),
+        raw_chunks=genotypes.chunks(chunk_size),
         chunk_sink=chunk_sink,
         chunk_size=chunk_size,
         n_buffers=chunk_plan.n_buffers,

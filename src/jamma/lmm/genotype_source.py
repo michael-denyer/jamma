@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
@@ -18,10 +19,6 @@ from jamma.lmm.schema import SnpMeta
 
 if TYPE_CHECKING:
     from jamma.lmm.chunk_runner_numpy import RawLmmChunk
-
-RawChunkSource = Callable[[], "RawLmmChunk | None"]
-ChunkFactory = Callable[[int], RawChunkSource]
-ChunkFactoryBuilder = Callable[[SnpSelection], ChunkFactory]
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +69,9 @@ class PreparedGenotypes:
     selection: SnpSelection
     n_unexpected: int
     analyzed_sample_count: int
-    chunk_factory: ChunkFactory = field(compare=False, repr=False)
+    chunk_factory: Callable[[int], Iterator[RawLmmChunk]] = field(
+        compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.n_unexpected < 0:
@@ -95,7 +94,7 @@ class PreparedGenotypes:
     def imputation_means(self) -> np.ndarray:
         return self.selection.filtered_means
 
-    def chunks(self, chunk_size: int) -> RawChunkSource:
+    def chunks(self, chunk_size: int) -> Iterator[RawLmmChunk]:
         if chunk_size < 1:
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         return self.chunk_factory(chunk_size)
@@ -117,14 +116,19 @@ def bind_prepared_genotypes(
     snp_meta: SnpMeta,
     stats: SnpStats,
     filters: SnpFilterSpec,
-    chunk_factory: ChunkFactoryBuilder,
+    chunk_source: Callable[[SnpSelection, int], Iterator[RawLmmChunk]],
 ) -> PreparedGenotypes:
-    """Filter one statistics population and bind its matching chunk factory."""
+    """Filter one statistics population and bind its matching chunk stream.
+
+    ``chunk_source`` is a generator function taking (selection, chunk_size);
+    the filtered selection is bound here so ``PreparedGenotypes.chunks``
+    only ever streams the SNPs this preparation selected.
+    """
     selection = filter_snp_stats(stats, filters)
     return PreparedGenotypes(
         snp_meta=snp_meta,
         selection=selection,
         n_unexpected=stats.n_unexpected,
         analyzed_sample_count=stats.n_samples,
-        chunk_factory=chunk_factory(selection),
+        chunk_factory=partial(chunk_source, selection),
     )

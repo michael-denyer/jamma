@@ -261,12 +261,12 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:138](../src/jamma/lmm/association_plan.py#L138) |
 | 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy with one-way post-filter tightening | [association_plan.py:68](../src/jamma/lmm/association_plan.py#L68) |
-| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:142](../src/jamma/lmm/runner_numpy.py#L142) |
-| 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:104](../src/jamma/lmm/genotype_source.py#L104) |
-| 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:28](../src/jamma/lmm/genotype_source.py#L28) |
-| 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:68](../src/jamma/lmm/genotype_source.py#L68) |
-| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:59](../src/jamma/lmm/runner_numpy.py#L59) |
-| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:351](../src/jamma/lmm/runner_numpy.py#L351) |
+| 4Nb | `_run_numpy_lmm()` | The shared run body: stats, filter, prepare, chunk loop, result routing | [runner_numpy.py:142](../src/jamma/lmm/runner_numpy.py#L133) |
+| 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:104](../src/jamma/lmm/genotype_source.py#L103) |
+| 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:28](../src/jamma/lmm/genotype_source.py#L25) |
+| 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:68](../src/jamma/lmm/genotype_source.py#L65) |
+| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:59](../src/jamma/lmm/runner_numpy.py#L61) |
+| 4Nb | `run_lmm_association_numpy()` | Batch wrapper: memory preflight, then the shared body over a MatrixSource | [runner_numpy.py:351](../src/jamma/lmm/runner_numpy.py#L342) |
 | 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:324](../src/jamma/lmm/prepare_common.py#L324) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:290](../src/jamma/lmm/chunk_runner_numpy.py#L290) |
 | 4Nb | `ChunkRunOptions` | Resource and presentation options outside the prepared run/config | [chunk_runner_numpy.py:125](../src/jamma/lmm/chunk_runner_numpy.py#L125) |
@@ -288,13 +288,13 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `build_models.py` | Immutable source manifests, compile/link flag policy, and `BuildSpec` values | [build_models.py](../src/jamma/_build_support/build_models.py) |
 | 4Nd | `build_execution.py` | Toolchain detection and atomic compile/link execution | [build_execution.py](../src/jamma/_build_support/build_execution.py) |
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
-| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:42](../src/jamma/lmm/runner_numpy_streaming.py#L42) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:139](../src/jamma/lmm/runner_numpy_streaming.py#L139) |
+| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:42](../src/jamma/lmm/runner_numpy_streaming.py#L47) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:139](../src/jamma/lmm/runner_numpy_streaming.py#L127) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:94](../src/jamma/lmm/schema.py#L94) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:120](../src/jamma/lmm/schema.py#L120) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:35](../src/jamma/lmm/results.py#L35) |
 | 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:174](../src/jamma/lmm/results.py#L174) |
-| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:151](../src/jamma/lmm/loco.py#L151) |
+| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:151](../src/jamma/lmm/loco.py#L153) |
 | 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:74](../src/jamma/lmm/loco_eigen.py#L74) |
 
 ---

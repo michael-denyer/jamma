@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from loguru import logger
 from jamma.core.snp_filter import validate_snp_indices
 from jamma.core.snp_stats import (
     SnpFilterSpec,
+    SnpSelection,
     SnpStats,
     collect_snp_stats_from_chunks,
 )
@@ -420,24 +422,15 @@ class _LocoChrSource:
             col_chunk_size=self._col_chunk_size,
         )
 
-        def _bind_chunks(selection):
+        def _iter_chunks(
+            selection: SnpSelection, chunk_size: int
+        ) -> Iterator[RawLmmChunk]:
             selected_columns = selection.indices
-
-            def _chunks(chunk_size: int):
-                n_filtered = len(selected_columns)
-                chunk_offsets = iter(range(0, n_filtered, chunk_size))
-                # Keep one BED handle for the session instead of re-reading BIM
-                # metadata for every chunk.
-                stack = contextlib.ExitStack()
-                bed = stack.enter_context(open_bed(Path(f"{self._bed_path}.bed")))
-
-                def _next_chunk() -> RawLmmChunk | None:
-                    try:
-                        chunk_start = next(chunk_offsets)
-                    except StopIteration:
-                        stack.close()
-                        return None
-
+            n_filtered = len(selected_columns)
+            # Keep one BED handle for the stream instead of re-reading BIM
+            # metadata for every chunk.
+            with open_bed(Path(f"{self._bed_path}.bed")) as bed:
+                for chunk_start in range(0, n_filtered, chunk_size):
                     chunk_end = min(chunk_start + chunk_size, n_filtered)
                     geno_chunk = bed.read(
                         index=np.s_[
@@ -446,19 +439,15 @@ class _LocoChrSource:
                         ],
                         dtype=np.float64,
                     )
-                    return RawLmmChunk(
+                    yield RawLmmChunk(
                         np.ascontiguousarray(geno_chunk), chunk_start, chunk_end
                     )
-
-                return _next_chunk
-
-            return _chunks
 
         return bind_prepared_genotypes(
             snp_meta=self._snp_meta,
             stats=stats,
             filters=filters,
-            chunk_factory=_bind_chunks,
+            chunk_source=_iter_chunks,
         )
 
 

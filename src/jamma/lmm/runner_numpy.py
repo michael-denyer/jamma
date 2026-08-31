@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,7 @@ from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.snp_filter import _SNP_STATS_CHUNK_SIZE
 from jamma.core.snp_stats import (
     SnpFilterSpec,
+    SnpSelection,
     collect_snp_stats_from_chunks,
 )
 from jamma.lmm.association_plan import (
@@ -103,39 +105,28 @@ class MatrixSource:
             sample_scope="all_samples" if samples.is_all_samples else "valid_samples",
         )
 
-        def _bind_chunks(selection):
+        def _iter_chunks(
+            selection: SnpSelection, chunk_size: int
+        ) -> Iterator[RawLmmChunk]:
             selected_columns = selection.local_indices
-
-            def _chunks(chunk_size: int):
-                n_filtered = len(selected_columns)
-                chunk_starts = iter(range(0, n_filtered, chunk_size))
-                geno_buf = np.empty((rows.shape[0], chunk_size), dtype=np.float64)
-
-                def _next_chunk() -> RawLmmChunk | None:
-                    try:
-                        chunk_start = next(chunk_starts)
-                    except StopIteration:
-                        return None
-
-                    chunk_end = min(chunk_start + chunk_size, n_filtered)
-                    actual_len = chunk_end - chunk_start
-                    geno_chunk = (
-                        geno_buf
-                        if actual_len == chunk_size
-                        else np.empty((rows.shape[0], actual_len), dtype=np.float64)
-                    )
-                    geno_chunk[:] = rows[:, selected_columns[chunk_start:chunk_end]]
-                    return RawLmmChunk(geno_chunk, chunk_start, chunk_end)
-
-                return _next_chunk
-
-            return _chunks
+            n_filtered = len(selected_columns)
+            geno_buf = np.empty((rows.shape[0], chunk_size), dtype=np.float64)
+            for chunk_start in range(0, n_filtered, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, n_filtered)
+                actual_len = chunk_end - chunk_start
+                geno_chunk = (
+                    geno_buf
+                    if actual_len == chunk_size
+                    else np.empty((rows.shape[0], actual_len), dtype=np.float64)
+                )
+                geno_chunk[:] = rows[:, selected_columns[chunk_start:chunk_end]]
+                yield RawLmmChunk(geno_chunk, chunk_start, chunk_end)
 
         return bind_prepared_genotypes(
             snp_meta=self._snp_meta,
             stats=stats,
             filters=filters,
-            chunk_factory=_bind_chunks,
+            chunk_source=_iter_chunks,
         )
 
 

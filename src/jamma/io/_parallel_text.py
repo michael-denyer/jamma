@@ -2,14 +2,14 @@
 
 matrix_reader.py parses a text matrix into a memmap across a spawn pool, and
 matrix_writer.py formats a memmap back to text across one. The pool setup, the
-worker cap, the temp-dir-beside-the-target, and the quiet-unlink idiom are the
-same in both; only the worker function, the gather step, and the output shape
-differ. Those identical pieces live here.
+worker cap, and the temp-dir-beside-the-target are the same in both; only the
+worker function, the gather step, and the output shape differ. Those identical
+pieces live here. ``unlink_quietly`` is re-exported from
+``jamma.utils.atomic_publish``, which owns it alongside the publish primitives.
 """
 
 from __future__ import annotations
 
-import contextlib
 import multiprocessing as mp
 import os
 import tempfile
@@ -17,6 +17,16 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from loguru import logger
+
+from jamma.utils.atomic_publish import unlink_quietly
+
+__all__ = [
+    "MAX_WORKERS",
+    "default_worker_count",
+    "run_spawn_pool",
+    "temp_dir_beside",
+    "unlink_quietly",
+]
 
 MAX_WORKERS = 32
 
@@ -50,25 +60,6 @@ def temp_dir_beside(target: Path, prefix: str) -> str:
             "usage significantly for large matrices."
         )
         return tempfile.mkdtemp(prefix=prefix.lstrip("."))
-
-
-def unlink_quietly(path: str | Path) -> None:
-    """Unlink a file, ignoring absence and logging any other OS error.
-
-    The cleanup idiom both modules repeat on temp memmaps and chunk files:
-    a missing file is fine (already cleaned), any other OSError is warned but
-    not raised, so cleanup never masks the real error on a failure path. Logger
-    calls are guarded because this can run from a finalizer during interpreter
-    shutdown when loguru may already be torn down.
-    """
-    try:
-        Path(path).unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        # loguru may be torn down when this runs from a finalizer at shutdown.
-        with contextlib.suppress(Exception):
-            logger.warning(f"Failed to clean up temp file {path}: {e}")
 
 
 def run_spawn_pool(

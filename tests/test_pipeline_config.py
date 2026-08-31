@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from jamma.lmm.association_plan import plan_association
@@ -405,6 +406,26 @@ class TestMultiPhenotypeConfig:
         """A bad index is caught wherever it sits, not only at the front."""
         with pytest.raises(ValueError, match="phenotype_columns indices must be >= 1"):
             PipelineConfig(bfile=Path("test"), phenotype_columns=[1, 0])
+
+    def test_non_int_phenotype_column_raises_value_error(self) -> None:
+        """A str or float index fails as a config error, not a stray TypeError."""
+        for bad in (["1", 2], [1.5]):
+            with pytest.raises(
+                ValueError, match="phenotype_columns indices must be integers"
+            ):
+                PipelineConfig(
+                    bfile=Path("test"),
+                    phenotype_columns=bad,  # type: ignore[bad-argument-type]
+                )
+
+    def test_numpy_integer_phenotype_columns_accepted(self) -> None:
+        """np.int64 indices normalize to plain int rather than being rejected."""
+        config = PipelineConfig(
+            bfile=Path("test"),
+            phenotype_columns=np.array([1, 2], dtype=np.int64),  # type: ignore[bad-argument-type]
+        )
+        assert config.phenotype_columns == (1, 2)
+        assert all(type(col) is int for col in config.phenotype_columns)
 
     def test_loco_multi_phenotype_error(self) -> None:
         """PipelineConfig(loco=True, phenotype_columns=[1,2]) raises ValueError."""

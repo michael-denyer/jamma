@@ -12,6 +12,7 @@ rather than a courtesy.
 
 from __future__ import annotations
 
+import operator
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -133,7 +134,16 @@ class PipelineConfig:
     def __post_init__(self) -> None:
         if self.cat_columns is not None:
             object.__setattr__(self, "cat_columns", tuple(self.cat_columns))
-        object.__setattr__(self, "phenotype_columns", tuple(self.phenotype_columns))
+        try:
+            phenotype_columns = tuple(
+                operator.index(col) for col in self.phenotype_columns
+            )
+        except TypeError as exc:
+            raise ValueError(
+                f"phenotype_columns indices must be integers, "
+                f"got {tuple(self.phenotype_columns)!r}"
+            ) from exc
+        object.__setattr__(self, "phenotype_columns", phenotype_columns)
 
         if os.sep in self.output_prefix or "/" in self.output_prefix:
             raise ValueError(

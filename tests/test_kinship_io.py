@@ -393,6 +393,31 @@ class TestBinaryKinship:
         K_loaded = np.load(npy_path)
         np.testing.assert_array_equal(K, K_loaded)
 
+    def test_binary_publication_failure_preserves_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed binary write leaves a pre-existing .npy intact.
+
+        np.save truncates its target on open, and npy_cache_valid accepts any
+        non-empty sidecar, so a half-written .npy is preferred on the next
+        read. The text path got this guarantee in #222; the default binary
+        path is the one that carries the real matrices.
+        """
+        npy_path = tmp_path / "kinship.cXX.npy"
+        np.save(npy_path, self._make_kinship(n=4))
+        old_bytes = npy_path.read_bytes()
+
+        def raise_on_replace(self: Path, target: object) -> None:
+            raise OSError("injected publication failure")
+
+        monkeypatch.setattr(Path, "replace", raise_on_replace)
+        with pytest.raises(OSError, match="injected publication failure"):
+            write_kinship_matrix(self._make_kinship(n=9), tmp_path / "kinship.cXX.txt")
+
+        assert npy_path.read_bytes() == old_bytes
+        leftovers = [p for p in tmp_path.iterdir() if p != npy_path]
+        assert not leftovers, f"Temp artifacts not cleaned up: {leftovers}"
+
     def test_kinship_autodetect_prefers_npy(self, tmp_path):
         """read_kinship_matrix prefers .npy over .txt when both exist."""
         import time

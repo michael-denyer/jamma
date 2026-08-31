@@ -25,7 +25,7 @@ from loguru import logger
 
 from jamma.io.matrix_reader import read_matrix_parallel
 from jamma.io.matrix_writer import write_matrix_parallel
-from jamma.utils.npy_cache import npy_cache_valid
+from jamma.utils.npy_cache import npy_cache_valid, save_npy_atomic
 
 # ---------------------------------------------------------------------------
 # .npy sidecar cache helpers (used for text-format files only)
@@ -41,32 +41,17 @@ def _npy_cache_path(txt_path: Path) -> Path:
 
 
 def _write_npy_cache(array: np.ndarray, npy_path: Path) -> None:
-    """Write .npy cache atomically via .tmp.npy sibling + os.replace.
+    """Write the .npy sidecar, swallowing filesystem errors.
 
-    Swallows filesystem errors (read-only FS, full disk, etc.) to avoid
-    aborting the caller. The atomic rename prevents corrupt .npy sidecars
-    from partial writes on power loss or process kill.
-
-    The temp file uses the same directory as the target so os.replace is
-    guaranteed to be atomic (same filesystem). It has a .npy suffix so
-    np.save does not append one automatically.
+    The sidecar is a read accelerator, not the artifact, so a read-only
+    filesystem or a full disk must not abort a caller whose real output
+    already landed. That tolerance is the only thing this adds over
+    ``save_npy_atomic``.
     """
-    # Use stem + ".tmp.npy" so np.save doesn't append an extra .npy suffix.
-    # E.g. "foo.eigenD.npy" → temp "foo.eigenD.tmp.npy".
-    tmp_path = npy_path.parent / (npy_path.stem + ".tmp.npy")
-    rename_done = False
     try:
-        np.save(tmp_path, array)
-        tmp_path.replace(npy_path)
-        rename_done = True
+        save_npy_atomic(array, npy_path)
     except OSError as e:
         logger.warning(f"Could not write .npy cache {npy_path}: {e}")
-    finally:
-        if not rename_done:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError as cleanup_err:
-                logger.debug(f"Could not remove temp file {tmp_path}: {cleanup_err}")
 
 
 def _load_npy_cache(npy_path: Path) -> np.ndarray | None:
@@ -254,7 +239,7 @@ def _write_array(
     else:
         npy_path = path.with_suffix(".npy")
         logger.info(f"Writing {what} to {npy_path}")
-        np.save(npy_path, array)
+        save_npy_atomic(array, npy_path)
 
 
 def _write_eigenvalues(

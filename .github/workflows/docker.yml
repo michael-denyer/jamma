@@ -1,0 +1,128 @@
+name: Docker
+
+# Build-and-run gate for the container image.
+#
+# tests/test_dockerfile_provenance.py reads the Dockerfile as text; nothing
+# there executes it. That matters because the image compiles both native
+# extensions in a full-bookworm builder and runs them in slim-bookworm, and
+# whether they link Intel libiomp5 (shipped under /usr/local, copied across) or
+# system libgomp (present in the builder, not guaranteed in slim) is decided at
+# build time by OpenMP detection. A cross-stage missing shared library fails
+# only at `docker run`, so a static test cannot see it.
+#
+# Paths-filtered, and deliberately NOT in the required-checks ruleset: a
+# paths-filtered workflow added there blocks every PR that does not match its
+# filter, with no bypass.
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docker.yml"
+  push:
+    branches: [main, master]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docker.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    name: Build and smoke-run the image
+    runs-on: ubuntu-latest
+    # MKL plus both toolchains is a ~2 GB image and a from-source compile of
+    # two extensions. Measured locally at well under this; the ceiling is here
+    # so a hang fails rather than burning the whole runner allowance.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
+
+      # The runner ships ~14 GB free on /. The MKL layers plus the builder
+      # stage do not comfortably fit beside the preinstalled Android SDK and
+      # .NET toolchains, so reclaim that space before building.
+      - name: Reclaim runner disk
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8  # v4.2.0
+        with:
+          platforms: linux/amd64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      # Loaded into the local daemon rather than pushed: the run steps below
+      # are the point, and this repo publishes no image registry.
+      - name: Build the image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: jamma-ci:${{ github.sha }}
+          # mode=min, not max: the MKL layers are ~2 GB, and this repo already
+          # holds 3.7 GB of the 10 GB Actions cache in prek and uv entries that
+          # every other workflow depends on. Exporting every intermediate layer
+          # would LRU-evict those to speed up a job that runs only when the
+          # Docker inputs change.
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+
+      - name: Entrypoint responds
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 jamma-ci:${{ github.sha }} --help
+
+      # The three properties a text test cannot check: the runtime is not root,
+      # NumPy in the slim stage really is the ILP64 MKL build, and the jlinalg C
+      # extension both loads across the stage boundary and computes correctly.
+      - name: Runtime assertions
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 \
+            --entrypoint python jamma-ci:${{ github.sha }} -c '
+          import getpass
+          import numpy as np
+
+          user = getpass.getuser()
+          assert user != "root", f"runtime user must not be root, got {user}"
+          print(f"runtime user: {user}")
+
+          blas = np.show_config(mode="dicts")["Build Dependencies"]["blas"]["name"]
+          assert "ilp64" in blas.lower(), f"expected ILP64 BLAS, got {blas}"
+          print(f"numpy BLAS: {blas}")
+
+          import jamma.jlinalg as jl
+
+          print(f"jlinalg backend: {jl.blas_backend}")
+
+          rng = np.random.default_rng(0)
+          a = rng.standard_normal((64, 64))
+          spd = a @ a.T + 64 * np.eye(64)
+          values = jl.eigh(spd)[0]
+          expected = np.linalg.eigvalsh(spd)
+          error = np.max(np.abs(values - expected) / np.abs(expected))
+          assert error < 1e-9, f"jlinalg eigh disagrees with numpy: {error:.3e}"
+          print(f"jlinalg eigh max relative error: {error:.3e}")
+          '

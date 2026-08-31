@@ -38,6 +38,22 @@ fails if LP64 NumPy is active. Base-image digests and every installed Python
 package version are pinned so rebuilding the same revision does not silently
 adopt a new runtime.
 
+**Refreshing the pins.** A pin with no refresh path accumulates unpatched CVEs, so
+each kind has one:
+
+| Pin | Refresh path |
+|-----|--------------|
+| The two `FROM` digests | Dependabot, `docker` ecosystem, weekly |
+| Runtime pins in `docker/requirements-container.txt` | `uv run python docker/generate-requirements.py` after any `uv.lock` change |
+| MKL pins in the same file | Dependabot, `pip` ecosystem on `/docker`; the versions must exist on the ILP64 index |
+| `numpy` and `mkl-service` | Bump `[build-system].requires` in `pyproject.toml` and the Dockerfile together; a test asserts they match |
+
+The runtime half of `requirements-container.txt` is generated from `uv.lock`, so it is
+not hand-edited. `docker/generate-requirements.py --check` fails when the file is stale,
+and `tests/test_dockerfile_provenance.py` asserts the shared versions match the lockfile.
+`.github/workflows/docker.yml` builds the image and smoke-runs it on any change to the
+Dockerfile, `docker/`, `pyproject.toml`, or `uv.lock`.
+
 **Run:**
 
 ```bash
@@ -165,12 +181,17 @@ For production Docker runs, the variables most likely to need tuning are:
 1. Yank the bad version via the PyPI web UI (project settings > releases > yank).
 2. Publish a patch release with the fix as `v<X.Y.Z+1>`.
 
-**Docker:** Redeploy using the previous image tag:
+**Docker:** JAMMA publishes no image registry, and the image is built from a checkout.
+Roll back by rebuilding from the previous git tag:
 
 ```bash
-docker pull jamma:<previous-tag>
+git checkout v<previous-tag>
+docker build --platform linux/amd64 -t jamma:<previous-tag> .
 docker run --platform linux/amd64 jamma:<previous-tag> ...
 ```
+
+Both `FROM` lines are digest-pinned, so rebuilding an older tag reproduces that tag's
+base images rather than today's.
 
 ## Monitoring
 

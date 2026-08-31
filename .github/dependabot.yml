@@ -26,3 +26,31 @@ updates:
     groups:
       python-minor-patch:
         update-types: ["minor", "patch"]
+
+  # The container's runtime pins. A separate entry because the root pip entry
+  # scans root manifests only, so docker/requirements-container.txt was
+  # invisible to Dependabot. The runtime half of that file is generated from
+  # uv.lock by docker/generate-requirements.py, and a test asserts the two
+  # agree, so a bump landing here without a regenerate fails CI rather than
+  # drifting silently.
+  - package-ecosystem: "pip"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      container-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # The two digest-pinned FROM lines in the Dockerfile. Dependabot rewrites
+  # `@sha256:` digests in place, which is the only refresh path a digest pin
+  # has: without this, CVE-driven python:3.11.x point releases never arrive.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14

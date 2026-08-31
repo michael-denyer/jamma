@@ -12,10 +12,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .build_models import SHARED_LINK_FLAGS as _SHARED_LINK_FLAGS
 from .build_models import resolve_cflags_for
 
 # ---------------------------------------------------------------------------
-# CompileResult — structured return from compile_jlinalg
+# CompileResult — structured return from execute_build
 # ---------------------------------------------------------------------------
 
 
@@ -39,6 +40,33 @@ class Toolchain:
     system: str
     omp_compile: tuple[str, ...]
     omp_link: tuple[str, ...]
+    #: Vectorization-report flags for this compiler, for ``diagnose=True``
+    #: builds. Determined from the compiler identity probed during detection,
+    #: so a diagnose build spends no extra ``cc --version`` subprocess.
+    diagnose_flags: tuple[str, ...] = ()
+
+
+def _diagnose_flags(cc_cmd: str) -> tuple[str, ...]:
+    """Vectorization-report flags for ``cc_cmd`` (clang ``-Rpass`` vs gcc).
+
+    Probing the compiler is toolchain detection, so this runs once inside
+    ``detect_toolchain`` and the answer rides on ``Toolchain``. Its result is
+    the same for every ``BuildSpec`` built with that compiler.
+    """
+    try:
+        probe = subprocess.run(
+            [cc_cmd, "--version"], capture_output=True, text=True, timeout=5
+        )
+        compiler_id = probe.stdout.lower() if probe.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, OSError):
+        compiler_id = ""
+    if "clang" in compiler_id:
+        return (
+            "-Rpass=loop-vectorize",
+            "-Rpass-missed=loop-vectorize",
+            "-Rpass-analysis=loop-vectorize",
+        )
+    return ("-fopt-info-vec-all",)
 
 
 def detect_toolchain(
@@ -120,29 +148,30 @@ def detect_toolchain(
         system=system,
         omp_compile=tuple(omp_compile),
         omp_link=tuple(omp_link),
+        diagnose_flags=_diagnose_flags(cc_cmd),
     )
 
 
 def link_cmd(
     cc_cmd: str,
     cc_extra: list[str],
-    link_mode_flags: tuple[str, ...],
     objs: list[Path],
     out: Path,
     ldflags: list[str],
     omp_link: list[str],
     extra: list[str],
 ) -> list[str]:
-    """Build one link command. Called for the first attempt and, on link
-    failure with ``omp_link`` non-empty, for the OMP-free retry — the two
-    calls in ``compile_jlinalg`` used to differ only by ``omp_link``, and a
-    hand-edit to one link command (e.g. adding a flag) used to require the
-    same edit twice.
+    """Build one shared-library link command.
+
+    Called for the first attempt and, on link failure with ``omp_link``
+    non-empty, for the OMP-free retry. The two calls differ only by
+    ``omp_link``, so a hand-edit to one link command would otherwise require
+    the same edit twice.
     """
     return [
         cc_cmd,
         *cc_extra,
-        *link_mode_flags,
+        *_SHARED_LINK_FLAGS,
         *[str(o) for o in objs],
         "-o",
         str(out),
@@ -175,11 +204,11 @@ class CompileResult:
 
 
 # ---------------------------------------------------------------------------
-# compile_jlinalg — two-phase compile + link with OpenMP retry
+# execute_build — two-phase compile + link with OpenMP retry
 # ---------------------------------------------------------------------------
 
 
-def compile_jlinalg(
+def execute_build(
     sources: list[Path],
     lapack_sources: list[Path],
     include_dirs: list[str],
@@ -195,7 +224,6 @@ def compile_jlinalg(
     extra_link_flags: list[str] | None = None,
     extra_lapack_cflags: list[str] | None = None,
     extra_source_includes: dict[str, list[str]] | None = None,
-    link_shared: bool = True,
     on_retry: Callable[[str], None] | None = None,
     verbose_print: Callable[..., None] = print,
     error_print: Callable[..., None] | None = None,
@@ -231,8 +259,7 @@ def compile_jlinalg(
             disables OpenMP entirely.
         omp_link: OpenMP link flags (e.g. ``["/path/to/libiomp5.so"]``).
         ldflags: Extra link flags (``-lm``, ``-ldl``, ``-lpthread``, etc.).
-        output: Final output path (shared library when ``link_shared=True``,
-            executable when ``link_shared=False``).
+        output: Final shared-library path.
         tmp_dir: Directory for intermediate .o files. If None, a temp dir
             is created via ``tempfile.mkdtemp(prefix="jamma-build-")``. Caller
             is responsible for cleanup in either case.
@@ -249,9 +276,6 @@ def compile_jlinalg(
             sanitizer override wins because gcc/clang honour the last ``-O``.
         extra_source_includes: Per-source extra ``-I<d>`` flags keyed by
             source filename (``src.name``).
-        link_shared: When True (default), link as a shared library with
-            ``-shared -fPIC``. When False, link as a plain executable (no
-            ``-shared`` / ``-fPIC`` at link time).
         on_retry: Optional callback invoked with a human-readable reason
             string when a retry path is taken. Intended for warning logs.
             For retry paths with underlying compiler output, the first-attempt
@@ -288,10 +312,6 @@ def compile_jlinalg(
     # Precompute LAPACK dispatch set — str() comparison avoids Path.resolve()
     # cross-platform quirks. Pattern lifted from _compile_jlinalg.py:190.
     lapack_source_set = {str(s) for s in lapack_sources}
-
-    # Shared-library link takes -shared -fPIC; executable link takes neither.
-    # (See ``link_shared`` parameter docstring.)
-    link_mode_flags: tuple[str, ...] = ("-shared", "-fPIC") if link_shared else ()
 
     # Mutable box so _compile_sources can report the first failure stderr
     # back up for inclusion in the retry notice. Without this, an OMP
@@ -375,7 +395,6 @@ def compile_jlinalg(
     first_link_cmd = link_cmd(
         cc_cmd,
         cc_extra,
-        link_mode_flags,
         compile_objs,
         link_tmp,
         ldflags,
@@ -403,7 +422,6 @@ def compile_jlinalg(
         retry_link_cmd = link_cmd(
             cc_cmd,
             cc_extra,
-            link_mode_flags,
             compile_objs,
             link_tmp,
             ldflags,

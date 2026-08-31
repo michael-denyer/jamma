@@ -8,8 +8,10 @@ from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Data constants — THE single source of truth. The three entry points
-# (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) all import from
-# here; no flag literal may live elsewhere.
+# (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) reach these through
+# the compile_and_link facade rather than importing them directly, but this
+# module owns the values: no flag literal may live elsewhere, which
+# scripts/check_compile_flag_literals.py enforces against the entry points.
 # ---------------------------------------------------------------------------
 
 # Default source names — callers supply their own source directory.
@@ -75,6 +77,10 @@ LAPACK_CFLAGS: tuple[str, ...] = (
     "-fPIC",
     "-std=c11",
 )
+
+# Every target in this tree is a Python extension module, so every link is a
+# shared-library link. Both entry points build one; nothing links an executable.
+SHARED_LINK_FLAGS: tuple[str, ...] = ("-shared", "-fPIC")
 
 # Platform-default link flags. Caller still appends omp_link + ldflags.
 LINK_FLAGS_BY_PLATFORM: dict[str, tuple[str, ...]] = {

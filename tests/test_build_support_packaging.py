@@ -29,6 +29,7 @@ _BUILD_SUPPORT_MODULES = (
     "build_models.py",
     "build_execution.py",
     "compile_and_link.py",
+    "load_proof.py",
 )
 
 

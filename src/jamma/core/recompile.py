@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from types import ModuleType
 
-    from jamma._build_support.compile_and_link import BuildSpec
+    from jamma._build_support.build_models import BuildSpec
 
 
 def _lock_path_for(sys_module_key: str) -> Path:

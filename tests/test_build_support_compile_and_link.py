@@ -1,7 +1,7 @@
 """Tests for jamma._build_support.compile_and_link.
 
 Covers the constants, resolve_cflags_for dispatch, and a smoke test for
-compile_jlinalg (subprocess monkeypatched so the test doesn't shell out).
+execute_build (subprocess monkeypatched so the test doesn't shell out).
 """
 
 from __future__ import annotations
@@ -10,7 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from jamma._build_support.compile_and_link import (
+from jamma._build_support.build_execution import (
+    CompileResult,
+    Toolchain,
+    execute_build,
+)
+from jamma._build_support.build_models import (
     BASE_CFLAGS,
     BASELINE_SOURCES,
     LAPACK_CFLAGS,
@@ -18,18 +23,15 @@ from jamma._build_support.compile_and_link import (
     LINK_FLAGS_BY_PLATFORM,
     LMM_ACCEL_SOURCES,
     BuildSpec,
-    CompileResult,
-    Toolchain,
-    compile_jlinalg,
     resolve_cflags_for,
-    run_build,
 )
+from jamma._build_support.compile_and_link import run_build
 
 pytestmark = pytest.mark.tier0
 
 # ---------------------------------------------------------------------------
 # Constants: exhaustive value checks — any drift breaks the three entry
-# points (hatch_build.py, _compile_jlinalg.py, _compile_accel.py) that
+# points (hatch_build.py, _execute_build.py, _compile_accel.py) that
 # import these constants.
 # ---------------------------------------------------------------------------
 
@@ -210,7 +212,7 @@ def test_compile_result_fields():
 
 
 # ---------------------------------------------------------------------------
-# compile_jlinalg smoke test — subprocess.run monkeypatched to return success.
+# execute_build smoke test — subprocess.run monkeypatched to return success.
 # No real compilation runs; Wave 4 validates end-to-end.
 # ---------------------------------------------------------------------------
 
@@ -222,8 +224,8 @@ class _FakeCompleted:
         self.stdout = ""
 
 
-def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
-    """Construct a compile_jlinalg call with stub paths; assert CompileResult
+def test_execute_build_smoke_success(monkeypatch, tmp_path):
+    """Construct a execute_build call with stub paths; assert CompileResult
     fields after a monkeypatched subprocess.run that always returns success.
     """
     calls: list[list[str]] = []
@@ -248,7 +250,7 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
         _fake_run,
     )
 
-    # Create empty source files so compile_jlinalg's file existence checks
+    # Create empty source files so execute_build's file existence checks
     # (if any) don't fail; the real cc_cmd is never invoked.
     src_a = tmp_path / "platform.c"
     src_a.write_text("// stub\n")
@@ -256,7 +258,7 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
     src_b.write_text("// stub\n")
     out = tmp_path / "out.so"
 
-    result = compile_jlinalg(
+    result = execute_build(
         sources=[src_a, src_b],
         lapack_sources=[src_b],
         include_dirs=["/usr/include"],
@@ -291,8 +293,8 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
     assert "-lm" in link_cmd, f"link missing -lm: {link_cmd}"
 
 
-def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_path):
-    """When the first compile fails WITH omp_compile active, compile_jlinalg
+def test_execute_build_compile_failure_triggers_omp_retry(monkeypatch, tmp_path):
+    """When the first compile fails WITH omp_compile active, execute_build
     should retry once WITHOUT OpenMP and invoke on_retry().
 
     Also asserts the retry subprocess command actually has ``-fopenmp``
@@ -328,7 +330,7 @@ def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_pat
     src.write_text("// stub\n")
     out = tmp_path / "out.so"
 
-    result = compile_jlinalg(
+    result = execute_build(
         sources=[src],
         lapack_sources=[],
         include_dirs=[],
@@ -394,7 +396,7 @@ def test_atomic_replace_failure_preserves_used_openmp_link(monkeypatch, tmp_path
     src.write_text("// stub\n")
     out = tmp_path / "out.so"
 
-    result = compile_jlinalg(
+    result = execute_build(
         sources=[src],
         lapack_sources=[],
         include_dirs=[],
@@ -453,7 +455,7 @@ def test_toolchain_detected_once_across_run_build_of_both_specs(monkeypatch, tmp
         _fake_detect_openmp_flags,
     )
 
-    from jamma._build_support.compile_and_link import detect_toolchain
+    from jamma._build_support.build_execution import detect_toolchain
 
     toolchain = detect_toolchain()
     assert isinstance(toolchain, Toolchain)

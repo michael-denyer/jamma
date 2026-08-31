@@ -1,0 +1,17 @@
+# Runtime packages are exact versions. JAMMA and the ILP64 NumPy wheel are
+# installed separately so this file can use the default PyPI index safely.
+mkl==2026.1.0
+onemkl-license==2026.1.0
+intel-openmp==2026.1.1
+intel-cmplr-lib-ur==2026.1.1
+umf==1.1.0
+tbb==2023.1.0
+tcmlib==1.5.0
+psutil==7.2.2
+loguru==0.7.3
+threadpoolctl==3.6.0
+click==8.4.2
+progressbar2==4.5.0
+python-utils==3.9.1
+typing-extensions==4.15.0
+bed-reader==1.0.6

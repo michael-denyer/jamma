@@ -332,8 +332,10 @@ natively since macOS 13.3 and JAMMA auto-detects it.
 
 ## Docker Configuration
 
-The provided `Dockerfile` builds a slimline image with ILP64 numpy (MKL) for
-large-scale GWAS. MKL is x86_64-only — always build and run with
+The provided `Dockerfile` uses a pinned Python 3.11 Bookworm builder and a
+pinned slim-Bookworm runtime with ILP64 NumPy (MKL). The builder compiles this
+checkout's native extensions before `/usr/local` is copied into the non-root
+runtime image. MKL is x86_64-only — always build and run with
 `--platform linux/amd64`.
 
 ```bash
@@ -351,12 +353,13 @@ docker run --platform linux/amd64 \
   jamma -lmm 1 -bfile /data/study -k /data/k.cXX.txt -o /data/output
 ```
 
-The Docker build installs dependencies in this order to preserve the ILP64 numpy:
+The Docker build installs dependencies in this order to preserve ILP64 NumPy:
 
-1. `mkl` — Intel MKL runtime libraries
-2. `numpy` with `--index-url https://michael-denyer.github.io/numpy-mkl` — ILP64 build
-3. Runtime dependencies (`psutil`, `loguru`, `threadpoolctl`, `click`, `progressbar2`, `bed-reader`)
-4. `jamma --no-deps` — JAMMA without dependency resolution (preserves ILP64 numpy)
+1. Exact runtime and MKL packages from `docker/requirements-container.txt`
+   with dependency resolution disabled
+2. Exact `numpy` and `mkl-service` wheels from the custom ILP64 index
+3. The current checkout with `--no-deps`, preserving the selected NumPy and
+   ensuring the image corresponds to the source being built
 
 ILP64 is verified at build time by asserting `ilp64` appears in the BLAS name
 from `numpy.show_config()`. Builds that fail this check do not produce an image.

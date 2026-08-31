@@ -9,6 +9,17 @@ WORKDIR /app
 COPY docker/requirements-container.txt /tmp/requirements-container.txt
 RUN python -m pip install --no-cache-dir --no-deps \
         -r /tmp/requirements-container.txt
+# The ILP64 numpy wheel declares `mkl>=2026.0.0` and `mkl-service>=2.7.2`, and
+# --no-deps means pip resolves neither, so both are pinned explicitly: `mkl` in
+# the requirements file above, `mkl-service` here alongside numpy because it
+# ships from the same custom index. Nothing in src/ imports mkl_service, which
+# makes it look removable; it is not. Dropping it fails the ILP64 assertion
+# below with "Intel oneMKL FATAL ERROR: Cannot load libmkl_avx2.so.3 or
+# libmkl_def.so.3", because the MKL kernel libraries arrive with it.
+#
+# This numpy version must equal the [build-system].requires pin in
+# pyproject.toml, so the extensions never build against newer headers than the
+# runtime provides. test_dockerfile_provenance.py enforces that equality.
 RUN python -m pip install --no-cache-dir --no-deps \
         numpy==2.4.6 \
         mkl-service==2.7.2 \

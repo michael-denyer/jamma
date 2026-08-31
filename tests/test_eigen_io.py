@@ -516,81 +516,96 @@ class TestNpyCache:
 
 @pytest.mark.tier0
 class TestAtomicCacheWrite:
-    """Verify _write_npy_cache uses atomic rename and leaves no temp files."""
+    """Verify _write_npy_cache publishes atomically and leaves no temp files.
+
+    These assert on the *contents of the directory*, never on a temp filename.
+    An earlier version hardcoded the ``<stem>.tmp.npy`` name the implementation
+    used at the time; when #283 moved to a pid+uuid scheme the assertions kept
+    passing against a file that could no longer exist, and stayed green with
+    cleanup deleted outright. Comparing the whole directory to the set of
+    expected artifacts cannot go stale that way.
+    """
+
+    @staticmethod
+    def _assert_dir_contents(directory: Path, expected: set[Path]) -> None:
+        """Assert ``directory`` holds exactly ``expected`` and no stray temps."""
+        actual = set(directory.iterdir())
+        leftovers = actual - expected
+        assert not leftovers, (
+            f"Unexpected files left behind: {sorted(p.name for p in leftovers)}"
+        )
+        missing = expected - actual
+        assert not missing, f"Expected files absent: {sorted(p.name for p in missing)}"
 
     def test_no_partial_npy_on_normal_write(self, tmp_path: Path) -> None:
-        """Normal _write_eigenvalues leaves .npy file and no .tmp.npy artifact."""
+        """A normal _write_eigenvalues leaves the .txt and .npy, nothing else."""
         d_path = tmp_path / "test.eigenD.txt"
         _write_eigenvalues(np.ones(5), d_path, legacy_text=True)
 
         npy_path = d_path.with_suffix(".npy")
-        assert npy_path.exists(), ".eigenD.npy sidecar should exist after write"
+        self._assert_dir_contents(tmp_path, {d_path, npy_path})
 
-        # No .tmp.npy temp file should remain
-        tmp_npy = tmp_path / (npy_path.stem + ".tmp.npy")
-        assert not tmp_npy.exists(), (
-            f"Temp file {tmp_npy.name} should not exist after atomic rename completed"
-        )
-
-        # Verify content is correct
         loaded = np.load(npy_path)
         np.testing.assert_array_equal(loaded, np.ones(5))
 
     def test_atomic_write_no_tmp_leftover(self, tmp_path: Path) -> None:
-        """_write_eigenvectors with legacy_text leaves no .tmp.npy in directory."""
+        """A normal _write_eigenvectors leaves the .txt and .npy, nothing else."""
         u_path = tmp_path / "test.eigenU.txt"
         _write_eigenvectors(np.eye(5), u_path, legacy_text=True)
 
         npy_path = u_path.with_suffix(".npy")
-        assert npy_path.exists(), ".eigenU.npy sidecar should exist after write"
+        self._assert_dir_contents(tmp_path, {u_path, npy_path})
 
-        # Verify no temp artifact in directory
-        tmp_files = [
-            f.name for f in tmp_path.iterdir() if f.is_file() and ".tmp.npy" in f.name
-        ]
-        assert tmp_files == [], (
-            f"Found unexpected .tmp.npy files after write: {tmp_files}"
-        )
+        loaded = np.load(npy_path)
+        np.testing.assert_array_equal(loaded, np.eye(5))
 
     def test_write_npy_cache_directly(self, tmp_path: Path) -> None:
-        """_write_npy_cache writes .npy file atomically and cleans up temp."""
+        """_write_npy_cache writes the .npy and cleans up its temp."""
         arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         npy_path = tmp_path / "direct.eigenD.npy"
 
         _write_npy_cache(arr, npy_path)
 
-        assert npy_path.exists(), "_write_npy_cache should create .npy file"
+        self._assert_dir_contents(tmp_path, {npy_path})
 
-        # No .tmp.npy artifact should remain
-        tmp_npy = tmp_path / (npy_path.stem + ".tmp.npy")
-        assert not tmp_npy.exists(), (
-            f"Temp file {tmp_npy.name} should not exist after _write_npy_cache"
-        )
-
-        # Verify content round-trips correctly
         loaded = np.load(npy_path)
         np.testing.assert_array_equal(loaded, arr)
 
     def test_write_npy_cache_error_cleans_tmp(self, tmp_path: Path) -> None:
-        """_write_npy_cache cleans up .tmp.npy when the atomic rename fails."""
+        """A failed rename leaves no target and no temp behind."""
         from unittest.mock import patch
 
         arr = np.array([1.0, 2.0, 3.0])
         npy_path = tmp_path / "fail.eigenD.npy"
-        tmp_npy = tmp_path / "fail.eigenD.tmp.npy"
 
-        # Patch Path.replace so the atomic rename step fails after the
-        # temp file has been written. _write_npy_cache must then remove
-        # the temp file in its finally block.
+        # Fail the rename after the temp file has been written, so cleanup is
+        # the only thing that can empty the directory.
         with patch.object(Path, "replace", side_effect=OSError("mock")):
             _write_npy_cache(arr, npy_path)
 
-        # The target .npy should not exist (rename failed)
         assert not npy_path.exists(), "Target .npy should not exist after failed rename"
-        # The temp .tmp.npy should be cleaned up
-        assert not tmp_npy.exists(), (
-            f"Temp file {tmp_npy.name} should be cleaned up after rename failure"
-        )
+        self._assert_dir_contents(tmp_path, set())
+
+    def test_write_npy_cache_error_preserves_existing_target(
+        self, tmp_path: Path
+    ) -> None:
+        """A failed rename leaves a pre-existing sidecar byte-for-byte intact.
+
+        The point of the publish: np.save would have truncated the target on
+        open, and npy_cache_valid accepts any non-empty sidecar, so a partial
+        write is read back as good data.
+        """
+        from unittest.mock import patch
+
+        npy_path = tmp_path / "existing.eigenD.npy"
+        np.save(npy_path, np.arange(5.0))
+        old_bytes = npy_path.read_bytes()
+
+        with patch.object(Path, "replace", side_effect=OSError("mock")):
+            _write_npy_cache(np.zeros(500), npy_path)
+
+        assert npy_path.read_bytes() == old_bytes
+        self._assert_dir_contents(tmp_path, {npy_path})
 
 
 # =============================================================================

@@ -268,10 +268,13 @@ class TestAtomicPublication:
         rng = np.random.default_rng(42)
         matrix = rng.standard_normal((600, 10))
 
-        def raise_on_replace(src: object, dst: object) -> None:
+        def raise_on_replace(self: Path, target: object) -> None:
             raise OSError("injected publication failure")
 
-        monkeypatch.setattr("jamma.io.matrix_writer.os.replace", raise_on_replace)
+        # Patch Path.replace, the call the publish step actually makes. Patching
+        # os.replace only worked via Path.replace's internal delegation, so it
+        # broke when matrix_writer stopped importing os at all.
+        monkeypatch.setattr(Path, "replace", raise_on_replace)
         with pytest.raises(OSError, match="injected publication failure"):
             write_matrix_parallel(matrix, out_path, n_workers=2)
 

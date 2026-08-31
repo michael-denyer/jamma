@@ -22,7 +22,13 @@ from jamma.lmm.schema import LmmMode, parse_lmm_mode
 ExecutionMode = Literal["batch", "streaming"]
 RequestedBackend = Literal["auto", "numpy", "numpy-streaming"]
 
-_DEFAULT_STATS_CHUNK = 10_000
+# SNPs per block in the streaming statistics pass when the caller names no
+# chunk size. Pass 1 reads the .bed and accumulates per-SNP counts, so its
+# footprint is one block of genotypes rather than the rotation and grid
+# buffers the association pass carries; it needs no RAM-budgeted sizing of
+# its own. Declared here, next to the pricing that assumes it, and imported
+# by the executing side (runner_numpy_streaming) so the two cannot drift.
+DEFAULT_STATS_CHUNK = 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +92,7 @@ class ExecutableAssociationPlan:
             )
             estimate = estimate_streaming_memory(
                 self.n_samples,
-                chunk_size=_DEFAULT_STATS_CHUNK,
+                chunk_size=DEFAULT_STATS_CHUNK,
                 n_cvt=self.n_cvt,
                 pipeline_buffers=chunks.n_buffers,
                 compute_chunk_size=chunks.chunk_size,
@@ -134,8 +140,9 @@ def plan_association(
 
     Plans unconditionally for whatever backend is requested. Whether a
     user-facing request may ask for numpy-streaming without the C extension
-    is the requesting boundary's policy (``require_streaming_accel``), not
-    the planner's: the streaming runner itself works without the extension.
+    is the requesting boundary's policy (the pipeline's
+    ``_reject_streaming_without_accel``), not the planner's: the streaming
+    runner itself works without the extension.
     """
     valid_requests = ("auto", "numpy", "numpy-streaming")
     if requested not in valid_requests:

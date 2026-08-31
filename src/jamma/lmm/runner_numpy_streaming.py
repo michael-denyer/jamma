@@ -20,6 +20,7 @@ from jamma.core.snp_stats import (
 )
 from jamma.io.plink import PlinkMetadata, get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.association_plan import (
+    DEFAULT_STATS_CHUNK,
     ExecutableAssociationPlan,
     plan_association,
 )
@@ -36,12 +37,6 @@ from jamma.lmm.schema import (
     LmmRunResult,
     SnpMeta,
 )
-
-# SNPs per block in the statistics pass when the caller names no chunk size.
-# Pass 1 reads the .bed and accumulates per-SNP counts, so its footprint is one
-# block of genotypes rather than the rotation and grid buffers the association
-# pass carries; it needs no RAM-budgeted sizing of its own.
-_DEFAULT_STATS_CHUNK = 10_000
 
 
 class BedSource:
@@ -158,7 +153,7 @@ def run_lmm_association_numpy_streaming(
         eigenvectors: Pre-computed eigenvectors or None.
         chunk_size: Cap on SNPs per chunk, for both the statistics pass and
             the association pass. None (default) reads statistics in
-            _DEFAULT_STATS_CHUNK blocks and lets the chunk engine size the
+            DEFAULT_STATS_CHUNK blocks and lets the chunk engine size the
             association chunks against the RAM budget.
         output_path: Path for incremental result writing, or None for
             in-memory.
@@ -251,7 +246,7 @@ def run_lmm_association_numpy_streaming_planned(
         snp_meta=snp_meta,
         n_samples=meta.n_samples,
         n_snps=meta.n_snps,
-        stats_chunk_size=_DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
+        stats_chunk_size=DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
         validate_genotypes=validate_genotypes,
         show_progress=config.show_progress,
     )

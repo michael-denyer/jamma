@@ -19,7 +19,7 @@ from jamma.core.memory import (
     estimate_lmm_memory,
     estimate_streaming_memory,
 )
-from jamma.lmm.association_plan import plan_association
+from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, plan_association
 from jamma.lmm.chunk_sizing import (
     LmmChunkPlan,
     compute_chunk_size_numpy,
@@ -28,7 +28,6 @@ from jamma.lmm.chunk_sizing import (
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.likelihood import n_index
-from jamma.lmm.runner_numpy_streaming import _DEFAULT_STATS_CHUNK
 from jamma.lmm.schema import LmmMode
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_memory import memory_preflight
@@ -280,7 +279,7 @@ def _priced_streaming_lmm_phase_gb(
     )
     est = estimate_streaming_memory(
         n_samples,
-        chunk_size=_DEFAULT_STATS_CHUNK,
+        chunk_size=DEFAULT_STATS_CHUNK,
         n_cvt=n_cvt,
         pipeline_buffers=chunk_plan.n_buffers,
         compute_chunk_size=chunk_plan.chunk_size,
@@ -521,7 +520,7 @@ class TestChunkPlanMatchesEngine:
         )
         est_hardcoded_two = estimate_streaming_memory(
             n_samples,
-            chunk_size=_DEFAULT_STATS_CHUNK,
+            chunk_size=DEFAULT_STATS_CHUNK,
             n_cvt=n_cvt,
             pipeline_buffers=2,
             compute_chunk_size=chunk_plan.chunk_size,

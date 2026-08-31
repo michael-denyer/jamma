@@ -41,7 +41,6 @@ def _association_plan(
         requested="numpy-streaming" if mode == "streaming" else "numpy",
         n_cvt=n_cvt,
         mem_budget=mem_budget,
-        _require_streaming_accel=False,
     )
 
 

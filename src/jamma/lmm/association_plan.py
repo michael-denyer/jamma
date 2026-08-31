@@ -145,9 +145,14 @@ def plan_association(
     mem_budget: float | None = None,
     max_chunk_size: int | None = None,
     log_dispatch_choices: bool = False,
-    _require_streaming_accel: bool = True,
 ) -> ExecutableAssociationPlan:
-    """Select all association policy and conservative geometry once."""
+    """Select all association policy and conservative geometry once.
+
+    Plans unconditionally for whatever backend is requested. Whether a
+    user-facing request may ask for numpy-streaming without the C extension
+    is the requesting boundary's policy (``require_streaming_accel``), not
+    the planner's: the streaming runner itself works without the extension.
+    """
     valid_requests = ("auto", "numpy", "numpy-streaming")
     if requested not in valid_requests:
         raise ValueError(
@@ -155,18 +160,6 @@ def plan_association(
         )
 
     c_ext_available = accel.available()
-    if (
-        requested == "numpy-streaming"
-        and _require_streaming_accel
-        and not c_ext_available
-    ):
-        raise ValueError(
-            "Backend 'numpy-streaming' requires the C extension but it is "
-            "not available. Compile it with: uv run python -c "
-            "'from jamma.jlinalg._compile_jlinalg import compile_extension; "
-            "compile_extension()'"
-        )
-
     mode = parse_lmm_mode(lmm_mode)
     dispatch = select_dispatch_path(
         n_cvt, mode, accel=c_ext_available, log_choices=log_dispatch_choices

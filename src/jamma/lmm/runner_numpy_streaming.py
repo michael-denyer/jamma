@@ -204,7 +204,6 @@ def run_lmm_association_numpy_streaming(
         lmm_mode=config.lmm_mode,
         mem_budget=config.mem_budget,
         max_chunk_size=chunk_size,
-        _require_streaming_accel=False,
     )
     return _run_lmm_association_numpy_streaming_planned(
         bed_path=bed_path,

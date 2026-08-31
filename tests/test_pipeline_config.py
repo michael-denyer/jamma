@@ -203,7 +203,6 @@ class TestCheckMemory:
                 100,
                 500,
                 requested="numpy-streaming",
-                _require_streaming_accel=False,
             ),
         )
         assert result is None
@@ -223,7 +222,6 @@ class TestCheckMemory:
                 100,
                 500,
                 requested="numpy-streaming",
-                _require_streaming_accel=False,
             ),
         )
 

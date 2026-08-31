@@ -138,11 +138,27 @@ class TestExecutionMode:
             plan = select_execution_mode(100, 1000, requested="numpy-streaming")
         assert plan.mode == "streaming"
 
-    def test_explicit_numpy_streaming_no_c_ext_raises(self):
-        """explicit 'numpy-streaming' + no C extension -> ValueError."""
+    def test_explicit_numpy_streaming_no_c_ext_selects_streaming(self):
+        """The planner plans the requested mode even without the C extension.
+
+        Refusing the combination is the pipeline boundary's policy, tested
+        below; the streaming runner itself works without the extension.
+        """
+        with patch("jamma.lmm.accel._accel", None):
+            plan = select_execution_mode(100, 1000, requested="numpy-streaming")
+        assert plan.mode == "streaming"
+
+    def test_pipeline_rejects_numpy_streaming_without_c_ext(self):
+        """The pipeline refuses an explicit numpy-streaming request without
+        the C extension, before touching any input file."""
+        from jamma.pipeline import PipelineConfig, PipelineRunner
+
+        config = PipelineConfig(
+            bfile=Path("/nonexistent/prefix"), backend="numpy-streaming"
+        )
         with patch("jamma.lmm.accel._accel", None):
             with pytest.raises(ValueError, match="C extension"):
-                select_execution_mode(100, 1000, requested="numpy-streaming")
+                PipelineRunner(config).run()
 
     # -- Input validation --
 

@@ -31,7 +31,6 @@ def _streaming_plan(*, mem_budget: float | None = None):  # type: ignore[no-unty
         500,
         requested="numpy-streaming",
         mem_budget=mem_budget,
-        _require_streaming_accel=False,
     )
 
 

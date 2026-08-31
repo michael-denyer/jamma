@@ -49,7 +49,6 @@ def _streaming_preflight(
         requested="numpy-streaming",
         n_cvt=n_cvt,
         lmm_mode=lmm_mode,
-        _require_streaming_accel=False,
     )
     memory_preflight(config, plan)
 
@@ -268,7 +267,6 @@ def _priced_streaming_lmm_phase_gb(
         requested="numpy-streaming",
         n_cvt=n_cvt,
         lmm_mode=lmm_mode,
-        _require_streaming_accel=False,
     )
     chunk_plan = execution.conservative_chunks
     uab_iab_gb = (
@@ -506,7 +504,6 @@ class TestChunkPlanMatchesEngine:
             requested="numpy-streaming",
             n_cvt=n_cvt,
             lmm_mode=lmm_mode,
-            _require_streaming_accel=False,
         )
         mem_plan = exec_plan.price()
 

@@ -43,6 +43,7 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
+from jamma.lmm import accel
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
@@ -86,6 +87,27 @@ def _parse_backend_override(value: str) -> BackendRequest:
             f"JAMMA_BACKEND must be one of {VALID_BACKENDS}, got {value!r}"
         )
     return value
+
+
+def _reject_streaming_without_accel(requested: BackendRequest) -> None:
+    """Refuse an explicit numpy-streaming request when the C extension is absent.
+
+    A user asking for the streaming backend on a machine that cannot honor it
+    is a boundary error, so it is checked here where the request arrives (config
+    or JAMMA_BACKEND), before any file I/O. The planner itself plans
+    unconditionally: the streaming runner works without the extension, and the
+    runner's own public entry allows it.
+
+    Raises:
+        ValueError: If numpy-streaming is requested without the C extension.
+    """
+    if requested == "numpy-streaming" and not accel.available():
+        raise ValueError(
+            "Backend 'numpy-streaming' requires the C extension but it is "
+            "not available. Compile it with: uv run python -c "
+            "'from jamma.jlinalg._compile_jlinalg import compile_extension; "
+            "compile_extension()'"
+        )
 
 
 class PipelineRunner:
@@ -414,7 +436,7 @@ class PipelineRunner:
 
         # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
         # It arrives as an unvalidated string, so check it here rather than
-        # letting an unknown value reach select_execution_mode after the
+        # letting an unknown value reach plan_association after the
         # pipeline has already read PLINK metadata off disk.
         env_backend = Env.current().backend_raw
         requested: BackendRequest = (
@@ -422,6 +444,7 @@ class PipelineRunner:
             if env_backend is not None
             else self.config.backend
         )
+        _reject_streaming_without_accel(requested)
 
         # Read once and pass it down. get_plink_metadata parses the whole .bim
         # (sid, chromosome, bp_position and both allele arrays).

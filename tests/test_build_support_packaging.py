@@ -25,6 +25,11 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_BUILD_SUPPORT_MODULES = (
+    "build_models.py",
+    "build_execution.py",
+    "compile_and_link.py",
+)
 
 
 @pytest.mark.tier0
@@ -51,6 +56,16 @@ def test_wheel_contains_build_support_structural():
         "list is split, ensure jamma._build_support is listed explicitly "
         "AND update this assertion."
     )
+
+
+@pytest.mark.tier0
+def test_build_support_responsibilities_are_separate_modules():
+    """Models, compiler execution, and orchestration must not collapse again."""
+    support_dir = _REPO_ROOT / "src/jamma/_build_support"
+    missing = [
+        name for name in _BUILD_SUPPORT_MODULES if not (support_dir / name).is_file()
+    ]
+    assert not missing, f"build-support modules missing: {missing}"
 
 
 def _build(tmp_out: Path) -> tuple[Path, Path]:
@@ -95,35 +110,21 @@ def test_build_support_ships_in_sdist_and_wheel(tmp_path):
     with zipfile.ZipFile(wheel_path) as zf:
         wheel_names = zf.namelist()
 
-    # sdist MUST contain jamma/_build_support/compile_and_link.py.
-    sdist_has_compile_and_link = any(
-        name.endswith("jamma/_build_support/compile_and_link.py")
-        for name in sdist_names
-    )
-    assert sdist_has_compile_and_link, (
-        f"jamma/_build_support/compile_and_link.py missing from sdist "
-        f"{sdist_path.name}. hatch_build.py imports from it at wheel-build "
-        "time; a source build will fail."
-    )
+    for module in _BUILD_SUPPORT_MODULES:
+        target = f"jamma/_build_support/{module}"
+        assert any(name.endswith(target) for name in sdist_names), (
+            f"{target} missing from sdist {sdist_path.name}; isolated source "
+            "builds need the complete build-support package"
+        )
+        assert any(name.endswith(target) for name in wheel_names), (
+            f"{target} missing from wheel {wheel_path.name}; runtime ABI "
+            "recompilation needs the complete build-support package"
+        )
 
-    # Wheel MUST contain jamma/_build_support/compile_and_link.py.
-    wheel_has_compile_and_link = any(
-        name.endswith("jamma/_build_support/compile_and_link.py")
-        for name in wheel_names
-    )
-    assert wheel_has_compile_and_link, (
-        f"jamma/_build_support/compile_and_link.py missing from wheel "
-        f"{wheel_path.name}. Runtime ABI-mismatch recompile via "
-        "jamma.core.recompile.auto_recompile_c_extension will raise "
-        "ImportError on every installed wheel. This makes the entire "
-        "auto-recompile feature dead code."
-    )
-
-    # And all three submodules — find_compiler, openmp_detect,
-    # compile_and_link — must be present. A partial ship silently breaks
+    # And every helper submodule must be present. A partial ship silently breaks
     # imports at the first submodule lookup.
     for submodule in (
-        "compile_and_link.py",
+        *_BUILD_SUPPORT_MODULES,
         "find_compiler.py",
         "openmp_detect.py",
         "__init__.py",

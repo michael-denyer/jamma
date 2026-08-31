@@ -216,8 +216,8 @@ DEFAULT_N_REFINE = 10
 # Minimum coarse-grid resolution. A one-point grid has no bracket: the
 # golden-section stage collapses (idx_low == idx_high, so a == b) and every SNP
 # silently returns lambda = l_min instead of its optimum. This is a correctness
-# bound, not a quality preference. The C kernel enforces the same minimum in
-# validate_batch_params (src/jamma/lmm/_lmm_accel.c) — keep the two in step.
+# bound, not a quality preference. The C kernels enforce the same minimum via
+# validate_batch_params in _lmm_support.c — keep the two in step.
 MIN_N_GRID = 2
 
 

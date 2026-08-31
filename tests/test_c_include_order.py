@@ -1,11 +1,11 @@
-"""Every C unit that reaches the CPython API must include Python.h first.
+"""Every LMM C unit that reaches the CPython API must include Python.h first.
 
 CPython requires Python.h before any standard header. In this tree the
 concrete casualty is ``M_PI``, which is not C11: glibc's ``<math.h>`` defines
 it only under ``__USE_XOPEN``, which ``Python.h`` turns on via
 ``_XOPEN_SOURCE``. Let any other header reach ``<math.h>`` first and the
 include guard blocks the later expansion, so every ``M_PI`` in
-``_lmm_accel.c`` fails to compile.
+an accelerator family fails to compile.
 
 The trap is that this is invisible on macOS, whose libc defines ``M_PI``
 unconditionally. A local build and the ARM Mac CI job both pass while every
@@ -37,19 +37,32 @@ def _first_include(source: Path) -> str:
     return match.group(1)
 
 
-def test_lmm_accel_includes_the_python_owner_first():
-    """_lmm_accel.c uses M_PI, so nothing may reach <math.h> before Python.h."""
-    source = _LMM_DIR / "_lmm_accel.c"
-    assert "M_PI" in source.read_text(), (
-        "guard is calibrated to M_PI; if that use is gone, re-check whether "
-        "this ordering still needs enforcing"
-    )
-    assert _first_include(source) == '"_lmm_support.h"', (
-        f"{_PYTHON_OWNER} must be the first include in _lmm_accel.c. It is what "
-        "pulls in <Python.h>, and glibc only exposes M_PI from <math.h> once "
-        "Python.h has set _XOPEN_SOURCE. macOS builds fine either way, so this "
-        "only fails on Linux."
-    )
+def test_accelerator_units_include_the_python_owner_first():
+    """Nothing may reach <math.h> before the header that owns Python.h."""
+    for name in (
+        "_lmm_accel.c",
+        "_lmm_accel_ncvt1.c",
+        "_lmm_accel_general.c",
+    ):
+        source = _LMM_DIR / name
+        assert _first_include(source) == '"_lmm_accel_internal.h"', (
+            f"_lmm_accel_internal.h must be the first include in {name}; it "
+            "pulls in Python.h before any standard header can reach math.h"
+        )
+
+
+def test_only_module_unit_owns_the_numpy_api_table():
+    """Family units share the module unit's imported NumPy C-API pointer."""
+    owner = (_LMM_DIR / "_lmm_accel.c").read_text()
+    assert "#define NO_IMPORT_ARRAY" not in owner
+    assert owner.count("import_array()") == 1
+
+    for name in ("_lmm_accel_ncvt1.c", "_lmm_accel_general.c"):
+        text = (_LMM_DIR / name).read_text()
+        assert text.index("#define NO_IMPORT_ARRAY") < text.index(
+            '#include "_lmm_accel_internal.h"'
+        )
+        assert "import_array()" not in text
 
 
 def test_stats_unit_stays_free_of_the_python_api():

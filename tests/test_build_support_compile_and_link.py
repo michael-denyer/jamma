@@ -16,6 +16,7 @@ from jamma._build_support.compile_and_link import (
     LAPACK_CFLAGS,
     LAPACK_SOURCES,
     LINK_FLAGS_BY_PLATFORM,
+    LMM_ACCEL_SOURCES,
     BuildSpec,
     CompileResult,
     Toolchain,
@@ -71,12 +72,26 @@ def test_baseline_sources_exact():
         "platform.c",
         "pymodule.c",
         "blas_dispatch.c",
+        "blas_operations.c",
         "snp_stats.c",
     )
 
 
 def test_lapack_sources_exact():
     assert LAPACK_SOURCES == ("eigh.c",)
+
+
+def test_lmm_accel_sources_exact():
+    """Every accelerator family must reach wheel and dev-mode builds."""
+    assert LMM_ACCEL_SOURCES == (
+        "_lmm_accel.c",
+        "_lmm_accel_ncvt1.c",
+        "_lmm_accel_general.c",
+        "_lmm_support.c",
+        "_lmm_stats.c",
+        "_lmm_kernels_general.c",
+        "_lmm_kernels_ncvt1.c",
+    )
 
 
 def test_link_flags_linux():
@@ -229,7 +244,7 @@ def test_compile_jlinalg_smoke_success(monkeypatch, tmp_path):
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(
-        "jamma._build_support.compile_and_link.subprocess.run",
+        "jamma._build_support.build_execution.subprocess.run",
         _fake_run,
     )
 
@@ -303,7 +318,7 @@ def test_compile_jlinalg_compile_failure_triggers_omp_retry(monkeypatch, tmp_pat
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(
-        "jamma._build_support.compile_and_link.subprocess.run",
+        "jamma._build_support.build_execution.subprocess.run",
         _fake_run,
     )
 
@@ -359,7 +374,7 @@ def test_atomic_replace_failure_preserves_used_openmp_link(monkeypatch, tmp_path
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(
-        "jamma._build_support.compile_and_link.subprocess.run",
+        "jamma._build_support.build_execution.subprocess.run",
         _fake_run,
     )
 
@@ -453,7 +468,7 @@ def test_toolchain_detected_once_across_run_build_of_both_specs(monkeypatch, tmp
         return _FakeCompleted(returncode=0)
 
     monkeypatch.setattr(
-        "jamma._build_support.compile_and_link.subprocess.run", _fake_run
+        "jamma._build_support.build_execution.subprocess.run", _fake_run
     )
 
     def _make_spec(name: str) -> BuildSpec:

@@ -4,7 +4,7 @@ Writes ``src/jamma/_build_meta.py`` at build time so the release date is
 available at runtime via ``jamma.__release_date__`` without manual upkeep.
 
 Also compiles two C extensions if a C compiler is available:
-  - ``src/jamma/lmm/_lmm_accel.c``: per-SNP REML Wald pipeline (with OpenMP)
+  - ``src/jamma/lmm/_lmm_accel*.c``: per-SNP LMM pipelines (with OpenMP)
   - ``src/jamma/jlinalg/src/*.c``: jlinalg BLAS compute layer (with OpenMP)
 
 If compilation fails for any reason, a warning is logged and a pure-Python
@@ -16,6 +16,7 @@ import datetime
 import importlib.util
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -34,10 +35,10 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 # time. The same file ships inside the wheel under its regular
 # jamma._build_support.* name for runtime recompile use.
 #
-# Only compile_and_link.py needs loading directly: detect_toolchain()
-# imports find_compiler and openmp_detect itself via a lazy relative
-# import, which resolves against the sys.modules registration below
-# rather than a package lookup that build isolation would break.
+_BUILD_SUPPORT_DIR = Path(__file__).parent / "src" / "jamma" / "_build_support"
+_build_support_package = types.ModuleType("jamma_build_support")
+_build_support_package.__path__ = [str(_BUILD_SUPPORT_DIR)]
+sys.modules.setdefault("jamma_build_support", _build_support_package)
 
 
 def _load_build_support_module(name: str, filename: str):
@@ -45,7 +46,7 @@ def _load_build_support_module(name: str, filename: str):
 
     Returns a module object registered on sys.modules under ``name``.
     """
-    path = Path(__file__).parent / "src" / "jamma" / "_build_support" / filename
+    path = _BUILD_SUPPORT_DIR / filename
     spec = importlib.util.spec_from_file_location(name, str(path))
     if spec is None or spec.loader is None:
         raise ImportError(f"could not load {path}")
@@ -57,6 +58,8 @@ def _load_build_support_module(name: str, filename: str):
 
 _load_build_support_module("jamma_build_support.find_compiler", "find_compiler.py")
 _load_build_support_module("jamma_build_support.openmp_detect", "openmp_detect.py")
+_load_build_support_module("jamma_build_support.build_models", "build_models.py")
+_load_build_support_module("jamma_build_support.build_execution", "build_execution.py")
 _cal = _load_build_support_module(
     "jamma_build_support.compile_and_link", "compile_and_link.py"
 )

@@ -74,11 +74,11 @@ uv run python -c "from jamma.jlinalg._compile_jlinalg import compile_extension; 
 **Wheel builds:** `hatch_build.py` handles compilation automatically.
 
 C sources, compile flags, and link flags are owned by
-`src/jamma/_build_support/compile_and_link.py` (`BASELINE_SOURCES`,
-`LAPACK_SOURCES`, `BASE_CFLAGS`, `LAPACK_CFLAGS`). Three compile entry
-points (`hatch_build.py`, `_compile_jlinalg.py`,
-`src/jamma/lmm/_compile_accel.py`) all import from `_build_support` so
-they stay in sync. Bare flag literals outside `_build_support/` fail
+`src/jamma/_build_support/build_models.py` (`BASELINE_SOURCES`,
+`LAPACK_SOURCES`, `BASE_CFLAGS`, `LAPACK_CFLAGS`). Toolchain execution lives
+in `build_execution.py`, and `compile_and_link.py` composes both behind the
+stable facade used by `hatch_build.py`, `_compile_jlinalg.py`, and
+`src/jamma/lmm/_compile_accel.py`. Bare flag literals outside `_build_support/` fail
 the `check_compile_flag_literals.py` pre-commit hook. LAPACK sources
 (`eigh.c`) use strict IEEE 754 flags (`-O2 -fno-fast-math`); other
 sources use `BASE_CFLAGS` (`-O3 -ftree-vectorize ...`).

@@ -177,6 +177,14 @@ repos:
         # passing the filtered file list.
         pass_filenames: false
         always_run: true
+      - id: check-file-size-limits
+        name: reject code files over 1000 lines
+        entry: scripts/check_file_size_limits.py
+        language: system
+        # A rename or deletion can change the repository-wide result even when
+        # the remaining files are not in pre-commit's filtered argument list.
+        always_run: true
+        pass_filenames: false
       - id: check-test-timeouts
         name: flag unjustified long @pytest.mark.timeout values
         entry: scripts/check_test_timeouts.py

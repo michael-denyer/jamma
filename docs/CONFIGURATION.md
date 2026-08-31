@@ -18,9 +18,9 @@ caching a module-level singleton, so `monkeypatch.setenv`/`delenv` in tests
 and a CI job's `env:` block both still take effect. `DO_NOT_TRACK` stays a
 direct read in `telemetry.py`: it follows a different truthiness rule (only
 `"1"` opts out) than every `JAMMA_*` toggle's presence-based one, so folding
-it into `Env` would misrepresent it. `JAMMA_SANITIZE`, `JAMMA_SENTINEL_UB`
-(build-time, read by `_build_support/compile_and_link.py` and the two
-dev-mode `_compile_*.py` recompile scripts), `JAMMA_NO_OPENMP`
+it into `Env` would misrepresent it. `JAMMA_SANITIZE` and `JAMMA_SENTINEL_UB`
+(build-time, resolved by `_build_support/build_models.py` through the shared
+build facade), `JAMMA_NO_OPENMP`
 (`_build_support/openmp_detect.py`), and `CC` stay direct reads too — those
 modules run under PEP 517 build isolation, or standalone before the package
 is installed, and cannot import the runtime `jamma` package that `Env` lives
@@ -39,8 +39,8 @@ in without pulling in the full numpy/loguru stack they are built to avoid.
 | `JAMMA_FORCE_NUMPY_FALLBACK` | *(unset)* | Set to any non-empty value (not `0`) to force the **entire jlinalg layer** onto its NumPy fallback path even when vendor BLAS is loaded. Wider scope than `JLINALG_NO_VENDOR_LAPACK`: also affects `dgemm`, `dsyrk`. Used by the weekly sanitizer workflow and by full numerical-divergence debugging. |
 | `JAMMA_NO_OPENMP` | *(unset)* | Set to any non-empty value (not `0`) to disable OpenMP when compiling the C extension. The extension will be single-threaded. |
 | `OMP_NUM_THREADS` | *(system default)* | OpenMP thread count for C extension kernels (`_lmm_accel`, `_jlinalg`). Separate from `JAMMA_BLAS_THREADS`, which controls BLAS only. |
-| `JAMMA_SANITIZE` | *(unset)* | **Build-time only.** Comma-separated sanitizer list (e.g. `address,undefined`) injected into compile and link flags by `_build_support/compile_and_link.py`. Used by `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10 for local repro. |
-| `JAMMA_SENTINEL_UB` | *(unset)* | **Build-time only.** When set to `1`, `_compile_accel.py` injects `-DJAMMA_SENTINEL_UB`, which compiles a known heap-OOB into `_lmm_accel.c`. Used by the sanitizer workflow's `asan-sentinel-meta-test` job to verify ASAN is actually catching bugs (distinguishes a clean run from an unwired sanitizer). |
+| `JAMMA_SANITIZE` | *(unset)* | **Build-time only.** Comma-separated sanitizer list (e.g. `address,undefined`) injected into compile and link flags by `_build_support/build_models.py`. Used by `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10 for local repro. |
+| `JAMMA_SENTINEL_UB` | *(unset)* | **Build-time only.** When set to `1`, the shared build model injects `-DJAMMA_SENTINEL_UB`, which compiles a known heap-OOB into the `_lmm_accel` module-registration unit. Used by the sanitizer workflow's `asan-sentinel-meta-test` job to verify ASAN is actually catching bugs (distinguishes a clean run from an unwired sanitizer). |
 | `JAMMA_FINGERPRINT_OUT` | *(unset)* | **Test-harness only.** Where the test suite writes the C accelerator's bit-exactness fingerprint. `scripts/run-fingerprint.sh` sets it, and `.github/workflows/fingerprint.yml` runs that script on both sides of a PR touching the accelerator. |
 
 ```bash

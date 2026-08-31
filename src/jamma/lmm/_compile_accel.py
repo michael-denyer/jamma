@@ -45,7 +45,7 @@ def compile_extension(
     diagnose: bool = False,
     on_retry: Callable[[str], None] | None = None,
 ) -> bool:
-    """Compile _lmm_accel.c into a shared library in the installed package.
+    """Compile the _lmm_accel sources into a shared library in the package.
 
     Thin shim over ``jamma._build_support.compile_and_link.compile_extension``
     bound to ``LMM_ACCEL_SPEC``. See that function for the build behavior.

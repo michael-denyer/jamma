@@ -1,17 +1,15 @@
-"""Map the section and static-function structure of ``_lmm_accel.c``.
+"""Map sections and static functions in one LMM accelerator source file.
 
-The file is organised into banner-delimited sections that are the natural
-family seams for a split, but most of its static helpers are referenced from
-more than one section. Which helpers those are decides what a shared core must
-hold, and re-deriving that by hand after every extraction step is both slow and
-easy to get wrong.
+The accelerator is split by kernel family. This utility reports the internal
+section structure and cross-section static references of any one translation
+unit; by default it inspects the n_cvt=1 implementation.
 
 Run it for a section-by-section summary::
 
     uv run python scripts/lmm_accel_sections.py
 
 ``--cross`` lists only the statics referenced from outside their own section,
-most-shared first, which is the worklist for the shared core::
+most-shared first::
 
     uv run python scripts/lmm_accel_sections.py --cross
 
@@ -28,7 +26,9 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_SOURCE = Path(__file__).resolve().parent.parent / "src/jamma/lmm/_lmm_accel.c"
+DEFAULT_SOURCE = (
+    Path(__file__).resolve().parent.parent / "src/jamma/lmm/_lmm_accel_ncvt1.c"
+)
 
 _BANNER = re.compile(r"^/\* ={10,}\s*$")
 _STATIC_HEAD = re.compile(r"^static\s+(?:inline\s+)?(?:const\s+)?[\w\s*]+?(\w+)\s*\(")

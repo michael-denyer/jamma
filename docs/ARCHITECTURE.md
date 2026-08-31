@@ -95,7 +95,9 @@ src/jamma/
 ├── pipeline_memory.py      # MemoryPlan: the preflight gate, priced per dispatch path and eigen driver
 ├── _build_support/         # Canonical compile flags, source lists, and the
 │   │                       # build/load seam: BuildSpec, run_build, find_c_compiler
-│   ├── compile_and_link.py # BuildSpec, LMM_ACCEL_SOURCES/JLINALG_SPEC, run_build driver
+│   ├── build_models.py     # BuildSpec values, source manifests, and flag policy
+│   ├── build_execution.py  # Toolchain detection and atomic compile/link execution
+│   ├── compile_and_link.py # Composition root and compatibility import surface
 │   ├── find_compiler.py    # C compiler discovery for build-time and runtime recompile
 │   └── openmp_detect.py    # OpenMP flag detection for C extension compilation
 ├── core/                   # Cross-cutting concerns: memory estimation,
@@ -159,15 +161,17 @@ src/jamma/
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
 │   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)
 │   ├── _compile_accel.py   # Dev-mode/runtime compiler; calls run_build(LMM_ACCEL_SPEC)
-│   ├── _lmm_accel.c        # CPython module init and the public compute/workspace entry
-│   │                       # points; the only unit calling import_array()
+│   ├── _lmm_accel.c        # CPython module init; the only unit calling import_array()
+│   ├── _lmm_accel_ncvt1.c  # Public n_cvt=1 workspace and chunk-compute entry points
+│   ├── _lmm_accel_general.c # Public general-workspace and chunk-compute entry points
+│   ├── _lmm_accel_internal.h # Private declarations shared with module registration
 │   ├── _lmm_support.c/.h   # Shared thread-scratch alloc/free and NumPy C-API glue
 │   ├── _lmm_stats.c/.h     # Wald/Score/LRT statistics kernels shared by both workspaces
 │   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) workspace creator and fused compute
 │   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 workspace creator and fused compute
 │   └── _lmm_types.h        # Shared workspace/result struct definitions
 │                          #
-│                          # LMM_ACCEL_SOURCES in _build_support/compile_and_link.py is the
+│                          # LMM_ACCEL_SOURCES in _build_support/build_models.py is the
 │                          # source list every build entry point reads; do not trust a file
 │                          # list written down anywhere else, including this one.
 ├── utils/                  # Shared utilities (logging setup, chromosome sort key)
@@ -190,7 +194,7 @@ src/jamma/
 
 The `eigh` function dispatches to DSYEVD (divide-and-conquer, faster, O(N²) workspace) and falls back to DSYEVR (MRRR algorithm, O(N) workspace) when DSYEVD workspace would exceed available memory. At 100k samples, DSYEVD requires ~240 GB; DSYEVR requires ~160 GB.
 
-The `_lmm_accel` C extension provides the per-SNP REML/Wald inner loop with optional OpenMP parallelism. It builds from several translation units, not one file. The `LMM_ACCEL_SOURCES` tuple in `src/jamma/_build_support/compile_and_link.py` is the authoritative list.
+The `_lmm_accel` C extension provides the per-SNP REML/Wald inner loop with optional OpenMP parallelism. It builds from several translation units, not one file. The `LMM_ACCEL_SOURCES` tuple in `src/jamma/_build_support/build_models.py` is the authoritative list.
 
 Two rules govern adding a `.c` file:
 
@@ -199,7 +203,7 @@ Two rules govern adding a `.c` file:
 
 A separate trap, guarded by [`tests/test_c_include_order.py`](../tests/test_c_include_order.py): `_lmm_support.h` must reach `<math.h>` before anything else does, because `M_PI` is not C11 and glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets. macOS defines `M_PI` unconditionally, so a local build and the ARM Mac CI job pass while every Linux job fails.
 
-Compile flags, source lists, and link flags are centralised in the same module and consumed by all three compile entry points (`hatch_build.py` for wheel builds, `_compile_jlinalg.py` and `_compile_accel.py` for dev-mode and runtime recompile). Each target is one frozen `BuildSpec` (`LMM_ACCEL_SPEC`, `JLINALG_SPEC`), and every entry point builds a spec and calls `run_build`, the shared compile-and-link driver in `_build_support/compile_and_link.py`. At runtime, `jamma.core.recompile._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
+Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery and compile/link execution, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, and `_compile_accel.py`) consume that facade. At runtime, `jamma.core.recompile._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
 
 ## C Extension Architecture
 

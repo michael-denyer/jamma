@@ -3,14 +3,12 @@
  *
  * The Pab recursion, likelihood evaluations, statistic extraction and lambda
  * optimizers for the general (arbitrary covariate count) path. These are the
- * table-driven counterparts of the single-covariate kernels that remain in
- * _lmm_accel.c, and the two sets are disjoint: no general kernel calls an
- * ncvt1 kernel or the reverse, which is what makes this a translation-unit
- * boundary rather than an arbitrary cut.
+ * table-driven counterparts of the single-covariate kernels, and the two sets
+ * are disjoint: no general kernel calls an ncvt1 kernel or the reverse, which
+ * is what makes this a translation-unit boundary rather than an arbitrary cut.
  *
- * Callers are the general entry points in _lmm_accel.c — the batch Score and
- * LRT paths and the fused-Uab chunk functions. They keep the workspace structs
- * and all CPython marshalling; only the arithmetic moved.
+ * Callers are the entry points in _lmm_accel_general.c. They keep the workspace
+ * structs and all CPython marshalling; only the arithmetic moved.
  *
  * Pure double arithmetic over the Pab layout: no CPython, no NumPy, no
  * OpenMP, no workspace state. It needs only the table shape from

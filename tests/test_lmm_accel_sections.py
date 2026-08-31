@@ -1,9 +1,8 @@
-"""Behaviour tests for ``scripts/lmm_accel_sections.py``.
+"""Behavior tests for ``scripts/lmm_accel_sections.py``.
 
-The script's cross-section coupling count is the worklist that decides which
-statics a ``_lmm_accel.c`` extraction must carry. A miscount sends real
-refactoring work at functions that are not actually shared, so the parser gets
-the same scrutiny as the code it measures.
+The script's cross-section coupling count describes which statics cross an
+accelerator source file's internal seams. A miscount gives maintainers a false
+map, so the parser gets the same scrutiny as the code it measures.
 """
 
 from __future__ import annotations

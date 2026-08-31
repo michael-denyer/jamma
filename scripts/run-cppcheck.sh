@@ -2,9 +2,9 @@
 # Static analysis over both C trees: src/jamma/jlinalg/src and src/jamma/lmm.
 #
 # NPY_INTP_FMT is a NumPy macro. cppcheck cannot resolve it without the NumPy
-# headers, and undefined it reports unknownMacro and stops analysing
-# _lmm_accel.c entirely — a file that then looks clean because nothing was
-# checked. Defining it here rather than suppressing the id keeps real parse
+# headers, and undefined it reports unknownMacro and stops analysing the LMM
+# accelerator units — files that then look clean because nothing was checked.
+# Defining it here rather than suppressing the id keeps real parse
 # failures visible elsewhere.
 #
 # This lives in a script rather than the hook's `entry:` line because

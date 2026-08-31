@@ -222,8 +222,8 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3b | `impute_missing_inplace()` | In-place NaN -> col-mean for genotype chunks (used by all runners) | [lmm/impute.py:6](../src/jamma/lmm/impute.py#L6) |
 | 3c | `eigendecompose_kinship()` | Eigendecomp via `jlinalg.eigh` with BLAS thread control | [eigen.py](../src/jamma/lmm/eigen.py) |
 | 3c' | `jlinalg.eigh()` | Vendor DSYEVD/DSYEVR dispatch with NumPy fallback | [jlinalg/\_\_init\_\_.py](../src/jamma/jlinalg/__init__.py) |
-| 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n^2) workspace) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
-| 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_dispatch.c](../src/jamma/jlinalg/src/blas_dispatch.c) |
+| 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n^2) workspace) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
+| 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
 | 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:463](../src/jamma/lmm/likelihood.py#L463) |
 | 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:827](../src/jamma/lmm/likelihood.py#L827) |
 | 3d | `compute_Uab()` | Element-wise products of rotated vectors | [likelihood.py:244](../src/jamma/lmm/likelihood.py#L244) |
@@ -252,7 +252,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 
 ### [4N] NumPy Backend
 
-Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation. Optional C extension (`_lmm_accel.c`) provides OpenMP-parallelized Wald test with workspace API for n_cvt=1, with automatic fallback to pure Python. Batch, disk-streaming, and LOCO runners share `chunk_runner_numpy.py` for chunk sizing, rotation, C/Python dispatch, diagnostics, and per-chunk result writes.
+Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation. The optional multi-source `_lmm_accel` extension provides OpenMP-parallelized LMM kernels, with automatic fallback to pure Python. Batch, disk-streaming, and LOCO runners share `chunk_runner_numpy.py` for chunk sizing, rotation, C/Python dispatch, diagnostics, and per-chunk result writes.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
@@ -277,15 +277,17 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `compute_chunk_size_numpy()` | RAM-budgeted chunk-size computation | [chunk_sizing.py:74](../src/jamma/lmm/chunk_sizing.py#L74) |
 | 4Nb | `available()` / `require()` | The one loader for `_lmm_accel`: import, ABI-validate, auto-recompile once, expose the module or raise | [accel.py](../src/jamma/lmm/accel.py) |
 | 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:186](../src/jamma/lmm/chunk_kernel.py#L186) |
-| 4Nc | `create_workspace_ncvt1_c()` | C extension: the per-run n_cvt=1 workspace, keyed by `lmm_mode` | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
+| 4Nc | `create_workspace_ncvt1_c()` | C extension: the per-run n_cvt=1 workspace, keyed by `lmm_mode` | [_lmm_accel_ncvt1.c](../src/jamma/lmm/_lmm_accel_ncvt1.c) |
 | 4Nc | `_fused_general_kernel()` | Build the one general (n_cvt>1) C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:223](../src/jamma/lmm/chunk_kernel.py#L223) |
-| 4Nc | `create_workspace_general_c()` | C extension: the per-run general workspace, keyed by `lmm_mode` | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
-| 4Nd | `compute_lmm_chunk_ncvt1_c()` | C extension: chunked compute for n_cvt=1 with OpenMP, REML Wald under `lmm_mode` 1 and Wald + Score + LRT under 4 | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
-| 4Nd | `compute_lmm_chunk_fused_general_c()` | C extension: chunked compute for the general (n_cvt>1) workspace with OpenMP, one entry point serving Wald/LRT/Score/mode-4 by `lmm_mode` | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
+| 4Nc | `create_workspace_general_c()` | C extension: the per-run general workspace, keyed by `lmm_mode` | [_lmm_accel_general.c](../src/jamma/lmm/_lmm_accel_general.c) |
+| 4Nd | `compute_lmm_chunk_ncvt1_c()` | C extension: chunked compute for n_cvt=1 with OpenMP, REML Wald under `lmm_mode` 1 and Wald + Score + LRT under 4 | [_lmm_accel_ncvt1.c](../src/jamma/lmm/_lmm_accel_ncvt1.c) |
+| 4Nd | `compute_lmm_chunk_fused_general_c()` | C extension: chunked compute for the general (n_cvt>1) workspace with OpenMP, one entry point serving Wald/LRT/Score/mode-4 by `lmm_mode` | [_lmm_accel_general.c](../src/jamma/lmm/_lmm_accel_general.c) |
 | 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:27](../src/jamma/lmm/_lmm_support.c#L27) |
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 | 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |
-| 4Nd | `compile_and_link.py` | Shared compile flags, source lists, link flags (single source of truth, consumed by `hatch_build.py` + both `_compile_*.py`) | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
+| 4Nd | `build_models.py` | Immutable source manifests, compile/link flag policy, and `BuildSpec` values | [build_models.py](../src/jamma/_build_support/build_models.py) |
+| 4Nd | `build_execution.py` | Toolchain detection and atomic compile/link execution | [build_execution.py](../src/jamma/_build_support/build_execution.py) |
+| 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:42](../src/jamma/lmm/runner_numpy_streaming.py#L42) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:139](../src/jamma/lmm/runner_numpy_streaming.py#L139) |
 | 4Nf | `select_execution_mode()` | Batch vs streaming mode selection | [runner.py:63](../src/jamma/lmm/runner.py#L63) |

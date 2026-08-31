@@ -8,7 +8,7 @@ Ships inside the installed package (``jamma._build_support``). Consumed by:
     ``src/jamma/__init__.py`` and pull in loguru/numpy/jamma.lmm, none of
     which are in the build env). Instead it loads each helper module by
     file path with ``importlib.util.spec_from_file_location`` and
-    registers it on ``sys.modules`` under a distinct
+    registers the helper modules on ``sys.modules`` under a distinct
     ``jamma_build_support.*`` namespace so there's no collision with the
     real ``jamma.*`` package at runtime.
   * ``src/jamma/jlinalg/_compile_jlinalg.py`` — dev-mode and runtime

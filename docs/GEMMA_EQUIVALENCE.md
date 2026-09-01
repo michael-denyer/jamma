@@ -157,9 +157,10 @@ agree to within `O(5e-5)` in practice on unimodal REML surfaces.
 `|lambda_JAMMA - lambda_GEMMA| <= O(5e-5)`.
 
 **Observed (REML, mouse_hs1940)**: max relative difference = 3.80e-5
-(within the bound above). `lambda_rtol` in `validation/tolerances.py` is
-set to `2e-5` for synthetic data and `5e-5` (`mouse_hs1940_rtol`) for the
-real-data parity tests.
+(within the bound above). `ToleranceConfig.lambda_rtol` in
+`validation/tolerances.py` defaults to `2e-5`. The real-data parity tests
+construct their own config inline with `ToleranceConfig(lambda_rtol=5e-5)`
+(`tests/test_loco_numpy.py`, `tests/test_numpy_streaming.py`).
 
 ### Flat Landscapes (Weak-Signal SNPs)
 

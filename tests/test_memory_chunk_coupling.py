@@ -31,6 +31,7 @@ from jamma.lmm.pab import n_index
 from jamma.lmm.schema import LmmMode
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_memory import memory_preflight
+from tests.conftest import requires_c
 from tests.fakes import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
@@ -539,6 +540,7 @@ class TestChunkPlanMatchesEngine:
             f"engine allocation {allocated_gb:.3f}GB"
         )
 
+    @requires_c
     def test_run_lmm_association_numpy_threads_real_n_buffers(self, monkeypatch):
         """Call-site regression: run_lmm_association_numpy's check_memory gate
         must call estimate_lmm_memory with the plan's real n_buffers, not a
@@ -615,6 +617,7 @@ class TestChunkPlanMatchesEngine:
         )
 
 
+@requires_c
 def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     """plan_association must price the chunk the run will allocate, not 20,000.
 
@@ -638,6 +641,7 @@ def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     )
 
 
+@requires_c
 def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
     """--mem-budget must narrow the chunk plan_association prices.
 

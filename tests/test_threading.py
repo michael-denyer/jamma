@@ -10,7 +10,7 @@ from jamma.core.threading import (
     get_blas_thread_count,
     get_c_extension_thread_count,
 )
-from jamma.jlinalg import get_n_threads, set_n_threads
+from jamma.jlinalg import HAS_C_EXTENSION, get_n_threads, set_n_threads
 
 pytestmark = pytest.mark.tier0
 
@@ -229,6 +229,10 @@ class TestThreadControl:
         # Restore
         set_n_threads(original)
 
+    @pytest.mark.skipif(
+        not HAS_C_EXTENSION,
+        reason="the NumPy fallback clamps to os.cpu_count; unclamped storage is C-only",
+    )
     def test_set_n_threads_accepts_large(self) -> None:
         """set_n_threads(9999) stores the value (no clamping after own-BLAS removal)."""
         original = get_n_threads()

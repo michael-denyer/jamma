@@ -109,9 +109,11 @@ jobs:
           #    Tests asserting "the C extension IS loaded" obviously fail
           #    here — they belong in the regular CI matrix.
           #
-          # Long-term fix: tag affected tests with a
-          # @pytest.mark.requires_c_extension marker and use -m to filter.
-          # Short-term: explicit --ignore / --deselect of the known set.
+          # Class-2 tests carry skipif markers (tests/conftest.py requires_c,
+          # jlinalg HAS_C_EXTENSION) that honour the fallback env, so only
+          # class-1 subprocess tests need listing here. A --deselect of a
+          # node id that no longer collects is silently ignored, so verify
+          # each path still resolves after moving a test between files.
           uv run pytest \
             -m "not benchmark and not slow" \
             -v -n 0 -p no:randomly \
@@ -120,8 +122,6 @@ jobs:
             --ignore=tests/test_c_extensions_ci.py \
             --ignore=tests/test_compile_accel_sentinel_injection.py \
             --deselect tests/test_conftest_tier_gate.py::TestGateUnderXdist::test_gate_passes_when_marked_under_xdist \
-            --deselect tests/test_jlinalg_dgemm.py::TestDgemmThreadSafety::test_single_vs_multi_thread \
-            --deselect tests/test_jlinalg_eigh.py::TestThreadControl::test_set_n_threads_accepts_large \
             --deselect tests/test_lmm_io_validation.py::test_python_m_jamma_help \
             --deselect tests/test_numpy_streaming.py::TestStreamingPipeline::test_streaming_pipeline_activates \
             --deselect tests/test_safety_gates.py::TestJlinalgABIValidation::test_abi_mismatch_triggers_production_guard_at_runtime \

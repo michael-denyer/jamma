@@ -170,6 +170,6 @@ PyPI publishing uses GitHub trusted publishing (no API tokens needed locally).
 3. Update `CHANGELOG.md` (move Unreleased items to the new version section)
 4. Commit and push to `master`
 5. Create a GitHub release: `gh release create v<X.Y.Z> --title "v<X.Y.Z>" --notes "..."`
-6. The `.github/workflows/build-wheels.yml` workflow builds wheels for Linux x86_64 and macOS arm64 (CPython 3.11–3.13) and uploads them to PyPI automatically on release
+6. The `.github/workflows/build-wheels.yml` workflow builds wheels for Linux x86_64 and macOS arm64 (CPython 3.11–3.14) and uploads them to PyPI automatically on release
 
 AVX2-optimised wheels are also built and attached to the GitHub release as assets (not uploaded to PyPI — they share platform tags with baseline wheels and would conflict).

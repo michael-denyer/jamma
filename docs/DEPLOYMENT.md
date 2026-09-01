@@ -109,7 +109,7 @@ Runs on `ubuntu-latest` and `macos-latest`.
 
 | Setting | Value |
 |---|---|
-| Python versions | CPython 3.11, 3.12, 3.13 |
+| Python versions | CPython 3.11, 3.12, 3.13, 3.14 |
 | Linux arch | x86_64 (manylinux, not musllinux or 32-bit) |
 | macOS arch | arm64 only (`MACOSX_DEPLOYMENT_TARGET=14.0`) |
 | Wheel repair (Linux) | `auditwheel repair` |

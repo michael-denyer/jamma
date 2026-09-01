@@ -25,8 +25,8 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074  # v4.2.0
         env:
-          # Build for CPython 3.11-3.13 only
-          CIBW_BUILD: "cp311-* cp312-* cp313-*"
+          # Build for CPython 3.11-3.14 only
+          CIBW_BUILD: "cp311-* cp312-* cp313-* cp314-*"
           # Skip 32-bit, musllinux, and Windows
           CIBW_SKIP: "*-win* *-manylinux_i686 *-musllinux*"
           # macOS: build arm64 only (Intel Mac is EOL)
@@ -75,8 +75,8 @@ jobs:
       - name: Build AVX2-optimized wheels
         uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074  # v4.2.0
         env:
-          # Build for CPython 3.11-3.13, Linux x86_64 only
-          CIBW_BUILD: "cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64"
+          # Build for CPython 3.11-3.14, Linux x86_64 only
+          CIBW_BUILD: "cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64 cp314-manylinux_x86_64"
           # AVX2 optimization flags via CFLAGS (picked up by hatch_build.py)
           CIBW_ENVIRONMENT_LINUX: 'CFLAGS="-march=x86-64-v3 -mavx2"'
           # Install libgomp in manylinux container (AlmaLinux 8, dnf)

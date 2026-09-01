@@ -130,6 +130,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mouse_hs1940 on an 18-core Apple M5 Pro, best-of-3: Wald 500 to 449 ms,
   all-tests 644 to 537 ms, Wald with 4 covariates 941 to 715 ms.
 
+- **Small inputs pipeline rotation and compute.** `plan_lmm_chunks` cuts a
+  split-capable run the memory budget alone would leave below
+  `_MIN_PIPELINE_CHUNKS` to 16 chunks (`_PIPELINE_TARGET_CHUNKS`, floor 100
+  SNPs), so the UT@G rotation of chunk N+1 overlaps the C kernel on chunk N
+  instead of running first in one chunk. A plan the budget already splits past
+  the threshold is unchanged. mouse_hs1940 on an 18-core Apple M5 Pro,
+  best-of-3: Wald 520 to 400 ms, all-tests 630 to 536 ms, Wald with 4
+  covariates 936 to 881 ms.
+
 - **`_lmm_accel.c` marshals arguments through `_lmm_support.c`.**
   `take_vector`, `take_matrix`, `take_chunk` and `take_array` replace 33 of
   the 43 inline `PyArray_FROM_OTF` + shape-check + `INT_MAX` blocks;

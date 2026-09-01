@@ -28,6 +28,16 @@ _MAX_BUDGET = 40_000_000_000  # 40 GB ceiling
 # Minimum number of chunks before pipelined execution is worthwhile.
 _MIN_PIPELINE_CHUNKS = 8
 
+# Chunk count a split-capable run is cut to when the memory budget alone would
+# leave it below _MIN_PIPELINE_CHUNKS, so rotation of chunk N+1 overlaps compute
+# of chunk N even on inputs that fit in one chunk. 16 measured best on
+# mouse_hs1940 (12,226 SNPs): Wald -20%, all-tests -10%, 4-covariate Wald
+# unchanged.
+_PIPELINE_TARGET_CHUNKS = 16
+
+# Chunk floor, so tiny inputs never pay per-chunk overhead for a handful of SNPs.
+_MIN_CHUNK = 100
+
 
 def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     """Live float64 bytes one SNP occupies on *dispatch*'s buffers.
@@ -123,7 +133,7 @@ def compute_chunk_size_numpy(
     mem_budget = mem_budget // pipeline_buffers
 
     chunk_from_memory = int(mem_budget / bytes_per_snp)
-    return max(100, min(chunk_from_memory, n_filtered, _MAX_CHUNK))
+    return max(_MIN_CHUNK, min(chunk_from_memory, n_filtered, _MAX_CHUNK))
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,9 +169,12 @@ def plan_lmm_chunks(
     memory preflight prices from: sizes with one live buffer, counts the
     resulting chunks, and re-sizes against two live buffers only when the
     dispatch path supports pipelining (``dispatch.use_split``) and the
-    single-buffer chunk count clears ``_MIN_PIPELINE_CHUNKS``. A caller-given
-    ``max_chunk_size`` caps the final chunk size before the chunk count is
-    recomputed, so a capped run still reports its true chunk count.
+    single-buffer chunk count clears ``_MIN_PIPELINE_CHUNKS``. A split-capable
+    run the budget alone leaves below that threshold is cut to
+    ``_PIPELINE_TARGET_CHUNKS`` chunks, down to the ``_MIN_CHUNK`` floor, so a
+    small input that fits in one chunk still overlaps rotation and compute. A
+    caller-given ``max_chunk_size`` caps the final chunk size before the chunk
+    count is recomputed, so a capped run still reports its true chunk count.
 
     Args:
         n_samples: Number of samples.
@@ -185,7 +198,7 @@ def plan_lmm_chunks(
     if max_chunk_size is not None and max_chunk_size < 1:
         raise ValueError(f"max_chunk_size must be >= 1, got {max_chunk_size}")
 
-    def _sized(*, pipeline_buffers: int) -> int:
+    def _sized(*, pipeline_buffers: int, overlap_cap: int | None = None) -> int:
         chunk = compute_chunk_size_numpy(
             n_samples,
             n_filtered,
@@ -194,20 +207,34 @@ def plan_lmm_chunks(
             mem_budget_bytes=mem_budget_bytes,
             pipeline_buffers=pipeline_buffers,
         )
+        if overlap_cap is not None:
+            chunk = min(chunk, overlap_cap)
         if max_chunk_size is not None:
             chunk = min(chunk, max_chunk_size)
         return max(1, chunk)
+
+    def _count(chunk_size: int) -> int:
+        return (n_filtered + chunk_size - 1) // chunk_size
 
     # Sized twice: the first size decides whether pipelining is worth it, and
     # a pipelined run then re-sizes against a budget split across two live
     # buffers.
     chunk_size = _sized(pipeline_buffers=1)
-    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+    n_chunks = _count(chunk_size)
+
+    # The budget alone leaves a split-capable run too few chunks to overlap
+    # rotation with compute, so cut it to _PIPELINE_TARGET_CHUNKS instead. A
+    # run the budget already splits past the threshold keeps its plan.
+    overlap_cap: int | None = None
+    if dispatch.use_split and n_chunks < _MIN_PIPELINE_CHUNKS:
+        overlap_cap = max(_MIN_CHUNK, -(-n_filtered // _PIPELINE_TARGET_CHUNKS))
+        chunk_size = _sized(pipeline_buffers=1, overlap_cap=overlap_cap)
+        n_chunks = _count(chunk_size)
     use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
     if use_pipeline:
-        chunk_size = _sized(pipeline_buffers=2)
-        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+        chunk_size = _sized(pipeline_buffers=2, overlap_cap=overlap_cap)
+        n_chunks = _count(chunk_size)
         use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
     return LmmChunkPlan(

@@ -248,9 +248,9 @@ grid over `[1e-5, 1e5]`, that bracket shrinkage gives a relative lambda
 tolerance bounded by `~6.6e-5`. GEMMA's Brent uses `1e-5` per its GSL
 configuration. The two converge to the same optimum to within `O(5e-5)`
 relative on unimodal REML surfaces -- max observed is `3.80e-5` on
-mouse_hs1940. The validation tolerance config (`validation/tolerances.py`)
-sets `lambda_rtol = 2e-5` for synthetic data and `5e-5` for real-data
-parity tests.
+mouse_hs1940. `ToleranceConfig.lambda_rtol` (`validation/tolerances.py`)
+defaults to `2e-5`; the real-data parity tests pass `lambda_rtol=5e-5`
+explicitly.
 
 ### Boundary Diagnostic
 

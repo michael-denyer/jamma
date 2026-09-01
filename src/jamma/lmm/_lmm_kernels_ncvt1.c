@@ -10,6 +10,8 @@
 /* wald_from_pab and score_from_pab live with the other statistic extractors
  * in _lmm_stats.c; the optimizers call them once per SNP on convergence. */
 #include "_lmm_stats.h"
+/* logdet_h_lambda: the logdet(H) term every REML and MLE evaluation needs. */
+#include "_lmm_logdet.h"
 
 #include <math.h>
 #include <string.h>
@@ -121,20 +123,19 @@ double reml_logl_ncvt1_split(
 {
     int df = n_samples - 2;
 
-    /* Fused: compute hi_eval + logdet_h + all 6 dot products in single pass.
-     * v = lambda * eval[i] + 1.0 is always > 1.0 (eigenvalues >= 0, lambda > 0),
-     * so fabs() is unnecessary and would block SIMD vectorization of log().
-     * SoA layout gives stride-1 access for all 6 columns — enables contiguous
-     * SIMD loads (vmovupd) instead of stride-3 gather instructions. */
-    double logdet_h = 0.0;
+    /* Fused: hi_eval + all 6 dot products in a single pass. logdet_h is a
+     * second pass over eigenvalues alone (n doubles, L1-resident): the
+     * per-element log() it used to add here dominated the loop, see
+     * _lmm_logdet.h. SoA layout gives stride-1 access for all 6 columns,
+     * so contiguous SIMD loads instead of stride-3 gathers. */
+    double logdet_h = logdet_h_lambda(eigenvalues, n_samples, lambda);
     double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
     double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
 
-    #pragma omp simd reduction(+:logdet_h,s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
+    #pragma omp simd reduction(+:s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         double h = 1.0 / v;
-        logdet_h += log(v);
 
         /* Varying (per-SNP, from DRAM) — stride-1 */
         s_wx += h * var_wx[i];
@@ -404,16 +405,15 @@ double mle_logl_ncvt1_split(
     double * restrict hi_eval
 )
 {
-    double logdet_h = 0.0;
+    double logdet_h = logdet_h_lambda(eigenvalues, n_samples, lambda);
     double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
     double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
 
-    #pragma omp simd reduction(+:logdet_h,s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
+    #pragma omp simd reduction(+:s_ww,s_wx,s_wy,s_xx,s_xy,s_yy)
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         double h = 1.0 / v;
         hi_eval[i] = h;
-        logdet_h += log(v);
 
         s_wx += h * var_wx[i];
         s_xx += h * var_xx[i];

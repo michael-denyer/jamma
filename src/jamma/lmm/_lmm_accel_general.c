@@ -5,6 +5,7 @@
 
 #include "_lmm_kernels_general.h"
 #include "_lmm_stats.h"
+#include "_lmm_logdet.h"
 #include <assert.h>
 #include <limits.h>
 #include <math.h>
@@ -303,15 +304,10 @@ static int init_fused_general_workspace(
     for (int g = 0; g < n_grid; g++) {
         double lam = grid->lambda_grid[g];
         double *hi_row = grid->hi_eval_grid + (size_t)g * n_samples;
-        double logdet = 0.0;
 
-        for (int i = 0; i < n_samples; i++) {
-            double v = lam * ws->eigenvalues[i] + 1.0;
-            double h = 1.0 / v;
-            hi_row[i] = h;
-            logdet += log(v);
-        }
-        grid->logdet_h_grid[g] = logdet;
+        for (int i = 0; i < n_samples; i++)
+            hi_row[i] = 1.0 / (lam * ws->eigenvalues[i] + 1.0);
+        grid->logdet_h_grid[g] = logdet_h_lambda(ws->eigenvalues, n_samples, lam);
 
         double *inv_sums = grid->inv_sums_grid + (size_t)g * n_inv;
         for (int c = 0; c < n_inv; c++) {

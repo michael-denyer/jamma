@@ -8,6 +8,8 @@
 #define NO_IMPORT_ARRAY
 #include "_lmm_support.h"
 
+#include "_lmm_logdet.h"
+
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -591,18 +593,15 @@ void build_grid_ncvt1(int n_grid, int n_samples, double log_l_min, double step,
     for (int g = 0; g < n_grid; g++) {
         double lam    = lambda_grid[g];
         double *hi_row = hi_eval_grid + (size_t)g * n_samples;
-        double logdet = 0.0;
         double sw = 0.0, swy = 0.0, sy = 0.0;
         for (int i = 0; i < n_samples; i++) {
-            double v = lam * eigenvalues[i] + 1.0;
-            double h = 1.0 / v;
+            double h = 1.0 / (lam * eigenvalues[i] + 1.0);
             hi_row[i] = h;
-            logdet += log(v);
             sw  += h * inv_ww[i];
             swy += h * inv_wy[i];
             sy  += h * inv_yy[i];
         }
-        logdet_h_grid[g] = logdet;
+        logdet_h_grid[g] = logdet_h_lambda(eigenvalues, n_samples, lam);
 
         grid_inv[g].s_ww    = sw;
         grid_inv[g].s_wy    = swy;

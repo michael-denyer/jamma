@@ -4,6 +4,8 @@ Split from the original single test_lmm_accel module. Shared fixtures
 live in tests/lmm_accel_helpers.py.
 """
 
+from typing import Literal
+
 import numpy as np
 import pytest
 
@@ -13,6 +15,7 @@ from jamma.lmm.uab import compute_uab_invariant_soa
 from tests.builders import rotated_lmm_inputs
 from tests.conftest import requires_c
 from tests.lmm_accel._helpers import (
+    LAMBDA_MLE_RTOL,
     _fused_general_mode4_workspace,
     _fused_general_workspace,
     _numpy_general_lrt,
@@ -672,6 +675,87 @@ def test_runner_fused_general_ncvt2_dispatch():
         fields={"p_wald": 1e-8, "beta": 1e-8},
         kernel=None,
         min_count=n_snps * 0.8,
+        atol=1e-14,
+    )
+
+
+def _synthetic_fixture_run(lmm_mode: Literal[1, 4], with_covariates: bool):
+    """A full runner invocation on the committed gemma_synthetic dataset."""
+    from jamma.io import load_plink_binary, read_fam_phenotypes
+    from jamma.kinship.io import read_kinship_matrix
+    from jamma.lmm.runner_numpy import run_lmm_association_numpy
+    from tests.conftest import require_fixture
+    from tests.fixture_paths import SYNTHETIC
+
+    require_fixture(
+        SYNTHETIC.bed,
+        SYNTHETIC.bim,
+        SYNTHETIC.fam,
+        SYNTHETIC.kinship,
+        SYNTHETIC.covariates,
+    )
+    plink = load_plink_binary(SYNTHETIC.bfile)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship)
+    phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
+    covariates = np.loadtxt(SYNTHETIC.covariates) if with_covariates else None
+    snp_info = [
+        {
+            "chr": str(plink.chromosome[i]),
+            "rs": plink.sid[i],
+            "pos": plink.bp_position[i],
+            "a1": plink.allele_1[i],
+            "a0": plink.allele_2[i],
+            "maf": 0.0,
+            "n_miss": 0,
+        }
+        for i in range(plink.n_snps)
+    ]
+
+    def run():
+        return run_lmm_association_numpy(
+            genotypes=plink.genotypes,
+            phenotypes=phenotypes,
+            kinship=kinship.copy(),
+            snp_info=snp_info,
+            covariates=covariates,
+            config=LmmConfig(
+                lmm_mode=lmm_mode, show_progress=False, check_memory=False
+            ),
+        )
+
+    return run
+
+
+@pytest.mark.tier0
+@requires_c
+@pytest.mark.parametrize(
+    ("lmm_mode", "with_covariates", "kernel"),
+    [
+        (1, False, "compute_lmm_chunk_ncvt1_c"),
+        (4, False, "compute_lmm_chunk_ncvt1_c"),
+        (1, True, "compute_lmm_chunk_fused_general_c"),
+    ],
+    ids=["wald_ncvt1", "all_ncvt1", "wald_general"],
+)
+def test_logdet_product_matches_numpy_log_sum_on_fixture(
+    lmm_mode, with_covariates, kernel
+):
+    """The C logdet(H) product form agrees with NumPy's log sum on real data.
+
+    _lmm_logdet.h computes logdet(H) as a product of mantissas with an exact
+    exponent; the NumPy path sums per-element logs. Both feed the same golden
+    section, so the REML log-likelihood and lambda must agree far inside the
+    GEMMA tolerances (logl 1e-6, lambda 5e-5). MLE lambda keeps its
+    established band: the two golden sections already land up to 3.8e-5 apart
+    on flat surfaces, independent of how logdet is summed.
+    """
+    fields = {"logl_H1": 1e-9, "l_remle": 1e-6}
+    if lmm_mode == 4:
+        fields["l_mle"] = LAMBDA_MLE_RTOL
+    assert_fused_matches_reference(
+        _synthetic_fixture_run(lmm_mode, with_covariates),
+        fields=fields,
+        kernel=kernel,
         atol=1e-14,
     )
 

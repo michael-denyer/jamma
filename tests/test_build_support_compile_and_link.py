@@ -360,6 +360,42 @@ def test_execute_build_compile_failure_triggers_omp_retry(monkeypatch, tmp_path)
     )
 
 
+def test_execute_build_compile_failure_reports_compiler_stderr(monkeypatch, tmp_path):
+    """A terminal compile failure carries the compiler's stderr in ``error``.
+
+    A bare "compile failed" string leaves the caller with no root cause, which
+    is the debugging dead end the ``error_print`` contract exists to prevent.
+    """
+
+    def _fake_run(cmd, **_kwargs):
+        return _FakeCompleted(returncode=1, stderr="platform.c:3: undeclared foo")
+
+    monkeypatch.setattr(
+        "jamma._build_support.build_execution.subprocess.run",
+        _fake_run,
+    )
+
+    source = tmp_path / "platform.c"
+    source.write_text("// stub\n")
+
+    result = execute_build(
+        sources=[source],
+        lapack_sources=[],
+        include_dirs=[],
+        cc_cmd="cc",
+        cc_extra=[],
+        omp_compile=[],
+        omp_link=[],
+        ldflags=[],
+        output=tmp_path / "out.so",
+        tmp_dir=tmp_path / "objs",
+    )
+
+    assert result.success is False
+    assert result.error is not None
+    assert "platform.c:3: undeclared foo" in result.error
+
+
 def test_execute_build_link_failure_retries_without_omp_runtime(monkeypatch, tmp_path):
     """A failed OpenMP link retries the same objects without its runtime."""
     calls: list[list[str]] = []

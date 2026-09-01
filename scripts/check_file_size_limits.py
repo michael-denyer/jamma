@@ -49,7 +49,12 @@ def _long_functions(
             continue
         try:
             tree = ast.parse("\n".join(lines), filename=str(path))
-        except SyntaxError:
+        except SyntaxError as error:
+            print(
+                f"{path.relative_to(root).as_posix()}: not scanned for long "
+                f"functions, unparsable ({error})",
+                file=sys.stderr,
+            )
             continue
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

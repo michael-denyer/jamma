@@ -283,15 +283,15 @@ def read_matrix_parallel(
         dtype_str = str(np.dtype(np.float64))
         chunk_args = [
             MatrixReadTask(
-                str(path),
-                memmap_path,
-                shape,
-                dtype_str,
-                sb,
-                eb,
-                sr,
-                nr,
-                delimiter,
+                txt_path=str(path),
+                memmap_path=memmap_path,
+                shape=shape,
+                dtype=dtype_str,
+                start_byte=sb,
+                end_byte=eb,
+                start_row=sr,
+                row_count=nr,
+                delimiter=delimiter,
             )
             for sb, eb, sr, nr in chunks
         ]

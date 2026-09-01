@@ -331,7 +331,7 @@ class TestDsyrkValidation:
     def test_validation_error_identical_across_backends(self, kwargs) -> None:
         """A bad dsyrk call raises the same error text on both backends.
 
-        dsyrk always validates once through ``_validate_dsyrk`` before either
+        dsyrk always validates once through ``_dsyrk.validate`` before either
         backend runs; this pins that invariant alongside dgemm's equivalent
         (Finding 5, review/03_jlinalg.md).
         """

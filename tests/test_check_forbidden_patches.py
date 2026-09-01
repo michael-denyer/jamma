@@ -33,7 +33,8 @@ _SRC = {
         "from jamma.core.memory import check_memory_available\n"
         "\ndef eigendecompose_kinship(K): ...\n"
     ),
-    "jamma/lmm/likelihood.py": "def calc_pab(): ...\n",
+    "jamma/lmm/pab.py": "def calc_pab(): ...\n",
+    "jamma/lmm/likelihood.py": "def reml_log_likelihood(): ...\n",
     "jamma/pipeline.py": "from jamma.lmm.eigen import eigendecompose_kinship\n",
     "jamma/core/__init__.py": "",
     "jamma/core/memory.py": "def check_memory_available(): ...\n",
@@ -42,28 +43,32 @@ _SRC = {
 _FORBIDDEN = {
     "string": """
         from unittest.mock import patch
-        patch("jamma.lmm.likelihood.calc_pab")
+        patch("jamma.lmm.pab.calc_pab")
         """,
     "wrapped": """
         from unittest.mock import patch
         patch(
-            "jamma.lmm.likelihood.calc_pab",
+            "jamma.lmm.pab.calc_pab",
             side_effect=None,
         )
         """,
     "patch.object-alias": """
         from unittest.mock import patch
-        import jamma.lmm.likelihood as lik
+        import jamma.lmm.pab as lik
         patch.object(lik, "calc_pab")
         """,
     "setattr-from-alias": """
-        from jamma.lmm import likelihood as lk
+        from jamma.lmm import pab as lk
         def test(monkeypatch):
             monkeypatch.setattr(lk, "calc_pab", None)
         """,
     "setattr-string": """
         def test(monkeypatch):
-            monkeypatch.setattr("jamma.lmm.likelihood.calc_pab", None)
+            monkeypatch.setattr("jamma.lmm.pab.calc_pab", None)
+        """,
+    "likelihood-string": """
+        from unittest.mock import patch
+        patch("jamma.lmm.likelihood.reml_log_likelihood")
         """,
     "mocker": """
         def test(mocker):
@@ -128,26 +133,26 @@ _ALLOWED = {
 _MARKED = {
     "same-line": """
         from unittest.mock import patch
-        patch("jamma.lmm.likelihood.calc_pab")  # allow-patch: spy
+        patch("jamma.lmm.pab.calc_pab")  # allow-patch: spy
         """,
     "line-above": """
         from unittest.mock import patch
         # allow-patch: spy
         patch(
-            "jamma.lmm.likelihood.calc_pab",
+            "jamma.lmm.pab.calc_pab",
         )
         """,
     "closing-line": """
         from unittest.mock import patch
         patch(
-            "jamma.lmm.likelihood.calc_pab",
+            "jamma.lmm.pab.calc_pab",
         )  # allow-patch: spy
         """,
     "comment-block-above": """
         from unittest.mock import patch
         # allow-patch: spy, forwarding to the real function
         # so the numbers are still real
-        patch("jamma.lmm.likelihood.calc_pab")
+        patch("jamma.lmm.pab.calc_pab")
         """,
     "above-with-header": """
         from unittest.mock import patch
@@ -155,7 +160,7 @@ _MARKED = {
             # allow-patch: spy
             with (
                 patch("os.getcwd"),
-                patch("jamma.lmm.likelihood.calc_pab"),
+                patch("jamma.lmm.pab.calc_pab"),
             ):
                 pass
         """,
@@ -204,7 +209,7 @@ def test_allow_marker_covers_the_call(tmp_path, source):
 def test_marker_without_reason_does_not_count(tmp_path):
     source = """
         from unittest.mock import patch
-        patch("jamma.lmm.likelihood.calc_pab")  # allow-patch:
+        patch("jamma.lmm.pab.calc_pab")  # allow-patch:
         """
     assert _run(tmp_path, source).returncode == 1
 

@@ -234,7 +234,6 @@ _CompileAttempt: TypeAlias = _CompileSucceeded | _CompileFailed
 
 @dataclass(frozen=True, slots=True)
 class _LinkAttempt:
-    temporary_output: Path
     returncode: int
     stderr: str
     used_openmp: bool
@@ -308,7 +307,6 @@ def _link_objects(
     verbose_print(f"link: {' '.join(command)}")
     result = subprocess.run(command, capture_output=True, text=True)
     return _LinkAttempt(
-        temporary_output=temporary_output,
         returncode=result.returncode,
         stderr=result.stderr or "",
         used_openmp=bool(omp_link),
@@ -468,7 +466,7 @@ def execute_build(
             success=False,
             used_openmp=False,
             used_openmp_link=False,
-            error="compile failed",
+            error=f"compile failed: {compile_attempt.stderr}",
         )
     compile_objs = list(compile_attempt.objects)
 

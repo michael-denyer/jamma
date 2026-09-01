@@ -481,7 +481,7 @@ both `jamma.jlinalg.eigh`, and `jamma.pipeline.eigendecompose_kinship` is
 name, so line wrapping and aliasing cannot hide a target from it (the
 regex gate it replaced missed 38 sites that way). It bans `numpy.linalg`,
 `numpy.matmul`, `scipy`, `jamma.jlinalg`, `jamma.kinship.stream`, `jamma.kinship.loco` and the
-`jamma.lmm` numerical modules (`likelihood`, `likelihood_numpy`,
+`jamma.lmm` numerical modules (`likelihood`, `likelihood_numpy`, `pab`,
 `compute_numpy`, `uab`, `special`, `prepare_common`, `eigen`). ALL_CAPS
 knobs (`_CF_MAX_ITER`) and the documented seams are allowed: `accel._accel`,
 which is one bit because the ABI-equality gate admits all of the C

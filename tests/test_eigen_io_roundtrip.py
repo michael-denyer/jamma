@@ -8,7 +8,7 @@ from hypothesis import HealthCheck, given, settings
 
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-from tests.eigen_io_helpers import genotype_matrix
+from tests.hypothesis_strategies import genotype_matrix
 from tests.reference.kinship import compute_centered_kinship
 
 

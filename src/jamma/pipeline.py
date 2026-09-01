@@ -60,7 +60,6 @@ from jamma.pipeline_config import (
 from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_phenotype_loop import run_phenotype_loop
 from jamma.pipeline_plan import (
-    ComputedKinship,
     KinshipSource,
     LocoAnalysisPlan,
     ProvidedEigen,
@@ -317,16 +316,18 @@ class PipelineRunner:
 
         return phenotypes, n_analyzed
 
-    def load_kinship(
+    def _load_kinship_from_source(
         self,
+        source: KinshipSource,
         n_samples: int,
-        ksnps_indices: np.ndarray | None = None,
-        valid_indices: np.ndarray | None = None,
+        valid_indices: np.ndarray | None,
     ) -> np.ndarray:
         """Load or compute the kinship matrix over the valid samples.
 
-        If kinship_file is provided, loads from disk. Otherwise, computes
-        from genotypes using streaming kinship computation.
+        A ``ProvidedKinship`` source loads from disk; ``ComputedKinship``
+        streams from genotypes. Derive the source with
+        ``pipeline_plan.resolve_kinship_source`` so it cannot drift from
+        the resolver's choice.
 
         If weight_file is configured, applies individual weights to K via
         K[i,j] /= sqrt(w_i * w_j) before returning (and before saving).
@@ -339,9 +340,8 @@ class PipelineRunner:
         (n_valid, n_valid) directly and the full matrix is never allocated.
 
         Args:
+            source: Where the kinship comes from, per the resolved plan.
             n_samples: Number of samples (for validation of loaded kinship).
-            ksnps_indices: Optional SNP indices to restrict kinship computation.
-                Ignored when loading pre-computed kinship from file.
             valid_indices: Sample indices to keep, or None for all samples.
                 Must be sorted, unique, and within [0, n_samples).
 
@@ -349,20 +349,6 @@ class PipelineRunner:
             Kinship matrix of shape (n_out, n_out) where n_out = len(valid_indices)
             or n_samples.
         """
-        source: KinshipSource = (
-            ProvidedKinship(self.config.kinship_file)
-            if self.config.kinship_file is not None
-            else ComputedKinship(ksnps_indices)
-        )
-        return self._load_kinship_from_source(source, n_samples, valid_indices)
-
-    def _load_kinship_from_source(
-        self,
-        source: KinshipSource,
-        n_samples: int,
-        valid_indices: np.ndarray | None,
-    ) -> np.ndarray:
-        """Load or compute kinship from a validated internal source."""
         if valid_indices is not None:
             from jamma.kinship import validate_valid_indices
 
@@ -592,15 +578,13 @@ class PipelineRunner:
 
         outcome = run_phenotype_loop(
             self.config,
-            analysis.execution,
-            analysis.lmm,
+            analysis,
             all_pheno_data,
             valid_mask,
             covariates,
             eigenvalues,
             eigenvectors,
             assoc_path,
-            analysis.snps_indices,
             meta,
         )
 
@@ -699,8 +683,9 @@ class PipelineRunner:
     ) -> tuple[np.ndarray, np.ndarray, float]:
         """Load or compute the shared eigendecomposition (once for all phenotypes).
 
-        Either reads pre-computed eigen files (-d/-u), or has load_kinship
-        produce the kinship matrix over the valid samples and eigendecomposes
+        Either reads pre-computed eigen files (-d/-u), or has
+        ``_load_kinship_from_source`` produce the kinship matrix over the
+        valid samples and eigendecomposes
         it (optionally writing the eigen files). The kinship matrix is consumed
         here — the runners use the eigenvalues/eigenvectors directly.
 

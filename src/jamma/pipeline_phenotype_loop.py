@@ -17,10 +17,10 @@ import numpy as np
 from loguru import logger
 
 from jamma.io.plink import PlinkData, PlinkMetadata
-from jamma.lmm.association_plan import ExecutableAssociationPlan
-from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming, SnpMeta
+from jamma.lmm.schema import LmmRunResult, RunnerTiming, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import PipelineConfig
+from jamma.pipeline_plan import StandardAnalysisPlan
 
 __all__ = ["PhenoLoopOutcome", "run_phenotype_loop"]
 
@@ -43,15 +43,13 @@ class PhenoLoopOutcome(NamedTuple):
 
 def run_phenotype_loop(
     config: PipelineConfig,
-    execution: ExecutableAssociationPlan,
-    lmm: LmmConfig,
+    analysis: StandardAnalysisPlan,
     all_pheno_data: dict[int, tuple[np.ndarray, int]],
     valid_mask: np.ndarray,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
     assoc_path: Path,
-    snps_indices: np.ndarray | None,
     meta: PlinkMetadata,
 ) -> PhenoLoopOutcome:
     """Run the per-phenotype LMM loop and aggregate its results.
@@ -70,7 +68,7 @@ def run_phenotype_loop(
     """
     pheno_columns = config.phenotype_columns
     is_multi = len(pheno_columns) > 1
-    plan = execution.summary
+    plan = analysis.execution.summary
 
     t_lmm = time.perf_counter()
     all_results: list[AssocResult] = []
@@ -112,29 +110,27 @@ def run_phenotype_loop(
 
         if plan.mode == "streaming":
             run_result = _run_streaming(
-                config,
+                analysis,
                 phenotypes_col,
                 covariates,
                 eigenvalues,
                 eigenvectors,
                 col_path,
-                snps_indices,
-                lmm=lmm,
-                execution=execution,
+                bfile=config.bfile,
+                hwe_threshold=config.hwe_threshold,
                 meta=meta,
             )
         else:
             run_result = _run_batch(
-                config,
+                analysis,
                 phenotypes_col,
                 covariates,
                 eigenvalues,
                 eigenvectors,
                 col_path,
-                snps_indices,
-                lmm=lmm,
+                bfile=config.bfile,
+                hwe_threshold=config.hwe_threshold,
                 plink_data=_plink_data,
-                execution=execution,
             )
 
         all_results.extend(run_result.associations)
@@ -158,15 +154,14 @@ def run_phenotype_loop(
 
 
 def _run_batch(
-    config: PipelineConfig,
+    analysis: StandardAnalysisPlan,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
     assoc_path: Path,
-    snps_indices: np.ndarray | None,
-    lmm: LmmConfig,
-    execution: ExecutableAssociationPlan,
+    bfile: Path,
+    hwe_threshold: float,
     plink_data: PlinkData | None = None,
 ) -> LmmRunResult:
     """Run LMM association using the pure-NumPy batch backend.
@@ -183,11 +178,12 @@ def _run_batch(
             "NumPy backend: loading all genotypes into memory "
             "(for large datasets, use --backend numpy-streaming)"
         )
-        plink_data = load_plink_binary(config.bfile)
+        plink_data = load_plink_binary(bfile)
 
     genotypes = plink_data.genotypes
 
     # Apply snps_indices filter before passing to runner
+    snps_indices = analysis.snps_indices
     if snps_indices is not None:
         genotypes = genotypes[:, snps_indices]
     snp_meta = SnpMeta.from_plink_meta(plink_data.meta, snps_indices)
@@ -202,10 +198,10 @@ def _run_batch(
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        config=lmm,
+        config=analysis.lmm,
         output_path=assoc_path,
-        hwe_threshold=config.hwe_threshold,
-        execution=execution,
+        hwe_threshold=hwe_threshold,
+        execution=analysis.execution,
         check_association_memory=False,
     )
 
@@ -213,15 +209,14 @@ def _run_batch(
 
 
 def _run_streaming(
-    config: PipelineConfig,
+    analysis: StandardAnalysisPlan,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
     assoc_path: Path,
-    snps_indices: np.ndarray | None,
-    lmm: LmmConfig,
-    execution: ExecutableAssociationPlan,
+    bfile: Path,
+    hwe_threshold: float,
     meta: PlinkMetadata,
 ) -> LmmRunResult:
     """Run LMM via NumPy streaming backend with selected policy."""
@@ -230,15 +225,15 @@ def _run_streaming(
     )
 
     return run_lmm_association_numpy_streaming_planned(
-        bed_path=config.bfile,
+        bed_path=bfile,
         phenotypes=phenotypes,
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
         output_path=assoc_path,
-        snps_indices=snps_indices,
-        hwe_threshold=config.hwe_threshold,
-        config=lmm,
-        execution=execution,
+        snps_indices=analysis.snps_indices,
+        hwe_threshold=hwe_threshold,
+        config=analysis.lmm,
+        execution=analysis.execution,
         meta=meta,
     )

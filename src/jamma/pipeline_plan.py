@@ -65,6 +65,15 @@ class LocoAnalysisPlan:
 AnalysisPlan = StandardAnalysisPlan | LocoAnalysisPlan
 
 
+def resolve_kinship_source(
+    kinship_file: Path | None, ksnps_indices: np.ndarray | None
+) -> KinshipSource:
+    """Derive the kinship source from config fields, in exactly one place."""
+    if kinship_file is not None:
+        return ProvidedKinship(kinship_file)
+    return ComputedKinship(ksnps_indices)
+
+
 def resolve_analysis_plan(
     config: PipelineConfig,
     *,
@@ -103,12 +112,10 @@ def resolve_analysis_plan(
             raise RuntimeError(
                 "resolve_analysis_plan requires validate_inputs() to pair eigen files"
             )
-        kinship_source: KinshipSource = (
-            ProvidedKinship(config.kinship_file)
-            if config.kinship_file is not None
-            else ComputedKinship(ksnps_indices)
+        eigen_source = KinshipToEigen(
+            resolve_kinship_source(config.kinship_file, ksnps_indices),
+            config.write_eigen,
         )
-        eigen_source = KinshipToEigen(kinship_source, config.write_eigen)
 
     return StandardAnalysisPlan(
         execution=execution,

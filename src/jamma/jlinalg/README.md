@@ -29,7 +29,7 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `eigh` | `(K, inplace=False) -> tuple[ndarray, ndarray]` | Eigenvalues and eigenvectors of symmetric K |
+| `eigh` | `(K, inplace=False, *, driver="auto") -> tuple[ndarray, ndarray, EighStatus]` | Eigendecomposition of symmetric K, consumed as scratch. `driver="dsyevr"` raises on failure |
 
 ### Introspection
 

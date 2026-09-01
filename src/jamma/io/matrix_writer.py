@@ -186,14 +186,14 @@ def write_matrix_parallel(
             chunk_paths.append(chunk_out)
             chunks_args.append(
                 MatrixWriteTask(
-                    memmap_path,
-                    chunk_out,
-                    start,
-                    min(start + rows_per_chunk, n_rows),
-                    fmt,
-                    delimiter,
-                    matrix.shape,
-                    str(matrix.dtype),
+                    memmap_path=memmap_path,
+                    output_path=chunk_out,
+                    start_row=start,
+                    stop_row=min(start + rows_per_chunk, n_rows),
+                    fmt=fmt,
+                    delimiter=delimiter,
+                    shape=matrix.shape,
+                    dtype=str(matrix.dtype),
                 )
             )
 

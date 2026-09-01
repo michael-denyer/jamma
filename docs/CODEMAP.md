@@ -222,16 +222,16 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3b | `impute_and_center()` | NaN -> mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
 | 3b | `impute_missing_inplace()` | In-place NaN -> col-mean for genotype chunks (used by all runners) | [lmm/impute.py:6](../src/jamma/lmm/impute.py#L6) |
 | 3c | `eigendecompose_kinship()` | Eigendecomp via `jlinalg.eigh` with BLAS thread control | [eigen.py](../src/jamma/lmm/eigen.py) |
-| 3c' | `jlinalg.eigh()` | Facade dispatch to vendor DSYEVD/DSYEVR or the operation-specific NumPy fallback | [jlinalg/\_\_init\_\_.py:127](../src/jamma/jlinalg/__init__.py#L127), [jlinalg/\_eigh.py](../src/jamma/jlinalg/_eigh.py) |
+| 3c' | `jlinalg.eigh()` | Facade dispatch to vendor DSYEVD/DSYEVR or the operation-specific NumPy fallback | [jlinalg/\_\_init\_\_.py:127](../src/jamma/jlinalg/__init__.py#L144), [jlinalg/\_eigh.py](../src/jamma/jlinalg/_eigh.py) |
 | 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n^2) workspace) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
 | 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
-| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:176](../src/jamma/lmm/likelihood.py#L176) |
-| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:441](../src/jamma/lmm/likelihood.py#L441) |
+| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:154](../src/jamma/lmm/likelihood.py#L154) |
+| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:419](../src/jamma/lmm/likelihood.py#L419) |
 | 3d | `compute_Uab()` | Element-wise products of rotated vectors | [pab.py:144](../src/jamma/lmm/pab.py#L144) |
 | 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [pab.py:199](../src/jamma/lmm/pab.py#L199) |
 | 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [pab.py:90](../src/jamma/lmm/pab.py#L90) |
-| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:399](../src/jamma/lmm/likelihood.py#L399) |
-| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:501](../src/jamma/lmm/likelihood.py#L501) |
+| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:377](../src/jamma/lmm/likelihood.py#L377) |
+| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:479](../src/jamma/lmm/likelihood.py#L479) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3e | `golden_section_optimize_lambda_mle_numpy()` | MLE optimization per SNP (LRT) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:20](../src/jamma/lmm/stats.py#L20) |
@@ -570,7 +570,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Matrix writer | [io/matrix_writer.py:90](../src/jamma/io/matrix_writer.py#L90) |
 | Kinship compute | [stream.py:425](../src/jamma/kinship/stream.py#L425) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
-| REML likelihood (`reml_log_likelihood()`) | [likelihood.py:176](../src/jamma/lmm/likelihood.py#L176) |
+| REML likelihood (`reml_log_likelihood()`) | [likelihood.py:154](../src/jamma/lmm/likelihood.py#L154) |
 | Pab projection/indexing | [pab.py](../src/jamma/lmm/pab.py) |
 | Uab/Pab/Iab batches | [uab.py](../src/jamma/lmm/uab.py) |
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |

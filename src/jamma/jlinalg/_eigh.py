@@ -39,7 +39,27 @@ def numpy(
     inplace: bool = False,
     driver: Driver = "auto",
 ) -> tuple[np.ndarray, np.ndarray, EighStatus]:
-    """Eigendecompose with NumPy while matching the native consume contract."""
+    """Eigendecompose with NumPy while matching the native consume contract.
+
+    The single fallback shared by the C-present-but-no-vendor-LAPACK path and
+    the no-C-extension path. Matches the vendor eigh contract: K is consumed
+    (overwritten as scratch) whether or not ``inplace`` is set.
+
+    Args:
+        k: Symmetric matrix, shape (N, N). Consumed on exit.
+        inplace: If True, return the eigenvectors in k's buffer. Requires a
+            C-contiguous writeable float64 array.
+        driver: Accepted for signature parity with the vendor backend. NumPy
+            has no DSYEVD/DSYEVR choice, so this has no effect; the returned
+            status always reports ``driver_used="none"``.
+
+    Returns:
+        Tuple of (eigenvalues ascending, eigenvectors, status).
+
+    Raises:
+        ValueError: If k is not 2-D square, or ``inplace`` is set on an array
+            that is not C-contiguous writeable float64.
+    """
     del driver
     _check_square(k)
     if inplace:
@@ -56,6 +76,8 @@ def numpy(
         k[:] = eigenvectors
         return eigenvalues, k, status
     if k.dtype == np.float64 and k.flags["WRITEABLE"]:
+        # Vendor eigh consumes K as scratch; zero it so the fallback matches
+        # that contract and no caller relies on K surviving the call.
         k[:] = 0.0
     return eigenvalues, eigenvectors, status
 

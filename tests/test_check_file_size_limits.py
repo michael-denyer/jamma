@@ -121,3 +121,33 @@ def test_long_python_function_warns_without_failing(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "long_function spans 4 lines" in result.stderr
+
+
+def test_function_below_threshold_is_not_reported(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        tracked={
+            "src/short_function.py": (
+                "def short_function():\n    return 1\n\n\ndef other():\n    return 2\n"
+            )
+        },
+        max_lines=10,
+        warn_lines=10,
+        warn_function_lines=3,
+    )
+
+    assert result.returncode == 0
+    assert "spans" not in result.stderr
+
+
+def test_unparsable_python_file_is_named_in_a_warning(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        tracked={"src/broken.py": "def broken(:\n"},
+        max_lines=10,
+        warn_lines=10,
+        warn_function_lines=1,
+    )
+
+    assert result.returncode == 0
+    assert "src/broken.py: not scanned for long functions" in result.stderr

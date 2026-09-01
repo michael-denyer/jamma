@@ -2,6 +2,24 @@
 
 This package facade owns backend discovery and reload semantics. Numerical
 contracts and fallback implementations live in operation-specific modules.
+
+Env vars:
+    JAMMA_FORCE_NUMPY_FALLBACK: when truthy (anything other than "" or "0"),
+        skips the _jlinalg.so import entirely. ASAN plus dlopen(...,
+        RTLD_LAZY) inside blas_dispatch.c can produce false-positive
+        heap-buffer-overflow reports, so the sanitizer workflow needs the
+        import skipped rather than downstream calls disabled; that way dlopen
+        never runs and ASAN's interceptors never see the unowned
+        BLAS-internal pointers. blas_backend is set to "numpy-fallback-forced"
+        so the workflow log can confirm the gate engaged, distinguishable from
+        the natural "numpy-fallback" used when the .so genuinely failed.
+    JLINALG_NO_VENDOR_DGEMM: when truthy, dispatch leaves vendor dgemm
+        unwired, so blas_has_dgemm reports 0 with the extension loaded. That
+        is the permanent state of an LP64-only host, which CI never reaches.
+    JLINALG_NO_VENDOR_LAPACK: when truthy, eigh routes to the NumPy fallback
+        regardless of the bound backend. Checked per call. eigendecompose_kinship
+        and the pre-flight memory estimators read the same var via
+        core.eigen_plan.forced_numpy_fallback so pre-flight and runtime agree.
 """
 
 from __future__ import annotations
@@ -9,7 +27,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import warnings
-from typing import Literal
 
 import numpy as np
 
@@ -19,7 +36,7 @@ from jamma.core.recompile import _load_c_module
 from jamma.jlinalg import _dgemm as _dgemm_operation
 from jamma.jlinalg import _dsyrk as _dsyrk_operation
 from jamma.jlinalg import _eigh as _eigh_operation
-from jamma.jlinalg._eigh import EighStatus
+from jamma.jlinalg._eigh import Driver, EighStatus
 from jamma.jlinalg._snp_stats import compute_snp_stats_chunk as _numpy_snp_stats
 
 _EXPECTED_JLINALG_ABI = 19
@@ -128,9 +145,36 @@ def eigh(
     K: np.ndarray,
     inplace: bool = False,
     *,
-    driver: Literal["auto", "dsyevd", "dsyevr"] = "auto",
+    driver: Driver = "auto",
 ) -> tuple[np.ndarray, np.ndarray, EighStatus]:
-    """Eigendecompose a symmetric matrix through vendor LAPACK or NumPy."""
+    """Eigendecompose a symmetric matrix through vendor LAPACK or NumPy.
+
+    Dispatches to the bound backend (vendor DSYEVD/DSYEVR when available, else
+    the NumPy fallback). ``JLINALG_NO_VENDOR_LAPACK`` forces the NumPy path
+    regardless of the backend, checked per call so a run can toggle it. K is
+    consumed (overwritten as scratch) on every path.
+
+    Args:
+        K: Symmetric matrix, shape (N, N). Consumed on exit.
+        inplace: If True, return the eigenvectors in K's buffer.
+        driver: ``"auto"`` tries DSYEVD first, falling through to DSYEVR on a
+            workspace allocation failure. ``"dsyevr"`` skips DSYEVD and
+            requires DSYEVR directly, because the caller's memory plan already
+            decided DSYEVD's footprint would not fit, so the driver that runs
+            must match the one that was budgeted. ``"dsyevd"`` is the same as
+            ``"auto"``. No effect on the NumPy fallback.
+
+    Returns:
+        Tuple of (eigenvalues ascending, eigenvectors, status). ``status.
+        driver_used`` names the driver that actually ran.
+
+    Raises:
+        ValueError: If K is not 2-D square, or ``inplace`` is set on an array
+            that is not C-contiguous writeable float64, or ``driver`` is not
+            one of the three accepted values.
+        RuntimeError: If ``driver="dsyevr"`` is requested but vendor DSYEVR is
+            not available.
+    """
     return _eigh_operation.run(
         _eigh_backend,
         K,

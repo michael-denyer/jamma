@@ -11,15 +11,11 @@ CalcPPPab, LogRL_dev2, CalcRLWald, CalcRLScore) live in ``tests/reference``.
 Also provides null model optimization via golden section search for Score
 and LRT tests.
 
-Key data structures:
-- Uab: 2D matrix (n_samples x n_index) storing element-wise products of rotated vectors
-- Pab: 2D matrix (n_cvt+2 x n_index) storing H-inv weighted projections
-- Hi_eval: 1/(lambda * eigenvalues + 1) weighting vector
-
-Key functions for C extension support:
-- classify_uab_columns: splits Uab indices into SNP-invariant and SNP-varying
-- build_pab_table_for_c: flattens recursion data into C-friendly int32 arrays
-- PabIndexTable / PabCTable: the two tables above, as typed NamedTuples
+This module owns likelihood evaluation, the P_yy clamp guard, and the golden
+section search. The packed Uab/Pab representation it evaluates over, along
+with the index tables and the C-friendly flattened table, lives in
+``jamma.lmm.pab``. The one value this module supplies is ``Hi_eval``, the
+1/(lambda * eigenvalues + 1) weighting vector each Pab row is built from.
 
 Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 """
@@ -35,35 +31,17 @@ from loguru import logger
 from jamma.lmm.pab import (
     _NCVT1,
     _P_YY_MIN,
-    PabCTable,
-    PabIndexTable,
     build_index_table,
-    build_pab_table_for_c,
     calc_iab,
     calc_pab,
-    classify_uab_columns,
     compute_Uab,
-    get_ab_index,
-    n_index,
 )
 
 __all__ = [
-    "_NCVT1",
-    "_P_YY_MIN",
-    "PabCTable",
-    "PabIndexTable",
-    "build_index_table",
-    "build_pab_table_for_c",
-    "calc_iab",
-    "calc_pab",
-    "classify_uab_columns",
-    "compute_Uab",
     "compute_null_model_lambda",
     "compute_null_model_mle",
     "finite_difference_dev2",
-    "get_ab_index",
     "mle_log_likelihood",
-    "n_index",
     "reml_log_likelihood",
     "reset_p_yy_warned",
     "warn_p_yy_once",

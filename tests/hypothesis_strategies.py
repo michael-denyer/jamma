@@ -1,4 +1,4 @@
-"""Shared Hypothesis strategies for eigendecomposition I/O tests."""
+"""Shared Hypothesis strategies for genetic data."""
 
 from __future__ import annotations
 
@@ -8,7 +8,11 @@ from hypothesis import strategies as st
 
 @st.composite
 def genotype_matrix(draw, min_samples=10, max_samples=100, min_snps=5, max_snps=50):
-    """Generate genotype matrices with realistic allele frequencies."""
+    """Generate genotype matrices with Hardy-Weinberg allele frequencies.
+
+    Values are drawn from {0.0, 1.0, 2.0} per column at a MAF sampled from
+    [0.1, 0.5), which keeps every column non-constant.
+    """
     n_samples = draw(st.integers(min_value=min_samples, max_value=max_samples))
     n_snps = draw(st.integers(min_value=min_snps, max_value=max_snps))
     seed = draw(st.integers(min_value=0, max_value=2**32 - 1))

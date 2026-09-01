@@ -201,12 +201,41 @@ def calc_pab(
     Hi_eval: np.ndarray,
     Uab: np.ndarray,
 ) -> np.ndarray:
-    """Compute Pab matrix following GEMMA's CalcPab exactly."""
+    """Compute Pab matrix following GEMMA's CalcPab exactly.
+
+    Pab stores v_a P_p v_b quantities where P_p is the projection matrix.
+    The computation uses a recursive formula:
+
+    For p=0 (row 0):
+        Pab[0, index_ab] = dot(Hi_eval, Uab[:, index_ab])
+
+    For p>0 (rows 1..n_cvt+1):
+        Pab[p, index_ab] = Pab[p-1, index_ab] -
+                           Pab[p-1, index_aw] * Pab[p-1, index_bw] / Pab[p-1, index_ww]
+
+    where w = p (the covariate being projected out).
+
+    GEMMA indexing (1-based):
+    - p from 0 to n_cvt+1 (projection levels)
+    - a from p+1 to n_cvt+2 (vector indices)
+    - b from a to n_cvt+2 (symmetric)
+
+    Args:
+        n_cvt: Number of covariates
+        Hi_eval: 1 / (lambda * eigenvalues + 1) vector (n_samples,)
+        Uab: Matrix products from compute_Uab (n_samples, n_index)
+
+    Returns:
+        Pab matrix (n_cvt+2, n_index)
+    """
     table = build_index_table(n_cvt)
     Pab = np.zeros((n_cvt + 2, table.n_index), dtype=np.float64)
 
+    # Row 0: Vectorized weighted dot products
     Pab[0, :] = Hi_eval @ Uab
 
+    # Rows 1 to n_cvt+1: Recursive projection, the same walk as
+    # uab._fill_pab_recursion
     for p in range(1, n_cvt + 2):
         for _a, _b, index_ab, index_aw, index_bw, index_ww in table.pab_recursion[p]:
             ps_ab = Pab[p - 1, index_ab]

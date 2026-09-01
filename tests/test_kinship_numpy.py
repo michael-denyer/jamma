@@ -16,32 +16,8 @@ from jamma.kinship import impute_and_center, impute_center_and_standardize
 from jamma.validation import compare_kinship_matrices, load_gemma_kinship
 from tests.conftest import require_fixture
 from tests.fixture_paths import SYNTHETIC
+from tests.hypothesis_strategies import genotype_matrix
 from tests.reference.kinship import compute_centered_kinship
-
-
-@st.composite
-def genotype_matrix(draw, min_samples=10, max_samples=100, min_snps=5, max_snps=50):
-    """Generate realistic genotype matrices (values in {0, 1, 2}).
-
-    Uses a random seed to generate genotypes with realistic variance.
-    """
-    n_samples = draw(st.integers(min_value=min_samples, max_value=max_samples))
-    n_snps = draw(st.integers(min_value=min_snps, max_value=max_snps))
-    seed = draw(st.integers(min_value=0, max_value=2**32 - 1))
-
-    rng = np.random.default_rng(seed)
-
-    # Use varying MAFs to ensure non-constant columns
-    mafs = rng.uniform(0.1, 0.5, n_snps)
-    genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
-
-    for j in range(n_snps):
-        p = mafs[j]
-        # Hardy-Weinberg genotype frequencies
-        probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
-        genotypes[:, j] = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=probs)
-
-    return genotypes
 
 
 @pytest.mark.tier0

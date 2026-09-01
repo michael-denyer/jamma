@@ -54,7 +54,7 @@ jamma -lmm 1 -bfile data/my_study -loco -o output
 **Threading note:** `JAMMA_BLAS_THREADS` controls BLAS libraries (MKL, OpenBLAS)
 via `threadpoolctl` and does not affect OpenMP threads. On macOS with Apple Accelerate,
 `JAMMA_BLAS_THREADS` has no effect — Accelerate provides no public thread-count API.
-JAMMA detects this automatically and halves OpenMP threads to avoid oversubscription.
+The C extension still uses every physical core for its OpenMP threads.
 
 ## CLI Flags
 

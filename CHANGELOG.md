@@ -122,6 +122,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The C extension uses every physical core for OpenMP under Accelerate.**
+  `get_c_extension_thread_count` no longer halves the count when threadpoolctl
+  finds no controllable BLAS. The halving guarded against oversubscription in
+  the overlapped pipeline, but a single-chunk run never computes beside a BLAS
+  call, and the pipelined run still measured faster with the full count.
+  mouse_hs1940 on an 18-core Apple M5 Pro, best-of-3: Wald 500 to 449 ms,
+  all-tests 644 to 537 ms, Wald with 4 covariates 941 to 715 ms.
+
 - **`_lmm_accel.c` marshals arguments through `_lmm_support.c`.**
   `take_vector`, `take_matrix`, `take_chunk` and `take_array` replace 33 of
   the 43 inline `PyArray_FROM_OTF` + shape-check + `INT_MAX` blocks;

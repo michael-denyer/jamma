@@ -6,8 +6,8 @@ This module provides explicit thread control for numpy BLAS operations
 On macOS with Apple Accelerate, threadpoolctl cannot control the BLAS thread
 count (Accelerate has no public thread-count API and ignores VECLIB_MAXIMUM_THREADS
 after library init). In this case blas_threads() is a no-op and
-is_blas_controllable() returns False so callers can adjust OpenMP thread counts
-to avoid oversubscription.
+is_blas_controllable() returns False, which the pipeline driver reads to skip
+its adaptive rotation/compute core split.
 """
 
 from __future__ import annotations
@@ -153,8 +153,7 @@ def get_c_extension_thread_count(
     if not c_accel_available or not c_has_openmp:
         return 1
 
-    cores = get_physical_core_count()
-    return max(1, cores // 2) if not is_blas_controllable() else cores
+    return get_physical_core_count()
 
 
 @contextmanager
@@ -191,6 +190,5 @@ def _warn_uncontrollable_blas() -> None:
     logger.warning(
         "BLAS thread control is not active — threadpoolctl found no "
         "controllable BLAS library. On macOS with Apple Accelerate this "
-        "is expected; Accelerate manages its own threads internally. "
-        "OpenMP thread counts are reduced automatically to compensate."
+        "is expected; Accelerate manages its own threads internally."
     )

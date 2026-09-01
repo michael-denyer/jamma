@@ -313,7 +313,7 @@ Configuration, memory management, threading, and logging.
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:55](../src/jamma/utils/logging.py#L55) |
 | 5c | `log_memory_snapshot()` | RSS + free-RAM snapshot at phase boundaries | [memory_snapshot.py](../src/jamma/core/memory_snapshot.py) |
 | 5e | `get_physical_core_count()` | Physical core detection (consolidated helper) | [threading.py:42](../src/jamma/core/threading.py#L42) |
-| 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:161](../src/jamma/core/threading.py#L161) |
+| 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:161](../src/jamma/core/threading.py#L160) |
 | 5f | `get_hardware_context()` | CPU, BLAS, platform info for benchmarks | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
 | 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:94](../src/jamma/core/progress.py#L94) |
 | 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/core/estimates.py#L149) |

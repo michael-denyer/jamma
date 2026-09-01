@@ -70,12 +70,12 @@ class TestCExtensionThreads:
         monkeypatch.setattr("jamma.core.threading.is_blas_controllable", lambda: True)
         assert get_c_extension_thread_count(True, True) == 48
 
-    def test_openmp_c_extension_halves_cores_when_blas_uncontrollable(
+    def test_openmp_c_extension_uses_physical_cores_when_blas_uncontrollable(
         self, monkeypatch
     ):
         monkeypatch.setattr("jamma.core.threading.get_physical_core_count", lambda: 48)
         monkeypatch.setattr("jamma.core.threading.is_blas_controllable", lambda: False)
-        assert get_c_extension_thread_count(True, True) == 24
+        assert get_c_extension_thread_count(True, True) == 48
 
 
 class TestEigendecompThreading:

@@ -667,9 +667,8 @@ typical Databricks / HPC environment for large-scale GWAS:
   expensive.
 - **ARM / Apple Silicon**: Runs correctly via Accelerate BLAS. Thread control
   (`blas_threads()`) is not available on Accelerate — Apple provides no public
-  API and `VECLIB_MAXIMUM_THREADS` is only read at library load time. JAMMA
-  detects this automatically and halves OpenMP threads in the C extension to
-  avoid oversubscription with Accelerate's uncontrollable thread pool.
+  API and `VECLIB_MAXIMUM_THREADS` is only read at library load time. The C
+  extension still uses every physical core for its OpenMP threads.
   `JAMMA_BLAS_THREADS` has no effect on Accelerate.
 
 ### General Tips

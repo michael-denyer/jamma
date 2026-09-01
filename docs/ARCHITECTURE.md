@@ -104,6 +104,7 @@ src/jamma/
 │   ├── build_execution.py  # Toolchain detection and atomic compile/link execution
 │   ├── compile_and_link.py # Composition root and compatibility import surface
 │   ├── find_compiler.py    # C compiler discovery for build-time and runtime recompile
+│   ├── load_proof.py       # Post-link import proof shared by both dev-mode compile shims
 │   └── openmp_detect.py    # OpenMP flag detection for C extension compilation
 ├── core/                   # Cross-cutting concerns: memory estimation,
 │   │                       # progress bars, SNP filtering, threading
@@ -159,7 +160,8 @@ src/jamma/
 │   ├── prepare_common.py   # Covariate matrix construction shared by NumPy LMM runners
 │   ├── results.py          # AssocResult building and per-chunk result sinks
 │   ├── association_plan.py # plan_association(); ExecutionPlan, ExecutableAssociationPlan
-│   ├── runner_numpy.py     # Shared run body (_run_numpy_lmm) + GenotypeSource + batch wrapper
+│   ├── genotype_source.py  # SampleBasis, PreparedGenotypes, GenotypeSource protocol
+│   ├── runner_numpy.py     # Shared run body (_run_numpy_lmm) + MatrixSource + batch wrapper
 │   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming wrapper
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 │   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation

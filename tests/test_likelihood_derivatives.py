@@ -25,12 +25,11 @@ from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
-    calc_pab,
     compute_null_model_lambda,
-    compute_Uab,
     finite_difference_dev2,
     reml_log_likelihood,
 )
+from jamma.lmm.pab import calc_pab, compute_Uab
 from jamma.lmm.prepare_common import compute_and_log_pve, compute_valid_mask
 from tests.conftest import require_fixture
 from tests.fixture_paths import MOUSE, SYNTHETIC

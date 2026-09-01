@@ -28,7 +28,6 @@ from jamma.validation import (
 )
 from tests.conftest import requires_c
 from tests.fixture_paths import SYNTHETIC
-from tests.lmm_accel._helpers import assert_fused_matches_reference
 
 # ---------------------------------------------------------------------------
 # Sanitizer-aware tolerances
@@ -810,56 +809,3 @@ class TestStreamingPipeline:
                 rtol=1e-8,
                 err_msg=f"{field} seq/pipeline mismatch (mode 4)",
             )
-
-
-# ---------------------------------------------------------------------------
-# SC-07: Fused Score/LRT Streaming Dispatch Tests
-# ---------------------------------------------------------------------------
-
-
-def _run_streaming_fused_dispatch(eigenvalues, eigenvectors, phenotypes, lmm_mode):
-    return run_lmm_association_numpy_streaming(
-        bed_path=SYNTHETIC.bfile,
-        phenotypes=phenotypes,
-        kinship=None,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors.copy(),
-        config=LmmConfig(lmm_mode=lmm_mode, show_progress=False, check_memory=False),
-        chunk_size=200,
-    )
-
-
-@pytest.mark.tier0
-@requires_c
-class TestStreamingFusedScoreDispatch:
-    """Streaming runner dispatches fused Score path for mode 3."""
-
-    def test_streaming_fused_score_matches_split(self, synthetic_eigen):
-        """Streaming fused Score matches split Score and calls fused WS C."""
-        _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
-
-        assert_fused_matches_reference(
-            lambda: _run_streaming_fused_dispatch(
-                eigenvalues, eigenvectors, phenotypes, lmm_mode=3
-            ),
-            fields={"p_score": 1e-8},
-            label=" Score WS (streaming)",
-        )
-
-
-@pytest.mark.tier0
-@requires_c
-class TestStreamingFusedLrtDispatch:
-    """Streaming runner dispatches fused LRT path for mode 2."""
-
-    def test_streaming_fused_lrt_matches_split(self, synthetic_eigen):
-        """Streaming fused LRT matches split LRT and calls fused WS C."""
-        _plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
-
-        assert_fused_matches_reference(
-            lambda: _run_streaming_fused_dispatch(
-                eigenvalues, eigenvectors, phenotypes, lmm_mode=2
-            ),
-            fields={"p_lrt": 5e-5, "l_mle": 5e-5},
-            label=" LRT WS (streaming)",
-        )

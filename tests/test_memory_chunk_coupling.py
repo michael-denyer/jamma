@@ -27,7 +27,7 @@ from jamma.lmm.chunk_sizing import (
     plan_lmm_chunks,
 )
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.likelihood import n_index
+from jamma.lmm.pab import n_index
 from jamma.lmm.schema import LmmMode
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_memory import memory_preflight

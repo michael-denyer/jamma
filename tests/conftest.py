@@ -682,7 +682,7 @@ def _build_synthetic_covariate_data(
         Dict with keys: eigenvalues, UtW, Uty, UtG, Uab_batch,
         n_samples, n_snps, n_cvt.
     """
-    from jamma.lmm.likelihood import compute_Uab
+    from jamma.lmm.pab import compute_Uab
 
     rng = np.random.default_rng(seed)
 

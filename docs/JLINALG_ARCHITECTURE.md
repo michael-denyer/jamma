@@ -14,8 +14,10 @@ BLAS specialization (DSYRK, DGEMM).
 graph TD
     subgraph PYTHON["PYTHON LAYER"]
         A["jamma Python code"]
-        B["jlinalg Python API<br/>(__init__.py)"]
+        B["jlinalg facade<br/>(__init__.py)"]
+        OPS["operation modules<br/>_dgemm / _dsyrk / _eigh / _snp_stats"]
         A --> B
+        B --> OPS
     end
 
     subgraph BRIDGE["C EXTENSION"]
@@ -33,7 +35,8 @@ graph TD
 
     B --> C
     C -->|yes| D
-    C -->|no| E
+    C -->|no| OPS
+    OPS --> E
     G -->|ILP64| H
     G -->|none| E
 
@@ -51,10 +54,12 @@ graph TD
     style E fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
 ```
 
-The Python API in `__init__.py` tries to import the `_jlinalg` C extension.
-If the import fails (not compiled, ABI mismatch), every function falls back to
-an equivalent NumPy implementation. When the C extension loads, `jlinalg_init()`
-in `platform.c` detects the CPU ISA and populates the dispatch table.
+The facade in `__init__.py` owns extension discovery, ABI validation, public
+exports, and package-reload semantics. `_dgemm.py`, `_dsyrk.py`, `_eigh.py`,
+and `_snp_stats.py` own their operation contracts and NumPy implementations.
+If the extension import fails, the facade binds those fallbacks. When the C
+extension loads, `jlinalg_init()` in `platform.c` detects the CPU ISA and
+populates the dispatch table.
 
 ## Dispatch Chain
 
@@ -130,7 +135,11 @@ results that diverge from GEMMA's validation tolerances.
 
 | File | Purpose |
 |------|---------|
-| `__init__.py` | Public API with NumPy fallbacks when C extension unavailable |
+| `__init__.py` | Backend discovery, reload semantics, and stable public facade |
+| `_dgemm.py` | DGEMM contract and NumPy implementation |
+| `_dsyrk.py` | DSYRK contract, blocked NumPy implementation, and scratch accounting |
+| `_eigh.py` | Eigh contract, NumPy implementation, and native status adaptation |
+| `_snp_stats.py` | NumPy fallback for per-SNP statistics |
 | `_compile_jlinalg.py` | Dev-mode compiler script; calls the `run_build(JLINALG_SPEC)` facade in `_build_support/compile_and_link.py` |
 | `_blas_dirs.py` | Candidate BLAS library directories for `blas_dispatch.c`'s discovery scans. Pure `importlib`/`pathlib`; no dlopen |
 

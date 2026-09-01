@@ -21,7 +21,8 @@ from collections.abc import Callable
 
 import numpy as np
 
-from jamma.lmm.likelihood import _NCVT1, _P_YY_MIN, build_index_table, warn_p_yy_once
+from jamma.lmm.likelihood import warn_p_yy_once
+from jamma.lmm.pab import _NCVT1, _P_YY_MIN, build_index_table
 from jamma.lmm.uab import _batch_compute_pab_varying_numpy, _fill_pab_recursion
 
 # The objective handed to the golden-section refinement: per-SNP log-lambdas

@@ -13,15 +13,19 @@ Covers the helpers extracted out of ``_run_inner``:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 import pytest
 
 from jamma.core.memory import MemoryBreakdown
-from jamma.lmm.association_plan import ExecutionPlan, plan_association
+from jamma.lmm.association_plan import plan_association
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
+from jamma.pipeline_plan import LocoAnalysisPlan, resolve_analysis_plan
+
+if TYPE_CHECKING:
+    from jamma.lmm.stats import AssocResult
 
 pytestmark = pytest.mark.tier0
 
@@ -349,7 +353,7 @@ class TestRunLoco:
         monkeypatch: pytest.MonkeyPatch,
     ) -> PipelineRunner:
         """Construct a runner and stub out the LOCO orchestrator."""
-        runner = _make_runner(tmp_path)
+        runner = _make_runner(tmp_path, loco=True)
         monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
         from jamma import lmm as lmm_pkg
@@ -367,16 +371,20 @@ class TestRunLoco:
         """Invoke _run_loco the way run() does, with the mask run() would build."""
         from jamma.lmm.prepare_common import compute_valid_mask
 
+        analysis = resolve_analysis_plan(
+            runner.config,
+            execution=plan_association(4, 1, requested="numpy"),
+            snps_indices=None,
+            ksnps_indices=None,
+        )
+        assert isinstance(analysis, LocoAnalysisPlan)
         return runner._run_loco(
+            analysis=analysis,
             t_start=0.0,
-            plan=ExecutionPlan(mode="batch", reason="loco"),
             phenotypes=phenotypes,
             covariates=covariates,
             valid_mask=compute_valid_mask(phenotypes, covariates),
-            n_snps=0,
             assoc_path=tmp_path / "out.assoc.txt",
-            snps_indices=None,
-            ksnps_indices=None,
         )
 
     def test_loco_result_fields_map_to_pipeline_result(
@@ -391,7 +399,9 @@ class TestRunLoco:
             [[1.0], [1.0], [1.0], [1.0]], dtype=np.float64
         )  # intercept only
         loco = LocoResult(
-            associations=["snp1", "snp2", "snp3"],  # sentinel strings for ordering
+            associations=cast(
+                "list[AssocResult]", ["snp1", "snp2", "snp3"]
+            ),  # sentinel strings for ordering
             n_tested=3,
             pve=0.42,
             pve_se=0.05,
@@ -527,7 +537,7 @@ class TestRunLoco:
     ) -> None:
         """If run_lmm_loco raises, _run_loco must propagate — no swallowing."""
         phenos = np.array([1.0, 2.0], dtype=np.float64)
-        runner = _make_runner(tmp_path)
+        runner = _make_runner(tmp_path, loco=True)
         monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
         from jamma import lmm as lmm_pkg

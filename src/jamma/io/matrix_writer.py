@@ -18,7 +18,10 @@ deleted eagerly during concatenation to minimize peak disk usage.
 Output is byte-identical to np.savetxt for all matrix sizes.
 """
 
+from __future__ import annotations
+
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -30,37 +33,48 @@ from jamma.io._parallel_text import (
     temp_dir_beside,
     unlink_quietly,
 )
-from jamma.utils.atomic_publish import publish_temp_path
+from jamma.utils.atomic_publish import atomic_output
 
 
-def _format_rows_to_file(args: tuple) -> None:
+@dataclass(frozen=True, slots=True)
+class MatrixWriteTask:
+    """Picklable message passed to one matrix-formatting worker."""
+
+    memmap_path: str
+    output_path: str
+    start_row: int
+    stop_row: int
+    fmt: str
+    delimiter: str
+    shape: tuple[int, int]
+    dtype: str
+
+
+def _format_rows_to_file(task: MatrixWriteTask) -> None:
     """Format a chunk of matrix rows and write to a temp file.
 
     Must be a top-level function for pickling with spawn context.
-
-    Args:
-        args: Tuple of (memmap_path, out_path, start, end, ncols, fmt,
-              delimiter, shape, dtype_str).
     """
-    (memmap_path, out_path, start, end, ncols, fmt, delimiter, shape, dtype_str) = args
-
     try:
         matrix = np.memmap(
-            memmap_path, dtype=np.dtype(dtype_str), mode="r", shape=shape
+            task.memmap_path,
+            dtype=np.dtype(task.dtype),
+            mode="r",
+            shape=task.shape,
         )
-        delimiter_bytes = delimiter.encode("ascii")
+        delimiter_bytes = task.delimiter.encode("ascii")
         newline = b"\n"
-        with open(out_path, "wb") as f:
-            for i in range(start, end):
+        with open(task.output_path, "wb") as f:
+            for i in range(task.start_row, task.stop_row):
                 row = matrix[i]
                 # Format each value individually and join — avoids creating a
                 # Python tuple of 125k float objects (~3 MB per row) that the
                 # old `row_fmt % tuple(row)` approach required.
-                parts = [(fmt % row[j]).encode("ascii") for j in range(len(row))]
+                parts = [(task.fmt % row[j]).encode("ascii") for j in range(len(row))]
                 f.write(delimiter_bytes.join(parts) + newline)
     except Exception as e:
         raise RuntimeError(
-            f"_format_rows_to_file failed on rows {start}-{end}: {e}"
+            f"_format_rows_to_file failed on rows {task.start_row}-{task.stop_row}: {e}"
         ) from e
 
 
@@ -111,13 +125,8 @@ def write_matrix_parallel(
         # Publish atomically: np.savetxt truncates its target on open, so an
         # interrupted or failed write would otherwise destroy a pre-existing
         # valid file.
-        publish_tmp = publish_temp_path(path)
-        try:
+        with atomic_output(path) as publish_tmp:
             np.savetxt(publish_tmp, matrix, fmt=fmt, delimiter=delimiter)
-            publish_tmp.replace(path)
-        except BaseException:
-            unlink_quietly(publish_tmp)
-            raise
         return
 
     if n_workers is None:
@@ -171,17 +180,16 @@ def write_matrix_parallel(
             ) from e
 
         # Build chunk args — each worker writes to its own temp file
-        chunks_args = []
+        chunks_args: list[MatrixWriteTask] = []
         for idx, start in enumerate(range(0, n_rows, rows_per_chunk)):
             chunk_out = str(tmp_dir_p / f"chunk_{idx:06d}.txt")
             chunk_paths.append(chunk_out)
             chunks_args.append(
-                (
+                MatrixWriteTask(
                     memmap_path,
                     chunk_out,
                     start,
                     min(start + rows_per_chunk, n_rows),
-                    n_cols,
                     fmt,
                     delimiter,
                     matrix.shape,
@@ -207,9 +215,8 @@ def write_matrix_parallel(
         # Concatenate into a sibling temp and os.replace() onto the final
         # path, so a failure mid-concatenation never destroys a pre-existing
         # valid file at the destination.
-        publish_tmp = publish_temp_path(path)
         try:
-            with open(publish_tmp, "wb") as f_out:
+            with atomic_output(path) as publish_tmp, open(publish_tmp, "wb") as f_out:
                 for chunk_path in chunk_paths:
                     with open(chunk_path, "rb") as f_in:
                         while True:
@@ -224,12 +231,10 @@ def write_matrix_parallel(
                         logger.debug(
                             f"Could not eagerly delete chunk {chunk_path}: {e}"
                         )
-            publish_tmp.replace(path)
         except BaseException as e:
             logger.opt(exception=e).error(
                 f"Failed during chunk concatenation to {path}: {e}"
             )
-            unlink_quietly(publish_tmp)
             raise
     finally:
         # Clean up any remaining temp files (error paths)

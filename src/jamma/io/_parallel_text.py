@@ -15,6 +15,7 @@ import os
 import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import TypeVar
 
 from loguru import logger
 
@@ -62,9 +63,12 @@ def temp_dir_beside(target: Path, prefix: str) -> str:
         return tempfile.mkdtemp(prefix=prefix.lstrip("."))
 
 
+WorkItem = TypeVar("WorkItem")
+
+
 def run_spawn_pool(
-    worker_fn: Callable[..., object],
-    args: Iterable[object],
+    worker_fn: Callable[[WorkItem], object],
+    args: Iterable[WorkItem],
     *,
     error_context: str,
     n_workers: int,

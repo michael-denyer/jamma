@@ -8,8 +8,8 @@ import numpy as np
 
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import WaldResult, _compute_wald_numpy
-from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.pab import build_pab_table_for_c, classify_uab_columns
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 
@@ -367,7 +367,7 @@ def _make_general_score_lrt_data(data: dict) -> dict:
     n_index = Uab_batch.shape[2]  # (n_cvt+3)*(n_cvt+2)//2
 
     # Null Uab: zero all varying (genotype) columns.
-    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.pab import classify_uab_columns
 
     inv_indices, _ = classify_uab_columns(n_cvt)
     Uab_null = np.zeros((1, n_samples, n_index), dtype=np.float64)

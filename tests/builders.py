@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from jamma.lmm.likelihood import compute_Uab
+from jamma.lmm.pab import compute_Uab
 
 # Matrix sizes the jlinalg BLAS tests sweep. The values were chosen around
 # the MR/MC/KC blocking of the own-BLAS kernel deleted at 663a22b; they are

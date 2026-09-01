@@ -8,15 +8,16 @@ LMM subsystem are derived views of MODE_SPECS.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict, cast
 
 import numpy as np
 
 if TYPE_CHECKING:
     from jamma.io.plink import PlinkMetadata
+    from jamma.lmm.stats import AssocResult
 
 LmmMode = Literal[1, 2, 3, 4]
 
@@ -308,7 +309,7 @@ class LmmRunResult:
         timing: Wall-clock breakdown of the run's chunk loop.
     """
 
-    associations: list  # list[AssocResult] -- avoid circular import with stats.py
+    associations: list[AssocResult]
     n_tested: int
     pve: float | None = None
     pve_se: float | None = None
@@ -328,10 +329,19 @@ class LocoResult:
             None if likelihood surface is flat.
     """
 
-    associations: list  # list[AssocResult]
+    associations: list[AssocResult]
     n_tested: int
     pve: float | None = None
     pve_se: float | None = None
+
+
+SnpInfoRecord: TypeAlias = Mapping[str, str | int | float]
+"""Caller-supplied SNP metadata row accepted by ``SnpMeta.from_dicts``.
+
+The public runners historically accept dictionaries with additional fields
+such as MAF. A read-only mapping preserves that compatibility while naming the
+value types consumed by ``SnpMeta``.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +405,7 @@ class SnpMeta:
         return cls(chr=chr_arr, rs=rs_arr, pos=pos_arr, a1=a1_arr, a0=a0_arr)
 
     @classmethod
-    def from_dicts(cls, snp_info: list) -> SnpMeta:
+    def from_dicts(cls, snp_info: Sequence[SnpInfoRecord]) -> SnpMeta:
         """Parse a caller-supplied list of per-SNP dicts.
 
         The boundary for the public batch API. Requires the canonical keys

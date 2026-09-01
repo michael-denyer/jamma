@@ -338,9 +338,9 @@ uv run python scripts/demonstrate_equivalence.py
 | GEMMA Function (lmm.cpp) | JAMMA Function | Location |
 |--------------------------|----------------|----------|
 | `CalcKin` | `compute_kinship_streaming` | kinship/stream.py |
-| `GetabIndex` | `get_ab_index` | lmm/likelihood.py |
-| `CalcUab` | `compute_Uab` | lmm/likelihood.py |
-| `CalcPab` | `calc_pab` | lmm/likelihood.py |
+| `GetabIndex` | `get_ab_index` | lmm/pab.py |
+| `CalcUab` | `compute_Uab` | lmm/pab.py |
+| `CalcPab` | `calc_pab` | lmm/pab.py |
 | `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py |
 | `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py |
 | `CalcLambda` | `golden_section_optimize_lambda_numpy` | lmm/likelihood_numpy.py |

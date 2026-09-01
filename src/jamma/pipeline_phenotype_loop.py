@@ -18,7 +18,7 @@ from loguru import logger
 
 from jamma.io.plink import PlinkData, PlinkMetadata
 from jamma.lmm.association_plan import ExecutableAssociationPlan
-from jamma.lmm.schema import LmmRunResult, RunnerTiming, SnpMeta
+from jamma.lmm.schema import LmmConfig, LmmRunResult, RunnerTiming, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import PipelineConfig
 
@@ -44,6 +44,7 @@ class PhenoLoopOutcome(NamedTuple):
 def run_phenotype_loop(
     config: PipelineConfig,
     execution: ExecutableAssociationPlan,
+    lmm: LmmConfig,
     all_pheno_data: dict[int, tuple[np.ndarray, int]],
     valid_mask: np.ndarray,
     covariates: np.ndarray | None,
@@ -118,6 +119,7 @@ def run_phenotype_loop(
                 eigenvectors,
                 col_path,
                 snps_indices,
+                lmm=lmm,
                 execution=execution,
                 meta=meta,
             )
@@ -130,6 +132,7 @@ def run_phenotype_loop(
                 eigenvectors,
                 col_path,
                 snps_indices,
+                lmm=lmm,
                 plink_data=_plink_data,
                 execution=execution,
             )
@@ -162,6 +165,7 @@ def _run_batch(
     eigenvectors: np.ndarray,
     assoc_path: Path,
     snps_indices: np.ndarray | None,
+    lmm: LmmConfig,
     execution: ExecutableAssociationPlan,
     plink_data: PlinkData | None = None,
 ) -> LmmRunResult:
@@ -198,7 +202,7 @@ def _run_batch(
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        config=config.lmm_config(),
+        config=lmm,
         output_path=assoc_path,
         hwe_threshold=config.hwe_threshold,
         execution=execution,
@@ -216,6 +220,7 @@ def _run_streaming(
     eigenvectors: np.ndarray,
     assoc_path: Path,
     snps_indices: np.ndarray | None,
+    lmm: LmmConfig,
     execution: ExecutableAssociationPlan,
     meta: PlinkMetadata,
 ) -> LmmRunResult:
@@ -233,7 +238,7 @@ def _run_streaming(
         output_path=assoc_path,
         snps_indices=snps_indices,
         hwe_threshold=config.hwe_threshold,
-        config=config.lmm_config(),
+        config=lmm,
         execution=execution,
         meta=meta,
     )

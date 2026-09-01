@@ -249,6 +249,8 @@ def test_runner_lrt_mode_c_vs_python():
 
     assert len(result_c.associations) == len(result_py.associations)
     for rc, rp in zip(result_c.associations, result_py.associations, strict=True):
+        assert rc.p_lrt is not None
+        assert rp.p_lrt is not None
         assert np.isfinite(rc.p_lrt), f"C path p_lrt not finite: {rc}"
         np.testing.assert_allclose(
             rc.p_lrt,
@@ -291,6 +293,8 @@ def test_runner_score_mode_c_vs_python():
 
     assert len(result_c.associations) == len(result_py.associations)
     for rc, rp in zip(result_c.associations, result_py.associations, strict=True):
+        assert rc.p_score is not None
+        assert rp.p_score is not None
         assert np.isfinite(rc.p_score), f"C path p_score not finite: {rc}"
         np.testing.assert_allclose(
             rc.p_score,

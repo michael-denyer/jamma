@@ -30,7 +30,8 @@ from jamma.lmm.compute_numpy import (
     _compute_score_numpy,
     compute_lmm_chunk_numpy,
 )
-from jamma.lmm.likelihood import build_pab_table_for_c, compute_null_model_mle
+from jamma.lmm.likelihood import compute_null_model_mle
+from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
@@ -567,7 +568,7 @@ def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
 @pytest.mark.parametrize("n_cvt", [2, 3, 4])
 def test_vectorized_general_uab_parity(n_cvt):
     """Vectorized _batch_compute_uab_general_numpy matches reference per-SNP loop."""
-    from jamma.lmm.likelihood import build_index_table
+    from jamma.lmm.pab import build_index_table
     from jamma.lmm.uab import _batch_compute_uab_general_numpy
 
     rng = np.random.default_rng(99)
@@ -603,7 +604,7 @@ def test_vectorized_general_uab_parity(n_cvt):
 @pytest.mark.parametrize("n_cvt", [2, 3, 4])
 def test_invariant_columns_constant_across_snps(n_cvt):
     """Uab columns classified as invariant are actually constant across SNPs."""
-    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.pab import classify_uab_columns
     from jamma.lmm.uab import _batch_compute_uab_general_numpy
 
     rng = np.random.default_rng(123)

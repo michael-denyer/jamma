@@ -18,14 +18,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jamma.lmm.likelihood import (
-    compute_Uab,
-)
 from jamma.lmm.likelihood_numpy import (
     _batch_grid_reml_numpy,
     _batch_reml_at_lambda_numpy,
     golden_section_optimize_lambda_numpy,
 )
+from jamma.lmm.pab import compute_Uab
 from jamma.lmm.uab import (
     batch_compute_iab_numpy,
     batch_compute_uab_numpy,
@@ -97,9 +95,8 @@ def test_mle_scalar_pab_ncvt1():
     """_mle_p_yy_scalar_ncvt1 must match calc_pab path to rtol=1e-14."""
     from jamma.lmm.likelihood import (
         _mle_p_yy_scalar_ncvt1,
-        calc_pab,
-        get_ab_index,
     )
+    from jamma.lmm.pab import calc_pab, get_ab_index
 
     n_samples = 50
     n_cvt = 1
@@ -135,10 +132,9 @@ def test_mle_null_scalar_ncvt1():
     """Null-model mle_log_likelihood with n_cvt=1 matches the full Pab path."""
     from jamma.lmm.likelihood import (
         _mle_p_yy_scalar_null_ncvt1,
-        calc_pab,
-        get_ab_index,
         mle_log_likelihood,
     )
+    from jamma.lmm.pab import calc_pab, get_ab_index
 
     rng = np.random.default_rng(789)
     n_samples = 50
@@ -183,9 +179,8 @@ def test_mle_scalar_degenerate_s_ww_zero():
     from jamma.lmm.likelihood import (
         _mle_p_yy_scalar_ncvt1,
         _mle_p_yy_scalar_null_ncvt1,
-        calc_pab,
-        get_ab_index,
     )
+    from jamma.lmm.pab import calc_pab, get_ab_index
 
     n_samples = 50
     # Construct Uab where column 0 (ww) is all zeros -> Hi_eval @ Uab[:,0] = 0
@@ -213,7 +208,8 @@ def test_mle_scalar_degenerate_s_ww_zero():
 
 def test_mle_scalar_degenerate_p1_xx_zero():
     """Scalar MLE P_yy returns p1_yy when p1_xx == 0 (constant genotype)."""
-    from jamma.lmm.likelihood import _mle_p_yy_scalar_ncvt1, calc_pab, get_ab_index
+    from jamma.lmm.likelihood import _mle_p_yy_scalar_ncvt1
+    from jamma.lmm.pab import calc_pab, get_ab_index
 
     n_samples = 50
     rng = np.random.default_rng(222)

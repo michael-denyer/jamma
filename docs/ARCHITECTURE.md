@@ -11,6 +11,7 @@ graph TD
     CLI["cli.py (Click CLI)"]
     API["gwas.py (Python API)"]
     Pipeline["pipeline.py (PipelineRunner)"]
+    AnalysisPlan["pipeline_plan.py (Validated analysis variants)"]
     IO["io/ (PLINK I/O)"]
     Kinship["kinship/ (Kinship computation)"]
     Eigen["lmm/eigen.py (Eigendecomposition)"]
@@ -18,7 +19,7 @@ graph TD
     BatchRunner["lmm/runner_numpy.py (Batch)"]
     StreamRunner["lmm/runner_numpy_streaming.py (Streaming)"]
     ChunkRunner["lmm/chunk_runner_numpy.py (Shared chunk engine)"]
-    Likelihood["lmm/likelihood.py / uab.py / likelihood_numpy.py"]
+    Likelihood["lmm/likelihood.py / pab.py / uab.py / likelihood_numpy.py"]
     Stats["lmm/stats.py (AssocResult, batch Wald/LRT/Score)"]
     LOCO["lmm/loco.py (LOCO orchestrator)"]
     jlinalg["jlinalg/ (BLAS/LAPACK dispatch)"]
@@ -26,6 +27,7 @@ graph TD
 
     CLI --> Pipeline
     API --> Pipeline
+    Pipeline --> AnalysisPlan
     Pipeline --> IO
     Pipeline --> Kinship
     Pipeline --> Eigen
@@ -53,7 +55,7 @@ A typical LMM association run proceeds as follows:
 
 2. **Data loading** — `PipelineRunner` calls `io/plink.py` to read PLINK metadata and phenotype vectors from the `.fam` file. Optional covariates are loaded from `io/covariate.py`.
 
-3. **Kinship** — If a kinship file is provided, `kinship/io.py` reads it. Otherwise `kinship/stream.py` computes the centered (or standardized) kinship matrix `K = (1/p) * X_c @ X_c.T` using `jlinalg.dsyrk` for the symmetric rank-k update; `kinship/loco.py` computes LOCO kinship by subtraction.
+3. **Analysis resolution and kinship** — After preserving the public configuration's validation order, `pipeline_plan.py` resolves it into explicit standard/LOCO and provided-eigen/provided-kinship/computed-kinship variants. If a kinship file is provided, `kinship/io.py` reads it. Otherwise `kinship/stream.py` computes the centered (or standardized) kinship matrix `K = (1/p) * X_c @ X_c.T` using `jlinalg.dsyrk` for the symmetric rank-k update; `kinship/loco.py` computes LOCO kinship by subtraction.
 
 4. **Eigendecomposition** — `lmm/eigen.py` eigendecomposes `K` via `jlinalg.eigh`, which dispatches to vendor DSYEVD (faster, O(N²) workspace) or falls back to DSYEVR (O(N) workspace) when memory is insufficient. The result is eigenvalues `D` and eigenvectors `U`.
 
@@ -71,6 +73,7 @@ A typical LMM association run proceeds as follows:
 |---|---|---|
 | `PipelineRunner` | `src/jamma/pipeline.py` | Orchestrates the `-lmm` pipeline; both CLI and Python API delegate here |
 | `PipelineConfig` / `PipelineResult` / `KinshipResult` | `src/jamma/pipeline_config.py` | Frozen configuration and result dataclasses for the pipeline; `KinshipResult` is also re-exported from `jamma.pipeline` |
+| `StandardAnalysisPlan` / `LocoAnalysisPlan` | `src/jamma/pipeline_plan.py` | Private validated variants that make kinship/eigen and standard/LOCO states explicit |
 | `gwas()` | `src/jamma/gwas.py` | Public Python API for single-call GWAS; builds a `PipelineConfig` and returns `PipelineRunner`'s `PipelineResult` |
 | `ExecutionPlan` | `src/jamma/lmm/association_plan.py` | Frozen two-field summary of the selected mode (`batch` or `streaming`) with a human-readable reason |
 | `ExecutableAssociationPlan` | `src/jamma/lmm/association_plan.py` | Frozen full plan from `plan_association()`: mode summary, dispatch path, conservative chunk geometry, and memory pricing |
@@ -89,6 +92,7 @@ src/jamma/
 ├── cli.py                  # Click CLI; maps GEMMA flags to PipelineConfig
 ├── gwas.py                 # Public Python API (gwas() function)
 ├── pipeline.py             # The -lmm path: PipelineRunner, used by CLI and API
+├── pipeline_plan.py        # Private validated analysis and kinship/eigen variants
 ├── pipeline_config.py      # PipelineConfig / PipelineResult / KinshipResult dataclasses
 ├── pipeline_banner.py      # GEMMA-style dataset and execution-plan banners
 ├── pipeline_phenotype_loop.py  # Per-phenotype loop + the batch/streaming runner calls
@@ -130,7 +134,11 @@ src/jamma/
 │   ├── io.py               # Kinship matrix I/O (GEMMA text format and binary .npy)
 │   └── missing.py          # Genotype imputation and centring helpers
 ├── jlinalg/                # Vendor BLAS/LAPACK dispatch layer with NumPy fallback
-│   ├── __init__.py         # Public API: dgemm, dsyrk, eigh, compute_snp_stats_chunk
+│   ├── __init__.py         # Backend discovery, reload semantics, and public facade
+│   ├── _dgemm.py           # DGEMM validation and NumPy implementation
+│   ├── _dsyrk.py           # DSYRK validation, NumPy implementation, scratch accounting
+│   ├── _eigh.py            # Eigen contract and native/NumPy result adaptation
+│   ├── _snp_stats.py       # NumPy fallback for per-SNP statistics
 │   ├── _blas_dirs.py       # Vendor BLAS/LAPACK library and include directory discovery
 │   ├── _compile_jlinalg.py # Dev-mode C extension compiler; calls run_build(JLINALG_SPEC)
 │   ├── include/            # jlinalg.h: shared C API surface for the _jlinalg extension
@@ -140,6 +148,7 @@ src/jamma/
 │   ├── accel.py            # available()/require(): the one loader for _lmm_accel
 │   ├── io.py               # IncrementalAssocWriter and the GEMMA .assoc.txt line format
 │   ├── likelihood.py       # Index tables, scalar REML/MLE, null-model golden section search
+│   ├── pab.py              # Pab indexing, Uab products, and Schur-complement recursion
 │   ├── uab.py              # Uab/Pab/Iab batch builders in full, split and SoA layouts
 │   ├── likelihood_numpy.py # NumPy batch REML/MLE evaluation and lambda optimisation
 │   ├── stats.py            # AssocResult and the batch Wald/LRT/Score statistics
@@ -177,7 +186,7 @@ src/jamma/
 │                          # source list every build entry point reads; do not trust a file
 │                          # list written down anywhere else, including this one.
 ├── utils/                  # Shared utilities (logging setup, chromosome sort key)
-│   ├── atomic_publish.py   # publish_temp_path()/unlink_quietly(): sibling-temp + rename publish
+│   ├── atomic_publish.py   # atomic_output()/publish_temp_path(): sibling-temp + rename publish
 │   ├── logging.py          # setup_logging() + write_gemma_log(): loguru config, GEMMA .log.txt
 │   └── npy_cache.py        # Shared .npy sidecar cache validation for binary I/O
 └── validation/             # GEMMA comparison utilities and tolerance configuration
@@ -206,7 +215,7 @@ Two rules govern adding a `.c` file:
 
 A separate trap, guarded by [`tests/test_c_include_order.py`](../tests/test_c_include_order.py): `_lmm_support.h` must reach `<math.h>` before anything else does, because `M_PI` is not C11 and glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets. macOS defines `M_PI` unconditionally, so a local build and the ARM Mac CI job pass while every Linux job fails.
 
-Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery and compile/link execution, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, and `_compile_accel.py`) consume that facade. At runtime, `jamma.core.recompile._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
+Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery plus explicit compile/link attempt results and retry transitions, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, and `_compile_accel.py`) consume that facade. At runtime, `jamma.core.recompile._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
 
 ## C Extension Architecture
 
@@ -227,7 +236,7 @@ Leave-one-chromosome-out (LOCO) analysis is orchestrated by `lmm/loco.py`. For e
 
 JAMMA targets exact output compatibility with GEMMA v0.98.5. Key design choices supporting this:
 
-- The `likelihood.py` Pab recursion follows GEMMA's `CalcPab` using identical index ordering (GEMMA's `GetabIndex` formula with 1-based indices).
+- The `pab.py` recursion follows GEMMA's `CalcPab` using identical index ordering (GEMMA's `GetabIndex` formula with 1-based indices).
 - REML optimization uses a 50-point grid search followed by golden section refinement (`n_refine >= 20` for ~1e-5 tolerance), matching GEMMA's convergence behaviour.
 - `lmm/special.py` provides pure-stdlib `betainc` (Cephes Lentz CF) and `chi2_sf` (erfc) to avoid a `scipy` runtime dependency, which would overwrite ILP64 numpy with LP64 numpy on installation.
 - `_P_YY_MIN = 1e-8` clamps near-zero projected residuals to prevent `log(0)` in the likelihood, matching GEMMA's behaviour.

@@ -23,7 +23,7 @@ import numpy as np
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.likelihood import build_pab_table_for_c
+from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.schema import LmmMode
 from jamma.lmm.uab import compute_uab_invariant_soa
 

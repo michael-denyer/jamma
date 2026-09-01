@@ -20,9 +20,9 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
     compute_null_model_lambda,
     compute_null_model_mle,
-    compute_Uab,
     finite_difference_dev2,
 )
+from jamma.lmm.pab import compute_Uab
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, NullModel
 
 

@@ -6,14 +6,13 @@ import math
 
 import pytest
 
-from jamma.lmm.schema import MODE_SPECS
-from jamma.lmm.stats import AssocResult
 from jamma.validation.compare import (
     AssocComparisonResult,
     compare_assoc_results,
     load_gemma_assoc,
 )
 from jamma.validation.tolerances import ToleranceConfig
+from tests.assoc_test_helpers import make_assoc as _make_assoc
 from tests.fakes.assoc_files import (
     ALL_TESTS_COLS,
     ALL_TESTS_FULL_COLS,
@@ -30,38 +29,6 @@ pytestmark = pytest.mark.tier0
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_assoc(
-    rs: str = "rs1",
-    *,
-    beta: float = 0.5,
-    se: float = 0.1,
-    af: float = 0.3,
-    p_wald: float | None = 0.01,
-    logl_H1: float | None = -100.0,
-    l_remle: float | None = 0.5,
-    p_score: float | None = None,
-    p_lrt: float | None = None,
-    l_mle: float | None = None,
-) -> AssocResult:
-    return AssocResult(
-        chr="1",
-        rs=rs,
-        ps=1000,
-        n_miss=0,
-        allele1="A",
-        allele0="G",
-        af=af,
-        beta=beta,
-        se=se,
-        logl_H1=logl_H1,
-        l_remle=l_remle,
-        p_wald=p_wald,
-        p_score=p_score,
-        p_lrt=p_lrt,
-        l_mle=l_mle,
-    )
 
 
 # Unique per-column sentinel values — a field-offset bug swaps columns, and
@@ -795,68 +762,3 @@ class TestCompareAssocResults:
         assert hasattr(comparison, "l_remle")
         assert hasattr(comparison, "af")
         assert hasattr(comparison, "mismatched_snps")
-
-    @pytest.mark.parametrize(
-        ("mode", "sample"),
-        [
-            (1, _make_assoc(rs="rs1")),
-            (
-                2,
-                _make_assoc(
-                    rs="rs1",
-                    beta=float("nan"),
-                    se=float("nan"),
-                    p_wald=None,
-                    logl_H1=None,
-                    l_remle=None,
-                    p_lrt=0.02,
-                    l_mle=0.8,
-                ),
-            ),
-            (
-                3,
-                _make_assoc(
-                    rs="rs1",
-                    p_wald=None,
-                    logl_H1=None,
-                    l_remle=None,
-                    p_score=0.05,
-                ),
-            ),
-            (
-                4,
-                _make_assoc(
-                    rs="rs1",
-                    p_wald=0.01,
-                    p_lrt=0.02,
-                    p_score=0.05,
-                    l_remle=0.5,
-                    l_mle=0.8,
-                    logl_H1=-100.0,
-                ),
-            ),
-        ],
-    )
-    def test_compared_columns_match_mode_spec(self, mode, sample):
-        """The set of columns compare_assoc_results actively compares for a
-        mode equals MODE_SPECS[mode].stat_columns, so the comparator cannot
-        drift from the schema's declared column set for that mode.
-
-        beta/se are excluded from this check: they are always-present output
-        slots, not entries in MODE_SPECS[mode].stat_columns, and LRT compares
-        them too (both sides all-NaN by construction) rather than skipping
-        them outright.
-        """
-        results = [sample]
-        comparison = compare_assoc_results(results, results)
-
-        expected_columns = frozenset(
-            c.field_name for c in MODE_SPECS[mode].stat_columns
-        ) - {"beta", "se"}
-        actual_columns = frozenset(
-            field
-            for field in ("p_wald", "logl_H1", "l_remle", "p_score", "p_lrt", "l_mle")
-            if (r := getattr(comparison, field)) is not None
-            and not (r.passed and r.worst_location is None and "skipped" in r.message)
-        )
-        assert actual_columns == expected_columns

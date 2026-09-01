@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from jamma.utils.atomic_publish import publish_temp_path, unlink_quietly
+from jamma.utils.atomic_publish import atomic_output, publish_temp_path, unlink_quietly
 
 
 @pytest.mark.tier0
@@ -100,3 +100,67 @@ class TestUnlinkQuietly:
         unlink_quietly(str(target))
 
         assert not target.exists()
+
+
+@pytest.mark.tier0
+class TestAtomicOutput:
+    """atomic_output owns the ordinary publish and cleanup lifecycle."""
+
+    def test_success_publishes_bytes_and_removes_temp(self, tmp_path: Path) -> None:
+        target = tmp_path / "result.txt"
+        with atomic_output(target) as tmp_path_for_write:
+            tmp_path_for_write.write_text("new contents")
+            assert not target.exists()
+
+        assert target.read_text() == "new contents"
+        assert not list(tmp_path.glob(".result.txt.tmp.*"))
+
+    def test_writer_failure_preserves_existing_target(self, tmp_path: Path) -> None:
+        target = tmp_path / "result.txt"
+        target.write_text("old contents")
+
+        with pytest.raises(RuntimeError, match="injected write failure"):
+            with atomic_output(target) as tmp_path_for_write:
+                tmp_path_for_write.write_text("partial")
+                raise RuntimeError("injected write failure")
+
+        assert target.read_text() == "old contents"
+        assert not list(tmp_path.glob(".result.txt.tmp.*"))
+
+    def test_keyboard_interrupt_cleans_temp(self, tmp_path: Path) -> None:
+        target = tmp_path / "result.txt"
+
+        with pytest.raises(KeyboardInterrupt):
+            with atomic_output(target) as tmp_path_for_write:
+                tmp_path_for_write.write_text("partial")
+                raise KeyboardInterrupt
+
+        assert not target.exists()
+        assert not list(tmp_path.glob(".result.txt.tmp.*"))
+
+    def test_replace_failure_preserves_existing_target_and_cleans_temp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "result.txt"
+        target.write_text("old contents")
+
+        def raise_on_replace(self: Path, target: object) -> None:
+            raise OSError("injected replace failure")
+
+        monkeypatch.setattr(Path, "replace", raise_on_replace)
+
+        with pytest.raises(OSError, match="injected replace failure"):
+            with atomic_output(target) as tmp_path_for_write:
+                tmp_path_for_write.write_text("new contents")
+
+        assert target.read_text() == "old contents"
+        assert not list(tmp_path.glob(".result.txt.tmp.*"))
+
+    def test_suffix_is_used_for_numpy_style_writers(self, tmp_path: Path) -> None:
+        target = tmp_path / "result.eigenD.npy"
+        with atomic_output(target, suffix=".npy") as tmp_path_for_write:
+            assert tmp_path_for_write.suffix == ".npy"
+            tmp_path_for_write.write_bytes(b"binary")
+
+        assert target.read_bytes() == b"binary"
+        assert not list(tmp_path.glob(".result.eigenD.tmp.*.npy"))

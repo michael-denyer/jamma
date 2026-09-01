@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from jamma.lmm.likelihood import _P_YY_MIN, get_ab_index
+from jamma.lmm.pab import _P_YY_MIN, get_ab_index
 from jamma.lmm.special import betainc, chi2_sf
 
 

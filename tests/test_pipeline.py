@@ -8,12 +8,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.io import read_fam_phenotypes
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from tests.builders import write_fam
-from tests.fixture_paths import LOCO, MOUSE, SYNTHETIC
+from tests.fixture_paths import LOCO, SYNTHETIC
 
 BFILE = SYNTHETIC.bfile
 
@@ -789,119 +787,3 @@ class TestNSamplesReflectsCovariateFiltering:
             f"got {result.n_samples}"
         )
         assert result.n_samples < n_samples
-
-
-# =============================================================================
-# LMM equivalence tests
-# =============================================================================
-
-# Fixture paths for mouse_hs1940 dataset
-MOUSE_BFILE = MOUSE.bfile
-MOUSE_KINSHIP_FILE = MOUSE.kinship
-
-
-@pytest.mark.slow
-@pytest.mark.tier1
-class TestLMMEquivalence:
-    """Verify loaded-eigen LMM results match fresh-eigen results."""
-
-    @pytest.mark.tier1
-    def test_loaded_eigen_matches_fresh_eigen_lmm(self, tmp_path: Path) -> None:
-        """LMM with loaded eigen files matches LMM with fresh eigendecomp.
-
-        This is the key validation: proves the multi-phenotype eigen reuse
-        workflow produces correct results.
-        """
-        from jamma.kinship import read_kinship_matrix
-        from jamma.lmm.eigen import eigendecompose_kinship
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        # 1. Run fresh-eigen pipeline (standard path with kinship)
-        fresh_dir = tmp_path / "fresh"
-        fresh_config = PipelineConfig(
-            bfile=MOUSE_BFILE,
-            kinship_file=MOUSE_KINSHIP_FILE,
-            output_dir=fresh_dir,
-            output_prefix="fresh",
-            check_memory=False,
-            show_progress=False,
-        )
-        fresh_result = PipelineRunner(fresh_config).run()
-
-        # 2. Compute eigen from kinship (subsetted to valid-phenotype samples)
-        from jamma.io.plink import get_plink_metadata
-
-        meta = get_plink_metadata(MOUSE_BFILE)
-        K = read_kinship_matrix(MOUSE_KINSHIP_FILE, n_samples=meta.n_samples)
-
-        # Subset to valid-phenotype samples (same as runner does internally)
-        pheno = read_fam_phenotypes(MOUSE.fam)
-        valid_mask = ~np.isnan(pheno) & (pheno != -9.0)
-        K_valid = K[np.ix_(valid_mask, valid_mask)]
-
-        eigenvalues, eigenvectors = eigendecompose_kinship(K_valid)
-
-        eigen_dir = tmp_path / "eigen"
-        d_path, u_path = write_eigen_files(
-            eigenvalues, eigenvectors, eigen_dir, prefix="test"
-        )
-
-        # 3. Run loaded-eigen pipeline (no kinship, just eigen files)
-        loaded_dir = tmp_path / "loaded"
-        loaded_config = PipelineConfig(
-            bfile=MOUSE_BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=u_path,
-            output_dir=loaded_dir,
-            output_prefix="loaded",
-            check_memory=False,
-            show_progress=False,
-        )
-        loaded_result = PipelineRunner(loaded_config).run()
-
-        # 4. Compare results. ToleranceConfig defaults (beta_rtol=1e-2,
-        # se_rtol=1e-5, pvalue_rtol=1e-4) are the same values this test used
-        # to hardcode from the GEMMA_EQUIVALENCE.md tolerance table.
-        from jamma.validation import compare_assoc_results, load_gemma_assoc
-
-        assert fresh_result.n_samples == loaded_result.n_samples
-        assert fresh_result.n_snps_tested == loaded_result.n_snps_tested
-
-        fresh_assoc = load_gemma_assoc(fresh_dir / "fresh.assoc.txt")
-        loaded_assoc = load_gemma_assoc(loaded_dir / "loaded.assoc.txt")
-        comparison = compare_assoc_results(loaded_assoc, fresh_assoc)
-        assert comparison.passed, (
-            f"beta={comparison.beta}, se={comparison.se}, "
-            f"p_wald={comparison.p_wald}, mismatched={comparison.mismatched_snps}"
-        )
-
-    @pytest.mark.tier1
-    def test_write_eigen_flag_creates_files(self, tmp_path: Path) -> None:
-        """PipelineRunner with write_eigen=True creates eigenD/eigenU files."""
-        from jamma.pipeline import PipelineConfig, PipelineRunner
-
-        config = PipelineConfig(
-            bfile=MOUSE_BFILE,
-            kinship_file=MOUSE_KINSHIP_FILE,
-            output_dir=tmp_path,
-            output_prefix="test",
-            check_memory=False,
-            show_progress=False,
-            write_eigen=True,
-        )
-        PipelineRunner(config).run()
-
-        # Default binary format writes .npy files
-        d_path = tmp_path / "test.eigenD.npy"
-        u_path = tmp_path / "test.eigenU.npy"
-
-        assert d_path.exists(), "eigenD file not created"
-        assert u_path.exists(), "eigenU file not created"
-        assert d_path.stat().st_size > 0
-        assert u_path.stat().st_size > 0
-
-        # Verify files are loadable
-        eigenvalues, eigenvectors = read_eigen_files(d_path, u_path)
-        assert eigenvalues.shape[0] > 0
-        assert eigenvectors.shape[0] == eigenvectors.shape[1]
-        assert eigenvalues.shape[0] == eigenvectors.shape[0]

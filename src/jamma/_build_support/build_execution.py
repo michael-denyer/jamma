@@ -7,10 +7,10 @@ import os
 import platform as _platform
 import subprocess
 import sysconfig
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeAlias
 
 from .build_models import SHARED_LINK_FLAGS as _SHARED_LINK_FLAGS
 from .build_models import resolve_cflags_for
@@ -182,7 +182,7 @@ def link_cmd(
     ]
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class CompileResult:
     """Result of a two-phase compile+link invocation.
 
@@ -204,6 +204,117 @@ class CompileResult:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _CompileRequest:
+    """Inputs shared by the first compile attempt and its OpenMP retry."""
+
+    sources: tuple[Path, ...]
+    lapack_source_set: set[str]
+    include_dirs: list[str]
+    cc_cmd: str
+    cc_extra: list[str]
+    tmp_dir: Path
+    extra_cflags: list[str]
+    extra_lapack_cflags: list[str]
+    extra_source_includes: dict[str, list[str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _CompileSucceeded:
+    objects: tuple[Path, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _CompileFailed:
+    stderr: str
+
+
+_CompileAttempt: TypeAlias = _CompileSucceeded | _CompileFailed
+
+
+@dataclass(frozen=True, slots=True)
+class _LinkAttempt:
+    temporary_output: Path
+    returncode: int
+    stderr: str
+    used_openmp: bool
+
+    @property
+    def succeeded(self) -> bool:
+        return self.returncode == 0
+
+
+def _compile_sources(
+    request: _CompileRequest,
+    *,
+    omp_compile: list[str],
+    object_suffix: str,
+    verbose_print: Callable[..., None],
+    error_print: Callable[..., None],
+) -> _CompileAttempt:
+    """Compile every source or return the first failure explicitly."""
+    objects: list[Path] = []
+    for source in request.sources:
+        object_path = request.tmp_dir / f"{source.stem}{object_suffix}.o"
+        cflags = resolve_cflags_for(
+            source,
+            request.lapack_source_set,
+            request.include_dirs,
+            extra_cflags=request.extra_cflags,
+            extra_source_includes=request.extra_source_includes.get(source.name, []),
+            extra_lapack_cflags=request.extra_lapack_cflags,
+        )
+        command = [
+            request.cc_cmd,
+            *request.cc_extra,
+            *cflags,
+            *omp_compile,
+            "-c",
+            str(source),
+            "-o",
+            str(object_path),
+        ]
+        verbose_print(f"compile: {' '.join(command)}")
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            error_print(f"Compile failed for {source.name}:")
+            error_print(result.stderr)
+            return _CompileFailed((result.stderr or "").strip())
+        objects.append(object_path)
+    return _CompileSucceeded(tuple(objects))
+
+
+def _link_objects(
+    *,
+    cc_cmd: str,
+    cc_extra: list[str],
+    objects: list[Path],
+    temporary_output: Path,
+    ldflags: list[str],
+    omp_link: list[str],
+    extra_link_flags: list[str],
+    verbose_print: Callable[..., None],
+) -> _LinkAttempt:
+    """Link one shared library and return the attempted state explicitly."""
+    command = link_cmd(
+        cc_cmd,
+        cc_extra,
+        objects,
+        temporary_output,
+        ldflags,
+        omp_link,
+        extra_link_flags,
+    )
+    verbose_print(f"link: {' '.join(command)}")
+    result = subprocess.run(command, capture_output=True, text=True)
+    return _LinkAttempt(
+        temporary_output=temporary_output,
+        returncode=result.returncode,
+        stderr=result.stderr or "",
+        used_openmp=bool(omp_link),
+    )
+
+
 # ---------------------------------------------------------------------------
 # execute_build — two-phase compile + link with OpenMP retry
 # ---------------------------------------------------------------------------
@@ -220,7 +331,7 @@ def execute_build(
     ldflags: list[str],
     output: Path,
     *,
-    tmp_dir: Path | None = None,
+    tmp_dir: Path,
     extra_cflags: list[str] | None = None,
     extra_link_flags: list[str] | None = None,
     extra_lapack_cflags: list[str] | None = None,
@@ -261,9 +372,7 @@ def execute_build(
         omp_link: OpenMP link flags (e.g. ``["/path/to/libiomp5.so"]``).
         ldflags: Extra link flags (``-lm``, ``-ldl``, ``-lpthread``, etc.).
         output: Final shared-library path.
-        tmp_dir: Directory for intermediate .o files. If None, a temp dir
-            is created via ``tempfile.mkdtemp(prefix="jamma-build-")``. Caller
-            is responsible for cleanup in either case.
+        tmp_dir: Caller-owned directory for intermediate .o files.
         extra_cflags: User-supplied CFLAGS spliced into BASE_CFLAGS (see
             ``resolve_cflags_for``). Not applied to LAPACK sources.
         extra_link_flags: Extra flags appended after ``ldflags`` and the
@@ -306,85 +415,62 @@ def execute_build(
     if error_print is None:
         error_print = verbose_print
 
-    if tmp_dir is None:
-        tmp_dir = Path(tempfile.mkdtemp(prefix="jamma-build-"))
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # Precompute LAPACK dispatch set — str() comparison avoids Path.resolve()
     # cross-platform quirks. Pattern lifted from _compile_jlinalg.py:190.
     lapack_source_set = {str(s) for s in lapack_sources}
 
-    # Mutable box so _compile_sources can report the first failure stderr
-    # back up for inclusion in the retry notice. Without this, an OMP
-    # downgrade on compile masks the real cause (e.g. missing omp.h).
-    first_stderr_holder: list[str] = [""]
-
-    def _compile_sources(
-        current_omp_compile: list[str], suffix: str
-    ) -> list[Path] | None:
-        """Compile each source to .o. Returns list of .o paths or None on failure."""
-        objs: list[Path] = []
-        for src in sources:
-            obj_file = tmp_dir / f"{src.stem}{suffix}.o"
-            per_source_includes = extra_source_includes.get(src.name, [])
-            cflags = resolve_cflags_for(
-                src,
-                lapack_source_set,
-                include_dirs,
-                extra_cflags=extra_cflags,
-                extra_source_includes=per_source_includes,
-                extra_lapack_cflags=extra_lapack_cflags,
-            )
-            cmd = [
-                cc_cmd,
-                *cc_extra,
-                *cflags,
-                *current_omp_compile,
-                "-c",
-                str(src),
-                "-o",
-                str(obj_file),
-            ]
-            verbose_print(f"compile: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                # Compile failure diagnostics go to error_print (always
-                # visible) so runtime recompile with verbose=False still
-                # surfaces the root cause rather than a bare
-                # "compile failed" with no stderr.
-                error_print(f"Compile failed for {src.name}:")
-                error_print(result.stderr)
-                first_stderr_holder[0] = (result.stderr or "").strip()
-                return None
-            objs.append(obj_file)
-        return objs
+    compile_request = _CompileRequest(
+        sources=tuple(sources),
+        lapack_source_set=lapack_source_set,
+        include_dirs=include_dirs,
+        cc_cmd=cc_cmd,
+        cc_extra=cc_extra,
+        tmp_dir=tmp_dir,
+        extra_cflags=extra_cflags,
+        extra_lapack_cflags=extra_lapack_cflags,
+        extra_source_includes=extra_source_includes,
+    )
 
     # First attempt: with OpenMP.
     used_openmp = bool(omp_compile)
     current_omp_link = omp_link.copy()
-    compile_objs = _compile_sources(omp_compile, "")
+    compile_attempt = _compile_sources(
+        compile_request,
+        omp_compile=omp_compile,
+        object_suffix="",
+        verbose_print=verbose_print,
+        error_print=error_print,
+    )
 
-    if compile_objs is None and used_openmp:
-        first_stderr = first_stderr_holder[0]
+    if isinstance(compile_attempt, _CompileFailed) and used_openmp:
         msg = (
             "OpenMP compilation failed, retrying without OpenMP "
             f"(single-threaded). first-attempt stderr: "
-            f"{first_stderr or '<empty>'}"
+            f"{compile_attempt.stderr or '<empty>'}"
         )
         if on_retry is not None:
             on_retry(msg)
         verbose_print(msg + "...")
-        compile_objs = _compile_sources([], "_noomp")
+        compile_attempt = _compile_sources(
+            compile_request,
+            omp_compile=[],
+            object_suffix="_noomp",
+            verbose_print=verbose_print,
+            error_print=error_print,
+        )
         current_omp_link = []  # no OMP runtime to link
         used_openmp = False
 
-    if compile_objs is None:
+    if isinstance(compile_attempt, _CompileFailed):
         return CompileResult(
             success=False,
             used_openmp=False,
             used_openmp_link=False,
             error="compile failed",
         )
+    compile_objs = list(compile_attempt.objects)
 
     # Phase 2: link.
     # Link to a sibling temp path then os.replace() onto the final output.
@@ -393,26 +479,23 @@ def execute_build(
     # Databricks tasks) can never observe a half-written .so. The PID suffix
     # also guarantees parallel linkers don't clobber each other's tmp file.
     link_tmp = output.with_name(f"{output.name}.tmp.{os.getpid()}")
-    first_link_cmd = link_cmd(
-        cc_cmd,
-        cc_extra,
-        compile_objs,
-        link_tmp,
-        ldflags,
-        current_omp_link,
-        extra_link_flags,
+    link_attempt = _link_objects(
+        cc_cmd=cc_cmd,
+        cc_extra=cc_extra,
+        objects=compile_objs,
+        temporary_output=link_tmp,
+        ldflags=ldflags,
+        omp_link=current_omp_link,
+        extra_link_flags=extra_link_flags,
+        verbose_print=verbose_print,
     )
-    verbose_print(f"link: {' '.join(first_link_cmd)}")
-    link_result = subprocess.run(first_link_cmd, capture_output=True, text=True)
 
-    used_openmp_link = bool(current_omp_link)
-
-    if link_result.returncode != 0 and current_omp_link:
+    if not link_attempt.succeeded and current_omp_link:
         # Include the first-attempt stderr in the retry notice so the
         # root cause (missing -lpthread, wrong libiomp5 path, broken
         # RPATH, etc.) surfaces even if the retry succeeds. Without
         # this, a silent OMP downgrade masks real link bugs.
-        first_stderr = (link_result.stderr or "").strip()
+        first_stderr = link_attempt.stderr.strip()
         msg = (
             "link failed, retrying without OpenMP runtime. "
             f"first-attempt stderr: {first_stderr or '<empty>'}"
@@ -420,20 +503,18 @@ def execute_build(
         if on_retry is not None:
             on_retry(msg)
         verbose_print(msg + "...")
-        retry_link_cmd = link_cmd(
-            cc_cmd,
-            cc_extra,
-            compile_objs,
-            link_tmp,
-            ldflags,
-            [],
-            extra_link_flags,
+        link_attempt = _link_objects(
+            cc_cmd=cc_cmd,
+            cc_extra=cc_extra,
+            objects=compile_objs,
+            temporary_output=link_tmp,
+            ldflags=ldflags,
+            omp_link=[],
+            extra_link_flags=extra_link_flags,
+            verbose_print=verbose_print,
         )
-        verbose_print(f"link: {' '.join(retry_link_cmd)}")
-        link_result = subprocess.run(retry_link_cmd, capture_output=True, text=True)
-        used_openmp_link = False
 
-    if link_result.returncode != 0:
+    if not link_attempt.succeeded:
         # Tidy up any partial tmp from the failed link attempt.
         with contextlib.suppress(OSError):
             link_tmp.unlink()
@@ -441,7 +522,7 @@ def execute_build(
             success=False,
             used_openmp=used_openmp,
             used_openmp_link=False,
-            error=f"link failed: {link_result.stderr}",
+            error=f"link failed: {link_attempt.stderr}",
         )
 
     # Atomic publish — readers see either the old .so or the new one, never
@@ -458,13 +539,13 @@ def execute_build(
         return CompileResult(
             success=False,
             used_openmp=used_openmp,
-            used_openmp_link=used_openmp_link,
+            used_openmp_link=link_attempt.used_openmp,
             error=f"atomic replace of {output} failed: {e}",
         )
 
     return CompileResult(
         success=True,
         used_openmp=used_openmp,
-        used_openmp_link=used_openmp_link,
+        used_openmp_link=link_attempt.used_openmp,
         output_path=output,
     )

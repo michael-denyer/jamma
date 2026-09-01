@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.likelihood import (
+from jamma.lmm.pab import (
     _NCVT1,
     PabIndexTable,
     build_index_table,

@@ -12,7 +12,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from jamma.lmm.likelihood import calc_pab, compute_Uab, reml_log_likelihood
+from jamma.lmm.likelihood import reml_log_likelihood
+from jamma.lmm.pab import calc_pab, compute_Uab
 from tests.reference.stats import calc_wald_test
 
 # -----------------------------------------------------------------------------

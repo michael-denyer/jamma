@@ -21,6 +21,7 @@ top-level picklable functions, temp dir on same filesystem as input.
 """
 
 import contextlib
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +35,22 @@ from jamma.io._parallel_text import (
 )
 
 
-def _parse_chunk_to_memmap(args: tuple) -> None:
+@dataclass(frozen=True, slots=True)
+class MatrixReadTask:
+    """Picklable message passed to one matrix-parsing worker."""
+
+    txt_path: str
+    memmap_path: str
+    shape: tuple[int, int]
+    dtype: str
+    start_byte: int
+    end_byte: int
+    start_row: int
+    row_count: int
+    delimiter: str | None
+
+
+def _parse_chunk_to_memmap(task: MatrixReadTask) -> None:
     """Parse a byte range of a text file and write parsed rows into a memmap.
 
     Must be a top-level function for pickling with spawn context.
@@ -42,46 +58,39 @@ def _parse_chunk_to_memmap(args: tuple) -> None:
     Uses np.loadtxt with max_rows directly on the file handle instead of
     buffering the entire byte range via f.read(). This streams line-by-line
     internally, keeping per-worker memory bounded.
-
-    Args:
-        args: Tuple of (txt_path, memmap_path, shape, dtype_str,
-              start_byte, end_byte, start_row, n_rows, delimiter).
     """
-    (
-        txt_path,
-        memmap_path,
-        shape,
-        dtype_str,
-        start_byte,
-        end_byte,
-        start_row,
-        n_rows,
-        delimiter,
-    ) = args
-
     try:
-        with open(txt_path, "rb") as f:
-            f.seek(start_byte)
+        with open(task.txt_path, "rb") as f:
+            f.seek(task.start_byte)
             chunk = np.loadtxt(
-                f, dtype=np.dtype(dtype_str), delimiter=delimiter, max_rows=n_rows
+                f,
+                dtype=np.dtype(task.dtype),
+                delimiter=task.delimiter,
+                max_rows=task.row_count,
             )
         chunk = np.atleast_2d(chunk)
-        if chunk.shape[0] != n_rows:
+        if chunk.shape[0] != task.row_count:
             raise RuntimeError(
-                f"Row count mismatch in chunk at byte offset {start_byte}: "
-                f"expected {n_rows} data rows, parsed {chunk.shape[0]}. "
+                f"Row count mismatch in chunk at byte offset {task.start_byte}: "
+                f"expected {task.row_count} data rows, parsed {chunk.shape[0]}. "
                 f"File may have been modified during read."
             )
 
-        mm = np.memmap(memmap_path, dtype=np.dtype(dtype_str), mode="r+", shape=shape)
-        mm[start_row : start_row + chunk.shape[0], :] = chunk
+        mm = np.memmap(
+            task.memmap_path,
+            dtype=np.dtype(task.dtype),
+            mode="r+",
+            shape=task.shape,
+        )
+        mm[task.start_row : task.start_row + chunk.shape[0], :] = chunk
         del mm  # release memmap reference
     except MemoryError:
         raise  # Let parent process handle OOM directly
     except Exception as e:
         raise RuntimeError(
-            f"_parse_chunk_to_memmap failed at bytes {start_byte}-{end_byte}, "
-            f"row offset {start_row}: {e}"
+            f"_parse_chunk_to_memmap failed at bytes "
+            f"{task.start_byte}-{task.end_byte}, "
+            f"row offset {task.start_row}: {e}"
         ) from e
 
 
@@ -273,7 +282,17 @@ def read_matrix_parallel(
 
         dtype_str = str(np.dtype(np.float64))
         chunk_args = [
-            (str(path), memmap_path, shape, dtype_str, sb, eb, sr, nr, delimiter)
+            MatrixReadTask(
+                str(path),
+                memmap_path,
+                shape,
+                dtype_str,
+                sb,
+                eb,
+                sr,
+                nr,
+                delimiter,
+            )
             for sb, eb, sr, nr in chunks
         ]
 

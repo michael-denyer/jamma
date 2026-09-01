@@ -360,6 +360,49 @@ def test_execute_build_compile_failure_triggers_omp_retry(monkeypatch, tmp_path)
     )
 
 
+def test_execute_build_link_failure_retries_without_omp_runtime(monkeypatch, tmp_path):
+    """A failed OpenMP link retries the same objects without its runtime."""
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **_kwargs):
+        calls.append(list(cmd))
+        if "-c" not in cmd and "-liomp5" in cmd:
+            return _FakeCompleted(returncode=1, stderr="omp link failed")
+        if "-o" in cmd:
+            Path(cmd[cmd.index("-o") + 1]).write_bytes(b"")
+        return _FakeCompleted(returncode=0)
+
+    monkeypatch.setattr(
+        "jamma._build_support.build_execution.subprocess.run",
+        _fake_run,
+    )
+    retry_reasons: list[str] = []
+    source = tmp_path / "platform.c"
+    source.write_text("// stub\n")
+
+    result = execute_build(
+        sources=[source],
+        lapack_sources=[],
+        include_dirs=[],
+        cc_cmd="cc",
+        cc_extra=[],
+        omp_compile=["-fopenmp"],
+        omp_link=["-liomp5"],
+        ldflags=[],
+        output=tmp_path / "out.so",
+        tmp_dir=tmp_path / "objs",
+        on_retry=retry_reasons.append,
+    )
+
+    assert result.success
+    assert result.used_openmp
+    assert not result.used_openmp_link
+    assert len(retry_reasons) == 1
+    assert "omp link failed" in retry_reasons[0]
+    assert "-liomp5" in calls[-2]
+    assert "-liomp5" not in calls[-1]
+
+
 def test_atomic_replace_failure_preserves_used_openmp_link(monkeypatch, tmp_path):
     """When link succeeded but atomic os.replace fails, the returned
     ``used_openmp_link`` must reflect the REAL link-time state (True here),

@@ -21,9 +21,12 @@ from jamma.lmm import _compile_accel
 pytestmark = pytest.mark.tier0
 
 
-def test_accel_load_proof_fails_loudly_on_broken_import(capsys):
+def test_accel_load_proof_fails_loudly_on_broken_import(monkeypatch, capsys):
     """A subprocess that cannot import the extension must return False and
     print the failure, not silently succeed."""
+    # The sanitizer CI job exports JAMMA_SANITIZE, which makes _load_proof
+    # take the skip path and return True regardless of the import.
+    monkeypatch.delenv("JAMMA_SANITIZE", raising=False)
     result = _compile_accel._load_proof("import jamma.lmm._nonexistent_module")
 
     assert result is False
@@ -45,9 +48,12 @@ def test_accel_load_proof_skipped_under_sanitize(monkeypatch, capsys):
     assert "skipping" in captured.err
 
 
-def test_jlinalg_load_proof_fails_loudly_on_broken_import(capsys):
+def test_jlinalg_load_proof_fails_loudly_on_broken_import(monkeypatch, capsys):
     """A subprocess that cannot import the extension must return False and
     print the failure, not silently succeed."""
+    # The sanitizer CI job exports JAMMA_SANITIZE, which makes _load_proof
+    # take the skip path and return True regardless of the import.
+    monkeypatch.delenv("JAMMA_SANITIZE", raising=False)
     result = _compile_jlinalg._load_proof("import jamma.jlinalg._nonexistent_module")
 
     assert result is False

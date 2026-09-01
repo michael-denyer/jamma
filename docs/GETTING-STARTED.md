@@ -8,7 +8,7 @@ genome-wide association studies (GWAS).
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | `>= 3.11` | 3.11, 3.12, and 3.13 supported |
+| Python | `>= 3.11` | 3.11, 3.12, 3.13, and 3.14 supported |
 | NumPy | `>= 2.4.6` | Bundled as a dependency |
 | pip | any recent | or `uv` (recommended for development) |
 

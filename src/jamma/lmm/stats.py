@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from jamma.lmm.likelihood import _P_YY_MIN, build_index_table
+from jamma.lmm.pab import _P_YY_MIN, build_index_table
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
 from jamma.lmm.uab import batch_compute_pab_numpy
 

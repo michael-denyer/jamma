@@ -7,13 +7,13 @@ import pytest
 
 from jamma.lmm.likelihood import (
     _golden_section_minimize,
-    compute_Uab,
     reml_log_likelihood,
 )
 from jamma.lmm.likelihood_numpy import (
     _batch_reml_at_lambda_numpy,
     golden_section_optimize_lambda_numpy,
 )
+from jamma.lmm.pab import compute_Uab
 from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
 from jamma.lmm.uab import (
     _batch_compute_pab_varying_numpy,
@@ -57,7 +57,7 @@ def wald_pab_data():
 
 def test_optimizer_returns_pab(wald_pab_data):
     """The optimizer returns (lambdas, logls, Pab) with Pab of the right shape."""
-    from jamma.lmm.likelihood import build_index_table
+    from jamma.lmm.pab import build_index_table
 
     eigenvalues, Uab_batch, Iab_batch, _n_samples = wald_pab_data
     n_cvt = 1
@@ -485,7 +485,7 @@ def test_reconstruct_uab_from_soa_ncvt1_fast_path():
 )
 def test_reconstruct_uab_from_soa_multi_cvt(n_cvt, seed, n_samples, n_snps):
     """reconstruct_uab_from_soa round-trips via classify_uab_columns for n_cvt > 1."""
-    from jamma.lmm.likelihood import classify_uab_columns
+    from jamma.lmm.pab import classify_uab_columns
     from jamma.lmm.uab import reconstruct_uab_from_soa
 
     rng = np.random.default_rng(seed)

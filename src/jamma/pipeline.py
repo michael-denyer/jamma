@@ -59,6 +59,14 @@ from jamma.pipeline_config import (
 )
 from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_phenotype_loop import run_phenotype_loop
+from jamma.pipeline_plan import (
+    KinshipSource,
+    LocoAnalysisPlan,
+    ProvidedEigen,
+    ProvidedKinship,
+    StandardAnalysisPlan,
+    resolve_analysis_plan,
+)
 
 __all__ = [
     "BackendRequest",
@@ -308,16 +316,18 @@ class PipelineRunner:
 
         return phenotypes, n_analyzed
 
-    def load_kinship(
+    def _load_kinship_from_source(
         self,
+        source: KinshipSource,
         n_samples: int,
-        ksnps_indices: np.ndarray | None = None,
-        valid_indices: np.ndarray | None = None,
+        valid_indices: np.ndarray | None,
     ) -> np.ndarray:
         """Load or compute the kinship matrix over the valid samples.
 
-        If kinship_file is provided, loads from disk. Otherwise, computes
-        from genotypes using streaming kinship computation.
+        A ``ProvidedKinship`` source loads from disk; ``ComputedKinship``
+        streams from genotypes. Derive the source with
+        ``pipeline_plan.resolve_kinship_source`` so it cannot drift from
+        the resolver's choice.
 
         If weight_file is configured, applies individual weights to K via
         K[i,j] /= sqrt(w_i * w_j) before returning (and before saving).
@@ -330,9 +340,8 @@ class PipelineRunner:
         (n_valid, n_valid) directly and the full matrix is never allocated.
 
         Args:
+            source: Where the kinship comes from, per the resolved plan.
             n_samples: Number of samples (for validation of loaded kinship).
-            ksnps_indices: Optional SNP indices to restrict kinship computation.
-                Ignored when loading pre-computed kinship from file.
             valid_indices: Sample indices to keep, or None for all samples.
                 Must be sorted, unique, and within [0, n_samples).
 
@@ -349,9 +358,9 @@ class PipelineRunner:
         # computed kinship is accumulated over the valid samples directly.
         full = valid_indices is None or self.config.save_kinship
 
-        if self.config.kinship_file is not None:
-            logger.info(f"Loading kinship from {self.config.kinship_file}")
-            K = read_kinship_matrix(self.config.kinship_file, n_samples=n_samples)
+        if isinstance(source, ProvidedKinship):
+            logger.info(f"Loading kinship from {source.path}")
+            K = read_kinship_matrix(source.path, n_samples=n_samples)
             if not full:
                 K = K[np.ix_(valid_indices, valid_indices)]
         else:
@@ -362,7 +371,7 @@ class PipelineRunner:
                 miss_threshold=self.config.miss,
                 check_memory=False,
                 show_progress=self.config.show_progress,
-                ksnps_indices=ksnps_indices,
+                ksnps_indices=source.ksnps_indices,
                 valid_indices=None if full else valid_indices,
             )
 
@@ -533,47 +542,49 @@ class PipelineRunner:
             lmm_mode=parse_lmm_mode(self.config.lmm_mode),
             mem_budget=self.config.mem_budget,
         )
-        plan = execution.summary
+        analysis = resolve_analysis_plan(
+            self.config,
+            execution=execution,
+            snps_indices=snps_indices,
+            ksnps_indices=ksnps_indices,
+        )
+        plan = analysis.execution.summary
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
         # LOCO is single-phenotype (PipelineConfig rejects more) and owns its
         # own per-chromosome kinship, eigendecomposition and memory gate, so it
         # leaves before the shared preflight below.
-        if self.config.loco:
+        if isinstance(analysis, LocoAnalysisPlan):
             phenotypes, _n_analyzed = all_pheno_data[pheno_columns[0]]
             return self._run_loco(
+                analysis=analysis,
                 t_start=t_start,
-                plan=plan,
                 phenotypes=phenotypes,
                 covariates=covariates,
                 valid_mask=valid_mask,
-                n_snps=n_snps,
                 assoc_path=assoc_path,
-                snps_indices=snps_indices,
-                ksnps_indices=ksnps_indices,
             )
 
         log_pipeline_banner(plan)
 
-        memory_preflight(self.config, execution)
+        memory_preflight(self.config, analysis.execution)
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes). The
         # kinship matrix is consumed here; runners use the eigen arrays directly.
         eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
-            n_samples, n_valid, valid_mask, ksnps_indices
+            analysis, n_samples, n_valid, valid_mask
         )
         load_s = time.perf_counter() - t_start
 
         outcome = run_phenotype_loop(
             self.config,
-            execution,
+            analysis,
             all_pheno_data,
             valid_mask,
             covariates,
             eigenvalues,
             eigenvectors,
             assoc_path,
-            snps_indices,
             meta,
         )
 
@@ -665,15 +676,16 @@ class PipelineRunner:
 
     def _acquire_eigendecomposition(
         self,
+        analysis: StandardAnalysisPlan,
         n_samples: int,
         n_valid: int,
         valid_mask: np.ndarray,
-        ksnps_indices: np.ndarray | None,
     ) -> tuple[np.ndarray, np.ndarray, float]:
         """Load or compute the shared eigendecomposition (once for all phenotypes).
 
-        Either reads pre-computed eigen files (-d/-u), or has load_kinship
-        produce the kinship matrix over the valid samples and eigendecomposes
+        Either reads pre-computed eigen files (-d/-u), or has
+        ``_load_kinship_from_source`` produce the kinship matrix over the
+        valid samples and eigendecomposes
         it (optionally writing the eigen files). The kinship matrix is consumed
         here — the runners use the eigenvalues/eigenvectors directly.
 
@@ -683,32 +695,33 @@ class PipelineRunner:
         """
         t_kinship = time.perf_counter()
 
-        if self.config.eigenvalue_file and self.config.eigenvector_file:
+        source = analysis.eigen_source
+        if isinstance(source, ProvidedEigen):
             eigenvalues, eigenvectors = read_eigen_files(
-                self.config.eigenvalue_file,
-                self.config.eigenvector_file,
+                source.eigenvalue_file,
+                source.eigenvector_file,
                 n_samples=n_valid,
             )
             logger.info(
                 f"Loaded pre-computed eigendecomposition "
                 f"({len(eigenvalues)} eigenvalues)"
             )
-            if self.config.kinship_file:
+            if source.ignored_kinship_file is not None:
                 logger.warning(
                     "Both kinship (-k) and eigen files (-d/-u) "
                     "provided. Using eigen files; kinship will "
                     "be ignored."
                 )
         else:
-            K = self.load_kinship(
+            K = self._load_kinship_from_source(
+                source.source,
                 n_samples,
-                ksnps_indices=ksnps_indices,
                 valid_indices=None if np.all(valid_mask) else np.where(valid_mask)[0],
             )
             eigenvalues, eigenvectors = eigendecompose_kinship(
                 K, check_memory=self.config.check_memory
             )
-            if self.config.write_eigen:
+            if source.write_eigen:
                 d_path, u_path = write_eigen_files(
                     eigenvalues,
                     eigenvectors,
@@ -725,15 +738,12 @@ class PipelineRunner:
     def _run_loco(
         self,
         *,
+        analysis: LocoAnalysisPlan,
         t_start: float,
-        plan: ExecutionPlan,
         phenotypes: np.ndarray,
         covariates: np.ndarray | None,
         valid_mask: np.ndarray,
-        n_snps: int,
         assoc_path: Path,
-        snps_indices: np.ndarray | None,
-        ksnps_indices: np.ndarray | None,
     ) -> PipelineResult:
         """LOCO branch of the pipeline.
 
@@ -746,10 +756,10 @@ class PipelineRunner:
         PipelineConfig.__post_init__.
         """
         from jamma.lmm import run_lmm_loco
-        from jamma.lmm.loco import LocoConfig
 
         n_valid = int(np.sum(valid_mask))
         n_cvt = covariates.shape[1] if covariates is not None else 1
+        plan = analysis.execution.summary
         log_pipeline_banner(plan)
 
         t_loco = time.perf_counter()
@@ -757,21 +767,8 @@ class PipelineRunner:
             bed_path=self.config.bfile,
             phenotypes=phenotypes,
             covariates=covariates,
-            # check_memory passed through rather than forced off: this branch
-            # returns from run before memory_preflight, so run_lmm_loco owns
-            # the only memory gate on the LOCO path.
-            config=self.config.lmm_config(check_memory=self.config.check_memory),
-            loco=LocoConfig(
-                kinship_output_dir=(
-                    self.config.output_dir if self.config.save_kinship else None
-                ),
-                prefix=self.config.output_prefix,
-                snps_indices=snps_indices,
-                ksnps_indices=ksnps_indices,
-                write_eigen=self.config.write_eigen,
-                eigen_dir=self.config.eigen_dir,
-                legacy_text=self.config.legacy_text,
-            ),
+            config=analysis.lmm,
+            loco=analysis.loco,
             output_path=assoc_path,
         )
         loco_s = time.perf_counter() - t_loco

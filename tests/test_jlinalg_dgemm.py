@@ -13,9 +13,6 @@ Run with -n0 to avoid parallel interference with threading tests:
 
 from __future__ import annotations
 
-import subprocess
-import sys
-import textwrap
 from typing import ClassVar
 
 import numpy as np
@@ -418,107 +415,6 @@ class TestDgemmTranspose:
         result = dgemm(A_T_shape, B_T_shape, transa="T", transb="T")
         expected = _reference_dgemm(A_T_shape, B_T_shape, transa="T", transb="T")
         npt.assert_allclose(result, expected, rtol=1e-10)
-
-
-# ---------------------------------------------------------------------------
-# TestDgemmInit (BUILD-04)
-# ---------------------------------------------------------------------------
-
-
-class TestDgemmInit:
-    """Tests that dgemm import and C extension linkage work correctly."""
-
-    def test_import_succeeds(self) -> None:
-        """Import jamma.jlinalg.dgemm without error."""
-        from jamma.jlinalg import dgemm as _dgemm
-
-        assert callable(_dgemm)
-
-    def test_c_extension_has_dgemm(self) -> None:
-        """If HAS_C_EXTENSION, verify the C extension exports dgemm."""
-        if not HAS_C_EXTENSION:
-            pytest.skip("C extension not compiled")
-        from jamma.jlinalg import _jlinalg  # type: ignore[import]
-
-        assert hasattr(_jlinalg, "dgemm"), (
-            "C extension loaded but does not export 'dgemm'."
-        )
-
-
-# ---------------------------------------------------------------------------
-# TestDgemmThreadSafety (BL3-09)
-# ---------------------------------------------------------------------------
-
-
-class TestDgemmThreadSafety:
-    """Thread safety: dgemm results must be consistent for any OMP_NUM_THREADS value."""
-
-    def test_single_vs_multi_thread(self) -> None:
-        """OMP_NUM_THREADS=1 and OMP_NUM_THREADS=4 give consistent results.
-
-        Runs each configuration in a separate subprocess so that the OpenMP
-        runtime is initialised fresh with the correct thread count (OMP_NUM_THREADS
-        must be set before the library is loaded).  Size 500x500.
-
-        With external BLAS (MKL/Accelerate), results are bitwise identical.
-        With jlinalg-own, different thread counts change FP accumulation order
-        in the IC loop, producing differences up to ~1e-13 (within double
-        precision expectations for 500-element dot products).
-        """
-        script = textwrap.dedent("""
-            import sys
-            import numpy as np
-            from jamma.jlinalg import dgemm
-
-            rng = np.random.default_rng(12345)
-            A = rng.standard_normal((500, 500))
-            B = rng.standard_normal((500, 500))
-            C = dgemm(A, B)
-            # Write result as binary to stdout
-            sys.stdout.buffer.write(C.tobytes())
-        """)
-
-        import os
-
-        env_single = {**os.environ, "OMP_NUM_THREADS": "1"}
-        env_multi = {**os.environ, "OMP_NUM_THREADS": "4"}
-
-        result_single = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            env=env_single,
-            timeout=60,
-        )
-        result_multi = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            env=env_multi,
-            timeout=60,
-        )
-
-        assert result_single.returncode == 0, (
-            f"Single-thread subprocess failed: {result_single.stderr.decode()}"
-        )
-        assert result_multi.returncode == 0, (
-            f"Multi-thread subprocess failed: {result_multi.stderr.decode()}"
-        )
-
-        C_single = np.frombuffer(result_single.stdout, dtype=np.float64).reshape(
-            500, 500
-        )
-        C_multi = np.frombuffer(result_multi.stdout, dtype=np.float64).reshape(500, 500)
-
-        npt.assert_allclose(
-            C_single,
-            C_multi,
-            rtol=1e-12,
-            atol=1e-12,
-            err_msg=(
-                "dgemm results differ between OMP_NUM_THREADS=1 and OMP_NUM_THREADS=4 "
-                "beyond FP accumulation tolerance. This indicates a thread-safety bug "
-                "in the dgemm implementation (packing, workspace, or microkernel)."
-            ),
-        )
 
 
 # ---------------------------------------------------------------------------

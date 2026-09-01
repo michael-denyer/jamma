@@ -7,7 +7,7 @@ itself is the shared body in ``runner_numpy``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +35,7 @@ from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     LmmConfig,
     LmmRunResult,
+    SnpInfoRecord,
     SnpMeta,
 )
 
@@ -123,7 +124,7 @@ def run_lmm_association_numpy_streaming(
     bed_path: Path,
     phenotypes: np.ndarray,
     kinship: np.ndarray | None = None,
-    snp_info: list | SnpMeta | None = None,
+    snp_info: Sequence[SnpInfoRecord] | SnpMeta | None = None,
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
     eigenvectors: np.ndarray | None = None,
@@ -221,7 +222,7 @@ def run_lmm_association_numpy_streaming_planned(
     execution: ExecutableAssociationPlan,
     meta: PlinkMetadata,
     kinship: np.ndarray | None = None,
-    snp_info: list | SnpMeta | None = None,
+    snp_info: Sequence[SnpInfoRecord] | SnpMeta | None = None,
     chunk_size: int | None = None,
     validate_genotypes: bool = True,
 ) -> LmmRunResult:

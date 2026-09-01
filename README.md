@@ -281,7 +281,7 @@ flowchart TD
     style RES fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
 ```
 
-Core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) are shared between batch and streaming runners. See [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) for the C vendor BLAS dispatch layer.
+Core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [pab.py](src/jamma/lmm/pab.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) are shared between batch and streaming runners. See [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) for the C vendor BLAS dispatch layer.
 
 See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source links.
 

@@ -40,7 +40,7 @@ def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
     it is the entry point that raises.
     """
     from jamma.lmm._lmm_accel import create_workspace_general_c
-    from jamma.lmm.likelihood import build_pab_table_for_c
+    from jamma.lmm.pab import build_pab_table_for_c
 
     n_cvt = compute_numpy.MAX_C_N_CVT + 1
     n_samples = 200
@@ -105,7 +105,7 @@ def test_full_uab_helpers_never_touch_the_extension(monkeypatch, helper):
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
 
-    from jamma.lmm.likelihood import compute_Uab
+    from jamma.lmm.pab import compute_Uab
 
     Uab_batch = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
     for i in range(n_snps):

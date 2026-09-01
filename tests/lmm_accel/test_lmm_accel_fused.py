@@ -410,7 +410,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
     mle_const in the workspace. This test verifies the fix: all non-degenerate
     SNPs must have finite lambda_mle values.
     """
-    from jamma.lmm.likelihood import build_pab_table_for_c, classify_uab_columns
+    from jamma.lmm.pab import build_pab_table_for_c, classify_uab_columns
 
     data = general_score_lrt_ncvt2
     eigenvalues = data["eigenvalues"]
@@ -502,7 +502,7 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
 )
 def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """FGEN-04: Fused general workspace creates, computes, and destroys cleanly."""
-    from jamma.lmm.likelihood import build_pab_table_for_c
+    from jamma.lmm.pab import build_pab_table_for_c
 
     data = synthetic_covariate_data_ncvt2
     eigenvalues = data["eigenvalues"]
@@ -566,7 +566,7 @@ def test_fused_general_degenerate_snps(synthetic_covariate_data_ncvt2):
     so P_XX to zero. Both sides are given the same degenerate input, so the
     comparison stays between two implementations of one problem.
     """
-    from jamma.lmm.likelihood import compute_Uab
+    from jamma.lmm.pab import compute_Uab
 
     data = dict(synthetic_covariate_data_ncvt2)
     UtG = data["UtG"].copy()
@@ -697,7 +697,7 @@ def test_general_creator_rejects_out_of_range_table(
     to be caught there rather than by the workspace filling code that used
     to read the arrays one by one.
     """
-    from jamma.lmm.likelihood import build_pab_table_for_c
+    from jamma.lmm.pab import build_pab_table_for_c
 
     data = synthetic_covariate_data_ncvt2
     n_cvt = data["n_cvt"]
@@ -734,7 +734,7 @@ def test_general_creator_rejects_mode_5():
     tests/lmm_accel/test_lmm_accel_workspace_score_lrt.py. This pins the
     bound still enforced past 4.
     """
-    from jamma.lmm.likelihood import build_pab_table_for_c
+    from jamma.lmm.pab import build_pab_table_for_c
 
     n_cvt, n_samples = 2, 20
     inputs = rotated_lmm_inputs(

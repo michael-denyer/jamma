@@ -10,12 +10,8 @@ import numpy as np
 import pytest
 
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.likelihood import (
-    calc_pab,
-    compute_Uab,
-    get_ab_index,
-    reml_log_likelihood,
-)
+from jamma.lmm.likelihood import reml_log_likelihood
+from jamma.lmm.pab import calc_pab, compute_Uab, get_ab_index
 from jamma.lmm.stats import AssocResult
 from tests.fakes import FakeJlinalg, use_fake_jlinalg
 from tests.reference.stats import calc_wald_test, f_sf
@@ -572,7 +568,7 @@ class TestAssocResult:
 
 def test_ncvt1_layout_matches_index_table():
     """_NCVT1 names the columns build_index_table(1) packs, in its order."""
-    from jamma.lmm.likelihood import _NCVT1, build_index_table, get_ab_index
+    from jamma.lmm.pab import _NCVT1, build_index_table, get_ab_index
 
     table = build_index_table(1)
     assert _NCVT1.ww == get_ab_index(1, 1, 1)

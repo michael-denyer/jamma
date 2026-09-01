@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +51,7 @@ from jamma.lmm.schema import (
     LmmConfig,
     LmmRunResult,
     RunnerTiming,
+    SnpInfoRecord,
     SnpMeta,
 )
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
@@ -341,7 +342,7 @@ def run_lmm_association_numpy(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
     kinship: np.ndarray | None,
-    snp_info: list | SnpMeta,
+    snp_info: Sequence[SnpInfoRecord] | SnpMeta,
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
     eigenvectors: np.ndarray | None = None,
@@ -422,7 +423,7 @@ def run_lmm_association_numpy_planned(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
     kinship: np.ndarray | None,
-    snp_info: list | SnpMeta,
+    snp_info: Sequence[SnpInfoRecord] | SnpMeta,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray | None,
     eigenvectors: np.ndarray | None,

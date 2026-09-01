@@ -17,8 +17,8 @@ import pytest
 
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
-from jamma.lmm.likelihood import build_pab_table_for_c
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.conftest import requires_c
@@ -471,7 +471,7 @@ class TestGeneralWorkspaceScoreParity:
     @requires_c
     def test_general_score_only_matches_numpy(self, general_score_lrt_ncvt2):
         """Score-only general workspace matches the NumPy Score statistics."""
-        from jamma.lmm.likelihood import classify_uab_columns
+        from jamma.lmm.pab import classify_uab_columns
 
         data = general_score_lrt_ncvt2
         n_cvt = data["n_cvt"]
@@ -522,7 +522,7 @@ class TestGeneralWorkspaceLrtParity:
     @requires_c
     def test_general_lrt_only_matches_numpy(self, general_score_lrt_ncvt2):
         """LRT-only general workspace matches the NumPy MLE lambdas and p_lrts."""
-        from jamma.lmm.likelihood import classify_uab_columns
+        from jamma.lmm.pab import classify_uab_columns
 
         data = general_score_lrt_ncvt2
         n_cvt = data["n_cvt"]

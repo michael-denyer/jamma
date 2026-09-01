@@ -1,9 +1,9 @@
-"""compute_kinship and PipelineRunner.load_kinship behaviour.
+"""compute_kinship and pipeline kinship-loading behaviour.
 
 The first section validates compute_kinship's flag combinations before it
-touches disk. The rest, moved from test_pipeline.py, exercises
-load_kinship's early sample filtering, weight application, and MAF/missing
-filter parity with -gk — the ~300 lines of "compute_kinship or load_kinship"
+touches disk. The rest, moved from test_pipeline.py, exercises the pipeline
+kinship path's early sample filtering, weight application, and MAF/missing
+filter parity with -gk — the ~300 lines of "compute or load kinship"
 tests F6 named as their own seam.
 """
 
@@ -17,9 +17,21 @@ import pytest
 
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_kinship import compute_kinship
+from jamma.pipeline_plan import resolve_kinship_source
 from tests.builders import write_fam
 from tests.conftest import require_fixture
 from tests.fixture_paths import MOUSE, SYNTHETIC
+
+
+def _load_kinship(
+    runner: PipelineRunner,
+    n_samples: int,
+    valid_indices: np.ndarray | None = None,
+) -> np.ndarray:
+    """Load kinship the way run() does: shared source derivation, then load."""
+    source = resolve_kinship_source(runner.config.kinship_file, None)
+    return runner._load_kinship_from_source(source, n_samples, valid_indices)
+
 
 BFILE = SYNTHETIC.bfile
 _MOUSE_BFILE = MOUSE.bfile
@@ -102,8 +114,8 @@ def test_weight_file_applied_to_kinship(tmp_path: Path) -> None:
     runner_u = PipelineRunner(config_unweighted)
 
     # Load kinship with and without weights
-    K_weighted = runner_w.load_kinship(100)
-    K_unweighted = runner_u.load_kinship(100)
+    K_weighted = _load_kinship(runner_w, 100)
+    K_unweighted = _load_kinship(runner_u, 100)
 
     # With uniform weights=4.0, K_weighted[i,j] = K[i,j] / sqrt(4*4) = K[i,j] / 4
     np.testing.assert_allclose(K_weighted, K_unweighted / 4.0, rtol=1e-10)
@@ -113,11 +125,11 @@ def test_weight_file_applied_to_kinship(tmp_path: Path) -> None:
 def test_lmm_kinship_applies_config_maf_miss() -> None:
     """-lmm internally-computed kinship applies config MAF/missing filters.
 
-    Regression for Bug 6: load_kinship built the kinship with no MAF or
-    missingness filter (thresholds defaulted to 0.0 / 1.0), while -gk applied
-    them. On mouse_hs1940 the default maf=0.01 removes SNPs, so the filtered
-    kinship differs from the unfiltered one, and load_kinship must match the
-    filtered computation, not the unfiltered one.
+    Regression for Bug 6: the -lmm kinship path built the kinship with no MAF
+    or missingness filter (thresholds defaulted to 0.0 / 1.0), while -gk
+    applied them. On mouse_hs1940 the default maf=0.01 removes SNPs, so the
+    filtered kinship differs from the unfiltered one, and the pipeline load
+    must match the filtered computation, not the unfiltered one.
     """
     from jamma.kinship.stream import compute_kinship_streaming
 
@@ -130,7 +142,7 @@ def test_lmm_kinship_applies_config_maf_miss() -> None:
         check_memory=False,
         show_progress=False,
     )
-    K_load = PipelineRunner(config).load_kinship(1940)
+    K_load = _load_kinship(PipelineRunner(config), 1940)
 
     K_filtered = compute_kinship_streaming(
         _MOUSE_BFILE,
@@ -150,7 +162,7 @@ def test_lmm_kinship_applies_config_maf_miss() -> None:
         K_filtered,
         rtol=1e-12,
         atol=1e-14,
-        err_msg="load_kinship must apply config maf/miss like -gk does",
+        err_msg="pipeline kinship load must apply config maf/miss like -gk does",
     )
 
 
@@ -200,7 +212,7 @@ class TestEarlySampleFiltering:
         )
 
         runner = PipelineRunner(config)
-        K_with_vi = runner.load_kinship(_N_SAMPLES, valid_indices=valid_indices)
+        K_with_vi = _load_kinship(runner, _N_SAMPLES, valid_indices=valid_indices)
         n_valid = len(valid_indices)
         assert K_with_vi.shape == (n_valid, n_valid), (
             f"Expected ({n_valid}, {n_valid}) kinship, got {K_with_vi.shape}"
@@ -218,7 +230,7 @@ class TestEarlySampleFiltering:
             K_with_vi,
             K_ref,
             rtol=1e-12,
-            err_msg="load_kinship with valid_indices must match direct streaming",
+            err_msg="kinship load with valid_indices must match direct streaming",
         )
 
     def test_save_kinship_full_size(self, tmp_path: Path) -> None:
@@ -239,7 +251,9 @@ class TestEarlySampleFiltering:
         )
 
         valid_indices = np.array([0, 1, 2, 3, 4, 6, 7, 8, 9])
-        K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
+        K = _load_kinship(
+            PipelineRunner(config), _N_SAMPLES, valid_indices=valid_indices
+        )
         assert K.shape == (len(valid_indices), len(valid_indices))
 
         K_saved = np.load(out / "result.cXX.npy")
@@ -266,7 +280,9 @@ class TestEarlySampleFiltering:
         )
 
         valid_indices = _valid_indices_excluding()
-        K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
+        K = _load_kinship(
+            PipelineRunner(config), _N_SAMPLES, valid_indices=valid_indices
+        )
         n_valid = len(valid_indices)
         assert K.shape == (n_valid, n_valid), (
             f"Expected ({n_valid}, {n_valid}) with valid_indices, got {K.shape}"
@@ -297,7 +313,9 @@ class TestEarlySampleFiltering:
         )
 
         valid_indices = _valid_indices_excluding()
-        K = PipelineRunner(config).load_kinship(_N_SAMPLES, valid_indices=valid_indices)
+        K = _load_kinship(
+            PipelineRunner(config), _N_SAMPLES, valid_indices=valid_indices
+        )
 
         n_valid = len(valid_indices)
         assert K.shape == (n_valid, n_valid)

@@ -118,7 +118,7 @@ class TestBuildPabTableForC:
 
     def test_ncvt1_basic_structure(self):
         """n_cvt=1: returns dict with all expected keys and correct scalar values."""
-        from jamma.lmm.likelihood import build_pab_table_for_c
+        from jamma.lmm.pab import build_pab_table_for_c
 
         t = build_pab_table_for_c(1)
 
@@ -126,7 +126,7 @@ class TestBuildPabTableForC:
         assert t.n_index == 6  # (1+3)*(1+2)//2 = 6
         assert t.n_rows == 3  # n_cvt + 2
         # idx_yy, idx_xx, idx_xy from build_index_table
-        from jamma.lmm.likelihood import build_index_table
+        from jamma.lmm.pab import build_index_table
 
         ref = build_index_table(1)
         assert t.idx_yy == ref.idx_yy
@@ -135,7 +135,7 @@ class TestBuildPabTableForC:
 
     def test_ncvt2_dimensions(self):
         """n_cvt=2: n_index=10, n_rows=4, correct inv/var counts."""
-        from jamma.lmm.likelihood import build_pab_table_for_c
+        from jamma.lmm.pab import build_pab_table_for_c
 
         t = build_pab_table_for_c(2)
 
@@ -147,7 +147,7 @@ class TestBuildPabTableForC:
 
     def test_ncvt4_dimensions(self):
         """n_cvt=4: n_index=21, n_rows=6, correct inv/var counts."""
-        from jamma.lmm.likelihood import build_pab_table_for_c
+        from jamma.lmm.pab import build_pab_table_for_c
 
         t = build_pab_table_for_c(4)
 
@@ -159,7 +159,7 @@ class TestBuildPabTableForC:
 
     def test_invariant_varying_partition(self):
         """invariant + varying indices partition range(n_index) for n_cvt=1,2,4."""
-        from jamma.lmm.likelihood import build_pab_table_for_c
+        from jamma.lmm.pab import build_pab_table_for_c
 
         for n_cvt in (1, 2, 4):
             t = build_pab_table_for_c(n_cvt)
@@ -172,7 +172,7 @@ class TestBuildPabTableForC:
 
     def test_all_arrays_are_int32(self):
         """All index arrays must be int32 for C extension compatibility."""
-        from jamma.lmm.likelihood import build_pab_table_for_c
+        from jamma.lmm.pab import build_pab_table_for_c
 
         t = build_pab_table_for_c(2)
         array_keys = [
@@ -191,7 +191,7 @@ class TestBuildPabTableForC:
 
     def test_level_offsets_index_entries(self):
         """level_offsets and level_counts correctly index into flat entries array."""
-        from jamma.lmm.likelihood import build_pab_table_for_c
+        from jamma.lmm.pab import build_pab_table_for_c
 
         for n_cvt in (1, 2, 4):
             t = build_pab_table_for_c(n_cvt)
@@ -223,7 +223,7 @@ class TestBuildPabTableForC:
 
     def test_entries_match_pab_recursion(self):
         """Flat entries array matches build_index_table pab_recursion content."""
-        from jamma.lmm.likelihood import build_index_table, build_pab_table_for_c
+        from jamma.lmm.pab import build_index_table, build_pab_table_for_c
 
         for n_cvt in (1, 2, 4):
             t = build_pab_table_for_c(n_cvt)
@@ -248,7 +248,7 @@ class TestBuildPabTableForC:
 
     def test_logdet_diag_matches_build_index_table(self):
         """logdet_diag_rows/cols match build_index_table logdet_diag_indices."""
-        from jamma.lmm.likelihood import build_index_table, build_pab_table_for_c
+        from jamma.lmm.pab import build_index_table, build_pab_table_for_c
 
         for n_cvt in (1, 2, 4):
             t = build_pab_table_for_c(n_cvt)
@@ -265,7 +265,7 @@ class TestBuildPabTableForC:
 
     def test_lru_cached(self):
         """Same n_cvt returns same object (lru_cache)."""
-        from jamma.lmm.likelihood import build_pab_table_for_c
+        from jamma.lmm.pab import build_pab_table_for_c
 
         t1 = build_pab_table_for_c(2)
         t2 = build_pab_table_for_c(2)

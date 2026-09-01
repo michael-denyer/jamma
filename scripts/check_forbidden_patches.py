@@ -73,6 +73,7 @@ FORBIDDEN: tuple[tuple[str, str], ...] = (
     ),
     ("jamma.jlinalg", "Patches a jlinalg numerical wrapper. Use real synthetic data."),
     ("jamma.lmm.likelihood", "Patches a likelihood function. Use synthetic data."),
+    ("jamma.lmm.pab", "Patches the Pab/Uab packing. Use synthetic data."),
     (
         "jamma.lmm.likelihood_numpy",
         "Patches a likelihood function. Use synthetic data.",

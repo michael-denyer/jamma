@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from jamma.io.matrix_reader import (
+    MatrixReadTask,
     _cleanup_temp_memmap,
     _scan_chunk_boundaries,
     read_matrix_parallel,
@@ -440,19 +441,19 @@ class TestParseChunkRowCountMismatch:
 
         file_size = txt_path.stat().st_size
         # Pass n_rows=10 but file only has 5 rows — triggers row-count mismatch
-        args = (
-            str(txt_path),
-            mm_path,
-            (10, 3),
-            "float64",
-            0,
-            file_size,
-            0,
-            10,
-            "\t",
+        task = MatrixReadTask(
+            txt_path=str(txt_path),
+            memmap_path=mm_path,
+            shape=(10, 3),
+            dtype="float64",
+            start_byte=0,
+            end_byte=file_size,
+            start_row=0,
+            row_count=10,
+            delimiter="\t",
         )
         with pytest.raises(RuntimeError, match="Row count mismatch"):
-            _parse_chunk_to_memmap(args)
+            _parse_chunk_to_memmap(task)
 
 
 class TestMultiWorkerCorrectness:

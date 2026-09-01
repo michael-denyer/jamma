@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from jamma.io import parse_fam_phenotype_column, read_fam_phenotypes
-from jamma.lmm.likelihood import compute_Uab
+from jamma.lmm.pab import compute_Uab
 from tests.builders import rotated_lmm_inputs, write_fam
 from tests.fixture_paths import LOCO, MOUSE, SYNTHETIC, FixtureDataset, KinshipDataset
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.utils.atomic_publish import publish_temp_path, unlink_quietly
+from jamma.utils.atomic_publish import atomic_output
 
 
 def save_npy_atomic(array: np.ndarray, npy_path: Path) -> None:
@@ -24,13 +24,8 @@ def save_npy_atomic(array: np.ndarray, npy_path: Path) -> None:
         OSError: If the write or the rename fails. The destination is left
             untouched and the temp is removed.
     """
-    tmp_path = publish_temp_path(npy_path, suffix=".npy")
-    try:
+    with atomic_output(npy_path, suffix=".npy") as tmp_path:
         np.save(tmp_path, array)
-        tmp_path.replace(npy_path)
-    except BaseException:
-        unlink_quietly(tmp_path)
-        raise
 
 
 def npy_cache_valid(txt_path: Path, npy_path: Path) -> bool:

@@ -3,7 +3,7 @@
 Split from test_pipeline.py: these tests build a PipelineConfig or call
 validate_inputs() against paths that need not exist, and never touch real
 PLINK/kinship fixture data. Component-level ``run()`` tests stay in
-test_pipeline.py; load_kinship behaviour moved to test_pipeline_kinship.py.
+test_pipeline.py; kinship-loading behaviour moved to test_pipeline_kinship.py.
 """
 
 from __future__ import annotations

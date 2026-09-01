@@ -18,9 +18,28 @@ from __future__ import annotations
 import contextlib
 import os
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from loguru import logger
+
+
+@contextmanager
+def atomic_output(path: Path, *, suffix: str = "") -> Iterator[Path]:
+    """Yield a sibling temp path and publish it onto ``path`` on success.
+
+    This is the ordinary non-durable publish protocol: callers own opening and
+    writing the temp file, while this context owns replacement and cleanup. It
+    deliberately does not fsync; durable commit markers such as LOCO eigen-cache
+    manifests keep their own descriptor-based protocol.
+    """
+    tmp_path = publish_temp_path(path, suffix=suffix)
+    try:
+        yield tmp_path
+        tmp_path.replace(path)
+    finally:
+        unlink_quietly(tmp_path)
 
 
 def publish_temp_path(path: Path, *, suffix: str = "") -> Path:

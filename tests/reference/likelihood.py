@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.likelihood import _P_YY_MIN, calc_iab, calc_pab, get_ab_index, n_index
+from jamma.lmm.pab import _P_YY_MIN, calc_iab, calc_pab, get_ab_index, n_index
 
 
 def calc_ppab(

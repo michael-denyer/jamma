@@ -12,10 +12,10 @@ import pytest
 from jamma.lmm.likelihood import (
     _clamp_p_yy,
     _golden_section_minimize,
-    compute_Uab,
     mle_log_likelihood,
     reml_log_likelihood,
 )
+from jamma.lmm.pab import compute_Uab
 from jamma.lmm.prepare_common import _build_covariate_matrix
 from tests.reference.stats import safe_sqrt
 

@@ -25,6 +25,7 @@ from loguru import logger
 
 from jamma.io.matrix_reader import read_matrix_parallel
 from jamma.io.matrix_writer import write_matrix_parallel
+from jamma.utils.atomic_publish import atomic_output
 from jamma.utils.npy_cache import npy_cache_valid, save_npy_atomic
 
 # ---------------------------------------------------------------------------
@@ -251,8 +252,14 @@ def _write_eigenvalues(
         path,
         what="eigenvalues",
         legacy_text=legacy_text,
-        save_text=lambda a, p: np.savetxt(p, a, fmt="%.10g"),
+        save_text=_save_eigenvalues_text,
     )
+
+
+def _save_eigenvalues_text(eigenvalues: np.ndarray, path: Path) -> None:
+    """Write legacy eigenvalues without exposing a partial destination."""
+    with atomic_output(path) as temporary:
+        np.savetxt(temporary, eigenvalues, fmt="%.10g")
 
 
 def _write_eigenvectors(

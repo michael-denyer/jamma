@@ -11,12 +11,8 @@ import numpy as np
 import pytest
 
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.likelihood import (
-    calc_pab,
-    compute_null_model_lambda,
-    compute_Uab,
-    get_ab_index,
-)
+from jamma.lmm.likelihood import compute_null_model_lambda
+from jamma.lmm.pab import calc_pab, compute_Uab, get_ab_index
 from tests.reference.stats import calc_score_test, f_sf
 
 pytestmark = pytest.mark.tier0

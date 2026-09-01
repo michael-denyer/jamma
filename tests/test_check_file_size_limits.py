@@ -20,6 +20,10 @@ def _run(
     tmp_path: Path,
     tracked: dict[str, str],
     untracked: dict[str, str] | None = None,
+    *,
+    max_lines: int = 3,
+    warn_lines: int = 2,
+    warn_function_lines: int = 150,
 ):
     script = install_lint_script(_SCRIPT, tmp_path / "scripts")
 
@@ -45,9 +49,11 @@ def _run(
             sys.executable,
             str(script),
             "--max-lines",
-            "3",
+            str(max_lines),
             "--warn-lines",
-            "2",
+            str(warn_lines),
+            "--warn-function-lines",
+            str(warn_function_lines),
         ],
         capture_output=True,
         text=True,
@@ -95,3 +101,53 @@ def test_non_code_files_do_not_enter_the_gate(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "large.md" not in result.stderr
+
+
+def test_long_python_function_warns_without_failing(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        tracked={
+            "src/long_function.py": (
+                "def long_function():\n"
+                "    value = 1\n"
+                "    value += 1\n"
+                "    return value\n"
+            )
+        },
+        max_lines=10,
+        warn_lines=10,
+        warn_function_lines=4,
+    )
+
+    assert result.returncode == 0
+    assert "long_function spans 4 lines" in result.stderr
+
+
+def test_function_below_threshold_is_not_reported(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        tracked={
+            "src/short_function.py": (
+                "def short_function():\n    return 1\n\n\ndef other():\n    return 2\n"
+            )
+        },
+        max_lines=10,
+        warn_lines=10,
+        warn_function_lines=3,
+    )
+
+    assert result.returncode == 0
+    assert "spans" not in result.stderr
+
+
+def test_unparsable_python_file_is_named_in_a_warning(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        tracked={"src/broken.py": "def broken(:\n"},
+        max_lines=10,
+        warn_lines=10,
+        warn_function_lines=1,
+    )
+
+    assert result.returncode == 0
+    assert "src/broken.py: not scanned for long functions" in result.stderr

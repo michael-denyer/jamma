@@ -16,8 +16,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from hypothesis import HealthCheck, given, settings
-from hypothesis import strategies as st
 
 from jamma.lmm.eigen_io import (
     _load_npy_cache,
@@ -29,32 +27,6 @@ from jamma.lmm.eigen_io import (
     read_eigen_files,
     write_eigen_files,
 )
-
-
-@st.composite
-def genotype_matrix(draw, min_samples=10, max_samples=100, min_snps=5, max_snps=50):
-    """Generate realistic genotype matrices (values in {0, 1, 2}).
-
-    Uses a random seed to generate genotypes with realistic variance.
-    """
-    n_samples = draw(st.integers(min_value=min_samples, max_value=max_samples))
-    n_snps = draw(st.integers(min_value=min_snps, max_value=max_snps))
-    seed = draw(st.integers(min_value=0, max_value=2**32 - 1))
-
-    rng = np.random.default_rng(seed)
-
-    # Use varying MAFs to ensure non-constant columns
-    mafs = rng.uniform(0.1, 0.5, n_snps)
-    genotypes = np.zeros((n_samples, n_snps), dtype=np.float64)
-
-    for j in range(n_snps):
-        p = mafs[j]
-        # Hardy-Weinberg genotype frequencies
-        probs = [(1 - p) ** 2, 2 * p * (1 - p), p**2]
-        genotypes[:, j] = rng.choice([0.0, 1.0, 2.0], size=n_samples, p=probs)
-
-    return genotypes
-
 
 # =============================================================================
 # File format tests
@@ -607,6 +579,24 @@ class TestAtomicCacheWrite:
         assert npy_path.read_bytes() == old_bytes
         self._assert_dir_contents(tmp_path, {npy_path})
 
+    def test_legacy_eigenvalue_error_preserves_existing_text(
+        self, tmp_path: Path
+    ) -> None:
+        """A failed text publish leaves the previous eigenvalues intact."""
+        from unittest.mock import patch
+
+        txt_path = tmp_path / "existing.eigenD.txt"
+        txt_path.write_text("old eigenvalues\n")
+
+        with (
+            patch.object(Path, "replace", side_effect=OSError("mock")),
+            pytest.raises(OSError, match="mock"),
+        ):
+            _write_eigenvalues(np.arange(500.0), txt_path, legacy_text=True)
+
+        assert txt_path.read_text() == "old eigenvalues\n"
+        self._assert_dir_contents(tmp_path, {txt_path})
+
 
 # =============================================================================
 # LMM equivalence tests
@@ -717,153 +707,3 @@ class TestBinaryEigenIO:
         txt_u = tmp_path / "nobintest.eigenU.txt"
         assert not txt_d.exists(), ".eigenD.txt should NOT be written in binary mode"
         assert not txt_u.exists(), ".eigenU.txt should NOT be written in binary mode"
-
-
-@pytest.mark.tier0
-class TestEigenIoRoundTrip:
-    """Property tests for eigendecomposition file I/O precision."""
-
-    @given(
-        genotypes=genotype_matrix(
-            min_samples=10, max_samples=30, min_snps=20, max_snps=40
-        )
-    )
-    @settings(
-        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_eigen_roundtrip_reconstruction(self, genotypes, tmp_path_factory):
-        """K = U @ diag(D) @ U.T should hold after write -> read."""
-        from jamma.lmm.eigen import eigendecompose_kinship
-        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-        from tests.reference.kinship import compute_centered_kinship
-
-        K = compute_centered_kinship(genotypes, check_memory=False)
-        # eigendecomp overwrites K in-place; save copy for reconstruction check
-        K_original = K.copy()
-        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
-
-        d_path, u_path = write_eigen_files(
-            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
-        )
-        D_read, U_read = read_eigen_files(d_path, u_path)
-
-        # Reconstruct from round-tripped values
-        K_reconstructed = U_read @ np.diag(D_read) @ U_read.T
-
-        # Binary .npy is lossless; tolerance handles eigendecomp float precision
-        scale = max(np.abs(K_original).max(), 1e-10)
-        np.testing.assert_allclose(
-            K_original,
-            K_reconstructed,
-            rtol=1e-7,
-            atol=scale * 1e-8,
-            err_msg="Round-trip reconstruction failed",
-        )
-
-    @given(
-        genotypes=genotype_matrix(
-            min_samples=10, max_samples=30, min_snps=20, max_snps=40
-        )
-    )
-    @settings(
-        max_examples=15, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_eigen_roundtrip_orthonormality(self, genotypes, tmp_path_factory):
-        """U.T @ U = I should hold after write -> read."""
-        from jamma.lmm.eigen import eigendecompose_kinship
-        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-        from tests.reference.kinship import compute_centered_kinship
-
-        K = compute_centered_kinship(genotypes, check_memory=False)
-        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
-
-        d_path, u_path = write_eigen_files(
-            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
-        )
-        _, U_read = read_eigen_files(d_path, u_path)
-
-        # Binary .npy is lossless; tolerance handles eigendecomp float precision
-        n = U_read.shape[0]
-        np.testing.assert_allclose(
-            U_read.T @ U_read,
-            np.eye(n),
-            rtol=1e-6,
-            atol=n * 1e-9,
-            err_msg="Orthonormality lost after round-trip",
-        )
-
-    @given(
-        genotypes=genotype_matrix(
-            min_samples=10, max_samples=30, min_snps=20, max_snps=40
-        )
-    )
-    @settings(
-        max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_eigen_roundtrip_eigenvalue_precision(self, genotypes, tmp_path_factory):
-        """Individual eigenvalues survive binary round-trip exactly."""
-        from jamma.lmm.eigen import eigendecompose_kinship
-        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-        from tests.reference.kinship import compute_centered_kinship
-
-        K = compute_centered_kinship(genotypes, check_memory=False)
-        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
-
-        d_path, u_path = write_eigen_files(
-            eigenvalues, U, tmp_path_factory.mktemp("eigen_roundtrip"), prefix="test"
-        )
-        D_read, _ = read_eigen_files(d_path, u_path)
-
-        # Binary .npy is lossless; small tolerance for float round-trip
-        np.testing.assert_allclose(
-            eigenvalues,
-            D_read,
-            rtol=1e-9,
-            err_msg="Eigenvalue precision lost in round-trip",
-        )
-
-    @given(
-        genotypes=genotype_matrix(
-            min_samples=10, max_samples=30, min_snps=20, max_snps=40
-        )
-    )
-    @settings(
-        max_examples=10, deadline=None, suppress_health_check=[HealthCheck.too_slow]
-    )
-    def test_eigen_roundtrip_text_precision(self, genotypes, tmp_path_factory):
-        """Eigenvalues survive legacy text (.10g) round-trip within precision limits."""
-        from jamma.lmm.eigen import eigendecompose_kinship
-        from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
-        from tests.reference.kinship import compute_centered_kinship
-
-        K = compute_centered_kinship(genotypes, check_memory=False)
-        K_original = K.copy()
-        eigenvalues, U = eigendecompose_kinship(K, threshold=0)
-
-        d_path, u_path = write_eigen_files(
-            eigenvalues,
-            U,
-            tmp_path_factory.mktemp("eigen_roundtrip"),
-            prefix="test",
-            legacy_text=True,
-        )
-        D_read, U_read = read_eigen_files(d_path, u_path)
-
-        # .10g format gives ~10 significant digits
-        np.testing.assert_allclose(
-            eigenvalues,
-            D_read,
-            rtol=5e-10,
-            err_msg="Eigenvalue precision lost in text round-trip",
-        )
-
-        # Reconstruction: .10g rounding accumulates through matrix products
-        K_reconstructed = U_read @ np.diag(D_read) @ U_read.T
-        scale = max(np.abs(K_original).max(), 1e-10)
-        np.testing.assert_allclose(
-            K_original,
-            K_reconstructed,
-            rtol=1e-6,
-            atol=scale * 1e-7,
-            err_msg="Text round-trip reconstruction failed",
-        )

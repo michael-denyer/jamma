@@ -284,6 +284,8 @@ def test_loco_numpy_multipass_equivalence():
         assert r_single.rs == r_multi.rs, (
             f"SNP order differs: {r_single.rs} vs {r_multi.rs}"
         )
+        assert r_single.p_wald is not None
+        assert r_multi.p_wald is not None
         np.testing.assert_allclose(r_single.beta, r_multi.beta, rtol=1e-10, atol=1e-14)
         np.testing.assert_allclose(r_single.se, r_multi.se, rtol=1e-10, atol=1e-14)
         np.testing.assert_allclose(
@@ -486,6 +488,8 @@ def test_loco_missing_phenotype_cache_and_noncache_agree():
         loco_cache.associations, loco_nocache.associations, strict=True
     ):
         assert r_cache.rs == r_nocache.rs
+        assert r_cache.p_wald is not None
+        assert r_nocache.p_wald is not None
         # af is the direct fingerprint of the stats basis (all-sample vs analysed);
         # on a fixture with no missing genotypes it is where the bug shows.
         np.testing.assert_allclose(r_cache.af, r_nocache.af, rtol=1e-9, atol=1e-12)

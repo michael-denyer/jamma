@@ -26,6 +26,20 @@ pytestmark = pytest.mark.tier0
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _plant(path: Path, script: str) -> None:
+    """Write a transient ``test_*.py`` under ``tests/`` in one step.
+
+    The tier gate walks ``tests/`` at every session start, including the
+    sub-sessions these tests spawn, and under xdist another worker's gate can
+    read a file this one is still writing. The temporary name does not match
+    the gate's ``test_*.py`` glob and ``os.replace`` publishes the finished
+    file atomically, so a walker sees either nothing or the whole script.
+    """
+    part = path.with_name(f".{path.name}.part")
+    part.write_text(script)
+    part.replace(path)
+
+
 def test_requires_c_marker_reflects_accel_available() -> None:
     """The marker's skip condition is exactly `not accel.available()`.
 
@@ -68,7 +82,7 @@ def test_no_c_kernels_restores_after_the_test() -> None:
         """)
     test_dir = Path(__file__).resolve().parent
     tmp_test = test_dir / "test_planted_no_c_kernels_restore.py"
-    tmp_test.write_text(script)
+    _plant(tmp_test, script)
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", str(tmp_test), "-o", "addopts="],
@@ -103,7 +117,7 @@ def test_requires_c_skips_when_extension_unavailable() -> None:
         """)
     test_dir = Path(__file__).resolve().parent
     tmp_test = test_dir / "test_planted_requires_c_forced_absent.py"
-    tmp_test.write_text(script)
+    _plant(tmp_test, script)
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", str(tmp_test), "-o", "addopts="],
@@ -117,3 +131,15 @@ def test_requires_c_skips_when_extension_unavailable() -> None:
         tmp_test.unlink()
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 skipped" in result.stdout, result.stdout + result.stderr
+
+
+def test_plant_publishes_the_whole_file_under_a_gate_visible_name(tmp_path) -> None:
+    """A planted file appears complete under its final name and nothing else stays.
+
+    The gate globs ``test_*.py``; the temporary name must not match it, and
+    after publishing only the final file may exist.
+    """
+    target = tmp_path / "test_planted_probe.py"
+    _plant(target, "import pytest\npytestmark = pytest.mark.tier0\n")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["test_planted_probe.py"]
+    assert target.read_text().endswith("tier0\n")

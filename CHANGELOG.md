@@ -120,6 +120,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including LOCO, and `_parse_phenotype_column` requires the loaded
   `fam_data`.
 
+### Fixed
+
+- **The tier-marker gate no longer fails on a test file another worker is
+  planting or removing.** `tests/test_conftest_c_seam.py` writes its
+  transient `test_*.py` files under `tests/` through a temporary name the
+  gate's glob does not match and publishes them with one `replace`, and
+  `_file_untiered_functions` treats a file that vanished between the
+  directory walk and the read as not part of the suite. A half-written or
+  just-removed planted file had surfaced as `<unparsable file>` in about one
+  CI run in ten.
+
 ### Changed
 
 - **The 16-chunk cut for small inputs applies only under an uncontrollable

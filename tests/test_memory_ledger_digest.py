@@ -22,13 +22,13 @@ Regenerate the digest with ``uv run python tests/test_memory_ledger_digest.py``.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import itertools
 import json
 from unittest.mock import patch
 
 import pytest
 
-from jamma import jlinalg
 from jamma.core import memory
 from jamma.core.eigen_plan import plan_eigen_driver
 from jamma.core.memory import (
@@ -266,10 +266,14 @@ def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
 
 def ledger_table() -> list[list]:
     """Every estimate and gate decision over the grid, in a fixed order."""
+    # Resolved here, not at import: test_force_numpy_fallback re-imports
+    # jamma.jlinalg under a fresh module object, and the estimator reads
+    # whichever one sys.modules holds when it runs.
+    jlinalg = importlib.import_module("jamma.jlinalg")
     with patch.object(
         jlinalg,
         "_dsyrk_backend",
-        jlinalg._dsyrk_numpy_impl,
+        jlinalg._dsyrk_operation.numpy_impl,
         # allow-patch: forces the dispatch fallback so the kinship rows price
         # the same scratch on every machine. _dsyrk_backend is resolved from
         # blas_has_dsyrk at import time, so toggling that flag would not

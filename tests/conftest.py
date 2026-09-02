@@ -160,10 +160,20 @@ def _file_untiered_functions(path: Path) -> list[str]:
     xdist, ``-k``, ``-m`` filters, and any other collection-time filtering.
     An unparsable file reports a single ``"<file>"`` sentinel entry so it
     surfaces through the same channel rather than being silently skipped.
+    A file that vanished between the directory walk and the read is not part
+    of the suite: tests in ``test_conftest_c_seam.py`` plant transient
+    ``test_*.py`` files under ``tests/`` and remove them, and under xdist
+    another worker's gate can walk the tree in between.
     """
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (SyntaxError, OSError, UnicodeDecodeError):
+        source = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError):
+        return ["<unparsable file>"]
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
         return ["<unparsable file>"]
     return _untiered_test_functions(tree)
 

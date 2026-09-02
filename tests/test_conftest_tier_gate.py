@@ -263,6 +263,16 @@ class TestFileUntieredFunctions:
         path.write_text("def test_a(:\n    pass\n")
         assert _file_untiered_functions(path) == ["<unparsable file>"]
 
+    def test_vanished_file_is_not_part_of_the_suite(self, tmp_path) -> None:
+        """A path the walk saw but the read cannot find reports nothing.
+
+        Transient files planted by other tests come and go under xdist; a
+        gate that flags them as unparsable fails the suite at random.
+        """
+        gone = tmp_path / "test_gone.py"
+        assert not gone.exists()
+        assert _file_untiered_functions(gone) == []
+
 
 class TestEnforceTierMarkersInProcess:
     def test_real_suite_passes(self) -> None:

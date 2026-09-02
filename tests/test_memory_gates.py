@@ -379,14 +379,21 @@ class TestNumpyFallbackKinshipMemory:
         )
 
     def test_estimator_budgets_the_declared_scratch(self, monkeypatch):
-        """The kinship phase peak must include the fallback's declaration."""
-        from jamma import jlinalg
-        from jamma.core.memory import estimate_streaming_memory
+        """The kinship phase peak must include the fallback's declaration.
 
+        The expected side is the pure formula, not ``dsyrk_scratch_bytes``
+        under the same patch: that would hold whether or not the patch took.
+        """
+        import importlib
+
+        from jamma.core.memory import estimate_streaming_memory
+        from jamma.jlinalg._dsyrk import numpy_impl, scratch_bytes
+
+        jlinalg = importlib.import_module("jamma.jlinalg")
         monkeypatch.setattr(
             jlinalg,
             "_dsyrk_backend",
-            jlinalg._dsyrk_numpy_impl,
+            numpy_impl,
             # allow-patch: forces the dispatch fallback. _dsyrk_backend is
             # resolved from blas_has_dsyrk at import time, so toggling that
             # flag afterwards would not redirect dispatch.
@@ -394,10 +401,10 @@ class TestNumpyFallbackKinshipMemory:
 
         ledger = estimate_streaming_memory(50_000, chunk_size=10_000)
 
+        declared = scratch_bytes(50_000, numpy_impl)
+        assert declared > 0
         assert ledger.kinship_gb == pytest.approx(
-            square_matrix_gb(50_000)
-            + array_gb(50_000, 10_000)
-            + jlinalg.dsyrk_scratch_bytes(50_000) / 1e9
+            square_matrix_gb(50_000) + array_gb(50_000, 10_000) + declared / 1e9
         )
 
     def test_native_backend_declares_no_scratch(self):

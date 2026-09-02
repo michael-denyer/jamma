@@ -37,14 +37,45 @@ def _reload_jlinalg():
 
 
 @pytest.fixture
+def jlinalg_identity_guard():
+    """Fail at teardown if ``sys.modules["jamma.jlinalg"]`` is a new object.
+
+    Every test module that did ``from jamma import jlinalg`` at collection
+    holds the object this fixture captures. A later ``patch.object`` through
+    that binding only reaches production code, which imports at call time, if
+    the two are the same object. Order this before ``reload_jlinalg_after_test``
+    so it tears down after it and sees the restored state.
+    """
+    import jamma
+    from jamma import jlinalg as bound
+
+    yield bound
+    replaced = "import-time bindings in other test modules now patch a dead object"
+    assert sys.modules["jamma.jlinalg"] is bound, replaced
+    assert vars(jamma).get("jlinalg") is bound, replaced
+
+
+@pytest.fixture
 def reload_jlinalg_after_test(monkeypatch):
     """Reload jlinalg with the env in its current state, and again at teardown
     with JAMMA_FORCE_NUMPY_FALLBACK explicitly cleared, so the post-test module
     state doesn't leak into other tests in the same process.
+
+    Teardown puts the original module object back into ``sys.modules`` and
+    onto the ``jamma`` package before reloading it in place, so a test that
+    popped and re-imported the module cannot strand the import-time bindings
+    held by other test modules. Both slots matter: a re-import rebinds the
+    package attribute too, and ``from jamma import jlinalg`` reads that
+    attribute rather than ``sys.modules``.
     """
+    import jamma
+
+    original = importlib.import_module("jamma.jlinalg")
     yield
     monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
-    _reload_jlinalg()
+    sys.modules["jamma.jlinalg"] = original
+    vars(jamma)["jlinalg"] = original
+    importlib.reload(original)
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +139,22 @@ def test_force_numpy_no_warning_emitted(monkeypatch, reload_jlinalg_after_test):
         if "jlinalg" in str(w.message).lower() or "fallback" in str(w.message).lower()
     ]
     assert forced_warnings == [], [str(w.message) for w in forced_warnings]
+
+
+def test_pop_and_reimport_restores_the_import_time_binding(
+    jlinalg_identity_guard, monkeypatch, reload_jlinalg_after_test
+):
+    """After the pop-and-reimport path, teardown restores the bound object.
+
+    Within the test the re-import yields a fresh object; that is the hazard.
+    ``jlinalg_identity_guard`` asserts the restore once the reload fixture has
+    torn down.
+    """
+    monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
+    sys.modules.pop("jamma.jlinalg", None)
+    fresh = importlib.import_module("jamma.jlinalg")
+    assert fresh is not jlinalg_identity_guard
+    assert sys.modules["jamma.jlinalg"] is fresh
 
 
 def test_force_numpy_fallback_functions_callable(

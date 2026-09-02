@@ -150,6 +150,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The chunk engine carries only the thread budget it reads.**
+  `_ChunkEngine.rot_threads` and `ThreadPlan.rot` are gone: the planner
+  wrote them, the adaptive split rewrote them, and nothing consumed them
+  (`_ChunkEngine.prepare` rotates under the process's BLAS thread count,
+  not a per-engine budget). `omp_threads` stays because the kernel reads it
+  on every chunk. Whether the rotation stage should hold its own
+  `blas_threads` context is an open, unmeasured question, not something
+  this change decides. `scripts/assoc_digest.py`: 68/68 keys identical to
+  `18454df`.
+
 - **LOCO plans its association once per run and prices it through the
   shared preflight.** `_run_lmm_for_chromosome_numpy` called
   `plan_association` for every chromosome (22 machine reads and dispatch

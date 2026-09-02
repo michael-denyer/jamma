@@ -128,8 +128,7 @@ class _ChunkEngine:
     seven ``nonlocal`` counters, and the pipeline driver reached the live thread
     split through a separate mutable object because a bare-int ``nonlocal``
     cannot cross a module boundary. Both are ordinary fields here, so the driver
-    takes one typed argument and rebinds ``rot_threads``/``omp_threads``
-    directly.
+    takes one typed argument and rebinds ``omp_threads`` directly.
     """
 
     def __init__(
@@ -143,7 +142,6 @@ class _ChunkEngine:
         chunk_sink: Callable[[dict[str, np.ndarray], int, int], None],
         chunk_size: int,
         n_buffers: int,
-        rot_threads: int,
         omp_threads: int,
     ) -> None:
         self.inv = invariants
@@ -155,7 +153,6 @@ class _ChunkEngine:
         self.chunk_size = chunk_size
 
         # Rebound by _drive_pipeline once it has profiled the first chunk.
-        self.rot_threads = rot_threads
         self.omp_threads = omp_threads
 
         n_samples = invariants.n_samples
@@ -352,7 +349,6 @@ def run_lmm_chunk_source_numpy(
         chunk_sink=chunk_sink,
         chunk_size=chunk_size,
         n_buffers=chunks.n_buffers,
-        rot_threads=threads.rot,
         omp_threads=threads.omp,
     )
 

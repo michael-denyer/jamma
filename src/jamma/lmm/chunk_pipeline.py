@@ -81,9 +81,12 @@ def compute_adaptive_core_split(
 
 
 class ThreadPlan(NamedTuple):
-    """How a run divides the physical cores, before any profiling."""
+    """The compute (OpenMP) thread budget for a run, before any profiling.
 
-    rot: int
+    Rotation runs under whatever BLAS thread count the process holds; only
+    the compute side is a budget the chunk engine reads.
+    """
+
     omp: int
     total_cores: int
 
@@ -100,11 +103,11 @@ def plan_thread_budget(
     """
     total_cores = get_physical_core_count()
     if not use_pipeline:
-        return ThreadPlan(rot=total_cores, omp=omp_threads, total_cores=total_cores)
+        return ThreadPlan(omp=omp_threads, total_cores=total_cores)
 
     logger.debug("Pipeline mode: overlapping rotation/compute")
     if omp_threads == 1:
-        return ThreadPlan(rot=total_cores, omp=1, total_cores=total_cores)
+        return ThreadPlan(omp=1, total_cores=total_cores)
 
     _rot, compute_threads = compute_pipeline_core_split(n_samples, total_cores)
     omp = min(compute_threads, omp_threads)
@@ -112,7 +115,7 @@ def plan_thread_budget(
     logger.debug(
         f"Pipeline core split: {rot} rotation, {omp} compute (n_samples={n_samples:,})"
     )
-    return ThreadPlan(rot=rot, omp=omp, total_cores=total_cores)
+    return ThreadPlan(omp=omp, total_cores=total_cores)
 
 
 def _drive_pipeline(
@@ -139,8 +142,8 @@ def _drive_pipeline(
     what the engine reads on every subsequent chunk.
 
     Args:
-        engine: The chunk engine to drive. Its ``rot_threads`` and
-            ``omp_threads`` are rebound here from the profiled first chunk.
+        engine: The chunk engine to drive. Its ``omp_threads`` is rebound
+            here from the profiled first chunk.
         n_chunks: Expected chunk count (progress total; adaptive-split guard).
         total_cores: Physical core count for the adaptive split.
         n_samples: Sample count (adaptive-split static fallback; ETA estimate).
@@ -173,14 +176,14 @@ def _drive_pipeline(
     # BLAS is controllable). The engine reads these fields on every subsequent
     # chunk, so writing them here is what makes the new split take effect.
     if n_chunks > 2 and is_blas_controllable():
-        old_rot, old_omp = engine.rot_threads, engine.omp_threads
-        engine.rot_threads, engine.omp_threads = compute_adaptive_core_split(
+        old_omp = engine.omp_threads
+        _rot, engine.omp_threads = compute_adaptive_core_split(
             t_first_rot, t_first_compute, total_cores, n_samples=n_samples
         )
-        if (engine.rot_threads, engine.omp_threads) != (old_rot, old_omp):
+        if engine.omp_threads != old_omp:
             logger.debug(
-                f"Adaptive core split: {old_rot}/{old_omp} -> "
-                f"{engine.rot_threads}/{engine.omp_threads} "
+                f"Adaptive compute split: {old_omp} -> {engine.omp_threads} "
+                f"of {total_cores} cores "
                 f"(rot={t_first_rot:.3f}s, compute={t_first_compute:.3f}s)"
             )
 

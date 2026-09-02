@@ -291,8 +291,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `build_models.py` | Immutable source manifests, compile/link flag policy, and `BuildSpec` values | [build_models.py](../src/jamma/_build_support/build_models.py) |
 | 4Nd | `build_execution.py` | Toolchain detection and atomic compile/link execution | [build_execution.py](../src/jamma/_build_support/build_execution.py) |
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
-| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:43](../src/jamma/lmm/runner_numpy_streaming.py#L43) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:123](../src/jamma/lmm/runner_numpy_streaming.py#L123) |
+| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:43](../src/jamma/lmm/runner_numpy_streaming.py#L39) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | Streaming wrapper: builds a BedSource for the shared body | [runner_numpy_streaming.py:123](../src/jamma/lmm/runner_numpy_streaming.py#L119) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:95](../src/jamma/lmm/schema.py#L95) |
 | 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:121](../src/jamma/lmm/schema.py#L121) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:35](../src/jamma/lmm/results.py#L35) |

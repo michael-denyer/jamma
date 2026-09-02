@@ -402,39 +402,7 @@ def run_lmm_association_numpy(
         max_chunk_size=max_chunk_size,
         log_dispatch_choices=True,
     )
-    return run_lmm_association_numpy_planned(
-        genotypes=genotypes,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        covariates=covariates,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
-        config=config,
-        output_path=output_path,
-        hwe_threshold=hwe_threshold,
-        execution=execution,
-        check_association_memory=config.check_memory and max_chunk_size is None,
-    )
-
-
-def run_lmm_association_numpy_planned(
-    *,
-    genotypes: np.ndarray,
-    phenotypes: np.ndarray,
-    kinship: np.ndarray | None,
-    snp_info: Sequence[SnpInfoRecord] | SnpMeta,
-    covariates: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
-    config: LmmConfig,
-    output_path: Path | None,
-    hwe_threshold: float,
-    execution: ExecutableAssociationPlan,
-    check_association_memory: bool,
-) -> LmmRunResult:
-    """Run the batch boundary with policy supplied by the pipeline."""
-    if check_association_memory:
+    if config.check_memory and max_chunk_size is None:
         quote = execution.price()
         available_gb = memory.available_ram_gb()
         logger.info(
@@ -444,8 +412,7 @@ def run_lmm_association_numpy_planned(
         memory.require(
             quote.total_peak_gb,
             available_gb,
-            f"LMM workflow with {execution.n_samples:,} samples x "
-            f"{execution.n_snps_before_filter:,} SNPs",
+            f"LMM workflow with {n_samples:,} samples x {n_snps:,} SNPs",
             budget_gb=execution.mem_budget_gb,
         )
 

@@ -290,6 +290,13 @@ def _decide_loco_passes(
     A single-pass run still goes through the batch loop with ``batch_size =
     n_chr_with_snps``, one batch covering every chromosome.
 
+    Both decisions use ``memory.fits``: single-pass when the whole-run peak
+    fits, and otherwise the largest batch whose peak (the two live matrices,
+    the chunk buffer, the eigendecomp reserve and ``batch_size`` S_chr
+    matrices) still fits. The margin is therefore always taken of the
+    requirement, via ``memory.headroom_gb``, so the multi-pass budget is the
+    same margin ``fits`` would apply to the batch it produces.
+
     Args:
         n_mat: Live matrix dimension (valid-sample count, or n_samples).
         n_samples: Total sample count (disk chunk-buffer width).
@@ -319,7 +326,7 @@ def _decide_loco_passes(
         batch_size = max_batch_chrs
         single_pass = n_chr_with_snps <= batch_size
     else:
-        single_pass = single_pass_gb + memory.margin_gb(single_pass_gb) <= available_gb
+        single_pass = memory.fits(single_pass_gb, available_gb)
         if single_pass:
             batch_size = n_chr_with_snps  # one batch covers every chromosome
         else:
@@ -327,15 +334,13 @@ def _decide_loco_passes(
             # suspended with remaining S_chr matrices still alive. Reserve
             # eigendecomp workspace (DSYEVR peak on the n_mat-sized K_loco) so
             # the batch doesn't exhaust memory before eigendecomp can run.
-            eigendecomp_reserve_gb = dsyevr_peak_gb(n_mat)
-            usable_gb = (
-                available_gb
-                - memory.margin_gb(available_gb)
-                - 2 * matrix_gb
-                - chunk_buffer_gb
-                - eigendecomp_reserve_gb
-            )
+            fixed_gb = 2 * matrix_gb + chunk_buffer_gb + dsyevr_peak_gb(n_mat)
+            usable_gb = memory.headroom_gb(available_gb) - fixed_gb
             batch_size = max(1, int(usable_gb / matrix_gb))
+            if batch_size > 1 and not memory.fits(
+                fixed_gb + batch_size * matrix_gb, available_gb
+            ):
+                batch_size -= 1  # floor landed on the tie fits rejects
 
     return _LocoPassPlan(
         single_pass=single_pass,

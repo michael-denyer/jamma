@@ -40,9 +40,14 @@ from jamma.kinship.loco import _decide_loco_passes
 
 pytestmark = pytest.mark.tier0
 
-# Recorded from master ebc07b6, before the ledger and the gate were reshaped,
-# under the forced NumPy dsyrk backend the table always prices with.
-EXPECTED_DIGEST = "e943012ebe93a6e4b38144b222eb4f0c87fd78d18c9a19e811fb201ab845898a"
+# Recorded after every gate moved onto memory.fits / memory.headroom_gb,
+# under the forced NumPy dsyrk backend the table always prices with. Against
+# the ebc07b6 recording (e943012e...) exactly 32 rows moved: the 12
+# eigen:tie rows pick DSYEVR at the tie, the 18 loco:tie rows go multi-pass
+# at the tie, and 2 loco rows (n=10001, 22 chr, 8GB) batch 4 not 3 because
+# the budget is headroom_gb(available) rather than available minus
+# margin_gb(available). `scripts/dump_memory_ledger.py diff` lists them.
+EXPECTED_DIGEST = "7b6e635ddfaffcd5306d8180bed3266ae2924f23a594e8e88f89955dbf9b4f5a"
 EXPECTED_ROWS = 2438
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)

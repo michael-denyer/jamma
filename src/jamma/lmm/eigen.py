@@ -154,7 +154,7 @@ def eigendecompose_kinship(
     if (
         not no_vendor
         and not plan.use_dsyevr
-        and required_gb + memory.margin_gb(required_gb) > available_gb
+        and not memory.fits(required_gb, available_gb)
     ):
         logger.warning(
             f"DSYEVD peak ({required_gb:.1f}GB) may exceed available memory "

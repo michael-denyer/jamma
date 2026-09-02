@@ -216,7 +216,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from disk, mode-selected transform; single-passes centered mode when unfiltered, else shared `_stream_kinship_two_pass` | [stream.py:425](../src/jamma/kinship/stream.py#L427) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:349](../src/jamma/kinship/loco.py#L349) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:354](../src/jamma/kinship/loco.py#L354) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L171) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |
 | 3b | `impute_and_center()` | NaN -> mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
@@ -308,8 +308,8 @@ Configuration, memory management, threading, and logging.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 5c | `MemoryLedger` | Peak memory per streaming phase; the gate reads `available_ram_gb()` once | [memory.py:101](../src/jamma/core/memory.py#L101) |
-| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:139](../src/jamma/core/memory.py#L139) |
+| 5c | `MemoryLedger` | Peak memory per streaming phase; the gate reads `available_ram_gb()` once | [memory.py:119](../src/jamma/core/memory.py#L119) |
+| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:157](../src/jamma/core/memory.py#L157) |
 | 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:28](../src/jamma/core/memory_snapshot.py#L28) |
 | 5c | `cleanup_memory()` | GC + clear caches | [memory_snapshot.py:79](../src/jamma/core/memory_snapshot.py#L79) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:20](../src/jamma/utils/logging.py#L20) |

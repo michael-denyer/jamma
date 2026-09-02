@@ -663,7 +663,7 @@ def test_decide_loco_passes_reserves_eigendecomp_at_valid_size():
     the n_mat-vs-n_samples reserve difference is material.
     """
     from jamma.core.eigen_plan import dsyevr_peak_gb
-    from jamma.core.memory import margin_gb
+    from jamma.core.memory import headroom_gb
     from jamma.kinship.loco import _decide_loco_passes
 
     n_samples = 100_000
@@ -681,7 +681,7 @@ def test_decide_loco_passes_reserves_eigendecomp_at_valid_size():
     # Re-derive both candidate batch sizes from the same public peak estimator.
     matrix_gb = n_mat**2 * 8 / 1e9
     chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
-    budget = available_gb - margin_gb(available_gb) - 2 * matrix_gb - chunk_buffer_gb
+    budget = headroom_gb(available_gb) - 2 * matrix_gb - chunk_buffer_gb
 
     fixed_batch = max(1, int((budget - dsyevr_peak_gb(n_mat)) / matrix_gb))
     buggy_batch = max(1, int((budget - dsyevr_peak_gb(n_samples)) / matrix_gb))

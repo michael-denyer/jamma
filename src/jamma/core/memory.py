@@ -42,8 +42,26 @@ def margin_gb(peak_gb: float) -> float:
 
 
 def fits(required_gb: float, available_gb: float) -> bool:
-    """Whether *required_gb* plus the margin fits in *available_gb*."""
+    """Whether *required_gb* plus the margin fits in *available_gb*.
+
+    The one inequality every memory gate spells: strict, with the margin
+    taken of the requirement, never of the machine.
+    """
     return (required_gb + margin_gb(required_gb)) < available_gb
+
+
+def headroom_gb(available_gb: float) -> float:
+    """The largest requirement whose margin still fits in *available_gb*.
+
+    The inverse of ``required + margin_gb(required)``, so a caller sizing a
+    batch against a fixed budget can subtract its fixed costs from this
+    figure and divide, and land where ``fits`` agrees. Taking
+    ``margin_gb(available_gb)`` off the machine instead reserves 10% of the
+    machine, which is more than 10% of the requirement below the 10GB cap.
+    """
+    if available_gb > 110.0:
+        return available_gb - 10.0
+    return available_gb / 1.1
 
 
 def require(

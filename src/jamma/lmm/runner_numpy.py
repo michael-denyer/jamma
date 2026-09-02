@@ -1,8 +1,9 @@
 """Shared NumPy LMM run body and the in-memory batch runner.
 
-One body, many sources: ``_run_numpy_lmm`` drives per-SNP statistics,
-filtering, preparation, and the chunk engine over a ``GenotypeSource``.
-The batch and streaming runners are thin wrappers that build a source;
+One body, many sources: ``run_lmm_association`` drives per-SNP statistics,
+filtering, preparation, and the chunk engine over a ``GenotypeSource`` under
+one ``LmmRunSpec``. The batch and streaming entries build a source and a
+spec from their public arguments; the pipeline builds one source per run;
 LOCO builds one per chromosome.
 """
 
@@ -12,6 +13,7 @@ import contextlib
 import gc
 import time
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -56,6 +58,50 @@ from jamma.lmm.schema import (
 )
 from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.stats import AssocResult
+
+
+@dataclass(frozen=True, slots=True)
+class RunLabels:
+    """How one runner names itself in the log and the progress bar."""
+
+    banner: str
+    label: str
+    progress_label: str = "LMM association"
+    lambda_warning_prefix: str = ""
+
+
+BATCH_LABELS = RunLabels(banner="NumPy batch", label="lmm_numpy")
+STREAMING_LABELS = RunLabels(
+    banner="NumPy streaming",
+    label="lmm_numpy_streaming",
+    progress_label="LMM association (streaming)",
+)
+LOCO_LABELS = RunLabels(
+    banner="NumPy LOCO", label="lmm_loco", lambda_warning_prefix="LOCO "
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LmmRunSpec:
+    """Everything one association run decides before it reads a genotype.
+
+    Attributes:
+        config: Thresholds, lambda bounds and grid, test type, progress.
+        execution: Mode, dispatch, and conservative association geometry.
+        snps_indices: Global indices restricting the tested SNP set, or
+            None. Joins the MAF, missingness and HWE filters in the body,
+            so every source applies the restriction at the same layer.
+        hwe_threshold: HWE p-value threshold; 0.0 disables the filter.
+        compute_pve: Whether to run the null-REML PVE estimate.
+        labels: The runner's banner and progress-bar wording.
+    """
+
+    config: LmmConfig
+    execution: ExecutableAssociationPlan
+    snps_indices: np.ndarray | None = None
+    hwe_threshold: float = 0.0
+    compute_pve: bool = True
+    labels: RunLabels = BATCH_LABELS
 
 
 class MatrixSource:
@@ -130,52 +176,38 @@ class MatrixSource:
         )
 
 
-def _run_numpy_lmm(
+def run_lmm_association(
     source: GenotypeSource,
+    spec: LmmRunSpec,
     *,
     phenotypes: np.ndarray,
     kinship: np.ndarray | None,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray | None,
     eigenvectors: np.ndarray | None,
-    config: LmmConfig,
-    output_path: Path | None,
-    banner: str,
-    label: str,
+    output_path: Path | None = None,
     writer: IncrementalAssocWriter | None = None,
-    snps_indices: np.ndarray | None = None,
-    hwe_threshold: float = 0.0,
-    execution: ExecutableAssociationPlan,
-    compute_pve: bool = True,
-    progress_label: str = "LMM association",
-    lambda_warning_prefix: str = "",
 ) -> LmmRunResult:
     """Run one NumPy LMM association over any genotype source.
 
     Statistics, filtering, eigen preparation, the chunk loop, and result
     routing are identical for every runner; only where genotypes come from
-    differs, and that lives in ``source``.
+    differs, and that lives in ``source``, and what policy the run follows,
+    which lives in ``spec``.
 
     Args:
         source: Genotype provider; owns sample-row filtering and stats dtype.
+        spec: The run's policy: config, execution plan, SNP restriction,
+            HWE threshold, PVE choice, and labels.
         phenotypes: Phenotype vector (n_samples_total,), NaN for missing.
         kinship: Kinship matrix, or None when eigenpairs are supplied.
         covariates: Covariate matrix or None for intercept-only.
         eigenvalues: Pre-computed eigenvalues (ascending) or None.
         eigenvectors: Pre-computed eigenvectors or None.
-        config: Thresholds, lambda bounds and grid, test type, progress.
         output_path: Stream results to this file, or None for in-memory.
-        banner: Runner name for the progress banner ("NumPy batch", ...).
-        label: Memory-log label identifying the calling runner.
         writer: A caller-owned writer to append results to, instead of
             output_path. LOCO shares one writer across its chromosome
             loop; the body neither opens nor closes it.
-        snps_indices: Global indices restricting the tested SNP set, or None.
-        hwe_threshold: HWE p-value threshold; 0.0 disables the filter.
-        execution: Mode, dispatch, and conservative association geometry.
-        compute_pve: Whether to run the null-REML PVE estimate.
-        progress_label: Chunk-loop progress bar label.
-        lambda_warning_prefix: Prefix for lambda-boundary warnings.
 
     Returns:
         LmmRunResult with associations (empty when output_path routed them
@@ -184,6 +216,9 @@ def _run_numpy_lmm(
     if output_path is not None and writer is not None:
         raise ValueError("pass output_path or writer, not both")
 
+    config = spec.config
+    execution = spec.execution
+    labels = spec.labels
     maf_threshold = config.maf_threshold
     miss_threshold = config.miss_threshold
     l_min, l_max = config.l_min, config.l_max
@@ -207,7 +242,7 @@ def _run_numpy_lmm(
     n_samples = phenotypes.shape[0]
 
     if show_progress:
-        logger.info(f"Performing LMM Association Test ({banner})")
+        logger.info(f"Performing LMM Association Test ({labels.banner})")
         logger.info(f"  Total individuals: {n_samples_total:,}")
         logger.info(f"  Analyzed individuals: {n_samples:,}")
         logger.info(f"  Total SNPs: {n_snps:,}")
@@ -220,8 +255,8 @@ def _run_numpy_lmm(
         SnpFilterSpec(
             maf_threshold=maf_threshold,
             miss_threshold=miss_threshold,
-            restrict_indices=snps_indices,
-            hwe_threshold=hwe_threshold,
+            restrict_indices=spec.snps_indices,
+            hwe_threshold=spec.hwe_threshold,
             restrict_label="SNP list filter",
         ),
     )
@@ -266,8 +301,8 @@ def _run_numpy_lmm(
         l_max=l_max,
         show_progress=show_progress,
         check_memory=check_memory,
-        label=label,
-        compute_pve=compute_pve,
+        label=labels.label,
+        compute_pve=spec.compute_pve,
     )
     del kinship
     gc.collect()
@@ -294,12 +329,12 @@ def _run_numpy_lmm(
             chunks=tightened_chunks,
             prepared=prepared,
             config=config,
-            progress_label=progress_label,
-            lambda_warning_prefix=lambda_warning_prefix,
+            progress_label=labels.progress_label,
+            lambda_warning_prefix=labels.lambda_warning_prefix,
         )
 
         if show_progress:
-            log_memory_snapshot(f"{label}:after_association")
+            log_memory_snapshot(f"{labels.label}:after_association")
 
             elapsed = time.perf_counter() - start_time
             t_stats = t_stats_end - t_stats_start
@@ -419,17 +454,13 @@ def run_lmm_association_numpy(
     snp_meta = (
         snp_info if isinstance(snp_info, SnpMeta) else SnpMeta.from_dicts(snp_info)
     )
-    return _run_numpy_lmm(
+    return run_lmm_association(
         MatrixSource(genotypes, snp_meta),
+        LmmRunSpec(config=config, execution=execution, hwe_threshold=hwe_threshold),
         phenotypes=phenotypes,
         kinship=kinship,
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        config=config,
         output_path=output_path,
-        hwe_threshold=hwe_threshold,
-        execution=execution,
-        banner="NumPy batch",
-        label="lmm_numpy",
     )

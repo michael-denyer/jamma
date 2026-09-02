@@ -26,7 +26,11 @@ from jamma.lmm.genotype_source import (
     SampleBasis,
     bind_prepared_genotypes,
 )
-from jamma.lmm.runner_numpy import _run_numpy_lmm
+from jamma.lmm.runner_numpy import (
+    STREAMING_LABELS,
+    LmmRunSpec,
+    run_lmm_association,
+)
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     LmmConfig,
@@ -204,19 +208,19 @@ def run_lmm_association_numpy_streaming(
         validate_genotypes=validate_genotypes,
         show_progress=config.show_progress,
     )
-    return _run_numpy_lmm(
+    return run_lmm_association(
         source,
+        LmmRunSpec(
+            config=config,
+            execution=execution,
+            snps_indices=snps_indices,
+            hwe_threshold=hwe_threshold,
+            labels=STREAMING_LABELS,
+        ),
         phenotypes=phenotypes,
         kinship=kinship,
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        config=config,
         output_path=output_path,
-        snps_indices=snps_indices,
-        hwe_threshold=hwe_threshold,
-        execution=execution,
-        banner="NumPy streaming",
-        label="lmm_numpy_streaming",
-        progress_label="LMM association (streaming)",
     )

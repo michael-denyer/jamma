@@ -51,7 +51,7 @@ from jamma.lmm.genotype_source import (
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig
 from jamma.lmm.loco_eigen import eigen_pairs_for
-from jamma.lmm.runner_numpy import _run_numpy_lmm
+from jamma.lmm.runner_numpy import LOCO_LABELS, LmmRunSpec, run_lmm_association
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     TEST_TYPE_MAP,
@@ -472,7 +472,7 @@ def _run_lmm_for_chromosome_numpy(
     """Run the shared NumPy LMM body on a single chromosome's SNPs.
 
     Builds a per-chromosome genotype source over this chromosome's columns
-    and hands it to ``_run_numpy_lmm`` with the LOCO eigenpairs. The run is
+    and hands it to ``run_lmm_association`` with the LOCO eigenpairs. The run is
     silenced (``show_progress=False``): the chromosome loop owns progress
     output, and a per-chromosome banner would repeat 20 times.
 
@@ -517,21 +517,21 @@ def _run_lmm_for_chromosome_numpy(
         max_chunk_size=col_chunk_size,
         log_dispatch_choices=True,
     )
-    return _run_numpy_lmm(
+    return run_lmm_association(
         source,
+        LmmRunSpec(
+            config=replace(config, show_progress=False),
+            execution=execution,
+            snps_indices=snps_indices,
+            compute_pve=compute_pve,
+            labels=replace(
+                LOCO_LABELS, progress_label=f"LOCO chr {chr_name} association"
+            ),
+        ),
         phenotypes=phenotypes,
         kinship=None,
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        config=replace(config, show_progress=False),
-        output_path=None,
         writer=writer,
-        snps_indices=snps_indices,
-        execution=execution,
-        compute_pve=compute_pve,
-        banner="NumPy LOCO",
-        label="lmm_loco",
-        progress_label=f"LOCO chr {chr_name} association",
-        lambda_warning_prefix="LOCO ",
     )

@@ -9,7 +9,8 @@ to pass where.
 
 ``RunInvariants`` is the per-run state both halves used to receive separately:
 sixteen positional arguments to the workspace builder, then thirteen of the
-same values re-listed as compute-context fields.
+same values re-listed as compute-context fields. ``build`` reads them from the
+prepared run and the config rather than having the caller re-list them.
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.pab import build_pab_table_for_c
-from jamma.lmm.schema import LmmMode
+from jamma.lmm.prepare_common import PreparedLmmRun
+from jamma.lmm.schema import LmmConfig, LmmMode
 from jamma.lmm.uab import compute_uab_invariant_soa
 
 # What a kernel hands back. The Wald C kernels return the WaldResult
@@ -64,41 +66,32 @@ class RunInvariants:
     @classmethod
     def build(
         cls,
-        *,
         dispatch: DispatchPath,
-        lmm_mode: LmmMode,
-        n_cvt: int,
-        n_samples: int,
+        prepared: PreparedLmmRun,
+        config: LmmConfig,
         n_filtered: int,
-        eigenvalues: np.ndarray,
-        UtW: np.ndarray,
-        Uty: np.ndarray,
-        Hi_eval_null: np.ndarray,
-        logl_H0: float,
-        l_min: float,
-        l_max: float,
-        n_grid: int,
-        n_refine: int,
     ) -> RunInvariants:
         """Derive the path-dependent members and freeze the rest."""
+        UtW = prepared.UtW
+        n_cvt = prepared.n_cvt
         return cls(
             dispatch=dispatch,
-            lmm_mode=lmm_mode,
+            lmm_mode=config.lmm_mode,
             n_cvt=n_cvt,
-            n_samples=n_samples,
+            n_samples=prepared.n_samples,
             n_filtered=n_filtered,
-            eigenvalues=eigenvalues,
+            eigenvalues=prepared.eigenvalues,
             UtW=UtW,
-            Uty=Uty,
-            Hi_eval_null=Hi_eval_null,
-            logl_H0=logl_H0,
-            l_min=l_min,
-            l_max=l_max,
-            n_grid=n_grid,
-            n_refine=n_refine,
+            Uty=prepared.Uty,
+            Hi_eval_null=prepared.Hi_eval_null,
+            logl_H0=prepared.logl_H0,
+            l_min=config.l_min,
+            l_max=config.l_max,
+            n_grid=config.n_grid,
+            n_refine=config.n_refine,
             w=UtW[:, 0].copy() if dispatch.needs_null_w else None,
             uab_invariant_soa=(
-                compute_uab_invariant_soa(UtW, Uty, n_cvt)
+                compute_uab_invariant_soa(UtW, prepared.Uty, n_cvt)
                 if dispatch.use_split
                 else None
             ),

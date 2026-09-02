@@ -24,7 +24,9 @@ _WORKFLOWS_DIR = _REPO_ROOT / ".github" / "workflows"
 # the PR head and the merge base within one job, checking out the base
 # mid-job, so neither can route through one setup-jamma call. They are the
 # only files allowed a bare `uv sync`, and it must pass --locked.
-_ALLOWED_BARE_UV_SYNC = frozenset({"fingerprint.yml", "kinship-digest.yml"})
+_ALLOWED_BARE_UV_SYNC = frozenset(
+    {"fingerprint.yml", "kinship-digest.yml", "assoc-digest.yml"}
+)
 
 
 def _iter_run_lines(step: dict) -> list[str]:
@@ -59,8 +61,8 @@ def test_no_job_step_runs_uv_sync_outside_the_composite_action(workflow_paths):
                         violations.append(f"{path.name}:{job_name}: {line.strip()}")
     assert not violations, (
         "uv sync must run only inside .github/actions/setup-jamma, or in "
-        "a documented per-side rebuild (fingerprint.yml, kinship-digest.yml):\n"
-        + "\n".join(violations)
+        "a documented per-side rebuild (fingerprint.yml, kinship-digest.yml, "
+        "assoc-digest.yml):\n" + "\n".join(violations)
     )
 
 

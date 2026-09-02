@@ -18,6 +18,7 @@ from loguru import logger
 from jamma.io.plink import PlinkMetadata
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
 from jamma.lmm.genotype_source import GenotypeSource
+from jamma.lmm.runner_numpy import BATCH_LABELS, STREAMING_LABELS
 from jamma.lmm.schema import RunnerTiming, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import PipelineConfig
@@ -69,7 +70,7 @@ def run_phenotype_loop(
         per-phenotype output paths, the loop wall time, runner timing, and
         the PVE estimate.
     """
-    from jamma.lmm.runner_numpy import _run_numpy_lmm
+    from jamma.lmm.runner_numpy import LmmRunSpec, run_lmm_association
 
     pheno_columns = config.phenotype_columns
     is_multi = len(pheno_columns) > 1
@@ -81,6 +82,13 @@ def run_phenotype_loop(
     all_assoc_paths: list[Path] = []
 
     source = _genotype_source(plan.mode, plan.runner_name, config.bfile, meta, analysis)
+    spec = LmmRunSpec(
+        config=analysis.lmm,
+        execution=analysis.execution,
+        snps_indices=analysis.snps_indices,
+        hwe_threshold=config.hwe_threshold,
+        labels=_LABELS[plan.mode],
+    )
 
     # The loop's last run carries the PVE estimate; both stay None if
     # pheno_columns is empty, which PipelineConfig already rejects.
@@ -104,8 +112,9 @@ def run_phenotype_loop(
         else:
             col_path = assoc_path
 
-        run_result = _run_numpy_lmm(
+        run_result = run_lmm_association(
             source,
+            spec,
             phenotypes=phenotypes_col,
             # The body takes the eigenpairs; the pipeline consumes the
             # kinship matrix during eigendecomposition and has none left.
@@ -113,14 +122,7 @@ def run_phenotype_loop(
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            config=analysis.lmm,
             output_path=col_path,
-            snps_indices=analysis.snps_indices,
-            hwe_threshold=config.hwe_threshold,
-            execution=analysis.execution,
-            banner=_BANNER[plan.mode],
-            label=_LABEL[plan.mode],
-            progress_label=_PROGRESS_LABEL[plan.mode],
         )
 
         all_results.extend(run_result.associations)
@@ -143,12 +145,7 @@ def run_phenotype_loop(
     )
 
 
-_BANNER = {"batch": "NumPy batch", "streaming": "NumPy streaming"}
-_LABEL = {"batch": "lmm_numpy", "streaming": "lmm_numpy_streaming"}
-_PROGRESS_LABEL = {
-    "batch": "LMM association",
-    "streaming": "LMM association (streaming)",
-}
+_LABELS = {"batch": BATCH_LABELS, "streaming": STREAMING_LABELS}
 
 
 def _genotype_source(

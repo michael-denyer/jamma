@@ -150,6 +150,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **LOCO plans its association once per run and prices it through the
+  shared preflight.** `_run_lmm_for_chromosome_numpy` called
+  `plan_association` for every chromosome (22 machine reads and dispatch
+  logs per run) while the pipeline's own plan for the run reached only the
+  banner and telemetry. The pipeline now plans LOCO with the new
+  `loco=True` keyword, which selects a `loco` execution mode priced like
+  streaming (one disk-read chunk plus the eigendecomposition, never the
+  full genotype matrix LOCO does not hold), runs `memory_preflight` on it,
+  and hands it to `run_lmm_loco(..., execution=)`; the chromosome loop
+  carries one `LmmRunSpec` and relabels it per chromosome. `run_lmm_loco`
+  called directly plans once itself, over the run's SNP total, and rejects
+  a caller plan wider than `loco.col_chunk_size`. The banner and telemetry
+  report `numpy-loco` for LOCO runs. `scripts/assoc_digest.py`: all 68
+  keys identical to `19f7395`; `tests/test_memory_ledger_digest.py`
+  unchanged.
 - **The phenotype loop reaches the chunk engine through five signatures,
   not seven, and `-snps` is one filter.** `run_lmm_association_numpy_planned`
   and `run_lmm_association_numpy_streaming_planned` (one caller each, no

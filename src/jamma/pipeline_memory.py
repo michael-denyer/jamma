@@ -63,7 +63,7 @@ def memory_preflight(
     available_gb = memory.available_ram_gb()
     eigen = (
         _eigen_driver_plan(plan.n_samples, available_gb)
-        if summary.mode == "streaming"
+        if summary.mode != "batch"
         else None
     )
     quote = plan.price(eigen=eigen)

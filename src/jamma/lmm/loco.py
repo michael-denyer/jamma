@@ -41,7 +41,7 @@ from jamma.io.plink import (
     partitions_from_metadata,
 )
 from jamma.kinship import SnpStatsCache
-from jamma.lmm.association_plan import plan_association
+from jamma.lmm.association_plan import ExecutableAssociationPlan, plan_association
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
 from jamma.lmm.genotype_source import (
     PreparedGenotypes,
@@ -157,6 +157,7 @@ def run_lmm_loco(
     config: LmmConfig = DEFAULT_LMM_CONFIG,
     loco: LocoConfig = DEFAULT_LOCO_CONFIG,
     output_path: Path | None = None,
+    execution: ExecutableAssociationPlan | None = None,
 ) -> LocoResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -183,6 +184,11 @@ def run_lmm_loco(
         loco: LOCO-only settings — kinship and eigen output, SNP restriction,
             chunk width, text vs binary artifacts. See :class:`LocoConfig`.
         output_path: Path for incremental result writing, or None for in-memory.
+        execution: The run's association plan, selected once by the caller
+            (the pipeline prices it through its memory preflight). None plans
+            it here, once, over the run's SNP total. Every chromosome shares
+            it; the body narrows its chunk plan to that chromosome's filtered
+            SNP count.
 
     Returns:
         LocoResult with associations in biological chromosome order
@@ -190,8 +196,9 @@ def run_lmm_loco(
         is set (results written to disk).
 
     Raises:
-        ValueError: If fewer than two chromosomes are present or if no samples
-            have valid phenotypes. Invalid lmm_mode and write_eigen without
+        ValueError: If fewer than two chromosomes are present, if no samples
+            have valid phenotypes, or if ``execution`` plans chunks wider than
+            ``loco.col_chunk_size``. Invalid lmm_mode and write_eigen without
             eigen_dir are rejected earlier, when LmmConfig and LocoConfig are
             constructed.
     """
@@ -255,6 +262,31 @@ def run_lmm_loco(
     # Build SNP metadata columns for result construction
     snp_info = SnpMeta.from_plink_meta(meta)
 
+    n_cvt = covariates_valid.shape[1] if covariates_valid is not None else 1
+    if execution is None:
+        execution = plan_association(
+            n_valid,
+            n_snps_total,
+            requested="numpy",
+            n_cvt=n_cvt,
+            lmm_mode=config.lmm_mode,
+            mem_budget=config.mem_budget,
+            max_chunk_size=loco.col_chunk_size,
+            log_dispatch_choices=True,
+            loco=True,
+        )
+    elif execution.conservative_chunks.chunk_size > loco.col_chunk_size:
+        raise ValueError(
+            f"execution plans {execution.conservative_chunks.chunk_size}-SNP "
+            f"chunks but loco.col_chunk_size is {loco.col_chunk_size}"
+        )
+    spec = LmmRunSpec(
+        config=replace(config, show_progress=False),
+        execution=execution,
+        snps_indices=loco.snps_indices,
+        labels=LOCO_LABELS,
+    )
+
     test_type = TEST_TYPE_MAP[config.lmm_mode]
 
     if output_path is None and n_snps_total > 100_000:
@@ -303,8 +335,7 @@ def run_lmm_loco(
                 covariates=covariates_valid,
                 snp_meta=snp_info,
                 valid_mask=valid_mask,
-                config=config,
-                snps_indices=loco.snps_indices,
+                spec=spec,
                 col_chunk_size=loco.col_chunk_size,
                 writer=writer,
                 chr_name=chr_name,
@@ -461,10 +492,9 @@ def _run_lmm_for_chromosome_numpy(
     covariates: np.ndarray | None,
     snp_meta: SnpMeta,
     valid_mask: np.ndarray,
-    config: LmmConfig,
+    spec: LmmRunSpec,
     col_chunk_size: int,
     chr_name: str,
-    snps_indices: np.ndarray | None = None,
     writer: IncrementalAssocWriter | None = None,
     snp_stats_cache: SnpStatsCache | None = None,
     compute_pve: bool = False,
@@ -472,9 +502,10 @@ def _run_lmm_for_chromosome_numpy(
     """Run the shared NumPy LMM body on a single chromosome's SNPs.
 
     Builds a per-chromosome genotype source over this chromosome's columns
-    and hands it to ``run_lmm_association`` with the LOCO eigenpairs. The run is
-    silenced (``show_progress=False``): the chromosome loop owns progress
-    output, and a per-chromosome banner would repeat 20 times.
+    and hands it to ``run_lmm_association`` with the LOCO eigenpairs and the
+    run's shared spec, relabelled for this chromosome. The spec is silenced
+    (``show_progress=False``): the chromosome loop owns progress output, and
+    a per-chromosome banner would repeat 20 times.
 
     Args:
         bed_path: PLINK file prefix.
@@ -485,10 +516,10 @@ def _run_lmm_for_chromosome_numpy(
         covariates: Covariate matrix (n_valid_samples, n_cvt) or None.
         snp_meta: Full SNP metadata columns (indexed by global SNP index).
         valid_mask: Boolean mask for valid samples (for disk row reads).
-        config: Whatever run_lmm_loco was given, unchanged.
+        spec: The run's shared spec: silenced config, the one association
+            plan, and the -snps restriction.
         col_chunk_size: Cap on SNP columns per disk read chunk.
         chr_name: Chromosome label, used in progress output.
-        snps_indices: Global -snps restriction indices, or None.
         writer: Shared incremental writer, or None to collect in memory.
         snp_stats_cache: Global SNP statistics from kinship PASS 1.
         compute_pve: Whether to estimate PVE from this chromosome's null
@@ -506,26 +537,13 @@ def _run_lmm_for_chromosome_numpy(
         col_chunk_size=col_chunk_size,
         snp_stats_cache=snp_stats_cache,
     )
-    n_cvt = covariates.shape[1] if covariates is not None else 1
-    execution = plan_association(
-        phenotypes.shape[0],
-        len(chr_snp_indices),
-        requested="numpy",
-        n_cvt=n_cvt,
-        lmm_mode=config.lmm_mode,
-        mem_budget=config.mem_budget,
-        max_chunk_size=col_chunk_size,
-        log_dispatch_choices=True,
-    )
     return run_lmm_association(
         source,
-        LmmRunSpec(
-            config=replace(config, show_progress=False),
-            execution=execution,
-            snps_indices=snps_indices,
+        replace(
+            spec,
             compute_pve=compute_pve,
             labels=replace(
-                LOCO_LABELS, progress_label=f"LOCO chr {chr_name} association"
+                spec.labels, progress_label=f"LOCO chr {chr_name} association"
             ),
         ),
         phenotypes=phenotypes,

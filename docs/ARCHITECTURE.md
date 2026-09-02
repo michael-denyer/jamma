@@ -59,7 +59,7 @@ A typical LMM association run proceeds as follows:
 
 4. **Eigendecomposition** — `lmm/eigen.py` eigendecomposes `K` via `jlinalg.eigh`, which dispatches to vendor DSYEVD (faster, O(N²) workspace) or falls back to DSYEVR (O(N) workspace) when memory is insufficient. The result is eigenvalues `D` and eigenvectors `U`.
 
-5. **Execution plan selection** — `lmm/association_plan.py:plan_association()` selects all association policy once: it checks available memory via `core/memory.py` and C extension availability to choose between `numpy-batch` (full genotype matrix in RAM) and `numpy-streaming` (two-pass disk streaming), selects the compute dispatch path, and plans conservative chunk geometry. The pipeline calls it once and passes the frozen `ExecutableAssociationPlan` down; runners consume the plan rather than re-deriving policy.
+5. **Execution plan selection** — `lmm/association_plan.py:plan_association()` selects all association policy once: it checks available memory via `core/memory.py` and C extension availability to choose between `numpy-batch` (full genotype matrix in RAM) and `numpy-streaming` (two-pass disk streaming), or `numpy-loco` when `-loco` is set (per-chromosome runs over disk-read chunks, priced like streaming), selects the compute dispatch path, and plans conservative chunk geometry. The pipeline calls it once, prices it through `memory_preflight`, and passes the frozen `ExecutableAssociationPlan` down; runners and the LOCO chromosome loop consume the plan rather than re-deriving policy.
 
 6. **Null model** — The rotated data `U.T @ Y` and covariates are used to optimize the variance component `lambda` via a 50-point grid search followed by golden section refinement (`lmm/likelihood.py` REML path).
 

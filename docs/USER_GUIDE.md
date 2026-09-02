@@ -694,7 +694,7 @@ Each `-lmm` run appends one JSON line to `~/.jamma/benchmarks.jsonl` with these 
 | `jamma_version` | JAMMA version string |
 | `n_samples` | Number of samples analyzed |
 | `n_snps` | Number of SNPs tested |
-| `backend` | Runner name (e.g. `numpy`, `numpy-streaming`) |
+| `backend` | Runner name (`numpy-batch`, `numpy-streaming`, or `numpy-loco`) |
 | `n_cvt` | Number of covariates (optional) |
 | `lmm_mode` | LMM test mode: 1=Wald, 2=LRT, 3=Score, 4=All (optional) |
 | `loco` | Whether LOCO mode was used (optional) |

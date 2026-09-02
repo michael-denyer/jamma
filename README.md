@@ -173,11 +173,8 @@ wall clock, measured 2026-09-02:
 | LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 11.5s | 5.8s | 654ms | 712ms | 8.9x | **41.6x** | **17.6x** |
 | LOCO Wald (`-loco`) | 2m31s | 1m20s | -- | **3.3s** | -- | -- | **~46x** | **~24x** |
 
-The C column is 21% to 48% faster than v7.2.0 on the same machine after three
-changes: the C kernel uses every physical core under Accelerate, small inputs
-are split so genotype rotation overlaps the kernel, and the log-determinant is
-a mantissa product instead of one `log()` per sample. LOCO is unchanged; its
-time is the 19 per-chromosome eigendecompositions.
+The C column is 21% to 48% faster than v7.2.0 on the same machine. LOCO is
+unchanged; its time is the 19 per-chromosome eigendecompositions.
 
 See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the
 version-over-version comparison, and large-scale (125k) results.

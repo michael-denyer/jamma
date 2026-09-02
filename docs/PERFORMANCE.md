@@ -46,6 +46,12 @@ this machine before merging:
   threshold to 16 chunks, so rotation of chunk N+1 overlaps the kernel on
   chunk N. mouse_hs1940 previously ran as one chunk with no overlap. Plans
   that already pipelined, which is every large-scale run, are untouched.
+  The cut applies only up to 10,000 samples: every extra chunk re-streams
+  the eigenvector matrix through the rotation GEMM, and the kernel time the
+  overlap hides shrinks relative to that GEMM as samples grow. Measured with
+  `scripts/bench_large_n_stages.py --stages association` at 5,000 SNPs
+  (interleaved ABBA blocks, cut versus no cut): 1,410 samples -20%, 5,000
+  -6.4%, 10,000 -0.2%, 30,000 +5.6%.
 - #295 evaluates logdet(H) as a product of mantissas with an exact integer
   exponent instead of one scalar `log()` per sample per likelihood
   evaluation. That call was 86% of the golden-section refinement loop. The

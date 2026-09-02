@@ -88,12 +88,17 @@ Kinship and LOCO do not reach the changed code. LOCO is 19 eigendecompositions
 of a 1,410 x 1,410 matrix plus 19 short LMM passes, so the kernel gain is
 below its 0.1 s reporting resolution.
 
-**Pure-NumPy `-lmm 4` reads 4.8s against 3.5s in the v7.2.0 table.** None of
-the three changes reaches the NumPy fallback, and the 4.7 to 4.8s figure
-reproduced on `e1f5c71` before any of them merged, on numpy 2.5.1 and 2.5.2
-and on Python 3.13 and 3.14. It is a pre-existing regression against the
-July figure that has not been traced yet, and it does not touch the C path
-users run by default.
+**Pure-NumPy `-lmm 4` reads 4.8s against 3.5s in the v7.2.0 table, and the
+July figure was not fully pure NumPy.** Traced on 2026-09-02: on the v7.2.0
+commit itself, that release's `bench_numpy_pure` reads 3.46s today, while the
+same commit with every C route disabled (`JAMMA_FORCE_NUMPY_FALLBACK=1`) reads
+4.68s. The July script switched off three `_C_*_AVAILABLE` flags, which
+covered the Wald path (2.28s then, 2.3s now) but left a C sub-path live for
+mode 4. The current script clears the single `accel._accel` handle, which
+disables every C route, so 4.8s is the real pure-NumPy time and no code
+regressed. Checked against the other candidates: numpy 2.4.6 and 2.5.1 on
+master give 4.61s and 4.62s, and every commit between v7.2.0 and `e1f5c71`
+that a bisect measured reads 4.63 to 4.89s with the flag.
 
 ## v7.2.0 on mouse_hs1940 (superseded by the master run above)
 
@@ -109,9 +114,13 @@ dev-mode compile, so these are not portable-wheel timings.
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
 | Kinship (`-gk 1`) | 1.0s | 1.2s | 192ms | 192ms | -- | 1.0x | **5.3x** | **6.3x** |
 | LMM Wald (`-lmm 1`) | 7.0s | 4.3s | 2.3s | 439ms | 551ms | 5.3x | **15.9x** | **9.7x** |
-| LMM All (`-lmm 4`) | 12.8s | 7.6s | 3.5s | 570ms | 680ms | 6.2x | **22.4x** | **13.3x** |
+| LMM All (`-lmm 4`) | 12.8s | 7.6s | 3.5s* | 570ms | 680ms | 6.2x | **22.4x** | **13.3x** |
 | LMM Wald+4cov (`-lmm 1 -c`) | 25.9s | 12.6s | 5.8s | 827ms | 939ms | 7.0x | **31.4x** | **15.2x** |
 | LOCO Wald (`-loco`) | 2m21s | 1m22s | -- | **3.3s** | -- | -- | **~43x** | **~25x** |
+
+*The 3.5s "JAMMA NumPy" figure for `-lmm 4` still ran part of mode 4 through
+the C extension; the fully pure-NumPy time on this commit is 4.7s. See the
+note under the master run above.
 
 **Methodology caveat.** This is one round of best-of-3, where the v6.0.0 run
 below was three interleaved rounds of best-of-3. A single round cannot separate

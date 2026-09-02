@@ -35,44 +35,6 @@ a measured change.
 
 ### master against v7.2.0
 
-Three changes landed between the two runs, each measured in its own PR on
-this machine before merging:
-
-- #292 gives the C kernel every physical core under Accelerate. The
-  `cores // 2` halving assumed the kernel always overlaps an Accelerate GEMM;
-  a single-chunk run never does, and the pipelined run measured faster with
-  the full count too.
-- #294 cuts a run the memory budget alone would leave below the pipeline
-  threshold to 16 chunks, so rotation of chunk N+1 overlaps the kernel on
-  chunk N. mouse_hs1940 previously ran as one chunk with no overlap. Plans
-  that already pipelined, which is every large-scale run, are untouched.
-  The cut applies only up to 10,000 samples: every extra chunk re-streams
-  the eigenvector matrix through the rotation GEMM, and the kernel time the
-  overlap hides shrinks relative to that GEMM as samples grow. Measured with
-  `scripts/bench_large_n_stages.py --stages association` at 5,000 SNPs
-  (interleaved ABBA blocks, cut versus no cut): 1,410 samples -20%, 5,000
-  -6.4%, 10,000 -0.2%, 30,000 +5.6%. It also applies only where the BLAS
-  cannot be throttled, which is Accelerate on macOS. With a controllable
-  BLAS the pipelined plan splits the cores between rotation and compute and
-  re-limits the thread pool per chunk, and on an 8-core Linux MKL node
-  (Databricks `Standard_E16ds_v6`, 5 blocks) the same cut measured +22.4% on
-  the mouse_hs1940 shape, every block between +14.7% and +31.5%. Linux
-  therefore keeps the plan it had before the cut existed. On MKL the
-  pipelined plan's thread split also moves the rotation's last bits, so two
-  plans are bit-identical only under Accelerate; the runner's digest check
-  reports the difference on Linux.
-- #295 evaluates logdet(H) as a product of mantissas with an exact integer
-  exponent instead of one scalar `log()` per sample per likelihood
-  evaluation. That call was 86% of the golden-section refinement loop. The
-  n_cvt=1 kernel went from 150 ms to 56 ms; the general kernel gains less
-  because its Pab recursion dominates. See `GEMMA_DIVERGENCES.md` section 3
-  for the measured bound. At production scale the gain is small because
-  rotation dominates: on a Databricks `Standard_E96ds_v6` (48 physical
-  cores, MKL ILP64) at 125,000 samples x 5,000 SNPs, `f218fde` against
-  master with the interleaved runner, 2 blocks, measured 52.9 s against
-  52.0 s per association pass, -1.8% (-1.7%, -2.2%), outputs differing in
-  the last bits as intended.
-
 | Operation | v7.2.0 | master | Delta |
 |-----------|--------|--------|-------|
 | Kinship (`-gk 1`) | 192ms | 196ms | +2.1% |
@@ -88,17 +50,33 @@ Kinship and LOCO do not reach the changed code. LOCO is 19 eigendecompositions
 of a 1,410 x 1,410 matrix plus 19 short LMM passes, so the kernel gain is
 below its 0.1 s reporting resolution.
 
-**Pure-NumPy `-lmm 4` reads 4.8s against 3.5s in the v7.2.0 table, and the
-July figure was not fully pure NumPy.** Traced on 2026-09-02: on the v7.2.0
-commit itself, that release's `bench_numpy_pure` reads 3.46s today, while the
-same commit with every C route disabled (`JAMMA_FORCE_NUMPY_FALLBACK=1`) reads
-4.68s. The July script switched off three `_C_*_AVAILABLE` flags, which
-covered the Wald path (2.28s then, 2.3s now) but left a C sub-path live for
-mode 4. The current script clears the single `accel._accel` handle, which
-disables every C route, so 4.8s is the real pure-NumPy time and no code
-regressed. Checked against the other candidates: numpy 2.4.6 and 2.5.1 on
-master give 4.61s and 4.62s, and every commit between v7.2.0 and `e1f5c71`
-that a bisect measured reads 4.63 to 4.89s with the flag.
+The C path uses every physical core under Accelerate, evaluates logdet(H) as
+a mantissa product with an exact exponent (`GEMMA_DIVERGENCES.md` section 3),
+and, under Accelerate only, cuts an input the memory budget leaves in fewer
+than 8 chunks to 16 chunks up to 10,000 samples, so genotype rotation
+overlaps the kernel. The cut is platform- and size-dependent. Measured with
+`scripts/bench_large_n_stages.py --stages association` at 5,000 SNPs,
+interleaved ABBA blocks, cut against no cut:
+
+| Platform | Samples x SNPs | Blocks | Cut vs no cut |
+|----------|----------------|--------|---------------|
+| Apple M5 Pro, 18 cores, Accelerate | 1,410 x 12,226 | best-of-3 | -20% |
+| Apple M5 Pro | 5,000 x 5,000 | 3 | -6.4% |
+| Apple M5 Pro | 10,000 x 5,000 | 4 | -0.2% |
+| Apple M5 Pro | 30,000 x 5,000 | 3 | +5.6% |
+| Linux `Standard_E16ds_v6`, 8 cores, MKL | 1,410 x 12,226 | 5 | +22.4% |
+
+Under MKL the pipelined plan's thread split also changes the rotation GEMM's
+last bits, so two chunk plans are bit-identical only under Accelerate.
+
+At 125,000 samples x 5,000 SNPs on `Standard_E96ds_v6` (48 physical cores,
+MKL ILP64), master runs the association pass 1.8% faster than the
+pre-tuning tree (52.0 s against 52.9 s, 2 interleaved blocks): the
+log-determinant gain at a scale where rotation dominates.
+
+**Pure-NumPy `-lmm 4` is 4.8s.** The v7.2.0 table's 3.5s ran part of mode 4
+through the C extension; with every C route disabled
+(`JAMMA_FORCE_NUMPY_FALLBACK=1`) that commit measures 4.7s.
 
 ## v7.2.0 on mouse_hs1940 (superseded by the master run above)
 
@@ -118,9 +96,8 @@ dev-mode compile, so these are not portable-wheel timings.
 | LMM Wald+4cov (`-lmm 1 -c`) | 25.9s | 12.6s | 5.8s | 827ms | 939ms | 7.0x | **31.4x** | **15.2x** |
 | LOCO Wald (`-loco`) | 2m21s | 1m22s | -- | **3.3s** | -- | -- | **~43x** | **~25x** |
 
-*The 3.5s "JAMMA NumPy" figure for `-lmm 4` still ran part of mode 4 through
-the C extension; the fully pure-NumPy time on this commit is 4.7s. See the
-note under the master run above.
+*Ran part of mode 4 through the C extension; the fully pure-NumPy time on
+this commit is 4.7s.
 
 **Methodology caveat.** This is one round of best-of-3, where the v6.0.0 run
 below was three interleaved rounds of best-of-3. A single round cannot separate

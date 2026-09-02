@@ -1,22 +1,24 @@
-"""Chunk-size computation for the shared NumPy LMM chunk engine.
+"""Chunk geometry for the shared NumPy LMM chunk engine.
 
 Sizes each genotype chunk against a RAM budget so the UT@G rotation makes as
 few DRAM passes over the eigenvector matrix as possible. Split out from
 ``chunk_runner_numpy`` so the sizing policy lives in one small, testable place.
 
-``plan_lmm_chunks`` is the one place that decides chunk size, chunk count, and
-whether a run pipelines: the chunk engine allocates from its result, and the
-memory preflight prices from the same result, so the two cannot compute
-different numbers for the same run.
+``LmmChunkPlan`` owns the whole lifecycle of that decision. ``LmmChunkPlan.plan``
+decides chunk size, chunk count, and whether a run pipelines from the pre-filter
+SNP count, and ``LmmChunkPlan.narrow`` tightens the result once the filtered
+count is known. The chunk engine allocates from the narrowed plan and the memory
+preflight prices the conservative one, so the two cannot compute different
+numbers for the same run. The planner is pure: the per-chunk budget and the
+BLAS controllability are resolved by the caller (``plan_association``), which
+reads the machine exactly once.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jamma.core import memory
 from jamma.core.constants import n_index
-from jamma.core.threading import is_blas_controllable
 from jamma.lmm.dispatch import DispatchPath
 
 # Allow large chunks — no int32 buffer constraint.
@@ -47,6 +49,23 @@ _PIPELINE_CUT_MAX_SAMPLES = 10_000
 
 # Chunk floor, so tiny inputs never pay per-chunk overhead for a handful of SNPs.
 _MIN_CHUNK = 100
+
+
+def chunk_budget_bytes(mem_budget_gb: float | None, *, available_bytes: int) -> int:
+    """Per-chunk memory budget: the user's ceiling, else a share of free RAM.
+
+    The auto budget is 15% of available RAM, floored at 2 GB and capped at
+    40 GB. Modern machines (128-512 GB) can afford larger working sets; the
+    floor prevents degenerate chunk sizes on low-memory systems and the
+    ceiling prevents excessive allocation on high-memory systems.
+
+    Args:
+        mem_budget_gb: The user's ``--mem-budget`` in GB, or None to auto-scale.
+        available_bytes: Free RAM at planning time, read once by the caller.
+    """
+    if mem_budget_gb is not None:
+        return int(mem_budget_gb * 1e9)
+    return max(_MIN_BUDGET, min(int(available_bytes * 0.15), _MAX_BUDGET))
 
 
 def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
@@ -97,13 +116,13 @@ def compute_chunk_size_numpy(
     n_cvt: int = 1,
     *,
     dispatch: DispatchPath,
-    mem_budget_bytes: int | None = None,
+    mem_budget_bytes: int,
     pipeline_buffers: int = 1,
 ) -> int:
-    """Compute chunk size based on RAM budget (no int32 constraint for NumPy).
+    """Compute chunk size from a per-chunk RAM budget (no int32 constraint).
 
-    Scales the memory budget with available RAM to minimise DRAM passes
-    through the eigenvector matrix during UT@G rotation.
+    Pure. The budget comes from :func:`chunk_budget_bytes`, so this never reads
+    the machine itself.
 
     Args:
         n_samples: Number of samples.
@@ -111,8 +130,7 @@ def compute_chunk_size_numpy(
         n_cvt: Number of covariates.
         dispatch: The run's active kernel path, which decides how many float64
             columns per SNP are live at once.
-        mem_budget_bytes: Explicit per-chunk memory budget in bytes.
-            None (default) auto-scales with available RAM.
+        mem_budget_bytes: Per-chunk memory budget in bytes.
         pipeline_buffers: Number of live chunks (1 for sequential,
             2 for pipeline double-buffering). Divides the budget.
 
@@ -130,17 +148,7 @@ def compute_chunk_size_numpy(
     if bytes_per_snp == 0:
         return n_filtered
 
-    if mem_budget_bytes is not None:
-        mem_budget = mem_budget_bytes
-    else:
-        available = int(memory.available_ram_gb() * 1e9)
-        # Budget: 15% of available RAM (up from 5%), 2 GB floor, 40 GB ceiling.
-        # Modern machines (128-512 GB) can afford larger working sets. The floor
-        # prevents degenerate chunk sizes on low-memory systems; the ceiling
-        # prevents excessive allocation on high-memory systems.
-        mem_budget = max(_MIN_BUDGET, min(int(available * 0.15), _MAX_BUDGET))
-
-    mem_budget = mem_budget // pipeline_buffers
+    mem_budget = mem_budget_bytes // pipeline_buffers
 
     chunk_from_memory = int(mem_budget / bytes_per_snp)
     return max(_MIN_CHUNK, min(chunk_from_memory, n_filtered, _MAX_CHUNK))
@@ -149,6 +157,11 @@ def compute_chunk_size_numpy(
 @dataclass(frozen=True, slots=True)
 class LmmChunkPlan:
     """One run's chunk size, chunk count, and pipelining decision.
+
+    Build one with :meth:`plan` from the pre-filter SNP count, then
+    :meth:`narrow` it once the filtered count is known. Both return frozen
+    values, so a caller holding the conservative plan keeps reading the
+    conservative numbers; the memory preflight relies on exactly that.
 
     Attributes:
         chunk_size: SNPs per chunk.
@@ -163,125 +176,131 @@ class LmmChunkPlan:
     n_buffers: int
     use_pipeline: bool
 
+    @classmethod
+    def plan(
+        cls,
+        n_samples: int,
+        n_filtered: int,
+        n_cvt: int,
+        dispatch: DispatchPath,
+        *,
+        budget_bytes: int,
+        blas_controllable: bool,
+        max_chunk_size: int | None = None,
+    ) -> LmmChunkPlan:
+        """Decide chunk size, chunk count, and pipelining for one LMM run.
 
-def plan_lmm_chunks(
-    n_samples: int,
-    n_filtered: int,
-    n_cvt: int,
-    dispatch: DispatchPath,
-    *,
-    max_chunk_size: int | None = None,
-    mem_budget_bytes: int | None = None,
-) -> LmmChunkPlan:
-    """Decide chunk size, chunk count, and pipelining for one LMM run.
+        The single sizing decision the chunk engine allocates from and the
+        memory preflight prices from: sizes with one live buffer, counts the
+        resulting chunks, and re-sizes against two live buffers only when the
+        dispatch path supports pipelining (``dispatch.use_split``) and the
+        single-buffer chunk count clears ``_MIN_PIPELINE_CHUNKS``. A
+        split-capable run of at most ``_PIPELINE_CUT_MAX_SAMPLES`` samples that
+        the budget alone leaves below that threshold is cut to
+        ``_PIPELINE_TARGET_CHUNKS`` chunks, down to the ``_MIN_CHUNK`` floor, so
+        a small input that fits in one chunk still overlaps rotation and
+        compute. A caller-given ``max_chunk_size`` caps the final chunk size
+        before the chunk count is recomputed, so a capped run still reports
+        its true chunk count.
 
-    The single sizing decision the chunk engine allocates from and the
-    memory preflight prices from: sizes with one live buffer, counts the
-    resulting chunks, and re-sizes against two live buffers only when the
-    dispatch path supports pipelining (``dispatch.use_split``) and the
-    single-buffer chunk count clears ``_MIN_PIPELINE_CHUNKS``. A split-capable
-    run of at most ``_PIPELINE_CUT_MAX_SAMPLES`` samples that the budget alone
-    leaves below that threshold is cut to ``_PIPELINE_TARGET_CHUNKS`` chunks,
-    down to the ``_MIN_CHUNK`` floor, so a small input that fits in one chunk
-    still overlaps rotation and compute. A
-    caller-given ``max_chunk_size`` caps the final chunk size before the chunk
-    count is recomputed, so a capped run still reports its true chunk count.
+        Args:
+            n_samples: Number of samples.
+            n_filtered: Number of filtered SNPs. The preflight calls this with
+                the pre-filter SNP count (statistics/MAF/missingness filtering
+                has not run yet), which is conservative: it can only ever be
+                greater than or equal to the real filtered count, so the chunk
+                size it plans is never larger than what the engine will use.
+            n_cvt: Number of covariates.
+            dispatch: The run's active kernel path.
+            budget_bytes: Per-chunk memory budget from
+                :func:`chunk_budget_bytes`.
+            blas_controllable: Whether the BLAS thread pool can be throttled
+                (``core.threading.is_blas_controllable()``), read once by the
+                caller. The pipeline cut applies only when it cannot.
+            max_chunk_size: Optional cap applied before chunk-count
+                recomputation (e.g. LOCO's disk-read chunk width).
 
-    Args:
-        n_samples: Number of samples.
-        n_filtered: Number of filtered SNPs. The preflight calls this with
-            the pre-filter SNP count (statistics/MAF/missingness filtering
-            has not run yet), which is conservative: it can only ever be
-            greater than or equal to the real filtered count, so the chunk
-            size it plans is never larger than what the engine will use.
-        n_cvt: Number of covariates.
-        dispatch: The run's active kernel path.
-        max_chunk_size: Optional cap applied before chunk-count recomputation
-            (e.g. LOCO's disk-read chunk width).
-        mem_budget_bytes: Explicit per-chunk memory budget in bytes, from
-            the user's ``--mem-budget``. None auto-scales against available
-            RAM as before.
+        Returns:
+            The plan's chunk size, chunk count, live buffer count, and whether
+            the run pipelines.
+        """
+        if max_chunk_size is not None and max_chunk_size < 1:
+            raise ValueError(f"max_chunk_size must be >= 1, got {max_chunk_size}")
 
-    Returns:
-        The plan's chunk size, chunk count, live buffer count, and whether
-        the run pipelines.
-    """
-    if max_chunk_size is not None and max_chunk_size < 1:
-        raise ValueError(f"max_chunk_size must be >= 1, got {max_chunk_size}")
+        def _sized(*, pipeline_buffers: int, overlap_cap: int | None = None) -> int:
+            chunk = compute_chunk_size_numpy(
+                n_samples,
+                n_filtered,
+                n_cvt,
+                dispatch=dispatch,
+                mem_budget_bytes=budget_bytes,
+                pipeline_buffers=pipeline_buffers,
+            )
+            if overlap_cap is not None:
+                chunk = min(chunk, overlap_cap)
+            if max_chunk_size is not None:
+                chunk = min(chunk, max_chunk_size)
+            return max(1, chunk)
 
-    def _sized(*, pipeline_buffers: int, overlap_cap: int | None = None) -> int:
-        chunk = compute_chunk_size_numpy(
-            n_samples,
-            n_filtered,
-            n_cvt,
-            dispatch=dispatch,
-            mem_budget_bytes=mem_budget_bytes,
-            pipeline_buffers=pipeline_buffers,
-        )
-        if overlap_cap is not None:
-            chunk = min(chunk, overlap_cap)
-        if max_chunk_size is not None:
-            chunk = min(chunk, max_chunk_size)
-        return max(1, chunk)
+        def _count(chunk_size: int) -> int:
+            return (n_filtered + chunk_size - 1) // chunk_size
 
-    def _count(chunk_size: int) -> int:
-        return (n_filtered + chunk_size - 1) // chunk_size
-
-    # Sized twice: the first size decides whether pipelining is worth it, and
-    # a pipelined run then re-sizes against a budget split across two live
-    # buffers.
-    chunk_size = _sized(pipeline_buffers=1)
-    n_chunks = _count(chunk_size)
-
-    # The budget alone leaves a split-capable run too few chunks to overlap
-    # rotation with compute, so cut it to _PIPELINE_TARGET_CHUNKS instead. A
-    # run the budget already splits past the threshold keeps its plan, and so
-    # does one with more samples than the cut is measured to help. The cut
-    # only pays where the BLAS cannot be throttled (Accelerate on macOS), so
-    # rotation keeps every core while the kernel overlaps it. With a
-    # controllable BLAS the pipelined plan splits the cores and re-limits the
-    # thread pool per chunk, and the interleaved A/B on an 8-core Linux MKL
-    # node measured the cut at +8.3% on mouse_hs1940's shape, against -20% on
-    # an 18-core Apple M5 Pro.
-    overlap_cap: int | None = None
-    if (
-        dispatch.use_split
-        and n_chunks < _MIN_PIPELINE_CHUNKS
-        and n_samples <= _PIPELINE_CUT_MAX_SAMPLES
-        and not is_blas_controllable()
-    ):
-        overlap_cap = max(_MIN_CHUNK, -(-n_filtered // _PIPELINE_TARGET_CHUNKS))
-        chunk_size = _sized(pipeline_buffers=1, overlap_cap=overlap_cap)
+        # Sized twice: the first size decides whether pipelining is worth it,
+        # and a pipelined run then re-sizes against a budget split across two
+        # live buffers.
+        chunk_size = _sized(pipeline_buffers=1)
         n_chunks = _count(chunk_size)
-    use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
-    if use_pipeline:
-        chunk_size = _sized(pipeline_buffers=2, overlap_cap=overlap_cap)
-        n_chunks = _count(chunk_size)
+        # The budget alone leaves a split-capable run too few chunks to overlap
+        # rotation with compute, so cut it to _PIPELINE_TARGET_CHUNKS instead.
+        # A run the budget already splits past the threshold keeps its plan,
+        # and so does one with more samples than the cut is measured to help.
+        # The cut only pays where the BLAS cannot be throttled (Accelerate on
+        # macOS), so rotation keeps every core while the kernel overlaps it.
+        # With a controllable BLAS the pipelined plan splits the cores and
+        # re-limits the thread pool per chunk, and the interleaved A/B on an
+        # 8-core Linux MKL node measured the cut at +8.3% on mouse_hs1940's
+        # shape, against -20% on an 18-core Apple M5 Pro.
+        overlap_cap: int | None = None
+        if (
+            dispatch.use_split
+            and n_chunks < _MIN_PIPELINE_CHUNKS
+            and n_samples <= _PIPELINE_CUT_MAX_SAMPLES
+            and not blas_controllable
+        ):
+            overlap_cap = max(_MIN_CHUNK, -(-n_filtered // _PIPELINE_TARGET_CHUNKS))
+            chunk_size = _sized(pipeline_buffers=1, overlap_cap=overlap_cap)
+            n_chunks = _count(chunk_size)
         use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
-    return LmmChunkPlan(
-        chunk_size=chunk_size,
-        n_chunks=n_chunks,
-        n_buffers=2 if use_pipeline else 1,
-        use_pipeline=use_pipeline,
-    )
+        if use_pipeline:
+            chunk_size = _sized(pipeline_buffers=2, overlap_cap=overlap_cap)
+            n_chunks = _count(chunk_size)
+            use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
 
+        return cls(
+            chunk_size=chunk_size,
+            n_chunks=n_chunks,
+            n_buffers=2 if use_pipeline else 1,
+            use_pipeline=use_pipeline,
+        )
 
-def tighten_lmm_chunks(
-    conservative: LmmChunkPlan,
-    n_filtered: int,
-) -> LmmChunkPlan:
-    """Narrow a conservative plan after filtering without selecting policy."""
-    if n_filtered < 0:
-        raise ValueError(f"n_filtered must be >= 0, got {n_filtered}")
+    def narrow(self, n_filtered: int) -> LmmChunkPlan:
+        """Narrow this plan to the filtered SNP count without selecting policy.
 
-    chunk_size = min(conservative.chunk_size, max(1, n_filtered))
-    n_chunks = (n_filtered + chunk_size - 1) // chunk_size
-    use_pipeline = conservative.use_pipeline and n_chunks >= _MIN_PIPELINE_CHUNKS
-    return LmmChunkPlan(
-        chunk_size=chunk_size,
-        n_chunks=n_chunks,
-        n_buffers=2 if use_pipeline else 1,
-        use_pipeline=use_pipeline,
-    )
+        Width only ever decreases, and pipelining only ever switches off: a
+        plan the budget did not pipeline stays sequential however many
+        chunks remain.
+        """
+        if n_filtered < 0:
+            raise ValueError(f"n_filtered must be >= 0, got {n_filtered}")
+
+        chunk_size = min(self.chunk_size, max(1, n_filtered))
+        n_chunks = (n_filtered + chunk_size - 1) // chunk_size
+        use_pipeline = self.use_pipeline and n_chunks >= _MIN_PIPELINE_CHUNKS
+        return LmmChunkPlan(
+            chunk_size=chunk_size,
+            n_chunks=n_chunks,
+            n_buffers=2 if use_pipeline else 1,
+            use_pipeline=use_pipeline,
+        )

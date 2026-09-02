@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from jamma.core import memory
-from jamma.lmm.chunk_sizing import _MAX_CHUNK, compute_chunk_size_numpy
+from jamma.lmm.chunk_sizing import (
+    _MAX_CHUNK,
+    chunk_budget_bytes,
+    compute_chunk_size_numpy,
+)
 from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
@@ -49,7 +52,11 @@ def test_compute_chunk_size_large_dataset():
 def test_compute_chunk_size_zero_bytes():
     """bytes_per_snp=0 (n_samples=0): returns n_filtered directly."""
     chunk = compute_chunk_size_numpy(
-        n_samples=0, n_filtered=1000, n_cvt=1, dispatch=DispatchPath.NUMPY_FALLBACK
+        n_samples=0,
+        n_filtered=1000,
+        n_cvt=1,
+        dispatch=DispatchPath.NUMPY_FALLBACK,
+        mem_budget_bytes=int(2e9),
     )
     assert chunk == 1000, f"Expected 1000, got {chunk}"
 
@@ -127,28 +134,31 @@ def test_chunk_size_pipeline_halves_budget():
     assert double >= single // 2 - 1  # allow rounding
 
 
-def test_chunk_size_auto_scales_with_memory():
+def test_chunk_budget_auto_scales_with_memory():
     """Auto-scaled budget uses 15% of available RAM between 2-40 GB bounds."""
-    from unittest.mock import patch
+    # 400 GB available -> 15% = 60 GB (hits 40 GB ceiling)
+    assert chunk_budget_bytes(None, available_bytes=int(400e9)) == 40_000_000_000
+    # 10 GB available -> 15% = 1.5 GB (hits 2 GB floor)
+    assert chunk_budget_bytes(None, available_bytes=int(10e9)) == 2_000_000_000
+    # 100 GB available -> 15 GB, inside both bounds
+    assert chunk_budget_bytes(None, available_bytes=int(100e9)) == 15_000_000_000
+    # A user ceiling in GB wins outright, whatever the machine has
+    assert chunk_budget_bytes(1.5, available_bytes=int(400e9)) == 1_500_000_000
 
-    # 400 GB available → 15% = 60 GB (hits 40 GB ceiling)
-    with patch("jamma.core.memory.available_ram_gb", return_value=400.0):
-        chunk_big = compute_chunk_size_numpy(
-            n_samples=50_000,
-            n_filtered=100_000,
-            n_cvt=1,
-            dispatch=DispatchPath.FUSED,
-        )
-
-    # 10 GB available → 15% = 1.5 GB (hits 2 GB floor)
-    with patch("jamma.core.memory.available_ram_gb", return_value=10.0):
-        chunk_small = compute_chunk_size_numpy(
-            n_samples=50_000,
-            n_filtered=100_000,
-            n_cvt=1,
-            dispatch=DispatchPath.FUSED,
-        )
-
+    chunk_big = compute_chunk_size_numpy(
+        n_samples=50_000,
+        n_filtered=100_000,
+        n_cvt=1,
+        dispatch=DispatchPath.FUSED,
+        mem_budget_bytes=chunk_budget_bytes(None, available_bytes=int(400e9)),
+    )
+    chunk_small = compute_chunk_size_numpy(
+        n_samples=50_000,
+        n_filtered=100_000,
+        n_cvt=1,
+        dispatch=DispatchPath.FUSED,
+        mem_budget_bytes=chunk_budget_bytes(None, available_bytes=int(10e9)),
+    )
     assert chunk_big > chunk_small
 
 
@@ -203,7 +213,7 @@ _N_CVT = 1
 _BYTES_PER_SNP = 48_000  # n_samples * n_index(n_cvt=1) * 8, NUMPY_FALLBACK
 
 
-def test_chunk_size_capped_by_max_chunk(monkeypatch):
+def test_chunk_size_capped_by_max_chunk():
     """A generous RAM budget still caps the chunk at _MAX_CHUNK.
 
     n_filtered sits far above _MAX_CHUNK, and available RAM is set high
@@ -211,35 +221,34 @@ def test_chunk_size_capped_by_max_chunk(monkeypatch):
     cap is the only thing that can produce this result. This asserts the cap
     exists as a code path distinct from n_filtered, not the cap's value.
     """
-    monkeypatch.setattr(memory, "available_ram_gb", lambda: 1_000_000.0)
-
     chunk = compute_chunk_size_numpy(
         n_samples=_N_SAMPLES,
         n_filtered=_MAX_CHUNK * 3,
         n_cvt=_N_CVT,
         dispatch=DispatchPath.NUMPY_FALLBACK,
+        mem_budget_bytes=chunk_budget_bytes(None, available_bytes=int(1e15)),
     )
 
     assert chunk == _MAX_CHUNK
 
 
-def test_chunk_size_bound_by_ram_budget_below_cap(monkeypatch):
+def test_chunk_size_bound_by_ram_budget_below_cap():
     """A tight RAM budget binds below _MAX_CHUNK, not at it.
 
-    available_ram_gb is small enough that 15% of it, floored at the 2 GB
+    Available RAM is small enough that 15% of it, floored at the 2 GB
     minimum budget, yields a budget-derived chunk well under both
     _MAX_CHUNK and n_filtered.
     """
-    monkeypatch.setattr(memory, "available_ram_gb", lambda: 20.0)
+    mem_budget = chunk_budget_bytes(None, available_bytes=int(20e9))
 
     chunk = compute_chunk_size_numpy(
         n_samples=_N_SAMPLES,
         n_filtered=_MAX_CHUNK * 3,
         n_cvt=_N_CVT,
         dispatch=DispatchPath.NUMPY_FALLBACK,
+        mem_budget_bytes=mem_budget,
     )
 
-    mem_budget = max(2_000_000_000, min(int(20.0 * 1e9 * 0.15), 40_000_000_000))
     expected = mem_budget // _BYTES_PER_SNP
 
     assert chunk == expected
@@ -305,6 +314,7 @@ class TestStreamingMemoryPipelineBuffers:
                 n_samples=1000,
                 n_filtered=50_000,
                 dispatch=DispatchPath.FUSED,
+                mem_budget_bytes=int(2e9),
                 pipeline_buffers=bad_value,
             )
 
@@ -319,5 +329,6 @@ class TestStreamingMemoryPipelineBuffers:
                 n_samples=1000,
                 n_filtered=50_000,
                 dispatch=DispatchPath.FUSED,
+                mem_budget_bytes=int(2e9),
                 pipeline_buffers=bad_value,
             )

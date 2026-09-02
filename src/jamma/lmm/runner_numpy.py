@@ -232,7 +232,7 @@ def _run_numpy_lmm(
         )
 
     n_filtered = genotypes.n_filtered
-    tightened_chunks = execution.tighten_after_filter(n_filtered)
+    tightened_chunks = execution.conservative_chunks.narrow(n_filtered)
 
     if show_progress:
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")

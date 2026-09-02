@@ -1,4 +1,4 @@
-"""Association policy selected once and tightened only after SNP filtering."""
+"""Association policy selected once; its chunk plan is narrowed after SNP filtering."""
 
 from __future__ import annotations
 
@@ -7,14 +7,15 @@ from typing import Literal
 
 from loguru import logger
 
+from jamma.core import memory
 from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
+from jamma.core.threading import is_blas_controllable
 from jamma.lmm import accel
 from jamma.lmm.chunk_sizing import (
     LmmChunkPlan,
+    chunk_budget_bytes,
     lmm_extra_bytes_per_snp,
-    plan_lmm_chunks,
-    tighten_lmm_chunks,
 )
 from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 from jamma.lmm.schema import LmmMode, parse_lmm_mode
@@ -120,10 +121,6 @@ class ExecutableAssociationPlan:
             eigen=None,
         )
 
-    def tighten_after_filter(self, n_filtered: int) -> LmmChunkPlan:
-        """Narrow geometry once without re-reading RAM or changing policy."""
-        return tighten_lmm_chunks(self.conservative_chunks, n_filtered)
-
 
 def plan_association(
     n_samples: int,
@@ -155,13 +152,17 @@ def plan_association(
     dispatch = select_dispatch_path(
         n_cvt, mode, accel=c_ext_available, log_choices=log_dispatch_choices
     )
-    chunks = plan_lmm_chunks(
+    # The machine is read here, once, so the planner itself stays pure.
+    chunks = LmmChunkPlan.plan(
         n_samples,
         n_snps,
         n_cvt,
         dispatch,
+        budget_bytes=chunk_budget_bytes(
+            mem_budget, available_bytes=int(memory.available_ram_gb() * 1e9)
+        ),
+        blas_controllable=is_blas_controllable(),
         max_chunk_size=max_chunk_size,
-        mem_budget_bytes=None if mem_budget is None else int(mem_budget * 1e9),
     )
 
     if requested == "numpy-streaming":

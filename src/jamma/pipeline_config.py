@@ -76,8 +76,8 @@ class PipelineConfig:
         l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
         n_grid: Grid search resolution for lambda bracketing (default 50).
             Must be >= 2 — a one-point grid has no bracket to refine.
-        n_refine: Golden section refinement iterations (default 10). Clamped
-            to a minimum of 20 by the runners rather than rejected here.
+        n_refine: Golden section refinement iterations (default 20). A lower
+            value is raised to 20 by LmmConfig rather than rejected here.
         weight_file: Individual weight file for kinship pre-transformation.
             One weight per line, matching sample order. Applies
             K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.

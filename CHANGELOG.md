@@ -133,6 +133,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The chunk plan is one module.** `LmmChunkPlan.plan` and `LmmChunkPlan.narrow`
+  replace the free functions `plan_lmm_chunks` and `tighten_lmm_chunks` and
+  `ExecutableAssociationPlan.tighten_after_filter`; `_run_numpy_lmm` narrows
+  `execution.conservative_chunks` directly. The planner is pure: `plan_association`
+  resolves the per-chunk budget (`chunk_budget_bytes`) and the BLAS controllability
+  once and passes them in, so `compute_chunk_size_numpy` now requires
+  `mem_budget_bytes` and reads no RAM. Every plan is bit-identical to before;
+  `tests/test_chunk_plan_digest.py` pins 7,560 plans over shapes, dispatch paths,
+  budgets, caps and both BLAS states as one sha256 recorded from `8aa94f8`.
+- **`n_refine` is raised to 20 in one place.** `LmmConfig` raises a lower value to
+  `MIN_N_REFINE` at construction; the two downstream clamps in the chunk runner and
+  `compute_lmm_chunk_numpy` are gone, and `DEFAULT_N_REFINE` is 20, the value every
+  run already used. The preflight log now labels its chunk `pre-filter`, since it
+  prices the conservative plan by design.
+
 - **The 16-chunk cut for small inputs applies only under an uncontrollable
   BLAS.** `plan_lmm_chunks` consults `is_blas_controllable()`; with MKL or
   OpenBLAS the pipelined plan splits the cores and re-limits the thread pool

@@ -131,8 +131,8 @@ def gwas(
         l_min: Minimum lambda for optimization (default 1e-5, matches GEMMA).
         l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
         n_grid: Grid search resolution for lambda bracketing (default 50).
-        n_refine: Golden section refinement iterations (default 10; the
-            runners clamp it to at least 20).
+        n_refine: Golden section refinement iterations (default 20; a lower
+            value is raised to 20).
         weight_file: Individual weight file for kinship pre-transformation.
             One weight per line, matching sample order. Applies
             K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.

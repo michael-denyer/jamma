@@ -342,8 +342,6 @@ def run_lmm_chunk_source_numpy(
         omp_threads=get_c_extension_thread_count(accel.available(), accel.HAS_OPENMP),
         use_pipeline=use_pipeline,
     )
-    n_refine = max(config.n_refine, 20)
-
     invariants = RunInvariants.build(
         dispatch=dispatch,
         lmm_mode=lmm_mode,
@@ -358,7 +356,7 @@ def run_lmm_chunk_source_numpy(
         l_min=l_min,
         l_max=l_max,
         n_grid=config.n_grid,
-        n_refine=n_refine,
+        n_refine=config.n_refine,
     )
     kernel = make_kernel(invariants, threads.omp)
 

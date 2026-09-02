@@ -23,7 +23,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_numpy,
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
-from jamma.lmm.schema import LmmMode
+from jamma.lmm.schema import MIN_N_REFINE, LmmMode
 from jamma.lmm.stats import (
     _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
@@ -249,7 +249,7 @@ def compute_lmm_chunk_numpy(
     l_min: float = 1e-5,
     l_max: float = 1e5,
     n_grid: int = 50,
-    n_refine: int = 10,
+    n_refine: int = MIN_N_REFINE,
     Hi_eval_null: np.ndarray | None = None,
     logl_H0: float | None = None,
 ) -> dict[str, np.ndarray | None]:
@@ -267,7 +267,8 @@ def compute_lmm_chunk_numpy(
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution for lambda bracketing.
-        n_refine: Golden section iterations (minimum 20 enforced).
+        n_refine: Golden section iterations. ``LmmConfig`` raises this to
+            ``MIN_N_REFINE`` for every runner; a direct caller passes it.
         Hi_eval_null: Pre-computed 1/(lambda_null*eval+1) for Score test.
         logl_H0: Null model MLE log-likelihood for LRT.
 
@@ -276,8 +277,6 @@ def compute_lmm_chunk_numpy(
         lambdas_mle, p_lrts, p_scores. Keys not relevant to the
         mode are set to None.
     """
-    n_refine = max(n_refine, 20)
-
     result: dict[str, np.ndarray | None] = {
         "lambdas": None,
         "logls": None,

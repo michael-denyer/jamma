@@ -8,6 +8,12 @@ owns representative prebuilt inputs, so unrelated setup work never
 contaminates its timing. The workers hash numerical results and stop when the
 revisions disagree.
 
+The kinship, eigen, and rotation stages time one jlinalg call each. The
+association stage times ``run_lmm_association_numpy`` end to end on a
+prebuilt eigenbasis, so it covers the chunk plan, the rotation GEMM, the C
+kernel, and whatever overlap the pipeline achieves between them. It uses
+JAMMA's own thread policy; ``--threads`` does not reach it.
+
 Examples:
     uv run python scripts/bench_large_n_stages.py \
         --a-root /path/to/base --b-root /path/to/candidate
@@ -28,11 +34,12 @@ import statistics
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 
-_STAGES = ("kinship", "eigen", "rotation", "mode4")
+_STAGES = ("kinship", "eigen", "rotation", "association")
 
 
 def _digest(value: object) -> str:
@@ -64,23 +71,35 @@ def _digest(value: object) -> str:
     return digest.hexdigest()
 
 
-def _build_inputs(
-    n_samples: int, n_snps: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Build deterministic, well-conditioned inputs for all timed stages."""
-    rng = np.random.default_rng(20260801)
-    genotypes = np.ascontiguousarray(rng.standard_normal((n_samples, n_snps)))
-    genotypes -= genotypes.mean(axis=0)
+def _build_inputs(n_samples: int, n_snps: int) -> tuple[np.ndarray, np.ndarray]:
+    """Build deterministic {0, 1, 2} dosages and phenotypes.
 
-    w = np.abs(rng.standard_normal(n_samples)) + 1.0
-    y = rng.standard_normal(n_samples)
-    uab_invariant = np.ascontiguousarray(np.stack((w * w, w * y, y * y)))
-    uab_varying = np.empty((n_snps, 3, n_samples), dtype=np.float64)
-    snp_by_sample = genotypes.T
-    uab_varying[:, 0, :] = snp_by_sample * w
-    uab_varying[:, 1, :] = snp_by_sample * snp_by_sample
-    uab_varying[:, 2, :] = snp_by_sample * y
-    return genotypes, w, y, uab_invariant, uab_varying
+    Dosages rather than Gaussian values, because the association stage runs
+    the real runner, whose MAF and missingness filters would drop every
+    Gaussian column and time an empty run.
+    """
+    rng = np.random.default_rng(20260801)
+    maf = rng.uniform(0.1, 0.5, n_snps)
+    genotypes = rng.binomial(2, maf, size=(n_samples, n_snps)).astype(np.float64)
+    genotypes = np.ascontiguousarray(genotypes)
+    phenotypes = rng.standard_normal(n_samples)
+    return genotypes, phenotypes
+
+
+def _householder_basis(n_samples: int) -> np.ndarray:
+    """A dense orthogonal matrix built in O(n^2), standing in for eigenvectors.
+
+    The association stage needs an orthonormal basis so the rotation GEMM and
+    the kernel see realistic dense inputs, not a timed eigendecomposition. A
+    Householder reflector I - 2 v v^T is exactly orthogonal and costs one
+    outer product to build, where a real eigendecomposition would dominate
+    worker start-up at large N.
+    """
+    v = np.random.default_rng(20260804).standard_normal(n_samples)
+    v /= np.linalg.norm(v)
+    basis = np.eye(n_samples)
+    basis -= 2.0 * np.outer(v, v)
+    return np.ascontiguousarray(basis)
 
 
 class _StageRunner:
@@ -94,28 +113,17 @@ class _StageRunner:
         stages: tuple[str, ...],
     ) -> None:
         from jamma import jlinalg
-        from jamma.lmm.compute_numpy import (
-            compute_mode4_split_c_ws,
-            create_lmm_workspace_mode4,
-        )
 
         self._jlinalg = jlinalg
-        self._compute_mode4 = compute_mode4_split_c_ws
         self._n_threads = n_threads
-        (
-            self._genotypes,
-            _w,
-            _y,
-            uab_invariant,
-            self._uab_varying,
-        ) = _build_inputs(n_samples, n_snps)
+        self._genotypes, self._phenotypes = _build_inputs(n_samples, n_snps)
 
         self._kinship_out: np.ndarray | None = None
         self._kinship_seed: np.ndarray | None = None
         self._eigen_work: np.ndarray | None = None
         self._eigenvectors: np.ndarray | None = None
         self._rotation_out: np.ndarray | None = None
-        self._mode4_workspace: object | None = None
+        self._association: Callable[[], dict[str, np.ndarray]] | None = None
 
         if "kinship" in stages or "eigen" in stages:
             self._kinship_out = np.empty((n_samples, n_samples), dtype=np.float64)
@@ -137,23 +145,8 @@ class _StageRunner:
             )
             self._rotation_out = np.empty((n_snps, n_samples), dtype=np.float64)
 
-        if "mode4" in stages:
-            mode4_eigenvalues = np.sort(
-                np.random.default_rng(20260803).uniform(0.1, 2.0, n_samples)
-            )
-            hi_eval_null = 1.0 / (mode4_eigenvalues + 1.0)
-            self._mode4_workspace = create_lmm_workspace_mode4(
-                mode4_eigenvalues,
-                uab_invariant,
-                n_samples,
-                1e-5,
-                1e5,
-                50,
-                20,
-                n_threads,
-                hi_eval_null,
-                0.0,
-            )
+        if "association" in stages:
+            self._association = self._bind_association(n_samples, n_snps)
 
     def run(self, stage: str) -> object:
         if stage == "kinship":
@@ -162,12 +155,51 @@ class _StageRunner:
             return self._run_eigen()
         if stage == "rotation":
             return self._run_rotation()
-        if stage == "mode4":
-            assert self._mode4_workspace is not None
-            return self._compute_mode4(
-                self._mode4_workspace, self._uab_varying, self._n_threads
-            )
+        if stage == "association":
+            assert self._association is not None
+            return self._association()
         raise ValueError(f"unknown benchmark stage: {stage}")
+
+    def _bind_association(
+        self, n_samples: int, n_snps: int
+    ) -> Callable[[], dict[str, np.ndarray]]:
+        from jamma.lmm.runner_numpy import run_lmm_association_numpy
+        from jamma.lmm.schema import LmmConfig
+
+        eigenvalues = np.sort(
+            np.random.default_rng(20260803).uniform(0.1, 2.0, n_samples)
+        )
+        eigenvectors = _householder_basis(n_samples)
+        snp_info = [
+            {"chr": "1", "rs": f"rs{i}", "pos": i + 1, "a1": "A", "a0": "T"}
+            for i in range(n_snps)
+        ]
+        config = LmmConfig(lmm_mode=1, show_progress=False, check_memory=False)
+        fields = ("beta", "se", "p_wald", "logl_H1", "l_remle")
+
+        def run() -> dict[str, np.ndarray]:
+            result = run_lmm_association_numpy(
+                genotypes=self._genotypes,
+                phenotypes=self._phenotypes,
+                kinship=None,
+                snp_info=snp_info,
+                eigenvalues=eigenvalues,
+                eigenvectors=eigenvectors,
+                config=config,
+            )
+            rows = result.associations
+            if len(rows) != n_snps:
+                raise RuntimeError(
+                    f"association stage tested {len(rows)} of {n_snps} SNPs; "
+                    "the inputs must pass every runner filter for the timing "
+                    "to mean anything"
+                )
+            return {
+                field: np.array([getattr(row, field) for row in rows], dtype=np.float64)
+                for field in fields
+            }
+
+        return run
 
     def _run_kinship(self) -> np.ndarray:
         assert self._kinship_out is not None
@@ -178,7 +210,10 @@ class _StageRunner:
         assert self._kinship_seed is not None
         assert self._eigen_work is not None
         np.copyto(self._eigen_work, self._kinship_seed)
-        return self._jlinalg.eigh(self._eigen_work, inplace=True)
+        eigenvalues, eigenvectors, _status = self._jlinalg.eigh(
+            self._eigen_work, inplace=True
+        )
+        return eigenvalues, eigenvectors
 
     def _run_rotation(self) -> np.ndarray:
         assert self._eigenvectors is not None

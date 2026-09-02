@@ -164,7 +164,9 @@ uv run pytest tests/test_jlinalg_dgemm.py tests/test_jlinalg_dsyrk.py tests/lmm_
 To compare large-N performance changes, use the drift-aware stage benchmark.
 It creates a fresh pair of workers for every ABBA/BAAB block, reverses both
 run and worker-creation order, hashes each stage result, and reports kinship,
-eigendecomposition, rotation, and mode-4 timings separately. Start with a
+eigendecomposition, rotation, and end-to-end association timings separately.
+The association stage runs `run_lmm_association_numpy` on a prebuilt
+eigenbasis, so it is the one to compare for chunk-plan or pipeline changes. Start with a
 small same-tree smoke run, then use dimensions that fit the target machine:
 
 ```bash

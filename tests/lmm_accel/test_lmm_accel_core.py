@@ -148,6 +148,17 @@ class TestFusedWorkspaceInputValidation:
         with pytest.raises(ValueError, match=r"eigenvalues.*not finite"):
             _make_workspace(fused_data, eigenvalues=bad)
 
+    def test_eigenvalue_below_minus_one_over_l_max(self, fused_data):
+        bad = fused_data[0].copy()
+        bad[10] = -1.0
+        with pytest.raises(ValueError, match=r"eigenvalues.*non-positive"):
+            _make_workspace(fused_data, eigenvalues=bad)
+
+    def test_round_off_negative_eigenvalue_is_accepted(self, fused_data):
+        ev = fused_data[0].copy()
+        ev[0] = -1e-16
+        _make_workspace(fused_data, eigenvalues=ev)
+
     def test_wrong_invariant_soa_shape(self, fused_data):
         uab_inv_soa = fused_data[4]
         with pytest.raises(ValueError, match="uab_invariant"):

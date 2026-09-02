@@ -383,7 +383,7 @@ PyObject *create_workspace_ncvt1_c_py(
         if (!hi_eval_null_arr) goto err_input;
     }
     if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples, l_max) < 0)
         goto err_input;
     if (wants_hi && validate_hi_eval_null(
             (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)

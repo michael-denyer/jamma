@@ -16,12 +16,14 @@
  * (2^-16, 1] and cannot underflow. Four independent lanes keep the multiply
  * chains from serialising.
  *
- * Invariant: every v is finite and >= 1. Eigenvalues are >= 0 (eigen.py
- * zeroes anything below its threshold; validate_eigenvalues() rejects
- * non-finite values at the workspace boundary) and lambda is > 0, so
- * lambda * ev + 1 >= 1. The bit split is correct only for positive normal
- * doubles; there is no sign, zero, subnormal or NaN handling, and the
- * invariant means none is needed.
+ * Invariant: every v is a finite positive normal double. eigen.py zeroes
+ * eigenvalues below its threshold, and validate_eigenvalues() rejects any
+ * eigenvalue that is non-finite or makes l_max * ev + 1 <= 0 at the
+ * workspace boundary; lambda never exceeds l_max, so v > 0 at every
+ * evaluation. Round-off eigenvalues of order -1e-16 pass and give v just
+ * below 1, which the split handles; a nonzero 1 + x is never subnormal. The
+ * bit split is correct only for positive normal doubles; there is no sign,
+ * zero, subnormal or NaN handling, and the invariant means none is needed.
  *
  * Measured against the per-element sum over eigenvalues spread 0..55 and
  * lambda in 1e-5..1e5 with n = 1410: max abs diff 3.6e-12 on values up to

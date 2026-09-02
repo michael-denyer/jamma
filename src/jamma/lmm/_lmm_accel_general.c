@@ -423,7 +423,7 @@ PyObject *create_workspace_general_c_py(
     eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
     if (!eigenvalues_arr) goto err_ws;
     if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples) < 0)
+            (const double *)PyArray_DATA(eigenvalues_arr), n_samples, l_max) < 0)
         goto err_ws;
     uab_inv_arr = take_matrix(uab_inv_obj, ws->table.n_inv, n_samples, "uab_invariant");
     if (!uab_inv_arr) goto err_ws;

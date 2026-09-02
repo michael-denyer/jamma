@@ -142,10 +142,11 @@ vectorizes `log`.
 
 ### Status: **Equivalent Results, Different Method**
 
-The NumPy path keeps `log(abs(v))`. The C path takes `v >= 1` as an invariant:
+The NumPy path keeps `log(abs(v))`. The C path takes `v > 0` as an invariant:
 `eigen.py` zeroes every eigenvalue below its threshold before the workspace is
-built, and `validate_eigenvalues()` rejects non-finite values at the C boundary,
-so no sign handling is needed. Measured against the per-element sum over
+built, and `validate_eigenvalues()` rejects non-finite eigenvalues and any that
+would make `l_max * ev + 1` non-positive at the C boundary, so no sign handling
+is needed. Measured against the per-element sum over
 eigenvalues spread 0..55 and lambda in 1e-5..1e5 with 1410 samples, the maximum
 absolute difference is 3.6e-12 on logdet values up to 1.6e4, and the maximum
 relative difference is 2.1e-14. That is below every validation tolerance and

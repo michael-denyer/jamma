@@ -23,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   import it. Every inequality keeps its exact form, LOCO's `<=` and margin-
   of-available included: `tests/test_memory_ledger_digest.py` pins 2,438
   estimates and gate decisions, tie rows included, as one sha256 recorded
-  from `ebc07b6` before the code moved.
+  from `ebc07b6` before the code moved, priced under the NumPy dsyrk
+  fallback so the digest is the same on every machine.
 
 - **One compute entry point per kernel family, taking `lmm_mode` 1 or 4;
   `ABI_VERSION` 14 -> 15.** `compute_lmm_chunk_fused_c` and

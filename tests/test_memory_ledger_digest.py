@@ -11,6 +11,11 @@ it deliberately, in the same commit as the measured reason.
 The grid includes exact-tie rows (``required + margin == available``) so a
 change to the strictness of any inequality shows up as a digest change.
 
+The kinship phase budgets the dsyrk backend's scratch, which is zero on the
+native path and a pure function of ``n`` on the NumPy fallback. The table
+is always priced under the fallback so the digest is the same on every
+machine, whichever backend it built.
+
 Regenerate the digest with ``uv run python tests/test_memory_ledger_digest.py``.
 """
 
@@ -19,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -34,8 +40,9 @@ from jamma.kinship.loco import _decide_loco_passes
 
 pytestmark = pytest.mark.tier0
 
-# Recorded from master ebc07b6, before the ledger and the gate were reshaped.
-EXPECTED_DIGEST = "e34144608d6c825db1f930b212071ce56a4bca182d64e514cfb079f0b3835161"
+# Recorded from master ebc07b6, before the ledger and the gate were reshaped,
+# under the forced NumPy dsyrk backend the table always prices with.
+EXPECTED_DIGEST = "e943012ebe93a6e4b38144b222eb4f0c87fd78d18c9a19e811fb201ab845898a"
 EXPECTED_ROWS = 2438
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
@@ -259,25 +266,27 @@ def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
 
 def ledger_table() -> list[list]:
     """Every estimate and gate decision over the grid, in a fixed order."""
-    return [
-        *_streaming_rows(),
-        *_batch_rows(),
-        *_gate_rows(),
-        *_eigen_driver_rows(),
-        *_loco_rows(),
-    ]
+    with patch.object(
+        jlinalg,
+        "_dsyrk_backend",
+        jlinalg._dsyrk_numpy_impl,
+        # allow-patch: forces the dispatch fallback so the kinship rows price
+        # the same scratch on every machine. _dsyrk_backend is resolved from
+        # blas_has_dsyrk at import time, so toggling that flag would not
+        # redirect dispatch.
+    ):
+        return [
+            *_streaming_rows(),
+            *_batch_rows(),
+            *_gate_rows(),
+            *_eigen_driver_rows(),
+            *_loco_rows(),
+        ]
 
 
 def ledger_digest(rows: list[list]) -> str:
     canonical = json.dumps(rows, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-def test_native_dsyrk_holds_no_scratch() -> None:
-    assert jlinalg.dsyrk_scratch_bytes(200_000) == 0, (
-        "the digest was recorded against the native dsyrk backend; "
-        "the NumPy fallback adds scratch to the kinship phase"
-    )
 
 
 def test_memory_ledger_digest_is_unchanged() -> None:

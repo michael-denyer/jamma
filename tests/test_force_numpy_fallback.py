@@ -46,13 +46,13 @@ def jlinalg_identity_guard():
     the two are the same object. Order this before ``reload_jlinalg_after_test``
     so it tears down after it and sees the restored state.
     """
+    import jamma
     from jamma import jlinalg as bound
 
     yield bound
-    assert sys.modules["jamma.jlinalg"] is bound, (
-        "jamma.jlinalg was replaced in sys.modules; import-time bindings in "
-        "other test modules now patch a dead object"
-    )
+    replaced = "import-time bindings in other test modules now patch a dead object"
+    assert sys.modules["jamma.jlinalg"] is bound, replaced
+    assert vars(jamma).get("jlinalg") is bound, replaced
 
 
 @pytest.fixture
@@ -60,10 +60,22 @@ def reload_jlinalg_after_test(monkeypatch):
     """Reload jlinalg with the env in its current state, and again at teardown
     with JAMMA_FORCE_NUMPY_FALLBACK explicitly cleared, so the post-test module
     state doesn't leak into other tests in the same process.
+
+    Teardown puts the original module object back into ``sys.modules`` and
+    onto the ``jamma`` package before reloading it in place, so a test that
+    popped and re-imported the module cannot strand the import-time bindings
+    held by other test modules. Both slots matter: a re-import rebinds the
+    package attribute too, and ``from jamma import jlinalg`` reads that
+    attribute rather than ``sys.modules``.
     """
+    import jamma
+
+    original = importlib.import_module("jamma.jlinalg")
     yield
     monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
-    _reload_jlinalg()
+    sys.modules["jamma.jlinalg"] = original
+    vars(jamma)["jlinalg"] = original
+    importlib.reload(original)
 
 
 # ---------------------------------------------------------------------------

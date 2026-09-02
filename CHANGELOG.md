@@ -122,6 +122,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The 16-chunk cut for small inputs applies only under an uncontrollable
+  BLAS.** `plan_lmm_chunks` consults `is_blas_controllable()`; with MKL or
+  OpenBLAS the pipelined plan splits the cores and re-limits the thread pool
+  per chunk, and on an 8-core Linux MKL node the cut measured +22.4% on the
+  mouse_hs1940 shape (5 interleaved blocks, all positive), against -20% on
+  an 18-core Apple M5 Pro with Accelerate. Linux keeps the plan it had
+  before #294. On MKL the pipelined thread split also moves the rotation's
+  last bits, so the cut is bit-neutral only under Accelerate.
+
 - **The 16-chunk cut for small inputs stops at 10,000 samples.**
   `plan_lmm_chunks` applies `_PIPELINE_TARGET_CHUNKS` only up to
   `_PIPELINE_CUT_MAX_SAMPLES`. The interleaved A/B runner measured the cut at

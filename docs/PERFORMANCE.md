@@ -4,9 +4,9 @@
 > noted version. Two separate currency questions matter here, and they have
 > different answers.
 >
-> *Small scale* is current. v7.2.0 was benchmarked on mouse_hs1940 on
-> 2026-07-27, on the same machine that produced the v6.0.0 run (section
-> below). No measurable delta.
+> *Small scale* is current. master at `9d33cc1` was benchmarked on
+> mouse_hs1940 on 2026-09-02, on the same machine that produced the v7.2.0
+> and v6.0.0 runs (sections below).
 >
 > *Large scale* is not. The most recent end-to-end large-scale benchmark
 > (125,632 samples) is still from v4.2.0; v4.6.1 added partial scaling data at
@@ -16,7 +16,66 @@
 > backend set is now `numpy` and `numpy-streaming` only, both routing
 > through jlinalg with vendor LAPACK > NumPy fallback.
 
-## v7.2.0 on mouse_hs1940 (current)
+## master `9d33cc1` on mouse_hs1940 (current)
+
+Measured 2026-09-02. Same machine, toolchain, and dataset as the v7.2.0 run
+below: Apple M5 Pro (18 cores), Accelerate-ILP64, numpy 2.5.1, Python 3.12,
+OpenMP on, GEMMA 0.98.5 in the Homebrew OpenBLAS and Apple Accelerate builds,
+dev-mode build with `-march=native`. One round of best-of-3, the v7.2.0
+methodology, so the same caveat applies: a delta inside a few percent is not
+a measured change.
+
+| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
+|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 196ms | 196ms | -- | 1.0x | **5.5x** | **6.3x** |
+| LMM Wald (`-lmm 1`) | 7.3s | 4.2s | 2.4s | 291ms | 416ms | 8.2x | **24.9x** | **14.5x** |
+| LMM All (`-lmm 4`) | 13.3s | 7.6s | 4.8s | 298ms | 400ms | 16.1x | **44.7x** | **25.3x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 11.5s | 5.8s | 654ms | 712ms | 8.9x | **41.6x** | **17.6x** |
+| LOCO Wald (`-loco`) | 2m31s | 1m20s | -- | **3.3s** | -- | -- | **~46x** | **~24x** |
+
+### master against v7.2.0
+
+Three changes landed between the two runs, each measured in its own PR on
+this machine before merging:
+
+- #292 gives the C kernel every physical core under Accelerate. The
+  `cores // 2` halving assumed the kernel always overlaps an Accelerate GEMM;
+  a single-chunk run never does, and the pipelined run measured faster with
+  the full count too.
+- #294 cuts a run the memory budget alone would leave below the pipeline
+  threshold to 16 chunks, so rotation of chunk N+1 overlaps the kernel on
+  chunk N. mouse_hs1940 previously ran as one chunk with no overlap. Plans
+  that already pipelined, which is every large-scale run, are untouched.
+- #295 evaluates logdet(H) as a product of mantissas with an exact integer
+  exponent instead of one scalar `log()` per sample per likelihood
+  evaluation. That call was 86% of the golden-section refinement loop. The
+  n_cvt=1 kernel went from 150 ms to 56 ms; the general kernel gains less
+  because its Pab recursion dominates. See `GEMMA_DIVERGENCES.md` section 3
+  for the measured bound.
+
+| Operation | v7.2.0 | master | Delta |
+|-----------|--------|--------|-------|
+| Kinship (`-gk 1`) | 192ms | 196ms | +2.1% |
+| LMM Wald (`-lmm 1`) | 439ms | 291ms | -33.7% |
+| LMM All (`-lmm 4`) | 570ms | 298ms | -47.7% |
+| LMM Wald+4cov (`-lmm 1 -c`) | 827ms | 654ms | -20.9% |
+| LMM Wald, streaming | 551ms | 416ms | -24.5% |
+| LMM All, streaming | 680ms | 400ms | -41.2% |
+| LMM Wald+4cov, streaming | 939ms | 712ms | -24.2% |
+| LOCO Wald (`-loco`) | 3.3s | 3.3s | 0% |
+
+Kinship and LOCO do not reach the changed code. LOCO is 19 eigendecompositions
+of a 1,410 x 1,410 matrix plus 19 short LMM passes, so the kernel gain is
+below its 0.1 s reporting resolution.
+
+**Pure-NumPy `-lmm 4` reads 4.8s against 3.5s in the v7.2.0 table.** None of
+the three changes reaches the NumPy fallback, and the 4.7 to 4.8s figure
+reproduced on `e1f5c71` before any of them merged, on numpy 2.5.1 and 2.5.2
+and on Python 3.13 and 3.14. It is a pre-existing regression against the
+July figure that has not been traced yet, and it does not touch the C path
+users run by default.
+
+## v7.2.0 on mouse_hs1940 (superseded by the master run above)
 
 Measured 2026-07-27. Apple M5 Pro (18 cores), 69 GB RAM, macOS 26.5.2.
 Accelerate-ILP64, numpy 2.5.1, Python 3.13.5, OpenMP on. GEMMA 0.98.5 in two

@@ -161,20 +161,23 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-JAMMA v7.2.0 on mouse_hs1940 (1,940 samples x 12,226 SNPs), Apple M5 Pro
-(18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best of 3, end-to-end wall clock,
-measured 2026-07-27:
+JAMMA master at `9d33cc1` on mouse_hs1940 (1,940 samples x 12,226 SNPs),
+Apple M5 Pro (18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best of 3, end-to-end
+wall clock, measured 2026-09-02:
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.0s | 1.2s | 192ms | 192ms | -- | 1.0x | **5.3x** | **6.3x** |
-| LMM Wald (`-lmm 1`) | 7.0s | 4.3s | 2.3s | 439ms | 551ms | 5.3x | **15.9x** | **9.7x** |
-| LMM All (`-lmm 4`) | 12.8s | 7.6s | 3.5s | 570ms | 680ms | 6.2x | **22.4x** | **13.3x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 25.9s | 12.6s | 5.8s | 827ms | 939ms | 7.0x | **31.4x** | **15.2x** |
-| LOCO Wald (`-loco`) | 2m21s | 1m22s | -- | **3.3s** | -- | -- | **~43x** | **~25x** |
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 196ms | 196ms | -- | 1.0x | **5.5x** | **6.3x** |
+| LMM Wald (`-lmm 1`) | 7.3s | 4.2s | 2.4s | 291ms | 416ms | 8.2x | **24.9x** | **14.5x** |
+| LMM All (`-lmm 4`) | 13.3s | 7.6s | 4.8s | 298ms | 400ms | 16.1x | **44.7x** | **25.3x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 11.5s | 5.8s | 654ms | 712ms | 8.9x | **41.6x** | **17.6x** |
+| LOCO Wald (`-loco`) | 2m31s | 1m20s | -- | **3.3s** | -- | -- | **~46x** | **~24x** |
 
-Every row lands within +/-2.2% of the v6.0.0 measurement on the same machine,
-so nothing since then carries a performance cost.
+The C column is 21% to 48% faster than v7.2.0 on the same machine after three
+changes: the C kernel uses every physical core under Accelerate, small inputs
+are split so genotype rotation overlaps the kernel, and the log-determinant is
+a mantissa product instead of one `log()` per sample. LOCO is unchanged; its
+time is the 19 per-chromosome eigendecompositions.
 
 See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the
 version-over-version comparison, and large-scale (125k) results.

@@ -122,6 +122,15 @@ l_REML(lambda) = c - 1/2 log|H| - 1/2 log|W'H^-1 W| - 1/2(n-c-1) log(P_yy)
 
 In the eigenspace: `H_i = lambda*d_i + 1`, so `log|H| = sum log(lambda*d_i + 1)`.
 
+The pure-NumPy path evaluates that sum term by term. The C accelerator
+evaluates the same quantity as a product of mantissas with an exact integer
+exponent (`_lmm_logdet.h`), calling `log()` once per evaluation instead of
+once per sample. Both carry `O(n * eps_mach)` rounding. Measured against a
+40-digit reference on the 1,940 mouse_hs1940 eigenvalues, the relative error
+of each form lies between 1e-18 and 1.1e-12 across lambda from 1e-5 to 1e5,
+and neither is uniformly smaller; the two forms agree to 2.1e-14 relative.
+See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md#3-reml-logdet-computation).
+
 ### Pab Recursion
 
 GEMMA `CalcPab` and JAMMA `calc_pab` implement the same recursion:

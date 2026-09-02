@@ -239,6 +239,11 @@ def bench_numpy_streaming(phenotypes, kinship, covariates_4, runs: int) -> OpTim
 # ---------------------------------------------------------------------------
 def bench_kinship(plink, runs: int) -> OpTimings:
     """Benchmark kinship computation (NumPy/BLAS via compute_centered_kinship)."""
+    # ``python scripts/bench_all_backends.py`` puts ``scripts/`` on sys.path, not
+    # the repo root, so the ``tests`` package needs the root added explicitly.
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
     from tests.reference.kinship import compute_centered_kinship
 
     # Warmup

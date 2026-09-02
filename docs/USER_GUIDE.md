@@ -661,10 +661,11 @@ typical Databricks / HPC environment for large-scale GWAS:
 
 - **BLAS/LAPACK**: Tuned for Intel MKL (shipped via `numpy-mkl` wheels).
   OpenBLAS works but is slower and segfaults above ~50k samples.
-- **C extension**: The OpenMP-parallelized `_lmm_accel` extension provides a
-  5-7x speedup over pure NumPy for the LMM compute phase on mouse_hs1940. The
-  margin grows with covariate count, because the Pab table recursion gets more
-  expensive.
+- **C extension**: The OpenMP-parallelized `_lmm_accel` extension provides an
+  8-16x speedup over pure NumPy for the LMM compute phase on mouse_hs1940. The
+  margin is largest on `-lmm 4`, where the C kernel evaluates the
+  log-determinant as a mantissa product, and it grows with covariate count
+  because the Pab table recursion gets more expensive.
 - **ARM / Apple Silicon**: Runs correctly via Accelerate BLAS. Thread control
   (`blas_threads()`) is not available on Accelerate — Apple provides no public
   API and `VECLIB_MAXIMUM_THREADS` is only read at library load time. The C

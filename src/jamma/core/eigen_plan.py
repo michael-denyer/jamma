@@ -256,9 +256,9 @@ def plan_eigen_driver(
     pre_fallback_gb = required_gb
     use_dsyevr = False
 
-    from jamma.core.memory import margin_gb  # deferred: memory imports the sizes above
+    from jamma.core.memory import fits  # deferred: memory imports the sizes above
 
-    if required_gb + margin_gb(required_gb) > available_gb and has_dsyevr:
+    if not fits(required_gb, available_gb) and has_dsyevr:
         pre_fallback_gb = required_gb
         required_gb = dsyevr_peak
         use_inplace = False

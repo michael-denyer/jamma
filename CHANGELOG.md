@@ -150,6 +150,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every memory gate spells its inequality as `memory.fits`.** The DSYEVR
+  fallback in `plan_eigen_driver`, the DSYEVD warning in `lmm/eigen`, and
+  the LOCO single-pass decision each wrote their own comparison; two used
+  `>` and LOCO used `<=`, so at an exact tie the eigen planner kept DSYEVD
+  and LOCO went single-pass while `fits` said no. All three now call
+  `fits`, which is strict, so the tie is a refusal everywhere. The LOCO
+  multi-pass budget took `margin_gb(available_gb)` off the machine; it now
+  subtracts the fixed costs from `memory.headroom_gb(available_gb)`, the
+  inverse of `required + margin_gb(required)`, so the batch it returns is
+  the largest one `fits` accepts. Below the 10GB cap that is a budget of
+  `available / 1.1` instead of `0.9 * available`, so on small machines the
+  batch can be one chromosome larger. `tests/test_memory_ledger_digest.py`
+  is re-pinned: of 2,438 rows, 32 moved (12 `eigen:tie`, 18 `loco:tie`, and
+  the 2 `loco` rows at n=10,001, 22 chromosomes, 8GB, batch 3 to 4);
+  `scripts/dump_memory_ledger.py` dumps and diffs the table.
+
 - **The chunk plan is one module.** `LmmChunkPlan.plan` and `LmmChunkPlan.narrow`
   replace the free functions `plan_lmm_chunks` and `tighten_lmm_chunks` and
   `ExecutableAssociationPlan.tighten_after_filter`; `_run_numpy_lmm` narrows

@@ -21,6 +21,7 @@ from jamma.core.memory import (
     eigen_cost,
     estimate_lmm_memory,
     fits,
+    headroom_gb,
     kinship_cost,
     lmm_cost,
     margin_gb,
@@ -461,6 +462,14 @@ class TestFitsAndRequire:
         assert fits(500.0, 505.0) is False
         with pytest.raises(MemoryError):
             require(500.0, 505.0)
+
+    @pytest.mark.parametrize("available", [0.001, 1.0, 64.0, 110.0, 110.5, 1000.0])
+    def test_headroom_is_the_largest_requirement_that_fits(self, available):
+        """headroom_gb inverts required + margin_gb(required) on both margin regimes."""
+        head = headroom_gb(available)
+        assert head + margin_gb(head) == pytest.approx(available)
+        assert fits(head * (1 - 1e-9), available) is True
+        assert fits(head * (1 + 1e-9), available) is False
 
     def test_require_passes_when_sufficient(self):
         require(1.0, 1000.0, "test")

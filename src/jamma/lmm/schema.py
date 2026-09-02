@@ -212,7 +212,7 @@ DEFAULT_MISS = 0.05
 DEFAULT_L_MIN = 1e-5
 DEFAULT_L_MAX = 1e5
 DEFAULT_N_GRID = 50
-DEFAULT_N_REFINE = 10
+DEFAULT_N_REFINE = 20
 
 # Minimum coarse-grid resolution. A one-point grid has no bracket: the
 # golden-section stage collapses (idx_low == idx_high, so a == b) and every SNP
@@ -221,14 +221,18 @@ DEFAULT_N_REFINE = 10
 # validate_batch_params in _lmm_support.c — keep the two in step.
 MIN_N_GRID = 2
 
+# Golden-section iterations for ~1e-5 relative tolerance on lambda. LmmConfig
+# raises a lower value to this rather than rejecting it, and it is the one place
+# that does so: every runner reads ``config.n_refine`` as-is.
+MIN_N_REFINE = 20
+
 
 @dataclass(frozen=True)
 class LmmConfig:
     """Configuration for LMM association runners.
 
     Groups the common parameters shared by all runner entry points.
-    Frozen to prevent accidental mutation — runners clamp values (e.g.,
-    n_refine >= 20) on locals after reading them off the config.
+    Frozen, so the values runners read are the values validated here.
 
     Attributes:
         maf_threshold: Minimum MAF for SNP inclusion.
@@ -237,9 +241,8 @@ class LmmConfig:
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution for lambda bracketing. Must be >= 2 —
             a one-point grid has no bracket to refine (see MIN_N_GRID).
-        n_refine: Golden section iterations (clamped to min 20 internally
-            for ~1e-5 tolerance, so low values are raised rather than
-            rejected).
+        n_refine: Golden section iterations. Raised to MIN_N_REFINE (20,
+            for ~1e-5 tolerance) rather than rejected.
         check_memory: Check available memory before workflow.
         show_progress: Show progress bars and GEMMA-style logging.
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
@@ -281,6 +284,8 @@ class LmmConfig:
             )
         if self.n_grid < MIN_N_GRID:
             raise ValueError(f"n_grid must be >= {MIN_N_GRID}, got {self.n_grid}")
+        if self.n_refine < MIN_N_REFINE:
+            object.__setattr__(self, "n_refine", MIN_N_REFINE)
 
 
 DEFAULT_LMM_CONFIG = LmmConfig()

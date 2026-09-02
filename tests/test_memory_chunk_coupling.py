@@ -2,7 +2,7 @@
 
 These tests assert on observable outputs — estimated GB totals and whether
 the live preflight gate (``memory_preflight``) raises MemoryError — rather
-than on internal call counts of ``plan_lmm_chunks`` / ``_uab_iab_gb``. This
+than on internal call counts of ``LmmChunkPlan.plan`` / ``_uab_iab_gb``. This
 follows CLAUDE.md: assert observable behavior, not delegation plumbing.
 """
 
@@ -19,12 +19,13 @@ from jamma.core.memory import (
     estimate_lmm_memory,
     estimate_streaming_memory,
 )
+from jamma.core.threading import is_blas_controllable
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, plan_association
 from jamma.lmm.chunk_sizing import (
     LmmChunkPlan,
+    chunk_budget_bytes,
     compute_chunk_size_numpy,
     lmm_extra_bytes_per_snp,
-    plan_lmm_chunks,
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.pab import n_index
@@ -35,6 +36,42 @@ from tests.conftest import requires_c
 from tests.fakes import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
+
+
+def _plan(
+    n_samples: int,
+    n_snps: int,
+    n_cvt: int,
+    dispatch: DispatchPath,
+    *,
+    mem_budget_bytes: int | None = None,
+    blas_controllable: bool | None = None,
+    max_chunk_size: int | None = None,
+) -> LmmChunkPlan:
+    """Plan a chunk geometry the way ``plan_association`` does.
+
+    The planner is pure; ``plan_association`` resolves the budget from
+    ``memory.available_ram_gb`` and the BLAS controllability once and passes
+    them in. Tests that pin RAM through that seam get the same plan here.
+    """
+    budget = (
+        mem_budget_bytes
+        if mem_budget_bytes is not None
+        else chunk_budget_bytes(
+            None, available_bytes=int(memory.available_ram_gb() * 1e9)
+        )
+    )
+    return LmmChunkPlan.plan(
+        n_samples,
+        n_snps,
+        n_cvt,
+        dispatch,
+        budget_bytes=budget,
+        blas_controllable=(
+            is_blas_controllable() if blas_controllable is None else blas_controllable
+        ),
+        max_chunk_size=max_chunk_size,
+    )
 
 
 def _streaming_preflight(
@@ -54,16 +91,24 @@ def _streaming_preflight(
 
 def test_chunk_size_varies_with_scale():
     """The sizer returns different values as the sample count scales."""
-    small = compute_chunk_size_numpy(1_410, 12_000, dispatch=DispatchPath.FUSED)
-    large = compute_chunk_size_numpy(100_000, 500_000, dispatch=DispatchPath.FUSED)
+    budget = int(2e9)
+    small = compute_chunk_size_numpy(
+        1_410, 12_000, dispatch=DispatchPath.FUSED, mem_budget_bytes=budget
+    )
+    large = compute_chunk_size_numpy(
+        100_000, 500_000, dispatch=DispatchPath.FUSED, mem_budget_bytes=budget
+    )
     assert small != large, "Chunk size should vary with scale"
 
 
 def test_memory_estimate_uses_computed_chunk():
     """Memory estimates differ when using computed chunk sizes at different scales."""
-    small_chunk = compute_chunk_size_numpy(1_410, 12_000, dispatch=DispatchPath.FUSED)
+    budget = int(2e9)
+    small_chunk = compute_chunk_size_numpy(
+        1_410, 12_000, dispatch=DispatchPath.FUSED, mem_budget_bytes=budget
+    )
     large_chunk = compute_chunk_size_numpy(
-        100_000, 500_000, dispatch=DispatchPath.FUSED
+        100_000, 500_000, dispatch=DispatchPath.FUSED, mem_budget_bytes=budget
     )
 
     est_small = estimate_streaming_memory(1410, compute_chunk_size=small_chunk)
@@ -319,7 +364,7 @@ def _priced_batch_lmm_phase_gb(
     ``check_memory`` gate does, then reads ``lmm_batch_gb`` off the real
     ``MemoryBreakdown`` ``estimate_lmm_memory`` returns.
     """
-    chunk_plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
+    chunk_plan = _plan(n_samples, n_snps, n_cvt, dispatch)
     est = estimate_lmm_memory(
         n_samples,
         n_snps,
@@ -339,9 +384,9 @@ class TestChunkPlanMatchesEngine:
     def test_plan_chunk_size_matches_engine(
         self, monkeypatch, n_cvt, lmm_mode, accel, dispatch
     ):
-        """plan_lmm_chunks' chunk size is exactly what the engine sizes.
+        """LmmChunkPlan.plan' chunk size is exactly what the engine sizes.
 
-        chunk_runner_numpy.run_lmm_chunk_source_numpy calls plan_lmm_chunks
+        chunk_runner_numpy.run_lmm_chunk_source_numpy calls LmmChunkPlan.plan
         with these same arguments to size chunk_size/n_chunks/n_buffers for
         the engine's _ChunkEngine, so calling it directly here with the same
         inputs reproduces the engine's own sizing decision.
@@ -364,7 +409,7 @@ class TestChunkPlanMatchesEngine:
             is dispatch
         )
 
-        plan = plan_lmm_chunks(n_samples, n_filtered, n_cvt, dispatch)
+        plan = _plan(n_samples, n_filtered, n_cvt, dispatch)
 
         assert plan.chunk_size >= 1
         assert plan.n_chunks == (n_filtered + plan.chunk_size - 1) // plan.chunk_size
@@ -394,7 +439,7 @@ class TestChunkPlanMatchesEngine:
         n_samples = 50_000
         n_snps = 500_000
 
-        plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
+        plan = _plan(n_samples, n_snps, n_cvt, dispatch)
         priced_gb = _priced_streaming_lmm_phase_gb(
             monkeypatch, n_samples, n_snps, n_cvt, lmm_mode, accel
         )
@@ -456,7 +501,7 @@ class TestChunkPlanMatchesEngine:
         # n_cvt >= 2, mode 1 -> FUSED_GENERAL (use_split=True); dispatch is
         # passed directly below, so no lmm_mode is needed.
         dispatch = DispatchPath.FUSED_GENERAL
-        plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
+        plan = _plan(n_samples, n_snps, n_cvt, dispatch)
         assert plan.use_pipeline, "this case must pipeline for the regression to bite"
         assert plan.n_buffers == 2
 
@@ -493,7 +538,7 @@ class TestChunkPlanMatchesEngine:
         lmm_mode = 1
 
         dispatch = DispatchPath.NUMPY_FALLBACK
-        plan = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
+        plan = _plan(n_samples, n_snps, n_cvt, dispatch)
         assert not plan.use_pipeline, "this case must not pipeline (plan.n_buffers=1)"
         assert plan.n_buffers == 1
 
@@ -622,7 +667,7 @@ def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     """plan_association must price the chunk the run will allocate, not 20,000.
 
     At n=50000, snps=500000, ``estimate_lmm_memory``'s ``lmm_batch_size=20_000``
-    default estimates 276.0GB; the chunk ``plan_lmm_chunks`` actually plans for
+    default estimates 276.0GB; the chunk ``LmmChunkPlan.plan`` actually plans for
     this dispatch path allocates enough per-SNP state that the real estimate is
     500.0GB. A machine with 288GB available sits strictly between the two
     thresholds: the stale default says "fits" (batch), the real chunk says "does
@@ -667,21 +712,19 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
     assert "500.0GB" not in budgeted.reason
 
 
-def test_plan_lmm_chunks_honors_mem_budget_bytes():
-    """plan_lmm_chunks must narrow the chunk when given mem_budget_bytes.
+def test_chunk_plan_honors_mem_budget_bytes():
+    """LmmChunkPlan.plan must narrow the chunk when given mem_budget_bytes.
 
     compute_chunk_size_numpy already accepted mem_budget_bytes, but
-    plan_lmm_chunks (the single sizing decision the engine allocates from
+    LmmChunkPlan.plan (the single sizing decision the engine allocates from
     and the preflight prices from) had no parameter to pass it through, so
     every production caller's chunk plan ignored --mem-budget.
     """
     dispatch = DispatchPath.FUSED
     n_samples, n_snps, n_cvt = 50_000, 500_000, 1
 
-    auto = plan_lmm_chunks(n_samples, n_snps, n_cvt, dispatch)
-    budgeted = plan_lmm_chunks(
-        n_samples, n_snps, n_cvt, dispatch, mem_budget_bytes=int(1e9)
-    )
+    auto = _plan(n_samples, n_snps, n_cvt, dispatch)
+    budgeted = _plan(n_samples, n_snps, n_cvt, dispatch, mem_budget_bytes=int(1e9))
 
     assert budgeted.chunk_size < auto.chunk_size
 
@@ -693,7 +736,7 @@ def test_pipeline_memory_plan_honors_mem_budget(monkeypatch):
     monkeypatch.setattr(accel, "_accel", None)
     n_samples, n_snps, n_cvt = 30, 200, 1
     mem_budget = 12e-6
-    expected = plan_lmm_chunks(
+    expected = _plan(
         n_samples,
         n_snps,
         n_cvt,
@@ -726,7 +769,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     monkeypatch.setattr(accel, "_accel", None)
     n_samples, n_snps, n_cvt = 30, 200, 1
     mem_budget = 12e-6
-    expected = plan_lmm_chunks(
+    expected = _plan(
         n_samples,
         n_snps,
         n_cvt,
@@ -786,7 +829,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
             genotypes=genotypes,
             chunk_sink=lambda _arrays, _start, _end: None,
             dispatch=exec_plan.dispatch,
-            chunks=exec_plan.tighten_after_filter(n_snps),
+            chunks=exec_plan.conservative_chunks.narrow(n_snps),
             prepared=prepared,
             config=LmmConfig(
                 lmm_mode=1,
@@ -799,40 +842,44 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     assert requested == [expected.chunk_size]
 
 
-def test_plan_lmm_chunks_splits_small_inputs_for_pipelining(monkeypatch):
+def test_chunk_plan_splits_small_inputs_for_pipelining(monkeypatch):
     """A budget that fits every SNP in one chunk still splits a split-capable
     run into enough chunks to overlap rotation with compute, while a plan the
     budget already splits past the pipeline threshold, a run with more
     samples than the cut is measured to help, or a controllable BLAS, is left
     alone."""
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
-    monkeypatch.setattr("jamma.lmm.chunk_sizing.is_blas_controllable", lambda: False)
 
-    plan = plan_lmm_chunks(1_410, 12_226, 1, DispatchPath.FUSED)
+    plan = _plan(1_410, 12_226, 1, DispatchPath.FUSED, blas_controllable=False)
     assert plan.n_chunks == 16
     assert plan.chunk_size == 765
     assert plan.use_pipeline
 
-    fallback = plan_lmm_chunks(1_410, 12_226, 1, DispatchPath.NUMPY_FALLBACK)
+    fallback = _plan(
+        1_410, 12_226, 1, DispatchPath.NUMPY_FALLBACK, blas_controllable=False
+    )
     assert fallback.n_chunks == 1
     assert not fallback.use_pipeline
 
-    at_bound = plan_lmm_chunks(10_000, 5_000, 1, DispatchPath.FUSED)
+    at_bound = _plan(10_000, 5_000, 1, DispatchPath.FUSED, blas_controllable=False)
     assert at_bound.n_chunks == 16
     assert at_bound.use_pipeline
 
-    past_bound = plan_lmm_chunks(30_000, 5_000, 1, DispatchPath.FUSED)
+    past_bound = _plan(30_000, 5_000, 1, DispatchPath.FUSED, blas_controllable=False)
     assert past_bound.n_chunks == 1
     assert not past_bound.use_pipeline
 
-    monkeypatch.setattr("jamma.lmm.chunk_sizing.is_blas_controllable", lambda: True)
-    controllable = plan_lmm_chunks(1_410, 12_226, 1, DispatchPath.FUSED)
+    controllable = _plan(1_410, 12_226, 1, DispatchPath.FUSED, blas_controllable=True)
     assert controllable.n_chunks == 1
     assert not controllable.use_pipeline
-    monkeypatch.setattr("jamma.lmm.chunk_sizing.is_blas_controllable", lambda: False)
 
-    budgeted = plan_lmm_chunks(
-        1_410, 12_226, 1, DispatchPath.FUSED, mem_budget_bytes=int(1e6)
+    budgeted = _plan(
+        1_410,
+        12_226,
+        1,
+        DispatchPath.FUSED,
+        mem_budget_bytes=int(1e6),
+        blas_controllable=False,
     )
     assert budgeted.n_chunks > 16
     assert budgeted.chunk_size == compute_chunk_size_numpy(
@@ -845,11 +892,10 @@ def test_plan_lmm_chunks_splits_small_inputs_for_pipelining(monkeypatch):
     )
 
 
-def test_plan_lmm_chunks_keeps_the_chunk_floor_on_tiny_inputs(monkeypatch):
+def test_chunk_plan_keeps_the_chunk_floor_on_tiny_inputs(monkeypatch):
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
-    monkeypatch.setattr("jamma.lmm.chunk_sizing.is_blas_controllable", lambda: False)
 
-    plan = plan_lmm_chunks(30, 400, 1, DispatchPath.FUSED)
+    plan = _plan(30, 400, 1, DispatchPath.FUSED, blas_controllable=False)
     assert plan.chunk_size == 100
     assert plan.n_chunks == 4
     assert not plan.use_pipeline

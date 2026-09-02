@@ -21,6 +21,7 @@ from jamma.lmm.schema import (
     DEFAULT_N_REFINE,
     FORMAT_COLUMNS,
     HEADERS,
+    MIN_N_REFINE,
     MODE_SPECS,
     RESULT_FIELDS,
     TEST_TYPE_MAP,
@@ -52,7 +53,9 @@ class TestDefaultKnobs:
     def test_golden_section_knobs(self) -> None:
         # JAMMA's lambda-optimizer knobs — no GEMMA equivalent (GEMMA uses Brent).
         assert DEFAULT_N_GRID == 50
-        assert DEFAULT_N_REFINE == 10
+        # The default is the minimum: every run already ran 20 refinements,
+        # since LmmConfig raises a lower value to MIN_N_REFINE.
+        assert DEFAULT_N_REFINE == MIN_N_REFINE == 20
 
 
 # ── Schema correctness: derived tables match old hardcoded values ────

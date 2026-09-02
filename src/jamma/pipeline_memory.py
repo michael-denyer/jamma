@@ -67,7 +67,7 @@ def memory_preflight(
         f"Memory estimate ({summary.runner_name}): "
         f"{quote.total_peak_gb:.1f}GB required, "
         f"{quote.available_gb:.1f}GB available"
-        f" (compute chunk {quote.compute_chunk_size}{driver_note})"
+        f" (pre-filter compute chunk {quote.compute_chunk_size}{driver_note})"
     )
     memory.require(
         quote.total_peak_gb,

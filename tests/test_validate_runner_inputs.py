@@ -9,7 +9,7 @@ import pytest
 
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.lmm.prepare_common import RunnerSetup, validate_runner_inputs
-from jamma.lmm.schema import LmmConfig
+from jamma.lmm.schema import MIN_N_REFINE, LmmConfig
 
 pytestmark = pytest.mark.tier0
 
@@ -224,6 +224,15 @@ class TestLmmConfigValidation:
     def test_n_grid_below_two_raises(self, n_grid):
         with pytest.raises(ValueError, match="n_grid must be >= 2"):
             LmmConfig(n_grid=n_grid)
+
+    @pytest.mark.parametrize("n_refine", [0, 1, 10, 19])
+    def test_n_refine_below_minimum_is_raised_not_rejected(self, n_refine):
+        """A low n_refine is raised to MIN_N_REFINE here, the one place that does."""
+        assert LmmConfig(n_refine=n_refine).n_refine == MIN_N_REFINE
+
+    @pytest.mark.parametrize("n_refine", [20, 25])
+    def test_n_refine_at_or_above_minimum_is_kept(self, n_refine):
+        assert LmmConfig(n_refine=n_refine).n_refine == n_refine
 
     def test_valid_l_range(self):
         config = LmmConfig(l_min=1e-5, l_max=1e5)

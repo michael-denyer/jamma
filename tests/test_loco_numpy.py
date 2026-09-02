@@ -15,7 +15,7 @@ import pytest
 
 from jamma.io import read_fam_phenotypes
 from jamma.io.plink import get_plink_metadata
-from jamma.lmm.loco import run_lmm_loco
+from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.schema import LmmConfig
 from jamma.validation.compare import compare_assoc_results, load_gemma_assoc
 from jamma.validation.tolerances import ToleranceConfig
@@ -136,6 +136,51 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
         f"Per-chromosome stats BED reads not fully eliminated."
     )
     assert loco.n_tested > 0, "Expected SNPs to be tested"
+
+
+@pytest.mark.tier1
+def test_run_lmm_loco_plans_association_once(monkeypatch):
+    """One plan per run, over the SNP total, shared by every chromosome."""
+    import jamma.lmm.loco as loco_module
+
+    calls: list[dict] = []
+    real_plan = loco_module.plan_association
+
+    def _spy(*args, **kwargs):
+        calls.append({"args": args, **kwargs})
+        return real_plan(*args, **kwargs)
+
+    monkeypatch.setattr(loco_module, "plan_association", _spy)
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
+    result = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        config=LmmConfig(check_memory=False, show_progress=False),
+    )
+    meta = get_plink_metadata(_LOCO_BFILE)
+
+    assert result.n_tested > 0
+    assert len(calls) == 1, f"expected one plan per run, got {len(calls)}"
+    assert calls[0]["args"][1] == meta.n_snps
+    assert calls[0]["loco"] is True
+    assert calls[0]["max_chunk_size"] == LocoConfig().col_chunk_size
+
+
+@pytest.mark.tier0
+def test_run_lmm_loco_rejects_plan_wider_than_col_chunk_size():
+    """A caller-built plan must respect the LOCO disk-read chunk width."""
+    from jamma.lmm.association_plan import plan_association
+
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
+    wide = plan_association(100, 500, requested="numpy", loco=True)
+    with pytest.raises(ValueError, match="col_chunk_size"):
+        run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            config=LmmConfig(check_memory=False, show_progress=False),
+            loco=LocoConfig(col_chunk_size=wide.conservative_chunks.chunk_size - 1),
+            execution=wide,
+        )
 
 
 @pytest.mark.tier1

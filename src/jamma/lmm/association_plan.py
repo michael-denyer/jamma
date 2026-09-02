@@ -20,7 +20,7 @@ from jamma.lmm.chunk_sizing import (
 from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 from jamma.lmm.schema import LmmMode, parse_lmm_mode
 
-ExecutionMode = Literal["batch", "streaming"]
+ExecutionMode = Literal["batch", "streaming", "loco"]
 RequestedBackend = Literal["auto", "numpy", "numpy-streaming"]
 
 # SNPs per block in the streaming statistics pass when the caller names no
@@ -77,7 +77,8 @@ class ExecutableAssociationPlan:
     def price(self, *, eigen: EigenDriverPlan | None = None) -> MemoryPlan:
         """Price the conservative geometry without rebuilding policy."""
         chunks = self.conservative_chunks
-        if self.summary.mode == "streaming":
+        # Streaming and LOCO both hold one genotype chunk, never the matrix.
+        if self.summary.mode != "batch":
             extra_gb = (
                 chunks.chunk_size
                 * lmm_extra_bytes_per_snp(
@@ -126,6 +127,7 @@ def plan_association(
     mem_budget: float | None = None,
     max_chunk_size: int | None = None,
     log_dispatch_choices: bool = False,
+    loco: bool = False,
 ) -> ExecutableAssociationPlan:
     """Select all association policy and conservative geometry once.
 
@@ -134,6 +136,12 @@ def plan_association(
     is the requesting boundary's policy (the pipeline's
     ``_reject_streaming_without_accel``), not the planner's: the streaming
     runner itself works without the extension.
+
+    ``loco=True`` selects the ``loco`` mode regardless of ``requested``: the
+    LOCO orchestrator runs the NumPy body per chromosome over disk-read
+    chunks, so it is priced like streaming (one chunk plus the
+    eigendecomposition), never like batch. ``n_snps`` is then the run total,
+    and ``max_chunk_size`` should be the LOCO disk-read chunk width.
     """
     valid_requests = ("auto", "numpy", "numpy-streaming")
     if requested not in valid_requests:
@@ -160,7 +168,9 @@ def plan_association(
         max_chunk_size=max_chunk_size,
     )
 
-    if requested == "numpy-streaming":
+    if loco:
+        summary = ExecutionPlan("loco", "LOCO per-chromosome NumPy runs")
+    elif requested == "numpy-streaming":
         summary = ExecutionPlan("streaming", "Explicit numpy-streaming request")
     elif requested == "numpy":
         summary = ExecutionPlan("batch", "NumPy backend explicitly requested")

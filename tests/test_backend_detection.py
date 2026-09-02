@@ -69,6 +69,15 @@ class TestExecutionMode:
             plan = _select_mode(*FITS_SHAPE)
         assert plan.mode == "batch"
 
+    def test_loco_selects_loco_mode_whatever_was_requested(self):
+        """loco=True plans the loco mode and prices one chunk, not the matrix."""
+        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+            loco = plan_association(*OVERFLOWS_SHAPE, loco=True)
+            batch = plan_association(*OVERFLOWS_SHAPE, requested="numpy")
+        assert loco.summary.mode == "loco"
+        assert loco.summary.runner_name == "numpy-loco"
+        assert loco.price().total_peak_gb < batch.price().total_peak_gb
+
     def test_no_c_ext_warns_for_large_dataset(self):
         """No C extension + insufficient memory logs warning."""
         with (

@@ -47,6 +47,7 @@ from jamma.lmm import accel
 from jamma.lmm.association_plan import ExecutionPlan, plan_association
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
 from jamma.lmm.prepare_common import compute_valid_mask
 from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
@@ -541,6 +542,10 @@ class PipelineRunner:
             n_cvt=n_cvt,
             lmm_mode=parse_lmm_mode(self.config.lmm_mode),
             mem_budget=self.config.mem_budget,
+            max_chunk_size=DEFAULT_LOCO_CONFIG.col_chunk_size
+            if self.config.loco
+            else None,
+            loco=self.config.loco,
         )
         analysis = resolve_analysis_plan(
             self.config,
@@ -552,8 +557,9 @@ class PipelineRunner:
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
 
         # LOCO is single-phenotype (PipelineConfig rejects more) and owns its
-        # own per-chromosome kinship, eigendecomposition and memory gate, so it
-        # leaves before the shared preflight below.
+        # own per-chromosome kinship and eigendecomposition, so it leaves
+        # before the shared eigen acquisition below; its branch runs the same
+        # memory preflight on the same plan.
         if isinstance(analysis, LocoAnalysisPlan):
             phenotypes, _n_analyzed = all_pheno_data[pheno_columns[0]]
             return self._run_loco(
@@ -748,9 +754,10 @@ class PipelineRunner:
         """LOCO branch of the pipeline.
 
         Entered from ``run`` once the shared preamble has loaded the single
-        phenotype and the covariates. Runs the LOCO orchestrator (which owns
-        its own per-chromosome kinship, eigendecomposition and memory gate)
-        and assembles a PipelineResult.
+        phenotype and the covariates. Prices the run's one association plan
+        through the shared preflight, hands that plan to the LOCO orchestrator
+        (which owns its own per-chromosome kinship and eigendecomposition) and
+        assembles a PipelineResult.
 
         Single-phenotype only — multi-phenotype LOCO is rejected at
         PipelineConfig.__post_init__.
@@ -761,6 +768,7 @@ class PipelineRunner:
         n_cvt = covariates.shape[1] if covariates is not None else 1
         plan = analysis.execution.summary
         log_pipeline_banner(plan)
+        memory_preflight(self.config, analysis.execution)
 
         t_loco = time.perf_counter()
         loco = run_lmm_loco(
@@ -770,6 +778,7 @@ class PipelineRunner:
             config=analysis.lmm,
             loco=analysis.loco,
             output_path=assoc_path,
+            execution=analysis.execution,
         )
         loco_s = time.perf_counter() - t_loco
         total_s = time.perf_counter() - t_start

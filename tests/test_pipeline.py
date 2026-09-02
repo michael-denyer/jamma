@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from loguru import logger
 
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.pipeline import PipelineConfig, PipelineRunner
@@ -351,6 +352,42 @@ def test_pipeline_output_path_content_matches_n_tested(
         f"Disk file has {len(disk_results)} rows but "
         f"n_snps_tested={result.n_snps_tested}"
     )
+
+
+@pytest.mark.tier1
+def test_pipeline_loco_prices_and_threads_one_plan(tmp_path: Path, monkeypatch):
+    """The LOCO branch runs the shared preflight and hands run_lmm_loco its plan."""
+    import jamma.lmm
+    from jamma.core import memory
+
+    seen: dict = {}
+    real_run_lmm_loco = jamma.lmm.run_lmm_loco
+
+    def _spy(*args, **kwargs):
+        seen["execution"] = kwargs["execution"]
+        return real_run_lmm_loco(*args, **kwargs)
+
+    monkeypatch.setattr(jamma.lmm, "run_lmm_loco", _spy)
+    monkeypatch.setattr(memory, "available_ram_gb", lambda: 1000.0)
+    quotes: list[str] = []
+    handle = logger.add(quotes.append, format="{message}", level="INFO")
+    try:
+        result = PipelineRunner(
+            PipelineConfig(
+                bfile=LOCO.bfile,
+                loco=True,
+                backend="numpy",
+                output_dir=tmp_path / "output",
+                check_memory=True,
+                show_progress=False,
+            )
+        ).run()
+    finally:
+        logger.remove(handle)
+
+    assert result.n_snps_tested > 0
+    assert seen["execution"].summary.mode == "loco"
+    assert any(m.startswith("Memory estimate (numpy-loco)") for m in quotes), quotes
 
 
 @pytest.mark.tier1

@@ -29,8 +29,8 @@ class TestCliMemoryCheckUnit:
             n_samples=meta.n_samples,
         )
 
-        assert est.total_peak_gb >= 0
-        assert est.available_gb >= 0
+        assert est.peak_gb >= 0
+        assert est.peak_gb == max(est.kinship_gb, est.eigen_gb, est.lmm_gb)
 
     def test_metadata_does_not_load_genotypes(self):
         """get_plink_metadata should only read dimensions, not genotypes."""

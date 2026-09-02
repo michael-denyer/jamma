@@ -29,7 +29,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.eigen_plan import _memory_margin_gb, array_gb, square_matrix_gb
+from jamma.core.eigen_plan import array_gb, square_matrix_gb
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_stats import SnpStatsCache, collect_streamed_snp_stats
 from jamma.io.plink import (
@@ -319,7 +319,7 @@ def _decide_loco_passes(
         batch_size = max_batch_chrs
         single_pass = n_chr_with_snps <= batch_size
     else:
-        single_pass = single_pass_gb + _memory_margin_gb(single_pass_gb) <= available_gb
+        single_pass = single_pass_gb + memory.margin_gb(single_pass_gb) <= available_gb
         if single_pass:
             batch_size = n_chr_with_snps  # one batch covers every chromosome
         else:
@@ -330,7 +330,7 @@ def _decide_loco_passes(
             eigendecomp_reserve_gb = dsyevr_peak_gb(n_mat)
             usable_gb = (
                 available_gb
-                - _memory_margin_gb(available_gb)
+                - memory.margin_gb(available_gb)
                 - 2 * matrix_gb
                 - chunk_buffer_gb
                 - eigendecomp_reserve_gb

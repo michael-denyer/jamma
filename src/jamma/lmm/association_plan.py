@@ -53,14 +53,11 @@ class ExecutionPlan:
 class MemoryPlan:
     """Memory quote for one already-selected association plan.
 
-    Carries exactly what the two gating call sites read: the pipeline
-    preflight logs and gates on all four fields, the batch runner on the
-    two GB figures. Sufficiency is not a field because ``memory.require``
-    derives it from the same two figures.
+    Pure: the gating call sites read ``available_gb`` once themselves and
+    hand both figures to ``memory.require``.
     """
 
     total_peak_gb: float
-    available_gb: float
     compute_chunk_size: int
     eigen: EigenDriverPlan | None
 
@@ -91,7 +88,7 @@ class ExecutableAssociationPlan:
                 )
                 / 1e9
             )
-            estimate = estimate_streaming_memory(
+            ledger = estimate_streaming_memory(
                 self.n_samples,
                 chunk_size=DEFAULT_STATS_CHUNK,
                 n_cvt=self.n_cvt,
@@ -101,22 +98,19 @@ class ExecutableAssociationPlan:
                 uab_iab_gb=extra_gb,
             )
             return MemoryPlan(
-                total_peak_gb=estimate.total_peak_gb,
-                available_gb=estimate.available_gb,
+                total_peak_gb=ledger.peak_gb,
                 compute_chunk_size=chunks.chunk_size,
                 eigen=eigen,
             )
 
-        estimate = estimate_lmm_memory(
-            self.n_samples,
-            self.n_snps_before_filter,
-            lmm_batch_size=chunks.chunk_size,
-            n_cvt=self.n_cvt,
-            n_buffers=chunks.n_buffers,
-        )
         return MemoryPlan(
-            total_peak_gb=estimate.total_gb,
-            available_gb=estimate.available_gb,
+            total_peak_gb=estimate_lmm_memory(
+                self.n_samples,
+                self.n_snps_before_filter,
+                lmm_batch_size=chunks.chunk_size,
+                n_cvt=self.n_cvt,
+                n_buffers=chunks.n_buffers,
+            ),
             compute_chunk_size=chunks.chunk_size,
             eigen=None,
         )
@@ -152,14 +146,15 @@ def plan_association(
     dispatch = select_dispatch_path(
         n_cvt, mode, accel=c_ext_available, log_choices=log_dispatch_choices
     )
-    # The machine is read here, once, so the planner itself stays pure.
+    # The machine is read here, once, so the planner and the pricing stay pure.
+    available_gb = memory.available_ram_gb()
     chunks = LmmChunkPlan.plan(
         n_samples,
         n_snps,
         n_cvt,
         dispatch,
         budget_bytes=chunk_budget_bytes(
-            mem_budget, available_bytes=int(memory.available_ram_gb() * 1e9)
+            mem_budget, available_bytes=int(available_gb * 1e9)
         ),
         blas_controllable=is_blas_controllable(),
         max_chunk_size=max_chunk_size,
@@ -170,31 +165,32 @@ def plan_association(
     elif requested == "numpy":
         summary = ExecutionPlan("batch", "NumPy backend explicitly requested")
     else:
-        estimate = estimate_lmm_memory(
+        batch_gb = estimate_lmm_memory(
             n_samples,
             n_snps,
             lmm_batch_size=chunks.chunk_size,
             n_cvt=n_cvt,
             n_buffers=chunks.n_buffers,
         )
-        if c_ext_available and estimate.sufficient:
+        sufficient = memory.fits(batch_gb, available_gb)
+        if c_ext_available and sufficient:
             summary = ExecutionPlan(
                 "batch",
-                f"C extension available, {estimate.total_gb:.1f}GB fits in "
-                f"{estimate.available_gb:.1f}GB available",
+                f"C extension available, {batch_gb:.1f}GB fits in "
+                f"{available_gb:.1f}GB available",
             )
         elif c_ext_available:
             summary = ExecutionPlan(
                 "streaming",
-                f"C extension available, {estimate.total_gb:.1f}GB exceeds "
-                f"{estimate.available_gb:.1f}GB available, using NumPy streaming",
+                f"C extension available, {batch_gb:.1f}GB exceeds "
+                f"{available_gb:.1f}GB available, using NumPy streaming",
             )
         else:
-            if not estimate.sufficient:
+            if not sufficient:
                 logger.warning(
                     f"No C extension available. Dataset requires "
-                    f"~{estimate.total_gb:.1f}GB but only "
-                    f"{estimate.available_gb:.1f}GB available. "
+                    f"~{batch_gb:.1f}GB but only "
+                    f"{available_gb:.1f}GB available. "
                     "Compile the C extension for streaming support."
                 )
             summary = ExecutionPlan("batch", "Fallback -- no C extension available")

@@ -228,7 +228,7 @@ class TestCheckMemory:
         quote = plan.price()
         assert isinstance(quote, MemoryPlan)
         assert quote.total_peak_gb >= 0
-        assert quote.available_gb >= 0
+        assert quote.compute_chunk_size > 0
 
 
 @pytest.mark.tier0

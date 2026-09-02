@@ -4,14 +4,17 @@ import numpy as np
 import pytest
 
 from jamma.core import (
-    MemoryBreakdown,
     MemorySnapshot,
-    check_memory_available,
     cleanup_memory,
     get_memory_snapshot,
     log_memory_snapshot,
 )
-from jamma.core.eigen_plan import _dsyevd_peak_gb, dsyevr_peak_gb, square_matrix_gb
+from jamma.core.eigen_plan import (
+    _dsyevd_peak_gb,
+    array_gb,
+    dsyevr_peak_gb,
+    square_matrix_gb,
+)
 from jamma.core.estimates import _format_duration
 from jamma.core.memory import (
     _uab_iab_gb,
@@ -20,39 +23,13 @@ from jamma.core.memory import (
     fits,
     kinship_cost,
     lmm_cost,
+    margin_gb,
     require,
 )
 from tests.builders import BOUNDARY_SIZES
 from tests.fakes.memory import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
-
-
-class TestCheckMemoryAvailable:
-    """Tests for check_memory_available function."""
-
-    def test_sufficient_memory_returns_true(self):
-        """Tiny memory request should succeed."""
-        result = check_memory_available(0.001, operation="test")
-        assert result is True
-
-    def test_insufficient_memory_raises(self):
-        """Huge memory request should raise MemoryError."""
-        with pytest.raises(MemoryError) as exc_info:
-            check_memory_available(1_000_000, operation="test allocation")
-
-        assert "Insufficient memory" in str(exc_info.value)
-        assert "test allocation" in str(exc_info.value)
-
-    def test_error_message_contains_details(self):
-        """Error message should include required, available, and suggestion."""
-        with pytest.raises(MemoryError) as exc_info:
-            check_memory_available(1_000_000, operation="kinship")
-
-        msg = str(exc_info.value)
-        assert "1000000" in msg or "1e+06" in msg.lower()  # Required amount
-        assert "GB available" in msg  # Available amount
-        assert "kinship" in msg  # Operation name
 
 
 class TestEigendecompMemoryGate:
@@ -172,23 +149,33 @@ class TestCleanupMemory:
         assert after.rss_gb > 0
 
 
+def _batch_non_buffer_gb(n_samples: int, n_snps: int) -> float:
+    """The terms of ``estimate_lmm_memory`` that no chunk buffer contributes to.
+
+    Eigenvectors + full genotypes + eigenvalues + the three rotated vectors.
+    Subtract it from the total to recover the per-buffer batch figure the old
+    ``MemoryBreakdown.lmm_batch_gb`` field exposed.
+    """
+    return (
+        square_matrix_gb(n_samples)
+        + array_gb(n_samples, n_snps)
+        + array_gb(n_samples)
+        + 3 * array_gb(n_samples)
+    )
+
+
 class TestLmmMemoryEstimation:
     """Tests for estimate_lmm_memory function (LMM-phase only)."""
 
-    def test_lmm_estimate_excludes_kinship(self):
-        """LMM estimate should not include kinship memory."""
-        est = estimate_lmm_memory(100_000, 10_000)
-        assert est.kinship_gb == 0.0
-
-    def test_lmm_estimate_excludes_eigendecomp_workspace(self):
-        """LMM estimate should not include eigendecomp workspace."""
-        est = estimate_lmm_memory(100_000, 10_000)
-        assert est.eigendecomp_workspace_gb == 0.0
-
-    def test_lmm_estimate_includes_eigenvectors(self):
-        """LMM estimate should include eigenvectors (~80GB at 100k)."""
-        est = estimate_lmm_memory(100_000, 10_000)
-        assert 79 < est.eigenvectors_gb < 81
+    def test_lmm_estimate_prices_eigenvectors_but_no_kinship_or_workspace(self):
+        """The LMM phase holds U and the genotypes, not K and not the workspace."""
+        n_samples, n_snps, batch = 100_000, 10_000, 20_000
+        total = estimate_lmm_memory(n_samples, n_snps, lmm_batch_size=batch)
+        expected_batch = array_gb(n_samples, batch) + _uab_iab_gb(n_samples, batch)
+        assert total == pytest.approx(
+            _batch_non_buffer_gb(n_samples, n_snps) + expected_batch
+        )
+        assert total < eigen_cost(n_samples)
 
     def test_lmm_estimate_100k_under_300gb(self):
         """At 100k samples with 100 SNPs, LMM should need well under 300GB.
@@ -197,20 +184,15 @@ class TestLmmMemoryEstimation:
         300.6GB available, but old check demanded 320GB (eigendecomp peak).
         """
         est = estimate_lmm_memory(100_000, 100)
-        assert est.total_gb < 200, (
-            f"LMM for 100k samples × 100 SNPs should need <200GB, "
-            f"got {est.total_gb:.1f}GB"
+        assert est < 200, (
+            f"LMM for 100k samples × 100 SNPs should need <200GB, got {est:.1f}GB"
         )
 
-    def test_returns_memory_breakdown(self):
-        """Should return MemoryBreakdown with all fields."""
+    def test_returns_a_gb_figure(self):
+        """The estimator returns one number, the phase peak in GB."""
         est = estimate_lmm_memory(1_000, 1_000)
-        assert isinstance(est, MemoryBreakdown)
-
-    def test_sufficient_flag_correct(self):
-        """Tiny estimate should be sufficient."""
-        est = estimate_lmm_memory(100, 100)
-        assert est.sufficient is True
+        assert isinstance(est, float)
+        assert est > 0
 
 
 class TestMemoryEstimateVsActualAllocation:
@@ -259,16 +241,16 @@ class TestMemoryEstimateVsActualAllocation:
         batch_size = 5_000
         n_cvt = 1
 
-        est = estimate_lmm_memory(
+        total = estimate_lmm_memory(
             n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=n_cvt
         )
+        batch_gb = total - _batch_non_buffer_gb(n_samples, 1_000)
 
         # UtG alone: n_samples * batch_size * 8
         utg_only_gb = n_samples * batch_size * 8 / 1e9
 
-        # lmm_batch_gb must be strictly larger than UtG alone (Uab+Iab added)
-        assert est.lmm_batch_gb > utg_only_gb, (
-            f"lmm_batch_gb ({est.lmm_batch_gb:.4f}GB) should exceed "
+        assert batch_gb > utg_only_gb, (
+            f"the batch buffer ({batch_gb:.4f}GB) should exceed "
             f"UtG-only ({utg_only_gb:.4f}GB) because Uab/Iab must be included"
         )
 
@@ -281,10 +263,12 @@ class TestKinshipDtypeAccounting:
         n_samples = 10_000
         n_snps = 50_000
 
-        est = estimate_lmm_memory(n_samples, n_snps)
+        growth = estimate_lmm_memory(n_samples, n_snps) - estimate_lmm_memory(
+            n_samples, 0
+        )
 
         expected_gb = n_samples * n_snps * 8 / 1e9
-        assert abs(est.genotypes_gb - expected_gb) < 1e-9
+        assert growth == pytest.approx(expected_gb)
 
     def test_lmm_batch_gb_grows_with_n_cvt(self):
         """estimate_lmm_memory.lmm_batch_gb must grow with n_cvt.
@@ -299,99 +283,64 @@ class TestKinshipDtypeAccounting:
         n_samples = 10_000
         batch_size = 5_000
 
-        est_1 = estimate_lmm_memory(
-            n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=1
-        )
-        est_5 = estimate_lmm_memory(
-            n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=5
-        )
-        est_20 = estimate_lmm_memory(
-            n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=20
-        )
+        non_buffer = _batch_non_buffer_gb(n_samples, 1_000)
+        batch = {
+            n_cvt: estimate_lmm_memory(
+                n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=n_cvt
+            )
+            - non_buffer
+            for n_cvt in (1, 5, 20)
+        }
 
-        # lmm_batch_gb is the only component that depends on n_cvt;
-        # all other fields (eigenvectors, genotypes, etc.) are invariant.
-        assert est_5.lmm_batch_gb > est_1.lmm_batch_gb, (
-            f"n_cvt=5 ({est_5.lmm_batch_gb:.4f}GB) should exceed "
-            f"n_cvt=1 ({est_1.lmm_batch_gb:.4f}GB)"
+        assert batch[5] > batch[1], (
+            f"n_cvt=5 ({batch[5]:.4f}GB) should exceed n_cvt=1 ({batch[1]:.4f}GB)"
         )
-        assert est_20.lmm_batch_gb > est_5.lmm_batch_gb, (
-            f"n_cvt=20 ({est_20.lmm_batch_gb:.4f}GB) should exceed "
-            f"n_cvt=5 ({est_5.lmm_batch_gb:.4f}GB)"
+        assert batch[20] > batch[5], (
+            f"n_cvt=20 ({batch[20]:.4f}GB) should exceed n_cvt=5 ({batch[5]:.4f}GB)"
         )
 
 
 class TestGateCorrectnessLmmMemory:
-    """Tests that LMM batch runner memory gate correctly blocks/passes."""
+    """Tests that the LMM batch runner memory gate correctly blocks/passes."""
 
-    def test_lmm_gate_passes_with_ample_memory(self, monkeypatch):
-        """Memory check should pass when plenty of memory is available."""
+    def test_lmm_gate_passes_with_ample_memory(self):
+        """The gate passes when plenty of memory is available."""
+        assert fits(estimate_lmm_memory(1_000, 1_000), 500.0) is True
 
-        use_fake_psutil(monkeypatch, available=500 * 1e9)  # 500GB
+    def test_lmm_gate_blocks_with_scarce_memory(self):
+        """The gate fails when memory is insufficient.
 
-        est = estimate_lmm_memory(1_000, 1_000)
-        assert est.sufficient is True
-
-    def test_lmm_gate_blocks_with_scarce_memory(self, monkeypatch):
-        """Memory check should fail when memory is insufficient."""
-
-        use_fake_psutil(monkeypatch, available=1 * 1e9)  # 1GB
-
-        # 100k samples needs ~80GB eigenvectors alone
-        est = estimate_lmm_memory(100_000, 10_000)
-        assert est.sufficient is False
-
-    def test_lmm_gate_threshold_boundary(self, monkeypatch):
-        """Memory check should account for safety margin (10% capped at 10GB).
-
-        _check_available uses: (total_gb + min(total_gb * 0.1, 10)) < available_gb.
+        100k samples needs ~80GB of eigenvectors alone.
         """
+        assert fits(estimate_lmm_memory(100_000, 10_000), 1.0) is False
 
-        # Compute total_gb deterministically (pin memory so it doesn't affect total)
-        use_fake_psutil(monkeypatch, available=1000 * 1e9)
-        est_dry = estimate_lmm_memory(100, 100)
+    def test_lmm_gate_threshold_boundary(self):
+        """The gate accounts for the safety margin (10% capped at 10GB)."""
+        required = estimate_lmm_memory(100, 100)
+        needed = required + margin_gb(required)
 
-        margin = min(est_dry.total_gb * 0.1, 10.0)
-        needed_with_margin = est_dry.total_gb + margin
-
-        # Set available to just above the margin (should pass)
-        use_fake_psutil(monkeypatch, available=(needed_with_margin + 0.001) * 1e9)
-        est = estimate_lmm_memory(100, 100)
-        assert est.sufficient is True
-
-        # Set available to just under the margin (should fail)
-        use_fake_psutil(monkeypatch, available=(needed_with_margin - 0.001) * 1e9)
-        est = estimate_lmm_memory(100, 100)
-        assert est.sufficient is False
+        assert fits(required, needed + 0.001) is True
+        assert fits(required, needed - 0.001) is False
 
 
 class TestSafetyMarginCap:
     """Verify 10GB absolute cap on safety margin."""
 
-    def test_margin_capped_at_10gb_for_large_requirements(self, monkeypatch):
+    def test_margin_capped_at_10gb_for_large_requirements(self):
         """Safety margin caps at 10GB for large memory requirements."""
+        # 500GB required: uncapped would be 500*1.1 = 550GB, capped is 510GB.
+        require(500.0, 515.0)
 
-        # 500GB required: old formula = 500*1.1 = 550GB needed
-        # new formula = 500 + min(50, 10) = 510GB needed
-        use_fake_psutil(monkeypatch, available=515 * 1e9)  # 515GB
-        # Should PASS with capped margin (510GB < 515GB)
-        assert check_memory_available(500.0) is True
-
-        use_fake_psutil(monkeypatch, available=505 * 1e9)  # 505GB
-        # Should FAIL (510GB > 505GB)
         with pytest.raises(MemoryError):
-            check_memory_available(500.0)
+            require(500.0, 505.0)
 
-    def test_small_requirements_use_percentage_margin(self, monkeypatch):
+    def test_small_requirements_use_percentage_margin(self):
         """Small requirements use 10% margin (not capped)."""
+        # 10GB required: margin = min(1, 10) = 1GB, so 11GB is needed.
+        require(10.0, 11.5)
 
-        # 10GB required: margin = min(1, 10) = 1GB, total = 11GB
-        use_fake_psutil(monkeypatch, available=11.5 * 1e9)
-        assert check_memory_available(10.0) is True
-
-        use_fake_psutil(monkeypatch, available=10.5 * 1e9)  # 10.5 < 11
         with pytest.raises(MemoryError):
-            check_memory_available(10.0)
+            require(10.0, 10.5)
 
 
 class TestFormatDuration:
@@ -504,16 +453,14 @@ class TestFitsAndRequire:
     def test_fits_false_when_scarce(self):
         assert fits(1000.0, 10.0) is False
 
-    def test_fits_matches_check_memory_available_boundary(self, monkeypatch):
-        """fits() and check_memory_available() apply the identical margin."""
-        use_fake_psutil(monkeypatch, available=515 * 1e9)
+    def test_fits_and_require_agree_at_the_margin_boundary(self):
+        """The predicate and the raise site apply the identical margin."""
         assert fits(500.0, 515.0) is True
-        assert check_memory_available(500.0) is True
+        require(500.0, 515.0)
 
-        use_fake_psutil(monkeypatch, available=505 * 1e9)
         assert fits(500.0, 505.0) is False
         with pytest.raises(MemoryError):
-            check_memory_available(500.0)
+            require(500.0, 505.0)
 
     def test_require_passes_when_sufficient(self):
         require(1.0, 1000.0, "test")

@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import pytest
 
-from jamma.core.memory import MemoryBreakdown
 from jamma.lmm.association_plan import ExecutionPlan, plan_association
 
 pytestmark = pytest.mark.tier0
@@ -30,34 +29,21 @@ def test_import_jamma_succeeds():
     assert hasattr(jamma, "__version__")
 
 
-def _make_sufficient_estimate() -> MemoryBreakdown:
-    """Build a MemoryBreakdown with sufficient=True."""
-    return MemoryBreakdown(
-        kinship_gb=0.1,
-        genotypes_gb=0.1,
-        eigenvectors_gb=0.1,
-        eigendecomp_workspace_gb=0.1,
-        lmm_rotated_gb=0.1,
-        lmm_batch_gb=0.1,
-        total_gb=1.0,
-        available_gb=100.0,
-        sufficient=True,
-    )
+# A machine with room for anything the small shapes below price, and one with
+# effectively none. Pinning the read lets the real ``memory.fits`` drive the
+# batch-versus-streaming decision.
+AMPLE_GB = 1000.0
+SCARCE_GB = 0.001
+
+# Shapes whose real price straddles AMPLE_GB: 100 samples x 1000 SNPs costs
+# well under a GB, 200k x 1M holds 1.6TB of genotypes alone.
+FITS_SHAPE = (100, 1000)
+OVERFLOWS_SHAPE = (200_000, 1_000_000)
 
 
-def _make_insufficient_estimate() -> MemoryBreakdown:
-    """Build a MemoryBreakdown with sufficient=False."""
-    return MemoryBreakdown(
-        kinship_gb=100.0,
-        genotypes_gb=100.0,
-        eigenvectors_gb=100.0,
-        eigendecomp_workspace_gb=100.0,
-        lmm_rotated_gb=50.0,
-        lmm_batch_gb=50.0,
-        total_gb=500.0,
-        available_gb=10.0,
-        sufficient=False,
-    )
+def _pin_ram(available_gb: float):
+    """Pin what every memory decision in the planner sees the machine report."""
+    return patch("jamma.core.memory.available_ram_gb", return_value=available_gb)
 
 
 class TestExecutionMode:
@@ -67,51 +53,30 @@ class TestExecutionMode:
 
     def test_auto_c_ext_memory_sufficient_returns_numpy_batch(self):
         """auto + C ext + memory sufficient -> numpy-batch."""
-        with (
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                return_value=_make_sufficient_estimate(),
-            ),
-            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
-        ):
-            plan = _select_mode(100, 1000)
+        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+            plan = _select_mode(*FITS_SHAPE)
         assert plan.mode == "batch"
 
     def test_auto_c_ext_memory_insufficient_returns_numpy_streaming(self):
         """auto + C ext + memory insufficient -> numpy-streaming."""
-        with (
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                return_value=_make_insufficient_estimate(),
-            ),
-            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
-        ):
-            plan = _select_mode(200_000, 100_000)
+        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+            plan = _select_mode(*OVERFLOWS_SHAPE)
         assert plan.mode == "streaming"
 
     def test_auto_no_c_ext_returns_numpy_batch(self):
         """auto + no C ext -> numpy-batch fallback."""
-        with (
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                return_value=_make_sufficient_estimate(),
-            ),
-            patch("jamma.lmm.accel._accel", None),
-        ):
-            plan = _select_mode(100, 1000)
+        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", None):
+            plan = _select_mode(*FITS_SHAPE)
         assert plan.mode == "batch"
 
     def test_no_c_ext_warns_for_large_dataset(self):
         """No C extension + insufficient memory logs warning."""
         with (
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                return_value=_make_insufficient_estimate(),
-            ),
+            _pin_ram(AMPLE_GB),
             patch("jamma.lmm.accel._accel", None),
             patch("jamma.lmm.association_plan.logger") as mock_logger,
         ):
-            plan = _select_mode(n_samples=100, n_snps=1000)
+            plan = _select_mode(*OVERFLOWS_SHAPE)
         assert plan.mode == "batch"
         mock_logger.warning.assert_called_once()
 
@@ -119,14 +84,8 @@ class TestExecutionMode:
 
     def test_explicit_numpy_returns_numpy_batch(self):
         """explicit 'numpy' -> numpy-batch regardless of memory."""
-        with (
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                return_value=_make_insufficient_estimate(),
-            ),
-            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
-        ):
-            plan = _select_mode(200_000, 100_000, requested="numpy")
+        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+            plan = _select_mode(*OVERFLOWS_SHAPE, requested="numpy")
         assert plan.mode == "batch"
 
     def test_explicit_numpy_bypasses_auto(self):
@@ -220,19 +179,13 @@ class TestExecutionMode:
 
     def test_plan_reevaluation_mode_change_allowed(self):
         """Mode change (same backend) during re-evaluation is allowed."""
-        sufficient = _make_sufficient_estimate()
-        insufficient = _make_insufficient_estimate()
-
-        # First call returns numpy-batch, second returns numpy-streaming
-        with (
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                side_effect=[sufficient, insufficient],
-            ),
-            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
-        ):
-            plan1 = _select_mode(100, 1000)
-            plan2 = _select_mode(100, 1000)
+        # The same shape planned twice on a machine that lost its memory
+        # between the calls: numpy-batch first, numpy-streaming second.
+        with patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+            with _pin_ram(AMPLE_GB):
+                plan1 = _select_mode(*FITS_SHAPE)
+            with _pin_ram(SCARCE_GB):
+                plan2 = _select_mode(*FITS_SHAPE)
         assert plan1.mode == "batch"
         assert plan2.mode == "streaming"
 
@@ -244,9 +197,10 @@ class TestExecutionMode:
 
         def capturing_estimate(n_samples, n_snps, **kwargs):
             calls.append(kwargs)
-            return _make_sufficient_estimate()
+            return 1.0
 
         with (
+            _pin_ram(AMPLE_GB),
             patch(
                 "jamma.lmm.association_plan.estimate_lmm_memory",
                 side_effect=capturing_estimate,
@@ -262,13 +216,7 @@ class TestExecutionMode:
 
     def test_no_c_general_falls_to_numpy_batch_for_n_cvt_gt1(self):
         """No C general + n_cvt>1 -> numpy-batch fallback."""
-        with (
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                return_value=_make_sufficient_estimate(),
-            ),
-            patch("jamma.lmm.accel._accel", None),
-        ):
+        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", None):
             plan_n_cvt4 = _select_mode(1000, 10000, n_cvt=4)
             plan_n_cvt1 = _select_mode(1000, 10000, n_cvt=1)
 
@@ -279,13 +227,7 @@ class TestExecutionMode:
 
     def test_c_general_n_cvt_numpy_batch(self):
         """C general available + n_cvt>1 + sufficient -> numpy-batch."""
-        with (
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                return_value=_make_sufficient_estimate(),
-            ),
-            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
-        ):
+        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
             plan = _select_mode(1000, 10000, n_cvt=4)
 
         assert plan.mode == "batch"

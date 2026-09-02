@@ -60,20 +60,6 @@ def square_matrix_gb(n: int) -> float:
     return n * n * 8 / 1e9
 
 
-def _memory_margin_gb(peak_gb: float) -> float:
-    """Safety margin: 10% of peak, capped at 10GB absolute.
-
-    The single spelling of the margin — the estimators' sufficiency verdict
-    and check_memory_available both apply exactly this.
-    """
-    return min(peak_gb * 0.1, 10.0)
-
-
-def _eigendecomp_workspace_gb(n: int) -> float:
-    """Return eigendecomp workspace in GB (DSYEVD, the default driver)."""
-    return _dsyevd_workspace_gb(n)
-
-
 def _dsyevd_inplace_peak_gb(n: int) -> float:
     """Peak memory (GB) for in-place DSYEVD eigendecomposition.
 
@@ -270,7 +256,9 @@ def plan_eigen_driver(
     pre_fallback_gb = required_gb
     use_dsyevr = False
 
-    if required_gb + _memory_margin_gb(required_gb) > available_gb and has_dsyevr:
+    from jamma.core.memory import margin_gb  # deferred: memory imports the sizes above
+
+    if required_gb + margin_gb(required_gb) > available_gb and has_dsyevr:
         pre_fallback_gb = required_gb
         required_gb = dsyevr_peak
         use_inplace = False

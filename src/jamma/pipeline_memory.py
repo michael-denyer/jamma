@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 __all__ = ["memory_preflight"]
 
 
-def _eigen_driver_plan(n_valid: int) -> EigenDriverPlan:
+def _eigen_driver_plan(n_valid: int, available_gb: float) -> EigenDriverPlan:
     """Plan the eigendecomposition driver the runtime will use."""
     has_dsyevd = False
     has_dsyevr = False
@@ -36,7 +36,7 @@ def _eigen_driver_plan(n_valid: int) -> EigenDriverPlan:
         )
     return plan_eigen_driver(
         n_valid,
-        memory.available_ram_gb(),
+        available_gb,
         has_dsyevd=has_dsyevd,
         has_dsyevr=has_dsyevr,
         no_vendor=forced_numpy_fallback(),
@@ -60,18 +60,23 @@ def memory_preflight(
         )
         return
 
-    eigen = _eigen_driver_plan(plan.n_samples) if summary.mode == "streaming" else None
+    available_gb = memory.available_ram_gb()
+    eigen = (
+        _eigen_driver_plan(plan.n_samples, available_gb)
+        if summary.mode == "streaming"
+        else None
+    )
     quote = plan.price(eigen=eigen)
     driver_note = f", eigen driver {quote.eigen.driver}" if quote.eigen else ""
     logger.info(
         f"Memory estimate ({summary.runner_name}): "
         f"{quote.total_peak_gb:.1f}GB required, "
-        f"{quote.available_gb:.1f}GB available"
+        f"{available_gb:.1f}GB available"
         f" (pre-filter compute chunk {quote.compute_chunk_size}{driver_note})"
     )
     memory.require(
         quote.total_peak_gb,
-        quote.available_gb,
+        available_gb,
         summary.runner_name,
         budget_gb=plan.mem_budget_gb,
     )

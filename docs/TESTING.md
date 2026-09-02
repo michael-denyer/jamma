@@ -386,7 +386,7 @@ boundaries. Everywhere else, write a fake.
 |---|---|
 | `psutil.virtual_memory`, `psutil.Process(...).memory_info`, through `use_fake_psutil` | OS state; cannot be set without large allocations |
 | `gc.collect` | Process-level side effect |
-| `jamma.core.memory._check_available` | Thin wrapper around OS memory probe |
+| `jamma.core.memory.available_ram_gb` | The one RAM read every memory decision uses |
 | `jlinalg.blas_is_ilp64`, `blas_has_dsyevd`, `blas_has_dsyevr`, `blas_backend` | Library detection that cannot be flipped at runtime |
 | `jlinalg.set_n_threads` | Thread control; a process-level side effect |
 | `jamma.lmm.eigen.jlinalg`, replaced by `FakeJlinalg` | Vendor LAPACK cannot be made to raise `MemoryError` on a 20x20 matrix; see §2.3 |
@@ -456,7 +456,7 @@ a structural test. Test the behavior.
 | Anti-pattern | Preferred approach |
 |---|---|
 | `inspect.getsource()` assertions | Assert on warnings, exceptions, return values |
-| `MagicMock()` for data classes (`MemoryBreakdown`, `ExecutionPlan`, `Path`) | Construct real instances with test values |
+| `MagicMock()` for data classes (`MemoryLedger`, `ExecutionPlan`, `Path`) | Construct real instances with test values |
 | `MagicMock(spec=Path)` to stand in for a path | Use `tmp_path` or `Path("/tmp/x")` |
 | `@patch` on a non-boundary collaborator (`PipelineRunner`, `numpy.linalg.eigh`) | Inject a fake; or test against real values |
 | Mocking numerical functions (eigh, BLAS, likelihood) | Use small synthetic data with known results |

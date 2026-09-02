@@ -24,11 +24,11 @@ import pytest
 
 from jamma import jlinalg
 from jamma.core import memory
-from jamma.core.eigen_plan import _memory_margin_gb, plan_eigen_driver
+from jamma.core.eigen_plan import plan_eigen_driver
 from jamma.core.memory import (
-    eigen_cost,
     estimate_lmm_memory,
     estimate_streaming_memory,
+    margin_gb,
 )
 from jamma.kinship.loco import _decide_loco_passes
 
@@ -63,7 +63,7 @@ def _f(x: float) -> str:
 
 
 def _tie(required_gb: float) -> float:
-    return required_gb + _memory_margin_gb(required_gb)
+    return required_gb + margin_gb(required_gb)
 
 
 def _streaming_rows() -> list[list]:
@@ -77,7 +77,7 @@ def _streaming_rows() -> list[list]:
         EIGEN_PEAK_GB,
         UAB_IAB_GB,
     ):
-        est = estimate_streaming_memory(
+        ledger = estimate_streaming_memory(
             n,
             chunk_size=chunk,
             n_cvt=n_cvt,
@@ -96,10 +96,10 @@ def _streaming_rows() -> list[list]:
                 compute,
                 eigen_peak,
                 uab,
-                _f(est.peak_kinship_gb),
-                _f(eigen_cost(n, eigen_peak)),
-                _f(est.peak_lmm_gb),
-                _f(est.total_peak_gb),
+                _f(ledger.kinship_gb),
+                _f(ledger.eigen_gb),
+                _f(ledger.lmm_gb),
+                _f(ledger.peak_gb),
             ]
         )
     return rows
@@ -110,17 +110,17 @@ def _batch_rows() -> list[list]:
     for n, n_snps, batch, n_cvt, buffers in itertools.product(
         N_SAMPLES, N_SNPS, LMM_BATCH, N_CVT, N_BUFFERS
     ):
-        est = estimate_lmm_memory(
+        batch_gb = estimate_lmm_memory(
             n, n_snps, lmm_batch_size=batch, n_cvt=n_cvt, n_buffers=buffers
         )
-        rows.append(["batch", n, n_snps, batch, n_cvt, buffers, _f(est.total_gb)])
+        rows.append(["batch", n, n_snps, batch, n_cvt, buffers, _f(batch_gb)])
     return rows
 
 
 def _gate_rows() -> list[list]:
     rows: list[list] = []
     for peak in PEAKS_GB:
-        rows.append(["margin", _f(peak), _f(_memory_margin_gb(peak))])
+        rows.append(["margin", _f(peak), _f(margin_gb(peak))])
     for required, available in itertools.product(PEAKS_GB, AVAILABLE_GB):
         rows.append(
             ["fits", _f(required), _f(available), memory.fits(required, available)]

@@ -14,6 +14,7 @@ from jamma.lmm.likelihood import reml_log_likelihood
 from jamma.lmm.pab import calc_pab, compute_Uab, get_ab_index
 from jamma.lmm.stats import AssocResult
 from tests.fakes import FakeJlinalg, use_fake_jlinalg
+from tests.fakes.memory import use_fake_psutil
 from tests.reference.stats import calc_wald_test, f_sf
 
 pytestmark = pytest.mark.tier0
@@ -94,46 +95,30 @@ class TestEigendecomposition:
         assert result_eigenvalues[2] > 0.4, "0.5 should be preserved"
         assert result_eigenvalues[3] > 0.9, "1.0 should be preserved"
 
-    def test_eigendecompose_check_memory_true_raises_on_insufficient(self):
+    def test_eigendecompose_check_memory_true_raises_on_insufficient(self, monkeypatch):
         """check_memory=True raises MemoryError when memory is insufficient."""
-        from unittest.mock import patch
+        use_fake_psutil(monkeypatch, available=1, total=1)
 
-        K = np.eye(10)
+        with pytest.raises(MemoryError, match="Insufficient memory"):
+            eigendecompose_kinship(np.eye(10), check_memory=True)
 
-        with patch(
-            "jamma.lmm.eigen.check_memory_available",
-            side_effect=MemoryError("not enough"),
-        ):
-            with pytest.raises(MemoryError, match="not enough"):
-                eigendecompose_kinship(K, check_memory=True)
+    def test_eigendecompose_check_memory_false_skips_check(self, monkeypatch):
+        """check_memory=False skips the gate even on a machine with no memory."""
+        use_fake_psutil(monkeypatch, available=1, total=1)
 
-    def test_eigendecompose_check_memory_false_skips_check(self):
-        """check_memory=False skips memory check entirely."""
-        from unittest.mock import patch
-
-        K = np.eye(10)
-
-        with patch(
-            "jamma.lmm.eigen.check_memory_available",
-            side_effect=MemoryError("should not be called"),
-        ) as mock_check:
-            eigenvalues, eigenvectors = eigendecompose_kinship(K, check_memory=False)
-            mock_check.assert_not_called()
+        eigenvalues, eigenvectors = eigendecompose_kinship(
+            np.eye(10), check_memory=False
+        )
 
         assert np.allclose(eigenvalues, 1.0)
         assert eigenvectors.shape == (10, 10)
 
-    def test_eigendecompose_check_memory_default_is_true(self):
-        """Default check_memory=True calls check_memory_available."""
-        from unittest.mock import patch
+    def test_eigendecompose_check_memory_default_is_true(self, monkeypatch):
+        """The gate runs by default, so a starved machine refuses the call."""
+        use_fake_psutil(monkeypatch, available=1, total=1)
 
-        K = np.eye(10)
-
-        with patch(
-            "jamma.lmm.eigen.check_memory_available", return_value=True
-        ) as mock_check:
-            eigendecompose_kinship(K)
-            mock_check.assert_called_once()
+        with pytest.raises(MemoryError, match="Insufficient memory"):
+            eigendecompose_kinship(np.eye(10))
 
     @pytest.mark.parametrize(
         ("error", "has_dsyevr"),

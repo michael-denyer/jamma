@@ -5,9 +5,7 @@ context, and telemetry.
 """
 
 from jamma.core.memory import (
-    MemoryBreakdown,
-    StreamingMemoryBreakdown,
-    check_memory_available,
+    MemoryLedger,
     estimate_lmm_memory,
     estimate_streaming_memory,
 )
@@ -19,10 +17,8 @@ from jamma.core.memory_snapshot import (
 )
 
 __all__ = [
-    "MemoryBreakdown",
+    "MemoryLedger",
     "MemorySnapshot",
-    "StreamingMemoryBreakdown",
-    "check_memory_available",
     "cleanup_memory",
     "estimate_lmm_memory",
     "estimate_streaming_memory",

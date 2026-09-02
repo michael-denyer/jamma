@@ -19,13 +19,12 @@ from loguru import logger
 from threadpoolctl import threadpool_info
 
 from jamma import jlinalg
+from jamma.core import memory
 from jamma.core.eigen_plan import (
-    _memory_margin_gb,
     forced_numpy_fallback,
     plan_eigen_driver,
     square_matrix_gb,
 )
-from jamma.core.memory import check_memory_available
 from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import timed_progress
 from jamma.core.threading import blas_threads, get_blas_thread_count
@@ -125,9 +124,8 @@ def eigendecompose_kinship(
     )
 
     # Memory pre-flight
-    available_gb = log_memory_snapshot(
-        f"before_eigendecomp_{n_samples}samples"
-    ).available_gb
+    log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
+    available_gb = memory.available_ram_gb()
 
     # Decide eigendecomp driver: inplace DSYEVD > DSYEVD > DSYEVR.
     # Inplace requires vendor DSYEVD and a C-contiguous writeable float64 K
@@ -156,7 +154,7 @@ def eigendecompose_kinship(
     if (
         not no_vendor
         and not plan.use_dsyevr
-        and required_gb + _memory_margin_gb(required_gb) > available_gb
+        and required_gb + memory.margin_gb(required_gb) > available_gb
     ):
         logger.warning(
             f"DSYEVD peak ({required_gb:.1f}GB) may exceed available memory "
@@ -178,11 +176,10 @@ def eigendecompose_kinship(
     logger.info(plan.describe(available_gb, inplace_reason))
 
     if check_memory:
-        check_memory_available(
+        memory.require(
             required_gb,
-            operation=(
-                f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix"
-            ),
+            available_gb,
+            f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix",
         )
 
     # Use all physical cores for BLAS

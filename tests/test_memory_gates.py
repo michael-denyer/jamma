@@ -1,8 +1,8 @@
-"""Tests for memory gate OOM prevention in PipelineRunner and check_memory_available.
+"""Tests for memory gate OOM prevention in PipelineRunner and the kinship gates.
 
-Covers ERRP-05: memory gate code paths in both pipeline_memory.memory_preflight
-and check_memory_available are tested using mock psutil to simulate low-memory
-conditions without requiring actual large allocations.
+Covers ERRP-05: the memory gate code paths are tested by pinning
+``available_ram_gb`` to simulate low-memory conditions without requiring
+actual large allocations.
 """
 
 from __future__ import annotations
@@ -13,7 +13,8 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from jamma.core.memory import check_memory_available
+from jamma.core import memory
+from jamma.core.eigen_plan import array_gb, square_matrix_gb
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
@@ -52,39 +53,32 @@ class TestMemoryGates:
                 _streaming_plan(mem_budget=config.mem_budget),
             )
 
-    @patch("jamma.core.memory._check_available", return_value=(0.001, False))
-    def test_insufficient_system_memory_raises(self, mock_check):
+    def test_insufficient_system_memory_raises(self):
         """Insufficient system memory raises MemoryError with 'Insufficient' message.
 
-        Mocks _check_available to return (0.001 GB, False), simulating a system
-        with nearly no available memory. memory_preflight must raise when
-        the plan reports sufficient=False.
+        Pins the machine at 1 MB available, so memory_preflight must refuse
+        even the smallest streaming plan.
         """
         config = PipelineConfig(bfile=BFILE, check_memory=True)
         runner = PipelineRunner(config)
 
-        with pytest.raises(MemoryError, match="Insufficient"):
-            memory_preflight(
-                runner.config,
-                _streaming_plan(),
-            )
+        with patch("jamma.core.memory.available_ram_gb", return_value=0.001):
+            with pytest.raises(MemoryError, match="Insufficient"):
+                memory_preflight(
+                    runner.config,
+                    _streaming_plan(),
+                )
 
-    @patch("jamma.core.memory._check_available", return_value=(1000.0, True))
-    def test_memory_check_passes_when_sufficient(self, mock_check):
-        """Sufficient memory (1 TB available) passes the gate.
-
-        Mocks _check_available to return (1000.0 GB, True), simulating ample
-        memory. memory_preflight must not raise, and the plan's own quote
-        must show the fit the gate approved.
-        """
+    def test_memory_check_passes_when_sufficient(self):
+        """Sufficient memory (1 TB available) passes the gate."""
         config = PipelineConfig(bfile=BFILE, check_memory=True)
         runner = PipelineRunner(config)
         plan = _streaming_plan()
 
-        memory_preflight(runner.config, plan)
+        with patch("jamma.core.memory.available_ram_gb", return_value=1000.0):
+            memory_preflight(runner.config, plan)
 
-        quote = plan.price()
-        assert quote.total_peak_gb <= quote.available_gb
+        assert memory.fits(plan.price().total_peak_gb, 1000.0)
 
     def test_memory_check_disabled_returns_none(self):
         """check_memory=False returns None without performing any memory check.
@@ -101,27 +95,6 @@ class TestMemoryGates:
         )
 
         assert result is None
-
-    def test_check_memory_available_raises_on_insufficient(self):
-        """check_memory_available raises MemoryError when psutil reports 1 MB available.
-
-        Pins the machine at 1 MB available through the available_ram_gb seam.
-        Requesting 100 GB must raise MemoryError.
-        """
-        with patch("jamma.core.memory.available_ram_gb", return_value=0.001):
-            with pytest.raises(MemoryError, match="Insufficient memory"):
-                check_memory_available(required_gb=100.0, operation="test")
-
-    def test_check_memory_available_passes_when_sufficient(self):
-        """check_memory_available returns True when psutil reports 1 TB available.
-
-        Pins the machine at 1 TB available through the available_ram_gb seam.
-        Requesting 1 GB must succeed without raising.
-        """
-        with patch("jamma.core.memory.available_ram_gb", return_value=1000.0):
-            result = check_memory_available(required_gb=1.0)
-
-        assert result is True
 
 
 class TestBatchPreflightThreadsNcvt:
@@ -290,18 +263,16 @@ class TestKinshipOnlyPreflight:
     machines with ample room for the kinship phase itself.
     """
 
-    def test_streaming_breakdown_exposes_kinship_phase_peak(self):
+    def test_ledger_exposes_kinship_phase_peak(self):
         """The per-phase kinship peak is reported, not just the workflow max."""
         from jamma.core.memory import estimate_streaming_memory
 
-        est = estimate_streaming_memory(50_000, chunk_size=10_000)
+        ledger = estimate_streaming_memory(50_000, chunk_size=10_000)
 
-        assert est.peak_kinship_gb == pytest.approx(
-            est.kinship_gb + est.chunk_gb + est.dsyrk_scratch_gb
-        )
-        assert est.peak_kinship_gb < est.total_peak_gb, (
+        assert ledger.kinship_gb < ledger.peak_gb, (
             "eigendecomp phase should dominate the workflow max at this scale"
         )
+        assert ledger.peak_gb == ledger.eigen_gb
 
     def test_kinship_only_run_not_blocked_by_eigendecomp_budget(self):
         """Memory that fits the kinship phase but not eigendecomp must pass.
@@ -312,8 +283,8 @@ class TestKinshipOnlyPreflight:
         from jamma.core.memory import estimate_streaming_memory
         from jamma.kinship.stream import _preflight_kinship_memory
 
-        est = estimate_streaming_memory(50_000, chunk_size=10_000)
-        assert est.peak_kinship_gb < 40.0 < est.total_peak_gb, (
+        ledger = estimate_streaming_memory(50_000, chunk_size=10_000)
+        assert ledger.kinship_gb < 40.0 < ledger.peak_gb, (
             "test fixture no longer straddles the two budgets"
         )
 
@@ -421,13 +392,12 @@ class TestNumpyFallbackKinshipMemory:
             # flag afterwards would not redirect dispatch.
         )
 
-        est = estimate_streaming_memory(50_000, chunk_size=10_000)
+        ledger = estimate_streaming_memory(50_000, chunk_size=10_000)
 
-        assert est.dsyrk_scratch_gb == pytest.approx(
-            jlinalg.dsyrk_scratch_bytes(50_000) / 1e9
-        )
-        assert est.peak_kinship_gb == pytest.approx(
-            est.kinship_gb + est.chunk_gb + est.dsyrk_scratch_gb
+        assert ledger.kinship_gb == pytest.approx(
+            square_matrix_gb(50_000)
+            + array_gb(50_000, 10_000)
+            + jlinalg.dsyrk_scratch_bytes(50_000) / 1e9
         )
 
     def test_native_backend_declares_no_scratch(self):

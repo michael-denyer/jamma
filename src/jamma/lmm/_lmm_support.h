@@ -93,10 +93,11 @@ void free_thread_scratch(double **bufs, int n_threads);
  * Validation
  * ------------------------------------------------------------------------- */
 
-/* Reject non-finite eigenvalues before the compute loop; without this they
- * propagate silently through the whole REML pipeline and produce garbage with
- * no error. O(n_samples), negligible against O(n*m*k). 0, or -1 with PyErr. */
-int validate_eigenvalues(const double *data, int n_samples);
+/* Reject non-finite eigenvalues, and any that would make l_max * ev + 1
+ * non-positive, before the compute loop; without this they propagate silently
+ * through the whole REML pipeline and produce garbage with no error.
+ * O(n_samples), negligible against O(n*m*k). 0, or -1 with PyErr. */
+int validate_eigenvalues(const double *data, int n_samples, double l_max);
 
 /* 0, or -1 with PyErr set. */
 int validate_batch_params(int n_samples, double l_min, double l_max,

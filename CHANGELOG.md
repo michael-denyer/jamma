@@ -122,6 +122,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The C accelerator computes logdet(H) as a mantissa product with an exact
+  exponent.** `logdet_h_lambda` in the new `_lmm_logdet.h` splits each
+  `lambda * ev + 1` into mantissa and exponent by its bit pattern, multiplies
+  the mantissas in four lanes with renormalisation every 16 elements, adds the
+  exponents as integers, and calls `log()` once. Every REML and MLE evaluation
+  in both kernel families and both grid precomputes use it; the NumPy path
+  keeps its per-element log sum. Results move only in the last bits (max
+  relative difference 2.1e-14 against the log sum), so the fingerprint gate
+  reports the compute entry points as changed by design, and no tolerance
+  moved. `validate_eigenvalues` now rejects an eigenvalue that would make
+  `l_max * ev + 1` non-positive, which the bit split requires. mouse_hs1940 on an
+  18-core Apple M5 Pro, best-of-3: Wald 450 to 349 ms, all-tests 598 to
+  384 ms, Wald with 4 covariates 878 to 813 ms; the n_cvt=1 kernel itself
+  150 to 56 ms. See `docs/GEMMA_DIVERGENCES.md` section 3.
+
 - **The C extension uses every physical core for OpenMP under Accelerate.**
   `get_c_extension_thread_count` no longer halves the count when threadpoolctl
   finds no controllable BLAS. The halving guarded against oversubscription in

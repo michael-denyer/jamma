@@ -182,6 +182,7 @@ src/jamma/
 │   ├── _lmm_stats.c/.h     # Wald/Score/LRT statistics kernels shared by both workspaces
 │   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) workspace creator and fused compute
 │   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 workspace creator and fused compute
+│   ├── _lmm_logdet.h       # logdet(H) as a mantissa product with exact exponent; hot-loop inline
 │   └── _lmm_types.h        # Shared workspace/result struct definitions
 │                          #
 │                          # LMM_ACCEL_SOURCES in _build_support/build_models.py is the

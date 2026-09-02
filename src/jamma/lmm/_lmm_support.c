@@ -8,6 +8,8 @@
 #define NO_IMPORT_ARRAY
 #include "_lmm_support.h"
 
+#include "_lmm_logdet.h"
+
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -47,7 +49,7 @@ void free_thread_scratch(double **bufs, int n_threads)
     free(bufs);
 }
 
-int validate_eigenvalues(const double *data, int n_samples)
+int validate_eigenvalues(const double *data, int n_samples, double l_max)
 {
     for (int i = 0; i < n_samples; i++) {
         if (!isfinite(data[i])) {
@@ -57,6 +59,19 @@ int validate_eigenvalues(const double *data, int n_samples)
             PyErr_Format(PyExc_ValueError,
                 "eigenvalues[%d] = %s is not finite. "
                 "Check kinship matrix and eigendecomposition quality.", i, buf);
+            return -1;
+        }
+        if (l_max * data[i] + 1.0 <= 0.0) {
+            /* logdet_h_lambda (_lmm_logdet.h) splits lambda * ev + 1 by its
+             * bit pattern and needs it positive at every lambda up to l_max.
+             * Round-off negatives of order -1e-16 pass; below -1/l_max the
+             * old log(v) gave NaN and the split would give a wrong number. */
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", data[i]);
+            PyErr_Format(PyExc_ValueError,
+                "eigenvalues[%d] = %s makes lambda * ev + 1 non-positive at "
+                "l_max. Threshold the eigendecomposition before building a "
+                "workspace.", i, buf);
             return -1;
         }
     }
@@ -591,18 +606,15 @@ void build_grid_ncvt1(int n_grid, int n_samples, double log_l_min, double step,
     for (int g = 0; g < n_grid; g++) {
         double lam    = lambda_grid[g];
         double *hi_row = hi_eval_grid + (size_t)g * n_samples;
-        double logdet = 0.0;
         double sw = 0.0, swy = 0.0, sy = 0.0;
         for (int i = 0; i < n_samples; i++) {
-            double v = lam * eigenvalues[i] + 1.0;
-            double h = 1.0 / v;
+            double h = 1.0 / (lam * eigenvalues[i] + 1.0);
             hi_row[i] = h;
-            logdet += log(v);
             sw  += h * inv_ww[i];
             swy += h * inv_wy[i];
             sy  += h * inv_yy[i];
         }
-        logdet_h_grid[g] = logdet;
+        logdet_h_grid[g] = logdet_h_lambda(eigenvalues, n_samples, lam);
 
         grid_inv[g].s_ww    = sw;
         grid_inv[g].s_wy    = swy;

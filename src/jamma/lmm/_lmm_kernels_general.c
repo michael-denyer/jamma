@@ -10,6 +10,8 @@
 /* wald_from_pab_general lives with the other statistic extractors in
  * _lmm_stats.c; the fused-general REML path calls it once per SNP. */
 #include "_lmm_stats.h"
+/* logdet_h_lambda: the logdet(H) term every REML and MLE evaluation needs. */
+#include "_lmm_logdet.h"
 
 #include <math.h>
 #include <string.h>
@@ -137,8 +139,9 @@ static double reml_logl_general_cached(
 /* -------------------------------------------------------------------------
  * reml_logl_general_fresh — Full REML evaluation for a specific lambda.
  *
- * Computes hi_eval + logdet_h + all dot products in single n_samples pass
- * (fused loop), then calc_pab + reml_finish.
+ * Computes hi_eval + all dot products in a single n_samples pass (fused
+ * loop), logdet_h in a second pass over the eigenvalues alone (see
+ * _lmm_logdet.h), then calc_pab + reml_finish.
  * Used during golden section refinement where lambda is SNP-specific.
  * ------------------------------------------------------------------------- */
 static double reml_logl_general_fresh(
@@ -158,7 +161,7 @@ static double reml_logl_general_fresh(
     int n_inv = t->n_inv;
     int n_var = t->n_var;
 
-    double logdet_h = 0.0;
+    double logdet_h = logdet_h_lambda(eigenvalues, n_samples, lambda);
     double inv_sums[MAX_N_INDEX];
     double var_sums[MAX_N_INDEX];
     for (int c = 0; c < n_inv; c++) inv_sums[c] = 0.0;
@@ -167,7 +170,6 @@ static double reml_logl_general_fresh(
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         double h = 1.0 / v;
-        logdet_h += log(v);
         for (int c = 0; c < n_inv; c++)
             inv_sums[c] += h * uab_inv[c * n_samples + i];
         for (int c = 0; c < n_var; c++)
@@ -320,13 +322,12 @@ static double mle_logl_general(
 {
     int ni = t->n_index;
 
-    double logdet_h = 0.0;
+    double logdet_h = logdet_h_lambda(eigenvalues, n_samples, lambda);
     for (int c = 0; c < ni; c++) row0[c] = 0.0;
 
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         double h = 1.0 / v;
-        logdet_h += log(v);
         for (int c = 0; c < ni; c++)
             row0[c] += h * uab_snp[i * ni + c];
     }

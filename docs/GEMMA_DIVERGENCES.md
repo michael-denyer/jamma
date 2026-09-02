@@ -123,15 +123,36 @@ if Px_yy >= 0.0 and Px_yy < 1e-8:
 logdet_h += safe_log(fabs(d));
 ```
 
-### JAMMA (likelihood.py)
+### JAMMA (likelihood.py, NumPy path)
 
 ```python
 logdet_h = np.sum(np.log(np.abs(v_temp)))
 ```
 
-### Status: **ALIGNED**
+### JAMMA (`_lmm_logdet.h`, C accelerator)
 
-Both use `log(abs(v))` to handle potential negative eigenvalues from non-PSD kinship matrices.
+The C kernels compute the same sum as a product of mantissas with an exact
+integer exponent. Each `v = lambda * ev + 1` is split by bit manipulation into
+`m * 2^e` with `m` in `[0.5, 1)`. The mantissas multiply, renormalised every 16
+elements so the product cannot underflow, the exponents add as integers, and one
+`log()` at the end gives `log(prod m) + (sum e) * ln 2`. This replaces one
+`log()` per sample per likelihood evaluation. That call dominated the
+golden-section refinement, because neither Apple clang nor gcc without fast-math
+vectorizes `log`.
+
+### Status: **Equivalent Results, Different Method**
+
+The NumPy path keeps `log(abs(v))`. The C path takes `v > 0` as an invariant:
+`eigen.py` zeroes every eigenvalue below its threshold before the workspace is
+built, and `validate_eigenvalues()` rejects non-finite eigenvalues and any that
+would make `l_max * ev + 1` non-positive at the C boundary, so no sign handling
+is needed. Measured against the per-element sum over
+eigenvalues spread 0..55 and lambda in 1e-5..1e5 with 1410 samples, the maximum
+absolute difference is 3.6e-12 on logdet values up to 1.6e4, and the maximum
+relative difference is 2.1e-14. That is below every validation tolerance and
+moves only the last bits of each log-likelihood. The bit-exactness fingerprint
+gate reports every refinement-dependent entry point as changed when this form
+lands, by design.
 
 ---
 
@@ -491,7 +512,7 @@ text mode writes the `.txt` files plus `.npy` sidecars for fast reload.
 | safe_sqrt(-5.0) | sqrt(5.0) | NaN | Edge case only |
 | P_xx = 0 | inf/NaN mix | NaN | Degenerate SNPs |
 | Px_yy clamping | None | 1e-8 floor | Numerical stability |
-| logdet with neg eigenvalues | log(abs(v)) | log(abs(v)) | Aligned |
+| logdet(H) | Sum of log(abs(v)) | NumPy: sum of log(abs(v)); C: mantissa product with exact exponent | 2.1e-14 relative; see §3 |
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | Covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |
 | Lambda optimizer | Brent (serial) | Golden section (batch vectorized, assumes unimodal) | < 1e-4 relative; see §6 |

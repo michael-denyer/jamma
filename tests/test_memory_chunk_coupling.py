@@ -802,9 +802,11 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
 def test_plan_lmm_chunks_splits_small_inputs_for_pipelining(monkeypatch):
     """A budget that fits every SNP in one chunk still splits a split-capable
     run into enough chunks to overlap rotation with compute, while a plan the
-    budget already splits past the pipeline threshold, or a run with more
-    samples than the cut is measured to help, is left alone."""
+    budget already splits past the pipeline threshold, a run with more
+    samples than the cut is measured to help, or a controllable BLAS, is left
+    alone."""
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
+    monkeypatch.setattr("jamma.lmm.chunk_sizing.is_blas_controllable", lambda: False)
 
     plan = plan_lmm_chunks(1_410, 12_226, 1, DispatchPath.FUSED)
     assert plan.n_chunks == 16
@@ -823,6 +825,12 @@ def test_plan_lmm_chunks_splits_small_inputs_for_pipelining(monkeypatch):
     assert past_bound.n_chunks == 1
     assert not past_bound.use_pipeline
 
+    monkeypatch.setattr("jamma.lmm.chunk_sizing.is_blas_controllable", lambda: True)
+    controllable = plan_lmm_chunks(1_410, 12_226, 1, DispatchPath.FUSED)
+    assert controllable.n_chunks == 1
+    assert not controllable.use_pipeline
+    monkeypatch.setattr("jamma.lmm.chunk_sizing.is_blas_controllable", lambda: False)
+
     budgeted = plan_lmm_chunks(
         1_410, 12_226, 1, DispatchPath.FUSED, mem_budget_bytes=int(1e6)
     )
@@ -839,6 +847,7 @@ def test_plan_lmm_chunks_splits_small_inputs_for_pipelining(monkeypatch):
 
 def test_plan_lmm_chunks_keeps_the_chunk_floor_on_tiny_inputs(monkeypatch):
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
+    monkeypatch.setattr("jamma.lmm.chunk_sizing.is_blas_controllable", lambda: False)
 
     plan = plan_lmm_chunks(30, 400, 1, DispatchPath.FUSED)
     assert plan.chunk_size == 100

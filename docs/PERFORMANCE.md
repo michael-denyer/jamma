@@ -51,7 +51,16 @@ this machine before merging:
   overlap hides shrinks relative to that GEMM as samples grow. Measured with
   `scripts/bench_large_n_stages.py --stages association` at 5,000 SNPs
   (interleaved ABBA blocks, cut versus no cut): 1,410 samples -20%, 5,000
-  -6.4%, 10,000 -0.2%, 30,000 +5.6%.
+  -6.4%, 10,000 -0.2%, 30,000 +5.6%. It also applies only where the BLAS
+  cannot be throttled, which is Accelerate on macOS. With a controllable
+  BLAS the pipelined plan splits the cores between rotation and compute and
+  re-limits the thread pool per chunk, and on an 8-core Linux MKL node
+  (Databricks `Standard_E16ds_v6`, 5 blocks) the same cut measured +22.4% on
+  the mouse_hs1940 shape, every block between +14.7% and +31.5%. Linux
+  therefore keeps the plan it had before the cut existed. On MKL the
+  pipelined plan's thread split also moves the rotation's last bits, so two
+  plans are bit-identical only under Accelerate; the runner's digest check
+  reports the difference on Linux.
 - #295 evaluates logdet(H) as a product of mantissas with an exact integer
   exponent instead of one scalar `log()` per sample per likelihood
   evaluation. That call was 86% of the golden-section refinement loop. The

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from jamma.core import memory
 from jamma.core.constants import n_index
+from jamma.core.threading import is_blas_controllable
 from jamma.lmm.dispatch import DispatchPath
 
 # Allow large chunks — no int32 buffer constraint.
@@ -235,12 +236,19 @@ def plan_lmm_chunks(
     # The budget alone leaves a split-capable run too few chunks to overlap
     # rotation with compute, so cut it to _PIPELINE_TARGET_CHUNKS instead. A
     # run the budget already splits past the threshold keeps its plan, and so
-    # does one with more samples than the cut is measured to help.
+    # does one with more samples than the cut is measured to help. The cut
+    # only pays where the BLAS cannot be throttled (Accelerate on macOS), so
+    # rotation keeps every core while the kernel overlaps it. With a
+    # controllable BLAS the pipelined plan splits the cores and re-limits the
+    # thread pool per chunk, and the interleaved A/B on an 8-core Linux MKL
+    # node measured the cut at +8.3% on mouse_hs1940's shape, against -20% on
+    # an 18-core Apple M5 Pro.
     overlap_cap: int | None = None
     if (
         dispatch.use_split
         and n_chunks < _MIN_PIPELINE_CHUNKS
         and n_samples <= _PIPELINE_CUT_MAX_SAMPLES
+        and not is_blas_controllable()
     ):
         overlap_cap = max(_MIN_CHUNK, -(-n_filtered // _PIPELINE_TARGET_CHUNKS))
         chunk_size = _sized(pipeline_buffers=1, overlap_cap=overlap_cap)

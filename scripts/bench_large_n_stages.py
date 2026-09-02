@@ -362,6 +362,7 @@ def _summarize_stage(
     n_snps: int,
     n_threads: int,
     schedule: list[list[str]],
+    tolerate_output_mismatch: bool = False,
 ) -> dict[str, object]:
     timings: dict[str, list[float]] = {"A": [], "B": []}
     digests: dict[str, set[str]] = {"A": set(), "B": set()}
@@ -400,9 +401,17 @@ def _summarize_stage(
         )
         block_medians.append(statistics.median(chronological))
 
-    if len(digests["A"]) != 1 or digests["A"] != digests["B"]:
+    if len(digests["A"]) != 1 or len(digests["B"]) != 1:
         raise RuntimeError(
-            f"{stage} output mismatch: A={digests['A']} B={digests['B']}"
+            f"{stage} output is not deterministic within a revision: "
+            f"A={digests['A']} B={digests['B']}"
+        )
+    outputs_match = digests["A"] == digests["B"]
+    if not outputs_match and not tolerate_output_mismatch:
+        raise RuntimeError(
+            f"{stage} output mismatch: A={digests['A']} B={digests['B']}. "
+            "Pass --tolerate-output-mismatch to time revisions that differ "
+            "in the last bits on purpose."
         )
 
     median_a = statistics.median(timings["A"])
@@ -420,7 +429,9 @@ def _summarize_stage(
             if min(deltas) <= 0.0 <= max(deltas)
             else "consistent_direction_requires_replication"
         ),
-        "output_sha256": next(iter(digests["A"])),
+        "outputs_match": outputs_match,
+        "a_output_sha256": next(iter(digests["A"])),
+        "b_output_sha256": next(iter(digests["B"])),
         "a_timings_seconds": timings["A"],
         "b_timings_seconds": timings["B"],
         "block_deltas_percent": deltas,
@@ -435,6 +446,7 @@ def compare(
     n_threads: int,
     blocks: int,
     stages: tuple[str, ...],
+    tolerate_output_mismatch: bool = False,
 ) -> dict[str, object]:
     """Compare every requested stage with balanced, correctness-checked A/B runs."""
     schedule = _balanced_schedule(blocks)
@@ -447,6 +459,7 @@ def compare(
             n_snps,
             n_threads,
             schedule,
+            tolerate_output_mismatch=tolerate_output_mismatch,
         )
         for stage in stages
     }
@@ -487,6 +500,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--blocks", type=int, default=2)
     parser.add_argument("--stages", type=_parse_stages, default=_STAGES)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--tolerate-output-mismatch",
+        action="store_true",
+        help="Report rather than abort when A and B outputs differ, for "
+        "revisions that change the last bits on purpose. Each revision must "
+        "still be deterministic with itself.",
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--source-root", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args()
@@ -529,6 +549,7 @@ def main() -> None:
         args.threads,
         args.blocks,
         args.stages,
+        tolerate_output_mismatch=args.tolerate_output_mismatch,
     )
     print(json.dumps(result, sort_keys=True))
 

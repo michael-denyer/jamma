@@ -35,6 +35,15 @@ _MIN_PIPELINE_CHUNKS = 8
 # unchanged.
 _PIPELINE_TARGET_CHUNKS = 16
 
+# Largest sample count the cut applies to. Every extra chunk re-streams the
+# whole eigenvector matrix through the rotation GEMM, and the kernel time the
+# overlap can hide shrinks relative to that GEMM as samples grow, so the cut
+# turns from a win into a loss with N. Measured with
+# scripts/bench_large_n_stages.py --stages association (5,000 SNPs, interleaved
+# ABBA blocks, cut vs no cut): 1,410 samples -20%, 5,000 -6.4%, 10,000 -0.2%,
+# 30,000 +5.6%.
+_PIPELINE_CUT_MAX_SAMPLES = 10_000
+
 # Chunk floor, so tiny inputs never pay per-chunk overhead for a handful of SNPs.
 _MIN_CHUNK = 100
 
@@ -170,9 +179,10 @@ def plan_lmm_chunks(
     resulting chunks, and re-sizes against two live buffers only when the
     dispatch path supports pipelining (``dispatch.use_split``) and the
     single-buffer chunk count clears ``_MIN_PIPELINE_CHUNKS``. A split-capable
-    run the budget alone leaves below that threshold is cut to
-    ``_PIPELINE_TARGET_CHUNKS`` chunks, down to the ``_MIN_CHUNK`` floor, so a
-    small input that fits in one chunk still overlaps rotation and compute. A
+    run of at most ``_PIPELINE_CUT_MAX_SAMPLES`` samples that the budget alone
+    leaves below that threshold is cut to ``_PIPELINE_TARGET_CHUNKS`` chunks,
+    down to the ``_MIN_CHUNK`` floor, so a small input that fits in one chunk
+    still overlaps rotation and compute. A
     caller-given ``max_chunk_size`` caps the final chunk size before the chunk
     count is recomputed, so a capped run still reports its true chunk count.
 
@@ -224,9 +234,14 @@ def plan_lmm_chunks(
 
     # The budget alone leaves a split-capable run too few chunks to overlap
     # rotation with compute, so cut it to _PIPELINE_TARGET_CHUNKS instead. A
-    # run the budget already splits past the threshold keeps its plan.
+    # run the budget already splits past the threshold keeps its plan, and so
+    # does one with more samples than the cut is measured to help.
     overlap_cap: int | None = None
-    if dispatch.use_split and n_chunks < _MIN_PIPELINE_CHUNKS:
+    if (
+        dispatch.use_split
+        and n_chunks < _MIN_PIPELINE_CHUNKS
+        and n_samples <= _PIPELINE_CUT_MAX_SAMPLES
+    ):
         overlap_cap = max(_MIN_CHUNK, -(-n_filtered // _PIPELINE_TARGET_CHUNKS))
         chunk_size = _sized(pipeline_buffers=1, overlap_cap=overlap_cap)
         n_chunks = _count(chunk_size)

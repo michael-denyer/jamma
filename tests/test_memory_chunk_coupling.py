@@ -624,7 +624,7 @@ def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     At n=50000, snps=500000, ``estimate_lmm_memory``'s ``lmm_batch_size=20_000``
     default estimates 276.0GB; the chunk ``plan_lmm_chunks`` actually plans for
     this dispatch path allocates enough per-SNP state that the real estimate is
-    395.0GB. A machine with 288GB available sits strictly between the two
+    500.0GB. A machine with 288GB available sits strictly between the two
     thresholds: the stale default says "fits" (batch), the real chunk says "does
     not fit" (streaming). At trunk, ``runner.py`` called ``estimate_lmm_memory``
     without ``lmm_batch_size``/``n_buffers`` and picked batch here; that flips
@@ -636,7 +636,7 @@ def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     plan = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
 
     assert plan.mode == "streaming", (
-        f"expected streaming (the real chunk needs ~395GB > 288GB available), "
+        f"expected streaming (the real chunk needs ~500GB > 288GB available), "
         f"got {plan.mode!r} ({plan.reason})"
     )
 
@@ -656,15 +656,15 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
         50_000, 500_000, n_cvt=1, lmm_mode=1, mem_budget=1.0
     ).summary
 
-    # Unbudgeted: the real chunk needs ~395GB, exceeding 288GB -> streaming.
+    # Unbudgeted: the real chunk needs ~500GB, exceeding 288GB -> streaming.
     assert unbudgeted.mode == "streaming"
-    assert "395.0GB" in unbudgeted.reason
+    assert "500.0GB" in unbudgeted.reason
     # A 1GB chunk budget shrinks the chunk the estimate is priced against so
     # much the run fits comfortably -> batch. This proves mem_budget reached
     # the chunk sizer, rather than only vetoing the run afterward (its only
     # other reach, through memory_preflight's _reject_if_over_budget).
     assert budgeted.mode == "batch"
-    assert "395.0GB" not in budgeted.reason
+    assert "500.0GB" not in budgeted.reason
 
 
 def test_plan_lmm_chunks_honors_mem_budget_bytes():
@@ -802,7 +802,8 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
 def test_plan_lmm_chunks_splits_small_inputs_for_pipelining(monkeypatch):
     """A budget that fits every SNP in one chunk still splits a split-capable
     run into enough chunks to overlap rotation with compute, while a plan the
-    budget already splits past the pipeline threshold is left alone."""
+    budget already splits past the pipeline threshold, or a run with more
+    samples than the cut is measured to help, is left alone."""
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
 
     plan = plan_lmm_chunks(1_410, 12_226, 1, DispatchPath.FUSED)
@@ -813,6 +814,14 @@ def test_plan_lmm_chunks_splits_small_inputs_for_pipelining(monkeypatch):
     fallback = plan_lmm_chunks(1_410, 12_226, 1, DispatchPath.NUMPY_FALLBACK)
     assert fallback.n_chunks == 1
     assert not fallback.use_pipeline
+
+    at_bound = plan_lmm_chunks(10_000, 5_000, 1, DispatchPath.FUSED)
+    assert at_bound.n_chunks == 16
+    assert at_bound.use_pipeline
+
+    past_bound = plan_lmm_chunks(30_000, 5_000, 1, DispatchPath.FUSED)
+    assert past_bound.n_chunks == 1
+    assert not past_bound.use_pipeline
 
     budgeted = plan_lmm_chunks(
         1_410, 12_226, 1, DispatchPath.FUSED, mem_budget_bytes=int(1e6)

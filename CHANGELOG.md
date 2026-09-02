@@ -122,6 +122,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The 16-chunk cut for small inputs stops at 10,000 samples.**
+  `plan_lmm_chunks` applies `_PIPELINE_TARGET_CHUNKS` only up to
+  `_PIPELINE_CUT_MAX_SAMPLES`. The interleaved A/B runner measured the cut at
+  5,000 SNPs as -6.4% at 5,000 samples, a wash at 10,000, and +5.6% at
+  30,000, where each extra chunk re-streams the 7.2 GB eigenvector matrix
+  and the kernel it overlaps is a percent or two of the run.
+
 - **The C accelerator computes logdet(H) as a mantissa product with an exact
   exponent.** `logdet_h_lambda` in the new `_lmm_logdet.h` splits each
   `lambda * ev + 1` into mantissa and exponent by its bit pattern, multiplies

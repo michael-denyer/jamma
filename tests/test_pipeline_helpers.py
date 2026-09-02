@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal, cast
 import numpy as np
 import pytest
 
-from jamma.core.memory import MemoryBreakdown
+from jamma.core import memory
 from jamma.lmm.association_plan import plan_association
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
@@ -55,29 +55,6 @@ def _make_runner(tmp_path: Path, **overrides) -> PipelineRunner:  # type: ignore
     return PipelineRunner(config)
 
 
-def _memory_breakdown(
-    *, total_gb: float, available_gb: float, sufficient: bool
-) -> MemoryBreakdown:
-    """Build a real MemoryBreakdown for test doubles.
-
-    Uses real types (not SimpleNamespace / MagicMock) so schema drift in
-    MemoryBreakdown surfaces as a test-time TypeError rather than being
-    silently accepted. Non-asserted fields are zeroed — the helpers under
-    test only read total_gb/available_gb/sufficient.
-    """
-    return MemoryBreakdown(
-        kinship_gb=0.0,
-        genotypes_gb=0.0,
-        eigenvectors_gb=0.0,
-        eigendecomp_workspace_gb=0.0,
-        lmm_rotated_gb=0.0,
-        lmm_batch_gb=0.0,
-        total_gb=total_gb,
-        available_gb=available_gb,
-        sufficient=sufficient,
-    )
-
-
 class TestMemoryPreflightStreaming:
     """Streaming mode prices the plan's own geometry and passes the gate."""
 
@@ -86,7 +63,6 @@ class TestMemoryPreflightStreaming:
     ) -> None:
         """The quote carries the chunk the engine will size and the
         driver-aware eigendecomposition figure, and the gate passes."""
-        from jamma.core import memory
         from jamma.pipeline_memory import _eigen_driver_plan
 
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
@@ -95,11 +71,11 @@ class TestMemoryPreflightStreaming:
 
         memory_preflight(runner.config, plan)  # gate must pass, not raise
 
-        quote = plan.price(eigen=_eigen_driver_plan(plan.n_samples))
+        quote = plan.price(eigen=_eigen_driver_plan(plan.n_samples, 64.0))
         assert quote.compute_chunk_size >= 100
         assert quote.eigen is not None
         assert quote.eigen.required_gb > 0
-        assert quote.total_peak_gb <= quote.available_gb
+        assert memory.fits(quote.total_peak_gb, 64.0)
 
     def test_streaming_check_memory_false_logs_skip(self, tmp_path: Path) -> None:
         """Streaming path with check_memory=False must log the skip with the
@@ -168,15 +144,15 @@ class TestMemoryPreflightBatch:
     def test_budget_exceeded_raises_before_sufficiency_check(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """If total_gb > mem_budget, raise even when sufficient=True.
+        """A peak above mem_budget raises even when the machine has room.
 
         Ordering is load-bearing: a generous budget on a large machine must
         not mask a user-set cap.
         """
         runner = _make_runner(tmp_path, check_memory=True, mem_budget=8.0)
-        est = _memory_breakdown(total_gb=16.0, available_gb=128.0, sufficient=True)
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 128.0)
         monkeypatch.setattr(
-            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: est
+            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: 16.0
         )
         plan = _association_plan(
             "batch", n_valid=1000, n_snps=100, n_cvt=1, mem_budget=8.0
@@ -189,9 +165,9 @@ class TestMemoryPreflightBatch:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         runner = _make_runner(tmp_path, check_memory=True)
-        est = _memory_breakdown(total_gb=200.0, available_gb=64.0, sufficient=False)
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
         monkeypatch.setattr(
-            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: est
+            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: 200.0
         )
         plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
 
@@ -202,9 +178,9 @@ class TestMemoryPreflightBatch:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         runner = _make_runner(tmp_path, check_memory=True)
-        est = _memory_breakdown(total_gb=32.0, available_gb=128.0, sufficient=True)
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 128.0)
         monkeypatch.setattr(
-            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: est
+            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: 32.0
         )
         plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
 

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **The memory estimators are pure and the gate reads the machine once.**
+  `estimate_streaming_memory` returns `MemoryLedger(kinship_gb, eigen_gb,
+  lmm_gb)` with a `peak_gb` property, replacing the 13-field
+  `StreamingMemoryBreakdown`, nine of whose fields nothing read.
+  `estimate_lmm_memory` returns the batch phase's GB as a float, replacing
+  `MemoryBreakdown`. Neither carries `available_gb` or `sufficient` any more:
+  each gate reads `memory.available_ram_gb()` once and hands both figures to
+  `memory.require`, so a test pins every decision, the eigendecomposition
+  driver included, with one patch. `check_memory_available` is gone; its two
+  callers use `require`. The margin is `memory.margin_gb`, public, and the
+  only module that spells it; `eigen_plan`, `kinship/loco` and `lmm/eigen`
+  import it. Every inequality keeps its exact form, LOCO's `<=` and margin-
+  of-available included: `tests/test_memory_ledger_digest.py` pins 2,438
+  estimates and gate decisions, tie rows included, as one sha256 recorded
+  from `ebc07b6` before the code moved, priced under the NumPy dsyrk
+  fallback so the digest is the same on every machine.
+
 - **One compute entry point per kernel family, taking `lmm_mode` 1 or 4;
   `ABI_VERSION` 14 -> 15.** `compute_lmm_chunk_fused_c` and
   `compute_lmm_chunk_fused_general_c` now serve Wald and mode 4 both, reading

@@ -15,8 +15,8 @@ from collections.abc import Callable
 import numpy as np
 from loguru import logger
 
+from jamma.core import memory
 from jamma.core.eigen_plan import array_gb, square_matrix_gb
-from jamma.core.memory import check_memory_available
 from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
@@ -131,9 +131,10 @@ def _compute_kinship_inmemory(
         # Kinship phase only: the accumulator plus the float64 genotype matrix.
         # Callers that eigendecompose are gated by eigendecompose_kinship.
         required_gb = square_matrix_gb(n_samples) + array_gb(n_samples, n_snps)
-        check_memory_available(
+        memory.require(
             required_gb,
-            operation=f"kinship accumulation (peak: {required_gb:.1f}GB)",
+            memory.available_ram_gb(),
+            f"kinship accumulation (peak: {required_gb:.1f}GB)",
         )
 
     log_memory_snapshot(f"before_{label.lower().replace(' ', '_')}_{n_samples}samples")

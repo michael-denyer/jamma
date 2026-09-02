@@ -227,13 +227,13 @@ log_memory_snapshot("kinship:after")
 ### Memory Estimation API
 
 ```python
-from jamma.core.memory import estimate_streaming_memory
+from jamma.core.memory import available_ram_gb, estimate_streaming_memory, fits
 
 # Before starting a big job
-estimate = estimate_streaming_memory(n_samples=200_000)
-print(f"Peak: {estimate.total_peak_gb:.1f}GB")
-print(f"Available: {estimate.available_gb:.1f}GB")
-print(f"Will fit: {estimate.sufficient}")
+ledger = estimate_streaming_memory(n_samples=200_000)
+print(f"Peak: {ledger.peak_gb:.1f}GB")
+print(f"Available: {available_ram_gb():.1f}GB")
+print(f"Will fit: {fits(ledger.peak_gb, available_ram_gb())}")
 ```
 
 ### Type Safety
@@ -332,11 +332,9 @@ results = run_lmm_association_numpy_streaming(
 )
 
 # Memory estimation before commitment
-from jamma.core.memory import estimate_lmm_memory
+from jamma.core.memory import available_ram_gb, estimate_lmm_memory, require
 
-estimate = estimate_lmm_memory(n_samples, n_snps)
-if not estimate.sufficient:
-    raise MemoryError(f"Need {estimate.total_gb:.1f}GB")
+require(estimate_lmm_memory(n_samples, n_snps), available_ram_gb(), "LMM")
 ```
 
 ---

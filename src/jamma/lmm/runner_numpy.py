@@ -436,13 +436,14 @@ def run_lmm_association_numpy_planned(
     """Run the batch boundary with policy supplied by the pipeline."""
     if check_association_memory:
         quote = execution.price()
+        available_gb = memory.available_ram_gb()
         logger.info(
             f"LMM memory: estimated {quote.total_peak_gb:.1f}GB, "
-            f"available {quote.available_gb:.1f}GB"
+            f"available {available_gb:.1f}GB"
         )
         memory.require(
             quote.total_peak_gb,
-            quote.available_gb,
+            available_gb,
             f"LMM workflow with {execution.n_samples:,} samples x "
             f"{execution.n_snps_before_filter:,} SNPs",
             budget_gb=execution.mem_budget_gb,

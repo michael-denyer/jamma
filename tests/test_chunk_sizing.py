@@ -264,27 +264,30 @@ class TestStreamingMemoryPipelineBuffers:
     """Tests for pipeline_buffers parameter in streaming memory estimators."""
 
     def test_streaming_memory_double_buffer_rotation_doubles(self):
-        """rotation_buffer_gb doubles when pipeline_buffers=2."""
+        """The LMM phase gains one more rotation buffer at pipeline_buffers=2."""
+        from jamma.core.eigen_plan import array_gb
         from jamma.core.memory import estimate_streaming_memory
 
-        est_1 = estimate_streaming_memory(1000, pipeline_buffers=1)
-        est_2 = estimate_streaming_memory(1000, pipeline_buffers=2)
-        assert est_2.rotation_buffer_gb == pytest.approx(
-            2 * est_1.rotation_buffer_gb, rel=1e-10
+        n_samples, chunk_size = 1000, 10_000
+        ledger_1 = estimate_streaming_memory(
+            n_samples, chunk_size=chunk_size, pipeline_buffers=1
         )
-        assert est_2.total_peak_gb > est_1.total_peak_gb
+        ledger_2 = estimate_streaming_memory(
+            n_samples, chunk_size=chunk_size, pipeline_buffers=2
+        )
+
+        assert ledger_2.lmm_gb - ledger_1.lmm_gb == pytest.approx(
+            array_gb(n_samples, chunk_size), rel=1e-10
+        )
+        assert ledger_2.kinship_gb == ledger_1.kinship_gb
+        assert ledger_2.eigen_gb == ledger_1.eigen_gb
 
     def test_streaming_memory_default_matches_single_buffer(self):
-        """Omitting pipeline_buffers gives the same total_peak_gb as pipeline_buffers=1.
-
-        Backward compatibility: default call must equal explicit pipeline_buffers=1.
-        """
+        """Omitting pipeline_buffers gives the same ledger as pipeline_buffers=1."""
         from jamma.core.memory import estimate_streaming_memory
 
-        est_default = estimate_streaming_memory(1000)
-        est_explicit = estimate_streaming_memory(1000, pipeline_buffers=1)
-        assert est_default.total_peak_gb == pytest.approx(
-            est_explicit.total_peak_gb, rel=1e-10
+        assert estimate_streaming_memory(1000) == estimate_streaming_memory(
+            1000, pipeline_buffers=1
         )
 
     @pytest.mark.parametrize("bad_value", [0, -1, -10])

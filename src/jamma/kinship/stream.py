@@ -26,8 +26,9 @@ import numpy as np
 from loguru import logger
 
 from jamma import jlinalg
+from jamma.core import memory
 from jamma.core.estimates import estimate_kinship_seconds
-from jamma.core.memory import check_memory_available, estimate_streaming_memory
+from jamma.core.memory import estimate_streaming_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import compute_snp_stats
 from jamma.core.snp_stats import (
@@ -157,10 +158,11 @@ def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
     Raises:
         MemoryError: If the kinship phase will not fit in available memory.
     """
-    est = estimate_streaming_memory(n_samples, chunk_size=chunk_size)
-    check_memory_available(
-        est.peak_kinship_gb,
-        operation=f"kinship accumulation (peak: {est.peak_kinship_gb:.1f}GB)",
+    kinship_gb = estimate_streaming_memory(n_samples, chunk_size=chunk_size).kinship_gb
+    memory.require(
+        kinship_gb,
+        memory.available_ram_gb(),
+        f"kinship accumulation (peak: {kinship_gb:.1f}GB)",
     )
 
 

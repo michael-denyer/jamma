@@ -876,15 +876,17 @@ from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
 
 # Full pipeline estimate (before starting anything; streaming is the
 # production path, so genotypes are counted per chunk, not in full)
+from jamma.core.memory import available_ram_gb, fits
+
 full = estimate_streaming_memory(n_samples=200_000)
-print(f"Full pipeline peak: {full.total_peak_gb:.1f}GB")
-print(f"Eigendecomp workspace: {full.eigendecomp_workspace_gb:.1f}GB")
-print(f"Available: {full.available_gb:.1f}GB")
-print(f"Sufficient: {full.sufficient}")
+print(f"Full pipeline peak: {full.peak_gb:.1f}GB")
+print(f"Eigendecomp phase: {full.eigen_gb:.1f}GB")
+print(f"Available: {available_ram_gb():.1f}GB")
+print(f"Sufficient: {fits(full.peak_gb, available_ram_gb())}")
 
 # LMM-only estimate (after eigendecomp is done, kinship freed)
-lmm = estimate_lmm_memory(n_samples=200_000, n_snps=95_000)
-print(f"LMM phase: {lmm.total_gb:.1f}GB")
+lmm_gb = estimate_lmm_memory(n_samples=200_000, n_snps=95_000)
+print(f"LMM phase: {lmm_gb:.1f}GB")
 ```
 
 ## Troubleshooting

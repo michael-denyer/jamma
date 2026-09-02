@@ -98,8 +98,13 @@ def _householder_basis(n_samples: int) -> np.ndarray:
     v = np.random.default_rng(20260804).standard_normal(n_samples)
     v /= np.linalg.norm(v)
     basis = np.eye(n_samples)
-    basis -= 2.0 * np.outer(v, v)
-    return np.ascontiguousarray(basis)
+    # Row blocks keep the outer-product temporary at block x n rather than
+    # n x n, so building the basis never doubles the worker's footprint.
+    block = 1024
+    for start in range(0, n_samples, block):
+        rows = v[start : start + block]
+        basis[start : start + block] -= 2.0 * np.outer(rows, v)
+    return basis
 
 
 class _StageRunner:

@@ -66,7 +66,12 @@ this machine before merging:
   evaluation. That call was 86% of the golden-section refinement loop. The
   n_cvt=1 kernel went from 150 ms to 56 ms; the general kernel gains less
   because its Pab recursion dominates. See `GEMMA_DIVERGENCES.md` section 3
-  for the measured bound.
+  for the measured bound. At production scale the gain is small because
+  rotation dominates: on a Databricks `Standard_E96ds_v6` (48 physical
+  cores, MKL ILP64) at 125,000 samples x 5,000 SNPs, `f218fde` against
+  master with the interleaved runner, 2 blocks, measured 52.9 s against
+  52.0 s per association pass, -1.8% (-1.7%, -2.2%), outputs differing in
+  the last bits as intended.
 
 | Operation | v7.2.0 | master | Delta |
 |-----------|--------|--------|-------|

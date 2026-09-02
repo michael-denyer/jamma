@@ -1,10 +1,9 @@
-"""The per-phenotype LMM loop and the two runner call sites it dispatches to.
+"""The per-phenotype LMM loop and the genotype source it runs over.
 
-Split out of ``pipeline.py``: ``PipelineRunner.run`` is the only caller,
-these three functions call nothing else in the pipeline, and none of them read
-anything from the runner but the config. So this is where the question "how does
-one phenotype reach a runner" is answered, without the surrounding
-orchestration.
+Split out of ``pipeline.py``: ``PipelineRunner.run`` is the only caller, the
+loop calls nothing else in the pipeline, and it reads nothing from the runner
+but the config. So this is where the question "how does one phenotype reach
+the shared LMM body" is answered, without the surrounding orchestration.
 """
 
 from __future__ import annotations
@@ -16,8 +15,11 @@ from typing import NamedTuple
 import numpy as np
 from loguru import logger
 
-from jamma.io.plink import PlinkData, PlinkMetadata
-from jamma.lmm.schema import LmmRunResult, RunnerTiming, SnpMeta
+from jamma.io.plink import PlinkMetadata
+from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
+from jamma.lmm.genotype_source import GenotypeSource
+from jamma.lmm.runner_numpy import BATCH_LABELS, STREAMING_LABELS
+from jamma.lmm.schema import RunnerTiming, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_plan import StandardAnalysisPlan
@@ -54,18 +56,22 @@ def run_phenotype_loop(
 ) -> PhenoLoopOutcome:
     """Run the per-phenotype LMM loop and aggregate its results.
 
-    Iterates the configured phenotype columns, masking each to the shared
-    valid-sample intersection, dispatching to the batch or streaming runner
-    per the plan, and collecting associations, counts, and output paths.
-    PVE and the runner timing breakdown are taken from the final phenotype's
-    result. ``meta`` is the pipeline's already-parsed PLINK metadata, passed
-    through so the streaming runner never re-reads the .bim per phenotype.
+    Builds one genotype source for the plan's mode, then iterates the
+    configured phenotype columns, masking each to the shared valid-sample
+    intersection and running the shared LMM body over that source. PVE and
+    the runner timing breakdown are taken from the final phenotype's result.
+    ``meta`` is the pipeline's already-parsed PLINK metadata, so the
+    streaming source never re-reads the .bim per phenotype. The ``-snps``
+    restriction reaches the body as ``snps_indices`` in both modes, where it
+    joins the MAF, missingness and HWE filters.
 
     Returns:
         A PhenoLoopOutcome bundling associations, total SNPs tested, the
         per-phenotype output paths, the loop wall time, runner timing, and
         the PVE estimate.
     """
+    from jamma.lmm.runner_numpy import LmmRunSpec, run_lmm_association
+
     pheno_columns = config.phenotype_columns
     is_multi = len(pheno_columns) > 1
     plan = analysis.execution.summary
@@ -75,16 +81,14 @@ def run_phenotype_loop(
     total_tested = 0
     all_assoc_paths: list[Path] = []
 
-    # Pre-load PLINK data once for batch multi-phenotype runs
-    _plink_data = None
-    if plan.mode == "batch" and is_multi:
-        from jamma.io import load_plink_binary
-
-        logger.info(
-            f"{plan.runner_name}: loading all genotypes into memory"
-            " (for large datasets, use --backend numpy-streaming)"
-        )
-        _plink_data = load_plink_binary(config.bfile)
+    source = _genotype_source(plan.mode, plan.runner_name, config.bfile, meta, analysis)
+    spec = LmmRunSpec(
+        config=analysis.lmm,
+        execution=analysis.execution,
+        snps_indices=analysis.snps_indices,
+        hwe_threshold=config.hwe_threshold,
+        labels=_LABELS[plan.mode],
+    )
 
     # The loop's last run carries the PVE estimate; both stay None if
     # pheno_columns is empty, which PipelineConfig already rejects.
@@ -108,30 +112,18 @@ def run_phenotype_loop(
         else:
             col_path = assoc_path
 
-        if plan.mode == "streaming":
-            run_result = _run_streaming(
-                analysis,
-                phenotypes_col,
-                covariates,
-                eigenvalues,
-                eigenvectors,
-                col_path,
-                bfile=config.bfile,
-                hwe_threshold=config.hwe_threshold,
-                meta=meta,
-            )
-        else:
-            run_result = _run_batch(
-                analysis,
-                phenotypes_col,
-                covariates,
-                eigenvalues,
-                eigenvectors,
-                col_path,
-                bfile=config.bfile,
-                hwe_threshold=config.hwe_threshold,
-                plink_data=_plink_data,
-            )
+        run_result = run_lmm_association(
+            source,
+            spec,
+            phenotypes=phenotypes_col,
+            # The body takes the eigenpairs; the pipeline consumes the
+            # kinship matrix during eigendecomposition and has none left.
+            kinship=None,
+            covariates=covariates,
+            eigenvalues=eigenvalues,
+            eigenvectors=eigenvectors,
+            output_path=col_path,
+        )
 
         all_results.extend(run_result.associations)
         total_tested += run_result.n_tested
@@ -153,87 +145,36 @@ def run_phenotype_loop(
     )
 
 
-def _run_batch(
-    analysis: StandardAnalysisPlan,
-    phenotypes: np.ndarray,
-    covariates: np.ndarray | None,
-    eigenvalues: np.ndarray,
-    eigenvectors: np.ndarray,
-    assoc_path: Path,
+_LABELS = {"batch": BATCH_LABELS, "streaming": STREAMING_LABELS}
+
+
+def _genotype_source(
+    mode: ExecutionMode,
+    runner_name: str,
     bfile: Path,
-    hwe_threshold: float,
-    plink_data: PlinkData | None = None,
-) -> LmmRunResult:
-    """Run LMM association using the pure-NumPy batch backend.
-
-    Args:
-        plink_data: Pre-loaded PLINK data. If None, loads from disk.
-            Pass this to avoid reloading genotypes in multi-phenotype runs.
-    """
-    from jamma.io import load_plink_binary
-    from jamma.lmm.runner_numpy import run_lmm_association_numpy_planned
-
-    if plink_data is None:
-        logger.info(
-            "NumPy backend: loading all genotypes into memory "
-            "(for large datasets, use --backend numpy-streaming)"
-        )
-        plink_data = load_plink_binary(bfile)
-
-    genotypes = plink_data.genotypes
-
-    # Apply snps_indices filter before passing to runner
-    snps_indices = analysis.snps_indices
-    if snps_indices is not None:
-        genotypes = genotypes[:, snps_indices]
-    snp_meta = SnpMeta.from_plink_meta(plink_data.meta, snps_indices)
-
-    run_result = run_lmm_association_numpy_planned(
-        genotypes=genotypes,
-        phenotypes=phenotypes,
-        # The runner takes the eigenpairs; the pipeline consumes the kinship
-        # matrix during eigendecomposition and has none left to pass.
-        kinship=None,
-        snp_info=snp_meta,
-        covariates=covariates,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
-        config=analysis.lmm,
-        output_path=assoc_path,
-        hwe_threshold=hwe_threshold,
-        execution=analysis.execution,
-        check_association_memory=False,
-    )
-
-    return run_result
-
-
-def _run_streaming(
-    analysis: StandardAnalysisPlan,
-    phenotypes: np.ndarray,
-    covariates: np.ndarray | None,
-    eigenvalues: np.ndarray,
-    eigenvectors: np.ndarray,
-    assoc_path: Path,
-    bfile: Path,
-    hwe_threshold: float,
     meta: PlinkMetadata,
-) -> LmmRunResult:
-    """Run LMM via NumPy streaming backend with selected policy."""
-    from jamma.lmm.runner_numpy_streaming import (
-        run_lmm_association_numpy_streaming_planned,
-    )
+    analysis: StandardAnalysisPlan,
+) -> GenotypeSource:
+    """Build the one genotype source every phenotype in this run reads from."""
+    snp_meta = SnpMeta.from_plink_meta(meta)
+    if mode == "streaming":
+        from jamma.lmm.runner_numpy_streaming import BedSource
 
-    return run_lmm_association_numpy_streaming_planned(
-        bed_path=bfile,
-        phenotypes=phenotypes,
-        covariates=covariates,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
-        output_path=assoc_path,
-        snps_indices=analysis.snps_indices,
-        hwe_threshold=hwe_threshold,
-        config=analysis.lmm,
-        execution=analysis.execution,
-        meta=meta,
+        return BedSource(
+            bfile,
+            snp_meta=snp_meta,
+            n_samples=meta.n_samples,
+            n_snps=meta.n_snps,
+            stats_chunk_size=DEFAULT_STATS_CHUNK,
+            validate_genotypes=True,
+            show_progress=analysis.lmm.show_progress,
+        )
+
+    from jamma.io import load_plink_binary
+    from jamma.lmm.runner_numpy import MatrixSource
+
+    logger.info(
+        f"{runner_name}: loading all genotypes into memory"
+        " (for large datasets, use --backend numpy-streaming)"
     )
+    return MatrixSource(load_plink_binary(bfile).genotypes, snp_meta)

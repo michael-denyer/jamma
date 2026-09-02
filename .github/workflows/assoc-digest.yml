@@ -1,0 +1,96 @@
+name: Association digest
+
+# workflow_dispatch only. Never add this to the required-status-checks
+# ruleset: it needs a base-vs-head double build like the fingerprint gate,
+# and making it required would block every PR that leaves association alone.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: "Ref to compare HEAD against (branch, tag, or SHA)"
+        required: true
+        default: "origin/master"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assoc-digest:
+    name: Association digest vs base
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Resolve the base SHA
+        id: base
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          git fetch origin "${BASE_REF#origin/}" --depth=1 2>/dev/null || true
+          base_sha=$(git rev-parse "${BASE_REF}")
+          echo "head=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "base=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "Comparing ${head_sha} against ${base_sha}"
+
+      # Staged outside the worktree so the base checkout below cannot swap it
+      # for an older copy; both sides must run the head's key set.
+      - name: Stage the digest script
+        run: |
+          install -m 755 scripts/assoc_digest.py "${RUNNER_TEMP}/assoc_digest.py"
+
+      - name: Digest the head
+        run: |
+          set -euo pipefail
+          uv sync --locked
+          uv run python -m jamma.lmm._compile_accel
+          uv run python -m jamma.jlinalg._compile_jlinalg
+          uv run python scripts/assoc_digest.py --out "${RUNNER_TEMP}/head.json"
+
+      - name: Digest the base
+        env:
+          BASE_SHA: ${{ steps.base.outputs.base }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "${BASE_SHA}"
+          install -m 755 "${RUNNER_TEMP}/assoc_digest.py" scripts/assoc_digest.py
+          uv sync --locked
+          uv run python -m jamma.lmm._compile_accel
+          uv run python -m jamma.jlinalg._compile_jlinalg
+          uv run python scripts/assoc_digest.py --out "${RUNNER_TEMP}/base.json"
+
+      - name: Compare
+        env:
+          HEAD_SHA: ${{ steps.base.outputs.head }}
+        run: |
+          set -euo pipefail
+          git checkout --force --detach "${HEAD_SHA}"
+          uv run python scripts/assoc_digest.py --diff \
+            "${RUNNER_TEMP}/base.json" "${RUNNER_TEMP}/head.json"
+
+      - name: Keep the digests for inspection
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: assoc-digests
+          path: |
+            ${{ runner.temp }}/base.json
+            ${{ runner.temp }}/head.json
+          if-no-files-found: warn
+          retention-days: 14

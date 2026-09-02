@@ -150,6 +150,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The phenotype loop reaches the chunk engine through five signatures,
+  not seven, and `-snps` is one filter.** `run_lmm_association_numpy_planned`
+  and `run_lmm_association_numpy_streaming_planned` (one caller each, no
+  tests) and the pipeline's `_run_batch`/`_run_streaming` pair are gone: the
+  phenotype loop builds one `GenotypeSource` for the plan's mode and calls
+  the shared body, now `run_lmm_association(source, spec, ...)`, which
+  takes an `LmmRunSpec` (config, execution plan, `snps_indices`,
+  `hwe_threshold`, `compute_pve`, `RunLabels`) in place of eight threaded
+  keyword arguments. The batch path used to subset the genotype matrix
+  before the runner while streaming passed the restriction as a filter;
+  both now hand `snps_indices` to the body, where it joins the MAF,
+  missingness and HWE filters. `RunInvariants.build` reads the prepared run
+  and the config rather than fourteen re-listed fields. The public entries
+  keep their signatures. `scripts/assoc_digest.py` (new, with the
+  dispatchable `assoc-digest` workflow) records one sha256 per pipeline
+  and API run over the synthetic and LOCO fixtures; all 68 keys are
+  identical to `97c89b8`.
 - **Every memory gate spells its inequality as `memory.fits`.** The DSYEVR
   fallback in `plan_eigen_driver`, the DSYEVD warning in `lmm/eigen`, and
   the LOCO single-pass decision each wrote their own comparison; two used

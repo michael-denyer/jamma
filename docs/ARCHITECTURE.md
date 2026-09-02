@@ -161,8 +161,8 @@ src/jamma/
 │   ├── results.py          # AssocResult building and per-chunk result sinks
 │   ├── association_plan.py # plan_association(); ExecutionPlan, ExecutableAssociationPlan
 │   ├── genotype_source.py  # SampleBasis, PreparedGenotypes, GenotypeSource protocol
-│   ├── runner_numpy.py     # Shared run body (_run_numpy_lmm) + MatrixSource + batch wrapper
-│   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming wrapper
+│   ├── runner_numpy.py     # Shared run body (run_lmm_association), LmmRunSpec, MatrixSource, batch entry
+│   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming entry
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 │   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation
 │   ├── dispatch.py         # DispatchPath: the one C-kernel path decision, from n_cvt/lmm_mode/accel

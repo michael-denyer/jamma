@@ -240,22 +240,24 @@ def _tiny_invariants(n_cvt: int, lmm_mode: LmmMode, n_samples: int = 8):
     """Smallest RunInvariants every dispatch path will build a kernel from."""
     from jamma.lmm.chunk_kernel import RunInvariants
     from jamma.lmm.dispatch import select_dispatch_path
+    from jamma.lmm.prepare_common import PreparedLmmRun
+    from jamma.lmm.schema import LmmConfig
 
-    return RunInvariants.build(
-        dispatch=select_dispatch_path(n_cvt, lmm_mode, accel=True, log_choices=False),
-        lmm_mode=lmm_mode,
-        n_cvt=n_cvt,
-        n_samples=n_samples,
-        n_filtered=500,
+    prepared = PreparedLmmRun(
         eigenvalues=np.linspace(0.1, 2.0, n_samples),
+        U=np.eye(n_samples),
         UtW=np.ones((n_samples, n_cvt)) * np.arange(1, n_cvt + 1),
         Uty=np.linspace(-1.0, 1.0, n_samples),
-        Hi_eval_null=np.ones(n_samples),
         logl_H0=-10.0,
-        l_min=1e-5,
-        l_max=1e5,
-        n_grid=20,
-        n_refine=20,
+        Hi_eval_null=np.ones(n_samples),
+        pve=None,
+        pve_se=None,
+    )
+    return RunInvariants.build(
+        select_dispatch_path(n_cvt, lmm_mode, accel=True, log_choices=False),
+        prepared,
+        LmmConfig(lmm_mode=lmm_mode, n_grid=20, n_refine=20),
+        n_filtered=500,
     )
 
 

@@ -18,19 +18,19 @@ from jamma.core.snp_stats import (
     SnpSelection,
     collect_streamed_snp_stats,
 )
-from jamma.io.plink import PlinkMetadata, get_plink_metadata, stream_genotype_chunks
-from jamma.lmm.association_plan import (
-    DEFAULT_STATS_CHUNK,
-    ExecutableAssociationPlan,
-    plan_association,
-)
+from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
+from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, plan_association
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
 from jamma.lmm.genotype_source import (
     PreparedGenotypes,
     SampleBasis,
     bind_prepared_genotypes,
 )
-from jamma.lmm.runner_numpy import _run_numpy_lmm
+from jamma.lmm.runner_numpy import (
+    STREAMING_LABELS,
+    LmmRunSpec,
+    run_lmm_association,
+)
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     LmmConfig,
@@ -179,6 +179,7 @@ def run_lmm_association_numpy_streaming(
         raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
 
     meta = get_plink_metadata(bed_path)
+    validate_snp_indices(snps_indices, meta.n_snps)
     n_cvt = covariates.shape[1] if covariates is not None else 1
     execution = plan_association(
         meta.n_samples,
@@ -189,50 +190,6 @@ def run_lmm_association_numpy_streaming(
         mem_budget=config.mem_budget,
         max_chunk_size=chunk_size,
     )
-    return run_lmm_association_numpy_streaming_planned(
-        bed_path=bed_path,
-        phenotypes=phenotypes,
-        kinship=kinship,
-        snp_info=snp_info,
-        covariates=covariates,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
-        chunk_size=chunk_size,
-        output_path=output_path,
-        snps_indices=snps_indices,
-        hwe_threshold=hwe_threshold,
-        validate_genotypes=validate_genotypes,
-        config=config,
-        execution=execution,
-        meta=meta,
-    )
-
-
-def run_lmm_association_numpy_streaming_planned(
-    *,
-    bed_path: Path,
-    phenotypes: np.ndarray,
-    covariates: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
-    output_path: Path | None,
-    snps_indices: np.ndarray | None,
-    hwe_threshold: float,
-    config: LmmConfig,
-    execution: ExecutableAssociationPlan,
-    meta: PlinkMetadata,
-    kinship: np.ndarray | None = None,
-    snp_info: Sequence[SnpInfoRecord] | SnpMeta | None = None,
-    chunk_size: int | None = None,
-    validate_genotypes: bool = True,
-) -> LmmRunResult:
-    """Run the streaming boundary with policy supplied by the caller.
-
-    ``meta`` is required so the .bim is parsed exactly once per process:
-    the pipeline reads it at startup and passes it through every phenotype's
-    run, and the public entry above passes the copy it planned against.
-    """
-    validate_snp_indices(snps_indices, meta.n_snps)
 
     # Caller-supplied SnpMeta or list, or the PLINK metadata parsed once.
     if snp_info is None:
@@ -251,19 +208,19 @@ def run_lmm_association_numpy_streaming_planned(
         validate_genotypes=validate_genotypes,
         show_progress=config.show_progress,
     )
-    return _run_numpy_lmm(
+    return run_lmm_association(
         source,
+        LmmRunSpec(
+            config=config,
+            execution=execution,
+            snps_indices=snps_indices,
+            hwe_threshold=hwe_threshold,
+            labels=STREAMING_LABELS,
+        ),
         phenotypes=phenotypes,
         kinship=kinship,
         covariates=covariates,
         eigenvalues=eigenvalues,
         eigenvectors=eigenvectors,
-        config=config,
         output_path=output_path,
-        snps_indices=snps_indices,
-        hwe_threshold=hwe_threshold,
-        execution=execution,
-        banner="NumPy streaming",
-        label="lmm_numpy_streaming",
-        progress_label="LMM association (streaming)",
     )

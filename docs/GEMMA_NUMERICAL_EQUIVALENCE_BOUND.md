@@ -150,6 +150,13 @@ where `L_λ` depends on the Lipschitz constants of `∂ℓ/∂λ` with respect t
 matrix arguments. This captures both algorithmic tolerance and propagated
 numerical perturbations.
 
+The evaluation error of `ℓ` itself is not listed separately because it is
+`O(n ε)` on `log|H|` and on the weighted sums, far below `τ_opt`. The C
+accelerator evaluates `log|H|` as a mantissa product with an exact exponent
+rather than a per-term log sum; on mouse_hs1940 both forms lie within 1.1e-12
+relative of a 40-digit reference, so the substitution does not move this
+bound.
+
 ### 4. Association statistics
 
 Wald, score, and LRT statistics are smooth functions of

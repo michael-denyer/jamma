@@ -303,6 +303,15 @@ reproduce compares two full commits rather than a head diffed against history it
 does not have; if the base predates the fingerprint harness there is nothing to
 compare against, same as the CI job's check.
 
+A differing digest is the gate's finding, not by itself a defect. A change that
+intends to move the last bits, such as #295 replacing the per-sample `log()`
+sum in `logdet(H)` with a mantissa product, fails this job by design. Such a PR
+states the intent, names the entry points expected to change, gives the
+measured bound against the NumPy path or a high-precision reference, and shows
+the GEMMA parity tier passing at the documented tolerances. `fingerprint.yml`
+is not in the required-checks ruleset, so the merge is not blocked, and the
+reviewer reads the red job as confirmation that only the intended keys moved.
+
 ## ILP64 numpy Installation (Linux/Windows)
 
 Standard numpy uses LP64 BLAS, which overflows at ~46k samples. For large-scale

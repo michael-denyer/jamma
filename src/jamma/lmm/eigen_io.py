@@ -26,7 +26,11 @@ from loguru import logger
 from jamma.io.matrix_reader import read_matrix_parallel
 from jamma.io.matrix_writer import write_matrix_parallel
 from jamma.utils.atomic_publish import atomic_output
-from jamma.utils.npy_cache import npy_cache_valid, save_npy_atomic
+from jamma.utils.npy_cache import (
+    read_array_artifact,
+    save_npy_atomic,
+    write_npy_cache,
+)
 
 # ---------------------------------------------------------------------------
 # .npy sidecar cache helpers (used for text-format files only)
@@ -39,38 +43,6 @@ def _npy_cache_path(txt_path: Path) -> Path:
     .eigenU.txt → .eigenU.npy, .eigenD.txt → .eigenD.npy
     """
     return txt_path.with_suffix(".npy")
-
-
-def _write_npy_cache(array: np.ndarray, npy_path: Path) -> None:
-    """Write the .npy sidecar, swallowing filesystem errors.
-
-    The sidecar is a read accelerator, not the artifact, so a read-only
-    filesystem or a full disk must not abort a caller whose real output
-    already landed. That tolerance is the only thing this adds over
-    ``save_npy_atomic``.
-    """
-    try:
-        save_npy_atomic(array, npy_path)
-    except OSError as e:
-        logger.warning(f"Could not write .npy cache {npy_path}: {e}")
-
-
-def _load_npy_cache(npy_path: Path) -> np.ndarray | None:
-    """Load .npy cache as a read-only memory-mapped array.
-
-    Returns a read-only memory-mapped array. Pages are loaded on demand by
-    the OS, so only accessed regions consume physical RAM. Returns None on
-    corruption or error, triggering a text re-parse in the caller.
-    """
-    try:
-        return np.load(npy_path, mmap_mode="r")
-    except (OSError, ValueError) as e:
-        logger.warning(f"Corrupt .npy cache {npy_path}, will re-parse text: {e}")
-        try:
-            npy_path.unlink()
-        except OSError as unlink_err:
-            logger.warning(f"Could not remove corrupt cache {npy_path}: {unlink_err}")
-        return None
 
 
 def _checked_shape(data: np.ndarray, *, what: str, ndim: int, path: Path) -> np.ndarray:
@@ -99,32 +71,15 @@ def _read_array(
 ) -> np.ndarray:
     """Read one eigen array from .npy, its .npy sidecar, or GEMMA text.
 
-    A .npy path loads directly. A text path loads its sidecar when the sidecar
-    is newer than the text, else parses the text and writes the sidecar for
-    next time. Sidecar loads are read-only memory maps.
+    Sidecar loads are read-only memory maps; see ``read_array_artifact``.
     """
-    path = Path(path)
-    if path.suffix == ".npy":
-        logger.info(f"Reading {what} from {path}")
-        return _checked_shape(np.load(path), what=what, ndim=ndim, path=path)
-
-    npy_path = _npy_cache_path(path)
-    if npy_cache_valid(path, npy_path):
-        data = _load_npy_cache(npy_path)
-        if data is not None:
-            logger.info(f"Reading {what} from cache {npy_path}")
-            return _checked_shape(data, what=what, ndim=ndim, path=npy_path)
-
-    logger.info(f"Reading {what} from {path}")
-    try:
-        data = parse_text(path)
-    except ValueError as e:
-        raise ValueError(f"Cannot parse {what} file {path}: {e}") from e
-    if data.size == 0:
-        raise ValueError(f"{what.capitalize()} file is empty: {path}")
-    data = _checked_shape(data, what=what, ndim=ndim, path=path)
-    _write_npy_cache(data, npy_path)
-    return data
+    return read_array_artifact(
+        path,
+        what=what,
+        parse_text=parse_text,
+        check=lambda data, p: _checked_shape(data, what=what, ndim=ndim, path=p),
+        mmap_mode="r",
+    )
 
 
 def _read_eigenvalues(path: Path) -> np.ndarray:
@@ -236,7 +191,7 @@ def _write_array(
     if legacy_text:
         logger.info(f"Writing {what} to {path}")
         save_text(array, path)
-        _write_npy_cache(array, _npy_cache_path(path))
+        write_npy_cache(array, _npy_cache_path(path))
     else:
         npy_path = path.with_suffix(".npy")
         logger.info(f"Writing {what} to {npy_path}")

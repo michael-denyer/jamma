@@ -5,7 +5,8 @@ GEMMA text format (.cXX.txt) is available via legacy_text=True for
 interoperability with external tools.
 
 Read behaviour: .npy paths load directly. .txt paths check for a .npy sibling
-(preferred if at least as new as the text file). Falls back to text parsing.
+(preferred if at least as new as the text file and not corrupt). Falls back to
+text parsing and writes the sibling for the next read.
 """
 
 from collections.abc import Iterable
@@ -15,7 +16,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.io.matrix_writer import write_matrix_parallel
-from jamma.utils.npy_cache import npy_cache_valid, save_npy_atomic
+from jamma.utils.npy_cache import read_array_artifact, save_npy_atomic
 
 _SYMMETRY_RTOL = 1e-10
 
@@ -48,7 +49,10 @@ def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
     Auto-detects format based on path suffix and sibling files:
     - .npy suffix: loads directly via np.load.
     - .txt suffix: checks for .npy sibling at least as new; uses it if valid,
-      otherwise falls back to text parsing.
+      otherwise falls back to text parsing and writes the sibling.
+
+    The matrix is always loaded eagerly and writable: the pipeline applies
+    individual weights to it in place.
 
     Args:
         path: Path to kinship matrix file (.cXX.npy or .cXX.txt).
@@ -60,38 +64,24 @@ def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
     Raises:
         ValueError: If matrix is not square, not symmetric, or dimension mismatch.
     """
-    path = Path(path)
 
-    # Direct .npy load
-    if path.suffix == ".npy":
-        logger.info(f"Reading kinship matrix from {path}")
-        K = np.load(path)
-        _validate_kinship(K, n_samples, str(path))
+    def parse_text(txt_path: Path) -> np.ndarray:
+        if n_samples is not None and n_samples > 50_000:
+            logger.warning(
+                f"Reading {n_samples}x{n_samples} kinship matrix from text file. "
+                f"This may be slow (~{n_samples**2 * 24 / 1e9:.0f}GB parse memory). "
+                "Consider binary kinship format for large cohorts."
+            )
+        # Load matrix - handles tab and space separated
+        return np.loadtxt(txt_path, dtype=np.float64)
+
+    def check(K: np.ndarray, source: Path) -> np.ndarray:
+        _validate_kinship(K, n_samples, str(source))
         return K
 
-    # Text path: check for .npy sibling
-    npy_path = path.with_suffix(".npy")
-    if npy_cache_valid(path, npy_path):
-        logger.info(f"Reading kinship matrix from binary cache {npy_path}")
-        K = np.load(npy_path)
-        _validate_kinship(K, n_samples, str(npy_path))
-        return K
-
-    # Fall back to text parse
-    logger.info(f"Reading kinship matrix from {path}")
-
-    if n_samples is not None and n_samples > 50_000:
-        logger.warning(
-            f"Reading {n_samples}x{n_samples} kinship matrix from text file. "
-            f"This may be slow (~{n_samples**2 * 24 / 1e9:.0f}GB parse memory). "
-            "Consider binary kinship format for large cohorts."
-        )
-
-    # Load matrix - handles tab and space separated
-    K = np.loadtxt(path, dtype=np.float64)
-    _validate_kinship(K, n_samples, str(path))
-
-    return K
+    return read_array_artifact(
+        path, what="kinship matrix", parse_text=parse_text, check=check
+    )
 
 
 def write_kinship_matrix(

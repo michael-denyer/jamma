@@ -16,7 +16,7 @@ from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes
 from jamma.lmm.prepare_common import PreparedLmmRun
-from jamma.lmm.schema import LmmConfig, SnpMeta
+from jamma.lmm.schema import ChunkRunStats, LmmConfig, SnpMeta
 
 pytestmark = pytest.mark.tier0
 
@@ -72,7 +72,7 @@ def test_prepared_run_and_config_define_an_empty_chunk_run() -> None:
         config=LmmConfig(show_progress=False),
     )
 
-    assert stats == (0, 0.0, 0.0, 0.0)
+    assert stats == ChunkRunStats()
 
 
 def test_prepared_genotype_sample_count_must_match_prepared_run() -> None:
@@ -113,7 +113,7 @@ def test_empty_filtered_returns_zeroed_stats():
     stats = run_lmm_chunk_source_numpy(
         **_run_kwargs(genotypes=_prepared_genotypes(4, 0))
     )
-    assert stats == (0, 0.0, 0.0, 0.0)
+    assert stats == ChunkRunStats()
 
 
 def test_shared_chunk_entry_resets_the_p_yy_warning():

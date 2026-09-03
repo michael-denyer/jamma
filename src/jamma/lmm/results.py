@@ -191,14 +191,12 @@ def count_lambda_boundary_hits(
     n_at_lmin = 0
     n_at_lmax = 0
     if lmm_mode in (1, 4):
-        lmin, lmax = _count_boundary_hits(
-            np.asarray(arrays.get("lambdas", [])), l_min, l_max
-        )
+        lmin, lmax = _count_boundary_hits(np.asarray(arrays["lambdas"]), l_min, l_max)
         n_at_lmin += lmin
         n_at_lmax += lmax
     if lmm_mode in (2, 4):
         lmin, lmax = _count_boundary_hits(
-            np.asarray(arrays.get("lambdas_mle", [])), l_min, l_max
+            np.asarray(arrays["lambdas_mle"]), l_min, l_max
         )
         n_at_lmin += lmin
         n_at_lmax += lmax

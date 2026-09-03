@@ -16,7 +16,7 @@ wires them together.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import nullcontext
 from typing import NamedTuple
 
@@ -39,9 +39,13 @@ from jamma.lmm.genotype_source import PreparedGenotypes
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.likelihood import reset_p_yy_warned
 from jamma.lmm.prepare_common import PreparedLmmRun
-from jamma.lmm.results import count_lambda_boundary_hits, log_lambda_boundary_warning
+from jamma.lmm.results import (
+    ChunkSink,
+    count_lambda_boundary_hits,
+    log_lambda_boundary_warning,
+)
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import LmmConfig
+from jamma.lmm.schema import ChunkRunStats, LmmConfig
 from jamma.lmm.uab import batch_compute_uab_numpy
 
 
@@ -104,23 +108,6 @@ class _PreparedLmmChunk(NamedTuple):
     filtered_range: LmmChunkRange
 
 
-class LmmChunkRunStats(NamedTuple):
-    """What the chunk runner hands back: how much it did, and how long it took.
-
-    Six further counters used to ride along here (nan_counts, the two lambda
-    boundary tallies, chunk_size, n_chunks, used_pipeline). No caller read any
-    of them; the runner already logs the diagnostics they carried.
-    """
-
-    processed: int
-    rotation_s: float
-    compute_s: float
-    result_write_s: float
-
-
-ChunkSink = Callable[[dict[str, np.ndarray], int, int], None]
-
-
 class _ChunkEngine:
     """The chunk loop's state: its buffers, its thread split, its counters.
 
@@ -139,7 +126,7 @@ class _ChunkEngine:
         U: np.ndarray,
         filtered_means: np.ndarray,
         raw_chunks: Iterator[RawLmmChunk],
-        chunk_sink: Callable[[dict[str, np.ndarray], int, int], None],
+        chunk_sink: ChunkSink,
         chunk_size: int,
         n_buffers: int,
         omp_threads: int,
@@ -283,7 +270,7 @@ def run_lmm_chunk_source_numpy(
     config: LmmConfig,
     progress_label: str = "LMM association",
     lambda_warning_prefix: str = "",
-) -> LmmChunkRunStats:
+) -> ChunkRunStats:
     """Run LMM association over caller-provided raw genotype chunks.
 
     The prepared source owns aligned imputation means and raw chunks. This
@@ -316,9 +303,7 @@ def run_lmm_chunk_source_numpy(
         )
 
     if n_filtered == 0:
-        return LmmChunkRunStats(
-            processed=0, rotation_s=0.0, compute_s=0.0, result_write_s=0.0
-        )
+        return ChunkRunStats()
 
     chunk_size = chunks.chunk_size
     n_chunks = chunks.n_chunks
@@ -402,7 +387,7 @@ def run_lmm_chunk_source_numpy(
         prefix=lambda_warning_prefix,
     )
 
-    return LmmChunkRunStats(
+    return ChunkRunStats(
         processed=engine.processed,
         rotation_s=rotation_s,
         compute_s=engine.compute_s,

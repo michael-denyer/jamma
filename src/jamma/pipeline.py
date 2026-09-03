@@ -608,7 +608,7 @@ class PipelineRunner:
                 load_s=load_s,
                 lmm_s=outcome.lmm_s,
                 total_s=total_s,
-                rotation_s=outcome.runner_timing.get("rotation_s", 0.0),
+                rotation_s=outcome.runner_timing.rotation_s,
             ),
             n_covariates=n_cvt,
             pve_estimate=outcome.pve,

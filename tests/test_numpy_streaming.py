@@ -507,12 +507,10 @@ class TestStreamingMechanics:
         )
 
         timing = result.timing
-        assert "rotation_s" in timing
-        assert "numpy_compute_s" in timing
-        assert "result_write_s" in timing
-        # Timing values should be non-negative
-        assert timing["rotation_s"] >= 0
-        assert timing["numpy_compute_s"] >= 0
+        assert timing.processed == result.n_tested
+        assert timing.rotation_s >= 0
+        assert timing.compute_s >= 0
+        assert timing.result_write_s >= 0
 
     def test_pve_populated(self, synthetic_data):
         """PVE should be populated in the result."""

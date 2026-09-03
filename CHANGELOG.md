@@ -150,6 +150,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One value for what the chunk loop did and how long it took.**
+  `jamma.lmm.schema.ChunkRunStats(processed, rotation_s, compute_s,
+  result_write_s)` replaces both the runner-private `LmmChunkRunStats`
+  and the string-keyed `RunnerTiming` TypedDict it was copied into;
+  `run_lmm_chunk_source_numpy` returns it and `LmmRunResult.timing`
+  carries it unchanged, so the pipeline reads `.rotation_s` instead of
+  `.get("rotation_s", 0.0)` and `numpy_compute_s` is now `compute_s`.
+  `ChunkSink` is defined once, in `jamma.lmm.results`;
+  `count_lambda_boundary_hits` indexes the lambda arrays the mode
+  guarantees instead of defaulting a missing key to empty.
+  `scripts/kinship_digest.py` 78/78 and `scripts/assoc_digest.py` 68/68
+  keys identical to `53538b1` (Mac).
+
 - **One reader for the "binary .npy default, GEMMA text legacy, .npy
   sidecar cache" contract.** `jamma.utils.npy_cache.read_array_artifact`
   loads a `.npy` path directly, a text path from its sidecar when the

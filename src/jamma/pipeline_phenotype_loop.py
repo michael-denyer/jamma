@@ -19,7 +19,7 @@ from jamma.io.plink import PlinkMetadata
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
 from jamma.lmm.genotype_source import GenotypeSource
 from jamma.lmm.runner_numpy import BATCH_LABELS, STREAMING_LABELS
-from jamma.lmm.schema import RunnerTiming, SnpMeta
+from jamma.lmm.schema import ChunkRunStats, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_plan import StandardAnalysisPlan
@@ -38,7 +38,7 @@ class PhenoLoopOutcome(NamedTuple):
     n_tested: int
     assoc_paths: list[Path]
     lmm_s: float
-    runner_timing: RunnerTiming
+    runner_timing: ChunkRunStats
     pve: float | None
     pve_se: float | None
 
@@ -95,7 +95,7 @@ def run_phenotype_loop(
     prefix = config.output_prefix
     pve: float | None = None
     pve_se: float | None = None
-    runner_timing: RunnerTiming = {}
+    runner_timing = ChunkRunStats()
     for col in pheno_columns:
         if is_multi:
             logger.info(f"Starting LMM for phenotype column {col}")

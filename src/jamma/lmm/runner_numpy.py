@@ -52,7 +52,6 @@ from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     LmmConfig,
     LmmRunResult,
-    RunnerTiming,
     SnpInfoRecord,
     SnpMeta,
 )
@@ -365,11 +364,7 @@ def run_lmm_association(
             n_tested=chunk_stats.processed,
             pve=prepared.pve,
             pve_se=prepared.pve_se,
-            timing=RunnerTiming(
-                rotation_s=chunk_stats.rotation_s,
-                numpy_compute_s=chunk_stats.compute_s,
-                result_write_s=chunk_stats.result_write_s,
-            ),
+            timing=chunk_stats,
         )
 
 

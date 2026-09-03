@@ -263,16 +263,16 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:125](../src/jamma/lmm/association_plan.py#L120) |
 | 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:69](../src/jamma/lmm/association_plan.py#L66) |
-| 4Nb | `run_lmm_association()` | The shared run body: stats, filter (MAF, missingness, HWE, `-snps`), prepare, chunk loop, result routing, over any source under one `LmmRunSpec` | [runner_numpy.py:179](../src/jamma/lmm/runner_numpy.py#L179) |
-| 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:85](../src/jamma/lmm/runner_numpy.py#L85) |
+| 4Nb | `run_lmm_association()` | The shared run body: stats, filter (MAF, missingness, HWE, `-snps`), prepare, chunk loop, result routing, over any source under one `LmmRunSpec` | [runner_numpy.py:179](../src/jamma/lmm/runner_numpy.py#L178) |
+| 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:85](../src/jamma/lmm/runner_numpy.py#L84) |
 | 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:103](../src/jamma/lmm/genotype_source.py#L103) |
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:25](../src/jamma/lmm/genotype_source.py#L25) |
 | 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:65](../src/jamma/lmm/genotype_source.py#L65) |
-| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:107](../src/jamma/lmm/runner_numpy.py#L107) |
-| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:376](../src/jamma/lmm/runner_numpy.py#L376) |
+| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:107](../src/jamma/lmm/runner_numpy.py#L106) |
+| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:376](../src/jamma/lmm/runner_numpy.py#L371) |
 | 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:324](../src/jamma/lmm/prepare_common.py#L324) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:276](../src/jamma/lmm/chunk_runner_numpy.py#L276) |
-| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:124](../src/jamma/lmm/chunk_runner_numpy.py#L124) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:276](../src/jamma/lmm/chunk_runner_numpy.py#L263) |
+| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:124](../src/jamma/lmm/chunk_runner_numpy.py#L111) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the prepared run and the config | [chunk_kernel.py:41](../src/jamma/lmm/chunk_kernel.py#L41) |
 | 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:148](../src/jamma/lmm/chunk_kernel.py#L148) |
 | 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:121](../src/jamma/lmm/chunk_pipeline.py#L121) |
@@ -295,8 +295,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:43](../src/jamma/lmm/runner_numpy_streaming.py#L43) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:123](../src/jamma/lmm/runner_numpy_streaming.py#L123) |
-| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:95](../src/jamma/lmm/schema.py#L95) |
-| 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:121](../src/jamma/lmm/schema.py#L121) |
+| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:95](../src/jamma/lmm/schema.py#L99) |
+| 4Nh | `ModeSpec` | Per-mode column specification (single source of truth) | [lmm/schema.py:121](../src/jamma/lmm/schema.py#L125) |
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:35](../src/jamma/lmm/results.py#L35) |
 | 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:174](../src/jamma/lmm/results.py#L174) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:153](../src/jamma/lmm/loco.py#L153) |
@@ -581,7 +581,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | Wald/Score/LRT tests | [stats.py](../src/jamma/lmm/stats.py) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
-| Output schema (`StatColumn`) | [lmm/schema.py:95](../src/jamma/lmm/schema.py#L95) |
+| Output schema (`StatColumn`) | [lmm/schema.py:95](../src/jamma/lmm/schema.py#L99) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | NumPy streaming runner | [runner_numpy_streaming.py](../src/jamma/lmm/runner_numpy_streaming.py) |
 | Shared NumPy chunk-loop orchestrator | [chunk_runner_numpy.py](../src/jamma/lmm/chunk_runner_numpy.py) |

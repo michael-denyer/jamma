@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 
 import numpy as np
 
@@ -53,20 +53,24 @@ class NullModel:
     hi_eval_null: np.ndarray
 
 
-class RunnerTiming(TypedDict, total=False):
-    """Timing breakdown from LMM runner execution.
+@dataclass(frozen=True, slots=True)
+class ChunkRunStats:
+    """What the chunk runner did and how long each stage took.
 
-    All keys are optional because not all runners populate all fields.
+    Returned by ``run_lmm_chunk_source_numpy`` and carried unchanged on
+    ``LmmRunResult.timing``. Zero everywhere when no SNP passed filtering.
 
     Attributes:
+        processed: SNPs the chunk loop handed to the result sink.
         rotation_s: Total UT@G rotation time (seconds).
-        numpy_compute_s: Total NumPy/C compute time (seconds).
+        compute_s: Total NumPy/C compute time (seconds).
         result_write_s: Total result write time (seconds).
     """
 
-    rotation_s: float
-    numpy_compute_s: float
-    result_write_s: float
+    processed: int = 0
+    rotation_s: float = 0.0
+    compute_s: float = 0.0
+    result_write_s: float = 0.0
 
 
 @dataclass
@@ -318,7 +322,7 @@ class LmmRunResult:
     n_tested: int
     pve: float | None = None
     pve_se: float | None = None
-    timing: RunnerTiming = field(default_factory=RunnerTiming)
+    timing: ChunkRunStats = field(default_factory=ChunkRunStats)
 
 
 @dataclass(frozen=True, slots=True)

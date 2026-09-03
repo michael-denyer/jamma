@@ -3,6 +3,7 @@
 These tests verify the GEMMA-format kinship output and CLI end-to-end workflow.
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +12,8 @@ from click.testing import CliRunner
 
 from jamma.cli import main
 from jamma.kinship import write_kinship_matrix
-from jamma.kinship.io import write_loco_kinship_matrices
+from jamma.kinship.io import read_kinship_matrix, write_loco_kinship_matrices
+from jamma.utils.npy_cache import npy_cache_valid
 from tests.fixture_paths import SYNTHETIC
 
 
@@ -638,3 +640,42 @@ class TestCLIIntegration:
 
         assert result.exit_code == 0
         assert "computed in" in result.stdout.lower()
+
+
+@pytest.mark.tier0
+class TestKinshipSidecarRecovery:
+    """A text kinship file's .npy sidecar is a cache, never the source of truth."""
+
+    @staticmethod
+    def _write_text_kinship(tmp_path):
+        K = np.array([[1.0, 0.25, 0.1], [0.25, 1.0, 0.3], [0.1, 0.3, 1.0]])
+        txt_path = tmp_path / "test.cXX.txt"
+        write_kinship_matrix(K, txt_path, legacy_text=True)
+        return K, txt_path
+
+    def test_truncated_sidecar_falls_back_to_text(self, tmp_path):
+        """A truncated sidecar newer than the text is dropped and the text re-parsed."""
+        K, txt_path = self._write_text_kinship(tmp_path)
+        npy_path = txt_path.with_suffix(".npy")
+        np.save(npy_path, K)
+        full = npy_path.read_bytes()
+        npy_path.write_bytes(full[: len(full) // 2])
+        os.utime(npy_path, None)
+        assert npy_cache_valid(txt_path, npy_path)
+
+        K_loaded = read_kinship_matrix(txt_path)
+
+        np.testing.assert_array_equal(K_loaded, K)
+        assert K_loaded.flags.writeable
+        assert not npy_path.exists() or npy_path.read_bytes() != full[: len(full) // 2]
+
+    def test_text_parse_writes_sidecar(self, tmp_path):
+        """Parsing the text leaves a valid .npy sidecar for the next read."""
+        K, txt_path = self._write_text_kinship(tmp_path)
+        npy_path = txt_path.with_suffix(".npy")
+        assert not npy_path.exists()
+
+        read_kinship_matrix(txt_path)
+
+        assert npy_cache_valid(txt_path, npy_path)
+        np.testing.assert_array_equal(np.load(npy_path), K)

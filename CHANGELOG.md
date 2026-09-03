@@ -150,6 +150,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One reader for the "binary .npy default, GEMMA text legacy, .npy
+  sidecar cache" contract.** `jamma.utils.npy_cache.read_array_artifact`
+  loads a `.npy` path directly, a text path from its sidecar when the
+  sidecar is at least as new and not corrupt, else parses the text and
+  writes the sidecar; the caller supplies only the text parser, the shape
+  check, and whether sidecar loads are memory-mapped. `read_kinship_matrix`
+  and the eigen readers both call it, so kinship gains what only the eigen
+  reader had: a truncated `.cXX.npy` sidecar is unlinked and the text
+  re-parsed instead of raising, a text parse leaves a sidecar for the next
+  read, and a read-only directory is a warning rather than an error.
+  Kinship stays an eager, writable load because
+  `apply_individual_weights` scales it in place; eigen sidecars stay
+  read-only memory maps. `scripts/kinship_digest.py` 78/78 and
+  `scripts/assoc_digest.py` 68/68 keys identical to `ace400c` (Mac).
+
 - **The chunk engine carries only the thread budget it reads.**
   `_ChunkEngine.rot_threads` and `ThreadPlan.rot` are gone: the planner
   wrote them, the adaptive split rewrote them, and nothing consumed them

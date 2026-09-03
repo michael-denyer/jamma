@@ -191,7 +191,7 @@ src/jamma/
 ├── utils/                  # Shared utilities (logging setup, chromosome sort key)
 │   ├── atomic_publish.py   # atomic_output()/publish_temp_path(): sibling-temp + rename publish
 │   ├── logging.py          # setup_logging() + write_gemma_log(): loguru config, GEMMA .log.txt
-│   └── npy_cache.py        # Shared .npy sidecar cache validation for binary I/O
+│   └── npy_cache.py        # read_array_artifact(): .npy / text / sidecar reader for kinship and eigen files
 └── validation/             # GEMMA comparison utilities and tolerance configuration
     ├── compare.py          # Side-by-side JAMMA vs GEMMA result comparisons
     └── tolerances.py       # ToleranceConfig with calibrated per-statistic tolerances

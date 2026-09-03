@@ -18,15 +18,14 @@ import numpy as np
 import pytest
 
 from jamma.lmm.eigen_io import (
-    _load_npy_cache,
     _read_eigenvalues,
     _read_eigenvectors,
     _write_eigenvalues,
     _write_eigenvectors,
-    _write_npy_cache,
     read_eigen_files,
     write_eigen_files,
 )
+from jamma.utils.npy_cache import load_npy_cache, write_npy_cache
 
 # =============================================================================
 # File format tests
@@ -449,17 +448,17 @@ class TestNpyCache:
         np.testing.assert_allclose(loaded_u, eigenvectors, rtol=1e-9)
 
     def test_cache_load_is_read_only(self, tmp_path: Path) -> None:
-        """Cache-loaded eigenvalues are read-only (mmap_mode='r' from _load_npy_cache).
+        """Cache-loaded eigenvalues are read-only (mmap_mode='r' from load_npy_cache).
 
         _write_eigenvalues with legacy_text=True writes both the .txt file and
-        a .npy sidecar via _write_npy_cache. Subsequent _read_eigenvalues uses
-        _load_npy_cache which returns np.load(..., mmap_mode='r').
+        a .npy sidecar via write_npy_cache. Subsequent _read_eigenvalues uses
+        load_npy_cache which returns np.load(..., mmap_mode='r').
         np.atleast_1d on a read-only memmap returns the same object unchanged.
         """
         d_path = tmp_path / "test.eigenD.txt"
         _write_eigenvalues(np.array([1.0, 2.0, 3.0]), d_path, legacy_text=True)
 
-        # _read_eigenvalues will use the .npy sidecar via _load_npy_cache
+        # _read_eigenvalues will use the .npy sidecar via load_npy_cache
         result = _read_eigenvalues(d_path)
 
         assert not result.flags.writeable, (
@@ -468,15 +467,15 @@ class TestNpyCache:
         )
 
     def test_cache_load_returns_memmap(self, tmp_path: Path) -> None:
-        """_load_npy_cache returns np.memmap instance (demand-paged, not eager)."""
+        """load_npy_cache returns np.memmap instance (demand-paged, not eager)."""
         arr = np.array([1.0, 2.0, 3.0])
         npy_path = tmp_path / "test.eigenD.npy"
-        _write_npy_cache(arr, npy_path)
+        write_npy_cache(arr, npy_path)
 
-        result = _load_npy_cache(npy_path)
+        result = load_npy_cache(npy_path, mmap_mode="r")
         assert result is not None
         assert isinstance(result, np.memmap), (
-            f"Expected np.memmap from _load_npy_cache, got {type(result).__name__}"
+            f"Expected np.memmap from load_npy_cache, got {type(result).__name__}"
         )
         np.testing.assert_array_equal(result, arr)
 
@@ -488,7 +487,7 @@ class TestNpyCache:
 
 @pytest.mark.tier0
 class TestAtomicCacheWrite:
-    """Verify _write_npy_cache publishes atomically and leaves no temp files.
+    """Verify write_npy_cache publishes atomically and leaves no temp files.
 
     These assert on the *contents of the directory*, never on a temp filename.
     An earlier version hardcoded the ``<stem>.tmp.npy`` name the implementation
@@ -531,19 +530,19 @@ class TestAtomicCacheWrite:
         loaded = np.load(npy_path)
         np.testing.assert_array_equal(loaded, np.eye(5))
 
-    def test_write_npy_cache_directly(self, tmp_path: Path) -> None:
-        """_write_npy_cache writes the .npy and cleans up its temp."""
+    def testwrite_npy_cache_directly(self, tmp_path: Path) -> None:
+        """write_npy_cache writes the .npy and cleans up its temp."""
         arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         npy_path = tmp_path / "direct.eigenD.npy"
 
-        _write_npy_cache(arr, npy_path)
+        write_npy_cache(arr, npy_path)
 
         self._assert_dir_contents(tmp_path, {npy_path})
 
         loaded = np.load(npy_path)
         np.testing.assert_array_equal(loaded, arr)
 
-    def test_write_npy_cache_error_cleans_tmp(self, tmp_path: Path) -> None:
+    def testwrite_npy_cache_error_cleans_tmp(self, tmp_path: Path) -> None:
         """A failed rename leaves no target and no temp behind."""
         from unittest.mock import patch
 
@@ -553,12 +552,12 @@ class TestAtomicCacheWrite:
         # Fail the rename after the temp file has been written, so cleanup is
         # the only thing that can empty the directory.
         with patch.object(Path, "replace", side_effect=OSError("mock")):
-            _write_npy_cache(arr, npy_path)
+            write_npy_cache(arr, npy_path)
 
         assert not npy_path.exists(), "Target .npy should not exist after failed rename"
         self._assert_dir_contents(tmp_path, set())
 
-    def test_write_npy_cache_error_preserves_existing_target(
+    def testwrite_npy_cache_error_preserves_existing_target(
         self, tmp_path: Path
     ) -> None:
         """A failed rename leaves a pre-existing sidecar byte-for-byte intact.
@@ -574,7 +573,7 @@ class TestAtomicCacheWrite:
         old_bytes = npy_path.read_bytes()
 
         with patch.object(Path, "replace", side_effect=OSError("mock")):
-            _write_npy_cache(np.zeros(500), npy_path)
+            write_npy_cache(np.zeros(500), npy_path)
 
         assert npy_path.read_bytes() == old_bytes
         self._assert_dir_contents(tmp_path, {npy_path})

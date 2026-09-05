@@ -432,7 +432,15 @@ class TestChunkPlanMatchesEngine:
             assert plan.n_buffers == 1
             assert not plan.use_pipeline
 
-    @pytest.mark.parametrize("n_cvt,lmm_mode,accel,dispatch", _DISPATCH_CASES)
+    @pytest.mark.parametrize(
+        "n_cvt,lmm_mode,accel,dispatch",
+        [
+            pytest.param(*case.values, id=case.id, marks=requires_c)
+            if case.values[2]
+            else case
+            for case in _DISPATCH_CASES
+        ],
+    )
     def test_streaming_preflight_priced_bytes_match_engine_allocation(
         self, monkeypatch, n_cvt, lmm_mode, accel, dispatch
     ):

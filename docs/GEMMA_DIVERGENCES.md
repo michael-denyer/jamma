@@ -231,8 +231,11 @@ iteration count per SNP; serial execution.
 Uses **grid search (50 log-spaced points) + golden section refinement (20
 iterations)**. All SNPs in a chunk are optimized simultaneously in lockstep
 (same bracket operation per iteration, vectorized across the SNP batch).
-REML then takes one safeguarded Newton step using the analytic score for each
-interior optimum. The derivative uses compensated weighted sums and the Schur
+REML then takes up to three safeguarded Newton steps using the analytic score
+for each interior optimum. It stops when the score divided by local curvature
+estimates a remaining log-lambda correction below 1e-10, or when no safe
+improvement is available. A single step can leave a measurable error on very
+flat peaks despite a tiny score residual. The derivative uses compensated weighted sums and the Schur
 complement chain rule. Probes and accepted candidates stay inside the original
 coarse bracket; acceptance requires negative curvature and a smaller score
 residual. Monotone brackets retain their bounded golden-section estimate.

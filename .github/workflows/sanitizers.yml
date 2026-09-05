@@ -162,6 +162,8 @@ jobs:
           env -u JAMMA_FORCE_NUMPY_FALLBACK uv run pytest \
             tests/lmm_accel \
             tests/test_workspace_planning.py \
+            tests/test_association_plan.py \
+            tests/test_memory_chunk_coupling.py \
             tests/test_likelihood_numpy.py \
             tests/test_reml_refinement_contract.py \
             tests/test_likelihood_output_contract.py \

@@ -169,10 +169,10 @@ timings start with genotypes loaded. Association runs use precomputed kinship.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 201ms | 201ms | -- | 1.0x | **5.4x** | **6.0x** |
-| LMM Wald (`-lmm 1`) | 7.3s | 4.2s | 5.2s | 316ms | 425ms | 16.4x | **23.3x** | **13.4x** |
-| LMM All (`-lmm 4`) | 13.6s | 7.5s | 7.6s | 329ms | 449ms | 23.1x | **41.3x** | **22.9x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.3s | 12.5s | 12.8s | 796ms | 896ms | 16.1x | **34.3x** | **15.7x** |
+| Kinship (`-gk 1`) | 1.3s | 1.3s | 210ms | 210ms | -- | 1.0x | **6.4x** | **6.1x** |
+| LMM Wald (`-lmm 1`) | 7.8s | 4.2s | 5.6s | 343ms | 484ms | 16.4x | **22.7x** | **12.3x** |
+| LMM All (`-lmm 4`) | 14.2s | 7.5s | 8.4s | 377ms | 498ms | 22.2x | **37.8x** | **19.9x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 28.4s | 11.7s | 14.1s | 861ms | 955ms | 16.4x | **33.0x** | **13.6x** |
 | LOCO Wald (`-loco`) | 2m31s | 1m20s | -- | **3.3s** | -- | -- | **~46x** | **~24x** |
 
 LOCO includes 19 per-chromosome eigendecompositions. Its historical timing

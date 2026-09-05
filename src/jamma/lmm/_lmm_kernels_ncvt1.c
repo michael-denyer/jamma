@@ -291,7 +291,7 @@ double refine_lambda_ncvt1_split(
 
     double log_opt = (a + b) / 2.0;
     /* Refine enclosed peaks independently of rounded objective ties. */
-    if (a > coarse_a && b < coarse_b) {
+    for (int step = 0; step < 3 && a > coarse_a && b < coarse_b; step++) {
         double delta = fmin(1e-3, 0.25 * (coarse_b - coarse_a));
         delta = fmin(delta, 0.5 * (log_opt - coarse_a));
         delta = fmin(delta, 0.5 * (coarse_b - log_opt));
@@ -312,10 +312,15 @@ double refine_lambda_ncvt1_split(
                 double candidate_score = reml_score_loglambda_ncvt1_split(
                     var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
                     eigenvalues, n_samples, exp(candidate));
-                if (isfinite(candidate_score) && fabs(candidate_score) < fabs(score))
+                if (isfinite(candidate_score) && fabs(candidate_score) < fabs(score)) {
                     log_opt = candidate;
+                    /* Score magnitude must be scaled by the local curvature. */
+                    if (fabs(candidate_score / curvature) > 1e-10)
+                        continue;
+                }
             }
         }
+        break;
     }
     double lambda_opt = exp(log_opt);
 

@@ -98,45 +98,55 @@ def _refine_reml_optima(
     interior: np.ndarray,
     score_at: Callable[[np.ndarray, np.ndarray], np.ndarray],
 ) -> np.ndarray:
-    """Take one safeguarded Newton step on interior REML optima."""
+    """Refine interior peaks until the estimated log-lambda error is small."""
     if not np.any(interior):
         return log_opt
     indices = np.flatnonzero(interior)
-    x = log_opt[indices]
-    low = coarse_a[indices]
-    high = coarse_b[indices]
-    delta = np.minimum.reduce(
-        (
-            np.full_like(x, _SCORE_PROBE_DELTA),
-            0.25 * (high - low),
-            0.5 * (x - low),
-            0.5 * (high - x),
-        )
-    )
-    score = score_at(x, indices)
-    score_minus = score_at(x - delta, indices)
-    score_plus = score_at(x + delta, indices)
-    curvature = (score_plus - score_minus) / (2.0 * delta)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        candidate = x - score / curvature
-    eligible = (
-        np.isfinite(candidate)
-        & np.isfinite(curvature)
-        & np.isfinite(delta)
-        & (delta > 0.0)
-        & (curvature < 0.0)
-        & (candidate >= low)
-        & (candidate <= high)
-    )
-    evaluated_candidate = np.where(eligible, candidate, x)
-    corrected_score = score_at(evaluated_candidate, indices)
-    safe = (
-        eligible
-        & np.isfinite(corrected_score)
-        & (np.abs(corrected_score) < np.abs(score))
-    )
     result = log_opt.copy()
-    result[indices] = np.where(safe, candidate, x)
+    for _ in range(3):
+        x = result[indices]
+        low = coarse_a[indices]
+        high = coarse_b[indices]
+        delta = np.minimum.reduce(
+            (
+                np.full_like(x, _SCORE_PROBE_DELTA),
+                0.25 * (high - low),
+                0.5 * (x - low),
+                0.5 * (high - x),
+            )
+        )
+        score = score_at(x, indices)
+        score_minus = score_at(x - delta, indices)
+        score_plus = score_at(x + delta, indices)
+        curvature = (score_plus - score_minus) / (2.0 * delta)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            candidate = x - score / curvature
+        eligible = (
+            np.isfinite(candidate)
+            & np.isfinite(curvature)
+            & np.isfinite(delta)
+            & (delta > 0.0)
+            & (curvature < 0.0)
+            & (candidate >= low)
+            & (candidate <= high)
+        )
+        evaluated_candidate = np.where(eligible, candidate, x)
+        corrected_score = score_at(evaluated_candidate, indices)
+        safe = (
+            eligible
+            & np.isfinite(corrected_score)
+            & (np.abs(corrected_score) < np.abs(score))
+        )
+        result[indices] = np.where(safe, candidate, x)
+        # A small score alone is misleading when curvature is nearly zero.
+        # Revisit only peaks whose estimated remaining relative lambda error
+        # exceeds 1e-10; cap work at three safeguarded steps.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            remaining = np.abs(corrected_score / curvature)
+        indices = indices[safe & (remaining > 1e-10)]
+        if indices.size == 0:
+            break
+
     return result
 
 

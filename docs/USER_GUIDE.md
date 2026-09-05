@@ -303,8 +303,8 @@ Tab-separated file. The first 7 columns are always present; stat columns depend 
 
 Following GEMMA, `logl_H1` is the REML likelihood calculated by the Wald test
 in mode 1 and the alternative-model MLE likelihood calculated by the LRT in
-modes 2 and 4. The validation reader also accepts older mode-2 files that
-omit this diagnostic column.
+modes 2 and 4. The validation reader also accepts mode-2 files without
+this diagnostic column.
 
 ### Kinship Matrix
 

@@ -19,6 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -134,8 +135,89 @@ def test_the_suite_covers_the_whole_extension(recorded):
         for name in dir(accel)
         if not name.startswith("_") and callable(getattr(accel, name))
     } - {"jamma_sentinel_oob"}
-    covered = {name for name, _, _ in recorded}
+    covered = {name.split(".", 1)[0] for name, _, _ in recorded}
     assert covered == public, (
         f"recorded {sorted(covered)}, extension exports {sorted(public)}. "
         "The wrapping in _install() has likely broken."
     )
+
+
+@pytest.fixture(scope="module")
+def fingerprint(load_script):
+    return load_script("lmm_accel_fingerprint")
+
+
+@pytest.fixture(scope="module")
+def compare_fingerprints(load_script):
+    return load_script("compare_fingerprints")
+
+
+def _record(fingerprint, fn):
+    fingerprint._records.clear()
+    result = fingerprint._wrap("probe", fn)(np.array([1.0]))
+    records = list(fingerprint._records)
+    fingerprint._records.clear()
+    return result, records
+
+
+def _as_comparison_input(records):
+    grouped = {}
+    for line in records:
+        name, args_digest, result = line.split("\t")
+        grouped.setdefault((name, args_digest), []).append(result)
+    return {key: tuple(sorted(values)) for key, values in grouped.items()}
+
+
+def test_dictionary_fields_are_independent_comparison_keys(
+    fingerprint, compare_fingerprints
+):
+    _, base_records = _record(
+        fingerprint, lambda _: {"shared": np.array([1.0]), "removed": np.array([2.0])}
+    )
+    changed = np.array([1.0])
+    changed.view(np.uint64)[0] ^= np.uint64(1)
+    _, head_records = _record(
+        fingerprint, lambda _: {"shared": changed, "added": np.array([3.0])}
+    )
+
+    base = _as_comparison_input(base_records)
+    head = _as_comparison_input(head_records)
+    drifted, added, removed = compare_fingerprints.compare(base, head)
+
+    args_digest = fingerprint._digest((np.array([1.0]),), {})
+    assert drifted == [("probe.shared", args_digest)]
+    assert added == [("probe.added", args_digest)]
+    assert removed == [("probe.removed", args_digest)]
+    assert all(key[0] != "probe" for key in base | head)
+
+
+def test_non_dictionary_and_exception_records_keep_their_identity(fingerprint):
+    value = np.array([4.0])
+    _, records = _record(fingerprint, lambda _: value)
+    name, _, result = records[0].split("\t")
+    assert name == "probe"
+    assert result == fingerprint._digest(value)
+
+    fingerprint._records.clear()
+
+    def fail(_):
+        raise ValueError("expected")
+
+    with pytest.raises(ValueError, match="expected"):
+        fingerprint._wrap("probe", fail)(np.array([1.0]))
+    name, _, result = fingerprint._records.pop().split("\t")
+    assert name == "probe"
+    assert result == "raise:ValueError"
+
+
+def test_digest_preserves_dtype_shape_signed_zero_and_nan_payload_bits(fingerprint):
+    assert fingerprint._digest(np.array([1.0], dtype=np.float64)) != (
+        fingerprint._digest(np.array([1.0], dtype=np.float32))
+    )
+    assert fingerprint._digest(np.array([1.0, 2.0])) != fingerprint._digest(
+        np.array([[1.0, 2.0]])
+    )
+    assert fingerprint._digest(np.array([0.0])) != fingerprint._digest(np.array([-0.0]))
+    nan_a = np.array([0x7FF8000000000001], dtype=np.uint64).view(np.float64)
+    nan_b = np.array([0x7FF8000000000002], dtype=np.uint64).view(np.float64)
+    assert fingerprint._digest(nan_a) != fingerprint._digest(nan_b)

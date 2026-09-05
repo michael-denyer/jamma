@@ -141,8 +141,6 @@ def _compute_lrt_numpy(
     n_grid: int,
     n_refine: int,
     logl_H0: float,
-    *,
-    report_logl_H1: bool = False,
 ) -> dict[str, np.ndarray]:
     """Compute MLE-optimized LRT statistics.
 
@@ -161,9 +159,8 @@ def _compute_lrt_numpy(
         logl_H0: Null model MLE log-likelihood (scalar).
 
     Returns:
-        Dict with keys ``lambdas_mle`` and ``p_lrts``. When
-        ``report_logl_H1`` is true, the dict also contains ``logls`` with the
-        alternative-model MLE likelihood that GEMMA reports in mode 4.
+        Dict with ``logls``, ``lambdas_mle``, and ``p_lrts``. GEMMA reports the
+        alternative-model MLE likelihood as ``logl_H1`` in modes 2 and 4.
     """
     lambdas_mle, logls_mle = golden_section_optimize_lambda_mle_numpy(
         n_cvt,
@@ -175,10 +172,7 @@ def _compute_lrt_numpy(
         n_iter=n_refine,
     )
     p_lrts = _batch_lrt_pvalues_numpy(logls_mle, logl_H0)
-    result = {"lambdas_mle": lambdas_mle, "p_lrts": p_lrts}
-    if report_logl_H1:
-        result["logls"] = logls_mle
-    return result
+    return {"logls": logls_mle, "lambdas_mle": lambdas_mle, "p_lrts": p_lrts}
 
 
 def _compute_score_numpy(
@@ -383,7 +377,6 @@ def compute_lmm_chunk_numpy(
                 n_grid,
                 n_refine,
                 logl_H0,
-                report_logl_H1=True,
             )
         )
 

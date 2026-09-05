@@ -353,12 +353,14 @@ class TestRunLoco:
             ksnps_indices=None,
         )
         assert isinstance(analysis, LocoAnalysisPlan)
+        valid_mask = compute_valid_mask(phenotypes, covariates)
         return runner._run_loco(
             analysis=analysis,
             t_start=0.0,
             phenotypes=phenotypes,
             covariates=covariates,
-            valid_mask=compute_valid_mask(phenotypes, covariates),
+            valid_mask=valid_mask,
+            analyzed_sample_indices=np.flatnonzero(valid_mask),
             assoc_path=tmp_path / "out.assoc.txt",
         )
 

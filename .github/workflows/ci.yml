@@ -198,6 +198,9 @@ jobs:
           "
 
       - name: Run tests
+        env:
+          JAMMA_MATH_EVIDENCE_DIR: ${{ runner.temp }}/math-validation
+          EXPECTED_BLAS_BACKEND: ${{ matrix.expected_blas_backend }}
         # addopts= clears pyproject.toml defaults so CI controls markers and parallelism explicitly.
         # --reruns 1 (one retry on failure) absorbs the documented timing-flake class on
         # heavily-loaded ARM Mac runners. Real failures still surface — they fail on the rerun
@@ -212,6 +215,14 @@ jobs:
             extra_args=()
           fi
           uv run pytest -m "not tier2 and not slow and not benchmark" -v -n 3 -o 'addopts=' "${extra_args[@]}"
+
+      - name: Upload mathematical evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: math-validation-${{ matrix.name }}
+          path: ${{ runner.temp }}/math-validation
+          if-no-files-found: error
 
   # Package smoke test: catches (a) sdist missing critical files
   # (e.g. src/jamma/_build_support/*.py needed for runtime recompile),
@@ -356,8 +367,44 @@ jobs:
 
       - name: Run tier1 tests under forced NumPy fallback
         env:
+          JAMMA_MATH_EVIDENCE_DIR: ${{ runner.temp }}/math-validation
           JAMMA_FORCE_NUMPY_FALLBACK: "1"
         run: uv run pytest -m tier1 tests/ -x -v -n 3 -o 'addopts='
+
+      - name: Upload forced NumPy evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: math-validation-forced-numpy
+          path: ${{ runner.temp }}/math-validation
+          if-no-files-found: error
+
+  # Always runs, without a paths filter. Safe to require after this job has
+  # passed on master. Fallback keeps its separate one-week stability policy.
+  numerical-validation:
+    name: numerical-validation
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every platform's numerical evidence
+        env:
+          PLATFORM_RESULT: ${{ needs.test.result }}
+        run: test "$PLATFORM_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
+      - name: Set up JAMMA
+        uses: ./.github/actions/setup-jamma
+      - name: Reject known wrong implementations
+        run: uv run python scripts/mathematical_mutations.py --output "$RUNNER_TEMP/mutations.json"
+      - name: Upload mutation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: mathematical-mutation-smoke
+          path: ${{ runner.temp }}/mutations.json
+          if-no-files-found: error
 
   # Markdown link checker (offline). Runs on every PR and verifies that
   # every relative link and anchor in every .md file resolves. Does not

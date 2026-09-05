@@ -1,0 +1,37 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 4.2.1
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.31  - OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP vortexm4 MAX_THREADS=56
+##   arch           = vortexm4
+##   threads        = 18
+##   parallel type  = openmp
+##
+## Command Line Input = /Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr3.cXX.txt -snps chr3.snps.txt -lmm 3 -maf 0 -miss 1 -outdir . -o gemma_chr3 
+##
+## Date = Sat Sep  5 14:26:44 2026
+##
+## Summary Statistics:
+## number of total individuals = 40
+## number of analyzed individuals = 40
+## number of covariates = 1
+## number of phenotypes = 1
+## number of total SNPs/var = 9
+## number of analyzed SNPs/var = 1
+## REMLE log-likelihood in the null model = -52.1958
+## MLE log-likelihood in the null model = -52.9021
+## pve estimate in the null model = 0.336986
+## se(pve) in the null model = 0.169785
+## vg estimate in the null model = 0.500825
+## ve estimate in the null model = 0.66389
+## beta estimate in the null model =   0.309083
+## se(beta) =   0.12883
+##
+## Computation Time:
+## total computation time = 2.54e-05 min 
+## computation time break down: 
+##      time on eigen-decomposition = 2.05e-06 min 
+##      time on calculating UtX = 7.16667e-07 min 
+##      time on optimization = 2.5e-07 min 
+##

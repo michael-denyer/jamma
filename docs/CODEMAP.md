@@ -205,8 +205,8 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2f | `read_array_artifact()` | One reader for `.npy`, `.txt`, and the `.npy` sidecar (corrupt-sidecar recovery, sidecar write after parse) | [utils/npy_cache.py](../src/jamma/utils/npy_cache.py) |
 | 2g | `write_matrix_parallel()` | Parallel matrix writer using file-backed memmap | [io/matrix_writer.py:90](../src/jamma/io/matrix_writer.py#L90) |
 | 2h | `read_matrix_parallel()` | Multi-worker matrix text reader with chunk scanning | [io/matrix_reader.py](../src/jamma/io/matrix_reader.py) |
-| 2i | `read_weight_file()` | Parse per-individual weight file (`-widv` flag) | [io/weight.py:25](../src/jamma/io/weight.py#L25) |
-| 2i | `apply_individual_weights()` | Apply weights to kinship matrix | [io/weight.py:67](../src/jamma/io/weight.py#L67) |
+| 2i | `read_weight_file()` | Parse per-individual weight file (`-widv` flag) | [io/weight.py:16](../src/jamma/io/weight.py#L16) |
+| 2i | `apply_individual_weights()` | Apply weights to kinship matrix | [io/weight.py:75](../src/jamma/io/weight.py#L75) |
 
 ---
 
@@ -335,13 +335,13 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:72](../src/jamma/validation/tolerances.py#L72) |
+| 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:55](../src/jamma/validation/tolerances.py#L55) |
 | 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:22](../src/jamma/validation/compare.py#L22) |
-| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:324](../src/jamma/validation/compare.py#L324) |
-| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:512](../src/jamma/validation/compare.py#L512) |
-| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:145](../src/jamma/validation/compare.py#L145) |
-| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:258](../src/jamma/validation/compare.py#L258) |
-| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:183](../src/jamma/validation/compare.py#L183) |
+| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:321](../src/jamma/validation/compare.py#L332) |
+| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:509](../src/jamma/validation/compare.py#L530) |
+| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:145](../src/jamma/validation/compare.py#L156) |
+| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:255](../src/jamma/validation/compare.py#L266) |
+| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:183](../src/jamma/validation/compare.py#L194) |
 
 ---
 
@@ -600,6 +600,6 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Memory estimation | [memory.py:244](../src/jamma/core/memory.py#L244) |
 | Threading | [threading.py:42](../src/jamma/core/threading.py#L42) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
-| Validation comparison | [compare.py:432](../src/jamma/validation/compare.py#L432) |
-| Equivalence proof | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
+| Validation comparison | [compare.py:509](../src/jamma/validation/compare.py#L530) |
+| Formula derivations and validation | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
 | Numerical equivalence bound | [GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md](GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) |

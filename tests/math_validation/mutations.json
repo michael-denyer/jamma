@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "mutations": [
+    {
+      "id": "analysed-sample-filtering",
+      "category": "compute filtering statistics on all samples instead of analysed samples",
+      "tier": "slow",
+      "path": "src/jamma/pipeline.py",
+      "find": "                filter_sample_indices=valid_indices,",
+      "replace": "                filter_sample_indices=None,",
+      "detector": "tests/test_kinship_sample_basis.py::test_pipeline_kinship_uses_gemma_filter_and_centring_populations",
+      "testcase": "test_pipeline_kinship_uses_gemma_filter_and_centring_populations"
+    },
+    {
+      "id": "analysis-submatrix-centering",
+      "category": "omit analysis-submatrix centring",
+      "tier": "smoke",
+      "path": "src/jamma/pipeline.py",
+      "find": "        center_kinship(K)",
+      "replace": "        pass  # mutation: omitted analysis-submatrix centring",
+      "detector": "tests/test_pipeline_kinship.py::TestEarlySampleFiltering::test_precomputed_kinship_still_works",
+      "testcase": "test_precomputed_kinship_still_works"
+    },
+    {
+      "id": "weights-before-centering",
+      "category": "re-centre the weighted kinship matrix",
+      "tier": "slow",
+      "path": "src/jamma/pipeline.py",
+      "find": "            K = apply_individual_weights(K, weights)",
+      "replace": "            K = apply_individual_weights(K, weights)\n            center_kinship(K)  # mutation: re-centre weighted kinship",
+      "detector": "tests/test_kinship_sample_basis.py::test_pipeline_kinship_uses_gemma_filter_and_centring_populations",
+      "testcase": "test_pipeline_kinship_uses_gemma_filter_and_centring_populations"
+    },
+    {
+      "id": "saved-full-kinship-as-analysis",
+      "category": "use saved full kinship as the analysed kinship",
+      "tier": "slow",
+      "path": "src/jamma/pipeline.py",
+      "find": "        if full and valid_indices is not None:",
+      "replace": "        if False and full and valid_indices is not None:",
+      "detector": "tests/test_pipeline_kinship.py::TestEarlySampleFiltering::test_save_kinship_full_size",
+      "testcase": "test_save_kinship_full_size"
+    },
+    {
+      "id": "mle-reml-logl-semantics",
+      "category": "swap MLE and REML logl_H1 semantics",
+      "tier": "smoke",
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "find": "    return result",
+      "replace": "    if lmm_mode == 4:\n        result[\"logls\"] = _compute_wald_numpy(\n            n_cvt, eigenvalues, Uab_batch, n_samples, l_min, l_max, n_grid, n_refine, Iab_batch=Iab_batch\n        )[\"logls\"]\n    return result",
+      "detector": "tests/test_compute_numpy.py::test_compute_lmm_chunk_numpy_all_modes",
+      "testcase": "test_compute_lmm_chunk_numpy_all_modes"
+    },
+    {
+      "id": "pab-index-shift",
+      "category": "shift Pab/GetabIndex mapping by one entry",
+      "tier": "slow",
+      "path": "src/jamma/lmm/pab.py",
+      "find": "    return (2 * cols - a1 + 2) * (a1 - 1) // 2 + b1 - a1",
+      "replace": "    return ((2 * cols - a1 + 2) * (a1 - 1) // 2 + b1 - a1 + 1) % n_index(n_cvt)",
+      "detector": "tests/lmm_accel/test_pab_oracle.py::test_numpy_wald_matches_independent_dense_oracle",
+      "testcase": "test_numpy_wald_matches_independent_dense_oracle"
+    },
+    {
+      "id": "score-per-snp-lambda",
+      "category": "use per-SNP lambda for Score instead of null lambda",
+      "tier": "slow",
+      "path": "src/jamma/lmm/compute_numpy.py",
+      "find": "    return {\"betas\": betas, \"ses\": ses, \"p_scores\": p_scores}",
+      "replace": "    per_snp_lambdas = golden_section_optimize_lambda_numpy(\n        n_cvt, eigenvalues, Uab_batch, batch_compute_iab_numpy(n_cvt, Uab_batch)\n    )[0]\n    per_snp_scores = [\n        batch_calc_score_stats_numpy(\n            n_cvt,\n            1.0 / (lambda_value * eigenvalues + 1.0),\n            Uab_batch[index : index + 1],\n            n_samples,\n        )\n        for index, lambda_value in enumerate(per_snp_lambdas)\n    ]\n    betas, ses, p_scores = (\n        np.concatenate([score[field] for score in per_snp_scores])\n        for field in range(3)\n    )\n    return {\"betas\": betas, \"ses\": ses, \"p_scores\": p_scores}",
+      "detector": "tests/test_compute_numpy.py::TestScoreSplitParity::test_score_split_parity",
+      "testcase": "test_score_split_parity"
+    },
+    {
+      "id": "chunk-boundary-drop",
+      "category": "drop or duplicate the SNP at a chunk boundary",
+      "tier": "slow",
+      "path": "src/jamma/lmm/chunk_runner_numpy.py",
+      "find": "        self.chunk_sink(chunk_arrays, filtered_start, chunk_range.filtered_end)\n        self.processed += actual_len",
+      "replace": "        if filtered_start > 0:\n            chunk_arrays = {key: values[1:] for key, values in chunk_arrays.items()}\n            filtered_start += 1\n        self.chunk_sink(chunk_arrays, filtered_start, chunk_range.filtered_end)\n        self.processed += actual_len",
+      "detector": "tests/test_runner_numpy.py::test_numpy_multi_chunk_pvalue_equivalence",
+      "testcase": "test_numpy_multi_chunk_pvalue_equivalence"
+    },
+    {
+      "id": "stale-loco-cache",
+      "category": "reuse a LOCO cache after a relevant input/config change",
+      "tier": "smoke",
+      "path": "src/jamma/lmm/eigen_cache.py",
+      "find": "    valid_mask_sha256 = hashlib.sha256(mask_bytes).hexdigest()",
+      "replace": "    valid_mask_sha256 = hashlib.sha256(bytes(len(mask_bytes))).hexdigest()",
+      "detector": "tests/test_eigen_cache_key.py::TestEigenCacheKey::test_key_changes_when_valid_mask_positions_change",
+      "testcase": "test_key_changes_when_valid_mask_positions_change"
+    },
+    {
+      "id": "production-wrong-allele-orientation",
+      "category": "emit the wrong allele orientation while preserving MAF",
+      "tier": "smoke",
+      "path": "src/jamma/lmm/results.py",
+      "find": "    a1_list = snp_info.a1[snp_indices].tolist()\n    a0_list = snp_info.a0[snp_indices].tolist()",
+      "replace": "    a1_list = snp_info.a0[snp_indices].tolist()\n    a0_list = snp_info.a1[snp_indices].tolist()",
+      "detector": "tests/test_mathematical_mutations.py::test_tiny_wald_results_preserve_external_allele_orientation",
+      "testcase": "test_tiny_wald_results_preserve_external_allele_orientation"
+    },
+    {
+      "id": "numeric-output-comparator",
+      "category": "perturb each numeric output column independently",
+      "kind": "observation-control",
+      "tier": "smoke",
+      "path": "tests/math_validation/compare.py",
+      "find": "        \"status\": \"VERIFIED\" if result.passed and not errors else \"NOT VERIFIED\",",
+      "replace": "        \"status\": \"VERIFIED\",",
+      "detector": "tests/test_mathematical_validation.py::test_each_numeric_column_mutation_is_rejected",
+      "testcase": "test_each_numeric_column_mutation_is_rejected"
+    },
+    {
+      "id": "forced-lower-bound",
+      "category": "force a lower-bound result against an interior reference",
+      "tier": "slow",
+      "path": "src/jamma/lmm/likelihood_numpy.py",
+      "find": "        n_cvt, lambdas_grid, eigenvalues, Uab_batch, Iab_batch",
+      "replace": "        n_cvt, np.full_like(lambdas_grid, l_min), eigenvalues, Uab_batch, Iab_batch",
+      "detector": "tests/test_reml_refinement_contract.py::test_tiny_reml_peak_optimizer_matches_independent_root[numpy]",
+      "testcase": "test_tiny_reml_peak_optimizer_matches_independent_root"
+    }
+  ]
+}

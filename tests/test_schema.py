@@ -71,7 +71,7 @@ class TestDerivedTables:
         assert ACCUM_KEYS[1] == ("betas", "ses", "logls", "lambdas", "pwalds")
 
     def test_accum_keys_mode2(self) -> None:
-        assert ACCUM_KEYS[2] == ("lambdas_mle", "p_lrts")
+        assert ACCUM_KEYS[2] == ("logls", "lambdas_mle", "p_lrts")
 
     def test_accum_keys_mode3(self) -> None:
         assert ACCUM_KEYS[3] == ("betas", "ses", "p_scores")
@@ -97,7 +97,11 @@ class TestDerivedTables:
                 "lambdas": "l_remle",
                 "pwalds": "p_wald",
             },
-            2: {"lambdas_mle": "l_mle", "p_lrts": "p_lrt"},
+            2: {
+                "logls": "logl_H1",
+                "lambdas_mle": "l_mle",
+                "p_lrts": "p_lrt",
+            },
             3: {"betas": "beta", "ses": "se", "p_scores": "p_score"},
             4: {
                 "betas": "beta",
@@ -116,7 +120,7 @@ class TestDerivedTables:
         expected = {
             "wald": ["beta", "se", "logl_H1", "l_remle", "p_wald"],
             "score": ["beta", "se", "p_score"],
-            "lrt": ["l_mle", "p_lrt"],
+            "lrt": ["logl_H1", "l_mle", "p_lrt"],
             "all": [
                 "beta",
                 "se",

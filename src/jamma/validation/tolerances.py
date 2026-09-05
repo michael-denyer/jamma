@@ -1,36 +1,19 @@
-"""Tolerance configuration for numerical comparisons in JAMMA validation.
+"""Field-specific policies for comparing JAMMA output with GEMMA references.
 
-This module provides configurable tolerance thresholds for comparing JAMMA
-output to reference GEMMA output. Different value types require different
-tolerances due to how they are computed.
+These thresholds are comparison gates, not a guarantee for untested inputs or
+platforms. The mathematical validation bundles record the cases and numerical
+backends actually exercised.
 
-**Scientific Equivalence**: Despite numerical differences, JAMMA and GEMMA produce
-statistically identical results:
-- P-value rank correlation: 1.000000
-- Significance agreement at all thresholds: 100%
-- Effect direction agreement: 100%
-- Top hits overlap: 100%
+GEMMA writes statistics with six digits after the decimal in scientific notation
+(seven significant digits). JAMMA uses a grid and vectorized golden-section
+search, with safeguarded score refinement for interior REML optima; GEMMA uses
+GSL scalar optimization. The existing lambda policy checks boundary classes
+separately from ordinary interior relative error.
 
-Numerical differences arise from:
-- **GEMMA output precision**: 6 significant figures in scientific notation
-- **Optimization convergence**: GEMMA uses Brent's method; JAMMA uses grid search +
-  golden section. Both converge to within 1e-5 of the true optimum, but on flat
-  optimization landscapes (weak-signal SNPs where lambda hits the lower bound 1e-5),
-  the two methods can land on slightly different local optima.
-- **CDF implementations**: Cephes betainc vs GSL gsl_cdf_fdist_Q
-- **Lambda sensitivity**: ~0.35x amplification to beta (1e-5 lambda → 3.5e-6 beta)
-
-Value types and tolerances:
-- **Kinship matrices**: Direct matrix operations, tightest tolerance (1e-8)
-- **Effect sizes (beta)**: Lambda-sensitive, moderate tolerance (1e-2)
-- **Standard errors**: Lambda-sensitive, moderate tolerance (1e-5)
-- **P-values**: CDF differences, moderate tolerance (1e-4)
-- **Log-likelihood (REML)**: Direct computation, tight tolerance (1e-6)
-- **Log-likelihood (MLE/logl_H1)**: Per-SNP MLE evaluation; on real datasets the golden
-  section vs Brent divergence on weak-signal SNPs produces larger differences (up to
-  ~1.35e-3 relative on mouse_hs1940). Use wider tolerance for dataset-specific configs.
-- **Lambda (variance ratio)**: Brent convergence, moderate tolerance (2e-5)
-- **Allele frequency**: JAMMA reports MAF (<=0.5), GEMMA reports AF (may be >0.5)
+``logl_H1`` is REML in mode 1 and MLE in modes 2 and 4. The earlier mode 4
+likelihood mismatch was an output-semantics defect, not evidence for widening
+``logl_rtol``. AF comparisons in the legacy comparator fold to MAF; the independent
+validation driver additionally checks the declared allele-orientation contract.
 """
 
 import math

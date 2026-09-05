@@ -315,9 +315,12 @@ uv run python scripts/compare_fingerprints.py /tmp/base.txt /tmp/head.txt
 
 `run-fingerprint.sh` runs `tests/lmm_accel/` under the recorder plugin with `-n0`
 and a fixed `--randomly-seed=1234`, so both sides drive the accelerator with
-identical inputs. Keys present on only one side (a deleted or renamed entry point)
-do not fail the comparison; a key present on both sides whose result digest differs
-does. Step 2 checks out `<base-sha>` without staging the head's
+identical inputs. Dictionary results produce one key per exact field name. This
+means an added or removed result field is reported as a coverage change, while
+every field shared by both sides remains subject to the byte-exact gate. Keys
+present on only one side (including a deleted or renamed entry point) do not fail
+the comparison; a key present on both sides whose result digest differs does.
+Step 2 checks out `<base-sha>` without staging the head's
 `scripts/lmm_accel_fingerprint.py` first, unlike the CI job, because a local
 reproduce compares two full commits rather than a head diffed against history it
 does not have; if the base predates the fingerprint harness there is nothing to

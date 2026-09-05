@@ -5,7 +5,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.io.weight import apply_individual_weights, read_weight_file
+from jamma.io.weight import (
+    apply_individual_weights,
+    apply_weights_to_eigenvectors,
+    read_analysis_weights,
+    read_weight_file,
+)
 
 pytestmark = pytest.mark.tier0
 
@@ -83,6 +88,27 @@ class TestReadWeightFile:
 
         with pytest.raises(ValueError, match=str(weight_file)):
             read_weight_file(weight_file)
+
+    def test_read_analysis_weights_selects_samples_in_analysis_order(
+        self, tmp_path: Path
+    ) -> None:
+        weight_file = tmp_path / "weights.txt"
+        weight_file.write_text("1.0\n2.0\n3.0\n4.0\n")
+
+        weights = read_analysis_weights(
+            weight_file, 4, np.array([0, 2, 3], dtype=np.intp)
+        )
+
+        np.testing.assert_array_equal(weights, [1.0, 3.0, 4.0])
+
+    def test_read_analysis_weights_rejects_wrong_sample_count(
+        self, tmp_path: Path
+    ) -> None:
+        weight_file = tmp_path / "weights.txt"
+        weight_file.write_text("1.0\n2.0\n3.0\n")
+
+        with pytest.raises(ValueError, match="3 entries but expected 4"):
+            read_analysis_weights(weight_file, 4, None)
 
 
 class TestApplyIndividualWeights:
@@ -183,3 +209,15 @@ class TestApplyIndividualWeights:
 
         with pytest.raises(ValueError, match="Weight array has 2 entries"):
             apply_individual_weights(K, weights)
+
+
+class TestApplyWeightsToEigenvectors:
+    def test_nonpositive_weights_zero_rows_like_gemma(self) -> None:
+        eigenvectors = np.arange(9, dtype=float).reshape(3, 3) + 1
+        original = eigenvectors.copy()
+
+        result = apply_weights_to_eigenvectors(eigenvectors, np.array([-4.0, 0.0, 9.0]))
+
+        assert result is eigenvectors
+        np.testing.assert_array_equal(result[:2], np.zeros((2, 3)))
+        np.testing.assert_array_equal(result[2], original[2] * 3.0)

@@ -28,10 +28,11 @@ def _load_kinship(
     runner: PipelineRunner,
     n_samples: int,
     valid_indices: np.ndarray | None = None,
+    weights: np.ndarray | None = None,
 ) -> np.ndarray:
     """Load kinship the way run() does: shared source derivation, then load."""
     source = resolve_kinship_source(runner.config.kinship_file, None)
-    return runner._load_kinship_from_source(source, n_samples, valid_indices)
+    return runner._load_kinship_from_source(source, n_samples, valid_indices, weights)
 
 
 BFILE = SYNTHETIC.bfile
@@ -115,7 +116,7 @@ def test_weight_file_applied_to_kinship(tmp_path: Path) -> None:
     runner_u = PipelineRunner(config_unweighted)
 
     # Load kinship with and without weights
-    K_weighted = _load_kinship(runner_w, 100)
+    K_weighted = _load_kinship(runner_w, 100, weights=np.full(100, 4.0))
     K_unweighted = _load_kinship(runner_u, 100)
 
     # With uniform weights=4.0, K_weighted[i,j] = K[i,j] / sqrt(4*4) = K[i,j] / 4
@@ -255,7 +256,9 @@ class TestEarlySampleFiltering:
 
         valid_indices = np.array([0, 1, 2, 3, 4, 6, 7, 8, 9])
         K = _load_kinship(
-            PipelineRunner(config), _N_SAMPLES, valid_indices=valid_indices
+            PipelineRunner(config),
+            _N_SAMPLES,
+            valid_indices=valid_indices,
         )
         assert K.shape == (len(valid_indices), len(valid_indices))
 
@@ -286,7 +289,10 @@ class TestEarlySampleFiltering:
 
         valid_indices = _valid_indices_excluding()
         K = _load_kinship(
-            PipelineRunner(config), _N_SAMPLES, valid_indices=valid_indices
+            PipelineRunner(config),
+            _N_SAMPLES,
+            valid_indices=valid_indices,
+            weights=np.arange(1.0, _N_SAMPLES + 1.0)[valid_indices],
         )
         n_valid = len(valid_indices)
         assert K.shape == (n_valid, n_valid), (
@@ -359,6 +365,9 @@ class TestEarlySampleFiltering:
 
         assert result.n_samples == n_valid, (
             f"Expected {n_valid} samples after NaN filtering, got {result.n_samples}"
+        )
+        np.testing.assert_array_equal(
+            result.analyzed_sample_indices, _valid_indices_excluding()
         )
         assert result.n_snps_tested > 0, "Should test at least some SNPs"
 

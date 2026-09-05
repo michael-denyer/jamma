@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "executable": "/Users/mdenyer/.local/bin/gemma",
+  "executable_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
+  "version": "GEMMA 0.98.5 (2021-08-25) by Xiang Zhou, Pjotr Prins and team (C) 2012-2021\n\n type ./gemma -h [num] for detailed help\n options: \n  1: quick guide\n  2: file I/O related\n  3: SNP QC\n  4: calculate relatedness matrix\n  5: perform eigen decomposition\n  6: perform variance component estimation\n  7: fit a linear model\n  8: fit a linear mixed model\n  9: fit a multivariate linear mixed model\n 10: fit a Bayesian sparse linear mixed model\n 11: obtain predicted values\n 12: calculate snp variance covariance\n 13: note\n 14: debug options\n\nThe GEMMA software is distributed under the GNU General Public v3\n   -license    show license information\n   see also http://www.xzlab.org/software.html, https://github.com/genetics-statistics\n",
+  "command": {
+    "argv": [
+      "/Users/mdenyer/.local/bin/gemma",
+      "-bfile",
+      "tiny",
+      "-k",
+      "kinship.txt",
+      "-lmm",
+      "1",
+      "-maf",
+      "0",
+      "-miss",
+      "1",
+      "-outdir",
+      ".",
+      "-o",
+      "gemma"
+    ],
+    "cwd": "/private/tmp/jamma-tiny-reference-final/tiny-wald-supplied-kinship",
+    "exit_code": 0
+  },
+  "case": {
+    "id": "tiny-wald-supplied-kinship",
+    "tier": "tier1",
+    "reason": "Anchor direct dense GLS to external GEMMA and the raw PLINK Wald output contract.",
+    "recipe": "tiny-plink-v1",
+    "seed": 731,
+    "n_samples": 16,
+    "n_snps": 3,
+    "mode": 1,
+    "factors": {
+      "samples": "all-valid",
+      "missingness": "none",
+      "covariates": "intercept",
+      "kinship": "supplied-centered",
+      "runner": "batch",
+      "cache": "cold"
+    },
+    "gemma_args": [
+      "-lmm",
+      "1",
+      "-maf",
+      "0",
+      "-miss",
+      "1"
+    ],
+    "jamma_args": [
+      "-lmm",
+      "1",
+      "-maf",
+      "0",
+      "-miss",
+      "1",
+      "--no-telemetry"
+    ]
+  },
+  "generator_sha256": "5313ade0f3b96379360315d03fe373c2e9ff418972ea1f8112b897d42b0c0449",
+  "files": {
+    "model.json": "5efd173b2fd872a152ce5c0cd25d123be696019e85433da908c606d48ef38da4",
+    "tiny.fam": "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18",
+    "tiny.bed": "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e",
+    "gemma.assoc.txt": "d1f062aad1af1c28fc7d76a96cbd1a1ba45362f1e1139beb32ed79f9104b401c",
+    "gemma.stdout.txt": "e7b9f20d6230095ea0fc27a6edb483f8021cb09339a520bb93f2b6f41cf8a29d",
+    "kinship.txt": "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda",
+    "gemma.stderr.txt": "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10",
+    "tiny.bim": "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8",
+    "gemma.log.txt": "5ba8518bff087ae373d13258994ba2397403438f97e1b9a0c43d25eb8a8efc38"
+  },
+  "metadata_corrections": [
+    "Runner factor corrected from pipeline to batch during integration: raw JAMMA log records numpy-batch. Raw GEMMA files and command unchanged."
+  ]
+}

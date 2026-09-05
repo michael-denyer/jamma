@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case": "mode4-missing-covariates",
+  "contract": {
+    "mode": 4,
+    "maf": 0.1,
+    "miss": 0.1,
+    "weights": "40 positive values linearly spaced 0.5 through 2.0",
+    "selection": "38 of 40 samples; disjoint missing phenotype and covariate",
+    "kinship": "GEMMA -gk 1 generated from the same raw PLINK input with covariates"
+  },
+  "gemma": {
+    "version": "0.98.5",
+    "binary": "/Users/mdenyer/.local/bin/gemma",
+    "binary_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
+    "source_repository": "https://github.com/genetics-statistics/GEMMA",
+    "source_revision": "c37b0445f820b682836a1d20009ce1817546493a"
+  },
+  "commands": {
+    "kinship": "gemma -bfile tiny -c covariates.txt -gk 1 -maf 0.1 -miss 0.1 -outdir . -o gemma_kinship",
+    "association": "gemma -bfile tiny -k gemma_kinship.cXX.txt -c covariates.txt -widv weights.txt -lmm 4 -maf 0.1 -miss 0.1 -outdir . -o gemma"
+  },
+  "source_evidence": {
+    "selection": "src/param.cpp:2022-2027 and 2128-2141",
+    "kinship_and_eigenvector_transform": "src/gemma.cpp:2587-2641",
+    "phenotype_covariate_transform": "src/gemma.cpp:2690-2691",
+    "genotype_transform": "src/lmm.cpp:1417 and 1524-1526"
+  },
+  "files": {
+    "covariates.txt": "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618",
+    "gemma.assoc.txt": "713458545db2e277aea95bbac574828706ec8b6b8095bf721c22770404f5e6cb",
+    "gemma.log.txt": "3a6aaa1f73d86f6703176766e67edc42c274f6db76e5f3fddc376ef72a4df915",
+    "gemma_kinship.cXX.txt": "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b",
+    "model.json": "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd",
+    "tiny.bed": "e2441465f11c334720d09cb4c85398a6dd8714be2ea340c252d6d6d94d84652e",
+    "tiny.bim": "ec0343d2d8d8dc656ca9ea914f52b80bc36805f317c5150f83729f663e07f3c2",
+    "tiny.fam": "0fc6eb00a6a4f2994d66afc6dbff337ecb639cfa00ee4a11ef9274497e86e96e",
+    "weights.txt": "8fbd10bdb3d34189543fbff9f5cd44484dcbec22fd77a3c7db55570a44ed40a0"
+  }
+}

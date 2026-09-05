@@ -96,6 +96,7 @@ class TestCompareArrays:
         assert result.max_abs_diff == 0.0
         assert result.max_rel_diff == 0.0
         assert result.worst_location is None
+        assert result.failed_indices == ()
 
     def test_compare_arrays_within_tolerance(self):
         """Arrays within tolerance should pass."""
@@ -117,6 +118,7 @@ class TestCompareArrays:
         assert result.passed is False
         assert result.max_abs_diff == pytest.approx(1.0)
         assert result.worst_location == (2,)
+        assert result.failed_indices == (2,)
         assert "test comparison failed" in result.message
         assert "(2,)" in result.message
 
@@ -128,6 +130,7 @@ class TestCompareArrays:
         result = compare_arrays(a, b, rtol=1e-6, atol=1e-12, name="test")
 
         assert result.passed is False
+        assert result.failed_indices == (0, 1, 2)
         assert "shape mismatch" in result.message
 
     def test_compare_arrays_2d(self):
@@ -139,6 +142,7 @@ class TestCompareArrays:
 
         assert result.passed is False
         assert result.worst_location == (1, 1)
+        assert result.failed_indices == (3,)
 
     def test_compare_arrays_near_zero(self):
         """Values near zero should use absolute tolerance."""
@@ -242,6 +246,7 @@ class TestComparisonResult:
             max_abs_diff=1e-10,
             max_rel_diff=1e-8,
             worst_location=None,
+            failed_indices=(),
             message="test passed",
         )
 
@@ -249,6 +254,7 @@ class TestComparisonResult:
         assert hasattr(result, "max_abs_diff")
         assert hasattr(result, "max_rel_diff")
         assert hasattr(result, "worst_location")
+        assert result.failed_indices == ()
         assert hasattr(result, "message")
 
     def test_comparison_result_failed_structure(self):
@@ -258,9 +264,11 @@ class TestComparisonResult:
             max_abs_diff=0.5,
             max_rel_diff=0.1,
             worst_location=(2, 3),
+            failed_indices=(2, 3),
             message="comparison failed at (2, 3)",
         )
 
         assert result.passed is False
         assert result.worst_location == (2, 3)
+        assert result.failed_indices == (2, 3)
         assert "(2, 3)" in result.message

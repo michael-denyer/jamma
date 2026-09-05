@@ -1,0 +1,2 @@
+chr	rs	ps	n_miss	allele1	allele0	af	logl_H1	l_mle	p_lrt
+3	loco8	108	0	A	G	0.500	-4.715696e+01	8.804509e-01	6.995888e-04

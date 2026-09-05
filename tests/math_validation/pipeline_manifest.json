@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "reference_version": "0.98.5",
+  "recipe": "pipeline-boundaries-v1",
+  "n_samples": 40,
+  "n_snps": 12,
+  "maf": 0.1,
+  "miss": 0.1,
+  "cases": [
+    {"id": "pipeline-mode1-internal-centered", "mode": 1, "tier": "tier1"},
+    {"id": "pipeline-mode2-internal-centered", "mode": 2, "tier": "tier1"},
+    {"id": "pipeline-mode3-internal-centered", "mode": 3, "tier": "tier1"},
+    {"id": "pipeline-mode4-internal-centered", "mode": 4, "tier": "tier1"}
+  ],
+  "factors": {
+    "sample_selection": "phenotype and covariate missing on disjoint rows",
+    "genotype_missingness": "none, imputed, just below and just above exclusion",
+    "snp_selection": "MAF below and above 0.1, missingness below and above 0.1, monomorphic",
+    "kinship": "internally computed centered",
+    "covariates": "intercept plus one nontrivial covariate",
+    "cache": "cold",
+    "runner": "pipeline batch and streaming, each with save on and off",
+    "chunking": "automatic; this small fixture does not force an uneven chunk width",
+    "output": "in-memory result metadata plus streamed association file"
+  },
+  "untested": [
+    "standardized kinship association is not exposed by PipelineConfig",
+    "cold/warm standard eigen cache is not exposed as one pipeline API",
+    "PipelineConfig does not expose an association chunk-size control"
+  ]
+}

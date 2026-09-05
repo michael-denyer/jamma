@@ -1,0 +1,27 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 4.2.1
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.31  - OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP vortexm4 MAX_THREADS=56
+##   arch           = vortexm4
+##   threads        = 18
+##   parallel type  = openmp
+##
+## Command Line Input = /Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr3.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr3 
+##
+## Date = Sat Sep  5 14:26:44 2026
+##
+## Summary Statistics:
+## number of total individuals = 40
+## number of analyzed individuals = 40
+## number of covariates = 1
+## number of phenotypes = 1
+## number of total SNPs/var = 9
+## number of analyzed SNPs/var = 8
+##
+## Computation Time:
+## total computation time = 0.000417267 min 
+## computation time break down: 
+##      time on calculating relatedness matrix = 0.000361767 min 
+##

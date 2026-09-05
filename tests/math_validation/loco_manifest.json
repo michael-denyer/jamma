@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "reference_version": "0.98.5",
+  "recipe": "tiny-loco-v1",
+  "n_samples": 40,
+  "n_snps": 9,
+  "chromosomes": {"1": 4, "2": 4, "3": 1},
+  "cases": [
+    {"id": "loco-mode1-cold-warm", "mode": 1, "tier": "tier1"},
+    {"id": "loco-mode2-cold-warm", "mode": 2, "tier": "tier1"},
+    {"id": "loco-mode3-cold-warm", "mode": 3, "tier": "tier1"},
+    {"id": "loco-mode4-cold-warm", "mode": 4, "tier": "tier1"}
+  ],
+  "factors": {
+    "locality": "three represented chromosomes including singleton chromosome 3",
+    "kinship": "external GEMMA centered kinship generated from SNPs outside each tested chromosome",
+    "cache": "cold write and proven warm reuse",
+    "association_mode": [1, 2, 3, 4],
+    "sample_selection": "all valid",
+    "covariates": "intercept only"
+  },
+  "untested": [
+    "empty filtered chromosome partition",
+    "LOCO cache invalidation under changed inputs or configuration",
+    "LOCO with missing phenotype or covariate rows"
+  ]
+}

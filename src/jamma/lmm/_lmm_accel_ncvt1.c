@@ -724,6 +724,7 @@ static PyObject *ncvt1_lrt_loop(
     }
 
     double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
+    double *out_logls       = (double *)PyArray_DATA(out.logls);
     double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
 
     /* Allocate per-thread scratch buffers (thread-safe, adapts to retuned n_threads) */
@@ -773,6 +774,7 @@ static PyObject *ncvt1_lrt_loop(
             ws->lrt->mle_const, hi_eval_local, &logl_H1
         );
         out_lambdas_mle[s] = lam_mle;
+        out_logls[s] = logl_H1;
 
         double lrt_stat = 2.0 * (logl_H1 - ws->lrt->logl_H0);
         if (lrt_stat < 0.0) lrt_stat = 0.0;
@@ -801,7 +803,7 @@ static PyObject *ncvt1_lrt_loop(
  *   compute_lmm_chunk_ncvt1_c(workspace, utg_t, n_threads)
  * Returns:
  *   mode 1: dict with lambdas, logls, betas, ses, pwalds
- *   mode 2: dict with lambdas_mle, p_lrts
+ *   mode 2: dict with logls, lambdas_mle, p_lrts
  *   mode 3: dict with betas, ses, p_scores
  *   mode 4: mode 1's keys plus p_scores, lambdas_mle, p_lrts
  *   each value (n_snps,) float64.

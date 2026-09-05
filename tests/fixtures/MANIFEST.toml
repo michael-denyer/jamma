@@ -128,6 +128,1159 @@ sha256 = "9bc1e40ce877f59aaf9afcf4ea93ada4ab99637d39d7a04f7fee17f626a28b28"
 gemma_version = "0.98.5"
 generation_cmd = "gemma -bfile /data/input/mouse_hs1940 -k /data/kinship.cXX.txt -lmm 1 -outdir /data/output -o mouse_hs1940"
 
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/chr1.ksnps.txt"]
+sha256 = "82197db24b60f77ae2b16f85423179002b5f8cffa1fa54648f478c7ba3ec09b4"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/chr1.snps.txt"]
+sha256 = "0cc3bc3381e2b06ce620f8b7f4d395abe0e66946bba1cab8816d98057665839d"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/chr2.ksnps.txt"]
+sha256 = "84fe83b53b27afaf93ae79de3ba7a5e7cffbfcbbefded7681321c32a05ae0747"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/chr2.snps.txt"]
+sha256 = "64a6e7d9133dfd78746abf286c11caedd011bb377448ca2a3300192f52738c38"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/chr3.ksnps.txt"]
+sha256 = "33635866594e45f23668af80349ee5e5afaf77eb746822bcbf6f2152e77b739a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/chr3.snps.txt"]
+sha256 = "be89e1270d24a4d4abe9d0468c8f47e67b73e603d4cd0ed34660f2c90aaede5a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma.assoc.txt"]
+sha256 = "adead928000cb352ed088fa0d7dbceb1b0d82bfcdad09f454d25d0a7c32dc84e"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr1.assoc.txt"]
+sha256 = "3fb83c1649673e58629e1695653e5e03e8a5ecc05893f1b8178c0f5cff3cdcea"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr1.log.txt"]
+sha256 = "859a03c5db38fc5c66427e4b57ee9758f9fb56598cc360cb2988a5490640102d"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr1.cXX.txt -snps chr1.snps.txt -lmm 1 -maf 0 -miss 1 -outdir . -o gemma_chr1"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr1.stderr.txt"]
+sha256 = "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr1.stdout.txt"]
+sha256 = "a549f816bdb0118f02c1a56700c55c2fa42c2a60222351e39d39c199c78e2c26"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr2.assoc.txt"]
+sha256 = "c0bff3bd7b82f418075a385d789ba6d5bf3ac926b8214e839d00ec2a44cc7535"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr2.log.txt"]
+sha256 = "23ba510733e361647250153e106af50efc432cee84e260831d78b088d2323ec3"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr2.cXX.txt -snps chr2.snps.txt -lmm 1 -maf 0 -miss 1 -outdir . -o gemma_chr2"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr2.stderr.txt"]
+sha256 = "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr2.stdout.txt"]
+sha256 = "7932ce56181d3a42bbcb51e60b602d34bf7014748434ab6b8a8e052db7d78936"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr3.assoc.txt"]
+sha256 = "fc933e94c3065fc2a268c67d8bf4e26a6babafd5ebcf35826d0bfa6239520159"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr3.log.txt"]
+sha256 = "739aa721af4c6bcd7f7e841bd3f6e4f6ffa66863f2861aada8252cbb445704d9"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr3.cXX.txt -snps chr3.snps.txt -lmm 1 -maf 0 -miss 1 -outdir . -o gemma_chr3"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr3.stderr.txt"]
+sha256 = "ba5b2140f167265077c870b2d7c19895d406b85421242bd85cd906d18599be3f"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_chr3.stdout.txt"]
+sha256 = "de6b7fc459e5c530c392972e08b4c57a1f6379e9f07bbd8474da5ce4ac024665"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr1.cXX.txt"]
+sha256 = "48d7567bd601c20f63c59e9dc1521b4e7141e0f3042edb2243689db1b7b5d8f7"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr1.log.txt"]
+sha256 = "866a4c2456cb12bd9f903904f4d153d3e84b864ee8dd0b18ca4f6040614941c3"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr1.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr1"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr1.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr1.stdout.txt"]
+sha256 = "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr2.cXX.txt"]
+sha256 = "9a300be307c680faac7469f336347b87bf08413b07ae886199d8572c4ef17709"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr2.log.txt"]
+sha256 = "59884214df71e4fe258d66773177ee88e37477d30845c89a9246f1ffb04eeb83"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr2.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr2"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr2.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr2.stdout.txt"]
+sha256 = "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr3.cXX.txt"]
+sha256 = "2f404bb4aa10330fdd951680e078df535a4820c29b16384863ab49beee1fc96d"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr3.log.txt"]
+sha256 = "c86eaf7cc40f0c97e2c195f6efecde09460c3e8cd70cb391061ac355b9bc03c4"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr3.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr3"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr3.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/gemma_k_chr3.stdout.txt"]
+sha256 = "9d18ae6f313f8b94fa46ea9942236b4b8dd6b9204d32b312287c5b431f011c63"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/model.json"]
+sha256 = "7c4f3eddb8f241df49b0263bf4dd80b27137fd83f120db4d9c6fdbdc11d85cfc"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/provenance.json"]
+sha256 = "04613fdb9339b167093bd3e3723ea0ddb687085471ad79583f9157ed937d3834"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/tiny.bed"]
+sha256 = "3fbc4e8663dab411cc566e3455d88bb4e54e82d72a2510aa0eba589256ced492"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/tiny.bim"]
+sha256 = "89776f066202c23ba9d45d84b0cbbb566c4b6ba118c237853e3651c8b1e6275a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode1-cold-warm/tiny.fam"]
+sha256 = "19c688b13ca88b16d84e14f73b56aa1a7807fa4446a5818955a0e30d645be368"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/chr1.ksnps.txt"]
+sha256 = "82197db24b60f77ae2b16f85423179002b5f8cffa1fa54648f478c7ba3ec09b4"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/chr1.snps.txt"]
+sha256 = "0cc3bc3381e2b06ce620f8b7f4d395abe0e66946bba1cab8816d98057665839d"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/chr2.ksnps.txt"]
+sha256 = "84fe83b53b27afaf93ae79de3ba7a5e7cffbfcbbefded7681321c32a05ae0747"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/chr2.snps.txt"]
+sha256 = "64a6e7d9133dfd78746abf286c11caedd011bb377448ca2a3300192f52738c38"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/chr3.ksnps.txt"]
+sha256 = "33635866594e45f23668af80349ee5e5afaf77eb746822bcbf6f2152e77b739a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/chr3.snps.txt"]
+sha256 = "be89e1270d24a4d4abe9d0468c8f47e67b73e603d4cd0ed34660f2c90aaede5a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma.assoc.txt"]
+sha256 = "0ad75a5f9db9862b37b69588389d09784b2e071d978c2ff805c9c6b47654634a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr1.assoc.txt"]
+sha256 = "321401967c1a4b8c855a13dd73db48673f84f370fbdc4fc18955345cb48f05c6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr1.log.txt"]
+sha256 = "03ac8a509e7ac96f14028ff00868ac337dc792f1c86ffbb468b0fb2fd8c44e1c"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr1.cXX.txt -snps chr1.snps.txt -lmm 2 -maf 0 -miss 1 -outdir . -o gemma_chr1"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr1.stderr.txt"]
+sha256 = "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr1.stdout.txt"]
+sha256 = "a549f816bdb0118f02c1a56700c55c2fa42c2a60222351e39d39c199c78e2c26"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr2.assoc.txt"]
+sha256 = "52a189c1aefabcaf65c619b85e32baee213bd1f1c59ead19747f971f868bab00"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr2.log.txt"]
+sha256 = "bb788291468c3d4a245bd625e3c41dd6e8e7bd89eb8f0d1c779574e50af8cea9"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr2.cXX.txt -snps chr2.snps.txt -lmm 2 -maf 0 -miss 1 -outdir . -o gemma_chr2"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr2.stderr.txt"]
+sha256 = "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr2.stdout.txt"]
+sha256 = "7932ce56181d3a42bbcb51e60b602d34bf7014748434ab6b8a8e052db7d78936"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr3.assoc.txt"]
+sha256 = "37ede80072a977cc528e087c2e3b823fa94ef9c18e9bd5366513cf207db3dfe7"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr3.log.txt"]
+sha256 = "7e7a4cf83b446cc80e716504a4934dc241cd955c581f3107585a74da941d055c"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr3.cXX.txt -snps chr3.snps.txt -lmm 2 -maf 0 -miss 1 -outdir . -o gemma_chr3"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr3.stderr.txt"]
+sha256 = "ba5b2140f167265077c870b2d7c19895d406b85421242bd85cd906d18599be3f"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_chr3.stdout.txt"]
+sha256 = "de6b7fc459e5c530c392972e08b4c57a1f6379e9f07bbd8474da5ce4ac024665"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr1.cXX.txt"]
+sha256 = "48d7567bd601c20f63c59e9dc1521b4e7141e0f3042edb2243689db1b7b5d8f7"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr1.log.txt"]
+sha256 = "63131dba7565b37885753beeeea7203486d0ceb96efc3817d5526a50f34371c7"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr1.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr1"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr1.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr1.stdout.txt"]
+sha256 = "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr2.cXX.txt"]
+sha256 = "9a300be307c680faac7469f336347b87bf08413b07ae886199d8572c4ef17709"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr2.log.txt"]
+sha256 = "57f41fbab160801ab60f7943b5f6ab48e71bdabf00fb733f462ba055c6741f22"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr2.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr2"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr2.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr2.stdout.txt"]
+sha256 = "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr3.cXX.txt"]
+sha256 = "2f404bb4aa10330fdd951680e078df535a4820c29b16384863ab49beee1fc96d"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr3.log.txt"]
+sha256 = "e90e1c7f8da568204aa8053bb147dc6d4cedd647da2cd58f3ed2e5b4af6a3bea"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr3.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr3"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr3.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/gemma_k_chr3.stdout.txt"]
+sha256 = "9d18ae6f313f8b94fa46ea9942236b4b8dd6b9204d32b312287c5b431f011c63"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/model.json"]
+sha256 = "7c4f3eddb8f241df49b0263bf4dd80b27137fd83f120db4d9c6fdbdc11d85cfc"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/provenance.json"]
+sha256 = "e8c81d5b81cc50c94a7abc23ce8ae8fae0bb98b24223a66d00b12633d1150310"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/tiny.bed"]
+sha256 = "3fbc4e8663dab411cc566e3455d88bb4e54e82d72a2510aa0eba589256ced492"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/tiny.bim"]
+sha256 = "89776f066202c23ba9d45d84b0cbbb566c4b6ba118c237853e3651c8b1e6275a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode2-cold-warm/tiny.fam"]
+sha256 = "19c688b13ca88b16d84e14f73b56aa1a7807fa4446a5818955a0e30d645be368"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/chr1.ksnps.txt"]
+sha256 = "82197db24b60f77ae2b16f85423179002b5f8cffa1fa54648f478c7ba3ec09b4"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/chr1.snps.txt"]
+sha256 = "0cc3bc3381e2b06ce620f8b7f4d395abe0e66946bba1cab8816d98057665839d"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/chr2.ksnps.txt"]
+sha256 = "84fe83b53b27afaf93ae79de3ba7a5e7cffbfcbbefded7681321c32a05ae0747"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/chr2.snps.txt"]
+sha256 = "64a6e7d9133dfd78746abf286c11caedd011bb377448ca2a3300192f52738c38"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/chr3.ksnps.txt"]
+sha256 = "33635866594e45f23668af80349ee5e5afaf77eb746822bcbf6f2152e77b739a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/chr3.snps.txt"]
+sha256 = "be89e1270d24a4d4abe9d0468c8f47e67b73e603d4cd0ed34660f2c90aaede5a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma.assoc.txt"]
+sha256 = "74993c521f25864ebb50a983d3c0de7bb5d1e01ee2545525dff7519ff5b802cc"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr1.assoc.txt"]
+sha256 = "6e022d72d30cf051f760c01674fd4451da0761ba9768bf3b3bf5bd3e646bd814"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr1.log.txt"]
+sha256 = "4c8de647d9f2dd4b997c7b02c34ea6a2704264dd3efb476fe512a474bed911d1"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr1.cXX.txt -snps chr1.snps.txt -lmm 3 -maf 0 -miss 1 -outdir . -o gemma_chr1"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr1.stderr.txt"]
+sha256 = "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr1.stdout.txt"]
+sha256 = "a549f816bdb0118f02c1a56700c55c2fa42c2a60222351e39d39c199c78e2c26"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr2.assoc.txt"]
+sha256 = "e0296e5eef7ed269777a64f466667e80550642a5612a02125bef5e453991e8b7"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr2.log.txt"]
+sha256 = "16846f91e883261ec49679b124aa9fb8b1a094a7ecb378685d2004b7c00a8b79"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr2.cXX.txt -snps chr2.snps.txt -lmm 3 -maf 0 -miss 1 -outdir . -o gemma_chr2"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr2.stderr.txt"]
+sha256 = "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr2.stdout.txt"]
+sha256 = "7932ce56181d3a42bbcb51e60b602d34bf7014748434ab6b8a8e052db7d78936"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr3.assoc.txt"]
+sha256 = "e0f03e337626211e70e6336289ba3dc721d4c895758297486d937e3f517d8142"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr3.log.txt"]
+sha256 = "c8f1fb8716ec47c863839865efb38adf3d52700d3a942fefa67a15b92b358dda"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr3.cXX.txt -snps chr3.snps.txt -lmm 3 -maf 0 -miss 1 -outdir . -o gemma_chr3"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr3.stderr.txt"]
+sha256 = "ba5b2140f167265077c870b2d7c19895d406b85421242bd85cd906d18599be3f"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_chr3.stdout.txt"]
+sha256 = "de6b7fc459e5c530c392972e08b4c57a1f6379e9f07bbd8474da5ce4ac024665"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr1.cXX.txt"]
+sha256 = "48d7567bd601c20f63c59e9dc1521b4e7141e0f3042edb2243689db1b7b5d8f7"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr1.log.txt"]
+sha256 = "c6a53ffc02f39f9e5a0a497746061b68427c70c409b0b2f69b5f0d74202f582f"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr1.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr1"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr1.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr1.stdout.txt"]
+sha256 = "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr2.cXX.txt"]
+sha256 = "9a300be307c680faac7469f336347b87bf08413b07ae886199d8572c4ef17709"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr2.log.txt"]
+sha256 = "205a6d519ce75b63d211c387c457fbf5312fe1cb9fd81cf6476e86e865744f09"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr2.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr2"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr2.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr2.stdout.txt"]
+sha256 = "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr3.cXX.txt"]
+sha256 = "2f404bb4aa10330fdd951680e078df535a4820c29b16384863ab49beee1fc96d"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr3.log.txt"]
+sha256 = "ad3648b8d6ae89f407d1b82d84c2f1b2ba1ef848d3ffd11e65f22f209399ce43"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr3.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr3"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr3.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/gemma_k_chr3.stdout.txt"]
+sha256 = "9d18ae6f313f8b94fa46ea9942236b4b8dd6b9204d32b312287c5b431f011c63"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/model.json"]
+sha256 = "7c4f3eddb8f241df49b0263bf4dd80b27137fd83f120db4d9c6fdbdc11d85cfc"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/provenance.json"]
+sha256 = "6e5c708f103329a32120aae58a95970cfeab520fbfc681ed48f833ded23873a4"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/tiny.bed"]
+sha256 = "3fbc4e8663dab411cc566e3455d88bb4e54e82d72a2510aa0eba589256ced492"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/tiny.bim"]
+sha256 = "89776f066202c23ba9d45d84b0cbbb566c4b6ba118c237853e3651c8b1e6275a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode3-cold-warm/tiny.fam"]
+sha256 = "19c688b13ca88b16d84e14f73b56aa1a7807fa4446a5818955a0e30d645be368"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/chr1.ksnps.txt"]
+sha256 = "82197db24b60f77ae2b16f85423179002b5f8cffa1fa54648f478c7ba3ec09b4"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/chr1.snps.txt"]
+sha256 = "0cc3bc3381e2b06ce620f8b7f4d395abe0e66946bba1cab8816d98057665839d"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/chr2.ksnps.txt"]
+sha256 = "84fe83b53b27afaf93ae79de3ba7a5e7cffbfcbbefded7681321c32a05ae0747"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/chr2.snps.txt"]
+sha256 = "64a6e7d9133dfd78746abf286c11caedd011bb377448ca2a3300192f52738c38"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/chr3.ksnps.txt"]
+sha256 = "33635866594e45f23668af80349ee5e5afaf77eb746822bcbf6f2152e77b739a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/chr3.snps.txt"]
+sha256 = "be89e1270d24a4d4abe9d0468c8f47e67b73e603d4cd0ed34660f2c90aaede5a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma.assoc.txt"]
+sha256 = "800f3706e58cfbe611546f05bf552461c6edf08b4d42fe56f5f2f4ab410cae8e"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr1.assoc.txt"]
+sha256 = "f133c22442a38539e0ee4f31424cfef8dc06742d2e2ec3978caa107801e33dd5"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr1.log.txt"]
+sha256 = "1a0d7dcc476eab8ba82e2efaa4060dc0d1aae1e72fdcafcb5a02118c83cc3d19"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr1.cXX.txt -snps chr1.snps.txt -lmm 4 -maf 0 -miss 1 -outdir . -o gemma_chr1"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr1.stderr.txt"]
+sha256 = "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr1.stdout.txt"]
+sha256 = "a549f816bdb0118f02c1a56700c55c2fa42c2a60222351e39d39c199c78e2c26"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr2.assoc.txt"]
+sha256 = "3bbe9de9152288feb29e48e89ec0933bf1de7bda948217975bc40ed987d96fc0"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr2.log.txt"]
+sha256 = "a91abaef678d16ec6b88f1581d0c5b2bcfe1822582942ff992b352701f5c8dd4"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr2.cXX.txt -snps chr2.snps.txt -lmm 4 -maf 0 -miss 1 -outdir . -o gemma_chr2"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr2.stderr.txt"]
+sha256 = "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr2.stdout.txt"]
+sha256 = "7932ce56181d3a42bbcb51e60b602d34bf7014748434ab6b8a8e052db7d78936"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr3.assoc.txt"]
+sha256 = "261f7623479c2e0b2a29c9f884dee32eca1079419541582234f66c85bac7d300"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr3.log.txt"]
+sha256 = "a09c9232b794f390f6c3625ddf3513904ba9adb2886b7f25cdd7b0a5f6735204"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr3.cXX.txt -snps chr3.snps.txt -lmm 4 -maf 0 -miss 1 -outdir . -o gemma_chr3"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr3.stderr.txt"]
+sha256 = "ba5b2140f167265077c870b2d7c19895d406b85421242bd85cd906d18599be3f"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_chr3.stdout.txt"]
+sha256 = "de6b7fc459e5c530c392972e08b4c57a1f6379e9f07bbd8474da5ce4ac024665"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr1.cXX.txt"]
+sha256 = "48d7567bd601c20f63c59e9dc1521b4e7141e0f3042edb2243689db1b7b5d8f7"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr1.log.txt"]
+sha256 = "c781fa52c71ae238f7b7a393ebf956223e4f3be3fdf5d64f4c9ea85e13ccaf86"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr1.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr1"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr1.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr1.stdout.txt"]
+sha256 = "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr2.cXX.txt"]
+sha256 = "9a300be307c680faac7469f336347b87bf08413b07ae886199d8572c4ef17709"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr2.log.txt"]
+sha256 = "0574b6f079f86ac785c0f8fc19da98ca17e4ff66f2a57a83e6b4cd50e56dea5e"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr2.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr2"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr2.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr2.stdout.txt"]
+sha256 = "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr3.cXX.txt"]
+sha256 = "2f404bb4aa10330fdd951680e078df535a4820c29b16384863ab49beee1fc96d"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr3.log.txt"]
+sha256 = "188f703df0c8bd698a15ff1188a16d09fbf79e4e469878bcbc7843a2ecf55654"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr3.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr3"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr3.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/gemma_k_chr3.stdout.txt"]
+sha256 = "9d18ae6f313f8b94fa46ea9942236b4b8dd6b9204d32b312287c5b431f011c63"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/model.json"]
+sha256 = "7c4f3eddb8f241df49b0263bf4dd80b27137fd83f120db4d9c6fdbdc11d85cfc"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/provenance.json"]
+sha256 = "3de9e0322f1b08cb4c6ee7155ef245c710ad408205ad7b148c7c3aee3aa30a22"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/tiny.bed"]
+sha256 = "3fbc4e8663dab411cc566e3455d88bb4e54e82d72a2510aa0eba589256ced492"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/tiny.bim"]
+sha256 = "89776f066202c23ba9d45d84b0cbbb566c4b6ba118c237853e3651c8b1e6275a"
+
+[file."tests/fixtures/mathematical_loco/loco-mode4-cold-warm/tiny.fam"]
+sha256 = "19c688b13ca88b16d84e14f73b56aa1a7807fa4446a5818955a0e30d645be368"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/covariates.txt"]
+sha256 = "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/gemma.assoc.txt"]
+sha256 = "2504e2834daf4d6fc6b0b945974cb5aa1cbbb5b671c1c227f5bb39c7b3f5f94d"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/gemma.log.txt"]
+sha256 = "2cc56611aa440a8def31b6d1651df46b5500b6af0c66650f303d28f877a84b35"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_kinship.cXX.txt -c covariates.txt -lmm 1 -maf 0.1 -miss 0.1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/gemma.stderr.txt"]
+sha256 = "518a5c56c62a6412c4768e1046c297433086281b9d764db4fad41cd27393af98"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/gemma.stdout.txt"]
+sha256 = "ddef8205381315cd9ba24179c7c8c489c1ad9760af406ae22171a2399efbd106"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/gemma_kinship.cXX.txt"]
+sha256 = "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/gemma_kinship.log.txt"]
+sha256 = "d465950ffc8db52ebc639e886ef38715fc6c48971e4bec06c5198ac8fbc3f611"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -c covariates.txt -gk 1 -maf 0.1 -miss 0.1 -outdir . -o gemma_kinship"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/gemma_kinship.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/gemma_kinship.stdout.txt"]
+sha256 = "e4366a34d2ad822344410edb417f67f1c3e5222ed3c974167fc091bfe9fd3d91"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/model.json"]
+sha256 = "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/provenance.json"]
+sha256 = "55cafaff5de37f50a333adda31e10a32057da494ab0f48fd8f3916a8cf248ebe"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/tiny.bed"]
+sha256 = "e2441465f11c334720d09cb4c85398a6dd8714be2ea340c252d6d6d94d84652e"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/tiny.bim"]
+sha256 = "ec0343d2d8d8dc656ca9ea914f52b80bc36805f317c5150f83729f663e07f3c2"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode1-internal-centered/tiny.fam"]
+sha256 = "0fc6eb00a6a4f2994d66afc6dbff337ecb639cfa00ee4a11ef9274497e86e96e"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/covariates.txt"]
+sha256 = "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/gemma.assoc.txt"]
+sha256 = "99cc8a50bed3dd2e75d9d11b36e6e405f5c9bb5015e4152edaf48342ee16c679"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/gemma.log.txt"]
+sha256 = "8b4b14592f7624cb307f20d327168da270e62a2671ffe56b39fbe61a9f7df064"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_kinship.cXX.txt -c covariates.txt -lmm 2 -maf 0.1 -miss 0.1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/gemma.stderr.txt"]
+sha256 = "518a5c56c62a6412c4768e1046c297433086281b9d764db4fad41cd27393af98"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/gemma.stdout.txt"]
+sha256 = "ddef8205381315cd9ba24179c7c8c489c1ad9760af406ae22171a2399efbd106"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/gemma_kinship.cXX.txt"]
+sha256 = "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/gemma_kinship.log.txt"]
+sha256 = "25c75b6ebc1661991f6e1e3cdc8e6d94f60cf1671eea8def84bd1c4a5d1b3453"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -c covariates.txt -gk 1 -maf 0.1 -miss 0.1 -outdir . -o gemma_kinship"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/gemma_kinship.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/gemma_kinship.stdout.txt"]
+sha256 = "e4366a34d2ad822344410edb417f67f1c3e5222ed3c974167fc091bfe9fd3d91"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/model.json"]
+sha256 = "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/provenance.json"]
+sha256 = "5ddc2ac464d8c01900355f3ccaf0f9a2426bc7a1eb7035946859dffada58519e"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/tiny.bed"]
+sha256 = "e2441465f11c334720d09cb4c85398a6dd8714be2ea340c252d6d6d94d84652e"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/tiny.bim"]
+sha256 = "ec0343d2d8d8dc656ca9ea914f52b80bc36805f317c5150f83729f663e07f3c2"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode2-internal-centered/tiny.fam"]
+sha256 = "0fc6eb00a6a4f2994d66afc6dbff337ecb639cfa00ee4a11ef9274497e86e96e"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/covariates.txt"]
+sha256 = "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/gemma.assoc.txt"]
+sha256 = "5be6e2b5bfe3ca16cc7efc718d5b892d33c97c238d5af1e8436c5b64997e3e5d"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/gemma.log.txt"]
+sha256 = "ee324f3ade8d7901bcae9e5a213d86d838b6359d2fc2039797dd523114b5abfc"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_kinship.cXX.txt -c covariates.txt -lmm 3 -maf 0.1 -miss 0.1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/gemma.stderr.txt"]
+sha256 = "518a5c56c62a6412c4768e1046c297433086281b9d764db4fad41cd27393af98"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/gemma.stdout.txt"]
+sha256 = "ddef8205381315cd9ba24179c7c8c489c1ad9760af406ae22171a2399efbd106"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/gemma_kinship.cXX.txt"]
+sha256 = "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/gemma_kinship.log.txt"]
+sha256 = "de9f1fbcbb04302fb61a7a91b6ad0e71997f36afa06bb6051464d897a204c79d"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -c covariates.txt -gk 1 -maf 0.1 -miss 0.1 -outdir . -o gemma_kinship"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/gemma_kinship.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/gemma_kinship.stdout.txt"]
+sha256 = "e4366a34d2ad822344410edb417f67f1c3e5222ed3c974167fc091bfe9fd3d91"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/model.json"]
+sha256 = "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/provenance.json"]
+sha256 = "4bdd2ef40e22f147d1d457a24b400d7d3f7089dcbc9cf7e467b151dbbd81d58b"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/tiny.bed"]
+sha256 = "e2441465f11c334720d09cb4c85398a6dd8714be2ea340c252d6d6d94d84652e"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/tiny.bim"]
+sha256 = "ec0343d2d8d8dc656ca9ea914f52b80bc36805f317c5150f83729f663e07f3c2"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode3-internal-centered/tiny.fam"]
+sha256 = "0fc6eb00a6a4f2994d66afc6dbff337ecb639cfa00ee4a11ef9274497e86e96e"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/covariates.txt"]
+sha256 = "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/gemma.assoc.txt"]
+sha256 = "07a37c4abf689f4ec206ce1c51c28cede6a4a2c7a8ba2fc24382c07c5dce576a"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/gemma.log.txt"]
+sha256 = "d1e03dae475689d30deb21dfc99cbacec38ca2db887cc7783e0b8664b4e066fe"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_kinship.cXX.txt -c covariates.txt -lmm 4 -maf 0.1 -miss 0.1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/gemma.stderr.txt"]
+sha256 = "518a5c56c62a6412c4768e1046c297433086281b9d764db4fad41cd27393af98"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/gemma.stdout.txt"]
+sha256 = "ddef8205381315cd9ba24179c7c8c489c1ad9760af406ae22171a2399efbd106"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/gemma_kinship.cXX.txt"]
+sha256 = "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/gemma_kinship.log.txt"]
+sha256 = "25d2c8e494ea0bfa24c90c6c0d4c2a2c6bec84b3cfa138d63b10bc8329fdd78f"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -c covariates.txt -gk 1 -maf 0.1 -miss 0.1 -outdir . -o gemma_kinship"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/gemma_kinship.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/gemma_kinship.stdout.txt"]
+sha256 = "e4366a34d2ad822344410edb417f67f1c3e5222ed3c974167fc091bfe9fd3d91"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/model.json"]
+sha256 = "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/provenance.json"]
+sha256 = "d6e1d9e3893c37a7ca961e5b5f8d1b1a09777254982d82bbd18518f2c4cdefdc"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/tiny.bed"]
+sha256 = "e2441465f11c334720d09cb4c85398a6dd8714be2ea340c252d6d6d94d84652e"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/tiny.bim"]
+sha256 = "ec0343d2d8d8dc656ca9ea914f52b80bc36805f317c5150f83729f663e07f3c2"
+
+[file."tests/fixtures/mathematical_pipeline/pipeline-mode4-internal-centered/tiny.fam"]
+sha256 = "0fc6eb00a6a4f2994d66afc6dbff337ecb639cfa00ee4a11ef9274497e86e96e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/covariates.txt"]
+sha256 = "a755f36270f1d3d19575c7c420eed4981294c62ccd8392a465b2b228e4ba95dc"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/gemma.assoc.txt"]
+sha256 = "3bd2ec9b9e078be73a7737c74d56a77fa2f21dc533b12d11832e122133c99985"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/gemma.log.txt"]
+sha256 = "5cf247918092f726f4e9a68435f9048426acfe224dcfc3d0170ddd13822b73c5"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 1 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/gemma.stdout.txt"]
+sha256 = "b539d991e87d3ce818c49d970ba4aaa0d9a74f8860189715e635773aecc9f9df"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/model.json"]
+sha256 = "895bc46a59935c2d428a6eebd05262c2d531c77fdf4ee33405263f0919a890f1"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/provenance.json"]
+sha256 = "de5485833169af54b1dbc464a3350c3d51009d979ee390008cc103fef53697cc"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov2-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/covariates.txt"]
+sha256 = "07945cb61c202d04821d8fda25bcd704f083295c0943673b8535799816c00b25"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/gemma.assoc.txt"]
+sha256 = "2bdf622d4fb7a43990d6b4439bd49109a69f50c9342d26e0399f0920c6ff0c73"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/gemma.log.txt"]
+sha256 = "2a47ff2b4f54a246d2c38b8b70cf428592bd753ef23b3f6bace807b2ca91f32c"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 1 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/gemma.stdout.txt"]
+sha256 = "55c6011a352b253d0eff28c2d1c8df74a46276b3cdafbd43dcba4f5538829248"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/model.json"]
+sha256 = "b238686a10040f66752f466afa82595d612cd73cbadf0d31205bcbb7552f8e82"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/provenance.json"]
+sha256 = "3332988036bf079e07a48e7cfd0da96f3e021b30b67771b124d53e2852138b1d"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode1-cov3-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/gemma.assoc.txt"]
+sha256 = "c240cd3b089660fb141dd32659123fafc461cc1e6a457c781749b502f61dfc00"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/gemma.log.txt"]
+sha256 = "29803c0a811a74fdd432a69d39a2ad39196da5e95fd9c8e895a5498856b2b26d"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 2 -maf 0 -miss 1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/gemma.stdout.txt"]
+sha256 = "e7b9f20d6230095ea0fc27a6edb483f8021cb09339a520bb93f2b6f41cf8a29d"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/model.json"]
+sha256 = "5efd173b2fd872a152ce5c0cd25d123be696019e85433da908c606d48ef38da4"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/provenance.json"]
+sha256 = "82e1c04a645bb30551f9fdd2d2c1c905457e9a7a7b8d392c8b6f9b9e3c6ee4bd"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov1-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/covariates.txt"]
+sha256 = "a755f36270f1d3d19575c7c420eed4981294c62ccd8392a465b2b228e4ba95dc"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/gemma.assoc.txt"]
+sha256 = "7e595e8730d4242c939b8168f25406c931f3aeb108f8178cae682ebccfe2a68f"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/gemma.log.txt"]
+sha256 = "587bca3f36a990e97e94507a1594399829da76d4ed23152fe4926ffe893f702e"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 2 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/gemma.stdout.txt"]
+sha256 = "b539d991e87d3ce818c49d970ba4aaa0d9a74f8860189715e635773aecc9f9df"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/model.json"]
+sha256 = "895bc46a59935c2d428a6eebd05262c2d531c77fdf4ee33405263f0919a890f1"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/provenance.json"]
+sha256 = "bcceaab5ee2bc12f8e3d06405273bfe5727ff6972dc22cf4284a863dd72540f7"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov2-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/covariates.txt"]
+sha256 = "07945cb61c202d04821d8fda25bcd704f083295c0943673b8535799816c00b25"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/gemma.assoc.txt"]
+sha256 = "bf66367f858c4f5274919160d92349bad76b7705021db873d9acfca5d569fd62"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/gemma.log.txt"]
+sha256 = "2b9ce4bacc741b69d1e95b816faab46daa12c7931a05c2d9ffa314421ded73b1"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 2 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/gemma.stdout.txt"]
+sha256 = "55c6011a352b253d0eff28c2d1c8df74a46276b3cdafbd43dcba4f5538829248"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/model.json"]
+sha256 = "b238686a10040f66752f466afa82595d612cd73cbadf0d31205bcbb7552f8e82"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/provenance.json"]
+sha256 = "a55a32b3a21741f379bcf1a5fd40f8f1c5d3d63337266f6aea59457e6a0a337f"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode2-cov3-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/gemma.assoc.txt"]
+sha256 = "546d06c34f88ddd7d444b54646dd0222debcdeed0471e2786f81b576935e48ab"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/gemma.log.txt"]
+sha256 = "0eabf3ee273abd55433d48f65bc78bd643b8199435b2bd37dd36e890a360243c"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 3 -maf 0 -miss 1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/gemma.stdout.txt"]
+sha256 = "e7b9f20d6230095ea0fc27a6edb483f8021cb09339a520bb93f2b6f41cf8a29d"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/model.json"]
+sha256 = "5efd173b2fd872a152ce5c0cd25d123be696019e85433da908c606d48ef38da4"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/provenance.json"]
+sha256 = "4b3087b19b2ebd643e84e665096b7c3d5f180360dc6d67a8d0309e8df1178725"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov1-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/covariates.txt"]
+sha256 = "a755f36270f1d3d19575c7c420eed4981294c62ccd8392a465b2b228e4ba95dc"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/gemma.assoc.txt"]
+sha256 = "c75b702e719b9975d397d76c7348382503e90ef734403ace71b054adbafc6538"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/gemma.log.txt"]
+sha256 = "a5a7bc5bcdb865225d8a787c53d35b534885153e82f47a8c1fc57c2582acce87"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 3 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/gemma.stdout.txt"]
+sha256 = "b539d991e87d3ce818c49d970ba4aaa0d9a74f8860189715e635773aecc9f9df"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/model.json"]
+sha256 = "895bc46a59935c2d428a6eebd05262c2d531c77fdf4ee33405263f0919a890f1"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/provenance.json"]
+sha256 = "4db8599d75ae4a57f8582636dde9beb742d5bf8f8f9f40e15d40b4f08e353e82"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov2-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/covariates.txt"]
+sha256 = "07945cb61c202d04821d8fda25bcd704f083295c0943673b8535799816c00b25"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/gemma.assoc.txt"]
+sha256 = "9068bd0446d0120580a5f01e3a427222bcd9557baecedd61afbe2ab9eed1ce60"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/gemma.log.txt"]
+sha256 = "e1e4fe5930ba97fb476e0340f849c040617853a7a21835f183e23cdf9f6bcfba"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 3 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/gemma.stdout.txt"]
+sha256 = "55c6011a352b253d0eff28c2d1c8df74a46276b3cdafbd43dcba4f5538829248"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/model.json"]
+sha256 = "b238686a10040f66752f466afa82595d612cd73cbadf0d31205bcbb7552f8e82"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/provenance.json"]
+sha256 = "d2a3850e957fcd91046f1b006717fcea15968db9ae6899855627bd47f0720cc0"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode3-cov3-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/gemma.assoc.txt"]
+sha256 = "edc75e8493502a9b6b2c15bb15242dbdc8e867311a1379978152330c1e82bbff"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/gemma.log.txt"]
+sha256 = "8d7485d628b366c80ee6d188077077f12e2f35b2a5c69db9ca655cae07089415"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 4 -maf 0 -miss 1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/gemma.stdout.txt"]
+sha256 = "e7b9f20d6230095ea0fc27a6edb483f8021cb09339a520bb93f2b6f41cf8a29d"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/model.json"]
+sha256 = "5efd173b2fd872a152ce5c0cd25d123be696019e85433da908c606d48ef38da4"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/provenance.json"]
+sha256 = "e630b88ad908a7707f6aa5fc5b06d8b61b2954c3d90093e8944b2a9489a11439"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov1-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/covariates.txt"]
+sha256 = "a755f36270f1d3d19575c7c420eed4981294c62ccd8392a465b2b228e4ba95dc"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/gemma.assoc.txt"]
+sha256 = "3402a63a90506787bcffb02ce7318a403b65acfe54781d4654b17c91867bf77b"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/gemma.log.txt"]
+sha256 = "78d974f9564854a1e77645701677c290524a3d614f744754ca1f59f3145af1b5"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 4 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/gemma.stdout.txt"]
+sha256 = "b539d991e87d3ce818c49d970ba4aaa0d9a74f8860189715e635773aecc9f9df"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/model.json"]
+sha256 = "895bc46a59935c2d428a6eebd05262c2d531c77fdf4ee33405263f0919a890f1"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/provenance.json"]
+sha256 = "6850a455d81314e4ad3b8939db9fc31b0c8020ec118e15057094d9f96b3ecace"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov2-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/covariates.txt"]
+sha256 = "07945cb61c202d04821d8fda25bcd704f083295c0943673b8535799816c00b25"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/gemma.assoc.txt"]
+sha256 = "2a797ee552a53f70b17dfc12694dc514c12f8256abf4997ead105660138c0c71"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/gemma.log.txt"]
+sha256 = "a1f29e6c007659ee14b55ca81bea2eb09f16324bf8c941a791ea42a98eb1988b"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 4 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/gemma.stdout.txt"]
+sha256 = "55c6011a352b253d0eff28c2d1c8df74a46276b3cdafbd43dcba4f5538829248"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/model.json"]
+sha256 = "b238686a10040f66752f466afa82595d612cd73cbadf0d31205bcbb7552f8e82"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/provenance.json"]
+sha256 = "96b57d487b7b34d97100e0ca6876f36f522b5a8343fcb72ccab161c8bd29bbf0"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-mode4-cov3-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/gemma.assoc.txt"]
+sha256 = "d1f062aad1af1c28fc7d76a96cbd1a1ba45362f1e1139beb32ed79f9104b401c"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/gemma.log.txt"]
+sha256 = "5ba8518bff087ae373d13258994ba2397403438f97e1b9a0c43d25eb8a8efc38"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 1 -maf 0 -miss 1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/gemma.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/gemma.stdout.txt"]
+sha256 = "e7b9f20d6230095ea0fc27a6edb483f8021cb09339a520bb93f2b6f41cf8a29d"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/kinship.txt"]
+sha256 = "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/model.json"]
+sha256 = "5efd173b2fd872a152ce5c0cd25d123be696019e85433da908c606d48ef38da4"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/provenance.json"]
+sha256 = "2ffa5eb80ca1ddd6334db725e736095059e4541aec3b93dce5536a84ca16abcb"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/tiny.bed"]
+sha256 = "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/tiny.bim"]
+sha256 = "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8"
+
+[file."tests/fixtures/mathematical_validation/tiny-wald-supplied-kinship/tiny.fam"]
+sha256 = "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/covariates.txt"]
+sha256 = "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/gemma.assoc.txt"]
+sha256 = "713458545db2e277aea95bbac574828706ec8b6b8095bf721c22770404f5e6cb"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/gemma.log.txt"]
+sha256 = "3a6aaa1f73d86f6703176766e67edc42c274f6db76e5f3fddc376ef72a4df915"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_kinship.cXX.txt -c covariates.txt -widv weights.txt -lmm 4 -maf 0.1 -miss 0.1 -outdir . -o gemma_widv"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/gemma_kinship.cXX.txt"]
+sha256 = "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/model.json"]
+sha256 = "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/provenance.json"]
+sha256 = "2d6670b080fc6df726be74ee25034cc9a2bb962c2137e430ede24e6f5ffc3505"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/tiny.bed"]
+sha256 = "e2441465f11c334720d09cb4c85398a6dd8714be2ea340c252d6d6d94d84652e"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/tiny.bim"]
+sha256 = "ec0343d2d8d8dc656ca9ea914f52b80bc36805f317c5150f83729f663e07f3c2"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/tiny.fam"]
+sha256 = "0fc6eb00a6a4f2994d66afc6dbff337ecb639cfa00ee4a11ef9274497e86e96e"
+
+[file."tests/fixtures/mathematical_weights/mode4-missing-covariates/weights.txt"]
+sha256 = "8fbd10bdb3d34189543fbff9f5cd44484dcbec22fd77a3c7db55570a44ed40a0"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/covariates.txt"]
+sha256 = "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/gemma.assoc.txt"]
+sha256 = "3029dacfa193d9658fdfa058bb1d2cdf600194dea79b7ab7f353b12cefb5b450"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/gemma.log.txt"]
+sha256 = "32cdb466c431b0d7775dd0e74c7b15fbce171664469faadc24ae206e5474c090"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_kinship.cXX.txt -c covariates.txt -widv weights.txt -lmm 4 -maf 0.1 -miss 0.1 -outdir . -o gemma"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/gemma.stderr.txt"]
+sha256 = "708c1694f713850ff26bdec95936f54a4548cb33b44c7103ebe61396eda69452"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/gemma.stdout.txt"]
+sha256 = "b945f8d8fdc20b154e69b95bf04f56e43e7fe9fb0156d9d84b31ae33f7009403"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/gemma_kinship.cXX.txt"]
+sha256 = "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/gemma_kinship.log.txt"]
+sha256 = "c55a1838fb8870c027927dbe4ba18429123df9fbea6ef3a8eaf0d014cfc1fa2e"
+gemma_version = "0.98.5"
+generation_cmd = "/Users/mdenyer/.local/bin/gemma -bfile tiny -c covariates.txt -gk 1 -maf 0.1 -miss 0.1 -outdir . -o gemma_kinship"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/gemma_kinship.stderr.txt"]
+sha256 = "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/gemma_kinship.stdout.txt"]
+sha256 = "e4366a34d2ad822344410edb417f67f1c3e5222ed3c974167fc091bfe9fd3d91"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/model.json"]
+sha256 = "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/provenance.json"]
+sha256 = "5befcd8195d0d539d2b701209dddd56761740596a83bb691487d02d25b53a9a7"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/tiny.bed"]
+sha256 = "e2441465f11c334720d09cb4c85398a6dd8714be2ea340c252d6d6d94d84652e"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/tiny.bim"]
+sha256 = "ec0343d2d8d8dc656ca9ea914f52b80bc36805f317c5150f83729f663e07f3c2"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/tiny.fam"]
+sha256 = "0fc6eb00a6a4f2994d66afc6dbff337ecb639cfa00ee4a11ef9274497e86e96e"
+
+[file."tests/fixtures/mathematical_weights/mode4-nonpositive-supplied/weights.txt"]
+sha256 = "c3994ab3e0af749fdc34f320433d6883fc5e86544c3550e486ce580421a090bf"
+
 [file."tests/fixtures/mouse_hs1940/covariates.txt"]
 sha256 = "b447b6fb4e9e2e8b78998cbbaee4bba1a6cfc176d48459f0bc3ba396278ed692"
 

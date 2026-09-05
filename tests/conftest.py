@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
+import os
+import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +26,49 @@ _REQUIRED_TIER_MARKERS = frozenset({"tier0", "tier1", "tier2", "slow", "benchmar
 _TIER_MARKER_EXEMPT_FILES: frozenset[str] = frozenset()
 
 _TESTS_DIR = Path(__file__).resolve().parent
+
+
+@pytest.fixture
+def math_evidence_dir(tmp_path, request):
+    """Keep each test's judged bundle for CI, or use its temporary directory."""
+    root = os.environ.get("JAMMA_MATH_EVIDENCE_DIR")
+    if root is None:
+        return tmp_path / "evidence"
+    name = re.sub(r"[^a-zA-Z0-9_.-]", "_", request.node.nodeid)
+    directory = Path(root) / name
+    directory.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="attempt-", dir=directory)) / "bundle"
+
+
+@pytest.fixture(scope="session")
+def load_script():
+    """Load standalone script helpers without adding scripts to sys.path."""
+
+    def load(name):
+        path = _TESTS_DIR.parent / "scripts" / f"{name}.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    return load
+
+
+def pytest_collection_modifyitems(items):
+    parity_tests = {
+        "test_manifest_case_matches_gemma_and_dense_oracle",
+        "test_raw_pipeline_matches_external_and_oracle",
+        "test_loco_cold_and_warm_each_match_gemma",
+        "test_pipeline_weight_semantics_match_external_gemma",
+        "test_nonpositive_weight_rows_match_external_gemma",
+        "test_callable_phase1_bundle_is_json_safe_and_native_is_required",
+    }
+    for item in items:
+        if item.originalname in parity_tests and not item.get_closest_marker("tier1"):
+            raise pytest.UsageError(f"GEMMA comparison must be tier1: {item.nodeid}")
+
 
 # Shared plumbing every scripts/check_*.py lint imports. install_lint_script()
 # below copies it alongside whichever lint a test is driving.

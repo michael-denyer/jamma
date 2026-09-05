@@ -150,25 +150,11 @@ def optimize(
 ):
     """Search every local grid peak with a test-only scalar solver, keep endpoints."""
 
-    def value(log_lam):
-        return evaluate(kinship, covariates, genotype, phenotype, np.exp(log_lam))[
-            objective
-        ]
-
-    grid = np.linspace(np.log(bounds[0]), np.log(bounds[1]), 129)
-    values = np.array([value(t) for t in grid])
-    candidates = [(values[0], grid[0]), (values[-1], grid[-1])]
-    for i in range(1, len(grid) - 1):
-        if values[i] >= max(values[i - 1], values[i + 1]):
-            fit = minimize_scalar(
-                lambda t: -value(t),
-                bounds=(grid[i - 1], grid[i + 1]),
-                method="bounded",
-                options={"xatol": 1e-11},
-            )
-            candidates.append((-fit.fun, fit.x))
-    _, optimum = max(candidates)
-    lam = float(np.exp(optimum))
+    design = np.column_stack((covariates, genotype))
+    optimized = _optimize_design(
+        kinship, design, phenotype, objective=objective, bounds=bounds
+    )
+    lam = optimized["lambda"]
     result = evaluate(kinship, covariates, genotype, phenotype, lam)
     return {
         "l_remle" if objective == "reml" else "l_mle": lam,

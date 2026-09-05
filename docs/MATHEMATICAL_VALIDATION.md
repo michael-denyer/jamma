@@ -18,14 +18,13 @@ The pipeline scales the eigenvector rows once before association. Nonpositive
 weights produce zero kinship rows and columns and zero observation scales, as
 in GEMMA. Saved eigenvectors remain raw and orthonormal. The weighted tests
 cover selected samples, computed and supplied kinship, batch and streaming
-execution, and multiple
-phenotypes without double scaling. The formula follows
+execution, and multiple phenotypes without double scaling. The formula follows
 [GEMMA v0.98.5](https://github.com/genetics-statistics/GEMMA/blob/v0.98.5/src/gemma.cpp).
 
 The positive-weight case requires every applicable field to pass with
 `n_refine=30`. The default 20-step result is recorded separately. With computed
-kinship, the native route can exceed the configured `2e-5` MLE lambda tolerance
-for this case; that result is marked **NOT VERIFIED** in the bundle.
+or supplied kinship, the native route can exceed the configured `2e-5` MLE
+lambda tolerance for this case; that result is marked **NOT VERIFIED** in the bundle.
 
 ## Declared coverage
 
@@ -41,8 +40,7 @@ for this case; that result is marked **NOT VERIFIED** in the bundle.
 References contain raw PLINK inputs, external outputs, executable hashes,
 commands and provenance. Generation runs the external GEMMA executable and is
 separate from pytest and comparison. Missing or changed references fail.
-The inventory command compares declared cases with actual tier1 collection;
-it rejects missing, extra and duplicate parameter cases.
+Collection requires the external comparison tests to retain their tier1 marker.
 
 The [dense oracle](../tests/math_validation/dense_oracle.py) constructs
 `H = I + lambda K`, solves GLS directly, and optimizes MLE and normalized REML.
@@ -70,8 +68,8 @@ The original working tree is hash checked before and after each run.
 The cases cover sample filtering, centering, weight order, saved-matrix subsetting,
 MLE/REML output identity, packed Pab indexing, the Score null lambda, chunk
 boundaries, stale LOCO caches, allele direction, the numeric comparator and an
-incorrect interior optimum. Comparator and observation controls also
-corrupt individual fields, Pab cells, objectives and route records.
+incorrect interior optimum. Comparator self-checks also perturb individual
+fields and check the reported failures.
 
 Native fingerprints compare result bytes per field. A field present in both
 revisions fails the comparison if its digest changes. Added or removed fields
@@ -87,27 +85,28 @@ Run from the repository root with development dependencies and a native build.
 Each output directory must be new.
 
 ```sh
-uv run python scripts/check_mathematical_inventory.py --output /tmp/math/inventory.json
-uv run python scripts/mathematical_validation.py compare --output /tmp/math/fixtures
-uv run python scripts/mathematical_validation.py pipeline --output /tmp/math/pipeline
-uv run python scripts/mathematical_validation.py loco --output /tmp/math/loco
-uv run python scripts/mathematical_validation.py weights --output /tmp/math/weights
-uv run python scripts/mathematical_validation.py phase1 --output /tmp/math/phase1
+uv run python scripts/mathematical_validation.py compare fixtures --output /tmp/math/fixtures
+uv run python scripts/mathematical_validation.py compare pipeline --output /tmp/math/pipeline
+uv run python scripts/mathematical_validation.py compare loco --output /tmp/math/loco
+uv run python scripts/mathematical_validation.py compare weights --output /tmp/math/weights
+uv run python scripts/mathematical_validation.py compare phase1 --output /tmp/math/phase1
 uv run python scripts/mathematical_mutations.py --all --output /tmp/math/mutations.json
 
 # Force the NumPy numerical route in a separate process and destination.
-JAMMA_FORCE_NUMPY_FALLBACK=1 uv run python scripts/mathematical_validation.py compare --output /tmp/math-numpy/fixtures
+JAMMA_FORCE_NUMPY_FALLBACK=1 uv run python scripts/mathematical_validation.py compare fixtures --output /tmp/math-numpy/fixtures
 
 # Generate fresh external references without overwriting committed evidence.
-uv run python scripts/mathematical_validation.py generate --gemma "$HOME/.local/bin/gemma" --output /tmp/new-reference
-uv run python scripts/mathematical_validation.py generate-pipeline --gemma "$HOME/.local/bin/gemma" --output /tmp/new-pipeline-reference
-uv run python scripts/mathematical_validation.py generate-loco --gemma "$HOME/.local/bin/gemma" --output /tmp/new-loco-reference
-uv run python scripts/mathematical_validation.py generate-weights --gemma "$HOME/.local/bin/gemma" --output /tmp/new-weight-reference
+uv run python scripts/mathematical_validation.py generate fixtures --gemma "$HOME/.local/bin/gemma" --output /tmp/new-reference
+uv run python scripts/mathematical_validation.py generate pipeline --gemma "$HOME/.local/bin/gemma" --output /tmp/new-pipeline-reference
+uv run python scripts/mathematical_validation.py generate loco --gemma "$HOME/.local/bin/gemma" --output /tmp/new-loco-reference
+uv run python scripts/mathematical_validation.py generate weights --gemma "$HOME/.local/bin/gemma" --output /tmp/new-weight-reference
 ```
 
 The driver records software versions, actual BLAS/LAPACK identity, compiler,
 source and binary hashes, configuration, raw outputs and field errors.
-CI uploads bundles for each test-matrix platform and the forced NumPy job.
+The tests write their compared outputs and verdicts to `JAMMA_MATH_EVIDENCE_DIR`
+when set, or to pytest temporary directories. CI uploads those same bundles
+for each platform and the forced NumPy job.
 The always-running `numerical-validation` context requires the platform jobs
 and production mutation smoke checks to pass. The slow workflow runs all
 production mutations.
@@ -115,9 +114,9 @@ production mutations.
 ## Remaining scope
 
 The declared matrix does not cover standardized internal kinship, HWE and
-SNP-list interactions, empty LOCO partitions, changed-input cache invalidation against fresh external output,
-all chunk widths, every in-memory output route, or rank-deficient negative cases
-through the complete external pipeline. Existing focused regression tests cover
+SNP-list interactions, empty LOCO partitions, changed-input cache invalidation
+against fresh external output, all chunk widths, every in-memory output route,
+or rank-deficient negative cases through the complete external pipeline. Existing focused regression tests cover
 some of these behaviors; they do not replace missing end-to-end evidence.
 
 Backend verdicts apply to the software and hardware recorded in each bundle.

@@ -29,8 +29,8 @@ def test_loco_reference_is_hash_verified(case):
 
 @pytest.mark.tier1
 @pytest.mark.parametrize("case", load_loco_manifest()["cases"], ids=lambda c: c["id"])
-def test_loco_cold_and_warm_each_match_gemma(case, tmp_path):
-    result = compare_loco(tmp_path / case["id"], case_ids=(case["id"],))
+def test_loco_cold_and_warm_each_match_gemma(case, math_evidence_dir):
+    result = compare_loco(math_evidence_dir, case_ids=(case["id"],))
     assert result["status"] == "VERIFIED", result
     assert [run["route"] for run in result["cases"][0]["runs"]] == ["cold", "warm"]
     assert result["cases"][0]["runs"][1]["cache_reused"] is True

@@ -1,19 +1,10 @@
-"""Weight file I/O and kinship weight application.
+"""Read GEMMA individual weights and apply kinship and observation transforms.
 
-This module provides reading of GEMMA-format individual weight files and
-vectorized application of individual weights to kinship matrices.
-
-GEMMA individual weight file format (-widv):
-- Single column of floating-point weights, one per line
-- No header row
-- Row order matches .fam file (positional matching)
-- Positive weights scale the kinship matrix; zero/negative weights zero out entries
-
-The weight application transforms the kinship matrix as:
-    K[i,j] /= sqrt(w_i * w_j) for positive weights
-    K[i,j] = 0 when either weight <= 0
-
-This matches GEMMA's gemma.cpp behavior (lines ~2635-2655).
+A ``-widv`` file has one weight per line, no header, in FAM sample order.
+For positive weights, divide centered K[i,j] by sqrt(w_i * w_j), then
+multiply each eigenvector row by sqrt(w_i) before association rotations.
+Nonpositive weights zero the corresponding kinship rows and columns and
+observation scales. Persist raw eigenvectors before scaling their rows.
 """
 
 from pathlib import Path
@@ -64,12 +55,29 @@ def read_weight_file(path: Path) -> np.ndarray:
     return weights
 
 
+def read_analysis_weights(
+    path: Path, n_samples: int, valid_indices: np.ndarray | None
+) -> np.ndarray:
+    """Read weights and return them in analyzed-sample order."""
+    weights = read_weight_file(path)
+    if len(weights) != n_samples:
+        raise ValueError(
+            f"Weight file has {len(weights)} entries but expected "
+            f"{n_samples} (matching sample count)"
+        )
+    return weights if valid_indices is None else weights[valid_indices]
+
+
+def _row_scale(weights: np.ndarray) -> np.ndarray:
+    return np.sqrt(np.maximum(weights, 0.0))
+
+
 def apply_individual_weights(K: np.ndarray, weights: np.ndarray) -> np.ndarray:
     """Apply individual weights to kinship matrix in-place.
 
     Transforms kinship via K[i,j] /= sqrt(w_i * w_j) for positive weights,
     and zeros out entries where either weight is non-positive. This matches
-    GEMMA's exact behavior (gemma.cpp lines ~2635-2655).
+    GEMMA's individual-weight transform.
 
     Uses two-pass row/column broadcasting to avoid allocating an n x n
     temporary matrix. At 100k samples the outer product would be 80GB;
@@ -101,8 +109,7 @@ def apply_individual_weights(K: np.ndarray, weights: np.ndarray) -> np.ndarray:
         )
 
     # Compute sqrt of positive weights; non-positive get 0
-    sqrt_w = np.sqrt(np.maximum(weights, 0.0))
-    sqrt_w[invalid] = 0.0
+    sqrt_w = _row_scale(weights)
 
     # Two-pass in-place scaling: row then column (no n x n temporary)
     # Pass 1: K[i,j] /= sqrt(w_i) for each row i
@@ -131,6 +138,5 @@ def apply_weights_to_eigenvectors(
             f"Weight array has {weights.shape[0]} entries but eigenvectors have "
             f"{eigenvectors.shape[0]} sample rows"
         )
-    row_scale = np.sqrt(np.maximum(weights, 0.0))
-    eigenvectors *= row_scale[:, None]
+    eigenvectors *= _row_scale(weights)[:, None]
     return eigenvectors

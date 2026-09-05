@@ -8,6 +8,7 @@ import pytest
 from jamma.io.weight import (
     apply_individual_weights,
     apply_weights_to_eigenvectors,
+    read_analysis_weights,
     read_weight_file,
 )
 
@@ -87,6 +88,27 @@ class TestReadWeightFile:
 
         with pytest.raises(ValueError, match=str(weight_file)):
             read_weight_file(weight_file)
+
+    def test_read_analysis_weights_selects_samples_in_analysis_order(
+        self, tmp_path: Path
+    ) -> None:
+        weight_file = tmp_path / "weights.txt"
+        weight_file.write_text("1.0\n2.0\n3.0\n4.0\n")
+
+        weights = read_analysis_weights(
+            weight_file, 4, np.array([0, 2, 3], dtype=np.intp)
+        )
+
+        np.testing.assert_array_equal(weights, [1.0, 3.0, 4.0])
+
+    def test_read_analysis_weights_rejects_wrong_sample_count(
+        self, tmp_path: Path
+    ) -> None:
+        weight_file = tmp_path / "weights.txt"
+        weight_file.write_text("1.0\n2.0\n3.0\n")
+
+        with pytest.raises(ValueError, match="3 entries but expected 4"):
+            read_analysis_weights(weight_file, 4, None)
 
 
 class TestApplyIndividualWeights:

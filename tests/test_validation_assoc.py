@@ -415,6 +415,21 @@ class TestCompareAssocResults:
         assert comparison.passed is False
         assert comparison.beta.passed is False
 
+    def test_numeric_failure_reports_every_snp_index(self):
+        """A column result identifies every failing association row."""
+        actual = [
+            _make_assoc(rs=f"rs{i}", beta=beta)
+            for i, beta in enumerate((10.0, 2.0, 30.0, 4.0))
+        ]
+        expected = [
+            _make_assoc(rs=f"rs{i}", beta=beta)
+            for i, beta in enumerate((1.0, 2.0, 3.0, 4.0))
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.beta.failed_indices == (0, 2)
+
     def test_snp_count_mismatch(self):
         """Different number of SNPs populates the early-return skip fields."""
         actual = [_make_assoc(rs="rs1")]
@@ -428,6 +443,7 @@ class TestCompareAssocResults:
         assert comparison.beta.passed is False
         assert "SNP count mismatch" in comparison.beta.message
         assert comparison.beta.max_abs_diff == float("inf")
+        assert comparison.beta.failed_indices == (1,)
 
         # All other Wald-always-present fields must carry the skip result
         skip_substr = "Skipped due to SNP count mismatch"
@@ -740,7 +756,40 @@ class TestCompareAssocResults:
 
         assert comparison.l_remle.passed is False
         assert comparison.l_remle.worst_location == (1,)
+        assert comparison.l_remle.failed_indices == (1,)
         assert "at (1,)" in comparison.l_remle.message
+
+    def test_lambda_failures_map_every_filtered_index_to_original_rows(self):
+        """Boundary filtering preserves all failing association row indices."""
+        actual = [
+            _make_assoc(rs="rs0", l_remle=1e-5),
+            _make_assoc(rs="rs1", l_remle=10.0),
+            _make_assoc(rs="rs2", l_remle=1e-5),
+            _make_assoc(rs="rs3", l_remle=30.0),
+        ]
+        expected = [
+            _make_assoc(rs="rs0", l_remle=1e-5),
+            _make_assoc(rs="rs1", l_remle=1.0),
+            _make_assoc(rs="rs2", l_remle=1e-5),
+            _make_assoc(rs="rs3", l_remle=3.0),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.l_remle.failed_indices == (1, 3)
+
+    @pytest.mark.parametrize("field", ["l_remle", "l_mle"])
+    def test_lambda_class_and_numeric_failures_are_both_reported(self, field):
+        actual = [
+            _make_assoc(rs=f"rs{i}", p_lrt=0.2, p_score=0.3, **{field: value})
+            for i, value in enumerate((1e-5, 10.0, 1e-5))
+        ]
+        expected = [
+            _make_assoc(rs=f"rs{i}", p_lrt=0.2, p_score=0.3, **{field: value})
+            for i, value in enumerate((1.0, 1.0, 1e-5 * (1 + 1e-5)))
+        ]
+        comparison = compare_assoc_results(actual, expected)
+        assert getattr(comparison, field).failed_indices == (0, 1)
 
     def test_lambda_class_mismatch_reports_worst_difference(self):
         """Class mismatch diagnostics keep the largest full-column error."""
@@ -758,6 +807,7 @@ class TestCompareAssocResults:
         assert comparison.l_remle.passed is False
         assert comparison.l_remle.max_abs_diff == pytest.approx(99999.0)
         assert comparison.l_remle.worst_location == (1,)
+        assert comparison.l_remle.failed_indices == (0, 1)
 
     def test_remle_matching_upper_values_use_strict_tolerance(self):
         """REML keeps its prior policy of no upper-bound magnitude exemption."""

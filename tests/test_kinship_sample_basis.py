@@ -262,10 +262,12 @@ def test_pipeline_kinship_uses_gemma_filter_and_centring_populations(
     analysed_centred = centred[valid] - centred[valid].mean(axis=0)
     expected = analysed_centred @ analysed_centred.T / selected.sum()
     weight_file = None
+    selected_weights = None
     if weighted:
         weights = np.linspace(0.5, 2.0, 80)
         weight_file = tmp_path / "weights.txt"
         np.savetxt(weight_file, weights)
+        selected_weights = weights[valid]
         expected /= np.sqrt(weights[valid, None] * weights[None, valid])
     runner = PipelineRunner(
         PipelineConfig(
@@ -280,7 +282,9 @@ def test_pipeline_kinship_uses_gemma_filter_and_centring_populations(
             no_telemetry=True,
         )
     )
-    actual = runner._load_kinship_from_source(ComputedKinship(None), 80, valid)
+    actual = runner._load_kinship_from_source(
+        ComputedKinship(None), 80, valid, selected_weights
+    )
     np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
 
     if save:

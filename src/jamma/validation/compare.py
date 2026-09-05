@@ -30,6 +30,7 @@ class ComparisonResult:
         max_abs_diff: Maximum absolute difference found.
         max_rel_diff: Maximum relative difference found (inf if expected was 0).
         worst_location: Index tuple of the worst mismatch, or None if passed.
+        failed_indices: Flat indices of every value outside tolerance.
         message: Human-readable description of the result.
 
     Example:
@@ -42,6 +43,7 @@ class ComparisonResult:
     max_abs_diff: float
     max_rel_diff: float
     worst_location: tuple[int, ...] | None
+    failed_indices: tuple[int, ...]
     message: str
 
 
@@ -80,6 +82,7 @@ def compare_arrays(
             max_abs_diff=np.inf,
             max_rel_diff=np.inf,
             worst_location=None,
+            failed_indices=tuple(range(max(actual.size, expected.size))),
             message=(
                 f"{name} shape mismatch: "
                 f"actual {actual.shape} vs expected {expected.shape}"
@@ -109,6 +112,7 @@ def compare_arrays(
             max_abs_diff=max_abs_diff,
             max_rel_diff=max_rel_diff,
             worst_location=None,
+            failed_indices=(),
             message=(
                 f"{name} comparison passed "
                 f"(max abs diff: {max_abs_diff:.2e}, max rel diff: {max_rel_diff:.2e})"
@@ -130,12 +134,19 @@ def compare_arrays(
             rel_diff = abs_diff / np.abs(expected)
             rel_diff = np.where(np.isfinite(rel_diff), rel_diff, np.inf)
         max_rel_diff = float(np.max(rel_diff))
+        failed_indices = tuple(
+            int(i)
+            for i in np.flatnonzero(
+                ~np.isclose(actual, expected, rtol=rtol, atol=atol, equal_nan=True)
+            )
+        )
 
         return ComparisonResult(
             passed=False,
             max_abs_diff=max_abs_diff,
             max_rel_diff=max_rel_diff,
             worst_location=worst_idx,
+            failed_indices=failed_indices,
             message=f"{name} comparison failed at {worst_idx}: "
             f"actual={actual[worst_idx]:.10e}, expected={expected[worst_idx]:.10e}, "
             f"abs_diff={abs_diff[worst_idx]:.2e} (rtol={rtol}, atol={atol})",
@@ -381,6 +392,7 @@ def _skipped_result(message: str) -> ComparisonResult:
         max_abs_diff=0.0,
         max_rel_diff=0.0,
         worst_location=None,
+        failed_indices=(),
         message=message,
     )
 
@@ -429,6 +441,10 @@ def _compare_lambdas(
     paired_nan = np.isnan(actual_arr) & np.isnan(expected_arr)
     invalid = (actual_classes == "invalid") | (expected_classes == "invalid")
     class_mismatch = (actual_classes != expected_classes) | (invalid & ~paired_nan)
+    matching_boundary = (actual_classes == "lower") & (expected_classes == "lower")
+    if exempt_upper:
+        matching_boundary |= (actual_classes == "upper") & (expected_classes == "upper")
+    exempt = matching_boundary | paired_nan
     if np.any(class_mismatch):
         mismatch_indices = np.flatnonzero(class_mismatch)
         mismatched_actual = actual_arr[mismatch_indices]
@@ -446,11 +462,17 @@ def _compare_lambdas(
             max_abs_diff = np.inf
             max_rel_diff = np.inf
         index = int(mismatch_indices[local_worst])
+        numeric_failure = ~exempt & ~np.isclose(
+            actual_arr, expected_arr, rtol=rtol, atol=atol, equal_nan=True
+        )
         return ComparisonResult(
             passed=False,
             max_abs_diff=max_abs_diff,
             max_rel_diff=max_rel_diff,
             worst_location=(index,),
+            failed_indices=tuple(
+                int(i) for i in np.flatnonzero(class_mismatch | numeric_failure)
+            ),
             message=(
                 f"{name} optimizer-bound class mismatch at ({index},): "
                 f"{actual_classes[index]}/{expected_classes[index]} "
@@ -458,10 +480,6 @@ def _compare_lambdas(
             ),
         )
 
-    matching_boundary = actual_classes == "lower"
-    if exempt_upper:
-        matching_boundary |= actual_classes == "upper"
-    exempt = matching_boundary | paired_nan
     if np.all(exempt):
         lower_count = int(np.sum(actual_classes == "lower"))
         upper_count = int(np.sum(actual_classes == "upper"))
@@ -494,6 +512,9 @@ def _compare_lambdas(
                 actual_arr[original_index] - expected_arr[original_index]
             )
             result.worst_location = (original_index,)
+            result.failed_indices = tuple(
+                int(i) for i in np.flatnonzero(keep)[list(result.failed_indices)]
+            )
             result.message = (
                 f"{name} comparison failed at ({original_index},): "
                 f"actual={actual_arr[original_index]:.10e}, "
@@ -553,6 +574,9 @@ def compare_assoc_results(
             max_abs_diff=np.inf,
             max_rel_diff=np.inf,
             worst_location=None,
+            failed_indices=tuple(
+                range(min(len(actual), len(expected)), max(len(actual), len(expected)))
+            ),
             message=f"SNP count mismatch: {len(actual)} vs {len(expected)}",
         )
         skip_result = _skipped_result("Skipped due to SNP count mismatch")

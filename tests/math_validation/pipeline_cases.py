@@ -4,28 +4,32 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import shutil
-import subprocess
 import sys
-from contextlib import contextmanager
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 
-from scripts.mathematical_validation import (
-    compare_files,
+from tests.math_validation.compare import compare_files, read_rows
+from tests.math_validation.evidence import (
+    bundle_status,
     environment,
-    read_rows,
+    run_pipeline,
     write_json,
 )
-from tests.math_validation.dense_oracle import all_test_statistics, optimize
 from tests.math_validation.fixtures import (
     EXTERNAL_HEADERS,
+)
+from tests.math_validation.oracle_io import write_oracle_assoc
+from tests.math_validation.reference import (
     copy_reference,
     digest,
+    gemma_binary,
     run_command,
+    snapshot_files,
+    validate_manifest,
+    verify_reference_dir,
+    write_plink,
+    write_provenance,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,17 +38,9 @@ REFERENCE = ROOT / "tests/fixtures/mathematical_pipeline"
 
 
 def load_pipeline_manifest(path: Path = MANIFEST) -> dict:
-    manifest = json.loads(path.read_text())
-    if manifest["schema_version"] != 1 or manifest["reference_version"] != "0.98.5":
-        raise ValueError("unsupported pipeline manifest")
-    ids = [case["id"] for case in manifest["cases"]]
-    if len(ids) != len(set(ids)) or any(
-        not re.fullmatch(r"[a-z0-9-]+", i) for i in ids
-    ):
-        raise ValueError("pipeline case IDs must be unique safe directory names")
-    if {case["mode"] for case in manifest["cases"]} != set(EXTERNAL_HEADERS):
-        raise ValueError("pipeline manifest must contain modes 1 through 4")
-    return manifest
+    return validate_manifest(
+        path, label="pipeline", required_modes=set(EXTERNAL_HEADERS)
+    )
 
 
 def _arrays() -> dict[str, np.ndarray | list[str]]:
@@ -83,32 +79,12 @@ def _arrays() -> dict[str, np.ndarray | list[str]]:
 
 
 def _write_plink(directory: Path, arrays: dict) -> None:
-    prefix = directory / "tiny"
-    x = arrays["genotypes"]
-    y = arrays["phenotype"]
-    prefix.with_suffix(".fam").write_text(
-        "".join(f"F{i}\tI{i}\t0\t0\t0\t{float(y[i]):.17g}\n" for i in range(len(y)))
-    )
-    prefix.with_suffix(".bim").write_text(
-        "".join(f"1\tboundary{j}\t0\t{100 + j}\tA\tG\n" for j in range(x.shape[1]))
-    )
-    bed = bytearray([0x6C, 0x1B, 0x01])
-    codes = {0: 3, 1: 2, 2: 0}
-    for j in range(x.shape[1]):
-        for start in range(0, x.shape[0], 4):
-            byte = 0
-            for offset, dosage in enumerate(x[start : start + 4, j]):
-                code = 1 if np.isnan(dosage) else codes[int(dosage)]
-                byte |= code << (2 * offset)
-            bed.append(byte)
-    prefix.with_suffix(".bed").write_bytes(bed)
-    covariates = np.asarray(arrays["covariates"])
-    (directory / "covariates.txt").write_text(
-        "".join(
-            "\t".join("NA" if np.isnan(value) else f"{value:.17g}" for value in row)
-            + "\n"
-            for row in covariates
-        )
+    write_plink(
+        directory,
+        genotypes=np.asarray(arrays["genotypes"]),
+        phenotype=np.asarray(arrays["phenotype"]),
+        snp_ids=arrays["snp_ids"],
+        covariates=np.asarray(arrays["covariates"]),
     )
 
 
@@ -172,13 +148,7 @@ def _selected_model(
 def generate_external(destination: Path, gemma: Path | str) -> None:
     """Generate immutable references; comparison never calls this function."""
     manifest = load_pipeline_manifest()
-    binary = Path(shutil.which(str(gemma)) or gemma).expanduser().resolve(strict=True)
-    version_run = subprocess.run(
-        [str(binary), "-h"], capture_output=True, text=True, check=True, timeout=15
-    )
-    version = version_run.stdout + version_run.stderr
-    if not re.search(r"GEMMA\s+0\.98\.5(?:\s|$)", version):
-        raise ValueError("reference executable must identify itself as GEMMA 0.98.5")
+    binary, version = gemma_binary(gemma)
     destination.mkdir(parents=True, exist_ok=False)
     arrays = _arrays()
     for case in manifest["cases"]:
@@ -235,48 +205,32 @@ def generate_external(destination: Path, gemma: Path | str) -> None:
             directory,
             "gemma",
         )
-        provenance = {
-            "schema_version": 1,
-            "executable": str(binary),
-            "executable_sha256": digest(binary),
-            "version": version,
-            "case": case,
-            "manifest": manifest,
-            "commands": {"kinship": gk, "association": assoc},
-            "generator_sha256": digest(Path(__file__)),
-            "files": {p.name: digest(p) for p in directory.iterdir() if p.is_file()},
-        }
-        (directory / "provenance.json").write_text(
-            json.dumps(provenance, indent=2) + "\n"
+        write_provenance(
+            directory,
+            schema_version=1,
+            executable=str(binary),
+            executable_sha256=digest(binary),
+            version=version,
+            case=case,
+            manifest=manifest,
+            commands={"kinship": gk, "association": assoc},
+            generator_sha256=digest(Path(__file__)),
         )
 
 
 def require_pipeline_reference(case: dict, root: Path = REFERENCE) -> tuple[Path, dict]:
     directory = root / case["id"]
-    provenance = json.loads((directory / "provenance.json").read_text())
-    if provenance["case"] != case or provenance["manifest"] != load_pipeline_manifest():
-        raise ValueError("pipeline case differs from immutable provenance")
-    for name, expected in provenance["files"].items():
-        if Path(name).name != name or digest(directory / name) != expected:
-            raise ValueError(f"pipeline reference hash mismatch: {name}")
+    provenance = verify_reference_dir(
+        directory,
+        expected={"case": case, "manifest": load_pipeline_manifest()},
+        label="pipeline reference",
+    )
     return directory, provenance
 
 
 def _oracle_rows(model: dict, mode: int, destination: Path) -> list[dict]:
-    import csv
-
-    k = np.asarray(model["kinship"])
-    x = np.asarray(model["genotypes"])
-    y = np.asarray(model["phenotype"])
-    w = np.asarray(model["covariates"])
-    rows = []
-    for j, snp in enumerate(model["selected_snp_ids"]):
-        fit = optimize(k, w, x[:, j], y)
-        if mode != 1:
-            fit.update(all_test_statistics(k, w, x[:, j], y))
-        if mode == 3:
-            fit["beta"], fit["se"] = fit["score_beta"], fit["score_se"]
-        row = {
+    def metadata(j, snp):
+        return {
             "chr": "1",
             "rs": snp,
             "ps": str(100 + int(snp.removeprefix("boundary"))),
@@ -285,38 +239,8 @@ def _oracle_rows(model: dict, mode: int, destination: Path) -> list[dict]:
             "allele0": "G",
             "af": model["selected_af"][j] / 2,
         }
-        row.update({field: fit[field] for field in EXTERNAL_HEADERS[mode][7:]})
-        rows.append(row)
-    with destination.open("w") as stream:
-        writer = csv.DictWriter(
-            stream, fieldnames=EXTERNAL_HEADERS[mode], delimiter="\t"
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-    return rows
 
-
-@contextmanager
-def _observe_pipeline_kinship():
-    """Capture the matrix and sample indices returned to the real pipeline."""
-    observed: dict[str, np.ndarray] = {}
-    prior = sys.getprofile()
-
-    def profile(frame, event, arg):
-        if event == "return" and frame.f_code.co_name == "_load_kinship_from_source":
-            observed["kinship"] = np.array(arg, copy=True)
-            indices = frame.f_locals["valid_indices"]
-            observed["valid_indices"] = (
-                np.arange(frame.f_locals["n_samples"])
-                if indices is None
-                else np.array(indices, copy=True)
-            )
-
-    sys.setprofile(profile)
-    try:
-        yield observed
-    finally:
-        sys.setprofile(prior)
+    return write_oracle_assoc(model, destination, mode, metadata=metadata)
 
 
 def compare_pipeline(
@@ -326,10 +250,7 @@ def compare_pipeline(
     case_ids: tuple[str, ...] | None = None,
 ) -> dict:
     """Compare mandatory pipeline routes with immutable external evidence."""
-    from loguru import logger
-
-    from jamma.pipeline import PipelineRunner
-    from jamma.pipeline_config import PipelineConfig
+    from jamma.lmm.eigen_io import read_eigen_files
 
     manifest = load_pipeline_manifest()
     backends = ("numpy", "numpy-streaming") if backends is None else tuple(backends)
@@ -377,33 +298,17 @@ def compare_pipeline(
             for save_kinship in (False, True):
                 route = f"{backend}-save-{str(save_kinship).lower()}"
                 out = destination / f"{case['id']}-{route}"
-                config = PipelineConfig(
-                    bfile=source / "tiny",
+                result, messages, serialized_config = run_pipeline(
+                    source,
+                    out,
                     covariate_file=source / "covariates.txt",
                     lmm_mode=case["mode"],
                     maf=manifest["maf"],
                     miss=manifest["miss"],
                     backend="numpy" if backend == "numpy" else "numpy-streaming",
-                    output_dir=out,
-                    output_prefix="jamma",
                     save_kinship=save_kinship,
-                    legacy_text=True,
-                    check_memory=False,
-                    show_progress=False,
-                    no_telemetry=True,
+                    write_eigen=True,
                 )
-                messages: list[str] = []
-                sink = logger.add(
-                    lambda message, sink_messages=messages: sink_messages.append(
-                        str(message)
-                    ),
-                    format="{message}",
-                )
-                try:
-                    with _observe_pipeline_kinship() as observed:
-                        result = PipelineRunner(config).run()
-                finally:
-                    logger.remove(sink)
                 comparison = compare_files(
                     result.assoc_path,
                     source / "gemma.assoc.txt",
@@ -414,14 +319,18 @@ def compare_pipeline(
                 actual_ids = [
                     row["rs"] for row in read_rows(result.assoc_path, case["mode"])
                 ]
-                actual_indices = observed.get("valid_indices", np.array([], dtype=int))
+                actual_indices = np.asarray(result.analyzed_sample_indices)
                 actual_samples = [f"F{i}:I{i}" for i in actual_indices]
-                actual_k = observed.get("kinship")
+                eigenvalues, eigenvectors = read_eigen_files(
+                    out / "jamma.eigenD.txt",
+                    out / "jamma.eigenU.txt",
+                    n_samples=result.n_samples,
+                )
+                actual_k = (eigenvectors * eigenvalues) @ eigenvectors.T
                 expected_k = np.asarray(model["kinship"])
                 gemma_k = np.asarray(model["gemma_centered_analysis_kinship"])
                 stage_ok = (
-                    actual_k is not None
-                    and actual_samples == model["selected_sample_ids"]
+                    actual_samples == model["selected_sample_ids"]
                     and actual_ids == model["selected_snp_ids"]
                     and result.n_samples == len(model["selected_sample_ids"])
                     and np.allclose(actual_k, expected_k, rtol=1e-8, atol=1e-10)
@@ -438,10 +347,7 @@ def compare_pipeline(
                         "route": route,
                         "backend": backend,
                         "save_kinship": save_kinship,
-                        "pipeline_config": {
-                            key: str(value) if isinstance(value, Path) else value
-                            for key, value in asdict(config).items()
-                        },
+                        "pipeline_config": serialized_config,
                         "association": comparison,
                         "stage_boundaries": {
                             "actual_selected_sample_ids": actual_samples,
@@ -457,11 +363,7 @@ def compare_pipeline(
                             ],
                         },
                         "logs": messages,
-                        "files": {
-                            str(path.relative_to(out)): digest(path)
-                            for path in sorted(out.rglob("*"))
-                            if path.is_file()
-                        },
+                        "files": snapshot_files(out),
                     }
                 )
         bundle["cases"].append(
@@ -481,10 +383,6 @@ def compare_pipeline(
                 "runs": runs,
             }
         )
-    bundle["status"] = (
-        "VERIFIED"
-        if statuses and all(status == "VERIFIED" for status in statuses)
-        else "NOT VERIFIED"
-    )
+    bundle["status"] = bundle_status(statuses)
     write_json(destination / "bundle.json", bundle)
     return bundle

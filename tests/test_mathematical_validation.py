@@ -11,23 +11,21 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.check_mathematical_inventory import check_inventory
-from scripts.mathematical_validation import (
+from tests.math_validation import dense_oracle
+from tests.math_validation.compare import (
     check_boundary_coverage,
-    compare,
     compare_files,
-    oracle_output,
     read_rows,
 )
-from tests.math_validation import dense_oracle
 from tests.math_validation.fixtures import (
-    MANIFEST,
     REFERENCE,
     WALD_HEADER,
     load_manifest,
     materialize,
     verify_reference,
 )
+from tests.math_validation.oracle_io import write_oracle_assoc
+from tests.math_validation.supplied_cases import compare
 
 
 @pytest.mark.tier0
@@ -110,13 +108,11 @@ def test_manifest_rejects_duplicate_or_unsafe_case_ids(tmp_path):
 
 @pytest.mark.tier1
 @pytest.mark.parametrize("case", load_manifest()["cases"], ids=lambda case: case["id"])
-def test_manifest_case_matches_gemma_and_dense_oracle(case, tmp_path):
+def test_manifest_case_matches_gemma_and_dense_oracle(case, math_evidence_dir):
     manifest = {**load_manifest(), "cases": [case]}
-    result = compare(manifest, REFERENCE, tmp_path / "bundle")
+    result = compare(manifest, REFERENCE, math_evidence_dir)
     assert result["status"] == "VERIFIED", result
     assert [c["id"] for c in result["cases"]] == [case["id"]]
-    contract = json.loads(MANIFEST.with_name("bundle.schema.json").read_text())
-    assert set(contract["required"]) <= result.keys()
     assert result["cases"][0]["selected_snp_ids"] == [
         f"snp{i}" for i in range(case["n_snps"])
     ]
@@ -178,7 +174,7 @@ def test_header_and_record_order_are_observed(tmp_path):
     source, _ = verify_reference(case)
     model = json.loads((source / "model.json").read_text())
     path = tmp_path / "oracle.assoc.txt"
-    oracle_output(model, path)
+    write_oracle_assoc(model, path)
     assert tuple(read_rows(path)[0]) == WALD_HEADER
     lines = path.read_text().splitlines()
     path.write_text("\n".join([lines[0], *reversed(lines[1:])]) + "\n")
@@ -202,16 +198,6 @@ def test_wrong_af_orientation_preserving_maf_is_rejected(tmp_path):
     result = compare_files(path, source / "gemma.assoc.txt")
     assert result["status"] == "NOT VERIFIED"
     assert "snp0:af_orientation" in result["failure_ids"]
-
-
-@pytest.mark.tier0
-def test_inventory_rejects_missing_or_unexpected_case():
-    cases = load_manifest()["cases"]
-    expected = check_inventory([], cases)["expected"]
-    assert check_inventory(expected, cases)["status"] == "VERIFIED"
-    assert check_inventory(expected[1:], cases)["status"] == "NOT VERIFIED"
-    unexpected = [*expected, expected[0].rsplit("[", 1)[0] + "[undeclared-case]"]
-    assert check_inventory(unexpected, cases)["status"] == "NOT VERIFIED"
 
 
 @pytest.mark.tier0

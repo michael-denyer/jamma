@@ -123,7 +123,7 @@ def _wrap(name: str, fn: Any) -> Any:
             # lived at that address.
             _workspaces[id(result)] = f"{name}|{args_digest}"
         if isinstance(result, dict):
-            for field, value in sorted(result.items()):
+            for field, value in result.items():
                 _records.add(f"{name}.{field}\t{args_digest}\t{_digest(value)}")
         else:
             _records.add(f"{name}\t{args_digest}\t{_digest(result)}")

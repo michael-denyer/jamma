@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
+
 from jamma.lmm.schema import (
     DEFAULT_L_MAX,
     DEFAULT_L_MIN,
@@ -305,6 +307,8 @@ class PipelineResult:
             multi-phenotype runs; use phenotype_results for those estimates.
         pve_se: Standard error of PVE from REML second derivative delta method.
             None if not computed or likelihood surface is flat.
+        analyzed_sample_indices: Zero-based input sample indices retained after
+            phenotype and covariate filtering, in analysis order.
     """
 
     associations: list[AssocResult]
@@ -317,6 +321,9 @@ class PipelineResult:
     pve_estimate: float | None = None
     pve_se: float | None = None
     phenotype_results: list[PhenotypeResult] = field(default_factory=list)
+    analyzed_sample_indices: np.ndarray = field(
+        default_factory=lambda: np.array([], dtype=np.intp)
+    )
 
 
 @dataclass

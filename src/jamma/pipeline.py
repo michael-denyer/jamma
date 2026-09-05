@@ -316,6 +316,7 @@ class PipelineRunner:
         source: KinshipSource,
         n_samples: int,
         valid_indices: np.ndarray | None,
+        weights: np.ndarray | None,
     ) -> np.ndarray:
         """Load or compute the kinship matrix over the valid samples.
 
@@ -324,7 +325,7 @@ class PipelineRunner:
         ``pipeline_plan.resolve_kinship_source`` so it cannot drift from
         the resolver's choice.
 
-        If weight_file is configured, applies individual weights to K via
+        If weights are provided, applies individual weights to K via
         K[i,j] /= sqrt(w_i * w_j) after centering the analysed matrix.
 
         If save_kinship is True, writes the kinship matrix to the output
@@ -339,6 +340,7 @@ class PipelineRunner:
             n_samples: Number of samples (for validation of loaded kinship).
             valid_indices: Sample indices to keep, or None for all samples.
                 Must be sorted, unique, and within [0, n_samples).
+            weights: Weights already selected into analyzed-sample order, or None.
 
         Returns:
             Kinship matrix of shape (n_out, n_out) where n_out = len(valid_indices)
@@ -385,30 +387,13 @@ class PipelineRunner:
         center_kinship(K)
 
         # Apply individual weights before eigendecomposition
-        if self.config.weight_file is not None:
+        if weights is not None:
             from jamma.io.weight import apply_individual_weights
 
-            weights = self._analysis_weights(n_samples, valid_indices)
             logger.info(f"Applying individual weights from {self.config.weight_file}")
             K = apply_individual_weights(K, weights)
 
         return K
-
-    def _analysis_weights(
-        self, n_samples: int, valid_indices: np.ndarray | None
-    ) -> np.ndarray:
-        """Load residual weights in the exact analyzed-sample order."""
-        from jamma.io.weight import read_weight_file
-
-        if self.config.weight_file is None:
-            raise ValueError("analysis weights requested without a weight file")
-        weights = read_weight_file(self.config.weight_file)
-        if len(weights) != n_samples:
-            raise ValueError(
-                f"Weight file has {len(weights)} entries but expected "
-                f"{n_samples} (matching sample count)"
-            )
-        return weights if valid_indices is None else weights[valid_indices]
 
     def load_covariates(self, n_samples: int) -> np.ndarray | None:
         """Load and validate the covariate file.
@@ -523,6 +508,7 @@ class PipelineRunner:
         all_pheno_data, valid_mask, n_valid = self._load_phenotypes_and_intersect_masks(
             pheno_columns, covariates
         )
+        analyzed_sample_indices = np.flatnonzero(valid_mask)
 
         n_cvt = covariates.shape[1] if covariates is not None else 1
         log_dataset_banner(
@@ -576,6 +562,7 @@ class PipelineRunner:
                 phenotypes=phenotypes,
                 covariates=covariates,
                 valid_mask=valid_mask,
+                analyzed_sample_indices=analyzed_sample_indices,
                 assoc_path=assoc_path,
             )
 
@@ -586,19 +573,8 @@ class PipelineRunner:
         # Load/compute eigendecomposition ONCE (shared across phenotypes). The
         # kinship matrix is consumed here; runners use the eigen arrays directly.
         eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
-            analysis, n_samples, n_valid, valid_mask
+            analysis, n_samples, n_valid, analyzed_sample_indices
         )
-        if self.config.weight_file is not None:
-            from jamma.io.weight import apply_weights_to_eigenvectors
-
-            # GEMMA -widv scales eigenvector rows after decomposing
-            # D^-1/2 K D^-1/2.  Existing rotations then apply D^1/2 to
-            # phenotype, covariates, and every genotype chunk.  Persisted
-            # eigenvectors were written above and remain orthonormal/raw.
-            weights = self._analysis_weights(
-                n_samples, None if np.all(valid_mask) else np.where(valid_mask)[0]
-            )
-            eigenvectors = apply_weights_to_eigenvectors(eigenvectors, weights)
         load_s = time.perf_counter() - t_start
 
         outcome = run_phenotype_loop(
@@ -633,6 +609,7 @@ class PipelineRunner:
             n_covariates=n_cvt,
             pve_estimate=outcome.pve,
             pve_se=outcome.pve_se,
+            analyzed_sample_indices=analyzed_sample_indices,
         )
         self._emit_telemetry(result, plan)
         return result
@@ -705,7 +682,7 @@ class PipelineRunner:
         analysis: StandardAnalysisPlan,
         n_samples: int,
         n_valid: int,
-        valid_mask: np.ndarray,
+        analyzed_sample_indices: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, float]:
         """Load or compute the shared eigendecomposition (once for all phenotypes).
 
@@ -739,10 +716,22 @@ class PipelineRunner:
                     "be ignored."
                 )
         else:
+            from jamma.io.weight import (
+                apply_weights_to_eigenvectors,
+                read_analysis_weights,
+            )
+
+            valid_indices = None if n_valid == n_samples else analyzed_sample_indices
+            weights = (
+                read_analysis_weights(self.config.weight_file, n_samples, valid_indices)
+                if self.config.weight_file is not None
+                else None
+            )
             K = self._load_kinship_from_source(
                 source.source,
                 n_samples,
-                valid_indices=None if np.all(valid_mask) else np.where(valid_mask)[0],
+                valid_indices=valid_indices,
+                weights=weights,
             )
             eigenvalues, eigenvectors = eigendecompose_kinship(
                 K, check_memory=self.config.check_memory
@@ -757,6 +746,11 @@ class PipelineRunner:
                 )
                 logger.info(f"Wrote eigenvalues to {d_path}")
                 logger.info(f"Wrote eigenvectors to {u_path}")
+            if weights is not None:
+                # GEMMA -widv scales eigenvector rows after decomposing
+                # D^-1/2 K D^-1/2. Persisted eigenvectors remain raw and
+                # orthonormal; rotations receive the observation transform.
+                eigenvectors = apply_weights_to_eigenvectors(eigenvectors, weights)
 
         kinship_s = time.perf_counter() - t_kinship
         return eigenvalues, eigenvectors, kinship_s
@@ -769,6 +763,7 @@ class PipelineRunner:
         phenotypes: np.ndarray,
         covariates: np.ndarray | None,
         valid_mask: np.ndarray,
+        analyzed_sample_indices: np.ndarray,
         assoc_path: Path,
     ) -> PipelineResult:
         """LOCO branch of the pipeline.
@@ -829,6 +824,7 @@ class PipelineRunner:
             n_covariates=n_cvt,
             pve_estimate=loco.pve,
             pve_se=loco.pve_se,
+            analyzed_sample_indices=analyzed_sample_indices,
         )
         self._emit_telemetry(result, plan)
         return result

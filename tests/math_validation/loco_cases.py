@@ -3,26 +3,31 @@
 from __future__ import annotations
 
 import json
-import re
-import shutil
-import subprocess
 import sys
-from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 
-from scripts.mathematical_validation import (
-    compare_files,
+from tests.math_validation.compare import compare_files, read_rows
+from tests.math_validation.evidence import (
+    bundle_status,
     environment,
-    read_rows,
+    run_pipeline,
     write_json,
 )
 from tests.math_validation.fixtures import (
     EXTERNAL_HEADERS,
+)
+from tests.math_validation.reference import (
     copy_reference,
     digest,
+    gemma_binary,
     run_command,
+    snapshot_files,
+    validate_manifest,
+    verify_reference_dir,
+    write_plink,
+    write_provenance,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,17 +36,7 @@ REFERENCE = ROOT / "tests/fixtures/mathematical_loco"
 
 
 def load_loco_manifest(path: Path = MANIFEST) -> dict:
-    manifest = json.loads(path.read_text())
-    if manifest["schema_version"] != 1 or manifest["reference_version"] != "0.98.5":
-        raise ValueError("unsupported LOCO manifest")
-    ids = [case["id"] for case in manifest["cases"]]
-    if len(ids) != len(set(ids)) or any(
-        not re.fullmatch(r"[a-z0-9-]+", case_id) for case_id in ids
-    ):
-        raise ValueError("LOCO case IDs must be unique safe directory names")
-    if {case["mode"] for case in manifest["cases"]} != set(EXTERNAL_HEADERS):
-        raise ValueError("LOCO manifest must contain modes 1 through 4")
-    return manifest
+    return validate_manifest(path, label="LOCO", required_modes=set(EXTERNAL_HEADERS))
 
 
 def _arrays() -> tuple[np.ndarray, np.ndarray, list[str], list[str]]:
@@ -57,25 +52,13 @@ def _arrays() -> tuple[np.ndarray, np.ndarray, list[str], list[str]]:
 
 def _write_inputs(directory: Path) -> dict:
     x, y, chromosomes, snps = _arrays()
-    prefix = directory / "tiny"
-    prefix.with_suffix(".fam").write_text(
-        "".join(f"F{i}\tI{i}\t0\t0\t0\t{y[i]:.17g}\n" for i in range(len(y)))
+    write_plink(
+        directory,
+        genotypes=x,
+        phenotype=y,
+        snp_ids=snps,
+        chromosomes=chromosomes,
     )
-    prefix.with_suffix(".bim").write_text(
-        "".join(
-            f"{chromosome}\t{snp}\t0\t{100 + j}\tA\tG\n"
-            for j, (chromosome, snp) in enumerate(zip(chromosomes, snps, strict=True))
-        )
-    )
-    bed = bytearray([0x6C, 0x1B, 0x01])
-    codes = {0: 3, 1: 2, 2: 0}
-    for j in range(x.shape[1]):
-        for start in range(0, x.shape[0], 4):
-            byte = 0
-            for offset, dosage in enumerate(x[start : start + 4, j]):
-                byte |= codes[int(dosage)] << (2 * offset)
-            bed.append(byte)
-    prefix.with_suffix(".bed").write_bytes(bed)
     by_chr = {
         chromosome: [
             snp
@@ -131,13 +114,7 @@ def _combine_outputs(directory: Path, mode: int) -> None:
 def generate_external(destination: Path, gemma: Path | str) -> None:
     """Generate per-chromosome GEMMA kinships and association references."""
     manifest = load_loco_manifest()
-    binary = Path(shutil.which(str(gemma)) or gemma).expanduser().resolve(strict=True)
-    version_run = subprocess.run(
-        [str(binary), "-h"], capture_output=True, text=True, check=True, timeout=15
-    )
-    version = version_run.stdout + version_run.stderr
-    if not re.search(r"GEMMA\s+0\.98\.5(?:\s|$)", version):
-        raise ValueError("reference executable must identify itself as GEMMA 0.98.5")
+    binary, version = gemma_binary(gemma)
     destination.mkdir(parents=True, exist_ok=False)
     for case in manifest["cases"]:
         directory = destination / case["id"]
@@ -202,39 +179,31 @@ def generate_external(destination: Path, gemma: Path | str) -> None:
                 )
             )
         _combine_outputs(directory, case["mode"])
-        provenance = {
-            "schema_version": 1,
-            "executable": str(binary),
-            "executable_sha256": digest(binary),
-            "version": version,
-            "manifest": manifest,
-            "case": case,
-            "commands": commands,
-            "generator_sha256": digest(Path(__file__)),
-            "files": {p.name: digest(p) for p in directory.iterdir() if p.is_file()},
-        }
-        (directory / "provenance.json").write_text(
-            json.dumps(provenance, indent=2) + "\n"
+        write_provenance(
+            directory,
+            schema_version=1,
+            executable=str(binary),
+            executable_sha256=digest(binary),
+            version=version,
+            manifest=manifest,
+            case=case,
+            commands=commands,
+            generator_sha256=digest(Path(__file__)),
         )
 
 
 def require_loco_reference(case: dict, root: Path = REFERENCE) -> tuple[Path, dict]:
     directory = root / case["id"]
-    provenance = json.loads((directory / "provenance.json").read_text())
-    if provenance["case"] != case or provenance["manifest"] != load_loco_manifest():
-        raise ValueError("LOCO case differs from immutable provenance")
-    for name, expected in provenance["files"].items():
-        if Path(name).name != name or digest(directory / name) != expected:
-            raise ValueError(f"LOCO reference hash mismatch: {name}")
+    provenance = verify_reference_dir(
+        directory,
+        expected={"case": case, "manifest": load_loco_manifest()},
+        label="LOCO reference",
+    )
     return directory, provenance
 
 
 def compare_loco(destination: Path, case_ids: tuple[str, ...] | None = None) -> dict:
     """Compare cold and proven-warm JAMMA LOCO runs independently with GEMMA."""
-    from loguru import logger
-
-    from jamma.pipeline import PipelineRunner
-    from jamma.pipeline_config import PipelineConfig
 
     manifest = load_loco_manifest()
     cases = [
@@ -262,30 +231,18 @@ def compare_loco(destination: Path, case_ids: tuple[str, ...] | None = None) -> 
         runs = []
         for route, write_eigen in (("cold", True), ("warm", False)):
             out = destination / f"{case['id']}-{route}"
-            config = PipelineConfig(
-                bfile=source / "tiny",
+            result, messages, serialized_config = run_pipeline(
+                source,
+                out,
                 lmm_mode=case["mode"],
                 maf=0,
                 miss=1,
                 backend="numpy-streaming",
-                output_dir=out,
                 output_prefix="study",
                 loco=True,
                 write_eigen=write_eigen,
                 eigen_dir=cache,
-                check_memory=False,
-                show_progress=False,
-                no_telemetry=True,
             )
-            messages = []
-            sink = logger.add(
-                lambda message, captured=messages: captured.append(str(message)),
-                format="{message}",
-            )
-            try:
-                result = PipelineRunner(config).run()
-            finally:
-                logger.remove(sink)
             comparison = compare_files(
                 result.assoc_path,
                 source / "gemma.assoc.txt",
@@ -308,17 +265,10 @@ def compare_loco(destination: Path, case_ids: tuple[str, ...] | None = None) -> 
                 {
                     "route": route,
                     "cache_reused": route == "warm" and reused,
-                    "pipeline_config": {
-                        key: str(value) if isinstance(value, Path) else value
-                        for key, value in asdict(config).items()
-                    },
+                    "pipeline_config": serialized_config,
                     "comparison": comparison,
                     "logs": messages,
-                    "files": {
-                        str(path.relative_to(out)): digest(path)
-                        for path in sorted(out.rglob("*"))
-                        if path.is_file()
-                    },
+                    "files": snapshot_files(out),
                 }
             )
         bundle["cases"].append(
@@ -337,10 +287,6 @@ def compare_loco(destination: Path, case_ids: tuple[str, ...] | None = None) -> 
                 "runs": runs,
             }
         )
-    bundle["status"] = (
-        "VERIFIED"
-        if statuses and all(status == "VERIFIED" for status in statuses)
-        else "NOT VERIFIED"
-    )
+    bundle["status"] = bundle_status(statuses)
     write_json(destination / "bundle.json", bundle)
     return bundle

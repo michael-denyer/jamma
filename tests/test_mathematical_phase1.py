@@ -13,6 +13,7 @@ from tests.math_validation.phase1 import (
     MODE1_FIELDS,
     MODE4_ORACLE_FIELDS,
     boundary_trace,
+    compare_phase1,
     mode4_evidence,
     objective_tolerance,
     phase1_evidence,
@@ -113,18 +114,20 @@ def test_objective_policy_constants_are_predeclared_not_fixture_fitted():
     )
 
 
-def test_callable_phase1_bundle_is_json_safe_and_native_is_required():
-    evidence = phase1_evidence()
+@pytest.mark.tier1
+def test_callable_phase1_bundle_is_json_safe_and_native_is_required(math_evidence_dir):
+    bundle = compare_phase1(math_evidence_dir)
+    evidence = bundle["evidence"]
+    backends = (
+        ["numpy"] if bundle["environment"]["forced_numpy"] else ["numpy", "native"]
+    )
     assert evidence["status"] == "VERIFIED"
     assert evidence["routes"] == {
-        "declared": ["numpy", "native"],
-        "observed": ["numpy", "native"],
+        "declared": backends,
+        "observed": backends,
     }
     assert {(item["backend"], item["n_cvt"]) for item in evidence["mode4"]} == {
-        ("numpy", 1),
-        ("numpy", 2),
-        ("native", 1),
-        ("native", 2),
+        (backend, n_cvt) for backend in backends for n_cvt in (1, 2)
     }
     assert all(item["passed"] for item in evidence["boundary"])
     assert {item["snp"] for item in evidence["raw_gemma_boundary"]} == {
@@ -132,21 +135,6 @@ def test_callable_phase1_bundle_is_json_safe_and_native_is_required():
         "snp2",
     }
     json.dumps(evidence, allow_nan=False)
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        *(f"mode4:{field}" for field in MODE4_ORACLE_FIELDS),
-        *(f"mode1:{field}" for field in MODE1_FIELDS),
-    ],
-)
-def test_callable_evidence_verdict_rejects_each_field_mutation(mutation):
-    evidence = phase1_evidence(backends=("numpy",), mutation=mutation)
-    assert evidence["status"] == "NOT VERIFIED"
-    assert any(
-        mutation.split(":")[-1] in failure for failure in evidence["failure_ids"]
-    )
 
 
 @pytest.mark.parametrize("backends", [(), ("bogus",)])

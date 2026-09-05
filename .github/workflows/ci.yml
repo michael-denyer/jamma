@@ -198,6 +198,9 @@ jobs:
           "
 
       - name: Run tests
+        env:
+          JAMMA_MATH_EVIDENCE_DIR: ${{ runner.temp }}/math-validation
+          EXPECTED_BLAS_BACKEND: ${{ matrix.expected_blas_backend }}
         # addopts= clears pyproject.toml defaults so CI controls markers and parallelism explicitly.
         # --reruns 1 (one retry on failure) absorbs the documented timing-flake class on
         # heavily-loaded ARM Mac runners. Real failures still surface — they fail on the rerun
@@ -212,17 +215,6 @@ jobs:
             extra_args=()
           fi
           uv run pytest -m "not tier2 and not slow and not benchmark" -v -n 3 -o 'addopts=' "${extra_args[@]}"
-
-      - name: Record mathematical validation evidence
-        env:
-          EXPECTED_BLAS_BACKEND: ${{ matrix.expected_blas_backend }}
-        run: |
-          uv run python scripts/check_mathematical_inventory.py --output "$RUNNER_TEMP/math-validation/inventory.json"
-          uv run python scripts/mathematical_validation.py compare --output "$RUNNER_TEMP/math-validation/fixtures"
-          uv run python scripts/mathematical_validation.py pipeline --output "$RUNNER_TEMP/math-validation/pipeline"
-          uv run python scripts/mathematical_validation.py loco --output "$RUNNER_TEMP/math-validation/loco"
-          uv run python scripts/mathematical_validation.py weights --output "$RUNNER_TEMP/math-validation/weights"
-          uv run python scripts/mathematical_validation.py phase1 --output "$RUNNER_TEMP/math-validation/phase1"
 
       - name: Upload mathematical evidence
         if: always()
@@ -375,19 +367,9 @@ jobs:
 
       - name: Run tier1 tests under forced NumPy fallback
         env:
+          JAMMA_MATH_EVIDENCE_DIR: ${{ runner.temp }}/math-validation
           JAMMA_FORCE_NUMPY_FALLBACK: "1"
         run: uv run pytest -m tier1 tests/ -x -v -n 3 -o 'addopts='
-
-      - name: Record forced NumPy evidence
-        env:
-          JAMMA_FORCE_NUMPY_FALLBACK: "1"
-        run: |
-          uv run python scripts/check_mathematical_inventory.py --output "$RUNNER_TEMP/math-validation/inventory.json"
-          uv run python scripts/mathematical_validation.py compare --output "$RUNNER_TEMP/math-validation/fixtures"
-          uv run python scripts/mathematical_validation.py pipeline --output "$RUNNER_TEMP/math-validation/pipeline"
-          uv run python scripts/mathematical_validation.py loco --output "$RUNNER_TEMP/math-validation/loco"
-          uv run python scripts/mathematical_validation.py weights --output "$RUNNER_TEMP/math-validation/weights"
-          uv run python scripts/mathematical_validation.py phase1 --output "$RUNNER_TEMP/math-validation/phase1"
 
       - name: Upload forced NumPy evidence
         if: always()

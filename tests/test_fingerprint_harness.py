@@ -22,9 +22,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts import compare_fingerprints
-from scripts import lmm_accel_fingerprint as fingerprint
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 pytestmark = [pytest.mark.tier0, pytest.mark.slow]
@@ -145,7 +142,17 @@ def test_the_suite_covers_the_whole_extension(recorded):
     )
 
 
-def _record(fn):
+@pytest.fixture(scope="module")
+def fingerprint(load_script):
+    return load_script("lmm_accel_fingerprint")
+
+
+@pytest.fixture(scope="module")
+def compare_fingerprints(load_script):
+    return load_script("compare_fingerprints")
+
+
+def _record(fingerprint, fn):
     fingerprint._records.clear()
     result = fingerprint._wrap("probe", fn)(np.array([1.0]))
     records = list(fingerprint._records)
@@ -161,13 +168,17 @@ def _as_comparison_input(records):
     return {key: tuple(sorted(values)) for key, values in grouped.items()}
 
 
-def test_dictionary_fields_are_independent_comparison_keys():
+def test_dictionary_fields_are_independent_comparison_keys(
+    fingerprint, compare_fingerprints
+):
     _, base_records = _record(
-        lambda _: {"shared": np.array([1.0]), "removed": np.array([2.0])}
+        fingerprint, lambda _: {"shared": np.array([1.0]), "removed": np.array([2.0])}
     )
     changed = np.array([1.0])
     changed.view(np.uint64)[0] ^= np.uint64(1)
-    _, head_records = _record(lambda _: {"shared": changed, "added": np.array([3.0])})
+    _, head_records = _record(
+        fingerprint, lambda _: {"shared": changed, "added": np.array([3.0])}
+    )
 
     base = _as_comparison_input(base_records)
     head = _as_comparison_input(head_records)
@@ -180,9 +191,9 @@ def test_dictionary_fields_are_independent_comparison_keys():
     assert all(key[0] != "probe" for key in base | head)
 
 
-def test_non_dictionary_and_exception_records_keep_their_identity():
+def test_non_dictionary_and_exception_records_keep_their_identity(fingerprint):
     value = np.array([4.0])
-    _, records = _record(lambda _: value)
+    _, records = _record(fingerprint, lambda _: value)
     name, _, result = records[0].split("\t")
     assert name == "probe"
     assert result == fingerprint._digest(value)
@@ -199,7 +210,7 @@ def test_non_dictionary_and_exception_records_keep_their_identity():
     assert result == "raise:ValueError"
 
 
-def test_digest_preserves_dtype_shape_signed_zero_and_nan_payload_bits():
+def test_digest_preserves_dtype_shape_signed_zero_and_nan_payload_bits(fingerprint):
     assert fingerprint._digest(np.array([1.0], dtype=np.float64)) != (
         fingerprint._digest(np.array([1.0], dtype=np.float32))
     )

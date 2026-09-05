@@ -178,7 +178,7 @@ def _named_detectors(expected, row_factory, fields, prefix):
     return detectors
 
 
-def mode4_evidence(*, backend="numpy", n_cvt=1, seed=911, mutation=None):
+def mode4_evidence(*, backend="numpy", n_cvt=1, seed=911):
     """Return JSON-safe evidence for modes 1, 2, and 4 on identical inputs."""
     data = rotated_lmm_inputs(40, 6, n_cvt=n_cvt, seed=seed)
     results = _production_results(data, backend)
@@ -210,16 +210,6 @@ def mode4_evidence(*, backend="numpy", n_cvt=1, seed=911, mutation=None):
             "l_remle": float(oracle["l_remle"]),
             "p_wald": float(oracle["p_wald"]),
         }
-        mutation_mode, _, mutation_field = (mutation or "").partition(":")
-        if snp == 0:
-            if mutation_mode == "mode4" and mutation_field in MODE4_ORACLE_FIELDS:
-                actual[mutation_field] += max(1.0, abs(actual[mutation_field])) * 0.1
-            elif mutation_mode == "mode1" and mutation_field in MODE1_FIELDS:
-                mode1_actual[mutation_field] += (
-                    max(1.0, abs(mode1_actual[mutation_field])) * 0.1
-                )
-            elif mutation in MODE4_ORACLE_FIELDS:
-                actual[mutation] += max(1.0, abs(actual[mutation])) * 0.1
         comparison = compare_assoc_results([_row(actual)], [_row(oracle)])
         field_checks = {
             field: bool(getattr(comparison, field).passed)
@@ -502,7 +492,7 @@ def _raw_gemma_boundary_evidence():
     return records
 
 
-def phase1_evidence(*, backends=("numpy", "native"), mutation=None):
+def phase1_evidence(*, backends=("numpy", "native")):
     """Callable JSON-safe Phase 1 evidence bundle."""
     if not backends or any(backend not in {"numpy", "native"} for backend in backends):
         raise ValueError("backends must be a nonempty subset of ('numpy', 'native')")
@@ -511,7 +501,6 @@ def phase1_evidence(*, backends=("numpy", "native"), mutation=None):
             backend=backend,
             n_cvt=n_cvt,
             seed=910 + n_cvt,
-            mutation=mutation,
         )
         for backend in backends
         for n_cvt in (1, 2)
@@ -555,3 +544,20 @@ def phase1_evidence(*, backends=("numpy", "native"), mutation=None):
         "boundary": boundary,
         "raw_gemma_boundary": raw_gemma,
     }
+
+
+def compare_phase1(destination):
+    from tests.math_validation.evidence import environment, write_json
+
+    destination.mkdir(parents=True, exist_ok=False)
+    identity = environment()
+    backends = ("numpy",) if identity["forced_numpy"] else ("numpy", "native")
+    result = {
+        "schema_version": 1,
+        "environment": identity,
+        "status": "INCONCLUSIVE",
+        "evidence": phase1_evidence(backends=backends),
+    }
+    result["status"] = result["evidence"]["status"]
+    write_json(destination / "bundle.json", result)
+    return result

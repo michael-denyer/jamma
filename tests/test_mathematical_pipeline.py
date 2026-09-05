@@ -61,9 +61,9 @@ def test_pipeline_comparison_rejects_no_backends(tmp_path):
 @pytest.mark.parametrize(
     "case", load_pipeline_manifest()["cases"], ids=lambda c: c["id"]
 )
-def test_raw_pipeline_matches_external_and_oracle(case, tmp_path):
+def test_raw_pipeline_matches_external_and_oracle(case, math_evidence_dir):
     result = compare_pipeline(
-        tmp_path / case["id"],
+        math_evidence_dir,
         case_ids=(case["id"],),
     )
     assert result["status"] == "VERIFIED", result

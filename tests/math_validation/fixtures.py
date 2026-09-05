@@ -4,15 +4,20 @@ This module deliberately imports no JAMMA code. Fixture generation is a separate
 command from comparison; the latter only reads hash-verified reference files.
 """
 
-import hashlib
 import json
-import os
-import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import numpy as np
+
+from tests.math_validation.reference import (
+    digest,
+    gemma_binary,
+    run_command,
+    validate_manifest,
+    verify_reference_dir,
+    write_plink,
+    write_provenance,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = Path(__file__).with_name("manifest.json")
@@ -49,28 +54,9 @@ EXTERNAL_HEADERS = {
 }
 
 
-def digest(path):
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def copy_reference(source, destination, provenance):
-    """Keep raw external inputs and outputs inside a self-contained run bundle."""
-    destination.mkdir(parents=True, exist_ok=False)
-    for name in (*provenance["files"], "provenance.json"):
-        if Path(name).name != name:
-            raise ValueError(f"unsafe reference member: {name}")
-        shutil.copy2(source / name, destination / name)
-
-
 def load_manifest(path=MANIFEST):
-    manifest = json.loads(Path(path).read_text())
-    if manifest["schema_version"] != 1 or manifest["reference_version"] != "0.98.5":
-        raise ValueError("unsupported case schema or GEMMA version")
-    ids = []
+    manifest = validate_manifest(Path(path), label="supplied-kinship")
     for case in manifest["cases"]:
-        if not re.fullmatch(r"[a-z0-9-]+", case["id"]):
-            raise ValueError("case ID must be a safe directory name")
         if case["recipe"] != "tiny-plink-v1" or case["mode"] not in EXTERNAL_HEADERS:
             raise ValueError("unsupported tiny recipe or LMM mode")
         if not case["reason"] or not 4 <= case["n_samples"] <= 100:
@@ -79,9 +65,6 @@ def load_manifest(path=MANIFEST):
             raise ValueError("tiny case requires 1..20 SNPs")
         if not 1 <= case.get("n_covariates", 1) <= 3:
             raise ValueError("tiny case requires 1..3 covariates including intercept")
-        ids.append(case["id"])
-    if not ids or len(ids) != len(set(ids)):
-        raise ValueError("case IDs must be nonempty and unique")
     return manifest
 
 
@@ -94,21 +77,12 @@ def materialize(case, directory):
     a -= a.mean(axis=0)
     k = a @ a.T / n
     y = 0.7 * x[:, 0] + rng.multivariate_normal(np.zeros(n), np.eye(n) + 2 * k)
-    prefix = directory / "tiny"
-    prefix.with_suffix(".fam").write_text(
-        "".join(f"F{i}\tI{i}\t0\t0\t0\t{y[i]:.17g}\n" for i in range(n))
+    write_plink(
+        directory,
+        genotypes=x,
+        phenotype=y,
+        snp_ids=[f"snp{j}" for j in range(m)],
     )
-    prefix.with_suffix(".bim").write_text(
-        "".join(f"1\tsnp{j}\t0\t{100 + j}\tA\tG\n" for j in range(m))
-    )
-    bed = bytearray([0x6C, 0x1B, 0x01])
-    for j in range(m):
-        for start in range(0, n, 4):
-            byte = 0
-            for offset, dosage in enumerate(x[start : start + 4, j]):
-                byte |= {0: 3, 1: 2, 2: 0}[int(dosage)] << (2 * offset)
-            bed.append(byte)
-    prefix.with_suffix(".bed").write_bytes(bed)
     np.savetxt(directory / "kinship.txt", k, fmt="%.17g")
     # Explicit raw arrays let the oracle avoid JAMMA's PLINK loader.
     model = {
@@ -128,31 +102,8 @@ def materialize(case, directory):
     return model
 
 
-def run_command(argv, directory, name):
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
-    result = subprocess.run(
-        argv,
-        cwd=directory,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=120,
-        check=False,
-    )
-    (directory / f"{name}.stdout.txt").write_text(result.stdout)
-    (directory / f"{name}.stderr.txt").write_text(result.stderr)
-    if result.returncode:
-        raise RuntimeError(f"{name} exited {result.returncode}; see {directory}")
-    return {"argv": argv, "cwd": str(directory), "exit_code": result.returncode}
-
-
 def generate_reference(manifest, destination, gemma):
-    binary = Path(shutil.which(str(gemma)) or gemma).expanduser().resolve(strict=True)
-    version = subprocess.run(
-        [str(binary), "-h"], capture_output=True, text=True, check=True, timeout=15
-    ).stdout
-    if not re.search(r"GEMMA\s+0\.98\.5(?:\s|$)", version):
-        raise ValueError("reference executable must identify itself as GEMMA 0.98.5")
+    binary, version = gemma_binary(gemma)
     destination.mkdir(parents=True, exist_ok=False)
     for case in manifest["cases"]:
         directory = destination / case["id"]
@@ -175,29 +126,21 @@ def generate_reference(manifest, destination, gemma):
         )
         if not (directory / "gemma.assoc.txt").is_file():
             raise RuntimeError("GEMMA did not produce association output")
-        provenance = {
-            "schema_version": 1,
-            "executable": str(binary),
-            "executable_sha256": digest(binary),
-            "version": version,
-            "command": command,
-            "case": case,
-            "generator_sha256": digest(Path(__file__)),
-            "files": {p.name: digest(p) for p in directory.iterdir() if p.is_file()},
-        }
-        (directory / "provenance.json").write_text(
-            json.dumps(provenance, indent=2) + "\n"
+        write_provenance(
+            directory,
+            schema_version=1,
+            executable=str(binary),
+            executable_sha256=digest(binary),
+            version=version,
+            command=command,
+            case=case,
+            generator_sha256=digest(Path(__file__)),
         )
 
 
 def verify_reference(case, root=REFERENCE):
     directory = root / case["id"]
-    provenance = json.loads((directory / "provenance.json").read_text())
-    if provenance["case"] != case:
-        raise ValueError(
-            "case differs from reference provenance; regenerate separately"
-        )
-    for name, expected in provenance["files"].items():
-        if Path(name).name != name or digest(directory / name) != expected:
-            raise ValueError(f"reference hash mismatch: {name}")
+    provenance = verify_reference_dir(
+        directory, expected={"case": case}, label="reference"
+    )
     return directory, provenance

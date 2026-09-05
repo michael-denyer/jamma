@@ -6,11 +6,13 @@ import shutil
 import numpy as np
 import pytest
 
-from scripts.mathematical_validation import compare_files
+from tests.math_validation.compare import compare_files
+from tests.math_validation.evidence import run_pipeline
 from tests.math_validation.weight_contract import (
-    compare_nonpositive_weight_contract,
-    compare_weight_contract,
+    compare_weights,
     fixed_lambda_differences,
+    load_nonpositive_weight_cases,
+    load_weight_cases,
     require_reference,
     write_oracle,
 )
@@ -35,9 +37,9 @@ def test_weight_formula_matches_gemma_at_reported_lambda():
 
 
 @pytest.mark.tier1
-@pytest.mark.parametrize("case_id", ["nonpositive-supplied-k-numpy"])
-def test_nonpositive_weight_rows_match_external_gemma(case_id, tmp_path):
-    result = compare_nonpositive_weight_contract(tmp_path / "nonpositive")
+@pytest.mark.parametrize("case", load_nonpositive_weight_cases(), ids=lambda c: c["id"])
+def test_nonpositive_weight_rows_match_external_gemma(case, math_evidence_dir):
+    result = compare_weights(math_evidence_dir, case_ids=(case["id"],))
     assert result["status"] == "VERIFIED", result
 
 
@@ -86,56 +88,34 @@ def test_weight_oracle_rejects_corrupt_model_identity_and_af(tmp_path):
 
 
 @pytest.mark.tier1
-@pytest.mark.parametrize("backend", ["numpy", "numpy-streaming"])
-@pytest.mark.parametrize(
-    "supplied_kinship", [False, True], ids=["computed-k", "supplied-k"]
-)
-def test_pipeline_weight_semantics_match_external_gemma(
-    backend, supplied_kinship, tmp_path
-):
-    default = compare_weight_contract(
-        tmp_path / "default",
-        backend=backend,
-        supplied_kinship=supplied_kinship,
-        n_refine=20,
-    )
+@pytest.mark.parametrize("case", load_weight_cases(), ids=lambda c: c["id"])
+def test_pipeline_weight_semantics_match_external_gemma(case, math_evidence_dir):
+    bundle = compare_weights(math_evidence_dir, case_ids=(case["id"],))
+    assert bundle["status"] == "VERIFIED", bundle
+    default, refined = bundle["cases"][0]["runs"]
     if default["status"] != "VERIFIED":
-        assert not supplied_kinship, default
-        assert default["failure_ids"] == ["boundary5:l_mle"]
-    refined = compare_weight_contract(
-        tmp_path / "refined",
-        backend=backend,
-        supplied_kinship=supplied_kinship,
-        n_refine=30,
-    )
+        assert default["comparison"]["failure_ids"] == ["boundary5:l_mle"], default
     assert refined["status"] == "VERIFIED", refined
 
 
 @pytest.mark.tier1
 def test_weighted_saved_eigenvectors_remain_orthonormal(tmp_path):
     from jamma.lmm.eigen_io import read_eigen_files
-    from jamma.pipeline import PipelineRunner
-    from jamma.pipeline_config import PipelineConfig
 
     source, _ = require_reference()
-    PipelineRunner(
-        PipelineConfig(
-            bfile=source / "tiny",
-            covariate_file=source / "covariates.txt",
-            weight_file=source / "weights.txt",
-            lmm_mode=4,
-            maf=0.1,
-            miss=0.1,
-            n_refine=30,
-            backend="numpy",
-            output_dir=tmp_path,
-            output_prefix="weighted",
-            write_eigen=True,
-            check_memory=False,
-            show_progress=False,
-            no_telemetry=True,
-        )
-    ).run()
+    run_pipeline(
+        source,
+        tmp_path,
+        covariate_file=source / "covariates.txt",
+        weight_file=source / "weights.txt",
+        lmm_mode=4,
+        maf=0.1,
+        miss=0.1,
+        n_refine=30,
+        backend="numpy",
+        output_prefix="weighted",
+        write_eigen=True,
+    )
     _, eigenvectors = read_eigen_files(
         tmp_path / "weighted.eigenD.npy",
         tmp_path / "weighted.eigenU.npy",
@@ -146,9 +126,6 @@ def test_weighted_saved_eigenvectors_remain_orthonormal(tmp_path):
 
 @pytest.mark.tier1
 def test_weights_are_applied_once_across_multiple_phenotypes(tmp_path):
-    from jamma.pipeline import PipelineRunner
-    from jamma.pipeline_config import PipelineConfig
-
     source, _ = require_reference()
     for suffix in ("bed", "bim"):
         shutil.copyfile(source / f"tiny.{suffix}", tmp_path / f"tiny.{suffix}")
@@ -156,24 +133,19 @@ def test_weights_are_applied_once_across_multiple_phenotypes(tmp_path):
     (tmp_path / "tiny.fam").write_text(
         "".join("\t".join([*row, row[5]]) + "\n" for row in fam_rows)
     )
-    result = PipelineRunner(
-        PipelineConfig(
-            bfile=tmp_path / "tiny",
-            covariate_file=source / "covariates.txt",
-            weight_file=source / "weights.txt",
-            phenotype_columns=(1, 2),
-            lmm_mode=4,
-            maf=0.1,
-            miss=0.1,
-            n_refine=30,
-            backend="numpy-streaming",
-            output_dir=tmp_path / "out",
-            output_prefix="jamma",
-            check_memory=False,
-            show_progress=False,
-            no_telemetry=True,
-        )
-    ).run()
+    result, _, _ = run_pipeline(
+        tmp_path,
+        tmp_path / "out",
+        covariate_file=source / "covariates.txt",
+        weight_file=source / "weights.txt",
+        phenotype_columns=(1, 2),
+        lmm_mode=4,
+        maf=0.1,
+        miss=0.1,
+        n_refine=30,
+        backend="numpy-streaming",
+        output_prefix="jamma",
+    )
     for path in result.assoc_paths:
         comparison = compare_files(
             path,

@@ -386,20 +386,29 @@ class PipelineRunner:
 
         # Apply individual weights before eigendecomposition
         if self.config.weight_file is not None:
-            from jamma.io.weight import apply_individual_weights, read_weight_file
+            from jamma.io.weight import apply_individual_weights
 
-            weights = read_weight_file(self.config.weight_file)
-            if len(weights) != n_samples:
-                raise ValueError(
-                    f"Weight file has {len(weights)} entries but expected "
-                    f"{n_samples} (matching sample count)"
-                )
-            if valid_indices is not None:
-                weights = weights[valid_indices]
+            weights = self._analysis_weights(n_samples, valid_indices)
             logger.info(f"Applying individual weights from {self.config.weight_file}")
             K = apply_individual_weights(K, weights)
 
         return K
+
+    def _analysis_weights(
+        self, n_samples: int, valid_indices: np.ndarray | None
+    ) -> np.ndarray:
+        """Load residual weights in the exact analyzed-sample order."""
+        from jamma.io.weight import read_weight_file
+
+        if self.config.weight_file is None:
+            raise ValueError("analysis weights requested without a weight file")
+        weights = read_weight_file(self.config.weight_file)
+        if len(weights) != n_samples:
+            raise ValueError(
+                f"Weight file has {len(weights)} entries but expected "
+                f"{n_samples} (matching sample count)"
+            )
+        return weights if valid_indices is None else weights[valid_indices]
 
     def load_covariates(self, n_samples: int) -> np.ndarray | None:
         """Load and validate the covariate file.
@@ -579,6 +588,17 @@ class PipelineRunner:
         eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
             analysis, n_samples, n_valid, valid_mask
         )
+        if self.config.weight_file is not None:
+            from jamma.io.weight import apply_weights_to_eigenvectors
+
+            # GEMMA -widv scales eigenvector rows after decomposing
+            # D^-1/2 K D^-1/2.  Existing rotations then apply D^1/2 to
+            # phenotype, covariates, and every genotype chunk.  Persisted
+            # eigenvectors were written above and remain orthonormal/raw.
+            weights = self._analysis_weights(
+                n_samples, None if np.all(valid_mask) else np.where(valid_mask)[0]
+            )
+            eigenvectors = apply_weights_to_eigenvectors(eigenvectors, weights)
         load_s = time.perf_counter() - t_start
 
         outcome = run_phenotype_loop(

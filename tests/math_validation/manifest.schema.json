@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JAMMA Phase 0 case manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "reference_version",
+    "boundary_expectations",
+    "cases",
+    "untested",
+    "policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "reference_version": {
+      "const": "0.98.5"
+    },
+    "boundary_expectations": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": {
+          "enum": ["lower", "upper"]
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "tier",
+          "reason",
+          "recipe",
+          "seed",
+          "n_samples",
+          "n_snps",
+          "mode",
+          "factors",
+          "gemma_args",
+          "jamma_args"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "tier": {
+            "const": "tier1"
+          },
+          "recipe": {
+            "const": "tiny-plink-v1"
+          },
+          "mode": {
+            "enum": [
+              1,
+              2,
+              3,
+              4
+            ]
+          },
+          "seed": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "n_samples": {
+            "type": "integer",
+            "minimum": 4,
+            "maximum": 100
+          },
+          "n_snps": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "factors": {
+            "type": "object"
+          },
+          "gemma_args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "jamma_args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "untested": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "policy": {
+      "type": "string"
+    }
+  }
+}

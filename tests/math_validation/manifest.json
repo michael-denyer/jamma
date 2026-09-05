@@ -1,0 +1,486 @@
+{
+  "schema_version": 1,
+  "reference_version": "0.98.5",
+  "boundary_expectations": {
+    "tiny-wald-supplied-kinship": {"snp0": "upper", "snp2": "upper"},
+    "tiny-mode4-cov1-supplied-kinship": {"snp0": "upper", "snp2": "upper"},
+    "tiny-mode1-cov2-supplied-kinship": {"snp0": "upper"},
+    "tiny-mode4-cov2-supplied-kinship": {"snp0": "upper"},
+    "tiny-mode1-cov3-supplied-kinship": {"snp0": "upper", "snp1": "lower", "snp2": "lower"},
+    "tiny-mode4-cov3-supplied-kinship": {"snp0": "upper", "snp1": "lower", "snp2": "lower"}
+  },
+  "cases": [
+    {
+      "id": "tiny-wald-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Anchor direct dense GLS to external GEMMA and the raw PLINK Wald output contract.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 1,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "1",
+        "-maf",
+        "0",
+        "-miss",
+        "1"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "1",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "--no-telemetry"
+      ]
+    },
+    {
+      "id": "tiny-mode2-cov1-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 2,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "1-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "2",
+        "-maf",
+        "0",
+        "-miss",
+        "1"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "2",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "--no-telemetry"
+      ],
+      "n_covariates": 1
+    },
+    {
+      "id": "tiny-mode3-cov1-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 3,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "1-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "3",
+        "-maf",
+        "0",
+        "-miss",
+        "1"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "3",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "--no-telemetry"
+      ],
+      "n_covariates": 1
+    },
+    {
+      "id": "tiny-mode4-cov1-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 4,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "1-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "4",
+        "-maf",
+        "0",
+        "-miss",
+        "1"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "4",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "--no-telemetry"
+      ],
+      "n_covariates": 1
+    },
+    {
+      "id": "tiny-mode1-cov2-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 1,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "2-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "1",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "1",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt",
+        "--no-telemetry"
+      ],
+      "n_covariates": 2
+    },
+    {
+      "id": "tiny-mode2-cov2-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 2,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "2-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "2",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "2",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt",
+        "--no-telemetry"
+      ],
+      "n_covariates": 2
+    },
+    {
+      "id": "tiny-mode3-cov2-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 3,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "2-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "3",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "3",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt",
+        "--no-telemetry"
+      ],
+      "n_covariates": 2
+    },
+    {
+      "id": "tiny-mode4-cov2-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 4,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "2-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "4",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "4",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt",
+        "--no-telemetry"
+      ],
+      "n_covariates": 2
+    },
+    {
+      "id": "tiny-mode1-cov3-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 1,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "3-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "1",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "1",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt",
+        "--no-telemetry"
+      ],
+      "n_covariates": 3
+    },
+    {
+      "id": "tiny-mode2-cov3-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 2,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "3-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "2",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "2",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt",
+        "--no-telemetry"
+      ],
+      "n_covariates": 3
+    },
+    {
+      "id": "tiny-mode3-cov3-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 3,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "3-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "3",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "3",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt",
+        "--no-telemetry"
+      ],
+      "n_covariates": 3
+    },
+    {
+      "id": "tiny-mode4-cov3-supplied-kinship",
+      "tier": "tier1",
+      "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+      "recipe": "tiny-plink-v1",
+      "seed": 731,
+      "n_samples": 16,
+      "n_snps": 3,
+      "mode": 4,
+      "factors": {
+        "samples": "all-valid",
+        "missingness": "none",
+        "covariates": "3-columns-including-intercept",
+        "kinship": "supplied-centered",
+        "runner": "batch",
+        "cache": "cold"
+      },
+      "gemma_args": [
+        "-lmm",
+        "4",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt"
+      ],
+      "jamma_args": [
+        "-lmm",
+        "4",
+        "-maf",
+        "0",
+        "-miss",
+        "1",
+        "-c",
+        "covariates.txt",
+        "--no-telemetry"
+      ],
+      "n_covariates": 3
+    }
+  ],
+  "untested": [
+    "expanded pairwise matrix",
+    "weights",
+    "LOCO",
+    "warm caches",
+    "production scale",
+    "other platforms"
+  ],
+  "policy": "Existing ToleranceConfig defaults; GEMMA AF rounded to 3 decimals, numeric statistics to 6 decimals in scientific notation. No tolerance changes."
+}

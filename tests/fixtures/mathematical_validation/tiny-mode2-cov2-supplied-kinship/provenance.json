@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "executable": "/Users/mdenyer/.local/bin/gemma",
+  "executable_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
+  "version": "GEMMA 0.98.5 (2021-08-25) by Xiang Zhou, Pjotr Prins and team (C) 2012-2021\n\n type ./gemma -h [num] for detailed help\n options: \n  1: quick guide\n  2: file I/O related\n  3: SNP QC\n  4: calculate relatedness matrix\n  5: perform eigen decomposition\n  6: perform variance component estimation\n  7: fit a linear model\n  8: fit a linear mixed model\n  9: fit a multivariate linear mixed model\n 10: fit a Bayesian sparse linear mixed model\n 11: obtain predicted values\n 12: calculate snp variance covariance\n 13: note\n 14: debug options\n\nThe GEMMA software is distributed under the GNU General Public v3\n   -license    show license information\n   see also http://www.xzlab.org/software.html, https://github.com/genetics-statistics\n",
+  "command": {
+    "argv": [
+      "/Users/mdenyer/.local/bin/gemma",
+      "-bfile",
+      "tiny",
+      "-k",
+      "kinship.txt",
+      "-lmm",
+      "2",
+      "-maf",
+      "0",
+      "-miss",
+      "1",
+      "-c",
+      "covariates.txt",
+      "-outdir",
+      ".",
+      "-o",
+      "gemma"
+    ],
+    "cwd": "/private/tmp/jamma-new-mode-references/tiny-mode2-cov2-supplied-kinship",
+    "exit_code": 0
+  },
+  "case": {
+    "id": "tiny-mode2-cov2-supplied-kinship",
+    "tier": "tier1",
+    "reason": "Cross every LMM output layout with intercept and one or two nontrivial covariates using independent dense GLS.",
+    "recipe": "tiny-plink-v1",
+    "seed": 731,
+    "n_samples": 16,
+    "n_snps": 3,
+    "mode": 2,
+    "factors": {
+      "samples": "all-valid",
+      "missingness": "none",
+      "covariates": "2-columns-including-intercept",
+      "kinship": "supplied-centered",
+      "runner": "batch",
+      "cache": "cold"
+    },
+    "gemma_args": [
+      "-lmm",
+      "2",
+      "-maf",
+      "0",
+      "-miss",
+      "1",
+      "-c",
+      "covariates.txt"
+    ],
+    "jamma_args": [
+      "-lmm",
+      "2",
+      "-maf",
+      "0",
+      "-miss",
+      "1",
+      "-c",
+      "covariates.txt",
+      "--no-telemetry"
+    ],
+    "n_covariates": 2
+  },
+  "generator_sha256": "f13d77a65078989dad75bb6c286cd5f3148e946459ab778990bf3193bb6c3f87",
+  "files": {
+    "model.json": "895bc46a59935c2d428a6eebd05262c2d531c77fdf4ee33405263f0919a890f1",
+    "tiny.fam": "1505936466d3b43eddb52b075b895a64447926de030316216c85c03a31e05e18",
+    "tiny.bed": "7fcb9214de020138d8845558588f769aab2f3759dbb637f5bc91a162af26569e",
+    "gemma.assoc.txt": "7e595e8730d4242c939b8168f25406c931f3aeb108f8178cae682ebccfe2a68f",
+    "gemma.stdout.txt": "b539d991e87d3ce818c49d970ba4aaa0d9a74f8860189715e635773aecc9f9df",
+    "kinship.txt": "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda",
+    "gemma.stderr.txt": "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10",
+    "tiny.bim": "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8",
+    "gemma.log.txt": "587bca3f36a990e97e94507a1594399829da76d4ed23152fe4926ffe893f702e",
+    "covariates.txt": "a755f36270f1d3d19575c7c420eed4981294c62ccd8392a465b2b228e4ba95dc"
+  }
+}

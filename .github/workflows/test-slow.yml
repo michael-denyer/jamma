@@ -28,3 +28,14 @@ jobs:
 
       - name: Run slow and tier2 tests
         run: uv run pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov
+
+      - name: Complete mathematical mutation suite
+        run: uv run python scripts/mathematical_mutations.py --all --output "$RUNNER_TEMP/mutations.json"
+
+      - name: Upload mutation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: mathematical-mutations-all
+          path: ${{ runner.temp }}/mutations.json
+          if-no-files-found: error

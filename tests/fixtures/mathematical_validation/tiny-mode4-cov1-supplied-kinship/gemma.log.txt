@@ -1,0 +1,37 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 4.2.1
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.31  - OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP vortexm4 MAX_THREADS=56
+##   arch           = vortexm4
+##   threads        = 18
+##   parallel type  = openmp
+##
+## Command Line Input = /Users/mdenyer/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 4 -maf 0 -miss 1 -outdir . -o gemma 
+##
+## Date = Sat Sep  5 14:00:13 2026
+##
+## Summary Statistics:
+## number of total individuals = 16
+## number of analyzed individuals = 16
+## number of covariates = 1
+## number of phenotypes = 1
+## number of total SNPs/var = 3
+## number of analyzed SNPs/var = 3
+## REMLE log-likelihood in the null model = -28.5731
+## MLE log-likelihood in the null model = -29.0422
+## pve estimate in the null model = 0.877604
+## se(pve) in the null model = 0.129898
+## vg estimate in the null model = 3.89582
+## ve estimate in the null model = 0.496436
+## beta estimate in the null model =   0.566247
+## se(beta) =   0.176146
+##
+## Computation Time:
+## total computation time = 1.26833e-05 min 
+## computation time break down: 
+##      time on eigen-decomposition = 9.5e-07 min 
+##      time on calculating UtX = 5e-07 min 
+##      time on optimization = 1.58333e-06 min 
+##

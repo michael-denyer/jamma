@@ -1,0 +1,27 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 4.2.1
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.31  - OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP vortexm4 MAX_THREADS=56
+##   arch           = vortexm4
+##   threads        = 18
+##   parallel type  = openmp
+##
+## Command Line Input = /Users/mdenyer/.local/bin/gemma -bfile tiny -c covariates.txt -gk 1 -maf 0.1 -miss 0.1 -outdir . -o gemma_kinship 
+##
+## Date = Sat Sep  5 14:21:12 2026
+##
+## Summary Statistics:
+## number of total individuals = 40
+## number of analyzed individuals = 38
+## number of covariates = 2
+## number of phenotypes = 1
+## number of total SNPs/var = 12
+## number of analyzed SNPs/var = 9
+##
+## Computation Time:
+## total computation time = 0.00233597 min 
+## computation time break down: 
+##      time on calculating relatedness matrix = 0.00232227 min 
+##

@@ -1,0 +1,2 @@
+chr	rs	ps	n_miss	allele1	allele0	af	beta	se	p_score
+3	loco8	108	0	A	G	0.500	-6.013399e-01	1.692934e-01	3.111950e-03

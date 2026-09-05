@@ -1,8 +1,12 @@
-# JAMMA-GEMMA Equivalence Proof
+# JAMMA-GEMMA formulas and validation evidence
 
 JAMMA implements GEMMA's statistical formulas with different numerical kernels
 and optimizers. This document records formula derivations, empirical comparisons,
 and the conditioning limits of those comparisons.
+
+The current declared cases, reproducible checks and untested configurations are
+recorded in [Mathematical validation](MATHEMATICAL_VALIDATION.md). Historical
+measurements below do not certify the current revision or every configuration.
 
 For deliberate behavioral divergences on edge cases (degenerate SNPs, GEMMA
 bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
@@ -25,12 +29,12 @@ bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
 | p_lrt | Yes | MLE subtraction amplification | O(eps * amplification) | 1.56e-3 |
 
 The former `1.35e-3` mode-4 likelihood discrepancy was a REML/MLE output
-mix-up, not an accepted optimizer tolerance. Mode 4 now reports the MLE
+mix-up, not an accepted optimizer tolerance. Modes 2 and 4 now report the MLE
 likelihood used by LRT. Independent dense-oracle tests enforce this contract;
 mode 1 retains REML. Historical measurements elsewhere in this document
 predate that correction and the REML score refinement.
 
-**Production-scale validation** (125,632 real samples, 91,586 SNPs):
+**Historical production-scale validation** (125,632 real samples, 91,586 SNPs):
 Spearman rho 1.000000, significance agreement 100% at all thresholds,
 effect direction agreement 100%. See [Empirical Results](#empirical-results).
 
@@ -362,27 +366,23 @@ uv run python scripts/demonstrate_equivalence.py
 
 ---
 
-## Conclusion
+## Scope of the evidence
 
-**Algorithmic Identity**: Every stage of the GWAS pipeline — kinship,
-eigendecomposition, REML optimization, Wald/Score/LRT statistics — uses
-algebraically identical formulas in both JAMMA and GEMMA.
+The derivations describe the intended statistical formulas. Finite comparisons
+establish agreement only for their recorded datasets, settings and backends.
+They do not establish identical rankings or significance calls for every input.
 
-**Bounded Differences**: All numerical differences arise from:
+The historical production tables above report the listed versions and thresholds.
+They have not been regenerated for the current revision. Mode-specific likelihood
+and weighted-observation defects found by the new validation program show why
+formula agreement alone cannot certify the complete implementation.
 
-1. IEEE-754 accumulation order (kinship, Pab)
-2. Optimizer convergence: Brent vs golden section, eps ~ 1e-5
-3. Flat MLE landscapes on weak-signal SNPs (logl_H1 only)
-4. CDF implementation differences (tail probabilities)
-
-**Scientific Equivalence**: Identical significance calls at all thresholds,
-identical effect directions, identical SNP rankings. Validated at small
-scale (1,940 samples), production scale (85,000 samples), and large
-scale (125,632 samples).
-
-Reference tolerances: `src/jamma/validation/tolerances.py`
-Reference data: `tests/fixtures/`
+Current field tolerances remain in `src/jamma/validation/tolerances.py`.
+See [Mathematical validation](MATHEMATICAL_VALIDATION.md) for the declared matrix,
+negative controls, backend evidence and remaining gaps, including the weighted
+fixture's default-refinement MLE lambda discrepancy.
 
 ---
 
-Document last updated: *2026-04-29*.
+Scope and likelihood-contract notes updated: 2026-09-05. Historical measurements
+retain their original provenance and dates.

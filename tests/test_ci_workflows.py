@@ -100,7 +100,7 @@ def test_triage_issue_action_exists():
         assert key in spec["inputs"]
 
 
-def test_setup_jamma_used_exactly_nine_times(workflow_paths):
+def test_setup_jamma_used_exactly_ten_times(workflow_paths):
     count = 0
     for path in workflow_paths:
         workflow = _load_workflow(path)
@@ -108,7 +108,7 @@ def test_setup_jamma_used_exactly_nine_times(workflow_paths):
             for step in job.get("steps", []):
                 if step.get("uses") == "./.github/actions/setup-jamma":
                     count += 1
-    assert count == 9
+    assert count == 10
 
 
 def test_flaky_detect_and_sanitizers_use_triage_issue_action():

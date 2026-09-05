@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JAMMA Phase 0 comparison bundle",
+  "type": "object",
+  "required": ["schema_version", "status", "manifest", "environment", "invocation", "cases", "untested"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["VERIFIED", "NOT VERIFIED", "INCONCLUSIVE"]},
+    "manifest": {"type": "object"},
+    "environment": {"type": "object", "required": ["python", "numpy", "scipy", "platform", "compiler", "numpy_config", "active_blas", "revision", "source_hashes", "driver_sha256"]},
+    "invocation": {"type": "array", "items": {"type": "string"}},
+    "cases": {"type": "array", "items": {"type": "object", "required": ["id", "reference_provenance", "command", "oracle", "comparisons", "selected_sample_ids", "selected_snp_ids", "files"]}},
+    "untested": {"type": "array", "items": {"type": "string"}},
+    "error": {"type": "string"}
+  }
+}

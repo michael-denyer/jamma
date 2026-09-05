@@ -79,9 +79,9 @@ class PipelineConfig:
             Must be >= 2 — a one-point grid has no bracket to refine.
         n_refine: Golden section refinement iterations (default 20). A lower
             value is raised to 20 by LmmConfig rather than rejected here.
-        weight_file: Individual weight file for kinship pre-transformation.
-            One weight per line, matching sample order. Applies
-            K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.
+        weight_file: Individual residual weights for kinship and observations.
+            One weight per line, matching sample order. Scales kinship before
+            eigendecomposition, then scales eigenvector rows for association.
             GEMMA's -widv flag.
         cat_columns: 1-indexed covariate column indices to treat as
             categorical. JAMMA-specific feature (not GEMMA's -cat which is

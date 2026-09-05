@@ -252,7 +252,7 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.npy \
 - `-hwe FLOAT` — HWE p-value threshold; exclude SNPs below this value (default: 0.0, disabled)
 - `-lmin FLOAT` — Minimum lambda for optimization (default: 1e-5)
 - `-lmax FLOAT` — Maximum lambda for optimization (default: 1e5)
-- `-widv PATH` — Individual weights file for kinship pre-transformation (one weight per line)
+- `-widv PATH` — Individual residual weights for kinship and observation scaling (one weight per line)
 - `-cat INT [INT ...]` — Covariate column indices to one-hot encode as categorical (1-based)
 - `-maf FLOAT` — MAF threshold (default: 0.01)
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
@@ -294,7 +294,7 @@ Tab-separated file. The first 7 columns are always present; stat columns depend 
 | ------ | :-: | :-: | :-: | :-: |
 | `beta` | yes | — | yes | yes |
 | `se` | yes | — | yes | yes |
-| `logl_H1` | yes | — | — | yes |
+| `logl_H1` | yes | yes | — | yes |
 | `l_remle` | yes | — | — | yes |
 | `l_mle` | — | yes | — | yes |
 | `p_wald` | yes | — | — | yes |
@@ -303,7 +303,8 @@ Tab-separated file. The first 7 columns are always present; stat columns depend 
 
 Following GEMMA, `logl_H1` is the REML likelihood calculated by the Wald test
 in mode 1 and the alternative-model MLE likelihood calculated by the LRT in
-mode 4. JAMMA's mode 2 output omits this diagnostic column.
+modes 2 and 4. The validation reader also accepts older mode-2 files that
+omit this diagnostic column.
 
 ### Kinship Matrix
 

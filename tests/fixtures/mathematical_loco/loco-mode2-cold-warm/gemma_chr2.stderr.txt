@@ -1,0 +1,2 @@
+**** WARNING: Matrix G has 35 eigenvalues close to zero
+**** INFO: Done.

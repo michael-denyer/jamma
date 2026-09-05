@@ -115,3 +115,22 @@ def apply_individual_weights(K: np.ndarray, weights: np.ndarray) -> np.ndarray:
     K[:, invalid] = 0.0
 
     return K
+
+
+def apply_weights_to_eigenvectors(
+    eigenvectors: np.ndarray, weights: np.ndarray
+) -> np.ndarray:
+    """Apply GEMMA ``-widv`` row scaling to analysis eigenvectors in-place.
+
+    GEMMA sets the multiplier to zero when a weight is nonpositive; otherwise
+    it uses its square root.  Scaling eigenvector rows makes the existing
+    rotations apply the same transform to phenotype, covariates, and markers.
+    """
+    if weights.shape[0] != eigenvectors.shape[0]:
+        raise ValueError(
+            f"Weight array has {weights.shape[0]} entries but eigenvectors have "
+            f"{eigenvectors.shape[0]} sample rows"
+        )
+    row_scale = np.sqrt(np.maximum(weights, 0.0))
+    eigenvectors *= row_scale[:, None]
+    return eigenvectors

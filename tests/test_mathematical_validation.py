@@ -225,3 +225,27 @@ def test_boundary_coverage_cannot_pass_vacuously():
         )["status"]
         == "VERIFIED"
     )
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize(
+    ("actual_af", "reference_af", "status"),
+    [
+        ("0.538", "0.537", "VERIFIED"),
+        ("0.387", "0.388", "VERIFIED"),
+        ("0.539", "0.537", "NOT VERIFIED"),
+    ],
+)
+def test_printed_af_rounding_limit_is_decimal_exact(
+    tmp_path, actual_af, reference_af, status
+):
+    source, _ = verify_reference(load_manifest()["cases"][0])
+    paths = [tmp_path / "actual.txt", tmp_path / "reference.txt"]
+    for path, af in zip(paths, (actual_af, reference_af), strict=True):
+        lines = (source / "gemma.assoc.txt").read_text().splitlines()
+        row = lines[1].split("\t")
+        row[WALD_HEADER.index("af")] = af
+        lines[1] = "\t".join(row)
+        path.write_text("\n".join(lines) + "\n")
+    result = compare_files(*paths)
+    assert result["status"] == status, result

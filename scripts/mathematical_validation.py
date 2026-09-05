@@ -16,6 +16,7 @@ import subprocess
 import sys
 from contextlib import redirect_stdout
 from dataclasses import asdict
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -147,15 +148,15 @@ def compare_files(
         # Both current writers emit BIM A1 dosage frequency. Keep its direction:
         # folding to MAF would hide flips. Two .3f values have at most 1e-3
         # combined rounding uncertainty; this supplements the existing gate.
-        reference_af = float(b["af"])
-        if (
-            not np.isclose(
-                float(a["af"]),
-                reference_af,
-                rtol=0,
-                atol=1e-3,
-            )
-            or not 0 <= float(a["af"]) <= 1
+        # Compare the printed decimals exactly at the formatting limit.
+        # Binary subtraction makes 0.538 - 0.537 slightly greater than 0.001.
+        actual_af = Decimal(a["af"])
+        reference_af = Decimal(b["af"])
+        if not (
+            actual_af.is_finite()
+            and reference_af.is_finite()
+            and 0 <= actual_af <= 1
+            and abs(actual_af - reference_af) <= Decimal("0.001")
         ):
             errors.append(f"{b['rs']}:af_orientation")
     failures = []

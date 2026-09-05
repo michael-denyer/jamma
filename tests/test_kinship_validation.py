@@ -316,7 +316,9 @@ class TestStandardizedKinshipStreaming:
             valid_indices=valid,
             mode="standardized",
         )
-        K_inmem = compute_standardized_kinship(genotypes[valid, :], check_memory=False)
+        K_inmem = compute_standardized_kinship(genotypes, check_memory=False)[
+            np.ix_(valid, valid)
+        ]
 
         assert K_stream.shape == (len(valid), len(valid))
         max_rel = np.max(np.abs(K_stream - K_inmem) / (np.abs(K_inmem) + 1e-15))

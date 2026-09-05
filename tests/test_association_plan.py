@@ -12,8 +12,13 @@ from jamma.lmm.association_plan import (
 )
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm.workspace import WorkspaceSpec
 
 pytestmark = pytest.mark.tier0
+
+
+def _workspace(dispatch: DispatchPath, n_cvt: int) -> WorkspaceSpec:
+    return WorkspaceSpec.build(dispatch, 1, 1_000, 1_000, n_cvt, 50, 20, 1)
 
 
 def test_plan_is_frozen_and_tightening_returns_a_chunk_plan() -> None:
@@ -23,9 +28,11 @@ def test_plan_is_frozen_and_tightening_returns_a_chunk_plan() -> None:
         dispatch=DispatchPath.FUSED,
         conservative_chunks=conservative,
         n_samples=1_000,
+        n_input_samples=1_000,
         n_snps_before_filter=1_000,
         n_cvt=1,
         mem_budget_gb=None,
+        workspace=_workspace(DispatchPath.FUSED, 1),
     )
     tightened = plan.conservative_chunks.narrow(500)
 
@@ -40,9 +47,11 @@ def test_tightening_only_decreases_width_and_preserves_policy() -> None:
         dispatch=DispatchPath.FUSED_GENERAL,
         conservative_chunks=LmmChunkPlan(100, 10, 2, True),
         n_samples=1_000,
+        n_input_samples=1_000,
         n_snps_before_filter=1_000,
         n_cvt=2,
         mem_budget_gb=8.0,
+        workspace=_workspace(DispatchPath.FUSED_GENERAL, 2),
     )
 
     tightened = plan.conservative_chunks.narrow(250)

@@ -5,6 +5,7 @@ import pytest
 
 from jamma.validation import (
     ComparisonResult,
+    LambdaBoundaryPolicy,
     ToleranceConfig,
     compare_arrays,
     compare_kinship_matrices,
@@ -66,6 +67,19 @@ class TestToleranceConfig:
         assert relaxed.pvalue_rtol > default.pvalue_rtol
         assert relaxed.kinship_rtol > default.kinship_rtol
         assert relaxed.atol > default.atol
+
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            lambda: LambdaBoundaryPolicy(upper=float("inf")),
+            lambda: LambdaBoundaryPolicy(rtol=float("nan")),
+            lambda: LambdaBoundaryPolicy(lower=1.0, upper=1.00001, rtol=1e-3),
+        ],
+    )
+    def test_lambda_boundary_policy_rejects_ambiguous_ranges(self, policy):
+        """The policy rejects non-finite values and overlapping bound bands."""
+        with pytest.raises(ValueError):
+            policy()
 
 
 class TestCompareArrays:

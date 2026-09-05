@@ -677,10 +677,9 @@ def test_loco_numpy_valid_sample_subsetting():
         valid_indices=valid_indices,
     )
 
-    # The all-sample SNP-stats cache is not exported on a filtered-sample run:
-    # PASS-1 stats are on the valid-sample basis (matching GEMMA and PASS-2), so
-    # there is no all-sample cache to reuse, and the association pass re-derives.
-    assert loco_stream.snp_stats is None
+    # Kinship statistics retain the full population even when output rows differ.
+    assert loco_stream.snp_stats is not None
+    assert loco_stream.snp_stats.n_samples == n_samples
 
     for chr_name, K_loco in loco_stream:
         assert K_loco.shape == (n_valid, n_valid), (

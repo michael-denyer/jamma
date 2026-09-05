@@ -14,11 +14,12 @@ from jamma.validation.compare import (
     load_gemma_assoc,
     load_gemma_kinship,
 )
-from jamma.validation.tolerances import ToleranceConfig
+from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig
 
 __all__ = [
     "AssocComparisonResult",
     "ComparisonResult",
+    "LambdaBoundaryPolicy",
     "ToleranceConfig",
     "compare_arrays",
     "compare_assoc_results",

@@ -132,12 +132,76 @@ jobs:
             --deselect tests/test_snp_stats.py::TestSnpStatsC::test_rectangular_chunk \
             2>&1 | tee sanitizer-run.log
 
+      - name: Run native C paths under ASAN/UBSAN
+        # The broad suite above deliberately forces the NumPy fallback to
+        # isolate JAMMA from ASan/vendor-BLAS interceptor noise. This focused
+        # pass starts fresh Python processes without that import-time gate, so
+        # the instrumented jlinalg and LMM extensions themselves are exercised.
+        shell: bash
+        run: |
+          LD_PRELOAD=$(gcc -print-file-name=libasan.so)
+          export LD_PRELOAD
+
+          env -u JAMMA_FORCE_NUMPY_FALLBACK uv run python - <<'PY' \
+            2>&1 | tee native-sanitizer-run.log
+          from jamma import jlinalg
+          from jamma.lmm import accel
+
+          assert accel.available(), "instrumented LMM accelerator must load"
+          assert accel.HAS_OPENMP, "instrumented LMM accelerator must use OpenMP"
+          assert jlinalg.HAS_C_EXTENSION, "instrumented jlinalg extension must load"
+          assert jlinalg.HAS_OPENMP, "instrumented jlinalg extension must use OpenMP"
+          print(
+              "native sanitizer probe:",
+              f"lmm_openmp={accel.HAS_OPENMP}",
+              f"jlinalg_openmp={jlinalg.HAS_OPENMP}",
+              f"jlinalg_backend={jlinalg.blas_backend}",
+          )
+          PY
+
+          env -u JAMMA_FORCE_NUMPY_FALLBACK uv run pytest \
+            tests/lmm_accel \
+            tests/test_workspace_planning.py \
+            tests/test_likelihood_numpy.py \
+            tests/test_reml_refinement_contract.py \
+            tests/test_likelihood_output_contract.py \
+            tests/test_build_support_openmp_detect.py \
+            tests/test_kinship_sample_basis.py \
+            tests/test_pipeline_phenotype_reuse.py \
+            tests/test_chunk_pipeline_lifetime.py \
+            tests/test_eigen_io.py \
+            tests/test_validation_assoc.py \
+            -m "not benchmark" \
+            -v -rs -n 0 -p no:rerunfailures \
+            --randomly-seed=1234 \
+            -o 'addopts=--timeout=300 --no-cov' \
+            2>&1 | tee -a native-sanitizer-run.log
+
+          # Keep LOCO eigensolvers to one BLAS thread. Native OpenMP remains
+          # enabled, while the constrained runner avoids oversubscription.
+          env -u JAMMA_FORCE_NUMPY_FALLBACK \
+            JAMMA_BLAS_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+            uv run pytest tests/test_loco_eigen_cache.py \
+            -m "not benchmark" \
+            -v -rs -n 0 -p no:rerunfailures \
+            --randomly-seed=1234 \
+            -o 'addopts=--timeout=600 --no-cov' \
+            2>&1 | tee -a native-sanitizer-run.log
+
       - name: Upload sanitizer logs
         if: always()  # success AND failure
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: sanitizer-logs-${{ github.run_id }}
           path: sanitizer-run.log
+          retention-days: 30
+
+      - name: Upload native sanitizer log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: native-sanitizer-log-${{ github.run_id }}
+          path: native-sanitizer-run.log
           retention-days: 30
 
   asan-sentinel-meta-test:

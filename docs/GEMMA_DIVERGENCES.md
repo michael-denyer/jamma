@@ -231,6 +231,11 @@ iteration count per SNP; serial execution.
 Uses **grid search (50 log-spaced points) + golden section refinement (20
 iterations)**. All SNPs in a chunk are optimized simultaneously in lockstep
 (same bracket operation per iteration, vectorized across the SNP batch).
+REML then takes one safeguarded Newton step using the analytic score for each
+interior optimum. The derivative uses compensated weighted sums and the Schur
+complement chain rule. Probes and accepted candidates stay inside the original
+coarse bracket; acceptance requires negative curvature and a smaller score
+residual. Monotone brackets retain their bounded golden-section estimate.
 
 ### Unimodality Assumption
 
@@ -263,15 +268,19 @@ golden section with Brent would require either scalar per-SNP optimization
 
 ### Convergence
 
-After grid bracketing to ±1 cell, 20 golden section iterations reduce the
-bracket by `0.618^20 ≈ 6.6e-5` of the cell width. With a 50-point log-spaced
-grid over `[1e-5, 1e5]`, that bracket shrinkage gives a relative lambda
-tolerance bounded by `~6.6e-5`. GEMMA's Brent uses `1e-5` per its GSL
-configuration. The two converge to the same optimum to within `O(5e-5)`
-relative on unimodal REML surfaces -- max observed is `3.80e-5` on
-mouse_hs1940. `ToleranceConfig.lambda_rtol` (`validation/tolerances.py`)
-defaults to `2e-5`; the real-data parity tests pass `lambda_rtol=5e-5`
-explicitly.
+Twenty golden-section iterations shrink a correctly retained bracket by
+`0.618^20`. This is a geometric bound, not a bound on lambda error when
+rounded likelihood comparisons can discard the true maximum. The September
+2026 audit reproduced eight flat REML peaks whose midpoint errors exceeded the
+existing `2e-5` relative tolerance. More golden-section iterations did not fix
+those errors.
+
+The analytic-score refinement recovers information lost in the objective
+comparison. `tests/fixtures/reml_flat_optima.npz` stores the eight cases and
+independent 80-digit stationary points. Generic NumPy, split NumPy, and native
+C are checked against those points at `5e-6` relative tolerance. The wider
+mathematical validation plan covers additional conditioning and boundary cases.
+`ToleranceConfig.lambda_rtol` remains `2e-5`.
 
 ### Boundary Diagnostic
 
@@ -288,15 +297,12 @@ bound — normal behavior that also occurs in GEMMA.
 
 ### Divergence Impact
 
-| Signal Strength | Lambda Divergence | Effect on Results |
-|-----------------|-------------------|-------------------|
-| Strong signal | < 1e-4 relative | Negligible |
-| Moderate signal | < 1e-4 relative | Negligible |
-| Weak signal (flat MLE surface) | up to ~1.35e-3 relative on mouse_hs1940 | Affects only MLE logl_H1 diagnostic |
-
-P-values, effect sizes, and significance calls are unaffected. The flat region
-corresponds to weak-signal SNPs where test statistics are small regardless of
-the exact lambda.
+The earlier `1.35e-3` explanation for mode-4 `logl_H1` was incorrect: that
+output contained the REML likelihood while GEMMA reported the alternative-model
+MLE likelihood. Mode 4 now reports the MLE likelihood already computed for LRT;
+mode 1 continues to report REML. Independent dense likelihood tests enforce
+both meanings. This fix changes the diagnostic column without changing the
+LRT calculation.
 
 See [GEMMA_EQUIVALENCE.md § Lambda Optimization](GEMMA_EQUIVALENCE.md#5-lambda-optimization)
 for full error bounds and empirical validation results.
@@ -461,19 +467,27 @@ text compatibility is preserved via `--legacy-text` and the auto-detecting reade
 ### GEMMA
 
 GEMMA computes kinship over all samples in the PLINK `.fam` file, regardless of
-phenotype or covariate missingness. Sample exclusion is applied downstream during
-LMM — the kinship matrix is always n_samples × n_samples.
+phenotype or covariate missingness. SNP filtering uses the analysed samples,
+while centring and imputation use all samples. Sample exclusion is applied to
+the resulting matrix downstream during LMM. The full matrix is n_samples × n_samples.
 
 ### JAMMA
 
 When `save_kinship=False` and some samples have missing phenotype or covariates,
 JAMMA passes `valid_indices` to `compute_kinship_streaming`, which subsets each
-genotype chunk to the valid rows before accumulation. The resulting kinship matrix
+genotype chunk to the valid rows after full-population preprocessing and before
+accumulation. For LMM, SNP filtering uses the analysed samples regardless of
+whether kinship is saved. Imputation means and centring use all BED samples.
+The streaming API separates `filter_sample_indices` from output `valid_indices`;
+standardization also uses all samples. The resulting kinship matrix
 has shape (n_valid, n_valid) and is never expanded to n_samples × n_samples.
 
 When `save_kinship=True`, JAMMA computes the full n_samples × n_samples kinship
-so the saved file is reusable across phenotype masks. In that case behavior matches
-GEMMA.
+so the saved file contains every sample. Reusing it preserves the SNP set selected
+for the original analysis; a new phenotype mask can select different SNPs when
+kinship is recomputed. Saving does not change the current analysis. The analysed submatrix is then
+recentred before eigendecomposition, matching GEMMA's `CenterMatrix` step.
+Saved matrices precede analysis centring and individual weighting.
 
 ### Divergence Impact
 

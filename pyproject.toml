@@ -79,6 +79,7 @@ dev = [
     "pyyaml>=6.0.3",
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",
+    "mpmath==1.4.1",
 ]
 
 [project.scripts]
@@ -253,4 +254,5 @@ dev = [
     "pyyaml>=6.0.3",
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",
+    "mpmath==1.4.1",
 ]

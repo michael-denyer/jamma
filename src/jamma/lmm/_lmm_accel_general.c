@@ -94,6 +94,7 @@ typedef struct {
     int actual_threads;         /* for scratch deallocation sizing */
     /* Per-thread heap buffers for Pab recursion (replaces stack arrays) */
     double *pab_per_thread;     /* (actual_threads * pab_size) owned */
+    double *dpab_per_thread;    /* same shape, REML score derivative */
     double *row0_per_thread;    /* (actual_threads * n_index) owned */
     int pab_size;               /* n_rows * n_index for this workspace */
     PyObject *Uty_ref;          /* keeps Uty array alive */
@@ -125,6 +126,7 @@ static void lmm_workspace_general_free(lmm_workspace_general_t *ws)
     free(ws->utw_transposed);
     free(ws->scratch_flat);
     free(ws->pab_per_thread);
+    free(ws->dpab_per_thread);
     free(ws->row0_per_thread);
     Py_XDECREF(ws->Uty_ref);
     if (ws->null_model) {
@@ -247,15 +249,23 @@ static int init_fused_general_workspace(
 #endif
     ws->actual_threads = actual_threads;
     ws->scratch_flat = (double *)malloc(
-        (size_t)actual_threads * (size_t)n_var * (size_t)n_samples * sizeof(double));
+        (size_t)actual_threads * general_scratch_doubles(n_samples, n_var)
+        * sizeof(double));
     if (!ws->scratch_flat) { PyErr_NoMemory(); return -1; }
 
     /* Per-thread heap buffers for Pab recursion (avoids stack overflow) */
     int pab_size = n_rows * n_index;
     ws->pab_size = pab_size;
     ws->pab_per_thread = (double *)malloc(
-        (size_t)actual_threads * (size_t)pab_size * sizeof(double));
+        (size_t)actual_threads * general_pab_doubles(n_rows, n_index)
+        * sizeof(double));
     if (!ws->pab_per_thread) { PyErr_NoMemory(); return -1; }
+    if (ws->mode == 1 || ws->mode == 4) {
+        ws->dpab_per_thread = (double *)malloc(
+            (size_t)actual_threads * general_pab_doubles(n_rows, n_index)
+            * sizeof(double));
+        if (!ws->dpab_per_thread) { PyErr_NoMemory(); return -1; }
+    }
     ws->row0_per_thread = (double *)malloc(
         (size_t)actual_threads * (size_t)n_index * sizeof(double));
     if (!ws->row0_per_thread) { PyErr_NoMemory(); return -1; }
@@ -281,7 +291,7 @@ static int init_fused_general_workspace(
     grid->step = step;
 
     grid->lambda_grid = (double *)malloc((size_t)n_grid * sizeof(double));
-    grid->hi_eval_grid = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
+    grid->hi_eval_grid = alloc_aligned_doubles(grid_doubles(n_samples, n_grid));
     grid->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
     grid->inv_sums_grid = (double *)malloc(
         (size_t)n_grid * (size_t)n_inv * sizeof(double));
@@ -485,8 +495,8 @@ PyObject *create_workspace_general_c_py(
          * Each thread needs (n_index * n_samples) doubles for row-major uab_snp. */
         int n_index = ws->table.n_index;
         lrt->uab_snp_flat = (double *)malloc(
-            (size_t)ws->actual_threads * (size_t)n_index
-            * (size_t)n_samples * sizeof(double));
+            (size_t)ws->actual_threads
+            * general_lrt_thread_doubles(n_samples, n_index) * sizeof(double));
         if (!lrt->uab_snp_flat) { free(lrt); PyErr_NoMemory(); goto err_ws; }
         ws->lrt = lrt;
     }
@@ -624,6 +634,8 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
         double *scratch = ws->scratch_flat +
             (size_t)tid * (size_t)n_var * (size_t)n_samples;
         double *my_pab = ws->pab_per_thread + (size_t)tid * ws->pab_size;
+        double *my_dpab = ws->dpab_per_thread
+            ? ws->dpab_per_thread + (size_t)tid * ws->pab_size : NULL;
         double *my_row0 = ws->row0_per_thread + (size_t)tid * n_index;
 
         /* Compute n_var varying columns on-the-fly */
@@ -699,7 +711,7 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
                 log_l_min, step, n_grid, n_refine,
                 logdet_iab, reml_const, &ws->table,
                 &logl_reml, &wald_beta, &wald_se, &wald_f, &wald_valid,
-                my_row0, my_pab
+                my_row0, my_pab, my_dpab
             );
 
             out_lambdas[snp] = lambda_reml;
@@ -750,6 +762,9 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
             );
 
             out_lambdas_mle[snp] = lambda_mle;
+            /* GEMMA mode 4 reports the LRT alternative-model MLE likelihood
+             * in logl_H1. Mode 1 leaves the REML likelihood written above. */
+            if (do_reml) out_logls[snp] = logl_H1;
 
             double lrt_stat = 2.0 * (logl_H1 - ws->lrt->logl_H0);
             if (lrt_stat < 0.0) lrt_stat = 0.0;

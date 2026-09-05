@@ -31,6 +31,7 @@ from jamma.lmm.compute_numpy import (
     compute_lmm_chunk_numpy,
 )
 from jamma.lmm.likelihood import compute_null_model_mle
+from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
@@ -40,6 +41,7 @@ from jamma.lmm.uab import (
 from tests.builders import rotated_lmm_inputs
 from tests.conftest import requires_c
 from tests.fixture_paths import MOUSE
+from tests.independent_lmm_oracle import dense_lmm_log_likelihood
 
 
 @contextlib.contextmanager
@@ -793,6 +795,48 @@ def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
         "p_scores",
     ):
         assert result4[key] is not None, f"Mode 4: key '{key}' is None"
+
+    assert result1["lambdas"] is not None
+    assert result1["logls"] is not None
+    assert result4["lambdas_mle"] is not None
+    assert result4["logls"] is not None
+
+    # GEMMA gives logl_H1 two mode-specific meanings: REML for Wald mode 1,
+    # and the alternative-model MLE likelihood calculated by LRT for mode 4.
+    mle = golden_section_optimize_lambda_mle_numpy(
+        1, eigenvalues, Uab_batch, n_iter=20
+    )[1]
+    np.testing.assert_allclose(result4["logls"], mle, rtol=1e-12)
+    assert not np.allclose(result1["logls"], mle, rtol=1e-6)
+
+    expected_reml = np.array(
+        [
+            dense_lmm_log_likelihood(
+                eigenvalues,
+                UtW,
+                Uty,
+                UtG[:, snp],
+                result1["lambdas"][snp],
+                restricted=True,
+            )
+            for snp in range(UtG.shape[1])
+        ]
+    )
+    expected_mle = np.array(
+        [
+            dense_lmm_log_likelihood(
+                eigenvalues,
+                UtW,
+                Uty,
+                UtG[:, snp],
+                result4["lambdas_mle"][snp],
+                restricted=False,
+            )
+            for snp in range(UtG.shape[1])
+        ]
+    )
+    np.testing.assert_allclose(result1["logls"], expected_reml, rtol=2e-14)
+    np.testing.assert_allclose(result4["logls"], expected_mle, rtol=2e-14)
 
 
 def test_compute_lmm_chunk_numpy_missing_args_raise(chunk_dispatch_data):

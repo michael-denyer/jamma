@@ -11,7 +11,7 @@ from jamma.validation.compare import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from jamma.validation.tolerances import ToleranceConfig
+from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig
 from tests.assoc_test_helpers import make_assoc as _make_assoc
 from tests.fakes.assoc_files import (
     ALL_TESTS_COLS,
@@ -671,6 +671,171 @@ class TestCompareAssocResults:
 
         assert comparison.passed is True
         assert "boundary" in comparison.l_remle.message.lower()
+
+    @pytest.mark.parametrize(
+        ("actual_lambda", "expected_lambda", "expected_classes"),
+        [
+            (1e-5, 1.0, "lower/interior"),
+            (1.0, 1e-5, "interior/lower"),
+            (1e5, 1.0, "upper/interior"),
+            (1e-5, 1e5, "lower/upper"),
+        ],
+    )
+    def test_lambda_boundary_class_mismatch_fails(
+        self, actual_lambda, expected_lambda, expected_classes
+    ):
+        """A boundary exemption requires both optimizers to hit the same bound."""
+        actual = [_make_assoc(rs="rs1", l_remle=actual_lambda)]
+        expected = [_make_assoc(rs="rs1", l_remle=expected_lambda)]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        assert comparison.l_remle.passed is False
+        assert expected_classes in comparison.l_remle.message
+
+    def test_matching_lower_boundary_values_are_exempt(self):
+        """Small pinning differences pass when both values classify as lower-bound."""
+        actual = [_make_assoc(rs="rs1", l_remle=1.00001e-5)]
+        expected = [_make_assoc(rs="rs1", l_remle=1e-5)]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is True
+        assert "matching lower boundary" in comparison.l_remle.message
+
+    def test_interior_lambda_values_keep_strict_tolerance(self):
+        """Boundary handling does not relax comparison of interior optima."""
+        actual = [_make_assoc(rs="rs1", l_remle=1.001)]
+        expected = [_make_assoc(rs="rs1", l_remle=1.0)]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        assert comparison.l_remle.passed is False
+
+    def test_former_lower_threshold_values_are_interior(self):
+        """Values above the optimizer bound do not inherit the old exemption."""
+        actual = [_make_assoc(rs="rs1", l_remle=2e-5)]
+        expected = [_make_assoc(rs="rs1", l_remle=9e-5)]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        assert comparison.l_remle.passed is False
+        assert "boundary" not in comparison.l_remle.message
+
+    def test_lambda_failure_location_uses_original_snp_index(self):
+        """Filtering an exempt pair does not renumber a later failing SNP."""
+        actual = [
+            _make_assoc(rs="rs1", l_remle=1e-5),
+            _make_assoc(rs="rs2", l_remle=2.0),
+        ]
+        expected = [
+            _make_assoc(rs="rs1", l_remle=1e-5),
+            _make_assoc(rs="rs2", l_remle=1.0),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.l_remle.passed is False
+        assert comparison.l_remle.worst_location == (1,)
+        assert "at (1,)" in comparison.l_remle.message
+
+    def test_lambda_class_mismatch_reports_worst_difference(self):
+        """Class mismatch diagnostics keep the largest full-column error."""
+        actual = [
+            _make_assoc(rs="rs1", l_remle=1e-5),
+            _make_assoc(rs="rs2", l_remle=1e5),
+        ]
+        expected = [
+            _make_assoc(rs="rs1", l_remle=1.0),
+            _make_assoc(rs="rs2", l_remle=1.0),
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.l_remle.passed is False
+        assert comparison.l_remle.max_abs_diff == pytest.approx(99999.0)
+        assert comparison.l_remle.worst_location == (1,)
+
+    def test_remle_matching_upper_values_use_strict_tolerance(self):
+        """REML keeps its prior policy of no upper-bound magnitude exemption."""
+        actual = [_make_assoc(rs="rs1", l_remle=1e5)]
+        expected = [_make_assoc(rs="rs1", l_remle=99900.0)]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        assert comparison.l_remle.passed is False
+
+    def test_lambda_boundary_policy_uses_configured_optimizer_bounds(self):
+        """Callers can match the comparator policy to non-default optimizer bounds."""
+        policy = LambdaBoundaryPolicy(lower=0.1, upper=10.0, rtol=1e-3)
+        config = ToleranceConfig(lambda_boundary=policy)
+        actual = [_make_assoc(rs="rs1", l_remle=0.10005)]
+        expected = [_make_assoc(rs="rs1", l_remle=0.1)]
+
+        comparison = compare_assoc_results(actual, expected, config)
+
+        assert comparison.passed is True
+        assert "matching lower boundary" in comparison.l_remle.message
+
+    def test_mle_boundary_class_mismatch_fails(self):
+        """The MLE lambda exemption also requires the same boundary class."""
+        actual = [
+            _make_assoc(
+                rs="rs1",
+                beta=float("nan"),
+                se=float("nan"),
+                p_wald=None,
+                logl_H1=None,
+                l_remle=None,
+                p_lrt=0.02,
+                l_mle=1e5,
+            )
+        ]
+        expected = [
+            _make_assoc(
+                rs="rs1",
+                beta=float("nan"),
+                se=float("nan"),
+                p_wald=None,
+                logl_H1=None,
+                l_remle=None,
+                p_lrt=0.02,
+                l_mle=1.0,
+            )
+        ]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is False
+        assert comparison.l_mle is not None
+        assert comparison.l_mle.passed is False
+        assert "upper/interior" in comparison.l_mle.message
+
+    @pytest.mark.parametrize(
+        ("actual_lambda", "expected_lambda", "passes"),
+        [
+            (float("nan"), float("nan"), True),
+            (float("nan"), 1.0, False),
+            (float("inf"), float("inf"), False),
+            (1e-8, 1e-8, False),
+        ],
+    )
+    def test_lambda_invalid_values_are_explicit(
+        self, actual_lambda, expected_lambda, passes
+    ):
+        """Only paired NaNs receive the degenerate-result exemption."""
+        actual = [_make_assoc(rs="rs1", l_remle=actual_lambda)]
+        expected = [_make_assoc(rs="rs1", l_remle=expected_lambda)]
+
+        comparison = compare_assoc_results(actual, expected)
+
+        assert comparison.passed is passes
+        assert comparison.l_remle.passed is passes
+        assert "invalid" in comparison.l_remle.message.lower()
 
     def test_lambda_boundary_partial_in_all_tests(self):
         """Partial boundary lambda values: boundary excluded, rest compared."""

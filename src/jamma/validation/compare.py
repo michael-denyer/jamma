@@ -15,7 +15,7 @@ from numpy.testing import assert_allclose
 
 from jamma.lmm.schema import HEADERS, MODE_SPECS, LmmMode
 from jamma.lmm.stats import AssocResult
-from jamma.validation.tolerances import ToleranceConfig
+from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig
 
 
 @dataclass
@@ -356,10 +356,6 @@ class AssocComparisonResult:
     l_mle: ComparisonResult | None = None  # Only for LRT (-lmm 2)
 
 
-_LAMBDA_LOWER_BOUND = 1e-4
-_LAMBDA_UPPER_BOUND = 1e4
-
-
 def _detect_lmm_mode(sample: list[AssocResult]) -> LmmMode:
     """Infer the LMM mode from which p-value columns the reference carries.
 
@@ -399,33 +395,117 @@ def _column(field: str, rows: list[AssocResult], default: float) -> np.ndarray:
     )
 
 
-def _compare_with_boundary(
+def _classify_lambdas(values: np.ndarray, policy: LambdaBoundaryPolicy) -> np.ndarray:
+    """Classify optimizer outputs against the bounds used for that run."""
+    classes = np.full(values.shape, "interior", dtype=object)
+    invalid = (
+        ~np.isfinite(values)
+        | (values <= 0)
+        | (values < policy.lower * (1 - policy.rtol))
+        | (values > policy.upper * (1 + policy.rtol))
+    )
+    classes[values <= policy.lower * (1 + policy.rtol)] = "lower"
+    classes[values >= policy.upper * (1 - policy.rtol)] = "upper"
+    classes[invalid] = "invalid"
+    return classes
+
+
+def _compare_lambdas(
     actual_arr: np.ndarray,
     expected_arr: np.ndarray,
-    boundary_mask: np.ndarray,
+    policy: LambdaBoundaryPolicy,
     rtol: float,
     atol: float,
     name: str,
+    *,
+    exempt_upper: bool,
 ) -> ComparisonResult:
-    """Compare lambda arrays, excluding values pinned at the optimizer boundary.
+    """Compare lambdas after classifying both optimizer outputs.
 
-    Lambda converges at the optimization bounds for weak-signal SNPs; JAMMA's
-    golden-section and GEMMA's Brent agree on *whether* a value is at the bound
-    but not on its exact pinned magnitude, so boundary values are excluded.
+    Matching lower-bound hits are exempt from magnitude comparison. MLE may
+    also exempt matching upper-bound hits. Paired NaNs represent the same
+    degenerate result and are exempt. Every other invalid value or class
+    disagreement fails before interior comparison.
     """
-    if np.all(boundary_mask):
-        return _skipped_result(
-            f"{name} comparison skipped (all values at optimization boundary)"
+    actual_classes = _classify_lambdas(actual_arr, policy)
+    expected_classes = _classify_lambdas(expected_arr, policy)
+    paired_nan = np.isnan(actual_arr) & np.isnan(expected_arr)
+    invalid = (actual_classes == "invalid") | (expected_classes == "invalid")
+    class_mismatch = (actual_classes != expected_classes) | (invalid & ~paired_nan)
+    if np.any(class_mismatch):
+        mismatch_indices = np.flatnonzero(class_mismatch)
+        mismatched_actual = actual_arr[mismatch_indices]
+        mismatched_expected = expected_arr[mismatch_indices]
+        finite = np.isfinite(mismatched_actual) & np.isfinite(mismatched_expected)
+        if np.all(finite):
+            abs_diffs = np.abs(mismatched_actual - mismatched_expected)
+            local_worst = int(np.argmax(abs_diffs))
+            max_abs_diff = float(abs_diffs[local_worst])
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rel_diffs = abs_diffs / np.abs(mismatched_expected)
+            max_rel_diff = float(np.max(rel_diffs))
+        else:
+            local_worst = int(np.flatnonzero(~finite)[0])
+            max_abs_diff = np.inf
+            max_rel_diff = np.inf
+        index = int(mismatch_indices[local_worst])
+        return ComparisonResult(
+            passed=False,
+            max_abs_diff=max_abs_diff,
+            max_rel_diff=max_rel_diff,
+            worst_location=(index,),
+            message=(
+                f"{name} optimizer-bound class mismatch at ({index},): "
+                f"{actual_classes[index]}/{expected_classes[index]} "
+                f"(actual={actual_arr[index]!r}, expected={expected_arr[index]!r})"
+            ),
         )
-    if np.any(boundary_mask):
-        keep = ~boundary_mask
-        return compare_arrays(
+
+    matching_boundary = actual_classes == "lower"
+    if exempt_upper:
+        matching_boundary |= actual_classes == "upper"
+    exempt = matching_boundary | paired_nan
+    if np.all(exempt):
+        lower_count = int(np.sum(actual_classes == "lower"))
+        upper_count = int(np.sum(actual_classes == "upper"))
+        nan_count = int(np.sum(paired_nan))
+        exemptions = []
+        if lower_count:
+            exemptions.append(f"{lower_count} matching lower boundary")
+        if upper_count:
+            exemptions.append(f"{upper_count} matching upper boundary")
+        if nan_count:
+            exemptions.append(f"{nan_count} paired invalid NaN")
+        return _skipped_result(f"{name} comparison exempted ({', '.join(exemptions)})")
+
+    if np.any(exempt):
+        boundary_count = int(np.sum(matching_boundary))
+        nan_count = int(np.sum(paired_nan))
+        details = f"matching classes; {nan_count} paired invalid NaN"
+        keep = ~exempt
+        result = compare_arrays(
             actual_arr[keep],
             expected_arr[keep],
             rtol,
             atol,
-            f"{name} (excluding {int(np.sum(boundary_mask))} boundary values)",
+            f"{name} (excluding {boundary_count} boundary values with {details})",
         )
+        if not result.passed and result.worst_location is not None:
+            filtered_index = result.worst_location[0]
+            original_index = int(np.flatnonzero(keep)[filtered_index])
+            original_abs_diff = abs(
+                actual_arr[original_index] - expected_arr[original_index]
+            )
+            result.worst_location = (original_index,)
+            result.message = (
+                f"{name} comparison failed at ({original_index},): "
+                f"actual={actual_arr[original_index]:.10e}, "
+                f"expected={expected_arr[original_index]:.10e}, "
+                f"abs_diff={original_abs_diff:.2e} "
+                f"(rtol={rtol}, atol={atol}; excluded {boundary_count} matching "
+                f"boundary values and {nan_count} paired invalid NaN values)"
+            )
+        return result
     return compare_arrays(actual_arr, expected_arr, rtol, atol, name)
 
 
@@ -559,20 +639,17 @@ def compare_assoc_results(
             "logl_H1",
         )
 
-    def _lambda(field: str, *, check_upper: bool) -> ComparisonResult:
+    def _lambda(field: str, *, exempt_upper: bool) -> ComparisonResult:
         actual_arr = _column(field, actual, np.nan)
         expected_arr = _column(field, expected, np.nan)
-        mask = (expected_arr <= _LAMBDA_LOWER_BOUND) | (
-            actual_arr <= _LAMBDA_LOWER_BOUND
-        )
-        if check_upper:
-            mask = (
-                mask
-                | (expected_arr >= _LAMBDA_UPPER_BOUND)
-                | (actual_arr >= _LAMBDA_UPPER_BOUND)
-            )
-        return _compare_with_boundary(
-            actual_arr, expected_arr, mask, config.lambda_rtol, config.atol, field
+        return _compare_lambdas(
+            actual_arr,
+            expected_arr,
+            config.lambda_boundary,
+            config.lambda_rtol,
+            config.atol,
+            field,
+            exempt_upper=exempt_upper,
         )
 
     column_rules: dict[str, Callable[[], ComparisonResult]] = {
@@ -580,8 +657,8 @@ def compare_assoc_results(
         "p_score": lambda: _pvalue("p_score", config.pvalue_rtol),
         "p_lrt": lambda: _pvalue("p_lrt", config.p_lrt_rtol),
         "logl_H1": _logl,
-        "l_remle": lambda: _lambda("l_remle", check_upper=False),
-        "l_mle": lambda: _lambda("l_mle", check_upper=True),
+        "l_remle": lambda: _lambda("l_remle", exempt_upper=False),
+        "l_mle": lambda: _lambda("l_mle", exempt_upper=True),
     }
 
     results: dict[str, ComparisonResult] = {"beta": beta_result, "se": se_result}

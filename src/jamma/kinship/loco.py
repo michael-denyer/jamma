@@ -37,10 +37,10 @@ from jamma.io.plink import (
     partitions_from_metadata,
     stream_genotype_chunks,
 )
-from jamma.kinship.stream import (
-    _accumulate_kinship,
-    _select_kinship_snps,
-    _selected_chunks,
+from jamma.kinship.accumulation import (
+    accumulate_kinship,
+    select_kinship_snps,
+    selected_chunks,
     validate_valid_indices,
 )
 from jamma.utils import chr_sort_key
@@ -60,10 +60,9 @@ class LocoKinshipStream:
 
     Attributes:
         snp_stats: PASS-1 all-sample SnpStatsCache for the LOCO association pass to
-            reuse, or None when ``valid_indices`` filtered the basis. SnpStatsCache is
-            all-sample by contract (``__post_init__`` forbids caching a valid-sample
-            basis), so a filtered run exports no cache. Available before iteration,
-            since PASS 1 runs eagerly at construction time.
+            reuse when its sample population matches, or None when SNP filtering
+            uses a sample subset. Output row selection does not change these
+            statistics. Available before iteration, since PASS 1 runs eagerly.
     """
 
     _matrices: Iterator[tuple[str, np.ndarray]]
@@ -237,16 +236,16 @@ def _stream_s_full_and_chr(
         # Skip centering when S_full isn't needed and no target chromosome is present.
         return S_full is not None or not chr_set.isdisjoint(chromosomes[global_idx])
 
-    for X_centered, global_idx in _selected_chunks(
+    for X_centered, global_idx in selected_chunks(
         chunk_iter, snp_indices, valid_indices, keep=keep
     ):
         if S_full is not None:
-            _accumulate_kinship(S_full, X_centered)
+            accumulate_kinship(S_full, X_centered)
 
         chunk_chrs = chromosomes[global_idx]
         for chr_name in set(chunk_chrs) & chr_set:
             X_chr_part = X_centered[:, chunk_chrs == chr_name]
-            _accumulate_kinship(S_chr[chr_name], X_chr_part)
+            accumulate_kinship(S_chr[chr_name], X_chr_part)
 
     return S_full, S_chr
 
@@ -362,6 +361,7 @@ def compute_loco_kinship_streaming(
     valid_indices: np.ndarray | None = None,
     mem_budget: float | None = None,
     *,
+    filter_sample_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
 ) -> LocoKinshipStream:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
@@ -390,6 +390,8 @@ def compute_loco_kinship_streaming(
         mem_budget: User-set ceiling in GB, or None for no ceiling. Vetoes the
             run the same way ``_reject_if_over_budget`` vetoes the batch and
             streaming paths; it does not resize the chromosome batch.
+        filter_sample_indices: Samples used for SNP filtering, or None for all
+            BED samples. Independent of output rows and full-population centering.
         _max_batch_chrs: Debug override forcing a fixed chromosomes-per-pass
             batch size (bypasses memory-based sizing). Used by tests to exercise
             multi-pass without mocking psutil.
@@ -399,10 +401,10 @@ def compute_loco_kinship_streaming(
         where chr_name is the chromosome being excluded and K_loco has shape
         (n_valid, n_valid) when valid_indices is provided, else
         (n_samples, n_samples). Read ``.snp_stats`` for the PASS-1 all-sample
-        SnpStatsCache the LOCO association pass reuses; it is None when
-        valid_indices filtered the basis (the all-sample cache is then neither
-        valid nor consumable). Each yielded matrix aliases a shared buffer
-        overwritten on the next advance, so consume each before advancing, or call
+        SnpStatsCache, or None when filtering uses a sample subset. Centering
+        always uses all BED samples;
+        valid_indices selects matrix rows only. Each yielded matrix aliases a shared
+        buffer overwritten on the next advance, so consume it before advancing, or call
         ``.materialize()`` to collect independent copies.
 
     Raises:
@@ -423,6 +425,8 @@ def compute_loco_kinship_streaming(
 
     if valid_indices is not None:
         validate_valid_indices(valid_indices, n_samples)
+    if filter_sample_indices is not None:
+        validate_valid_indices(filter_sample_indices, n_samples)
 
     # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
     partitions = partitions_from_metadata(meta)
@@ -438,20 +442,21 @@ def compute_loco_kinship_streaming(
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")
 
-    # PASS 1: stats over the analysed (valid) samples, matching GEMMA's basis and
-    # the non-LOCO streaming path, so a SNP (near-)monomorphic among analysed
-    # individuals is not admitted just because it varies in dropped samples.
+    # SNP filtering and output rows are independent. The LMM caller filters on
+    # analysed samples even when saving a full matrix; centering uses all rows.
     stats = collect_streamed_snp_stats(
         bed_path,
         n_snps=n_snps,
         n_samples=n_samples,
         chunk_size=chunk_size,
-        sample_indices=valid_indices,
+        sample_indices=filter_sample_indices,
         validate_genotypes=True,
         show_progress=show_progress,
         progress_label="LOCO: SNP statistics",
         dtype=np.float32,
-        sample_scope="valid_samples" if valid_indices is not None else "all_samples",
+        sample_scope="all_samples"
+        if filter_sample_indices is None
+        else "valid_samples",
     )
 
     if stats.n_unexpected > 0:
@@ -460,9 +465,6 @@ def compute_loco_kinship_streaming(
             f"expected range {{0, 1, 2, NaN}}"
         )
 
-    # Export the PASS-1 stats on the stream, only for the all-sample basis
-    # (SnpStatsCache is all-sample by contract): a filtered run re-derives
-    # valid-sample stats downstream instead, so no cache is exported (None).
     snp_stats_cache = (
         SnpStatsCache(
             col_means=stats.col_means,
@@ -474,11 +476,11 @@ def compute_loco_kinship_streaming(
             global_indices=stats.global_indices,
             sample_scope=stats.sample_scope,
         )
-        if valid_indices is None
+        if filter_sample_indices is None
         else None
     )
 
-    snp_selection = _select_kinship_snps(
+    snp_selection = select_kinship_snps(
         stats, maf_threshold, miss_threshold, ksnps_indices, n_snps
     )
     n_filtered = len(snp_selection.indices)

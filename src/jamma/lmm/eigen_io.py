@@ -7,9 +7,12 @@ GEMMA text format (.eigenD.txt / .eigenU.txt) remains available via
 legacy_text=True for interoperability with external tools.
 
 Read behaviour:
-- .npy suffix: loads eagerly via np.load (full read into RAM).
+- .npy suffix: loads read-only through NumPy's memory-mapped path.
 - .txt suffix: checks for .npy sidecar cache (memory-mapped, demand-paged via
   mmap_mode='r') when available. Falls back to text parsing.
+
+Managed JAMMA writes use immutable generation filenames plus one atomic manifest.
+Explicit external GEMMA pairs remain supported without a manifest.
 
 Format follows GEMMA param.cpp WriteVector/WriteMatrix:
 - eigenD: one value per line, 10 significant digits (.10g format)
@@ -17,6 +20,8 @@ Format follows GEMMA param.cpp WriteVector/WriteMatrix:
 - No headers in either file
 """
 
+import json
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -31,6 +36,8 @@ from jamma.utils.npy_cache import (
     save_npy_atomic,
     write_npy_cache,
 )
+
+EIGEN_MANIFEST_SCHEMA_VERSION = 1
 
 # ---------------------------------------------------------------------------
 # .npy sidecar cache helpers (used for text-format files only)
@@ -140,6 +147,24 @@ def read_eigen_files(
         ValueError: If dimensions are inconsistent or do not match
             n_samples.
     """
+    eigenD_path = Path(eigenD_path)
+    eigenU_path = Path(eigenU_path)
+    d_generation = _member_generation(eigenD_path)
+    u_generation = _member_generation(eigenU_path)
+    if (d_generation is None) != (u_generation is None) or (
+        d_generation is not None and d_generation != u_generation
+    ):
+        raise ValueError(
+            "Eigen files name different managed generations; use both paths "
+            "returned by one write_eigen_files call"
+        )
+    stable = _stable_pair_identity(eigenD_path, eigenU_path)
+    if stable is not None:
+        directory, prefix = stable
+        manifest = eigen_manifest_path(directory, prefix)
+        if manifest.is_file():
+            eigenD_path, eigenU_path = resolve_eigen_generation(directory, prefix)
+
     eigenvalues = _read_eigenvalues(eigenD_path)
     eigenvectors = _read_eigenvectors(eigenU_path)
 
@@ -170,6 +195,47 @@ def read_eigen_files(
         )
 
     return eigenvalues, eigenvectors
+
+
+def _member_generation(path: Path) -> str | None:
+    """Return the full managed generation identity embedded in a member name."""
+    marker = ".generation."
+    if marker not in path.name:
+        return None
+    for kind in (".eigenD.", ".eigenU."):
+        if kind in path.name:
+            identity, _separator, _suffix = path.name.partition(kind)
+            return identity
+    return None
+
+
+def _stable_pair_identity(
+    eigenD_path: Path, eigenU_path: Path
+) -> tuple[Path, str] | None:
+    """Return the managed stable pair identity, or None for explicit inputs."""
+    if eigenD_path.parent != eigenU_path.parent:
+        return None
+    for suffix in (".npy", ".txt"):
+        d_tail = f".eigenD{suffix}"
+        u_tail = f".eigenU{suffix}"
+        if eigenD_path.name.endswith(d_tail) and eigenU_path.name.endswith(u_tail):
+            d_prefix = eigenD_path.name[: -len(d_tail)]
+            u_prefix = eigenU_path.name[: -len(u_tail)]
+            if d_prefix == u_prefix and ".generation." not in d_prefix:
+                return eigenD_path.parent, d_prefix
+    return None
+
+
+def managed_eigen_pair_exists(eigenD_path: Path, eigenU_path: Path) -> bool:
+    """Whether a stable managed pair resolves to two committed members."""
+    stable = _stable_pair_identity(Path(eigenD_path), Path(eigenU_path))
+    if stable is None:
+        return False
+    try:
+        members = resolve_eigen_generation(*stable)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, OSError):
+        return False
+    return all(path.is_file() for path in members)
 
 
 def _write_array(
@@ -243,8 +309,8 @@ def write_eigen_files(
     Binary .npy is the default format (no text files written). Use
     legacy_text=True for GEMMA-compatible .txt + .npy sidecar output.
 
-    Binary naming: {prefix}.eigenD.npy and {prefix}.eigenU.npy
-    Text naming: {prefix}.eigenD.txt and {prefix}.eigenU.txt (+ sidecars)
+    Members include an immutable generation ID. A small manifest at
+    ``{prefix}.eigen_manifest.json`` selects the current complete pair.
 
     Args:
         eigenvalues: 1D array of eigenvalues.
@@ -255,13 +321,100 @@ def write_eigen_files(
             writes only binary .npy.
 
     Returns:
-        Tuple of (eigenD_path, eigenU_path). Paths reflect actual files written
-        (.npy by default, .txt with legacy_text=True).
+        Paths to the committed immutable members. JAMMA also accepts the stable
+        ``{prefix}.eigenD/eigenU`` pair and resolves it through the manifest.
     """
     output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generation = uuid.uuid4().hex
+    eigenD_path, eigenU_path = write_eigen_generation_members(
+        eigenvalues,
+        eigenvectors,
+        output_dir,
+        prefix,
+        generation,
+        legacy_text=legacy_text,
+    )
+    _write_manifest(
+        eigen_manifest_path(output_dir, prefix),
+        {
+            "schema_version": EIGEN_MANIFEST_SCHEMA_VERSION,
+            "generation": generation,
+            "members": {
+                "eigenD": eigenD_path.name,
+                "eigenU": eigenU_path.name,
+            },
+        },
+    )
+    return eigenD_path, eigenU_path
+
+
+def eigen_manifest_path(output_dir: Path, prefix: str) -> Path:
+    """Stable commit record for the latest managed eigenpair generation."""
+    return Path(output_dir) / f"{prefix}.eigen_manifest.json"
+
+
+def _generation_prefix(prefix: str, generation: str) -> str:
+    return f"{prefix}.generation.{generation}"
+
+
+def _write_manifest(path: Path, payload: dict[str, object]) -> None:
+    """Publish a small JSON commit record after all referenced files exist."""
+    with atomic_output(path) as temporary, open(temporary, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+        fh.write("\n")
+
+
+def resolve_eigen_generation(output_dir: Path, prefix: str) -> tuple[Path, Path]:
+    """Resolve the latest managed eigenpair from one manifest read."""
+    manifest_path = eigen_manifest_path(output_dir, prefix)
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise ValueError(f"Unsupported eigen manifest: {manifest_path}")
+    generation = manifest.get("generation")
+    members = manifest.get("members")
+    if not isinstance(generation, str) or not isinstance(members, dict):
+        raise ValueError(f"Malformed eigen manifest: {manifest_path}")
+    expected_prefix = _generation_prefix(prefix, generation)
+    resolved: list[Path] = []
+    formats: list[str] = []
+    for kind in ("eigenD", "eigenU"):
+        name = members.get(kind)
+        if (
+            not isinstance(name, str)
+            or Path(name).name != name
+            or not name.startswith(f"{expected_prefix}.{kind}.")
+        ):
+            raise ValueError(f"Unsafe or malformed {kind} member in {manifest_path}")
+        artifact_format = Path(name).suffix
+        if artifact_format not in {".npy", ".txt"}:
+            raise ValueError(f"Unsupported {kind} member format in {manifest_path}")
+        formats.append(artifact_format)
+        resolved.append(Path(output_dir) / name)
+    if formats[0] != formats[1]:
+        raise ValueError(f"Mixed member formats in eigen manifest: {manifest_path}")
+    return resolved[0], resolved[1]
+
+
+def write_eigen_generation_members(
+    eigenvalues: np.ndarray,
+    eigenvectors: np.ndarray,
+    output_dir: Path,
+    prefix: str,
+    generation: str,
+    *,
+    legacy_text: bool = False,
+    label: str | None = None,
+) -> tuple[Path, Path]:
+    """Write immutable pair members without publishing a commit record."""
+    output_dir = Path(output_dir)
     suffix = ".txt" if legacy_text else ".npy"
-    eigenD_path = output_dir / f"{prefix}.eigenD{suffix}"
-    eigenU_path = output_dir / f"{prefix}.eigenU{suffix}"
+    member_prefix = _generation_prefix(prefix, generation)
+    if label is not None:
+        member_prefix = f"{member_prefix}.{label}"
+    eigenD_path = output_dir / f"{member_prefix}.eigenD{suffix}"
+    eigenU_path = output_dir / f"{member_prefix}.eigenU{suffix}"
     _write_eigenvalues(eigenvalues, eigenD_path, legacy_text=legacy_text)
     _write_eigenvectors(eigenvectors, eigenU_path, legacy_text=legacy_text)
     return eigenD_path, eigenU_path

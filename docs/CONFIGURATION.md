@@ -106,12 +106,32 @@ or `-lmm` is required.
 | `-eigen` | flag | off | Write eigendecomposition files alongside kinship output |
 | `--eigen-dir` | path | — | Directory for LOCO per-chromosome eigen cache. With `-lmm -loco`, reads cached files to skip re-computation. With `-eigen`, writes them here. Only valid with `-loco`. |
 
+JAMMA writes ordinary eigenpairs as immutable generation files, for example
+`result.generation.<id>.eigenD.npy` and
+`result.generation.<id>.eigenU.npy`. It writes both files before atomically
+publishing `result.eigen_manifest.json`, which selects the current complete
+pair. The Python result and CLI output report the actual generation paths.
+With `--legacy-text`, those reported `.txt` generation files are ordinary
+GEMMA-compatible text files and can be passed directly to GEMMA.
+
+For JAMMA input, the stable logical names `result.eigenD.npy` and
+`result.eigenU.npy` (or their `.txt` forms) resolve through the sibling manifest;
+the logical files themselves do not exist and are not portable to software that
+does not understand the manifest. External GEMMA pairs remain unmanaged inputs
+and can be supplied directly with `-d` and `-u`. To copy a managed pair, copy the
+two actual generation files returned by JAMMA, or copy the manifest together
+with every member it names. JAMMA retains older generation files so readers that
+started before a replacement can finish. It does not currently remove those old
+generations automatically.
+
 > **Cache validation.** The eigen cache is keyed by a SHA-256 over its
 > determinants: the `.bim` is content-hashed, the `.bed` is fingerprinted by
 > size + modification time, plus the MAF and missingness thresholds, any
 > `-ksnps` restriction, the analysed-sample set, and the manifest
 > `schema_version` (bumping it invalidates all prior caches), stored in
-> `<prefix>.loco.cache_manifest.json`. The `.bed` is fingerprinted rather than
+> `<prefix>.loco.cache_manifest.json`. The LOCO manifest also names every
+> chromosome member in one immutable generation, and becomes visible only after
+> that complete set has been written. The `.bed` is fingerprinted rather than
 > fully hashed to avoid re-reading large genotype files every run; regenerating
 > genotypes changes the `.bed` size or timestamp and invalidates the cache.
 > When any determinant changes the cache is recomputed rather than silently

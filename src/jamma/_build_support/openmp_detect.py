@@ -31,10 +31,34 @@ correctly — no GOMP shim involved.  Falls back to GCC with a warning.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+
+_LIBIOMP5_SHARED_NAME = re.compile(r"^libiomp5(?:-[0-9a-fA-F]{6,})?\.so(?:\.[0-9]+)*$")
+
+
+def _libiomp5_candidate(directory: Path) -> Path | None:
+    """Return the preferred loadable Intel OpenMP runtime in a directory."""
+    candidates = [
+        path
+        for path in directory.iterdir()
+        if path.is_file() and _LIBIOMP5_SHARED_NAME.fullmatch(path.name)
+    ]
+    if not candidates:
+        return None
+
+    def preference(path: Path) -> tuple[int, str]:
+        name = path.name
+        if name == "libiomp5.so":
+            return (0, name)
+        if name.startswith("libiomp5.so."):
+            return (1, name)
+        return (2, name)
+
+    return min(candidates, key=preference)
 
 
 def openmp_disabled_by_env() -> bool:
@@ -191,10 +215,10 @@ def _find_libiomp5(
         for d in search_dirs:
             if not d.is_dir():
                 continue
-            for lib in d.iterdir():
-                if "libiomp5" in lib.name and ".so" in lib.name:
-                    _print(f"Intel OpenMP found: {lib}")
-                    return lib
+            lib = _libiomp5_candidate(d)
+            if lib is not None:
+                _print(f"Intel OpenMP found: {lib}")
+                return lib
     except ImportError as e:
         # numpy failing to import during a probe is itself a signal — an
         # ILP64 ABI mismatch is exactly what runtime recompile exists to fix,
@@ -209,10 +233,10 @@ def _find_libiomp5(
     for search_dir in (Path("/usr/lib"), Path("/usr/lib64"), Path("/usr/local/lib")):
         if not search_dir.is_dir():
             continue
-        for lib in search_dir.iterdir():
-            if "libiomp5" in lib.name and ".so" in lib.name:
-                _print(f"Intel OpenMP found (system): {lib}")
-                return lib
+        lib = _libiomp5_candidate(search_dir)
+        if lib is not None:
+            _print(f"Intel OpenMP found (system): {lib}")
+            return lib
 
     return None
 

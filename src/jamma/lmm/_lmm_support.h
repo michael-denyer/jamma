@@ -80,6 +80,14 @@ typedef struct {
 
 /* n doubles, 32-byte aligned (AVX2). NULL on failure or n == 0. */
 double *alloc_aligned_doubles(size_t n);
+size_t aligned_double_bytes(size_t n);
+size_t grid_doubles(int n_samples, int n_grid);
+size_t general_scratch_doubles(int n_samples, int n_rows);
+size_t general_pab_doubles(int n_rows, int n_index);
+size_t general_lrt_thread_doubles(int n_samples, int n_index);
+size_t pab_entry_count(int n_rows);
+size_t pab_transport_peak_bytes(int n_cvt);
+size_t pab_python_conservative_bytes(int n_cvt);
 
 /* One n-double aligned buffer per thread, so the per-SNP loop never calls
  * malloc (heap-lock contention at high thread counts). NULL on any failure,

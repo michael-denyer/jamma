@@ -52,11 +52,11 @@ def _fused_score_lrt_null_model(split_wald_data):
 
 
 @requires_c
-def test_abi_version_18():
-    """ABI_VERSION is 18 after the ncvt1 family collapses to one compute entry."""
+def test_abi_version_19():
+    """ABI_VERSION is 19 after adding the required workspace sizing query."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 18
+    assert ABI_VERSION == 19
 
 
 def _make_runner_test_data(rng, n_samples=50, n_snps=20):
@@ -140,7 +140,7 @@ def test_runner_fused_score_chunk_size():
         n_samples,
         n_filtered,
         n_cvt=1,
-        dispatch=DispatchPath.FUSED_SCORE_WS,
+        dispatch=DispatchPath.FUSED,
         mem_budget_bytes=budget,
     )
     chunk_fallback = compute_chunk_size_numpy(
@@ -171,7 +171,7 @@ def test_runner_fused_lrt_chunk_size():
         n_samples,
         n_filtered,
         n_cvt=1,
-        dispatch=DispatchPath.FUSED_LRT_WS,
+        dispatch=DispatchPath.FUSED,
         mem_budget_bytes=budget,
     )
     chunk_fallback = compute_chunk_size_numpy(

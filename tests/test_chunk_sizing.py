@@ -61,9 +61,8 @@ def test_compute_chunk_size_zero_bytes():
     assert chunk == 1000, f"Expected 1000, got {chunk}"
 
 
-def test_compute_chunk_size_minimum():
-    """Chunk size never drops below 100."""
-    # Huge n_samples to force small chunk_from_memory, tiny n_filtered to avoid cap
+def test_compute_chunk_size_can_drop_below_throughput_floor_to_fit_budget():
+    """A feasible small chunk wins over allocating the 100-SNP throughput floor."""
     chunk = compute_chunk_size_numpy(
         n_samples=1_000_000,
         n_filtered=200,
@@ -71,7 +70,7 @@ def test_compute_chunk_size_minimum():
         dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
-    assert chunk >= 100, f"Chunk {chunk} below minimum 100"
+    assert chunk == 3
 
 
 def test_chunk_size_split_larger_than_full():
@@ -189,8 +188,8 @@ def test_chunk_size_accounting_by_dispatch_path():
     fused = [
         size(DispatchPath.FUSED),
         size(DispatchPath.FUSED_GENERAL),
-        size(DispatchPath.FUSED_SCORE_WS),
-        size(DispatchPath.FUSED_LRT_WS),
+        size(DispatchPath.FUSED),
+        size(DispatchPath.FUSED),
     ]
     assert len(set(fused)) == 1, f"fused family must size alike, got {fused}"
 

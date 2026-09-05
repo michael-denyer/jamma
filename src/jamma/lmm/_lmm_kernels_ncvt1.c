@@ -14,6 +14,7 @@
 #include "_lmm_logdet.h"
 
 #include <math.h>
+#include <float.h>
 #include <string.h>
 
 
@@ -157,6 +158,56 @@ double reml_logl_ncvt1_split(
     return reml_finish(pab, logdet_h, logdet_iab, df, reml_const);
 }
 
+static double reml_score_loglambda_ncvt1_split(
+    const double * restrict var_wx, const double * restrict var_xx,
+    const double * restrict var_xy, const double * restrict inv_ww,
+    const double * restrict inv_wy, const double * restrict inv_yy,
+    const double * restrict eigenvalues, int n_samples, double lambda)
+{
+    double s[6] = {0}, ds[6] = {0}, cs[6] = {0}, cds[6] = {0};
+    double trace = 0.0, ctrace = 0.0;
+    for (int i = 0; i < n_samples; i++) {
+        double d = eigenvalues[i];
+        double h = 1.0 / (1.0 + lambda * d);
+        double dh = -lambda * d * h * h;
+        double trace_value = lambda * d * h - ctrace;
+        double trace_next = trace + trace_value;
+        ctrace = (trace_next - trace) - trace_value;
+        trace = trace_next;
+        const double values[6] = {
+            inv_ww[i], var_wx[i], inv_wy[i],
+            var_xx[i], var_xy[i], inv_yy[i]
+        };
+        for (int j = 0; j < 6; j++) {
+            double value = h * values[j] - cs[j];
+            double next = s[j] + value;
+            cs[j] = (next - s[j]) - value;
+            s[j] = next;
+            value = dh * values[j] - cds[j];
+            next = ds[j] + value;
+            cds[j] = (next - ds[j]) - value;
+            ds[j] = next;
+        }
+    }
+    if (!(s[0] > 0.0)) return NAN;
+    double pxx = s[3] - s[1] * s[1] / s[0];
+    double pxy = s[4] - s[1] * s[2] / s[0];
+    double pyy1 = s[5] - s[2] * s[2] / s[0];
+    double dpxx = ds[3] - 2.0 * s[1] * ds[1] / s[0]
+                  + s[1] * s[1] * ds[0] / (s[0] * s[0]);
+    double dpxy = ds[4] - (ds[1] * s[2] + s[1] * ds[2]) / s[0]
+                  + s[1] * s[2] * ds[0] / (s[0] * s[0]);
+    double dpyy1 = ds[5] - 2.0 * s[2] * ds[2] / s[0]
+                   + s[2] * s[2] * ds[0] / (s[0] * s[0]);
+    if (!(pxx > 0.0)) return NAN;
+    double pyy = pyy1 - pxy * pxy / pxx;
+    double dpyy = dpyy1 - 2.0 * pxy * dpxy / pxx
+                  + pxy * pxy * dpxx / (pxx * pxx);
+    if (!(pyy > P_YY_MIN)) return NAN;
+    return -0.5 * trace - 0.5 * ds[0] / s[0] - 0.5 * dpxx / pxx
+           - 0.5 * (n_samples - 2) * dpyy / pyy;
+}
+
 
 
 /* -------------------------------------------------------------------------
@@ -206,6 +257,7 @@ double refine_lambda_ncvt1_split(
     int idx_high = (best_idx < n_grid - 1) ? best_idx + 1 : n_grid - 1;
     double a = log_l_min + idx_low * step;
     double b = log_l_min + idx_high * step;
+    const double coarse_a = a, coarse_b = b;
 
     /* Stage 2: golden section refinement (fused single-pass) */
     double c = b - phi * (b - a);
@@ -238,6 +290,33 @@ double refine_lambda_ncvt1_split(
     }
 
     double log_opt = (a + b) / 2.0;
+    /* Refine enclosed peaks independently of rounded objective ties. */
+    if (a > coarse_a && b < coarse_b) {
+        double delta = fmin(1e-3, 0.25 * (coarse_b - coarse_a));
+        delta = fmin(delta, 0.5 * (log_opt - coarse_a));
+        delta = fmin(delta, 0.5 * (coarse_b - log_opt));
+        double score = reml_score_loglambda_ncvt1_split(
+            var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
+            eigenvalues, n_samples, exp(log_opt));
+        double sm = reml_score_loglambda_ncvt1_split(
+            var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
+            eigenvalues, n_samples, exp(log_opt - delta));
+        double sp = reml_score_loglambda_ncvt1_split(
+            var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
+            eigenvalues, n_samples, exp(log_opt + delta));
+        double curvature = (sp - sm) / (2.0 * delta);
+        if (isfinite(delta) && delta > 0.0 && isfinite(score)
+            && isfinite(curvature) && curvature < 0.0) {
+            double candidate = log_opt - score / curvature;
+            if (isfinite(candidate) && candidate >= coarse_a && candidate <= coarse_b) {
+                double candidate_score = reml_score_loglambda_ncvt1_split(
+                    var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
+                    eigenvalues, n_samples, exp(candidate));
+                if (isfinite(candidate_score) && fabs(candidate_score) < fabs(score))
+                    log_opt = candidate;
+            }
+        }
+    }
     double lambda_opt = exp(log_opt);
 
     /* Final evaluation: reml_logl_ncvt1_split fills pab as a side effect, so

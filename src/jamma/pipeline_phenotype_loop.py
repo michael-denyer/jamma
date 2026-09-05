@@ -17,11 +17,12 @@ from loguru import logger
 
 from jamma.io.plink import PlinkMetadata
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
-from jamma.lmm.genotype_source import GenotypeSource
+from jamma.lmm.genotype_source import GenotypeSource, SampleBasis
+from jamma.lmm.prepare_common import prepare_rotated_covariates
 from jamma.lmm.runner_numpy import BATCH_LABELS, STREAMING_LABELS
 from jamma.lmm.schema import ChunkRunStats, SnpMeta
 from jamma.lmm.stats import AssocResult
-from jamma.pipeline_config import PipelineConfig
+from jamma.pipeline_config import PhenotypeResult, PipelineConfig
 from jamma.pipeline_plan import StandardAnalysisPlan
 
 __all__ = ["PhenoLoopOutcome", "run_phenotype_loop"]
@@ -37,6 +38,7 @@ class PhenoLoopOutcome(NamedTuple):
     associations: list[AssocResult]
     n_tested: int
     assoc_paths: list[Path]
+    phenotype_results: list[PhenotypeResult]
     lmm_s: float
     runner_timing: ChunkRunStats
     pve: float | None
@@ -58,8 +60,8 @@ def run_phenotype_loop(
 
     Builds one genotype source for the plan's mode, then iterates the
     configured phenotype columns, masking each to the shared valid-sample
-    intersection and running the shared LMM body over that source. PVE and
-    the runner timing breakdown are taken from the final phenotype's result.
+    intersection and running the shared LMM body over one prepared genotype
+    selection. Aggregate runner timing sums every phenotype's work.
     ``meta`` is the pipeline's already-parsed PLINK metadata, so the
     streaming source never re-reads the .bim per phenotype. The ``-snps``
     restriction reaches the body as ``snps_indices`` in both modes, where it
@@ -70,7 +72,10 @@ def run_phenotype_loop(
         per-phenotype output paths, the loop wall time, runner timing, and
         the PVE estimate.
     """
-    from jamma.lmm.runner_numpy import LmmRunSpec, run_lmm_association
+    from jamma.lmm.runner_numpy import (
+        LmmRunSpec,
+        prepare_genotypes,
+    )
 
     pheno_columns = config.phenotype_columns
     is_multi = len(pheno_columns) > 1
@@ -80,6 +85,7 @@ def run_phenotype_loop(
     all_results: list[AssocResult] = []
     total_tested = 0
     all_assoc_paths: list[Path] = []
+    phenotype_results: list[PhenotypeResult] = []
 
     source = _genotype_source(plan.mode, plan.runner_name, config.bfile, meta, analysis)
     spec = LmmRunSpec(
@@ -89,59 +95,107 @@ def run_phenotype_loop(
         hwe_threshold=config.hwe_threshold,
         labels=_LABELS[plan.mode],
     )
+    genotypes = prepare_genotypes(source, spec, SampleBasis.from_mask(valid_mask))
+    if genotypes.n_unexpected > 0:
+        logger.warning(
+            f"Genotype validation: {genotypes.n_unexpected} values outside "
+            "expected range {0, 1, 2, NaN}"
+        )
+    if genotypes.n_filtered == 0:
+        logger.warning("All SNPs were filtered out. No association tests will run.")
+    filtered_covariates = covariates[valid_mask, :] if covariates is not None else None
+    prepared_covariates = prepare_rotated_covariates(
+        eigenvectors, filtered_covariates, genotypes.analyzed_sample_count
+    )
 
-    # The loop's last run carries the PVE estimate; both stay None if
-    # pheno_columns is empty, which PipelineConfig already rejects.
     prefix = config.output_prefix
-    pve: float | None = None
-    pve_se: float | None = None
-    runner_timing = ChunkRunStats()
-    for col in pheno_columns:
-        if is_multi:
-            logger.info(f"Starting LMM for phenotype column {col}")
-        # Mark samples outside the shared intersection as NaN so the
-        # runner computes the same valid_mask used for eigendecomposition.
-        # We pass full-length arrays (not pre-filtered) because the
-        # streaming runner indexes genotypes streamed from disk using
-        # the mask it computes internally.
-        phenotypes_col = all_pheno_data[col][0].copy()
-        phenotypes_col[~valid_mask] = np.nan
+    from jamma.lmm.runner_numpy import (
+        PreparedPhenotypeSpec,
+        run_lmm_association_group_prepared,
+    )
 
-        if is_multi:
-            col_path = config.output_dir / f"{prefix}.pheno{col}.assoc.txt"
-        else:
-            col_path = assoc_path
+    shared_rotation_s = 0.0
+    group_size = analysis.execution.phenotype_group_size
+    for group_start in range(0, len(pheno_columns), group_size):
+        columns = pheno_columns[group_start : group_start + group_size]
+        group_specs = []
+        group_paths = []
+        for col in columns:
+            if is_multi:
+                logger.info(f"Starting LMM for phenotype column {col}")
+            phenotypes_col = all_pheno_data[col][0][valid_mask]
+            col_path = (
+                config.output_dir / f"{prefix}.pheno{col}.assoc.txt"
+                if is_multi
+                else assoc_path
+            )
+            group_specs.append(PreparedPhenotypeSpec(phenotypes_col, col_path))
+            group_paths.append(col_path)
 
-        run_result = run_lmm_association(
-            source,
+        grouped = run_lmm_association_group_prepared(
+            genotypes,
             spec,
-            phenotypes=phenotypes_col,
-            # The body takes the eigenpairs; the pipeline consumes the
-            # kinship matrix during eigendecomposition and has none left.
-            kinship=None,
-            covariates=covariates,
+            tuple(group_specs),
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
-            output_path=col_path,
+            prepared_covariates=prepared_covariates,
         )
-
-        all_results.extend(run_result.associations)
-        total_tested += run_result.n_tested
-        all_assoc_paths.append(col_path)
-        pve, pve_se = run_result.pve, run_result.pve_se
-        runner_timing = run_result.timing
-        logger.info(f"Phenotype {col}: {run_result.n_tested} SNPs tested -> {col_path}")
+        shared_rotation_s += grouped.rotation_s
+        rotation_shares = [grouped.rotation_s / len(grouped.results)] * len(
+            grouped.results
+        )
+        rotation_shares[-1] = grouped.rotation_s - sum(rotation_shares[:-1])
+        for col, col_path, run_result, rotation_share in zip(
+            columns, group_paths, grouped.results, rotation_shares, strict=True
+        ):
+            all_results.extend(run_result.associations)
+            total_tested += run_result.n_tested
+            all_assoc_paths.append(col_path)
+            phenotype_results.append(
+                PhenotypeResult(
+                    column=col,
+                    associations=run_result.associations,
+                    n_snps_tested=run_result.n_tested,
+                    assoc_path=col_path,
+                    timing=ChunkRunStats(
+                        processed=run_result.timing.processed,
+                        rotation_s=rotation_share,
+                        compute_s=run_result.timing.compute_s,
+                        result_write_s=run_result.timing.result_write_s,
+                    ),
+                    pve_estimate=run_result.pve,
+                    pve_se=run_result.pve_se,
+                )
+            )
+            logger.info(
+                f"Phenotype {col}: {run_result.n_tested} SNPs tested -> {col_path}"
+            )
 
     lmm_s = time.perf_counter() - t_lmm
+    runner_timing = _sum_chunk_stats(phenotype_results, shared_rotation_s)
+    single = phenotype_results[0] if len(phenotype_results) == 1 else None
 
     return PhenoLoopOutcome(
         associations=all_results,
         n_tested=total_tested,
         assoc_paths=all_assoc_paths,
+        phenotype_results=phenotype_results,
         lmm_s=lmm_s,
         runner_timing=runner_timing,
-        pve=pve,
-        pve_se=pve_se,
+        pve=single.pve_estimate if single is not None else None,
+        pve_se=single.pve_se if single is not None else None,
+    )
+
+
+def _sum_chunk_stats(
+    results: list[PhenotypeResult], shared_rotation_s: float
+) -> ChunkRunStats:
+    """Sum work and stage timings across every phenotype run."""
+    return ChunkRunStats(
+        processed=sum(result.timing.processed for result in results),
+        rotation_s=shared_rotation_s,
+        compute_s=sum(result.timing.compute_s for result in results),
+        result_write_s=sum(result.timing.result_write_s for result in results),
     )
 
 

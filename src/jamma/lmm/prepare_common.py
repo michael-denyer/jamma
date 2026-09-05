@@ -47,6 +47,46 @@ def compute_valid_mask(
 
 
 @dataclass(frozen=True, slots=True)
+class KinshipMatrix:
+    """A kinship matrix that still needs eigendecomposition."""
+
+    value: np.ndarray
+
+
+@dataclass(frozen=True, slots=True)
+class EigenPairs:
+    """A complete pre-computed eigendecomposition."""
+
+    values: np.ndarray
+    vectors: np.ndarray
+
+
+EigenInput = KinshipMatrix | EigenPairs
+
+
+def parse_eigen_input(
+    kinship: np.ndarray | None,
+    eigenvalues: np.ndarray | None,
+    eigenvectors: np.ndarray | None,
+) -> EigenInput:
+    """Normalize the legacy public eigen arguments into one complete value."""
+    if (eigenvalues is None) != (eigenvectors is None):
+        raise ValueError(
+            "Must provide both eigenvalues and eigenvectors, or neither. "
+            f"Got eigenvalues={eigenvalues is not None}, "
+            f"eigenvectors={eigenvectors is not None}"
+        )
+    if eigenvalues is not None and eigenvectors is not None:
+        return EigenPairs(eigenvalues, eigenvectors)
+    if kinship is not None:
+        return KinshipMatrix(kinship)
+    raise ValueError(
+        "Either kinship or pre-computed eigendecomposition (eigenvalues + "
+        "eigenvectors) must be provided"
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class RunnerSetup:
     """Validated and filtered inputs for LMM runners.
 
@@ -55,85 +95,54 @@ class RunnerSetup:
 
     Attributes:
         phenotypes: Filtered phenotype vector (n_samples,).
-        kinship: Filtered kinship matrix (n_samples, n_samples) or None.
+        eigen_input: Filtered kinship matrix or complete pre-computed eigenpairs.
         covariates: Filtered covariate matrix (n_samples, n_cvt) or None.
-        eigenvalues: Pre-computed eigenvalues (n_samples,) or None.
-        eigenvectors: Pre-computed eigenvectors (n_samples, n_samples) or None.
         valid_mask: Boolean mask used to filter samples (original length).
         n_samples: Number of valid samples after filtering.
     """
 
     phenotypes: np.ndarray
-    kinship: np.ndarray | None
+    eigen_input: EigenInput
     covariates: np.ndarray | None
-    eigenvalues: np.ndarray | None
-    eigenvectors: np.ndarray | None
     valid_mask: np.ndarray
     n_samples: int
 
 
 def validate_runner_inputs(
     phenotypes: np.ndarray,
-    kinship: np.ndarray | None,
+    eigen_input: EigenInput,
     covariates: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
-    lmm_mode: int,
 ) -> RunnerSetup:
     """Validate LMM runner inputs and apply sample filtering.
 
-    Performs the common validation sequence shared by both runners
-    (numpy batch, numpy streaming): eigendecomposition pair check, lmm_mode guard,
-    kinship/eigenvalue guard, valid-sample mask computation and application,
-    empty-sample guard, and eigenpair dimension validation.
+    Performs the common validation sequence shared by both runners: valid-sample
+    mask computation and application, the empty-sample guard, and eigenpair
+    dimension validation.
 
     Does NOT include: memory checks (differ between batch/streaming).
 
     Args:
         phenotypes: Phenotype vector (n_samples,), with NaN for missing.
-        kinship: Kinship matrix (n_samples, n_samples), or None when
-            pre-computed eigenvalues/eigenvectors are provided.
+        eigen_input: Kinship matrix or complete pre-computed eigenpairs.
         covariates: Covariate matrix (n_samples, n_cvt) or None.
-        eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
-        eigenvectors: Pre-computed eigenvectors or None.
-        lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
 
     Returns:
         RunnerSetup with filtered arrays and validated n_samples.
 
     Raises:
-        ValueError: If only one of eigenvalues/eigenvectors is provided,
-            if lmm_mode is not in (1, 2, 3, 4), if neither kinship nor
-            eigenvalues are provided, if no valid samples remain after
-            filtering, or if eigenpair dimensions do not match n_samples.
+        ValueError: If no valid samples remain after filtering or eigenpair
+            dimensions do not match.
     """
-    # Validate eigendecomposition params — must provide both or neither
-    if (eigenvalues is None) != (eigenvectors is None):
-        raise ValueError(
-            "Must provide both eigenvalues and eigenvectors, or neither. "
-            f"Got eigenvalues={eigenvalues is not None}, "
-            f"eigenvectors={eigenvectors is not None}"
-        )
-
-    if lmm_mode not in (1, 2, 3, 4):
-        raise ValueError(
-            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
-        )
-
-    if kinship is eigenvalues is None:
-        raise ValueError(
-            "Either kinship or pre-computed eigendecomposition (eigenvalues + "
-            "eigenvectors) must be provided"
-        )
-
     # Compute valid-sample mask from phenotype and covariate NaN
     valid_mask = compute_valid_mask(phenotypes, covariates)
 
     # Apply mask only when needed (avoid a copy if all samples are valid)
     if not np.all(valid_mask):
         phenotypes = phenotypes[valid_mask]
-        if kinship is not None:
-            kinship = kinship[np.ix_(valid_mask, valid_mask)]
+        if isinstance(eigen_input, KinshipMatrix):
+            eigen_input = KinshipMatrix(
+                eigen_input.value[np.ix_(valid_mask, valid_mask)]
+            )
         if covariates is not None:
             covariates = covariates[valid_mask, :]
 
@@ -145,30 +154,28 @@ def validate_runner_inputs(
         )
 
     # Validate precomputed eigenpair dimensions against (possibly filtered) n_samples
-    if eigenvalues is not None and eigenvectors is not None:
+    if isinstance(eigen_input, EigenPairs):
         hint = (
             "Recompute eigenpairs on the filtered kinship, or pass kinship= "
             "and let JAMMA compute the eigendecomposition."
         )
-        if eigenvalues.shape[0] != n_samples:
+        if eigen_input.values.shape[0] != n_samples:
             raise ValueError(
-                f"eigenvalues length ({eigenvalues.shape[0]}) does not match "
+                f"eigenvalues length ({eigen_input.values.shape[0]}) does not match "
                 f"n_samples ({n_samples}) after removing missing "
                 f"phenotypes/covariates. {hint}"
             )
-        if eigenvectors.shape != (n_samples, n_samples):
+        if eigen_input.vectors.shape != (n_samples, n_samples):
             raise ValueError(
-                f"eigenvectors shape {eigenvectors.shape} does not match "
+                f"eigenvectors shape {eigen_input.vectors.shape} does not match "
                 f"({n_samples}, {n_samples}) after removing missing "
                 f"phenotypes/covariates. {hint}"
             )
 
     return RunnerSetup(
         phenotypes=phenotypes,
-        kinship=kinship,
+        eigen_input=eigen_input,
         covariates=covariates,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
         valid_mask=valid_mask,
         n_samples=n_samples,
     )
@@ -217,10 +224,41 @@ def _build_covariate_matrix(
     return W, n_cvt
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedCovariates:
+    """Covariate matrix and eigen rotation shared across phenotypes."""
+
+    W: np.ndarray
+    n_cvt: int
+    UtW: np.ndarray
+
+    def __post_init__(self) -> None:
+        if self.W.ndim != 2 or self.W.shape[1] != self.n_cvt:
+            raise ValueError(
+                "prepared covariate matrix shape does not match n_cvt: "
+                f"got {self.W.shape} and {self.n_cvt}"
+            )
+        if self.UtW.shape != self.W.shape:
+            raise ValueError(
+                "rotated covariates must match covariate matrix shape: "
+                f"got {self.UtW.shape} and {self.W.shape}"
+            )
+
+
+def prepare_rotated_covariates(
+    eigenvectors: np.ndarray,
+    covariates: np.ndarray | None,
+    n_samples: int,
+) -> PreparedCovariates:
+    """Build and rotate phenotype-independent covariates once."""
+    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
+    with blas_threads(get_blas_thread_count()):
+        UtW = eigenvectors.T @ W
+    return PreparedCovariates(W=W, n_cvt=n_cvt, UtW=UtW)
+
+
 def _eigendecompose_or_reuse(
-    kinship: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
+    eigen_input: EigenInput,
     show_progress: bool,
     label: str,
     *,
@@ -229,10 +267,7 @@ def _eigendecompose_or_reuse(
     """Return eigendecomposition, computing it if not provided.
 
     Args:
-        kinship: Kinship matrix (n_samples, n_samples), or None when
-            pre-computed eigenvalues and eigenvectors are provided.
-        eigenvalues: Pre-computed eigenvalues or None.
-        eigenvectors: Pre-computed eigenvectors or None.
+        eigen_input: Kinship matrix or complete pre-computed eigenpairs.
         show_progress: Whether to log memory usage.
         label: Label for memory logging (e.g. "lmm", "lmm_streaming").
         check_memory: If True (default), check available memory before
@@ -241,20 +276,16 @@ def _eigendecompose_or_reuse(
     Returns:
         Tuple of (eigenvalues, eigenvectors).
     """
-    if eigenvalues is not None and eigenvectors is not None:
+    if isinstance(eigen_input, EigenPairs):
         if show_progress:
             logger.debug("Using pre-computed eigendecomposition")
-        return eigenvalues, eigenvectors
-
-    if kinship is None:
-        raise ValueError(
-            "Must provide either (eigenvalues, eigenvectors) or kinship matrix. "
-            "All three are None."
-        )
+        return eigen_input.values, eigen_input.vectors
 
     if show_progress:
         log_memory_snapshot(f"{label}:before_eigendecomp")
-    eigenvalues_np, U = eigendecompose_kinship(kinship, check_memory=check_memory)
+    eigenvalues_np, U = eigendecompose_kinship(
+        eigen_input.value, check_memory=check_memory
+    )
     # Release LAPACK DSYEVD workspace before LMM phase
     gc.collect()
     if show_progress:
@@ -359,9 +390,7 @@ class PreparedLmmRun:
 
 def prepare_lmm_run(
     *,
-    kinship: np.ndarray | None,
-    eigenvalues: np.ndarray | None,
-    eigenvectors: np.ndarray | None,
+    eigen_input: EigenInput,
     phenotypes: np.ndarray,
     W: np.ndarray,
     n_cvt: int,
@@ -371,6 +400,7 @@ def prepare_lmm_run(
     check_memory: bool,
     label: str,
     compute_pve: bool = True,
+    rotated_covariates: np.ndarray | None = None,
 ) -> PreparedLmmRun:
     """Eigendecompose, rotate, solve the null model, and estimate PVE.
 
@@ -378,14 +408,12 @@ def prepare_lmm_run(
     label differing between them. Sharing it means their setup cannot drift,
     which matters because a divergence here moves every downstream statistic.
 
-    The caller keeps ownership of ``kinship`` and should drop its reference
-    once this returns; the eigendecomposition may reuse that buffer for the
-    eigenvectors, so holding it pins a second n-by-n matrix.
+    The caller keeps ownership of a supplied kinship matrix and should drop its
+    reference once this returns; the eigendecomposition may reuse that buffer for
+    the eigenvectors, so holding it pins a second n-by-n matrix.
 
     Args:
-        kinship: Kinship matrix, or None when eigenpairs are supplied.
-        eigenvalues: Pre-computed eigenvalues, or None to decompose.
-        eigenvectors: Pre-computed eigenvectors, or None to decompose.
+        eigen_input: Kinship matrix to decompose or complete eigenpairs to reuse.
         phenotypes: Phenotype vector, already filtered to valid samples.
         W: Covariate matrix from ``_build_covariate_matrix``.
         n_cvt: Number of covariates, including the intercept.
@@ -398,9 +426,7 @@ def prepare_lmm_run(
             PVE. LOCO passes False on every chromosome after the first.
     """
     eigenvalues_np, U = _eigendecompose_or_reuse(
-        kinship,
-        eigenvalues,
-        eigenvectors,
+        eigen_input,
         show_progress,
         label,
         check_memory=check_memory,
@@ -408,8 +434,14 @@ def prepare_lmm_run(
 
     # Rotation is pure BLAS — use all physical cores.
     with blas_threads(get_blas_thread_count()):
-        UtW = U.T @ W
+        UtW = U.T @ W if rotated_covariates is None else rotated_covariates
         Uty = U.T @ phenotypes
+
+    if UtW.shape != (phenotypes.shape[0], n_cvt):
+        raise ValueError(
+            "rotated covariate shape does not match prepared LMM inputs: "
+            f"got {UtW.shape}, expected {(phenotypes.shape[0], n_cvt)}"
+        )
 
     null_model = _compute_null_model_common(
         eigenvalues_np,

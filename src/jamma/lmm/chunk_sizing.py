@@ -118,6 +118,8 @@ def compute_chunk_size_numpy(
     dispatch: DispatchPath,
     mem_budget_bytes: int,
     pipeline_buffers: int = 1,
+    fixed_bytes: int = 0,
+    output_bytes_per_snp: int = 0,
 ) -> int:
     """Compute chunk size from a per-chunk RAM budget (no int32 constraint).
 
@@ -144,14 +146,17 @@ def compute_chunk_size_numpy(
     if pipeline_buffers < 1:
         raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
 
-    bytes_per_snp = _bytes_per_snp(n_samples, n_cvt, dispatch)
+    bytes_per_snp = _bytes_per_snp(n_samples, n_cvt, dispatch) + output_bytes_per_snp
     if bytes_per_snp == 0:
         return n_filtered
 
-    mem_budget = mem_budget_bytes // pipeline_buffers
+    variable_budget = max(0, mem_budget_bytes - fixed_bytes)
+    mem_budget = variable_budget // pipeline_buffers
 
     chunk_from_memory = int(mem_budget / bytes_per_snp)
-    return max(_MIN_CHUNK, min(chunk_from_memory, n_filtered, _MAX_CHUNK))
+    if chunk_from_memory < _MIN_CHUNK:
+        return max(1, min(chunk_from_memory, n_filtered))
+    return min(chunk_from_memory, n_filtered, _MAX_CHUNK)
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +192,8 @@ class LmmChunkPlan:
         budget_bytes: int,
         blas_controllable: bool,
         max_chunk_size: int | None = None,
+        fixed_bytes: int = 0,
+        output_bytes_per_snp: int = 0,
     ) -> LmmChunkPlan:
         """Decide chunk size, chunk count, and pipelining for one LMM run.
 
@@ -235,6 +242,8 @@ class LmmChunkPlan:
                 dispatch=dispatch,
                 mem_budget_bytes=budget_bytes,
                 pipeline_buffers=pipeline_buffers,
+                fixed_bytes=fixed_bytes,
+                output_bytes_per_snp=output_bytes_per_snp,
             )
             if overlap_cap is not None:
                 chunk = min(chunk, overlap_cap)
@@ -292,10 +301,16 @@ class LmmChunkPlan:
         plan the budget did not pipeline stays sequential however many
         chunks remain.
         """
+        return self.cap_width(n_filtered, self.chunk_size)
+
+    def cap_width(self, n_filtered: int, max_chunk_size: int) -> LmmChunkPlan:
+        """Reduce chunk width while preserving the run's SNP-count geometry."""
         if n_filtered < 0:
             raise ValueError(f"n_filtered must be >= 0, got {n_filtered}")
+        if max_chunk_size < 1:
+            raise ValueError(f"max_chunk_size must be >= 1, got {max_chunk_size}")
 
-        chunk_size = min(self.chunk_size, max(1, n_filtered))
+        chunk_size = min(self.chunk_size, max_chunk_size, max(1, n_filtered))
         n_chunks = (n_filtered + chunk_size - 1) // chunk_size
         use_pipeline = self.use_pipeline and n_chunks >= _MIN_PIPELINE_CHUNKS
         return LmmChunkPlan(

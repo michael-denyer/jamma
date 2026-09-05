@@ -161,20 +161,22 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-JAMMA master at `9d33cc1` on mouse_hs1940 (1,940 samples x 12,226 SNPs),
-Apple M5 Pro (18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best of 3, end-to-end
-wall clock, measured 2026-09-02:
+JAMMA on mouse_hs1940 (1,940 samples x 12,226 SNPs),
+Apple M5 Pro (18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best of 3 wall-clock
+runs of `scripts/bench_all_backends.py`, measured 2026-09-05 (LOCO retains its
+2026-09-02 measurement). GEMMA timings include the CLI command; JAMMA batch
+timings start with genotypes loaded. Association runs use precomputed kinship.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 196ms | 196ms | -- | 1.0x | **5.5x** | **6.3x** |
-| LMM Wald (`-lmm 1`) | 7.3s | 4.2s | 2.4s | 291ms | 416ms | 8.2x | **24.9x** | **14.5x** |
-| LMM All (`-lmm 4`) | 13.3s | 7.6s | 4.8s | 298ms | 400ms | 16.1x | **44.7x** | **25.3x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 11.5s | 5.8s | 654ms | 712ms | 8.9x | **41.6x** | **17.6x** |
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 201ms | 201ms | -- | 1.0x | **5.4x** | **6.0x** |
+| LMM Wald (`-lmm 1`) | 7.3s | 4.2s | 5.2s | 316ms | 425ms | 16.4x | **23.3x** | **13.4x** |
+| LMM All (`-lmm 4`) | 13.6s | 7.5s | 7.6s | 329ms | 449ms | 23.1x | **41.3x** | **22.9x** |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.3s | 12.5s | 12.8s | 796ms | 896ms | 16.1x | **34.3x** | **15.7x** |
 | LOCO Wald (`-loco`) | 2m31s | 1m20s | -- | **3.3s** | -- | -- | **~46x** | **~24x** |
 
-The C column is 21% to 48% faster than v7.2.0 on the same machine. LOCO is
-unchanged; its time is the 19 per-chromosome eigendecompositions.
+LOCO includes 19 per-chromosome eigendecompositions. Its historical timing
+predates the REML score refinement; it has not been remeasured for this change.
 
 See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the
 version-over-version comparison, and large-scale (125k) results.

@@ -161,56 +161,6 @@ def test_adaptive_core_split():
     assert omp >= 1, f"Single core: rot={rot}, omp={omp}"
 
 
-@pytest.mark.tier1
-def test_compute_adaptive_core_split():
-    """compute_adaptive_core_split allocates threads proportional to measured times."""
-    from jamma.lmm.chunk_pipeline import compute_adaptive_core_split
-
-    # Rotation-heavy: 80% rotation time -> ~80% of cores for rotation
-    rot, omp = compute_adaptive_core_split(
-        rot_time=0.8, compute_time=0.2, total_cores=8
-    )
-    assert rot == 6, f"Rotation-heavy: rot={rot}, omp={omp}"
-    assert omp == 2, f"Rotation-heavy: rot={rot}, omp={omp}"
-
-    # Compute-heavy: 20% rotation time -> ~20% of cores for rotation
-    rot, omp = compute_adaptive_core_split(
-        rot_time=0.2, compute_time=0.8, total_cores=8
-    )
-    assert rot == 2, f"Compute-heavy: rot={rot}, omp={omp}"
-    assert omp == 6, f"Compute-heavy: rot={rot}, omp={omp}"
-
-    # Balanced: equal times -> 50/50 split
-    rot, omp = compute_adaptive_core_split(
-        rot_time=0.5, compute_time=0.5, total_cores=8
-    )
-    assert rot == 4, f"Balanced: rot={rot}, omp={omp}"
-    assert omp == 4, f"Balanced: rot={rot}, omp={omp}"
-
-    # Degenerate: both times near zero -> static fallback
-    rot, omp = compute_adaptive_core_split(
-        rot_time=0.0, compute_time=0.0, total_cores=8, n_samples=50_000
-    )
-    # Static fallback for 50k samples: 50% -> (4, 4)
-    assert rot == 4, f"Degenerate fallback: rot={rot}, omp={omp}"
-    assert omp == 4, f"Degenerate fallback: rot={rot}, omp={omp}"
-
-    # Always returns (rot >= 1, compute >= 1)
-    for r, c, n in [(0.9, 0.1, 2), (0.1, 0.9, 2), (0.5, 0.5, 2)]:
-        rot, omp = compute_adaptive_core_split(
-            rot_time=r, compute_time=c, total_cores=n
-        )
-        assert rot >= 1, f"Min 1: rot={rot}, omp={omp} (r={r}, c={c}, n={n})"
-        assert omp >= 1, f"Min 1: rot={rot}, omp={omp} (r={r}, c={c}, n={n})"
-
-    # Clamped: 2 cores, rotation-heavy -> (1, 1) since both must be >= 1
-    rot, omp = compute_adaptive_core_split(
-        rot_time=0.9, compute_time=0.1, total_cores=2
-    )
-    assert rot == 1, f"Clamped 2-core: rot={rot}, omp={omp}"
-    assert omp == 1, f"Clamped 2-core: rot={rot}, omp={omp}"
-
-
 # ---------------------------------------------------------------------------
 # End-to-end runner tests for LRT/Score/All modes with C extension (RUN-07)
 # ---------------------------------------------------------------------------

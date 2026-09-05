@@ -12,6 +12,8 @@ import numpy as np
 import pytest
 
 from jamma.lmm.prepare_common import (
+    EigenPairs,
+    KinshipMatrix,
     _build_covariate_matrix,
     _compute_null_model_common,
     _eigendecompose_or_reuse,
@@ -40,9 +42,7 @@ def test_null_model_populated_regardless_of_caller_intent():
     W = np.ones((n_samples, 1))
 
     prepared = prepare_lmm_run(
-        kinship=kinship,
-        eigenvalues=None,
-        eigenvectors=None,
+        eigen_input=KinshipMatrix(kinship),
         phenotypes=phenotypes,
         W=W,
         n_cvt=1,
@@ -83,9 +83,7 @@ def test_eigendecompose_or_reuse_passthrough():
     eigenvectors = np.eye(3)
 
     result_evals, result_evecs = _eigendecompose_or_reuse(
-        kinship=None,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
+        EigenPairs(eigenvalues, eigenvectors),
         show_progress=False,
         label="test",
     )
@@ -93,18 +91,6 @@ def test_eigendecompose_or_reuse_passthrough():
     # Should return the exact same objects (no copy, no computation)
     assert result_evals is eigenvalues
     assert result_evecs is eigenvectors
-
-
-def test_eigendecompose_or_reuse_raises_when_all_none():
-    """Must raise ValueError when kinship=None and no pre-computed eigen provided."""
-    with pytest.raises(ValueError, match="Must provide either"):
-        _eigendecompose_or_reuse(
-            kinship=None,
-            eigenvalues=None,
-            eigenvectors=None,
-            show_progress=False,
-            label="test",
-        )
 
 
 def test_build_covariate_matrix_with_user_covariates():

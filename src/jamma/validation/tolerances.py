@@ -33,7 +33,39 @@ Value types and tolerances:
 - **Allele frequency**: JAMMA reports MAF (<=0.5), GEMMA reports AF (may be >0.5)
 """
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
+
+from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN
+
+DEFAULT_LAMBDA_RTOL = 2e-5
+
+
+@dataclass(frozen=True)
+class LambdaBoundaryPolicy:
+    """Optimizer bounds used to classify lambda comparison results."""
+
+    lower: float = DEFAULT_L_MIN
+    upper: float = DEFAULT_L_MAX
+    rtol: float = DEFAULT_LAMBDA_RTOL
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.lower) or not math.isfinite(self.upper):
+            raise ValueError("lambda boundary policy bounds must be finite")
+        if not math.isfinite(self.rtol):
+            raise ValueError("lambda boundary classification rtol must be finite")
+        if not 0 < self.lower < self.upper:
+            raise ValueError(
+                "lambda boundary policy requires 0 < lower < upper, "
+                f"got lower={self.lower}, upper={self.upper}"
+            )
+        if not 0 <= self.rtol < 1:
+            raise ValueError(
+                "lambda boundary classification rtol must be in [0, 1), "
+                f"got {self.rtol}"
+            )
+        if self.lower * (1 + self.rtol) >= self.upper * (1 - self.rtol):
+            raise ValueError("lambda boundary classification bands must not overlap")
 
 
 @dataclass
@@ -78,6 +110,8 @@ class ToleranceConfig:
             in dataset-specific ToleranceConfig when comparing logl_H1.
         lambda_rtol: Relative tolerance for lambda (variance ratio).
             Max observed: 1.2e-5 from Brent convergence differences.
+        lambda_boundary: Bounds used by both optimizers and the relative margin
+            used to classify lower- and upper-bound hits.
         af_rtol: Relative tolerance for allele frequency.
             JAMMA reports MAF (<=0.5), GEMMA reports AF (can be >0.5).
             Comparison normalizes both to MAF before comparing.
@@ -112,7 +146,9 @@ class ToleranceConfig:
     # SNPs. Override in dataset-specific configs when comparing logl_H1.
     logl_rtol: float = 1e-6
     # Lambda: Brent optimization convergence. Max observed: 1.2e-5
-    lambda_rtol: float = 2e-5
+    lambda_rtol: float = DEFAULT_LAMBDA_RTOL
+    # Optimizer bounds and classification tolerance for boundary exemptions.
+    lambda_boundary: LambdaBoundaryPolicy = field(default_factory=LambdaBoundaryPolicy)
     # AF: JAMMA reports MAF (<=0.5), GEMMA reports AF. Max diff from rounding: 0.04
     af_rtol: float = 0.05
     # Absolute tolerance floor for near-zero comparisons.

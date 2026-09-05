@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 /* Bump when function signatures or array layout expectations change. */
-#define ABI_VERSION 18
+#define ABI_VERSION 19
 
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
@@ -27,6 +27,87 @@ static PyObject *_get_aligned_alloc_test_ptr(PyObject *self, PyObject *args)
     uintptr_t addr = (uintptr_t)p;
     free(p);
     return PyLong_FromUnsignedLongLong((unsigned long long)addr);
+}
+
+/* Pure sizing companion to the workspace creators. Array payloads are split
+ * by lifetime so Python can price before any workspace allocation occurs. */
+static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
+{
+    int n_samples, n_cvt, n_grid, lmm_mode, n_threads;
+    (void)self;
+    if (!PyArg_ParseTuple(args, "iiiii", &n_samples, &n_cvt, &n_grid,
+                          &lmm_mode, &n_threads)) return NULL;
+    if (n_samples < 1 || n_cvt < 1 || n_cvt > 100 || n_grid < 2 ||
+        lmm_mode < 1 || lmm_mode > 4 || n_threads < 1) {
+        PyErr_SetString(PyExc_ValueError, "invalid workspace sizing dimensions");
+        return NULL;
+    }
+    size_t rows_check = (size_t)n_cvt + 2;
+    size_t index_check = ((size_t)n_cvt + 3) * rows_check / 2;
+    size_t largest_factor = index_check > (size_t)n_grid
+        ? index_check : (size_t)n_grid;
+    if ((size_t)n_samples > SIZE_MAX / largest_factor / sizeof(double) / 16 ||
+        (size_t)n_threads > SIZE_MAX / largest_factor /
+            (size_t)n_samples / sizeof(double) / 4) {
+        PyErr_SetString(PyExc_OverflowError, "workspace dimensions overflow size_t");
+        return NULL;
+    }
+
+    size_t persistent = 0, per_thread = 0, transient_per_thread = 0;
+    int output_columns = lmm_mode == 1 ? 5 : lmm_mode == 2 ? 2 :
+                         lmm_mode == 3 ? 3 : 8;
+    if (n_cvt == 1) {
+        /* RunInvariants retains eigenvalues, UtW, Uty, Hi_eval_null, w and
+         * the three invariant Uab rows while the capsule borrows the arrays. */
+        persistent = (size_t)8 * n_samples * sizeof(double);
+        if (lmm_mode != 3) {
+            persistent += (size_t)n_grid * 6 * sizeof(double);
+            persistent += aligned_double_bytes(grid_doubles(n_samples, n_grid));
+        }
+        if (lmm_mode == 3 || lmm_mode == 4)
+            persistent += aligned_double_bytes((size_t)n_samples);
+        if (lmm_mode == 3)
+            persistent += (size_t)2 * aligned_double_bytes((size_t)n_samples);
+        int scratch_arrays = lmm_mode == 1 ? 3 : lmm_mode == 3 ? 0 : 4;
+        transient_per_thread = (size_t)scratch_arrays *
+            (aligned_double_bytes((size_t)n_samples) + sizeof(double *));
+    } else {
+        size_t rows = (size_t)n_cvt + 2;
+        size_t index = ((size_t)n_cvt + 3) * rows / 2;
+        size_t var = rows, inv = index - var;
+        /* Two fixed-size reduction buffers in the fresh likelihood and score
+         * kernels. They coexist on each worker stack, regardless of n_cvt. */
+        transient_per_thread = (size_t)2 * MAX_N_INDEX * sizeof(double);
+        /* Native-owned eigenvalue and UtW-transpose payloads coexist with
+         * RunInvariants' original eigenvalues, UtW, Uty and Hi_eval_null.
+         * The invariant SoA is retained by reference and counted once. */
+        persistent = ((size_t)4 * n_samples +
+                      (size_t)2 * n_cvt * n_samples + inv * n_samples) *
+                     sizeof(double);
+        persistent += aligned_double_bytes(grid_doubles(n_samples, n_grid));
+        persistent += ((size_t)n_grid * (inv + 2) + inv) * sizeof(double);
+        if (lmm_mode == 3 || lmm_mode == 4)
+            persistent += aligned_double_bytes((size_t)n_samples) +
+                          inv * sizeof(double);
+        persistent += pab_transport_peak_bytes(n_cvt);
+        persistent += pab_python_conservative_bytes(n_cvt);
+        per_thread = (general_scratch_doubles(n_samples, (int)rows) +
+                      general_pab_doubles((int)rows, (int)index) + index) *
+                     sizeof(double);
+        if (lmm_mode == 1 || lmm_mode == 4)
+            per_thread += general_pab_doubles((int)rows, (int)index)
+                          * sizeof(double);
+        if (lmm_mode == 2 || lmm_mode == 4)
+            per_thread += general_lrt_thread_doubles(n_samples, (int)index) *
+                          sizeof(double);
+    }
+    /* Covers PyArray headers, capsules and allocator metadata. Pab transport
+     * arrays, including the temporary raw entry copy, are counted above. */
+    persistent += 1024 * 1024;
+    return Py_BuildValue("(KKKK)", (unsigned long long)persistent,
+                         (unsigned long long)per_thread,
+                         (unsigned long long)transient_per_thread,
+                         (unsigned long long)output_columns * sizeof(double));
 }
 
 /* -------------------------------------------------------------------------
@@ -67,6 +148,10 @@ static PyObject *jamma_sentinel_oob(PyObject *self, PyObject *args)
  * ========================================================================= */
 
 static PyMethodDef methods[] = {
+    {
+        "workspace_sizes_c", workspace_sizes_c, METH_VARARGS,
+        "Return conservative persistent, per-thread, transient-thread and per-SNP bytes."
+    },
     {
         "create_workspace_ncvt1_c",
         (PyCFunction)create_workspace_ncvt1_c_py,

@@ -10,7 +10,10 @@ import pytest
 from jamma.io import read_fam_phenotypes
 from jamma.kinship import read_kinship_matrix
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+from jamma.lmm.eigen_io import (
+    resolve_eigen_generation,
+    write_eigen_files,
+)
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from tests.fixture_paths import MOUSE
 
@@ -85,10 +88,16 @@ class TestLMMEquivalence:
             )
         ).run()
 
-        d_path = tmp_path / "test.eigenD.npy"
-        u_path = tmp_path / "test.eigenU.npy"
+        d_path, u_path = resolve_eigen_generation(tmp_path, "test")
         assert d_path.stat().st_size > 0
         assert u_path.stat().st_size > 0
-        eigenvalues, eigenvectors = read_eigen_files(d_path, u_path)
+        eigenvalues = np.load(d_path)
+        eigenvectors = np.load(u_path)
         assert eigenvalues.shape[0] == eigenvectors.shape[0]
         assert eigenvectors.shape[0] == eigenvectors.shape[1]
+        np.testing.assert_allclose(
+            eigenvectors.T @ eigenvectors,
+            np.eye(eigenvectors.shape[0]),
+            rtol=1e-12,
+            atol=1e-12,
+        )

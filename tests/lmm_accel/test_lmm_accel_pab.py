@@ -10,22 +10,17 @@ import pytest
 
 @pytest.mark.benchmark
 class TestCExtensionPerformance:
-    """Benchmark C extension vs Python on realistic data.
+    """Benchmark the C extension on realistic valid data.
 
     Hardware-sensitive — `2x` speedup is not a correctness invariant. Runs
     only under `--benchmark-only`; on machines with <4 physical cores it
-    skips. Numerical parity between C and Python paths IS a correctness
-    invariant and is checked unconditionally.
+    skips. Numerical correctness lives in ordinary tier-0 tests.
     """
 
-    def test_c_faster_than_python(self, benchmark):
-        """Benchmark C-accelerated Wald; verify numerical parity vs Python."""
+    def test_native_wald_latency(self, benchmark):
+        """Time the actual native fused Wald kernel on valid shared inputs."""
         from jamma.core.threading import get_physical_core_count
         from jamma.lmm import accel
-        from jamma.lmm.compute_numpy import _compute_wald_numpy
-        from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_numpy
-        from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
-        from jamma.lmm.uab import batch_compute_iab_numpy
 
         if not accel.available():
             pytest.skip("C extension not compiled")
@@ -38,78 +33,24 @@ class TestCExtensionPerformance:
         n_samples, n_snps = 500, 2000
         eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
 
-        # Uab columns are cross-products of (w, x, y), so each SNP's row is a
-        # Gram matrix. Drawing the six columns independently instead breaks
-        # Cauchy-Schwarz on about half the SNPs, driving P_xx/P_yy negative;
-        # the two paths then disagree about which SNPs are degenerate and
-        # return different NaN sets. Same construction as the shared fixtures.
-        w = np.abs(rng.standard_normal((n_snps, n_samples))) + 1.0
-        x = np.abs(rng.standard_normal((n_snps, n_samples))) + 0.5
-        y = rng.standard_normal((n_snps, n_samples))
-        Uab_batch = np.stack([w * w, w * x, w * y, x * x, x * y, y * y], axis=2)
-        Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
-
-        wald_kwargs = {"l_min": 1e-5, "l_max": 1e5, "n_grid": 50, "n_refine": 20}
+        w = rng.standard_normal(n_samples)
+        y = rng.standard_normal(n_samples)
+        utg_t = np.ascontiguousarray(rng.standard_normal((n_snps, n_samples)))
+        invariant = np.stack((w * w, w * y, y * y))
+        workspace = accel.require().create_workspace_ncvt1_c(
+            eigenvalues, invariant, w, y, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
+        )
 
         # Warmup: amortise OpenMP thread-pool startup before timing
-        _compute_wald_numpy(
-            1,
-            eigenvalues,
-            Uab_batch[:50],
-            n_samples,
-            **wald_kwargs,
-            Iab_batch=Iab_batch[:50],
-        )
+        accel.require().compute_lmm_chunk_ncvt1_c(workspace, utg_t[:50], n_threads)
 
-        # pytest-benchmark times the C path; speedup vs the Python path is
-        # tracked over time as benchmark history rather than asserted.
-        result_c = benchmark(
-            _compute_wald_numpy,
-            1,
-            eigenvalues,
-            Uab_batch,
-            n_samples,
-            **wald_kwargs,
-            Iab_batch=Iab_batch,
+        # pytest-benchmark tracks native latency history; it asserts no speed ratio.
+        benchmark(
+            accel.require().compute_lmm_chunk_ncvt1_c,
+            workspace,
+            utg_t,
+            n_threads,
         )
-
-        # Numerical parity is the actual correctness invariant. Build the
-        # reference from the generic optimizer rather than by disabling
-        # accel.available(): that flag routes n_cvt=1 to the split-Uab
-        # optimizer, a different algorithm from the C batch path, so the
-        # comparison would not be like-for-like. Same approach and same
-        # calibrated tolerances as test_c_vs_python_parity_synthetic, where
-        # atol carries lambdas that converge to the l_min boundary from
-        # opposite sides.
-        lambdas_py, logls_py, pab_py = golden_section_optimize_lambda_numpy(
-            1,
-            eigenvalues,
-            Uab_batch,
-            Iab_batch,
-            l_min=1e-5,
-            l_max=1e5,
-            n_grid=50,
-            n_iter=20,
-        )
-        betas_py, ses_py, pwalds_py = batch_calc_wald_stats_from_pab_numpy(
-            1, pab_py, n_samples
-        )
-        expected = {
-            "lambdas": lambdas_py,
-            "logls": logls_py,
-            "betas": betas_py,
-            "ses": ses_py,
-            "pwalds": pwalds_py,
-        }
-        for field, want in expected.items():
-            np.testing.assert_allclose(
-                result_c[field],
-                want,
-                rtol=1e-6,
-                atol=1e-4,
-                equal_nan=True,
-                err_msg=f"{field}: C vs Python mismatch",
-            )
 
 
 @pytest.mark.tier0

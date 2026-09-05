@@ -23,6 +23,11 @@ import numpy as np
 
 from jamma.lmm.likelihood import warn_p_yy_once
 from jamma.lmm.pab import _NCVT1, _P_YY_MIN, build_index_table
+from jamma.lmm.reml_score import (
+    _batch_reml_score_log_lambda_numpy,
+    _batch_reml_score_log_lambda_split_ncvt1_numpy,
+    _refine_reml_optima,
+)
 from jamma.lmm.uab import _batch_compute_pab_varying_numpy, _fill_pab_recursion
 
 # The objective handed to the golden-section refinement: per-SNP log-lambdas
@@ -335,13 +340,17 @@ def _batch_golden_section_bracket_numpy(
     grid_logls: np.ndarray,
     log_lambdas: np.ndarray,
     n_iter: int,
-) -> np.ndarray:
+    *,
+    return_details: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Refine each SNP's bracket and return the optimal log-lambda per SNP.
 
     Grid-to-golden-section refinement using NumPy broadcasting over SNPs.
 
-    All operations are vectorized over SNPs (axis 0).
-    After 20 iterations: 0.618^20 ~ 6.6e-5 relative tolerance.
+    All operations are vectorized over SNPs (axis 0). Twenty iterations shrink
+    the initial bracket by 0.618^20; interior REML peaks receive a subsequent
+    analytic-score correction because bracket width alone does not bound the
+    lambda error when likelihood comparisons are at floating-point noise.
 
     Stops at the optimal log-lambda rather than evaluating there, because each
     caller wants a different final evaluation: the REML optimizers need the Pab
@@ -368,6 +377,8 @@ def _batch_golden_section_bracket_numpy(
 
     a = log_lambdas[idx_low]  # (n_snps,)
     b = log_lambdas[idx_high]  # (n_snps,)
+    coarse_a = a.copy()
+    coarse_b = b.copy()
 
     # Initial probe points
     c = b - phi * (b - a)
@@ -390,7 +401,13 @@ def _batch_golden_section_bracket_numpy(
 
         a, b, c, d, fc, fd = new_a, new_b, new_c, new_d, new_fc, new_fd
 
-    return (a + b) / 2.0
+    # A bracket that still touches a coarse endpoint can be monotone.
+    # Refine every enclosed peak, independent of likelihood rounding.
+    interior = (a > coarse_a) & (b < coarse_b)
+    log_opt = (a + b) / 2.0
+    if return_details:
+        return log_opt, coarse_a, coarse_b, interior
+    return log_opt
 
 
 def golden_section_optimize_lambda_numpy(
@@ -408,8 +425,8 @@ def golden_section_optimize_lambda_numpy(
     Optimize REML lambda using grid search + golden section refinement with
     NumPy broadcasting over the SNP batch.
 
-    Enforces minimum of 20 golden section iterations to guarantee
-    lambda relative tolerance < 1e-5 (matching GEMMA Brent tolerance).
+    Uses 20 golden-section iterations, then refines interior peaks with one
+    safeguarded analytic-score Newton step.
 
     Args:
         n_cvt: Number of covariates.
@@ -419,8 +436,7 @@ def golden_section_optimize_lambda_numpy(
         l_min: Minimum lambda.
         l_max: Maximum lambda.
         n_grid: Coarse grid points.
-        n_iter: Golden section iterations (should be >= 20 for 1e-5 tolerance;
-            runner-level code enforces the minimum).
+        n_iter: Golden section iterations (runner-level code requires at least 20).
 
     Returns:
         ``(optimal_lambdas, optimal_logls, Pab_final)`` where the first two are
@@ -453,8 +469,21 @@ def golden_section_optimize_lambda_numpy(
         )
 
     # Stage 2: Golden section refinement, then one evaluation at the optimum.
-    log_opt = _batch_golden_section_bracket_numpy(
-        lambda log_lams: reml_at(log_lams)[0], grid_logls, log_lambdas, n_iter
+    log_opt, coarse_a, coarse_b, interior = _batch_golden_section_bracket_numpy(
+        lambda log_lams: reml_at(log_lams)[0],
+        grid_logls,
+        log_lambdas,
+        n_iter,
+        return_details=True,
+    )
+    log_opt = _refine_reml_optima(
+        log_opt,
+        coarse_a,
+        coarse_b,
+        interior,
+        lambda values, indices: _batch_reml_score_log_lambda_numpy(
+            n_cvt, values, eigenvalues, Uab_batch[indices]
+        ),
     )
     opt_logls, Pab_final = reml_at(log_opt)
     return np.exp(log_opt), opt_logls, Pab_final
@@ -501,8 +530,12 @@ def golden_section_optimize_lambda_mle_numpy(
         return _batch_mle_at_lambda_numpy(n_cvt, lams, eigenvalues, Uab_batch)
 
     # Stage 2: Golden section refinement, then one evaluation at the optimum.
-    log_opt = _batch_golden_section_bracket_numpy(
-        compute_mle_batch, grid_logls, log_lambdas, n_iter
+    log_opt, _coarse_a, _coarse_b, _interior = _batch_golden_section_bracket_numpy(
+        compute_mle_batch,
+        grid_logls,
+        log_lambdas,
+        n_iter,
+        return_details=True,
     )
     return np.exp(log_opt), compute_mle_batch(log_opt)
 
@@ -795,8 +828,21 @@ def golden_section_optimize_lambda_split_ncvt1_numpy(
             reml_const,
         )
 
-    log_opt = _batch_golden_section_bracket_numpy(
-        lambda log_lams: reml_at(log_lams)[0], grid_logls, log_lambdas, n_iter
+    log_opt, coarse_a, coarse_b, interior = _batch_golden_section_bracket_numpy(
+        lambda log_lams: reml_at(log_lams)[0],
+        grid_logls,
+        log_lambdas,
+        n_iter,
+        return_details=True,
+    )
+    log_opt = _refine_reml_optima(
+        log_opt,
+        coarse_a,
+        coarse_b,
+        interior,
+        lambda values, indices: _batch_reml_score_log_lambda_split_ncvt1_numpy(
+            values, eigenvalues, uab_varying_soa[indices], uab_invariant_soa
+        ),
     )
     opt_logls, Pab_final = reml_at(log_opt)
     return np.exp(log_opt), opt_logls, Pab_final

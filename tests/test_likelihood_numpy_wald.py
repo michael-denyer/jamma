@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.optimize import brentq
 
 from jamma.lmm.likelihood import (
     _golden_section_minimize,
@@ -23,6 +24,7 @@ from jamma.lmm.uab import (
     compute_uab_invariant_soa,
 )
 from tests.builders import rotated_lmm_inputs
+from tests.independent_lmm_oracle import dense_reml_score_log_lambda
 
 pytestmark = pytest.mark.tier0
 
@@ -379,22 +381,12 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
 
 
 def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
-    """Scalar and batch REML optimizers agree on lambda and logl.
+    """Batch refinement reaches the independent root and preserves likelihood.
 
-    Feeds a single SNP through both optimizers:
-    - Scalar: _golden_section_minimize + reml_log_likelihood (likelihood.py)
-    - Batch:  golden_section_optimize_lambda_numpy (likelihood_numpy.py)
-
-    Both run identical grid search + golden section in log-lambda space (same
-    n_grid=50, n_iter=20 defaults), so the returned optimal lambda and the
-    log-likelihood evaluated at that lambda should agree to near-machine-epsilon
-    after accounting for the batch midpoint vs scalar midpoint evaluation.
-
-    Tolerance rationale:
-    - lambda: rtol=1e-10 — both converge to log((a+b)/2) with same bracket,
-      so the difference is sub-ULP in double precision.
-    - logl: rtol=1e-10 — evaluated at the same lambda point via the same REML
-      arithmetic; any discrepancy would indicate a divergence in Pab/Iab logic.
+    The generic scalar optimizer returns a golden-section midpoint. The REML
+    batch optimizer also uses the analytic score, so lambda equality with that
+    midpoint would require keeping its approximation error. Compare the refined
+    lambda with a root of the independently implemented dense projector score.
     """
     n = 50
     n_cvt = 1
@@ -424,16 +416,18 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
     lambda_batch = lambdas_batch[0]
     logl_batch = logls_batch[0]
 
-    np.testing.assert_allclose(
-        lambda_scalar,
-        lambda_batch,
-        rtol=1e-10,
-        atol=1e-14,
-        err_msg=(
-            f"Scalar lambda {lambda_scalar:.6e} vs batch lambda {lambda_batch:.6e} "
-            "disagree beyond rtol=1e-10"
-        ),
+    def independent_score(log_lambda):
+        return dense_reml_score_log_lambda(
+            eigenvalues, UtW, Uty, Utx, np.exp(log_lambda)
+        )
+
+    root = brentq(
+        independent_score,
+        np.log(lambda_scalar) - 0.1,
+        np.log(lambda_scalar) + 0.1,
+        xtol=1e-13,
     )
+    np.testing.assert_allclose(lambda_batch, np.exp(root), rtol=1e-10, atol=1e-14)
     np.testing.assert_allclose(
         logl_scalar,
         logl_batch,

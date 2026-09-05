@@ -8,7 +8,13 @@ import numpy as np
 import pytest
 
 from jamma.core.constants import PHENOTYPE_MISSING
-from jamma.lmm.prepare_common import RunnerSetup, validate_runner_inputs
+from jamma.lmm.prepare_common import (
+    EigenPairs,
+    KinshipMatrix,
+    RunnerSetup,
+    parse_eigen_input,
+    validate_runner_inputs,
+)
 from jamma.lmm.schema import MIN_N_REFINE, LmmConfig
 
 pytestmark = pytest.mark.tier0
@@ -21,45 +27,34 @@ class TestValidateRunnerInputsErrors:
 
     def test_only_eigenvalues_raises(self):
         """Providing eigenvalues without eigenvectors raises ValueError."""
-        y = np.array([1.0, 2.0, 3.0])
         K = np.eye(3)
         with pytest.raises(ValueError, match="both eigenvalues and eigenvectors"):
-            validate_runner_inputs(y, K, None, np.ones(3), None, lmm_mode=1)
+            parse_eigen_input(K, np.ones(3), None)
 
     def test_only_eigenvectors_raises(self):
         """Providing eigenvectors without eigenvalues raises ValueError."""
-        y = np.array([1.0, 2.0, 3.0])
         K = np.eye(3)
         with pytest.raises(ValueError, match="both eigenvalues and eigenvectors"):
-            validate_runner_inputs(y, K, None, None, np.eye(3), lmm_mode=1)
-
-    @pytest.mark.parametrize("mode", [0, 5, -1, 99])
-    def test_invalid_lmm_mode_raises(self, mode):
-        """lmm_mode not in (1,2,3,4) raises ValueError."""
-        y = np.array([1.0, 2.0, 3.0])
-        K = np.eye(3)
-        with pytest.raises(ValueError, match="lmm_mode must be"):
-            validate_runner_inputs(y, K, None, None, None, lmm_mode=mode)
+            parse_eigen_input(K, None, np.eye(3))
 
     def test_no_kinship_no_eigen_raises(self):
         """Neither kinship nor eigenvalues raises ValueError."""
-        y = np.array([1.0, 2.0, 3.0])
         with pytest.raises(ValueError, match="Either kinship or pre-computed"):
-            validate_runner_inputs(y, None, None, None, None, lmm_mode=1)
+            parse_eigen_input(None, None, None)
 
     def test_all_phenotypes_missing_raises(self):
         """All phenotypes NaN raises ValueError."""
         y = np.array([np.nan, np.nan, np.nan])
         K = np.eye(3)
         with pytest.raises(ValueError, match="No valid samples"):
-            validate_runner_inputs(y, K, None, None, None, lmm_mode=1)
+            validate_runner_inputs(y, KinshipMatrix(K), None)
 
     def test_all_phenotypes_sentinel_raises(self):
         """All phenotypes equal to PHENOTYPE_MISSING raises ValueError."""
         y = np.full(3, PHENOTYPE_MISSING, dtype=np.float64)
         K = np.eye(3)
         with pytest.raises(ValueError, match="No valid samples"):
-            validate_runner_inputs(y, K, None, None, None, lmm_mode=1)
+            validate_runner_inputs(y, KinshipMatrix(K), None)
 
     def test_eigenpair_dimension_mismatch_eigenvalues(self):
         """Eigenvalue length mismatch after filtering raises ValueError."""
@@ -68,7 +63,7 @@ class TestValidateRunnerInputsErrors:
         evals = np.ones(4)
         evecs = np.eye(4)
         with pytest.raises(ValueError, match="eigenvalues length"):
-            validate_runner_inputs(y, None, None, evals, evecs, lmm_mode=1)
+            validate_runner_inputs(y, EigenPairs(evals, evecs), None)
 
     def test_eigenpair_dimension_mismatch_eigenvectors(self):
         """Eigenvector shape mismatch raises ValueError."""
@@ -76,7 +71,7 @@ class TestValidateRunnerInputsErrors:
         evals = np.ones(3)
         evecs = np.eye(4)  # Wrong shape
         with pytest.raises(ValueError, match="eigenvectors shape"):
-            validate_runner_inputs(y, None, None, evals, evecs, lmm_mode=1)
+            validate_runner_inputs(y, EigenPairs(evals, evecs), None)
 
 
 class TestValidateRunnerInputsHappyPath:
@@ -86,7 +81,7 @@ class TestValidateRunnerInputsHappyPath:
         """Valid inputs return a RunnerSetup."""
         y = np.array([1.0, 2.0, 3.0])
         K = np.eye(3)
-        result = validate_runner_inputs(y, K, None, None, None, lmm_mode=1)
+        result = validate_runner_inputs(y, KinshipMatrix(K), None)
         assert isinstance(result, RunnerSetup)
         assert result.n_samples == 3
 
@@ -94,16 +89,17 @@ class TestValidateRunnerInputsHappyPath:
         """When all samples are valid, arrays are not copied."""
         y = np.array([1.0, 2.0, 3.0])
         K = np.eye(3)
-        result = validate_runner_inputs(y, K, None, None, None, lmm_mode=1)
+        result = validate_runner_inputs(y, KinshipMatrix(K), None)
         # Same object — no copy made
         assert result.phenotypes is y
-        assert result.kinship is K
+        assert isinstance(result.eigen_input, KinshipMatrix)
+        assert result.eigen_input.value is K
 
     def test_filters_nan_phenotypes(self):
         """NaN phenotypes are filtered out."""
         y = np.array([1.0, np.nan, 3.0])
         K = np.eye(3)
-        result = validate_runner_inputs(y, K, None, None, None, lmm_mode=1)
+        result = validate_runner_inputs(y, KinshipMatrix(K), None)
         assert result.n_samples == 2
         np.testing.assert_array_equal(result.phenotypes, [1.0, 3.0])
 
@@ -111,7 +107,7 @@ class TestValidateRunnerInputsHappyPath:
         """PHENOTYPE_MISSING (-9) phenotypes are filtered out."""
         y = np.array([1.0, PHENOTYPE_MISSING, 3.0], dtype=np.float64)
         K = np.eye(3)
-        result = validate_runner_inputs(y, K, None, None, None, lmm_mode=1)
+        result = validate_runner_inputs(y, KinshipMatrix(K), None)
         assert result.n_samples == 2
 
     def test_filters_nan_covariates(self):
@@ -119,7 +115,7 @@ class TestValidateRunnerInputsHappyPath:
         y = np.array([1.0, 2.0, 3.0])
         K = np.eye(3)
         cov = np.array([[1.0], [np.nan], [1.0]])
-        result = validate_runner_inputs(y, K, cov, None, None, lmm_mode=1)
+        result = validate_runner_inputs(y, KinshipMatrix(K), cov)
         assert result.n_samples == 2
         np.testing.assert_array_equal(result.phenotypes, [1.0, 3.0])
 
@@ -127,35 +123,39 @@ class TestValidateRunnerInputsHappyPath:
         """Kinship is subsetted via np.ix_ when samples are removed."""
         y = np.array([1.0, np.nan, 3.0])
         K = np.arange(9, dtype=np.float64).reshape(3, 3)
-        result = validate_runner_inputs(y, K, None, None, None, lmm_mode=1)
+        result = validate_runner_inputs(y, KinshipMatrix(K), None)
         expected = K[np.ix_([True, False, True], [True, False, True])]
-        np.testing.assert_array_equal(result.kinship, expected)
+        assert isinstance(result.eigen_input, KinshipMatrix)
+        np.testing.assert_array_equal(result.eigen_input.value, expected)
 
     def test_valid_mask_shape_matches_original(self):
         """valid_mask has the original (pre-filter) length."""
         y = np.array([1.0, np.nan, 3.0, 4.0])
         K = np.eye(4)
-        result = validate_runner_inputs(y, K, None, None, None, lmm_mode=1)
+        result = validate_runner_inputs(y, KinshipMatrix(K), None)
         assert result.valid_mask.shape == (4,)
         np.testing.assert_array_equal(result.valid_mask, [True, False, True, True])
-
-    @pytest.mark.parametrize("mode", [1, 2, 3, 4])
-    def test_all_valid_lmm_modes(self, mode):
-        """All four valid lmm_mode values are accepted."""
-        y = np.array([1.0, 2.0])
-        K = np.eye(2)
-        result = validate_runner_inputs(y, K, None, None, None, lmm_mode=mode)
-        assert result.n_samples == 2
 
     def test_precomputed_eigenpairs_accepted(self):
         """Pre-computed eigenvalues + eigenvectors are passed through."""
         y = np.array([1.0, 2.0, 3.0])
         evals = np.ones(3)
         evecs = np.eye(3)
-        result = validate_runner_inputs(y, None, None, evals, evecs, lmm_mode=1)
-        assert result.eigenvalues is evals
-        assert result.eigenvectors is evecs
-        assert result.kinship is None
+        result = validate_runner_inputs(y, EigenPairs(evals, evecs), None)
+        assert isinstance(result.eigen_input, EigenPairs)
+        assert result.eigen_input.values is evals
+        assert result.eigen_input.vectors is evecs
+
+    def test_complete_eigenpairs_take_precedence_over_kinship(self):
+        kinship = np.eye(3)
+        evals = np.ones(3)
+        evecs = np.eye(3)
+
+        result = parse_eigen_input(kinship, evals, evecs)
+
+        assert isinstance(result, EigenPairs)
+        assert result.values is evals
+        assert result.vectors is evecs
 
 
 # ── LmmConfig ──────────────────────────────────────────────────────

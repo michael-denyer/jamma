@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.lmm.eigen_cache import EigenCacheComponents
+from jamma.lmm.eigen_cache import EIGEN_CACHE_SCHEMA_VERSION, EigenCacheComponents
 
 pytestmark = pytest.mark.tier0
 
@@ -26,7 +26,7 @@ def _dummy_components(maf_threshold: float = 0.01) -> EigenCacheComponents:
     maf_threshold is exposed because the roundtrip test asserts on it.
     """
     return {
-        "schema_version": 1,
+        "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
         "bed_fingerprint": "data.bed:64:1",
         "bim_sha256": "0" * 64,
         "maf_threshold": maf_threshold,
@@ -34,6 +34,16 @@ def _dummy_components(maf_threshold: float = 0.01) -> EigenCacheComponents:
         "valid_mask_sha256": "1" * 64,
         "ksnps": "none",
     }
+
+
+def _dummy_generation(tmp_path: Path) -> tuple[str, dict[str, dict[str, str]]]:
+    generation = "testgeneration"
+    stem = f"result.generation.{generation}.loco.chr1"
+    d_path = tmp_path / f"{stem}.eigenD.npy"
+    u_path = tmp_path / f"{stem}.eigenU.npy"
+    np.save(d_path, np.ones(2))
+    np.save(u_path, np.eye(2))
+    return generation, {"1": {"eigenD": d_path.name, "eigenU": u_path.name}}
 
 
 def _write_dummy_plink(
@@ -205,8 +215,14 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
+        generation, artifacts = _dummy_generation(tmp_path)
         write_eigen_cache_manifest(
-            tmp_path, "result", "KEY123", components=_dummy_components()
+            tmp_path,
+            "result",
+            "KEY123",
+            components=_dummy_components(),
+            generation=generation,
+            artifacts=artifacts,
         )
         ok, _reason = eigen_cache_is_valid(tmp_path, "result", "KEY123")
         assert ok is True
@@ -217,8 +233,14 @@ class TestEigenCacheManifest:
             write_eigen_cache_manifest,
         )
 
+        generation, artifacts = _dummy_generation(tmp_path)
         write_eigen_cache_manifest(
-            tmp_path, "result", "KEY123", components=_dummy_components()
+            tmp_path,
+            "result",
+            "KEY123",
+            components=_dummy_components(),
+            generation=generation,
+            artifacts=artifacts,
         )
         ok, reason = eigen_cache_is_valid(tmp_path, "result", "DIFFERENT")
         assert ok is False
@@ -231,14 +253,68 @@ class TestEigenCacheManifest:
         )
 
         components = _dummy_components(maf_threshold=0.01)
+        generation, artifacts = _dummy_generation(tmp_path)
         path = write_eigen_cache_manifest(
-            tmp_path, "result", "KEY123", components=components
+            tmp_path,
+            "result",
+            "KEY123",
+            components=components,
+            generation=generation,
+            artifacts=artifacts,
         )
         assert path.exists()
         manifest = read_eigen_cache_manifest(tmp_path, "result")
         assert manifest is not None
         assert manifest["cache_key"] == "KEY123"
         assert manifest["components"] == components
+
+    def test_loco_manifest_resolves_one_complete_generation(
+        self, tmp_path: Path
+    ) -> None:
+        from jamma.lmm.eigen_cache import loco_eigen_paths_from_manifest
+
+        generation = "abc123"
+        names: dict[str, dict[str, str]] = {}
+        for chromosome in ("1", "2"):
+            stem = f"study.generation.{generation}.loco.chr{chromosome}"
+            d_path = tmp_path / f"{stem}.eigenD.npy"
+            u_path = tmp_path / f"{stem}.eigenU.npy"
+            np.save(d_path, np.ones(2))
+            np.save(u_path, np.eye(2))
+            names[chromosome] = {"eigenD": d_path.name, "eigenU": u_path.name}
+        manifest = {
+            "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
+            "cache_key": "KEY",
+            "components": _dummy_components(),
+            "generation": generation,
+            "artifacts": names,
+        }
+
+        resolved = loco_eigen_paths_from_manifest(
+            tmp_path, "study", ["1", "2"], manifest
+        )
+
+        assert resolved is not None
+        assert resolved["1"][0].name == names["1"]["eigenD"]
+
+    def test_loco_manifest_rejects_member_outside_generation(
+        self, tmp_path: Path
+    ) -> None:
+        from jamma.lmm.eigen_cache import loco_eigen_paths_from_manifest
+
+        manifest = {
+            "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
+            "cache_key": "KEY",
+            "components": _dummy_components(),
+            "generation": "abc123",
+            "artifacts": {
+                "1": {"eigenD": "../outside.npy", "eigenU": "../outside.npy"}
+            },
+        }
+
+        assert (
+            loco_eigen_paths_from_manifest(tmp_path, "study", ["1"], manifest) is None
+        )
 
     def test_corrupt_manifest_is_invalid(self, tmp_path: Path) -> None:
         from jamma.lmm.eigen_cache import (
@@ -250,6 +326,18 @@ class TestEigenCacheManifest:
         ok, reason = eigen_cache_is_valid(tmp_path, "result", "KEY")
         assert ok is False
         assert reason
+
+    @pytest.mark.parametrize("payload", ["[]", "null", '"manifest"', "3"])
+    def test_non_object_manifest_is_invalid(self, tmp_path: Path, payload: str) -> None:
+        from jamma.lmm.eigen_cache import (
+            eigen_cache_is_valid,
+            eigen_cache_manifest_path,
+        )
+
+        eigen_cache_manifest_path(tmp_path, "result").write_text(payload)
+        ok, reason = eigen_cache_is_valid(tmp_path, "result", "KEY")
+        assert ok is False
+        assert "manifest" in reason
 
     def test_missing_cache_key_reports_malformed_not_input_change(
         self, tmp_path: Path
@@ -333,32 +421,17 @@ class TestEigenCacheManifest:
             raise RuntimeError("simulated serialisation failure")
 
         monkeypatch.setattr(json_mod, "dump", boom)
+        generation, artifacts = _dummy_generation(tmp_path)
 
         with pytest.raises(RuntimeError, match="simulated serialisation failure"):
             write_eigen_cache_manifest(
-                tmp_path, "result", "KEY", components=_dummy_components()
+                tmp_path,
+                "result",
+                "KEY",
+                components=_dummy_components(),
+                generation=generation,
+                artifacts=artifacts,
             )
 
         assert list(tmp_path.glob("*.json")) == []
         assert not eigen_cache_manifest_path(tmp_path, "result").exists()
-
-    def test_invalidate_removes_present_manifest_and_no_ops_when_absent(
-        self, tmp_path: Path
-    ) -> None:
-        from jamma.lmm.eigen_cache import (
-            eigen_cache_manifest_path,
-            invalidate_eigen_cache_manifest,
-            write_eigen_cache_manifest,
-        )
-
-        write_eigen_cache_manifest(
-            tmp_path, "result", "KEY", components=_dummy_components()
-        )
-        manifest = eigen_cache_manifest_path(tmp_path, "result")
-        assert manifest.exists()
-
-        invalidate_eigen_cache_manifest(tmp_path, "result")
-        assert manifest.exists() is False
-
-        invalidate_eigen_cache_manifest(tmp_path, "result")
-        assert manifest.exists() is False

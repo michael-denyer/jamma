@@ -330,7 +330,7 @@ class TestNumpyFallbackKinshipMemory:
         import tracemalloc
 
         from jamma import jlinalg
-        from jamma.kinship.stream import _accumulate_kinship
+        from jamma.kinship.accumulation import accumulate_kinship
 
         monkeypatch.setattr(
             jlinalg,
@@ -343,13 +343,13 @@ class TestNumpyFallbackKinshipMemory:
 
         K = np.zeros((n, n))
         X = np.ascontiguousarray(np.random.default_rng(1).standard_normal((n, batch)))
-        _accumulate_kinship(K, X)  # warm BLAS so its one-time state is excluded
+        accumulate_kinship(K, X)  # warm BLAS so its one-time state is excluded
 
         gc.collect()
         tracemalloc.start()
         try:
             before = tracemalloc.get_traced_memory()[0]
-            _accumulate_kinship(K, X)
+            accumulate_kinship(K, X)
             peak = tracemalloc.get_traced_memory()[1]
         finally:
             tracemalloc.stop()

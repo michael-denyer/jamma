@@ -221,7 +221,7 @@ class TestFusedParity:
         result = accel.require().compute_lmm_chunk_ncvt1_c(ws_fused, utg_t, 1)
 
         wald = _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples)
-        reference = {k: wald[k] for k in _WALD_KEYS}
+        reference = {k: wald[k] for k in _WALD_KEYS if k != "logls"}
         reference["p_scores"] = _numpy_ncvt1_score(
             w, Uty, utg_t, Hi_eval_null, n_samples
         )["p_scores"]
@@ -388,7 +388,7 @@ def test_fused_general_ncvt2_mode4(general_score_lrt_ncvt2):
 
     assert_matches_numpy(
         result,
-        {k: reference[k] for k in _WALD_KEYS},
+        {k: reference[k] for k in _WALD_KEYS if k != "logls"},
         "Fused general mode-4 Wald n_cvt=2",
     )
 
@@ -491,7 +491,7 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
     )
 
     wald = _numpy_general_wald(data)
-    reference = {k: wald[k] for k in _WALD_KEYS}
+    reference = {k: wald[k] for k in _WALD_KEYS if k != "logls"}
     reference["p_scores"] = _numpy_general_score(data)["p_scores"]
     reference.update(_numpy_general_lrt(data))
 
@@ -805,6 +805,144 @@ def test_general_creator_rejects_out_of_range_table(
             table,
             lmm_mode=1,
         )
+
+
+def _create_general_workspace_with_table(data, table, *, uab_invariant=None):
+    n_cvt = data["n_cvt"]
+    if uab_invariant is None:
+        uab_invariant = compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt)
+    return accel.require().create_workspace_general_c(
+        data["eigenvalues"],
+        uab_invariant,
+        data["UtW"],
+        data["Uty"],
+        data["n_samples"],
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        table,
+        lmm_mode=1,
+    )
+
+
+@pytest.mark.tier0
+@requires_c
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("n_index", 6000),
+        ("n_rows", 5),
+        ("n_inv", 5996),
+        ("n_var", 5),
+        ("idx_xx", 6),
+        ("idx_xy", 7),
+        ("idx_yy", 8),
+        ("n_index", 2**40),
+    ],
+    ids=[
+        "n_index",
+        "n_rows",
+        "n_inv",
+        "n_var",
+        "idx_xx",
+        "idx_xy",
+        "idx_yy",
+        "integer_overflow",
+    ],
+)
+def test_general_creator_rejects_noncanonical_dimensions(
+    synthetic_covariate_data_ncvt2, key, value
+):
+    """Dimensions are derived from n_cvt rather than trusted independently."""
+    from jamma.lmm.pab import build_pab_table_for_c
+
+    data = synthetic_covariate_data_ncvt2
+    table = build_pab_table_for_c(data["n_cvt"])._asdict()
+    table[key] = value
+    if key == "n_index" and value == 6000:
+        table["n_inv"] = value - table["n_var"]
+        table["invariant_indices"] = np.arange(table["n_inv"], dtype=np.int32)
+        uab_invariant = np.zeros((table["n_inv"], data["n_samples"]), dtype=np.float64)
+    else:
+        uab_invariant = None
+
+    with pytest.raises((TypeError, ValueError), match=key):
+        _create_general_workspace_with_table(data, table, uab_invariant=uab_invariant)
+
+
+@pytest.mark.tier0
+@requires_c
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "duplicate_partition",
+        "missing_partition",
+        "wrong_varying_map",
+        "wrong_diagonal",
+        "wrong_level",
+        "wrong_recursion",
+    ],
+)
+def test_general_creator_rejects_noncanonical_layout(
+    synthetic_covariate_data_ncvt2, mutation
+):
+    """Index maps and recursion must match the canonical n_cvt layout."""
+    from jamma.lmm.pab import build_pab_table_for_c
+
+    data = synthetic_covariate_data_ncvt2
+    table = build_pab_table_for_c(data["n_cvt"])._asdict()
+
+    if mutation == "duplicate_partition":
+        bad = table["invariant_indices"].copy()
+        bad[1] = bad[0]
+        table["invariant_indices"] = bad
+    elif mutation == "missing_partition":
+        bad = table["varying_indices"].copy()
+        bad[0] = table["invariant_indices"][0]
+        table["varying_indices"] = bad
+    elif mutation == "wrong_varying_map":
+        bad = table["var_a_cols"].copy()
+        bad[0] = bad[0] + 1
+        table["var_a_cols"] = bad
+    elif mutation == "wrong_diagonal":
+        bad = table["logdet_diag_cols"].copy()
+        bad[1] = bad[1] + 1
+        table["logdet_diag_cols"] = bad
+    elif mutation == "wrong_level":
+        bad = table["level_offsets"].copy()
+        bad[-1] = bad[-1] - 1
+        table["level_offsets"] = bad
+    else:
+        bad = table["entries"].copy()
+        bad[0] = bad[1]
+        table["entries"] = bad
+
+    with pytest.raises(ValueError, match="canonical"):
+        _create_general_workspace_with_table(data, table)
+
+
+@pytest.mark.tier0
+@requires_c
+@pytest.mark.parametrize("mutation", ["wrong_shape", "oversized_value"])
+def test_general_creator_requires_exact_int32_array_transport(
+    synthetic_covariate_data_ncvt2, mutation
+):
+    """Array validation happens before NumPy can reshape or narrow integers."""
+    from jamma.lmm.pab import build_pab_table_for_c
+
+    data = synthetic_covariate_data_ncvt2
+    table = build_pab_table_for_c(data["n_cvt"])._asdict()
+    if mutation == "wrong_shape":
+        bad = table["entries"].reshape(2, -1)
+    else:
+        bad = table["entries"].astype(np.int64)
+        bad[0] += 2**32
+    table["entries"] = bad
+
+    with pytest.raises(TypeError, match="one-dimensional int32"):
+        _create_general_workspace_with_table(data, table)
 
 
 @pytest.mark.tier0

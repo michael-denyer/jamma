@@ -60,7 +60,8 @@ double golden_section_lambda_general(
     double *beta_out, double *se_out, double *f_stat_out,
     int *is_valid_out,
     double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
+    double *pab_scratch,   /* caller-provided, at least n_rows * n_index doubles */
+    double *dpab_scratch   /* same shape, for the interior REML refinement */
 );
 
 /* -------------------------------------------------------------------------

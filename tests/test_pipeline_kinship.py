@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.lmm.eigen import center_kinship
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_kinship import compute_kinship
 from jamma.pipeline_plan import resolve_kinship_source
@@ -225,7 +226,9 @@ class TestEarlySampleFiltering:
             check_memory=False,
             show_progress=False,
             valid_indices=valid_indices,
+            filter_sample_indices=valid_indices,
         )
+        center_kinship(K_ref)
         np.testing.assert_allclose(
             K_with_vi,
             K_ref,
@@ -258,7 +261,9 @@ class TestEarlySampleFiltering:
 
         K_saved = np.load(out / "result.cXX.npy")
         assert K_saved.shape == (_N_SAMPLES, _N_SAMPLES)
-        np.testing.assert_array_equal(K, K_saved[np.ix_(valid_indices, valid_indices)])
+        expected = K_saved[np.ix_(valid_indices, valid_indices)]
+        center_kinship(expected)
+        np.testing.assert_array_equal(K, expected)
 
     def test_weight_file_valid_indices(self, tmp_path: Path) -> None:
         """Weights filtered to match valid_indices under early filtering."""
@@ -319,11 +324,13 @@ class TestEarlySampleFiltering:
 
         n_valid = len(valid_indices)
         assert K.shape == (n_valid, n_valid)
+        expected = K_full[np.ix_(valid_indices, valid_indices)]
+        center_kinship(expected)
         np.testing.assert_allclose(
             K,
-            K_full[np.ix_(valid_indices, valid_indices)],
+            expected,
             rtol=1e-12,
-            err_msg="Pre-computed kinship with valid_indices must match np.ix_",
+            err_msg="Loaded kinship must match the centred submatrix",
         )
 
     def test_run_end_to_end_with_nan_phenotypes(self, tmp_path: Path) -> None:
@@ -358,8 +365,8 @@ class TestEarlySampleFiltering:
     def test_run_end_to_end_save_kinship_with_nan(self, tmp_path: Path) -> None:
         """Full run() with save_kinship=True and NaN phenotypes.
 
-        Verifies save_kinship does not change statistical results: the
-        filtered kinship is saved and eigenpairs match the non-save path.
+        Checks sample/SNP counts and the saved full-matrix shape. Numerical
+        save/no-save parity is covered in test_kinship_sample_basis.py.
         """
         bfile = _copy_plink_genotypes(tmp_path)
         write_fam(

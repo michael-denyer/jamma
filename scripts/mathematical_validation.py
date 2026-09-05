@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate external references, compare immutable cases, or trace the Pab defect.
+"""Generate external references or compare immutable cases.
 
 Run with PYTHONPATH=src python scripts/mathematical_validation.py --help.
 No reference output is created by the compare command.
@@ -371,52 +371,6 @@ def compare(manifest, reference, destination):
     return bundle
 
 
-def summarize_evidence(root, destination):
-    """Generate the review summary from immutable raw bundles, never hand maxima."""
-    tiny_path, pab_path = root / "tiny/bundle.json", root / "pab/pab.json"
-    tiny = json.loads(tiny_path.read_text())
-    pab = json.loads(pab_path.read_text())
-    diagnostic = pab["diagnostic"]
-    summary = {
-        "schema_version": 1,
-        "tiny_status": tiny["status"],
-        "pab_diagnosis_status": diagnostic["status"],
-        "historical_parity_status": diagnostic["original_assertion_status"],
-        "environment": {
-            key: pab["environment"][key]
-            for key in (
-                "revision",
-                "platform",
-                "python",
-                "numpy",
-                "scipy",
-                "active_blas",
-                "native_sha256",
-            )
-        },
-        "case_ids": [case["id"] for case in tiny["cases"]],
-        "tiny_comparisons": {case["id"]: case["comparisons"] for case in tiny["cases"]},
-        "first_divergence": diagnostic["first_divergence"],
-        "reduction": diagnostic["reduction"],
-        "original_errors": {
-            field: {
-                "max_abs": value["max_abs"],
-                "failure_count": len(value["failed_ids"]),
-            }
-            for field, value in diagnostic["original_errors"].items()
-        },
-        "shared_2000_errors": diagnostic["shared_2000_errors"],
-        "observer_negative_controls": diagnostic["observer_negative_controls"],
-        "bundles": {
-            "tiny": {"path": str(tiny_path), "sha256": digest(tiny_path)},
-            "pab": {"path": str(pab_path), "sha256": digest(pab_path)},
-        },
-        "untested": tiny["untested"],
-    }
-    write_json(destination, summary)
-    return summary
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -430,12 +384,9 @@ def main():
             "pipeline",
             "loco",
             "weights",
-            "pab",
             "phase1",
-            "summarize",
         ),
     )
-    parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--manifest", type=Path, default=MANIFEST)
     parser.add_argument("--reference", type=Path, default=REFERENCE)
     parser.add_argument("--output", required=True, type=Path)
@@ -494,29 +445,12 @@ def main():
         write_json(args.output / "phase1.json", result)
         print(result["evidence"]["status"])
         return int(result["evidence"]["status"] != "VERIFIED")
-    if args.command == "summarize":
-        if args.evidence_root is None:
-            parser.error("summarize requires --evidence-root")
-        summarize_evidence(args.evidence_root, args.output)
-    elif args.command == "generate":
+    if args.command == "generate":
         generate_reference(manifest, args.output, args.gemma)
     elif args.command == "compare":
         result = compare(manifest, args.reference, args.output)
         print(result["status"])
         return int(result["status"] != "VERIFIED")
-    else:
-        from tests.math_validation.pab_trace import diagnose
-
-        args.output.mkdir(parents=True, exist_ok=False)
-        result = {
-            "schema_version": 1,
-            "environment": environment(),
-            "invocation": sys.argv,
-            "diagnostic": diagnose(),
-        }
-        write_json(args.output / "pab.json", result)
-        print(result["diagnostic"]["status"], result["diagnostic"]["verdict"])
-        return int(result["diagnostic"]["status"] != "VERIFIED")
     return 0
 
 

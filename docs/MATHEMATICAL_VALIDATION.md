@@ -36,7 +36,7 @@ for this case; that result is marked **NOT VERIFIED** in the bundle.
 | [LOCO manifest](../tests/math_validation/loco_manifest.json) | Four modes; three chromosomes including a singleton; external kinship excluding the tested chromosome; cold cache creation and observed warm reuse |
 | [Weight contract](../tests/math_validation/weight_contract.py) | Mode 4; nonuniform weights with selected samples; supplied/computed kinship; batch/streaming; independent fixed-lambda and optimized dense checks |
 | [Likelihood and boundary checks](../tests/math_validation/phase1.py) | Separate mode-4 fields, mode-2 MLE and mode-1 REML identity; constrained lambda classes, objective gaps and curvature; native and NumPy |
-| [Pab checks](../tests/math_validation/pab_trace.py) | Shared-input requirements, invalid-input control, observed native calls and intermediate projection products |
+| [Shared-input parity](../tests/test_pab_diagnostic.py) | Public native and NumPy results against the dense oracle |
 
 References contain raw PLINK inputs, external outputs, executable hashes,
 commands and provenance. Generation runs the external GEMMA executable and is
@@ -78,9 +78,8 @@ revisions fails the comparison if its digest changes. Added or removed fields
 are reported as coverage changes. CI builds both revisions on the same runner.
 
 The split Pab route requires phenotype and covariate inputs shared across SNPs.
-A strict expected-failure test supplies varying inputs to check this requirement.
-The diagnostic command records intermediate products and observes the native
-cached-grid selector. Native final bracket endpoints are unavailable.
+The parity tests compare its results with the public native entry point and
+the dense oracle.
 
 ## Reproduce and inspect evidence
 
@@ -94,7 +93,6 @@ uv run python scripts/mathematical_validation.py pipeline --output /tmp/math/pip
 uv run python scripts/mathematical_validation.py loco --output /tmp/math/loco
 uv run python scripts/mathematical_validation.py weights --output /tmp/math/weights
 uv run python scripts/mathematical_validation.py phase1 --output /tmp/math/phase1
-uv run python scripts/mathematical_validation.py pab --output /tmp/math/pab
 uv run python scripts/mathematical_mutations.py --all --output /tmp/math/mutations.json
 
 # Force the NumPy numerical route in a separate process and destination.
@@ -112,8 +110,7 @@ source and binary hashes, configuration, raw outputs and field errors.
 CI uploads bundles for each test-matrix platform and the forced NumPy job.
 The always-running `numerical-validation` context requires the platform jobs
 and production mutation smoke checks to pass. The slow workflow runs all
-production mutations. Native Pab symbol observation requires an exporting build;
-a missing symbol fails that command.
+production mutations.
 
 ## Remaining scope
 

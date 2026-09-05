@@ -9,8 +9,11 @@ introduce (inlining changes FMA contraction and register allocation).
 This plugin wraps every public callable in ``jamma.lmm._lmm_accel`` with a
 recorder, lets the existing ``tests/lmm_accel/`` suite drive them with the
 inputs the maintainers already care about, and writes one sorted line per
-distinct ``(function, args digest, result digest)`` triple. Two runs across a
-refactor that differ by one bit produce different files.
+distinct result. Dictionary returns are recorded as one ``(function.field,
+args digest, field digest)`` triple per exact field; other returns keep one
+``(function, args digest, result digest)`` triple. This keeps existing fields
+directly comparable when an API adds or removes a field. Two runs across a
+refactor that differ by one bit in a shared field produce different files.
 
 Usage, via ``scripts/run-fingerprint.sh`` (the invocation both sides of a
 comparison must share, so it lives in one file rather than being typed twice)::
@@ -119,7 +122,11 @@ def _wrap(name: str, fn: Any) -> Any:
             # function of its own call and never of whatever capsule last
             # lived at that address.
             _workspaces[id(result)] = f"{name}|{args_digest}"
-        _records.add(f"{name}\t{args_digest}\t{_digest(result)}")
+        if isinstance(result, dict):
+            for field, value in sorted(result.items()):
+                _records.add(f"{name}.{field}\t{args_digest}\t{_digest(value)}")
+        else:
+            _records.add(f"{name}\t{args_digest}\t{_digest(result)}")
         return result
 
     recorder.__name__ = getattr(fn, "__name__", name)

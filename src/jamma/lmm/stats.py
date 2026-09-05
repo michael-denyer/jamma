@@ -22,7 +22,7 @@ class AssocResult:
 
     Matches GEMMA's output format. Fields present depend on test type:
     - Wald (-lmm 1): REML logl_H1, l_remle, p_wald
-    - LRT (-lmm 2): l_mle, p_lrt (no beta/se in GEMMA output, but kept for consistency)
+    - LRT (-lmm 2): MLE logl_H1, l_mle, p_lrt (no beta/se in GEMMA output)
     - Score (-lmm 3): p_score only (no per-SNP logl_H1/l_remle)
     - All (-lmm 4): All fields; logl_H1 is the alternative-model MLE
     """
@@ -36,7 +36,7 @@ class AssocResult:
     af: float  # allele frequency
     beta: float
     se: float
-    logl_H1: float | None = None  # REML in mode 1, MLE in mode 4
+    logl_H1: float | None = None  # REML in mode 1, MLE in modes 2 and 4
     l_remle: float | None = None  # Not present for Score-only
     p_wald: float | None = None  # Only for Wald/-lmm 1
     p_score: float | None = None  # Only for Score/-lmm 3

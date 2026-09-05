@@ -49,8 +49,9 @@ typedef struct {
     PyArrayObject *p_scores;
 } score_output_t;
 
-/* LRT: 2 arrays. */
+/* LRT: alternative MLE likelihood, lambda, and p-value. */
 typedef struct {
+    PyArrayObject *logls;
     PyArrayObject *lambdas_mle;
     PyArrayObject *p_lrts;
 } lrt_output_t;
@@ -133,8 +134,8 @@ PyObject *build_lrt_result_dict(lrt_output_t *out);
 
 /* betas/ses/p_scores are always allocated: mode 1 leaves p_scores unused,
  * mode 3 has no Wald block and writes Score's beta/se into betas/ses
- * instead. lambdas/logls/pwalds are mode 1 and 4 only; lambdas_mle/p_lrts
- * are mode 2 and 4 only. build_lmm_result_dict emits only the non-NULL
+ * instead. lambdas/pwalds are mode 1 and 4 only; logls is mode 1, 2, and 4;
+ * lambdas_mle/p_lrts are mode 2 and 4 only. build_lmm_result_dict emits the non-NULL
  * arrays, so a mode's absent keys never reach the Python dict. */
 int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int lmm_mode);
 void decref_lmm_output(lmm_output_t *out);

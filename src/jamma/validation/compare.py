@@ -214,20 +214,17 @@ def _assoc_header_layouts() -> frozenset[tuple[str, ...]]:
 
     The four canonical layouts are ``schema.HEADERS`` (one per LMM mode). Three
     extra layouts are GEMMA-version quirks the schema does not model: they differ
-    only by an optional ``logl_H1`` column that some versions emit for Wald/all
-    tests and others emit for LRT.
+    only by an optional ``logl_H1`` column that some runs omit.
     """
     cols = {tt: tuple(h.split("\t")) for tt, h in HEADERS.items()}
-    # Number of leading metadata columns (chr..af), derived rather than hardcoded.
-    n_prefix = len(cols["lrt"]) - len(MODE_SPECS[2].stat_columns)
     wald, lrt, all_tests = cols["wald"], cols["lrt"], cols["all"]
     return frozenset(
         {
             wald,  # Wald with logl_H1
             tuple(c for c in wald if c != "logl_H1"),  # Wald without logl_H1
             cols["score"],
-            lrt,  # LRT without logl_H1
-            (*lrt[:n_prefix], "logl_H1", *lrt[n_prefix:]),  # LRT with logl_H1
+            lrt,  # LRT with logl_H1
+            tuple(c for c in lrt if c != "logl_H1"),  # LRT without logl_H1
             all_tests,  # all-tests with logl_H1
             tuple(c for c in all_tests if c != "logl_H1"),  # all-tests without
         }

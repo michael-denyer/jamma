@@ -447,7 +447,7 @@ class TestLrtWorkspaceParity:
         single = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
         multi = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 2)
 
-        for key in ("lambdas_mle", "p_lrts"):
+        for key in ("logls", "lambdas_mle", "p_lrts"):
             np.testing.assert_array_equal(
                 single[key],
                 multi[key],
@@ -551,7 +551,7 @@ class TestGeneralWorkspaceLrtParity:
         )
         result = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
 
-        assert set(result.keys()) == {"lambdas_mle", "p_lrts"}
+        assert set(result.keys()) == {"logls", "lambdas_mle", "p_lrts"}
 
         reference = _compute_lrt_numpy(
             n_cvt,

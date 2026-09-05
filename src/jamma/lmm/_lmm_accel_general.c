@@ -540,7 +540,7 @@ err_input:
  *       n_threads,   # int
  *   ) -> dict, keys depending on lmm_mode:
  *        1: lambdas, logls, betas, ses, pwalds
- *        2: lambdas_mle, p_lrts
+ *        2: logls, lambdas_mle, p_lrts
  *        3: betas, ses, p_scores
  *        4: all eight keys above
  * ------------------------------------------------------------------------- */
@@ -595,7 +595,8 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
      * alone) allocates neither, so both stay NULL. */
     const int has_beta_se   = do_reml || do_score;
     double *out_lambdas     = do_reml    ? (double *)PyArray_DATA(out.lambdas)     : NULL;
-    double *out_logls       = do_reml    ? (double *)PyArray_DATA(out.logls)       : NULL;
+    double *out_logls       = (do_reml || do_lrt)
+        ? (double *)PyArray_DATA(out.logls) : NULL;
     double *out_betas       = has_beta_se ? (double *)PyArray_DATA(out.betas)     : NULL;
     double *out_ses         = has_beta_se ? (double *)PyArray_DATA(out.ses)       : NULL;
     double *out_pwalds      = do_reml    ? (double *)PyArray_DATA(out.pwalds)      : NULL;
@@ -762,9 +763,9 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
             );
 
             out_lambdas_mle[snp] = lambda_mle;
-            /* GEMMA mode 4 reports the LRT alternative-model MLE likelihood
+            /* GEMMA modes 2 and 4 report the LRT alternative-model MLE likelihood
              * in logl_H1. Mode 1 leaves the REML likelihood written above. */
-            if (do_reml) out_logls[snp] = logl_H1;
+            out_logls[snp] = logl_H1;
 
             double lrt_stat = 2.0 * (logl_H1 - ws->lrt->logl_H0);
             if (lrt_stat < 0.0) lrt_stat = 0.0;

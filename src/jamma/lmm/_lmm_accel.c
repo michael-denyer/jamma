@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 /* Bump when function signatures or array layout expectations change. */
-#define ABI_VERSION 19
+#define ABI_VERSION 20
 
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
@@ -199,7 +199,7 @@ static PyMethodDef methods[] = {
         "\n"
         "Returns:\n"
         "    mode 1: dict with lambdas, logls, betas, ses, pwalds\n"
-        "    mode 2: dict with lambdas_mle, p_lrts\n"
+        "    mode 2: dict with logls, lambdas_mle, p_lrts\n"
         "    mode 3: dict with betas, ses, p_scores\n"
         "    mode 4: mode 1's keys plus p_scores, lambdas_mle, p_lrts\n"
         "    each value (n_snps,) float64\n"

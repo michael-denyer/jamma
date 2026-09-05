@@ -219,10 +219,12 @@ PyObject *build_score_result_dict(score_output_t *out)
 int alloc_lrt_output(lrt_output_t *out, npy_intp n_snps)
 {
     npy_intp dims[1] = { n_snps };
+    out->logls       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
     out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
     out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
 
-    if (!out->lambdas_mle || !out->p_lrts) {
+    if (!out->logls || !out->lambdas_mle || !out->p_lrts) {
+        Py_XDECREF(out->logls);
         Py_XDECREF(out->lambdas_mle);
         Py_XDECREF(out->p_lrts);
         return -1;
@@ -232,6 +234,7 @@ int alloc_lrt_output(lrt_output_t *out, npy_intp n_snps)
 
 void decref_lrt_output(lrt_output_t *out)
 {
+    Py_DECREF(out->logls);
     Py_DECREF(out->lambdas_mle);
     Py_DECREF(out->p_lrts);
 }
@@ -244,7 +247,8 @@ PyObject *build_lrt_result_dict(lrt_output_t *out)
         return NULL;
     }
 
-    if (PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
+    if (PyDict_SetItemString(result, "logls",       (PyObject *)out->logls)       < 0 ||
+        PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
         PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0) {
         Py_DECREF(result);
         decref_lrt_output(out);
@@ -265,9 +269,12 @@ int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int lmm_mode)
     int ok = 1;
     if (do_reml) {
         out->lambdas = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-        out->logls   = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         out->pwalds  = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-        ok = ok && out->lambdas && out->logls && out->pwalds;
+        ok = ok && out->lambdas && out->pwalds;
+    }
+    if (do_reml || do_lrt) {
+        out->logls = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+        ok = ok && out->logls;
     }
     /* betas/ses hold Wald's beta/se (modes 1, 4) or Score's (mode 3). */
     if (do_reml || do_score) {

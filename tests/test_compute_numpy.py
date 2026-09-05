@@ -749,14 +749,13 @@ def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
     assert result1["p_lrts"] is None
     assert result1["p_scores"] is None
 
-    # Mode 2: LRT — expects lambdas_mle, p_lrts
+    # Mode 2: LRT — reports the alternative MLE likelihood, lambda, and p-value
     result2 = compute_lmm_chunk_numpy(
         2, 1, eigenvalues, Uab_batch, n_samples, logl_H0=logl_H0
     )
-    for key in ("lambdas_mle", "p_lrts"):
+    for key in ("logls", "lambdas_mle", "p_lrts"):
         assert result2[key] is not None, f"Mode 2: key '{key}' is None"
     assert result2["lambdas"] is None
-    assert result2["logls"] is None
     assert result2["betas"] is None
     assert result2["ses"] is None
     assert result2["pwalds"] is None

@@ -166,7 +166,7 @@ _P_SCORE = StatColumn("p_scores", "p_score", "p_score")
 MODE_SPECS: Mapping[int, ModeSpec] = MappingProxyType(
     {
         1: ModeSpec("wald", (_BETA, _SE, _LOGL, _L_REMLE, _P_WALD)),
-        2: ModeSpec("lrt", (_L_MLE, _P_LRT)),
+        2: ModeSpec("lrt", (_LOGL, _L_MLE, _P_LRT)),
         3: ModeSpec("score", (_BETA, _SE, _P_SCORE)),
         4: ModeSpec(
             "all",

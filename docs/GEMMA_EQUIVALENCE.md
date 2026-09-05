@@ -1,8 +1,8 @@
 # JAMMA-GEMMA Equivalence Proof
 
-JAMMA implements mathematically identical algorithms to GEMMA. All numerical
-differences are bounded by floating-point precision and optimizer convergence
-tolerance. This document provides both the proofs and the empirical validation.
+JAMMA implements GEMMA's statistical formulas with different numerical kernels
+and optimizers. This document records formula derivations, empirical comparisons,
+and the conditioning limits of those comparisons.
 
 For deliberate behavioral divergences on edge cases (degenerate SNPs, GEMMA
 bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
@@ -16,17 +16,19 @@ bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
 | Kinship K | Yes | FP accumulation in BLAS | O(p * eps_mach) | 4.66e-10 |
 | Eigenvalues | Yes | LAPACK backward error | O(n * eps_mach) | ~1e-13 |
 | REML log-likelihood | Yes | FP accumulation in Pab | O(n * eps_mach) | 3.23e-7 |
-| MLE logl_H1 | Yes | Optimizer on flat landscapes | O(eps * flatness) | 1.35e-3* |
-| Lambda (REML) | Yes | Convergence tolerance | O(5e-5) | 3.80e-5 |
+| MLE logl_H1 | Yes | MLE optimization / accumulation | Conditioning dependent | See correction below |
+| Lambda (REML) | Yes | Optimization / score conditioning | Conditioning dependent | See section 5 |
 | Beta (effect) | Yes | Lambda propagation / Pab | O(eps * sensitivity) | 7.0e-5 |
 | SE | Yes | Lambda propagation / sqrt | O(eps * sensitivity) | ~2e-6 |
 | p_wald | Yes | CDF implementation | O(1e-5) | 2.20e-6 |
 | p_score | Yes | CDF implementation | O(1e-5) | 4.14e-7 |
 | p_lrt | Yes | MLE subtraction amplification | O(eps * amplification) | 1.56e-3 |
 
-*logl_H1 worst case on mouse_hs1940 (1,940 total / 1,410 analyzed samples, 12,226 total / 10,768 analyzed SNPs). On synthetic
-data the max is < 1e-6. Divergence arises from weak-signal SNPs with flat MLE
-surfaces where golden section and Brent settle on different optima.*
+The former `1.35e-3` mode-4 likelihood discrepancy was a REML/MLE output
+mix-up, not an accepted optimizer tolerance. Mode 4 now reports the MLE
+likelihood used by LRT. Independent dense-oracle tests enforce this contract;
+mode 1 retains REML. Historical measurements elsewhere in this document
+predate that correction and the REML score refinement.
 
 **Production-scale validation** (125,632 real samples, 91,586 SNPs):
 Spearman rho 1.000000, significance agreement 100% at all thresholds,
@@ -79,11 +81,15 @@ The formula is identical. Differences arise only from FP accumulation order.
 **Bound**: `|K_JAMMA - K_GEMMA| <= O(p * eps_mach)`. With p <= 10^6:
 `O(10^6 * 2^-52) ~ O(10^-10)`.
 
-**Early sample filtering**: When `valid_indices` is provided (samples excluded due to
-missing phenotype/covariate data), JAMMA accumulates `K` at `(n_valid, n_valid)` size
-directly rather than computing the full `(n_samples, n_samples)` matrix and subsetting.
-This is algebraically identical and produces the same FP result — the same dot products
-over the same rows. No change to the kinship tolerance bound.
+**Early row selection**: `filter_sample_indices` determines the population used
+for SNP filtering; `valid_indices` selects the output rows. The LMM pipeline
+filters on analysed samples and imputes and centres the selected genotype columns
+over all samples, independently of whether kinship is saved. For a fixed SNP set
+and transformed genotype matrix, selecting rows before symmetric accumulation
+produces the corresponding principal submatrix of full kinship. The analysed
+matrix is then centred before weighting and eigendecomposition. This preserves
+the smaller `(n_valid, n_valid)` allocation without changing preprocessing or
+widening the kinship tolerance.
 
 **Observed**: max relative difference = 4.66e-10.
 
@@ -156,34 +162,28 @@ beta/SE differences.
 
 | | GEMMA | JAMMA |
 |-|-------|-------|
-| Method | Brent (GSL) | Grid (50 points) + golden section (20 iter) |
+| Method | Brent (GSL) | 50-point grid + 20 golden steps; analytic-score refinement for interior REML peaks |
 | Bounds | [1e-5, 1e5] | [1e-5, 1e5] |
-| Tolerance | 1e-5 | ~6.6e-5 per grid cell (0.618^20 * cell width) |
+| Comparison tolerance | | `ToleranceConfig.lambda_rtol=2e-5` |
 
-**Bound**: GEMMA Brent converges to within 1e-5; JAMMA golden section
-converges to ~6.6e-5 relative (one bracket of 0.618^20). The two algorithms
-agree to within `O(5e-5)` in practice on unimodal REML surfaces.
-`|lambda_JAMMA - lambda_GEMMA| <= O(5e-5)`.
+Golden-section bracket shrinkage does not guarantee lambda accuracy when the
+objective is flat enough for rounding to change the retained interval. The
+September 2026 audit confirmed this with eight real-data peaks and an
+independent 80-digit dense REML calculation. Increasing the iteration count
+alone did not recover their stationary points.
 
-**Observed (REML, mouse_hs1940)**: max relative difference = 3.80e-5
-(within the bound above). `ToleranceConfig.lambda_rtol` in
-`validation/tolerances.py` defaults to `2e-5`. The real-data parity tests
-construct their own config inline with `ToleranceConfig(lambda_rtol=5e-5)`
-(`tests/test_loco_numpy.py`, `tests/test_numpy_streaming.py`).
+The REML optimizer now differentiates weighted cross-products directly, uses
+compensated reductions, and applies the Schur-complement chain rule. One
+Newton step is accepted only with negative curvature, a candidate inside the
+original coarse bracket, and a smaller absolute score. This remains vectorized
+across SNPs in NumPy. MLE retains its existing golden-section optimizer.
 
-### Flat Landscapes (Weak-Signal SNPs)
-
-For SNPs where the REML/MLE surface is nearly flat near lambda = 1e-5, both
-optimizers settle on slightly different points within the flat region:
-
-- REML lambda: < 1e-4 relative (negligible)
-- MLE lambda: up to ~9e-4 relative
-- MLE logl_H1: up to ~1.35e-3 relative (worst case: SNP 596 of 10,768,
-  abs_diff ~2.1 on values ~-1583)
-
-This affects only the per-SNP MLE log-likelihood diagnostic. P-values, effect
-sizes, and significance calls are unaffected because the flat region
-corresponds to weak-signal SNPs where test statistics are small.
+The eight committed reference roots are independently reproducible with
+`scripts/verify_reml_precision_oracle.py`. Tests compare generic NumPy, split
+NumPy, and native C at `5e-6` relative tolerance. These cases establish a
+regression contract, not a universal error bound for arbitrarily ill-conditioned
+inputs. Neither the production tolerance nor the existing real-data test
+tolerances were widened.
 
 ---
 

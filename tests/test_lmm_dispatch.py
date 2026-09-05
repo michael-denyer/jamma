@@ -27,8 +27,8 @@ _NCVT_MANY = (2, 3, 5, 100, 101)
 _EXPECTED = {
     (True, 1): DispatchPath.FUSED,
     (True, 4): DispatchPath.FUSED,
-    (True, 3): DispatchPath.FUSED_SCORE_WS,
-    (True, 2): DispatchPath.FUSED_LRT_WS,
+    (True, 3): DispatchPath.FUSED,
+    (True, 2): DispatchPath.FUSED,
     (False, 1): DispatchPath.FUSED_GENERAL,
     (False, 4): DispatchPath.FUSED_GENERAL,
     (False, 3): DispatchPath.FUSED_GENERAL,
@@ -38,10 +38,7 @@ _EXPECTED = {
 _FEEDS_RAW_UTG = {
     DispatchPath.FUSED,
     DispatchPath.FUSED_GENERAL,
-    DispatchPath.FUSED_SCORE_WS,
-    DispatchPath.FUSED_LRT_WS,
 }
-_SCORE_OR_LRT = {DispatchPath.FUSED_SCORE_WS, DispatchPath.FUSED_LRT_WS}
 
 
 def _select(n_cvt: int, lmm_mode: LmmMode, *, accel: bool = True) -> DispatchPath:
@@ -78,9 +75,7 @@ def test_path_properties_agree_with_membership():
     for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False)):
         path = _select(n_cvt, mode, accel=accel)
         assert path.use_split == (path is not DispatchPath.NUMPY_FALLBACK)
-        assert path.use_fused_general == (path is DispatchPath.FUSED_GENERAL)
         assert path.feeds_raw_utg == (path in _FEEDS_RAW_UTG)
-        assert path.uses_fused_score_or_lrt == (path in _SCORE_OR_LRT)
 
 
 def test_mode_and_ncvt_gating():
@@ -88,16 +83,9 @@ def test_mode_and_ncvt_gating():
     for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
         path = _select(n_cvt, mode)
         if path is DispatchPath.FUSED:
-            assert mode in (1, 4)
             assert n_cvt == 1
         if path is DispatchPath.FUSED_GENERAL:
             assert n_cvt >= 2
-        if path is DispatchPath.FUSED_SCORE_WS:
-            assert mode == 3
-            assert n_cvt == 1
-        if path is DispatchPath.FUSED_LRT_WS:
-            assert mode == 2
-            assert n_cvt == 1
 
 
 @pytest.mark.parametrize("bad_mode", [0, 5, -1, 99])

@@ -206,3 +206,7 @@ sha256 = "ddf5596f87c4cb629d6fd3bac3d682e752de8411bb558b1f2ab297d9541359c4"
 sha256 = "02babd16c5fdf9530baa8ae86931d48fd3f8e667459751131e3efd04b98e1abd"
 gemma_version = "0.98.5"
 generation_cmd = "gemma -bfile /data/tests/fixtures/mouse_hs1940/mouse_hs1940 -k /data/tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt -lmm 3 -o mouse_hs1940_score -outdir /data/tests/fixtures/mouse_hs1940"
+
+[file."tests/fixtures/reml_flat_optima.npz"]
+sha256 = "22dd9f399e84729cf21c95161dc1b9a82190529d639185bb63a1c73f349d0e1c"
+generation_cmd = "python scripts/verify_reml_precision_oracle.py"

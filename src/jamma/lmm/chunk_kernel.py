@@ -28,6 +28,7 @@ from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.prepare_common import PreparedLmmRun
 from jamma.lmm.schema import LmmConfig, LmmMode
 from jamma.lmm.uab import compute_uab_invariant_soa
+from jamma.lmm.workspace import WorkspaceSpec
 
 # What a kernel hands back. The Wald C kernels return the WaldResult
 # TypedDict; every other C kernel and the split paths return a plain
@@ -122,6 +123,7 @@ class Kernel:
     n_filtered: int
     call: Callable[[np.ndarray, int], KernelResult]
     uses_c: bool  # True for every path but NUMPY_FALLBACK; see make_kernel
+    max_threads: int
 
     def compute_chunk(
         self, chunk_data: np.ndarray, n_threads: int, write_offset: int
@@ -133,6 +135,11 @@ class Kernel:
         OSError that models a C-kernel segfault, is wrapped so the message names
         the kernel and how far the run had got.
         """
+        if n_threads > self.max_threads:
+            raise ValueError(
+                f"kernel thread count {n_threads} exceeds workspace capacity "
+                f"{self.max_threads}"
+            )
         try:
             return self.call(chunk_data, n_threads)
         except (MemoryError, ValueError, TypeError, OverflowError):
@@ -145,22 +152,29 @@ class Kernel:
             ) from exc
 
 
-def make_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
+def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
     """Build the one kernel this run's dispatch path selects.
 
-    *n_threads* sizes the per-thread scratch inside a persistent workspace and
-    is fixed for the run. The thread count handed to each chunk is separate and
-    may change after the pipeline profiles its first chunk.
+    ``workspace.max_threads`` sizes persistent and transient thread capacity.
+    The thread count handed to each chunk may be smaller, but cannot exceed the
+    capacity priced before allocation.
     """
+    if (
+        workspace.dispatch is not inv.dispatch
+        or workspace.lmm_mode != inv.lmm_mode
+        or workspace.n_samples != inv.n_samples
+        or workspace.n_cvt != inv.n_cvt
+        or workspace.n_grid != inv.n_grid
+        or workspace.n_refine != inv.n_refine
+    ):
+        raise ValueError("workspace specification does not match kernel invariants")
     match inv.dispatch:
-        case (
-            DispatchPath.FUSED | DispatchPath.FUSED_SCORE_WS | DispatchPath.FUSED_LRT_WS
-        ):
-            return _ncvt1_kernel(inv)
+        case DispatchPath.FUSED:
+            return _ncvt1_kernel(inv, workspace.max_threads)
         case DispatchPath.FUSED_GENERAL:
-            return _fused_general_kernel(inv, n_threads)
+            return _fused_general_kernel(inv, workspace.max_threads)
         case DispatchPath.NUMPY_FALLBACK:
-            return _numpy_kernel(inv)
+            return _numpy_kernel(inv, workspace.max_threads)
         case _:
             assert_never(inv.dispatch)
 
@@ -176,7 +190,7 @@ _NCVT1_LABEL: dict[int, str] = {
 }
 
 
-def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
+def _ncvt1_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
     """n_cvt=1, any mode: one workspace keyed by lmm_mode, one compute.
 
     The workspace packs w, the lambda grid and the null-model block the mode
@@ -202,6 +216,7 @@ def _ncvt1_kernel(inv: RunInvariants) -> Kernel:
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         uses_c=True,
+        max_threads=max_threads,
     )
 
 
@@ -240,10 +255,11 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         uses_c=True,
+        max_threads=n_threads,
     )
 
 
-def _numpy_kernel(inv: RunInvariants) -> Kernel:
+def _numpy_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
     """No C extension: the full-Uab pure-NumPy path, chunk by chunk."""
 
     def call(chunk: np.ndarray, threads: int) -> KernelResult:
@@ -263,7 +279,11 @@ def _numpy_kernel(inv: RunInvariants) -> Kernel:
         )
 
     return Kernel(
-        label="LMM chunk compute", n_filtered=inv.n_filtered, call=call, uses_c=False
+        label="LMM chunk compute",
+        n_filtered=inv.n_filtered,
+        call=call,
+        uses_c=False,
+        max_threads=max_threads,
     )
 
 

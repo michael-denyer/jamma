@@ -26,6 +26,7 @@ from jamma.lmm.schema import (
     DEFAULT_MISS,
     DEFAULT_N_GRID,
     DEFAULT_N_REFINE,
+    ChunkRunStats,
     LmmConfig,
     PipelineTiming,
     parse_lmm_mode,
@@ -262,6 +263,25 @@ class PipelineConfig:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PhenotypeResult:
+    """Association outcome and run metadata for one phenotype column.
+
+    ``timing`` contains this phenotype's compute and result-write work. Shared
+    genotype rotation time is divided evenly among the phenotypes in its
+    bounded group, so summing every record matches
+    ``PipelineResult.timing.rotation_s`` without counting the rotation twice.
+    """
+
+    column: int
+    associations: list[AssocResult]
+    n_snps_tested: int
+    assoc_path: Path
+    timing: ChunkRunStats = field(default_factory=ChunkRunStats)
+    pve_estimate: float | None = None
+    pve_se: float | None = None
+
+
 @dataclass
 class PipelineResult:
     """Result of a pipeline run.
@@ -277,10 +297,12 @@ class PipelineResult:
             the full list.
         assoc_paths: List of all per-phenotype association result paths. For
             single-phenotype runs, this is a single-element list matching assoc_path.
+        phenotype_results: One result record per phenotype, including its output,
+            count, PVE estimate, and chunk timing.
         timing: Timing breakdown by pipeline phase (seconds).
         n_covariates: Number of covariate columns (1 = intercept-only).
-        pve_estimate: PVE (proportion of variance explained) from null model REML.
-            None if not computed (e.g. LOCO with per-chromosome eigendecomp).
+        pve_estimate: PVE from the single phenotype's null model REML. None for
+            multi-phenotype runs; use phenotype_results for those estimates.
         pve_se: Standard error of PVE from REML second derivative delta method.
             None if not computed or likelihood surface is flat.
     """
@@ -294,6 +316,7 @@ class PipelineResult:
     n_covariates: int = 1
     pve_estimate: float | None = None
     pve_se: float | None = None
+    phenotype_results: list[PhenotypeResult] = field(default_factory=list)
 
 
 @dataclass

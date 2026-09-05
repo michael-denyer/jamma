@@ -196,7 +196,7 @@ static int init_ncvt1_workspace(
     if (!grid) { PyErr_NoMemory(); return -1; }
 
     grid->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
-    grid->hi_eval_grid  = alloc_aligned_doubles((size_t)n_grid * (size_t)n_samples);
+    grid->hi_eval_grid  = alloc_aligned_doubles(grid_doubles(n_samples, n_grid));
     grid->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
     grid->grid_inv      = (grid_invariant_t *)malloc(
         (size_t)n_grid * sizeof(grid_invariant_t));
@@ -601,6 +601,9 @@ static PyObject *ncvt1_wald_loop(
             );
 
             out_lambdas_mle[snp] = lambda_mle;
+            /* GEMMA mode 4 reports the LRT alternative-model MLE likelihood
+             * in logl_H1. Mode 1 leaves the REML likelihood written above. */
+            out_logls[snp] = logl_H1;
 
             double lrt_stat = 2.0 * (logl_H1 - ws->lrt->logl_H0);
             if (lrt_stat < 0.0) lrt_stat = 0.0;

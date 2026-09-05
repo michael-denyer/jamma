@@ -43,10 +43,13 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm import accel
 from jamma.lmm.association_plan import ExecutionPlan, plan_association
-from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+from jamma.lmm.eigen import center_kinship, eigendecompose_kinship
+from jamma.lmm.eigen_io import (
+    managed_eigen_pair_exists,
+    read_eigen_files,
+    write_eigen_files,
+)
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
 from jamma.lmm.prepare_common import compute_valid_mask
 from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
@@ -55,6 +58,7 @@ from jamma.pipeline_config import (
     VALID_BACKENDS,
     BackendRequest,
     KinshipResult,
+    PhenotypeResult,
     PipelineConfig,
     PipelineResult,
 )
@@ -72,6 +76,7 @@ from jamma.pipeline_plan import (
 __all__ = [
     "BackendRequest",
     "KinshipResult",
+    "PhenotypeResult",
     "PipelineConfig",
     "PipelineResult",
     "PipelineRunner",
@@ -128,27 +133,6 @@ def warn_if_small_sample(n_samples: int) -> None:
             "and JAMMA's batch golden-section lambda optimizer may diverge from "
             "GEMMA's Brent's method on multimodal likelihoods. "
             "See docs/GEMMA_DIVERGENCES.md §6."
-        )
-
-
-def _reject_streaming_without_accel(requested: BackendRequest) -> None:
-    """Refuse an explicit numpy-streaming request when the C extension is absent.
-
-    A user asking for the streaming backend on a machine that cannot honor it
-    is a boundary error, so it is checked here where the request arrives (config
-    or JAMMA_BACKEND), before any file I/O. The planner itself plans
-    unconditionally: the streaming runner works without the extension, and the
-    runner's own public entry allows it.
-
-    Raises:
-        ValueError: If numpy-streaming is requested without the C extension.
-    """
-    if requested == "numpy-streaming" and not accel.available():
-        raise ValueError(
-            "Backend 'numpy-streaming' requires the C extension but it is "
-            "not available. Compile it with: uv run python -c "
-            "'from jamma.jlinalg._compile_jlinalg import compile_extension; "
-            "compile_extension()'"
         )
 
 
@@ -266,7 +250,17 @@ class PipelineRunner:
             (self.config.ksnps_file, "Kinship SNP list file"),
             (self.config.weight_file, "Weight file"),
         )
+        managed_pair = (
+            has_eigen
+            and self.config.eigenvalue_file is not None
+            and self.config.eigenvector_file is not None
+            and managed_eigen_pair_exists(
+                self.config.eigenvalue_file, self.config.eigenvector_file
+            )
+        )
         for path, label in required_files:
+            if managed_pair and label in {"Eigenvalue file", "Eigenvector file"}:
+                continue
             if path is not None and not path.exists():
                 raise FileNotFoundError(f"{label} not found: {path}")
 
@@ -331,12 +325,12 @@ class PipelineRunner:
         the resolver's choice.
 
         If weight_file is configured, applies individual weights to K via
-        K[i,j] /= sqrt(w_i * w_j) before returning (and before saving).
+        K[i,j] /= sqrt(w_i * w_j) after centering the analysed matrix.
 
         If save_kinship is True, writes the kinship matrix to the output
-        directory (whether loaded or computed). The saved matrix is always
+        directory before analysis centering and weighting. The saved matrix is always
         full (n_samples, n_samples), so it can be reused under a different
-        phenotype mask; the subset to valid_indices happens after the write.
+        phenotype mask using the same SNP set; subsetting happens after the write.
         Without save_kinship a computed kinship is accumulated at
         (n_valid, n_valid) directly and the full matrix is never allocated.
 
@@ -374,22 +368,8 @@ class PipelineRunner:
                 show_progress=self.config.show_progress,
                 ksnps_indices=source.ksnps_indices,
                 valid_indices=None if full else valid_indices,
+                filter_sample_indices=valid_indices,
             )
-
-        # Apply individual weights before eigendecomposition
-        if self.config.weight_file is not None:
-            from jamma.io.weight import apply_individual_weights, read_weight_file
-
-            weights = read_weight_file(self.config.weight_file)
-            if len(weights) != n_samples:
-                raise ValueError(
-                    f"Weight file has {len(weights)} entries but expected "
-                    f"{n_samples} (matching sample count)"
-                )
-            if not full:
-                weights = weights[valid_indices]
-            logger.info(f"Applying individual weights from {self.config.weight_file}")
-            K = apply_individual_weights(K, weights)
 
         if self.config.save_kinship:
             kinship_base = (
@@ -402,6 +382,23 @@ class PipelineRunner:
 
         if full and valid_indices is not None:
             K = K[np.ix_(valid_indices, valid_indices)]
+        center_kinship(K)
+
+        # Apply individual weights before eigendecomposition
+        if self.config.weight_file is not None:
+            from jamma.io.weight import apply_individual_weights, read_weight_file
+
+            weights = read_weight_file(self.config.weight_file)
+            if len(weights) != n_samples:
+                raise ValueError(
+                    f"Weight file has {len(weights)} entries but expected "
+                    f"{n_samples} (matching sample count)"
+                )
+            if valid_indices is not None:
+                weights = weights[valid_indices]
+            logger.info(f"Applying individual weights from {self.config.weight_file}")
+            K = apply_individual_weights(K, weights)
+
         return K
 
     def load_covariates(self, n_samples: int) -> np.ndarray | None:
@@ -487,8 +484,6 @@ class PipelineRunner:
             if env_backend is not None
             else self.config.backend
         )
-        _reject_streaming_without_accel(requested)
-
         # Read once and pass it down. get_plink_metadata parses the whole .bim
         # (sid, chromosome, bp_position and both allele arrays).
         meta = get_plink_metadata(self.config.bfile)
@@ -537,10 +532,14 @@ class PipelineRunner:
         # re-running estimate_lmm_memory both times; this is the single call.
         execution = plan_association(
             n_samples=n_valid,
+            n_input_samples=n_samples,
             n_snps=n_snps,
             requested=requested,
             n_cvt=n_cvt,
             lmm_mode=parse_lmm_mode(self.config.lmm_mode),
+            n_grid=self.config.n_grid,
+            n_refine=self.config.n_refine,
+            n_phenotypes=len(pheno_columns),
             mem_budget=self.config.mem_budget,
             max_chunk_size=DEFAULT_LOCO_CONFIG.col_chunk_size
             if self.config.loco
@@ -603,6 +602,7 @@ class PipelineRunner:
             n_snps_tested=outcome.n_tested,
             assoc_path=outcome.assoc_paths[-1],
             assoc_paths=outcome.assoc_paths,
+            phenotype_results=outcome.phenotype_results,
             timing=PipelineTiming(
                 kinship_s=kinship_s,
                 load_s=load_s,
@@ -792,6 +792,16 @@ class PipelineRunner:
             n_snps_tested=loco.n_tested,
             assoc_path=assoc_path,
             assoc_paths=[assoc_path],
+            phenotype_results=[
+                PhenotypeResult(
+                    column=self.config.phenotype_columns[0],
+                    associations=loco.associations,
+                    n_snps_tested=loco.n_tested,
+                    assoc_path=assoc_path,
+                    pve_estimate=loco.pve,
+                    pve_se=loco.pve_se,
+                )
+            ],
             timing=PipelineTiming(
                 lmm_s=loco_s,
                 total_s=total_s,

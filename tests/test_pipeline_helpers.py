@@ -106,7 +106,7 @@ class TestMemoryPreflightBatch:
     def test_check_memory_false_short_circuits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When check_memory=False the estimator must not run AND the skip
+        """When check_memory=False preflight must not reprice AND the skip
         must be logged — the log is the only observable signal that the
         preflight was intentionally bypassed (closes the silent-skip
         asymmetry between batch and streaming).
@@ -114,6 +114,7 @@ class TestMemoryPreflightBatch:
         from loguru import logger
 
         runner = _make_runner(tmp_path, check_memory=False)
+        plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
         called = False
 
         def fake_estimate(*_args: object, **_kw: object) -> None:
@@ -123,8 +124,6 @@ class TestMemoryPreflightBatch:
         monkeypatch.setattr(
             "jamma.lmm.association_plan.estimate_lmm_memory", fake_estimate
         )
-        plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
-
         records: list[str] = []
         handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
         try:

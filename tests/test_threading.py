@@ -196,9 +196,7 @@ class TestBlasThreadsKnobReachesRotation:
         x = rng.standard_normal((n, n))
         kinship = np.ascontiguousarray(x @ x.T / n)
         prepare_common.prepare_lmm_run(
-            kinship=kinship,
-            eigenvalues=None,
-            eigenvectors=None,
+            eigen_input=prepare_common.KinshipMatrix(kinship),
             phenotypes=rng.standard_normal(n),
             W=np.ones((n, 1)),
             n_cvt=1,

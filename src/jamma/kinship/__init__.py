@@ -15,6 +15,7 @@ has no production caller; it lives at tests/reference/kinship.py.
 """
 
 from jamma.core.snp_stats import SnpStatsCache
+from jamma.kinship.accumulation import validate_valid_indices
 from jamma.kinship.io import (
     read_kinship_matrix,
     write_kinship_matrix,
@@ -22,7 +23,7 @@ from jamma.kinship.io import (
 )
 from jamma.kinship.loco import LocoKinshipStream, compute_loco_kinship_streaming
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
-from jamma.kinship.stream import compute_kinship_streaming, validate_valid_indices
+from jamma.kinship.stream import compute_kinship_streaming
 
 __all__ = [
     "LocoKinshipStream",

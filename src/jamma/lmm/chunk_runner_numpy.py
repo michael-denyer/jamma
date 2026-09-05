@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
-from contextlib import nullcontext
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 import numpy as np
@@ -47,6 +47,7 @@ from jamma.lmm.results import (
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import ChunkRunStats, LmmConfig
 from jamma.lmm.uab import batch_compute_uab_numpy
+from jamma.lmm.workspace import WorkspaceSpec
 
 
 class LmmChunkRange(NamedTuple):
@@ -97,52 +98,123 @@ class RawLmmChunk(NamedTuple):
 class _PreparedLmmChunk(NamedTuple):
     """A rotated chunk ready for compute, tagged with its filtered SNP range.
 
-    ``data`` is polymorphic by dispatch path: 2-D ``utg_t`` of shape
-    ``(n_snps, n_samples)`` when ``dispatch.feeds_raw_utg`` (every C path),
-    otherwise the full Uab batch the NumPy fallback consumes.
-    ``_compute_and_write`` selects the matching kernel via the same
-    ``dispatch`` flags that produced the data, so the two never disagree.
+    ``data`` is raw ``utg_t`` with shape ``(n_snps, n_samples)``. Every
+    phenotype consumer sees this same rotation. A fallback consumer derives
+    its phenotype-dependent Uab immediately before its sequential compute.
     """
 
     data: np.ndarray
     filtered_range: LmmChunkRange
 
 
+@dataclass(slots=True)
+class _PhenotypeConsumer:
+    """One phenotype's kernel, sink, diagnostics, and timing."""
+
+    inv: RunInvariants
+    kernel: Kernel
+    chunk_sink: ChunkSink
+    processed: int = 0
+    compute_s: float = 0.0
+    result_write_s: float = 0.0
+    nan_counts: dict[str, int] = field(default_factory=dict)
+    n_at_lmin: int = 0
+    n_at_lmax: int = 0
+
+    def kernel_input(self, utg_t: np.ndarray) -> np.ndarray:
+        if self.inv.dispatch.feeds_raw_utg:
+            return utg_t
+        return batch_compute_uab_numpy(
+            self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t
+        )
+
+    def compute_and_write(self, prepared: _PreparedLmmChunk, omp_threads: int) -> None:
+        chunk_range = prepared.filtered_range
+        filtered_start = chunk_range.filtered_start
+        actual_len = chunk_range.length
+        if filtered_start != self.processed:
+            raise RuntimeError(
+                "prepared LMM chunks reached compute out of order: "
+                f"expected start {self.processed}, got {filtered_start}"
+            )
+
+        t_compute_start = time.perf_counter()
+        cr = self.kernel.compute_chunk(
+            self.kernel_input(prepared.data), omp_threads, self.processed
+        )
+        self.compute_s += time.perf_counter() - t_compute_start
+
+        t_write_start = time.perf_counter()
+        chunk_arrays = {
+            key: cr[key][:actual_len] for key in _RESULT_FIELDS[self.inv.lmm_mode]
+        }
+        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
+            self.inv.lmm_mode, chunk_arrays, self.inv.l_min, self.inv.l_max
+        )
+        self.n_at_lmin += chunk_lmin
+        self.n_at_lmax += chunk_lmax
+        for key, arr in chunk_arrays.items():
+            if arr.dtype.kind != "f":
+                continue
+            n_nan = int(np.count_nonzero(np.isnan(arr)))
+            if n_nan > 0:
+                self.nan_counts[key] = self.nan_counts.get(key, 0) + n_nan
+
+        self.chunk_sink(chunk_arrays, filtered_start, chunk_range.filtered_end)
+        self.processed += actual_len
+        self.result_write_s += time.perf_counter() - t_write_start
+
+
+class GroupedChunkRunStats(NamedTuple):
+    """Per-phenotype compute/write timing plus one shared rotation timing."""
+
+    phenotypes: tuple[ChunkRunStats, ...]
+    rotation_s: float
+
+
+@dataclass(frozen=True, slots=True)
+class PhenotypeChunkJob:
+    """Prepared phenotype state and destination for a shared chunk pass."""
+
+    prepared: PreparedLmmRun
+    chunk_sink: ChunkSink
+    config: LmmConfig
+    lambda_warning_prefix: str = ""
+
+
 class _ChunkEngine:
     """The chunk loop's state: its buffers, its thread split, its counters.
 
-    ``prepare`` and ``compute_and_write`` were closures in the runner body over
-    seven ``nonlocal`` counters, and the pipeline driver reached the live thread
-    split through a separate mutable object because a bare-int ``nonlocal``
-    cannot cross a module boundary. Both are ordinary fields here, so the driver
-    takes one typed argument and rebinds ``omp_threads`` directly.
+    ``prepare`` rotates each chunk and ``compute_and_write`` consumes it. Both
+    share the buffers and counters here. The OpenMP allocation is fixed by the
+    per-run thread plan before the pipeline starts.
     """
 
     def __init__(
         self,
         *,
-        invariants: RunInvariants,
-        kernel: Kernel,
+        consumers: tuple[_PhenotypeConsumer, ...],
         U: np.ndarray,
         filtered_means: np.ndarray,
         raw_chunks: Iterator[RawLmmChunk],
-        chunk_sink: ChunkSink,
         chunk_size: int,
         n_buffers: int,
         omp_threads: int,
     ) -> None:
-        self.inv = invariants
-        self.kernel = kernel
+        if not consumers:
+            raise ValueError("chunk engine requires at least one phenotype consumer")
+        self.consumers = consumers
+        self.inv = consumers[0].inv
+        self.kernel = consumers[0].kernel
         self.U = U
         self.filtered_means = filtered_means
         self.raw_chunks = raw_chunks
-        self.chunk_sink = chunk_sink
         self.chunk_size = chunk_size
 
-        # Rebound by _drive_pipeline once it has profiled the first chunk.
+        # Fixed by plan_thread_budget before the engine is created.
         self.omp_threads = omp_threads
 
-        n_samples = invariants.n_samples
+        n_samples = self.inv.n_samples
         self.utg_bufs = [
             np.empty((chunk_size, n_samples), dtype=np.float64)
             for _ in range(n_buffers)
@@ -150,12 +222,6 @@ class _ChunkEngine:
 
         self.chunk_counter = 0
         self.next_expected_start = 0
-        self.processed = 0
-        self.compute_s = 0.0
-        self.result_write_s = 0.0
-        self.nan_counts: dict[str, int] = {}
-        self.n_at_lmin = 0
-        self.n_at_lmax = 0
 
     def prepare(self) -> _PreparedLmmChunk | None:
         """Pull the next raw chunk, impute it, rotate it, and shape it for the kernel.
@@ -188,7 +254,7 @@ class _ChunkEngine:
         utg_out = self.utg_bufs[buf_idx][:actual_len, :]
         utg_t = jlinalg.dgemm(raw.genotypes, self.U, transa="T", out=utg_out)
 
-        return _PreparedLmmChunk(self._kernel_input(utg_t), chunk_range)
+        return _PreparedLmmChunk(utg_t, chunk_range)
 
     def _next_non_empty_chunk(self) -> RawLmmChunk | None:
         """Skip zero-length chunks, checking each keeps the contiguity contract."""
@@ -209,69 +275,46 @@ class _ChunkEngine:
             raw = next(self.raw_chunks, None)
         return raw
 
-    def _kernel_input(self, utg_t: np.ndarray) -> np.ndarray:
-        """Shape the rotated chunk into whatever this run's kernel consumes."""
-        if self.inv.dispatch.feeds_raw_utg:
-            return utg_t
-
-        return batch_compute_uab_numpy(
-            self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t
-        )
-
     def compute_and_write(self, prepared: _PreparedLmmChunk) -> None:
-        """Run one prepared chunk through the kernel and hand results to the sink."""
-        chunk_range = prepared.filtered_range
-        filtered_start = chunk_range.filtered_start
-        actual_len = chunk_range.length
-        if filtered_start != self.processed:
-            raise RuntimeError(
-                "prepared LMM chunks reached compute out of order: "
-                f"expected start {self.processed}, got {filtered_start}"
-            )
+        """Run one shared rotation through every phenotype consumer."""
+        for consumer in self.consumers:
+            consumer.compute_and_write(prepared, self.omp_threads)
 
-        t_compute_start = time.perf_counter()
-        blas_ctx = blas_threads(1) if self.kernel.uses_c else nullcontext()
-        with blas_ctx:
-            cr = self.kernel.compute_chunk(
-                prepared.data, self.omp_threads, self.processed
-            )
-        self.compute_s += time.perf_counter() - t_compute_start
+    @property
+    def processed(self) -> int:
+        return self.consumers[0].processed
 
-        t_write_start = time.perf_counter()
-        chunk_arrays = {
-            key: cr[key][:actual_len] for key in _RESULT_FIELDS[self.inv.lmm_mode]
-        }
+    @property
+    def compute_s(self) -> float:
+        return self.consumers[0].compute_s
 
-        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-            self.inv.lmm_mode, chunk_arrays, self.inv.l_min, self.inv.l_max
-        )
-        self.n_at_lmin += chunk_lmin
-        self.n_at_lmax += chunk_lmax
+    @property
+    def result_write_s(self) -> float:
+        return self.consumers[0].result_write_s
 
-        for key, arr in chunk_arrays.items():
-            if arr.dtype.kind != "f":
-                continue
-            n_nan = int(np.count_nonzero(np.isnan(arr)))
-            if n_nan > 0:
-                self.nan_counts[key] = self.nan_counts.get(key, 0) + n_nan
+    @property
+    def nan_counts(self) -> dict[str, int]:
+        return self.consumers[0].nan_counts
 
-        self.chunk_sink(chunk_arrays, filtered_start, chunk_range.filtered_end)
-        self.processed += actual_len
-        self.result_write_s += time.perf_counter() - t_write_start
+    @property
+    def n_at_lmin(self) -> int:
+        return self.consumers[0].n_at_lmin
+
+    @property
+    def n_at_lmax(self) -> int:
+        return self.consumers[0].n_at_lmax
 
 
-def run_lmm_chunk_source_numpy(
+def run_lmm_chunk_source_numpy_group(
     *,
     genotypes: PreparedGenotypes,
-    chunk_sink: ChunkSink,
+    jobs: tuple[PhenotypeChunkJob, ...],
     dispatch: DispatchPath,
     chunks: LmmChunkPlan,
-    prepared: PreparedLmmRun,
-    config: LmmConfig,
+    workspace: WorkspaceSpec,
     progress_label: str = "LMM association",
-    lambda_warning_prefix: str = "",
-) -> ChunkRunStats:
-    """Run LMM association over caller-provided raw genotype chunks.
+) -> GroupedChunkRunStats:
+    """Rotate each raw genotype chunk once for a bounded phenotype group.
 
     The prepared source owns aligned imputation means and raw chunks. This
     function consumes it with the selected dispatch and chunk geometry
@@ -286,10 +329,13 @@ def run_lmm_chunk_source_numpy(
     outcome for degenerate inputs, and a fatal abort would be both wrong there and
     sensitive to platform floating-point (the NaN fraction can differ by BLAS).
     """
-    # Every runner reaches this entry, so the per-run diagnostic reset lives
-    # here rather than in one of them.
+    if not jobs:
+        raise ValueError("at least one phenotype chunk job is required")
     reset_p_yy_warned()
 
+    first_job = jobs[0]
+    prepared = first_job.prepared
+    config = first_job.config
     n_samples = prepared.n_samples
     n_filtered = genotypes.n_filtered
     l_min = config.l_min
@@ -302,8 +348,18 @@ def run_lmm_chunk_source_numpy(
             f"got {genotypes.analyzed_sample_count} and {n_samples}"
         )
 
+    for job in jobs[1:]:
+        if job.prepared.n_samples != n_samples:
+            raise ValueError("all phenotype jobs must use the same sample count")
+        if job.prepared.U is not prepared.U:
+            raise ValueError("all phenotype jobs must share one eigenvector matrix")
+        if job.config != config:
+            raise ValueError("all phenotype jobs must use one LMM configuration")
+
     if n_filtered == 0:
-        return ChunkRunStats()
+        return GroupedChunkRunStats(
+            tuple(ChunkRunStats() for _job in jobs), rotation_s=0.0
+        )
 
     chunk_size = chunks.chunk_size
     n_chunks = chunks.n_chunks
@@ -320,18 +376,26 @@ def run_lmm_chunk_source_numpy(
     threads = plan_thread_budget(
         n_samples=n_samples,
         omp_threads=get_c_extension_thread_count(accel.available(), accel.HAS_OPENMP),
+        max_omp_threads=workspace.max_threads,
         use_pipeline=use_pipeline,
     )
-    invariants = RunInvariants.build(dispatch, prepared, config, n_filtered)
-    kernel = make_kernel(invariants, threads.omp)
+    consumer_list = []
+    for job in jobs:
+        invariants = RunInvariants.build(dispatch, job.prepared, job.config, n_filtered)
+        consumer_list.append(
+            _PhenotypeConsumer(
+                invariants,
+                make_kernel(invariants, workspace),
+                job.chunk_sink,
+            )
+        )
+    consumers = tuple(consumer_list)
 
     engine = _ChunkEngine(
-        invariants=invariants,
-        kernel=kernel,
+        consumers=consumers,
         U=prepared.U,
         filtered_means=genotypes.imputation_means,
         raw_chunks=genotypes.chunks(chunk_size),
-        chunk_sink=chunk_sink,
         chunk_size=chunk_size,
         n_buffers=chunks.n_buffers,
         omp_threads=threads.omp,
@@ -342,7 +406,7 @@ def run_lmm_chunk_source_numpy(
         rotation_s += _drive_pipeline(
             engine,
             n_chunks=n_chunks,
-            total_cores=threads.total_cores,
+            rotation_threads=threads.rotation,
             n_samples=n_samples,
             n_filtered=n_filtered,
             show_progress=show_progress,
@@ -361,35 +425,80 @@ def run_lmm_chunk_source_numpy(
 
         for _chunk_idx in chunk_iterator:
             t_rot_start = time.perf_counter()
-            prepared_chunk = engine.prepare()
+            with blas_threads(threads.rotation):
+                prepared_chunk = engine.prepare()
             rotation_s += time.perf_counter() - t_rot_start
             if prepared_chunk is None:
                 break
             engine.compute_and_write(prepared_chunk)
 
-    if engine.processed != n_filtered:
-        raise RuntimeError(
-            f"Pre-allocated array size mismatch: wrote {engine.processed} results, "
-            f"expected {n_filtered}. This is an internal error — please report "
-            f"this issue with your dataset dimensions."
+    phenotype_stats = []
+    for consumer, job in zip(engine.consumers, jobs, strict=True):
+        if consumer.processed != n_filtered:
+            raise RuntimeError(
+                "Pre-allocated array size mismatch: wrote "
+                f"{consumer.processed} results, expected {n_filtered}. "
+                "This is an internal error; please report this issue with "
+                "your dataset dimensions."
+            )
+        for key, n_nan in consumer.nan_counts.items():
+            logger.warning(
+                f"{n_nan}/{n_filtered} SNPs have NaN {key}; check for "
+                "degenerate genotypes and kinship matrix quality"
+            )
+        log_lambda_boundary_warning(
+            consumer.n_at_lmin,
+            consumer.n_at_lmax,
+            l_min,
+            l_max,
+            prefix=job.lambda_warning_prefix,
+        )
+        phenotype_stats.append(
+            ChunkRunStats(
+                processed=consumer.processed,
+                compute_s=consumer.compute_s,
+                result_write_s=consumer.result_write_s,
+            )
         )
 
-    for key, n_nan in engine.nan_counts.items():
-        logger.warning(
-            f"{n_nan}/{n_filtered} SNPs have NaN {key} — "
-            "check for degenerate (constant) genotypes and kinship matrix quality"
-        )
-    log_lambda_boundary_warning(
-        engine.n_at_lmin,
-        engine.n_at_lmax,
-        l_min,
-        l_max,
-        prefix=lambda_warning_prefix,
+    return GroupedChunkRunStats(
+        phenotypes=tuple(phenotype_stats),
+        rotation_s=rotation_s,
     )
 
+
+def run_lmm_chunk_source_numpy(
+    *,
+    genotypes: PreparedGenotypes,
+    chunk_sink: ChunkSink,
+    dispatch: DispatchPath,
+    chunks: LmmChunkPlan,
+    workspace: WorkspaceSpec,
+    prepared: PreparedLmmRun,
+    config: LmmConfig,
+    progress_label: str = "LMM association",
+    lambda_warning_prefix: str = "",
+) -> ChunkRunStats:
+    """Run the shared chunk engine for one phenotype."""
+    grouped = run_lmm_chunk_source_numpy_group(
+        genotypes=genotypes,
+        jobs=(
+            PhenotypeChunkJob(
+                prepared=prepared,
+                chunk_sink=chunk_sink,
+                config=config,
+                lambda_warning_prefix=lambda_warning_prefix,
+            ),
+        ),
+        dispatch=dispatch,
+        chunks=chunks,
+        workspace=workspace,
+        progress_label=progress_label,
+    )
+    stats = grouped.phenotypes[0]
     return ChunkRunStats(
-        processed=engine.processed,
-        rotation_s=rotation_s,
-        compute_s=engine.compute_s,
-        result_write_s=engine.result_write_s,
+        processed=stats.processed,
+        rotation_s=grouped.rotation_s,
+        compute_s=stats.compute_s,
+        result_write_s=stats.result_write_s,
     )

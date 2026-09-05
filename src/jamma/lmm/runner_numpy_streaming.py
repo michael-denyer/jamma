@@ -26,6 +26,7 @@ from jamma.lmm.genotype_source import (
     SampleBasis,
     bind_prepared_genotypes,
 )
+from jamma.lmm.prepare_common import compute_valid_mask, parse_eigen_input
 from jamma.lmm.runner_numpy import (
     STREAMING_LABELS,
     LmmRunSpec,
@@ -116,6 +117,7 @@ class BedSource:
             snp_meta=self._snp_meta,
             stats=stats,
             filters=filters,
+            sample_basis=samples,
             chunk_source=_iter_chunks,
         )
 
@@ -181,12 +183,16 @@ def run_lmm_association_numpy_streaming(
     meta = get_plink_metadata(bed_path)
     validate_snp_indices(snps_indices, meta.n_snps)
     n_cvt = covariates.shape[1] if covariates is not None else 1
+    n_analyzed = int(np.count_nonzero(compute_valid_mask(phenotypes, covariates)))
     execution = plan_association(
-        meta.n_samples,
+        n_analyzed,
         meta.n_snps,
+        n_input_samples=meta.n_samples,
         requested="numpy-streaming",
         n_cvt=n_cvt,
         lmm_mode=config.lmm_mode,
+        n_grid=config.n_grid,
+        n_refine=config.n_refine,
         mem_budget=config.mem_budget,
         max_chunk_size=chunk_size,
     )
@@ -218,9 +224,7 @@ def run_lmm_association_numpy_streaming(
             labels=STREAMING_LABELS,
         ),
         phenotypes=phenotypes,
-        kinship=kinship,
+        eigen_input=parse_eigen_input(kinship, eigenvalues, eigenvectors),
         covariates=covariates,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
         output_path=output_path,
     )

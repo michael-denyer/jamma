@@ -12,6 +12,7 @@ validation to test_pipeline_config.py, and the CLI help test to test_cli.py.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from jamma.lmm.eigen_io import (
     _write_eigenvalues,
     _write_eigenvectors,
     read_eigen_files,
+    resolve_eigen_generation,
     write_eigen_files,
 )
 from jamma.utils.npy_cache import load_npy_cache, write_npy_cache
@@ -141,6 +143,108 @@ class TestRoundTripPrecision:
 
         np.testing.assert_array_equal(loaded_d, eigenvalues)
         np.testing.assert_array_equal(loaded_u, eigenvectors)
+
+    def test_failed_pair_rewrite_preserves_committed_generation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Failure after new eigenvalues cannot replace the committed pair."""
+        import jamma.lmm.eigen_io as eigen_io
+
+        old_values = np.array([1.0, 2.0])
+        old_vectors = np.eye(2)
+        write_eigen_files(old_values, old_vectors, tmp_path, prefix="atomic")
+        committed = resolve_eigen_generation(tmp_path, "atomic")
+
+        def fail_vectors(*_args: object, **_kwargs: object) -> None:
+            raise OSError("injected eigenvector failure")
+
+        monkeypatch.setattr(eigen_io, "_write_eigenvectors", fail_vectors)
+        with pytest.raises(OSError, match="injected eigenvector failure"):
+            write_eigen_files(
+                np.array([3.0, 4.0]),
+                np.fliplr(np.eye(2)),
+                tmp_path,
+                prefix="atomic",
+            )
+
+        assert resolve_eigen_generation(tmp_path, "atomic") == committed
+        values, vectors = read_eigen_files(
+            tmp_path / "atomic.eigenD.npy", tmp_path / "atomic.eigenU.npy"
+        )
+        np.testing.assert_array_equal(values, old_values)
+        np.testing.assert_array_equal(vectors, old_vectors)
+
+    def test_reader_overlapping_commit_keeps_generation_selected_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reader that starts before commit opens only old immutable members."""
+        import jamma.lmm.eigen_io as eigen_io
+
+        old_values = np.array([1.0, 2.0])
+        old_vectors = np.eye(2)
+        new_values = np.array([3.0, 4.0])
+        new_vectors = np.fliplr(np.eye(2))
+        write_eigen_files(old_values, old_vectors, tmp_path, prefix="race")
+        stable = (
+            tmp_path / "race.eigenD.npy",
+            tmp_path / "race.eigenU.npy",
+        )
+        reader_selected = threading.Event()
+        allow_member_read = threading.Event()
+        real_read_eigenvalues = eigen_io._read_eigenvalues
+
+        def blocked_member_read(path: Path) -> np.ndarray:
+            if ".generation." in path.name:
+                reader_selected.set()
+                assert allow_member_read.wait(timeout=5)
+            return real_read_eigenvalues(path)
+
+        monkeypatch.setattr(eigen_io, "_read_eigenvalues", blocked_member_read)
+        error: list[BaseException] = []
+        read_result: list[tuple[np.ndarray, np.ndarray]] = []
+
+        def overlapping_read() -> None:
+            try:
+                read_result.append(read_eigen_files(*stable))
+            except OSError as exc:
+                error.append(exc)
+
+        thread = threading.Thread(target=overlapping_read)
+        thread.start()
+        assert reader_selected.wait(timeout=5)
+        write_eigen_files(new_values, new_vectors, tmp_path, prefix="race")
+        allow_member_read.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert not error
+        assert len(read_result) == 1
+        read_values, read_vectors = read_result[0]
+        np.testing.assert_array_equal(read_values, old_values)
+        np.testing.assert_array_equal(read_vectors, old_vectors)
+        latest_values, latest_vectors = read_eigen_files(*stable)
+        np.testing.assert_array_equal(latest_values, new_values)
+        np.testing.assert_array_equal(latest_vectors, new_vectors)
+
+    def test_mixed_managed_generation_paths_are_rejected(self, tmp_path: Path) -> None:
+        """Explicit generated members cannot be mixed as an unmanaged pair."""
+        write_eigen_files(np.ones(2), np.eye(2), tmp_path, prefix="mix")
+        first_members = resolve_eigen_generation(tmp_path, "mix")
+        write_eigen_files(np.full(2, 2.0), np.fliplr(np.eye(2)), tmp_path, prefix="mix")
+        second_members = resolve_eigen_generation(tmp_path, "mix")
+        with pytest.raises(ValueError, match="different managed generations"):
+            read_eigen_files(first_members[0], second_members[1])
+
+    def test_same_loco_generation_different_chromosomes_are_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        generation = "samegeneration"
+        d_path = tmp_path / f"study.generation.{generation}.loco.chr1.eigenD.npy"
+        u_path = tmp_path / f"study.generation.{generation}.loco.chr2.eigenU.npy"
+        np.save(d_path, np.ones(2))
+        np.save(u_path, np.eye(2))
+
+        with pytest.raises(ValueError, match="different managed generations"):
+            read_eigen_files(d_path, u_path)
 
 
 # =============================================================================

@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import TypedDict
@@ -22,7 +23,9 @@ from typing import TypedDict
 import numpy as np
 from loguru import logger
 
-EIGEN_CACHE_SCHEMA_VERSION: int = 1
+# Version 3 adds one immutable generation and a complete chromosome member map.
+# Version 2 separated analysed-sample filtering from full-population centering.
+EIGEN_CACHE_SCHEMA_VERSION: int = 3
 
 
 class EigenCacheComponents(TypedDict):
@@ -49,6 +52,8 @@ class EigenCacheManifest(TypedDict):
     schema_version: int
     cache_key: str
     components: EigenCacheComponents
+    generation: str
+    artifacts: dict[str, dict[str, str]]
 
 
 def _sha256_file(path: Path) -> str:
@@ -159,24 +164,14 @@ def eigen_cache_manifest_path(eigen_dir: Path, prefix: str) -> Path:
     return eigen_dir / f"{prefix}.loco.cache_manifest.json"
 
 
-def invalidate_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> None:
-    """Remove the cache manifest if present; no-op if absent.
-
-    Called before a write_eigen rewrite so a stale manifest cannot validate a
-    half-rewritten eigen cache: the fresh manifest is written only after all
-    per-chromosome eigen files succeed, so an interrupted rewrite leaves no
-    manifest and the next read recomputes.
-    """
-    with suppress(FileNotFoundError):
-        eigen_cache_manifest_path(eigen_dir, prefix).unlink()
-
-
 def write_eigen_cache_manifest(
     eigen_dir: Path,
     prefix: str,
     key: str,
     *,
     components: EigenCacheComponents,
+    generation: str,
+    artifacts: dict[str, dict[str, str]],
 ) -> Path:
     """Write a cache manifest JSON atomically.
 
@@ -194,7 +189,15 @@ def write_eigen_cache_manifest(
         "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
         "cache_key": key,
         "components": components,
+        "generation": generation,
+        "artifacts": artifacts,
     }
+    if (
+        not artifacts
+        or loco_eigen_paths_from_manifest(eigen_dir, prefix, list(artifacts), manifest)
+        is None
+    ):
+        raise ValueError("LOCO eigen manifest must name a complete existing generation")
     target = eigen_cache_manifest_path(eigen_dir, prefix)
     fd, tmp_name = tempfile.mkstemp(dir=eigen_dir, suffix=".json")
     tmp_path = Path(tmp_name)
@@ -211,9 +214,46 @@ def write_eigen_cache_manifest(
     return target
 
 
-def read_eigen_cache_manifest(
-    eigen_dir: Path, prefix: str
-) -> EigenCacheManifest | None:
+def loco_eigen_paths_from_manifest(
+    eigen_dir: Path,
+    prefix: str,
+    chr_names: list[str],
+    manifest: Mapping[str, object],
+) -> dict[str, tuple[Path, Path]] | None:
+    """Validate and resolve one LOCO generation without rereading its manifest."""
+    generation = manifest.get("generation")
+    artifacts = manifest.get("artifacts")
+    if (
+        not isinstance(generation, str)
+        or not generation
+        or not isinstance(artifacts, dict)
+    ):
+        return None
+    generation_prefix = f"{prefix}.generation.{generation}.loco.chr"
+    resolved: dict[str, tuple[Path, Path]] = {}
+    for chromosome in chr_names:
+        members = artifacts.get(chromosome)
+        if not isinstance(members, dict):
+            return None
+        paths: list[Path] = []
+        for kind in ("eigenD", "eigenU"):
+            name = members.get(kind)
+            expected = f"{generation_prefix}{chromosome}.{kind}."
+            if (
+                not isinstance(name, str)
+                or Path(name).name != name
+                or not name.startswith(expected)
+            ):
+                return None
+            path = eigen_dir / name
+            if not path.is_file():
+                return None
+            paths.append(path)
+        resolved[chromosome] = (paths[0], paths[1])
+    return resolved
+
+
+def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict[str, object] | None:
     """Read and parse the cache manifest.
 
     Args:
@@ -226,7 +266,13 @@ def read_eigen_cache_manifest(
     path = eigen_cache_manifest_path(eigen_dir, prefix)
     try:
         with open(path) as fh:
-            return json.load(fh)
+            value = json.load(fh)
+            if not isinstance(value, dict):
+                logger.warning(
+                    f"Malformed eigen cache manifest {path}: expected object"
+                )
+                return None
+            return value
     except FileNotFoundError:
         return None
     except json.JSONDecodeError as exc:
@@ -254,6 +300,13 @@ def eigen_cache_is_valid(
     path = eigen_cache_manifest_path(eigen_dir, prefix)
     if manifest is None:
         return False, f"no valid cache manifest found at {path}"
+    return eigen_cache_manifest_is_valid(manifest, path, current_key)
+
+
+def eigen_cache_manifest_is_valid(
+    manifest: Mapping[str, object], path: Path, current_key: str
+) -> tuple[bool, str]:
+    """Validate an already-read manifest so transaction readers read it once."""
     got_version = manifest.get("schema_version")
     if got_version != EIGEN_CACHE_SCHEMA_VERSION:
         return (

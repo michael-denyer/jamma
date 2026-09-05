@@ -160,6 +160,7 @@ def estimate_lmm_memory(
     lmm_batch_size: int = 20_000,
     n_cvt: int = 1,
     n_buffers: int = 1,
+    n_grid: int = 0,
 ) -> float:
     """Peak memory (GB) of the batch LMM phase, the full-materialization path.
 
@@ -191,6 +192,7 @@ def estimate_lmm_memory(
     lmm_batch_gb = n_buffers * (
         array_gb(n_samples, lmm_batch_size)
         + _uab_iab_gb(n_samples, lmm_batch_size, n_cvt)
+        + array_gb(n_grid, lmm_batch_size)
     )
     return (
         eigenvectors_gb + genotypes_gb + eigenvalues_gb + lmm_rotated_gb + lmm_batch_gb

@@ -15,24 +15,118 @@ Notes on tolerance:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+from jamma.lmm import accel
 from jamma.lmm.likelihood_numpy import (
     _batch_grid_reml_numpy,
     _batch_reml_at_lambda_numpy,
     golden_section_optimize_lambda_numpy,
+    golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 from jamma.lmm.pab import compute_Uab
+from jamma.lmm.reml_score import (
+    _batch_reml_score_log_lambda_numpy,
+    _batch_reml_score_log_lambda_split_ncvt1_numpy,
+)
 from jamma.lmm.uab import (
     batch_compute_iab_numpy,
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
+    compute_iab_invariant_scalars_ncvt1,
     compute_uab_invariant_soa,
 )
 from tests.builders import rotated_lmm_inputs
+from tests.independent_lmm_oracle import dense_reml_score_log_lambda
 
 pytestmark = pytest.mark.tier0
+
+
+@pytest.mark.parametrize("n_cvt", [1, 2, 4])
+def test_reml_score_matches_independent_dense_projector(n_cvt):
+    rng = np.random.default_rng(8123 + n_cvt)
+    n_samples = 30
+    eigenvalues = np.sort(rng.uniform(0.05, 3.0, n_samples))
+    UtW = np.column_stack(
+        (np.ones(n_samples), rng.standard_normal((n_samples, n_cvt - 1)))
+    )
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, 3))
+    Uab = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
+    lambdas = np.array([1e-4, 0.7, 50.0])
+
+    actual = _batch_reml_score_log_lambda_numpy(
+        n_cvt, np.log(lambdas), eigenvalues, Uab
+    )
+    expected = np.array(
+        [
+            dense_reml_score_log_lambda(eigenvalues, UtW, Uty, UtG[:, i], lambdas[i])
+            for i in range(3)
+        ]
+    )
+    np.testing.assert_allclose(actual, expected, rtol=2e-12, atol=2e-12)
+
+
+def test_split_reml_score_matches_full_recurrence(split_uab_data):
+    eigenvalues, varying, invariant, full_uab, _iab = split_uab_data
+    log_lambdas = np.linspace(-8.0, 4.0, len(full_uab))
+
+    split = _batch_reml_score_log_lambda_split_ncvt1_numpy(
+        log_lambdas, eigenvalues, varying, invariant
+    )
+    full = _batch_reml_score_log_lambda_numpy(1, log_lambdas, eigenvalues, full_uab)
+    np.testing.assert_allclose(split, full, rtol=2e-12, atol=2e-12)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "split", "native"])
+def test_flat_reml_optima_match_independent_high_precision_roots(backend):
+    """The eight real flat peaks that exposed objective-rounding drift."""
+    fixture = np.load(Path(__file__).parent / "fixtures/reml_flat_optima.npz")
+    eigenvalues = fixture["eigenvalues"]
+    UtW = fixture["UtW"]
+    Uty = fixture["Uty"]
+    UtG = fixture["UtG"]
+    expected = fixture["oracle_lambdas"]
+    Uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
+    Iab = batch_compute_iab_numpy(1, Uab)
+
+    if backend == "numpy":
+        actual, _logls, _pab = golden_section_optimize_lambda_numpy(
+            1, eigenvalues, Uab, Iab
+        )
+    elif backend == "split":
+        varying = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
+        invariant = compute_uab_invariant_soa(UtW, Uty, n_cvt=1)
+        actual, _logls, _pab = golden_section_optimize_lambda_split_ncvt1_numpy(
+            eigenvalues,
+            varying,
+            invariant,
+            *compute_iab_invariant_scalars_ncvt1(invariant),
+        )
+    else:
+        if not accel.available():
+            pytest.skip("C accelerator is unavailable")
+        invariant = compute_uab_invariant_soa(UtW, Uty, n_cvt=1)
+        workspace = accel.require().create_workspace_ncvt1_c(
+            eigenvalues,
+            invariant,
+            UtW[:, 0],
+            Uty,
+            len(eigenvalues),
+            1e-5,
+            1e5,
+            50,
+            20,
+            lmm_mode=1,
+        )
+        actual = accel.require().compute_lmm_chunk_ncvt1_c(
+            workspace, np.ascontiguousarray(UtG.T), 1
+        )["lambdas"]
+
+    np.testing.assert_allclose(actual, expected, rtol=5e-6, atol=0.0)
 
 
 @pytest.fixture

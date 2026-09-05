@@ -14,6 +14,7 @@
 #include "_lmm_logdet.h"
 
 #include <math.h>
+#include <float.h>
 #include <string.h>
 
 /* -------------------------------------------------------------------------
@@ -189,6 +190,81 @@ static double reml_logl_general_fresh(
     return reml_finish_general(pab_scratch, t, logdet_h, logdet_iab, reml_const);
 }
 
+static double reml_score_loglambda_general(
+    const double *uab_inv, const double *uab_var, const double *eigenvalues,
+    int n_samples, double lambda, const pab_table_t *t,
+    double *row0, double *pab, double *dpab)
+{
+    int ni = t->n_index;
+    double crow0[MAX_N_INDEX], cdrow0[MAX_N_INDEX];
+    double *drow0 = dpab;
+    memset(dpab, 0, (size_t)t->n_rows * ni * sizeof(double));
+    for (int c = 0; c < ni; c++) {
+        row0[c] = 0.0; drow0[c] = 0.0;
+        crow0[c] = 0.0; cdrow0[c] = 0.0;
+    }
+    double trace = 0.0, ctrace = 0.0;
+    for (int i = 0; i < n_samples; i++) {
+        double d = eigenvalues[i];
+        double h = 1.0 / (1.0 + lambda * d);
+        double dh = -lambda * d * h * h;
+        double trace_value = lambda * d * h - ctrace;
+        double trace_next = trace + trace_value;
+        ctrace = (trace_next - trace) - trace_value;
+        trace = trace_next;
+        for (int c = 0; c < t->n_inv; c++) {
+            int index = t->invariant_indices[c];
+            double value = uab_inv[c * n_samples + i];
+            double term = h * value - crow0[index];
+            double next = row0[index] + term;
+            crow0[index] = (next - row0[index]) - term;
+            row0[index] = next;
+            term = dh * value - cdrow0[index];
+            next = drow0[index] + term;
+            cdrow0[index] = (next - drow0[index]) - term;
+            drow0[index] = next;
+        }
+        for (int c = 0; c < t->n_var; c++) {
+            int index = t->varying_indices[c];
+            double value = uab_var[c * n_samples + i];
+            double term = h * value - crow0[index];
+            double next = row0[index] + term;
+            crow0[index] = (next - row0[index]) - term;
+            row0[index] = next;
+            term = dh * value - cdrow0[index];
+            next = drow0[index] + term;
+            cdrow0[index] = (next - drow0[index]) - term;
+            drow0[index] = next;
+        }
+    }
+    calc_pab_general(row0, t, pab);
+    for (int p = 1; p < t->n_rows; p++) {
+        int offset = t->level_offsets[p], count = t->level_counts[p];
+        for (int e = 0; e < count; e++) {
+            const pab_entry_t *re = &t->entries[offset + e];
+            int prev = (p - 1) * ni, out = p * ni;
+            double q = pab[prev + re->index_ww];
+            if (q == 0.0) continue;
+            double aw = pab[prev + re->index_aw];
+            double bw = pab[prev + re->index_bw];
+            dpab[out + re->index_ab] = dpab[prev + re->index_ab]
+                - (dpab[prev + re->index_aw] * bw
+                   + aw * dpab[prev + re->index_bw]) / q
+                + aw * bw * dpab[prev + re->index_ww] / (q * q);
+        }
+    }
+    double score = -0.5 * trace;
+    for (int d = 0; d < t->n_cvt + 1; d++) {
+        int index = t->logdet_diag_rows[d] * ni + t->logdet_diag_cols[d];
+        if (!(pab[index] > 0.0)) return NAN;
+        score -= 0.5 * dpab[index] / pab[index];
+    }
+    int yy = (t->n_cvt + 1) * ni + t->idx_yy;
+    if (!(pab[yy] > P_YY_MIN)) return NAN;
+    score -= 0.5 * t->df * dpab[yy] / pab[yy];
+    return score;
+}
+
 
 /* -------------------------------------------------------------------------
  * golden_section_lambda_general — Grid + golden section for general n_cvt.
@@ -215,7 +291,8 @@ double golden_section_lambda_general(
     double *beta_out, double *se_out, double *f_stat_out,
     int *is_valid_out,
     double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
+    double *pab_scratch,
+    double *dpab_scratch
 )
 {
     const double phi = 0.6180339887498949;
@@ -258,6 +335,7 @@ double golden_section_lambda_general(
     int idx_high = (best_idx < n_grid - 1) ? best_idx + 1 : n_grid - 1;
     double a = log_l_min + idx_low * step;
     double b = log_l_min + idx_high * step;
+    const double coarse_a = a, coarse_b = b;
 
     /* Stage 2: golden section refinement (fresh evaluation) */
     double c = b - phi * (b - a);
@@ -286,6 +364,38 @@ double golden_section_lambda_general(
     }
 
     double log_opt = (a + b) / 2.0;
+    /* Refine enclosed peaks independently of rounded objective ties. */
+    for (int step = 0; step < 3 && a > coarse_a && b < coarse_b; step++) {
+        double delta = fmin(1e-3, 0.25 * (coarse_b - coarse_a));
+        delta = fmin(delta, 0.5 * (log_opt - coarse_a));
+        delta = fmin(delta, 0.5 * (coarse_b - log_opt));
+        double score = reml_score_loglambda_general(
+            uab_inv, uab_var, eigenvalues, n_samples, exp(log_opt), t,
+            row0, pab_scratch, dpab_scratch);
+        double sm = reml_score_loglambda_general(
+            uab_inv, uab_var, eigenvalues, n_samples, exp(log_opt - delta), t,
+            row0, pab_scratch, dpab_scratch);
+        double sp = reml_score_loglambda_general(
+            uab_inv, uab_var, eigenvalues, n_samples, exp(log_opt + delta), t,
+            row0, pab_scratch, dpab_scratch);
+        double curvature = (sp - sm) / (2.0 * delta);
+        if (isfinite(delta) && delta > 0.0 && isfinite(score)
+            && isfinite(curvature) && curvature < 0.0) {
+            double candidate = log_opt - score / curvature;
+            if (isfinite(candidate) && candidate >= coarse_a && candidate <= coarse_b) {
+                double candidate_score = reml_score_loglambda_general(
+                    uab_inv, uab_var, eigenvalues, n_samples, exp(candidate), t,
+                    row0, pab_scratch, dpab_scratch);
+                if (isfinite(candidate_score) && fabs(candidate_score) < fabs(score)) {
+                    log_opt = candidate;
+                    /* Score magnitude must be scaled by the local curvature. */
+                    if (fabs(candidate_score / curvature) > 1e-10)
+                        continue;
+                }
+            }
+        }
+        break;
+    }
     double lambda_opt = exp(log_opt);
 
     /* Final evaluation: reml_logl_general_fresh fills pab_scratch as a side

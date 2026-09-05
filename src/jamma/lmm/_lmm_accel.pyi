@@ -8,6 +8,10 @@ import numpy.typing as npt
 ABI_VERSION: int
 HAS_OPENMP: int
 
+def workspace_sizes_c(
+    n_samples: int, n_cvt: int, n_grid: int, lmm_mode: int, n_threads: int
+) -> tuple[int, int, int, int]: ...
+
 # One n_cvt=1 workspace type. The creator's lmm_mode picks which loop
 # compute_lmm_chunk_ncvt1_c runs: 1 Wald, 2 LRT, 3 Score, 4 all three. Under
 # lmm_mode 4 the returned dict carries three extra keys.

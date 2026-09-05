@@ -267,3 +267,16 @@ def eigendecompose_kinship(
         )
 
     return eigenvalues, eigenvectors
+
+
+def center_kinship(K: np.ndarray) -> None:
+    """Centre an analysis kinship matrix in place, as GEMMA's CenterMatrix does.
+
+    Apply H K H, where H removes the sample mean, before individual weighting
+    and eigendecomposition. A principal submatrix of centred full kinship is
+    generally not itself centred. Only O(n) scratch is needed.
+    """
+    means = K.mean(axis=0)
+    K -= means[np.newaxis, :]
+    K -= means[:, np.newaxis]
+    K += means.mean()

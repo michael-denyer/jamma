@@ -141,6 +141,8 @@ def _compute_lrt_numpy(
     n_grid: int,
     n_refine: int,
     logl_H0: float,
+    *,
+    report_logl_H1: bool = False,
 ) -> dict[str, np.ndarray]:
     """Compute MLE-optimized LRT statistics.
 
@@ -159,7 +161,9 @@ def _compute_lrt_numpy(
         logl_H0: Null model MLE log-likelihood (scalar).
 
     Returns:
-        Dict with keys: lambdas_mle, p_lrts.
+        Dict with keys ``lambdas_mle`` and ``p_lrts``. When
+        ``report_logl_H1`` is true, the dict also contains ``logls`` with the
+        alternative-model MLE likelihood that GEMMA reports in mode 4.
     """
     lambdas_mle, logls_mle = golden_section_optimize_lambda_mle_numpy(
         n_cvt,
@@ -171,7 +175,10 @@ def _compute_lrt_numpy(
         n_iter=n_refine,
     )
     p_lrts = _batch_lrt_pvalues_numpy(logls_mle, logl_H0)
-    return {"lambdas_mle": lambdas_mle, "p_lrts": p_lrts}
+    result = {"lambdas_mle": lambdas_mle, "p_lrts": p_lrts}
+    if report_logl_H1:
+        result["logls"] = logls_mle
+    return result
 
 
 def _compute_score_numpy(
@@ -348,18 +355,6 @@ def compute_lmm_chunk_numpy(
             n_samples,
         )
         result["p_scores"] = score_result["p_scores"]
-        result.update(
-            _compute_lrt_numpy(
-                n_cvt,
-                eigenvalues,
-                Uab_batch,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                logl_H0,
-            )
-        )
         # Pre-compute Iab once for Wald (lambda-independent)
         Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
         _store_wald(
@@ -375,6 +370,21 @@ def compute_lmm_chunk_numpy(
                 n_refine,
                 Iab_batch=Iab_batch,
             ),
+        )
+        # GEMMA mode 4 writes the alternative-model MLE likelihood calculated
+        # by LRT into logl_H1. Mode 1 keeps the REML likelihood from Wald.
+        result.update(
+            _compute_lrt_numpy(
+                n_cvt,
+                eigenvalues,
+                Uab_batch,
+                l_min,
+                l_max,
+                n_grid,
+                n_refine,
+                logl_H0,
+                report_logl_H1=True,
+            )
         )
 
     else:

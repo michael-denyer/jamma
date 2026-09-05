@@ -69,6 +69,7 @@ class PreparedGenotypes:
     selection: SnpSelection
     n_unexpected: int
     analyzed_sample_count: int
+    sample_basis: SampleBasis
     chunk_factory: Callable[[int], Iterator[RawLmmChunk]] = field(
         compare=False, repr=False
     )
@@ -79,6 +80,12 @@ class PreparedGenotypes:
         if self.analyzed_sample_count < 1:
             raise ValueError(
                 f"analyzed_sample_count must be >= 1, got {self.analyzed_sample_count}"
+            )
+        if self.analyzed_sample_count != self.sample_basis.analyzed_sample_count:
+            raise ValueError(
+                "analyzed_sample_count must match sample_basis: "
+                f"got {self.analyzed_sample_count} and "
+                f"{self.sample_basis.analyzed_sample_count}"
             )
         indices = self.selection.indices
         if len(indices) > 0 and (
@@ -116,6 +123,7 @@ def bind_prepared_genotypes(
     snp_meta: SnpMeta,
     stats: SnpStats,
     filters: SnpFilterSpec,
+    sample_basis: SampleBasis,
     chunk_source: Callable[[SnpSelection, int], Iterator[RawLmmChunk]],
 ) -> PreparedGenotypes:
     """Filter one statistics population and bind its matching chunk stream.
@@ -130,5 +138,6 @@ def bind_prepared_genotypes(
         selection=selection,
         n_unexpected=stats.n_unexpected,
         analyzed_sample_count=stats.n_samples,
+        sample_basis=sample_basis,
         chunk_factory=partial(chunk_source, selection),
     )

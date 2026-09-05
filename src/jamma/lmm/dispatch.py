@@ -21,36 +21,18 @@ class DispatchPath(Enum):
     Derived once by ``select_dispatch_path`` from ``(n_cvt, lmm_mode, accel)``
     and consulted per chunk. Exactly one member is active, so the
     contradictory flag combinations a multi-boolean form admits are
-    unrepresentable and need no runtime guard. Every C path (FUSED,
-    FUSED_GENERAL, FUSED_SCORE_WS, FUSED_LRT_WS) resolves the mode it runs
+    unrepresentable and need no runtime guard. Every C path resolves the mode it runs
     from ``lmm_mode`` at workspace creation, in ``chunk_kernel.py``.
     """
 
     NUMPY_FALLBACK = "numpy_fallback"  # not split: pure-NumPy full-Uab path
-    FUSED = "fused"  # n_cvt==1 fused Uab (Wald/mode-4 by lmm_mode)
+    FUSED = "fused"  # n_cvt==1 fused Uab, any lmm_mode
     FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab, any lmm_mode
-    FUSED_SCORE_WS = "fused_score_ws"  # n_cvt==1 mode 3 workspace-based
-    FUSED_LRT_WS = "fused_lrt_ws"  # n_cvt==1 mode 2 workspace-based
 
     @property
     def use_split(self) -> bool:
         """False only for the NumPy fallback, which takes the full-Uab path."""
         return self is not DispatchPath.NUMPY_FALLBACK
-
-    @property
-    def use_fused_general(self) -> bool:
-        """True for the n_cvt>=2 fused path, which sizes chunks differently."""
-        return self is DispatchPath.FUSED_GENERAL
-
-    @property
-    def uses_fused_score_or_lrt(self) -> bool:
-        """True when the n_cvt==1 fused Score/LRT path (mode 2/3) is active.
-
-        These paths take the null-model ``w`` vector as a separate argument
-        rather than packing it into a Wald workspace, so the chunk runner
-        materializes ``w = UtW[:, 0]`` only for this family.
-        """
-        return self in _SCORE_LRT_FAMILY
 
     @property
     def needs_null_w(self) -> bool:
@@ -60,7 +42,7 @@ class DispatchPath(Enum):
         Score/LRT kernels take it per call. Both consumers read the same vector,
         so the chunk runner materialises it once for either.
         """
-        return self is DispatchPath.FUSED or self in _SCORE_LRT_FAMILY
+        return self is DispatchPath.FUSED
 
     @property
     def feeds_raw_utg(self) -> bool:
@@ -71,9 +53,6 @@ class DispatchPath(Enum):
         builds a full Uab batch instead.
         """
         return self is not DispatchPath.NUMPY_FALLBACK
-
-
-_SCORE_LRT_FAMILY = frozenset({DispatchPath.FUSED_SCORE_WS, DispatchPath.FUSED_LRT_WS})
 
 
 def select_dispatch_path(
@@ -144,9 +123,7 @@ def _resolve_dispatch_path(n_cvt: int, lmm_mode: LmmMode, accel: bool) -> Dispat
     if n_cvt >= 2:
         return DispatchPath.FUSED_GENERAL
 
-    if lmm_mode in (1, 4):
-        return DispatchPath.FUSED
-    return DispatchPath.FUSED_SCORE_WS if lmm_mode == 3 else DispatchPath.FUSED_LRT_WS
+    return DispatchPath.FUSED
 
 
 _PATH_LOG_MESSAGES = {
@@ -156,14 +133,6 @@ _PATH_LOG_MESSAGES = {
     ),
     DispatchPath.FUSED_GENERAL: (
         "Fused general Uab path active: utg_t passed directly to C workspace"
-    ),
-    DispatchPath.FUSED_SCORE_WS: (
-        "Fused Score workspace path active: workspace created once, "
-        "utg_t passed per-chunk (eliminates per-chunk malloc)"
-    ),
-    DispatchPath.FUSED_LRT_WS: (
-        "Fused LRT workspace path active: workspace created once, "
-        "utg_t passed per-chunk (eliminates per-chunk malloc/grid precompute)"
     ),
 }
 

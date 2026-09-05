@@ -261,6 +261,21 @@ def _tiny_invariants(n_cvt: int, lmm_mode: LmmMode, n_samples: int = 8):
     )
 
 
+def _tiny_workspace(inv):
+    from jamma.lmm.workspace import WorkspaceSpec
+
+    return WorkspaceSpec.build(
+        inv.dispatch,
+        inv.lmm_mode,
+        inv.n_samples,
+        inv.n_samples,
+        inv.n_cvt,
+        inv.n_grid,
+        inv.n_refine,
+        1,
+    )
+
+
 @pytest.mark.tier0
 class TestErrorMessageDifferentiation:
     """A failing chunk must say which kernel failed, and where.
@@ -277,13 +292,18 @@ class TestErrorMessageDifferentiation:
         """A real kernel for this path, with its call swapped for a raise."""
         from jamma.lmm.chunk_kernel import Kernel, make_kernel
 
-        built = make_kernel(_tiny_invariants(n_cvt, lmm_mode), 1)
+        inv = _tiny_invariants(n_cvt, lmm_mode)
+        built = make_kernel(inv, _tiny_workspace(inv))
 
         def _boom(_chunk, _threads):
             raise exc
 
         return Kernel(
-            label=built.label, n_filtered=built.n_filtered, call=_boom, uses_c=True
+            label=built.label,
+            n_filtered=built.n_filtered,
+            call=_boom,
+            uses_c=True,
+            max_threads=1,
         )
 
     @requires_c
@@ -298,7 +318,9 @@ class TestErrorMessageDifferentiation:
         from jamma.lmm.chunk_kernel import make_kernel
 
         labels = {
-            (n_cvt, mode): make_kernel(_tiny_invariants(n_cvt, mode), 1).label
+            (n_cvt, mode): (lambda inv: make_kernel(inv, _tiny_workspace(inv)).label)(
+                _tiny_invariants(n_cvt, mode)
+            )
             for n_cvt in (1, 2)
             for mode in (1, 2, 3, 4)
         }
@@ -358,5 +380,6 @@ class TestErrorMessageDifferentiation:
             n_filtered=100,
             call=lambda _chunk, _threads: expected,
             uses_c=True,
+            max_threads=1,
         )
         assert kernel.compute_chunk(np.zeros((1, 8)), 1, 0) is expected

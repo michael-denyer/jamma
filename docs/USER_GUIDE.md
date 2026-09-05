@@ -301,6 +301,10 @@ Tab-separated file. The first 7 columns are always present; stat columns depend 
 | `p_lrt` | — | yes | — | yes |
 | `p_score` | — | — | yes | yes |
 
+Following GEMMA, `logl_H1` is the REML likelihood calculated by the Wald test
+in mode 1 and the alternative-model MLE likelihood calculated by the LRT in
+mode 4. JAMMA's mode 2 output omits this diagnostic column.
+
 ### Kinship Matrix
 
 **Binary format (`.cXX.npy`, default):** NumPy binary array. 10-100x faster I/O than
@@ -496,10 +500,16 @@ result = gwas(
 `gwas()` handles the full pipeline: load data, compute or load kinship,
 eigendecompose, run LMM association, and write results. Returns the same
 `PipelineResult` as `PipelineRunner.run()`: association paths, sample and SNP
-counts, and a timing breakdown. Every keyword is one `PipelineConfig` field. Access `result.pve_estimate` for the PVE
+counts, and a timing breakdown. Every keyword is one `PipelineConfig` field. For a single phenotype, access `result.pve_estimate` for the PVE
 (proportion of variance explained) estimate and `result.pve_se` for the
 standard error of PVE computed via the delta method from the REML second
 derivative at the null model optimum.
+
+For multiple phenotypes, `result.phenotype_results` retains each column's output
+path, tested count, PVE, PVE standard error, and timing. The top-level PVE fields
+are `None`; the top-level timing sums the work across phenotypes. Genotype
+filtering and covariate preparation are shared across the common sample mask.
+Genotype chunks are still rotated separately for each phenotype.
 
 ### Low-level API
 

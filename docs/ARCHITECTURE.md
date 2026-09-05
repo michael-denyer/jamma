@@ -57,7 +57,7 @@ A typical LMM association run proceeds as follows:
 
 3. **Analysis resolution and kinship** — After preserving the public configuration's validation order, `pipeline_plan.py` resolves it into explicit standard/LOCO and provided-eigen/provided-kinship/computed-kinship variants. If a kinship file is provided, `kinship/io.py` reads it. Otherwise `kinship/stream.py` computes the centered (or standardized) kinship matrix `K = (1/p) * X_c @ X_c.T` using `jlinalg.dsyrk` for the symmetric rank-k update; `kinship/loco.py` computes LOCO kinship by subtraction.
 
-4. **Eigendecomposition** — `lmm/eigen.py` eigendecomposes `K` via `jlinalg.eigh`, which dispatches to vendor DSYEVD (faster, O(N²) workspace) or falls back to DSYEVR (O(N) workspace) when memory is insufficient. The result is eigenvalues `D` and eigenvectors `U`.
+4. **Eigendecomposition** — Public batch and streaming runners normalize nullable inputs once to `KinshipMatrix` or `EigenPairs` in `lmm/prepare_common.py`. Sample filtering and preparation carry that complete value; grouped phenotypes reuse one `EigenPairs` object. `lmm/eigen.py` eigendecomposes `K` via `jlinalg.eigh`, which dispatches to vendor DSYEVD (faster, O(N²) workspace) or falls back to DSYEVR (O(N) workspace) when memory is insufficient. The result is eigenvalues `D` and eigenvectors `U`.
 
 5. **Execution plan selection** — `lmm/association_plan.py:plan_association()` selects all association policy once: it checks available memory via `core/memory.py` and C extension availability to choose between `numpy-batch` (full genotype matrix in RAM) and `numpy-streaming` (two-pass disk streaming), or `numpy-loco` when `-loco` is set (per-chromosome runs over disk-read chunks, priced like streaming), selects the compute dispatch path, and plans conservative chunk geometry. The pipeline calls it once, prices it through `memory_preflight`, and passes the frozen `ExecutableAssociationPlan` down; runners and the LOCO chromosome loop consume the plan rather than re-deriving policy.
 
@@ -77,6 +77,7 @@ A typical LMM association run proceeds as follows:
 | `gwas()` | `src/jamma/gwas.py` | Public Python API for single-call GWAS; builds a `PipelineConfig` and returns `PipelineRunner`'s `PipelineResult` |
 | `ExecutionPlan` | `src/jamma/lmm/association_plan.py` | Frozen two-field summary of the selected mode (`batch` or `streaming`) with a human-readable reason |
 | `ExecutableAssociationPlan` | `src/jamma/lmm/association_plan.py` | Frozen full plan from `plan_association()`: mode summary, dispatch path, conservative chunk geometry, and memory pricing |
+| `WorkspaceSpec` | `src/jamma/lmm/workspace.py` | Kernel dimensions, thread capacity, and allocation bounds shared by the planner and workspace creation |
 | `LmmConfig` | `src/jamma/lmm/schema.py` | Frozen configuration dataclass shared by all LMM runners (MAF, lambda bounds, test type, etc.) |
 | `LmmRunResult` | `src/jamma/lmm/schema.py` | Return type for all runners; bundles association list, PVE estimate, and SNP count |
 | `AssocResult` | `src/jamma/lmm/stats.py` | Per-SNP association result dataclass matching GEMMA's output columns |
@@ -132,6 +133,7 @@ src/jamma/
 ├── kinship/                # Kinship matrix computation and LOCO variants
 │   ├── stream.py           # Streaming centered/standardized kinship (dsyrk), mode-selected
 │   ├── loco.py             # Streaming LOCO kinship via subtraction, batch loop
+│   ├── accumulation.py     # Shared selection, preprocessing, row validation, and symmetric rank-k updates
 │   ├── io.py               # Kinship matrix I/O (GEMMA text format and binary .npy)
 │   └── missing.py          # Genotype imputation and centring helpers
 ├── jlinalg/                # Vendor BLAS/LAPACK dispatch layer with NumPy fallback
@@ -157,9 +159,10 @@ src/jamma/
 │   ├── eigen_cache.py      # Content + parameter cache key for LOCO per-chromosome eigen
 │   ├── eigen_io.py         # Read/write eigenvalue and eigenvector files (.npy / .txt)
 │   ├── impute.py           # In-place mean imputation for genotype chunks
-│   ├── prepare_common.py   # Covariate matrix construction shared by NumPy LMM runners
+│   ├── prepare_common.py   # Typed kinship/eigen inputs, filtering, covariates, and null-model preparation
 │   ├── results.py          # AssocResult building and per-chunk result sinks
 │   ├── association_plan.py # plan_association(); ExecutionPlan, ExecutableAssociationPlan
+│   ├── workspace.py        # Kernel allocation contract and native sizing query
 │   ├── genotype_source.py  # SampleBasis, PreparedGenotypes, GenotypeSource protocol
 │   ├── runner_numpy.py     # Shared run body (run_lmm_association), LmmRunSpec, MatrixSource, batch entry
 │   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming entry

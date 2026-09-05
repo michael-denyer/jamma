@@ -14,9 +14,10 @@ from jamma.core.snp_stats import SnpSelection
 from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.genotype_source import PreparedGenotypes
+from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
 from jamma.lmm.prepare_common import PreparedLmmRun
 from jamma.lmm.schema import ChunkRunStats, LmmConfig, SnpMeta
+from jamma.lmm.workspace import WorkspaceSpec
 
 pytestmark = pytest.mark.tier0
 
@@ -45,7 +46,22 @@ def _prepared_genotypes(n_samples: int, n_filtered: int) -> PreparedGenotypes:
         ),
         n_unexpected=0,
         analyzed_sample_count=n_samples,
+        sample_basis=SampleBasis(np.arange(n_samples), n_samples),
         chunk_factory=lambda _chunk_size: iter(()),
+    )
+
+
+def _workspace(n_samples: int, config: LmmConfig | None = None) -> WorkspaceSpec:
+    config = LmmConfig(show_progress=False) if config is None else config
+    return WorkspaceSpec.build(
+        DispatchPath.NUMPY_FALLBACK,
+        config.lmm_mode,
+        n_samples,
+        n_samples,
+        1,
+        config.n_grid,
+        config.n_refine,
+        1,
     )
 
 
@@ -68,6 +84,7 @@ def test_prepared_run_and_config_define_an_empty_chunk_run() -> None:
         chunk_sink=lambda _arrays, _start, _end: None,
         dispatch=DispatchPath.NUMPY_FALLBACK,
         chunks=LmmChunkPlan(1, 0, 1, False),
+        workspace=_workspace(n_samples),
         prepared=prepared,
         config=LmmConfig(show_progress=False),
     )
@@ -96,13 +113,15 @@ def _run_kwargs(**overrides):
         pve=None,
         pve_se=None,
     )
+    config = LmmConfig(lmm_mode=1, show_progress=False)
     base = {
         "genotypes": _prepared_genotypes(n_samples, 5),
         "chunk_sink": lambda _arrays, _start, _end: None,
         "dispatch": DispatchPath.NUMPY_FALLBACK,
         "chunks": LmmChunkPlan(5, 1, 1, False),
+        "workspace": _workspace(n_samples, config),
         "prepared": prepared,
-        "config": LmmConfig(lmm_mode=1, show_progress=False),
+        "config": config,
     }
     base.update(overrides)
     return base

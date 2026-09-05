@@ -182,7 +182,7 @@ computation.
 | `test-slow.yml` | push to master | `pytest -m "tier2 or slow" -v -o 'addopts=' --no-cov` |
 | `fingerprint.yml` | PR touching `_lmm_*.c`, `_lmm_*.h`, `_build_support/`, or the fingerprint scripts | Builds both sides of the merge base and diffs per-entry-point result digests. Tolerance-based tests do not catch last-bit drift |
 | `kinship-digest.yml` | dispatch only | Builds a base ref and HEAD, runs `scripts/kinship_digest.py --out` on each, diffs with `--diff`. `fingerprint.yml` does not path-match `src/jamma/kinship/stream.py` or `src/jamma/kinship/loco.py`, so this is the only bit-exactness check a kinship or eigendecomposition change gets. Never a required check |
-| `sanitizers.yml` | Wednesday cron + dispatch | `pytest -m "not benchmark and not slow" -n 0 -p no:randomly` (under ASAN/UBSAN) |
+| `sanitizers.yml` | Wednesday cron + dispatch | Broad forced-fallback suite plus focused native LMM/jlinalg, workspace, grouped-phenotype, and LOCO coverage under ASAN/UBSAN; both run serially |
 | `flaky-detect.yml` | Sunday 06:00 UTC + dispatch | `pytest` under five distinct `--randomly-seed` values, opens an issue on disagreement |
 
 CI overrides `addopts` via `-o 'addopts='` so markers and parallelism are
@@ -191,7 +191,12 @@ controlled per-job, independent of the local default.
 ### 1.10 Running under sanitizers (local repro of CI)
 
 The weekly `Sanitizers (ASAN + UBSAN)` workflow rebuilds the C extensions
-with `-fsanitize=address,undefined` and runs the test suite under ASAN.
+with `-fsanitize=address,undefined` and runs two serial passes under ASAN. The
+broad suite forces the NumPy fallback to avoid vendor-BLAS interceptor noise.
+A focused pass starts fresh Python processes with that import-time gate unset,
+asserts that the LMM and jlinalg extensions loaded with OpenMP, and exercises
+native math, workspace lifetime/planning, grouped-phenotype reuse, and LOCO
+eigendecomposition. CI uploads separate broad-suite and native-pass logs.
 Linux is the supported repro target — macOS works for UBSAN-only, but
 ASAN on macOS requires Xcode's clang and a runtime libasan that is not
 typically on the default `LD_PRELOAD` path.
@@ -246,12 +251,12 @@ uv run python -m jamma.lmm._compile_accel
 | `runtime error: signed integer overflow` (UBSAN) | Real bug — usually arithmetic on int sizes/strides | Fix or add an explicit cast with a comment explaining the safety argument |
 | Workflow exits 0 with no `AddressSanitizer:` lines anywhere in the asan-ubsan log | Either (a) clean run (good) or (b) ASAN not actually wired (BAD) | The `asan-sentinel-meta-test` job exists exactly to distinguish these cases — if it's also green, ASAN is wired and the asan-ubsan green is real |
 
-> **Note:** The sanitizer workflow uses `JAMMA_FORCE_NUMPY_FALLBACK=1`,
-> so the C BLAS dispatch in `_jlinalg.so` and the C compute path in
-> `_lmm_accel.so` are SKIPPED at import time. The sanitizer therefore
-> exercises the NumPy fallback paths under instrumentation — not the
-> vendor-BLAS dispatch. This is intentional; BLAS-allocator interactions
-> with ASAN are too noisy to catch genuine bugs in our own code.
+> **Note:** The broad sanitizer pass uses `JAMMA_FORCE_NUMPY_FALLBACK=1`, so
+> the C extensions are skipped at import time in that pass. The focused native
+> pass unsets it before starting Python and verifies that both instrumented
+> extensions and OpenMP are active. On an LP64 runner, jlinalg may still route
+> vendor-BLAS operations through NumPy by policy; its native non-BLAS kernels
+> remain loaded and covered.
 
 See also: [`.github/workflows/sanitizers.yml`](../.github/workflows/sanitizers.yml),
 [`scripts/asan-suppressions.txt`](../scripts/asan-suppressions.txt),
@@ -563,6 +568,15 @@ config = ToleranceConfig()
 np.testing.assert_allclose(result, reference, rtol=config.pvalue_rtol, atol=config.atol)
 ```
 
+Association comparison classifies each reported lambda against
+`ToleranceConfig.lambda_boundary` before comparing its magnitude. The default
+bounds are `1e-5` and `1e5`, with a relative classification margin of `2e-5`.
+Pass a `LambdaBoundaryPolicy` with the actual bounds when validating a run that
+used different bounds. A boundary/interior or opposite-bound disagreement fails.
+Only matching lower-bound hits, and matching upper-bound hits for MLE, receive
+the boundary exemption. Interior values retain `lambda_rtol`; paired NaNs are
+handled explicitly as degenerate results.
+
 Do not relax tolerances to make tests pass. If a tolerance is too tight,
 either fix the algorithm or update [`docs/GEMMA_EQUIVALENCE.md`](GEMMA_EQUIVALENCE.md)
 *and* `ToleranceConfig` in one PR.
@@ -710,3 +724,20 @@ from `.log.txt` headers, so the manifest also serves as a provenance record.
 Editing or adding a fixture without updating the manifest will fail the
 pre-commit gate with a `sha256 drift` message that points at the stale
 hash and tells you exactly which command to run.
+
+### Independent flat-REML reference points
+
+`tests/fixtures/reml_flat_optima.npz` contains eight transformed association
+inputs that exposed rounded-objective optimization errors: rs0020, rs0107,
+rs0167, rs0214, rs0260, rs0397, rs0427, and rs0497. They come from the audit's
+50-sample masked phenotype case with MAF 0.3 and a recentered analyzed kinship.
+The stored eigenvalues, covariates, phenotype, and SNP vectors are the exact
+binary64 inputs to the reference calculation, avoiding platform-dependent
+reconstruction by another eigensolver.
+
+Run `python scripts/verify_reml_precision_oracle.py` in the development
+environment to recompute all stationary points at 80 decimal digits. The script
+uses dense two-column GLS and mpmath differentiation, imports no JAMMA numerical
+code, independently brackets each maximum, and checks negative curvature and
+score convergence. `mpmath` is a development dependency only. The regular tests
+use the stored roots without requiring high-precision arithmetic on every run.

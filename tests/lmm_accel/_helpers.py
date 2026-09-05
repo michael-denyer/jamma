@@ -156,7 +156,7 @@ def _numpy_general_score(data: dict) -> dict:
 
 
 def _numpy_general_lrt(data: dict) -> dict:
-    """NumPy MLE lambdas and LRT p-values for a general n_cvt fixture."""
+    """NumPy mode-4 MLE likelihoods, lambdas, and LRT p-values."""
     lambdas_mle, logls_mle = golden_section_optimize_lambda_mle_numpy(
         data["n_cvt"],
         data["eigenvalues"],
@@ -167,6 +167,7 @@ def _numpy_general_lrt(data: dict) -> dict:
         n_iter=20,
     )
     return {
+        "logls": logls_mle,
         "lambdas_mle": lambdas_mle,
         "p_lrts": _batch_lrt_pvalues_numpy(logls_mle, data["logl_H0"]),
     }
@@ -319,7 +320,7 @@ def _numpy_ncvt1_score(w, Uty, utg_t, Hi_eval_null, n_samples) -> dict:
 
 
 def _numpy_ncvt1_lrt(eigenvalues, w, Uty, utg_t, logl_H0, n_refine=20) -> dict:
-    """NumPy MLE lambdas and LRT p-values for the fused kernel's n_cvt=1 inputs."""
+    """NumPy mode-4 MLE likelihoods, lambdas, and LRT p-values for n_cvt=1."""
     lambdas_mle, logls_mle = golden_section_optimize_lambda_mle_numpy(
         1,
         eigenvalues,
@@ -330,6 +331,7 @@ def _numpy_ncvt1_lrt(eigenvalues, w, Uty, utg_t, logl_H0, n_refine=20) -> dict:
         n_iter=n_refine,
     )
     return {
+        "logls": logls_mle,
         "lambdas_mle": lambdas_mle,
         "p_lrts": _batch_lrt_pvalues_numpy(logls_mle, logl_H0),
     }

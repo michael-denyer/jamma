@@ -12,20 +12,36 @@ from jamma.lmm.association_plan import (
 )
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm.workspace import WorkspaceSpec
+from tests.conftest import requires_c
 
 pytestmark = pytest.mark.tier0
 
 
-def test_plan_is_frozen_and_tightening_returns_a_chunk_plan() -> None:
-    conservative = LmmChunkPlan(100, 10, 2, True)
+def _workspace(dispatch: DispatchPath, n_cvt: int) -> WorkspaceSpec:
+    return WorkspaceSpec.build(dispatch, 1, 1_000, 1_000, n_cvt, 50, 20, 1)
+
+
+@pytest.mark.parametrize(
+    "dispatch",
+    [pytest.param(DispatchPath.FUSED, marks=requires_c), DispatchPath.NUMPY_FALLBACK],
+)
+def test_plan_is_frozen_and_tightening_returns_a_chunk_plan(
+    dispatch: DispatchPath,
+) -> None:
+    conservative = LmmChunkPlan(
+        100, 10, 2 if dispatch.use_split else 1, dispatch.use_split
+    )
     plan = ExecutableAssociationPlan(
         summary=ExecutionPlan("batch", "test"),
-        dispatch=DispatchPath.FUSED,
+        dispatch=dispatch,
         conservative_chunks=conservative,
         n_samples=1_000,
+        n_input_samples=1_000,
         n_snps_before_filter=1_000,
         n_cvt=1,
         mem_budget_gb=None,
+        workspace=_workspace(dispatch, 1),
     )
     tightened = plan.conservative_chunks.narrow(500)
 
@@ -34,22 +50,35 @@ def test_plan_is_frozen_and_tightening_returns_a_chunk_plan() -> None:
         plan.n_samples = 2_000  # type: ignore[misc]
 
 
-def test_tightening_only_decreases_width_and_preserves_policy() -> None:
+@pytest.mark.parametrize(
+    "dispatch",
+    [
+        pytest.param(DispatchPath.FUSED_GENERAL, marks=requires_c),
+        DispatchPath.NUMPY_FALLBACK,
+    ],
+)
+def test_tightening_only_decreases_width_and_preserves_policy(
+    dispatch: DispatchPath,
+) -> None:
     plan = ExecutableAssociationPlan(
         summary=ExecutionPlan("streaming", "test"),
-        dispatch=DispatchPath.FUSED_GENERAL,
-        conservative_chunks=LmmChunkPlan(100, 10, 2, True),
+        dispatch=dispatch,
+        conservative_chunks=LmmChunkPlan(
+            100, 10, 2 if dispatch.use_split else 1, dispatch.use_split
+        ),
         n_samples=1_000,
+        n_input_samples=1_000,
         n_snps_before_filter=1_000,
         n_cvt=2,
         mem_budget_gb=8.0,
+        workspace=_workspace(dispatch, 2),
     )
 
     tightened = plan.conservative_chunks.narrow(250)
 
     # Tightening narrows geometry only; mode and dispatch stay on the plan.
     assert plan.summary.mode == "streaming"
-    assert plan.dispatch is DispatchPath.FUSED_GENERAL
+    assert plan.dispatch is dispatch
     assert tightened == LmmChunkPlan(100, 3, 1, False)
 
 

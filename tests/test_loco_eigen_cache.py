@@ -17,10 +17,17 @@ import numpy as np
 import pytest
 
 from jamma.io import read_fam_phenotypes
-from jamma.lmm.eigen_cache import EigenCacheComponents
-from jamma.lmm.eigen_io import read_eigen_files, write_eigen_files
+from jamma.lmm.eigen_cache import (
+    EIGEN_CACHE_SCHEMA_VERSION,
+    EigenCacheComponents,
+)
+from jamma.lmm.eigen_io import (
+    read_eigen_files,
+    write_eigen_files,
+    write_eigen_generation_members,
+)
 from jamma.lmm.loco import LocoConfig
-from jamma.lmm.loco_eigen import _find_loco_eigen_cache
+from jamma.lmm.loco_eigen import _cached_eigen_pairs, _find_loco_eigen_cache
 from jamma.lmm.schema import LmmConfig
 from tests.conftest import require_fixture
 from tests.fixture_paths import MOUSE
@@ -48,7 +55,7 @@ def _dummy_components(maf_threshold: float = 0.01) -> EigenCacheComponents:
     maf_threshold is exposed because the roundtrip test asserts on it.
     """
     return {
-        "schema_version": 1,
+        "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
         "bed_fingerprint": "data.bed:64:1",
         "bim_sha256": "0" * 64,
         "maf_threshold": maf_threshold,
@@ -73,14 +80,29 @@ def _write_cache_entries(
     is supposed to agree with.
     """
     assert loco.eigen_dir is not None
+    generation = "testgeneration"
+    artifacts: dict[str, dict[str, str]] = {}
     for ch in chr_names:
-        write_eigen_files(
+        d_path, u_path = write_eigen_generation_members(
             np.random.default_rng(42).random(n),
             np.eye(n),
             loco.eigen_dir,
-            prefix=loco.eigen_stem(ch),
+            loco.prefix,
+            generation,
             legacy_text=loco.legacy_text,
+            label=f"loco.chr{ch}",
         )
+        artifacts[ch] = {"eigenD": d_path.name, "eigenU": u_path.name}
+    from jamma.lmm.eigen_cache import write_eigen_cache_manifest
+
+    write_eigen_cache_manifest(
+        loco.eigen_dir,
+        loco.prefix,
+        "TESTKEY",
+        components=_dummy_components(),
+        generation=generation,
+        artifacts=artifacts,
+    )
 
 
 @pytest.mark.tier0
@@ -127,13 +149,13 @@ class TestLocoConfigArtifactNaming:
         """eigen_stem() feeds write_eigen_files(prefix=), so the writer's output
         must land exactly on the paths eigen_paths() looks for."""
         loco = LocoConfig(eigen_dir=tmp_path, prefix="study")
-        write_eigen_files(
+        paths = write_eigen_files(
             np.arange(4, dtype=np.float64),
             np.eye(4),
             tmp_path,
             prefix=loco.eigen_stem("21"),
         )
-        for path in loco.eigen_paths("21"):
+        for path in paths:
             assert path.exists(), f"writer and reader disagree on {path.name}"
 
     def test_kinship_path(self, tmp_path: Path) -> None:
@@ -200,18 +222,16 @@ class TestFindLocoEigenCache:
         assert result is not None
         assert set(result.keys()) == set(chr_names)
 
-    def test_binary_cache_does_not_satisfy_text_lookup(self, tmp_path: Path) -> None:
-        """A .npy-only cache must not answer a legacy_text lookup.
-
-        Only one direction holds. legacy_text=True writes the GEMMA .txt files
-        *and* a .npy sidecar, so a binary lookup over a text-written cache does
-        find its files — deliberately. A binary-only write leaves no .txt, so
-        the text reader must miss and recompute.
-        """
+    def test_manifest_format_overrides_requested_write_format(
+        self, tmp_path: Path
+    ) -> None:
+        """A committed cache reads the exact members named by its manifest."""
         _write_cache_entries(LocoConfig(eigen_dir=tmp_path), ["1"])
 
         text_lookup = LocoConfig(eigen_dir=tmp_path, legacy_text=True)
-        assert _find_loco_eigen_cache(text_lookup, ["1"]) is None
+        cache = _find_loco_eigen_cache(text_lookup, ["1"])
+        assert cache is not None
+        assert cache["1"][0].suffix == ".npy"
 
     def test_text_cache_also_satisfies_binary_lookup(self, tmp_path: Path) -> None:
         """The .npy sidecar written alongside GEMMA text is a usable cache."""
@@ -223,6 +243,53 @@ class TestFindLocoEigenCache:
         """Empty directory returns None (no cache found)."""
         result = _find_loco_eigen_cache(LocoConfig(eigen_dir=tmp_path), ["1", "2"])
         assert result is None
+
+    def test_reader_retains_selected_loco_generation_after_commit(
+        self, tmp_path: Path
+    ) -> None:
+        from jamma.lmm.eigen_cache import write_eigen_cache_manifest
+
+        loco = LocoConfig(eigen_dir=tmp_path, prefix="study")
+        _write_cache_entries(loco, ["1", "2"], n=2)
+        selected = _find_loco_eigen_cache(loco, ["1", "2"])
+        assert selected is not None
+
+        generation = "replacement"
+        artifacts: dict[str, dict[str, str]] = {}
+        for chromosome in ("1", "2"):
+            d_path, u_path = write_eigen_generation_members(
+                np.full(2, 4.0),
+                np.fliplr(np.eye(2)),
+                tmp_path,
+                "study",
+                generation,
+                label=f"loco.chr{chromosome}",
+            )
+            artifacts[chromosome] = {
+                "eigenD": d_path.name,
+                "eigenU": u_path.name,
+            }
+        write_eigen_cache_manifest(
+            tmp_path,
+            "study",
+            "NEWKEY",
+            components=_dummy_components(),
+            generation=generation,
+            artifacts=artifacts,
+        )
+
+        pairs = list(
+            _cached_eigen_pairs(
+                selected,
+                ["1", "2"],
+                n_valid=2,
+                partitions={"1": np.array([0]), "2": np.array([1])},
+                show_progress=False,
+            )
+        )
+        for _chromosome, eigenvalues, eigenvectors in pairs:
+            assert not np.all(eigenvalues == 4.0)
+            np.testing.assert_array_equal(eigenvectors, np.eye(2))
 
 
 # ---------------------------------------------------------------------------
@@ -258,15 +325,27 @@ class TestLocoWriteEigen:
         )
         assert result.n_tested > 0
 
-        # Verify per-chromosome eigen files exist with correct dimensions
+        cache = _find_loco_eigen_cache(
+            LocoConfig(eigen_dir=tmp_path, prefix="result"), unique_chrs
+        )
+        assert cache is not None
+        # Verify manifest-selected files contain complete eigendecompositions.
         for ch in unique_chrs:
-            d_path = tmp_path / f"result.loco.chr{ch}.eigenD.npy"
-            u_path = tmp_path / f"result.loco.chr{ch}.eigenU.npy"
+            d_path, u_path = cache[ch]
             assert d_path.exists(), f"Missing eigenD for chr {ch}"
             assert u_path.exists(), f"Missing eigenU for chr {ch}"
-            eigenvalues, eigenvectors = read_eigen_files(d_path, u_path)
+            eigenvalues = np.load(d_path)
+            eigenvectors = np.load(u_path)
             assert eigenvalues.shape == (n_valid,)
             assert eigenvectors.shape == (n_valid, n_valid)
+            assert np.all(eigenvalues[:-1] <= eigenvalues[1:])
+            np.testing.assert_allclose(
+                np.sum(eigenvectors * eigenvectors, axis=0),
+                np.ones(n_valid),
+                rtol=1e-12,
+                atol=1e-12,
+            )
+            assert abs(eigenvectors[:, 0] @ eigenvectors[:, -1]) < 1e-12
 
 
 # ---------------------------------------------------------------------------
@@ -427,10 +506,13 @@ class TestLocoEigenCacheFallback:
             loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir, prefix="result"),
         )
 
-        # Delete one chromosome's files to simulate partial cache
+        cache = _find_loco_eigen_cache(
+            LocoConfig(eigen_dir=eigen_dir, prefix="result"), unique_chrs
+        )
+        assert cache is not None
+        # Delete one manifest-referenced member to simulate a partial generation.
         first_chr = unique_chrs[0]
-        (eigen_dir / f"result.loco.chr{first_chr}.eigenD.npy").unlink()
-        (eigen_dir / f"result.loco.chr{first_chr}.eigenU.npy").unlink()
+        cache[first_chr][0].unlink()
 
         # Run with partial cache: should fall back to full compute
         result = run_lmm_loco(
@@ -592,10 +674,10 @@ class TestGwasLocoWriteEigen:
         meta = get_plink_metadata(MOUSE_HS1940_BFILE)
         unique_chrs = sorted(partitions_from_metadata(meta).keys())
         for ch in unique_chrs:
-            assert (out_dir / f"result.loco.chr{ch}.eigenD.npy").exists(), (
+            assert list(out_dir.glob(f"result.generation.*.loco.chr{ch}.eigenD.npy")), (
                 f"Missing eigenD for chr {ch} in output_dir"
             )
-            assert (out_dir / f"result.loco.chr{ch}.eigenU.npy").exists(), (
+            assert list(out_dir.glob(f"result.generation.*.loco.chr{ch}.eigenU.npy")), (
                 f"Missing eigenU for chr {ch} in output_dir"
             )
 
@@ -635,12 +717,12 @@ class TestLocoLegacyText:
         )
 
         for ch in unique_chrs:
-            assert (tmp_path / f"result.loco.chr{ch}.eigenD.txt").exists(), (
-                f"Missing .txt eigenD for chr {ch}"
-            )
-            assert (tmp_path / f"result.loco.chr{ch}.eigenU.txt").exists(), (
-                f"Missing .txt eigenU for chr {ch}"
-            )
+            assert list(
+                tmp_path.glob(f"result.generation.*.loco.chr{ch}.eigenD.txt")
+            ), f"Missing .txt eigenD for chr {ch}"
+            assert list(
+                tmp_path.glob(f"result.generation.*.loco.chr{ch}.eigenU.txt")
+            ), f"Missing .txt eigenU for chr {ch}"
             assert (tmp_path / f"result.loco.cXX.chr{ch}.txt").exists(), (
                 f"Missing .txt kinship for chr {ch}"
             )
@@ -719,15 +801,14 @@ class TestLocoEigenCacheStaleDetection:
                 err_msg=f"beta {rs}: stale maf=0.01 cache silently reused",
             )
 
-    def test_interrupted_rewrite_leaves_no_stale_manifest(
+    def test_interrupted_rewrite_preserves_prior_committed_generation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """An interrupted write_eigen rewrite must leave no manifest.
+        """An interrupted rewrite leaves the prior complete cache readable.
 
         Run 1 writes a complete maf=0.01 cache + manifest. Run 2 rewrites with
         maf=0.05 but is interrupted on the second chromosome. The maf=0.01
-        manifest must already be gone (invalidated before the loop), so a later
-        read with the maf=0.01 inputs cannot validate the half-rewritten cache.
+        manifest remains the commit record for the old immutable generation.
         """
         import jamma.lmm.loco_eigen as loco_eigen_mod
         from jamma.lmm.eigen_cache import eigen_cache_manifest_path
@@ -760,31 +841,38 @@ class TestLocoEigenCacheStaleDetection:
         )
         manifest = eigen_cache_manifest_path(eigen_dir, "result")
         assert manifest.exists()
+        old_manifest = manifest.read_bytes()
 
-        real_write_eigen_files = loco_eigen_mod.write_eigen_files
+        real_write_members = loco_eigen_mod.write_eigen_generation_members
         calls = {"n": 0}
 
-        def interrupting_write_eigen_files(
+        def interrupting_write_members(
             eigenvalues: np.ndarray,
             eigenvectors: np.ndarray,
             output_dir: Path,
             prefix: str = "result",
+            generation: str = "",
             *,
             legacy_text: bool = False,
+            label: str | None = None,
         ) -> tuple[Path, Path]:
             calls["n"] += 1
             if calls["n"] == 1:
-                return real_write_eigen_files(
+                return real_write_members(
                     eigenvalues,
                     eigenvectors,
                     output_dir,
-                    prefix=prefix,
+                    prefix,
+                    generation,
                     legacy_text=legacy_text,
+                    label=label,
                 )
             raise RuntimeError("simulated interruption")
 
         monkeypatch.setattr(
-            loco_eigen_mod, "write_eigen_files", interrupting_write_eigen_files
+            loco_eigen_mod,
+            "write_eigen_generation_members",
+            interrupting_write_members,
         )
 
         with pytest.raises(RuntimeError, match="simulated interruption"):
@@ -796,4 +884,4 @@ class TestLocoEigenCacheStaleDetection:
             )
 
         assert calls["n"] >= 2, "interruption did not run the real writer first"
-        assert manifest.exists() is False
+        assert manifest.read_bytes() == old_manifest

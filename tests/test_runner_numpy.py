@@ -92,6 +92,34 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
 
 
 @pytest.mark.tier0
+def test_public_runner_supplied_eigenpairs_take_precedence(synthetic_data):
+    """Supplying kinship alongside eigenpairs produces the eigenpair result."""
+    from jamma.lmm.eigen import eigendecompose_kinship
+
+    plink, kinship, phenotypes, snp_info = synthetic_data
+    eigenvalues, eigenvectors = eigendecompose_kinship(
+        kinship.copy(), check_memory=False
+    )
+    config = LmmConfig(lmm_mode=1, check_memory=False, show_progress=False)
+    common = {
+        "genotypes": plink.genotypes,
+        "phenotypes": phenotypes,
+        "snp_info": snp_info,
+        "eigenvalues": eigenvalues,
+        "eigenvectors": eigenvectors,
+        "config": config,
+    }
+
+    supplied = run_lmm_association_numpy(kinship=None, **common)
+    both = run_lmm_association_numpy(kinship=np.full_like(kinship, np.nan), **common)
+
+    assert both.associations == supplied.associations
+    assert both.n_tested == supplied.n_tested
+    assert both.pve == supplied.pve
+    assert both.pve_se == supplied.pve_se
+
+
+@pytest.mark.tier0
 def test_numpy_runner_empty_after_filter(synthetic_data):
     """Edge case: returns LmmRunResult with empty associations."""
     plink, kinship, phenotypes, snp_info = synthetic_data

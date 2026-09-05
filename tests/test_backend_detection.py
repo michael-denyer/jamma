@@ -8,6 +8,8 @@ from unittest.mock import patch
 import pytest
 
 from jamma.lmm.association_plan import ExecutionPlan, plan_association
+from tests.conftest import requires_c
+from tests.fixture_paths import LOCO
 
 pytestmark = pytest.mark.tier0
 
@@ -15,11 +17,6 @@ pytestmark = pytest.mark.tier0
 def _select_mode(*args, **kwargs) -> ExecutionPlan:
     """Plan and keep only the selected-mode summary, as the pipeline does."""
     return plan_association(*args, **kwargs).summary
-
-
-# Stands in for a loaded extension. Only `is not None` is read on
-# the paths under test, so the object's identity is all that matters.
-_EXTENSION_LOADED = object()
 
 
 def test_import_jamma_succeeds():
@@ -51,15 +48,17 @@ class TestExecutionMode:
 
     # -- Auto selection --
 
+    @requires_c
     def test_auto_c_ext_memory_sufficient_returns_numpy_batch(self):
         """auto + C ext + memory sufficient -> numpy-batch."""
-        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+        with _pin_ram(AMPLE_GB):
             plan = _select_mode(*FITS_SHAPE)
         assert plan.mode == "batch"
 
+    @requires_c
     def test_auto_c_ext_memory_insufficient_returns_numpy_streaming(self):
         """auto + C ext + memory insufficient -> numpy-streaming."""
-        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+        with _pin_ram(AMPLE_GB):
             plan = _select_mode(*OVERFLOWS_SHAPE)
         assert plan.mode == "streaming"
 
@@ -69,31 +68,28 @@ class TestExecutionMode:
             plan = _select_mode(*FITS_SHAPE)
         assert plan.mode == "batch"
 
+    @requires_c
     def test_loco_selects_loco_mode_whatever_was_requested(self):
         """loco=True plans the loco mode and prices one chunk, not the matrix."""
-        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+        with _pin_ram(AMPLE_GB):
             loco = plan_association(*OVERFLOWS_SHAPE, loco=True)
             batch = plan_association(*OVERFLOWS_SHAPE, requested="numpy")
         assert loco.summary.mode == "loco"
         assert loco.summary.runner_name == "numpy-loco"
         assert loco.price().total_peak_gb < batch.price().total_peak_gb
 
-    def test_no_c_ext_warns_for_large_dataset(self):
-        """No C extension + insufficient memory logs warning."""
-        with (
-            _pin_ram(AMPLE_GB),
-            patch("jamma.lmm.accel._accel", None),
-            patch("jamma.lmm.association_plan.logger") as mock_logger,
-        ):
+    def test_no_c_ext_large_dataset_selects_streaming(self):
+        """Fallback compute retains streaming when batch storage does not fit."""
+        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", None):
             plan = _select_mode(*OVERFLOWS_SHAPE)
-        assert plan.mode == "batch"
-        mock_logger.warning.assert_called_once()
+        assert plan.mode == "streaming"
 
     # -- Explicit backend selection --
 
+    @requires_c
     def test_explicit_numpy_returns_numpy_batch(self):
         """explicit 'numpy' -> numpy-batch regardless of memory."""
-        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+        with _pin_ram(AMPLE_GB):
             plan = _select_mode(*OVERFLOWS_SHAPE, requested="numpy")
         assert plan.mode == "batch"
 
@@ -106,33 +102,37 @@ class TestExecutionMode:
 
     # -- Compound backend requests --
 
+    @requires_c
     def test_explicit_numpy_streaming_returns_numpy_streaming(self):
         """explicit 'numpy-streaming' -> numpy-streaming directly."""
-        with patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
-            plan = _select_mode(100, 1000, requested="numpy-streaming")
+        plan = _select_mode(100, 1000, requested="numpy-streaming")
         assert plan.mode == "streaming"
 
     def test_explicit_numpy_streaming_no_c_ext_selects_streaming(self):
         """The planner plans the requested mode even without the C extension.
 
-        Refusing the combination is the pipeline boundary's policy, tested
-        below; the streaming runner itself works without the extension.
+        Streaming is a storage policy and works without the extension.
         """
         with patch("jamma.lmm.accel._accel", None):
             plan = _select_mode(100, 1000, requested="numpy-streaming")
         assert plan.mode == "streaming"
 
-    def test_pipeline_rejects_numpy_streaming_without_c_ext(self):
-        """The pipeline refuses an explicit numpy-streaming request without
-        the C extension, before touching any input file."""
+    @pytest.mark.tier1
+    def test_pipeline_runs_numpy_streaming_without_c_ext(self, tmp_path):
+        """The public pipeline completes the 500-SNP fixture in fallback mode."""
         from jamma.pipeline import PipelineConfig, PipelineRunner
 
         config = PipelineConfig(
-            bfile=Path("/nonexistent/prefix"), backend="numpy-streaming"
+            bfile=LOCO.bfile,
+            backend="numpy-streaming",
+            output_dir=tmp_path,
+            check_memory=False,
+            show_progress=False,
         )
         with patch("jamma.lmm.accel._accel", None):
-            with pytest.raises(ValueError, match="C extension"):
-                PipelineRunner(config).run()
+            result = PipelineRunner(config).run()
+        assert result.n_snps_tested == 500
+        assert result.assoc_path.exists()
 
     # -- Input validation --
 
@@ -186,20 +186,21 @@ class TestExecutionMode:
         assert hash(plan_a) == hash(plan_b)
         assert len({plan_a, plan_b}) == 1
 
+    @requires_c
     def test_plan_reevaluation_mode_change_allowed(self):
         """Mode change (same backend) during re-evaluation is allowed."""
         # The same shape planned twice on a machine that lost its memory
         # between the calls: numpy-batch first, numpy-streaming second.
-        with patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
-            with _pin_ram(AMPLE_GB):
-                plan1 = _select_mode(*FITS_SHAPE)
-            with _pin_ram(SCARCE_GB):
-                plan2 = _select_mode(*FITS_SHAPE)
+        with _pin_ram(AMPLE_GB):
+            plan1 = _select_mode(*FITS_SHAPE)
+        with _pin_ram(SCARCE_GB):
+            plan2 = _select_mode(*FITS_SHAPE)
         assert plan1.mode == "batch"
         assert plan2.mode == "streaming"
 
     # -- n_cvt-aware selection --
 
+    @requires_c
     def test_n_cvt_affects_memory(self):
         """plan_association passes n_cvt to estimate_lmm_memory."""
         calls = []
@@ -214,7 +215,6 @@ class TestExecutionMode:
                 "jamma.lmm.association_plan.estimate_lmm_memory",
                 side_effect=capturing_estimate,
             ),
-            patch("jamma.lmm.accel._accel", _EXTENSION_LOADED),
         ):
             _select_mode(1000, 10000, n_cvt=4)
 
@@ -234,9 +234,10 @@ class TestExecutionMode:
         # n_cvt=1 still uses numpy-batch (C extension handles n_cvt=1)
         assert plan_n_cvt1.mode == "batch"
 
+    @requires_c
     def test_c_general_n_cvt_numpy_batch(self):
         """C general available + n_cvt>1 + sufficient -> numpy-batch."""
-        with _pin_ram(AMPLE_GB), patch("jamma.lmm.accel._accel", _EXTENSION_LOADED):
+        with _pin_ram(AMPLE_GB):
             plan = _select_mode(1000, 10000, n_cvt=4)
 
         assert plan.mode == "batch"

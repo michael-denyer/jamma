@@ -21,6 +21,7 @@ import pytest
 from jamma._build_support.openmp_detect import (
     _detect_darwin_openmp_flags,
     _find_libiomp5,
+    _libiomp5_candidate,
     _openmp_flags_for_libiomp5,
 )
 
@@ -82,6 +83,44 @@ def test_darwin_brew_not_found_returns_empty_and_logs():
 # ---------------------------------------------------------------------------
 # Linux: numpy ImportError during libiomp5 probe
 # ---------------------------------------------------------------------------
+
+
+def test_libiomp5_candidate_prefers_runtime_over_debug_helper(tmp_path):
+    """The Linux image's debugger helper must never win directory ordering."""
+    runtime = tmp_path / "libiomp5.so"
+    runtime.write_bytes(b"runtime")
+    (tmp_path / "libiomp5_db.so").write_bytes(b"debug helper")
+
+    assert _libiomp5_candidate(tmp_path) == runtime
+
+
+def test_libiomp5_candidate_accepts_deterministic_versioned_and_hashed_names(
+    tmp_path,
+):
+    """Bundled wheel names remain supported with stable preference ordering."""
+    hashed = tmp_path / "libiomp5-a1b2c3.so"
+    versioned = tmp_path / "libiomp5.so.5"
+    hashed.write_bytes(b"hashed runtime")
+    versioned.write_bytes(b"versioned runtime")
+
+    assert _libiomp5_candidate(tmp_path) == versioned
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "libiomp5_db.so",
+        "libiomp5.a",
+        "libiomp5.so.debug",
+        "libiomp5-debug.so",
+        "not-libiomp5.so",
+        "libiomp5.so.backup",
+    ],
+)
+def test_libiomp5_candidate_rejects_non_runtime_names(tmp_path, name):
+    (tmp_path / name).write_bytes(b"not a runtime")
+
+    assert _libiomp5_candidate(tmp_path) is None
 
 
 def test_find_libiomp5_logs_numpy_import_error(monkeypatch):

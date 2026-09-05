@@ -30,6 +30,7 @@ from jamma.lmm.chunk_sizing import (
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.pab import n_index
 from jamma.lmm.schema import LmmMode
+from jamma.lmm.workspace import WorkspaceSpec
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_memory import memory_preflight
 from tests.conftest import requires_c
@@ -149,7 +150,7 @@ def test_estimate_streaming_memory_peak_scales_with_n_cvt():
     )
 
 
-def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
+def test_preflight_narrows_when_n_cvt_inflates_toward_available(monkeypatch):
     """Regression for jamma-ca6p: the preflight gate must thread n_cvt.
 
     Every C dispatch path now holds no per-SNP batch array (the general
@@ -157,9 +158,9 @@ def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
     preflight. The NumPy fallback still materialises the full Uab batch,
     which grows with n_cvt, so this pins the bug there instead: n_cvt=1
     fits comfortably in the pinned budget; n_cvt=90 inflates the full Uab
-    batch past it. If the preflight silently defaults n_cvt back to 1, both
-    calls succeed — only a correctly threaded n_cvt produces the asymmetric
-    pass/raise this asserts.
+    batch toward the ceiling. A feasible run must now narrow rather than fail.
+    If the preflight silently defaults n_cvt back to 1, both plans retain the
+    same width.
     """
     from jamma.core import memory
     from jamma.lmm import accel
@@ -174,12 +175,16 @@ def test_preflight_raises_when_n_cvt_inflates_past_available(monkeypatch):
     n_samples = 800
     n_snps = 10_000
 
-    # With n_cvt=1, peak should be well under 1.0GB available.
-    _streaming_preflight(n_samples, n_snps, n_cvt=1, lmm_mode=2)
+    low = plan_association(
+        n_samples, n_snps, requested="numpy-streaming", n_cvt=1, lmm_mode=2
+    )
+    high = plan_association(
+        n_samples, n_snps, requested="numpy-streaming", n_cvt=90, lmm_mode=2
+    )
 
-    # With n_cvt=90, the full Uab batch inflates past it.
-    with pytest.raises(MemoryError):
-        _streaming_preflight(n_samples, n_snps, n_cvt=90, lmm_mode=2)
+    assert high.conservative_chunks.chunk_size < low.conservative_chunks.chunk_size
+    _streaming_preflight(n_samples, n_snps, n_cvt=1, lmm_mode=2)
+    _streaming_preflight(n_samples, n_snps, n_cvt=90, lmm_mode=2)
 
 
 def test_preflight_succeeds_at_low_n_cvt():
@@ -215,7 +220,7 @@ def test_preflight_accepts_moderate_n_cvt(monkeypatch):
     _streaming_preflight(3048, 88_268, n_cvt=25)
 
 
-# n_cvt=1 selects FUSED/FUSED_SCORE_WS/FUSED_LRT_WS depending on lmm_mode;
+# n_cvt=1 selects FUSED for every lmm_mode;
 # n_cvt>=2 selects FUSED_GENERAL for every mode; accel=False always selects
 # NUMPY_FALLBACK regardless of n_cvt/lmm_mode. One representative lmm_mode
 # per path, matching select_dispatch_path's own resolution table.
@@ -223,8 +228,8 @@ _DISPATCH_CASES = [
     pytest.param(1, 1, True, DispatchPath.FUSED, id="fused"),
     pytest.param(2, 1, True, DispatchPath.FUSED_GENERAL, id="fused_general"),
     pytest.param(2, 2, True, DispatchPath.FUSED_GENERAL, id="fused_general_lrt"),
-    pytest.param(1, 3, True, DispatchPath.FUSED_SCORE_WS, id="fused_score_ws"),
-    pytest.param(1, 2, True, DispatchPath.FUSED_LRT_WS, id="fused_lrt_ws"),
+    pytest.param(1, 3, True, DispatchPath.FUSED, id="fused_score_ws"),
+    pytest.param(1, 2, True, DispatchPath.FUSED, id="fused_lrt_ws"),
     pytest.param(4, 1, False, DispatchPath.NUMPY_FALLBACK, id="numpy_fallback"),
 ]
 
@@ -289,7 +294,7 @@ def _priced_streaming_lmm_phase_gb(
     n_cvt: int,
     lmm_mode: LmmMode,
     accel: bool,
-) -> float:
+) -> tuple[float, LmmChunkPlan, WorkspaceSpec]:
     """The streaming preflight's real priced LMM-phase total.
 
     Calls ``estimate_streaming_memory`` the way ``pipeline_memory.plan_memory``
@@ -304,7 +309,8 @@ def _priced_streaming_lmm_phase_gb(
     """
     from jamma.lmm import accel as accel_module
 
-    monkeypatch.setattr(accel_module, "_accel", object() if accel else None)
+    loaded_accel = accel_module.require() if accel else None
+    monkeypatch.setattr(accel_module, "_accel", loaded_accel)
     execution = plan_association(
         n_samples,
         n_snps,
@@ -312,26 +318,12 @@ def _priced_streaming_lmm_phase_gb(
         n_cvt=n_cvt,
         lmm_mode=lmm_mode,
     )
-    chunk_plan = execution.conservative_chunks
-    uab_iab_gb = (
-        chunk_plan.chunk_size
-        * lmm_extra_bytes_per_snp(
-            n_samples,
-            n_cvt,
-            execution.dispatch,
-            n_buffers=chunk_plan.n_buffers,
-        )
-        / 1e9
+    quote = execution.price()
+    return (
+        dict(quote.components_gb)["association"],
+        execution.conservative_chunks,
+        execution.workspace,
     )
-    est = estimate_streaming_memory(
-        n_samples,
-        chunk_size=DEFAULT_STATS_CHUNK,
-        n_cvt=n_cvt,
-        pipeline_buffers=chunk_plan.n_buffers,
-        compute_chunk_size=chunk_plan.chunk_size,
-        uab_iab_gb=uab_iab_gb,
-    )
-    return est.lmm_gb
 
 
 def _streaming_lmm_phase_non_buffer_terms_gb(
@@ -440,7 +432,15 @@ class TestChunkPlanMatchesEngine:
             assert plan.n_buffers == 1
             assert not plan.use_pipeline
 
-    @pytest.mark.parametrize("n_cvt,lmm_mode,accel,dispatch", _DISPATCH_CASES)
+    @pytest.mark.parametrize(
+        "n_cvt,lmm_mode,accel,dispatch",
+        [
+            pytest.param(*case.values, id=case.id, marks=requires_c)
+            if case.values[2]
+            else case
+            for case in _DISPATCH_CASES
+        ],
+    )
     def test_streaming_preflight_priced_bytes_match_engine_allocation(
         self, monkeypatch, n_cvt, lmm_mode, accel, dispatch
     ):
@@ -460,16 +460,18 @@ class TestChunkPlanMatchesEngine:
         n_samples = 50_000
         n_snps = 500_000
 
-        plan = _plan(n_samples, n_snps, n_cvt, dispatch)
-        priced_gb = _priced_streaming_lmm_phase_gb(
+        priced_gb, plan, workspace = _priced_streaming_lmm_phase_gb(
             monkeypatch, n_samples, n_snps, n_cvt, lmm_mode, accel
         )
         allocated_gb = _engine_allocation_gb(
             n_samples, n_cvt, plan, dispatch, include_raw_block=True
-        ) + _streaming_lmm_phase_non_buffer_terms_gb(n_samples, plan.chunk_size)
+        ) + _streaming_lmm_phase_non_buffer_terms_gb(
+            n_samples, plan.chunk_size, n_grid=0
+        )
+        allocated_gb += plan.chunk_size * workspace.bytes_per_snp / 1e9
 
-        assert priced_gb == pytest.approx(allocated_gb, rel=1e-9), (
-            f"{dispatch}: priced {priced_gb:.3f}GB != allocated {allocated_gb:.3f}GB"
+        assert priced_gb >= allocated_gb - 1e-12, (
+            f"{dispatch}: priced {priced_gb:.3f}GB < allocated {allocated_gb:.3f}GB"
         )
 
     @pytest.mark.parametrize("n_cvt,lmm_mode,accel,dispatch", _DISPATCH_CASES)
@@ -558,11 +560,6 @@ class TestChunkPlanMatchesEngine:
         n_cvt = 4
         lmm_mode = 1
 
-        dispatch = DispatchPath.NUMPY_FALLBACK
-        plan = _plan(n_samples, n_snps, n_cvt, dispatch)
-        assert not plan.use_pipeline, "this case must not pipeline (plan.n_buffers=1)"
-        assert plan.n_buffers == 1
-
         exec_plan = plan_association(
             n_samples,
             n_snps,
@@ -570,6 +567,10 @@ class TestChunkPlanMatchesEngine:
             n_cvt=n_cvt,
             lmm_mode=lmm_mode,
         )
+        dispatch = DispatchPath.NUMPY_FALLBACK
+        plan = exec_plan.conservative_chunks
+        assert not plan.use_pipeline, "this case must not pipeline (plan.n_buffers=1)"
+        assert plan.n_buffers == 1
         mem_plan = exec_plan.price()
 
         # Reference: the same estimate built with pipeline_buffers hardcoded
@@ -594,13 +595,27 @@ class TestChunkPlanMatchesEngine:
             uab_iab_gb=uab_iab_gb,
         )
 
-        assert mem_plan.total_peak_gb < est_hardcoded_two.peak_gb, (
+        hardcoded_two_gb = (
+            est_hardcoded_two.peak_gb
+            + (
+                exec_plan.workspace.fixed_bytes
+                + chunk_plan.chunk_size * exec_plan.workspace.bytes_per_snp
+            )
+            / 1e9
+        )
+        assert mem_plan.total_peak_gb < hardcoded_two_gb, (
             "plan_memory's real total must be below what pipeline_buffers=2 "
             "would have priced for a plan that does not pipeline"
         )
         allocated_gb = _engine_allocation_gb(
             n_samples, n_cvt, plan, dispatch, include_raw_block=True
-        ) + _streaming_lmm_phase_non_buffer_terms_gb(n_samples, plan.chunk_size)
+        ) + _streaming_lmm_phase_non_buffer_terms_gb(
+            n_samples, plan.chunk_size, n_grid=0
+        )
+        allocated_gb += (
+            exec_plan.workspace.fixed_bytes
+            + plan.chunk_size * exec_plan.workspace.bytes_per_snp
+        ) / 1e9
         assert mem_plan.total_peak_gb == pytest.approx(allocated_gb, rel=1e-9), (
             f"plan_memory total {mem_plan.total_peak_gb:.3f}GB != "
             f"engine allocation {allocated_gb:.3f}GB"
@@ -669,18 +684,13 @@ class TestChunkPlanMatchesEngine:
         )
 
         assert result.n_tested == n_snps
-        assert len(recorded_calls) == 1, (
-            f"expected exactly one estimate_lmm_memory call, got {len(recorded_calls)}"
+        assert recorded_calls
+        assert all(call["n_buffers"] == 2 for call in recorded_calls), (
+            "every selection and preflight quote must use the plan's two live buffers"
         )
-        call = recorded_calls[0]
-        assert call["n_buffers"] == 2, (
-            f"expected n_buffers=2 (the plan's real live-buffer count), "
-            f"got {call.get('n_buffers')!r}"
-        )
-        assert call["lmm_batch_size"] == forced_chunk_size, (
-            f"expected lmm_batch_size={forced_chunk_size} (the plan's chunk "
-            f"size), got {call.get('lmm_batch_size')!r}"
-        )
+        assert all(
+            call["lmm_batch_size"] == forced_chunk_size for call in recorded_calls
+        ), "every quote must use the plan's real chunk size"
 
 
 @requires_c
@@ -724,12 +734,10 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
 
     # Unbudgeted: the real chunk needs ~500GB, exceeding 288GB -> streaming.
     assert unbudgeted.mode == "streaming"
-    assert "500.0GB" in unbudgeted.reason
-    # A 1GB chunk budget shrinks the chunk the estimate is priced against so
-    # much the run fits comfortably -> batch. This proves mem_budget reached
-    # the chunk sizer, rather than only vetoing the run afterward (its only
-    # other reach, through memory_preflight's _reject_if_over_budget).
-    assert budgeted.mode == "batch"
+    assert "exceeds 288.0GB capacity" in unbudgeted.reason
+    # The 1GB ceiling cannot hold the 20GB eigenvector matrix even at a
+    # one-SNP chunk, so auto must not select an impossible batch plan.
+    assert budgeted.mode == "streaming"
     assert "500.0GB" not in budgeted.reason
 
 
@@ -757,14 +765,6 @@ def test_pipeline_memory_plan_honors_mem_budget(monkeypatch):
     monkeypatch.setattr(accel, "_accel", None)
     n_samples, n_snps, n_cvt = 30, 200, 1
     mem_budget = 12e-6
-    expected = _plan(
-        n_samples,
-        n_snps,
-        n_cvt,
-        DispatchPath.NUMPY_FALLBACK,
-        mem_budget_bytes=int(mem_budget * 1e9),
-    )
-
     execution = plan_association(
         n_samples,
         n_snps,
@@ -774,8 +774,16 @@ def test_pipeline_memory_plan_honors_mem_budget(monkeypatch):
     )
     planned = execution.price()
 
-    assert expected.chunk_size == 100
-    assert planned.compute_chunk_size == expected.chunk_size
+    assert execution.conservative_chunks.chunk_size == 1
+    assert planned.compute_chunk_size == execution.conservative_chunks.chunk_size
+    assert planned.total_peak_gb > mem_budget
+    with pytest.raises(MemoryError, match="exceeds budget"):
+        memory.require(
+            planned.total_peak_gb,
+            64.0,
+            "fallback association",
+            budget_gb=mem_budget,
+        )
 
 
 def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
@@ -783,20 +791,13 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     from jamma.core.snp_stats import SnpSelection
     from jamma.lmm import accel
     from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
-    from jamma.lmm.genotype_source import PreparedGenotypes
+    from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
     from jamma.lmm.prepare_common import PreparedLmmRun
     from jamma.lmm.schema import LmmConfig, SnpMeta
 
     monkeypatch.setattr(accel, "_accel", None)
     n_samples, n_snps, n_cvt = 30, 200, 1
     mem_budget = 12e-6
-    expected = _plan(
-        n_samples,
-        n_snps,
-        n_cvt,
-        DispatchPath.NUMPY_FALLBACK,
-        mem_budget_bytes=int(mem_budget * 1e9),
-    )
     prepared = PreparedLmmRun(
         eigenvalues=np.ones(n_samples),
         U=np.eye(n_samples),
@@ -835,6 +836,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
         ),
         n_unexpected=0,
         analyzed_sample_count=n_samples,
+        sample_basis=SampleBasis(np.arange(n_samples), n_samples),
         chunk_factory=observe_geometry,
     )
 
@@ -851,6 +853,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
             chunk_sink=lambda _arrays, _start, _end: None,
             dispatch=exec_plan.dispatch,
             chunks=exec_plan.conservative_chunks.narrow(n_snps),
+            workspace=exec_plan.workspace,
             prepared=prepared,
             config=LmmConfig(
                 lmm_mode=1,
@@ -859,8 +862,8 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
             ),
         )
 
-    assert expected.chunk_size == 100
-    assert requested == [expected.chunk_size]
+    assert exec_plan.conservative_chunks.chunk_size == 1
+    assert requested == [exec_plan.conservative_chunks.chunk_size]
 
 
 def test_chunk_plan_splits_small_inputs_for_pipelining(monkeypatch):

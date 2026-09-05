@@ -51,6 +51,7 @@ from jamma.lmm.genotype_source import (
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig
 from jamma.lmm.loco_eigen import eigen_pairs_for
+from jamma.lmm.prepare_common import EigenPairs
 from jamma.lmm.runner_numpy import LOCO_LABELS, LmmRunSpec, run_lmm_association
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
@@ -270,6 +271,9 @@ def run_lmm_loco(
             requested="numpy",
             n_cvt=n_cvt,
             lmm_mode=config.lmm_mode,
+            n_input_samples=n_samples_total,
+            n_grid=config.n_grid,
+            n_refine=config.n_refine,
             mem_budget=config.mem_budget,
             max_chunk_size=loco.col_chunk_size,
             log_dispatch_choices=True,
@@ -478,6 +482,7 @@ class _LocoChrSource:
             snp_meta=self._snp_meta,
             stats=stats,
             filters=filters,
+            sample_basis=samples,
             chunk_source=_iter_chunks,
         )
 
@@ -547,9 +552,7 @@ def _run_lmm_for_chromosome_numpy(
             ),
         ),
         phenotypes=phenotypes,
-        kinship=None,
+        eigen_input=EigenPairs(eigenvalues, eigenvectors),
         covariates=covariates,
-        eigenvalues=eigenvalues,
-        eigenvectors=eigenvectors,
         writer=writer,
     )

@@ -20,6 +20,6 @@ click==8.4.2
 loguru==0.7.3
 progressbar2==4.5.0
 psutil==7.2.2
-python-utils==3.9.1
+python-utils==4.0.0
 threadpoolctl==3.6.0
 typing-extensions==4.15.0

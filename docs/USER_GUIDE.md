@@ -178,9 +178,9 @@ jamma -gk 1 -bfile data/my_study -o kinship -outdir output
 - `-bfile PATH` — PLINK binary file prefix (required)
 - `-gk MODE` — Kinship type: 1 = centered, 2 = standardized
 - `-ksnps PATH` — SNP list file to restrict kinship computation (one RS ID per line)
-- `-n INT` — Phenotype column in .fam file (1-based, default: 1)
-- `-maf FLOAT` — MAF threshold (default: 0.0, no filter for gk mode)
-- `-miss FLOAT` — Missing rate threshold (default: 1.0, no filter for gk mode)
+- `-n INT` — Phenotype column in .fam file (1-based, default: 1). As in GEMMA, the matrix spans every sample, and the SNP filters are measured over the samples with this phenotype present
+- `-maf FLOAT` — MAF threshold (default: 0.01)
+- `-miss FLOAT` — Missing rate threshold (default: 0.05)
 - `--legacy-text` — Write kinship files in GEMMA text format (`.cXX.txt`) instead of binary `.npy`
 - `-o PREFIX` — Output file prefix
 - `-outdir DIR` — Output directory

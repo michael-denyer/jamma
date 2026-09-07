@@ -15,11 +15,11 @@ JAMMA-computed reference kinship matrix used by the kinship tests in
 GEMMA-computed reference kinship matrix on the same dataset, used as the
 GEMMA-parity reference for kinship validation.
 
-GEMMA filters samples and SNPs based on phenotype availability and MAF before
-computing kinship (1410/1940 samples, 10768/12226 SNPs on mouse_hs1940). JAMMA
-computes kinship on all samples and SNPs without filtering, so the two
-matrices are not numerically identical -- the kinship-equivalence tests
-match GEMMA's filtering before comparing.
+GEMMA builds the matrix over all 1940 samples but measures the MAF and
+missingness filters over the 1410 phenotyped ones, keeping 10768 of 12226
+SNPs. `jamma -gk 1` does the same, and
+`tests/test_pipeline_kinship.py::test_gk_cli_matches_gemma_reference_kinship`
+pins the two matrices together at `kinship_rtol`.
 
 Generated with:
 

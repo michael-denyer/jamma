@@ -12,9 +12,11 @@ import time
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 from loguru import logger
 
-from jamma.io.plink import get_plink_metadata
+from jamma.io.covariate import read_covariate_file
+from jamma.io.plink import get_plink_metadata, parse_fam_phenotype_column
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
@@ -24,10 +26,30 @@ from jamma.kinship import (
 )
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import write_eigen_files
+from jamma.lmm.prepare_common import compute_valid_mask
 from jamma.pipeline_banner import log_dataset_banner
 from jamma.pipeline_config import KinshipResult, PipelineConfig
 
 __all__ = ["compute_kinship"]
+
+
+def _phenotyped_sample_indices(config: PipelineConfig) -> np.ndarray | None:
+    """Samples GEMMA measures the SNP filters over: every selected phenotype
+    column present, and every covariate present when a covariate file is given.
+
+    Returns None when every sample qualifies, so the streams take their
+    all-samples fast path.
+    """
+    fam_data = np.loadtxt(f"{config.bfile}.fam", dtype=str, ndmin=2)
+    covariates = None
+    if config.covariate_file is not None:
+        covariates, _ = read_covariate_file(config.covariate_file)
+    masks = [
+        compute_valid_mask(parse_fam_phenotype_column(fam_data, col), covariates)
+        for col in config.phenotype_columns
+    ]
+    mask = np.all(masks, axis=0)
+    return None if mask.all() else np.where(mask)[0]
 
 
 def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResult:
@@ -71,8 +93,11 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
     n_samples = meta.n_samples
     n_snps = meta.n_snps
 
-    # GEMMA-style banner — kinship uses all samples (n_analyzed == n_total).
-    log_dataset_banner(n_total=n_samples, n_analyzed=n_samples, n_snps=n_snps)
+    # As GEMMA: the matrix spans every sample, the SNP filters are measured
+    # over the phenotyped ones.
+    filter_samples = _phenotyped_sample_indices(config)
+    n_analyzed = n_samples if filter_samples is None else len(filter_samples)
+    log_dataset_banner(n_total=n_samples, n_analyzed=n_analyzed, n_snps=n_snps)
 
     ksnps_indices = resolve_snp_list_file(config.ksnps_file, meta.sid, "-ksnps")
 
@@ -87,6 +112,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             check_memory=config.check_memory,
             show_progress=config.show_progress,
             ksnps_indices=ksnps_indices,
+            filter_sample_indices=filter_samples,
             mem_budget=config.mem_budget,
         )
         written_paths = write_loco_kinship_matrices(
@@ -109,8 +135,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             kinship_s=kinship_s,
         )
 
-    if config.maf > 0.0 or config.miss < 1.0:
-        logger.info(f"Filtering: MAF >= {config.maf}, missing rate <= {config.miss}")
+    logger.info(f"Filtering: MAF >= {config.maf}, missing rate <= {config.miss}")
 
     if mode == 1:
         logger.info("Computing centered kinship matrix (streaming)")
@@ -123,6 +148,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
         check_memory=config.check_memory,
         show_progress=config.show_progress,
         ksnps_indices=ksnps_indices,
+        filter_sample_indices=filter_samples,
         mode="centered" if mode == 1 else "standardized",
     )
 

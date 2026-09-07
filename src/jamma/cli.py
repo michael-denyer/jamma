@@ -204,9 +204,7 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     default=None,
     help="Individual weight file (one weight per line)",
 )
-@click.pass_context
 def main(
-    ctx,
     bfile,
     gk,
     lmm,
@@ -254,19 +252,6 @@ def main(
 
     phenotype_columns = _int_list(n, "-n")
     cat_columns = _int_list(cat, "-cat") if cat is not None else None
-
-    if gk is not None:
-        # gk mode: no filtering by default (GEMMA kinship behavior)
-        # lmm mode: standard filtering (GEMMA association behavior)
-        if ctx.get_parameter_source("maf") == click.core.ParameterSource.DEFAULT:
-            maf = 0.0
-        if ctx.get_parameter_source("miss") == click.core.ParameterSource.DEFAULT:
-            miss = 1.0
-        if len(phenotype_columns) > 1:
-            raise click.UsageError(
-                "-n with multiple columns is not supported in -gk mode. "
-                "Kinship computation uses all samples regardless of phenotype."
-            )
 
     try:
         pipeline_config = PipelineConfig(

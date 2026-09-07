@@ -77,6 +77,34 @@ def test_build_covariate_matrix_from_common():
     np.testing.assert_array_equal(W, np.ones((100, 1)))
 
 
+def test_build_covariate_matrix_appends_intercept_when_none_constant():
+    """A covariate file with no constant column gets a ones column, as GEMMA does.
+
+    GEMMA's CheckCvt (param.cpp) appends a column of 1s and increments n_cvt
+    when no covariate column is constant. Without it the model has no intercept
+    and every SNP is biased toward significance.
+    """
+    rng = np.random.default_rng(0)
+    cov = np.column_stack([np.linspace(-1.0, 1.0, 40), rng.normal(size=40)])
+
+    W, n_cvt = _build_covariate_matrix(cov, 40)
+
+    assert n_cvt == 3
+    assert W.shape == (40, 3)
+    has_constant_col = any(np.ptp(W[:, j]) == 0.0 for j in range(W.shape[1]))
+    assert has_constant_col
+
+
+def test_build_covariate_matrix_keeps_existing_intercept():
+    """A covariate matrix that already carries a constant column is unchanged."""
+    cov = np.column_stack([np.ones(40), np.linspace(-1.0, 1.0, 40)])
+
+    W, n_cvt = _build_covariate_matrix(cov, 40)
+
+    assert n_cvt == 2
+    np.testing.assert_array_equal(W, cov)
+
+
 def test_eigendecompose_or_reuse_passthrough():
     """Pre-computed eigenvalues/eigenvectors are returned unchanged."""
     eigenvalues = np.array([1.0, 2.0, 3.0])

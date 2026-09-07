@@ -181,6 +181,23 @@ def validate_runner_inputs(
     )
 
 
+def _covariates_include_intercept(covariates: np.ndarray) -> bool:
+    """True if any covariate column is constant (GEMMA's intercept test)."""
+    return bool(np.any(np.ptp(covariates, axis=0) == 0.0))
+
+
+def covariate_n_cvt(covariates: np.ndarray | None) -> int:
+    """Effective covariate count, counting an auto-added intercept.
+
+    Mirrors _build_covariate_matrix so the association plan sizes its
+    workspace for the same n_cvt the runner later builds.
+    """
+    if covariates is None:
+        return 1
+    n = covariates.shape[1]
+    return n if _covariates_include_intercept(covariates) else n + 1
+
+
 def _build_covariate_matrix(
     covariates: np.ndarray | None, n_samples: int
 ) -> tuple[np.ndarray, int]:
@@ -204,8 +221,7 @@ def _build_covariate_matrix(
         # appends a column of 1s when none is present, so the model always
         # carries an intercept. Match that; a constant column need not be
         # the first one nor equal to 1.
-        has_constant_col = bool(np.any(np.ptp(W, axis=0) == 0.0))
-        if not has_constant_col:
+        if not _covariates_include_intercept(W):
             logger.info(
                 "No intercept term found in the covariate file; adding a column of 1s."
             )

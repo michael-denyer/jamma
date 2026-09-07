@@ -171,15 +171,25 @@ class TestPipelineErrorPaths:
         with pytest.raises(ValueError, match="rows"):
             PipelineRunner(config).load_covariates(n_samples=100)
 
-    def test_missing_intercept_warning(self, tmp_path: Path) -> None:
-        """load_covariates emits a loguru warning when first column is not all 1s."""
+    def test_covariate_without_constant_column_gets_intercept(
+        self, tmp_path: Path
+    ) -> None:
+        """A covariate file with no constant column has an intercept added.
+
+        GEMMA's CheckCvt appends a column of 1s; JAMMA now matches, so no
+        "will NOT include intercept" warning is emitted and the built design
+        matrix carries an intercept.
+        """
         from loguru import logger
+
+        from jamma.lmm.prepare_common import _build_covariate_matrix
 
         fam_path = BFILE.with_suffix(".fam")
         n_samples = len(fam_path.read_text().strip().splitlines())
 
         cov_path = tmp_path / "cov.txt"
-        lines = [f"{2 + i} {3 + i}" for i in range(n_samples)]
+        # Two non-constant, non-collinear columns and no intercept column.
+        lines = [f"{i} {i * i}" for i in range(n_samples)]
         cov_path.write_text("\n".join(lines) + "\n")
 
         config = PipelineConfig(
@@ -188,7 +198,6 @@ class TestPipelineErrorPaths:
             check_memory=False,
         )
 
-        # Capture loguru messages directly (compatible with pytest-xdist workers)
         captured_messages: list[str] = []
         handler_id = logger.add(
             lambda msg: captured_messages.append(msg),
@@ -196,10 +205,13 @@ class TestPipelineErrorPaths:
             format="{message}",
         )
         try:
-            PipelineRunner(config).load_covariates(n_samples=n_samples)
+            covariates = PipelineRunner(config).load_covariates(n_samples=n_samples)
         finally:
             logger.remove(handler_id)
 
-        assert any("intercept" in m for m in captured_messages), (
-            f"Expected 'intercept' warning from loguru, got: {captured_messages!r}"
+        assert not any("intercept" in m for m in captured_messages), (
+            f"No intercept warning expected, got: {captured_messages!r}"
         )
+        W, n_cvt = _build_covariate_matrix(covariates, n_samples)
+        assert n_cvt == 3
+        assert any(np.ptp(W[:, j]) == 0.0 for j in range(W.shape[1]))

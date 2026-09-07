@@ -251,3 +251,46 @@ def test_thread_plan_never_exceeds_preallocated_compute_capacity(
     assert plan.omp == 4
     assert plan.rotation == 12
     assert plan.rotation + plan.omp == plan.total_cores
+
+
+class _CountingEngine:
+    """Minimal engine: yields ``n`` chunks, records every compute call.
+
+    Exercises only the driver's prepare/compute/progress loop, so it needs
+    no C kernel or BLAS state.
+    """
+
+    def __init__(self, n: int):
+        self._remaining = list(range(n))
+        self.computed: list[int] = []
+
+    def prepare(self):
+        if not self._remaining:
+            return None
+        return self._remaining.pop(0)
+
+    def compute_and_write(self, chunk: int) -> None:
+        self.computed.append(chunk)
+
+
+def test_pipeline_with_progress_bar_computes_every_chunk_without_overflow() -> None:
+    """A multi-chunk run with the progress bar on writes all chunks.
+
+    Regression: the counter tracked prepared chunks and drove the bar to
+    ``n_chunks + 1``, so progressbar2 raised ``Value N is too large`` after
+    the last chunk and the caller deleted its finished output.
+    """
+    n_chunks = 4
+    engine = _CountingEngine(n_chunks)
+
+    chunk_pipeline._drive_pipeline(
+        engine,  # type: ignore[arg-type]
+        n_chunks=n_chunks,
+        rotation_threads=1,
+        n_samples=4,
+        n_filtered=n_chunks,
+        show_progress=True,
+        progress_label="test",
+    )
+
+    assert engine.computed == list(range(n_chunks))

@@ -51,6 +51,7 @@ from jamma.lmm.prepare_common import (
     PreparedCovariates,
     _build_covariate_matrix,
     compute_valid_mask,
+    covariate_n_cvt,
     parse_eigen_input,
     prepare_lmm_run,
     validate_runner_inputs,
@@ -632,7 +633,7 @@ def run_lmm_association_numpy(
     n_input_samples, n_snps = genotypes.shape
     valid_mask = compute_valid_mask(phenotypes, covariates)
     n_samples = int(np.count_nonzero(valid_mask))
-    n_cvt = covariates.shape[1] if covariates is not None else 1
+    n_cvt = covariate_n_cvt(covariates)
     execution = plan_association(
         n_samples,
         n_snps,

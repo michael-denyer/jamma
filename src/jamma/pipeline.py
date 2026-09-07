@@ -423,15 +423,8 @@ class PipelineRunner:
 
         logger.info(f"Loaded {covariates.shape[1]} covariates")
 
-        # Warn if first column is not an intercept
-        first_col = covariates[:, 0]
-        valid_first = first_col[~np.isnan(first_col)]
-        if not np.allclose(valid_first, 1.0):
-            logger.warning(
-                "Warning: Covariate file does not have intercept column "
-                "(first column is not all 1s). "
-                "Model will NOT include intercept."
-            )
+        # Intercept handling (adding a column of 1s when no constant column is
+        # present) happens in _build_covariate_matrix, matching GEMMA's CheckCvt.
 
         # Apply categorical encoding if -cat specified
         if self.config.cat_columns is not None:

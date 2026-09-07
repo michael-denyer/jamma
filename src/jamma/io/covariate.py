@@ -7,8 +7,8 @@ GEMMA covariate file format:
 - Whitespace/tab/space delimited (no header row)
 - Row order matches .fam file (positional matching, not ID-based)
 - Missing values encoded as "NA" (case-sensitive)
-- First column MUST be all 1s if user wants an intercept in the model
-- GEMMA does NOT auto-add an intercept column
+- A constant column is treated as the intercept; when no column is constant,
+  a column of 1s is appended, matching GEMMA's CheckCvt
 """
 
 from collections.abc import Sequence

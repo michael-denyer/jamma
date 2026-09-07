@@ -200,12 +200,16 @@ def _build_covariate_matrix(
         W = np.ones((n_samples, 1))
     else:
         W = covariates.astype(np.float64)
-        if not np.allclose(W[:, 0], 1.0):
-            logger.warning(
-                "Covariate matrix does not have intercept column "
-                "(first column is not all 1s). "
-                "Model will NOT include an intercept term."
+        # GEMMA's CheckCvt treats any constant column as the intercept and
+        # appends a column of 1s when none is present, so the model always
+        # carries an intercept. Match that; a constant column need not be
+        # the first one nor equal to 1.
+        has_constant_col = bool(np.any(np.ptp(W, axis=0) == 0.0))
+        if not has_constant_col:
+            logger.info(
+                "No intercept term found in the covariate file; adding a column of 1s."
             )
+            W = np.hstack([W, np.ones((n_samples, 1))])
     n_cvt = W.shape[1]
     # df = n_samples - n_cvt - 1 must be positive for valid REML
     if n_samples <= n_cvt + 1:

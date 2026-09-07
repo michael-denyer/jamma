@@ -214,7 +214,9 @@ Supports arbitrary covariates (n_cvt >= 1) since v1.2.
 
 ### Status: **Aligned**
 
-All LMM modes (Wald, LRT, Score, all-tests) work with covariates.
+All LMM modes (Wald, LRT, Score, all-tests) work with covariates. A constant
+column is treated as the intercept; when the covariate file has no constant
+column, a column of 1s is appended, matching GEMMA's `CheckCvt`.
 
 ---
 

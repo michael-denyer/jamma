@@ -531,25 +531,26 @@ K = compute_kinship_streaming(Path("data/my_study"))
 
 ```python
 from jamma.lmm import run_lmm_association_numpy
-from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.schema import LmmConfig
 
-eigenvalues, eigenvectors = eigendecompose_kinship(K)
-
-# NumPy runner (loads full genotype matrix)
+# NumPy runner (loads full genotype matrix). Pass the kinship directly; the
+# runner centres the analysed kinship (as GEMMA does) and eigendecomposes it.
 run_result = run_lmm_association_numpy(
     genotypes=data.genotypes,
     phenotypes=phenotypes,
-    kinship=None,  # Not needed when eigenvalues/eigenvectors provided
+    kinship=K,
     snp_info=snp_info,  # list of dicts with chr, rs, pos, a1, a0
-    eigenvalues=eigenvalues,
-    eigenvectors=eigenvectors,
     config=LmmConfig(lmm_mode=1),  # 1=Wald, 2=LRT, 3=Score, 4=All
 )
 results = run_result.associations  # list[AssocResult]
 pve = run_result.pve               # heritability estimate
 pve_se = run_result.pve_se         # SE of PVE via delta method (None if flat likelihood)
 ```
+
+Passing pre-computed `eigenvalues`/`eigenvectors` instead of `kinship` is still
+supported, but then the caller owns centring: eigendecompose
+`center_kinship(K)`, not the raw `K`, or the non-REML results (LRT, Score, PVE)
+will be wrong.
 
 The NumPy backend supports Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) is supported on the streaming backend only (`numpy-streaming`).
 

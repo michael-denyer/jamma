@@ -16,7 +16,7 @@ from loguru import logger
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.threading import blas_threads, get_blas_thread_count
-from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.eigen import center_kinship, eigendecompose_kinship
 from jamma.lmm.likelihood import (
     compute_null_model_lambda,
     compute_null_model_mle,
@@ -303,6 +303,11 @@ def _eigendecompose_or_reuse(
 
     if show_progress:
         log_memory_snapshot(f"{label}:before_eigendecomp")
+    # Centre the analysed kinship before eigendecomposition, as GEMMA's
+    # CenterMatrix does and the pipeline does at pipeline.py. REML with an
+    # intercept is invariant to this, but MLE, LRT, Score and PVE are not, so a
+    # raw supplied kinship would otherwise give the wrong non-REML results.
+    center_kinship(eigen_input.value)
     eigenvalues_np, U = eigendecompose_kinship(
         eigen_input.value, check_memory=check_memory
     )

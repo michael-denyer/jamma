@@ -21,7 +21,7 @@ from jamma.pipeline_kinship import compute_kinship
 from jamma.pipeline_plan import resolve_kinship_source
 from tests.builders import write_fam
 from tests.conftest import require_fixture
-from tests.fixture_paths import MOUSE, SYNTHETIC
+from tests.fixture_paths import FIXTURES, MOUSE, SYNTHETIC
 
 
 def _load_kinship(
@@ -165,6 +165,49 @@ def test_lmm_kinship_applies_config_maf_miss() -> None:
         rtol=1e-12,
         atol=1e-14,
         err_msg="pipeline kinship load must apply config maf/miss like -gk does",
+    )
+
+
+@pytest.mark.tier1
+def test_gk_cli_matches_gemma_reference_kinship(tmp_path: Path) -> None:
+    """``jamma -gk 1`` reproduces ``gemma -gk 1`` on mouse_hs1940.
+
+    GEMMA builds the matrix over every sample in the .fam but selects SNPs
+    with maf 0.01 / miss 0.05 measured over the phenotyped samples only
+    (1410 of 1940, 10768 of 12226 SNPs). Both halves must hold for the
+    matrices to agree at kinship_rtol.
+    """
+    from click.testing import CliRunner
+
+    from jamma.cli import main
+    from jamma.kinship import read_kinship_matrix
+    from jamma.validation.tolerances import ToleranceConfig
+
+    reference = FIXTURES / "kinship" / "gemma_ref.cXX.txt"
+    require_fixture(
+        _MOUSE_BFILE.with_suffix(".bed"), _MOUSE_BFILE.with_suffix(".fam"), reference
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "-gk",
+            "1",
+            "-bfile",
+            str(_MOUSE_BFILE),
+            "-outdir",
+            str(tmp_path),
+            "-o",
+            "jamma",
+            "--no-check-memory",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    actual = read_kinship_matrix(tmp_path / "jamma.cXX.txt", n_samples=1940)
+    expected = np.loadtxt(reference)
+    np.testing.assert_allclose(
+        actual, expected, rtol=ToleranceConfig().kinship_rtol, atol=1e-12
     )
 
 

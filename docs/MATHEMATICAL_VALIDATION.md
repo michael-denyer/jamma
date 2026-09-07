@@ -16,7 +16,8 @@ centered kinship K and positive diagonal weights D, decompose
 `D^-1/2 K D^-1/2`, then rotate `D^1/2 y`, `D^1/2 W` and `D^1/2 x`.
 The pipeline scales the eigenvector rows once before association. Nonpositive
 weights produce zero kinship rows and columns and zero observation scales, as
-in GEMMA. Saved eigenvectors remain raw and orthonormal. The weighted tests
+in GEMMA. Saved eigenvectors carry the row scaling, as GEMMA writes them, so
+weighted eigen files reload through `-d/-u` without the weight file. The weighted tests
 cover selected samples, computed and supplied kinship, batch and streaming
 execution, and multiple phenotypes without double scaling. The formula follows
 [GEMMA v0.98.5](https://github.com/genetics-statistics/GEMMA/blob/v0.98.5/src/gemma.cpp).

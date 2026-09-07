@@ -729,6 +729,11 @@ class PipelineRunner:
             eigenvalues, eigenvectors = eigendecompose_kinship(
                 K, check_memory=self.config.check_memory
             )
+            if weights is not None:
+                # GEMMA -widv scales the eigenvector rows by sqrt(w) after
+                # decomposing D^-1/2 K D^-1/2, and writes the scaled U, so a
+                # weighted eigenU round-trips through -d/-u without -widv.
+                eigenvectors = apply_weights_to_eigenvectors(eigenvectors, weights)
             if source.write_eigen:
                 d_path, u_path = write_eigen_files(
                     eigenvalues,
@@ -739,11 +744,6 @@ class PipelineRunner:
                 )
                 logger.info(f"Wrote eigenvalues to {d_path}")
                 logger.info(f"Wrote eigenvectors to {u_path}")
-            if weights is not None:
-                # GEMMA -widv scales eigenvector rows after decomposing
-                # D^-1/2 K D^-1/2. Persisted eigenvectors remain raw and
-                # orthonormal; rotations receive the observation transform.
-                eigenvectors = apply_weights_to_eigenvectors(eigenvectors, weights)
 
         kinship_s = time.perf_counter() - t_kinship
         return eigenvalues, eigenvectors, kinship_s

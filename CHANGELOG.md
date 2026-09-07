@@ -139,6 +139,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`jamma -gk` selects SNPs the way `gemma -gk` does.** The matrix still
+  spans every sample in the `.fam`, but the MAF and missingness filters
+  default to 0.01 and 0.05 and are measured over the samples whose selected
+  phenotype columns and covariates are present, as GEMMA's `indicator_idv`
+  basis is. `-gk` had forced `maf=0, miss=1` under a comment attributing
+  that to GEMMA, so a standardised kinship weighted singletons like common
+  variants and the mouse_hs1940 diagonal sat 2% below the GEMMA reference.
+  `jamma -gk 1` now matches `tests/fixtures/kinship/gemma_ref.cXX.txt` at
+  `kinship_rtol`, and `-gk -loco` uses the same basis. Multi-column `-n`
+  under `-gk` intersects the columns instead of raising.
 - **The tier-marker gate no longer fails on a test file another worker is
   planting or removing.** `tests/test_conftest_c_seam.py` writes its
   transient `test_*.py` files under `tests/` through a temporary name the

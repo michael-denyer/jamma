@@ -413,12 +413,6 @@ class TestMultiNParsing:
         result = _invoke_with_n("")
         assert result.exit_code != 0
 
-    def test_multi_n_with_gk_error(self) -> None:
-        """CLI -n '1 2' -gk 1 produces a clear error."""
-        result = _invoke_with_n("1 2", gk="1")
-        assert result.exit_code != 0
-        assert "not supported" in result.output.lower()
-
 
 def _mock_pipeline_result(outdir: Path):
     """Create a minimal mock PipelineResult for CLI tests."""

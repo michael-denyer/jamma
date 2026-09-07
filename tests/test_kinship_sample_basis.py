@@ -100,6 +100,66 @@ def test_early_rows_equal_full_loco_slices(
         )
 
 
+@pytest.mark.tier1
+@pytest.mark.parametrize("loco", [False, True])
+def test_gk_filters_snps_on_phenotyped_samples(asymmetric_plink, tmp_path, loco):
+    """``-gk`` measures maf/miss on phenotyped samples and builds K over all.
+
+    GEMMA's ``ReadFile_bed`` computes the SNP filter over ``indicator_idv``
+    (samples with a phenotype) while ``PlinkKin`` sums over every sample in
+    the file. The fixture's first SNP is polymorphic only outside the
+    phenotyped half, so the two filter bases disagree on it.
+    """
+    from jamma.kinship import read_kinship_matrix
+    from jamma.pipeline_kinship import compute_kinship
+    from tests.builders import write_fam
+
+    write_fam(
+        asymmetric_plink.with_suffix(".fam"),
+        np.linspace(1.0, 2.0, 80).tolist(),
+        missing_at=range(40, 80),
+    )
+    valid = np.arange(40)
+    config = PipelineConfig(
+        bfile=asymmetric_plink,
+        output_dir=tmp_path,
+        output_prefix="k",
+        loco=loco,
+        maf=0.3,
+        miss=0.1,
+        check_memory=False,
+        show_progress=False,
+        no_telemetry=True,
+    )
+    result = compute_kinship(config, 1)
+
+    if loco:
+        expected = compute_loco_kinship_streaming(
+            asymmetric_plink,
+            maf_threshold=0.3,
+            miss_threshold=0.1,
+            check_memory=False,
+            show_progress=False,
+            filter_sample_indices=valid,
+        ).materialize()
+        assert len(result.kinship_paths) == len(expected) == 3
+        for chromosome, K in expected.items():
+            path = tmp_path / f"k.loco.cXX.chr{chromosome}.txt"
+            actual = read_kinship_matrix(path, n_samples=80)
+            np.testing.assert_allclose(actual, K, rtol=1e-12, atol=1e-14)
+    else:
+        expected = compute_kinship_streaming(
+            asymmetric_plink,
+            maf_threshold=0.3,
+            miss_threshold=0.1,
+            check_memory=False,
+            show_progress=False,
+            filter_sample_indices=valid,
+        )
+        actual = read_kinship_matrix(result.kinship_paths[0], n_samples=80)
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
+
+
 def _assert_same_associations(left, right):
     assert len(left) > 0
     assert [r.rs for r in left] == [r.rs for r in right]

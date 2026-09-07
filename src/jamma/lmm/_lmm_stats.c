@@ -149,7 +149,7 @@ int wald_from_pab(
         *f_stat_out = (double)NAN;
         return 0;  /* degenerate */
     }
-    if (Px_YY < P_YY_MIN) {
+    if (Px_YY == 0.0) {
         Px_YY = P_YY_MIN;
     }
 
@@ -225,9 +225,9 @@ int score_from_pab(
     }
 
     /* Clamp P_yy for F-stat denominator */
-    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
+    if (P_yy == 0.0) P_yy = P_YY_MIN;
     /* Clamp Px_yy for beta/se */
-    if (Px_yy < P_YY_MIN) Px_yy = P_YY_MIN;
+    if (Px_yy == 0.0) Px_yy = P_YY_MIN;
 
     *beta_out = P_xy / P_xx;
 
@@ -285,8 +285,8 @@ int score_from_pab_general(
     }
 
     /* Clamp for numerical stability */
-    if (P_YY < P_YY_MIN) P_YY = P_YY_MIN;
-    if (Px_YY < P_YY_MIN) Px_YY = P_YY_MIN;
+    if (P_YY == 0.0) P_YY = P_YY_MIN;
+    if (Px_YY == 0.0) Px_YY = P_YY_MIN;
 
     double beta = P_XY / P_XX;
     double tau = (double)df / Px_YY;
@@ -339,7 +339,7 @@ int wald_from_pab_general(
         *beta_out = *se_out = *f_stat_out = (double)NAN;
         return 0;
     }
-    if (Px_YY < P_YY_MIN) Px_YY = P_YY_MIN;
+    if (Px_YY == 0.0) Px_YY = P_YY_MIN;
 
     if (P_XX <= 0.0) {
         *beta_out = *se_out = *f_stat_out = (double)NAN;

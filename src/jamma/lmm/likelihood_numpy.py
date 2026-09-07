@@ -36,7 +36,7 @@ _BatchLoglFn = Callable[[np.ndarray], np.ndarray]
 
 
 def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
-    """Clamp P_yy: negative -> NaN, near-zero -> _P_YY_MIN.
+    """Guard P_yy: negative -> NaN, exact zero -> _P_YY_MIN (as GEMMA).
 
     Prevents NaN/Inf from log(P_yy) in degenerate SNPs. Downstream code
     detects NaN to mark those SNPs as invalid.
@@ -54,7 +54,7 @@ def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
             "Kinship matrix may not be positive semi-definite."
         )
     P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
-    return np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+    return np.where(P_yy == 0.0, _P_YY_MIN, P_yy)
 
 
 # ---------------------------------------------------------------------------

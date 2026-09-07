@@ -72,8 +72,8 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
     """Clamp P_yy to prevent log(0) or log(negative) in log-likelihood.
 
     Returns NaN for negative P_yy (propagates through np.log as NaN;
-    optimizer avoids NaN regions) and clamps near-zero positive values
-    to _P_YY_MIN.
+    optimizer avoids NaN regions) and replaces an exact zero with
+    _P_YY_MIN, as GEMMA's LogRL_f and LogL_f do.
 
     Warning deduplication: only logs the first negative P_yy per run.
     Call reset_p_yy_warned() at the start of each LMM run.
@@ -92,7 +92,7 @@ def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
             "The kinship matrix may not be positive semi-definite."
         )
         return float("nan")  # np.log(nan) = nan, optimizer avoids
-    if P_yy < _P_YY_MIN:
+    if P_yy == 0.0:
         return _P_YY_MIN
     return P_yy
 

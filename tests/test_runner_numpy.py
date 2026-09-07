@@ -535,3 +535,41 @@ def test_inplace_imputation_replaces_nan_with_column_mean():
         dtype=np.float64,
     )
     np.testing.assert_array_equal(chunk, expected)
+
+
+@pytest.mark.tier0
+def test_numpy_runner_centres_supplied_kinship(synthetic_data):
+    """A supplied kinship is centred, so adding a constant matrix is a no-op.
+
+    GEMMA centres the analysed kinship (CenterMatrix) before eigendecomposing.
+    Centring annihilates the all-ones direction, so K and K + c*J yield the
+    same model. Before the fix the runner eigendecomposed the raw kinship, so
+    the constant shifted every MLE, LRT and Score result.
+    """
+    from jamma.lmm.schema import LmmConfig
+
+    plink, kinship, phenotypes, snp_info = synthetic_data
+    config = LmmConfig(lmm_mode=4, show_progress=False)
+
+    base = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship.copy(),
+        snp_info=snp_info,
+        config=config,
+    ).associations
+    shifted = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship + 1.0,
+        snp_info=snp_info,
+        config=config,
+    ).associations
+
+    assert len(base) == len(shifted)
+    for a, b in zip(base, shifted, strict=True):
+        for field in ("beta", "se", "p_wald", "p_lrt", "p_score", "l_mle", "l_remle"):
+            va, vb = getattr(a, field), getattr(b, field)
+            if va is None or (isinstance(va, float) and np.isnan(va)):
+                continue
+            np.testing.assert_allclose(vb, va, rtol=1e-9, atol=1e-12, err_msg=field)

@@ -3,7 +3,6 @@
 import json
 import shutil
 
-import numpy as np
 import pytest
 
 from tests.math_validation.compare import compare_files
@@ -99,29 +98,46 @@ def test_pipeline_weight_semantics_match_external_gemma(case, math_evidence_dir)
 
 
 @pytest.mark.tier1
-def test_weighted_saved_eigenvectors_remain_orthonormal(tmp_path):
-    from jamma.lmm.eigen_io import read_eigen_files
+def test_weighted_eigen_files_round_trip_through_reload(tmp_path):
+    """Eigen files written under -widv reproduce the weighted run when reloaded.
 
+    GEMMA scales the eigenvector rows by sqrt(w) before writing, so its
+    weighted eigenU round-trips through -d/-u without the weight file. JAMMA
+    wrote the unscaled U, and -d/-u refuses -widv, so a reload silently gave
+    a model that was neither the weighted nor the unweighted one.
+    """
     source, _ = require_reference()
-    run_pipeline(
+    common = {
+        "covariate_file": source / "covariates.txt",
+        "lmm_mode": 4,
+        "maf": 0.1,
+        "miss": 0.1,
+        "n_refine": 30,
+        "backend": "numpy",
+    }
+    weighted, _, _ = run_pipeline(
         source,
-        tmp_path,
-        covariate_file=source / "covariates.txt",
+        tmp_path / "weighted",
         weight_file=source / "weights.txt",
-        lmm_mode=4,
-        maf=0.1,
-        miss=0.1,
-        n_refine=30,
-        backend="numpy",
         output_prefix="weighted",
         write_eigen=True,
+        **common,
     )
-    _, eigenvectors = read_eigen_files(
-        tmp_path / "weighted.eigenD.npy",
-        tmp_path / "weighted.eigenU.npy",
-        n_samples=38,
+    reloaded, _, _ = run_pipeline(
+        source,
+        tmp_path / "reload",
+        eigenvalue_file=tmp_path / "weighted" / "weighted.eigenD.npy",
+        eigenvector_file=tmp_path / "weighted" / "weighted.eigenU.npy",
+        output_prefix="reload",
+        **common,
     )
-    assert np.allclose(eigenvectors.T @ eigenvectors, np.eye(38), atol=1e-10)
+    comparison = compare_files(
+        reloaded.assoc_paths[0],
+        weighted.assoc_paths[0],
+        af_contract="counted-allele",
+        mode=4,
+    )
+    assert comparison["status"] == "VERIFIED", comparison
 
 
 @pytest.mark.tier1

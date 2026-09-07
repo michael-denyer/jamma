@@ -114,13 +114,16 @@ LOCO_SNPS = FIXTURES / "gemma_loco" / "test_snps.txt"
 
 KINSHIP_DIR = FIXTURES / "kinship"
 
-# NumPy backend versus GEMMA on mouse_hs1940. Cephes betainc is close to GSL
-# betainc for large a (n_samples > 1000); lambda optimisation is golden
-# section against GEMMA's Brent. See docs/GEMMA_EQUIVALENCE.md.
+# NumPy backend versus GEMMA on mouse_hs1940, with the analysed kinship centred
+# as GEMMA does. Fields are held to the documented ToleranceConfig defaults
+# except two mouse-scale relaxations: pvalue_rtol covers p_score at n=1410 (the
+# Cephes-vs-GSL F-CDF difference is ~1.1e-4 there), and lambda_rtol covers the
+# golden-section MLE optimum (~2.4e-5 vs GEMMA's Brent). See
+# docs/GEMMA_EQUIVALENCE.md.
 NUMPY_GEMMA_TOLERANCES = ToleranceConfig(
-    lambda_rtol=1e-3,
-    pvalue_rtol=1e-2,
-    se_rtol=5e-4,
-    logl_rtol=5e-3,
-    atol=1e-4,
+    lambda_rtol=5e-5,
+    pvalue_rtol=2e-4,
+    se_rtol=1e-5,
+    logl_rtol=1e-6,
+    atol=1e-12,
 )

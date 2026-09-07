@@ -28,10 +28,11 @@
 #define MAX_N_ROWS   (MAX_N_CVT + 2)                          /* 102 */
 #define MAX_PAB_SIZE (MAX_N_ROWS * MAX_N_INDEX)               /* 535806 */
 
-/* Floor for P_yy before the log in a REML/MLE tail. Mirrors _P_YY_MIN in
- * likelihood.py; both sides must agree or the C and NumPy paths diverge on
- * near-degenerate SNPs. Shared here because the likelihood kernels and the
- * test statistics both clamp against it. */
+/* Replacement for an exactly zero P_yy before the log in a REML/MLE tail,
+ * as GEMMA's LogRL_f/LogL_f do (`if (P_yy == 0.0) P_yy = 1e-8`). Only an
+ * exact zero is replaced; an absolute floor would break scale equivariance.
+ * Mirrors _P_YY_MIN in pab.py; both sides must agree or the C and NumPy
+ * paths diverge on degenerate SNPs. */
 #define P_YY_MIN 1e-8
 
 /* REML sentinel: replaces NaN log-likelihood from degenerate P_yy.

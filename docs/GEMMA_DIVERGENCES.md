@@ -85,27 +85,29 @@ p_wald = gsl_cdf_fdist_Q((P_yy - Px_yy) * tau, 1.0, df);
 if P_xx <= 0.0:
     return float("nan"), float("nan"), float("nan")
 
-if Px_yy >= 0.0 and Px_yy < 1e-8:
+if Px_yy == 0.0:
     Px_yy = 1e-8
 ```
 
 **Behavior**:
 
 - P_xx ≤ 0: Return NaN for all stats (SNP has no variance)
-- Px_yy clamping: Prevent division by near-zero residual variance
+- Px_yy exact-zero guard: prevent division by zero, the same replacement
+  GEMMA's `LogRL_f`/`LogL_f` apply to `P_yy`
 
 ### Divergence Impact
 
 | Condition | GEMMA | JAMMA |
 |-----------|-------|-------|
 | P_xx = 0 (constant SNP) | beta=NaN, se=inf, p=NaN | beta=NaN, se=NaN, p=NaN |
-| Px_yy = 1e-12 | tau=1e12, se≈0 | tau=1e8, se finite |
+| Px_yy = 1e-12 | tau=1e12, se≈0 | tau=1e12, se≈0 |
 
 ### Rationale
 
 - Constant SNPs (P_xx = 0) have no genetic variance to test
 - Consistent NaN is more useful than mixed inf/NaN
-- Px_yy clamping prevents numerical overflow in downstream calculations
+- Only an exact zero is replaced; an absolute floor would make results
+  depend on the phenotype scale, which the LMM must not
 
 ### When This Matters
 
@@ -530,7 +532,7 @@ text mode writes the `.txt` files plus `.npy` sidecars for fast reload.
 |---------|---------------|----------------|--------|
 | safe_sqrt(-5.0) | sqrt(5.0) | NaN | Edge case only |
 | P_xx = 0 | inf/NaN mix | NaN | Degenerate SNPs |
-| Px_yy clamping | None | 1e-8 floor | Numerical stability |
+| Px_yy exact-zero guard | None | replace 0 with 1e-8 | Division by zero |
 | logdet(H) | Sum of log(abs(v)) | NumPy: sum of log(abs(v)); C: mantissa product with exact exponent | 2.1e-14 relative; see §3 |
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | Covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |

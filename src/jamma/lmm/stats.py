@@ -141,8 +141,8 @@ def batch_calc_wald_stats_from_pab_numpy(
     P_YY = Pab_batch[:, n_cvt, idx_yy]
     Px_YY = Pab_batch[:, n_cvt + 1, idx_yy]
 
-    # Clamp Px_YY to avoid division by near-zero for degenerate SNPs.
-    Px_YY = np.where((Px_YY >= 0.0) & (Px_YY < _P_YY_MIN), _P_YY_MIN, Px_YY)
+    # Replace an exact-zero Px_YY so degenerate SNPs do not divide by zero.
+    Px_YY = np.where(Px_YY == 0.0, _P_YY_MIN, Px_YY)
 
     beta, se, is_valid = _beta_se_from_pab(P_XX, P_XY, Px_YY, df)
 
@@ -187,13 +187,13 @@ def batch_calc_score_stats_numpy(
 
     # Score test: extract at level n_cvt (covariates only, NOT genotype)
     P_yy = Pab_batch[:, n_cvt, idx_yy]
-    P_yy = np.where((P_yy >= 0.0) & (P_yy < _P_YY_MIN), _P_YY_MIN, P_yy)
+    P_yy = np.where(P_yy == 0.0, _P_YY_MIN, P_yy)
     P_xx = Pab_batch[:, n_cvt, idx_xx]
     P_xy = Pab_batch[:, n_cvt, idx_xy]
 
     # Px_yy for beta/se computation
     Px_yy = Pab_batch[:, n_cvt + 1, idx_yy]
-    Px_yy = np.where((Px_yy >= 0.0) & (Px_yy < _P_YY_MIN), _P_YY_MIN, Px_yy)
+    Px_yy = np.where(Px_yy == 0.0, _P_YY_MIN, Px_yy)
 
     beta, se, is_valid = _beta_se_from_pab(P_xx, P_xy, Px_yy, df)
 

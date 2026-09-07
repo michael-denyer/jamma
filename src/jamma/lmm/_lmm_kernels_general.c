@@ -85,7 +85,7 @@ static double reml_finish_general(
     double P_yy = pab[nc_total * ni + t->idx_yy];
     if (P_yy < 0.0) {
         P_yy = (double)NAN;
-    } else if (P_yy < P_YY_MIN) {
+    } else if (P_yy == 0.0) {
         P_yy = P_YY_MIN;
     }
 
@@ -260,7 +260,7 @@ static double reml_score_loglambda_general(
         score -= 0.5 * dpab[index] / pab[index];
     }
     int yy = (t->n_cvt + 1) * ni + t->idx_yy;
-    if (!(pab[yy] > P_YY_MIN)) return NAN;
+    if (!(pab[yy] > 0.0)) return NAN;
     score -= 0.5 * t->df * dpab[yy] / pab[yy];
     return score;
 }
@@ -448,7 +448,7 @@ static double mle_logl_general(
     int nc = t->n_cvt;
     double P_yy = pab_scratch[(nc + 1) * ni + t->idx_yy];
     if (P_yy < 0.0) return (double)NAN;
-    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
+    if (P_yy == 0.0) P_yy = P_YY_MIN;
 
     return mle_const - 0.5 * logdet_h - 0.5 * (double)n_samples * log(P_yy);
 }
@@ -482,7 +482,7 @@ static double mle_logl_general_cached(
     int nc = t->n_cvt;
     double P_yy = pab_scratch[(nc + 1) * ni + t->idx_yy];
     if (P_yy < 0.0) return (double)NAN;
-    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
+    if (P_yy == 0.0) P_yy = P_YY_MIN;
 
     return mle_const - 0.5 * cached_logdet_h - 0.5 * (double)n_samples * log(P_yy);
 }

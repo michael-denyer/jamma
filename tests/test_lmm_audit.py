@@ -58,8 +58,9 @@ class TestClampPyy:
     def test_positive_above_min_unchanged(self):
         assert _clamp_p_yy(1.0, 0.1) == 1.0
 
-    def test_near_zero_clamped(self):
-        assert _clamp_p_yy(1e-12, 0.1) == 1e-8
+    def test_tiny_positive_passes_through(self):
+        """Only an exact zero is replaced (GEMMA), so scale equivariance holds."""
+        assert _clamp_p_yy(1e-12, 0.1) == 1e-12
 
     def test_zero_clamped(self):
         assert _clamp_p_yy(0.0, 0.1) == 1e-8

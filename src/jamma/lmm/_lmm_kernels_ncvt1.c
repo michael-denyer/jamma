@@ -34,7 +34,7 @@ static inline double reml_finish(
     double P_yy = pab[2][5];
     if (P_yy < 0.0) {
         P_yy = (double)NAN;
-    } else if (P_yy < P_YY_MIN) {
+    } else if (P_yy == 0.0) {
         P_yy = P_YY_MIN;
     }
 
@@ -83,7 +83,7 @@ static inline double reml_finish_cached_split(
     double P_yy = pab[2][5];
     if (P_yy < 0.0) {
         P_yy = (double)NAN;
-    } else if (P_yy < P_YY_MIN) {
+    } else if (P_yy == 0.0) {
         P_yy = P_YY_MIN;
     }
 
@@ -203,7 +203,7 @@ static double reml_score_loglambda_ncvt1_split(
     double pyy = pyy1 - pxy * pxy / pxx;
     double dpyy = dpyy1 - 2.0 * pxy * dpxy / pxx
                   + pxy * pxy * dpxx / (pxx * pxx);
-    if (!(pyy > P_YY_MIN)) return NAN;
+    if (!(pyy > 0.0)) return NAN;
     return -0.5 * trace - 0.5 * ds[0] / s[0] - 0.5 * dpxx / pxx
            - 0.5 * (n_samples - 2) * dpyy / pyy;
 }
@@ -356,7 +356,7 @@ static inline double mle_finish(
 {
     double P_yy = pab[2][5];
     if (P_yy < 0.0) return (double)NAN;
-    if (P_yy < P_YY_MIN) P_yy = P_YY_MIN;
+    if (P_yy == 0.0) P_yy = P_YY_MIN;
     return mle_const - 0.5 * logdet_h - 0.5 * n_samples * log(P_yy);
 }
 

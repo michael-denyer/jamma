@@ -737,6 +737,39 @@ def test_pipeline_planning_passes_n_cvt(
 
 
 @pytest.mark.tier1
+def test_pipeline_covariate_without_constant_column_runs(
+    tmp_path: Path, sample_plink_data: Path
+) -> None:
+    """A one-column, non-constant covariate file gets an intercept and runs.
+
+    The plan and the built design matrix must agree on n_cvt; a mismatch is
+    a ValueError from the kernel before any result is written.
+    """
+    n_samples = 100
+    cov_path = tmp_path / "cov.txt"
+    rng = np.random.default_rng(7)
+    np.savetxt(str(cov_path), rng.standard_normal(n_samples), fmt="%.6f")
+    out = tmp_path / "output"
+    out.mkdir()
+
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=sample_plink_data.parent / "gemma_kinship.cXX.txt",
+        covariate_file=cov_path,
+        lmm_mode=1,
+        output_dir=out,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    result = PipelineRunner(config).run()
+
+    assert result.n_covariates == 2
+    assert result.n_snps_tested > 0
+    assert result.assoc_path.exists()
+
+
+@pytest.mark.tier1
 def test_pipeline_emits_telemetry(tmp_path: Path, sample_plink_data: Path) -> None:
     """Telemetry record is emitted with expected fields after a pipeline run."""
     from unittest.mock import patch

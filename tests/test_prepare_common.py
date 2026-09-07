@@ -95,6 +95,19 @@ def test_build_covariate_matrix_appends_intercept_when_none_constant():
     assert has_constant_col
 
 
+def test_build_covariate_matrix_rejects_missing_intercept():
+    """A matrix with no constant column is refused with a named cause.
+
+    The intercept is appended once, after masking, by with_intercept; a
+    caller that skips that step must fail here rather than in the kernel.
+    """
+    rng = np.random.default_rng(0)
+    cov = np.column_stack([np.linspace(-1.0, 1.0, 40), rng.normal(size=40)])
+
+    with pytest.raises(ValueError, match="intercept"):
+        _build_covariate_matrix(cov, 40)
+
+
 def test_build_covariate_matrix_keeps_existing_intercept():
     """A covariate matrix that already carries a constant column is unchanged."""
     cov = np.column_stack([np.ones(40), np.linspace(-1.0, 1.0, 40)])

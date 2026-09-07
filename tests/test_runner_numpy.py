@@ -573,3 +573,46 @@ def test_numpy_runner_centres_supplied_kinship(synthetic_data):
             if va is None or (isinstance(va, float) and np.isnan(va)):
                 continue
             np.testing.assert_allclose(vb, va, rtol=1e-9, atol=1e-12, err_msg=field)
+
+
+def _run_mode4(synthetic_data, scale: float):
+    plink, kinship, phenotypes, snp_info = synthetic_data
+    return run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes * scale,
+        kinship=kinship.copy(),
+        snp_info=snp_info,
+        config=LmmConfig(lmm_mode=4, show_progress=False),
+    ).associations
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("use_c", [True, False], ids=["c", "numpy"])
+def test_results_are_scale_equivariant(synthetic_data, use_c):
+    """Rescaling the phenotype rescales beta and se and leaves everything else.
+
+    The LMM is scale-equivariant and GEMMA reproduces that to 2e-16. An
+    absolute floor of 1e-8 on P_yy broke it once the residual sum of squares
+    fell below the floor: lambda landed on the kink and every p-value moved.
+    """
+    from unittest.mock import patch
+
+    scale = 1e-6
+    if use_c:
+        base, small = _run_mode4(synthetic_data, 1.0), _run_mode4(synthetic_data, scale)
+    else:
+        with patch("jamma.lmm.accel._accel", None):
+            base, small = (
+                _run_mode4(synthetic_data, 1.0),
+                _run_mode4(synthetic_data, scale),
+            )
+
+    for a, b in zip(base, small, strict=True):
+        if a.beta is None or np.isnan(a.beta):
+            continue
+        np.testing.assert_allclose(b.beta, a.beta * scale, rtol=1e-6, err_msg="beta")
+        np.testing.assert_allclose(b.se, a.se * scale, rtol=1e-6, err_msg="se")
+        for field in ("p_wald", "p_lrt", "p_score", "l_mle", "l_remle"):
+            np.testing.assert_allclose(
+                getattr(b, field), getattr(a, field), rtol=1e-6, err_msg=field
+            )

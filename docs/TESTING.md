@@ -341,7 +341,7 @@ following module-level bindings so the usual
 caught rather than just the inline form.
 
 Detector 3 covers what neither of the others can see: a guard whose path is fine
-and whose reason is honest, but which asks whether a name is still there.
+and whose reason is accurate, but which asks whether a name is still there.
 `hasattr` answers False for a deleted name exactly as readily as for one that was
 never built, so the guard turns itself off during an unrelated refactor.
 `test_lmm_accel_fused.py` probed `compute_numpy._C_FUSED_AVAILABLE`; #182
@@ -359,11 +359,11 @@ when the name goes, which is the whole point.
 
 - **Skips about the environment are untouched.** `C extension not available`,
   `uv not available on PATH`, an absent optional import and an env-var gate are
-  all genuine conditional skips and stay skips. Neither detector fires on them.
+  all legitimate conditional skips and stay skips. Neither detector fires on them.
 - **Fail on a path, do not skip on it.** If a file should be there and is not,
   use `pytest.fail`, an `assert`, or `require_fixture`, as
   `tests/test_fingerprint_harness.py` does with `pytest.fail` when the recorder
-  writes nothing. If the file genuinely may be absent because it is a build
+  writes nothing. If the file may be absent because it is a build
   output, gate on the flag that predicts it (`HAS_C_EXTENSION` and the like)
   rather than on the path.
 
@@ -518,7 +518,7 @@ two are acceptable:
    fixture in this category, and §1.11's gate now rejects any skip reason that
    names a fixture, whatever the wording. `gemma_loco` and `mouse_hs1940` are
    both committed in full and their guards use `require_fixture`, which raises.
-   If a genuinely un-committable dataset ever arrives, gate it on an environment
+   If an un-committable dataset ever arrives, gate it on an environment
    variable or a marker rather than on the word "fixture" in a skip reason.
 3. **Test is broken / commented-out** — *not acceptable*. Either fix or
    delete.

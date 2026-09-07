@@ -1,0 +1,41 @@
+{
+  "terms": {},
+  "replacements": {
+    "hand-rolled": "name the concrete thing: shell scripts, ad-hoc scripts, own C translation",
+    "honest": "delete the marker and state the fact",
+    "rigorous": "name the property: bounded, tested, proven",
+    "genuine": "delete",
+    "leverage": "use",
+    "delve": "look at, examine",
+    "seamless": "delete"
+  },
+  "banned_patterns": [
+    "(?i)\\bhand-rolled\\b",
+    "(?i)\\bhonest(ly)?\\b",
+    "(?i)\\bhonest (answer|view|opinion|take|picture)\\b",
+    "(?i)\\bcandidly\\b",
+    "(?i)\\bfrankly\\b",
+    "(?i)\\bto be honest\\b",
+    "(?i)\\btruthfully\\b",
+    "(?i)\\bin all honesty\\b",
+    "(?i)\\bin short\\b",
+    "(?i)\\b(stated|put) plainly\\b",
+    "(?i)\\bworth (stating|being) plain(ly)?\\b",
+    "(?i)\\bgood question\\b",
+    "(?i)\\brigorous(ly)?\\b",
+    "(?i)\\bgenuine(ly)?\\b",
+    "(?i)\\bI now have the full picture\\b",
+    "(?i)\\bI won't fabricate\\b",
+    "(?i)\\bto be clear\\b",
+    "(?i)\\bI won't hide that\\b",
+    "(?i)\\bbeing upfront\\b",
+    "(?i)\\bfor full transparency\\b",
+    "(?i)\\bI should flag\\b",
+    "(?i)\\bworth being honest\\b",
+    "(?i)\\brather than claim otherwise\\b",
+    "(?i)\\bdelve\\b",
+    "(?i)\\bleverage\\b",
+    "(?i)\\bseamless(ly)?\\b",
+    "(?i)\\bworth noting\\b"
+  ]
+}

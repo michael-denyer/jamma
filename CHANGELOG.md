@@ -150,6 +150,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Docs prose is gated by a banned-word list.** A `vocabguard` pre-commit
+  hook checks every markdown file except `CHANGELOG.md` against
+  `.vocabguard.json`, a list of regexes for house-style words (`honestly`,
+  `genuinely`, `rigorous`, `hand-rolled`, `leverage`, and the like) with
+  the statistical classifier off. The six existing occurrences in `docs/`
+  are reworded.
 - **One value for what the chunk loop did and how long it took.**
   `jamma.lmm.schema.ChunkRunStats(processed, rotation_s, compute_s,
   result_write_s)` replaces both the runner-private `LmmChunkRunStats`

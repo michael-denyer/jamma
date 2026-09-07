@@ -5,7 +5,7 @@ between JAMMA and GEMMA for the complete GWAS pipeline. It complements
 `docs/GEMMA_EQUIVALENCE.md` (exact-algebra equivalence) and focuses on the
 **magnitude of numerical differences** under floating-point arithmetic.
 
-The goal is a *stated bound* that is rigorous but data-dependent: constants
+The goal is a *stated bound* that is derived but data-dependent: constants
 depend on condition numbers and problem scale, which vary by dataset.
 
 ---

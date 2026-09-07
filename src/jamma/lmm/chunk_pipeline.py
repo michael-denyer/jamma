@@ -146,7 +146,8 @@ def _drive_pipeline(
         current = engine.prepare()
         rotation_s += time.perf_counter() - t
 
-        # The first two prepared chunks are already accounted for.
+        # One chunk has been computed above; the bar counts computed chunks,
+        # so it starts at 1 and reaches n_chunks after the loop.
         bar = (
             create_progress_bar(
                 n_chunks,
@@ -157,9 +158,9 @@ def _drive_pipeline(
             else None
         )
         if bar is not None:
-            bar.update(2)
+            bar.update(1)
 
-        i = 2
+        i = 1
         try:
             with ThreadPoolExecutor(max_workers=1) as executor:
                 while current is not None:

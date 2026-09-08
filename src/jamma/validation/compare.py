@@ -269,9 +269,7 @@ class AssocDataset(Sequence[AssocResult]):
     rows: tuple[AssocResult, ...]
 
     def __post_init__(self) -> None:
-        row_mode = _mode_from_rows(self.rows)
-        if row_mode is not None and row_mode != self.mode:
-            raise ValueError(f"Rows carry mode {row_mode}, expected mode {self.mode}")
+        _mode_from_rows(self)
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -420,8 +418,12 @@ def _present_fields(rows: Sequence[AssocResult]) -> frozenset[str]:
 
 
 def _mode_from_rows(rows: Sequence[AssocResult]) -> LmmMode | None:
-    """Use the parsed mode, or infer it for in-memory rows; empty lists are unknown."""
+    """Validate current rows against a declared mode, or infer an undeclared mode."""
     if isinstance(rows, AssocDataset):
+        # The tuple is fixed, but its AssocResult elements remain mutable.
+        row_mode = _mode_from_rows(rows.rows)
+        if row_mode is not None and row_mode != rows.mode:
+            raise ValueError(f"Rows carry mode {row_mode}, expected mode {rows.mode}")
         return rows.mode
     if not rows:
         return None

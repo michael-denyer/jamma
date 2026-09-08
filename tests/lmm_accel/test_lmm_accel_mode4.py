@@ -1,7 +1,7 @@
 """_lmm_accel C extension tests: the mode-4 kernel that fuses Wald, Score and LRT.
 
 Split from the original single test_lmm_accel module. Shared fixtures
-live in tests/lmm_accel_helpers.py.
+live in tests/lmm_accel/_helpers.py.
 
 The kernel under test is the fused mode-4 workspace, which is what
 ``DispatchPath.FUSED`` reaches for lmm_mode 4 at n_cvt=1. These checks used to

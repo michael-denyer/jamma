@@ -1,7 +1,7 @@
 """_lmm_accel C extension tests: Pab table construction and kernel performance.
 
 Split from the original single test_lmm_accel module. Shared fixtures
-live in tests/lmm_accel_helpers.py.
+live in tests/lmm_accel/_helpers.py.
 """
 
 import numpy as np

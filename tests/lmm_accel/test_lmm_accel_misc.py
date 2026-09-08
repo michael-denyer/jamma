@@ -1,7 +1,7 @@
 """_lmm_accel C extension tests: identity-Pab optimisation and n_cvt bounds.
 
 Split from the original single test_lmm_accel module. Shared fixtures
-live in tests/lmm_accel_helpers.py.
+live in tests/lmm_accel/_helpers.py.
 """
 
 import numpy as np

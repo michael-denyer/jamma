@@ -1,7 +1,7 @@
 """_lmm_accel C extension tests: import, edge cases, and input validation.
 
 Split from the original single test_lmm_accel module. Shared fixtures
-live in tests/lmm_accel_helpers.py.
+live in tests/lmm_accel/_helpers.py.
 
 The kernel under test is the fused n_cvt=1 Wald workspace, which is what
 ``DispatchPath.FUSED`` reaches for lmm_mode 1. This module used to drive

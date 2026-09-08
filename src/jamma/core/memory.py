@@ -134,34 +134,14 @@ class MemoryLedger:
         return max(self.kinship_gb, self.eigen_gb, self.lmm_gb)
 
 
-def _uab_iab_gb(n_samples: int, chunk_size: int, n_cvt: int = 1) -> float:
-    """Estimate per-chunk LMM intermediate memory (GB).
-
-    Uab_batch (chunk_size, n_samples, n_index) + Iab_batch
-    (chunk_size, n_cvt+2, n_index).
-
-    Args:
-        n_samples: Number of samples.
-        chunk_size: SNPs per chunk.
-        n_cvt: Number of covariates (default 1).
-
-    Returns:
-        Combined memory in GB.
-    """
-    idx = n_index(n_cvt)
-    uab_bytes = chunk_size * n_samples * idx * 8
-    iab_bytes = chunk_size * (n_cvt + 2) * idx * 8
-    return (uab_bytes + iab_bytes) / 1e9
-
-
 def estimate_lmm_memory(
     n_samples: int,
     n_snps: int,
+    *,
+    uab_iab_gb: float,
     lmm_batch_size: int = 20_000,
-    n_cvt: int = 1,
     n_buffers: int = 1,
     n_grid: int = 0,
-    uab_iab_gb: float | None = None,
 ) -> float:
     """Peak memory (GB) of the batch LMM phase, the full-materialization path.
 
@@ -170,33 +150,29 @@ def estimate_lmm_memory(
     phases. Genotypes are held in full, O(n * n_snps); the streaming path
     holds one chunk instead (see ``estimate_streaming_memory``).
 
-    Includes Uab_batch (n_chunk, n_samples, n_index) and Iab_batch
-    (n_chunk, n_cvt+2, n_index), the dominant intermediates.
-
     Args:
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (variants).
+        uab_iab_gb: Per-buffer Uab and Iab bytes in GB. ``core`` sits below
+            ``lmm`` in the layering and cannot read the dispatch path, so the
+            caller supplies the figure its path actually holds
+            (``lmm.chunk_sizing.lmm_extra_bytes_per_snp`` times the chunk).
         lmm_batch_size: Batch size for LMM SNP processing. Pass the runtime
             chunk size for accurate estimates; the default is a generic guess.
-        n_cvt: Number of covariates (default 1).
         n_buffers: Live chunk buffers the engine allocates (1 sequential, 2
             pipelined). Scales both the UtG rotation chunk and the Uab/Iab
             extra, matching ``_ChunkEngine``'s per-buffer allocation.
         n_grid: Lambda grid width the optimizer materialises per chunk. 0 when
             the caller prices the grid elsewhere.
-        uab_iab_gb: Per-buffer Uab and Iab bytes in GB, for a dispatch path that
-            holds less than the full table. None prices the full Uab and Iab
-            batches.
 
     Example:
-        >>> print(f"LMM needs {estimate_lmm_memory(100_000, 100):.0f}GB")
+        >>> gb = estimate_lmm_memory(100_000, 100, uab_iab_gb=0.0)
+        >>> print(f"LMM needs {gb:.0f}GB")
     """
     eigenvectors_gb = square_matrix_gb(n_samples)
     genotypes_gb = array_gb(n_samples, n_snps)
     eigenvalues_gb = array_gb(n_samples)
     lmm_rotated_gb = 3 * array_gb(n_samples)
-    if uab_iab_gb is None:
-        uab_iab_gb = _uab_iab_gb(n_samples, lmm_batch_size, n_cvt)
     lmm_batch_gb = n_buffers * (
         array_gb(n_samples, lmm_batch_size)
         + uab_iab_gb
@@ -321,7 +297,14 @@ def estimate_streaming_memory(
     if compute_chunk_size is None:
         compute_chunk_size = chunk_size
     if uab_iab_gb is None:
-        uab_iab_gb = _uab_iab_gb(n_samples, compute_chunk_size, n_cvt)
+        # The NumPy fallback's shape: a full Uab batch of n_samples rows and an
+        # Iab batch of n_cvt + 2 rows, both n_index wide, for every SNP in the
+        # chunk. Summed in integer bytes before the divide so a caller passing
+        # lmm_extra_bytes_per_snp(NUMPY_FALLBACK) * chunk / 1e9 gets the same
+        # float back.
+        uab_iab_gb = (
+            compute_chunk_size * (n_samples + n_cvt + 2) * n_index(n_cvt) * 8 / 1e9
+        )
 
     # The chunk engine's raw-chunk source hands prepare() one buffer at a
     # time even under pipelining (the overlap is between a rotated buffer and

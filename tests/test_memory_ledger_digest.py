@@ -37,6 +37,8 @@ from jamma.core.memory import (
     margin_gb,
 )
 from jamma.kinship.loco import plan_loco_passes
+from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
+from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
 
@@ -117,7 +119,15 @@ def _batch_rows() -> list[list]:
         N_SAMPLES, N_SNPS, LMM_BATCH, N_CVT, N_BUFFERS
     ):
         batch_gb = estimate_lmm_memory(
-            n, n_snps, lmm_batch_size=batch, n_cvt=n_cvt, n_buffers=buffers
+            n,
+            n_snps,
+            lmm_batch_size=batch,
+            n_buffers=buffers,
+            uab_iab_gb=(
+                batch
+                * lmm_extra_bytes_per_snp(n, n_cvt, DispatchPath.NUMPY_FALLBACK)
+                / 1e9
+            ),
         )
         rows.append(["batch", n, n_snps, batch, n_cvt, buffers, _f(batch_gb)])
     return rows

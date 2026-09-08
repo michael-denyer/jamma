@@ -181,15 +181,12 @@ class ExecutableAssociationPlan:
             self.n_samples,
             self.n_snps_before_filter,
             lmm_batch_size=chunks.chunk_size,
-            n_cvt=self.n_cvt,
             n_buffers=chunks.n_buffers,
             n_grid=0,
             uab_iab_gb=(
                 chunks.chunk_size
                 * lmm_extra_bytes_per_snp(self.n_samples, self.n_cvt, self.dispatch)
                 / 1e9
-                if self.dispatch is DispatchPath.NUMPY_WALD
-                else None
             ),
         )
         return MemoryPlan(

@@ -201,8 +201,14 @@ class TestExecutionMode:
     # -- n_cvt-aware selection --
 
     @requires_c
-    def test_n_cvt_affects_memory(self):
-        """plan_association passes n_cvt to estimate_lmm_memory."""
+    def test_batch_quote_prices_the_selected_dispatch_path(self):
+        """plan_association prices the Uab/Iab batch its dispatch path holds.
+
+        n_cvt=4 with the extension loaded selects FUSED_GENERAL, whose C
+        workspace forms Uab in place, so the batch quote charges no Uab/Iab
+        buffer at all. Before this, the quote charged the full NumPy-fallback
+        table on every C path.
+        """
         calls = []
 
         def capturing_estimate(n_samples, n_snps, **kwargs):
@@ -218,9 +224,9 @@ class TestExecutionMode:
         ):
             _select_mode(1000, 10000, n_cvt=4)
 
-        # At least one call should have n_cvt=4
-        assert any(c.get("n_cvt") == 4 for c in calls), (
-            f"n_cvt=4 not passed to estimate_lmm_memory; calls={calls}"
+        assert calls, "estimate_lmm_memory was never called"
+        assert all(c["uab_iab_gb"] == 0.0 for c in calls), (
+            f"FUSED_GENERAL must be quoted with no Uab/Iab batch; calls={calls}"
         )
 
     def test_no_c_general_falls_to_numpy_batch_for_n_cvt_gt1(self):

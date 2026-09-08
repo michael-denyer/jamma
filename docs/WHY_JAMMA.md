@@ -334,7 +334,12 @@ results = run_lmm_association_numpy_streaming(
 # Memory estimation before commitment
 from jamma.core.memory import available_ram_gb, estimate_lmm_memory, require
 
-require(estimate_lmm_memory(n_samples, n_snps), available_ram_gb(), "LMM")
+# uab_iab_gb: the per-buffer Uab/Iab bytes this run's dispatch path holds.
+require(
+    estimate_lmm_memory(n_samples, n_snps, uab_iab_gb=0.0),
+    available_ram_gb(),
+    "LMM",
+)
 ```
 
 ---

@@ -97,7 +97,7 @@ class RunInvariants:
             w=UtW[:, 0].copy() if dispatch.needs_null_w else None,
             uab_invariant_soa=(
                 compute_uab_invariant_soa(UtW, prepared.Uty, n_cvt)
-                if dispatch is not DispatchPath.NUMPY_FALLBACK
+                if dispatch.invariant_rows(n_cvt)
                 else None
             ),
         )

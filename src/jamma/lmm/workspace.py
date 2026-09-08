@@ -83,8 +83,7 @@ class WorkspaceSpec:
                     bytes_per_snp += (
                         n_samples * idx + 6 * n_samples + 2 * rows * idx + 6 * idx
                     ) * _DOUBLE
-            if dispatch is DispatchPath.NUMPY_WALD:
-                fixed_bytes += 3 * n_samples * _DOUBLE
+            fixed_bytes += dispatch.invariant_rows(n_cvt) * n_samples * _DOUBLE
             return cls(
                 dispatch,
                 lmm_mode,

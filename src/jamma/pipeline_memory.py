@@ -7,45 +7,14 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.eigen_plan import (
-    EigenDriverPlan,
-    forced_numpy_fallback,
-    plan_eigen_driver,
-    square_matrix_gb,
-)
+from jamma.core.eigen_plan import EigenDriverPlan, square_matrix_gb
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
+from jamma.lmm.eigen import plan_eigen_driver_for_machine
 
 if TYPE_CHECKING:
     from jamma.pipeline_config import PipelineConfig
 
 __all__ = ["memory_preflight"]
-
-
-def _eigen_driver_plan(
-    n_valid: int, available_gb: float, budget_gb: float | None = None
-) -> EigenDriverPlan:
-    """Plan the eigendecomposition driver the runtime will use."""
-    has_dsyevd = False
-    has_dsyevr = False
-    try:
-        from jamma import jlinalg
-
-        has_dsyevd = bool(jlinalg.blas_has_dsyevd)
-        has_dsyevr = bool(jlinalg.blas_has_dsyevr)
-    except ImportError:
-        logger.debug(
-            "Could not import jlinalg; "
-            "preflight will use the conservative DSYEVD estimate."
-        )
-    return plan_eigen_driver(
-        n_valid,
-        available_gb,
-        has_dsyevd=has_dsyevd,
-        has_dsyevr=has_dsyevr,
-        no_vendor=forced_numpy_fallback(),
-        inplace_eligible=True,
-        budget_gb=budget_gb,
-    )
 
 
 def memory_preflight(
@@ -66,7 +35,12 @@ def memory_preflight(
 
     available_gb = memory.available_ram_gb()
     eigen = (
-        _eigen_driver_plan(plan.n_samples, available_gb, plan.mem_budget_gb)
+        plan_eigen_driver_for_machine(
+            plan.n_samples,
+            available_gb,
+            budget_gb=plan.mem_budget_gb,
+            inplace_eligible=True,
+        )
         if config.eigenvalue_file is None
         else None
     )

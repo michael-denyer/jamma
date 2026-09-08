@@ -21,21 +21,19 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma import jlinalg
 from jamma.core import memory
-from jamma.core.eigen_plan import (
-    EigenDriverPlan,
-    forced_numpy_fallback,
-    plan_eigen_driver,
-    square_matrix_gb,
-)
+from jamma.core.eigen_plan import EigenDriverPlan, square_matrix_gb
 from jamma.kinship import (
     SnpStatsCache,
     compute_loco_kinship_streaming,
     write_kinship_matrix,
 )
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK
-from jamma.lmm.eigen import center_kinship, eigendecompose_kinship
+from jamma.lmm.eigen import (
+    center_kinship,
+    eigendecompose_kinship,
+    plan_eigen_driver_for_machine,
+)
 from jamma.lmm.eigen_cache import (
     EigenCacheComponents,
     compute_eigen_cache_key,
@@ -169,14 +167,11 @@ def eigen_pairs_for(
         3 * square_matrix_gb(n_mat) + len(valid_mask) * DEFAULT_STATS_CHUNK * 8 / 1e9
     )
     available_gb = memory.available_ram_gb()
-    eigen_plan = plan_eigen_driver(
+    eigen_plan = plan_eigen_driver_for_machine(
         n_valid,
         max(0.0, available_gb - retained_gb),
-        has_dsyevd=bool(jlinalg.blas_has_dsyevd),
-        has_dsyevr=bool(jlinalg.blas_has_dsyevr),
-        no_vendor=forced_numpy_fallback(),
-        inplace_eligible=True,
         budget_gb=None if mem_budget is None else max(0.0, mem_budget - retained_gb),
+        inplace_eligible=True,
     )
     stream = compute_loco_kinship_streaming(
         bed_path,

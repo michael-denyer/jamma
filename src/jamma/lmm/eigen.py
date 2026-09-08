@@ -70,6 +70,37 @@ def _check_symmetry_sampled(
         )
 
 
+def plan_eigen_driver_for_machine(
+    n_samples: int,
+    available_gb: float,
+    *,
+    budget_gb: float | None,
+    inplace_eligible: bool,
+) -> EigenDriverPlan:
+    """Plan the eigendecomposition driver with this process's LAPACK capabilities.
+
+    The one place that reads ``jlinalg``'s vendor flags and the forced-numpy
+    environment override, so the preflight, the LOCO planner, and the runtime
+    decomposition all reach ``plan_eigen_driver`` with the same facts.
+
+    Args:
+        n_samples: Kinship matrix dimension.
+        available_gb: Memory the decomposition may use, in GB.
+        budget_gb: User-set ceiling in GB, or None for no ceiling.
+        inplace_eligible: K can be overwritten in place (float64, C-contiguous,
+            writeable). Planners that have not built K yet pass True.
+    """
+    return plan_eigen_driver(
+        n_samples,
+        available_gb,
+        has_dsyevd=bool(jlinalg.blas_has_dsyevd),
+        has_dsyevr=bool(jlinalg.blas_has_dsyevr),
+        no_vendor=forced_numpy_fallback(),
+        inplace_eligible=inplace_eligible,
+        budget_gb=budget_gb,
+    )
+
+
 def eigendecompose_kinship(
     K: np.ndarray,
     threshold: float = 1e-10,
@@ -144,14 +175,11 @@ def eigendecompose_kinship(
     inplace_eligible = (
         K.dtype == np.float64 and K.flags["C_CONTIGUOUS"] and K.flags["WRITEABLE"]
     )
-    plan = eigen_plan or plan_eigen_driver(
+    plan = eigen_plan or plan_eigen_driver_for_machine(
         n_samples,
         available_gb,
-        has_dsyevd=bool(jlinalg.blas_has_dsyevd),
-        has_dsyevr=bool(jlinalg.blas_has_dsyevr),
-        no_vendor=no_vendor_env,
-        inplace_eligible=inplace_eligible,
         budget_gb=mem_budget,
+        inplace_eligible=inplace_eligible,
     )
     no_vendor = plan.no_vendor
     if no_vendor and not no_vendor_env:

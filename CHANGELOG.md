@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.1] - 2026-09-08
+
+Metadata only; the library is byte-for-byte the 8.0.0 code. Cut so Zenodo
+mints a DOI for JAMMA.
+
+### Added
+
+- `CITATION.cff` with author ORCID, so GitHub offers "Cite this repository".
+- `.zenodo.json` so the Zenodo record carries the right title, author, and licence.
+
 ## [8.0.0] - 2026-09-08
 
 Major. The public surface moves in four places a user can observe: `gwas()`

@@ -17,8 +17,20 @@ is always priced under the fallback so the digest is the same on every
 machine, whichever backend it built.
 
 Regenerate the digest with ``uv run python tests/test_memory_ledger_digest.py``.
+Name the rows a change moved by running ``uv run python
+scripts/dump_memory_ledger.py dump <file>`` at each commit and then ``diff``
+on the two files.
 
-Digest history. ``c8a00ab6``: the LOCO rows lost two columns,
+Digest history. ``b2e9b37d``: the LOCO consumer reservation reached the
+single-pass plan as well as the batched one, moving 1026 of the 2438 rows,
+1008 tagged ``loco`` and 18 ``loco:tie``. Every one of them moved
+``single_pass_gb``; 480 moved ``batch_size``, 232 of those to 0 and all 232
+at ``n_chr`` 0; 134 flipped ``single_pass`` from False to True, 64 at
+``n_chr`` 0 and 70 at ``n_chr`` 1; 126 moved ``min_required_gb``; and the 18
+tie rows moved the ``available`` figure their tie is built from.
+``eigendecomp_min_gb`` did not move in any row.
+
+``c8a00ab6``: the LOCO rows lost two columns,
 ``min_required_gb`` and ``eigendecomp_min_gb``, when ``plan_loco_passes``
 stopped reporting them; the row table was dumped before and after and
 compared cell by cell: 2438 rows, 1026 LOCO rows each 12 columns before

@@ -141,13 +141,13 @@ def assert_fused_matches_reference(
 
 
 def _prepare_fused_general_data(data: dict) -> dict:
-    """Add the invariant SoA, varying SoA, UtG_T and Pab table the kernels need.
+    """Add the invariant SoA, varying SoA and UtG_T the kernels need.
 
     Args:
         data: Dict from _build_synthetic_covariate_data.
 
     Returns:
-        Dict with uab_inv_soa, uab_var_soa, utg_t, pab_c, and the original keys.
+        Dict with uab_inv_soa, uab_var_soa, utg_t, and the original keys.
     """
     n_cvt = data["n_cvt"]
     Uab_batch = data["Uab_batch"]

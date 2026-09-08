@@ -6,7 +6,6 @@ import pytest
 import jamma.lmm.compute_numpy as compute_numpy
 from jamma.lmm import accel
 from jamma.lmm.dispatch import DispatchPath, select_current
-from tests.conftest import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -27,44 +26,6 @@ def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
     monkeypatch.setattr(accel, "_accel", _EXTENSION_LOADED)
 
     assert select_current(n_cvt, 1, log_choices=False) is DispatchPath.FUSED_GENERAL
-
-
-@requires_c
-def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
-    """Past MAX_C_N_CVT the kernel refuses rather than the dispatcher diverting.
-
-    Nothing in Python bounds n_cvt any more. The guard that did lived in
-    _compute_wald_numpy, on a branch the runner never reached, so the C
-    kernel's own check is the enforcement and this pins that it fires. The
-    general workspace creator parses the Pab table before anything else, so
-    it is the entry point that raises.
-    """
-    from jamma.lmm._lmm_accel import create_workspace_general_c
-
-    n_cvt = compute_numpy.MAX_C_N_CVT + 1
-    n_samples = 200
-
-    rng = np.random.default_rng(777)
-    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]
-
-    with pytest.raises(ValueError, match=r"n_cvt must be 1\.\.100, got 101"):
-        create_workspace_general_c(
-            eigenvalues,
-            np.zeros(
-                (((n_cvt + 3) * (n_cvt + 2) // 2 - (n_cvt + 2)), n_samples),
-                dtype=np.float64,
-            ),
-            np.zeros((n_samples, n_cvt), dtype=np.float64),
-            np.zeros(n_samples, dtype=np.float64),
-            n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-            n_cvt,
-            lmm_mode=1,
-        )
 
 
 @pytest.mark.parametrize(

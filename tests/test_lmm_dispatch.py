@@ -45,7 +45,7 @@ def _select(n_cvt: int, lmm_mode: LmmMode, *, accel: bool = True) -> DispatchPat
     return select_dispatch_path(n_cvt, lmm_mode, accel=accel, log_choices=False)
 
 
-def test_no_extension_is_always_the_numpy_fallback():
+def test_without_the_extension_only_ncvt1_wald_leaves_the_numpy_fallback():
     for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
         expected = (
             DispatchPath.NUMPY_WALD

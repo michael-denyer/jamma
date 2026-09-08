@@ -208,10 +208,19 @@ class TestCheckMemory:
         )
         assert result is None
 
-    def test_gates_and_returns_the_selected_eigen_driver(self) -> None:
-        """Preflight returns its driver so execution preserves the resource decision."""
-        from jamma.lmm.association_plan import MemoryPlan
+    def test_gates_and_returns_the_selected_eigen_driver(self, monkeypatch) -> None:
+        """Preflight returns its driver so execution preserves the resource decision.
 
+        RAM and the vendor LAPACK flags are pinned because both decide the
+        driver. At 100 samples the in-place DSYEVD peak is then the 0.00008 GB
+        matrix plus a (1+6N+2N^2) float64 and (3+5N) int64 workspace.
+        """
+        from jamma.core import memory
+
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
+        monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevd", 1)
+        monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevr", 1)
+        monkeypatch.delenv("JLINALG_NO_VENDOR_LAPACK", raising=False)
         config = PipelineConfig(
             bfile=BFILE,
             check_memory=True,
@@ -225,11 +234,10 @@ class TestCheckMemory:
         result = preflight(runner.config, plan)
 
         assert result is not None
-        assert result.required_gb > 0
+        assert result.driver == "DSYEVD-inplace"
+        assert result.required_gb == pytest.approx(0.000248832)
         quote = plan.price(eigen=None)
-        assert isinstance(quote, MemoryPlan)
-        assert quote.total_peak_gb >= 0
-        assert quote.compute_chunk_size > 0
+        assert quote.total_peak_gb == pytest.approx(0.00808)
 
 
 @pytest.mark.tier0

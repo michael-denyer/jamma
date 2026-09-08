@@ -278,7 +278,9 @@ def test_auto_uses_user_budget_and_allows_streaming_fallback(monkeypatch) -> Non
     )
 
     assert plan.summary.mode == "streaming"
-    assert plan.dispatch is DispatchPath.NUMPY_WALD
+    # The split-product kernel holds three invariant Uab rows over 50,000
+    # samples, 1,200,000 bytes the full-Uab fallback's 40,001,536 does not.
+    assert plan.workspace.persistent_bytes == 41_201_536
 
 
 def test_streaming_chunk_converges_on_full_quote_under_physical_ram(
@@ -357,7 +359,13 @@ def test_workspace_thread_capacity_is_explicit(monkeypatch) -> None:
 
 
 @requires_c
-def test_native_sizing_query_is_the_workspace_source() -> None:
+def test_workspace_adds_the_python_reference_table_to_the_native_query() -> None:
+    """Every figure but the persistent one is the native query's, unchanged.
+
+    The persistent figure adds the reference recursion table the null model
+    retains in Python: comb(n_cvt + 3, 3) entries at 384 bytes, which is
+    176,851 x 384 at n_cvt=100.
+    """
     from jamma.lmm import accel
 
     native = accel.require().workspace_sizes_c(1_000, 100, 50, 4, 18)
@@ -365,7 +373,7 @@ def test_native_sizing_query_is_the_workspace_source() -> None:
         DispatchPath.FUSED_GENERAL, 4, 1_000, 1_000, 100, 50, 20, 18
     )
 
-    assert spec.persistent_bytes > native[0]  # retained Python reference table
+    assert spec.persistent_bytes - native[0] == 67_910_784
     assert native[1:] == (
         spec.per_thread_bytes,
         spec.transient_per_thread_bytes,

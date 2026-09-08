@@ -21,17 +21,3 @@ abstract: >-
   genome-wide association studies. Keeps GEMMA's command-line flags and
   file formats, is validated against GEMMA for numerical equivalence,
   and runs 16-43x faster on large cohorts.
-references:
-  - type: article
-    title: "Genome-wide efficient mixed-model analysis for association studies"
-    authors:
-      - family-names: Zhou
-        given-names: Xiang
-      - family-names: Stephens
-        given-names: Matthew
-    journal: Nature Genetics
-    volume: 44
-    year: 2012
-    start: 821
-    end: 824
-    doi: 10.1038/ng.2310

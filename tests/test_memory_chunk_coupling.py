@@ -32,8 +32,7 @@ from jamma.lmm.pab import n_index
 from jamma.lmm.schema import LmmMode
 from jamma.lmm.workspace import WorkspaceSpec
 from jamma.pipeline_config import PipelineConfig
-from jamma.pipeline_memory import memory_preflight
-from tests.conftest import requires_c
+from tests.conftest import preflight, requires_c
 from tests.fakes import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
@@ -87,7 +86,7 @@ def _streaming_preflight(
         n_cvt=n_cvt,
         lmm_mode=lmm_mode,
     )
-    memory_preflight(config, plan)
+    preflight(config, plan)
 
 
 def test_chunk_size_varies_with_scale():
@@ -321,9 +320,9 @@ def _priced_streaming_lmm_phase_gb(
         n_cvt=n_cvt,
         lmm_mode=lmm_mode,
     )
-    quote = execution.price()
+    quote = execution.price(eigen=None)
     return (
-        dict(quote.components_gb)["association"],
+        quote.association_gb,
         execution.conservative_chunks,
         execution.workspace,
     )
@@ -583,7 +582,7 @@ class TestChunkPlanMatchesEngine:
         plan = exec_plan.conservative_chunks
         assert not plan.use_pipeline, "this case must not pipeline (plan.n_buffers=1)"
         assert plan.n_buffers == 1
-        mem_plan = exec_plan.price()
+        mem_plan = exec_plan.price(eigen=None)
 
         # Reference: the same estimate built with pipeline_buffers hardcoded
         # to 2, the pre-fix behavior, to prove the two would have disagreed.
@@ -786,7 +785,7 @@ def test_pipeline_memory_plan_honors_mem_budget(monkeypatch):
         n_cvt=n_cvt,
         mem_budget=mem_budget,
     )
-    planned = execution.price()
+    planned = execution.price(eigen=None)
 
     assert execution.conservative_chunks.chunk_size == 1
     assert planned.compute_chunk_size == execution.conservative_chunks.chunk_size

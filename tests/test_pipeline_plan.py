@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.lmm.association_plan import plan_association
+from jamma.lmm.association_plan import KinshipShape, plan_association
 from jamma.pipeline_config import PipelineConfig
 from jamma.pipeline_plan import (
     ComputedKinship,
@@ -94,3 +94,75 @@ def test_loco_plan_owns_lmm_and_loco_configuration(tmp_path: Path) -> None:
     assert isinstance(plan, LocoAnalysisPlan)
     assert plan.lmm.check_memory
     assert plan.loco.kinship_output_dir == tmp_path
+
+
+def _subset_execution():  # type: ignore[no-untyped-def]
+    return plan_association(10, 20, requested="numpy", n_input_samples=12)
+
+
+def test_provided_eigen_materialises_no_kinship(tmp_path: Path) -> None:
+    plan = resolve_analysis_plan(
+        PipelineConfig(
+            bfile=tmp_path / "study",
+            eigenvalue_file=tmp_path / "eigenD.npy",
+            eigenvector_file=tmp_path / "eigenU.npy",
+        ),
+        execution=_subset_execution(),
+        snps_indices=None,
+        ksnps_indices=None,
+    )
+
+    assert plan.execution.kinship is None
+    with pytest.raises(ValueError, match="materialises no kinship"):
+        _ = plan.execution.resolved_kinship
+
+
+def test_provided_kinship_is_read_at_full_size(tmp_path: Path) -> None:
+    plan = resolve_analysis_plan(
+        PipelineConfig(bfile=tmp_path / "study", kinship_file=tmp_path / "k.npy"),
+        execution=_subset_execution(),
+        snps_indices=None,
+        ksnps_indices=None,
+    )
+
+    assert plan.execution.kinship == KinshipShape(n_samples=12, loaded=True)
+
+
+def test_computed_kinship_accumulates_over_analysed_samples(tmp_path: Path) -> None:
+    plan = resolve_analysis_plan(
+        PipelineConfig(bfile=tmp_path / "study"),
+        execution=_subset_execution(),
+        snps_indices=None,
+        ksnps_indices=None,
+    )
+
+    assert plan.execution.kinship == KinshipShape(n_samples=10, loaded=False)
+
+
+def test_saved_kinship_is_computed_at_full_size(tmp_path: Path) -> None:
+    plan = resolve_analysis_plan(
+        PipelineConfig(
+            bfile=tmp_path / "study", save_kinship=True, output_dir=tmp_path
+        ),
+        execution=_subset_execution(),
+        snps_indices=None,
+        ksnps_indices=None,
+    )
+
+    assert plan.execution.kinship == KinshipShape(n_samples=12, loaded=False)
+
+
+@pytest.mark.parametrize(("save", "expected"), [(False, 10), (True, 12)])
+def test_loco_kinship_follows_the_same_rule(
+    tmp_path: Path, save: bool, expected: int
+) -> None:
+    plan = resolve_analysis_plan(
+        PipelineConfig(
+            bfile=tmp_path / "study", loco=True, save_kinship=save, output_dir=tmp_path
+        ),
+        execution=_subset_execution(),
+        snps_indices=None,
+        ksnps_indices=None,
+    )
+
+    assert plan.execution.kinship == KinshipShape(n_samples=expected, loaded=False)

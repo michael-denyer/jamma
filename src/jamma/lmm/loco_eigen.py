@@ -21,21 +21,18 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma import jlinalg
-from jamma.core import memory
-from jamma.core.eigen_plan import (
-    EigenDriverPlan,
-    forced_numpy_fallback,
-    plan_eigen_driver,
-    square_matrix_gb,
-)
+from jamma.core.eigen_plan import EigenDriverPlan, array_gb, square_matrix_gb
 from jamma.kinship import (
     SnpStatsCache,
     compute_loco_kinship_streaming,
     write_kinship_matrix,
 )
-from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK
-from jamma.lmm.eigen import center_kinship, eigendecompose_kinship
+from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
+from jamma.lmm.eigen import (
+    center_kinship,
+    eigendecompose_kinship,
+    plan_eigen_driver_for_machine,
+)
 from jamma.lmm.eigen_cache import (
     EigenCacheComponents,
     compute_eigen_cache_key,
@@ -84,6 +81,29 @@ class _EigenCacheWrite:
     generation: str
 
 
+def plan_loco_eigen_driver(
+    execution: ExecutableAssociationPlan, available_gb: float
+) -> EigenDriverPlan:
+    """Plan the per-chromosome eigen driver against what the retained set leaves.
+
+    Three accumulators at the kinship order (S_full, K_loco_buf, one S_chr)
+    and one disk block over every input sample stay live while each
+    chromosome decomposes, so the driver is chosen against the headroom and
+    budget left after them.
+    """
+    n_mat = execution.resolved_kinship.n_samples
+    retained_gb = 3 * square_matrix_gb(n_mat) + array_gb(
+        execution.n_input_samples, DEFAULT_STATS_CHUNK
+    )
+    budget_gb = execution.mem_budget_gb
+    return plan_eigen_driver_for_machine(
+        execution.n_samples,
+        max(0.0, available_gb - retained_gb),
+        budget_gb=None if budget_gb is None else max(0.0, budget_gb - retained_gb),
+        inplace_eligible=True,
+    )
+
+
 def eigen_pairs_for(
     bed_path: Path,
     chr_names: list[str],
@@ -95,6 +115,7 @@ def eigen_pairs_for(
     partitions: dict[str, np.ndarray],
     check_memory: bool,
     show_progress: bool,
+    eigen_plan: EigenDriverPlan,
     mem_budget: float | None = None,
     association_peak_gb: float = 0.0,
 ) -> EigenPairSource:
@@ -115,9 +136,11 @@ def eigen_pairs_for(
         partitions: chr_name -> global SNP indices, for progress output.
         check_memory: Passed to the kinship streamer and eigendecomposition.
         show_progress: Whether to log per-chromosome progress.
-        mem_budget: User-set ceiling in GB, or None for no ceiling. Budgets the
-            eigen driver against what the retained set leaves, and reaches the
-            kinship streamer's veto.
+        eigen_plan: The driver every chromosome's decomposition runs, from
+            ``plan_loco_eigen_driver``; its peak is what the kinship streamer
+            reserves for the consumer.
+        mem_budget: User-set ceiling in GB, or None for no ceiling. Reaches the
+            kinship streamer's veto and each decomposition's gate.
         association_peak_gb: Peak the association phase will hold, so the kinship
             streamer sizes its chromosome batch around the larger of that and the
             eigen driver.
@@ -163,20 +186,6 @@ def eigen_pairs_for(
         None
         if all_samples_valid or loco.kinship_output_dir is not None
         else np.where(valid_mask)[0]
-    )
-    n_mat = len(valid_mask) if kinship_valid_indices is None else n_valid
-    retained_gb = (
-        3 * square_matrix_gb(n_mat) + len(valid_mask) * DEFAULT_STATS_CHUNK * 8 / 1e9
-    )
-    available_gb = memory.available_ram_gb()
-    eigen_plan = plan_eigen_driver(
-        n_valid,
-        max(0.0, available_gb - retained_gb),
-        has_dsyevd=bool(jlinalg.blas_has_dsyevd),
-        has_dsyevr=bool(jlinalg.blas_has_dsyevr),
-        no_vendor=forced_numpy_fallback(),
-        inplace_eligible=True,
-        budget_gb=None if mem_budget is None else max(0.0, mem_budget - retained_gb),
     )
     stream = compute_loco_kinship_streaming(
         bed_path,

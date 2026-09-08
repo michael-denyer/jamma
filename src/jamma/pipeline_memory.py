@@ -2,110 +2,52 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.eigen_plan import (
-    EigenDriverPlan,
-    forced_numpy_fallback,
-    plan_eigen_driver,
-    square_matrix_gb,
-)
-from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
-
-if TYPE_CHECKING:
-    from jamma.pipeline_config import PipelineConfig
+from jamma.core.eigen_plan import EigenDriverPlan
+from jamma.lmm.eigen import plan_eigen_driver_for_machine
+from jamma.lmm.loco_eigen import plan_loco_eigen_driver
+from jamma.pipeline_plan import AnalysisPlan, LocoAnalysisPlan, ProvidedEigen
 
 __all__ = ["memory_preflight"]
 
 
-def _eigen_driver_plan(
-    n_valid: int, available_gb: float, budget_gb: float | None = None
-) -> EigenDriverPlan:
-    """Plan the eigendecomposition driver the runtime will use."""
-    has_dsyevd = False
-    has_dsyevr = False
-    try:
-        from jamma import jlinalg
-
-        has_dsyevd = bool(jlinalg.blas_has_dsyevd)
-        has_dsyevr = bool(jlinalg.blas_has_dsyevr)
-    except ImportError:
-        logger.debug(
-            "Could not import jlinalg; "
-            "preflight will use the conservative DSYEVD estimate."
-        )
-    return plan_eigen_driver(
-        n_valid,
+def _eigen_driver(
+    analysis: AnalysisPlan, available_gb: float
+) -> EigenDriverPlan | None:
+    """Plan the decomposition the run will execute; None when eigenpairs are read."""
+    execution = analysis.execution
+    if isinstance(analysis, LocoAnalysisPlan):
+        return plan_loco_eigen_driver(execution, available_gb)
+    if isinstance(analysis.eigen_source, ProvidedEigen):
+        return None
+    return plan_eigen_driver_for_machine(
+        execution.n_samples,
         available_gb,
-        has_dsyevd=has_dsyevd,
-        has_dsyevr=has_dsyevr,
-        no_vendor=forced_numpy_fallback(),
+        budget_gb=execution.mem_budget_gb,
         inplace_eligible=True,
-        budget_gb=budget_gb,
     )
 
 
 def memory_preflight(
-    config: PipelineConfig,
-    plan: ExecutableAssociationPlan,
+    analysis: AnalysisPlan, *, check_memory: bool
 ) -> EigenDriverPlan | None:
-    """Price and gate one plan without rebuilding association policy.
-
-    Logs the quote and raises through ``memory.require`` when it does not
-    fit. Return the selected eigen driver for acquisition to execute.
-    """
-    summary = plan.summary
-    if not config.check_memory:
-        logger.info(
-            f"Memory preflight skipped ({summary.runner_name}): check_memory=False"
-        )
-        return
-
+    """Price and gate one plan; return the eigen driver acquisition executes."""
+    execution = analysis.execution
+    runner_name = execution.summary.runner_name
+    if not check_memory:
+        logger.info(f"Memory preflight skipped ({runner_name}): check_memory=False")
+        return None
     available_gb = memory.available_ram_gb()
-    eigen = (
-        _eigen_driver_plan(plan.n_samples, available_gb, plan.mem_budget_gb)
-        if config.eigenvalue_file is None
-        else None
-    )
-    quote = plan.price(eigen=eigen)
-    required_gb = max(quote.total_peak_gb, eigen.required_gb if eigen else 0.0)
-    if eigen is not None:
-        n_kinship = (
-            plan.n_input_samples
-            if config.save_kinship or config.kinship_file is not None
-            else plan.n_samples
-        )
-        if config.kinship_file is None:
-            kinship_gb = memory.estimate_streaming_memory(
-                n_kinship,
-                chunk_size=DEFAULT_STATS_CHUNK,
-            ).kinship_gb
-            kinship_gb += (
-                max(0, plan.n_input_samples - n_kinship) * DEFAULT_STATS_CHUNK * 8 / 1e9
-            )
-        else:
-            kinship_gb = square_matrix_gb(n_kinship)
-        if n_kinship != plan.n_samples:
-            kinship_gb = max(
-                kinship_gb,
-                square_matrix_gb(n_kinship) + square_matrix_gb(plan.n_samples),
-            )
-        required_gb = max(required_gb, kinship_gb)
+    eigen = _eigen_driver(analysis, available_gb)
+    quote = execution.price(eigen=eigen)
     driver_note = f", eigen driver {eigen.driver}" if eigen else ""
     logger.info(
-        f"Memory estimate ({summary.runner_name}): "
-        f"{required_gb:.1f}GB required, "
+        f"Memory estimate ({runner_name}): {quote.total_peak_gb:.1f}GB required, "
         f"{available_gb:.1f}GB available"
         f" (pre-filter compute chunk {quote.compute_chunk_size}{driver_note})"
     )
-    memory.require(
-        required_gb,
-        available_gb,
-        summary.runner_name,
-        budget_gb=plan.mem_budget_gb,
-    )
-
+    budget_gb = execution.mem_budget_gb
+    memory.require(quote.total_peak_gb, available_gb, runner_name, budget_gb=budget_gb)
     return eigen

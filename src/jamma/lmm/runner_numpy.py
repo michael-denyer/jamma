@@ -649,14 +649,14 @@ def run_lmm_association_numpy(
         log_dispatch_choices=True,
     )
     if config.check_memory and max_chunk_size is None:
-        quote = execution.price()
+        quote = execution.price(eigen=None)
         available_gb = memory.available_ram_gb()
         logger.info(
-            f"LMM memory: estimated {quote.total_peak_gb:.1f}GB, "
+            f"LMM memory: estimated {quote.association_gb:.1f}GB, "
             f"available {available_gb:.1f}GB"
         )
         memory.require(
-            quote.total_peak_gb,
+            quote.association_gb,
             available_gb,
             f"LMM workflow with {n_samples:,} samples x {n_snps:,} SNPs",
             budget_gb=execution.mem_budget_gb,

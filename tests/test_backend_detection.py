@@ -76,7 +76,9 @@ class TestExecutionMode:
             batch = plan_association(*OVERFLOWS_SHAPE, requested="numpy")
         assert loco.summary.mode == "loco"
         assert loco.summary.runner_name == "numpy-loco"
-        assert loco.price().total_peak_gb < batch.price().total_peak_gb
+        assert (
+            loco.price(eigen=None).total_peak_gb < batch.price(eigen=None).total_peak_gb
+        )
 
     def test_no_c_ext_large_dataset_selects_streaming(self):
         """Fallback compute retains streaming when batch storage does not fit."""

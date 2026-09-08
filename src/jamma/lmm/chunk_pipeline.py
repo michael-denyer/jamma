@@ -1,26 +1,28 @@
 """Rotation/compute thread split and the overlapped chunk pipeline driver.
 
-Owns the core-split heuristics and the per-run plan, plus
-``_drive_pipeline``, which overlaps background rotation of chunk N+1 with
-foreground C compute of chunk N. Split out from ``chunk_runner_numpy`` so the
-concurrency machinery is isolated from chunk sizing and kernel dispatch.
+Owns the core-split heuristics and the per-run plan, plus the pair that overlaps
+background rotation of chunk N+1 with foreground C compute of chunk N:
+``_overlapped_chunks`` yields the prepared chunks and ``_drive_pipeline``
+computes them. Split out from ``chunk_runner_numpy`` so the concurrency
+machinery is isolated from chunk sizing and kernel dispatch.
 """
 
 from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
 from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
 from jamma.core.estimates import estimate_lmm_seconds
-from jamma.core.progress import create_progress_bar
+from jamma.core.progress import progress_iterator
 from jamma.core.threading import blas_threads, get_physical_core_count
 
 if TYPE_CHECKING:
-    from jamma.lmm.chunk_runner_numpy import _ChunkEngine
+    from collections.abc import Callable, Iterator
+
+    from jamma.lmm.chunk_runner_numpy import _ChunkEngine, _PreparedLmmChunk
 
 
 def compute_pipeline_core_split(n_samples: int, total_cores: int) -> tuple[int, int]:
@@ -93,6 +95,41 @@ def plan_thread_budget(
     return ThreadPlan(rotation=rot, omp=omp, total_cores=total_cores)
 
 
+def _overlapped_chunks(
+    engine: _ChunkEngine,
+    executor: ThreadPoolExecutor,
+    rotation_s: list[float],
+) -> Iterator[_PreparedLmmChunk]:
+    """Yield each prepared chunk while the next one rotates in the background.
+
+    Submitting the successor before yielding is what overlaps the two stages.
+    The caller computes chunk N on the foreground thread while ``engine.prepare``
+    rotates chunk N+1 on the executor, and both release the GIL.
+
+    Args:
+        engine: The chunk engine to pull from.
+        executor: Single-worker executor that owns the background rotation.
+        rotation_s: Single-element accumulator for foreground rotation seconds.
+
+    Yields:
+        Prepared chunks in source order, until the engine is exhausted.
+    """
+
+    def awaited(
+        next_chunk: Callable[[], _PreparedLmmChunk | None],
+    ) -> _PreparedLmmChunk | None:
+        t = time.perf_counter()
+        prepared = next_chunk()
+        rotation_s[0] += time.perf_counter() - t
+        return prepared
+
+    current = awaited(engine.prepare)
+    while current is not None:
+        future = executor.submit(engine.prepare)
+        yield current
+        current = awaited(future.result)
+
+
 def _drive_pipeline(
     engine: _ChunkEngine,
     *,
@@ -105,10 +142,11 @@ def _drive_pipeline(
 ) -> float:
     """Drive the overlapped chunk pipeline shared by every NumPy runner.
 
-    Prepares and computes the first chunk, then overlaps rotation of chunk N+1 (a
-    background ``engine.prepare``) with C compute of chunk N (a foreground
-    ``engine.compute_and_write``) via a single-worker executor. Both stages
-    release the GIL, so they run concurrently.
+    Computes every chunk :func:`_overlapped_chunks` yields, so rotation of chunk
+    N+1 runs on the executor while C compute of chunk N runs here. The executor
+    is owned here rather than by the generator, so a failing compute unwinds
+    through ``ThreadPoolExecutor.__exit__`` and waits for the in-flight rotation
+    instead of leaving that cleanup to garbage collection.
 
     The engine owns the chunk source, the sink, the buffers, and the live core
     split, so the driver takes one typed argument rather than a pair of opaque
@@ -119,7 +157,7 @@ def _drive_pipeline(
         n_chunks: Expected chunk count (progress total).
         rotation_threads: Process-wide BLAS limit held for the whole drive.
         n_samples: Sample count (ETA estimate).
-        n_filtered: Filtered SNP count (ETA estimate; error diagnostics).
+        n_filtered: Filtered SNP count (ETA estimate).
         show_progress: Whether to render a progress bar.
         progress_label: Progress-bar label.
 
@@ -128,72 +166,18 @@ def _drive_pipeline(
         for the caller's timing breakdown. Compute and write time is
         accumulated by the engine itself.
     """
-    with blas_threads(rotation_threads):
-        rotation_s = 0.0
-
-        # The first chunk is sequential. The fixed run plan already accounts
-        # for maximum compute capacity and avoids changing global BLAS state.
-        t = time.perf_counter()
-        first = engine.prepare()
-        rotation_s += time.perf_counter() - t
-        if first is None:
-            return rotation_s
-
-        engine.compute_and_write(first)
-        del first
-
-        t = time.perf_counter()
-        current = engine.prepare()
-        rotation_s += time.perf_counter() - t
-
-        # One chunk has been computed above; the bar counts computed chunks,
-        # so it starts at 1 and reaches n_chunks after the loop.
-        bar = (
-            create_progress_bar(
-                n_chunks,
-                progress_label,
+    rotation_s = [0.0]
+    with blas_threads(rotation_threads), ThreadPoolExecutor(max_workers=1) as executor:
+        chunks: Iterator[_PreparedLmmChunk] = _overlapped_chunks(
+            engine, executor, rotation_s
+        )
+        if show_progress and n_chunks > 1:
+            chunks = progress_iterator(
+                chunks,
+                total=n_chunks,
+                desc=progress_label,
                 initial_eta_seconds=estimate_lmm_seconds(n_samples, n_filtered),
             )
-            if show_progress and n_chunks > 1
-            else None
-        )
-        if bar is not None:
-            bar.update(1)
-
-        i = 1
-        try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                while current is not None:
-                    # Both calls release the GIL, so rotation and compute overlap.
-                    future = executor.submit(engine.prepare)
-                    engine.compute_and_write(current)
-
-                    t = time.perf_counter()
-                    try:
-                        current = future.result()
-                    except (
-                        MemoryError,
-                        ValueError,
-                        TypeError,
-                        OverflowError,
-                        OSError,
-                    ):
-                        raise
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f"Pipeline chunk preparation failed at chunk {i} of "
-                            f"{n_chunks} during overlapped rotation "
-                            f"({n_filtered} SNPs total)."
-                        ) from exc
-                    rotation_s += time.perf_counter() - t
-
-                    i += 1
-                    if bar is not None:
-                        bar.update(i)
-        finally:
-            if bar is not None:
-                with suppress(Exception):
-                    bar.update(n_chunks)
-                    bar.finish()
-
-        return rotation_s
+        for chunk in chunks:
+            engine.compute_and_write(chunk)
+    return rotation_s[0]

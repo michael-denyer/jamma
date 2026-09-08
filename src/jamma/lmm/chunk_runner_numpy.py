@@ -37,7 +37,7 @@ from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes
 from jamma.lmm.impute import impute_missing_inplace
-from jamma.lmm.likelihood import reset_p_yy_warned
+from jamma.lmm.pab import reset_p_yy_warned
 from jamma.lmm.prepare_common import PreparedLmmRun
 from jamma.lmm.results import (
     ChunkSink,

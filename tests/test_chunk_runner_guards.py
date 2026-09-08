@@ -142,8 +142,8 @@ def test_shared_chunk_entry_resets_the_p_yy_warning():
     it in the batch runner only meant a streaming or LOCO run that followed
     one in the same process never warned again.
     """
-    from jamma.lmm import likelihood
+    from jamma.lmm import pab
 
-    likelihood._p_yy_state.warned = True
+    pab._p_yy_state.warned = True
     run_lmm_chunk_source_numpy(**_run_kwargs(genotypes=_prepared_genotypes(4, 0)))
-    assert getattr(likelihood._p_yy_state, "warned", False) is False
+    assert getattr(pab._p_yy_state, "warned", False) is False

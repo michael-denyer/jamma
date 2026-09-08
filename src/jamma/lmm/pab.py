@@ -8,14 +8,59 @@ own their shape.
 from __future__ import annotations
 
 import functools
+import threading
 from collections.abc import Sequence
 from typing import NamedTuple
 
 import numpy as np
+from loguru import logger
+from numpy.typing import ArrayLike
 
 from jamma.core.constants import n_index
 
-_P_YY_MIN = 1e-8
+_P_YY_ZERO_REPLACEMENT = 1e-8
+"""Stands in for an exactly zero P_yy, as GEMMA v0.98.5's LogRL_f/LogL_f do.
+Mirrors P_YY_ZERO_REPLACEMENT in _lmm_types.h."""
+
+# One thread-local flag deduplicates the negative-P_yy warning within a single
+# LMM run. The batch likelihood fires guard_p_yy hundreds of times per run
+# (once per grid eval plus golden section iteration per chunk), which buried
+# the meaningful first warning under identical log spam.
+_p_yy_state = threading.local()
+
+
+def reset_p_yy_warned() -> None:
+    """Reset the P_yy warning flag so each LMM run gets its own warning."""
+    _p_yy_state.warned = False
+
+
+def guard_p_yy(P_yy: ArrayLike) -> np.ndarray:
+    """Guard a projected residual sum of squares before a log or a denominator.
+
+    Negative values become NaN: the Schur complement lost positive
+    semi-definiteness, and downstream code reads the NaN as degenerate. An
+    exact zero becomes ``_P_YY_ZERO_REPLACEMENT``. Every positive value passes
+    through unchanged, so an absolute floor cannot break scale equivariance.
+    The first negative value per run logs a warning; ``reset_p_yy_warned``
+    re-arms it.
+
+    Args:
+        P_yy: A scalar or an array of any shape.
+
+    Returns:
+        Guarded values with the shape of ``P_yy`` (0-d for a scalar).
+    """
+    P_yy = np.asarray(P_yy, dtype=np.float64)
+    n_negative = int(np.count_nonzero(P_yy < 0.0))
+    if n_negative > 0 and not getattr(_p_yy_state, "warned", False):
+        logger.warning(
+            f"{n_negative} negative P_yy value(s): numerical breakdown, "
+            "subsequent occurrences suppressed. The kinship matrix may not be "
+            "positive semi-definite."
+        )
+        _p_yy_state.warned = True
+    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
+    return np.where(P_yy == 0.0, _P_YY_ZERO_REPLACEMENT, P_yy)
 
 
 class PabIndexTable(NamedTuple):

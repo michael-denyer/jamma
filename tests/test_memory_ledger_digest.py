@@ -17,6 +17,13 @@ is always priced under the fallback so the digest is the same on every
 machine, whichever backend it built.
 
 Regenerate the digest with ``uv run python tests/test_memory_ledger_digest.py``.
+
+Digest history. ``c8a00ab6``: the LOCO rows lost two columns,
+``min_required_gb`` and ``eigendecomp_min_gb``, when ``plan_loco_passes``
+stopped reporting them; the row table was dumped before and after and
+compared cell by cell: 2438 rows, 1026 LOCO rows each 12 columns before
+and 10 after, 0 surviving cells changed. The single-pass column survives
+as the ``required_gb`` of the plan an unlimited machine makes.
 """
 
 from __future__ import annotations
@@ -42,8 +49,7 @@ from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
 
-# Updated for LOCO consumer reservation in both single-pass and batched plans.
-EXPECTED_DIGEST = "b2e9b37d5fff95415fedbc02a5fd8183ee12b3bf5d1ff6a0c3b4cceb7f271e57"
+EXPECTED_DIGEST = "c8a00ab6ab0e0f24d3d0e695acbe26e4aacbf946a07cef39f4b0790e45b7e400"
 EXPECTED_ROWS = 2438
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
@@ -279,8 +285,6 @@ def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
         plan.single_pass,
         plan.batch_size,
         _f(_single_pass_gb(n_mat, n_samples, n_chr, chunk)),
-        _f(_loco_plan(n_mat, n_samples, 1, chunk, available, None).required_gb),
-        _f(dsyevr_peak_gb(n_mat)),
     ]
 
 

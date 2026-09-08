@@ -184,6 +184,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only` the centring subtraction raised from several frames deeper.
   Callers that need the matrix afterwards pass `kinship.copy()`; the
   runners still never copy, so a 100k run holds one matrix rather than two.
+- **The overlapped chunk pipeline is a generator, and the progress bar has one
+  owner.** `_overlapped_chunks` yields each prepared chunk after submitting the
+  next `engine.prepare` to the single-worker executor, and `_drive_pipeline`
+  feeds it to the same `progress_iterator` the sequential branch already uses.
+  The sequential first-chunk prologue, its second `prepare`, the `del first`,
+  the hand-maintained chunk counter and the `bar.update(n_chunks)` that
+  duplicated `finish()` are all gone, so a progress total can no longer drift
+  from the number of chunks computed. The wrapper that reboxed a background
+  `prepare` failure as `RuntimeError` goes with them: it had an arbitrary
+  allow-list of exception types that passed through unwrapped, nothing read its
+  message, and the chained traceback already carried the cause. The executor
+  stays owned by `_drive_pipeline`, so a failing compute still unwinds through
+  `ThreadPoolExecutor.__exit__` and waits for the in-flight rotation. The
+  driver's executable body drops from 79 lines to 41 across the pair. Behaviour
+  is unchanged: `-lmm 1` and `-lmm 4` on `mouse_hs1940` under the pipelined
+  driver (15 chunks) write byte-identical `.assoc.txt` files. Rotation seconds
+  in the timing breakdown now count one fewer un-overlapped `prepare`, because
+  the first chunk overlaps like every other one.
 - **Docs prose is gated by a banned-word list.** A `vocabguard` pre-commit
   hook checks every markdown file except `CHANGELOG.md` against
   `.vocabguard.json`, a list of regexes for house-style words (`honestly`,

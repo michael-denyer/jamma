@@ -277,7 +277,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:185](../src/jamma/lmm/chunk_runner_numpy.py#L185) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the prepared run and the config | [chunk_kernel.py:42](../src/jamma/lmm/chunk_kernel.py#L42) |
 | 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:155](../src/jamma/lmm/chunk_kernel.py#L155) |
-| 4Nb | `_drive_pipeline()` | Overlapped rotate-and-compute pipeline + adaptive thread split | [chunk_pipeline.py:96](../src/jamma/lmm/chunk_pipeline.py#L96) |
+| 4Nb | `_overlapped_chunks()` | Generator yielding each prepared chunk while the next rotates on the executor | [chunk_pipeline.py:98](../src/jamma/lmm/chunk_pipeline.py#L98) |
+| 4Nb | `_drive_pipeline()` | Computes every overlapped chunk under one BLAS limit and one progress iterator | [chunk_pipeline.py:133](../src/jamma/lmm/chunk_pipeline.py#L133) |
 | 4Nb | `compute_chunk_size_numpy()` | Chunk size from a per-chunk budget and the dispatch path's per-SNP bytes; pure | [chunk_sizing.py:113](../src/jamma/lmm/chunk_sizing.py#L113) |
 | 4Nb | `LmmChunkPlan.plan()` | Chunk size, chunk count, and pipelining decision; cuts a split-capable run of at most 10,000 samples to 16 chunks when the budget alone would not pipeline and the BLAS is uncontrollable (Accelerate). Pure: `plan_association` reads RAM and BLAS controllability once and passes them in | [chunk_sizing.py:185](../src/jamma/lmm/chunk_sizing.py#L185) |
 | 4Nb | `LmmChunkPlan.narrow()` | Narrows a conservative plan to the filtered SNP count; width only decreases and pipelining only switches off | [chunk_sizing.py:297](../src/jamma/lmm/chunk_sizing.py#L297) |

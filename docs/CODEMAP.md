@@ -339,11 +339,11 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 |----|-----------|-------------|-----------|
 | 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:55](../src/jamma/validation/tolerances.py#L55) |
 | 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:22](../src/jamma/validation/compare.py#L22) |
-| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:321](../src/jamma/validation/compare.py#L343) |
-| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:509](../src/jamma/validation/compare.py#L548) |
-| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:145](../src/jamma/validation/compare.py#L159) |
-| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:255](../src/jamma/validation/compare.py#L277) |
-| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:183](../src/jamma/validation/compare.py#L197) |
+| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:329](../src/jamma/validation/compare.py#L329) |
+| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:561](../src/jamma/validation/compare.py#L561) |
+| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:153](../src/jamma/validation/compare.py#L153) |
+| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:263](../src/jamma/validation/compare.py#L263) |
+| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:191](../src/jamma/validation/compare.py#L191) |
 
 ---
 
@@ -602,6 +602,6 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Memory estimation | [lmm_cost](../src/jamma/core/memory.py#L252) |
 | Threading | [threading.py:42](../src/jamma/core/threading.py#L42) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
-| Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L548) |
+| Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L561) |
 | Formula derivations and validation | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
 | Numerical equivalence bound | [GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md](GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) |

@@ -163,7 +163,7 @@ _P_SCORE = StatColumn("p_scores", "p_score", "p_score")
 
 # ── The single source of truth ──────────────────────────────────────
 
-MODE_SPECS: Mapping[int, ModeSpec] = MappingProxyType(
+MODE_SPECS: Mapping[LmmMode, ModeSpec] = MappingProxyType(
     {
         1: ModeSpec("wald", (_BETA, _SE, _LOGL, _L_REMLE, _P_WALD)),
         2: ModeSpec("lrt", (_LOGL, _L_MLE, _P_LRT)),
@@ -180,7 +180,7 @@ def get_spec(mode: int) -> ModeSpec:
     """Look up ModeSpec by lmm_mode int, or raise ValueError."""
     if mode not in MODE_SPECS:
         raise ValueError(f"Unknown lmm_mode={mode}; expected one of {list(MODE_SPECS)}")
-    return MODE_SPECS[mode]
+    return MODE_SPECS[parse_lmm_mode(mode)]
 
 
 # ── Derived views (replace old per-module dispatch tables) ──────────

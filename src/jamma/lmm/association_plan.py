@@ -62,8 +62,34 @@ class MemoryPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class KinshipShape:
+    """The kinship matrix a run materialises before its eigendecomposition.
+
+    ``n_samples`` is the matrix order: the input sample count when the matrix
+    is read from disk or saved (both happen at full size), else the analysed
+    count. ``loaded`` means one square read replaces the accumulation pass
+    over the genotypes.
+    """
+
+    n_samples: int
+    loaded: bool
+
+    @classmethod
+    def resolve(
+        cls, n_samples: int, n_input_samples: int, *, loaded: bool, saved: bool
+    ) -> KinshipShape:
+        """Apply the one rule for the matrix order the pipeline materialises."""
+        full = loaded or saved or n_samples == n_input_samples
+        return cls(n_input_samples if full else n_samples, loaded)
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutableAssociationPlan:
-    """Selected mode, dispatch, conservative geometry, and memory policy."""
+    """Selected mode, dispatch, conservative geometry, and memory policy.
+
+    ``kinship`` is None when the run materialises no kinship matrix: the
+    eigenpairs are provided, or a standalone runner already holds it.
+    """
 
     summary: ExecutionPlan
     dispatch: DispatchPath
@@ -75,10 +101,18 @@ class ExecutableAssociationPlan:
     mem_budget_gb: float | None
     workspace: WorkspaceSpec
     phenotype_group_size: int = 1
+    kinship: KinshipShape | None = None
 
     def __post_init__(self) -> None:
         if self.phenotype_group_size < 1:
             raise ValueError("phenotype_group_size must be >= 1")
+
+    @property
+    def resolved_kinship(self) -> KinshipShape:
+        """The kinship shape of a plan that materialises a kinship matrix."""
+        if self.kinship is None:
+            raise ValueError("this association plan materialises no kinship matrix")
+        return self.kinship
 
     def _group_workspace_bytes(self) -> int:
         """Fixed bytes for all phenotype kernels live in one bounded group."""

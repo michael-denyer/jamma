@@ -7,12 +7,12 @@ fields into the variants the runner can safely execute.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
 
-from jamma.lmm.association_plan import ExecutableAssociationPlan
+from jamma.lmm.association_plan import ExecutableAssociationPlan, KinshipShape
 from jamma.lmm.loco_config import LocoConfig
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline_config import PipelineConfig
@@ -81,10 +81,20 @@ def resolve_analysis_plan(
     snps_indices: np.ndarray | None,
     ksnps_indices: np.ndarray | None,
 ) -> AnalysisPlan:
-    """Convert an already validated flat config into one executable variant."""
+    """Convert an already validated flat config into one executable variant.
+
+    The kinship shape is resolved here, once, from the same source variants,
+    so the memory quote and the runtime load read one rule.
+    """
     if config.loco:
+        kinship = KinshipShape.resolve(
+            execution.n_samples,
+            execution.n_input_samples,
+            loaded=False,
+            saved=config.save_kinship,
+        )
         return LocoAnalysisPlan(
-            execution=execution,
+            execution=replace(execution, kinship=kinship),
             lmm=config.lmm_config(check_memory=config.check_memory),
             loco=LocoConfig(
                 kinship_output_dir=config.output_dir if config.save_kinship else None,
@@ -107,18 +117,23 @@ def resolve_analysis_plan(
             config.eigenvector_file,
             config.kinship_file,
         )
+        kinship = None
     else:
         if config.eigenvector_file is not None:
             raise RuntimeError(
                 "resolve_analysis_plan requires validate_inputs() to pair eigen files"
             )
-        eigen_source = KinshipToEigen(
-            resolve_kinship_source(config.kinship_file, ksnps_indices),
-            config.write_eigen,
+        source = resolve_kinship_source(config.kinship_file, ksnps_indices)
+        eigen_source = KinshipToEigen(source, config.write_eigen)
+        kinship = KinshipShape.resolve(
+            execution.n_samples,
+            execution.n_input_samples,
+            loaded=isinstance(source, ProvidedKinship),
+            saved=config.save_kinship,
         )
 
     return StandardAnalysisPlan(
-        execution=execution,
+        execution=replace(execution, kinship=kinship),
         lmm=config.lmm_config(),
         eigen_source=eigen_source,
         snps_indices=snps_indices,

@@ -9,6 +9,7 @@ from bed_reader import to_bed
 from loguru import logger
 
 from jamma.kinship import compute_kinship_streaming, compute_loco_kinship_streaming
+from jamma.lmm.association_plan import KinshipShape
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.validation.compare import load_gemma_assoc
 from tests.conftest import require_fixture
@@ -436,7 +437,11 @@ def test_pipeline_kinship_uses_gemma_filter_and_centring_populations(
         )
     )
     actual = runner._load_kinship_from_source(
-        ComputedKinship(None), 80, valid, selected_weights
+        ComputedKinship(None),
+        80,
+        KinshipShape.resolve(len(valid), 80, loaded=False, saved=save),
+        valid,
+        selected_weights,
     )
     np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
 

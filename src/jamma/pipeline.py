@@ -38,7 +38,11 @@ from jamma.kinship import (
     read_kinship_matrix,
     write_kinship_matrix,
 )
-from jamma.lmm.association_plan import ExecutionPlan, plan_association
+from jamma.lmm.association_plan import (
+    ExecutionPlan,
+    KinshipShape,
+    plan_association,
+)
 from jamma.lmm.eigen import center_kinship, eigendecompose_kinship
 from jamma.lmm.eigen_io import (
     managed_eigen_pair_exists,
@@ -278,6 +282,7 @@ class PipelineRunner:
         self,
         source: KinshipSource,
         n_samples: int,
+        kinship: KinshipShape,
         valid_indices: np.ndarray | None,
         weights: np.ndarray | None,
     ) -> np.ndarray:
@@ -301,6 +306,7 @@ class PipelineRunner:
         Args:
             source: Where the kinship comes from, per the resolved plan.
             n_samples: Number of samples (for validation of loaded kinship).
+            kinship: The matrix order the plan resolved, full or analysed.
             valid_indices: Sample indices to keep, or None for all samples.
                 Must be sorted, unique, and within [0, n_samples).
             weights: Weights already selected into analyzed-sample order, or None.
@@ -314,15 +320,11 @@ class PipelineRunner:
 
             validate_valid_indices(valid_indices, n_samples)
 
-        # The full matrix is needed when it is going to be saved; otherwise a
-        # computed kinship is accumulated over the valid samples directly.
-        full = valid_indices is None or self.config.save_kinship
+        full = kinship.n_samples == n_samples
 
         if isinstance(source, ProvidedKinship):
             logger.info(f"Loading kinship from {source.path}")
             K = read_kinship_matrix(source.path, n_samples=n_samples)
-            if not full:
-                K = K[np.ix_(valid_indices, valid_indices)]
         else:
             logger.info("Computing kinship from genotypes")
             K = compute_kinship_streaming(
@@ -578,6 +580,7 @@ class PipelineRunner:
             K = self._load_kinship_from_source(
                 source.source,
                 n_samples,
+                analysis.execution.resolved_kinship,
                 valid_indices=valid_indices,
                 weights=weights,
             )

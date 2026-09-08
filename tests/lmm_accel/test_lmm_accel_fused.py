@@ -1,7 +1,7 @@
 """_lmm_accel C extension tests: fused Uab kernels, n_cvt=1 and general.
 
 Split from the original single test_lmm_accel module. Shared fixtures
-live in tests/lmm_accel_helpers.py.
+live in tests/lmm_accel/_helpers.py.
 """
 
 from typing import Literal

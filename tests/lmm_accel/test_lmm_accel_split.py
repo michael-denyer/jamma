@@ -1,7 +1,7 @@
 """_lmm_accel C extension tests: workspace guards and alignment.
 
 Split from the original single test_lmm_accel module. Shared fixtures
-live in tests/lmm_accel_helpers.py.
+live in tests/lmm_accel/_helpers.py.
 
 The C kernels this module used to drive, compute_lmm_batch_split_c
 and the create_workspace_split_c workspace, are not reachable from any

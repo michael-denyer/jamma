@@ -475,7 +475,6 @@ class TestGeneralWorkspaceScoreParity:
         data = general_score_lrt_ncvt2
         n_cvt = data["n_cvt"]
         n_samples = data["n_samples"]
-        pab_dict = n_cvt
 
         inv_indices, _var_indices = classify_uab_columns(n_cvt)
         Uab_batch = data["Uab_batch"]
@@ -493,7 +492,7 @@ class TestGeneralWorkspaceScoreParity:
             50,
             20,
             1,
-            pab_dict,
+            n_cvt,
             lmm_mode=3,
             hi_eval_null=data["Hi_eval_null"],
         )
@@ -526,7 +525,6 @@ class TestGeneralWorkspaceLrtParity:
         data = general_score_lrt_ncvt2
         n_cvt = data["n_cvt"]
         n_samples = data["n_samples"]
-        pab_dict = n_cvt
 
         inv_indices, _var_indices = classify_uab_columns(n_cvt)
         Uab_batch = data["Uab_batch"]
@@ -544,7 +542,7 @@ class TestGeneralWorkspaceLrtParity:
             50,
             20,
             1,
-            pab_dict,
+            n_cvt,
             lmm_mode=2,
             logl_H0=data["logl_H0"],
         )

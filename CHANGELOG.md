@@ -70,6 +70,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Interrupted association output survives even when renaming it to `.partial`
+  fails. The warning names the recoverable file, and cleanup preserves it.
+- LOCO checks the selected chromosome batch against the free RAM available
+  after genotype statistics, before allocating the kinship matrices.
+- Association comparison rejects different header modes even when both files
+  contain zero rows. Empty in-memory rows report count mismatches without
+  assuming a Wald mode.
+
 - **The batch-mode quote for the C paths no longer charges a Uab+Iab batch the
   workspace never allocates.** `ExecutableAssociationPlan.price()` passed the
   dispatch-derived figure only for `NUMPY_WALD` and priced the full fallback
@@ -93,10 +101,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`compare_assoc_results` raises `ValueError` when the two files carry
   different LMM modes.** It used to return `passed=False` with every column
   result passing and no message, so a caller had a failure with no cause.
-  `load_gemma_assoc` returns a plain `list[AssocResult]`; the `AssocTable`
-  subclass that carried the file's header columns is gone, and no caller read
-  them. An empty file now reports mode 1 rather than the mode its header
-  implies, which changes no comparison result over zero rows.
+  `load_gemma_assoc` returns an `AssocDataset`, a read-only sequence with an
+  explicit `mode` and tuple of `rows`. Iteration, indexing, and slicing remain
+  available, and an empty slice retains its source's mode. The parsed schema
+  no longer depends on there being a first row.
 
 ## [8.0.0] - 2026-09-08
 

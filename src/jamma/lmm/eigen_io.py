@@ -30,7 +30,7 @@ from loguru import logger
 
 from jamma.io.matrix_reader import read_matrix_parallel
 from jamma.io.matrix_writer import write_matrix_parallel
-from jamma.utils.atomic_publish import atomic_output
+from jamma.utils.atomic_publish import AtomicOutput
 from jamma.utils.npy_cache import (
     read_array_artifact,
     save_npy_atomic,
@@ -282,7 +282,7 @@ def _write_eigenvalues(
 
 def _save_eigenvalues_text(eigenvalues: np.ndarray, path: Path) -> None:
     """Write legacy eigenvalues without exposing a partial destination."""
-    with atomic_output(path) as temporary:
+    with AtomicOutput(path) as temporary:
         np.savetxt(temporary, eigenvalues, fmt="%.10g")
 
 
@@ -363,7 +363,7 @@ def _generation_prefix(prefix: str, generation: str) -> str:
 
 def _write_manifest(path: Path, payload: dict[str, object]) -> None:
     """Publish a small JSON commit record after all referenced files exist."""
-    with atomic_output(path) as temporary, open(temporary, "w", encoding="utf-8") as fh:
+    with AtomicOutput(path) as temporary, open(temporary, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, sort_keys=True)
         fh.write("\n")
 

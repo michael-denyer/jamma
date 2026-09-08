@@ -13,7 +13,7 @@ from loguru import logger
 
 from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, SnpMeta, get_spec
 from jamma.lmm.stats import AssocResult
-from jamma.utils.atomic_publish import atomic_output, unlink_quietly
+from jamma.utils.atomic_publish import AtomicOutput
 
 # Retry backoff schedule (seconds) for transient write failures
 _RETRY_BACKOFF = (0.1, 0.5, 2.0)
@@ -81,7 +81,7 @@ class IncrementalAssocWriter:
 
     Writes via ``write_arrays_batch(...)``, directly from numpy arrays.
 
-    Results go to the sibling temp file ``atomic_output`` owns and are
+    Results go to the sibling temp file ``AtomicOutput`` owns and are
     published onto ``path`` only when the context exits cleanly. An ordinary
     exception discards them. An interrupt or an out-of-memory keeps what was
     written at ``partial_path``, beside the destination.
@@ -117,7 +117,7 @@ class IncrementalAssocWriter:
     def __enter__(self) -> "IncrementalAssocWriter":
         """Open the temp file and write the header."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._publish = atomic_output(self.path)
+        self._publish = AtomicOutput(self.path)
         self._temp_path = self._publish.__enter__()
         try:
             self._file = open(self._temp_path, "w")
@@ -141,7 +141,7 @@ class IncrementalAssocWriter:
     def _discard_temp(self) -> None:
         """Close the file and delete the temp (best-effort), for the retry path."""
         self._close_file()
-        unlink_quietly(self._temp_path)
+        self._publish.discard()
 
     def _write_buf(self, buf: str, count: int) -> None:
         """Write pre-formatted buffer with retry logic.
@@ -320,15 +320,11 @@ class IncrementalAssocWriter:
 
         self._close_file()
         if not issubclass(exc_type, Exception) or issubclass(exc_type, MemoryError):
-            try:
-                self._temp_path.replace(self.partial_path)
-            except OSError as error:
-                logger.warning(f"Partial output remains at {self._temp_path}: {error}")
-            else:
-                logger.warning(
-                    f"{exc_type.__name__} after {self._count} results written; "
-                    f"partial output retained at {self.partial_path}"
-                )
+            retained_path = self._publish.retain(self.partial_path)
+            logger.warning(
+                f"{exc_type.__name__} after {self._count} results written; "
+                f"partial output retained at {retained_path}"
+            )
         else:
             logger.warning(
                 f"{exc_type.__name__}: {exc_val}; discarding partial output "

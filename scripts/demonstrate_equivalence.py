@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
 from jamma.lmm.runner_numpy import run_lmm_association_numpy  # noqa: E402
 from jamma.lmm.schema import LmmConfig, LmmMode  # noqa: E402
+from jamma.lmm.stats import AssocResult  # noqa: E402
 from jamma.validation import (  # noqa: E402
     ToleranceConfig,
     compare_assoc_results,
@@ -212,7 +214,9 @@ def _rank_correlation(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(rx, ry)[0, 1])
 
 
-def _print_scientific_equivalence(jamma: list, gemma: list, p_field: str) -> None:
+def _print_scientific_equivalence(
+    jamma: Sequence[AssocResult], gemma: Sequence[AssocResult], p_field: str
+) -> None:
     """Compute and print scientific equivalence metrics."""
     j_by_rs = {r.rs: r for r in jamma}
     g_by_rs = {r.rs: r for r in gemma}
@@ -315,7 +319,7 @@ def print_performance_summary(timings: list[SectionTiming], total: float):
 
 
 def _assoc_rows(
-    jamma: list, gemma: list, tol: ToleranceConfig
+    jamma: Sequence[AssocResult], gemma: Sequence[AssocResult], tol: ToleranceConfig
 ) -> tuple[bool, list[tuple[str, float, ComparisonResult]]]:
     """Compare one mode's results and lay the active columns out as rows.
 

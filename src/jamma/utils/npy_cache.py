@@ -11,7 +11,7 @@ from typing import Literal
 import numpy as np
 from loguru import logger
 
-from jamma.utils.atomic_publish import atomic_output
+from jamma.utils.atomic_publish import AtomicOutput
 
 
 def save_npy_atomic(array: np.ndarray, npy_path: Path) -> None:
@@ -30,7 +30,7 @@ def save_npy_atomic(array: np.ndarray, npy_path: Path) -> None:
         OSError: If the write or the rename fails. The destination is left
             untouched and the temp is removed.
     """
-    with atomic_output(npy_path, suffix=".npy") as tmp_path:
+    with AtomicOutput(npy_path, suffix=".npy") as tmp_path:
         np.save(tmp_path, array)
 
 

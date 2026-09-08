@@ -194,7 +194,7 @@ src/jamma/
 │                          # source list every build entry point reads; do not trust a file
 │                          # list written down anywhere else, including this one.
 ├── utils/                  # Shared utilities (logging setup, chromosome sort key)
-│   ├── atomic_publish.py   # atomic_output()/publish_temp_path(): sibling-temp + rename publish
+│   ├── atomic_publish.py   # AtomicOutput()/publish_temp_path(): sibling-temp + rename publish
 │   ├── logging.py          # setup_logging() + write_gemma_log(): loguru config, GEMMA .log.txt
 │   └── npy_cache.py        # read_array_artifact(): .npy / text / sidecar reader for kinship and eigen files
 └── validation/             # GEMMA comparison utilities and tolerance configuration

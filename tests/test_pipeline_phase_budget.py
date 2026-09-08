@@ -123,3 +123,18 @@ def test_precomputed_eigen_streaming_does_not_reserve_decomposition(monkeypatch)
     plan = plan_association(10_000, 100, requested="numpy-streaming", mem_budget=2.0)
     assert plan.price(eigen=None).total_peak_gb <= 2.0
     assert preflight(config, plan) is None
+
+
+def test_loco_rechecks_capacity_after_genotype_statistics(monkeypatch):
+    from jamma.kinship import compute_loco_kinship_streaming
+    from tests.conftest import require_fixture
+    from tests.fixture_paths import LOCO
+
+    require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
+    readings = iter((256.0, 0.0))
+    monkeypatch.setattr(memory, "available_ram_gb", lambda: next(readings))
+    with pytest.raises(MemoryError, match="LOCO kinship"):
+        stream = compute_loco_kinship_streaming(
+            LOCO.bfile, consumer_gb=0.0, show_progress=False
+        )
+        next(iter(stream))

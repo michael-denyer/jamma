@@ -33,7 +33,7 @@ from jamma.io._parallel_text import (
     temp_dir_beside,
     unlink_quietly,
 )
-from jamma.utils.atomic_publish import atomic_output
+from jamma.utils.atomic_publish import AtomicOutput
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +125,7 @@ def write_matrix_parallel(
         # Publish atomically: np.savetxt truncates its target on open, so an
         # interrupted or failed write would otherwise destroy a pre-existing
         # valid file.
-        with atomic_output(path) as publish_tmp:
+        with AtomicOutput(path) as publish_tmp:
             np.savetxt(publish_tmp, matrix, fmt=fmt, delimiter=delimiter)
         return
 
@@ -216,7 +216,7 @@ def write_matrix_parallel(
         # path, so a failure mid-concatenation never destroys a pre-existing
         # valid file at the destination.
         try:
-            with atomic_output(path) as publish_tmp, open(publish_tmp, "wb") as f_out:
+            with AtomicOutput(path) as publish_tmp, open(publish_tmp, "wb") as f_out:
                 for chunk_path in chunk_paths:
                     with open(chunk_path, "rb") as f_in:
                         while True:

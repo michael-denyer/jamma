@@ -535,6 +535,15 @@ def compute_loco_kinship_streaming(
         budget_gb=mem_budget,
         max_batch_chrs=_max_batch_chrs,
     )
+    if check_memory:
+        # Statistics may take long enough for free RAM to change. The planner
+        # returns a one-chromosome floor even when it cannot fit this reading.
+        memory.require(
+            plan.required_gb,
+            available_gb,
+            "LOCO kinship",
+            budget_gb=mem_budget,
+        )
 
     if mem_budget is not None:
         logger.info(f"  Memory budget: {mem_budget:.1f}GB")

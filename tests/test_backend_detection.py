@@ -205,9 +205,7 @@ class TestExecutionMode:
         """plan_association prices the Uab/Iab batch its dispatch path holds.
 
         n_cvt=4 with the extension loaded selects FUSED_GENERAL, whose C
-        workspace forms Uab in place, so the batch quote charges no Uab/Iab
-        buffer at all. Before this, the quote charged the full NumPy-fallback
-        table on every C path.
+        workspace forms Uab in place, so the quote charges no Uab/Iab buffer.
         """
         calls = []
 

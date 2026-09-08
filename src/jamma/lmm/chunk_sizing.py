@@ -70,9 +70,9 @@ def chunk_budget_bytes(mem_budget_gb: float | None, *, available_bytes: int) -> 
 def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     """Live float64 bytes one SNP occupies on *dispatch*'s buffers.
 
-    The rows the path materialises, floored at one: a native path materialises
-    none beyond ``utg_t`` itself, which ``jlinalg.dgemm(chunk, U, transa="T")``
-    writes C-contiguous, one column per SNP.
+    The floor of one row is ``utg_t`` itself, which a native path materialises
+    nothing beyond: ``jlinalg.dgemm(chunk, U, transa="T")`` writes it
+    C-contiguous, one column per SNP.
     """
     return 8 * n_samples * max(1, dispatch.varying_rows(n_cvt))
 
@@ -83,8 +83,7 @@ def lmm_extra_bytes_per_snp(
     """Per-SNP bytes live in the LMM phase beyond the UtG rotation buffers.
 
     The preflight prices the association phase as rotation buffers plus this
-    figure, so its estimate follows the same dispatch knowledge the sizer
-    uses: the path's varying Uab rows plus the Iab cells it holds beside them.
+    figure, so its estimate follows the same dispatch knowledge the sizer uses.
 
     Args:
         n_samples: Number of samples.

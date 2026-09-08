@@ -31,12 +31,8 @@ static inline double reml_finish(
     if (pab[1][3] > 0.0) logdet_pab += log(pab[1][3]);
     double logdet_hiw = logdet_pab - logdet_iab;
 
-    double P_yy = pab[2][5];
-    if (P_yy < 0.0) {
-        P_yy = (double)NAN;
-    } else if (P_yy == 0.0) {
-        P_yy = P_YY_MIN;
-    }
+    double P_yy = replace_zero_p_yy(pab[2][5]);
+    if (P_yy < 0.0) P_yy = (double)NAN;
 
     return reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * log(P_yy);
 }
@@ -80,12 +76,8 @@ static inline double reml_finish_cached_split(
     if (pab[1][3] > 0.0) logdet_pab += log(pab[1][3]);
     double logdet_hiw = logdet_pab - logdet_iab;
 
-    double P_yy = pab[2][5];
-    if (P_yy < 0.0) {
-        P_yy = (double)NAN;
-    } else if (P_yy == 0.0) {
-        P_yy = P_YY_MIN;
-    }
+    double P_yy = replace_zero_p_yy(pab[2][5]);
+    if (P_yy < 0.0) P_yy = (double)NAN;
 
     return reml_const - 0.5 * cached_logdet_h - 0.5 * logdet_hiw
            - 0.5 * df * log(P_yy);
@@ -354,9 +346,8 @@ static inline double mle_finish(
     double mle_const
 )
 {
-    double P_yy = pab[2][5];
+    double P_yy = replace_zero_p_yy(pab[2][5]);
     if (P_yy < 0.0) return (double)NAN;
-    if (P_yy == 0.0) P_yy = P_YY_MIN;
     return mle_const - 0.5 * logdet_h - 0.5 * n_samples * log(P_yy);
 }
 

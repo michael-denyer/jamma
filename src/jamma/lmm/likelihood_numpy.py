@@ -21,8 +21,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from jamma.lmm.likelihood import warn_p_yy_once
-from jamma.lmm.pab import _NCVT1, _P_YY_MIN, build_index_table
+from jamma.lmm.pab import _NCVT1, build_index_table, guard_p_yy
 from jamma.lmm.reml_score import (
     _batch_reml_score_log_lambda_numpy,
     _batch_reml_score_log_lambda_split_ncvt1_numpy,
@@ -33,28 +32,6 @@ from jamma.lmm.uab import _batch_compute_pab_varying_numpy, _fill_pab_recursion
 # The objective handed to the golden-section refinement: per-SNP log-lambdas
 # (n_snps,) in, per-SNP log-likelihoods (n_snps,) out.
 _BatchLoglFn = Callable[[np.ndarray], np.ndarray]
-
-
-def _guard_P_yy(P_yy: np.ndarray) -> np.ndarray:
-    """Guard P_yy: negative -> NaN, exact zero -> _P_YY_MIN (as GEMMA).
-
-    Prevents NaN/Inf from log(P_yy) in degenerate SNPs. Downstream code
-    detects NaN to mark those SNPs as invalid.
-
-    Args:
-        P_yy: Projected phenotype variance, any shape.
-
-    Returns:
-        Guarded P_yy with same shape.
-    """
-    n_negative = int(np.sum(P_yy < 0.0))
-    if n_negative > 0:
-        warn_p_yy_once(
-            f"{n_negative} SNPs have negative P_yy — numerical breakdown. "
-            "Kinship matrix may not be positive semi-definite."
-        )
-    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
-    return np.where(P_yy == 0.0, _P_YY_MIN, P_yy)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +94,7 @@ def _batch_pab_at_lambda_numpy(
     # Pab with per-SNP Hi_eval
     Pab_batch = _batch_compute_pab_varying_numpy(n_cvt, Hi_eval_batch, Uab_batch)
 
-    P_yy = _guard_P_yy(Pab_batch[:, nc_total, table.idx_yy])
+    P_yy = guard_p_yy(Pab_batch[:, nc_total, table.idx_yy])
     return Pab_batch, logdet_h, P_yy
 
 
@@ -252,7 +229,7 @@ def _batch_grid_pab_numpy(
     # Recursive rows 1..n_cvt+1 (uses ... indexing for 4D)
     _fill_pab_recursion(Pab, table, n_cvt)
 
-    P_yy = _guard_P_yy(Pab[:, :, nc_total, table.idx_yy])
+    P_yy = guard_p_yy(Pab[:, :, nc_total, table.idx_yy])
 
     return Pab, logdet_h, P_yy
 
@@ -642,7 +619,7 @@ def _batch_grid_reml_split_ncvt1_numpy(
     with np.errstate(divide="ignore", invalid="ignore"):
         inv_p1_xx = np.where(p1_xx != 0, 1.0 / p1_xx, 0.0)
     P_yy = p1_yy_grid[:, None] - p1_xy * p1_xy * inv_p1_xx  # (n_grid, n_snps)
-    P_yy = _guard_P_yy(P_yy)
+    P_yy = guard_p_yy(P_yy)
 
     # logdet_hiw = (log(s_ww) - log(iab_s_ww)) + (log(p1_xx) - log(iab_p1_xx))
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -719,7 +696,7 @@ def _batch_reml_at_lambda_split_ncvt1_numpy(
 
     with np.errstate(divide="ignore", invalid="ignore"):
         inv_p1_xx = np.where(p1_xx != 0, 1.0 / p1_xx, 0.0)
-    P_yy = _guard_P_yy(p1_yy - p1_xy * p1_xy * inv_p1_xx)
+    P_yy = guard_p_yy(p1_yy - p1_xy * p1_xy * inv_p1_xx)
 
     # logdet_hiw
     with np.errstate(divide="ignore", invalid="ignore"):

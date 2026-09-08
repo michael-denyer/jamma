@@ -80,14 +80,9 @@ static double reml_finish_general(
     }
     double logdet_hiw = logdet_pab - logdet_iab;
 
-    /* P_yy guard */
     int nc_total = t->n_cvt + 1;
-    double P_yy = pab[nc_total * ni + t->idx_yy];
-    if (P_yy < 0.0) {
-        P_yy = (double)NAN;
-    } else if (P_yy == 0.0) {
-        P_yy = P_YY_MIN;
-    }
+    double P_yy = replace_zero_p_yy(pab[nc_total * ni + t->idx_yy]);
+    if (P_yy < 0.0) P_yy = (double)NAN;
 
     return reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * log(P_yy);
 }
@@ -446,9 +441,8 @@ static double mle_logl_general(
 
     /* P_yy_full at level n_cvt+1 (fully projected) */
     int nc = t->n_cvt;
-    double P_yy = pab_scratch[(nc + 1) * ni + t->idx_yy];
+    double P_yy = replace_zero_p_yy(pab_scratch[(nc + 1) * ni + t->idx_yy]);
     if (P_yy < 0.0) return (double)NAN;
-    if (P_yy == 0.0) P_yy = P_YY_MIN;
 
     return mle_const - 0.5 * logdet_h - 0.5 * (double)n_samples * log(P_yy);
 }
@@ -480,9 +474,8 @@ static double mle_logl_general_cached(
     calc_pab_general(row0, t, pab_scratch);
 
     int nc = t->n_cvt;
-    double P_yy = pab_scratch[(nc + 1) * ni + t->idx_yy];
+    double P_yy = replace_zero_p_yy(pab_scratch[(nc + 1) * ni + t->idx_yy]);
     if (P_yy < 0.0) return (double)NAN;
-    if (P_yy == 0.0) P_yy = P_YY_MIN;
 
     return mle_const - 0.5 * cached_logdet_h - 0.5 * (double)n_samples * log(P_yy);
 }

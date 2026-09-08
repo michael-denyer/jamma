@@ -28,20 +28,29 @@
 #define MAX_N_ROWS   (MAX_N_CVT + 2)                          /* 102 */
 #define MAX_PAB_SIZE (MAX_N_ROWS * MAX_N_INDEX)               /* 535806 */
 
-/* Replacement for an exactly zero P_yy before the log in a REML/MLE tail,
- * as GEMMA's LogRL_f/LogL_f do (`if (P_yy == 0.0) P_yy = 1e-8`). Only an
- * exact zero is replaced; an absolute floor would break scale equivariance.
- * Mirrors _P_YY_MIN in pab.py; both sides must agree or the C and NumPy
- * paths diverge on degenerate SNPs. */
-#define P_YY_MIN 1e-8
+/* Replacement for an exactly zero P_yy before the log in a REML/MLE tail or
+ * the tau denominator of a Wald/Score statistic, as GEMMA v0.98.5's
+ * LogRL_f/LogL_f do (`if (P_yy == 0.0) P_yy = 0.00000001`). Only an exact
+ * zero is replaced; an absolute floor would break scale equivariance. A
+ * negative P_yy is the caller's call (NaN likelihood, degenerate statistic)
+ * and passes through untouched.
+ * Mirrors _P_YY_ZERO_REPLACEMENT in pab.py; both sides must agree or the C
+ * and NumPy paths diverge on degenerate SNPs. */
+#define P_YY_ZERO_REPLACEMENT 1e-8
+
+static inline double replace_zero_p_yy(double p_yy)
+{
+    return p_yy == 0.0 ? P_YY_ZERO_REPLACEMENT : p_yy;
+}
 
 /* REML sentinel: replaces NaN log-likelihood from degenerate P_yy.
  * reml_finish returns NaN when P_yy < 0; the golden section callers
  * map NaN -> REML_SENTINEL so the > comparison skips degenerate points
  * without needing an isnan() guard on every iteration.
  * Matches the Python path's np.where(isnan, -inf, logl).
- * Here rather than in _lmm_support.h for the same reason as P_YY_MIN: the
- * lambda optimizers read it and must not need <Python.h> to do so. */
+ * Here rather than in _lmm_support.h for the same reason as
+ * P_YY_ZERO_REPLACEMENT: the lambda optimizers read it and must not need
+ * <Python.h> to do so. */
 #define REML_SENTINEL (-INFINITY)
 
 /* Pre-computed invariant dot products for one coarse grid point.

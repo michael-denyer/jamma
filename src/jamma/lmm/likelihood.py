@@ -11,10 +11,10 @@ CalcPPPab, LogRL_dev2, CalcRLWald, CalcRLScore) live in ``tests/reference``.
 Also provides null model optimization via golden section search for Score
 and LRT tests.
 
-This module owns likelihood evaluation, the P_yy clamp guard, and the golden
-section search. The packed Uab/Pab representation it evaluates over, along
-with the index tables and the C-friendly flattened table, lives in
-``jamma.lmm.pab``. The one value this module supplies is ``Hi_eval``, the
+This module owns likelihood evaluation and the golden section search. The
+packed Uab/Pab representation it evaluates over, the index tables, the
+C-friendly flattened table, and the P_yy guard live in ``jamma.lmm.pab``.
+The one value this module supplies is ``Hi_eval``, the
 1/(lambda * eigenvalues + 1) weighting vector each Pab row is built from.
 
 Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
@@ -22,7 +22,6 @@ Reference: Zhou & Stephens (2012) Nature Genetics, Supplementary Information
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable
 
 import numpy as np
@@ -30,11 +29,12 @@ from loguru import logger
 
 from jamma.lmm.pab import (
     _NCVT1,
-    _P_YY_MIN,
     build_index_table,
     calc_iab,
     calc_pab,
     compute_Uab,
+    guard_p_yy,
+    reset_p_yy_warned,
 )
 
 __all__ = [
@@ -43,58 +43,7 @@ __all__ = [
     "finite_difference_dev2",
     "mle_log_likelihood",
     "reml_log_likelihood",
-    "reset_p_yy_warned",
-    "warn_p_yy_once",
 ]
-
-# One thread-local flag deduplicates the negative-P_yy warning across the
-# scalar (_clamp_p_yy) and batch (likelihood_numpy._guard_P_yy) guards within
-# a single LMM run. The batch guard fires hundreds of times per run (once per
-# grid eval + golden section iter per chunk), which buried the meaningful first
-# warning under identical log spam. Reset at run start via reset_p_yy_warned().
-_p_yy_state = threading.local()
-
-
-def reset_p_yy_warned() -> None:
-    """Reset the P_yy warning flag so each LMM run gets its own warning."""
-    _p_yy_state.warned = False
-
-
-def warn_p_yy_once(message: str) -> None:
-    """Log ``message`` at WARNING level once per run, then stay silent."""
-    if getattr(_p_yy_state, "warned", False):
-        return
-    logger.warning(message)
-    _p_yy_state.warned = True
-
-
-def _clamp_p_yy(P_yy: float, lambda_val: float) -> float:
-    """Clamp P_yy to prevent log(0) or log(negative) in log-likelihood.
-
-    Returns NaN for negative P_yy (propagates through np.log as NaN;
-    optimizer avoids NaN regions) and replaces an exact zero with
-    _P_YY_MIN, as GEMMA's LogRL_f and LogL_f do.
-
-    Warning deduplication: only logs the first negative P_yy per run.
-    Call reset_p_yy_warned() at the start of each LMM run.
-
-    Args:
-        P_yy: Projected residual variance from Pab.
-        lambda_val: Current lambda value (for diagnostic logging).
-
-    Returns:
-        Clamped P_yy, or NaN for negative values (signals invalid region).
-    """
-    if P_yy < 0:
-        warn_p_yy_once(
-            f"Negative P_yy ({P_yy:.6e}) at lambda={lambda_val:.6e} — "
-            "numerical breakdown (subsequent occurrences suppressed). "
-            "The kinship matrix may not be positive semi-definite."
-        )
-        return float("nan")  # np.log(nan) = nan, optimizer avoids
-    if P_yy == 0.0:
-        return _P_YY_MIN
-    return P_yy
 
 
 def finite_difference_dev2(
@@ -202,7 +151,7 @@ def reml_log_likelihood(
         if d_iab > 0:
             logdet_hiw -= np.log(d_iab)
 
-    P_yy = _clamp_p_yy(Pab[nc_total, table.idx_yy], lambda_val)
+    P_yy = float(guard_p_yy(Pab[nc_total, table.idx_yy]))
 
     c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
@@ -467,7 +416,7 @@ def mle_log_likelihood(
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
         P_yy_raw = Pab[nc_total, build_index_table(n_cvt).idx_yy]
 
-    P_yy = _clamp_p_yy(P_yy_raw, lambda_val)
+    P_yy = float(guard_p_yy(P_yy_raw))
 
     # MLE formula (uses n, not df; no logdet_hiw)
     c = 0.5 * n * (np.log(n) - np.log(2 * np.pi) - 1.0)

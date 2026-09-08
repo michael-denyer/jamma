@@ -99,7 +99,7 @@ def test_batch_golden_section_numpy_all_nan_grid():
     l_min. Refinement should return log-lambdas at or near log(l_min) without
     crashing, and never an infinite one.
 
-    This is the all-SNPs-degenerate extreme: _guard_P_yy produces NaN for
+    This is the all-SNPs-degenerate extreme: guard_p_yy produces NaN for
     every grid point, so safe_logls is all -inf.
     """
     from jamma.lmm.likelihood_numpy import (

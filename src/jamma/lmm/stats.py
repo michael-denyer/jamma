@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from jamma.lmm.pab import _P_YY_MIN, build_index_table
+from jamma.lmm.pab import build_index_table, replace_zero_p_yy
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
 from jamma.lmm.uab import batch_compute_pab_numpy
 
@@ -141,8 +141,7 @@ def batch_calc_wald_stats_from_pab_numpy(
     P_YY = Pab_batch[:, n_cvt, idx_yy]
     Px_YY = Pab_batch[:, n_cvt + 1, idx_yy]
 
-    # Replace an exact-zero Px_YY so degenerate SNPs do not divide by zero.
-    Px_YY = np.where(Px_YY == 0.0, _P_YY_MIN, Px_YY)
+    Px_YY = replace_zero_p_yy(Px_YY)
 
     beta, se, is_valid = _beta_se_from_pab(P_XX, P_XY, Px_YY, df)
 
@@ -187,13 +186,13 @@ def batch_calc_score_stats_numpy(
 
     # Score test: extract at level n_cvt (covariates only, NOT genotype)
     P_yy = Pab_batch[:, n_cvt, idx_yy]
-    P_yy = np.where(P_yy == 0.0, _P_YY_MIN, P_yy)
+    P_yy = replace_zero_p_yy(P_yy)
     P_xx = Pab_batch[:, n_cvt, idx_xx]
     P_xy = Pab_batch[:, n_cvt, idx_xy]
 
     # Px_yy for beta/se computation
     Px_yy = Pab_batch[:, n_cvt + 1, idx_yy]
-    Px_yy = np.where(Px_yy == 0.0, _P_YY_MIN, Px_yy)
+    Px_yy = replace_zero_p_yy(Px_yy)
 
     beta, se, is_valid = _beta_se_from_pab(P_xx, P_xy, Px_yy, df)
 

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from jamma.lmm.pab import _P_YY_MIN, get_ab_index
+from jamma.lmm.pab import get_ab_index
 from jamma.lmm.special import betainc, chi2_sf
+from tests.reference import P_YY_FLOOR
 
 
 def safe_sqrt(d: float) -> float:
@@ -118,10 +119,8 @@ def calc_wald_test(
     if P_xx <= 0.0:
         return float("nan"), float("nan"), float("nan")
 
-    # Clamp Px_yy to prevent negative variance (GEMMA lmm.cpp:854)
-    # Only clamp if >= 0 and < _P_YY_MIN; leave negative values to produce NaN
-    if Px_yy >= 0.0 and Px_yy < _P_YY_MIN:
-        Px_yy = _P_YY_MIN
+    if Px_yy >= 0.0 and Px_yy < P_YY_FLOOR:
+        Px_yy = P_YY_FLOOR
 
     # Compute effect size and standard error
     # Use safe_sqrt to handle edge cases where 1/(tau*P_xx) could be slightly negative
@@ -214,9 +213,8 @@ def calc_score_test(
     if P_xx <= 0.0:
         return float("nan"), float("nan"), float("nan")
 
-    # Clamp Px_yy like Wald test does (GEMMA lmm.cpp:854)
-    if Px_yy >= 0.0 and Px_yy < _P_YY_MIN:
-        Px_yy = _P_YY_MIN
+    if Px_yy >= 0.0 and Px_yy < P_YY_FLOOR:
+        Px_yy = P_YY_FLOOR
 
     # Compute beta and se (informational only for Score test)
     beta = P_xy / P_xx

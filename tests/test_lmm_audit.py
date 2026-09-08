@@ -1,4 +1,4 @@
-"""LMM numerical-guard regressions: safe_sqrt, P_yy clamp, covariate
+"""LMM numerical-guard regressions: safe_sqrt, P_yy guard, covariate
 over-parameterization, golden-section optimizer.
 
 Covers boundary behavior at the edge of the LMM numerical envelope. Each
@@ -10,12 +10,11 @@ import numpy as np
 import pytest
 
 from jamma.lmm.likelihood import (
-    _clamp_p_yy,
     _golden_section_minimize,
     mle_log_likelihood,
     reml_log_likelihood,
 )
-from jamma.lmm.pab import compute_Uab
+from jamma.lmm.pab import compute_Uab, guard_p_yy
 from jamma.lmm.prepare_common import _build_covariate_matrix
 from tests.reference.stats import safe_sqrt
 
@@ -52,30 +51,39 @@ class TestSafeSqrt:
         assert result == pytest.approx(np.sqrt(1e-15))
 
 
-class TestClampPyy:
-    """T2: P_yy clamping helper."""
+class TestGuardPyy:
+    """T2: the one P_yy guard, scalar and batch."""
 
-    def test_positive_above_min_unchanged(self):
-        assert _clamp_p_yy(1.0, 0.1) == 1.0
+    def test_positive_unchanged(self):
+        assert guard_p_yy(1.0) == 1.0
 
     def test_tiny_positive_passes_through(self):
-        """Only an exact zero is replaced (GEMMA), so scale equivariance holds."""
-        assert _clamp_p_yy(1e-12, 0.1) == 1e-12
+        """Only an exact zero is replaced (GEMMA v0.98.5); scale equivariance holds."""
+        assert guard_p_yy(1e-12) == 1e-12
 
-    def test_zero_clamped(self):
-        assert _clamp_p_yy(0.0, 0.1) == 1e-8
+    def test_zero_replaced(self):
+        assert guard_p_yy(0.0) == 1e-8
 
     def test_negative_returns_nan(self):
-        result = _clamp_p_yy(-0.01, 0.1)
-        assert np.isnan(result)
+        assert np.isnan(guard_p_yy(-0.01))
 
-    def test_exactly_at_min_unchanged(self):
-        result = _clamp_p_yy(1e-8, 0.1)
-        assert result == 1e-8
+    def test_exactly_at_replacement_unchanged(self):
+        assert guard_p_yy(1e-8) == 1e-8
+
+    def test_scalar_input_yields_zero_dim(self):
+        assert guard_p_yy(2.5).shape == ()
+
+    def test_array_elementwise(self):
+        out = guard_p_yy(np.array([[1.0, 0.0], [-1.0, 1e-12]]))
+        assert out.shape == (2, 2)
+        assert out[0, 0] == 1.0
+        assert out[0, 1] == 1e-8
+        assert np.isnan(out[1, 0])
+        assert out[1, 1] == 1e-12
 
 
 class TestPyyInLogLikelihood:
-    """T2 continued: P_yy clamping produces finite log-likelihood."""
+    """T2 continued: the P_yy guard produces finite log-likelihood."""
 
     @pytest.fixture
     def synthetic_eigen(self):

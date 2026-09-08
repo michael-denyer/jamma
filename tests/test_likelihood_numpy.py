@@ -146,10 +146,10 @@ def synthetic_data():
 
 
 def test_p_yy_warn_once_scalar():
-    """_clamp_p_yy fires warning exactly once per run; reset restarts the counter."""
+    """guard_p_yy fires warning exactly once per run; reset restarts the counter."""
     from loguru import logger
 
-    from jamma.lmm.likelihood import _clamp_p_yy, reset_p_yy_warned
+    from jamma.lmm.pab import guard_p_yy, reset_p_yy_warned
 
     warning_messages: list[str] = []
 
@@ -163,7 +163,7 @@ def test_p_yy_warn_once_scalar():
     sink_id = logger.add(_capture_sink, level="WARNING")
     try:
         for _ in range(10):
-            _clamp_p_yy(-1.0, 1.0)
+            guard_p_yy(-1.0)
 
         assert len(warning_messages) == 1, (
             f"Expected exactly 1 warning, got {len(warning_messages)}"
@@ -171,7 +171,7 @@ def test_p_yy_warn_once_scalar():
 
         # Reset and fire again — should produce a second warning
         reset_p_yy_warned()
-        _clamp_p_yy(-1.0, 1.0)
+        guard_p_yy(-1.0)
 
         assert len(warning_messages) == 2, (
             f"Expected 2 total warnings after reset, got {len(warning_messages)}"

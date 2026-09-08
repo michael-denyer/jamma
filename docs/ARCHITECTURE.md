@@ -245,5 +245,5 @@ JAMMA targets exact output compatibility with GEMMA v0.98.5. Key design choices 
 - The `pab.py` recursion follows GEMMA's `CalcPab` using identical index ordering (GEMMA's `GetabIndex` formula with 1-based indices).
 - REML optimization uses a 50-point grid search followed by golden section refinement (`n_refine >= 20` for ~1e-5 tolerance), matching GEMMA's convergence behaviour.
 - `lmm/special.py` provides pure-stdlib `betainc` (Cephes Lentz CF) and `chi2_sf` (erfc) to avoid a `scipy` runtime dependency, which would overwrite ILP64 numpy with LP64 numpy on installation.
-- `_P_YY_MIN = 1e-8` clamps near-zero projected residuals to prevent `log(0)` in the likelihood, matching GEMMA's behaviour.
+- `guard_p_yy` replaces an exactly zero projected residual with `_P_YY_ZERO_REPLACEMENT = 1e-8` before `log`, as GEMMA v0.98.5's `LogRL_f`/`LogL_f` do, and turns a negative one into NaN.
 - Calibrated tolerances are documented in `src/jamma/validation/tolerances.py` and `docs/GEMMA_EQUIVALENCE.md`.

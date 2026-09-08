@@ -175,6 +175,7 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | 1c | `resolve_analysis_plan()` | Converts the validated flat public config into explicit standard/LOCO and eigen/kinship variants | [pipeline_plan.py](../src/jamma/pipeline_plan.py) |
 | 1c | `run_phenotype_loop()` | Prepares shared genotype selection and covariates once, then runs each phenotype and retains its result metadata | [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py) |
 | 1c | `compute_kinship()` | `-gk` kinship orchestration (compute + write), returns `KinshipResult` | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
+| 1c | `load_analysed_samples()` | GEMMA's `indicator_idv` for both `-lmm` and `-gk`: phenotype columns, validated covariates, and the `SampleBasis` their masks intersect to | [pipeline_samples.py](../src/jamma/pipeline_samples.py) |
 | 1c | `memory_preflight()` | Memory gate before compute; streaming and batch estimators behind one entry point | [pipeline_memory.py](../src/jamma/pipeline_memory.py) |
 | 1c | `log_dataset_banner()` / `log_pipeline_banner()` | GEMMA-style dataset summary and execution-plan banner | [pipeline_banner.py](../src/jamma/pipeline_banner.py) |
 | 1c | `PipelineConfig` | Pipeline configuration dataclass (all CLI flags) | [pipeline_config.py](../src/jamma/pipeline_config.py) |

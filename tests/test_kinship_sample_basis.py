@@ -160,6 +160,99 @@ def test_gk_filters_snps_on_phenotyped_samples(asymmetric_plink, tmp_path, loco)
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
 
 
+def _gk_config(bfile: Path, tmp_path: Path, **overrides) -> PipelineConfig:
+    """A ``-gk 1`` config over the given bfile, writing into tmp_path."""
+    overrides.setdefault("maf", 0.0)
+    overrides.setdefault("miss", 1.0)
+    return PipelineConfig(
+        bfile=bfile,
+        output_dir=tmp_path,
+        output_prefix="k",
+        check_memory=False,
+        show_progress=False,
+        no_telemetry=True,
+        **overrides,
+    )
+
+
+@pytest.mark.tier0
+def test_gk_rejects_covariate_file_with_wrong_row_count(asymmetric_plink, tmp_path):
+    """``-gk`` names a covariate file of the wrong length, as ``-lmm`` does."""
+    from jamma.pipeline_kinship import compute_kinship
+    from tests.builders import write_fam
+
+    write_fam(asymmetric_plink.with_suffix(".fam"), np.linspace(1.0, 2.0, 80).tolist())
+    cov_path = tmp_path / "cov.txt"
+    cov_path.write_text("\n".join(["1 0.5"] * 79) + "\n")
+
+    with pytest.raises(ValueError, match="79 rows but PLINK data has 80 samples"):
+        compute_kinship(
+            _gk_config(asymmetric_plink, tmp_path, covariate_file=cov_path), 1
+        )
+
+
+@pytest.mark.tier0
+def test_gk_rejects_an_all_missing_phenotype_column(asymmetric_plink, tmp_path):
+    """``-gk`` names the empty sample basis, not a downstream kinship error."""
+    from jamma.pipeline_kinship import compute_kinship
+    from tests.builders import write_fam
+
+    write_fam(
+        asymmetric_plink.with_suffix(".fam"),
+        np.linspace(1.0, 2.0, 80).tolist(),
+        missing_at=range(80),
+    )
+
+    with pytest.raises(ValueError, match="No samples have valid values"):
+        compute_kinship(_gk_config(asymmetric_plink, tmp_path), 1)
+
+
+@pytest.mark.tier1
+def test_gk_covariate_nan_rows_narrow_the_filter_basis(asymmetric_plink, tmp_path):
+    """A NaN covariate row leaves the SNP filter basis, as it does under ``-lmm``.
+
+    GEMMA's ProcessCvtPhen zeroes indicator_idv where indicator_cvt is 0, so
+    the covariate file's missing rows shrink the basis the SNP filters are
+    measured over while the matrix still spans every sample.
+    """
+    from jamma.kinship import read_kinship_matrix
+    from jamma.pipeline_kinship import compute_kinship
+    from tests.builders import write_fam
+
+    write_fam(asymmetric_plink.with_suffix(".fam"), np.linspace(1.0, 2.0, 80).tolist())
+    cov_rows = ["1 NA" if i >= 40 else "1 0.5" for i in range(80)]
+    cov_path = tmp_path / "cov.txt"
+    cov_path.write_text("\n".join(cov_rows) + "\n")
+
+    result = compute_kinship(
+        _gk_config(
+            asymmetric_plink, tmp_path, covariate_file=cov_path, maf=0.3, miss=0.1
+        ),
+        1,
+    )
+
+    expected = compute_kinship_streaming(
+        asymmetric_plink,
+        maf_threshold=0.3,
+        miss_threshold=0.1,
+        check_memory=False,
+        show_progress=False,
+        filter_sample_indices=np.arange(40),
+    )
+    actual = read_kinship_matrix(result.kinship_paths[0], n_samples=80)
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
+
+    # The covariate mask must actually move the filter basis, or this proves nothing.
+    unfiltered = compute_kinship_streaming(
+        asymmetric_plink,
+        maf_threshold=0.3,
+        miss_threshold=0.1,
+        check_memory=False,
+        show_progress=False,
+    )
+    assert not np.allclose(actual, unfiltered, rtol=1e-8)
+
+
 def _assert_same_associations(left, right):
     assert len(left) > 0
     assert [r.rs for r in left] == [r.rs for r in right]

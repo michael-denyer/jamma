@@ -17,7 +17,8 @@ import numpy as np
 import pytest
 
 from jamma.io.covariate import encode_categorical_covariates, read_covariate_file
-from jamma.pipeline import PipelineConfig, PipelineRunner
+from jamma.pipeline import PipelineConfig
+from jamma.pipeline_samples import load_analysed_samples, load_covariates
 from tests.fixture_paths import SYNTHETIC
 
 pytestmark = pytest.mark.tier0
@@ -156,7 +157,7 @@ class TestPipelineErrorPaths:
             check_memory=False,
         )
         with pytest.raises(ValueError, match="No samples"):
-            PipelineRunner(config)._load_phenotypes_and_intersect_masks([1], None)
+            load_analysed_samples(config, n_samples=n_samples)
 
     def test_covariate_dimension_mismatch_raises(self, tmp_path: Path) -> None:
         """load_covariates raises ValueError when covariate row count != n_samples."""
@@ -169,7 +170,7 @@ class TestPipelineErrorPaths:
             check_memory=False,
         )
         with pytest.raises(ValueError, match="rows"):
-            PipelineRunner(config).load_covariates(n_samples=100)
+            load_covariates(config, n_samples=100)
 
     def test_covariate_without_constant_column_gets_intercept(
         self, tmp_path: Path
@@ -209,7 +210,7 @@ class TestPipelineErrorPaths:
             format="{message}",
         )
         try:
-            covariates = PipelineRunner(config).load_covariates(n_samples=n_samples)
+            covariates = load_covariates(config, n_samples=n_samples)
         finally:
             logger.remove(handler_id)
 

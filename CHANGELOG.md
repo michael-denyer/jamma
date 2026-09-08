@@ -216,6 +216,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the fingerprint recorder reads 420 of 420 keys bit-identical.
   `docs/GEMMA_DIVERGENCES.md` records that the replacement matches GEMMA
   v0.98.5 and that GEMMA master carries an absolute floor JAMMA does not.
+- **One analysed-sample basis for `-lmm` and `-gk`.**
+  `jamma.pipeline_samples.load_analysed_samples(config, n_samples)` returns
+  `AnalysedSamples`, carrying the parsed phenotype columns, the validated and
+  `-cat`-encoded covariates, and the `SampleBasis` their masks intersect to.
+  It replaces `PipelineRunner.load_covariates`,
+  `_load_phenotypes_and_intersect_masks`, `_parse_phenotype_column`, and
+  `pipeline_kinship._phenotyped_sample_indices`, which read the `.fam` and the
+  covariate file twice with two error vocabularies. `-gk` gains the checks
+  `-lmm` already had: a covariate file of the wrong length is named rather
+  than surfacing as a numpy broadcast error, an all-missing column reports the
+  per-column valid counts rather than `valid_indices must not be empty`, and
+  `-cat` encoding runs. The `-gk` dataset banner reports the real `-c` and `-n`
+  counts instead of one covariate and one phenotype. The per-column
+  `n_analyzed` payload nothing read is gone. `-gk 1` and `-lmm 1` on
+  mouse_hs1940 write byte-identical output.
 - **Docs prose is gated by a banned-word list.** A `vocabguard` pre-commit
   hook checks every markdown file except `CHANGELOG.md` against
   `.vocabguard.json`, a list of regexes for house-style words (`honestly`,

@@ -74,6 +74,7 @@ A typical LMM association run proceeds as follows:
 | `PipelineRunner` | `src/jamma/pipeline.py` | Orchestrates the `-lmm` pipeline; both CLI and Python API delegate here |
 | `PipelineConfig` / `PipelineResult` / `KinshipResult` | `src/jamma/pipeline_config.py` | Frozen configuration and result dataclasses for the pipeline; `KinshipResult` is also re-exported from `jamma.pipeline` |
 | `StandardAnalysisPlan` / `LocoAnalysisPlan` | `src/jamma/pipeline_plan.py` | Private validated variants that make kinship/eigen and standard/LOCO states explicit |
+| `AnalysedSamples` | `src/jamma/pipeline_samples.py` | The phenotype columns, validated covariates, and `SampleBasis` that `-lmm` and `-gk` both analyse over |
 | `gwas()` | `src/jamma/gwas.py` | Public Python API for single-call GWAS; builds a `PipelineConfig` and returns `PipelineRunner`'s `PipelineResult` |
 | `ExecutionPlan` | `src/jamma/lmm/association_plan.py` | Frozen two-field summary of the selected mode (`batch` or `streaming`) with a human-readable reason |
 | `ExecutableAssociationPlan` | `src/jamma/lmm/association_plan.py` | Frozen full plan from `plan_association()`: mode summary, dispatch path, conservative chunk geometry, and memory pricing |
@@ -98,6 +99,7 @@ src/jamma/
 ├── pipeline_banner.py      # GEMMA-style dataset and execution-plan banners
 ├── pipeline_phenotype_loop.py  # Per-phenotype loop + the batch/streaming runner calls
 ├── pipeline_kinship.py     # The -gk path: compute a kinship matrix and write it
+├── pipeline_samples.py     # The analysed-sample basis shared by -lmm and -gk
 ├── pipeline_memory.py      # The preflight gate: prices the plan per dispatch path and eigen driver
 ├── _build_support/         # Canonical compile flags, source lists, and the
 │   │                       # build/load seam: BuildSpec, run_build, find_c_compiler

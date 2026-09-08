@@ -897,8 +897,10 @@ print(f"Eigendecomp phase: {full.eigen_gb:.1f}GB")
 print(f"Available: {available_ram_gb():.1f}GB")
 print(f"Sufficient: {fits(full.peak_gb, available_ram_gb())}")
 
-# LMM-only estimate (after eigendecomp is done, kinship freed)
-lmm_gb = estimate_lmm_memory(n_samples=200_000, n_snps=95_000)
+# LMM-only estimate (after eigendecomp is done, kinship freed). uab_iab_gb is
+# the per-buffer Uab/Iab figure the run's dispatch path holds; the fused C
+# paths form Uab in place and hold none.
+lmm_gb = estimate_lmm_memory(n_samples=200_000, n_snps=95_000, uab_iab_gb=0.0)
 print(f"LMM phase: {lmm_gb:.1f}GB")
 ```
 

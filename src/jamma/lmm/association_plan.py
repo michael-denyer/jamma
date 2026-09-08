@@ -6,7 +6,6 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from jamma.core import memory
-from jamma.core.constants import n_index
 from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
 from jamma.core.threading import get_c_extension_thread_count, is_blas_controllable
@@ -103,11 +102,9 @@ class ExecutableAssociationPlan:
         # The filtered phenotype input remains live while Uty and the null
         # model are prepared. The null solve also returns Hi_eval. Count all
         # three analysed-sample vectors for every additional live phenotype.
-        rows = 3
-        if self.dispatch is not DispatchPath.NUMPY_FALLBACK:
-            rows += n_index(self.n_cvt) - (self.n_cvt + 2)
-            if self.dispatch.needs_null_w:
-                rows += 1
+        rows = 3 + self.dispatch.invariant_rows(self.n_cvt)
+        if self.dispatch.needs_null_w:
+            rows += 1
         prepared_bytes = (group_size - 1) * rows * self.n_samples * 8
         return kernel_bytes + prepared_bytes
 

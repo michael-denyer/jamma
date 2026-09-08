@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jamma.core.constants import n_index
 from jamma.lmm.dispatch import DispatchPath
 
 # Allow large chunks — no int32 buffer constraint.
@@ -71,19 +70,11 @@ def chunk_budget_bytes(mem_budget_gb: float | None, *, available_bytes: int) -> 
 def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     """Live float64 bytes one SNP occupies on *dispatch*'s buffers.
 
-    Three accountings. The fused family hands ``utg_t`` straight to its kernel,
-    so the rotation output is the only allocation. ``NUMPY_WALD`` materialises
-    the three varying Uab rows. The NumPy fallback materialises the whole Uab
-    table.
+    The rows the path materialises, floored at one: a native path materialises
+    none beyond ``utg_t`` itself, which ``jlinalg.dgemm(chunk, U, transa="T")``
+    writes C-contiguous, one column per SNP.
     """
-    if dispatch.is_native:
-        # jlinalg.dgemm(chunk, U, transa="T") writes C-contiguous utg_t
-        # directly: one column per SNP, no intermediate.
-        return n_samples * 8
-
-    if dispatch is DispatchPath.NUMPY_WALD:
-        return n_samples * 3 * 8
-    return n_samples * n_index(n_cvt) * 8
+    return 8 * n_samples * max(1, dispatch.varying_rows(n_cvt))
 
 
 def lmm_extra_bytes_per_snp(
@@ -93,9 +84,7 @@ def lmm_extra_bytes_per_snp(
 
     The preflight prices the association phase as rotation buffers plus this
     figure, so its estimate follows the same dispatch knowledge the sizer
-    uses. Fused paths hold no per-SNP batch arrays (the C workspace forms
-    Uab on the fly); ``NUMPY_WALD`` holds the three varying Uab rows; the
-    NumPy fallback materialises the full Uab and Iab batches.
+    uses: the path's varying Uab rows plus the Iab cells it holds beside them.
 
     Args:
         n_samples: Number of samples.
@@ -106,13 +95,7 @@ def lmm_extra_bytes_per_snp(
             every current dispatch path's pricing, kept so a future
             per-buffer-scaled path does not have to change this signature.
     """
-    if dispatch.is_native:
-        return 0
-    if dispatch is DispatchPath.NUMPY_WALD:
-        return n_samples * 3 * 8
-    # Only NUMPY_FALLBACK reaches here, and it never pipelines, so n_buffers
-    # is always 1 and the full Uab+Iab batch is priced once.
-    return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8
+    return 8 * (n_samples * dispatch.varying_rows(n_cvt) + dispatch.iab_cells(n_cvt))
 
 
 def compute_chunk_size_numpy(

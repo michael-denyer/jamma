@@ -33,7 +33,8 @@ def test_eigen_driver_selection_respects_user_ceiling():
         budget_gb=2.0,
     )
     assert plan.driver == "DSYEVR"
-    assert plan.required_gb <= 2.0
+    # K and U at 0.8 GB each, plus DSYEVR's 26N+10N-word MRRR workspace.
+    assert plan.required_gb == pytest.approx(1.60288)
 
 
 def test_standalone_eigen_rejects_budget_before_decomposition(monkeypatch):
@@ -73,35 +74,40 @@ def test_loco_batch_selection_fits_user_budget():
         budget_gb=8.0,
         max_batch_chrs=None,
     )
-    assert 1 <= plan.batch_size < 22
-    assert plan.required_gb <= 8.0
+    # S_full and K_loco_buf at 0.8 GB each, a 0.8 GB chunk buffer and the
+    # 2.5 GB consumer are fixed at 4.9 GB, so the 8 GB ceiling buys three
+    # more 0.8 GB S_chr accumulators and stops there.
+    assert plan.batch_size == 3
+    assert plan.single_pass is False
+    assert plan.required_gb == pytest.approx(7.3)
 
 
-def test_impossible_loco_budget_fails_before_genotype_statistics():
-    import sys
+def test_impossible_loco_budget_fails_before_genotype_statistics(tmp_path):
+    """A header-only .bed makes the two orderings raise different exceptions.
 
-    from jamma.io.plink import stream_genotype_chunks
+    The metadata files are intact, so the run reaches its memory gate; the
+    genotype bytes are absent, so the first statistics read cannot succeed.
+    An impossible budget therefore has to surface as MemoryError, and the
+    same call without a budget surfaces the truncated read.
+    """
+    import shutil
+
     from jamma.kinship import compute_loco_kinship_streaming
     from tests.conftest import require_fixture
     from tests.fixture_paths import LOCO
 
-    require_fixture(LOCO.bfile.with_suffix(".bed"))
-    reads = []
+    require_fixture(LOCO.bfile.with_suffix(".bed"), LOCO.bfile.with_suffix(".fam"))
+    bfile = tmp_path / "loco"
+    for suffix in (".bim", ".fam"):
+        shutil.copy(LOCO.bfile.with_suffix(suffix), bfile.with_suffix(suffix))
+    bfile.with_suffix(".bed").write_bytes(b"\x6c\x1b\x01")
 
-    def observe(frame, event, result):
-        if event == "call" and frame.f_code is stream_genotype_chunks.__code__:
-            reads.append(True)
-
-    old_profile = sys.getprofile()
-    sys.setprofile(observe)
-    try:
-        with pytest.raises(MemoryError, match="exceeds"):
-            compute_loco_kinship_streaming(
-                LOCO.bfile, mem_budget=1e-8, show_progress=False, consumer_gb=0.0
-            )
-    finally:
-        sys.setprofile(old_profile)
-    assert not reads
+    with pytest.raises(MemoryError, match="exceeds budget"):
+        compute_loco_kinship_streaming(
+            bfile, mem_budget=1e-8, show_progress=False, consumer_gb=0.0
+        )
+    with pytest.raises(ValueError, match="Ill-formed BED file"):
+        compute_loco_kinship_streaming(bfile, show_progress=False, consumer_gb=0.0)
 
 
 def test_precomputed_eigen_streaming_does_not_reserve_decomposition(monkeypatch):

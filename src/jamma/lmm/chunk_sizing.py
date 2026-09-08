@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jamma.core.constants import n_index
 from jamma.lmm.dispatch import DispatchPath
 
 # Allow large chunks — no int32 buffer constraint.
@@ -31,7 +30,7 @@ _MAX_BUDGET = 40_000_000_000  # 40 GB ceiling
 # Minimum number of chunks before pipelined execution is worthwhile.
 _MIN_PIPELINE_CHUNKS = 8
 
-# Chunk count a split-capable run is cut to when the memory budget alone would
+# Chunk count a native run is cut to when the memory budget alone would
 # leave it below _MIN_PIPELINE_CHUNKS, so rotation of chunk N+1 overlaps compute
 # of chunk N even on inputs that fit in one chunk. 16 measured best on
 # mouse_hs1940 (12,226 SNPs): Wald -20%, all-tests -10%, 4-covariate Wald
@@ -71,19 +70,11 @@ def chunk_budget_bytes(mem_budget_gb: float | None, *, available_bytes: int) -> 
 def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     """Live float64 bytes one SNP occupies on *dispatch*'s buffers.
 
-    Three accountings. The fused family hands ``utg_t`` straight to its kernel,
-    so the rotation output is the only allocation. ``NUMPY_WALD`` materialises
-    the three varying Uab rows. The NumPy fallback materialises the whole Uab
-    table.
+    The floor of one row is ``utg_t`` itself, which a native path materialises
+    nothing beyond: ``jlinalg.dgemm(chunk, U, transa="T")`` writes it
+    C-contiguous, one column per SNP.
     """
-    if dispatch.use_split:
-        # jlinalg.dgemm(chunk, U, transa="T") writes C-contiguous utg_t
-        # directly: one column per SNP, no intermediate.
-        return n_samples * 8
-
-    if dispatch is DispatchPath.NUMPY_WALD:
-        return n_samples * 3 * 8
-    return n_samples * n_index(n_cvt) * 8
+    return 8 * n_samples * max(1, dispatch.varying_rows(n_cvt))
 
 
 def lmm_extra_bytes_per_snp(
@@ -92,10 +83,7 @@ def lmm_extra_bytes_per_snp(
     """Per-SNP bytes live in the LMM phase beyond the UtG rotation buffers.
 
     The preflight prices the association phase as rotation buffers plus this
-    figure, so its estimate follows the same dispatch knowledge the sizer
-    uses. Fused paths hold no per-SNP batch arrays (the C workspace forms
-    Uab on the fly); ``NUMPY_WALD`` holds the three varying Uab rows; the
-    NumPy fallback materialises the full Uab and Iab batches.
+    figure, so its estimate follows the same dispatch knowledge the sizer uses.
 
     Args:
         n_samples: Number of samples.
@@ -106,13 +94,7 @@ def lmm_extra_bytes_per_snp(
             every current dispatch path's pricing, kept so a future
             per-buffer-scaled path does not have to change this signature.
     """
-    if dispatch.use_split:
-        return 0
-    if dispatch is DispatchPath.NUMPY_WALD:
-        return n_samples * 3 * 8
-    # Only NUMPY_FALLBACK reaches here, and it never pipelines, so n_buffers
-    # is always 1 and the full Uab+Iab batch is priced once.
-    return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8
+    return 8 * (n_samples * dispatch.varying_rows(n_cvt) + dispatch.iab_cells(n_cvt))
 
 
 def compute_chunk_size_numpy(
@@ -205,9 +187,9 @@ class LmmChunkPlan:
         The single sizing decision the chunk engine allocates from and the
         memory preflight prices from: sizes with one live buffer, counts the
         resulting chunks, and re-sizes against two live buffers only when the
-        dispatch path supports pipelining (``dispatch.use_split``) and the
+        dispatch path supports pipelining (``dispatch.is_native``) and the
         single-buffer chunk count clears ``_MIN_PIPELINE_CHUNKS``. A
-        split-capable run of at most ``_PIPELINE_CUT_MAX_SAMPLES`` samples that
+        native run of at most ``_PIPELINE_CUT_MAX_SAMPLES`` samples that
         the budget alone leaves below that threshold is cut to
         ``_PIPELINE_TARGET_CHUNKS`` chunks, down to the ``_MIN_CHUNK`` floor, so
         a small input that fits in one chunk still overlaps rotation and
@@ -265,7 +247,7 @@ class LmmChunkPlan:
         chunk_size = _sized(pipeline_buffers=1)
         n_chunks = _count(chunk_size)
 
-        # The budget alone leaves a split-capable run too few chunks to overlap
+        # The budget alone leaves a native run too few chunks to overlap
         # rotation with compute, so cut it to _PIPELINE_TARGET_CHUNKS instead.
         # A run the budget already splits past the threshold keeps its plan,
         # and so does one with more samples than the cut is measured to help.
@@ -277,7 +259,7 @@ class LmmChunkPlan:
         # shape, against -20% on an 18-core Apple M5 Pro.
         overlap_cap: int | None = None
         if (
-            dispatch.use_split
+            dispatch.is_native
             and n_chunks < _MIN_PIPELINE_CHUNKS
             and n_samples <= _PIPELINE_CUT_MAX_SAMPLES
             and not blas_controllable
@@ -285,12 +267,12 @@ class LmmChunkPlan:
             overlap_cap = max(_MIN_CHUNK, -(-n_filtered // _PIPELINE_TARGET_CHUNKS))
             chunk_size = _sized(pipeline_buffers=1, overlap_cap=overlap_cap)
             n_chunks = _count(chunk_size)
-        use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+        use_pipeline = dispatch.is_native and n_chunks >= _MIN_PIPELINE_CHUNKS
 
         if use_pipeline:
             chunk_size = _sized(pipeline_buffers=2, overlap_cap=overlap_cap)
             n_chunks = _count(chunk_size)
-            use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+            use_pipeline = dispatch.is_native and n_chunks >= _MIN_PIPELINE_CHUNKS
 
         return cls(
             chunk_size=chunk_size,

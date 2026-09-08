@@ -28,6 +28,36 @@ from tests.conftest import requires_c
 pytestmark = pytest.mark.tier0
 
 
+@pytest.mark.parametrize(
+    ("dispatch", "n_cvt", "varying_rows", "iab_cells", "invariant_rows"),
+    [
+        (DispatchPath.NUMPY_FALLBACK, 1, 6, 18, 0),
+        (DispatchPath.NUMPY_FALLBACK, 3, 15, 75, 0),
+        (DispatchPath.NUMPY_WALD, 1, 3, 0, 3),
+        (DispatchPath.NUMPY_WALD, 3, 3, 0, 10),
+        (DispatchPath.FUSED, 1, 0, 0, 3),
+        (DispatchPath.FUSED, 3, 0, 0, 10),
+        (DispatchPath.FUSED_GENERAL, 1, 0, 0, 3),
+        (DispatchPath.FUSED_GENERAL, 3, 0, 0, 10),
+    ],
+)
+def test_dispatch_path_sizing_facts(
+    dispatch: DispatchPath,
+    n_cvt: int,
+    varying_rows: int,
+    iab_cells: int,
+    invariant_rows: int,
+) -> None:
+    """Hand-derived counts from n_index(n_cvt) = (n_cvt + 3)(n_cvt + 2) / 2.
+
+    n_index is 6 at n_cvt=1 and 15 at n_cvt=3. NUMPY_WALD runs only at
+    n_cvt=1, so its n_cvt=3 row pins the formula rather than a reachable run.
+    """
+    assert dispatch.varying_rows(n_cvt) == varying_rows
+    assert dispatch.iab_cells(n_cvt) == iab_cells
+    assert dispatch.invariant_rows(n_cvt) == invariant_rows
+
+
 @requires_c
 def test_general_mode4_prices_known_thread_workspace() -> None:
     spec = WorkspaceSpec.build(

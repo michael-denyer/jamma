@@ -66,7 +66,7 @@ class WorkspaceSpec:
         # Null-model calculations retain Python's reference recursion table.
         # Each entry owns a six-int tuple; 384 bytes bounds its Python objects.
         reference_bytes = comb(n_cvt + 3, 3) * 384
-        if not dispatch.use_split:
+        if not dispatch.is_native:
             fixed_bytes = 0
             bytes_per_snp = output_bytes
             if lmm_mode in (1, 2, 4):
@@ -83,8 +83,7 @@ class WorkspaceSpec:
                     bytes_per_snp += (
                         n_samples * idx + 6 * n_samples + 2 * rows * idx + 6 * idx
                     ) * _DOUBLE
-            if dispatch is DispatchPath.NUMPY_WALD:
-                fixed_bytes += 3 * n_samples * _DOUBLE
+            fixed_bytes += dispatch.invariant_rows(n_cvt) * n_samples * _DOUBLE
             return cls(
                 dispatch,
                 lmm_mode,

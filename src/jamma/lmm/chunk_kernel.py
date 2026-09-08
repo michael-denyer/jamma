@@ -97,7 +97,7 @@ class RunInvariants:
             w=UtW[:, 0].copy() if dispatch.needs_null_w else None,
             uab_invariant_soa=(
                 compute_uab_invariant_soa(UtW, prepared.Uty, n_cvt)
-                if dispatch is not DispatchPath.NUMPY_FALLBACK
+                if dispatch.invariant_rows(n_cvt) > 0
                 else None
             ),
         )
@@ -263,6 +263,11 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
 
 
 def _numpy_wald_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
+    """n_cvt=1, mode 1, no C extension: the split Wald body in NumPy.
+
+    The Iab scalars are derived once here rather than per chunk, which is what
+    lets each chunk contribute three varying rows instead of the whole table.
+    """
     invariant = inv.require_invariant_soa()
     scalars = compute_iab_invariant_scalars_ncvt1(invariant)
 

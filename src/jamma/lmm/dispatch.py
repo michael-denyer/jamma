@@ -8,9 +8,11 @@ present at import time.
 from __future__ import annotations
 
 from enum import Enum
+from typing import assert_never
 
 from loguru import logger
 
+from jamma.core.constants import n_index
 from jamma.lmm import accel
 from jamma.lmm.schema import LmmMode
 
@@ -31,11 +33,9 @@ class DispatchPath(Enum):
     FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab, any lmm_mode
 
     @property
-    def use_split(self) -> bool:
-        """True for the two fused C paths, which pipeline raw ``utg_t``.
-
-        Both NumPy paths are False. The fallback materialises the full Uab
-        table, and ``NUMPY_WALD`` splits it in Python rather than in C.
+    def is_native(self) -> bool:
+        """True for the C workspace paths, which pipeline, own a C workspace,
+        and consume raw ``utg_t``.
         """
         return self in (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL)
 
@@ -48,6 +48,46 @@ class DispatchPath(Enum):
         so the chunk runner materialises it once for either.
         """
         return self is DispatchPath.FUSED
+
+    def varying_rows(self, n_cvt: int) -> int:
+        """Rows of ``n_samples`` float64 one SNP materialises beyond ``utg_t``."""
+        match self:
+            case DispatchPath.FUSED | DispatchPath.FUSED_GENERAL:
+                return 0
+            case DispatchPath.NUMPY_WALD:
+                return 3
+            case DispatchPath.NUMPY_FALLBACK:
+                return n_index(n_cvt)
+            case _:
+                assert_never(self)
+
+    def iab_cells(self, n_cvt: int) -> int:
+        """Per-SNP Iab float64 cells held alongside the varying rows."""
+        match self:
+            case (
+                DispatchPath.FUSED
+                | DispatchPath.FUSED_GENERAL
+                | DispatchPath.NUMPY_WALD
+            ):
+                return 0
+            case DispatchPath.NUMPY_FALLBACK:
+                return (n_cvt + 2) * n_index(n_cvt)
+            case _:
+                assert_never(self)
+
+    def invariant_rows(self, n_cvt: int) -> int:
+        """Rows of ``n_samples`` the run holds once for the invariant Uab columns."""
+        match self:
+            case (
+                DispatchPath.FUSED
+                | DispatchPath.FUSED_GENERAL
+                | DispatchPath.NUMPY_WALD
+            ):
+                return n_index(n_cvt) - (n_cvt + 2)
+            case DispatchPath.NUMPY_FALLBACK:
+                return 0
+            case _:
+                assert_never(self)
 
 
 def select_dispatch_path(

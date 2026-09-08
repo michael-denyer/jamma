@@ -222,7 +222,7 @@ def test_per_chunk_process_limit_would_override_the_overlap_limit(
     real_compute = engine.compute_and_write
 
     def compute_with_legacy_limit(prepared) -> None:
-        if engine.engine.inv.dispatch.use_split:
+        if engine.engine.inv.dispatch.is_native:
             with controller(1):
                 real_compute(prepared)
         else:

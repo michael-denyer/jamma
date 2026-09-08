@@ -16,6 +16,8 @@ import pytest
 from jamma.core import memory
 from jamma.core.eigen_plan import array_gb, square_matrix_gb
 from jamma.lmm.association_plan import plan_association
+from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
+from jamma.lmm.dispatch import select_current
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
@@ -97,15 +99,19 @@ class TestMemoryGates:
         assert result is None
 
 
-class TestBatchPreflightThreadsNcvt:
-    """Regression: batch LMM memory preflight must propagate n_cvt.
+def _expected_uab_iab_gb(args, kwargs, n_cvt: int) -> float:
+    """The Uab/Iab figure a correct preflight passes for this recorded call."""
+    dispatch = select_current(n_cvt, 1, log_choices=False)
+    per_snp = lmm_extra_bytes_per_snp(args[0], n_cvt, dispatch)
+    return kwargs["lmm_batch_size"] * per_snp / 1e9
 
-    The estimator estimate_lmm_memory scales Uab/Iab memory with n_cvt
-    (memory.py:_uab_iab_gb). Both batch preflight call sites previously
-    omitted n_cvt, so multi-covariate runs (n_cvt > 1) would pass the
-    preflight using the n_cvt=1 default and then OOM at real allocation
-    time in compute_numpy._run_inner. These tests pin that the dispatch
-    sites propagate n_cvt to the estimator.
+
+class TestBatchPreflightPricesItsDispatchPath:
+    """Regression: the batch preflight must supply the run's own Uab/Iab figure.
+
+    Both batch preflight call sites previously omitted n_cvt, so
+    multi-covariate runs passed the preflight on the n_cvt=1 figure and then
+    OOMed at real allocation time in compute_numpy._run_inner.
 
     Dispatch-site assertions are the right test shape here: the preflight's
     sole job is to delegate to the estimator with correct arguments, so the
@@ -113,8 +119,8 @@ class TestBatchPreflightThreadsNcvt:
     guidance on system-boundary assert_called_once_with).
     """
 
-    def test_pipeline_batch_preflight_passes_n_cvt(self):
-        """PipelineRunner batch branch must pass n_cvt to estimate_lmm_memory.
+    def test_pipeline_batch_preflight_prices_its_dispatch_path(self):
+        """PipelineRunner batch branch must price the run's own dispatch path.
 
         The batch preflight site at pipeline.py:~1035 previously called
         estimate_lmm_memory(n_valid, n_snps) with no n_cvt, silently
@@ -181,21 +187,16 @@ class TestBatchPreflightThreadsNcvt:
         assert captured_calls, (
             "estimate_lmm_memory was not called — batch preflight branch did not run"
         )
-        # Every call must propagate n_cvt=3 (from the 3-column covariates).
         for args, kwargs in captured_calls:
-            n_cvt_arg = kwargs.get("n_cvt")
-            if n_cvt_arg is None and len(args) >= 4:
-                # estimate_lmm_memory signature:
-                # (n_samples, n_snps, lmm_batch_size=..., n_cvt=1)
-                n_cvt_arg = args[3]
-            assert n_cvt_arg == 3, (
-                f"Batch preflight called estimate_lmm_memory with "
-                f"n_cvt={n_cvt_arg!r}, expected 3 (from 3-col covariates). "
+            expected = _expected_uab_iab_gb(args, kwargs, 3)
+            assert kwargs["uab_iab_gb"] == expected, (
+                f"Batch preflight priced uab_iab_gb={kwargs['uab_iab_gb']!r}, "
+                f"expected {expected!r} for n_cvt=3 (from 3-col covariates). "
                 f"Full call: args={args}, kwargs={kwargs}"
             )
 
-    def test_runner_numpy_preflight_passes_n_cvt(self):
-        """run_lmm_association_numpy must pass n_cvt to estimate_lmm_memory.
+    def test_runner_numpy_preflight_prices_its_dispatch_path(self):
+        """run_lmm_association_numpy must price the run's own dispatch path.
 
         The batch runner preflight at runner_numpy.py:~610 previously
         called estimate_lmm_memory(n_samples, n_snps) with no n_cvt.
@@ -244,13 +245,11 @@ class TestBatchPreflightThreadsNcvt:
             "estimate_lmm_memory was not called — runner_numpy preflight did not run"
         )
         for args, kwargs in captured_calls:
-            n_cvt_arg = kwargs.get("n_cvt")
-            if n_cvt_arg is None and len(args) >= 4:
-                n_cvt_arg = args[3]
-            assert n_cvt_arg == expected_n_cvt, (
-                f"runner_numpy preflight called estimate_lmm_memory with "
-                f"n_cvt={n_cvt_arg!r}, expected {expected_n_cvt}. "
-                f"Full call: args={args}, kwargs={kwargs}"
+            expected = _expected_uab_iab_gb(args, kwargs, expected_n_cvt)
+            assert kwargs["uab_iab_gb"] == expected, (
+                f"runner_numpy preflight priced uab_iab_gb="
+                f"{kwargs['uab_iab_gb']!r}, expected {expected!r} for "
+                f"n_cvt={expected_n_cvt}. Full call: args={args}, kwargs={kwargs}"
             )
 
 

@@ -17,7 +17,6 @@ from jamma.core.eigen_plan import (
 )
 from jamma.core.estimates import _format_duration
 from jamma.core.memory import (
-    _uab_iab_gb,
     eigen_cost,
     estimate_lmm_memory,
     fits,
@@ -27,10 +26,24 @@ from jamma.core.memory import (
     margin_gb,
     require,
 )
+from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
+from jamma.lmm.dispatch import DispatchPath
 from tests.builders import BOUNDARY_SIZES
 from tests.fakes.memory import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
+
+
+def _fallback_uab_iab_gb(n_samples: int, chunk_size: int, n_cvt: int = 1) -> float:
+    """The full Uab+Iab batch the NumPy fallback materialises, in GB.
+
+    The fallback is the largest of the four paths, so these tests price with it.
+    """
+    return (
+        chunk_size
+        * lmm_extra_bytes_per_snp(n_samples, n_cvt, DispatchPath.NUMPY_FALLBACK)
+        / 1e9
+    )
 
 
 class TestEigendecompMemoryGate:
@@ -171,8 +184,11 @@ class TestLmmMemoryEstimation:
     def test_lmm_estimate_prices_eigenvectors_but_no_kinship_or_workspace(self):
         """The LMM phase holds U and the genotypes, not K and not the workspace."""
         n_samples, n_snps, batch = 100_000, 10_000, 20_000
-        total = estimate_lmm_memory(n_samples, n_snps, lmm_batch_size=batch)
-        expected_batch = array_gb(n_samples, batch) + _uab_iab_gb(n_samples, batch)
+        uab_iab_gb = _fallback_uab_iab_gb(n_samples, batch)
+        total = estimate_lmm_memory(
+            n_samples, n_snps, lmm_batch_size=batch, uab_iab_gb=uab_iab_gb
+        )
+        expected_batch = array_gb(n_samples, batch) + uab_iab_gb
         assert total == pytest.approx(
             _batch_non_buffer_gb(n_samples, n_snps) + expected_batch
         )
@@ -184,14 +200,18 @@ class TestLmmMemoryEstimation:
         This is the exact scenario from the xlarge benchmark bug:
         300.6GB available, but old check demanded 320GB (eigendecomp peak).
         """
-        est = estimate_lmm_memory(100_000, 100)
+        est = estimate_lmm_memory(
+            100_000, 100, uab_iab_gb=_fallback_uab_iab_gb(100_000, 20_000)
+        )
         assert est < 200, (
             f"LMM for 100k samples × 100 SNPs should need <200GB, got {est:.1f}GB"
         )
 
     def test_returns_a_gb_figure(self):
         """The estimator returns one number, the phase peak in GB."""
-        est = estimate_lmm_memory(1_000, 1_000)
+        est = estimate_lmm_memory(
+            1_000, 1_000, uab_iab_gb=_fallback_uab_iab_gb(1_000, 20_000)
+        )
         assert isinstance(est, float)
         assert est > 0
 
@@ -215,7 +235,7 @@ class TestMemoryEstimateVsActualAllocation:
         ],
     )
     def test_lmm_estimate_covers_uab_iab(self, n_samples, chunk_size, n_cvt):
-        """LMM estimate must include Uab_batch + Iab_batch memory.
+        """The fallback figure the caller supplies covers what runtime allocates.
 
         Runtime allocates:
         - Uab_batch: (chunk_size, n_samples, n_index) float64
@@ -228,12 +248,11 @@ class TestMemoryEstimateVsActualAllocation:
         iab_bytes = chunk_size * (n_cvt + 2) * n_index * 8
         actual_uab_iab_gb = (uab_bytes + iab_bytes) / 1e9
 
-        # Estimator's computation
-        estimated_gb = _uab_iab_gb(n_samples, chunk_size, n_cvt)
+        priced_gb = _fallback_uab_iab_gb(n_samples, chunk_size, n_cvt)
 
-        assert abs(estimated_gb - actual_uab_iab_gb) < 1e-9, (
-            f"_uab_iab_gb({n_samples}, {chunk_size}, {n_cvt}) = {estimated_gb:.6f}GB "
-            f"but actual is {actual_uab_iab_gb:.6f}GB"
+        assert abs(priced_gb - actual_uab_iab_gb) < 1e-9, (
+            f"the fallback price for ({n_samples}, {chunk_size}, {n_cvt}) is "
+            f"{priced_gb:.6f}GB but actual is {actual_uab_iab_gb:.6f}GB"
         )
 
     def test_lmm_batch_gb_includes_uab_iab(self):
@@ -243,7 +262,10 @@ class TestMemoryEstimateVsActualAllocation:
         n_cvt = 1
 
         total = estimate_lmm_memory(
-            n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=n_cvt
+            n_samples,
+            1_000,
+            lmm_batch_size=batch_size,
+            uab_iab_gb=_fallback_uab_iab_gb(n_samples, batch_size, n_cvt),
         )
         batch_gb = total - _batch_non_buffer_gb(n_samples, 1_000)
 
@@ -264,9 +286,10 @@ class TestKinshipDtypeAccounting:
         n_samples = 10_000
         n_snps = 50_000
 
-        growth = estimate_lmm_memory(n_samples, n_snps) - estimate_lmm_memory(
-            n_samples, 0
-        )
+        uab_iab_gb = _fallback_uab_iab_gb(n_samples, 20_000)
+        growth = estimate_lmm_memory(
+            n_samples, n_snps, uab_iab_gb=uab_iab_gb
+        ) - estimate_lmm_memory(n_samples, 0, uab_iab_gb=uab_iab_gb)
 
         expected_gb = n_samples * n_snps * 8 / 1e9
         assert growth == pytest.approx(expected_gb)
@@ -287,7 +310,10 @@ class TestKinshipDtypeAccounting:
         non_buffer = _batch_non_buffer_gb(n_samples, 1_000)
         batch = {
             n_cvt: estimate_lmm_memory(
-                n_samples, 1_000, lmm_batch_size=batch_size, n_cvt=n_cvt
+                n_samples,
+                1_000,
+                lmm_batch_size=batch_size,
+                uab_iab_gb=_fallback_uab_iab_gb(n_samples, batch_size, n_cvt),
             )
             - non_buffer
             for n_cvt in (1, 5, 20)
@@ -306,18 +332,26 @@ class TestGateCorrectnessLmmMemory:
 
     def test_lmm_gate_passes_with_ample_memory(self):
         """The gate passes when plenty of memory is available."""
-        assert fits(estimate_lmm_memory(1_000, 1_000), 500.0) is True
+        required = estimate_lmm_memory(
+            1_000, 1_000, uab_iab_gb=_fallback_uab_iab_gb(1_000, 20_000)
+        )
+        assert fits(required, 500.0) is True
 
     def test_lmm_gate_blocks_with_scarce_memory(self):
         """The gate fails when memory is insufficient.
 
         100k samples needs ~80GB of eigenvectors alone.
         """
-        assert fits(estimate_lmm_memory(100_000, 10_000), 1.0) is False
+        required = estimate_lmm_memory(
+            100_000, 10_000, uab_iab_gb=_fallback_uab_iab_gb(100_000, 20_000)
+        )
+        assert fits(required, 1.0) is False
 
     def test_lmm_gate_threshold_boundary(self):
         """The gate accounts for the safety margin (10% capped at 10GB)."""
-        required = estimate_lmm_memory(100, 100)
+        required = estimate_lmm_memory(
+            100, 100, uab_iab_gb=_fallback_uab_iab_gb(100, 20_000)
+        )
         needed = required + margin_gb(required)
 
         assert fits(required, needed + 0.001) is True
@@ -371,17 +405,6 @@ class TestFormatDuration:
         assert _format_duration(seconds) == expected
 
 
-class TestUabIabGb:
-    """Tests for Uab/Iab memory estimation."""
-
-    def test_uab_iab_gb_formula(self):
-        """_uab_iab_gb combines the Uab_batch and Iab_batch float64 buffers."""
-        result = _uab_iab_gb(1000, 500, n_cvt=1)
-        n_index = (1 + 3) * (1 + 2) // 2  # 6
-        expected = (500 * 1000 * n_index * 8 + 500 * 3 * n_index * 8) / 1e9
-        assert result == pytest.approx(expected)
-
-
 @pytest.mark.tier0
 class TestPhaseCostFunctions:
     """Table-driven checks over the three phase cost functions.
@@ -421,7 +444,7 @@ class TestPhaseCostFunctions:
         lmm_chunk_gb = n * 500 * 8 / 1e9
         rotation_buffer_gb = n * 500 * 8 / 1e9
         grid_reml_gb = 50 * 500 * 8 / 1e9
-        uab_iab_gb = _uab_iab_gb(n, 500, n_cvt=1)
+        uab_iab_gb = 2.5
         assert lmm_cost(
             eigenvectors_gb, lmm_chunk_gb, rotation_buffer_gb, grid_reml_gb, uab_iab_gb
         ) == pytest.approx(

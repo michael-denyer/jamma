@@ -16,13 +16,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carried it, `PabCTable` and `build_pab_table_for_c`, are gone with no
   replacement. Callers pass the covariate count they already have.
 
-- **`DispatchPath` gains `NUMPY_WALD` and loses `feeds_raw_utg`.** An
-  intercept-only Wald run without the C extension is now its own member rather
-  than a shape of the fallback, and it materialises three varying Uab rows per
-  SNP where the fallback materialises the whole table. `feeds_raw_utg` and
-  `use_split` were the same predicate spelled twice, so `feeds_raw_utg` is
-  deleted and `use_split` now means the two fused C paths only. The per-SNP
-  byte accounting in `chunk_sizing` branches three ways instead of two.
+- **`DispatchPath` gains `NUMPY_WALD`, loses `feeds_raw_utg`, and renames
+  `use_split` to `is_native`.** An intercept-only Wald run without the C
+  extension is now its own member rather than a shape of the fallback, and it
+  materialises three varying Uab rows per SNP where the fallback materialises
+  the whole table. `feeds_raw_utg` and `use_split` were the same predicate
+  spelled twice, so `feeds_raw_utg` is deleted and the survivor is renamed
+  `is_native`, true for the two C workspace paths only. Each member now
+  answers `varying_rows(n_cvt)`, `iab_cells(n_cvt)`, and
+  `invariant_rows(n_cvt)`, so chunk sizing, workspace pricing, the phenotype
+  group bound, and kernel construction ask the path instead of testing which
+  member it is.
+
+- **`estimate_lmm_memory` requires `uab_iab_gb` and no longer takes `n_cvt`.**
+  `core` sits below `lmm` in the layering and cannot read the dispatch path,
+  so the caller supplies the per-buffer Uab and Iab bytes its path really
+  holds (`lmm.chunk_sizing.lmm_extra_bytes_per_snp` times the chunk). The
+  private `memory._uab_iab_gb` computed the NumPy fallback's figure and was
+  bit-identical to `lmm_extra_bytes_per_snp` on that path, so it is deleted;
+  `n_cvt` fed only that formula.
+
+### Fixed
+
+- **The batch-mode quote for the C paths no longer charges a Uab+Iab batch the
+  workspace never allocates.** `ExecutableAssociationPlan.price()` passed the
+  dispatch-derived figure only for `NUMPY_WALD` and priced the full fallback
+  table on the other three, while the fused kernels form Uab in place inside
+  their C workspace. At 50,000 samples, 500,000 SNPs, a chunk of 24,940 and
+  two live buffers, the `FUSED` batch quote drops from 359.7 GB to 240.0 GB,
+  which is U plus the genotype matrix plus the two rotation buffers, so more
+  C-dispatch runs qualify for batch on the `auto` path. The `NUMPY_FALLBACK`
+  and `NUMPY_WALD` quotes are unchanged.
 
 ### Changed
 

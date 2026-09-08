@@ -2,7 +2,8 @@
 
 These tests assert on observable outputs — estimated GB totals and whether
 the live preflight gate (``memory_preflight``) raises MemoryError — rather
-than on internal call counts of ``LmmChunkPlan.plan`` / ``_uab_iab_gb``. This
+than on internal call counts of ``LmmChunkPlan.plan`` /
+``lmm_extra_bytes_per_snp``. This
 follows CLAUDE.md: assert observable behavior, not delegation plumbing.
 """
 
@@ -15,7 +16,6 @@ import pytest
 
 from jamma.core import memory
 from jamma.core.memory import (
-    _uab_iab_gb,
     estimate_lmm_memory,
     estimate_streaming_memory,
 )
@@ -118,8 +118,8 @@ def test_memory_estimate_uses_computed_chunk():
     assert est_small.peak_gb != est_large.peak_gb
 
 
-def test_uab_iab_gb_scales_with_n_cvt():
-    """Observable invariant: Uab/Iab buffers grow with n_cvt.
+def test_fallback_uab_iab_price_scales_with_n_cvt():
+    """Observable invariant: the fallback's Uab/Iab price grows with n_cvt.
 
     The runner's preflight underestimate bug (jamma-ca6p) was possible
     precisely because callers defaulted to n_cvt=1. If a future refactor
@@ -127,9 +127,12 @@ def test_uab_iab_gb_scales_with_n_cvt():
     observable GB output, not by inspecting call arguments.
     """
     chunk = 10_000
-    gb_n1 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=1)
-    gb_n5 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=5)
-    gb_n10 = _uab_iab_gb(n_samples=1000, chunk_size=chunk, n_cvt=10)
+
+    def price(n_cvt: int) -> float:
+        per_snp = lmm_extra_bytes_per_snp(1000, n_cvt, DispatchPath.NUMPY_FALLBACK)
+        return chunk * per_snp / 1e9
+
+    gb_n1, gb_n5, gb_n10 = price(1), price(5), price(10)
 
     assert gb_n1 < gb_n5 < gb_n10, (
         f"Uab/Iab must grow with n_cvt, got n_cvt=1:{gb_n1} < 5:{gb_n5} < 10:{gb_n10}"
@@ -381,8 +384,12 @@ def _priced_batch_lmm_phase_gb(
         n_samples,
         n_snps,
         lmm_batch_size=chunk_plan.chunk_size,
-        n_cvt=n_cvt,
         n_buffers=chunk_plan.n_buffers,
+        uab_iab_gb=(
+            chunk_plan.chunk_size
+            * lmm_extra_bytes_per_snp(n_samples, n_cvt, dispatch)
+            / 1e9
+        ),
     )
     buffers_gb = total_gb - _batch_lmm_phase_non_buffer_terms_gb(n_samples, n_snps)
     return buffers_gb, chunk_plan
@@ -427,7 +434,7 @@ class TestChunkPlanMatchesEngine:
         assert plan.chunk_size >= 1
         assert plan.n_chunks == (n_filtered + plan.chunk_size - 1) // plan.chunk_size
         assert plan.n_buffers in (1, 2)
-        if not dispatch.use_split:
+        if not dispatch.is_native:
             # NUMPY_FALLBACK never pipelines.
             assert plan.n_buffers == 1
             assert not plan.use_pipeline
@@ -483,12 +490,9 @@ class TestChunkPlanMatchesEngine:
 
         Regression for the coordinator-flagged Gap B: estimate_lmm_memory
         had no n_buffers concept, so a pipelined batch run (n_buffers=2)
-        was priced at one buffer's worth. estimate_lmm_memory is the
-        documented "generic estimate" for the full-materialization path
-        (it prices the full Uab+Iab batch shape regardless of the real
-        dispatch, unlike the streaming estimator's dispatch-aware
-        uab_iab_gb), so it can price above the real allocation; it must
-        never price below it.
+        was priced at one buffer's worth. The batch quote may price above
+        the real allocation for terms outside the chunk buffers, but it
+        must never price below it.
         """
         del accel, lmm_mode  # dispatch alone determines pricing here
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
@@ -510,7 +514,7 @@ class TestChunkPlanMatchesEngine:
         change when the plan pipelines, not stay pinned to one buffer.
 
         Forces a pipelining case (n_chunks >= _MIN_PIPELINE_CHUNKS, a
-        use_split dispatch) by pinning a small RAM budget so the sizer picks
+        is_native dispatch) by pinning a small RAM budget so the sizer picks
         many small chunks, then compares the gate's real
         estimate_lmm_memory(n_buffers=1) against n_buffers=plan.n_buffers:
         before the fix these were identical regardless of plan.n_buffers.
@@ -521,7 +525,7 @@ class TestChunkPlanMatchesEngine:
         n_snps = 500_000
         n_cvt = 2
 
-        # n_cvt >= 2, mode 1 -> FUSED_GENERAL (use_split=True); dispatch is
+        # n_cvt >= 2, mode 1 -> FUSED_GENERAL (is_native=True); dispatch is
         # passed directly below, so no lmm_mode is needed.
         dispatch = DispatchPath.FUSED_GENERAL
         plan = _plan(n_samples, n_snps, n_cvt, dispatch)
@@ -529,7 +533,15 @@ class TestChunkPlanMatchesEngine:
         assert plan.n_buffers == 2
 
         one_buffer_gb = estimate_lmm_memory(
-            n_samples, n_snps, lmm_batch_size=plan.chunk_size, n_cvt=n_cvt, n_buffers=1
+            n_samples,
+            n_snps,
+            lmm_batch_size=plan.chunk_size,
+            n_buffers=1,
+            uab_iab_gb=(
+                plan.chunk_size
+                * lmm_extra_bytes_per_snp(n_samples, n_cvt, dispatch)
+                / 1e9
+            ),
         ) - _batch_lmm_phase_non_buffer_terms_gb(n_samples, n_snps)
         est_real, _ = _priced_batch_lmm_phase_gb(n_samples, n_snps, n_cvt, dispatch)
 
@@ -697,23 +709,25 @@ class TestChunkPlanMatchesEngine:
 def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     """plan_association must price the chunk the run will allocate, not 20,000.
 
-    At n=50000, snps=500000, ``estimate_lmm_memory``'s ``lmm_batch_size=20_000``
-    default estimates 276.0GB; the chunk ``LmmChunkPlan.plan`` actually plans for
-    this dispatch path allocates enough per-SNP state that the real estimate is
-    500.0GB. A machine with 288GB available sits strictly between the two
-    thresholds: the stale default says "fits" (batch), the real chunk says "does
-    not fit" (streaming). At trunk, ``runner.py`` called ``estimate_lmm_memory``
-    without ``lmm_batch_size``/``n_buffers`` and picked batch here; that flips
-    the execution mode a machine near this line gets, in the direction that
-    silently under-estimates memory.
+    Measured at n=50000, snps=500000 on the FUSED path: ``estimate_lmm_memory``
+    at its ``lmm_batch_size=20_000`` default and one buffer quotes 228.0GB,
+    while the chunk ``LmmChunkPlan.plan`` really plans (24,940 SNPs over two
+    buffers, narrowed to 19,940 here) quotes 236.0GB. A machine with 240GB
+    available sits strictly between the two thresholds once the 10GB safety
+    margin applies: the stale default says "fits" (batch), the real chunk says
+    "does not fit" (streaming). At trunk, ``runner.py`` called
+    ``estimate_lmm_memory`` without ``lmm_batch_size``/``n_buffers`` and picked
+    batch here; that flips the execution mode a machine near this line gets, in
+    the direction that silently under-estimates memory.
     """
-    use_fake_psutil(monkeypatch, available=288e9)
+    use_fake_psutil(monkeypatch, available=240e9)
 
     plan = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
 
     assert plan.mode == "streaming", (
-        f"expected streaming (the real chunk needs ~500GB > 288GB available), "
-        f"got {plan.mode!r} ({plan.reason})"
+        f"expected streaming (the real chunk needs 236.0GB, which does not "
+        f"clear the margin against 240GB available), got {plan.mode!r} "
+        f"({plan.reason})"
     )
 
 
@@ -725,20 +739,20 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
     estimate, in turn shrinking the estimated total. At trunk, ``mem_budget``
     never reached the mode selector at all.
     """
-    use_fake_psutil(monkeypatch, available=288e9)
+    use_fake_psutil(monkeypatch, available=240e9)
 
     unbudgeted = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
     budgeted = plan_association(
         50_000, 500_000, n_cvt=1, lmm_mode=1, mem_budget=1.0
     ).summary
 
-    # Unbudgeted: the real chunk needs ~500GB, exceeding 288GB -> streaming.
+    # 236.0GB does not clear the 10GB safety margin against 240GB.
     assert unbudgeted.mode == "streaming"
-    assert "exceeds 288.0GB capacity" in unbudgeted.reason
+    assert "exceeds 240.0GB capacity" in unbudgeted.reason
     # The 1GB ceiling cannot hold the 20GB eigenvector matrix even at a
     # one-SNP chunk, so auto must not select an impossible batch plan.
     assert budgeted.mode == "streaming"
-    assert "500.0GB" not in budgeted.reason
+    assert "exceeds 1.0GB capacity" in budgeted.reason
 
 
 def test_chunk_plan_honors_mem_budget_bytes():
@@ -867,7 +881,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
 
 
 def test_chunk_plan_splits_small_inputs_for_pipelining(monkeypatch):
-    """A budget that fits every SNP in one chunk still splits a split-capable
+    """A budget that fits every SNP in one chunk still splits a native
     run into enough chunks to overlap rotation with compute, while a plan the
     budget already splits past the pipeline threshold, a run with more
     samples than the cut is measured to help, or a controllable BLAS, is left

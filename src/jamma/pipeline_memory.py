@@ -8,7 +8,7 @@ from jamma.core import memory
 from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.lmm.eigen import plan_eigen_driver_for_machine
 from jamma.lmm.loco_eigen import plan_loco_eigen_driver
-from jamma.pipeline_plan import AnalysisPlan, ProvidedEigen, StandardAnalysisPlan
+from jamma.pipeline_plan import AnalysisPlan, LocoAnalysisPlan, ProvidedEigen
 
 __all__ = ["memory_preflight"]
 
@@ -18,7 +18,7 @@ def _eigen_driver(
 ) -> EigenDriverPlan | None:
     """Plan the decomposition the run will execute; None when eigenpairs are read."""
     execution = analysis.execution
-    if not isinstance(analysis, StandardAnalysisPlan):
+    if isinstance(analysis, LocoAnalysisPlan):
         return plan_loco_eigen_driver(execution, available_gb)
     if isinstance(analysis.eigen_source, ProvidedEigen):
         return None

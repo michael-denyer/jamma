@@ -195,9 +195,8 @@ def run_lmm_loco(
         execution: The run's association plan, selected once by the caller
             (the pipeline prices it through its memory preflight) with its
             ``kinship`` shape resolved. None plans it here, once, over the
-            run's SNP total. Every chromosome shares
-            it; the body narrows its chunk plan to that chromosome's filtered
-            SNP count.
+            run's SNP total. Every chromosome shares it; the body narrows its
+            chunk plan to that chromosome's filtered SNP count.
         eigen_plan: The eigen driver the pipeline's preflight selected for
             this run, or None to plan it here, once, the same way.
 

@@ -82,9 +82,8 @@ class KinshipShape:
     def resolve(
         cls, n_samples: int, n_input_samples: int, *, loaded: bool, saved: bool
     ) -> KinshipShape:
-        """Apply the one rule for the matrix order the pipeline materialises."""
-        full = loaded or saved or n_samples == n_input_samples
-        return cls(n_input_samples if full else n_samples, loaded)
+        """The input order when loaded or saved, else the analysed order."""
+        return cls(n_input_samples if loaded or saved else n_samples, loaded)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +159,7 @@ class ExecutableAssociationPlan:
         statistics_gb = (
             self._statistics_phase_gb() if self.summary.mode == "streaming" else 0.0
         )
-        association_gb = self._association_phase_gb(chunks)
+        association_gb = self._association_phase_gb()
         return MemoryPlan(
             total_peak_gb=max(kinship_gb, eigen_gb, statistics_gb, association_gb),
             compute_chunk_size=chunks.chunk_size,
@@ -199,8 +198,9 @@ class ExecutableAssociationPlan:
             self.n_input_samples, DEFAULT_STATS_CHUNK
         )
 
-    def _association_phase_gb(self, chunks: LmmChunkPlan) -> float:
+    def _association_phase_gb(self) -> float:
         """Peak of the association pass at this chunk width and phenotype group."""
+        chunks = self.conservative_chunks
         workspace_gb = (
             self._group_workspace_bytes()
             + chunks.chunk_size * self.workspace.bytes_per_snp

@@ -265,7 +265,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:325](../src/jamma/lmm/association_plan.py#L325) |
-| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:91](../src/jamma/lmm/association_plan.py#L91) |
+| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:90](../src/jamma/lmm/association_plan.py#L90) |
 | 4Nb | `run_lmm_association()` | The shared run body: stats, filter (MAF, missingness, HWE, `-snps`), prepare, chunk loop, result routing, over any source under one `LmmRunSpec` | [runner_numpy.py:203](../src/jamma/lmm/runner_numpy.py#L203) |
 | 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:93](../src/jamma/lmm/runner_numpy.py#L93) |
 | 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:110](../src/jamma/lmm/genotype_source.py#L110) |

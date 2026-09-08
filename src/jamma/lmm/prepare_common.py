@@ -186,16 +186,28 @@ def _covariates_include_intercept(covariates: np.ndarray) -> bool:
     return bool(np.any(np.ptp(covariates, axis=0) == 0.0))
 
 
-def covariate_n_cvt(covariates: np.ndarray | None) -> int:
-    """Effective covariate count, counting an auto-added intercept.
+def with_intercept(
+    covariates: np.ndarray | None, valid_mask: np.ndarray
+) -> np.ndarray | None:
+    """Append a column of 1s unless some column is constant over the analysed rows.
 
-    Mirrors _build_covariate_matrix so the association plan sizes its
-    workspace for the same n_cvt the runner later builds.
+    GEMMA's CheckCvt tests constancy over indicator_idv, so rows the mask
+    drops never vote and a NaN row cannot hide an existing intercept. A
+    column of 1s is constant under any mask and adds no NaN, so the valid
+    mask is unchanged by it and a second call returns its input.
+
+    Args:
+        covariates: Unmasked covariate matrix (n_input, n_covariates) or None.
+        valid_mask: Boolean analysed-sample mask of length n_input.
+
+    Returns:
+        The input when it is None or already carries a constant column,
+        otherwise the input with a ones column appended.
     """
-    if covariates is None:
-        return 1
-    n = covariates.shape[1]
-    return n if _covariates_include_intercept(covariates) else n + 1
+    if covariates is None or _covariates_include_intercept(covariates[valid_mask]):
+        return covariates
+    logger.info("No intercept term found in the covariate file; adding a column of 1s.")
+    return np.hstack([covariates, np.ones((covariates.shape[0], 1))])
 
 
 def _build_covariate_matrix(
@@ -203,29 +215,31 @@ def _build_covariate_matrix(
 ) -> tuple[np.ndarray, int]:
     """Construct covariate matrix W and return (W, n_cvt).
 
-    If covariates is None, uses intercept-only model. Warns if provided
-    covariates lack an intercept column.
+    If covariates is None, uses intercept-only model. Supplied covariates
+    must already carry an intercept column: with_intercept() appends one
+    after masking, and the association plan is sized from that same array,
+    so a matrix without one here means a caller skipped that step.
 
     Args:
-        covariates: Optional covariate matrix (n_samples, n_covariates).
+        covariates: Optional masked covariate matrix (n_samples, n_covariates).
         n_samples: Number of samples (for intercept construction).
 
     Returns:
         Tuple of (W, n_cvt) where W is the covariate matrix.
+
+    Raises:
+        ValueError: If no covariate column is constant, the model is
+            over-parameterized, or the covariates are rank-deficient.
     """
     if covariates is None:
         W = np.ones((n_samples, 1))
     else:
         W = covariates.astype(np.float64)
-        # GEMMA's CheckCvt treats any constant column as the intercept and
-        # appends a column of 1s when none is present, so the model always
-        # carries an intercept. Match that; a constant column need not be
-        # the first one nor equal to 1.
         if not _covariates_include_intercept(W):
-            logger.info(
-                "No intercept term found in the covariate file; adding a column of 1s."
+            raise ValueError(
+                "Covariate matrix has no intercept column; pass covariates "
+                "through with_intercept() after computing the valid mask"
             )
-            W = np.hstack([W, np.ones((n_samples, 1))])
     n_cvt = W.shape[1]
     # df = n_samples - n_cvt - 1 must be positive for valid REML
     if n_samples <= n_cvt + 1:

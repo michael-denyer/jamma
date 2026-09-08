@@ -28,8 +28,8 @@ from jamma.lmm.genotype_source import (
 )
 from jamma.lmm.prepare_common import (
     compute_valid_mask,
-    covariate_n_cvt,
     parse_eigen_input,
+    with_intercept,
 )
 from jamma.lmm.runner_numpy import (
     STREAMING_LABELS,
@@ -186,8 +186,10 @@ def run_lmm_association_numpy_streaming(
 
     meta = get_plink_metadata(bed_path)
     validate_snp_indices(snps_indices, meta.n_snps)
-    n_cvt = covariate_n_cvt(covariates)
-    n_analyzed = int(np.count_nonzero(compute_valid_mask(phenotypes, covariates)))
+    valid_mask = compute_valid_mask(phenotypes, covariates)
+    covariates = with_intercept(covariates, valid_mask)
+    n_cvt = covariates.shape[1] if covariates is not None else 1
+    n_analyzed = int(np.count_nonzero(valid_mask))
     execution = plan_association(
         n_analyzed,
         meta.n_snps,

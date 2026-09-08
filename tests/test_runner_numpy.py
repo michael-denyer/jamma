@@ -46,16 +46,13 @@ def mouse_hs1940_data():
 
 @pytest.fixture
 def mouse_hs1940_data_with_covariates(mouse_hs1940_data):
-    """Load mouse_hs1940 data plus covariates with intercept column prepended.
+    """Load mouse_hs1940 data plus its covariates as the file supplies them.
 
-    The covariates.txt file contains only user-provided covariates (no intercept).
-    GEMMA adds the intercept internally when -c is used, so we prepend a column
-    of 1s to match GEMMA's internal representation.
+    The covariates.txt file has no constant column, so the runner appends the
+    intercept the same way GEMMA's CheckCvt does with -c.
     """
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
-    raw_covariates = np.loadtxt(MOUSE.covariates)
-    n_samples = raw_covariates.shape[0]
-    covariates = np.hstack([np.ones((n_samples, 1)), raw_covariates])
+    covariates = np.loadtxt(MOUSE.covariates)
     return plink, kinship, phenotypes, snp_info, covariates
 
 

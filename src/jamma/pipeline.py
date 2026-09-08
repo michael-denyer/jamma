@@ -51,7 +51,7 @@ from jamma.lmm.eigen_io import (
     write_eigen_files,
 )
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
-from jamma.lmm.prepare_common import compute_valid_mask
+from jamma.lmm.prepare_common import compute_valid_mask, with_intercept
 from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
@@ -498,8 +498,8 @@ class PipelineRunner:
         covariates = self.load_covariates(n_samples)
 
         pheno_columns = self.config.phenotype_columns
-        all_pheno_data, valid_mask, n_valid = self._load_phenotypes_and_intersect_masks(
-            pheno_columns, covariates
+        all_pheno_data, valid_mask, n_valid, covariates = (
+            self._load_phenotypes_and_intersect_masks(pheno_columns, covariates)
         )
         analyzed_sample_indices = np.flatnonzero(valid_mask)
 
@@ -611,23 +611,26 @@ class PipelineRunner:
         self,
         pheno_columns: Sequence[int],
         covariates: np.ndarray | None,
-    ) -> tuple[dict[int, tuple[np.ndarray, int]], np.ndarray, int]:
+    ) -> tuple[dict[int, tuple[np.ndarray, int]], np.ndarray, int, np.ndarray | None]:
         """Load each phenotype column and intersect their valid-sample masks.
 
         Reads .fam once, parses each phenotype column, computes the valid
         mask (non-NaN phenotype + non-NaN covariates) per column, then
         intersects across columns so eigendecomposition runs on the
-        sample set common to every phenotype.
+        sample set common to every phenotype. The covariates come back
+        with an intercept column appended when none is constant over the
+        intersected mask, so ``covariates.shape[1]`` is the n_cvt every
+        later stage uses.
 
         Args:
             pheno_columns: Phenotype column numbers (1-based, as PLINK).
             covariates: Covariate matrix (n_samples, n_cvt) or None.
 
         Returns:
-            ``(all_pheno_data, valid_mask, n_valid)`` where
+            ``(all_pheno_data, valid_mask, n_valid, covariates)`` where
             ``all_pheno_data[col] = (phenotype_array, n_analyzed)``,
             ``valid_mask`` is the boolean intersection across all columns,
-            and ``n_valid`` is its sum.
+            ``n_valid`` is its sum, and ``covariates`` carries an intercept.
 
         Raises:
             ValueError: If the .fam file can't be read, or if no sample is
@@ -668,7 +671,12 @@ class PipelineRunner:
                 f"intersection {n_valid}"
             )
 
-        return all_pheno_data, valid_mask, n_valid
+        return (
+            all_pheno_data,
+            valid_mask,
+            n_valid,
+            with_intercept(covariates, valid_mask),
+        )
 
     def _acquire_eigendecomposition(
         self,

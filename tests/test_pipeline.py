@@ -20,7 +20,9 @@ BFILE = SYNTHETIC.bfile
 def _first_phenotype(runner: PipelineRunner) -> tuple[np.ndarray, int]:
     """Read the runner's first configured phenotype column the way run() does."""
     columns = runner.config.phenotype_columns
-    data, _mask, _n_valid = runner._load_phenotypes_and_intersect_masks(columns, None)
+    data, _mask, _n_valid, _ = runner._load_phenotypes_and_intersect_masks(
+        columns, None
+    )
     return data[columns[0]]
 
 
@@ -689,15 +691,15 @@ def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) 
 def test_pipeline_planning_passes_n_cvt(
     tmp_path: Path, sample_plink_data: Path
 ) -> None:
-    """BCKAUTO-04: Re-evaluation passes n_cvt from loaded covariates."""
+    """BCKAUTO-04: Planning passes n_cvt from the loaded covariates."""
     from unittest.mock import patch
 
     from jamma.lmm.association_plan import plan_association
 
     n_samples = 100  # gemma_synthetic fixture has 100 samples
 
-    # Write a covariate file with 2 columns (intercept + one covariate).
-    # GEMMA format: whitespace-separated values, one row per sample, no header.
+    # Two columns, the first constant so it is the intercept; GEMMA format:
+    # whitespace-separated values, one row per sample, no header.
     cov_path = tmp_path / "covariates.txt"
     rng = np.random.default_rng(42)
     cov_data = np.column_stack([np.ones(n_samples), rng.standard_normal(n_samples)])

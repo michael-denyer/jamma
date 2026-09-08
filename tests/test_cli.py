@@ -466,16 +466,12 @@ def test_cli_lmm_with_covariates(tmp_path: Path):
 
     outdir = tmp_path / "output"
 
-    # Create GEMMA-format covariate file: no header, whitespace-delimited,
-    # first column = intercept (1.0), second column = random covariate.
+    # GEMMA-format covariate file: no header, whitespace-delimited, one
+    # non-constant column; the intercept is appended by the pipeline.
     rng = np.random.default_rng(42)
     n_samples = 100  # gemma_synthetic test dataset sample count
-    intercept = np.ones(n_samples)
-    covariate = rng.standard_normal(n_samples)
     cov_path = tmp_path / "covariates.txt"
-    with open(cov_path, "w") as f:
-        for i in range(n_samples):
-            f.write(f"{intercept[i]:.1f}\t{covariate[i]:.6f}\n")
+    np.savetxt(str(cov_path), rng.standard_normal(n_samples), fmt="%.6f")
 
     result = runner.invoke(
         main,

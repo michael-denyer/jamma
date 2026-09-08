@@ -13,7 +13,7 @@ from loguru import logger
 
 from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, SnpMeta, get_spec
 from jamma.lmm.stats import AssocResult
-from jamma.utils.atomic_publish import publish_temp_path, unlink_quietly
+from jamma.utils.atomic_publish import atomic_output, unlink_quietly
 
 # Retry backoff schedule (seconds) for transient write failures
 _RETRY_BACKOFF = (0.1, 0.5, 2.0)
@@ -81,6 +81,11 @@ class IncrementalAssocWriter:
 
     Writes via ``write_arrays_batch(...)``, directly from numpy arrays.
 
+    Results go to the sibling temp file ``atomic_output`` owns and are
+    published onto ``path`` only when the context exits cleanly. An ordinary
+    exception discards them. An interrupt or an out-of-memory keeps what was
+    written at ``partial_path``, beside the destination.
+
     Example:
         with IncrementalAssocWriter(Path("output.assoc.txt")) as writer:
             writer.write_arrays_batch(lmm_mode, snp_indices, snp_info,
@@ -104,19 +109,22 @@ class IncrementalAssocWriter:
                 f"expected one of {list(FORMAT_COLUMNS)}"
             )
         self.path = Path(path)
+        self.partial_path = self.path.with_name(f"{self.path.name}.partial")
         self.test_type = test_type
         self._file = None
         self._count = 0
-        self._temp_path = publish_temp_path(self.path)
 
     def __enter__(self) -> "IncrementalAssocWriter":
-        """Open file and write header."""
+        """Open the temp file and write the header."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._publish = atomic_output(self.path)
+        self._temp_path = self._publish.__enter__()
         try:
             self._file = open(self._temp_path, "w")
             self._file.write(HEADERS[self.test_type] + "\n")
-        except BaseException:
-            self._cleanup_partial()
+        except BaseException as error:
+            self._close_file()
+            self._publish.__exit__(type(error), error, error.__traceback__)
             raise
         return self
 
@@ -126,12 +134,12 @@ class IncrementalAssocWriter:
             try:
                 self._file.close()
             except OSError as e:
-                logger.warning(f"Failed to close output file {self.path}: {e}")
+                logger.warning(f"Failed to close output file {self._temp_path}: {e}")
             finally:
                 self._file = None
 
-    def _cleanup_partial(self) -> None:
-        """Close file and delete partial output (best-effort)."""
+    def _discard_temp(self) -> None:
+        """Close the file and delete the temp (best-effort), for the retry path."""
         self._close_file()
         unlink_quietly(self._temp_path)
 
@@ -178,7 +186,7 @@ class IncrementalAssocWriter:
                         f"Failed to rollback partial write at position "
                         f"{pos} ({seek_err}); file may be inconsistent"
                     )
-                    self._cleanup_partial()
+                    self._discard_temp()
                     raise last_error from None
                 if attempt < len(_RETRY_BACKOFF):
                     err_code = getattr(e, "errno", None)
@@ -190,15 +198,15 @@ class IncrementalAssocWriter:
                     )
                     time.sleep(_RETRY_BACKOFF[attempt])
 
-        self._cleanup_partial()
+        self._discard_temp()
         err_code = getattr(last_error, "errno", None)
         if attempt == 0 and err_code is not None and err_code not in _RETRYABLE_ERRNOS:
             logger.error(
                 f"Write failed immediately "
-                f"(non-retryable errno={err_code}): {self.path}"
+                f"(non-retryable errno={err_code}): {self._temp_path}"
             )
         else:
-            logger.error(f"Write failed after {attempt + 1} retries: {self.path}")
+            logger.error(f"Write failed after {attempt + 1} retries: {self._temp_path}")
         raise last_error  # type: ignore[misc]
 
     def write_arrays_batch(
@@ -295,33 +303,38 @@ class IncrementalAssocWriter:
 
         self._write_buf("\n".join(lines) + "\n", n)
 
-    def __exit__(self, exc_type, _exc_val, _exc_tb) -> None:
-        """Close file; delete partial on error, retain on interrupt/OOM."""
-        if exc_type is not None:
-            if not issubclass(exc_type, Exception) or issubclass(exc_type, MemoryError):
-                self._close_file()
-                partial = self._temp_path.with_name(
-                    self._temp_path.name.replace(".tmp.", ".partial.", 1)
-                )
-                try:
-                    self._temp_path.replace(partial)
-                except OSError as error:
-                    logger.warning(
-                        f"Partial output remains at {self._temp_path}: {error}"
-                    )
-                else:
-                    logger.warning(f"Interrupted; partial output retained at {partial}")
-            else:
-                self._cleanup_partial()
-            return
-        if self._file is not None:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Publish on success, discard on error, retain a partial on interrupt."""
+        if exc_type is None:
+            if self._file is None:
+                return  # _write_buf hit an error the caller swallowed
             try:
-                self._file.flush()
-                self._file.close()
+                self._file.close()  # close() flushes, so a bad flush raises here
                 self._file = None
-                self._temp_path.replace(self.path)
-            finally:
-                self._cleanup_partial()
+            except BaseException as error:
+                self._close_file()
+                self._publish.__exit__(type(error), error, error.__traceback__)
+                raise
+            self._publish.__exit__(None, None, None)
+            return
+
+        self._close_file()
+        if not issubclass(exc_type, Exception) or issubclass(exc_type, MemoryError):
+            try:
+                self._temp_path.replace(self.partial_path)
+            except OSError as error:
+                logger.warning(f"Partial output remains at {self._temp_path}: {error}")
+            else:
+                logger.warning(
+                    f"{exc_type.__name__} after {self._count} results written; "
+                    f"partial output retained at {self.partial_path}"
+                )
+        else:
+            logger.warning(
+                f"{exc_type.__name__}: {exc_val}; discarding partial output "
+                f"for {self.path} ({self._count} results written)"
+            )
+        self._publish.__exit__(exc_type, exc_val, exc_tb)
 
     @property
     def count(self) -> int:

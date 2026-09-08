@@ -208,8 +208,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the scalar and batch Python likelihoods and the once-per-run negative-P_yy
   warning, replacing `likelihood._clamp_p_yy` and
   `likelihood_numpy._guard_P_yy`; `reset_p_yy_warned` moves to `pab` with
-  it. The constant is `P_YY_ZERO_REPLACEMENT` / `_P_YY_ZERO_REPLACEMENT`,
-  named for what it does. Every negative-P_yy branch stays with its caller
+  it, and `pab.replace_zero_p_yy` is the C inline's twin for the three
+  Wald/Score denominators in `stats.py`. The constant is
+  `P_YY_ZERO_REPLACEMENT` / `_P_YY_ZERO_REPLACEMENT`, named for what it
+  does; the GEMMA-literal oracles in `tests/reference` keep their absolute
+  floor under their own `P_YY_FLOOR`. Every negative-P_yy branch stays with its caller
   and the fingerprint recorder reads 420 of 420 keys bit-identical.
   `docs/GEMMA_DIVERGENCES.md` records that the replacement matches GEMMA
   v0.98.5 and that GEMMA master carries an absolute floor JAMMA does not.

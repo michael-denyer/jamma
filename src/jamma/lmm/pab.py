@@ -40,9 +40,9 @@ def guard_p_yy(P_yy: ArrayLike) -> np.ndarray:
     Negative values become NaN: the Schur complement lost positive
     semi-definiteness, and downstream code reads the NaN as degenerate. An
     exact zero becomes ``_P_YY_ZERO_REPLACEMENT``. Every positive value passes
-    through unchanged, so an absolute floor cannot break scale equivariance.
-    The first negative value per run logs a warning; ``reset_p_yy_warned``
-    re-arms it.
+    through unchanged; an absolute floor would move tiny positive values and
+    break scale equivariance. The first negative value per run logs a
+    warning; ``reset_p_yy_warned`` re-arms it.
 
     Args:
         P_yy: A scalar or an array of any shape.
@@ -59,7 +59,15 @@ def guard_p_yy(P_yy: ArrayLike) -> np.ndarray:
             "positive semi-definite."
         )
         _p_yy_state.warned = True
-    P_yy = np.where(P_yy < 0.0, np.nan, P_yy)
+    return replace_zero_p_yy(np.where(P_yy < 0.0, np.nan, P_yy))
+
+
+def replace_zero_p_yy(P_yy: np.ndarray) -> np.ndarray:
+    """Replace an exact zero with ``_P_YY_ZERO_REPLACEMENT``, nothing else.
+
+    The Python twin of the C inline of the same name, for the Wald and Score
+    denominators whose negative branch belongs to the caller.
+    """
     return np.where(P_yy == 0.0, _P_YY_ZERO_REPLACEMENT, P_yy)
 
 

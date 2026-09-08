@@ -229,9 +229,9 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
 | 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |
 | 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:368](../src/jamma/lmm/likelihood.py#L368) |
-| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [pab.py:189](../src/jamma/lmm/pab.py#L189) |
-| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [pab.py:244](../src/jamma/lmm/pab.py#L244) |
-| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [pab.py:135](../src/jamma/lmm/pab.py#L135) |
+| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [pab.py:197](../src/jamma/lmm/pab.py#L197) |
+| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [pab.py:252](../src/jamma/lmm/pab.py#L252) |
+| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [pab.py:143](../src/jamma/lmm/pab.py#L143) |
 | 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:326](../src/jamma/lmm/likelihood.py#L326) |
 | 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:428](../src/jamma/lmm/likelihood.py#L428) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |

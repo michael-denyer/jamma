@@ -10,13 +10,8 @@ from __future__ import annotations
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.pab import (
-    _P_YY_ZERO_REPLACEMENT,
-    calc_iab,
-    calc_pab,
-    get_ab_index,
-    n_index,
-)
+from jamma.lmm.pab import calc_iab, calc_pab, get_ab_index, n_index
+from tests.reference import P_YY_FLOOR
 
 
 def calc_ppab(
@@ -238,9 +233,9 @@ def reml_log_likelihood_dev2(
 
     idx_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
     P_yy = Pab[nc_total, idx_yy]
-    if P_yy < _P_YY_ZERO_REPLACEMENT:
+    if P_yy < P_YY_FLOOR:
         logger.warning(
-            f"P_yy={P_yy:.6e} below floor {_P_YY_ZERO_REPLACEMENT} in dev2 "
+            f"P_yy={P_yy:.6e} below floor {P_YY_FLOOR} in dev2 "
             f"— phenotype may be degenerate after projection"
         )
         return np.nan

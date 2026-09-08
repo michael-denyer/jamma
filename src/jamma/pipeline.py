@@ -23,20 +23,14 @@ Example:
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 from loguru import logger
 
-from jamma.core.constants import PHENOTYPE_MISSING, Env
-from jamma.io.covariate import read_covariate_file
-from jamma.io.plink import (
-    get_plink_metadata,
-    parse_fam_phenotype_column,
-    validate_plink_dimensions,
-)
+from jamma.core.constants import Env
+from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
@@ -51,7 +45,6 @@ from jamma.lmm.eigen_io import (
     write_eigen_files,
 )
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
-from jamma.lmm.prepare_common import compute_valid_mask, with_intercept
 from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
@@ -72,6 +65,7 @@ from jamma.pipeline_plan import (
     StandardAnalysisPlan,
     resolve_analysis_plan,
 )
+from jamma.pipeline_samples import load_analysed_samples
 
 __all__ = [
     "BackendRequest",
@@ -279,38 +273,6 @@ class PipelineRunner:
                 "Weights must be applied to kinship before eigendecomposition."
             )
 
-    def _parse_phenotype_column(
-        self, pheno_col: int, fam_data: np.ndarray
-    ) -> tuple[np.ndarray, int]:
-        """Parse a specific phenotype column from pre-loaded .fam data.
-
-        Args:
-            pheno_col: 1-based phenotype column index.
-            fam_data: The whole .fam file as a 2-D string array, read once by
-                ``_load_phenotypes_and_intersect_masks``.
-
-        Returns:
-            Tuple of (phenotypes array, n_analyzed) where phenotypes has
-            NaN for missing values and n_analyzed is the count of valid
-            (non-NaN, non-missing) phenotypes.
-
-        Raises:
-            ValueError: If pheno_col names a column the .fam file does not
-                have, or if no sample has a valid phenotype. pheno_col is
-                trusted to be >= 1; PipelineConfig.__post_init__ is where that
-                is enforced.
-        """
-        phenotypes = parse_fam_phenotype_column(fam_data, pheno_col)
-        logger.info(f"Using phenotype column {pheno_col} (file column {pheno_col + 5})")
-
-        valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
-        n_analyzed = int(valid_mask.sum())
-
-        if n_analyzed == 0:
-            raise ValueError("No samples with valid phenotypes")
-
-        return phenotypes, n_analyzed
-
     def _load_kinship_from_source(
         self,
         source: KinshipSource,
@@ -395,51 +357,6 @@ class PipelineRunner:
 
         return K
 
-    def load_covariates(self, n_samples: int) -> np.ndarray | None:
-        """Load and validate the covariate file.
-
-        Args:
-            n_samples: Number of samples for row-count validation.
-
-        Returns:
-            Covariate array of shape (n_samples, n_covariates), or None
-            if no covariate file was specified.
-
-        Raises:
-            ValueError: If covariate row count does not match n_samples.
-        """
-        if self.config.covariate_file is None:
-            return None
-
-        logger.info(f"Loading covariates from {self.config.covariate_file}")
-        covariates, _ = read_covariate_file(self.config.covariate_file)
-
-        if covariates.shape[0] != n_samples:
-            raise ValueError(
-                f"Covariate file has {covariates.shape[0]} rows "
-                f"but PLINK data has {n_samples} samples. "
-                f"Covariate rows must match sample count exactly."
-            )
-
-        logger.info(f"Loaded {covariates.shape[1]} covariates")
-
-        # Intercept handling (adding a column of 1s when no constant column is
-        # present) happens in _build_covariate_matrix, matching GEMMA's CheckCvt.
-
-        # Apply categorical encoding if -cat specified
-        if self.config.cat_columns is not None:
-            from jamma.io.covariate import encode_categorical_covariates
-
-            covariates = encode_categorical_covariates(
-                covariates, self.config.cat_columns
-            )
-            logger.info(
-                f"Categorical encoding applied to columns {self.config.cat_columns}: "
-                f"expanded to {covariates.shape[1]} covariate columns"
-            )
-
-        return covariates
-
     def run(self) -> PipelineResult:
         """Execute the full GWAS pipeline.
 
@@ -495,15 +412,14 @@ class PipelineRunner:
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         assoc_path = self.config.output_dir / f"{self.config.output_prefix}.assoc.txt"
 
-        covariates = self.load_covariates(n_samples)
-
         pheno_columns = self.config.phenotype_columns
-        all_pheno_data, valid_mask, n_valid, covariates = (
-            self._load_phenotypes_and_intersect_masks(pheno_columns, covariates)
-        )
-        analyzed_sample_indices = np.flatnonzero(valid_mask)
+        samples = load_analysed_samples(self.config, n_samples)
+        covariates = samples.covariates
+        valid_mask = samples.valid_mask
+        analyzed_sample_indices = samples.basis.positions
+        n_valid = samples.basis.analyzed_sample_count
+        n_cvt = samples.n_covariates
 
-        n_cvt = covariates.shape[1] if covariates is not None else 1
         log_dataset_banner(
             n_samples,
             n_valid,
@@ -548,11 +464,10 @@ class PipelineRunner:
         # before the shared eigen acquisition below; its branch runs the same
         # memory preflight on the same plan.
         if isinstance(analysis, LocoAnalysisPlan):
-            phenotypes, _n_analyzed = all_pheno_data[pheno_columns[0]]
             return self._run_loco(
                 analysis=analysis,
                 t_start=t_start,
-                phenotypes=phenotypes,
+                phenotypes=samples.phenotypes[pheno_columns[0]],
                 covariates=covariates,
                 valid_mask=valid_mask,
                 analyzed_sample_indices=analyzed_sample_indices,
@@ -573,7 +488,7 @@ class PipelineRunner:
         outcome = run_phenotype_loop(
             self.config,
             analysis,
-            all_pheno_data,
+            samples.phenotypes,
             valid_mask,
             covariates,
             eigenvalues,
@@ -606,77 +521,6 @@ class PipelineRunner:
         )
         self._emit_telemetry(result, plan)
         return result
-
-    def _load_phenotypes_and_intersect_masks(
-        self,
-        pheno_columns: Sequence[int],
-        covariates: np.ndarray | None,
-    ) -> tuple[dict[int, tuple[np.ndarray, int]], np.ndarray, int, np.ndarray | None]:
-        """Load each phenotype column and intersect their valid-sample masks.
-
-        Reads .fam once, parses each phenotype column, computes the valid
-        mask (non-NaN phenotype + non-NaN covariates) per column, then
-        intersects across columns so eigendecomposition runs on the
-        sample set common to every phenotype. The covariates come back
-        with an intercept column appended when none is constant over the
-        intersected mask, so ``covariates.shape[1]`` is the n_cvt every
-        later stage uses.
-
-        Args:
-            pheno_columns: Phenotype column numbers (1-based, as PLINK).
-            covariates: Covariate matrix (n_samples, n_cvt) or None.
-
-        Returns:
-            ``(all_pheno_data, valid_mask, n_valid, covariates)`` where
-            ``all_pheno_data[col] = (phenotype_array, n_analyzed)``,
-            ``valid_mask`` is the boolean intersection across all columns,
-            ``n_valid`` is its sum, and ``covariates`` carries an intercept.
-
-        Raises:
-            ValueError: If the .fam file can't be read, or if no sample is
-                valid across all columns (with per-column counts in the
-                message for diagnosis).
-        """
-        fam_path = f"{self.config.bfile}.fam"
-        try:
-            fam_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
-        except (ValueError, OSError) as e:
-            raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
-
-        all_pheno_data: dict[int, tuple[np.ndarray, int]] = {}
-        all_masks: list[np.ndarray] = []
-        for col in pheno_columns:
-            pheno, n_anal = self._parse_phenotype_column(col, fam_data)
-            all_pheno_data[col] = (pheno, n_anal)
-            all_masks.append(compute_valid_mask(pheno, covariates))
-
-        valid_mask = np.all(all_masks, axis=0)
-        n_valid = int(np.sum(valid_mask))
-
-        if n_valid == 0:
-            per_pheno_counts = {
-                col: int(m.sum())
-                for col, m in zip(pheno_columns, all_masks, strict=True)
-            }
-            raise ValueError(
-                f"No samples have valid values across all {len(pheno_columns)} "
-                f"phenotype columns. Per-column valid counts: {per_pheno_counts}"
-            )
-
-        per_pheno_counts = [int(m.sum()) for m in all_masks]
-        if n_valid < min(per_pheno_counts):
-            logger.warning(
-                f"Sample mask intersection reduced valid samples: "
-                f"per-phenotype counts {per_pheno_counts}, "
-                f"intersection {n_valid}"
-            )
-
-        return (
-            all_pheno_data,
-            valid_mask,
-            n_valid,
-            with_intercept(covariates, valid_mask),
-        )
 
     def _acquire_eigendecomposition(
         self,

@@ -4,8 +4,8 @@ Covers the helpers extracted out of ``_run_inner``:
 
 - ``pipeline_memory.memory_preflight`` (streaming / batch / batch-with-budget /
   insufficient)
-- ``_load_phenotypes_and_intersect_masks`` (happy, disjoint, shrink-warning,
-  unreadable .fam)
+- ``pipeline_samples.load_analysed_samples`` (happy, disjoint, shrink-warning,
+  unreadable .fam, covariate row count, appended intercept)
 - ``_run_loco`` (delegation contract: LocoResult fields map to
   PipelineResult fields, timing is non-negative, covariates drive n_cvt).
 """
@@ -23,6 +23,7 @@ from jamma.lmm.association_plan import plan_association
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_plan import LocoAnalysisPlan, resolve_analysis_plan
+from jamma.pipeline_samples import load_analysed_samples
 
 if TYPE_CHECKING:
     from jamma.lmm.stats import AssocResult
@@ -191,13 +192,18 @@ def _write_fam(path: Path, rows: list[list[str]]) -> None:
     path.write_text("\n".join(" ".join(r) for r in rows) + "\n")
 
 
-class TestLoadPhenotypesAndIntersectMasks:
-    """Multi-phenotype loading + mask intersection."""
+class TestLoadAnalysedSamples:
+    """Multi-phenotype loading, covariate loading, and mask intersection."""
 
-    def _runner_with_fam(
-        self, tmp_path: Path, pheno_cols: list[list[str]]
-    ) -> PipelineRunner:
-        """Build a runner whose .fam has FID/IID/PID/MID/SEX plus pheno cols."""
+    def _config_with_fam(
+        self,
+        tmp_path: Path,
+        pheno_cols: list[list[str]],
+        *,
+        phenotype_columns: list[int] | None = None,
+        covariate_rows: list[str] | None = None,
+    ) -> PipelineConfig:
+        """Build a config whose .fam has FID/IID/PID/MID/SEX plus pheno cols."""
         n_samples = len(pheno_cols[0])
         rows = []
         for i in range(n_samples):
@@ -205,63 +211,69 @@ class TestLoadPhenotypesAndIntersectMasks:
             rows.append(row)
         bfile = tmp_path / "dummy"
         _write_fam(Path(f"{bfile}.fam"), rows)
-        config = PipelineConfig(bfile=bfile, check_memory=False)
-        return PipelineRunner(config)
+        covariate_file = None
+        if covariate_rows is not None:
+            covariate_file = tmp_path / "cov.txt"
+            covariate_file.write_text("\n".join(covariate_rows) + "\n")
+        return PipelineConfig(
+            bfile=bfile,
+            check_memory=False,
+            phenotype_columns=phenotype_columns or [1],
+            covariate_file=covariate_file,
+        )
 
     def test_happy_path_multi_column_intersection(self, tmp_path: Path) -> None:
         # 4 samples, 2 phenotypes, all valid.
-        runner = self._runner_with_fam(
+        config = self._config_with_fam(
             tmp_path,
             pheno_cols=[
                 ["1.0", "2.0", "3.0", "4.0"],
                 ["0.5", "1.5", "2.5", "3.5"],
             ],
+            phenotype_columns=[1, 2],
         )
-        all_pheno, mask, n_valid, _ = runner._load_phenotypes_and_intersect_masks(
-            pheno_columns=[1, 2], covariates=None
-        )
-        assert n_valid == 4
-        assert mask.tolist() == [True, True, True, True]
-        assert set(all_pheno) == {1, 2}
+        samples = load_analysed_samples(config, n_samples=4)
+        assert samples.basis.analyzed_sample_count == 4
+        assert samples.valid_mask.tolist() == [True, True, True, True]
+        assert set(samples.phenotypes) == {1, 2}
+        assert samples.filter_indices is None
 
     def test_intersection_is_elementwise_and(self, tmp_path: Path) -> None:
         # col1: missing at sample 0; col2: missing at sample 1.
         # Intersection keeps only samples 2,3.
-        runner = self._runner_with_fam(
+        config = self._config_with_fam(
             tmp_path,
             pheno_cols=[
                 ["NA", "2.0", "3.0", "4.0"],
                 ["0.5", "NA", "2.5", "3.5"],
             ],
+            phenotype_columns=[1, 2],
         )
-        all_pheno, mask, n_valid, _ = runner._load_phenotypes_and_intersect_masks(
-            pheno_columns=[1, 2], covariates=None
-        )
-        assert mask.tolist() == [False, False, True, True]
-        assert n_valid == 2
+        samples = load_analysed_samples(config, n_samples=4)
+        assert samples.valid_mask.tolist() == [False, False, True, True]
+        assert samples.basis.analyzed_sample_count == 2
+        assert samples.filter_indices is not None
+        assert samples.filter_indices.tolist() == [2, 3]
 
     def test_disjoint_masks_raises_with_per_column_counts(self, tmp_path: Path) -> None:
         # col1 valid at samples 0,1; col2 valid at samples 2,3. Intersection empty.
-        runner = self._runner_with_fam(
+        config = self._config_with_fam(
             tmp_path,
             pheno_cols=[
                 ["1.0", "2.0", "NA", "NA"],
                 ["NA", "NA", "3.0", "4.0"],
             ],
+            phenotype_columns=[1, 2],
         )
         with pytest.raises(ValueError) as excinfo:
-            runner._load_phenotypes_and_intersect_masks(
-                pheno_columns=[1, 2], covariates=None
-            )
+            load_analysed_samples(config, n_samples=4)
         msg = str(excinfo.value)
         assert "No samples have valid values" in msg
         # Per-column counts must appear so users can diagnose.
         assert "1: 2" in msg
         assert "2: 2" in msg
 
-    def test_shrink_warning_when_intersection_reduces(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_shrink_warning_when_intersection_reduces(self, tmp_path: Path) -> None:
         """When the intersection is smaller than every column, emit a warning."""
         from loguru import logger
 
@@ -269,46 +281,67 @@ class TestLoadPhenotypesAndIntersectMasks:
         handler_id = logger.add(lambda m: records.append(str(m)), level="WARNING")
         try:
             # col1 valid at 0,1,2 (3); col2 valid at 1,2,3 (3); intersection 1,2 (2).
-            runner = self._runner_with_fam(
+            config = self._config_with_fam(
                 tmp_path,
                 pheno_cols=[
                     ["1.0", "2.0", "3.0", "NA"],
                     ["NA", "1.5", "2.5", "3.5"],
                 ],
+                phenotype_columns=[1, 2],
             )
-            _, mask, n_valid, _ = runner._load_phenotypes_and_intersect_masks(
-                pheno_columns=[1, 2], covariates=None
-            )
+            samples = load_analysed_samples(config, n_samples=4)
         finally:
             logger.remove(handler_id)
 
-        assert n_valid == 2
-        assert mask.tolist() == [False, True, True, False]
+        assert samples.basis.analyzed_sample_count == 2
+        assert samples.valid_mask.tolist() == [False, True, True, False]
         assert any("intersection" in r for r in records), (
             f"expected intersection shrink warning, got: {records}"
         )
 
     def test_missing_fam_raises_with_path(self, tmp_path: Path) -> None:
-        runner = _make_runner(tmp_path)
+        config = PipelineConfig(bfile=tmp_path / "dummy", check_memory=False)
         # No .fam file exists at tmp_path/dummy.fam
         with pytest.raises(ValueError, match=r"Failed to read \.fam file .*dummy\.fam"):
-            runner._load_phenotypes_and_intersect_masks(
-                pheno_columns=[1], covariates=None
-            )
+            load_analysed_samples(config, n_samples=4)
 
     def test_covariates_narrow_the_mask(self, tmp_path: Path) -> None:
         """A NaN covariate row must be excluded from the valid mask."""
-        runner = self._runner_with_fam(
+        config = self._config_with_fam(
             tmp_path,
             pheno_cols=[["1.0", "2.0", "3.0", "4.0"]],
+            # Covariate NaN at sample 2, and a constant column so no intercept
+            # is appended.
+            covariate_rows=["1 0.5", "1 1.5", "1 NA", "1 3.5"],
         )
-        # Covariate NaN at sample 2.
-        covariates = np.array([[1.0], [1.0], [np.nan], [1.0]], dtype=np.float64)
-        _, mask, n_valid, _ = runner._load_phenotypes_and_intersect_masks(
-            pheno_columns=[1], covariates=covariates
+        samples = load_analysed_samples(config, n_samples=4)
+        assert samples.valid_mask.tolist() == [True, True, False, True]
+        assert samples.basis.analyzed_sample_count == 3
+        assert samples.n_covariates == 2
+
+    def test_covariate_row_count_mismatch_raises(self, tmp_path: Path) -> None:
+        """A covariate file that does not span every sample is named as such."""
+        config = self._config_with_fam(
+            tmp_path,
+            pheno_cols=[["1.0", "2.0", "3.0", "4.0"]],
+            covariate_rows=["1 0.5", "1 1.5", "1 2.5"],
         )
-        assert mask.tolist() == [True, True, False, True]
-        assert n_valid == 3
+        with pytest.raises(ValueError, match="3 rows but PLINK data has 4 samples"):
+            load_analysed_samples(config, n_samples=4)
+
+    def test_intercept_appended_when_no_column_is_constant(
+        self, tmp_path: Path
+    ) -> None:
+        """with_intercept runs after masking, so n_covariates counts the ones column."""
+        config = self._config_with_fam(
+            tmp_path,
+            pheno_cols=[["1.0", "2.0", "3.0", "4.0"]],
+            covariate_rows=["0 1", "1 3", "2 5", "3 7"],
+        )
+        samples = load_analysed_samples(config, n_samples=4)
+        assert samples.n_covariates == 3
+        assert samples.covariates is not None
+        assert np.array_equal(samples.covariates[:, 2], np.ones(4))
 
 
 class TestRunLoco:

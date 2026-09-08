@@ -48,7 +48,7 @@ class PhenoLoopOutcome(NamedTuple):
 def run_phenotype_loop(
     config: PipelineConfig,
     analysis: StandardAnalysisPlan,
-    all_pheno_data: dict[int, tuple[np.ndarray, int]],
+    phenotypes: dict[int, np.ndarray],
     valid_mask: np.ndarray,
     covariates: np.ndarray | None,
     eigenvalues: np.ndarray,
@@ -123,7 +123,7 @@ def run_phenotype_loop(
         for col in columns:
             if is_multi:
                 logger.info(f"Starting LMM for phenotype column {col}")
-            phenotypes_col = all_pheno_data[col][0][valid_mask]
+            phenotypes_col = phenotypes[col][valid_mask]
             col_path = (
                 config.output_dir / f"{prefix}.pheno{col}.assoc.txt"
                 if is_multi

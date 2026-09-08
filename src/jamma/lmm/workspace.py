@@ -65,7 +65,6 @@ class WorkspaceSpec:
         output_bytes = _output_columns(lmm_mode) * _DOUBLE
         # Null-model calculations retain Python's reference recursion table.
         # Each entry owns a six-int tuple; 384 bytes bounds its Python objects.
-        # The removed flat transport and flattening list are not included.
         reference_bytes = comb(n_cvt + 3, 3) * 384
         if not dispatch.use_split:
             fixed_bytes = 0

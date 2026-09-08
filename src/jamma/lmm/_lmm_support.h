@@ -4,7 +4,7 @@
  *
  * These are the functions that talk to CPython and the allocator rather than
  * to the numerics: scratch buffers, argument validation, the alloc/decref/build
- * triples for each result shape, and the pab-table parser. Every kernel family
+ * triples for each result shape, and the packed Pab table. Every kernel family
  * needs them, none of them owns any floating-point pipeline, so they are the
  * one shared seam that can move without a numerical argument.
  *
@@ -69,11 +69,6 @@ typedef struct {
     PyArrayObject *lambdas_mle;  /* MLE lambda, mode 4 only */
     PyArrayObject *p_lrts;       /* LRT p-value, mode 4 only */
 } lmm_output_t;
-
-/* ---------------------------------------------------------------------------
- * Pab recursion table, constructed from n_cvt at workspace creation.
- * ------------------------------------------------------------------------- */
-
 
 /* ---------------------------------------------------------------------------
  * Allocation
@@ -141,7 +136,8 @@ void decref_lmm_output(lmm_output_t *out);
 PyObject *build_lmm_result_dict(lmm_output_t *out);
 
 /* ---------------------------------------------------------------------------
- * Argument parsing
+ * Pab recursion table, built from n_cvt at workspace creation. The typedef
+ * lives in _lmm_types.h.
  * ------------------------------------------------------------------------- */
 
 /* Construct the canonical packed table from n_cvt. Free on every failure. */

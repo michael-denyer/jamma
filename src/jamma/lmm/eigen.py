@@ -93,6 +93,9 @@ def eigendecompose_kinship(
         threshold: Eigenvalues below this are zeroed (default: 1e-10)
         check_memory: If True (default), check available memory before
             eigendecomposition. Set False to skip (e.g., when already checked).
+        mem_budget: User-set ceiling in GB, or None for no ceiling. Gates the
+            run, and picks the driver when ``eigen_plan`` is absent.
+        eigen_plan: Driver plan from an earlier preflight, or None to plan here.
 
     Returns:
         Tuple of (eigenvalues, eigenvectors) where:

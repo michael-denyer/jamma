@@ -253,10 +253,15 @@ def _stream_s_full_and_chr(
 class _LocoPassPlan(NamedTuple):
     """Memory-sizing decision for streaming LOCO kinship.
 
-    single_pass: accumulate S_full and every per-chromosome S_chr together.
-    batch_size: chromosomes processed per disk pass when multi-pass.
-    single_pass_gb / min_required_gb: peak estimates surfaced for logging and
-        the memory-preflight guard.
+    Attributes:
+        single_pass: Accumulate S_full and every per-chromosome S_chr together.
+        batch_size: Chromosomes processed per disk pass when multi-pass.
+        single_pass_gb: Peak for the single-pass shape, reported in logs.
+        min_required_gb: Peak for one chromosome per pass, the floor below
+            which no batch size fits.
+        eigendecomp_min_gb: Conservative DSYEVR peak for ``n_mat``.
+        required_gb: Peak for the batch size this plan chose. The figure the
+            memory gate checks.
     """
 
     single_pass: bool
@@ -382,14 +387,17 @@ def compute_loco_kinship_streaming(
             (n_valid, n_valid) where n_valid = len(valid_indices), eliminating
             the post-hoc np.ix_ copy. When None, K_loco has shape
             (n_samples, n_samples) (default, backward-compatible).
-        mem_budget: User-set ceiling in GB, or None for no ceiling. Vetoes the
-            run the same way ``_reject_if_over_budget`` vetoes the batch and
-            streaming paths; it does not resize the chromosome batch.
+        mem_budget: User-set ceiling in GB, or None for no ceiling. Caps the
+            capacity ``plan_loco_passes`` sizes the chromosome batch against,
+            and vetoes the run when even one chromosome per pass exceeds it.
         filter_sample_indices: Samples used for SNP filtering, or None for all
             BED samples. Independent of output rows and full-population centering.
-        _max_batch_chrs: Debug override forcing a fixed chromosomes-per-pass
-            batch size (bypasses memory-based sizing). Used by tests to exercise
-            multi-pass without mocking psutil.
+        _max_batch_chrs: Debug cap on chromosomes per pass, applied on top of
+            the memory-based batch size. Used by tests to exercise multi-pass
+            without mocking psutil.
+        consumer_peak_gb: Peak the downstream eigen and association work will
+            hold while this stream is live. None reserves the conservative
+            DSYEVR peak, for standalone kinship use.
 
     Returns:
         A consume-once LocoKinshipStream. Iterate it for (chr_name, K_loco) pairs,

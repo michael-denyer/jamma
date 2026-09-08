@@ -78,7 +78,8 @@ def _read_array(
 ) -> np.ndarray:
     """Read one eigen array from .npy, its .npy sidecar, or GEMMA text.
 
-    Sidecar loads are read-only memory maps; see ``read_array_artifact``.
+    Every binary load is a read-only memory map, direct .npy path and sidecar
+    alike; see ``read_array_artifact``.
     """
     return read_array_artifact(
         path,
@@ -92,8 +93,9 @@ def _read_array(
 def _read_eigenvalues(path: Path) -> np.ndarray:
     """1-D float64 eigenvalues from .eigenD.npy or GEMMA .eigenD.txt.
 
-    May be a read-only ``np.memmap`` when loaded from the .npy sidecar;
-    callers must not mutate it in place.
+    A read-only ``np.memmap`` whenever the bytes come from a .npy file,
+    whether that is the given path or the sidecar beside a text path.
+    Callers must not mutate it in place.
 
     Raises:
         ValueError: If the file is empty, non-numeric, or not a vector.
@@ -109,8 +111,9 @@ def _read_eigenvalues(path: Path) -> np.ndarray:
 def _read_eigenvectors(path: Path) -> np.ndarray:
     """2-D float64 eigenvectors from .eigenU.npy or GEMMA .eigenU.txt.
 
-    Text parsing goes through ``read_matrix_parallel``. May be a read-only
-    ``np.memmap`` when loaded from the .npy sidecar; callers must not mutate
+    Text parsing goes through ``read_matrix_parallel``. A read-only
+    ``np.memmap`` whenever the bytes come from a .npy file, whether that is
+    the given path or the sidecar beside a text path. Callers must not mutate
     it in place.
 
     Raises:

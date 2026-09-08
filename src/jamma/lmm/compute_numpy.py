@@ -1,15 +1,15 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-The full-Uab helpers below (``_compute_wald_numpy`` and its LRT and Score
-siblings) are pure NumPy. They are reached only through
-``compute_lmm_chunk_numpy``, which the runner calls only on
-``DispatchPath.NUMPY_FALLBACK``, and that path is selected only when the
-extension is absent.
+The full-Uab helpers here (``_compute_wald_numpy`` and its LRT and Score
+siblings) are pure NumPy, reached only through ``compute_lmm_chunk_numpy``,
+which the runner calls only on ``DispatchPath.NUMPY_FALLBACK``. That path is
+selected only when the extension is absent.
 
-The caller is responsible for:
-- Computing Uab_batch (n_snps, n_samples, n_index) for chunk dispatch.
-- There is no async dispatch in the NumPy backend — results are immediately
-  available after the call returns.
+``compute_wald_split_numpy`` is the exception. It is the ``NUMPY_WALD`` kernel
+body, which ``chunk_kernel`` calls directly on the split Uab rows.
+
+The caller computes ``Uab_batch`` (n_snps, n_samples, n_index) for chunk
+dispatch. Every call is synchronous; results are available when it returns.
 """
 
 from __future__ import annotations

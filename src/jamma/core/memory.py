@@ -182,6 +182,11 @@ def estimate_lmm_memory(
         n_buffers: Live chunk buffers the engine allocates (1 sequential, 2
             pipelined). Scales both the UtG rotation chunk and the Uab/Iab
             extra, matching ``_ChunkEngine``'s per-buffer allocation.
+        n_grid: Lambda grid width the optimizer materialises per chunk. 0 when
+            the caller prices the grid elsewhere.
+        uab_iab_gb: Per-buffer Uab and Iab bytes in GB, for a dispatch path that
+            holds less than the full table. None prices the full Uab and Iab
+            batches.
 
     Example:
         >>> print(f"LMM needs {estimate_lmm_memory(100_000, 100):.0f}GB")

@@ -115,8 +115,12 @@ def eigen_pairs_for(
         partitions: chr_name -> global SNP indices, for progress output.
         check_memory: Passed to the kinship streamer and eigendecomposition.
         show_progress: Whether to log per-chromosome progress.
-        mem_budget: User-set ceiling in GB, passed to the kinship streamer's
-            veto. None for no ceiling.
+        mem_budget: User-set ceiling in GB, or None for no ceiling. Budgets the
+            eigen driver against what the retained set leaves, and reaches the
+            kinship streamer's veto.
+        association_peak_gb: Peak the association phase will hold, so the kinship
+            streamer sizes its chromosome batch around the larger of that and the
+            eigen driver.
     """
     n_valid = int(np.sum(valid_mask))
     all_samples_valid = n_valid == len(valid_mask)
@@ -397,6 +401,10 @@ def _computed_eigen_pairs(
                 f"Cannot create eigen cache directory {cache_write.eigen_dir}: {e}"
             ) from e
 
+    # No enumerate() here. CPython's enumerate holds its previous result tuple,
+    # and through it the previous U, until this generator yields the next item,
+    # so chromosome c's eigenvectors would stay live through c+1's
+    # eigendecomposition. The counter feeds the progress line below.
     chr_idx = -1
     for chr_name, K_loco in loco_iter:
         chr_idx += 1

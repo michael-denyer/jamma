@@ -213,6 +213,9 @@ def plan_eigen_driver(
         no_vendor: Force the numpy fallback (e.g. JLINALG_NO_VENDOR_LAPACK set).
         inplace_eligible: K can be overwritten in place (float64, C-contiguous,
             writeable).
+        budget_gb: User-set ceiling in GB, or None for no ceiling. Falls back to
+            DSYEVR when the DSYEVD peak exceeds it, the same way an available-RAM
+            shortfall does.
 
     Returns:
         EigenDriverPlan with the chosen driver, flags, and peak estimates.

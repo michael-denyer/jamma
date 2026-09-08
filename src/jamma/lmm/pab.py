@@ -1,8 +1,8 @@
 """Packed Uab/Pab/Iab representation and table construction.
 
-This module owns GEMMA's packed projection indexing and the C-friendly table
-derived from it. Likelihood evaluation consumes these values, but it does not
-own their shape.
+This module owns GEMMA's packed projection indexing, which means the ``(a, b)``
+pair order, the recursion levels ``calc_pab`` walks, and the logdet diagonal.
+Likelihood evaluation consumes these values, but it does not own their shape.
 """
 
 from __future__ import annotations

@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deleted and `use_split` now means the two fused C paths only. The per-SNP
   byte accounting in `chunk_sizing` branches three ways instead of two.
 
+### Changed
+
+- **An interrupted association run retains `<prefix>.assoc.txt.partial`.** The
+  retained partial used to be a hidden sibling carrying the writer's pid and a
+  uuid, so `ls` did not show it and nothing swept it. It now sits beside the
+  destination under a fixed name, and a second interrupted run overwrites it.
+  Both failure paths report the result count again: an interrupt names the
+  retained file, an ordinary error names the output it is discarding, which
+  matters because the previous complete file now survives the failure.
+
+- **`compare_assoc_results` raises `ValueError` when the two files carry
+  different LMM modes.** It used to return `passed=False` with every column
+  result passing and no message, so a caller had a failure with no cause.
+  `load_gemma_assoc` returns a plain `list[AssocResult]`; the `AssocTable`
+  subclass that carried the file's header columns is gone, and no caller read
+  them. An empty file now reports mode 1 rather than the mode its header
+  implies, which changes no comparison result over zero rows.
+
 ## [8.0.0] - 2026-09-08
 
 Major. The public surface moves in four places a user can observe: `gwas()`

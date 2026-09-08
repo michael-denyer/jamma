@@ -1,8 +1,4 @@
-"""_lmm_accel C extension tests: Pab table construction and kernel performance.
-
-Split from the original single test_lmm_accel module. Shared fixtures
-live in tests/lmm_accel/_helpers.py.
-"""
+"""Wall-clock benchmark for the n_cvt=1 fused C Wald kernel."""
 
 import numpy as np
 import pytest

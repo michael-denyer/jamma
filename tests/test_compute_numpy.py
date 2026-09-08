@@ -139,7 +139,6 @@ def mouse_data():
 
 def _general_score_only_result(d):
     """The general workspace's lmm_mode=3 (Score only) compute for *d*."""
-    pab_table = d["n_cvt"]
     ws = accel.require().create_workspace_general_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
@@ -151,7 +150,7 @@ def _general_score_only_result(d):
         50,
         20,
         1,
-        pab_table,
+        d["n_cvt"],
         lmm_mode=3,
         hi_eval_null=d["Hi_eval_null"],
     )
@@ -160,7 +159,6 @@ def _general_score_only_result(d):
 
 def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
     """The general workspace's lmm_mode=2 (LRT only) compute for *d*."""
-    pab_table = d["n_cvt"]
     ws = accel.require().create_workspace_general_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
@@ -172,7 +170,7 @@ def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
         n_grid,
         n_refine,
         1,
-        pab_table,
+        d["n_cvt"],
         lmm_mode=2,
         logl_H0=d["logl_H0"],
     )

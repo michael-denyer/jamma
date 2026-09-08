@@ -306,9 +306,9 @@ def plan_loco_passes(
     in the batch, with ``consumer_gb`` reserved for the eigen or association
     work that runs while the stream is live. The batch is the largest count
     whose peak fits ``memory.headroom_gb(available_gb)``, capped by
-    ``budget_gb`` and ``max_batch_chrs``, and never below one chromosome; the
-    caller gates that floor. A single-pass run is ``batch_size ==
-    n_chr_with_snps``, one batch covering every chromosome.
+    ``budget_gb``, ``max_batch_chrs``, and ``n_chr_with_snps``, and never
+    below one chromosome; the caller gates that floor. A single-pass run is
+    ``batch_size == n_chr_with_snps``, one batch covering every chromosome.
 
     The margin is taken of the requirement via ``memory.headroom_gb``, the
     same margin ``fits`` applies to the batch it produces, so the two agree
@@ -322,9 +322,10 @@ def plan_loco_passes(
         available_gb: Free RAM in GB (the caller reads psutil once).
         budget_gb: User ceiling in GB without the physical-RAM margin, or None.
         max_batch_chrs: Cap on chromosomes per pass, or None.
+
+    Returns:
+        The batch size, whether it is a single pass, and its peak.
     """
-    # S_full and K_loco_buf are shared across the batch; each chromosome in
-    # the batch adds one S_chr, so batch_size == 1 is the retained set.
     fixed_gb = 2 * retained.matrix_gb + retained.chunk_buffer_gb + consumer_gb
     capacity_gb = memory.headroom_gb(available_gb)
     if budget_gb is not None:
@@ -433,8 +434,6 @@ def compute_loco_kinship_streaming(
     partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
-    # Matrices are n_mat x n_mat once valid_indices subsets the rows; the disk
-    # buffer stays n_samples wide.
     n_mat = len(valid_indices) if valid_indices is not None else n_samples
     logger.info("Computing LOCO Kinship (streaming)")
     logger.info(
@@ -450,7 +449,7 @@ def compute_loco_kinship_streaming(
         memory.require(
             retained.while_consuming_gb + consumer_gb,
             memory.available_ram_gb(),
-            f"LOCO working set (3 accumulators + disk buffer "
+            "LOCO working set (3 accumulators + disk buffer "
             f"{retained.while_consuming_gb:.1f}GB, consumer {consumer_gb:.1f}GB)",
             budget_gb=mem_budget,
         )
@@ -541,23 +540,23 @@ def compute_loco_kinship_streaming(
         logger.info(f"  Memory budget: {mem_budget:.1f}GB")
 
     batch_size = plan.batch_size
-    single_pass_gb = (
-        retained.while_consuming_gb
-        + consumer_gb
-        + (n_chr_with_snps - 1) * retained.matrix_gb
-    )
     # At least one batch always runs, even when n_chr_with_snps == 0 (every
     # chromosome lost all its SNPs to filtering): that lone batch still computes
     # S_full, which _yield_full_kinship_fallback below needs for every chromosome.
     n_batches = max(1, -(-n_chr_with_snps // batch_size)) if batch_size else 1
 
     def _generate() -> Iterator[tuple[str, np.ndarray]]:
-        if plan.single_pass and single_pass_gb > 10:
+        if plan.single_pass and plan.required_gb > 10:
             logger.info(
-                f"LOCO streaming: single-pass ({single_pass_gb:.1f}GB for "
+                f"LOCO streaming: single-pass ({plan.required_gb:.1f}GB for "
                 f"{n_chr_with_snps} chromosomes)"
             )
         elif not plan.single_pass:
+            single_pass_gb = (
+                retained.while_consuming_gb
+                + consumer_gb
+                + (n_chr_with_snps - 1) * retained.matrix_gb
+            )
             logger.warning(
                 f"LOCO streaming: multi-pass mode ({n_batches} passes, "
                 f"{batch_size} chromosomes/pass). Single-pass would need "

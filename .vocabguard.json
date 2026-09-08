@@ -1,21 +1,10 @@
 {
   "terms": {},
-  "replacements": {
-    "hand-rolled": "name the concrete thing: shell scripts, ad-hoc scripts, own C translation",
-    "honest": "delete the marker and state the fact",
-    "rigorous": "name the property: bounded, tested, proven",
-    "genuine": "delete",
-    "leverage": "use",
-    "delve": "look at, examine",
-    "seamless": "delete"
-  },
   "banned_patterns": [
     "(?i)\\bhand-rolled\\b",
     "(?i)\\bhonest(ly)?\\b",
-    "(?i)\\bhonest (answer|view|opinion|take|picture)\\b",
     "(?i)\\bcandidly\\b",
     "(?i)\\bfrankly\\b",
-    "(?i)\\bto be honest\\b",
     "(?i)\\btruthfully\\b",
     "(?i)\\bin all honesty\\b",
     "(?i)\\bin short\\b",
@@ -31,7 +20,6 @@
     "(?i)\\bbeing upfront\\b",
     "(?i)\\bfor full transparency\\b",
     "(?i)\\bI should flag\\b",
-    "(?i)\\bworth being honest\\b",
     "(?i)\\brather than claim otherwise\\b",
     "(?i)\\bdelve\\b",
     "(?i)\\bleverage\\b",

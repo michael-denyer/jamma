@@ -17,6 +17,7 @@ from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
     _eigendecompose_or_reuse,
+    parse_eigen_input,
     prepare_lmm_run,
     with_intercept,
 )
@@ -334,5 +335,47 @@ def test_eigenvector_shape_mismatch_raises():
             snp_info=snp_info,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors_wrong,
+            config=LmmConfig(check_memory=False, show_progress=False),
+        )
+
+
+def test_read_only_kinship_rejected_at_the_boundary():
+    """A read-only kinship fails in KinshipMatrix, not inside center_kinship.
+
+    The runner consumes the supplied matrix: center_kinship writes into it,
+    then the eigendecomposition overwrites it. Both write before NumPy checks
+    writeability, so without this guard the NumPy-fallback path reports a bare
+    "output array is read-only" from the centring subtraction.
+    """
+    kinship = np.eye(4)
+    kinship.flags.writeable = False
+
+    with pytest.raises(ValueError, match="kinship must be writeable"):
+        KinshipMatrix(kinship)
+
+    with pytest.raises(ValueError, match="kinship must be writeable"):
+        parse_eigen_input(kinship, None, None)
+
+
+def test_read_only_kinship_rejected_by_the_public_runner():
+    """run_lmm_association_numpy names the cause before any computation."""
+    from jamma.lmm.runner_numpy import run_lmm_association_numpy
+
+    rng = np.random.default_rng(11)
+    n_samples = 20
+    n_snps = 5
+
+    kinship = np.eye(n_samples)
+    kinship.flags.writeable = False
+
+    with pytest.raises(ValueError, match="kinship must be writeable"):
+        run_lmm_association_numpy(
+            genotypes=rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps)),
+            phenotypes=rng.standard_normal(n_samples),
+            kinship=kinship,
+            snp_info=[
+                {"chr": "1", "rs": f"rs{i}", "pos": i * 100, "a1": "A", "a0": "G"}
+                for i in range(n_snps)
+            ],
             config=LmmConfig(check_memory=False, show_progress=False),
         )

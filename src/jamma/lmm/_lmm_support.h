@@ -172,7 +172,6 @@ PyArrayObject *take_matrix(PyObject *obj, int rows, int cols,
 PyArrayObject *take_chunk(PyObject *obj, int n_samples, int *n_snps_out);
 
 /* Each 0 on success, -1 with PyErr set. */
-int validate_n_cvt(int n_cvt);
 int validate_logl_H0(double logl_H0);
 int validate_hi_eval_null(const double *hi, int n_samples);
 

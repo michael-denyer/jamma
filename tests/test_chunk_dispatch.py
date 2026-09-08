@@ -104,8 +104,8 @@ def test_reconstruct_uab_from_soa_matches_direct():
         batch_compute_uab_numpy,
         batch_compute_uab_varying_soa_numpy,
         compute_uab_invariant_soa,
-        reconstruct_uab_from_soa,
     )
+    from tests.lmm_accel._helpers import reconstruct_uab_from_soa
 
     inputs = rotated_lmm_inputs(n_samples=50, n_snps=20, n_cvt=1, seed=42)
     UtW, Uty, UtG = inputs.UtW, inputs.Uty, inputs.UtG

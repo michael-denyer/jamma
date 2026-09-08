@@ -470,7 +470,7 @@ class TestGeneralWorkspaceScoreParity:
     @requires_c
     def test_general_score_only_matches_numpy(self, general_score_lrt_ncvt2):
         """Score-only general workspace matches the NumPy Score statistics."""
-        from jamma.lmm.pab import classify_uab_columns
+        from tests.lmm_accel._helpers import classify_uab_columns
 
         data = general_score_lrt_ncvt2
         n_cvt = data["n_cvt"]
@@ -521,7 +521,7 @@ class TestGeneralWorkspaceLrtParity:
     @requires_c
     def test_general_lrt_only_matches_numpy(self, general_score_lrt_ncvt2):
         """LRT-only general workspace matches the NumPy MLE lambdas and p_lrts."""
-        from jamma.lmm.pab import classify_uab_columns
+        from tests.lmm_accel._helpers import classify_uab_columns
 
         data = general_score_lrt_ncvt2
         n_cvt = data["n_cvt"]

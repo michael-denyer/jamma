@@ -483,16 +483,6 @@ PyArrayObject *take_chunk(PyObject *obj, int n_samples, int *n_snps_out)
     return arr;
 }
 
-int validate_n_cvt(int n_cvt)
-{
-    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
-        PyErr_Format(PyExc_ValueError,
-                     "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
-        return -1;
-    }
-    return 0;
-}
-
 int validate_logl_H0(double logl_H0)
 {
     if (!isfinite(logl_H0)) {

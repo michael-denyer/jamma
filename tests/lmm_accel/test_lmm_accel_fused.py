@@ -413,7 +413,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
     mle_const in the workspace. This test verifies the fix: all non-degenerate
     SNPs must have finite lambda_mle values.
     """
-    from jamma.lmm.pab import classify_uab_columns
+    from tests.lmm_accel._helpers import classify_uab_columns
 
     data = general_score_lrt_ncvt2
     eigenvalues = data["eigenvalues"]

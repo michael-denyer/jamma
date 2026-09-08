@@ -37,7 +37,7 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
     (void)self;
     if (!PyArg_ParseTuple(args, "iiiii", &n_samples, &n_cvt, &n_grid,
                           &lmm_mode, &n_threads)) return NULL;
-    if (n_samples < 1 || n_cvt < 1 || n_cvt > 100 || n_grid < 2 ||
+    if (n_samples < 1 || n_cvt < 1 || n_cvt > MAX_N_CVT || n_grid < 2 ||
         lmm_mode < 1 || lmm_mode > 4 || n_threads < 1) {
         PyErr_SetString(PyExc_ValueError, "invalid workspace sizing dimensions");
         return NULL;

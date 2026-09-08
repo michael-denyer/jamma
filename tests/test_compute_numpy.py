@@ -605,8 +605,8 @@ def test_vectorized_general_uab_parity(n_cvt):
 @pytest.mark.parametrize("n_cvt", [2, 3, 4])
 def test_invariant_columns_constant_across_snps(n_cvt):
     """Uab columns classified as invariant are actually constant across SNPs."""
-    from jamma.lmm.pab import classify_uab_columns
     from jamma.lmm.uab import _batch_compute_uab_general_numpy
+    from tests.lmm_accel._helpers import classify_uab_columns
 
     rng = np.random.default_rng(123)
     n_samples, n_snps = 40, 20
@@ -659,38 +659,6 @@ def test_batch_compute_uab_numpy_rejects_wrong_layout():
 
     with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
         batch_compute_uab_numpy(1, UtW, Uty, UtG)
-
-
-@pytest.mark.tier0
-def test_batch_compute_uab_varying_soa_rejects_wrong_out_shape():
-    """batch_compute_uab_varying_soa_numpy raises ValueError for wrong out= shape."""
-    rng = np.random.default_rng(99)
-    n_samples, n_snps = 50, 10
-    UtW = rng.standard_normal((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    utg_t = rng.standard_normal((n_snps, n_samples))
-    wrong_out = np.empty((n_snps + 1, 3, n_samples), dtype=np.float64)
-
-    with pytest.raises(ValueError, match="out shape"):
-        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, utg_t, out=wrong_out)
-
-
-@pytest.mark.tier0
-def test_batch_compute_uab_varying_soa_ncvt1_rejects_wrong_out_dtype_and_layout():
-    """The n_cvt=1 branch validates out= dtype and contiguity like the general one."""
-    rng = np.random.default_rng(99)
-    n_samples, n_snps = 50, 10
-    UtW = rng.standard_normal((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    utg_t = rng.standard_normal((n_snps, n_samples))
-
-    with pytest.raises(ValueError, match="out dtype"):
-        batch_compute_uab_varying_soa_numpy(
-            1, UtW, Uty, utg_t, out=np.empty((n_snps, 3, n_samples), dtype=np.float32)
-        )
-    fortran_out = np.asfortranarray(np.empty((n_snps, 3, n_samples), dtype=np.float64))
-    with pytest.raises(ValueError, match="C-contiguous"):
-        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, utg_t, out=fortran_out)
 
 
 @pytest.mark.tier0

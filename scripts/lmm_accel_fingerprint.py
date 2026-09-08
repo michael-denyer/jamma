@@ -117,14 +117,6 @@ def _wrap(name: str, fn: Any) -> Any:
         except BaseException as exc:
             _records.add(f"{name}\t{args_digest}\traise:{type(exc).__name__}")
             raise
-        if name == "create_workspace_general_c" and len(args) > 10:
-            # The former dict transport and the native n_cvt constructor
-            # describe the same successful workspace. Normalize only successful
-            # calls; malformed old tables retain their distinct failure keys.
-            dimension = args[10]
-            if isinstance(dimension, dict):
-                dimension = dimension["n_cvt"]
-            args_digest = _digest((*args[:10], dimension, *args[11:]), kwargs)
         if name.startswith("create_workspace"):
             # Register before digesting, so a creator's result digest is a
             # function of its own call and never of whatever capsule last

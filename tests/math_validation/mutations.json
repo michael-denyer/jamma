@@ -47,7 +47,7 @@
       "tier": "smoke",
       "path": "src/jamma/lmm/compute_numpy.py",
       "find": "    return result",
-      "replace": "    if lmm_mode == 4:\n        result[\"logls\"] = _compute_wald_numpy(\n            n_cvt, eigenvalues, Uab_batch, n_samples, l_min, l_max, n_grid, n_refine, Iab_batch=Iab_batch\n        )[\"logls\"]\n    return result",
+      "replace": "    if lmm_mode == 4:\n        result[\"logls\"] = _compute_wald_numpy(\n            n_cvt, eigenvalues, Uab_batch, n_samples, l_min, l_max, n_grid, n_refine\n        )[\"logls\"]\n    return result",
       "detector": "tests/test_compute_numpy.py::test_compute_lmm_chunk_numpy_all_modes",
       "testcase": "test_compute_lmm_chunk_numpy_all_modes"
     },

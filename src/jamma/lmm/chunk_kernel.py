@@ -126,7 +126,6 @@ class Kernel:
     label: str
     n_filtered: int
     call: Callable[[np.ndarray, int], KernelResult]
-    uses_c: bool  # True for every path but NUMPY_FALLBACK; see make_kernel
     max_threads: int
 
     def compute_chunk(
@@ -221,7 +220,6 @@ def _ncvt1_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
         label=_NCVT1_LABEL[inv.lmm_mode],
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
-        uses_c=True,
         max_threads=max_threads,
     )
 
@@ -260,7 +258,6 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         label=_GENERAL_LABEL[inv.lmm_mode],
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
-        uses_c=True,
         max_threads=n_threads,
     )
 
@@ -283,7 +280,12 @@ def _numpy_wald_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
             n_refine=inv.n_refine,
         )
 
-    return Kernel("NumPy Wald", inv.n_filtered, call, False, max_threads)
+    return Kernel(
+        label="NumPy Wald",
+        n_filtered=inv.n_filtered,
+        call=call,
+        max_threads=max_threads,
+    )
 
 
 def _numpy_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
@@ -309,7 +311,6 @@ def _numpy_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
         label="LMM chunk compute",
         n_filtered=inv.n_filtered,
         call=call,
-        uses_c=False,
         max_threads=max_threads,
     )
 

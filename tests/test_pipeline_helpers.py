@@ -64,18 +64,16 @@ class TestMemoryPreflightStreaming:
     ) -> None:
         """The quote carries the chunk the engine will size and the
         driver-aware eigendecomposition figure, and the gate passes."""
-        from jamma.pipeline_memory import _eigen_driver_plan
-
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
         runner = _make_runner(tmp_path, check_memory=True)
         plan = _association_plan("streaming", n_valid=1000, n_snps=50_000, n_cvt=3)
 
-        memory_preflight(runner.config, plan)  # gate must pass, not raise
+        eigen = memory_preflight(runner.config, plan)  # gate must pass, not raise
 
-        quote = plan.price(eigen=_eigen_driver_plan(plan.n_samples, 64.0))
+        assert eigen is not None
+        assert eigen.required_gb > 0
+        quote = plan.price(eigen=eigen)
         assert quote.compute_chunk_size >= 100
-        assert quote.eigen is not None
-        assert quote.eigen.required_gb > 0
         assert memory.fits(quote.total_peak_gb, 64.0)
 
     def test_streaming_check_memory_false_logs_skip(self, tmp_path: Path) -> None:

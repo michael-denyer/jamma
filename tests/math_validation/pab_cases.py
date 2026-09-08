@@ -29,7 +29,7 @@ def numpy_routes(eigenvalues, w, x, y):
     uab = gram_products(w, x, y)
     iab = batch_compute_iab_numpy(1, uab)
     split = _compute_wald_numpy(
-        1, eigenvalues, uab, len(eigenvalues), 1e-5, 1e5, 50, 20, Iab_batch=iab
+        1, eigenvalues, uab, len(eigenvalues), 1e-5, 1e5, 50, 20
     )
     lam, logl, pab = golden_section_optimize_lambda_numpy(1, eigenvalues, uab, iab)
     beta, se, p = batch_calc_wald_stats_from_pab_numpy(1, pab, len(eigenvalues))

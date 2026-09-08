@@ -70,6 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Association comparison revalidates mutable rows against their dataset's
+  declared mode. Changing loaded rows to another schema now raises an error
+  instead of silently skipping the new statistics.
+
 - Interrupted association output survives even when renaming it to `.partial`
   fails. The warning names the recoverable file, and cleanup preserves it.
 - LOCO checks the selected chromosome batch against the free RAM available

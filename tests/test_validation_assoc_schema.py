@@ -99,3 +99,43 @@ def test_dataset_rejects_rows_with_a_different_mode():
 
     with pytest.raises(ValueError, match="Rows carry mode 1, expected mode 3"):
         AssocDataset(3, (make_assoc(),))
+
+
+@pytest.fixture
+def loaded_wald_pair(tmp_path):
+    from jamma.validation import load_gemma_assoc
+    from tests.fakes.assoc_files import WALD_FULL_COLS, write_assoc
+
+    path = tmp_path / "wald.txt"
+    write_assoc(
+        path,
+        WALD_FULL_COLS,
+        [
+            ["1", f"rs{i}", i, 0, "A", "G", 0.2, 0.1, 0.2, -10, 0.8, 0.05]
+            for i in range(2)
+        ],
+    )
+    return load_gemma_assoc(path), load_gemma_assoc(path)
+
+
+@pytest.mark.parametrize("sides", [(0,), (1,), (0, 1)])
+@pytest.mark.parametrize("row_indices", [(1,), (0, 1)])
+def test_comparison_rejects_mutated_loaded_schema(loaded_wald_pair, sides, row_indices):
+    for side in sides:
+        for index in row_indices:
+            row = loaded_wald_pair[side][index]
+            row.p_wald = None
+            row.l_remle = None
+            row.logl_H1 = None
+            row.p_score = 0.01 if side == 0 else 0.9
+
+    with pytest.raises(ValueError, match=r"schema|Rows carry mode"):
+        compare_assoc_results(*loaded_wald_pair)
+
+
+def test_comparison_still_compares_mutated_numeric_values(loaded_wald_pair):
+    actual, expected = loaded_wald_pair
+    actual[0].p_wald = 0.9
+    result = compare_assoc_results(actual, expected)
+    assert not result.passed
+    assert not result.p_wald.passed

@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use JAMMA in your research, please cite it as below."
+title: "JAMMA: Highly-Accelerated Multi-method Mixed-Model Association for large-scale GWAS"
+type: software
+authors:
+  - family-names: Denyer
+    given-names: Michael
+    orcid: https://orcid.org/0000-0001-9667-5683
+version: 8.0.0
+date-released: 2026-09-08
+license: GPL-3.0-or-later
+repository-code: https://github.com/michael-denyer/jamma
+url: https://pypi.org/project/jamma/
+keywords:
+  - gwas
+  - linear-mixed-model
+  - statistical-genetics
+  - gemma
+abstract: >-
+  A Python and C reimplementation of GEMMA for linear mixed-model
+  genome-wide association studies. Keeps GEMMA's command-line flags and
+  file formats, is validated against GEMMA for numerical equivalence,
+  and runs 16-43x faster on large cohorts.
+references:
+  - type: article
+    title: "Genome-wide efficient mixed-model analysis for association studies"
+    authors:
+      - family-names: Zhou
+        given-names: Xiang
+      - family-names: Stephens
+        given-names: Matthew
+    journal: Nature Genetics
+    volume: 44
+    year: 2012
+    start: 821
+    end: 824
+    doi: 10.1038/ng.2310

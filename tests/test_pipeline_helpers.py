@@ -217,7 +217,7 @@ class TestLoadPhenotypesAndIntersectMasks:
                 ["0.5", "1.5", "2.5", "3.5"],
             ],
         )
-        all_pheno, mask, n_valid = runner._load_phenotypes_and_intersect_masks(
+        all_pheno, mask, n_valid, _ = runner._load_phenotypes_and_intersect_masks(
             pheno_columns=[1, 2], covariates=None
         )
         assert n_valid == 4
@@ -234,7 +234,7 @@ class TestLoadPhenotypesAndIntersectMasks:
                 ["0.5", "NA", "2.5", "3.5"],
             ],
         )
-        all_pheno, mask, n_valid = runner._load_phenotypes_and_intersect_masks(
+        all_pheno, mask, n_valid, _ = runner._load_phenotypes_and_intersect_masks(
             pheno_columns=[1, 2], covariates=None
         )
         assert mask.tolist() == [False, False, True, True]
@@ -276,7 +276,7 @@ class TestLoadPhenotypesAndIntersectMasks:
                     ["NA", "1.5", "2.5", "3.5"],
                 ],
             )
-            _, mask, n_valid = runner._load_phenotypes_and_intersect_masks(
+            _, mask, n_valid, _ = runner._load_phenotypes_and_intersect_masks(
                 pheno_columns=[1, 2], covariates=None
             )
         finally:
@@ -304,7 +304,7 @@ class TestLoadPhenotypesAndIntersectMasks:
         )
         # Covariate NaN at sample 2.
         covariates = np.array([[1.0], [1.0], [np.nan], [1.0]], dtype=np.float64)
-        _, mask, n_valid = runner._load_phenotypes_and_intersect_masks(
+        _, mask, n_valid, _ = runner._load_phenotypes_and_intersect_masks(
             pheno_columns=[1], covariates=covariates
         )
         assert mask.tolist() == [True, True, False, True]

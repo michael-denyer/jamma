@@ -176,13 +176,17 @@ class TestPipelineErrorPaths:
     ) -> None:
         """A covariate file with no constant column has an intercept added.
 
-        GEMMA's CheckCvt appends a column of 1s; JAMMA now matches, so no
-        "will NOT include intercept" warning is emitted and the built design
-        matrix carries an intercept.
+        GEMMA's CheckCvt appends a column of 1s, so loading emits no
+        intercept warning and the design matrix built after masking carries
+        an intercept.
         """
         from loguru import logger
 
-        from jamma.lmm.prepare_common import _build_covariate_matrix
+        from jamma.lmm.prepare_common import (
+            _build_covariate_matrix,
+            compute_valid_mask,
+            with_intercept,
+        )
 
         fam_path = BFILE.with_suffix(".fam")
         n_samples = len(fam_path.read_text().strip().splitlines())
@@ -212,6 +216,9 @@ class TestPipelineErrorPaths:
         assert not any("intercept" in m for m in captured_messages), (
             f"No intercept warning expected, got: {captured_messages!r}"
         )
+        valid_mask = compute_valid_mask(np.zeros(n_samples), covariates)
+        covariates = with_intercept(covariates, valid_mask)
+        assert covariates is not None
         W, n_cvt = _build_covariate_matrix(covariates, n_samples)
         assert n_cvt == 3
         assert any(np.ptp(W[:, j]) == 0.0 for j in range(W.shape[1]))

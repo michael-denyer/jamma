@@ -7,6 +7,8 @@ files (see GEMMA_EQUIVALENCE.md for tolerance rationale).
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import numpy as np
 import pytest
 
@@ -44,16 +46,13 @@ def mouse_hs1940_data():
 
 @pytest.fixture
 def mouse_hs1940_data_with_covariates(mouse_hs1940_data):
-    """Load mouse_hs1940 data plus covariates with intercept column prepended.
+    """Load mouse_hs1940 data plus its covariates as the file supplies them.
 
-    The covariates.txt file contains only user-provided covariates (no intercept).
-    GEMMA adds the intercept internally when -c is used, so we prepend a column
-    of 1s to match GEMMA's internal representation.
+    The covariates.txt file has no constant column, so the runner appends the
+    intercept the same way GEMMA's CheckCvt does with -c.
     """
     plink, kinship, phenotypes, snp_info = mouse_hs1940_data
-    raw_covariates = np.loadtxt(MOUSE.covariates)
-    n_samples = raw_covariates.shape[0]
-    covariates = np.hstack([np.ones((n_samples, 1)), raw_covariates])
+    covariates = np.loadtxt(MOUSE.covariates)
     return plink, kinship, phenotypes, snp_info, covariates
 
 
@@ -235,6 +234,51 @@ def test_numpy_runner_covar_synthetic(
     assert comparison.passed, (
         f"NumPy mode {lmm_mode}+covar (synthetic) vs GEMMA failed:\n{comparison}"
     )
+
+
+@pytest.mark.tier1
+def test_numpy_runner_nan_covariate_row_equals_explicit_drop(
+    synthetic_data_with_covariates,
+):
+    """A sample with missing covariates is dropped, and the intercept is still seen.
+
+    GEMMA's CheckCvt tests for a constant column over the analysed samples
+    only, so a NaN row must neither crash the run nor hide the intercept
+    column that the remaining rows carry.
+    """
+    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    cov = covariates.copy()
+    cov[5, :] = np.nan
+    config = LmmConfig(lmm_mode=1, show_progress=False)
+
+    masked = run_lmm_association_numpy(
+        genotypes=plink.genotypes,
+        phenotypes=phenotypes,
+        kinship=kinship.copy(),
+        snp_info=snp_info,
+        covariates=cov,
+        config=config,
+    ).associations
+
+    keep = np.ones(len(phenotypes), dtype=bool)
+    keep[5] = False
+    explicit = run_lmm_association_numpy(
+        genotypes=plink.genotypes[keep],
+        phenotypes=phenotypes[keep],
+        kinship=kinship[np.ix_(keep, keep)].copy(),
+        snp_info=snp_info,
+        covariates=covariates[keep],
+        config=config,
+    ).associations
+
+    assert len(masked) == len(explicit) > 0
+    for a, b in zip(masked, explicit, strict=True):
+        for field, value in asdict(a).items():
+            other = asdict(b)[field]
+            if isinstance(value, float):
+                assert value == pytest.approx(other, rel=1e-12, nan_ok=True), field
+            else:
+                assert value == other, field
 
 
 # ---------------------------------------------------------------------------

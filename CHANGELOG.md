@@ -139,6 +139,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`-c` with a covariate file that has no constant column runs, and a
+  sample with missing covariates no longer hides the intercept.** The
+  intercept column is appended once, by `with_intercept`, right after each
+  path computes its analysed-sample mask, and the constant-column test runs
+  over the analysed rows only, as GEMMA's `CheckCvt` does over
+  `indicator_idv`. Every later stage (`plan_association`,
+  `_build_covariate_matrix`, `PipelineResult.n_covariates`) reads
+  `covariates.shape[1]` from that one array, so the planned and built
+  `n_cvt` cannot disagree. Before, the plan and the design matrix counted
+  the intercept separately, and `jamma -lmm 1 -c cov.txt` with a one-column
+  file, or the runner API with a `NA` covariate row, failed with
+  `workspace specification does not match kernel invariants` after writing
+  no results. `_build_covariate_matrix` refuses a matrix with no constant
+  column so a path that skips `with_intercept` fails with a named cause.
+  The mouse_hs1940 covariate parity tests pass the raw two-column file and
+  match GEMMA's `covar_*` references through the appended-intercept path.
 - **`jamma -gk` selects SNPs the way `gemma -gk` does.** The matrix still
   spans every sample in the `.fam`, but the MAF and missingness filters
   default to 0.01 and 0.05 and are measured over the samples whose selected

@@ -20,7 +20,9 @@ BFILE = SYNTHETIC.bfile
 def _first_phenotype(runner: PipelineRunner) -> tuple[np.ndarray, int]:
     """Read the runner's first configured phenotype column the way run() does."""
     columns = runner.config.phenotype_columns
-    data, _mask, _n_valid = runner._load_phenotypes_and_intersect_masks(columns, None)
+    data, _mask, _n_valid, _ = runner._load_phenotypes_and_intersect_masks(
+        columns, None
+    )
     return data[columns[0]]
 
 
@@ -689,15 +691,15 @@ def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) 
 def test_pipeline_planning_passes_n_cvt(
     tmp_path: Path, sample_plink_data: Path
 ) -> None:
-    """BCKAUTO-04: Re-evaluation passes n_cvt from loaded covariates."""
+    """BCKAUTO-04: Planning passes n_cvt from the loaded covariates."""
     from unittest.mock import patch
 
     from jamma.lmm.association_plan import plan_association
 
     n_samples = 100  # gemma_synthetic fixture has 100 samples
 
-    # Write a covariate file with 2 columns (intercept + one covariate).
-    # GEMMA format: whitespace-separated values, one row per sample, no header.
+    # Two columns, the first constant so it is the intercept; GEMMA format:
+    # whitespace-separated values, one row per sample, no header.
     cov_path = tmp_path / "covariates.txt"
     rng = np.random.default_rng(42)
     cov_data = np.column_stack([np.ones(n_samples), rng.standard_normal(n_samples)])
@@ -734,6 +736,39 @@ def test_pipeline_planning_passes_n_cvt(
     assert any(c.get("n_cvt", 1) == 2 for c in calls), (
         f"No call to plan_association had n_cvt=2; calls={calls}"
     )
+
+
+@pytest.mark.tier1
+def test_pipeline_covariate_without_constant_column_runs(
+    tmp_path: Path, sample_plink_data: Path
+) -> None:
+    """A one-column, non-constant covariate file gets an intercept and runs.
+
+    The plan and the built design matrix must agree on n_cvt; a mismatch is
+    a ValueError from the kernel before any result is written.
+    """
+    n_samples = 100
+    cov_path = tmp_path / "cov.txt"
+    rng = np.random.default_rng(7)
+    np.savetxt(str(cov_path), rng.standard_normal(n_samples), fmt="%.6f")
+    out = tmp_path / "output"
+    out.mkdir()
+
+    config = PipelineConfig(
+        bfile=sample_plink_data,
+        kinship_file=sample_plink_data.parent / "gemma_kinship.cXX.txt",
+        covariate_file=cov_path,
+        lmm_mode=1,
+        output_dir=out,
+        check_memory=False,
+        show_progress=False,
+        backend="numpy",
+    )
+    result = PipelineRunner(config).run()
+
+    assert result.n_covariates == 2
+    assert result.n_snps_tested > 0
+    assert result.assoc_path.exists()
 
 
 @pytest.mark.tier1

@@ -243,9 +243,10 @@ def run_lmm_loco(
         logger.info(f"  Chromosomes: {len(unique_chrs)}")
 
     # Sample filtering: missing phenotypes, covariate NaNs
-    from jamma.lmm.prepare_common import compute_valid_mask
+    from jamma.lmm.prepare_common import compute_valid_mask, with_intercept
 
     valid_mask = compute_valid_mask(phenotypes, covariates)
+    covariates = with_intercept(covariates, valid_mask)
     n_valid = int(np.sum(valid_mask))
 
     if n_valid == 0:

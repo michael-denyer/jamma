@@ -18,6 +18,7 @@ from jamma.lmm.prepare_common import (
     _compute_null_model_common,
     _eigendecompose_or_reuse,
     prepare_lmm_run,
+    with_intercept,
 )
 from jamma.lmm.schema import LmmConfig
 
@@ -77,8 +78,8 @@ def test_build_covariate_matrix_from_common():
     np.testing.assert_array_equal(W, np.ones((100, 1)))
 
 
-def test_build_covariate_matrix_appends_intercept_when_none_constant():
-    """A covariate file with no constant column gets a ones column, as GEMMA does.
+def test_with_intercept_appends_when_none_constant():
+    """A covariate matrix with no constant column gets a ones column, as GEMMA does.
 
     GEMMA's CheckCvt (param.cpp) appends a column of 1s and increments n_cvt
     when no covariate column is constant. Without it the model has no intercept
@@ -86,19 +87,47 @@ def test_build_covariate_matrix_appends_intercept_when_none_constant():
     """
     rng = np.random.default_rng(0)
     cov = np.column_stack([np.linspace(-1.0, 1.0, 40), rng.normal(size=40)])
+    mask = np.ones(40, dtype=bool)
 
-    W, n_cvt = _build_covariate_matrix(cov, 40)
+    with_ones = with_intercept(cov, mask)
 
+    assert with_ones is not None
+    assert with_ones.shape == (40, 3)
+    np.testing.assert_array_equal(with_ones[:, :2], cov)
+    np.testing.assert_array_equal(with_ones[:, 2], np.ones(40))
+    W, n_cvt = _build_covariate_matrix(with_ones, 40)
     assert n_cvt == 3
     assert W.shape == (40, 3)
-    has_constant_col = any(np.ptp(W[:, j]) == 0.0 for j in range(W.shape[1]))
-    assert has_constant_col
+
+
+def test_with_intercept_sees_constant_column_over_masked_rows_only():
+    """A NaN in a masked-out row does not hide the intercept the analysed rows carry."""
+    cov = np.column_stack([np.ones(40), np.linspace(-1.0, 1.0, 40)])
+    cov[3, :] = np.nan
+    mask = ~np.isnan(cov).any(axis=1)
+
+    assert with_intercept(cov, mask) is cov
+    assert with_intercept(None, mask) is None
+
+
+def test_build_covariate_matrix_rejects_missing_intercept():
+    """A matrix with no constant column is refused with a named cause.
+
+    The intercept is appended once, after masking, by with_intercept; a
+    caller that skips that step must fail here rather than in the kernel.
+    """
+    rng = np.random.default_rng(0)
+    cov = np.column_stack([np.linspace(-1.0, 1.0, 40), rng.normal(size=40)])
+
+    with pytest.raises(ValueError, match="intercept"):
+        _build_covariate_matrix(cov, 40)
 
 
 def test_build_covariate_matrix_keeps_existing_intercept():
     """A covariate matrix that already carries a constant column is unchanged."""
     cov = np.column_stack([np.ones(40), np.linspace(-1.0, 1.0, 40)])
 
+    assert with_intercept(cov, np.ones(40, dtype=bool)) is cov
     W, n_cvt = _build_covariate_matrix(cov, 40)
 
     assert n_cvt == 2

@@ -383,16 +383,19 @@ def compute_loco_kinship_streaming(
             (n_valid, n_valid) where n_valid = len(valid_indices), eliminating
             the post-hoc np.ix_ copy. When None, K_loco has shape
             (n_samples, n_samples) (default, backward-compatible).
-        mem_budget: User-set ceiling in GB, or None for no ceiling. Caps the
-            capacity ``plan_loco_passes`` sizes the chromosome batch against,
-            and vetoes the run when even one chromosome per pass exceeds it.
+        mem_budget: User-set ceiling in GB, or None for no ceiling. A second
+            capacity beside physical RAM: the batch planner sizes the
+            chromosome batch against the smaller of the two, and the gate
+            before pass 1 vetoes the run when the retained set plus
+            ``consumer_gb`` exceeds it.
         filter_sample_indices: Samples used for SNP filtering, or None for all
             BED samples. Independent of output rows and full-population centering.
-        _max_batch_chrs: Debug cap on chromosomes per pass, applied on top of
-            the memory-based batch size. Used by tests to exercise multi-pass
+        _max_batch_chrs: Cap on chromosomes per pass, applied on top of the
+            memory-based batch size. Tests use it to exercise multi-pass
             without mocking psutil.
-        consumer_gb: Peak the downstream eigen and association work will hold
-            while this stream is live.
+        consumer_gb: Peak the downstream eigen and association work holds
+            while this stream is live. The gate and the batch planner both
+            reserve it beside the retained set.
 
     Returns:
         A consume-once LocoKinshipStream. Iterate it for (chr_name, K_loco) pairs,
@@ -406,9 +409,9 @@ def compute_loco_kinship_streaming(
         ``.materialize()`` to collect independent copies.
 
     Raises:
-        MemoryError: If check_memory=True and insufficient memory for even
-            S_full + one S_chr, or if mem_budget is set and the estimate
-            exceeds it.
+        MemoryError: If check_memory=True and the retained set (S_full,
+            K_loco_buf, one S_chr, the disk buffer) plus ``consumer_gb`` does
+            not fit available RAM, or exceeds ``mem_budget``.
         FileNotFoundError: If the PLINK .bed file does not exist.
         ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
             a single chromosome.

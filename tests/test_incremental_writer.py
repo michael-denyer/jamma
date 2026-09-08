@@ -892,3 +892,26 @@ class TestAssocPublication:
         assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
         assert messages == []
         assert writer.count == 1
+
+    @pytest.mark.parametrize("error", [KeyboardInterrupt, SystemExit, MemoryError])
+    def test_failed_partial_rename_preserves_recoverable_bytes(
+        self, tmp_path: Path, sample_result: SampleBatch, error
+    ):
+        destination = tmp_path / "result.assoc.txt"
+        destination.write_text("previous completed run\n")
+        # A directory at the recovery destination refuses a file rename while
+        # still permitting deletion of the sibling temp. No I/O mock is needed.
+        destination.with_name(destination.name + ".partial").mkdir()
+
+        with _captured_warnings() as messages:
+            with pytest.raises(error):
+                with IncrementalAssocWriter(destination) as writer:
+                    writer.write_arrays_batch(*sample_result.as_call_args())
+                    raise error()
+        del writer  # Cleanup on finalization must not undo retention either.
+
+        recovered = [p for p in tmp_path.iterdir() if p.is_file() and p != destination]
+        assert len(recovered) == 1
+        assert "rs12345" in recovered[0].read_text()
+        assert any(str(recovered[0]) in message for message in messages)
+        assert destination.read_text() == "previous completed run\n"

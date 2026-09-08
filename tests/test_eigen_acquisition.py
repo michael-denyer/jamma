@@ -1,57 +1,37 @@
 """Eigen inputs are demand-paged and released between acquisitions."""
 
-import weakref
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from jamma.core.eigen_plan import plan_eigen_driver
-from jamma.io.plink import get_plink_metadata, partitions_from_metadata
+from jamma.io import read_fam_phenotypes
+from jamma.lmm import loco_eigen
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files
-from jamma.lmm.loco_config import LocoConfig
-from jamma.lmm.loco_eigen import eigen_pairs_for
-from jamma.utils import chr_sort_key
+from jamma.lmm.loco import LocoConfig, run_lmm_loco
+from jamma.lmm.schema import LmmConfig
 from tests.conftest import require_fixture
+from tests.fakes.eigen_lifetime import (
+    LifetimeCheckedEigenReader,
+    LifetimeCheckedJlinalg,
+)
+from tests.fakes.jlinalg import use_fake_jlinalg
 from tests.fixture_paths import LOCO
 
 pytestmark = pytest.mark.tier0
 
 
-def _loco_eigen_pairs(eigen_dir: Path | None, *, write_eigen: bool = False):
-    """The LOCO fixture's eigenpair generator, one chromosome per ``next``.
-
-    ``eigen_dir`` with ``write_eigen`` false and a valid manifest reads the
-    cache; anything else streams kinship and eigendecomposes.
-
-    The plan is out-of-place on purpose. In-place DSYEVD returns the streamer's
-    reused kinship buffer as U, so every chromosome yields the same object and
-    no lifetime is observable; out-of-place is the case where one chromosome's
-    eigenvectors can outlive their turn.
-    """
-    require_fixture(LOCO.bfile.with_suffix(".bed"), LOCO.bfile.with_suffix(".fam"))
-    meta = get_plink_metadata(LOCO.bfile)
-    partitions = partitions_from_metadata(meta)
-    return eigen_pairs_for(
+def _run_loco(eigen_dir: Path | None = None, *, write_eigen: bool = False):
+    """Run the real consumer, including its references between chromosomes."""
+    require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
+    return run_lmm_loco(
         LOCO.bfile,
-        sorted(partitions, key=chr_sort_key),
+        read_fam_phenotypes(LOCO.fam),
+        config=LmmConfig(check_memory=False, show_progress=False),
         loco=LocoConfig(eigen_dir=eigen_dir, write_eigen=write_eigen),
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        valid_mask=np.ones(meta.n_samples, dtype=bool),
-        partitions=partitions,
-        check_memory=False,
-        show_progress=False,
-        eigen_plan=plan_eigen_driver(
-            meta.n_samples,
-            256.0,
-            has_dsyevd=True,
-            has_dsyevr=True,
-            no_vendor=False,
-            inplace_eligible=False,
-        ),
-    ).pairs
+    )
 
 
 def test_direct_binary_eigen_inputs_are_read_only_mappings(tmp_path):
@@ -65,36 +45,25 @@ def test_direct_binary_eigen_inputs_are_read_only_mappings(tmp_path):
     np.testing.assert_array_equal(eigenvectors, np.eye(4))
 
 
-def test_computed_eigenpairs_drop_each_chromosome_before_yielding_the_next():
-    pairs = _loco_eigen_pairs(None)
-    try:
-        first_chr, _, first_u = next(pairs)
-        released = weakref.ref(first_u)
-        del first_u
-        second_chr, _, _ = next(pairs)
-    finally:
-        pairs.close()
-    assert second_chr != first_chr
-    assert released() is None
+def test_computed_loco_releases_previous_matrix_before_decomposition(monkeypatch):
+    # The documented jlinalg boundary performs real NumPy decomposition with
+    # an independent U. The observer checks before allocating the next U.
+    observer = LifetimeCheckedJlinalg()
+    use_fake_jlinalg(monkeypatch, observer)
+    result = _run_loco()
+    assert result.n_tested > 0
+    assert observer.previous is not None
+    assert observer.previous() is None
 
 
-def test_cached_eigenpairs_drop_each_chromosome_before_yielding_the_next(tmp_path):
-    written = _loco_eigen_pairs(tmp_path, write_eigen=True)
-    try:
-        chr_names = [name for name, _, _ in written]
-    finally:
-        written.close()
-
-    pairs = _loco_eigen_pairs(tmp_path)
-    try:
-        first_chr, _, first_u = next(pairs)
-        released = weakref.ref(first_u)
-        del first_u
-        second_chr, _, _ = next(pairs)
-    finally:
-        pairs.close()
-    assert [first_chr, second_chr] == chr_names[:2]
-    assert released() is None
+def test_cached_loco_releases_previous_matrix_before_read(tmp_path, monkeypatch):
+    fresh = _run_loco(tmp_path, write_eigen=True)
+    reader = LifetimeCheckedEigenReader()
+    monkeypatch.setattr(loco_eigen, "read_eigen_files", reader)
+    cached = _run_loco(tmp_path)
+    assert cached.n_tested == fresh.n_tested > 0
+    assert reader.previous is not None
+    assert reader.previous() is None
 
 
 def test_reserved_dsyevr_plan_prices_the_decomposition_a_dsyevd_plan_cannot():

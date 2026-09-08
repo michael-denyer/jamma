@@ -6,9 +6,10 @@ rather than raising exceptions, enabling programmatic validation workflows.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import overload
 
 import numpy as np
 from numpy.testing import assert_allclose
@@ -260,7 +261,37 @@ def _float_or_nan(row: dict[str, str], name: str) -> float:
     return float("nan") if raw is None else float(raw)
 
 
-def load_gemma_assoc(path: Path) -> list[AssocResult]:
+@dataclass(frozen=True)
+class AssocDataset(Sequence[AssocResult]):
+    """Association rows with a mode that survives an empty file or slice."""
+
+    mode: LmmMode
+    rows: tuple[AssocResult, ...]
+
+    def __post_init__(self) -> None:
+        row_mode = _mode_from_rows(self.rows)
+        if row_mode is not None and row_mode != self.mode:
+            raise ValueError(f"Rows carry mode {row_mode}, expected mode {self.mode}")
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __iter__(self) -> Iterator[AssocResult]:
+        return iter(self.rows)
+
+    @overload
+    def __getitem__(self, index: int) -> AssocResult: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> AssocDataset: ...
+
+    def __getitem__(self, index: int | slice) -> AssocResult | AssocDataset:
+        if isinstance(index, slice):
+            return AssocDataset(self.mode, self.rows[index])
+        return self.rows[index]
+
+
+def load_gemma_assoc(path: Path) -> AssocDataset:
     """Load GEMMA association results from .assoc.txt format.
 
     Parses the tab-separated .assoc.txt format produced by GEMMA's LMM modes:
@@ -277,7 +308,7 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
         path: Path to the association results file (.assoc.txt).
 
     Returns:
-        List of AssocResult dataclass instances, one per SNP.
+        A sequence of AssocResult rows retaining the mode declared by its header.
 
     Raises:
         FileNotFoundError: If the file does not exist.
@@ -322,7 +353,8 @@ def load_gemma_assoc(path: Path) -> list[AssocResult]:
                     p_lrt=_opt_float(row, "p_lrt"),
                 )
             )
-    return results
+    mode = _MODE_BY_P_VALUE_FIELDS[frozenset(cols) & _P_VALUE_FIELDS]
+    return AssocDataset(mode, tuple(results))
 
 
 @dataclass
@@ -387,10 +419,12 @@ def _present_fields(rows: Sequence[AssocResult]) -> frozenset[str]:
     return first
 
 
-def _mode_from_rows(rows: Sequence[AssocResult]) -> LmmMode:
-    """Infer the LMM mode from the p-value fields the rows carry; 1 when empty."""
+def _mode_from_rows(rows: Sequence[AssocResult]) -> LmmMode | None:
+    """Use the parsed mode, or infer it for in-memory rows; empty lists are unknown."""
+    if isinstance(rows, AssocDataset):
+        return rows.mode
     if not rows:
-        return 1
+        return None
     p_fields = _present_fields(rows) & _P_VALUE_FIELDS
     try:
         return _MODE_BY_P_VALUE_FIELDS[p_fields]
@@ -426,7 +460,7 @@ def _passed_without_comparison(message: str) -> ComparisonResult:
     )
 
 
-def _column(field: str, rows: list[AssocResult], default: float) -> np.ndarray:
+def _column(field: str, rows: Sequence[AssocResult], default: float) -> np.ndarray:
     """Extract one AssocResult field across rows, substituting default for None."""
     return np.array(
         [getattr(r, field) if getattr(r, field) is not None else default for r in rows]
@@ -559,13 +593,15 @@ def _compare_lambdas(
 
 
 def compare_assoc_results(
-    actual: list[AssocResult],
-    expected: list[AssocResult],
+    actual: Sequence[AssocResult],
+    expected: Sequence[AssocResult],
     config: ToleranceConfig | None = None,
 ) -> AssocComparisonResult:
     """Compare association results with column-appropriate tolerances.
 
-    Compares lists of AssocResult objects from JAMMA and reference GEMMA output.
+    Compares sequences of AssocResult objects from JAMMA and reference GEMMA output.
+    Parsed datasets retain their mode even when empty. Empty in-memory sequences
+    have no declared mode; they can still report an empty result or count mismatch.
     Uses appropriate tolerance thresholds for each statistic type:
     - beta: beta_rtol (effect sizes from linear algebra)
     - se: se_rtol (standard errors with sqrt operations)
@@ -601,12 +637,17 @@ def compare_assoc_results(
 
     mode = _mode_from_rows(expected)
     actual_mode = _mode_from_rows(actual)
-    if actual_mode != mode:
+    if actual_mode is not None and mode is not None and actual_mode != mode:
         raise ValueError(
             f"Association schemas differ: actual mode {actual_mode} "
             f"but reference mode {mode}"
         )
-    active_columns = frozenset(c.field_name for c in MODE_SPECS[mode].stat_columns)
+    mode = mode if mode is not None else actual_mode
+    active_columns = (
+        frozenset(c.field_name for c in MODE_SPECS[mode].stat_columns)
+        if mode is not None
+        else frozenset()
+    )
 
     # Check for SNP count mismatch
     if len(actual) != len(expected):

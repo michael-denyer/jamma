@@ -18,28 +18,59 @@ from __future__ import annotations
 import contextlib
 import os
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
+from types import TracebackType
 
 from loguru import logger
 
 
-@contextmanager
-def atomic_output(path: Path, *, suffix: str = "") -> Iterator[Path]:
-    """Yield a sibling temp path and publish it onto ``path`` on success.
+class AtomicOutput:
+    """Own a sibling temp until publication, discard, or explicit retention.
 
     This is the ordinary non-durable publish protocol: callers own opening and
     writing the temp file, while this context owns replacement and cleanup. It
     deliberately does not fsync; durable commit markers such as LOCO eigen-cache
     manifests keep their own descriptor-based protocol.
+
+    ``retain`` transfers the temp to a recovery artifact. If its rename fails,
+    the original temp survives context exit at the path returned to the caller.
     """
-    tmp_path = publish_temp_path(path, suffix=suffix)
-    try:
-        yield tmp_path
-        tmp_path.replace(path)
-    finally:
-        unlink_quietly(tmp_path)
+
+    def __init__(self, path: Path, *, suffix: str = "") -> None:
+        self.path = path
+        self.temp_path = publish_temp_path(path, suffix=suffix)
+        self._finished = False
+
+    def __enter__(self) -> Path:
+        return self.temp_path
+
+    def retain(self, recovery_path: Path) -> Path:
+        """Keep the output, returning its actual path even when rename fails."""
+        self._finished = True
+        try:
+            return self.temp_path.replace(recovery_path)
+        except OSError as error:
+            logger.warning(f"Could not move partial output to {recovery_path}: {error}")
+            return self.temp_path
+
+    def discard(self) -> None:
+        """Discard an unsuccessful write without permitting later publication."""
+        self._finished = True
+        unlink_quietly(self.temp_path)
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        if self._finished:
+            return
+        try:
+            if exc_type is None:
+                self.temp_path.replace(self.path)
+        finally:
+            self.discard()
 
 
 def publish_temp_path(path: Path, *, suffix: str = "") -> Path:

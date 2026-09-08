@@ -7,6 +7,7 @@ This package contains utilities for validating JAMMA output:
 
 from jamma.validation.compare import (
     AssocComparisonResult,
+    AssocDataset,
     ComparisonResult,
     compare_arrays,
     compare_assoc_results,
@@ -18,6 +19,7 @@ from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig
 
 __all__ = [
     "AssocComparisonResult",
+    "AssocDataset",
     "ComparisonResult",
     "LambdaBoundaryPolicy",
     "ToleranceConfig",

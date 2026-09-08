@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from jamma.utils.atomic_publish import atomic_output, publish_temp_path, unlink_quietly
+from jamma.utils.atomic_publish import AtomicOutput, publish_temp_path, unlink_quietly
 
 
 @pytest.mark.tier0
@@ -104,11 +104,11 @@ class TestUnlinkQuietly:
 
 @pytest.mark.tier0
 class TestAtomicOutput:
-    """atomic_output owns the ordinary publish and cleanup lifecycle."""
+    """AtomicOutput owns the ordinary publish and cleanup lifecycle."""
 
     def test_success_publishes_bytes_and_removes_temp(self, tmp_path: Path) -> None:
         target = tmp_path / "result.txt"
-        with atomic_output(target) as tmp_path_for_write:
+        with AtomicOutput(target) as tmp_path_for_write:
             tmp_path_for_write.write_text("new contents")
             assert not target.exists()
 
@@ -120,7 +120,7 @@ class TestAtomicOutput:
         target.write_text("old contents")
 
         with pytest.raises(RuntimeError, match="injected write failure"):
-            with atomic_output(target) as tmp_path_for_write:
+            with AtomicOutput(target) as tmp_path_for_write:
                 tmp_path_for_write.write_text("partial")
                 raise RuntimeError("injected write failure")
 
@@ -131,7 +131,7 @@ class TestAtomicOutput:
         target = tmp_path / "result.txt"
 
         with pytest.raises(KeyboardInterrupt):
-            with atomic_output(target) as tmp_path_for_write:
+            with AtomicOutput(target) as tmp_path_for_write:
                 tmp_path_for_write.write_text("partial")
                 raise KeyboardInterrupt
 
@@ -150,7 +150,7 @@ class TestAtomicOutput:
         monkeypatch.setattr(Path, "replace", raise_on_replace)
 
         with pytest.raises(OSError, match="injected replace failure"):
-            with atomic_output(target) as tmp_path_for_write:
+            with AtomicOutput(target) as tmp_path_for_write:
                 tmp_path_for_write.write_text("new contents")
 
         assert target.read_text() == "old contents"
@@ -158,7 +158,7 @@ class TestAtomicOutput:
 
     def test_suffix_is_used_for_numpy_style_writers(self, tmp_path: Path) -> None:
         target = tmp_path / "result.eigenD.npy"
-        with atomic_output(target, suffix=".npy") as tmp_path_for_write:
+        with AtomicOutput(target, suffix=".npy") as tmp_path_for_write:
             assert tmp_path_for_write.suffix == ".npy"
             tmp_path_for_write.write_bytes(b"binary")
 

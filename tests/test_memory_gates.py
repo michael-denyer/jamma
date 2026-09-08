@@ -109,12 +109,9 @@ def _expected_uab_iab_gb(args, kwargs, n_cvt: int) -> float:
 class TestBatchPreflightPricesItsDispatchPath:
     """Regression: the batch preflight must supply the run's own Uab/Iab figure.
 
-    estimate_lmm_memory no longer derives Uab/Iab from n_cvt; core sits below
-    lmm and cannot read the dispatch path, so the caller passes the bytes its
-    path really holds. Both batch preflight call sites previously omitted
-    n_cvt, so multi-covariate runs passed the preflight on the n_cvt=1 figure
-    and then OOMed at real allocation time in compute_numpy._run_inner. These
-    tests pin that each site prices its own dispatch path at its own n_cvt.
+    Both batch preflight call sites previously omitted n_cvt, so
+    multi-covariate runs passed the preflight on the n_cvt=1 figure and then
+    OOMed at real allocation time in compute_numpy._run_inner.
 
     Dispatch-site assertions are the right test shape here: the preflight's
     sole job is to delegate to the estimator with correct arguments, so the
@@ -190,7 +187,6 @@ class TestBatchPreflightPricesItsDispatchPath:
         assert captured_calls, (
             "estimate_lmm_memory was not called — batch preflight branch did not run"
         )
-        # Every call must price the path selected for n_cvt=3 (3-col covariates).
         for args, kwargs in captured_calls:
             expected = _expected_uab_iab_gb(args, kwargs, 3)
             assert kwargs["uab_iab_gb"] == expected, (

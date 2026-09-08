@@ -490,11 +490,9 @@ class TestChunkPlanMatchesEngine:
 
         Regression for the coordinator-flagged Gap B: estimate_lmm_memory
         had no n_buffers concept, so a pipelined batch run (n_buffers=2)
-        was priced at one buffer's worth. Both the batch and the streaming
-        estimator now take the caller's dispatch figure, so the two agree
-        on what a path holds; the batch quote may still price above the
-        real allocation for terms outside the chunk buffers, but it must
-        never price below it.
+        was priced at one buffer's worth. The batch quote may price above
+        the real allocation for terms outside the chunk buffers, but it
+        must never price below it.
         """
         del accel, lmm_mode  # dispatch alone determines pricing here
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
@@ -748,8 +746,7 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
         50_000, 500_000, n_cvt=1, lmm_mode=1, mem_budget=1.0
     ).summary
 
-    # Unbudgeted: the real chunk needs 236.0GB, which does not clear the
-    # margin against 240GB -> streaming.
+    # 236.0GB does not clear the 10GB safety margin against 240GB.
     assert unbudgeted.mode == "streaming"
     assert "exceeds 240.0GB capacity" in unbudgeted.reason
     # The 1GB ceiling cannot hold the 20GB eigenvector matrix even at a

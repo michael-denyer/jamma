@@ -37,9 +37,7 @@ pytestmark = pytest.mark.tier0
 def _fallback_uab_iab_gb(n_samples: int, chunk_size: int, n_cvt: int = 1) -> float:
     """The full Uab+Iab batch the NumPy fallback materialises, in GB.
 
-    ``estimate_lmm_memory`` no longer derives this figure; the caller supplies
-    the one its dispatch path holds. The fallback is the largest of the four,
-    so these tests price with it.
+    The fallback is the largest of the four paths, so these tests price with it.
     """
     return (
         chunk_size

@@ -153,10 +153,9 @@ def estimate_lmm_memory(
     Args:
         n_samples: Number of samples (individuals).
         n_snps: Number of SNPs (variants).
-        uab_iab_gb: Per-buffer Uab and Iab bytes in GB. ``core`` sits below
-            ``lmm`` in the layering and cannot read the dispatch path, so the
-            caller supplies the figure its path actually holds
-            (``lmm.chunk_sizing.lmm_extra_bytes_per_snp`` times the chunk).
+        uab_iab_gb: Per-buffer Uab and Iab bytes in GB. ``core`` cannot read
+            the dispatch path from below ``lmm``, so the caller supplies it:
+            ``lmm.chunk_sizing.lmm_extra_bytes_per_snp`` times the chunk.
         lmm_batch_size: Batch size for LMM SNP processing. Pass the runtime
             chunk size for accurate estimates; the default is a generic guess.
         n_buffers: Live chunk buffers the engine allocates (1 sequential, 2
@@ -297,11 +296,9 @@ def estimate_streaming_memory(
     if compute_chunk_size is None:
         compute_chunk_size = chunk_size
     if uab_iab_gb is None:
-        # The NumPy fallback's shape: a full Uab batch of n_samples rows and an
-        # Iab batch of n_cvt + 2 rows, both n_index wide, for every SNP in the
-        # chunk. Summed in integer bytes before the divide so a caller passing
-        # lmm_extra_bytes_per_snp(NUMPY_FALLBACK) * chunk / 1e9 gets the same
-        # float back.
+        # The NumPy fallback's full Uab and Iab batches. Integer bytes summed
+        # before the divide, so this matches a caller's
+        # lmm_extra_bytes_per_snp(NUMPY_FALLBACK) * chunk / 1e9 to the bit.
         uab_iab_gb = (
             compute_chunk_size * (n_samples + n_cvt + 2) * n_index(n_cvt) * 8 / 1e9
         )

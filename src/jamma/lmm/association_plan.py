@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from jamma.core import memory
-from jamma.core.eigen_plan import EigenDriverPlan
+from jamma.core.eigen_plan import EigenDriverPlan, array_gb, square_matrix_gb
 from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
 from jamma.core.threading import get_c_extension_thread_count, is_blas_controllable
 from jamma.lmm import accel
@@ -52,13 +52,17 @@ class ExecutionPlan:
 class MemoryPlan:
     """Memory quote for one already-selected association plan.
 
-    Pure: the gating call sites read ``available_gb`` once themselves and
-    hand both figures to ``memory.require``.
+    One figure per phase of the run and their maximum. Pure: the gating call
+    sites read ``available_gb`` once themselves and hand both figures to
+    ``memory.require``.
     """
 
     total_peak_gb: float
     compute_chunk_size: int
-    components_gb: tuple[tuple[str, float], ...] = ()
+    kinship_gb: float
+    eigen_gb: float
+    statistics_gb: float
+    association_gb: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,12 +146,93 @@ class ExecutableAssociationPlan:
         prepared_bytes = (group_size - 1) * rows * self.n_samples * 8
         return kernel_bytes + prepared_bytes
 
-    def price(self, *, eigen: EigenDriverPlan | None = None) -> MemoryPlan:
-        """Price the conservative geometry without rebuilding policy."""
+    def price(self, *, eigen: EigenDriverPlan | None) -> MemoryPlan:
+        """Price every phase of the run this plan describes; the peak is their max.
+
+        ``eigen=None`` means no decomposition runs: the eigenpairs are
+        provided, or the caller is sizing the association phase alone.
+        """
         chunks = self.conservative_chunks
+        kinship_gb = (
+            0.0 if self.kinship is None else self._kinship_phase_gb(self.kinship)
+        )
+        eigen_gb = 0.0 if eigen is None else eigen.required_gb
+        statistics_gb = (
+            self._statistics_phase_gb() if self.summary.mode == "streaming" else 0.0
+        )
+        association_gb = self._association_phase_gb(chunks)
+        return MemoryPlan(
+            total_peak_gb=max(kinship_gb, eigen_gb, statistics_gb, association_gb),
+            compute_chunk_size=chunks.chunk_size,
+            kinship_gb=kinship_gb,
+            eigen_gb=eigen_gb,
+            statistics_gb=statistics_gb,
+            association_gb=association_gb,
+        )
+
+    def _kinship_phase_gb(self, kinship: KinshipShape) -> float:
+        """Peak while the kinship matrix is read or accumulated."""
+        if kinship.loaded:
+            phase_gb = square_matrix_gb(kinship.n_samples)
+        else:
+            # The accumulator plus one genotype block over every input sample;
+            # the streamer subsets each block after reading it.
+            phase_gb = estimate_streaming_memory(
+                kinship.n_samples, chunk_size=DEFAULT_STATS_CHUNK
+            ).kinship_gb + array_gb(
+                self.n_input_samples - kinship.n_samples, DEFAULT_STATS_CHUNK
+            )
+        if kinship.n_samples != self.n_samples:
+            # The full matrix and its analysed-sample copy are live together.
+            phase_gb = max(
+                phase_gb,
+                square_matrix_gb(kinship.n_samples) + square_matrix_gb(self.n_samples),
+            )
+        return phase_gb
+
+    def _statistics_phase_gb(self) -> float:
+        """Peak of streaming pass 1, which reads SNP statistics with U live.
+
+        The blocks are ``DEFAULT_STATS_CHUNK`` wide over every input sample.
+        """
+        return square_matrix_gb(self.n_samples) + array_gb(
+            self.n_input_samples, DEFAULT_STATS_CHUNK
+        )
+
+    def _association_phase_gb(self, chunks: LmmChunkPlan) -> float:
+        """Peak of the association pass at this chunk width and phenotype group."""
+        workspace_gb = (
+            self._group_workspace_bytes()
+            + chunks.chunk_size * self.workspace.bytes_per_snp
+        ) / 1e9
+        input_subset_rows = self.n_input_samples - self.n_samples
+        if self.summary.mode == "batch":
+            batch_arrays_gb = estimate_lmm_memory(
+                self.n_samples,
+                self.n_snps_before_filter,
+                lmm_batch_size=chunks.chunk_size,
+                n_buffers=chunks.n_buffers,
+                n_grid=0,
+                uab_iab_gb=(
+                    chunks.chunk_size
+                    * lmm_extra_bytes_per_snp(self.n_samples, self.n_cvt, self.dispatch)
+                    / 1e9
+                ),
+            )
+            return (
+                batch_arrays_gb
+                + array_gb(input_subset_rows, self.n_snps_before_filter)
+                + workspace_gb
+            )
         # Streaming and LOCO both hold one genotype chunk, never the matrix.
-        if self.summary.mode != "batch":
-            extra_gb = (
+        ledger = estimate_streaming_memory(
+            self.n_samples,
+            chunk_size=DEFAULT_STATS_CHUNK,
+            n_cvt=self.n_cvt,
+            pipeline_buffers=chunks.n_buffers,
+            compute_chunk_size=chunks.chunk_size,
+            n_grid=0,
+            uab_iab_gb=(
                 chunks.chunk_size
                 * lmm_extra_bytes_per_snp(
                     self.n_samples,
@@ -156,87 +241,23 @@ class ExecutableAssociationPlan:
                     n_buffers=chunks.n_buffers,
                 )
                 / 1e9
-            )
-            ledger = estimate_streaming_memory(
-                self.n_samples,
-                chunk_size=DEFAULT_STATS_CHUNK,
-                n_cvt=self.n_cvt,
-                pipeline_buffers=chunks.n_buffers,
-                compute_chunk_size=chunks.chunk_size,
-                n_grid=0,
-                eigendecomp_peak_gb=0.0 if eigen is None else eigen.required_gb,
-                uab_iab_gb=extra_gb,
-            )
-            stats_subset_gb = (
-                max(0, self.n_input_samples - self.n_samples)
-                * DEFAULT_STATS_CHUNK
-                * 8
-                / 1e9
-            )
-            association_subset_gb = (
-                max(0, self.n_input_samples - self.n_samples)
-                * chunks.chunk_size
-                * 8
-                / 1e9
-            )
-            workspace_gb = (
-                self._group_workspace_bytes()
-                + chunks.chunk_size * self.workspace.bytes_per_snp
-            ) / 1e9
-            total_peak_gb = max(
-                ledger.kinship_gb + stats_subset_gb,
-                ledger.eigen_gb,
-                ledger.lmm_gb + association_subset_gb + workspace_gb,
-            )
-            return MemoryPlan(
-                total_peak_gb=total_peak_gb,
-                compute_chunk_size=chunks.chunk_size,
-                components_gb=(
-                    ("kinship_and_statistics", ledger.kinship_gb + stats_subset_gb),
-                    ("eigendecomposition", ledger.eigen_gb),
-                    (
-                        "association",
-                        ledger.lmm_gb + association_subset_gb + workspace_gb,
-                    ),
-                ),
-            )
-
-        input_subset_gb = (
-            max(0, self.n_input_samples - self.n_samples)
-            * self.n_snps_before_filter
-            * 8
-            / 1e9
-        )
-        workspace_gb = (
-            self._group_workspace_bytes()
-            + chunks.chunk_size * self.workspace.bytes_per_snp
-        ) / 1e9
-        batch_arrays_gb = estimate_lmm_memory(
-            self.n_samples,
-            self.n_snps_before_filter,
-            lmm_batch_size=chunks.chunk_size,
-            n_buffers=chunks.n_buffers,
-            n_grid=0,
-            uab_iab_gb=(
-                chunks.chunk_size
-                * lmm_extra_bytes_per_snp(self.n_samples, self.n_cvt, self.dispatch)
-                / 1e9
             ),
         )
-        return MemoryPlan(
-            total_peak_gb=batch_arrays_gb + input_subset_gb + workspace_gb,
-            compute_chunk_size=chunks.chunk_size,
-            components_gb=(
-                ("batch_arrays", batch_arrays_gb),
-                ("input_row_subset", input_subset_gb),
-                ("kernel_workspace_and_outputs", workspace_gb),
-            ),
+        return (
+            ledger.lmm_gb
+            + array_gb(input_subset_rows, chunks.chunk_size)
+            + workspace_gb
         )
 
 
 def _quote_fits(plan: ExecutableAssociationPlan, *, available_gb: float) -> bool:
-    """Apply the same two ceilings as ``memory.require`` without raising."""
-    required_gb = plan.price().total_peak_gb
+    """Apply the same two ceilings as ``memory.require`` to the association phase.
+
+    Narrowing the chunk or the phenotype group moves only that phase. The
+    kinship, eigen, and statistics figures are fixed by the sample counts,
+    so the preflight gates them once on the whole quote.
+    """
+    required_gb = plan.price(eigen=None).association_gb
     within_budget = plan.mem_budget_gb is None or required_gb <= plan.mem_budget_gb
     return within_budget and memory.fits(required_gb, available_gb)
 
@@ -400,7 +421,7 @@ def plan_association(
         workspace=workspace,
     )
     if requested == "auto" and not loco:
-        batch_gb = plan.price().total_peak_gb
+        batch_gb = plan.price(eigen=None).association_gb
         capacity_gb = min(
             available_gb,
             mem_budget if mem_budget is not None else available_gb,

@@ -320,7 +320,7 @@ def run_lmm_loco(
             check_memory=config.check_memory,
             show_progress=show_progress,
             mem_budget=config.mem_budget,
-            association_peak_gb=dict(execution.price().components_gb)["association"],
+            association_peak_gb=execution.price(eigen=None).association_gb,
         )
 
         first_chr_pve: float | None = None

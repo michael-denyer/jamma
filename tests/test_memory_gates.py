@@ -20,7 +20,7 @@ from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
 from jamma.lmm.dispatch import select_current
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
-from jamma.pipeline_memory import memory_preflight
+from tests.conftest import preflight
 from tests.fixture_paths import SYNTHETIC
 
 pytestmark = pytest.mark.tier0
@@ -50,7 +50,7 @@ class TestMemoryGates:
         runner = PipelineRunner(config)
 
         with pytest.raises(MemoryError, match="exceeds"):
-            memory_preflight(
+            preflight(
                 runner.config,
                 _streaming_plan(mem_budget=config.mem_budget),
             )
@@ -66,7 +66,7 @@ class TestMemoryGates:
 
         with patch("jamma.core.memory.available_ram_gb", return_value=0.001):
             with pytest.raises(MemoryError, match="Insufficient"):
-                memory_preflight(
+                preflight(
                     runner.config,
                     _streaming_plan(),
                 )
@@ -78,9 +78,9 @@ class TestMemoryGates:
         plan = _streaming_plan()
 
         with patch("jamma.core.memory.available_ram_gb", return_value=1000.0):
-            memory_preflight(runner.config, plan)
+            preflight(runner.config, plan)
 
-        assert memory.fits(plan.price().total_peak_gb, 1000.0)
+        assert memory.fits(plan.price(eigen=None).total_peak_gb, 1000.0)
 
     def test_memory_check_disabled_returns_none(self):
         """check_memory=False returns None without performing any memory check.
@@ -91,7 +91,7 @@ class TestMemoryGates:
         config = PipelineConfig(bfile=BFILE, check_memory=False)
         runner = PipelineRunner(config)
 
-        result = memory_preflight(
+        result = preflight(
             runner.config,
             _streaming_plan(),
         )

@@ -148,8 +148,10 @@ def test_phenotype_group_is_bounded_by_live_native_workspaces(monkeypatch) -> No
     )
 
     assert grouped.phenotype_group_size == 2
-    assert grouped.price().total_peak_gb <= 2.5
-    assert replace(grouped, phenotype_group_size=3).price().total_peak_gb > 2.5
+    assert grouped.price(eigen=None).total_peak_gb <= 2.5
+    assert (
+        replace(grouped, phenotype_group_size=3).price(eigen=None).total_peak_gb > 2.5
+    )
 
 
 def test_phenotype_group_preserves_single_phenotype_chunk_width(monkeypatch) -> None:
@@ -185,7 +187,8 @@ def test_phenotype_group_preserves_single_phenotype_chunk_width(monkeypatch) -> 
     group_two = replace(plan, phenotype_group_size=2)
     group_three = replace(plan, phenotype_group_size=3)
     available_gb = (
-        group_two.price().total_peak_gb + group_three.price().total_peak_gb
+        group_two.price(eigen=None).total_peak_gb
+        + group_three.price(eigen=None).total_peak_gb
     ) / 2
 
     assert (
@@ -193,7 +196,7 @@ def test_phenotype_group_preserves_single_phenotype_chunk_width(monkeypatch) -> 
             group_three,
             conservative_chunks=group_three.conservative_chunks.cap_width(100, 1),
         )
-        .price()
+        .price(eigen=None)
         .total_peak_gb
         < available_gb
     )
@@ -218,7 +221,9 @@ def test_fallback_group_reuses_sequential_compute_scratch(monkeypatch) -> None:
     )
 
     assert grouped.phenotype_group_size == 3
-    added = grouped.price().total_peak_gb - single.price().total_peak_gb
+    added = (
+        grouped.price(eigen=None).total_peak_gb - single.price(eigen=None).total_peak_gb
+    )
     assert added < 3 * grouped.workspace.fixed_bytes / 1e9
 
 
@@ -286,7 +291,7 @@ def test_streaming_chunk_converges_on_full_quote_under_physical_ram(
     plan = association_plan.plan_association(
         2_000, 1_000_000, n_cvt=4, mem_budget=1_000.0
     )
-    quote = plan.price()
+    quote = plan.price(eigen=None)
 
     assert plan.summary.mode == "streaming"
     assert plan.conservative_chunks.chunk_size < 200_000
@@ -307,7 +312,7 @@ def test_streaming_chunk_converges_on_full_quote_under_physical_ram(
         chunk_size=wider_size,
         n_chunks=(1_000_000 + wider_size - 1) // wider_size,
     )
-    wider_quote = replace(plan, conservative_chunks=wider_chunks).price()
+    wider_quote = replace(plan, conservative_chunks=wider_chunks).price(eigen=None)
     with pytest.raises(MemoryError):
         memory.require(
             wider_quote.total_peak_gb,
@@ -329,7 +334,7 @@ def test_streaming_chunk_converges_on_user_budget_below_ram(monkeypatch) -> None
         n_cvt=4,
         mem_budget=3.0,
     )
-    quote = plan.price()
+    quote = plan.price(eigen=None)
 
     assert plan.conservative_chunks.chunk_size > 1
     assert quote.total_peak_gb <= 3.0

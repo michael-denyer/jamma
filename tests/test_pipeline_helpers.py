@@ -21,9 +21,9 @@ import pytest
 from jamma.core import memory
 from jamma.lmm.association_plan import plan_association
 from jamma.pipeline import PipelineConfig, PipelineRunner
-from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_plan import LocoAnalysisPlan, resolve_analysis_plan
 from jamma.pipeline_samples import load_analysed_samples
+from tests.conftest import preflight
 
 if TYPE_CHECKING:
     from jamma.lmm.stats import AssocResult
@@ -68,7 +68,7 @@ class TestMemoryPreflightStreaming:
         runner = _make_runner(tmp_path, check_memory=True)
         plan = _association_plan("streaming", n_valid=1000, n_snps=50_000, n_cvt=3)
 
-        eigen = memory_preflight(runner.config, plan)  # gate must pass, not raise
+        eigen = preflight(runner.config, plan)  # gate must pass, not raise
 
         assert eigen is not None
         assert eigen.required_gb > 0
@@ -89,7 +89,7 @@ class TestMemoryPreflightStreaming:
         records: list[str] = []
         handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
         try:
-            result = memory_preflight(runner.config, plan)
+            result = preflight(runner.config, plan)
         finally:
             logger.remove(handler_id)
 
@@ -126,7 +126,7 @@ class TestMemoryPreflightBatch:
         records: list[str] = []
         handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
         try:
-            memory_preflight(runner.config, plan)
+            preflight(runner.config, plan)
         finally:
             logger.remove(handler_id)
 
@@ -157,7 +157,7 @@ class TestMemoryPreflightBatch:
         )
 
         with pytest.raises(MemoryError, match=r"exceeds .*budget \(8\.0GB\)"):
-            memory_preflight(runner.config, plan)
+            preflight(runner.config, plan)
 
     def test_insufficient_memory_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -170,7 +170,7 @@ class TestMemoryPreflightBatch:
         plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
 
         with pytest.raises(MemoryError, match=r"Insufficient memory"):
-            memory_preflight(runner.config, plan)
+            preflight(runner.config, plan)
 
     def test_sufficient_passes_silently(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -182,7 +182,7 @@ class TestMemoryPreflightBatch:
         )
         plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
 
-        memory_preflight(runner.config, plan)
+        preflight(runner.config, plan)
 
 
 def _write_fam(path: Path, rows: list[list[str]]) -> None:

@@ -17,7 +17,7 @@ import pytest
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import MIN_N_GRID
 from jamma.pipeline import PipelineConfig, PipelineRunner
-from jamma.pipeline_memory import memory_preflight
+from tests.conftest import preflight
 from tests.fixture_paths import SYNTHETIC
 
 BFILE = SYNTHETIC.bfile
@@ -198,7 +198,7 @@ class TestCheckMemory:
             check_memory=False,
         )
         runner = PipelineRunner(config)
-        result = memory_preflight(
+        result = preflight(
             runner.config,
             plan_association(
                 100,
@@ -222,11 +222,11 @@ class TestCheckMemory:
             500,
             requested="numpy-streaming",
         )
-        result = memory_preflight(runner.config, plan)
+        result = preflight(runner.config, plan)
 
         assert result is not None
         assert result.required_gb > 0
-        quote = plan.price()
+        quote = plan.price(eigen=None)
         assert isinstance(quote, MemoryPlan)
         assert quote.total_peak_gb >= 0
         assert quote.compute_chunk_size > 0

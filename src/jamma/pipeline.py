@@ -479,7 +479,7 @@ class PipelineRunner:
 
         log_pipeline_banner(plan)
 
-        eigen_plan = memory_preflight(self.config, analysis.execution)
+        eigen_plan = memory_preflight(analysis, check_memory=self.config.check_memory)
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes). The
         # kinship matrix is consumed here; runners use the eigen arrays directly.
@@ -637,7 +637,7 @@ class PipelineRunner:
         n_cvt = covariates.shape[1] if covariates is not None else 1
         plan = analysis.execution.summary
         log_pipeline_banner(plan)
-        memory_preflight(self.config, analysis.execution)
+        memory_preflight(analysis, check_memory=self.config.check_memory)
 
         t_loco = time.perf_counter()
         loco = run_lmm_loco(

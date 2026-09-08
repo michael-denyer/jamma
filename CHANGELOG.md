@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-09-08
+
+Major. The public surface moves in four places a user can observe: `gwas()`
+returns `PipelineResult` and takes `phenotype_columns`, `jamma -gk` filters
+SNPs with GEMMA's defaults (`maf 0.01`, `miss 0.05`) measured over the
+phenotyped samples, a covariate file without a constant column gets an
+intercept appended as GEMMA's `CheckCvt` does, and a kinship passed to the
+runner API is centred and consumed in place. The GEMMA v0.98.5 parity suites
+(tier1, tier2 and the CI `numerical-validation` job) pass at the tolerances
+in `docs/GEMMA_EQUIVALENCE.md`. The entries under Fixed are the changes that
+moved results, and each names the case it changed.
+
 ### Breaking
 
 - **The memory estimators are pure and the gate reads the machine once.**
@@ -165,6 +177,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `jamma -gk 1` now matches `tests/fixtures/kinship/gemma_ref.cXX.txt` at
   `kinship_rtol`, and `-gk -loco` uses the same basis. Multi-column `-n`
   under `-gk` intersects the columns instead of raising.
+- **A multi-chunk `-lmm` run with the progress bar on keeps its output.**
+  The pipelined driver counted prepared chunks rather than computed ones, so
+  the bar reached `n_chunks + 1`, `progressbar2` raised `Value N is too
+  large`, and the caller deleted the finished `.assoc.txt` as partial output.
+- **`run_lmm_association_numpy(kinship=K)` centres the analysed kinship
+  before eigendecomposition, as GEMMA's `CenterMatrix` does.** REML with an
+  intercept is invariant to centring, but MLE, LRT, Score and PVE are not, so
+  a raw supplied kinship gave wrong non-REML results through the direct API.
+  The pipeline already centred; the runner now does too, and `K + c` yields
+  the same model as `K`.
+- **Weighted eigenvector files reload correctly.** Under `-widv` with eigen
+  output, the saved `eigenU` carries the `sqrt(w)` row scaling, as GEMMA
+  writes it, so a later run through `-d/-u` without the weight file reproduces
+  the weighted run instead of a model that was neither weighted nor
+  unweighted.
+- **Only an exactly zero `P_yy` is replaced with `1e-8`, as GEMMA v0.98.5's
+  `LogRL_f`/`LogL_f` do.** The former absolute floor on every `P_yy` and
+  `Px_yy` below `1e-8` made results depend on the phenotype scale: once the
+  residual sum of squares fell under the floor, lambda landed on the kink and
+  every p-value moved. Rescaling the phenotype by `1e-6` now rescales `beta`
+  and `se` and leaves every other field unchanged, on both the C and NumPy
+  paths.
 - **The tier-marker gate no longer fails on a test file another worker is
   planting or removing.** `tests/test_conftest_c_seam.py` writes its
   transient `test_*.py` files under `tests/` through a temporary name the

@@ -26,17 +26,24 @@ def test_inconsistent_rows_after_initial_sample_are_rejected():
 
 
 @pytest.mark.parametrize("test_type", ["wald", "lrt", "score", "all"])
-def test_empty_parsed_table_preserves_schema(tmp_path, test_type):
+def test_empty_file_compares_as_zero_snps(tmp_path, test_type):
     from jamma.lmm.schema import HEADERS
     from jamma.validation.compare import load_gemma_assoc
 
     path = tmp_path / "empty.assoc.txt"
     path.write_text(HEADERS[test_type] + "\n")
     rows = load_gemma_assoc(path)
-    assert rows.columns == tuple(HEADERS[test_type].split("\t"))
+    assert rows == []
     result = compare_assoc_results(rows, rows)
     assert result.passed
     assert result.n_snps == 0
+
+
+def test_mode_mismatch_between_actual_and_reference_is_rejected():
+    reference = make_assoc()
+    actual = replace(reference, p_lrt=0.02, p_score=0.03, l_mle=0.6)
+    with pytest.raises(ValueError, match="actual mode 4 but reference mode 1"):
+        compare_assoc_results([actual], [reference])
 
 
 def test_absent_likelihood_does_not_match_present_nan():

@@ -1,6 +1,7 @@
-"""Tests for incremental association result writer."""
+"""Tests for the incremental association result writer and its publication."""
 
 import errno
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import TextIOWrapper
@@ -9,6 +10,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from loguru import logger
 
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.schema import SnpMeta
@@ -67,6 +69,17 @@ def _inject_write_failure(
 
     handle.write = patched_write
     yield
+
+
+@contextmanager
+def _captured_warnings() -> Iterator[list[str]]:
+    """Collect the loguru warnings emitted inside the block."""
+    messages: list[str] = []
+    handler_id = logger.add(messages.append, format="{message}", level="WARNING")
+    try:
+        yield messages
+    finally:
+        logger.remove(handler_id)
 
 
 @dataclass
@@ -315,8 +328,7 @@ class TestIncrementalAssocWriter:
                     ):
                         writer.write_arrays_batch(*sample_result.as_call_args())
 
-        # Partial file should be cleaned up
-        assert not output_path.exists(), "Partial output file should be deleted"
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
 
     def test_no_retry_on_non_oserror(self, tmp_path: Path, sample_result: SampleBatch):
         """Non-OSError exceptions propagate immediately without retries."""
@@ -350,10 +362,7 @@ class TestIncrementalAssocWriter:
                     ):
                         writer.write_arrays_batch(*sample_result.as_call_args())
 
-        # File should be cleaned up by __exit__
-        assert not output_path.exists(), (
-            "Partial file should be deleted on context exit with OSError"
-        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
 
     def test_retains_partial_on_keyboard_interrupt(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -366,10 +375,9 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise KeyboardInterrupt()
 
-        assert not output_path.exists()
-        (output_path,) = tmp_path.glob("*.partial.*")
-        content = output_path.read_text()
-        assert "rs12345" in content
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["test.assoc.txt.partial"]
+        partial = tmp_path / "test.assoc.txt.partial"
+        assert "rs12345" in partial.read_text()
 
     def test_retains_partial_on_system_exit(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -382,10 +390,9 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise SystemExit(1)
 
-        assert not output_path.exists()
-        (output_path,) = tmp_path.glob("*.partial.*")
-        content = output_path.read_text()
-        assert "rs12345" in content
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["test.assoc.txt.partial"]
+        partial = tmp_path / "test.assoc.txt.partial"
+        assert "rs12345" in partial.read_text()
 
     def test_cleanup_on_computation_error(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -398,9 +405,7 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise ValueError("bad data")
 
-        assert not output_path.exists(), (
-            "Partial file should be deleted on computation error"
-        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
 
     def test_write_arrays_batch_retries_on_flaky_write(
         self, tmp_path: Path, sample_results: SampleBatch
@@ -479,8 +484,7 @@ class TestIncrementalAssocWriter:
             # No retry sleeps should have occurred
             mock_sleep.assert_not_called()
 
-        # Partial file should be cleaned up
-        assert not output_path.exists(), "Partial output file should be deleted"
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
 
     def test_write_rollback_preserves_first_result(
         self, tmp_path: Path, sample_results: SampleBatch
@@ -511,10 +515,7 @@ class TestIncrementalAssocWriter:
                             *sample_results.slice_one(1).as_call_args()
                         )
 
-        # _cleanup_partial deletes the file after exhausting retries
-        assert not output_path.exists(), (
-            "Partial output file should be deleted after exhausting retries"
-        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
 
     def test_retains_partial_on_memory_error(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -527,10 +528,9 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise MemoryError("OOM at 90% completion")
 
-        assert not output_path.exists()
-        (output_path,) = tmp_path.glob("*.partial.*")
-        content = output_path.read_text()
-        assert "rs12345" in content
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["test.assoc.txt.partial"]
+        partial = tmp_path / "test.assoc.txt.partial"
+        assert "rs12345" in partial.read_text()
 
     def test_retains_partial_on_generator_exit(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -543,10 +543,9 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise GeneratorExit()
 
-        assert not output_path.exists()
-        (output_path,) = tmp_path.glob("*.partial.*")
-        content = output_path.read_text()
-        assert "rs12345" in content
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["test.assoc.txt.partial"]
+        partial = tmp_path / "test.assoc.txt.partial"
+        assert "rs12345" in partial.read_text()
 
     def test_flush_failure_on_normal_exit_raises(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -563,10 +562,7 @@ class TestIncrementalAssocWriter:
 
                 open_handle(writer).flush = failing_flush
 
-        # Partial file should be cleaned up
-        assert not output_path.exists(), (
-            "Partial output should be deleted after flush failure"
-        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
 
     def test_keyboard_interrupt_with_close_failure(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -666,10 +662,7 @@ class TestIncrementalAssocWriter:
 
                     writer.write_arrays_batch(*sample_result.as_call_args())
 
-        # _cleanup_partial should have deleted the partial file
-        assert not output_path.exists(), (
-            "Partial output file should be deleted when EPERM + rollback both fail"
-        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
 
     def test_write_buf_tell_failure_surfaces_as_oserror(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -697,9 +690,7 @@ class TestIncrementalAssocWriter:
 
                     writer.write_arrays_batch(*sample_result.as_call_args())
 
-        assert not output_path.exists(), (
-            "Partial output file should be deleted when tell() fails"
-        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == []
 
     def test_write_buf_rollback_discards_debris_before_retry(
         self, tmp_path: Path, sample_result: SampleBatch
@@ -753,4 +744,151 @@ class TestIncrementalAssocWriter:
         assert len(lines) == 2, f"Expected header + one result, got {lines}"
         assert lines[0].startswith("chr\trs\tps")
         assert lines[1].startswith("1\trs12345\t")
+        assert writer.count == 1
+
+
+class TestAssocPublication:
+    """Publication preserves a completed artifact until a run finishes."""
+
+    def test_computation_failure_preserves_completed_output(self, tmp_path: Path):
+        """An ordinary exception leaves the previous complete file untouched."""
+        destination = tmp_path / "result.assoc.txt"
+        destination.write_bytes(b"previous completed run\n")
+
+        with pytest.raises(ValueError, match="computation failed"):
+            with IncrementalAssocWriter(destination):
+                raise ValueError("computation failed")
+
+        assert destination.read_bytes() == b"previous completed run\n"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
+
+    def test_close_failure_prevents_publication(self, tmp_path: Path):
+        """A close that fails after flushing must not publish the temp."""
+        destination = tmp_path / "result.assoc.txt"
+        destination.write_bytes(b"previous completed run\n")
+
+        with pytest.raises(OSError, match="close failed"):
+            with IncrementalAssocWriter(destination) as writer:
+                handle = open_handle(writer)
+                original_close = handle.close
+
+                def failing_close():
+                    original_close()
+                    raise OSError("close failed")
+
+                handle.close = failing_close
+
+        assert destination.read_bytes() == b"previous completed run\n"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
+
+    @pytest.mark.parametrize("error", [KeyboardInterrupt, SystemExit, MemoryError])
+    def test_interruption_retains_separate_partial(self, tmp_path: Path, error):
+        """An interrupt keeps what was written beside the previous output."""
+        destination = tmp_path / "result.assoc.txt"
+        destination.write_bytes(b"previous completed run\n")
+
+        with pytest.raises(error):
+            with IncrementalAssocWriter(destination):
+                raise error()
+
+        assert destination.read_bytes() == b"previous completed run\n"
+        partial = tmp_path / "result.assoc.txt.partial"
+        assert partial.read_text().startswith("chr\trs\t")
+
+    def test_header_failure_cleans_temporary_output(self, tmp_path: Path):
+        """A temp file that cannot be opened leaves no debris behind."""
+        destination = tmp_path / "result.assoc.txt"
+        destination.write_bytes(b"previous completed run\n")
+
+        tmp_path.chmod(0o500)
+        try:
+            with pytest.raises(PermissionError):
+                with IncrementalAssocWriter(destination):
+                    pass
+        finally:
+            tmp_path.chmod(0o700)
+
+        assert destination.read_bytes() == b"previous completed run\n"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
+
+    @pytest.mark.parametrize("operation", ["flush", "replace"])
+    def test_publication_io_failure_preserves_destination(
+        self, tmp_path: Path, monkeypatch, operation: str
+    ):
+        """A failure while publishing leaves the previous output in place."""
+        destination = tmp_path / "result.assoc.txt"
+        destination.write_bytes(b"previous completed run\n")
+
+        def fail(*args, **kwargs):
+            raise OSError("publication failed")
+
+        if operation == "replace":
+            monkeypatch.setattr(Path, "replace", fail)
+
+        with pytest.raises(OSError, match="publication failed"):
+            with IncrementalAssocWriter(destination) as writer:
+                if operation == "flush":
+                    open_handle(writer).flush = fail
+
+        assert destination.read_bytes() == b"previous completed run\n"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
+
+    def test_success_replaces_completed_output(self, tmp_path: Path):
+        """The destination keeps its old bytes until the context exits cleanly."""
+        destination = tmp_path / "result.assoc.txt"
+        destination.write_bytes(b"previous completed run\n")
+
+        with IncrementalAssocWriter(destination):
+            assert destination.read_bytes() == b"previous completed run\n"
+
+        assert destination.read_text().startswith("chr\trs\t")
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
+
+    def test_interrupt_leaves_only_the_partial(
+        self, tmp_path: Path, sample_result: SampleBatch
+    ):
+        """An interrupt leaves the partial alone and reports the count."""
+        destination = tmp_path / "result.assoc.txt"
+
+        with _captured_warnings() as messages:
+            with pytest.raises(KeyboardInterrupt):
+                with IncrementalAssocWriter(destination) as writer:
+                    writer.write_arrays_batch(*sample_result.as_call_args())
+                    raise KeyboardInterrupt()
+
+        partial = tmp_path / "result.assoc.txt.partial"
+        assert sorted(p.name for p in tmp_path.iterdir()) == [partial.name]
+        assert "KeyboardInterrupt after 1 results written" in messages[0]
+        assert str(partial) in messages[0]
+
+    def test_exception_leaves_only_the_previous_output(
+        self, tmp_path: Path, sample_result: SampleBatch
+    ):
+        """A computation failure keeps the old file and reports what it discards."""
+        destination = tmp_path / "result.assoc.txt"
+        destination.write_bytes(b"previous completed run\n")
+
+        with _captured_warnings() as messages:
+            with pytest.raises(ValueError, match="computation failed"):
+                with IncrementalAssocWriter(destination) as writer:
+                    writer.write_arrays_batch(*sample_result.as_call_args())
+                    raise ValueError("computation failed")
+
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
+        assert destination.read_bytes() == b"previous completed run\n"
+        assert "ValueError: computation failed" in messages[0]
+        assert "(1 results written)" in messages[0]
+
+    def test_success_leaves_only_the_destination(
+        self, tmp_path: Path, sample_result: SampleBatch
+    ):
+        """A clean run publishes the destination and warns about nothing."""
+        destination = tmp_path / "result.assoc.txt"
+
+        with _captured_warnings() as messages:
+            with IncrementalAssocWriter(destination) as writer:
+                writer.write_arrays_batch(*sample_result.as_call_args())
+
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
+        assert messages == []
         assert writer.count == 1

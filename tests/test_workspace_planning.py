@@ -243,7 +243,7 @@ def test_auto_uses_user_budget_and_allows_streaming_fallback(monkeypatch) -> Non
     )
 
     assert plan.summary.mode == "streaming"
-    assert plan.dispatch is DispatchPath.NUMPY_FALLBACK
+    assert plan.dispatch is DispatchPath.NUMPY_WALD
 
 
 def test_streaming_chunk_converges_on_full_quote_under_physical_ram(
@@ -330,8 +330,8 @@ def test_native_sizing_query_is_the_workspace_source() -> None:
         DispatchPath.FUSED_GENERAL, 4, 1_000, 1_000, 100, 50, 20, 18
     )
 
-    assert native == (
-        spec.persistent_bytes,
+    assert spec.persistent_bytes > native[0]  # retained Python reference table
+    assert native[1:] == (
         spec.per_thread_bytes,
         spec.transient_per_thread_bytes,
         spec.bytes_per_snp,
@@ -374,3 +374,31 @@ def test_native_sizing_query_counts_max_covariate_transport_and_rejects_beyond()
 
     with pytest.raises(ValueError, match="invalid workspace sizing dimensions"):
         accel.require().workspace_sizes_c(1_000, 101, 50, 4, 18)
+
+
+@requires_c
+def test_native_quote_retains_python_reference_table_cost():
+    import json
+    import subprocess
+    import sys
+
+    script = """
+import json
+import tracemalloc
+from jamma.lmm.pab import build_index_table
+from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm.workspace import WorkspaceSpec
+spec = WorkspaceSpec.build(DispatchPath.FUSED_GENERAL, 1, 128, 128, 100, 50, 20, 1)
+tracemalloc.start()
+table = build_index_table(100)
+retained, _ = tracemalloc.get_traced_memory()
+print(json.dumps({"quote": spec.fixed_bytes, "retained": retained}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    measured = json.loads(result.stdout)
+    assert measured["quote"] >= measured["retained"]

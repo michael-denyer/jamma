@@ -18,7 +18,6 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
-from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.conftest import requires_c
@@ -476,7 +475,7 @@ class TestGeneralWorkspaceScoreParity:
         data = general_score_lrt_ncvt2
         n_cvt = data["n_cvt"]
         n_samples = data["n_samples"]
-        pab_dict = build_pab_table_for_c(n_cvt)._asdict()
+        pab_dict = n_cvt
 
         inv_indices, _var_indices = classify_uab_columns(n_cvt)
         Uab_batch = data["Uab_batch"]
@@ -527,7 +526,7 @@ class TestGeneralWorkspaceLrtParity:
         data = general_score_lrt_ncvt2
         n_cvt = data["n_cvt"]
         n_samples = data["n_samples"]
-        pab_dict = build_pab_table_for_c(n_cvt)._asdict()
+        pab_dict = n_cvt
 
         inv_indices, _var_indices = classify_uab_columns(n_cvt)
         Uab_batch = data["Uab_batch"]

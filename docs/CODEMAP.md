@@ -196,8 +196,8 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:21](../src/jamma/io/covariate.py#L21) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L46) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L87) |
-| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:75](../src/jamma/lmm/io.py#L75) |
-| 2d | `format_assoc_line()` | Table-driven output row formatting | [lmm/io.py:35](../src/jamma/lmm/io.py#L35) |
+| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/io.py:76](../src/jamma/lmm/io.py#L76) |
+| 2d | `format_assoc_line()` | Table-driven output row formatting | [lmm/io.py:36](../src/jamma/lmm/io.py#L36) |
 | 2e | `read_snp_list_file()` | Parse SNP list file (one RS ID per line) | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2e | `resolve_snp_list_to_indices()` | Map SNP IDs to dataset indices | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2f | `read_eigen_files()` | Load eigenvalue/eigenvector files (auto-detects `.npy` or `.txt`) | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
@@ -218,7 +218,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from disk, mode-selected transform; single-passes centered mode when unfiltered, else shared `_stream_kinship_two_pass` | [stream.py:265](../src/jamma/kinship/stream.py#L265) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:353](../src/jamma/kinship/loco.py#L353) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:347](../src/jamma/kinship/loco.py#L347) |
 | 3a | `selected_chunks()`, `select_kinship_snps()`, `accumulate_kinship()` | Shared streaming/LOCO selection and rank-k updates; preserve BED chunk grouping and preprocess before selecting output rows | [accumulation.py](../src/jamma/kinship/accumulation.py) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L171) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |
@@ -230,9 +230,9 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
 | 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |
 | 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:368](../src/jamma/lmm/likelihood.py#L368) |
-| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [pab.py:197](../src/jamma/lmm/pab.py#L197) |
-| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [pab.py:252](../src/jamma/lmm/pab.py#L252) |
-| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [pab.py:143](../src/jamma/lmm/pab.py#L143) |
+| 3d | `compute_Uab()` | Element-wise products of rotated vectors | [pab.py:168](../src/jamma/lmm/pab.py#L168) |
+| 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [pab.py:223](../src/jamma/lmm/pab.py#L223) |
+| 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [pab.py:114](../src/jamma/lmm/pab.py#L114) |
 | 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:326](../src/jamma/lmm/likelihood.py#L326) |
 | 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:428](../src/jamma/lmm/likelihood.py#L428) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
@@ -264,7 +264,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:272](../src/jamma/lmm/association_plan.py#L272) |
+| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:279](../src/jamma/lmm/association_plan.py#L279) |
 | 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:67](../src/jamma/lmm/association_plan.py#L67) |
 | 4Nb | `run_lmm_association()` | The shared run body: stats, filter (MAF, missingness, HWE, `-snps`), prepare, chunk loop, result routing, over any source under one `LmmRunSpec` | [runner_numpy.py:203](../src/jamma/lmm/runner_numpy.py#L203) |
 | 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:93](../src/jamma/lmm/runner_numpy.py#L93) |
@@ -274,23 +274,23 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:130](../src/jamma/lmm/runner_numpy.py#L130) |
 | 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:581](../src/jamma/lmm/runner_numpy.py#L581) |
 | 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:406](../src/jamma/lmm/prepare_common.py#L406) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:470](../src/jamma/lmm/chunk_runner_numpy.py#L470) |
-| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:185](../src/jamma/lmm/chunk_runner_numpy.py#L185) |
-| 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the prepared run and the config | [chunk_kernel.py:42](../src/jamma/lmm/chunk_kernel.py#L42) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:155](../src/jamma/lmm/chunk_kernel.py#L155) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:460](../src/jamma/lmm/chunk_runner_numpy.py#L460) |
+| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:175](../src/jamma/lmm/chunk_runner_numpy.py#L175) |
+| 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the prepared run and the config | [chunk_kernel.py:46](../src/jamma/lmm/chunk_kernel.py#L46) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:159](../src/jamma/lmm/chunk_kernel.py#L159) |
 | 4Nb | `_overlapped_chunks()` | Generator yielding each prepared chunk while the next rotates on the executor | [chunk_pipeline.py:98](../src/jamma/lmm/chunk_pipeline.py#L98) |
 | 4Nb | `_drive_pipeline()` | Computes every overlapped chunk under one BLAS limit and one progress iterator | [chunk_pipeline.py:133](../src/jamma/lmm/chunk_pipeline.py#L133) |
-| 4Nb | `compute_chunk_size_numpy()` | Chunk size from a per-chunk budget and the dispatch path's per-SNP bytes; pure | [chunk_sizing.py:113](../src/jamma/lmm/chunk_sizing.py#L113) |
-| 4Nb | `LmmChunkPlan.plan()` | Chunk size, chunk count, and pipelining decision; cuts a split-capable run of at most 10,000 samples to 16 chunks when the budget alone would not pipeline and the BLAS is uncontrollable (Accelerate). Pure: `plan_association` reads RAM and BLAS controllability once and passes them in | [chunk_sizing.py:185](../src/jamma/lmm/chunk_sizing.py#L185) |
-| 4Nb | `LmmChunkPlan.narrow()` | Narrows a conservative plan to the filtered SNP count; width only decreases and pipelining only switches off | [chunk_sizing.py:297](../src/jamma/lmm/chunk_sizing.py#L297) |
+| 4Nb | `compute_chunk_size_numpy()` | Chunk size from a per-chunk budget and the dispatch path's per-SNP bytes; pure | [chunk_sizing.py:117](../src/jamma/lmm/chunk_sizing.py#L117) |
+| 4Nb | `LmmChunkPlan.plan()` | Chunk size, chunk count, and pipelining decision; cuts a split-capable run of at most 10,000 samples to 16 chunks when the budget alone would not pipeline and the BLAS is uncontrollable (Accelerate). Pure: `plan_association` reads RAM and BLAS controllability once and passes them in | [chunk_sizing.py:189](../src/jamma/lmm/chunk_sizing.py#L189) |
+| 4Nb | `LmmChunkPlan.narrow()` | Narrows a conservative plan to the filtered SNP count; width only decreases and pipelining only switches off | [chunk_sizing.py:301](../src/jamma/lmm/chunk_sizing.py#L301) |
 | 4Nb | `available()` / `require()` | The one loader for `_lmm_accel`: import, ABI-validate, auto-recompile once, expose the module or raise | [accel.py](../src/jamma/lmm/accel.py) |
-| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:193](../src/jamma/lmm/chunk_kernel.py#L193) |
+| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:199](../src/jamma/lmm/chunk_kernel.py#L199) |
 | 4Nc | `create_workspace_ncvt1_c()` | C extension: the per-run n_cvt=1 workspace, keyed by `lmm_mode` | [_lmm_accel_ncvt1.c](../src/jamma/lmm/_lmm_accel_ncvt1.c) |
-| 4Nc | `_fused_general_kernel()` | Build the one general (n_cvt>1) C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:231](../src/jamma/lmm/chunk_kernel.py#L231) |
+| 4Nc | `_fused_general_kernel()` | Build the one general (n_cvt>1) C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:237](../src/jamma/lmm/chunk_kernel.py#L237) |
 | 4Nc | `create_workspace_general_c()` | C extension: the per-run general workspace, keyed by `lmm_mode` | [_lmm_accel_general.c](../src/jamma/lmm/_lmm_accel_general.c) |
 | 4Nd | `compute_lmm_chunk_ncvt1_c()` | C extension: chunked compute for n_cvt=1 with OpenMP, REML Wald under `lmm_mode` 1 and Wald + Score + LRT under 4 | [_lmm_accel_ncvt1.c](../src/jamma/lmm/_lmm_accel_ncvt1.c) |
 | 4Nd | `compute_lmm_chunk_fused_general_c()` | C extension: chunked compute for the general (n_cvt>1) workspace with OpenMP, one entry point serving Wald/LRT/Score/mode-4 by `lmm_mode` | [_lmm_accel_general.c](../src/jamma/lmm/_lmm_accel_general.c) |
-| 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:82](../src/jamma/lmm/_lmm_support.c#L82) |
+| 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:73](../src/jamma/lmm/_lmm_support.c#L73) |
 | 4Nd | `logdet_h_lambda()` | C: logdet(H) as a mantissa product with an exact exponent, shared by every REML/MLE evaluation and both grid precomputes | [_lmm_logdet.h](../src/jamma/lmm/_lmm_logdet.h) |
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
 | 4Nd | `_compile_jlinalg.py` | Dev-mode / runtime recompile for jlinalg | [_compile_jlinalg.py](../src/jamma/jlinalg/_compile_jlinalg.py) |
@@ -304,7 +304,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:35](../src/jamma/lmm/results.py#L35) |
 | 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:174](../src/jamma/lmm/results.py#L174) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:154](../src/jamma/lmm/loco.py#L154) |
-| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:78](../src/jamma/lmm/loco_eigen.py#L78) |
+| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:87](../src/jamma/lmm/loco_eigen.py#L87) |
 
 ---
 
@@ -339,11 +339,11 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 |----|-----------|-------------|-----------|
 | 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:55](../src/jamma/validation/tolerances.py#L55) |
 | 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:22](../src/jamma/validation/compare.py#L22) |
-| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:321](../src/jamma/validation/compare.py#L332) |
-| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:509](../src/jamma/validation/compare.py#L530) |
-| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:145](../src/jamma/validation/compare.py#L156) |
-| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:255](../src/jamma/validation/compare.py#L266) |
-| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:183](../src/jamma/validation/compare.py#L194) |
+| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:321](../src/jamma/validation/compare.py#L343) |
+| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:509](../src/jamma/validation/compare.py#L548) |
+| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:145](../src/jamma/validation/compare.py#L159) |
+| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:255](../src/jamma/validation/compare.py#L277) |
+| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:183](../src/jamma/validation/compare.py#L197) |
 
 ---
 
@@ -598,10 +598,10 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | LOCO config and artifact naming | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
-| Result writer | [lmm/io.py:75](../src/jamma/lmm/io.py#L75) |
-| Memory estimation | [memory.py:244](../src/jamma/core/memory.py#L244) |
+| Result writer | [IncrementalAssocWriter](../src/jamma/lmm/io.py#L76) |
+| Memory estimation | [lmm_cost](../src/jamma/core/memory.py#L247) |
 | Threading | [threading.py:42](../src/jamma/core/threading.py#L42) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
-| Validation comparison | [compare.py:509](../src/jamma/validation/compare.py#L530) |
+| Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L548) |
 | Formula derivations and validation | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
 | Numerical equivalence bound | [GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md](GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) |

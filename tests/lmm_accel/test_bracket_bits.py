@@ -53,7 +53,7 @@ def test_mode2_workspace_matches_mode4_workspace_bracket():
     block compute the same bracket, so their outputs are byte-equal."""
     data = _general_score_lrt_fixture()
     n_samples = data["n_samples"]
-    pab_dict = data["pab_c"]._asdict()
+    pab_dict = data["n_cvt"]
 
     ws4 = _fused_general_mode4_workspace(data, n_threads=1)
     result4 = accel.require().compute_lmm_chunk_fused_general_c(ws4, data["utg_t"], 1)

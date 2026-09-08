@@ -320,12 +320,16 @@ def run_lmm_loco(
             check_memory=config.check_memory,
             show_progress=show_progress,
             mem_budget=config.mem_budget,
+            association_peak_gb=dict(execution.price().components_gb)["association"],
         )
 
         first_chr_pve: float | None = None
         first_chr_pve_se: float | None = None
 
-        for chr_idx, (chr_name, eigenvalues_np, U) in enumerate(source.pairs):
+        stack.callback(source.pairs.close)
+        chr_idx = -1
+        for chr_name, eigenvalues_np, U in source.pairs:
+            chr_idx += 1
             chr_snp_indices = partitions[chr_name]
             logger.debug(
                 f"  chr {chr_name}: numpy backend, {len(chr_snp_indices)} SNPs"

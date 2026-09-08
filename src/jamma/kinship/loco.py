@@ -264,9 +264,10 @@ class _LocoPassPlan(NamedTuple):
     single_pass_gb: float
     min_required_gb: float
     eigendecomp_min_gb: float
+    required_gb: float
 
 
-def _decide_loco_passes(
+def plan_loco_passes(
     n_mat: int,
     n_samples: int,
     n_chr_with_snps: int,
@@ -274,6 +275,8 @@ def _decide_loco_passes(
     available_gb: float,
     *,
     max_batch_chrs: int | None,
+    budget_gb: float | None = None,
+    consumer_peak_gb: float | None = None,
 ) -> _LocoPassPlan:
     """Decide single-pass vs multi-pass and the chromosomes-per-pass batch size.
 
@@ -302,8 +305,10 @@ def _decide_loco_passes(
         n_chr_with_snps: Number of chromosomes that retain SNPs after filtering.
         chunk_size: SNPs per disk read.
         available_gb: Available RAM in GB (caller reads psutil and passes it in).
-        max_batch_chrs: Test override forcing the chromosomes-per-pass count;
-            None for memory-based sizing.
+        max_batch_chrs: Optional cap on the chromosomes per pass.
+        budget_gb: Explicit user ceiling, without the physical-RAM margin.
+        consumer_peak_gb: Selected eigen/association consumer peak. When omitted,
+            reserve the conservative DSYEVR peak for standalone kinship use.
 
     Returns:
         A _LocoPassPlan with the decision and the peak estimates.
@@ -311,42 +316,31 @@ def _decide_loco_passes(
     from jamma.core.eigen_plan import dsyevr_peak_gb
 
     matrix_gb = square_matrix_gb(n_mat)
-    # Chunk buffer is n_samples (full disk read) regardless of valid_indices;
-    # subsetting happens after load.
     chunk_buffer_gb = array_gb(n_samples, chunk_size)
-    # S_full + K_loco_buf + all S_chr + chunk buffer
-    single_pass_gb = matrix_gb * (2 + n_chr_with_snps) + chunk_buffer_gb
-    # Minimum: 3 matrices (S_full + K_loco_buf + 1 remaining S_chr) + chunk
-    # buffer + eigendecomp workspace (DSYEVR peak on the n_mat-sized K_loco).
     eigendecomp_min_gb = dsyevr_peak_gb(n_mat)
-    min_required_gb = matrix_gb * 3 + chunk_buffer_gb + eigendecomp_min_gb
-
+    consumer_gb = eigendecomp_min_gb if consumer_peak_gb is None else consumer_peak_gb
+    # Conservatively retain the disk buffer and both shared matrices while
+    # the consumer holds its eigen/association workspace.
+    fixed_gb = 2 * matrix_gb + chunk_buffer_gb + consumer_gb
+    single_pass_gb = fixed_gb + n_chr_with_snps * matrix_gb
+    min_required_gb = fixed_gb + matrix_gb
+    capacity_gb = memory.headroom_gb(available_gb)
+    if budget_gb is not None:
+        capacity_gb = min(capacity_gb, budget_gb)
+    batch_size = min(n_chr_with_snps, max(1, int((capacity_gb - fixed_gb) / matrix_gb)))
     if max_batch_chrs is not None:
-        batch_size = max_batch_chrs
-        single_pass = n_chr_with_snps <= batch_size
-    else:
-        single_pass = memory.fits(single_pass_gb, available_gb)
-        if single_pass:
-            batch_size = n_chr_with_snps  # one batch covers every chromosome
-        else:
-            # The consumer eigendecomposes each K_loco while the generator is
-            # suspended with remaining S_chr matrices still alive. Reserve
-            # eigendecomp workspace (DSYEVR peak on the n_mat-sized K_loco) so
-            # the batch doesn't exhaust memory before eigendecomp can run.
-            fixed_gb = 2 * matrix_gb + chunk_buffer_gb + dsyevr_peak_gb(n_mat)
-            usable_gb = memory.headroom_gb(available_gb) - fixed_gb
-            batch_size = max(1, int(usable_gb / matrix_gb))
-            if batch_size > 1 and not memory.fits(
-                fixed_gb + batch_size * matrix_gb, available_gb
-            ):
-                batch_size -= 1  # floor landed on the tie fits rejects
-
+        batch_size = min(batch_size, max_batch_chrs)
+    if batch_size > 1 and not memory.fits(
+        fixed_gb + batch_size * matrix_gb, available_gb
+    ):
+        batch_size -= 1
     return _LocoPassPlan(
-        single_pass=single_pass,
+        single_pass=n_chr_with_snps <= batch_size,
         batch_size=batch_size,
         single_pass_gb=single_pass_gb,
         min_required_gb=min_required_gb,
         eigendecomp_min_gb=eigendecomp_min_gb,
+        required_gb=fixed_gb + batch_size * matrix_gb,
     )
 
 
@@ -363,6 +357,7 @@ def compute_loco_kinship_streaming(
     *,
     filter_sample_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
+    consumer_peak_gb: float | None = None,
 ) -> LocoKinshipStream:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -370,7 +365,7 @@ def compute_loco_kinship_streaming(
     per-SNP statistics for filtering (MAF, missingness, variance). Pass 2+
     streams filtered SNPs in one or more chromosome batches, accumulating
     S_full (first batch only, threaded into every later batch) and each
-    batch's S_chr; ``_decide_loco_passes`` picks ``batch_size ==
+    batch's S_chr; ``plan_loco_passes`` picks ``batch_size ==
     n_chr_with_snps`` (single disk pass) when every chromosome's accumulator
     fits in memory alongside S_full, else a smaller batch across more passes.
 
@@ -441,6 +436,25 @@ def compute_loco_kinship_streaming(
     logger.info(f"  SNPs: {n_snps:,}")
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")
+
+    if check_memory:
+        available_gb = memory.available_ram_gb()
+        minimum = plan_loco_passes(
+            n_out,
+            n_samples,
+            1,
+            chunk_size,
+            available_gb,
+            max_batch_chrs=None,
+            budget_gb=mem_budget,
+            consumer_peak_gb=consumer_peak_gb,
+        )
+        memory.require(
+            minimum.required_gb,
+            available_gb,
+            "LOCO minimum working set",
+            budget_gb=mem_budget,
+        )
 
     # SNP filtering and output rows are independent. The LMM caller filters on
     # analysed samples even when saving a full matrix; centering uses all rows.
@@ -516,16 +530,18 @@ def compute_loco_kinship_streaming(
 
     # Determine memory strategy: single-pass vs multi-pass batching.
     # When valid_indices is provided, matrices are n_valid x n_valid (not
-    # n_samples); the chromosomes-per-pass sizing lives in _decide_loco_passes.
+    # n_samples); the chromosomes-per-pass sizing lives in plan_loco_passes.
     n_mat = len(valid_indices) if valid_indices is not None else n_samples
     available_gb = memory.available_ram_gb()
-    plan = _decide_loco_passes(
+    plan = plan_loco_passes(
         n_mat,
         n_samples,
         n_chr_with_snps,
         chunk_size,
         available_gb,
         max_batch_chrs=_max_batch_chrs,
+        budget_gb=mem_budget,
+        consumer_peak_gb=consumer_peak_gb,
     )
 
     if mem_budget is not None:
@@ -533,7 +549,7 @@ def compute_loco_kinship_streaming(
 
     if check_memory:
         memory.require(
-            plan.min_required_gb,
+            plan.required_gb,
             available_gb,
             f"LOCO kinship (S_full + K_loco_buf + one S_chr + eigendecomp "
             f"{plan.eigendecomp_min_gb:.1f}GB)",

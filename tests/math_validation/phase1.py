@@ -12,7 +12,6 @@ import numpy as np
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.likelihood import compute_null_model_mle
-from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.stats import AssocResult
 from jamma.lmm.uab import batch_compute_uab_numpy, compute_uab_invariant_soa
 from jamma.validation.compare import _classify_lambdas, compare_assoc_results
@@ -118,7 +117,7 @@ def _production_results(data, backend) -> dict[int, dict[str, np.ndarray | None]
                 50,
                 20,
                 1,
-                build_pab_table_for_c(data.n_cvt)._asdict(),
+                data.n_cvt,
                 lmm_mode=mode,
                 **optional,
             )

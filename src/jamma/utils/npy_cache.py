@@ -113,7 +113,7 @@ def read_array_artifact(
     writes the sidecar for next time. ``check`` runs on every branch before
     the array is returned or cached, so a sidecar never holds an array the
     caller would reject; it may return a promoted view of its input.
-    ``mmap_mode`` applies to sidecar loads only.
+    ``mmap_mode`` applies to direct binary and sidecar loads.
 
     Raises:
         ValueError: If the text cannot be parsed, is empty, or ``check``
@@ -122,7 +122,7 @@ def read_array_artifact(
     path = Path(path)
     if path.suffix == ".npy":
         logger.info(f"Reading {what} from {path}")
-        return check(np.load(path), path)
+        return check(np.load(path, mmap_mode=mmap_mode), path)
 
     npy_path = path.with_suffix(".npy")
     if npy_cache_valid(path, npy_path):

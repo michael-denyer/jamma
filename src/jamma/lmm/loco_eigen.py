@@ -14,18 +14,27 @@ from __future__ import annotations
 
 import gc
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from loguru import logger
 
+from jamma import jlinalg
+from jamma.core import memory
+from jamma.core.eigen_plan import (
+    EigenDriverPlan,
+    forced_numpy_fallback,
+    plan_eigen_driver,
+    square_matrix_gb,
+)
 from jamma.kinship import (
     SnpStatsCache,
     compute_loco_kinship_streaming,
     write_kinship_matrix,
 )
+from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK
 from jamma.lmm.eigen import center_kinship, eigendecompose_kinship
 from jamma.lmm.eigen_cache import (
     EigenCacheComponents,
@@ -39,7 +48,7 @@ from jamma.lmm.eigen_cache import (
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_generation_members
 from jamma.lmm.loco_config import LocoConfig
 
-EigenPairs = Iterator[tuple[str, np.ndarray, np.ndarray]]
+EigenPairs = Generator[tuple[str, np.ndarray, np.ndarray], None, None]
 """``(chr_name, eigenvalues, U)`` per chromosome, in ``chr_names`` order."""
 
 
@@ -87,6 +96,7 @@ def eigen_pairs_for(
     check_memory: bool,
     show_progress: bool,
     mem_budget: float | None = None,
+    association_peak_gb: float = 0.0,
 ) -> EigenPairSource:
     """Choose the eigenpair source for one LOCO run.
 
@@ -150,8 +160,23 @@ def eigen_pairs_for(
         if all_samples_valid or loco.kinship_output_dir is not None
         else np.where(valid_mask)[0]
     )
+    n_mat = len(valid_mask) if kinship_valid_indices is None else n_valid
+    retained_gb = (
+        3 * square_matrix_gb(n_mat) + len(valid_mask) * DEFAULT_STATS_CHUNK * 8 / 1e9
+    )
+    available_gb = memory.available_ram_gb()
+    eigen_plan = plan_eigen_driver(
+        n_valid,
+        max(0.0, available_gb - retained_gb),
+        has_dsyevd=bool(jlinalg.blas_has_dsyevd),
+        has_dsyevr=bool(jlinalg.blas_has_dsyevr),
+        no_vendor=forced_numpy_fallback(),
+        inplace_eligible=True,
+        budget_gb=None if mem_budget is None else max(0.0, mem_budget - retained_gb),
+    )
     stream = compute_loco_kinship_streaming(
         bed_path,
+        chunk_size=DEFAULT_STATS_CHUNK,
         maf_threshold=maf_threshold,
         miss_threshold=miss_threshold,
         check_memory=check_memory,
@@ -160,6 +185,7 @@ def eigen_pairs_for(
         valid_indices=kinship_valid_indices,
         filter_sample_indices=None if all_samples_valid else np.where(valid_mask)[0],
         mem_budget=mem_budget,
+        consumer_peak_gb=max(eigen_plan.required_gb, association_peak_gb),
     )
     pairs = _computed_eigen_pairs(
         stream,
@@ -173,6 +199,8 @@ def eigen_pairs_for(
         show_progress=show_progress,
         loco=loco,
         cache_write=cache_write,
+        eigen_plan=eigen_plan,
+        mem_budget=mem_budget,
     )
     return EigenPairSource(pairs, snp_stats=stream.snp_stats)
 
@@ -328,6 +356,7 @@ def _cached_eigen_pairs(
         except (ValueError, FileNotFoundError) as e:
             raise type(e)(f"LOCO eigen cache for chromosome {chr_name}: {e}") from e
         yield chr_name, eigenvalues, U
+        del eigenvalues, U
 
 
 def _computed_eigen_pairs(
@@ -343,6 +372,8 @@ def _computed_eigen_pairs(
     show_progress: bool,
     loco: LocoConfig,
     cache_write: _EigenCacheWrite | None,
+    eigen_plan: EigenDriverPlan,
+    mem_budget: float | None,
 ) -> EigenPairs:
     """Yield per-chromosome eigenpairs by eigendecomposing streamed LOCO kinship.
 
@@ -366,7 +397,9 @@ def _computed_eigen_pairs(
                 f"Cannot create eigen cache directory {cache_write.eigen_dir}: {e}"
             ) from e
 
-    for chr_idx, (chr_name, K_loco) in enumerate(loco_iter):
+    chr_idx = -1
+    for chr_name, K_loco in loco_iter:
+        chr_idx += 1
         if show_progress:
             logger.info(
                 f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
@@ -393,7 +426,12 @@ def _computed_eigen_pairs(
             gc.collect()
 
         center_kinship(K_loco_valid)
-        eigenvalues, U = eigendecompose_kinship(K_loco_valid, check_memory=check_memory)
+        eigenvalues, U = eigendecompose_kinship(
+            K_loco_valid,
+            check_memory=check_memory,
+            mem_budget=mem_budget,
+            eigen_plan=eigen_plan,
+        )
         del K_loco_valid
         gc.collect()
 
@@ -409,6 +447,7 @@ def _computed_eigen_pairs(
             artifacts[chr_name] = {"eigenD": d_path.name, "eigenU": u_path.name}
 
         yield chr_name, eigenvalues, U
+        del eigenvalues, U
 
     if cache_write is not None:
         write_eigen_cache_manifest(

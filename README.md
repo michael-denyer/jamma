@@ -16,7 +16,7 @@
 
 - **Drop-in GEMMA replacement**: Same CLI flags, same file formats, same results. Change one word in your pipeline.
 - **Numerical equivalence**: Validated against GEMMA -- 100% significance agreement, 100% effect direction agreement
-- **Fast**: Up to 43x faster than GEMMA 0.98.5 (LOCO mode); 16-31x on single-pass LMM. Against a GEMMA built with Apple Accelerate rather than OpenBLAS, roughly 25x and 9.7-15.2x
+- **Fast**: Native C kernels accelerate association testing. See the [measured backend comparison](#performance) for timings against NumPy and GEMMA 0.98.5.
 - **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
 - **Cross-platform**: Runs on Linux, macOS, and Windows with NumPy and vendor BLAS
 - **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
@@ -162,18 +162,21 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 ## Performance
 
 JAMMA on mouse_hs1940 (1,940 samples x 12,226 SNPs),
-Apple M5 Pro (18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best of 3 wall-clock
-runs of `scripts/bench_all_backends.py`, measured 2026-09-05 (LOCO retains its
+Apple M5 Pro (18 cores), Accelerate-ILP64, GEMMA 0.98.5. One wall-clock run
+per operation with `scripts/bench_all_backends.py`, measured 2026-09-08 (LOCO retains its
 2026-09-02 measurement). GEMMA timings include the CLI command; JAMMA batch
 timings start with genotypes loaded. Association runs use precomputed kinship.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.3s | 275ms | 275ms | -- | 1.0x | 3.9x | 4.5x |
-| LMM Wald (`-lmm 1`) | 7.4s | 4.4s | 8.5s | 364ms | 515ms | 23.3x | 20.4x | 12.2x |
-| LMM All (`-lmm 4`) | 13.7s | 7.8s | 12.3s | 388ms | 509ms | 31.7x | 35.3x | 20.2x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.7s | 12.1s | 19.4s | 840ms | 951ms | 23.1x | 33.0x | 14.4x |
+| Kinship (`-gk 1`) | 1.9s | 1.2s | 198ms | 198ms | -- | 1.0x | 9.5x | 6.2x |
+| LMM Wald (`-lmm 1`) | 14.5s | 4.3s | 5.1s | 304ms | 428ms | 16.7x | 47.6x | 14.2x |
+| LMM All (`-lmm 4`) | 13.9s | 7.5s | 7.6s | 312ms | 427ms | 24.3x | 44.6x | 24.1x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.4s | 12.5s | 16.2s | 834ms | 919ms | 19.4x | 32.8x | 15.0x |
 | LOCO Wald (`-loco`) | 2m31s | 1m20s | -- | **3.3s** | -- | -- | **~46x** | **~24x** |
+
+Timings vary substantially between runs; these ratios describe this measurement
+and should not be read as a version-over-version speedup.
 
 LOCO includes 19 per-chromosome eigendecompositions. Its historical timing
 predates the REML score refinement; it has not been remeasured for this change.

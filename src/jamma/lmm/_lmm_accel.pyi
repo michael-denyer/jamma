@@ -38,8 +38,7 @@ def compute_lmm_chunk_ncvt1_c(
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
 
-# One general (n_cvt >= 2) workspace type, for any lmm_mode. pab_table is
-# the dict PabCTable._asdict() returns.
+# One general workspace type, constructing its packed table from n_cvt.
 GeneralWorkspace = NewType("GeneralWorkspace", object)
 
 def create_workspace_general_c(
@@ -53,7 +52,7 @@ def create_workspace_general_c(
     n_grid: int,
     n_refine: int,
     n_threads: int,
-    pab_table: dict,
+    n_cvt: int,
     *,
     lmm_mode: int,
     hi_eval_null: npt.NDArray[np.float64] | None = None,

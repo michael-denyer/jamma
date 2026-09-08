@@ -44,6 +44,43 @@ class WaldResult(TypedDict):
     pwalds: np.ndarray
 
 
+def compute_wald_split_numpy(
+    eigenvalues: np.ndarray,
+    uab_varying_soa: np.ndarray,
+    uab_invariant_soa: np.ndarray,
+    iab_scalars: tuple[float, float, float, float],
+    n_samples: int,
+    *,
+    l_min: float,
+    l_max: float,
+    n_grid: int,
+    n_refine: int,
+) -> WaldResult:
+    """Intercept-only Wald from three varying rows and shared invariant products."""
+    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = iab_scalars
+    lambdas, logls, Pab_final = golden_section_optimize_lambda_split_ncvt1_numpy(
+        eigenvalues,
+        uab_varying_soa,
+        uab_invariant_soa,
+        iab_s_ww,
+        iab_s_wy,
+        iab_s_yy,
+        iab_logdet,
+        l_min=l_min,
+        l_max=l_max,
+        n_grid=n_grid,
+        n_iter=n_refine,
+    )
+    betas, ses, pwalds = batch_calc_wald_stats_from_pab_numpy(1, Pab_final, n_samples)
+    return {
+        "lambdas": lambdas,
+        "logls": logls,
+        "betas": betas,
+        "ses": ses,
+        "pwalds": pwalds,
+    }
+
+
 def _compute_wald_numpy(
     n_cvt: int,
     eigenvalues: np.ndarray,
@@ -92,18 +129,16 @@ def _compute_wald_numpy(
         iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
             uab_invariant_soa
         )
-        lambdas, logls, Pab_final = golden_section_optimize_lambda_split_ncvt1_numpy(
+        return compute_wald_split_numpy(
             eigenvalues,
             uab_varying_soa,
             uab_invariant_soa,
-            iab_s_ww,
-            iab_s_wy,
-            iab_s_yy,
-            iab_logdet,
+            (iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet),
+            n_samples,
             l_min=l_min,
             l_max=l_max,
             n_grid=n_grid,
-            n_iter=n_refine,
+            n_refine=n_refine,
         )
     else:
         # Generic Python path for n_cvt > 1

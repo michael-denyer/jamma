@@ -9,7 +9,7 @@ import numpy as np
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import WaldResult, _compute_wald_numpy
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
-from jamma.lmm.pab import build_pab_table_for_c, classify_uab_columns
+from jamma.lmm.pab import classify_uab_columns
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 
@@ -92,7 +92,6 @@ def _prepare_fused_general_data(data: dict) -> dict:
             Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
         ),
         "utg_t": np.ascontiguousarray(data["UtG"].T),
-        "pab_c": build_pab_table_for_c(n_cvt),
     }
 
 
@@ -103,7 +102,7 @@ def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
     Accepts either a raw _build_synthetic_covariate_data dict or one already
     through _prepare_fused_general_data.
     """
-    if "pab_c" not in data:
+    if "uab_inv_soa" not in data:
         data = _prepare_fused_general_data(data)
     return accel.require().create_workspace_general_c(
         data["eigenvalues"],
@@ -116,7 +115,7 @@ def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
         50,
         20,
         n_threads,
-        data["pab_c"]._asdict(),
+        data["n_cvt"],
         lmm_mode=1,
     )
 
@@ -127,7 +126,7 @@ def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
     *data* must carry Hi_eval_null and logl_H0, so it has to have been through
     _make_general_score_lrt_data.
     """
-    if "pab_c" not in data:
+    if "uab_inv_soa" not in data:
         data = _prepare_fused_general_data(data)
     return accel.require().create_workspace_general_c(
         data["eigenvalues"],
@@ -140,7 +139,7 @@ def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
         50,
         20,
         n_threads,
-        data["pab_c"]._asdict(),
+        data["n_cvt"],
         lmm_mode=4,
         hi_eval_null=data["Hi_eval_null"],
         logl_H0=data["logl_H0"],
@@ -175,7 +174,7 @@ def _numpy_general_lrt(data: dict) -> dict:
 
 def _fused_general_wald(data: dict, n_threads: int = 1) -> WaldResult:
     """Run the live fused-general Wald kernel over *data*."""
-    if "pab_c" not in data:
+    if "uab_inv_soa" not in data:
         data = _prepare_fused_general_data(data)
     ws = _fused_general_workspace(data, n_threads)
     return accel.require().compute_lmm_chunk_fused_general_c(

@@ -366,7 +366,8 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise KeyboardInterrupt()
 
-        assert output_path.exists(), "Partial file should be retained on interrupt"
+        assert not output_path.exists()
+        (output_path,) = tmp_path.glob("*.partial.*")
         content = output_path.read_text()
         assert "rs12345" in content
 
@@ -381,7 +382,8 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise SystemExit(1)
 
-        assert output_path.exists(), "Partial file should be retained on SystemExit"
+        assert not output_path.exists()
+        (output_path,) = tmp_path.glob("*.partial.*")
         content = output_path.read_text()
         assert "rs12345" in content
 
@@ -525,7 +527,8 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise MemoryError("OOM at 90% completion")
 
-        assert output_path.exists(), "Partial file should be retained on MemoryError"
+        assert not output_path.exists()
+        (output_path,) = tmp_path.glob("*.partial.*")
         content = output_path.read_text()
         assert "rs12345" in content
 
@@ -540,7 +543,8 @@ class TestIncrementalAssocWriter:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise GeneratorExit()
 
-        assert output_path.exists(), "Partial file should be retained on GeneratorExit"
+        assert not output_path.exists()
+        (output_path,) = tmp_path.glob("*.partial.*")
         content = output_path.read_text()
         assert "rs12345" in content
 

@@ -190,6 +190,7 @@ def plan_eigen_driver(
     has_dsyevr: bool,
     no_vendor: bool,
     inplace_eligible: bool,
+    budget_gb: float | None = None,
 ) -> EigenDriverPlan:
     """Select the eigendecomposition driver from memory and capability flags.
 
@@ -258,7 +259,10 @@ def plan_eigen_driver(
 
     from jamma.core.memory import fits  # deferred: memory imports the sizes above
 
-    if not fits(required_gb, available_gb) and has_dsyevr:
+    if has_dsyevr and (
+        not fits(required_gb, available_gb)
+        or (budget_gb is not None and required_gb > budget_gb)
+    ):
         pre_fallback_gb = required_gb
         required_gb = dsyevr_peak
         use_inplace = False

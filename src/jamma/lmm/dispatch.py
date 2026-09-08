@@ -26,13 +26,14 @@ class DispatchPath(Enum):
     """
 
     NUMPY_FALLBACK = "numpy_fallback"  # not split: pure-NumPy full-Uab path
+    NUMPY_WALD = "numpy_wald"  # intercept-only Wald, split products
     FUSED = "fused"  # n_cvt==1 fused Uab, any lmm_mode
     FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab, any lmm_mode
 
     @property
     def use_split(self) -> bool:
         """False only for the NumPy fallback, which takes the full-Uab path."""
-        return self is not DispatchPath.NUMPY_FALLBACK
+        return self in (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL)
 
     @property
     def needs_null_w(self) -> bool:
@@ -43,16 +44,6 @@ class DispatchPath(Enum):
         so the chunk runner materialises it once for either.
         """
         return self is DispatchPath.FUSED
-
-    @property
-    def feeds_raw_utg(self) -> bool:
-        """True when chunk preparation hands raw ``utg_t`` straight to the kernel.
-
-        Every C path (the fused family and the workspace Score/LRT variants)
-        consumes ``utg_t`` directly. Only the negation, the NumPy fallback,
-        builds a full Uab batch instead.
-        """
-        return self is not DispatchPath.NUMPY_FALLBACK
 
 
 def select_dispatch_path(
@@ -112,7 +103,11 @@ def _resolve_dispatch_path(n_cvt: int, lmm_mode: LmmMode, accel: bool) -> Dispat
         )
 
     if not accel:
-        return DispatchPath.NUMPY_FALLBACK
+        return (
+            DispatchPath.NUMPY_WALD
+            if n_cvt == lmm_mode == 1
+            else DispatchPath.NUMPY_FALLBACK
+        )
 
     # n_cvt > MAX_C_N_CVT resolves to a C path here and is rejected by the
     # kernel itself, which raises "n_cvt must be 1..100". There used to be a

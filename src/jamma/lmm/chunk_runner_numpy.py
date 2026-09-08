@@ -46,7 +46,6 @@ from jamma.lmm.results import (
 )
 from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import ChunkRunStats, LmmConfig
-from jamma.lmm.uab import batch_compute_uab_numpy
 from jamma.lmm.workspace import WorkspaceSpec
 
 
@@ -121,13 +120,6 @@ class _PhenotypeConsumer:
     n_at_lmin: int = 0
     n_at_lmax: int = 0
 
-    def kernel_input(self, utg_t: np.ndarray) -> np.ndarray:
-        if self.inv.dispatch.feeds_raw_utg:
-            return utg_t
-        return batch_compute_uab_numpy(
-            self.inv.n_cvt, self.inv.UtW, self.inv.Uty, utg_t
-        )
-
     def compute_and_write(self, prepared: _PreparedLmmChunk, omp_threads: int) -> None:
         chunk_range = prepared.filtered_range
         filtered_start = chunk_range.filtered_start
@@ -139,9 +131,7 @@ class _PhenotypeConsumer:
             )
 
         t_compute_start = time.perf_counter()
-        cr = self.kernel.compute_chunk(
-            self.kernel_input(prepared.data), omp_threads, self.processed
-        )
+        cr = self.kernel.compute_chunk(prepared.data, omp_threads, self.processed)
         self.compute_s += time.perf_counter() - t_compute_start
 
         t_write_start = time.perf_counter()

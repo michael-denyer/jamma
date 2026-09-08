@@ -75,11 +75,13 @@ def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     so the rotation output is the only allocation. The NumPy fallback
     materialises the whole Uab table.
     """
-    if dispatch.feeds_raw_utg:
+    if dispatch.use_split:
         # jlinalg.dgemm(chunk, U, transa="T") writes C-contiguous utg_t
         # directly: one column per SNP, no intermediate.
         return n_samples * 8
 
+    if dispatch is DispatchPath.NUMPY_WALD:
+        return n_samples * 3 * 8
     return n_samples * n_index(n_cvt) * 8
 
 
@@ -103,8 +105,10 @@ def lmm_extra_bytes_per_snp(
             every current dispatch path's pricing, kept so a future
             per-buffer-scaled path does not have to change this signature.
     """
-    if dispatch.feeds_raw_utg:
+    if dispatch.use_split:
         return 0
+    if dispatch is DispatchPath.NUMPY_WALD:
+        return n_samples * 3 * 8
     # NUMPY_FALLBACK never pipelines (dispatch.use_split is False), so
     # n_buffers is always 1 here; the full Uab+Iab batch is priced once.
     return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8

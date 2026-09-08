@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 /* Bump when function signatures or array layout expectations change. */
-#define ABI_VERSION 20
+#define ABI_VERSION 21
 
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
@@ -89,8 +89,7 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
         if (lmm_mode == 3 || lmm_mode == 4)
             persistent += aligned_double_bytes((size_t)n_samples) +
                           inv * sizeof(double);
-        persistent += pab_transport_peak_bytes(n_cvt);
-        persistent += pab_python_conservative_bytes(n_cvt);
+        persistent += pab_table_bytes(n_cvt);
         per_thread = (general_scratch_doubles(n_samples, (int)rows) +
                       general_pab_doubles((int)rows, (int)index) + index) *
                      sizeof(double);
@@ -101,8 +100,8 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
             per_thread += general_lrt_thread_doubles(n_samples, (int)index) *
                           sizeof(double);
     }
-    /* Covers PyArray headers, capsules and allocator metadata. Pab transport
-     * arrays, including the temporary raw entry copy, are counted above. */
+    /* Covers PyArray headers, capsules and allocator metadata. Native Pab
+     * arrays are counted above. */
     persistent += 1024 * 1024;
     return Py_BuildValue("(KKKK)", (unsigned long long)persistent,
                          (unsigned long long)per_thread,
@@ -210,7 +209,7 @@ static PyMethodDef methods[] = {
         METH_VARARGS | METH_KEYWORDS,
         "Create the per-run general (n_cvt >= 2) workspace for any lmm_mode.\n"
         "\n"
-        "Takes the Pab table as the dict PabCTable._asdict() returns, and\n"
+        "Constructs the canonical Pab table from n_cvt, and\n"
         "stores UtW (transposed to column-major), Uty and the varying-column\n"
         "map for on-the-fly Uab computation from UtG_T. Modes 3 and 4 also\n"
         "take hi_eval_null; modes 2 and 4 also take logl_H0.\n"

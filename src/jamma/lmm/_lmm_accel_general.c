@@ -24,9 +24,8 @@
  * Adds the lmm_workspace_general_t workspace type, which accepts n_cvt as a
  * parameter. The n_cvt=1 code path is separate and unchanged.
  *
- * Key design: Python builds the recursion table (via build_pab_table_for_c)
- * and passes flat int32 arrays. C code just walks the table — no index
- * computation in C.
+ * The workspace constructs its canonical recursion table once from n_cvt.
+ * Per-SNP kernels walk that immutable table.
  *
  * Memory: Large per-SNP Pab buffers (pab_scratch, row0_scratch) are heap-
  * allocated per-thread in workspace structs or before parallel regions.
@@ -354,11 +353,11 @@ static int init_fused_general_workspace(
  *       UtW,              # (n_samples, n_cvt) float64 — row-major
  *       Uty,              # (n_samples,) float64
  *       n_samples, l_min, l_max, n_grid, n_refine, n_threads,
- *       pab_table,        # dict, PabCTable._asdict()
+ *       n_cvt,            # number of covariates, including intercept
  *       *, lmm_mode, hi_eval_null=None, logl_H0=None,
  *   ) -> PyCapsule
  *
- * n_cvt and every index array come from pab_table. lmm_mode is 1 (Wald),
+ * Every index array is derived from n_cvt. lmm_mode is 1 (Wald),
  * 2 (LRT), 3 (Score) or 4 (all three); hi_eval_null is required by 3 and 4,
  * logl_H0 by 2 and 4, matching create_workspace_ncvt1_c's mode contract.
  * ------------------------------------------------------------------------- */
@@ -368,20 +367,20 @@ PyObject *create_workspace_general_c_py(
     static const char *kwlist[] = {
         "eigenvalues", "uab_invariant", "UtW", "Uty",
         "n_samples", "l_min", "l_max", "n_grid", "n_refine", "n_threads",
-        "pab_table", "lmm_mode", "hi_eval_null", "logl_H0",
+        "n_cvt", "lmm_mode", "hi_eval_null", "logl_H0",
         NULL
     };
 
-    PyObject *eigenvalues_obj, *uab_inv_obj, *UtW_obj, *Uty_obj, *pab_table;
+    PyObject *eigenvalues_obj, *uab_inv_obj, *UtW_obj, *Uty_obj;
     PyObject *hi_eval_null_obj = NULL, *logl_H0_obj = NULL;
-    int n_samples, n_grid, n_refine, n_threads, lmm_mode = 0;
+    int n_samples, n_grid, n_refine, n_threads, n_cvt, lmm_mode = 0;
     double l_min, l_max, logl_H0 = 0.0;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOOOiddiiiO|$iOO", (char **)kwlist,
+            args, kwargs, "OOOOiddiiii|$iOO", (char **)kwlist,
             &eigenvalues_obj, &uab_inv_obj, &UtW_obj, &Uty_obj,
             &n_samples, &l_min, &l_max, &n_grid, &n_refine, &n_threads,
-            &pab_table, &lmm_mode, &hi_eval_null_obj, &logl_H0_obj)) {
+            &n_cvt, &lmm_mode, &hi_eval_null_obj, &logl_H0_obj)) {
         return NULL;
     }
     if (lmm_mode < 1 || lmm_mode > 4) {
@@ -410,10 +409,6 @@ PyObject *create_workspace_general_c_py(
         if (logl_H0 == -1.0 && PyErr_Occurred()) return NULL;
         if (validate_logl_H0(logl_H0) < 0) return NULL;
     }
-    if (!PyDict_Check(pab_table)) {
-        PyErr_SetString(PyExc_TypeError, "pab_table must be a dict");
-        return NULL;
-    }
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
 
@@ -426,9 +421,8 @@ PyObject *create_workspace_general_c_py(
     ws = (lmm_workspace_general_t *)calloc(1, sizeof(lmm_workspace_general_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
     ws->mode = lmm_mode;
-    if (parse_pab_table_from_dict(pab_table, &ws->table, n_samples) < 0)
+    if (build_pab_table(n_cvt, &ws->table, n_samples) < 0)
         goto err_ws;
-    int n_cvt = ws->table.n_cvt;
 
     eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
     if (!eigenvalues_arr) goto err_ws;

@@ -36,6 +36,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bit-identical to `lmm_extra_bytes_per_snp` on that path, so it is deleted;
   `n_cvt` fed only that formula.
 
+- **`MemoryPlan` is one figure per phase and `price(eigen)` owns the whole
+  quote.** `ExecutableAssociationPlan.price(eigen=...)` returns
+  `MemoryPlan(total_peak_gb, compute_chunk_size, kinship_gb, eigen_gb,
+  statistics_gb, association_gb)` in batch, streaming, and LOCO mode alike;
+  the stringly typed `components_gb` tuple is gone and `eigen` is a required
+  keyword (`None` means no decomposition runs). The plan carries
+  `kinship: KinshipShape | None` (`n_samples`, `loaded`), resolved once in
+  `resolve_analysis_plan` with the rule the kinship loader used to respell
+  at runtime, and `None` when the eigenpairs are read from files.
+  `memory_preflight(analysis, *, check_memory)` takes the resolved
+  `AnalysisPlan`, plans the driver, prices, logs, gates, and returns the
+  driver; it no longer adds a kinship figure of its own on top of the quote.
+  The streaming statistics pass (U live, one `DEFAULT_STATS_CHUNK` block
+  over every input sample) is priced as its own phase, which is what kept a
+  provided kinship's streaming quote at the old figure; on the NumPy
+  fallback that old figure also counted the dsyrk scratch an accumulation
+  the run never performs would hold, and the new one does not. Chunk
+  narrowing, the phenotype group bound, the `auto` batch figure, the batch
+  runner's gate, and the LOCO consumer figure read `association_gb`, the
+  only phase a chunk width moves.
+
+- **The eigen driver is planned once per run.**
+  `lmm.eigen.plan_eigen_driver_for_machine` is the one reader of the
+  `jlinalg` vendor flags and the forced-numpy override;
+  `pipeline_memory._eigen_driver_plan` and its unreachable `ImportError`
+  guard are deleted. `run_lmm_loco` takes `eigen_plan` and
+  `loco_eigen.eigen_pairs_for` requires it: the pipeline passes the
+  preflight's plan through instead of discarding it, and
+  `loco_eigen.plan_loco_eigen_driver` chooses it against the LOCO retained
+  set for the preflight and the standalone API alike, so a LOCO run logs
+  the driver it executes.
+
 ### Fixed
 
 - **The batch-mode quote for the C paths no longer charges a Uab+Iab batch the

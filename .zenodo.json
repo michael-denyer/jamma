@@ -1,0 +1,14 @@
+{
+  "title": "JAMMA: Highly-Accelerated Multi-method Mixed-Model Association for large-scale GWAS",
+  "upload_type": "software",
+  "license": "GPL-3.0-or-later",
+  "creators": [
+    {
+      "name": "Denyer, Michael",
+      "orcid": "0000-0001-9667-5683"
+    }
+  ],
+  "keywords": ["gwas", "linear-mixed-model", "statistical-genetics", "gemma"],
+  "description": "A Python and C reimplementation of GEMMA for linear mixed-model genome-wide association studies. Keeps GEMMA's command-line flags and file formats, is validated against GEMMA for numerical equivalence, and runs 16-43x faster on large cohorts.",
+  "access_right": "open"
+}

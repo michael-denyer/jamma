@@ -17,6 +17,13 @@ is always priced under the fallback so the digest is the same on every
 machine, whichever backend it built.
 
 Regenerate the digest with ``uv run python tests/test_memory_ledger_digest.py``.
+
+Digest history. ``c8a00ab6``: the LOCO rows lost two columns,
+``min_required_gb`` and ``eigendecomp_min_gb``, when ``plan_loco_passes``
+stopped reporting them; the row table was dumped before and after and
+compared cell by cell: 2438 rows, 1026 LOCO rows each 12 columns before
+and 10 after, 0 surviving cells changed. The single-pass column survives
+as the ``required_gb`` of the plan an unlimited machine makes.
 """
 
 from __future__ import annotations
@@ -30,20 +37,19 @@ from unittest.mock import patch
 import pytest
 
 from jamma.core import memory
-from jamma.core.eigen_plan import plan_eigen_driver
+from jamma.core.eigen_plan import dsyevr_peak_gb, plan_eigen_driver
 from jamma.core.memory import (
     estimate_lmm_memory,
     estimate_streaming_memory,
     margin_gb,
 )
-from jamma.kinship.loco import plan_loco_passes
+from jamma.kinship.loco import loco_retained_set, plan_loco_passes
 from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
 from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
 
-# Updated for LOCO consumer reservation in both single-pass and batched plans.
-EXPECTED_DIGEST = "b2e9b37d5fff95415fedbc02a5fd8183ee12b3bf5d1ff6a0c3b4cceb7f271e57"
+EXPECTED_DIGEST = "c8a00ab6ab0e0f24d3d0e695acbe26e4aacbf946a07cef39f4b0790e45b7e400"
 EXPECTED_ROWS = 2438
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
@@ -236,14 +242,13 @@ def _loco_rows() -> list[list]:
         for n_samples in (n_mat, n_mat + 7):
             rows.append(_loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch))
     for n_mat, n_chr in itertools.product(N_SAMPLES, N_CHR):
-        probe = plan_loco_passes(n_mat, n_mat, n_chr, 10_000, 1e12, max_batch_chrs=None)
         rows.append(
             _loco_row(
                 n_mat,
                 n_mat,
                 n_chr,
                 10_000,
-                _tie(probe.single_pass_gb),
+                _tie(_single_pass_gb(n_mat, n_mat, n_chr, 10_000)),
                 None,
                 tag="loco:tie",
             )
@@ -251,10 +256,24 @@ def _loco_rows() -> list[list]:
     return rows
 
 
-def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
-    plan = plan_loco_passes(
-        n_mat, n_samples, n_chr, chunk, available, max_batch_chrs=max_batch
+def _loco_plan(n_mat, n_samples, n_chr, chunk, available, max_batch):
+    return plan_loco_passes(
+        loco_retained_set(n_mat, n_samples, chunk),
+        dsyevr_peak_gb(n_mat),
+        n_chr,
+        available,
+        budget_gb=None,
+        max_batch_chrs=max_batch,
     )
+
+
+def _single_pass_gb(n_mat, n_samples, n_chr, chunk):
+    """Peak of the plan an unlimited machine makes: one pass over every chromosome."""
+    return _loco_plan(n_mat, n_samples, n_chr, chunk, 1e12, None).required_gb
+
+
+def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
+    plan = _loco_plan(n_mat, n_samples, n_chr, chunk, available, max_batch)
     return [
         tag,
         n_mat,
@@ -265,9 +284,7 @@ def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
         max_batch,
         plan.single_pass,
         plan.batch_size,
-        _f(plan.single_pass_gb),
-        _f(plan.min_required_gb),
-        _f(plan.eigendecomp_min_gb),
+        _f(_single_pass_gb(n_mat, n_samples, n_chr, chunk)),
     ]
 
 

@@ -63,17 +63,15 @@ def test_saved_full_sample_kinship_is_in_batch_preflight(monkeypatch):
 
 
 def test_loco_batch_selection_fits_user_budget():
-    from jamma.kinship.loco import plan_loco_passes
+    from jamma.kinship.loco import loco_retained_set, plan_loco_passes
 
     plan = plan_loco_passes(
-        10_000,
-        10_000,
+        loco_retained_set(10_000, 10_000, 10_000),
+        2.5,
         22,
-        10_000,
         256.0,
-        max_batch_chrs=None,
         budget_gb=8.0,
-        consumer_peak_gb=2.5,
+        max_batch_chrs=None,
     )
     assert 1 <= plan.batch_size < 22
     assert plan.required_gb <= 8.0
@@ -99,7 +97,7 @@ def test_impossible_loco_budget_fails_before_genotype_statistics():
     try:
         with pytest.raises(MemoryError, match="exceeds"):
             compute_loco_kinship_streaming(
-                LOCO.bfile, mem_budget=1e-8, show_progress=False
+                LOCO.bfile, mem_budget=1e-8, show_progress=False, consumer_gb=0.0
             )
     finally:
         sys.setprofile(old_profile)

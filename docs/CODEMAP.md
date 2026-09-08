@@ -218,7 +218,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from disk, mode-selected transform; single-passes centered mode when unfiltered, else shared `_stream_kinship_two_pass` | [stream.py:265](../src/jamma/kinship/stream.py#L265) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:352](../src/jamma/kinship/loco.py#L352) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:349](../src/jamma/kinship/loco.py#L349) |
 | 3a | `selected_chunks()`, `select_kinship_snps()`, `accumulate_kinship()` | Shared streaming/LOCO selection and rank-k updates; preserve BED chunk grouping and preprocess before selecting output rows | [accumulation.py](../src/jamma/kinship/accumulation.py) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L171) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |
@@ -304,7 +304,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:35](../src/jamma/lmm/results.py#L35) |
 | 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:174](../src/jamma/lmm/results.py#L174) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:160](../src/jamma/lmm/loco.py#L160) |
-| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:107](../src/jamma/lmm/loco_eigen.py#L107) |
+| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:110](../src/jamma/lmm/loco_eigen.py#L110) |
 
 ---
 

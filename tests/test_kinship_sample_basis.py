@@ -88,6 +88,7 @@ def test_early_rows_equal_full_loco_slices(
         show_progress=False,
         _max_batch_chrs=batch_chrs,
         filter_sample_indices=valid if filter_subset else None,
+        consumer_gb=0.0,
     )
     full = compute().materialize()
     subset = compute(valid_indices=valid).materialize()
@@ -142,6 +143,7 @@ def test_gk_filters_snps_on_phenotyped_samples(asymmetric_plink, tmp_path, loco)
             check_memory=False,
             show_progress=False,
             filter_sample_indices=valid,
+            consumer_gb=0.0,
         ).materialize()
         assert len(result.kinship_paths) == len(expected) == 3
         for chromosome, K in expected.items():

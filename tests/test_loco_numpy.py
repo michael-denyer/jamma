@@ -558,7 +558,7 @@ def test_loco_stream_carries_all_sample_snp_stats():
     from jamma.kinship import SnpStatsCache, compute_loco_kinship_streaming
 
     stream = compute_loco_kinship_streaming(
-        _LOCO_BFILE, check_memory=False, show_progress=False
+        _LOCO_BFILE, check_memory=False, show_progress=False, consumer_gb=0.0
     )
     # Available before iteration (PASS 1 is eager at construction time).
     assert isinstance(stream.snp_stats, SnpStatsCache)
@@ -580,11 +580,11 @@ def test_loco_stream_materialize_matches_iteration():
     live = {
         chr_name: K.copy()
         for chr_name, K in compute_loco_kinship_streaming(
-            _LOCO_BFILE, check_memory=False, show_progress=False
+            _LOCO_BFILE, check_memory=False, show_progress=False, consumer_gb=0.0
         )
     }
     materialized = compute_loco_kinship_streaming(
-        _LOCO_BFILE, check_memory=False, show_progress=False
+        _LOCO_BFILE, check_memory=False, show_progress=False, consumer_gb=0.0
     ).materialize()
 
     assert set(materialized) == set(live)
@@ -615,12 +615,14 @@ def test_loco_batch_size_n_chr_matches_batch_size_one_bit_for_bit():
         check_memory=False,
         show_progress=False,
         _max_batch_chrs=n_chr,
+        consumer_gb=0.0,
     ).materialize()
     many_batches = compute_loco_kinship_streaming(
         _LOCO_BFILE,
         check_memory=False,
         show_progress=False,
         _max_batch_chrs=1,
+        consumer_gb=0.0,
     ).materialize()
 
     assert set(one_batch) == set(many_batches) == {"1", "2", "3"}
@@ -649,6 +651,7 @@ def test_loco_kinship_streaming_mem_budget_reaches_the_gate():
             check_memory=True,
             show_progress=False,
             mem_budget=1e-6,
+            consumer_gb=0.0,
         )
 
 
@@ -675,6 +678,7 @@ def test_loco_numpy_valid_sample_subsetting():
         check_memory=False,
         show_progress=False,
         valid_indices=valid_indices,
+        consumer_gb=0.0,
     )
 
     # Kinship statistics retain the full population even when output rows differ.
@@ -694,21 +698,19 @@ def test_loco_numpy_valid_sample_subsetting():
 
 
 @pytest.mark.tier0
-def test_plan_loco_passes_reserves_eigendecomp_at_valid_size():
-    """Multi-pass batch sizing reserves eigendecomp memory at n_mat, not n_samples.
+def test_plan_loco_passes_reserves_the_consumer_the_caller_sized():
+    """The batch reserves exactly the consumer figure the caller passes.
 
-    Regression: the multi-pass branch sized its eigendecomp workspace reserve
-    with the full n_samples instead of n_mat (the valid-sample matrix size).
-    On datasets with invalid samples that over-reservation shrinks usable RAM
-    and can collapse batch_size to 1, forcing many redundant BED passes even
-    though the live K_loco matrices are only n_valid x n_valid.
+    With 30k of 100k samples filtered out, a DSYEVR reserve sized at n_mat
+    leaves room for several chromosomes per pass at 300 GB; the same reserve
+    sized at n_samples would collapse the batch to one chromosome. The
+    planner must not add a reserve of its own on top of the one it is given.
 
-    Pure sizing math, so we drive it at realistic scale (no genotype data) where
-    the n_mat-vs-n_samples reserve difference is material.
+    Pure sizing math, so we drive it at realistic scale (no genotype data).
     """
     from jamma.core.eigen_plan import dsyevr_peak_gb
     from jamma.core.memory import headroom_gb
-    from jamma.kinship.loco import plan_loco_passes
+    from jamma.kinship.loco import loco_retained_set, plan_loco_passes
 
     n_samples = 100_000
     n_mat = 70_000  # 30k samples filtered out
@@ -717,35 +719,70 @@ def test_plan_loco_passes_reserves_eigendecomp_at_valid_size():
     available_gb = 300.0  # forces multi-pass (single-pass needs ~950GB)
 
     plan = plan_loco_passes(
-        n_mat, n_samples, n_chr, chunk_size, available_gb, max_batch_chrs=None
+        loco_retained_set(n_mat, n_samples, chunk_size),
+        dsyevr_peak_gb(n_mat),
+        n_chr,
+        available_gb,
+        budget_gb=None,
+        max_batch_chrs=None,
     )
 
     assert not plan.single_pass, "scenario must exercise the multi-pass branch"
 
-    # Re-derive both candidate batch sizes from the same public peak estimator.
+    # Re-derive the batch size from the same public peak estimator.
     matrix_gb = n_mat**2 * 8 / 1e9
     chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
     budget = headroom_gb(available_gb) - 2 * matrix_gb - chunk_buffer_gb
+    expected_batch = max(1, int((budget - dsyevr_peak_gb(n_mat)) / matrix_gb))
 
-    fixed_batch = max(1, int((budget - dsyevr_peak_gb(n_mat)) / matrix_gb))
-    buggy_batch = max(1, int((budget - dsyevr_peak_gb(n_samples)) / matrix_gb))
-
-    # The scenario must genuinely distinguish the two reserves, and the fix must
-    # pick the (larger) n_mat-based batch size rather than collapsing to 1.
-    assert buggy_batch < fixed_batch, "test scenario does not exercise the bug"
-    assert buggy_batch == 1, "buggy n_samples reserve should collapse to batch_size=1"
-    assert plan.batch_size == fixed_batch
+    assert plan.batch_size == expected_batch
     assert plan.batch_size > 1
 
 
 @pytest.mark.tier0
 def test_plan_loco_passes_unfiltered_matches_full_size():
-    """With no sample filtering (n_mat == n_samples) the reserve fix is a no-op."""
-    from jamma.kinship.loco import plan_loco_passes
+    """An unfiltered 100k run at 300 GB is multi-pass with a batch of at least one."""
+    from jamma.core.eigen_plan import dsyevr_peak_gb
+    from jamma.kinship.loco import loco_retained_set, plan_loco_passes
 
-    plan = plan_loco_passes(100_000, 100_000, 22, 10_000, 300.0, max_batch_chrs=None)
+    plan = plan_loco_passes(
+        loco_retained_set(100_000, 100_000, 10_000),
+        dsyevr_peak_gb(100_000),
+        22,
+        300.0,
+        budget_gb=None,
+        max_batch_chrs=None,
+    )
     assert not plan.single_pass
     assert plan.batch_size >= 1
+
+
+@pytest.mark.tier0
+def test_plan_loco_passes_literal_batch_size():
+    """A 3 GB retained set, a 2 GB consumer, 22 chromosomes, 20 GB available.
+
+    One 1 GB matrix and no disk buffer make the retained set 3 GB. The pass
+    planner holds S_full, K_loco_buf, the buffer and the consumer as its fixed
+    cost, 2 + 0 + 2 = 4 GB, and each chromosome in the batch adds one 1 GB
+    S_chr. ``headroom_gb(20) = 20 / 1.1 = 18.18``, so the batch is
+    ``floor((18.18 - 4) / 1) = 14`` chromosomes at a peak of 4 + 14 = 18 GB;
+    ``fits(18, 20)`` holds (18 + 1.8 < 20), so the tie check leaves 14 alone.
+    22 chromosomes do not fit one pass, so the plan is multi-pass.
+    """
+    from jamma.kinship.loco import LocoRetainedSet, plan_loco_passes
+
+    plan = plan_loco_passes(
+        LocoRetainedSet(matrix_gb=1.0, chunk_buffer_gb=0.0),
+        2.0,
+        22,
+        20.0,
+        budget_gb=None,
+        max_batch_chrs=None,
+    )
+
+    assert plan.batch_size == 14
+    assert plan.single_pass is False
+    assert plan.required_gb == 18.0
 
 
 @pytest.mark.tier1

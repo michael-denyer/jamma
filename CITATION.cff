@@ -9,6 +9,14 @@ authors:
 version: 8.0.1
 date-released: 2026-09-08
 license: GPL-3.0-or-later
+doi: 10.5281/zenodo.22666119
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22666119
+    description: Concept DOI, resolves to the latest release
+  - type: doi
+    value: 10.5281/zenodo.22666120
+    description: Version DOI for v8.0.1
 repository-code: https://github.com/michael-denyer/jamma
 url: https://pypi.org/project/jamma/
 keywords:

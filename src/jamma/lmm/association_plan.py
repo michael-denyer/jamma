@@ -59,7 +59,6 @@ class MemoryPlan:
 
     total_peak_gb: float
     compute_chunk_size: int
-    eigen: EigenDriverPlan | None
     components_gb: tuple[tuple[str, float], ...] = ()
 
 
@@ -161,7 +160,6 @@ class ExecutableAssociationPlan:
             return MemoryPlan(
                 total_peak_gb=total_peak_gb,
                 compute_chunk_size=chunks.chunk_size,
-                eigen=eigen,
                 components_gb=(
                     ("kinship_and_statistics", ledger.kinship_gb + stats_subset_gb),
                     ("eigendecomposition", ledger.eigen_gb),
@@ -200,7 +198,6 @@ class ExecutableAssociationPlan:
         return MemoryPlan(
             total_peak_gb=batch_arrays_gb + input_subset_gb + workspace_gb,
             compute_chunk_size=chunks.chunk_size,
-            eigen=None,
             components_gb=(
                 ("batch_arrays", batch_arrays_gb),
                 ("input_row_subset", input_subset_gb),

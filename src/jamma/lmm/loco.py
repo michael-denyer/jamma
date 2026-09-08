@@ -327,9 +327,11 @@ def run_lmm_loco(
         first_chr_pve_se: float | None = None
 
         stack.callback(source.pairs.close)
-        chr_idx = -1
+        # No enumerate() here. CPython's enumerate holds its previous result
+        # tuple, and through it the previous U, until the generator yields the
+        # next item, so chromosome c's eigenvectors would stay live through
+        # c+1's eigendecomposition.
         for chr_name, eigenvalues_np, U in source.pairs:
-            chr_idx += 1
             chr_snp_indices = partitions[chr_name]
             logger.debug(
                 f"  chr {chr_name}: numpy backend, {len(chr_snp_indices)} SNPs"
@@ -357,7 +359,7 @@ def run_lmm_loco(
                 all_results.extend(chr_result.associations)
 
             if first_chr_pve is None and chr_pve is not None:
-                if chr_idx > 0:
+                if chr_name != unique_chrs[0]:
                     logger.info(
                         f"PVE computed from chromosome {chr_name} "
                         f"(earlier chromosomes had all SNPs filtered)"

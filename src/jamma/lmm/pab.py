@@ -1,8 +1,8 @@
 """Packed Uab/Pab/Iab representation and table construction.
 
-This module owns GEMMA's packed projection indexing and the C-friendly table
-derived from it. Likelihood evaluation consumes these values, but it does not
-own their shape.
+This module owns GEMMA's packed projection indexing, which means the ``(a, b)``
+pair order, the recursion levels ``calc_pab`` walks, and the logdet diagonal.
+Likelihood evaluation consumes these values, but it does not own their shape.
 """
 
 from __future__ import annotations
@@ -283,18 +283,3 @@ def calc_iab(
     n_samples = Uab.shape[0]
     ones = np.ones(n_samples, dtype=np.float64)
     return calc_pab(n_cvt, ones, Uab)
-
-
-@functools.lru_cache(maxsize=8)
-def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """Classify Uab columns as invariant or SNP-varying."""
-    table = build_index_table(n_cvt)
-    genotype_col = n_cvt
-    invariant = []
-    varying = []
-    for a_col, b_col, linear_idx in table.uab_pairs:
-        if genotype_col in (a_col, b_col):
-            varying.append(linear_idx)
-        else:
-            invariant.append(linear_idx)
-    return tuple(invariant), tuple(varying)

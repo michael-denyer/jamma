@@ -32,7 +32,11 @@ class DispatchPath(Enum):
 
     @property
     def use_split(self) -> bool:
-        """False only for the NumPy fallback, which takes the full-Uab path."""
+        """True for the two fused C paths, which pipeline raw ``utg_t``.
+
+        Both NumPy paths are False. The fallback materialises the full Uab
+        table, and ``NUMPY_WALD`` splits it in Python rather than in C.
+        """
         return self in (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL)
 
     @property

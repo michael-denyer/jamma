@@ -694,7 +694,7 @@ def test_loco_numpy_valid_sample_subsetting():
 
 
 @pytest.mark.tier0
-def testplan_loco_passes_reserves_eigendecomp_at_valid_size():
+def test_plan_loco_passes_reserves_eigendecomp_at_valid_size():
     """Multi-pass batch sizing reserves eigendecomp memory at n_mat, not n_samples.
 
     Regression: the multi-pass branch sized its eigendecomp workspace reserve
@@ -739,7 +739,7 @@ def testplan_loco_passes_reserves_eigendecomp_at_valid_size():
 
 
 @pytest.mark.tier0
-def testplan_loco_passes_unfiltered_matches_full_size():
+def test_plan_loco_passes_unfiltered_matches_full_size():
     """With no sample filtering (n_mat == n_samples) the reserve fix is a no-op."""
     from jamma.kinship.loco import plan_loco_passes
 

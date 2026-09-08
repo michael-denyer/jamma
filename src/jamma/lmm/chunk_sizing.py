@@ -71,9 +71,10 @@ def chunk_budget_bytes(mem_budget_gb: float | None, *, available_bytes: int) -> 
 def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     """Live float64 bytes one SNP occupies on *dispatch*'s buffers.
 
-    Two accountings. The fused family hands ``utg_t`` straight to its kernel,
-    so the rotation output is the only allocation. The NumPy fallback
-    materialises the whole Uab table.
+    Three accountings. The fused family hands ``utg_t`` straight to its kernel,
+    so the rotation output is the only allocation. ``NUMPY_WALD`` materialises
+    the three varying Uab rows. The NumPy fallback materialises the whole Uab
+    table.
     """
     if dispatch.use_split:
         # jlinalg.dgemm(chunk, U, transa="T") writes C-contiguous utg_t
@@ -93,8 +94,8 @@ def lmm_extra_bytes_per_snp(
     The preflight prices the association phase as rotation buffers plus this
     figure, so its estimate follows the same dispatch knowledge the sizer
     uses. Fused paths hold no per-SNP batch arrays (the C workspace forms
-    Uab on the fly); the NumPy fallback materialises the full Uab and Iab
-    batches.
+    Uab on the fly); ``NUMPY_WALD`` holds the three varying Uab rows; the
+    NumPy fallback materialises the full Uab and Iab batches.
 
     Args:
         n_samples: Number of samples.
@@ -109,8 +110,8 @@ def lmm_extra_bytes_per_snp(
         return 0
     if dispatch is DispatchPath.NUMPY_WALD:
         return n_samples * 3 * 8
-    # NUMPY_FALLBACK never pipelines (dispatch.use_split is False), so
-    # n_buffers is always 1 here; the full Uab+Iab batch is priced once.
+    # Only NUMPY_FALLBACK reaches here, and it never pipelines, so n_buffers
+    # is always 1 and the full Uab+Iab batch is priced once.
     return (n_samples + n_cvt + 2) * n_index(n_cvt) * 8
 
 

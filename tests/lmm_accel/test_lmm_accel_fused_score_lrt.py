@@ -52,11 +52,12 @@ def _fused_score_lrt_null_model(split_wald_data):
 
 
 @requires_c
-def test_abi_version_21():
-    """ABI 21 constructs the general workspace table from n_cvt."""
+def test_built_module_abi_matches_the_loader_expectation():
+    """The built module reports the ABI the loader admits, whatever the number."""
+    from jamma.lmm import accel
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 21
+    assert ABI_VERSION == accel._EXPECTED_ABI_VERSION
 
 
 def _make_runner_test_data(rng, n_samples=50, n_snps=20):

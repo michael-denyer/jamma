@@ -46,7 +46,6 @@ def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
 
     rng = np.random.default_rng(777)
     eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]
-    pab_table = n_cvt
 
     with pytest.raises(ValueError, match=r"n_cvt must be 1\.\.100, got 101"):
         create_workspace_general_c(
@@ -63,7 +62,7 @@ def test_ncvt_beyond_the_limit_is_rejected_by_the_kernel():
             50,
             20,
             1,
-            pab_table,
+            n_cvt,
             lmm_mode=1,
         )
 

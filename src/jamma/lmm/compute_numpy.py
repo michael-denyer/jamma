@@ -1,15 +1,15 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-The full-Uab helpers below (``_compute_wald_numpy`` and its LRT and Score
-siblings) are pure NumPy. They are reached only through
-``compute_lmm_chunk_numpy``, which the runner calls only on
-``DispatchPath.NUMPY_FALLBACK``, and that path is selected only when the
-extension is absent.
+The full-Uab helpers here (``_compute_wald_numpy`` and its LRT and Score
+siblings) are pure NumPy, reached only through ``compute_lmm_chunk_numpy``,
+which the runner calls only on ``DispatchPath.NUMPY_FALLBACK``. That path is
+selected only when the extension is absent.
 
-The caller is responsible for:
-- Computing Uab_batch (n_snps, n_samples, n_index) for chunk dispatch.
-- There is no async dispatch in the NumPy backend — results are immediately
-  available after the call returns.
+``compute_wald_split_numpy`` is the exception. It is the ``NUMPY_WALD`` kernel
+body, which ``chunk_kernel`` calls directly on the split Uab rows.
+
+The caller computes ``Uab_batch`` (n_snps, n_samples, n_index) for chunk
+dispatch. Every call is synchronous; results are available when it returns.
 """
 
 from __future__ import annotations
@@ -90,7 +90,6 @@ def _compute_wald_numpy(
     l_max: float,
     n_grid: int,
     n_refine: int,
-    Iab_batch: np.ndarray | None = None,
 ) -> WaldResult:
     """Compute REML-optimized Wald test statistics.
 
@@ -108,7 +107,6 @@ def _compute_wald_numpy(
         n_grid: Grid search resolution.
         n_refine: Golden section iterations (should be >= 20 for 1e-5 tolerance;
             C extension requires >= 1). Runner-level code enforces the minimum.
-        Iab_batch: Pre-computed identity-weighted Pab. If None, computed internally.
 
     Returns:
         Dict with keys: lambdas, logls, betas, ses, pwalds.
@@ -126,14 +124,11 @@ def _compute_wald_numpy(
             [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
         )  # (3, n_samples): rows [ww, wy, yy]
 
-        iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
-            uab_invariant_soa
-        )
         return compute_wald_split_numpy(
             eigenvalues,
             uab_varying_soa,
             uab_invariant_soa,
-            (iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet),
+            compute_iab_invariant_scalars_ncvt1(uab_invariant_soa),
             n_samples,
             l_min=l_min,
             l_max=l_max,
@@ -142,8 +137,7 @@ def _compute_wald_numpy(
         )
     else:
         # Generic Python path for n_cvt > 1
-        if Iab_batch is None:
-            Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
+        Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
         lambdas, logls, Pab_final = golden_section_optimize_lambda_numpy(
             n_cvt,
             eigenvalues,
@@ -384,8 +378,6 @@ def compute_lmm_chunk_numpy(
             n_samples,
         )
         result["p_scores"] = score_result["p_scores"]
-        # Pre-compute Iab once for Wald (lambda-independent)
-        Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
         _store_wald(
             result,
             _compute_wald_numpy(
@@ -397,7 +389,6 @@ def compute_lmm_chunk_numpy(
                 l_max,
                 n_grid,
                 n_refine,
-                Iab_batch=Iab_batch,
             ),
         )
         # GEMMA mode 4 writes the alternative-model MLE likelihood calculated

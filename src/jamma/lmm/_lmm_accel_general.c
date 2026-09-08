@@ -72,7 +72,7 @@ typedef struct {
     double *eigenvalues;    /* (n_samples,) — owned copy */
     double reml_const;
     int n_samples;
-    /* Table (owned copy of indices) */
+    /* Packed Pab recursion table, built from n_cvt */
     pab_table_t table;
     /* Iab: invariant identity sums (precomputed, reused per-SNP) */
     double *inv_identity_sums;  /* (n_inv,) — sum of each invariant column at identity */
@@ -188,7 +188,7 @@ static inline const double *get_fused_vector(
     return ws->Uty;  /* col_0based == n_cvt + 1 */
 }
 
-/* Fill a calloc'd general workspace whose table has already been parsed:
+/* Fill a calloc'd general workspace whose table build_pab_table already built:
  * eigenvalues, uab_inv, UtW (transposed), Uty, per-thread scratch, the
  * lambda grid and its invariant sums, and the beta/REML constants. 0, or -1
  * with PyErr set; the caller frees ws through lmm_workspace_general_free. */

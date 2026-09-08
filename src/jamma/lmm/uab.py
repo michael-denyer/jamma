@@ -19,7 +19,6 @@ from jamma.lmm.pab import (
     _NCVT1,
     PabIndexTable,
     build_index_table,
-    classify_uab_columns,
 )
 
 
@@ -316,7 +315,6 @@ def batch_compute_uab_varying_soa_numpy(
     UtW: np.ndarray,
     Uty: np.ndarray,
     utg_t: np.ndarray,
-    out: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute SNP-varying Uab columns in SoA layout (n_snps, n_var, n_samples).
 
@@ -330,9 +328,6 @@ def batch_compute_uab_varying_soa_numpy(
         Uty: Rotated phenotype (n_samples,).
         utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
             from jlinalg.dgemm(chunk, U, transa="T").
-        out: Optional pre-allocated output buffer (n_snps, n_var, n_samples).
-            When provided and shape matches, writes directly into it to avoid
-            allocation.
 
     Returns:
         Varying array (n_snps, n_var, n_samples) — SoA layout.
@@ -343,92 +338,13 @@ def batch_compute_uab_varying_soa_numpy(
         )
     _check_utg_t(utg_t, UtW)
     n_snps, n_samples = utg_t.shape
-    n_var = 3
-    expected_shape = (n_snps, n_var, n_samples)
-    if out is None:
-        out = np.empty(expected_shape, dtype=np.float64)
-    else:
-        if out.shape != expected_shape:
-            raise ValueError(
-                f"batch_compute_uab_varying_soa_numpy: out shape {out.shape} "
-                f"doesn't match expected {expected_shape}"
-            )
-        if out.dtype != np.float64:
-            raise ValueError(
-                f"batch_compute_uab_varying_soa_numpy: out dtype {out.dtype} "
-                f"must be float64"
-            )
-        if not out.flags["C_CONTIGUOUS"]:
-            raise ValueError(
-                "batch_compute_uab_varying_soa_numpy: out must be C-contiguous"
-            )
+    out = np.empty((n_snps, 3, n_samples), dtype=np.float64)
 
     w = UtW[:, 0]
     out[:, 0, :] = w[None, :] * utg_t  # wx row
     out[:, 1, :] = utg_t * utg_t  # xx row
     out[:, 2, :] = utg_t * Uty[None, :]  # xy row
     return out
-
-
-def reconstruct_uab_from_soa(
-    uab_invariant_soa: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    n_cvt: int,
-) -> np.ndarray:
-    """Reconstruct full Uab matrix from split SoA components.
-
-    For n_cvt=1: combines invariant columns [ww, wy, yy] with per-SNP varying
-    columns [wx, xx, xy] into the standard layout (n_snps, n_samples, 6).
-
-    For n_cvt>1: uses classify_uab_columns(n_cvt) to determine which linear
-    column indices are invariant vs varying, then places each column at its
-    correct index in the output array. Invariant columns are broadcast across
-    all SNPs; varying columns are placed per-SNP from uab_varying_soa.
-
-    Args:
-        uab_invariant_soa: Shape (n_inv, n_samples) — one row per invariant column.
-        uab_varying_soa: Shape (n_snps, n_var, n_samples) — one axis-1 row per
-            varying column.
-        n_cvt: Number of covariates.
-
-    Returns:
-        Full Uab array (n_snps, n_samples, n_index) matching
-        batch_compute_uab_numpy layout.
-    """
-    n_snps, _, n_samples = uab_varying_soa.shape
-
-    if n_cvt == 1:
-        # Fast path: the six-column layout, zero overhead for the common case.
-        Uab = np.empty((n_snps, n_samples, 6), dtype=np.float64)
-
-        # Invariant columns — broadcast across all SNPs
-        Uab[:, :, _NCVT1.ww] = uab_invariant_soa[0]
-        Uab[:, :, _NCVT1.wy] = uab_invariant_soa[1]
-        Uab[:, :, _NCVT1.yy] = uab_invariant_soa[2]
-
-        # Varying columns — per-SNP
-        Uab[:, :, _NCVT1.wx] = uab_varying_soa[:, 0, :]
-        Uab[:, :, _NCVT1.xx] = uab_varying_soa[:, 1, :]
-        Uab[:, :, _NCVT1.xy] = uab_varying_soa[:, 2, :]
-
-        return Uab
-
-    # General path for n_cvt > 1: use classify_uab_columns to get index mapping.
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    Uab = np.empty(
-        (n_snps, n_samples, build_index_table(n_cvt).n_index), dtype=np.float64
-    )
-
-    # Place invariant columns (broadcast across all SNPs)
-    for row_i, col_idx in enumerate(inv_indices):
-        Uab[:, :, col_idx] = uab_invariant_soa[row_i]
-
-    # Place varying columns (per-SNP from SoA axis-1)
-    for row_i, col_idx in enumerate(var_indices):
-        Uab[:, :, col_idx] = uab_varying_soa[:, row_i, :]
-
-    return Uab
 
 
 def compute_iab_invariant_scalars_ncvt1(

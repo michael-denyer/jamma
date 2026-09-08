@@ -302,7 +302,6 @@ class TestErrorMessageDifferentiation:
             label=built.label,
             n_filtered=built.n_filtered,
             call=_boom,
-            uses_c=True,
             max_threads=1,
         )
 
@@ -379,7 +378,6 @@ class TestErrorMessageDifferentiation:
             label="Fused Uab dispatch",
             n_filtered=100,
             call=lambda _chunk, _threads: expected,
-            uses_c=True,
             max_threads=1,
         )
         assert kernel.compute_chunk(np.zeros((1, 8)), 1, 0) is expected

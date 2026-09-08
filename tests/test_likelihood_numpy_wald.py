@@ -262,10 +262,8 @@ def test_split_ncvt1_fallback_degenerate_snps_wald_nan(pattern):
     from jamma.lmm.likelihood_numpy import (
         golden_section_optimize_lambda_split_ncvt1_numpy,
     )
-    from jamma.lmm.uab import (
-        compute_iab_invariant_scalars_ncvt1,
-        reconstruct_uab_from_soa,
-    )
+    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
+    from tests.lmm_accel._helpers import reconstruct_uab_from_soa
 
     rng = np.random.default_rng(17)
     n, n_snps = 30, 5
@@ -447,7 +445,7 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
 
 def test_reconstruct_uab_from_soa_ncvt1_fast_path():
     """reconstruct_uab_from_soa's n_cvt=1 fast path rebuilds the six-column Uab."""
-    from jamma.lmm.uab import reconstruct_uab_from_soa
+    from tests.lmm_accel._helpers import reconstruct_uab_from_soa
 
     rng = np.random.default_rng(42)
     n_samples, n_snps = 50, 8
@@ -479,8 +477,10 @@ def test_reconstruct_uab_from_soa_ncvt1_fast_path():
 )
 def test_reconstruct_uab_from_soa_multi_cvt(n_cvt, seed, n_samples, n_snps):
     """reconstruct_uab_from_soa round-trips via classify_uab_columns for n_cvt > 1."""
-    from jamma.lmm.pab import classify_uab_columns
-    from jamma.lmm.uab import reconstruct_uab_from_soa
+    from tests.lmm_accel._helpers import (
+        classify_uab_columns,
+        reconstruct_uab_from_soa,
+    )
 
     rng = np.random.default_rng(seed)
     UtW = rng.standard_normal((n_samples, n_cvt))

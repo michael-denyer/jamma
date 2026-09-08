@@ -6,14 +6,14 @@ rather than raising exceptions, enabling programmatic validation workflows.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from numpy.testing import assert_allclose
 
-from jamma.lmm.schema import HEADERS, MODE_SPECS, LmmMode, parse_lmm_mode
+from jamma.lmm.schema import HEADERS, MODE_SPECS, LmmMode
 from jamma.lmm.stats import AssocResult
 from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig
 
@@ -77,20 +77,14 @@ def compare_arrays(
         True
     """
     if actual.shape != expected.shape:
-        return ComparisonResult(
-            passed=False,
-            max_abs_diff=np.inf,
-            max_rel_diff=np.inf,
-            worst_location=None,
-            failed_indices=tuple(range(max(actual.size, expected.size))),
-            message=(
-                f"{name} shape mismatch: "
-                f"actual {actual.shape} vs expected {expected.shape}"
-            ),
+        return _failed_result(
+            f"{name} shape mismatch: "
+            f"actual {actual.shape} vs expected {expected.shape}",
+            tuple(range(max(actual.size, expected.size))),
         )
 
     if actual.size == 0:
-        return _skipped_result(f"{name} comparison passed (empty arrays)")
+        return _passed_without_comparison(f"{name} comparison passed (empty arrays)")
 
     try:
         assert_allclose(
@@ -266,15 +260,7 @@ def _float_or_nan(row: dict[str, str], name: str) -> float:
     return float("nan") if raw is None else float(raw)
 
 
-class AssocTable(list[AssocResult]):
-    """Parsed rows retaining the file's column schema, even when empty."""
-
-    def __init__(self, rows: list[AssocResult], columns: tuple[str, ...]):
-        super().__init__(rows)
-        self.columns = columns
-
-
-def load_gemma_assoc(path: Path) -> AssocTable:
+def load_gemma_assoc(path: Path) -> list[AssocResult]:
     """Load GEMMA association results from .assoc.txt format.
 
     Parses the tab-separated .assoc.txt format produced by GEMMA's LMM modes:
@@ -336,7 +322,7 @@ def load_gemma_assoc(path: Path) -> AssocTable:
                     p_lrt=_opt_float(row, "p_lrt"),
                 )
             )
-    return AssocTable(results, cols)
+    return results
 
 
 @dataclass
@@ -375,36 +361,61 @@ class AssocComparisonResult:
     l_mle: ComparisonResult | None = None  # Only for LRT (-lmm 2)
 
 
-def _detect_lmm_mode(sample: list[AssocResult]) -> LmmMode:
-    """Infer mode from every row's column presence, including degenerate NaNs."""
-    if isinstance(sample, AssocTable):
-        for mode, spec in MODE_SPECS.items():
-            if tuple(
-                field in sample.columns for field in ("p_wald", "p_lrt", "p_score")
-            ) == tuple(
-                field in {col.field_name for col in spec.stat_columns}
-                for field in ("p_wald", "p_lrt", "p_score")
-            ):
-                if sample and _detect_lmm_mode(sample.copy()) != mode:
-                    raise ValueError("Rows disagree with association header schema")
-                return parse_lmm_mode(mode)
-        raise ValueError("Unrecognized association header schema")
-    if not sample:
-        return 1
-    fields = ("p_wald", "p_lrt", "p_score", "logl_H1", "l_remle", "l_mle")
-    presence = tuple(getattr(sample[0], field) is not None for field in fields)
-    for index, row in enumerate(sample):
-        if tuple(getattr(row, field) is not None for field in fields) != presence:
+_P_VALUE_FIELDS = frozenset({"p_wald", "p_lrt", "p_score"})
+_OPTIONAL_FIELDS = _P_VALUE_FIELDS | {"logl_H1", "l_remle", "l_mle"}
+
+# No two modes carry the same set of p-value columns, so the set a file's rows
+# carry names its mode outright.
+_MODE_BY_P_VALUE_FIELDS: dict[frozenset[str], LmmMode] = {
+    frozenset(
+        c.field_name for c in spec.stat_columns if c.field_name in _P_VALUE_FIELDS
+    ): mode
+    for mode, spec in MODE_SPECS.items()
+}
+
+
+def _present_fields(rows: Sequence[AssocResult]) -> frozenset[str]:
+    """Optional fields every row carries; rows that disagree are a schema error."""
+
+    def present(row: AssocResult) -> frozenset[str]:
+        return frozenset(f for f in _OPTIONAL_FIELDS if getattr(row, f) is not None)
+
+    first = present(rows[0])
+    for index, row in enumerate(rows):
+        if present(row) != first:
             raise ValueError(f"Inconsistent association schema at row {index}")
-    for mode, spec in MODE_SPECS.items():
-        columns = {col.field_name for col in spec.stat_columns}
-        if tuple(field in columns for field in fields[:3]) == presence[:3]:
-            return parse_lmm_mode(mode)
-    raise ValueError("Association schema has no recognized p-value columns")
+    return first
 
 
-def _skipped_result(message: str) -> ComparisonResult:
-    """A vacuously-passing result for a column not applicable to the test type."""
+def _mode_from_rows(rows: Sequence[AssocResult]) -> LmmMode:
+    """Infer the LMM mode from the p-value fields the rows carry; 1 when empty."""
+    if not rows:
+        return 1
+    p_fields = _present_fields(rows) & _P_VALUE_FIELDS
+    try:
+        return _MODE_BY_P_VALUE_FIELDS[p_fields]
+    except KeyError:
+        raise ValueError(
+            f"Association schema has no recognized p-value columns: {sorted(p_fields)}"
+        ) from None
+
+
+def _failed_result(
+    message: str, failed_indices: tuple[int, ...] = ()
+) -> ComparisonResult:
+    """A failing result with no measurable difference to report."""
+    return ComparisonResult(
+        passed=False,
+        max_abs_diff=np.inf,
+        max_rel_diff=np.inf,
+        worst_location=None,
+        failed_indices=failed_indices,
+        message=message,
+    )
+
+
+def _passed_without_comparison(message: str) -> ComparisonResult:
+    """A vacuously-passing result for a column that was never compared."""
     return ComparisonResult(
         passed=True,
         max_abs_diff=0.0,
@@ -509,7 +520,9 @@ def _compare_lambdas(
             exemptions.append(f"{upper_count} matching upper boundary")
         if nan_count:
             exemptions.append(f"{nan_count} paired invalid NaN")
-        return _skipped_result(f"{name} comparison exempted ({', '.join(exemptions)})")
+        return _passed_without_comparison(
+            f"{name} comparison exempted ({', '.join(exemptions)})"
+        )
 
     if np.any(exempt):
         boundary_count = int(np.sum(matching_boundary))
@@ -572,6 +585,10 @@ def compare_assoc_results(
     Returns:
         AssocComparisonResult with per-column comparison details.
 
+    Raises:
+        ValueError: If the two inputs carry different LMM modes, or if rows
+            within one of them disagree about which columns are present.
+
     Example:
         >>> jamma_results = load_gemma_assoc(Path("jamma_output.assoc.txt"))
         >>> gemma_results = load_gemma_assoc(Path("gemma_output.assoc.txt"))
@@ -582,23 +599,24 @@ def compare_assoc_results(
     if config is None:
         config = ToleranceConfig()
 
-    mode = _detect_lmm_mode(expected)
-    actual_mode = _detect_lmm_mode(actual)
+    mode = _mode_from_rows(expected)
+    actual_mode = _mode_from_rows(actual)
+    if actual_mode != mode:
+        raise ValueError(
+            f"Association schemas differ: actual mode {actual_mode} "
+            f"but reference mode {mode}"
+        )
     active_columns = frozenset(c.field_name for c in MODE_SPECS[mode].stat_columns)
 
     # Check for SNP count mismatch
     if len(actual) != len(expected):
-        mismatch_result = ComparisonResult(
-            passed=False,
-            max_abs_diff=np.inf,
-            max_rel_diff=np.inf,
-            worst_location=None,
-            failed_indices=tuple(
+        mismatch_result = _failed_result(
+            f"SNP count mismatch: {len(actual)} vs {len(expected)}",
+            tuple(
                 range(min(len(actual), len(expected)), max(len(actual), len(expected)))
             ),
-            message=f"SNP count mismatch: {len(actual)} vs {len(expected)}",
         )
-        skip_result = _skipped_result("Skipped due to SNP count mismatch")
+        skip_result = _passed_without_comparison("Skipped due to SNP count mismatch")
         return AssocComparisonResult(
             passed=False,
             n_snps=len(actual),
@@ -670,17 +688,13 @@ def compare_assoc_results(
     def _logl() -> ComparisonResult:
         expected_logl = _column("logl_H1", expected, np.nan)
         if all(row.logl_H1 is None for row in expected):
-            return _skipped_result("logl_H1 skipped (reference missing logl_H1 column)")
+            return _passed_without_comparison(
+                "logl_H1 skipped (reference missing logl_H1 column)"
+            )
         if any(row.logl_H1 is None for row in actual):
-            return ComparisonResult(
-                passed=False,
-                max_abs_diff=np.inf,
-                max_rel_diff=np.inf,
-                worst_location=None,
-                failed_indices=tuple(
-                    i for i, row in enumerate(actual) if row.logl_H1 is None
-                ),
-                message="logl_H1 column missing from actual association schema",
+            return _failed_result(
+                "logl_H1 column missing from actual association schema",
+                tuple(i for i, row in enumerate(actual) if row.logl_H1 is None),
             )
         return compare_arrays(
             _column("logl_H1", actual, np.nan),
@@ -717,7 +731,7 @@ def compare_assoc_results(
         results[field] = (
             compute()
             if field in active_columns
-            else _skipped_result(f"{field} skipped")
+            else _passed_without_comparison(f"{field} skipped")
         )
 
     no_id_mismatch = len(mismatched) == 0
@@ -726,7 +740,6 @@ def compare_assoc_results(
         and af_result.passed
         and beta_se_ok
         and no_id_mismatch
-        and actual_mode == mode
     )
 
     return AssocComparisonResult(

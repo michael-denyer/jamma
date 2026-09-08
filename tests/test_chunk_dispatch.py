@@ -299,8 +299,8 @@ def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
     engaged; the assertion held either way. Forcing a small chunk gets past the
     real threshold, and the spy is what makes the claim in the name checkable.
 
-    The overlapped pipeline only engages on a split dispatch path, and
-    DispatchPath.use_split is False for the NumPy fallback (see dispatch.py).
+    The overlapped pipeline only engages on a C workspace path, and
+    DispatchPath.is_native is False for both NumPy paths (see dispatch.py).
     With no C accelerator, every mode takes the full-Uab path and
     _drive_pipeline is never called, so this needs the real extension rather
     than a C-accel-only behaviour asserted without it. This is the case the

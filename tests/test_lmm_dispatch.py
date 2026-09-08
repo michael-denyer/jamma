@@ -79,7 +79,7 @@ def test_path_properties_agree_with_membership():
     """The derived properties must not drift from the members they describe."""
     for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False)):
         path = _select(n_cvt, mode, accel=accel)
-        assert path.use_split == (path in _PIPELINED_PATHS)
+        assert path.is_native == (path in _PIPELINED_PATHS)
 
 
 def test_mode_and_ncvt_gating():

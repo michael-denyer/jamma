@@ -7,6 +7,7 @@ from loguru import logger
 from jamma.core import memory
 from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.lmm.eigen import plan_eigen_driver_for_machine
+from jamma.lmm.loco_eigen import plan_loco_eigen_driver
 from jamma.pipeline_plan import AnalysisPlan, ProvidedEigen, StandardAnalysisPlan
 
 __all__ = ["memory_preflight"]
@@ -16,11 +17,11 @@ def _eigen_driver(
     analysis: AnalysisPlan, available_gb: float
 ) -> EigenDriverPlan | None:
     """Plan the decomposition the run will execute; None when eigenpairs are read."""
-    if isinstance(analysis, StandardAnalysisPlan) and isinstance(
-        analysis.eigen_source, ProvidedEigen
-    ):
-        return None
     execution = analysis.execution
+    if not isinstance(analysis, StandardAnalysisPlan):
+        return plan_loco_eigen_driver(execution, available_gb)
+    if isinstance(analysis.eigen_source, ProvidedEigen):
+        return None
     return plan_eigen_driver_for_machine(
         execution.n_samples,
         available_gb,

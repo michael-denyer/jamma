@@ -28,6 +28,8 @@ import numpy as np
 from bed_reader import open_bed
 from loguru import logger
 
+from jamma.core import memory
+from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.core.snp_filter import validate_snp_indices
 from jamma.core.snp_stats import (
     SnpFilterSpec,
@@ -41,7 +43,11 @@ from jamma.io.plink import (
     partitions_from_metadata,
 )
 from jamma.kinship import SnpStatsCache
-from jamma.lmm.association_plan import ExecutableAssociationPlan, plan_association
+from jamma.lmm.association_plan import (
+    ExecutableAssociationPlan,
+    KinshipShape,
+    plan_association,
+)
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
 from jamma.lmm.genotype_source import (
     PreparedGenotypes,
@@ -50,7 +56,7 @@ from jamma.lmm.genotype_source import (
 )
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig
-from jamma.lmm.loco_eigen import eigen_pairs_for
+from jamma.lmm.loco_eigen import eigen_pairs_for, plan_loco_eigen_driver
 from jamma.lmm.prepare_common import EigenPairs
 from jamma.lmm.runner_numpy import LOCO_LABELS, LmmRunSpec, run_lmm_association
 from jamma.lmm.schema import (
@@ -159,6 +165,7 @@ def run_lmm_loco(
     loco: LocoConfig = DEFAULT_LOCO_CONFIG,
     output_path: Path | None = None,
     execution: ExecutableAssociationPlan | None = None,
+    eigen_plan: EigenDriverPlan | None = None,
 ) -> LocoResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
@@ -186,10 +193,13 @@ def run_lmm_loco(
             chunk width, text vs binary artifacts. See :class:`LocoConfig`.
         output_path: Path for incremental result writing, or None for in-memory.
         execution: The run's association plan, selected once by the caller
-            (the pipeline prices it through its memory preflight). None plans
-            it here, once, over the run's SNP total. Every chromosome shares
+            (the pipeline prices it through its memory preflight) with its
+            ``kinship`` shape resolved. None plans it here, once, over the
+            run's SNP total. Every chromosome shares
             it; the body narrows its chunk plan to that chromosome's filtered
             SNP count.
+        eigen_plan: The eigen driver the pipeline's preflight selected for
+            this run, or None to plan it here, once, the same way.
 
     Returns:
         LocoResult with associations in biological chromosome order
@@ -280,11 +290,22 @@ def run_lmm_loco(
             log_dispatch_choices=True,
             loco=True,
         )
+        execution = replace(
+            execution,
+            kinship=KinshipShape.resolve(
+                n_valid,
+                n_samples_total,
+                loaded=False,
+                saved=loco.kinship_output_dir is not None,
+            ),
+        )
     elif execution.conservative_chunks.chunk_size > loco.col_chunk_size:
         raise ValueError(
             f"execution plans {execution.conservative_chunks.chunk_size}-SNP "
             f"chunks but loco.col_chunk_size is {loco.col_chunk_size}"
         )
+    if eigen_plan is None:
+        eigen_plan = plan_loco_eigen_driver(execution, memory.available_ram_gb())
     spec = LmmRunSpec(
         config=replace(config, show_progress=False),
         execution=execution,
@@ -319,6 +340,7 @@ def run_lmm_loco(
             partitions=partitions,
             check_memory=config.check_memory,
             show_progress=show_progress,
+            eigen_plan=eigen_plan,
             mem_budget=config.mem_budget,
             association_peak_gb=execution.price(eigen=None).association_gb,
         )

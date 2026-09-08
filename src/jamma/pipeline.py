@@ -624,9 +624,10 @@ class PipelineRunner:
 
         Entered from ``run`` once the shared preamble has loaded the single
         phenotype and the covariates. Prices the run's one association plan
-        through the shared preflight, hands that plan to the LOCO orchestrator
-        (which owns its own per-chromosome kinship and eigendecomposition) and
-        assembles a PipelineResult.
+        through the shared preflight, hands that plan and the eigen driver the
+        preflight selected to the LOCO orchestrator (which owns its own
+        per-chromosome kinship and eigendecomposition) and assembles a
+        PipelineResult.
 
         Single-phenotype only — multi-phenotype LOCO is rejected at
         PipelineConfig.__post_init__.
@@ -637,7 +638,7 @@ class PipelineRunner:
         n_cvt = covariates.shape[1] if covariates is not None else 1
         plan = analysis.execution.summary
         log_pipeline_banner(plan)
-        memory_preflight(analysis, check_memory=self.config.check_memory)
+        eigen_plan = memory_preflight(analysis, check_memory=self.config.check_memory)
 
         t_loco = time.perf_counter()
         loco = run_lmm_loco(
@@ -648,6 +649,7 @@ class PipelineRunner:
             loco=analysis.loco,
             output_path=assoc_path,
             execution=analysis.execution,
+            eigen_plan=eigen_plan,
         )
         loco_s = time.perf_counter() - t_loco
         total_s = time.perf_counter() - t_start

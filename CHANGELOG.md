@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **The general workspace builds its own Pab table from `n_cvt`;
+  `ABI_VERSION` 20 -> 21.** `create_workspace_general_c` takes an `int n_cvt`
+  as its eleventh positional argument in place of the packed table dict it
+  used to take. C owns the table now, so the two Python names that built and
+  carried it, `PabCTable` and `build_pab_table_for_c`, are gone with no
+  replacement. Callers pass the covariate count they already have.
+
+- **`DispatchPath` gains `NUMPY_WALD` and loses `feeds_raw_utg`.** An
+  intercept-only Wald run without the C extension is now its own member rather
+  than a shape of the fallback, and it materialises three varying Uab rows per
+  SNP where the fallback materialises the whole table. `feeds_raw_utg` and
+  `use_split` were the same predicate spelled twice, so `feeds_raw_utg` is
+  deleted and `use_split` now means the two fused C paths only. The per-SNP
+  byte accounting in `chunk_sizing` branches three ways instead of two.
+
 ## [8.0.0] - 2026-09-08
 
 Major. The public surface moves in four places a user can observe: `gwas()`

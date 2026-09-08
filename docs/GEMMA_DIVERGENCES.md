@@ -93,7 +93,13 @@ if Px_yy == 0.0:
 
 - P_xx ≤ 0: Return NaN for all stats (SNP has no variance)
 - Px_yy exact-zero guard: prevent division by zero, the same replacement
-  GEMMA's `LogRL_f`/`LogL_f` apply to `P_yy`
+  GEMMA v0.98.5's `LogRL_f`/`LogL_f` apply to `P_yy`. v0.98.5's
+  `CalcRLWald`/`CalcRLScore` have no `Px_yy` guard at all, so this
+  replacement in the statistics is JAMMA-only. GEMMA master (`lmm.cpp:527`
+  and `lmm.cpp:854` at the time of writing) carries an absolute floor
+  instead, `if (P_yy >= 0.0 && P_yy < 1e-8) P_yy = 1e-8`, in both the
+  likelihood and the statistics; JAMMA does not, because a floor breaks scale
+  equivariance (see Rationale below)
 
 ### Divergence Impact
 
@@ -532,7 +538,8 @@ text mode writes the `.txt` files plus `.npy` sidecars for fast reload.
 |---------|---------------|----------------|--------|
 | safe_sqrt(-5.0) | sqrt(5.0) | NaN | Edge case only |
 | P_xx = 0 | inf/NaN mix | NaN | Degenerate SNPs |
-| Px_yy exact-zero guard | None | replace 0 with 1e-8 | Division by zero |
+| Px_yy exact-zero guard | v0.98.5: none in the statistics; master: absolute floor `>= 0 && < 1e-8` | replace an exact 0 with 1e-8 | Division by zero; see §2 |
+| P_yy exact-zero replacement in `LogRL_f`/`LogL_f` | v0.98.5: replace an exact 0 with 1e-8; master: absolute floor `>= 0 && < 1e-8` | replace an exact 0 with 1e-8 (matches v0.98.5) | Phenotypes whose residual sum of squares falls below 1e-8; see §2 |
 | logdet(H) | Sum of log(abs(v)) | NumPy: sum of log(abs(v)); C: mantissa product with exact exponent | 2.1e-14 relative; see §3 |
 | Monomorphic detection | Count-based | Variance-based | Aligned (equivalent) |
 | Covariates | n_cvt >= 1 | n_cvt >= 1 | Aligned (since v1.2) |

@@ -427,7 +427,7 @@ class TestChunkPlanMatchesEngine:
         assert plan.chunk_size >= 1
         assert plan.n_chunks == (n_filtered + plan.chunk_size - 1) // plan.chunk_size
         assert plan.n_buffers in (1, 2)
-        if not dispatch.use_split:
+        if not dispatch.is_native:
             # NUMPY_FALLBACK never pipelines.
             assert plan.n_buffers == 1
             assert not plan.use_pipeline
@@ -510,7 +510,7 @@ class TestChunkPlanMatchesEngine:
         change when the plan pipelines, not stay pinned to one buffer.
 
         Forces a pipelining case (n_chunks >= _MIN_PIPELINE_CHUNKS, a
-        use_split dispatch) by pinning a small RAM budget so the sizer picks
+        is_native dispatch) by pinning a small RAM budget so the sizer picks
         many small chunks, then compares the gate's real
         estimate_lmm_memory(n_buffers=1) against n_buffers=plan.n_buffers:
         before the fix these were identical regardless of plan.n_buffers.
@@ -521,7 +521,7 @@ class TestChunkPlanMatchesEngine:
         n_snps = 500_000
         n_cvt = 2
 
-        # n_cvt >= 2, mode 1 -> FUSED_GENERAL (use_split=True); dispatch is
+        # n_cvt >= 2, mode 1 -> FUSED_GENERAL (is_native=True); dispatch is
         # passed directly below, so no lmm_mode is needed.
         dispatch = DispatchPath.FUSED_GENERAL
         plan = _plan(n_samples, n_snps, n_cvt, dispatch)
@@ -867,7 +867,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
 
 
 def test_chunk_plan_splits_small_inputs_for_pipelining(monkeypatch):
-    """A budget that fits every SNP in one chunk still splits a split-capable
+    """A budget that fits every SNP in one chunk still splits a native
     run into enough chunks to overlap rotation with compute, while a plan the
     budget already splits past the pipeline threshold, a run with more
     samples than the cut is measured to help, or a controllable BLAS, is left

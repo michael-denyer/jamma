@@ -31,11 +31,9 @@ class DispatchPath(Enum):
     FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab, any lmm_mode
 
     @property
-    def use_split(self) -> bool:
-        """True for the two fused C paths, which pipeline raw ``utg_t``.
-
-        Both NumPy paths are False. The fallback materialises the full Uab
-        table, and ``NUMPY_WALD`` splits it in Python rather than in C.
+    def is_native(self) -> bool:
+        """True for the C workspace paths, which pipeline, own a C workspace,
+        and consume raw ``utg_t``.
         """
         return self in (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL)
 

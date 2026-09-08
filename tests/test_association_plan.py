@@ -30,7 +30,7 @@ def test_plan_is_frozen_and_tightening_returns_a_chunk_plan(
     dispatch: DispatchPath,
 ) -> None:
     conservative = LmmChunkPlan(
-        100, 10, 2 if dispatch.use_split else 1, dispatch.use_split
+        100, 10, 2 if dispatch.is_native else 1, dispatch.is_native
     )
     plan = ExecutableAssociationPlan(
         summary=ExecutionPlan("batch", "test"),
@@ -64,7 +64,7 @@ def test_tightening_only_decreases_width_and_preserves_policy(
         summary=ExecutionPlan("streaming", "test"),
         dispatch=dispatch,
         conservative_chunks=LmmChunkPlan(
-            100, 10, 2 if dispatch.use_split else 1, dispatch.use_split
+            100, 10, 2 if dispatch.is_native else 1, dispatch.is_native
         ),
         n_samples=1_000,
         n_input_samples=1_000,

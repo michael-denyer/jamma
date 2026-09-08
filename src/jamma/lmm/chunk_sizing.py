@@ -31,7 +31,7 @@ _MAX_BUDGET = 40_000_000_000  # 40 GB ceiling
 # Minimum number of chunks before pipelined execution is worthwhile.
 _MIN_PIPELINE_CHUNKS = 8
 
-# Chunk count a split-capable run is cut to when the memory budget alone would
+# Chunk count a native run is cut to when the memory budget alone would
 # leave it below _MIN_PIPELINE_CHUNKS, so rotation of chunk N+1 overlaps compute
 # of chunk N even on inputs that fit in one chunk. 16 measured best on
 # mouse_hs1940 (12,226 SNPs): Wald -20%, all-tests -10%, 4-covariate Wald
@@ -76,7 +76,7 @@ def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     the three varying Uab rows. The NumPy fallback materialises the whole Uab
     table.
     """
-    if dispatch.use_split:
+    if dispatch.is_native:
         # jlinalg.dgemm(chunk, U, transa="T") writes C-contiguous utg_t
         # directly: one column per SNP, no intermediate.
         return n_samples * 8
@@ -106,7 +106,7 @@ def lmm_extra_bytes_per_snp(
             every current dispatch path's pricing, kept so a future
             per-buffer-scaled path does not have to change this signature.
     """
-    if dispatch.use_split:
+    if dispatch.is_native:
         return 0
     if dispatch is DispatchPath.NUMPY_WALD:
         return n_samples * 3 * 8
@@ -205,9 +205,9 @@ class LmmChunkPlan:
         The single sizing decision the chunk engine allocates from and the
         memory preflight prices from: sizes with one live buffer, counts the
         resulting chunks, and re-sizes against two live buffers only when the
-        dispatch path supports pipelining (``dispatch.use_split``) and the
+        dispatch path supports pipelining (``dispatch.is_native``) and the
         single-buffer chunk count clears ``_MIN_PIPELINE_CHUNKS``. A
-        split-capable run of at most ``_PIPELINE_CUT_MAX_SAMPLES`` samples that
+        native run of at most ``_PIPELINE_CUT_MAX_SAMPLES`` samples that
         the budget alone leaves below that threshold is cut to
         ``_PIPELINE_TARGET_CHUNKS`` chunks, down to the ``_MIN_CHUNK`` floor, so
         a small input that fits in one chunk still overlaps rotation and
@@ -265,7 +265,7 @@ class LmmChunkPlan:
         chunk_size = _sized(pipeline_buffers=1)
         n_chunks = _count(chunk_size)
 
-        # The budget alone leaves a split-capable run too few chunks to overlap
+        # The budget alone leaves a native run too few chunks to overlap
         # rotation with compute, so cut it to _PIPELINE_TARGET_CHUNKS instead.
         # A run the budget already splits past the threshold keeps its plan,
         # and so does one with more samples than the cut is measured to help.
@@ -277,7 +277,7 @@ class LmmChunkPlan:
         # shape, against -20% on an 18-core Apple M5 Pro.
         overlap_cap: int | None = None
         if (
-            dispatch.use_split
+            dispatch.is_native
             and n_chunks < _MIN_PIPELINE_CHUNKS
             and n_samples <= _PIPELINE_CUT_MAX_SAMPLES
             and not blas_controllable
@@ -285,12 +285,12 @@ class LmmChunkPlan:
             overlap_cap = max(_MIN_CHUNK, -(-n_filtered // _PIPELINE_TARGET_CHUNKS))
             chunk_size = _sized(pipeline_buffers=1, overlap_cap=overlap_cap)
             n_chunks = _count(chunk_size)
-        use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+        use_pipeline = dispatch.is_native and n_chunks >= _MIN_PIPELINE_CHUNKS
 
         if use_pipeline:
             chunk_size = _sized(pipeline_buffers=2, overlap_cap=overlap_cap)
             n_chunks = _count(chunk_size)
-            use_pipeline = dispatch.use_split and n_chunks >= _MIN_PIPELINE_CHUNKS
+            use_pipeline = dispatch.is_native and n_chunks >= _MIN_PIPELINE_CHUNKS
 
         return cls(
             chunk_size=chunk_size,

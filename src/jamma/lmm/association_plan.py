@@ -84,7 +84,7 @@ class ExecutableAssociationPlan:
     def _group_workspace_bytes(self) -> int:
         """Fixed bytes for all phenotype kernels live in one bounded group."""
         group_size = self.phenotype_group_size
-        if not self.dispatch.use_split:
+        if not self.dispatch.is_native:
             kernel_bytes = self.workspace.fixed_bytes
         else:
             per_kernel = self.workspace.persistent_bytes + (

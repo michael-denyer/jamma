@@ -263,6 +263,12 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
 
 
 def _numpy_wald_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
+    """n_cvt=1, mode 1, no C extension: the split Wald body in NumPy.
+
+    The invariant Uab columns and the Iab scalars derived from them are built
+    once from the run invariants, so each chunk materialises only the three
+    varying rows rather than the whole Uab table the fallback builds.
+    """
     invariant = inv.require_invariant_soa()
     scalars = compute_iab_invariant_scalars_ncvt1(invariant)
 

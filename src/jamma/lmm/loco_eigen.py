@@ -198,7 +198,7 @@ def eigen_pairs_for(
         valid_indices=kinship_valid_indices,
         filter_sample_indices=None if all_samples_valid else np.where(valid_mask)[0],
         mem_budget=mem_budget,
-        consumer_peak_gb=max(eigen_plan.required_gb, association_peak_gb),
+        consumer_gb=max(eigen_plan.required_gb, association_peak_gb),
     )
     pairs = _computed_eigen_pairs(
         stream,

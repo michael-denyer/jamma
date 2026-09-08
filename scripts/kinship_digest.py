@@ -179,6 +179,7 @@ def _loco_keys(fixture: str, bfile: Path) -> dict[str, str]:
                     show_progress=False,
                     valid_indices=valid_indices,
                     _max_batch_chrs=max_batch_chrs,
+                    consumer_gb=0.0,
                 )
                 for chr_name, k_loco in stream:
                     digests[f"{key_prefix}/{path_label}/chr{chr_name}"] = digest_array(

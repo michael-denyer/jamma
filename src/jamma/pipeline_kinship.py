@@ -14,6 +14,7 @@ from typing import Literal
 
 from loguru import logger
 
+from jamma.core.eigen_plan import dsyevr_peak_gb
 from jamma.io.plink import get_plink_metadata
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
@@ -99,6 +100,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             ksnps_indices=ksnps_indices,
             filter_sample_indices=filter_samples,
             mem_budget=config.mem_budget,
+            consumer_gb=dsyevr_peak_gb(n_samples),
         )
         written_paths = write_loco_kinship_matrices(
             loco_stream,

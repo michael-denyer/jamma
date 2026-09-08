@@ -30,13 +30,13 @@ from unittest.mock import patch
 import pytest
 
 from jamma.core import memory
-from jamma.core.eigen_plan import plan_eigen_driver
+from jamma.core.eigen_plan import dsyevr_peak_gb, plan_eigen_driver
 from jamma.core.memory import (
     estimate_lmm_memory,
     estimate_streaming_memory,
     margin_gb,
 )
-from jamma.kinship.loco import plan_loco_passes
+from jamma.kinship.loco import loco_retained_set, plan_loco_passes
 from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
 from jamma.lmm.dispatch import DispatchPath
 
@@ -236,14 +236,13 @@ def _loco_rows() -> list[list]:
         for n_samples in (n_mat, n_mat + 7):
             rows.append(_loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch))
     for n_mat, n_chr in itertools.product(N_SAMPLES, N_CHR):
-        probe = plan_loco_passes(n_mat, n_mat, n_chr, 10_000, 1e12, max_batch_chrs=None)
         rows.append(
             _loco_row(
                 n_mat,
                 n_mat,
                 n_chr,
                 10_000,
-                _tie(probe.single_pass_gb),
+                _tie(_single_pass_gb(n_mat, n_mat, n_chr, 10_000)),
                 None,
                 tag="loco:tie",
             )
@@ -251,10 +250,24 @@ def _loco_rows() -> list[list]:
     return rows
 
 
-def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
-    plan = plan_loco_passes(
-        n_mat, n_samples, n_chr, chunk, available, max_batch_chrs=max_batch
+def _loco_plan(n_mat, n_samples, n_chr, chunk, available, max_batch):
+    return plan_loco_passes(
+        loco_retained_set(n_mat, n_samples, chunk),
+        dsyevr_peak_gb(n_mat),
+        n_chr,
+        available,
+        budget_gb=None,
+        max_batch_chrs=max_batch,
     )
+
+
+def _single_pass_gb(n_mat, n_samples, n_chr, chunk):
+    """Peak of the plan an unlimited machine makes: one pass over every chromosome."""
+    return _loco_plan(n_mat, n_samples, n_chr, chunk, 1e12, None).required_gb
+
+
+def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
+    plan = _loco_plan(n_mat, n_samples, n_chr, chunk, available, max_batch)
     return [
         tag,
         n_mat,
@@ -265,9 +278,9 @@ def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
         max_batch,
         plan.single_pass,
         plan.batch_size,
-        _f(plan.single_pass_gb),
-        _f(plan.min_required_gb),
-        _f(plan.eigendecomp_min_gb),
+        _f(_single_pass_gb(n_mat, n_samples, n_chr, chunk)),
+        _f(_loco_plan(n_mat, n_samples, 1, chunk, available, None).required_gb),
+        _f(dsyevr_peak_gb(n_mat)),
     ]
 
 

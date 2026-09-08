@@ -250,102 +250,98 @@ def _stream_s_full_and_chr(
     return S_full, S_chr
 
 
-class _LocoPassPlan(NamedTuple):
-    """Memory-sizing decision for streaming LOCO kinship.
+class LocoRetainedSet(NamedTuple):
+    """What the LOCO kinship stream keeps live while its consumer works.
 
     Attributes:
-        single_pass: Accumulate S_full and every per-chromosome S_chr together.
-        batch_size: Chromosomes processed per disk pass when multi-pass.
-        single_pass_gb: Peak for the single-pass shape, reported in logs.
-        min_required_gb: Peak for one chromosome per pass, the floor below
-            which no batch size fits.
-        eigendecomp_min_gb: Conservative DSYEVR peak for ``n_mat``.
-        required_gb: Peak for the batch size this plan chose. The figure the
-            memory gate checks.
+        matrix_gb: One ``n_mat x n_mat`` accumulator: S_full, K_loco_buf, or
+            one S_chr.
+        chunk_buffer_gb: One disk read of ``chunk_size`` SNPs over every
+            input sample. Subsetting happens after the read, so the buffer is
+            ``n_samples`` wide even when the matrices are ``n_mat`` wide.
     """
 
-    single_pass: bool
+    matrix_gb: float
+    chunk_buffer_gb: float
+
+    @property
+    def while_consuming_gb(self) -> float:
+        """S_full, K_loco_buf, one S_chr, and the disk buffer."""
+        return 3 * self.matrix_gb + self.chunk_buffer_gb
+
+
+def loco_retained_set(n_mat: int, n_samples: int, chunk_size: int) -> LocoRetainedSet:
+    """Size the retained set for ``n_mat``-order matrices over ``n_samples`` inputs."""
+    return LocoRetainedSet(square_matrix_gb(n_mat), array_gb(n_samples, chunk_size))
+
+
+class _LocoPassPlan(NamedTuple):
+    """Chromosomes per disk pass for streaming LOCO kinship.
+
+    Attributes:
+        batch_size: Chromosomes accumulated per disk pass.
+        single_pass: One pass covers every chromosome that has SNPs.
+        required_gb: Peak for this batch size: the retained set, the
+            consumer, and ``batch_size - 1`` further S_chr accumulators.
+    """
+
     batch_size: int
-    single_pass_gb: float
-    min_required_gb: float
-    eigendecomp_min_gb: float
+    single_pass: bool
     required_gb: float
 
 
 def plan_loco_passes(
-    n_mat: int,
-    n_samples: int,
+    retained: LocoRetainedSet,
+    consumer_gb: float,
     n_chr_with_snps: int,
-    chunk_size: int,
     available_gb: float,
     *,
+    budget_gb: float | None,
     max_batch_chrs: int | None,
-    budget_gb: float | None = None,
-    consumer_peak_gb: float | None = None,
 ) -> _LocoPassPlan:
-    """Decide single-pass vs multi-pass and the chromosomes-per-pass batch size.
+    """Pick the chromosomes-per-pass batch size that fits both ceilings.
 
-    Pure sizing math (no I/O), so it can be unit-tested at scale. The live
-    matrices are ``n_mat x n_mat`` — ``n_mat`` is ``len(valid_indices)`` when
-    sample filtering is active, else ``n_samples`` — while the disk chunk buffer
-    is always ``n_samples`` wide (subsetting happens after the full read). The
-    eigendecomposition runs on the ``n_mat``-sized K_loco, so its workspace
-    reserve is sized by ``n_mat`` too (NOT ``n_samples``); using ``n_samples``
-    over-reserves on filtered datasets and can collapse ``batch_size`` to 1,
-    forcing many redundant BED passes.
-
-    A single-pass run still goes through the batch loop with ``batch_size =
+    Pure sizing math (no I/O), so it can be unit-tested at scale. A pass
+    holds S_full, K_loco_buf, the disk buffer, and one S_chr per chromosome
+    in the batch, with ``consumer_gb`` reserved for the eigen or association
+    work that runs while the stream is live. The batch is the largest count
+    whose peak fits ``memory.headroom_gb(available_gb)``, capped by
+    ``budget_gb`` and ``max_batch_chrs``, and never below one chromosome; the
+    caller gates that floor. A single-pass run is ``batch_size ==
     n_chr_with_snps``, one batch covering every chromosome.
 
-    Both decisions use ``memory.fits``: single-pass when the whole-run peak
-    fits, and otherwise the largest batch whose peak (the two live matrices,
-    the chunk buffer, the eigendecomp reserve and ``batch_size`` S_chr
-    matrices) still fits. The margin is therefore always taken of the
-    requirement, via ``memory.headroom_gb``, so the multi-pass budget is the
-    same margin ``fits`` would apply to the batch it produces.
+    The margin is taken of the requirement via ``memory.headroom_gb``, the
+    same margin ``fits`` applies to the batch it produces, so the two agree
+    except at an exact tie, which the final ``fits`` check settles.
 
     Args:
-        n_mat: Live matrix dimension (valid-sample count, or n_samples).
-        n_samples: Total sample count (disk chunk-buffer width).
-        n_chr_with_snps: Number of chromosomes that retain SNPs after filtering.
-        chunk_size: SNPs per disk read.
-        available_gb: Available RAM in GB (caller reads psutil and passes it in).
-        max_batch_chrs: Optional cap on the chromosomes per pass.
-        budget_gb: Explicit user ceiling, without the physical-RAM margin.
-        consumer_peak_gb: Selected eigen/association consumer peak. When omitted,
-            reserve the conservative DSYEVR peak for standalone kinship use.
-
-    Returns:
-        A _LocoPassPlan with the decision and the peak estimates.
+        retained: The stream's live matrices and disk buffer.
+        consumer_gb: Peak the downstream eigen and association work holds
+            while the stream is live.
+        n_chr_with_snps: Chromosomes that retain SNPs after filtering.
+        available_gb: Free RAM in GB (the caller reads psutil once).
+        budget_gb: User ceiling in GB without the physical-RAM margin, or None.
+        max_batch_chrs: Cap on chromosomes per pass, or None.
     """
-    from jamma.core.eigen_plan import dsyevr_peak_gb
-
-    matrix_gb = square_matrix_gb(n_mat)
-    chunk_buffer_gb = array_gb(n_samples, chunk_size)
-    eigendecomp_min_gb = dsyevr_peak_gb(n_mat)
-    consumer_gb = eigendecomp_min_gb if consumer_peak_gb is None else consumer_peak_gb
-    # Conservatively retain the disk buffer and both shared matrices while
-    # the consumer holds its eigen/association workspace.
-    fixed_gb = 2 * matrix_gb + chunk_buffer_gb + consumer_gb
-    single_pass_gb = fixed_gb + n_chr_with_snps * matrix_gb
-    min_required_gb = fixed_gb + matrix_gb
+    # S_full and K_loco_buf are shared across the batch; each chromosome in
+    # the batch adds one S_chr, so batch_size == 1 is the retained set.
+    fixed_gb = 2 * retained.matrix_gb + retained.chunk_buffer_gb + consumer_gb
     capacity_gb = memory.headroom_gb(available_gb)
     if budget_gb is not None:
         capacity_gb = min(capacity_gb, budget_gb)
-    batch_size = min(n_chr_with_snps, max(1, int((capacity_gb - fixed_gb) / matrix_gb)))
+    batch_size = min(
+        n_chr_with_snps, max(1, int((capacity_gb - fixed_gb) / retained.matrix_gb))
+    )
     if max_batch_chrs is not None:
         batch_size = min(batch_size, max_batch_chrs)
     if batch_size > 1 and not memory.fits(
-        fixed_gb + batch_size * matrix_gb, available_gb
+        fixed_gb + batch_size * retained.matrix_gb, available_gb
     ):
         batch_size -= 1
     return _LocoPassPlan(
-        single_pass=n_chr_with_snps <= batch_size,
         batch_size=batch_size,
-        single_pass_gb=single_pass_gb,
-        min_required_gb=min_required_gb,
-        eigendecomp_min_gb=eigendecomp_min_gb,
-        required_gb=fixed_gb + batch_size * matrix_gb,
+        single_pass=n_chr_with_snps <= batch_size,
+        required_gb=fixed_gb + batch_size * retained.matrix_gb,
     )
 
 
@@ -362,7 +358,7 @@ def compute_loco_kinship_streaming(
     *,
     filter_sample_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
-    consumer_peak_gb: float | None = None,
+    consumer_gb: float,
 ) -> LocoKinshipStream:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -395,9 +391,8 @@ def compute_loco_kinship_streaming(
         _max_batch_chrs: Debug cap on chromosomes per pass, applied on top of
             the memory-based batch size. Used by tests to exercise multi-pass
             without mocking psutil.
-        consumer_peak_gb: Peak the downstream eigen and association work will
-            hold while this stream is live. None reserves the conservative
-            DSYEVR peak, for standalone kinship use.
+        consumer_gb: Peak the downstream eigen and association work will hold
+            while this stream is live.
 
     Returns:
         A consume-once LocoKinshipStream. Iterate it for (chr_name, K_loco) pairs,
@@ -435,32 +430,25 @@ def compute_loco_kinship_streaming(
     partitions = partitions_from_metadata(meta)
     unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
 
-    n_out = len(valid_indices) if valid_indices is not None else n_samples
+    # Matrices are n_mat x n_mat once valid_indices subsets the rows; the disk
+    # buffer stays n_samples wide.
+    n_mat = len(valid_indices) if valid_indices is not None else n_samples
     logger.info("Computing LOCO Kinship (streaming)")
     logger.info(
-        f"  Individuals: {n_out:,}"
-        + (f" (filtered from {n_samples:,})" if n_out != n_samples else "")
+        f"  Individuals: {n_mat:,}"
+        + (f" (filtered from {n_samples:,})" if n_mat != n_samples else "")
     )
     logger.info(f"  SNPs: {n_snps:,}")
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")
 
+    retained = loco_retained_set(n_mat, n_samples, chunk_size)
     if check_memory:
-        available_gb = memory.available_ram_gb()
-        minimum = plan_loco_passes(
-            n_out,
-            n_samples,
-            1,
-            chunk_size,
-            available_gb,
-            max_batch_chrs=None,
-            budget_gb=mem_budget,
-            consumer_peak_gb=consumer_peak_gb,
-        )
         memory.require(
-            minimum.required_gb,
-            available_gb,
-            "LOCO minimum working set",
+            retained.while_consuming_gb + consumer_gb,
+            memory.available_ram_gb(),
+            f"LOCO working set (3 accumulators + disk buffer "
+            f"{retained.while_consuming_gb:.1f}GB, consumer {consumer_gb:.1f}GB)",
             budget_gb=mem_budget,
         )
 
@@ -536,51 +524,41 @@ def compute_loco_kinship_streaming(
         )
     n_chr_with_snps = len(chrs_with_snps)
 
-    # Determine memory strategy: single-pass vs multi-pass batching.
-    # When valid_indices is provided, matrices are n_valid x n_valid (not
-    # n_samples); the chromosomes-per-pass sizing lives in plan_loco_passes.
-    n_mat = len(valid_indices) if valid_indices is not None else n_samples
     available_gb = memory.available_ram_gb()
     plan = plan_loco_passes(
-        n_mat,
-        n_samples,
+        retained,
+        consumer_gb,
         n_chr_with_snps,
-        chunk_size,
         available_gb,
-        max_batch_chrs=_max_batch_chrs,
         budget_gb=mem_budget,
-        consumer_peak_gb=consumer_peak_gb,
+        max_batch_chrs=_max_batch_chrs,
     )
 
     if mem_budget is not None:
         logger.info(f"  Memory budget: {mem_budget:.1f}GB")
 
-    if check_memory:
-        memory.require(
-            plan.required_gb,
-            available_gb,
-            f"LOCO kinship (S_full + K_loco_buf + one S_chr + eigendecomp "
-            f"{plan.eigendecomp_min_gb:.1f}GB)",
-            budget_gb=mem_budget,
-        )
-
     batch_size = plan.batch_size
+    single_pass_gb = (
+        retained.while_consuming_gb
+        + consumer_gb
+        + (n_chr_with_snps - 1) * retained.matrix_gb
+    )
     # At least one batch always runs, even when n_chr_with_snps == 0 (every
     # chromosome lost all its SNPs to filtering): that lone batch still computes
     # S_full, which _yield_full_kinship_fallback below needs for every chromosome.
     n_batches = max(1, -(-n_chr_with_snps // batch_size)) if batch_size else 1
 
     def _generate() -> Iterator[tuple[str, np.ndarray]]:
-        if plan.single_pass and plan.single_pass_gb > 10:
+        if plan.single_pass and single_pass_gb > 10:
             logger.info(
-                f"LOCO streaming: single-pass ({plan.single_pass_gb:.1f}GB for "
+                f"LOCO streaming: single-pass ({single_pass_gb:.1f}GB for "
                 f"{n_chr_with_snps} chromosomes)"
             )
         elif not plan.single_pass:
             logger.warning(
                 f"LOCO streaming: multi-pass mode ({n_batches} passes, "
                 f"{batch_size} chromosomes/pass). Single-pass would need "
-                f"{plan.single_pass_gb:.1f}GB, available {available_gb:.1f}GB."
+                f"{single_pass_gb:.1f}GB, available {available_gb:.1f}GB."
             )
 
         # One batch loop covers both the single-pass and multi-pass cases:

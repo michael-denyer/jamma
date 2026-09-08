@@ -21,12 +21,13 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core.eigen_plan import EigenDriverPlan, array_gb, square_matrix_gb
+from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.kinship import (
     SnpStatsCache,
     compute_loco_kinship_streaming,
     write_kinship_matrix,
 )
+from jamma.kinship.loco import loco_retained_set
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
 from jamma.lmm.eigen import (
     center_kinship,
@@ -86,20 +87,23 @@ def plan_loco_eigen_driver(
 ) -> EigenDriverPlan:
     """Plan the per-chromosome eigen driver against what the retained set leaves.
 
-    Three accumulators at the kinship order (S_full, K_loco_buf, one S_chr)
-    and one disk block over every input sample stay live while each
-    chromosome decomposes, so the driver is chosen against the headroom and
-    budget left after them.
+    The kinship stream's retained set stays live while each chromosome
+    decomposes, so the driver is chosen against the headroom and budget left
+    after it. A negative remainder needs no clamp: the planner's own fit
+    checks already read it as "does not fit".
     """
-    n_mat = execution.resolved_kinship.n_samples
-    retained_gb = 3 * square_matrix_gb(n_mat) + array_gb(
-        execution.n_input_samples, DEFAULT_STATS_CHUNK
+    retained = loco_retained_set(
+        execution.resolved_kinship.n_samples,
+        execution.n_input_samples,
+        DEFAULT_STATS_CHUNK,
     )
     budget_gb = execution.mem_budget_gb
     return plan_eigen_driver_for_machine(
         execution.n_samples,
-        max(0.0, available_gb - retained_gb),
-        budget_gb=None if budget_gb is None else max(0.0, budget_gb - retained_gb),
+        available_gb - retained.while_consuming_gb,
+        budget_gb=None
+        if budget_gb is None
+        else budget_gb - retained.while_consuming_gb,
         inplace_eligible=True,
     )
 

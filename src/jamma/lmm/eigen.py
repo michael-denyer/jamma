@@ -21,6 +21,7 @@ from threadpoolctl import threadpool_info
 from jamma import jlinalg
 from jamma.core import memory
 from jamma.core.eigen_plan import (
+    EigenDriverPlan,
     forced_numpy_fallback,
     plan_eigen_driver,
     square_matrix_gb,
@@ -70,7 +71,12 @@ def _check_symmetry_sampled(
 
 
 def eigendecompose_kinship(
-    K: np.ndarray, threshold: float = 1e-10, *, check_memory: bool = True
+    K: np.ndarray,
+    threshold: float = 1e-10,
+    *,
+    check_memory: bool = True,
+    mem_budget: float | None = None,
+    eigen_plan: EigenDriverPlan | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Eigendecompose kinship matrix, zeroing small eigenvalues.
 
@@ -135,13 +141,14 @@ def eigendecompose_kinship(
     inplace_eligible = (
         K.dtype == np.float64 and K.flags["C_CONTIGUOUS"] and K.flags["WRITEABLE"]
     )
-    plan = plan_eigen_driver(
+    plan = eigen_plan or plan_eigen_driver(
         n_samples,
         available_gb,
         has_dsyevd=bool(jlinalg.blas_has_dsyevd),
         has_dsyevr=bool(jlinalg.blas_has_dsyevr),
         no_vendor=no_vendor_env,
         inplace_eligible=inplace_eligible,
+        budget_gb=mem_budget,
     )
     no_vendor = plan.no_vendor
     if no_vendor and not no_vendor_env:
@@ -180,6 +187,7 @@ def eigendecompose_kinship(
             required_gb,
             available_gb,
             f"eigendecomposition of {n_samples:,}x{n_samples:,} kinship matrix",
+            budget_gb=mem_budget,
         )
 
     # Use all physical cores for BLAS

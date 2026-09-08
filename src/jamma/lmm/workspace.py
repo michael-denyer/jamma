@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import comb
 
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.schema import LmmMode
@@ -23,7 +24,7 @@ class WorkspaceSpec:
     ``max_threads`` because the general workspace allocates its capacity once.
     ``bytes_per_snp`` covers result arrays; rotation and fallback Uab/Iab
     buffers remain part of the chunk geometry where they are allocated. The
-    native query derives C and Python table transport from their dimensions,
+    native query derives the owned Pab table storage from its dimensions,
     then adds a fixed bound for object headers and allocator metadata on top
     of the dominant array payloads.
     """
@@ -62,7 +63,11 @@ class WorkspaceSpec:
         if max_threads < 1:
             raise ValueError(f"max_threads must be >= 1, got {max_threads}")
         output_bytes = _output_columns(lmm_mode) * _DOUBLE
-        if dispatch is DispatchPath.NUMPY_FALLBACK:
+        # Null-model calculations retain Python's reference recursion table.
+        # Each entry owns a six-int tuple; 384 bytes bounds its Python objects.
+        # The removed flat transport and flattening list are not included.
+        reference_bytes = comb(n_cvt + 3, 3) * 384
+        if not dispatch.use_split:
             fixed_bytes = 0
             bytes_per_snp = output_bytes
             if lmm_mode in (1, 2, 4):
@@ -79,6 +84,8 @@ class WorkspaceSpec:
                     bytes_per_snp += (
                         n_samples * idx + 6 * n_samples + 2 * rows * idx + 6 * idx
                     ) * _DOUBLE
+            if dispatch is DispatchPath.NUMPY_WALD:
+                fixed_bytes += 3 * n_samples * _DOUBLE
             return cls(
                 dispatch,
                 lmm_mode,
@@ -88,7 +95,7 @@ class WorkspaceSpec:
                 n_grid,
                 n_refine,
                 1,
-                fixed_bytes,
+                fixed_bytes + reference_bytes,
                 0,
                 0,
                 bytes_per_snp,
@@ -110,7 +117,7 @@ class WorkspaceSpec:
             n_grid,
             n_refine,
             max_threads,
-            persistent,
+            persistent + reference_bytes,
             per_thread,
             transient,
             output_bytes,

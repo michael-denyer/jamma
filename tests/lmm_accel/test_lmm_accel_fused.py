@@ -105,7 +105,7 @@ class TestHiEvalNullPositivity:
                 50,
                 20,
                 1,
-                data["pab_c"]._asdict(),
+                data["n_cvt"],
                 lmm_mode=3,
                 hi_eval_null=hi_bad,
             )
@@ -413,7 +413,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
     mle_const in the workspace. This test verifies the fix: all non-degenerate
     SNPs must have finite lambda_mle values.
     """
-    from jamma.lmm.pab import build_pab_table_for_c, classify_uab_columns
+    from jamma.lmm.pab import classify_uab_columns
 
     data = general_score_lrt_ncvt2
     eigenvalues = data["eigenvalues"]
@@ -440,7 +440,7 @@ def test_fused_general_mode4_nan_lambda_regression(general_score_lrt_ncvt2):
         50,
         20,
         1,
-        build_pab_table_for_c(n_cvt)._asdict(),
+        n_cvt,
         lmm_mode=4,
         hi_eval_null=Hi_eval_null,
         logl_H0=logl_H0,
@@ -505,7 +505,6 @@ def test_fused_general_mode4_all_statistics_ncvt2(general_score_lrt_ncvt2):
 )
 def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """FGEN-04: Fused general workspace creates, computes, and destroys cleanly."""
-    from jamma.lmm.pab import build_pab_table_for_c
 
     data = synthetic_covariate_data_ncvt2
     eigenvalues = data["eigenvalues"]
@@ -528,7 +527,7 @@ def test_fused_general_workspace_lifecycle(synthetic_covariate_data_ncvt2):
         50,
         20,
         1,
-        build_pab_table_for_c(n_cvt)._asdict(),
+        n_cvt,
         lmm_mode=1,
     )
     assert ws is not None
@@ -622,7 +621,7 @@ def test_fused_general_abi_version_9():
 def test_runner_fused_general_ncvt2_dispatch():
     """Runner integration: n_cvt=2 dispatches fused general path end-to-end.
 
-    Exercises the full build_pab_table_for_c → create_workspace_fused_general →
+    Exercises native table construction → create_workspace_general_c →
     compute_lmm_chunk_fused_general_c pipeline through run_lmm_association_numpy.
     Compares fused general results (n_cvt=2 with the C extension) against the
     NumPy path, reached by dropping the extension. Not bitwise: the reference
@@ -762,191 +761,6 @@ def test_logdet_product_matches_numpy_log_sum_on_fixture(
 
 @pytest.mark.tier0
 @requires_c
-@pytest.mark.parametrize(
-    "key",
-    [
-        "invariant_indices",
-        "varying_indices",
-        "logdet_diag_rows",
-        "logdet_diag_cols",
-        "var_a_cols",
-    ],
-)
-def test_general_creator_rejects_out_of_range_table(
-    synthetic_covariate_data_ncvt2, key
-):
-    """The Pab table parser range-checks every index array it is handed.
-
-    The general creator takes the table as one dict, so a corrupt entry has
-    to be caught there rather than by the workspace filling code that used
-    to read the arrays one by one.
-    """
-    from jamma.lmm.pab import build_pab_table_for_c
-
-    data = synthetic_covariate_data_ncvt2
-    n_cvt = data["n_cvt"]
-    table = build_pab_table_for_c(n_cvt)._asdict()
-    bad = np.array(table[key], dtype=np.int32).copy()
-    bad[0] = 10**6
-    table[key] = bad
-
-    with pytest.raises(ValueError, match=rf"{key}\[0\].*out of range"):
-        accel.require().create_workspace_general_c(
-            data["eigenvalues"],
-            compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt),
-            data["UtW"],
-            data["Uty"],
-            data["n_samples"],
-            1e-5,
-            1e5,
-            50,
-            20,
-            1,
-            table,
-            lmm_mode=1,
-        )
-
-
-def _create_general_workspace_with_table(data, table, *, uab_invariant=None):
-    n_cvt = data["n_cvt"]
-    if uab_invariant is None:
-        uab_invariant = compute_uab_invariant_soa(data["UtW"], data["Uty"], n_cvt)
-    return accel.require().create_workspace_general_c(
-        data["eigenvalues"],
-        uab_invariant,
-        data["UtW"],
-        data["Uty"],
-        data["n_samples"],
-        1e-5,
-        1e5,
-        50,
-        20,
-        1,
-        table,
-        lmm_mode=1,
-    )
-
-
-@pytest.mark.tier0
-@requires_c
-@pytest.mark.parametrize(
-    ("key", "value"),
-    [
-        ("n_index", 6000),
-        ("n_rows", 5),
-        ("n_inv", 5996),
-        ("n_var", 5),
-        ("idx_xx", 6),
-        ("idx_xy", 7),
-        ("idx_yy", 8),
-        ("n_index", 2**40),
-    ],
-    ids=[
-        "n_index",
-        "n_rows",
-        "n_inv",
-        "n_var",
-        "idx_xx",
-        "idx_xy",
-        "idx_yy",
-        "integer_overflow",
-    ],
-)
-def test_general_creator_rejects_noncanonical_dimensions(
-    synthetic_covariate_data_ncvt2, key, value
-):
-    """Dimensions are derived from n_cvt rather than trusted independently."""
-    from jamma.lmm.pab import build_pab_table_for_c
-
-    data = synthetic_covariate_data_ncvt2
-    table = build_pab_table_for_c(data["n_cvt"])._asdict()
-    table[key] = value
-    if key == "n_index" and value == 6000:
-        table["n_inv"] = value - table["n_var"]
-        table["invariant_indices"] = np.arange(table["n_inv"], dtype=np.int32)
-        uab_invariant = np.zeros((table["n_inv"], data["n_samples"]), dtype=np.float64)
-    else:
-        uab_invariant = None
-
-    with pytest.raises((TypeError, ValueError), match=key):
-        _create_general_workspace_with_table(data, table, uab_invariant=uab_invariant)
-
-
-@pytest.mark.tier0
-@requires_c
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        "duplicate_partition",
-        "missing_partition",
-        "wrong_varying_map",
-        "wrong_diagonal",
-        "wrong_level",
-        "wrong_recursion",
-    ],
-)
-def test_general_creator_rejects_noncanonical_layout(
-    synthetic_covariate_data_ncvt2, mutation
-):
-    """Index maps and recursion must match the canonical n_cvt layout."""
-    from jamma.lmm.pab import build_pab_table_for_c
-
-    data = synthetic_covariate_data_ncvt2
-    table = build_pab_table_for_c(data["n_cvt"])._asdict()
-
-    if mutation == "duplicate_partition":
-        bad = table["invariant_indices"].copy()
-        bad[1] = bad[0]
-        table["invariant_indices"] = bad
-    elif mutation == "missing_partition":
-        bad = table["varying_indices"].copy()
-        bad[0] = table["invariant_indices"][0]
-        table["varying_indices"] = bad
-    elif mutation == "wrong_varying_map":
-        bad = table["var_a_cols"].copy()
-        bad[0] = bad[0] + 1
-        table["var_a_cols"] = bad
-    elif mutation == "wrong_diagonal":
-        bad = table["logdet_diag_cols"].copy()
-        bad[1] = bad[1] + 1
-        table["logdet_diag_cols"] = bad
-    elif mutation == "wrong_level":
-        bad = table["level_offsets"].copy()
-        bad[-1] = bad[-1] - 1
-        table["level_offsets"] = bad
-    else:
-        bad = table["entries"].copy()
-        bad[0] = bad[1]
-        table["entries"] = bad
-
-    with pytest.raises(ValueError, match="canonical"):
-        _create_general_workspace_with_table(data, table)
-
-
-@pytest.mark.tier0
-@requires_c
-@pytest.mark.parametrize("mutation", ["wrong_shape", "oversized_value"])
-def test_general_creator_requires_exact_int32_array_transport(
-    synthetic_covariate_data_ncvt2, mutation
-):
-    """Array validation happens before NumPy can reshape or narrow integers."""
-    from jamma.lmm.pab import build_pab_table_for_c
-
-    data = synthetic_covariate_data_ncvt2
-    table = build_pab_table_for_c(data["n_cvt"])._asdict()
-    if mutation == "wrong_shape":
-        bad = table["entries"].reshape(2, -1)
-    else:
-        bad = table["entries"].astype(np.int64)
-        bad[0] += 2**32
-    table["entries"] = bad
-
-    with pytest.raises(TypeError, match="one-dimensional int32"):
-        _create_general_workspace_with_table(data, table)
-
-
-@pytest.mark.tier0
-@requires_c
 def test_general_creator_rejects_mode_5():
     """lmm_mode outside 1..4 is rejected, whatever n_cvt.
 
@@ -956,7 +770,6 @@ def test_general_creator_rejects_mode_5():
     tests/lmm_accel/test_lmm_accel_workspace_score_lrt.py. This pins the
     bound still enforced past 4.
     """
-    from jamma.lmm.pab import build_pab_table_for_c
 
     n_cvt, n_samples = 2, 20
     inputs = rotated_lmm_inputs(
@@ -975,6 +788,6 @@ def test_general_creator_rejects_mode_5():
             50,
             20,
             1,
-            build_pab_table_for_c(n_cvt)._asdict(),
+            n_cvt,
             lmm_mode=5,
         )

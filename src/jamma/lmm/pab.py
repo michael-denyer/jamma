@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import functools
 import threading
-from collections.abc import Sequence
 from typing import NamedTuple
 
 import numpy as np
@@ -92,34 +91,6 @@ class PabIndexTable(NamedTuple):
     products."""
     logdet_diag_indices: tuple[tuple[int, int], ...]
     """(row, col) of Pab[i, (i+1, i+1)] for i in 0..n_cvt, the logdet_hiw diagonal."""
-
-
-class PabCTable(NamedTuple):
-    """``build_pab_table_for_c``'s product: the recursion flattened for the C kernels.
-
-    The ``entries`` array is stride-4: each entry is
-    [index_ab, index_aw, index_bw, index_ww]. Level 0 has no entries (row 0
-    comes from dot products); levels 1..n_cvt+1 have recursion entries.
-    ``_asdict()`` is the dict the C table parser reads.
-    """
-
-    n_cvt: int
-    n_index: int
-    n_rows: int
-    n_inv: int
-    n_var: int
-    idx_xx: int
-    idx_xy: int
-    idx_yy: int
-    invariant_indices: np.ndarray
-    varying_indices: np.ndarray
-    logdet_diag_rows: np.ndarray
-    logdet_diag_cols: np.ndarray
-    level_offsets: np.ndarray
-    level_counts: np.ndarray
-    entries: np.ndarray
-    var_a_cols: np.ndarray
-    var_b_cols: np.ndarray
 
 
 class _Ncvt1Layout(NamedTuple):
@@ -327,58 +298,3 @@ def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
         else:
             invariant.append(linear_idx)
     return tuple(invariant), tuple(varying)
-
-
-@functools.lru_cache(maxsize=8)
-def build_pab_table_for_c(n_cvt: int) -> PabCTable:
-    """Build flat C-friendly arrays from build_index_table recursion data."""
-    table = build_index_table(n_cvt)
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-
-    level_counts_list = [len(level) for level in table.pab_recursion]
-    all_entries = []
-    for level_entries in table.pab_recursion:
-        for _, _, idx_ab, idx_aw, idx_bw, idx_ww in level_entries:
-            all_entries.extend([idx_ab, idx_aw, idx_bw, idx_ww])
-
-    level_offsets_list = []
-    running = 0
-    for count in level_counts_list:
-        level_offsets_list.append(running)
-        running += count
-
-    diag_rows = [r for r, _ in table.logdet_diag_indices]
-    diag_cols = [c for _, c in table.logdet_diag_indices]
-
-    def _frozen(data: Sequence[int]) -> np.ndarray:
-        arr = np.array(data, dtype=np.int32)
-        arr.flags.writeable = False
-        return arr
-
-    genotype_col = n_cvt
-    var_a_list = []
-    var_b_list = []
-    for a_col, b_col, _linear_idx in table.uab_pairs:
-        if genotype_col in (a_col, b_col):
-            var_a_list.append(a_col)
-            var_b_list.append(b_col)
-
-    return PabCTable(
-        n_cvt=n_cvt,
-        n_index=table.n_index,
-        n_rows=n_cvt + 2,
-        n_inv=len(inv_indices),
-        n_var=len(var_indices),
-        idx_xx=table.idx_xx,
-        idx_xy=table.idx_xy,
-        idx_yy=table.idx_yy,
-        invariant_indices=_frozen(inv_indices),
-        varying_indices=_frozen(var_indices),
-        logdet_diag_rows=_frozen(diag_rows),
-        logdet_diag_cols=_frozen(diag_cols),
-        level_offsets=_frozen(level_offsets_list),
-        level_counts=_frozen(level_counts_list),
-        entries=_frozen(all_entries),
-        var_a_cols=_frozen(var_a_list),
-        var_b_cols=_frozen(var_b_list),
-    )

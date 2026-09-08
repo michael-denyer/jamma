@@ -11,8 +11,9 @@ from jamma.core.eigen_plan import (
     EigenDriverPlan,
     forced_numpy_fallback,
     plan_eigen_driver,
+    square_matrix_gb,
 )
-from jamma.lmm.association_plan import ExecutableAssociationPlan
+from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
 
 if TYPE_CHECKING:
     from jamma.pipeline_config import PipelineConfig
@@ -20,7 +21,9 @@ if TYPE_CHECKING:
 __all__ = ["memory_preflight"]
 
 
-def _eigen_driver_plan(n_valid: int, available_gb: float) -> EigenDriverPlan:
+def _eigen_driver_plan(
+    n_valid: int, available_gb: float, budget_gb: float | None = None
+) -> EigenDriverPlan:
     """Plan the eigendecomposition driver the runtime will use."""
     has_dsyevd = False
     has_dsyevr = False
@@ -41,17 +44,18 @@ def _eigen_driver_plan(n_valid: int, available_gb: float) -> EigenDriverPlan:
         has_dsyevr=has_dsyevr,
         no_vendor=forced_numpy_fallback(),
         inplace_eligible=True,
+        budget_gb=budget_gb,
     )
 
 
 def memory_preflight(
     config: PipelineConfig,
     plan: ExecutableAssociationPlan,
-) -> None:
+) -> EigenDriverPlan | None:
     """Price and gate one plan without rebuilding association policy.
 
     Logs the quote and raises through ``memory.require`` when it does not
-    fit; callers needing the numbers price the plan themselves.
+    fit. Return the selected eigen driver for acquisition to execute.
     """
     summary = plan.summary
     if not config.check_memory:
@@ -62,21 +66,46 @@ def memory_preflight(
 
     available_gb = memory.available_ram_gb()
     eigen = (
-        _eigen_driver_plan(plan.n_samples, available_gb)
-        if summary.mode != "batch"
+        _eigen_driver_plan(plan.n_samples, available_gb, plan.mem_budget_gb)
+        if config.eigenvalue_file is None
         else None
     )
     quote = plan.price(eigen=eigen)
-    driver_note = f", eigen driver {quote.eigen.driver}" if quote.eigen else ""
+    required_gb = max(quote.total_peak_gb, eigen.required_gb if eigen else 0.0)
+    if eigen is not None:
+        n_kinship = (
+            plan.n_input_samples
+            if config.save_kinship or config.kinship_file is not None
+            else plan.n_samples
+        )
+        if config.kinship_file is None:
+            kinship_gb = memory.estimate_streaming_memory(
+                n_kinship,
+                chunk_size=DEFAULT_STATS_CHUNK,
+            ).kinship_gb
+            kinship_gb += (
+                max(0, plan.n_input_samples - n_kinship) * DEFAULT_STATS_CHUNK * 8 / 1e9
+            )
+        else:
+            kinship_gb = square_matrix_gb(n_kinship)
+        if n_kinship != plan.n_samples:
+            kinship_gb = max(
+                kinship_gb,
+                square_matrix_gb(n_kinship) + square_matrix_gb(plan.n_samples),
+            )
+        required_gb = max(required_gb, kinship_gb)
+    driver_note = f", eigen driver {eigen.driver}" if eigen else ""
     logger.info(
         f"Memory estimate ({summary.runner_name}): "
-        f"{quote.total_peak_gb:.1f}GB required, "
+        f"{required_gb:.1f}GB required, "
         f"{available_gb:.1f}GB available"
         f" (pre-filter compute chunk {quote.compute_chunk_size}{driver_note})"
     )
     memory.require(
-        quote.total_peak_gb,
+        required_gb,
         available_gb,
         summary.runner_name,
         budget_gb=plan.mem_budget_gb,
     )
+
+    return eigen

@@ -51,24 +51,15 @@ size_t pab_entry_count(int n_rows)
     return k * (k + 1) * (k + 2) / 6;
 }
 
-size_t pab_transport_peak_bytes(int n_cvt)
+size_t pab_table_bytes(int n_cvt)
 {
     size_t rows = (size_t)n_cvt + 2;
     size_t index = ((size_t)n_cvt + 3) * rows / 2;
     size_t inv = index - rows;
     size_t int_count = inv + rows + 2 * ((size_t)n_cvt + 1)
         + 2 * rows + 2 * rows;
-    /* During parsing, raw stride-4 entries and their pab_entry_t copy coexist. */
     return int_count * sizeof(int)
-        + 2 * pab_entry_count((int)rows) * sizeof(pab_entry_t);
-}
-
-size_t pab_python_conservative_bytes(int n_cvt)
-{
-    size_t entries = pab_entry_count(n_cvt + 2);
-    /* Cached six-int recursion tuple and its referenced int objects. The
-     * temporary flattening list additionally holds four pointers per entry. */
-    return entries * (384 + 4 * sizeof(void *));
+        + pab_entry_count((int)rows) * sizeof(pab_entry_t);
 }
 
 double *alloc_aligned_doubles(size_t n)
@@ -348,30 +339,6 @@ PyObject *build_lmm_result_dict(lmm_output_t *out)
     return result;
 }
 
-int *parse_int32_array(PyObject *obj, int expected_len, const char *name)
-{
-    if (!PyArray_Check(obj) ||
-        PyArray_NDIM((PyArrayObject *)obj) != 1 ||
-        PyArray_TYPE((PyArrayObject *)obj) != NPY_INT32) {
-        PyErr_Format(PyExc_TypeError,
-            "%s must be a one-dimensional int32 array", name);
-        return NULL;
-    }
-    PyArrayObject *arr = (PyArrayObject *)PyArray_FROM_OTF(
-        obj, NPY_INT32, NPY_ARRAY_C_CONTIGUOUS);
-    if (!arr) return NULL;
-    if (PyArray_SIZE(arr) != expected_len) {
-        PyErr_Format(PyExc_ValueError, "%s must have %d elements", name, expected_len);
-        Py_DECREF(arr);
-        return NULL;
-    }
-    int *copy = (int *)malloc((size_t)expected_len * sizeof(int));
-    if (!copy) { Py_DECREF(arr); PyErr_NoMemory(); return NULL; }
-    memcpy(copy, PyArray_DATA(arr), (size_t)expected_len * sizeof(int));
-    Py_DECREF(arr);
-    return copy;
-}
-
 static int get_pab_index(int a, int b, int n_cvt)
 {
     int cols = n_cvt + 2;
@@ -380,287 +347,72 @@ static int get_pab_index(int a, int b, int n_cvt)
     return (2 * cols - a1 + 2) * (a1 - 1) / 2 + b1 - a1;
 }
 
-static int get_pab_int(PyObject *dict, const char *key, int *value)
+int build_pab_table(int n_cvt, pab_table_t *t, int n_samples)
 {
-    PyObject *obj = PyDict_GetItemString(dict, key);
-    if (!obj) {
-        PyErr_Format(PyExc_KeyError, "pab_table_dict missing key '%s'", key);
-        return -1;
-    }
-    long parsed = PyLong_AsLong(obj);
-    if (parsed == -1 && PyErr_Occurred()) {
-        PyErr_Clear();
-        PyErr_Format(PyExc_TypeError,
-            "pab_table_dict key '%s' must be an int in range [%d, %d]",
-            key, INT_MIN, INT_MAX);
-        return -1;
-    }
-    if (parsed < INT_MIN || parsed > INT_MAX) {
-        PyErr_Format(PyExc_ValueError,
-            "pab_table_dict key '%s' must fit in a C int", key);
-        return -1;
-    }
-    *value = (int)parsed;
-    return 0;
-}
-
-static int reject_noncanonical_int(
-    const char *key, int supplied, int expected)
-{
-    if (supplied == expected) return 0;
-    PyErr_Format(PyExc_ValueError,
-        "%s=%d does not match canonical value %d derived from n_cvt",
-        key, supplied, expected);
-    return -1;
-}
-
-static int reject_noncanonical_array_value(
-    const char *key, int offset, int supplied, int expected)
-{
-    if (supplied == expected) return 0;
-    PyErr_Format(PyExc_ValueError,
-        "%s[%d]=%d does not match canonical value %d derived from n_cvt",
-        key, offset, supplied, expected);
-    return -1;
-}
-
-int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples)
-{
-    int supplied_n_index, supplied_n_rows, supplied_n_inv, supplied_n_var;
-    int supplied_idx_xx, supplied_idx_xy, supplied_idx_yy;
-
     memset(t, 0, sizeof(*t));
-    if (get_pab_int(dict, "n_cvt", &t->n_cvt) < 0) return -1;
-    if (t->n_cvt < 1 || t->n_cvt > MAX_N_CVT) {
-        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, t->n_cvt);
+    if (n_cvt < 1 || n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d", MAX_N_CVT, n_cvt);
         return -1;
     }
-
-    t->n_rows = t->n_cvt + 2;
-    t->n_index = (t->n_cvt + 3) * (t->n_cvt + 2) / 2;
-    t->n_var = t->n_cvt + 2;
+    t->n_cvt = n_cvt;
+    t->n_rows = n_cvt + 2;
+    t->n_index = (n_cvt + 3) * (n_cvt + 2) / 2;
+    t->n_var = n_cvt + 2;
     t->n_inv = t->n_index - t->n_var;
-    t->idx_xx = get_pab_index(t->n_cvt + 1, t->n_cvt + 1, t->n_cvt);
-    t->idx_xy = get_pab_index(t->n_cvt + 1, t->n_cvt + 2, t->n_cvt);
-    t->idx_yy = get_pab_index(t->n_cvt + 2, t->n_cvt + 2, t->n_cvt);
-    t->df = n_samples - t->n_cvt - 1;
+    t->idx_xx = get_pab_index(n_cvt + 1, n_cvt + 1, n_cvt);
+    t->idx_xy = get_pab_index(n_cvt + 1, n_cvt + 2, n_cvt);
+    t->idx_yy = get_pab_index(n_cvt + 2, n_cvt + 2, n_cvt);
+    t->df = n_samples - n_cvt - 1;
+    t->n_entries = (int)pab_entry_count(t->n_rows);
 
-#define CHECK_CANONICAL_INT(key, field) do { \
-    if (get_pab_int(dict, key, &supplied_##field) < 0 || \
-        reject_noncanonical_int(key, supplied_##field, t->field) < 0) return -1; \
-} while(0)
-    CHECK_CANONICAL_INT("n_index", n_index);
-    CHECK_CANONICAL_INT("n_rows", n_rows);
-    CHECK_CANONICAL_INT("n_inv", n_inv);
-    CHECK_CANONICAL_INT("n_var", n_var);
-    CHECK_CANONICAL_INT("idx_xx", idx_xx);
-    CHECK_CANONICAL_INT("idx_xy", idx_xy);
-    CHECK_CANONICAL_INT("idx_yy", idx_yy);
-#undef CHECK_CANONICAL_INT
+#define ALLOC_FIELD(field, count) do { \
+    t->field = malloc((size_t)(count) * sizeof(*t->field)); \
+    if (!t->field) { free_pab_table(t); PyErr_NoMemory(); return -1; } \
+} while (0)
+    ALLOC_FIELD(invariant_indices, t->n_inv);
+    ALLOC_FIELD(varying_indices, t->n_var);
+    ALLOC_FIELD(logdet_diag_rows, n_cvt + 1);
+    ALLOC_FIELD(logdet_diag_cols, n_cvt + 1);
+    ALLOC_FIELD(level_offsets, t->n_rows);
+    ALLOC_FIELD(level_counts, t->n_rows);
+    ALLOC_FIELD(var_a_cols, t->n_var);
+    ALLOC_FIELD(var_b_cols, t->n_var);
+    ALLOC_FIELD(entries, t->n_entries);
+#undef ALLOC_FIELD
 
-    /* Parse array fields — free_pab_table on failure (safe: pointers NULL-init'd) */
-#define GETARR(key, field, len) do { \
-    PyObject *obj = PyDict_GetItemString(dict, key); \
-    if (!obj) { PyErr_Format(PyExc_KeyError, "pab_table_dict missing key '%s'", key); free_pab_table(t); return -1; } \
-    (field) = parse_int32_array(obj, (len), key); \
-    if (!(field)) { free_pab_table(t); return -1; } \
-} while(0)
-
-    GETARR("invariant_indices", t->invariant_indices, t->n_inv);
-    GETARR("varying_indices",   t->varying_indices,   t->n_var);
-    GETARR("logdet_diag_rows",  t->logdet_diag_rows,  t->n_cvt + 1);
-    GETARR("logdet_diag_cols",  t->logdet_diag_cols,  t->n_cvt + 1);
-    GETARR("level_offsets",     t->level_offsets,      t->n_rows);
-    GETARR("level_counts",      t->level_counts,       t->n_rows);
-    GETARR("var_a_cols",        t->var_a_cols,         t->n_var);
-    GETARR("var_b_cols",        t->var_b_cols,         t->n_var);
-#undef GETARR
-
-    for (int i = 0; i < t->n_inv; i++) {
-        if (t->invariant_indices[i] < 0 || t->invariant_indices[i] >= t->n_index) {
-            PyErr_Format(PyExc_ValueError,
-                "invariant_indices[%d] = %d out of range [0, %d)",
-                i, t->invariant_indices[i], t->n_index);
-            free_pab_table(t);
-            return -1;
-        }
-    }
-    for (int i = 0; i < t->n_var; i++) {
-        if (t->varying_indices[i] < 0 || t->varying_indices[i] >= t->n_index) {
-            PyErr_Format(PyExc_ValueError,
-                "varying_indices[%d] = %d out of range [0, %d)",
-                i, t->varying_indices[i], t->n_index);
-            free_pab_table(t);
-            return -1;
-        }
-    }
-    for (int d = 0; d < t->n_cvt + 1; d++) {
-        if (t->logdet_diag_rows[d] < 0 || t->logdet_diag_rows[d] >= t->n_rows) {
-            PyErr_Format(PyExc_ValueError,
-                "logdet_diag_rows[%d] = %d out of range [0, %d)",
-                d, t->logdet_diag_rows[d], t->n_rows);
-            free_pab_table(t);
-            return -1;
-        }
-        if (t->logdet_diag_cols[d] < 0 || t->logdet_diag_cols[d] >= t->n_index) {
-            PyErr_Format(PyExc_ValueError,
-                "logdet_diag_cols[%d] = %d out of range [0, %d)",
-                d, t->logdet_diag_cols[d], t->n_index);
-            free_pab_table(t);
-            return -1;
-        }
-    }
-    for (int v = 0; v < t->n_var; v++) {
-        if (t->var_a_cols[v] < 0 || t->var_a_cols[v] > t->n_cvt + 1 ||
-            t->var_b_cols[v] < 0 || t->var_b_cols[v] > t->n_cvt + 1) {
-            PyErr_Format(PyExc_ValueError,
-                "var_a_cols[%d]=%d or var_b_cols[%d]=%d out of range [0, %d]",
-                v, t->var_a_cols[v], v, t->var_b_cols[v], t->n_cvt + 1);
-            free_pab_table(t);
-            return -1;
-        }
-    }
-
-    /* Parse entries (stride-4 flat int32 array) */
-    {
-        PyObject *entries_obj = PyDict_GetItemString(dict, "entries");
-        if (!entries_obj) {
-            PyErr_SetString(PyExc_KeyError, "pab_table_dict missing key 'entries'");
-            free_pab_table(t);
-            return -1;
-        }
-        int expected_n_entries = (int)pab_entry_count(t->n_rows);
-        npy_intp expected_len = (npy_intp)expected_n_entries * 4;
-        t->n_entries = expected_n_entries;
-
-        int *raw = parse_int32_array(entries_obj, (int)expected_len, "entries");
-        if (!raw) { free_pab_table(t); return -1; }
-        t->entries = (pab_entry_t *)malloc((size_t)t->n_entries * sizeof(pab_entry_t));
-        if (!t->entries) {
-            free(raw);
-            PyErr_NoMemory();
-            free_pab_table(t);
-            return -1;
-        }
-        for (int i = 0; i < t->n_entries; i++) {
-            t->entries[i].index_ab = raw[i * 4 + 0];
-            t->entries[i].index_aw = raw[i * 4 + 1];
-            t->entries[i].index_bw = raw[i * 4 + 2];
-            t->entries[i].index_ww = raw[i * 4 + 3];
-        }
-        free(raw);
-
-        /* Validate entry indices are in range [0, n_index) */
-        for (int i = 0; i < t->n_entries; i++) {
-            if (t->entries[i].index_ab < 0 || t->entries[i].index_ab >= t->n_index ||
-                t->entries[i].index_aw < 0 || t->entries[i].index_aw >= t->n_index ||
-                t->entries[i].index_bw < 0 || t->entries[i].index_bw >= t->n_index ||
-                t->entries[i].index_ww < 0 || t->entries[i].index_ww >= t->n_index) {
-                PyErr_Format(PyExc_ValueError,
-                    "entries[%d] has out-of-range index (n_index=%d)", i, t->n_index);
-                free_pab_table(t);
-                return -1;
-            }
-        }
-
-        /* Validate level_offsets/level_counts don't exceed n_entries */
-        for (int p = 0; p < t->n_rows; p++) {
-            if (t->level_offsets[p] < 0 ||
-                t->level_counts[p] < 0 ||
-                (int64_t)t->level_offsets[p] + t->level_counts[p] > t->n_entries) {
-                PyErr_Format(PyExc_ValueError,
-                    "level_offsets[%d]=%d + level_counts[%d]=%d exceeds n_entries=%d",
-                    p, t->level_offsets[p], p, t->level_counts[p], t->n_entries);
-                free_pab_table(t);
-                return -1;
+    int inv = 0, var = 0;
+    for (int a = 1; a < n_cvt + 3; a++) {
+        for (int b = a; b < n_cvt + 3; b++) {
+            int index = get_pab_index(a, b, n_cvt);
+            if (a - 1 == n_cvt || b - 1 == n_cvt) {
+                t->varying_indices[var] = index;
+                t->var_a_cols[var] = a - 1;
+                t->var_b_cols[var++] = b - 1;
+            } else {
+                t->invariant_indices[inv++] = index;
             }
         }
     }
-
-    /* The kernels require the exact packed layout, not merely in-range
-     * indices. Validate the authoritative Python builder's transport data
-     * against the layout implied by n_cvt before exposing the workspace. */
-    {
-        int inv = 0, var = 0;
-        int genotype_col = t->n_cvt;
-        for (int a = 1; a < t->n_cvt + 3; a++) {
-            for (int b = a; b < t->n_cvt + 3; b++) {
-                int index = get_pab_index(a, b, t->n_cvt);
-                if (a - 1 == genotype_col || b - 1 == genotype_col) {
-                    if (reject_noncanonical_array_value(
-                            "varying_indices", var, t->varying_indices[var], index) < 0 ||
-                        reject_noncanonical_array_value(
-                            "var_a_cols", var, t->var_a_cols[var], a - 1) < 0 ||
-                        reject_noncanonical_array_value(
-                            "var_b_cols", var, t->var_b_cols[var], b - 1) < 0) {
-                        free_pab_table(t);
-                        return -1;
-                    }
-                    var++;
-                } else {
-                    if (reject_noncanonical_array_value(
-                            "invariant_indices", inv, t->invariant_indices[inv], index) < 0) {
-                        free_pab_table(t);
-                        return -1;
-                    }
-                    inv++;
-                }
-            }
-        }
-
-        int entry = 0;
-        for (int p = 0; p < t->n_rows; p++) {
-            int count = 0;
-            if (p > 0) {
-                int remaining = t->n_rows - p;
-                count = remaining * (remaining + 1) / 2;
-            }
-            if (reject_noncanonical_array_value(
-                    "level_offsets", p, t->level_offsets[p], entry) < 0 ||
-                reject_noncanonical_array_value(
-                    "level_counts", p, t->level_counts[p], count) < 0) {
-                free_pab_table(t);
-                return -1;
-            }
-            for (int a = p + 1; p > 0 && a < t->n_rows + 1; a++) {
-                for (int b = a; b < t->n_rows + 1; b++) {
-                    int expected[4] = {
-                        get_pab_index(a, b, t->n_cvt),
-                        get_pab_index(a, p, t->n_cvt),
-                        get_pab_index(b, p, t->n_cvt),
-                        get_pab_index(p, p, t->n_cvt),
-                    };
-                    int supplied[4] = {
-                        t->entries[entry].index_ab,
-                        t->entries[entry].index_aw,
-                        t->entries[entry].index_bw,
-                        t->entries[entry].index_ww,
-                    };
-                    for (int field = 0; field < 4; field++) {
-                        if (reject_noncanonical_array_value(
-                                "entries", entry * 4 + field,
-                                supplied[field], expected[field]) < 0) {
-                            free_pab_table(t);
-                            return -1;
-                        }
-                    }
-                    entry++;
-                }
-            }
-        }
-
-        for (int d = 0; d < t->n_cvt + 1; d++) {
-            if (reject_noncanonical_array_value(
-                    "logdet_diag_rows", d, t->logdet_diag_rows[d], d) < 0 ||
-                reject_noncanonical_array_value(
-                    "logdet_diag_cols", d, t->logdet_diag_cols[d],
-                    get_pab_index(d + 1, d + 1, t->n_cvt)) < 0) {
-                free_pab_table(t);
-                return -1;
+    int entry = 0;
+    for (int p = 0; p < t->n_rows; p++) {
+        int remaining = t->n_rows - p;
+        t->level_offsets[p] = entry;
+        t->level_counts[p] = p > 0 ? remaining * (remaining + 1) / 2 : 0;
+        for (int a = p + 1; p > 0 && a < t->n_rows + 1; a++) {
+            for (int b = a; b < t->n_rows + 1; b++) {
+                t->entries[entry++] = (pab_entry_t){
+                    get_pab_index(a, b, n_cvt),
+                    get_pab_index(a, p, n_cvt),
+                    get_pab_index(b, p, n_cvt),
+                    get_pab_index(p, p, n_cvt),
+                };
             }
         }
     }
-
+    for (int d = 0; d < n_cvt + 1; d++) {
+        t->logdet_diag_rows[d] = d;
+        t->logdet_diag_cols[d] = get_pab_index(d + 1, d + 1, n_cvt);
+    }
     return 0;
 }
 

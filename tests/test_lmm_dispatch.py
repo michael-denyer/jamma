@@ -35,7 +35,7 @@ _EXPECTED = {
     (False, 2): DispatchPath.FUSED_GENERAL,
 }
 
-_FEEDS_RAW_UTG = {
+_PIPELINED_PATHS = {
     DispatchPath.FUSED,
     DispatchPath.FUSED_GENERAL,
 }
@@ -47,7 +47,12 @@ def _select(n_cvt: int, lmm_mode: LmmMode, *, accel: bool = True) -> DispatchPat
 
 def test_no_extension_is_always_the_numpy_fallback():
     for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
-        assert _select(n_cvt, mode, accel=False) is DispatchPath.NUMPY_FALLBACK
+        expected = (
+            DispatchPath.NUMPY_WALD
+            if (n_cvt, mode) == (1, 1)
+            else DispatchPath.NUMPY_FALLBACK
+        )
+        assert _select(n_cvt, mode, accel=False) is expected
 
 
 def test_every_input_maps_to_the_documented_path():
@@ -74,8 +79,7 @@ def test_path_properties_agree_with_membership():
     """The derived properties must not drift from the members they describe."""
     for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False)):
         path = _select(n_cvt, mode, accel=accel)
-        assert path.use_split == (path is not DispatchPath.NUMPY_FALLBACK)
-        assert path.feeds_raw_utg == (path in _FEEDS_RAW_UTG)
+        assert path.use_split == (path in _PIPELINED_PATHS)
 
 
 def test_mode_and_ncvt_gating():

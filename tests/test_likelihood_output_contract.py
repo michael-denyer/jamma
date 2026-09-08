@@ -8,7 +8,6 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.likelihood import compute_null_model_mle
-from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.schema import LmmMode
 from jamma.lmm.uab import batch_compute_uab_numpy, compute_uab_invariant_soa
 from tests.builders import rotated_lmm_inputs
@@ -72,7 +71,7 @@ def _compute(data, mode: LmmMode, backend: str):
         50,
         20,
         1,
-        build_pab_table_for_c(data.n_cvt)._asdict(),
+        data.n_cvt,
         lmm_mode=mode,
         **(
             {"hi_eval_null": hi_eval_null, "logl_H0": logl_H0}

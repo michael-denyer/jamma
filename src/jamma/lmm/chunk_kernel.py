@@ -22,12 +22,16 @@ from typing import Any, assert_never
 import numpy as np
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
+from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy, compute_wald_split_numpy
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.prepare_common import PreparedLmmRun
 from jamma.lmm.schema import LmmConfig, LmmMode
-from jamma.lmm.uab import compute_uab_invariant_soa
+from jamma.lmm.uab import (
+    batch_compute_uab_numpy,
+    batch_compute_uab_varying_soa_numpy,
+    compute_iab_invariant_scalars_ncvt1,
+    compute_uab_invariant_soa,
+)
 from jamma.lmm.workspace import WorkspaceSpec
 
 # What a kernel hands back. The Wald C kernels return the WaldResult
@@ -93,7 +97,7 @@ class RunInvariants:
             w=UtW[:, 0].copy() if dispatch.needs_null_w else None,
             uab_invariant_soa=(
                 compute_uab_invariant_soa(UtW, prepared.Uty, n_cvt)
-                if dispatch.use_split
+                if dispatch is not DispatchPath.NUMPY_FALLBACK
                 else None
             ),
         )
@@ -173,6 +177,8 @@ def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
             return _ncvt1_kernel(inv, workspace.max_threads)
         case DispatchPath.FUSED_GENERAL:
             return _fused_general_kernel(inv, workspace.max_threads)
+        case DispatchPath.NUMPY_WALD:
+            return _numpy_wald_kernel(inv, workspace.max_threads)
         case DispatchPath.NUMPY_FALLBACK:
             return _numpy_kernel(inv, workspace.max_threads)
         case _:
@@ -245,7 +251,7 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         inv.n_grid,
         inv.n_refine,
         n_threads,
-        build_pab_table_for_c(inv.n_cvt)._asdict(),
+        inv.n_cvt,
         lmm_mode=inv.lmm_mode,
         **_null_model_kwargs(inv),
     )
@@ -259,6 +265,27 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
     )
 
 
+def _numpy_wald_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
+    invariant = inv.require_invariant_soa()
+    scalars = compute_iab_invariant_scalars_ncvt1(invariant)
+
+    def call(chunk: np.ndarray, threads: int) -> KernelResult:
+        varying = batch_compute_uab_varying_soa_numpy(1, inv.UtW, inv.Uty, chunk)
+        return compute_wald_split_numpy(
+            inv.eigenvalues,
+            varying,
+            invariant,
+            scalars,
+            inv.n_samples,
+            l_min=inv.l_min,
+            l_max=inv.l_max,
+            n_grid=inv.n_grid,
+            n_refine=inv.n_refine,
+        )
+
+    return Kernel("NumPy Wald", inv.n_filtered, call, False, max_threads)
+
+
 def _numpy_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
     """No C extension: the full-Uab pure-NumPy path, chunk by chunk."""
 
@@ -268,7 +295,7 @@ def _numpy_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
             inv.lmm_mode,
             inv.n_cvt,
             inv.eigenvalues,
-            chunk,
+            batch_compute_uab_numpy(inv.n_cvt, inv.UtW, inv.Uty, chunk),
             inv.n_samples,
             l_min=inv.l_min,
             l_max=inv.l_max,

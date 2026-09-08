@@ -274,9 +274,8 @@ def compute_uab_invariant_soa(
 ) -> np.ndarray:
     """Compute SNP-invariant Uab columns in SoA layout (n_inv, n_samples).
 
-    For n_cvt=1, rows are [ww, wy, yy] (3 rows). For n_cvt>1, invariant
-    columns are identified via classify_uab_columns and extracted from a
-    single representative Uab computed with a zero genotype vector.
+    For n_cvt=1, rows are [ww, wy, yy] (3 rows). For n_cvt>1, enumerate
+    upper-triangular covariate/phenotype products in the same packed order.
 
     These columns depend only on UtW and Uty, so they can be computed once
     per run (before the chunk loop) rather than once per chunk.
@@ -298,21 +297,18 @@ def compute_uab_invariant_soa(
         uab_invariant_soa[2, :] = Uty * Uty  # yy
         return uab_invariant_soa
 
-    # General n_cvt: compute full Uab for a zero genotype vector,
-    # then extract invariant columns.
-
-    inv_indices, _var_indices = classify_uab_columns(n_cvt)
-    n_samples = Uty.shape[0]
-
-    # Build a single Uab with zero genotype (invariant columns are
-    # independent of genotype, so the genotype value doesn't matter).
-    utg_t_zero = np.zeros((1, n_samples), dtype=np.float64)
-    Uab_single = _batch_compute_uab_general_numpy(n_cvt, UtW, Uty, utg_t_zero)
-    # Uab_single shape: (1, n_samples, n_index)
-    # Extract invariant columns: advanced indexing a[0, :, list] groups the
-    # integer (0) and list indices at front -> (n_inv, n_samples) SoA layout.
-    uab_invariant_soa = np.ascontiguousarray(Uab_single[0, :, list(inv_indices)])
-    return uab_invariant_soa
+    # Removing the genotype column preserves the packed order of all
+    # invariant pairs. Fill those products directly without a zero-genotype
+    # tensor or the reference Pab recursion table.
+    columns = (*UtW.T, Uty)
+    n_inv = (n_cvt + 1) * (n_cvt + 2) // 2
+    out = np.empty((n_inv, Uty.shape[0]), dtype=np.float64)
+    row = 0
+    for a in range(n_cvt + 1):
+        for b in range(a, n_cvt + 1):
+            np.multiply(columns[a], columns[b], out=out[row])
+            row += 1
+    return out
 
 
 def batch_compute_uab_varying_soa_numpy(

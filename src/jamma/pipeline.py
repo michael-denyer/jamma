@@ -30,6 +30,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.constants import Env
+from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
@@ -476,12 +477,12 @@ class PipelineRunner:
 
         log_pipeline_banner(plan)
 
-        memory_preflight(self.config, analysis.execution)
+        eigen_plan = memory_preflight(self.config, analysis.execution)
 
         # Load/compute eigendecomposition ONCE (shared across phenotypes). The
         # kinship matrix is consumed here; runners use the eigen arrays directly.
         eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
-            analysis, n_samples, n_valid, analyzed_sample_indices
+            analysis, n_samples, n_valid, analyzed_sample_indices, eigen_plan=eigen_plan
         )
         load_s = time.perf_counter() - t_start
 
@@ -528,6 +529,8 @@ class PipelineRunner:
         n_samples: int,
         n_valid: int,
         analyzed_sample_indices: np.ndarray,
+        *,
+        eigen_plan: EigenDriverPlan | None = None,
     ) -> tuple[np.ndarray, np.ndarray, float]:
         """Load or compute the shared eigendecomposition (once for all phenotypes).
 
@@ -579,7 +582,10 @@ class PipelineRunner:
                 weights=weights,
             )
             eigenvalues, eigenvectors = eigendecompose_kinship(
-                K, check_memory=self.config.check_memory
+                K,
+                check_memory=self.config.check_memory,
+                mem_budget=self.config.mem_budget,
+                eigen_plan=eigen_plan,
             )
             if weights is not None:
                 # GEMMA -widv scales the eigenvector rows by sqrt(w) after

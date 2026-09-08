@@ -36,18 +36,12 @@ from jamma.core.memory import (
     estimate_streaming_memory,
     margin_gb,
 )
-from jamma.kinship.loco import _decide_loco_passes
+from jamma.kinship.loco import plan_loco_passes
 
 pytestmark = pytest.mark.tier0
 
-# Recorded after every gate moved onto memory.fits / memory.headroom_gb,
-# under the forced NumPy dsyrk backend the table always prices with. Against
-# the ebc07b6 recording (e943012e...) exactly 32 rows moved: the 12
-# eigen:tie rows pick DSYEVR at the tie, the 18 loco:tie rows go multi-pass
-# at the tie, and 2 loco rows (n=10001, 22 chr, 8GB) batch 4 not 3 because
-# the budget is headroom_gb(available) rather than available minus
-# margin_gb(available). `scripts/dump_memory_ledger.py diff` lists them.
-EXPECTED_DIGEST = "7b6e635ddfaffcd5306d8180bed3266ae2924f23a594e8e88f89955dbf9b4f5a"
+# Updated for LOCO consumer reservation in both single-pass and batched plans.
+EXPECTED_DIGEST = "b2e9b37d5fff95415fedbc02a5fd8183ee12b3bf5d1ff6a0c3b4cceb7f271e57"
 EXPECTED_ROWS = 2438
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
@@ -232,9 +226,7 @@ def _loco_rows() -> list[list]:
         for n_samples in (n_mat, n_mat + 7):
             rows.append(_loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch))
     for n_mat, n_chr in itertools.product(N_SAMPLES, N_CHR):
-        probe = _decide_loco_passes(
-            n_mat, n_mat, n_chr, 10_000, 1e12, max_batch_chrs=None
-        )
+        probe = plan_loco_passes(n_mat, n_mat, n_chr, 10_000, 1e12, max_batch_chrs=None)
         rows.append(
             _loco_row(
                 n_mat,
@@ -250,7 +242,7 @@ def _loco_rows() -> list[list]:
 
 
 def _loco_row(n_mat, n_samples, n_chr, chunk, available, max_batch, tag="loco"):
-    plan = _decide_loco_passes(
+    plan = plan_loco_passes(
         n_mat, n_samples, n_chr, chunk, available, max_batch_chrs=max_batch
     )
     return [

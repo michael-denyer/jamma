@@ -52,11 +52,11 @@ def _fused_score_lrt_null_model(split_wald_data):
 
 
 @requires_c
-def test_abi_version_19():
-    """ABI 20 requires the mode 2 alternative-model likelihood output."""
+def test_abi_version_21():
+    """ABI 21 constructs the general workspace table from n_cvt."""
     from jamma.lmm._lmm_accel import ABI_VERSION
 
-    assert ABI_VERSION == 20
+    assert ABI_VERSION == 21
 
 
 def _make_runner_test_data(rng, n_samples=50, n_snps=20):

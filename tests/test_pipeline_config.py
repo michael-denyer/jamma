@@ -208,8 +208,8 @@ class TestCheckMemory:
         )
         assert result is None
 
-    def test_gates_without_returning_a_value(self) -> None:
-        """memory_preflight gates and logs; the quote comes from plan.price()."""
+    def test_gates_and_returns_the_selected_eigen_driver(self) -> None:
+        """Preflight returns its driver so execution preserves the resource decision."""
         from jamma.lmm.association_plan import MemoryPlan
 
         config = PipelineConfig(
@@ -224,7 +224,8 @@ class TestCheckMemory:
         )
         result = memory_preflight(runner.config, plan)
 
-        assert result is None
+        assert result is not None
+        assert result.required_gb > 0
         quote = plan.price()
         assert isinstance(quote, MemoryPlan)
         assert quote.total_peak_gb >= 0

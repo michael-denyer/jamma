@@ -85,7 +85,7 @@ class ExecutableAssociationPlan:
     def _group_workspace_bytes(self) -> int:
         """Fixed bytes for all phenotype kernels live in one bounded group."""
         group_size = self.phenotype_group_size
-        if self.dispatch is DispatchPath.NUMPY_FALLBACK:
+        if not self.dispatch.use_split:
             kernel_bytes = self.workspace.fixed_bytes
         else:
             per_kernel = self.workspace.persistent_bytes + (
@@ -134,7 +134,7 @@ class ExecutableAssociationPlan:
                 pipeline_buffers=chunks.n_buffers,
                 compute_chunk_size=chunks.chunk_size,
                 n_grid=0,
-                eigendecomp_peak_gb=None if eigen is None else eigen.required_gb,
+                eigendecomp_peak_gb=0.0 if eigen is None else eigen.required_gb,
                 uab_iab_gb=extra_gb,
             )
             stats_subset_gb = (
@@ -189,6 +189,13 @@ class ExecutableAssociationPlan:
             n_cvt=self.n_cvt,
             n_buffers=chunks.n_buffers,
             n_grid=0,
+            uab_iab_gb=(
+                chunks.chunk_size
+                * lmm_extra_bytes_per_snp(self.n_samples, self.n_cvt, self.dispatch)
+                / 1e9
+                if self.dispatch is DispatchPath.NUMPY_WALD
+                else None
+            ),
         )
         return MemoryPlan(
             total_peak_gb=batch_arrays_gb + input_subset_gb + workspace_gb,

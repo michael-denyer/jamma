@@ -13,6 +13,7 @@ from loguru import logger
 
 from jamma.lmm.schema import FORMAT_COLUMNS, HEADERS, SnpMeta, get_spec
 from jamma.lmm.stats import AssocResult
+from jamma.utils.atomic_publish import publish_temp_path, unlink_quietly
 
 # Retry backoff schedule (seconds) for transient write failures
 _RETRY_BACKOFF = (0.1, 0.5, 2.0)
@@ -106,12 +107,17 @@ class IncrementalAssocWriter:
         self.test_type = test_type
         self._file = None
         self._count = 0
+        self._temp_path = publish_temp_path(self.path)
 
     def __enter__(self) -> "IncrementalAssocWriter":
         """Open file and write header."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = open(self.path, "w")
-        self._file.write(HEADERS[self.test_type] + "\n")
+        try:
+            self._file = open(self._temp_path, "w")
+            self._file.write(HEADERS[self.test_type] + "\n")
+        except BaseException:
+            self._cleanup_partial()
+            raise
         return self
 
     def _close_file(self) -> None:
@@ -127,10 +133,7 @@ class IncrementalAssocWriter:
     def _cleanup_partial(self) -> None:
         """Close file and delete partial output (best-effort)."""
         self._close_file()
-        try:
-            self.path.unlink(missing_ok=True)
-        except OSError as e:
-            logger.warning(f"Failed to delete partial output {self.path}: {e}")
+        unlink_quietly(self._temp_path)
 
     def _write_buf(self, buf: str, count: int) -> None:
         """Write pre-formatted buffer with retry logic.
@@ -292,40 +295,33 @@ class IncrementalAssocWriter:
 
         self._write_buf("\n".join(lines) + "\n", n)
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type, _exc_val, _exc_tb) -> None:
         """Close file; delete partial on error, retain on interrupt/OOM."""
         if exc_type is not None:
-            if issubclass(exc_type, (KeyboardInterrupt, SystemExit, MemoryError)):
-                # Resource/signal — partial output is valid, retain it
-                logger.warning(
-                    f"{exc_type.__name__} with {self._count} results written to "
-                    f"{self.path} (partial file retained)"
-                )
+            if not issubclass(exc_type, Exception) or issubclass(exc_type, MemoryError):
                 self._close_file()
-            elif issubclass(exc_type, Exception):
-                # Computation error — partial output is unreliable, delete it
-                logger.warning(
-                    f"Error during association testing "
-                    f"({exc_type.__name__}: {exc_val}); "
-                    f"deleting partial output {self.path} "
-                    f"({self._count} results written)"
+                partial = self._temp_path.with_name(
+                    self._temp_path.name.replace(".tmp.", ".partial.", 1)
                 )
-                self._cleanup_partial()
+                try:
+                    self._temp_path.replace(partial)
+                except OSError as error:
+                    logger.warning(
+                        f"Partial output remains at {self._temp_path}: {error}"
+                    )
+                else:
+                    logger.warning(f"Interrupted; partial output retained at {partial}")
             else:
-                # Other BaseException (e.g. GeneratorExit) — close file, retain output
-                self._close_file()
-            return  # exception propagates (returning None does not suppress)
-        if self._file:
+                self._cleanup_partial()
+            return
+        if self._file is not None:
             try:
                 self._file.flush()
-            except OSError as e:
-                logger.error(
-                    f"Failed to flush output file {self.path} on close: {e}. "
-                    f"Deleting partial output ({self._count} results written)."
-                )
+                self._file.close()
+                self._file = None
+                self._temp_path.replace(self.path)
+            finally:
                 self._cleanup_partial()
-                raise  # Caller must know the write failed
-            self._close_file()
 
     @property
     def count(self) -> int:

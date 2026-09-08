@@ -40,19 +40,21 @@ def test_ncvt_101_rejected_by_c_extension():
     parses the Pab table, which carries n_cvt, before anything else.
     """
     from jamma.lmm._lmm_accel import create_workspace_general_c
-    from jamma.lmm.pab import build_pab_table_for_c
 
     n_cvt = 101
     n_samples = 200
 
     rng = np.random.default_rng(777)
     eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]
-    pab_table = build_pab_table_for_c(n_cvt)._asdict()
+    pab_table = n_cvt
 
     with pytest.raises(ValueError, match=r"n_cvt must be 1\.\.100, got 101"):
         create_workspace_general_c(
             eigenvalues,
-            np.zeros((pab_table["n_inv"], n_samples), dtype=np.float64),
+            np.zeros(
+                (((n_cvt + 3) * (n_cvt + 2) // 2 - (n_cvt + 2)), n_samples),
+                dtype=np.float64,
+            ),
             np.zeros((n_samples, n_cvt), dtype=np.float64),
             np.zeros(n_samples, dtype=np.float64),
             n_samples,

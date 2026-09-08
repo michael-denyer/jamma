@@ -13,7 +13,6 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_numpy,
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
-from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.reml_score import (
     _batch_reml_score_log_lambda_numpy,
     _batch_reml_score_log_lambda_split_ncvt1_numpy,
@@ -88,7 +87,7 @@ def _run_general_c_at_target(
         50,
         20,
         1,
-        build_pab_table_for_c(2)._asdict(),
+        2,
         lmm_mode=1,
     )
     result = accel.require().compute_lmm_chunk_fused_general_c(

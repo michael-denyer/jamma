@@ -71,7 +71,7 @@ typedef struct {
 } lmm_output_t;
 
 /* ---------------------------------------------------------------------------
- * Pab recursion table, parsed from the dict build_pab_table_for_c() returns.
+ * Pab recursion table, constructed from n_cvt at workspace creation.
  * ------------------------------------------------------------------------- */
 
 
@@ -87,8 +87,7 @@ size_t general_scratch_doubles(int n_samples, int n_rows);
 size_t general_pab_doubles(int n_rows, int n_index);
 size_t general_lrt_thread_doubles(int n_samples, int n_index);
 size_t pab_entry_count(int n_rows);
-size_t pab_transport_peak_bytes(int n_cvt);
-size_t pab_python_conservative_bytes(int n_cvt);
+size_t pab_table_bytes(int n_cvt);
 
 /* One n-double aligned buffer per thread, so the per-SNP loop never calls
  * malloc (heap-lock contention at high thread counts). NULL on any failure,
@@ -145,14 +144,8 @@ PyObject *build_lmm_result_dict(lmm_output_t *out);
  * Argument parsing
  * ------------------------------------------------------------------------- */
 
-/* Malloc'd copy of a length-checked int32 array; caller frees. */
-int *parse_int32_array(PyObject *obj, int expected_len, const char *name);
-
-/* Parse and fully validate the dict PabCTable._asdict() produces: every
- * index in range, the level table consistent with entries. 0 on success, -1
- * with PyErr set. On success the caller must free_pab_table. On failure
- * everything already taken is released and the struct is zeroed. */
-int parse_pab_table_from_dict(PyObject *dict, pab_table_t *t, int n_samples);
+/* Construct the canonical packed table from n_cvt. Free on every failure. */
+int build_pab_table(int n_cvt, pab_table_t *t, int n_samples);
 
 /* Release the owned fields and zero the struct, so a second call is a no-op.
  * Does NOT free the struct itself. */

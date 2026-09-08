@@ -32,7 +32,6 @@ from jamma.lmm.compute_numpy import (
 )
 from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
-from jamma.lmm.pab import build_pab_table_for_c
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
@@ -140,7 +139,7 @@ def mouse_data():
 
 def _general_score_only_result(d):
     """The general workspace's lmm_mode=3 (Score only) compute for *d*."""
-    pab_table = build_pab_table_for_c(d["n_cvt"])._asdict()
+    pab_table = d["n_cvt"]
     ws = accel.require().create_workspace_general_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
@@ -161,7 +160,7 @@ def _general_score_only_result(d):
 
 def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
     """The general workspace's lmm_mode=2 (LRT only) compute for *d*."""
-    pab_table = build_pab_table_for_c(d["n_cvt"])._asdict()
+    pab_table = d["n_cvt"]
     ws = accel.require().create_workspace_general_c(
         d["eigenvalues"],
         d["uab_inv_soa"],

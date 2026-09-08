@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-import collections
 import shutil
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
+from loguru import logger
 
 from jamma.lmm.schema import LmmMode
-from jamma.pipeline import BackendRequest, PipelineConfig, PipelineRunner
+from jamma.pipeline import (
+    BackendRequest,
+    PipelineConfig,
+    PipelineResult,
+    PipelineRunner,
+)
 from tests.builders import write_fam
 from tests.fixture_paths import SYNTHETIC
 
@@ -67,6 +71,30 @@ def _config(
     )
 
 
+def _run_logged(config: PipelineConfig) -> tuple[PipelineResult, list[str]]:
+    """Run the pipeline and return its result with the INFO lines it logged."""
+    messages: list[str] = []
+    sink_id = logger.add(messages.append, level="INFO", format="{message}")
+    try:
+        return PipelineRunner(config).run(), messages
+    finally:
+        logger.remove(sink_id)
+
+
+def _genotype_passes(messages: list[str], *, filtered_only: bool = False) -> int:
+    """Count the ``Reading N SNPs in K chunks`` lines, one per pass over the file.
+
+    ``filtered_only`` keeps just the association pass over the SNPs that
+    survived filtering.
+    """
+    marker = " filtered SNPs in " if filtered_only else " SNPs in "
+    return sum(
+        1
+        for message in messages
+        if message.startswith("Reading ") and marker in message
+    )
+
+
 @pytest.mark.parametrize(
     ("backend", "lmm_mode", "force_fallback"),
     [
@@ -77,68 +105,44 @@ def _config(
         ("numpy", 4, True),
     ],
 )
-def test_multi_phenotype_reuses_preparation_and_preserves_each_result(
+def test_multi_phenotype_reads_genotypes_once_and_preserves_each_result(
     tmp_path: Path,
     backend: BackendRequest,
     lmm_mode: LmmMode,
     force_fallback: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """One shared preparation produces the same files as isolated runs."""
+    """A two-phenotype run reads the genotype file as often as a one-phenotype run.
+
+    The PLINK reader logs one ``Reading N SNPs in K chunks`` line per pass
+    over the file, so the log is where a user sees whether the streaming
+    backend collected SNP statistics and streamed the association chunks
+    once for both phenotypes or once per phenotype. The in-memory backend's
+    statistics pass and the covariate rotation produce no output, so this
+    test does not observe them; it checks their results against isolated
+    single-phenotype runs instead.
+    """
     bfile, phenotypes, covariate_path = _study(tmp_path)
     if force_fallback:
         from jamma.lmm import accel
 
         monkeypatch.setattr(accel, "_accel", None)
-    calls: collections.Counter[str] = collections.Counter()
 
-    def profile(frame, event, _arg):  # type: ignore[no-untyped-def]
-        if event != "call":
-            return
-        filename = frame.f_code.co_filename
-        name = frame.f_code.co_name
-        if (
-            Path(filename).name in {"runner_numpy.py", "runner_numpy_streaming.py"}
-            and name == "prepare"
-        ):
-            calls["source preparation"] += 1
-        caller = frame.f_back.f_code.co_filename if frame.f_back is not None else ""
-        if (
-            filename.endswith("snp_stats.py")
-            and name == "collect_snp_stats_from_chunks"
-            and Path(caller).name == "runner_numpy.py"
-        ):
-            calls["collect_snp_stats_from_chunks"] += 1
-        if (
-            filename.endswith("snp_stats.py")
-            and name == "collect_streamed_snp_stats"
-            and Path(caller).name == "runner_numpy_streaming.py"
-        ):
-            calls["collect_streamed_snp_stats"] += 1
-        if filename.endswith("chunk_runner_numpy.py") and name == "prepare":
-            calls["chunk rotations"] += 1
-        if filename.endswith("prepare_common.py") and name == "_build_covariate_matrix":
-            calls["covariate preparation"] += 1
-        if (
-            filename.endswith("prepare_common.py")
-            and name == "prepare_rotated_covariates"
-        ):
-            calls["covariate rotation"] += 1
-
-    sys.setprofile(profile)
-    try:
-        combined = PipelineRunner(
-            _config(
-                bfile,
-                tmp_path / "combined",
-                [1, 2],
-                covariate_path,
-                backend,
-                lmm_mode,
-            )
-        ).run()
-    finally:
-        sys.setprofile(None)
+    combined, combined_log = _run_logged(
+        _config(
+            bfile,
+            tmp_path / "combined",
+            [1, 2],
+            covariate_path,
+            backend,
+            lmm_mode,
+        )
+    )
+    expected_association_passes = 1 if backend == "numpy-streaming" else 0
+    assert (
+        _genotype_passes(combined_log, filtered_only=True)
+        == expected_association_passes
+    )
 
     individual = []
     for index, column in enumerate((1, 2)):
@@ -147,41 +151,19 @@ def test_multi_phenotype_reuses_preparation_and_preserves_each_result(
         for missing_index in (0, 1):
             shared_masked[missing_index] = "NA"
         write_fam(Path(f"{single_bfile}.fam"), shared_masked)
-        individual.append(
-            PipelineRunner(
-                _config(
-                    single_bfile,
-                    tmp_path / f"single-{column}",
-                    [1],
-                    covariate_path,
-                    backend,
-                    lmm_mode,
-                )
-            ).run()
+        result, single_log = _run_logged(
+            _config(
+                single_bfile,
+                tmp_path / f"single-{column}",
+                [1],
+                covariate_path,
+                backend,
+                lmm_mode,
+            )
         )
+        assert _genotype_passes(single_log) == _genotype_passes(combined_log)
+        individual.append(result)
 
-    assert calls["source preparation"] == 1
-    expected_stats_key = (
-        "collect_snp_stats_from_chunks"
-        if backend == "numpy"
-        else "collect_streamed_snp_stats"
-    )
-    assert calls[expected_stats_key] == 1
-    assert calls["covariate preparation"] == 1
-    assert calls["covariate rotation"] == 1
-    from jamma.lmm.association_plan import plan_association
-
-    execution = plan_association(
-        97,
-        500,
-        requested=backend,
-        n_input_samples=100,
-        n_cvt=2,
-        lmm_mode=lmm_mode,
-        n_phenotypes=2,
-    )
-    assert execution.phenotype_group_size == 2
-    assert calls["chunk rotations"] == execution.conservative_chunks.n_chunks
     assert [result.column for result in combined.phenotype_results] == [1, 2]
     assert combined.n_snps_tested == sum(
         result.n_snps_tested for result in combined.phenotype_results

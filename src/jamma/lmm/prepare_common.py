@@ -48,9 +48,21 @@ def compute_valid_mask(
 
 @dataclass(frozen=True, slots=True)
 class KinshipMatrix:
-    """A kinship matrix that still needs eigendecomposition."""
+    """A kinship matrix that still needs eigendecomposition.
+
+    The array is consumed: centred in place, then overwritten by the
+    eigendecomposition. Callers that need the matrix afterwards pass a copy.
+    """
 
     value: np.ndarray
+
+    def __post_init__(self) -> None:
+        if not self.value.flags.writeable:
+            raise ValueError(
+                "kinship must be writeable: it is consumed in place (centred, "
+                "then overwritten by the eigendecomposition). Pass kinship.copy() "
+                "to keep the original matrix."
+            )
 
 
 @dataclass(frozen=True, slots=True)

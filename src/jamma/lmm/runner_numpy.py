@@ -601,10 +601,10 @@ def run_lmm_association_numpy(
         genotypes: Genotype matrix (n_samples, n_snps) with values 0, 1, 2.
         phenotypes: Phenotype vector (n_samples,).
         kinship: Kinship matrix (n_samples, n_samples) or None when
-            pre-computed eigenvalues/eigenvectors are provided. WARNING: may
-            be overwritten in-place during eigendecomposition (buffer reused
-            for eigenvectors). Treat as consumed; pass kinship.copy() if you
-            need the original matrix after this call.
+            pre-computed eigenvalues/eigenvectors are provided. Consumed:
+            centred in place, then overwritten by the eigendecomposition
+            (zeroed on the NumPy fallback). Must be writeable; pass
+            kinship.copy() to keep the original matrix.
         snp_info: SnpMeta, or a list of dicts with keys chr, rs, pos, a1, a0
             for the public batch API.
         covariates: Covariate matrix (n_samples, n_cvt) or None for

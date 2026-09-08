@@ -176,6 +176,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A read-only kinship is rejected by name at the runner boundary.**
+  `run_lmm_association_numpy` and `run_lmm_association_numpy_streaming`
+  consume the supplied matrix: they centre it in place, then overwrite it
+  with the eigendecomposition. `KinshipMatrix` rejects a non-writeable array
+  with a message naming that contract, in place of the bare `output array is
+  read-only` the centring subtraction raised from several frames deeper.
+  Callers that need the matrix afterwards pass `kinship.copy()`; the
+  runners still never copy, so a 100k run holds one matrix rather than two.
 - **Docs prose is gated by a banned-word list.** A `vocabguard` pre-commit
   hook checks every markdown file except `CHANGELOG.md` against
   `.vocabguard.json`, a list of regexes for house-style words (`honestly`,

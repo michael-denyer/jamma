@@ -534,7 +534,8 @@ from jamma.lmm import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig
 
 # NumPy runner (loads full genotype matrix). Pass the kinship directly; the
-# runner centres the analysed kinship (as GEMMA does) and eigendecomposes it.
+# runner consumes K, centring it in place (as GEMMA does) and then overwriting
+# it with the eigendecomposition, so pass K.copy() to keep the matrix.
 run_result = run_lmm_association_numpy(
     genotypes=data.genotypes,
     phenotypes=phenotypes,

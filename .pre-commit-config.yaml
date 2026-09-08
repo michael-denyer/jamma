@@ -124,10 +124,11 @@ repos:
       - id: markdownlint-cli2
         files: \.md$
   # Prose watchlist. .vocabguard.json is a list of banned regexes only
-  # (terms is empty, so the statistical classifier is off): the words the
-  # house style forbids in docs. Markdown only; CHANGELOG.md is history
-  # and stays as written. No --diff-base: CI's checkout is shallow and has
-  # no origin/master, so the whole file must be clean.
+  # (terms is empty, so the statistical classifier is off, and vocabguard
+  # reads replacements only for a terms hit): the words the house style
+  # forbids in docs. Markdown only; CHANGELOG.md is history and stays as
+  # written. No --diff-base: CI's checkout is shallow and has no
+  # origin/master, so the whole file must be clean.
   - repo: https://github.com/mpfaffenberger/vocabguard
     rev: v0.3.1
     hooks:

@@ -22,7 +22,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.conftest import require_fixture
+from tests.conftest import require_fixture, requires_c
 from tests.fixture_paths import (
     MOUSE,
     NUMPY_GEMMA_TOLERANCES,
@@ -631,25 +631,22 @@ def _run_mode4(synthetic_data, scale: float):
 
 
 @pytest.mark.tier0
-@pytest.mark.parametrize("use_c", [True, False], ids=["c", "numpy"])
-def test_results_are_scale_equivariant(synthetic_data, use_c):
+@pytest.mark.parametrize(
+    "use_c",
+    [pytest.param(True, marks=requires_c, id="c"), pytest.param(False, id="numpy")],
+)
+def test_results_are_scale_equivariant(synthetic_data, use_c, request):
     """Rescaling the phenotype rescales beta and se and leaves everything else.
 
     The LMM is scale-equivariant and GEMMA reproduces that to 2e-16. An
     absolute floor of 1e-8 on P_yy broke it once the residual sum of squares
     fell below the floor: lambda landed on the kink and every p-value moved.
     """
-    from unittest.mock import patch
+    if not use_c:
+        request.getfixturevalue("no_c_kernels")
 
     scale = 1e-6
-    if use_c:
-        base, small = _run_mode4(synthetic_data, 1.0), _run_mode4(synthetic_data, scale)
-    else:
-        with patch("jamma.lmm.accel._accel", None):
-            base, small = (
-                _run_mode4(synthetic_data, 1.0),
-                _run_mode4(synthetic_data, scale),
-            )
+    base, small = _run_mode4(synthetic_data, 1.0), _run_mode4(synthetic_data, scale)
 
     for a, b in zip(base, small, strict=True):
         if a.beta is None or np.isnan(a.beta):

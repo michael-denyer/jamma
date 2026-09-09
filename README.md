@@ -226,6 +226,14 @@ version-over-version comparison, and large-scale (125k) results.
 JAMMA uses NumPy for data loading and kinship. Eigendecomposition uses `jlinalg.eigh` which dispatches to vendor DSYEVD (default) or DSYEVR (O(n) workspace, under memory pressure) via the jlinalg C layer. LMM association uses a NumPy backend with an optional C extension for OpenMP-parallel Wald/Score/LRT tests. Mode is auto-selected based on available memory: batch runner when genotypes fit in RAM, streaming runner (two-pass disk I/O) for large datasets.
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    lineColor: "#9fb3c8"
+    primaryTextColor: "#eeeeee"
+    edgeLabelBackground: "#0f3460"
+---
 flowchart TD
     subgraph ENTRY["ENTRY"]
         CLI["CLI / gwas()"]
@@ -265,14 +273,14 @@ flowchart TD
     C --> RES
     PY --> RES
 
-    style ENTRY fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
-    style IO fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style ENTRY fill:#0f3460,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style IO fill:#0f3460,stroke:#53a8b6,color:#eee,stroke-width:2px
     style CORE fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
     style ASSOC fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
 
-    style CLI fill:#53a8b6,stroke:#3d8a96,color:#fff
-    style PIPE fill:#53a8b6,stroke:#3d8a96,color:#fff
-    style LOAD fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style CLI fill:#53a8b6,stroke:#3d8a96,color:#1a1a2e
+    style PIPE fill:#53a8b6,stroke:#3d8a96,color:#1a1a2e
+    style LOAD fill:#53a8b6,stroke:#3d8a96,color:#1a1a2e
 
     style KIN fill:#f5b461,stroke:#d4943f,color:#1a1a2e
     style EIG fill:#f5b461,stroke:#d4943f,color:#1a1a2e

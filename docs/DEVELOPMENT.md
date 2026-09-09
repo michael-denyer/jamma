@@ -211,6 +211,18 @@ its place:
 scripts/render_readme_diagram.py
 ```
 
+The `config:` frontmatter at the top of the fence carries the theme, and both
+renderers read it — GitHub and mermaid-cli alike. Do not move it into a CLI
+config file: mermaid's default theme is built for a light page, so without
+those variables the diagram's dark fills get dark arrows and white edge-label
+boxes **on GitHub too**, and a config file would fix only the PNG.
+
+Two traps. `primaryTextColor` is what colours the edge labels — `textColor`,
+`tertiaryTextColor` and `labelTextColor` all leave them dark on dark. And the
+theme must be frontmatter, not the older `%%{init: ...}%%` directive, which
+mermaid renders but `maid` 0.0.29 fails to parse, breaking the maid-mermaid
+hook.
+
 The `check-pypi-readme` and `readme-diagram-sync` hooks gate both — the first
 renders the transformed description through the exact renderer PyPI uses and
 fails on any surviving mermaid fence or relative link, the second fails when

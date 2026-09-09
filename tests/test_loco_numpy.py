@@ -230,46 +230,6 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
 
 
 @pytest.mark.tier1
-def test_run_lmm_loco_reads_loco_workers_env(monkeypatch):
-    """run_lmm_loco reads JAMMA_LOCO_WORKERS and logs a WARNING when workers > 1.
-
-    Verifies LOCO-08 wiring: the env var is read at run_lmm_loco entry and
-    a WARNING-level message is emitted when workers > 1 (not yet implemented).
-    """
-    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
-
-    from unittest.mock import patch
-
-    monkeypatch.setenv("JAMMA_LOCO_WORKERS", "4")
-    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
-
-    logged_warnings: list[str] = []
-
-    # loguru does not integrate with pytest caplog; capture via the logger sink
-    import jamma.lmm.loco as loco_module
-
-    original_warning = loco_module.logger.warning
-
-    def capture_warning(msg, *args, **kwargs):
-        logged_warnings.append(str(msg))
-        return original_warning(msg, *args, **kwargs)
-
-    with patch.object(loco_module.logger, "warning", side_effect=capture_warning):
-        loco = run_lmm_loco(
-            bed_path=_LOCO_BFILE,
-            phenotypes=phenotypes,
-            config=LmmConfig(check_memory=False, show_progress=False),
-        )
-
-    assert any("JAMMA_LOCO_WORKERS=4" in msg for msg in logged_warnings), (
-        f"Expected 'JAMMA_LOCO_WORKERS=4' in warning messages, got: {logged_warnings}"
-    )
-    assert loco.n_tested > 0, (
-        "Expected SNPs tested (workers > 1 falls back to sequential)"
-    )
-
-
-@pytest.mark.tier1
 def test_loco_numpy_multipass_equivalence():
     """Multi-pass and single-pass LOCO produce identical association results.
 

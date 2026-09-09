@@ -30,7 +30,7 @@ from jamma.lmm.loco import LocoConfig
 from jamma.lmm.loco_eigen import _cached_eigen_pairs, _find_loco_eigen_cache
 from jamma.lmm.schema import LmmConfig
 from tests.conftest import require_fixture
-from tests.fixture_paths import MOUSE
+from tests.fixture_paths import LOCO, MOUSE
 
 # ---------------------------------------------------------------------------
 # Fixture paths
@@ -885,3 +885,53 @@ class TestLocoEigenCacheStaleDetection:
 
         assert calls["n"] >= 2, "interruption did not run the real writer first"
         assert manifest.read_bytes() == old_manifest
+
+
+@pytest.mark.tier1
+def test_write_eigen_with_workers_matches_sequential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """write_eigen under three workers lays down the same cache as under one.
+
+    The same key, components and per-chromosome member names (after the
+    per-run generation id), and bit-identical eigenD/eigenU arrays.
+    """
+    require_fixture(LOCO.bed, LOCO.fam)
+    from jamma.lmm.eigen_cache import read_eigen_cache_manifest
+    from jamma.lmm.loco import run_lmm_loco
+
+    phenotypes = read_fam_phenotypes(LOCO.fam)
+
+    def write(workers: int, eigen_dir: Path) -> dict:
+        monkeypatch.setenv("JAMMA_LOCO_WORKERS", str(workers))
+        run_lmm_loco(
+            bed_path=LOCO.bfile,
+            phenotypes=phenotypes,
+            config=LmmConfig(check_memory=False, show_progress=False),
+            loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir, prefix="loco"),
+        )
+        manifest = read_eigen_cache_manifest(eigen_dir, "loco")
+        assert manifest is not None
+        return manifest
+
+    one = write(1, tmp_path / "w1")
+    three = write(3, tmp_path / "w3")
+
+    assert one["cache_key"] == three["cache_key"]
+    assert one["components"] == three["components"]
+    assert set(one["artifacts"]) == set(three["artifacts"]) == {"1", "2", "3"}
+    for chr_name in one["artifacts"]:
+        names_one = {
+            member: name.replace(one["generation"], "GEN")
+            for member, name in one["artifacts"][chr_name].items()
+        }
+        names_three = {
+            member: name.replace(three["generation"], "GEN")
+            for member, name in three["artifacts"][chr_name].items()
+        }
+        assert names_one == names_three
+        for member in ("eigenD", "eigenU"):
+            np.testing.assert_array_equal(
+                np.load(tmp_path / "w1" / one["artifacts"][chr_name][member]),
+                np.load(tmp_path / "w3" / three["artifacts"][chr_name][member]),
+            )

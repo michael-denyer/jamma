@@ -9,6 +9,10 @@ Memory profile (sequential processing):
     plus one K_loco (n^2*8) during eigendecomp, plus LMM working set.
     Each K_loco is discarded after eigendecomp.
 
+With ``JAMMA_LOCO_WORKERS`` above one, ``plan_loco_workers`` lets that many
+chromosomes eigendecompose at once, each on its own copy of K_loco, while
+the association pass stays sequential and in chromosome order.
+
 ``LocoConfig`` lives in ``loco_config`` and is re-exported here, so ``from
 jamma.lmm.loco import LocoConfig`` keeps working. Where the eigenpairs come
 from (cache or compute), and every file the cache involves, is
@@ -56,7 +60,12 @@ from jamma.lmm.genotype_source import (
 )
 from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig
-from jamma.lmm.loco_eigen import eigen_pairs_for, plan_loco_eigen_driver
+from jamma.lmm.loco_eigen import (
+    eigen_pairs_for,
+    loco_retained_set_for,
+    plan_loco_eigen_driver,
+    plan_loco_workers,
+)
 from jamma.lmm.prepare_common import EigenPairs
 from jamma.lmm.runner_numpy import LOCO_LABELS, LmmRunSpec, run_lmm_association
 from jamma.lmm.schema import (
@@ -215,16 +224,6 @@ def run_lmm_loco(
     show_progress = config.show_progress
     start_time = time.perf_counter()
 
-    # Read LOCO worker count and log configuration
-    loco_workers = get_loco_worker_count()
-    if loco_workers > 1:
-        logger.warning(
-            f"JAMMA_LOCO_WORKERS={loco_workers} but parallel LOCO is not yet "
-            "implemented. Running sequentially."
-        )
-    else:
-        logger.debug("LOCO worker count: 1 (sequential)")
-
     # Get metadata
     meta = get_plink_metadata(bed_path)
     n_samples_total = meta.n_samples
@@ -303,8 +302,28 @@ def run_lmm_loco(
             f"execution plans {execution.conservative_chunks.chunk_size}-SNP "
             f"chunks but loco.col_chunk_size is {loco.col_chunk_size}"
         )
+    available_gb = memory.available_ram_gb()
     if eigen_plan is None:
-        eigen_plan = plan_loco_eigen_driver(execution, memory.available_ram_gb())
+        eigen_plan = plan_loco_eigen_driver(execution, available_gb)
+    association_gb = execution.price(eigen=None).association_gb
+    requested_workers = get_loco_worker_count()
+    workers = plan_loco_workers(
+        requested_workers,
+        n_chr=len(unique_chrs),
+        retained=loco_retained_set_for(execution),
+        eigen_plan=eigen_plan,
+        available_gb=available_gb,
+        budget_gb=config.mem_budget,
+        association_gb=association_gb,
+    )
+    if requested_workers == 1:
+        logger.info("LOCO workers: 1")
+    else:
+        logger.info(
+            f"LOCO workers: {workers.workers} (requested {requested_workers}; "
+            f"{len(unique_chrs)} chromosomes; {workers.cores} cores; "
+            f"memory allows {workers.memory_allows})"
+        )
     spec = LmmRunSpec(
         config=replace(config, show_progress=False),
         execution=execution,
@@ -340,8 +359,9 @@ def run_lmm_loco(
             check_memory=config.check_memory,
             show_progress=show_progress,
             eigen_plan=eigen_plan,
+            workers=workers,
             mem_budget=config.mem_budget,
-            association_peak_gb=execution.price(eigen=None).association_gb,
+            association_peak_gb=association_gb,
         )
 
         first_chr_pve: float | None = None

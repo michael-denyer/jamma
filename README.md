@@ -4,7 +4,7 @@
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white" alt="Python 3.11+"></a>
   <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-2.4.6+-013243.svg?logo=numpy&logoColor=white" alt="NumPy"></a>
   <a href="https://hypothesis.readthedocs.io/"><img src="https://img.shields.io/badge/tested%20with-Hypothesis-BD1C2B.svg" alt="Hypothesis"></a>
-  <a href="https://doi.org/10.5281/zenodo.22666119"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.22666119.svg" alt="DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.22666119"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22666119-1682D4.svg" alt="DOI"></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-green.svg" alt="License: GPL-3.0"></a>
   <a href="https://buymeacoffee.com/codenyer"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
 </p>

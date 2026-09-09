@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The DOI badge renders on GitHub.** `zenodo.org/badge/DOI/...svg` answers in
+  21-30 seconds and intermittently 504s on its own; GitHub's camo image proxy
+  times out at about 4 seconds and served a broken image in its place. The same
+  DOI now comes from shields.io, which answers in 0.17 seconds and already backs
+  five other badges in this README. Same width, so the badge row does not shift.
+
 ## [8.0.3] - 2026-09-09
 
 ### Fixed

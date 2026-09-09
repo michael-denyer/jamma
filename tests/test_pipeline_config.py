@@ -208,12 +208,17 @@ class TestCheckMemory:
         )
         assert result is None
 
-    def test_gates_and_returns_the_selected_eigen_driver(self, monkeypatch) -> None:
+    def test_gates_and_returns_the_selected_eigen_driver(
+        self, monkeypatch, no_c_kernels: None
+    ) -> None:
         """Preflight returns its driver so execution preserves the resource decision.
 
-        RAM and the vendor LAPACK flags are pinned because both decide the
-        driver. At 100 samples the in-place DSYEVD peak is then the 0.00008 GB
-        matrix plus a (1+6N+2N^2) float64 and (3+5N) int64 workspace.
+        RAM, the vendor LAPACK flags, and the dispatch path are pinned because
+        all three decide a figure asserted here. At 100 samples the in-place
+        DSYEVD peak is the 0.00008 GB matrix plus a (1+6N+2N^2) float64 and
+        (3+5N) int64 workspace. The peak phase moves with the dispatch path:
+        the split-product NumPy kernel prices the association pass above the
+        statistics pass, where a native workspace prices it below.
         """
         from jamma.core import memory
 
@@ -237,7 +242,8 @@ class TestCheckMemory:
         assert result.driver == "DSYEVD-inplace"
         assert result.required_gb == pytest.approx(0.000248832)
         quote = plan.price(eigen=None)
-        assert quote.total_peak_gb == pytest.approx(0.00808)
+        assert quote.statistics_gb == pytest.approx(0.00808)
+        assert quote.total_peak_gb == pytest.approx(0.012071936)
 
 
 @pytest.mark.tier0

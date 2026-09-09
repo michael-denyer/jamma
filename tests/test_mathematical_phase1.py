@@ -9,6 +9,7 @@ import pytest
 
 from jamma.validation.tolerances import ToleranceConfig
 from tests.builders import rotated_lmm_inputs
+from tests.conftest import requires_c
 from tests.math_validation.phase1 import (
     MODE1_FIELDS,
     MODE4_ORACLE_FIELDS,
@@ -22,7 +23,10 @@ from tests.math_validation.phase1 import (
 pytestmark = pytest.mark.tier0
 
 
-@pytest.mark.parametrize("backend", ["numpy", "native"])
+# The native route calls accel.require(). compare_phase1 drops it from its
+# declared routes under the forced fallback; this direct parametrisation gates
+# on the extension itself, which also covers a build that never produced one.
+@pytest.mark.parametrize("backend", ["numpy", pytest.param("native", marks=requires_c)])
 @pytest.mark.parametrize("n_cvt", [1, 2])
 def test_modes_1_2_4_and_all_mode4_fields_have_independent_evidence(backend, n_cvt):
     evidence = mode4_evidence(backend=backend, n_cvt=n_cvt, seed=910 + n_cvt)

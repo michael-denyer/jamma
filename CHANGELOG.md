@@ -7,13 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.4] - 2026-09-09
+
 ### Fixed
+
+- **The architecture diagram's arrows, edge labels and contrast.** Mermaid's
+  default theme is built for a light page while the diagram's own style
+  directives paint dark fills, so both renderers — GitHub for the README and
+  mermaid-cli for the PNG on PyPI — drew near-invisible dark arrows and boxed
+  every edge label in white. The theme now travels in `config:` frontmatter at
+  the top of the fence, which both renderers read. Two node colours were wrong
+  independently: the ENTRY and DATA LOADING tiers were filled with the canvas
+  colour and read as bare outlines, and white on the `#53a8b6` nodes measured
+  2.75:1, below WCAG AA.
 
 - **The DOI badge renders on GitHub.** `zenodo.org/badge/DOI/...svg` answers in
   21-30 seconds and intermittently 504s on its own; GitHub's camo image proxy
   times out at about 4 seconds and served a broken image in its place. The same
   DOI now comes from shields.io, which answers in 0.17 seconds and already backs
-  five other badges in this README. Same width, so the badge row does not shift.
+  five other badges in this README. Same width, so the badge row does not
+  shift. The badge is now purple (`#6f42c1`, 6.51:1) rather than Zenodo blue.
 
 ## [8.0.3] - 2026-09-09
 

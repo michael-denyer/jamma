@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The startup log reports the thread counts the run uses.** A `Threads:`
+  line now follows the `Pipeline:` banner, for example
+  `Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=18 (OpenMP) | LOCO workers=1`.
+  Both lines and the chunk runner's OpenMP count come from one `RunThreads`
+  read in `jamma.core.threading`, so the banner cannot print a number the
+  kernel never used. It used to: whenever threadpoolctl could not see the BLAS
+  the banner halved the physical core count, so an 18-core Mac showed
+  `C-ext (9 threads)` while the kernel ran 18, and it named the BLAS `Unknown`
+  because threadpoolctl cannot see Accelerate. The name now falls back to
+  jlinalg's, which found the library. The `Eigendecomp:` line prints
+  `threads=uncontrolled (Accelerate)` instead of the requested count when
+  `blas_threads` cannot enforce it: Accelerate ignores the request and runs
+  the solver on one core, so the old `threads=18` described nothing that ran.
+
 ## [8.0.4] - 2026-09-09
 
 ### Fixed

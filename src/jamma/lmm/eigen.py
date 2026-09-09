@@ -28,7 +28,7 @@ from jamma.core.eigen_plan import (
 )
 from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import timed_progress
-from jamma.core.threading import blas_threads, get_blas_thread_count
+from jamma.core.threading import blas_threads, run_threads
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
@@ -222,7 +222,8 @@ def eigendecompose_kinship(
         )
 
     # Use all physical cores for BLAS
-    n_threads = get_blas_thread_count()
+    threads = run_threads()
+    n_threads = threads.blas
     blas_libs = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
     if blas_libs:
         active = jlinalg.blas_backend or "numpy-fallback"
@@ -277,7 +278,9 @@ def eigendecompose_kinship(
         )
         raise
 
-    logger.info(f"Eigendecomp: {eigh_status.driver_used}, threads={n_threads}")
+    logger.info(
+        f"Eigendecomp: {eigh_status.driver_used}, threads={threads.blas_label()}"
+    )
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")

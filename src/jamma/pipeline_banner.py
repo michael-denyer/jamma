@@ -11,16 +11,10 @@ from __future__ import annotations
 
 from loguru import logger
 
-from jamma.core.constants import Env
+from jamma.core.threading import blas_display_name
 from jamma.lmm.association_plan import ExecutionPlan
 
 __all__ = ["log_dataset_banner", "log_pipeline_banner"]
-
-_BLAS_DISPLAY: dict[str, str] = {
-    "mkl": "MKL",
-    "openblas": "OpenBLAS",
-    "accelerate": "Accelerate",
-}
 
 
 def format_pipeline_banner(
@@ -42,7 +36,8 @@ def format_pipeline_banner(
             "accelerate").
         eigen_driver: Eigen driver name (e.g. "DSYEVD", "DSYEVR").
         c_ext: Whether the C extension is usable.
-        threads: BLAS/OpenMP thread count.
+        threads: OpenMP thread count of the C extension, or the BLAS thread
+            count when no extension is loaded and NumPy does the compute.
         jlinalg_backend: jlinalg's ``blas_backend`` (e.g. "MKL-ILP64",
             "numpy-fallback"). Omitted from the banner when None, since
             jlinalg can report "numpy-fallback" even with its C extension
@@ -60,7 +55,7 @@ def format_pipeline_banner(
         ... )
         'Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads) | jlinalg: MKL-ILP64'
     """
-    blas_display = _BLAS_DISPLAY.get(blas, blas.title())
+    blas_display = blas_display_name(blas)
     c_ext_str = "C-ext" if c_ext else "no C-ext"
     banner = (
         f"Pipeline: {runner} | {blas_display} | {eigen_driver}"
@@ -102,12 +97,13 @@ def log_dataset_banner(
 
 
 def log_pipeline_banner(plan: ExecutionPlan) -> None:
-    """Emit a consolidated one-line pipeline configuration banner.
+    """Emit the pipeline configuration banner and the thread plan beneath it.
 
     Gathers runner type, BLAS backend, C extension status, and
     thread count into a single log line. The banner shows "pending"
     for the eigen driver; the actual driver is logged separately by
-    eigendecompose_kinship once the matrix size is known.
+    eigendecompose_kinship once the matrix size is known. The second
+    line is ``RunThreads.describe()``, the same numbers the kernels use.
 
     This function is purely diagnostic — failures are caught and logged
     as warnings to avoid aborting the GWAS pipeline.
@@ -117,49 +113,18 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
     """
     try:
         import jamma.jlinalg as jlinalg
-        from jamma.core.threading import (
-            get_blas_backend,
-            get_blas_thread_count,
-            get_c_extension_thread_count,
-            get_physical_core_count,
-            is_blas_controllable,
-        )
-        from jamma.lmm import accel
+        from jamma.core.threading import run_threads
 
-        c_ext = accel.available()
-        jlinalg_backend = jlinalg.blas_backend
-        c_has_openmp = accel.HAS_OPENMP
-        runner = plan.runner_name
-
-        blas = get_blas_backend()
-
-        # One parse of JAMMA_BLAS_THREADS: get_blas_thread_count owns it.
-        if Env.current().blas_threads_raw or is_blas_controllable():
-            threads = get_blas_thread_count()
-        else:
-            # Accelerate or no BLAS — use halved core count
-            # (same fallback used by the NumPy LMM chunk runner).
-            threads = max(1, get_physical_core_count() // 2)
-
-        # A single-threaded _lmm_accel build should not be logged as a
-        # multi-threaded compute kernel.
-        if c_ext:
-            threads = min(
-                threads,
-                get_c_extension_thread_count(
-                    c_accel_available=c_ext,
-                    c_has_openmp=c_has_openmp,
-                ),
-            )
-
+        threads = run_threads()
         banner = format_pipeline_banner(
-            runner=runner,
-            blas=blas,
+            runner=plan.runner_name,
+            blas=threads.blas_backend,
             eigen_driver="pending",
-            c_ext=c_ext,
-            threads=threads,
-            jlinalg_backend=jlinalg_backend,
+            c_ext=threads.c_ext_available,
+            threads=threads.c_ext if threads.c_ext_available else threads.blas,
+            jlinalg_backend=jlinalg.blas_backend,
         )
         logger.info(banner)
+        logger.info(threads.describe())
     except (ImportError, OSError, RuntimeError, AttributeError) as exc:
         logger.warning(f"Could not build pipeline banner: {exc}")

@@ -761,6 +761,7 @@ Kinship-only mode (`-gk`) does not emit telemetry regardless of these settings.
 | -------- | ------- | ----------- |
 | `JAMMA_BACKEND` | auto-detect | Force backend: `auto`, `numpy`, or `numpy-streaming`. Auto-detect prefers C+NumPy, then NumPy fallback. |
 | `JAMMA_BLAS_THREADS` | `physical_cores` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
+| `VECLIB_MAXIMUM_THREADS` | *(unset)* | Apple's Accelerate thread cap. Has no effect on the eigensolver: on Accelerate, DSYEVD runs on one core at n=5000 with `VECLIB_MAXIMUM_THREADS=18` exported before Python starts, and `JAMMA_BLAS_THREADS` cannot change that either. The `Threads:` log line shows what the run will use and marks the BLAS `uncontrolled`. |
 | `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers in LOCO mode. Each worker holds a full K_loco matrix (`n_samples^2 x 8` bytes), so increase with caution. |
 | `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable benchmark telemetry. See [Telemetry](#telemetry). |
 | `DO_NOT_TRACK` | *(unset)* | Universal telemetry opt-out convention. Set to `1` to disable JAMMA telemetry. See [Telemetry](#telemetry). |
@@ -775,7 +776,9 @@ jamma -lmm 1 -bfile data/my_study -loco -o output
 **Note:** `JAMMA_BLAS_THREADS` scopes thread control to BLAS libraries (MKL, OpenBLAS)
 and does not affect OpenMP (`libgomp`/`libomp`). It has no
 effect on macOS Accelerate (which provides no thread-count API). If you have C
-extensions compiled with `-fopenmp`, use `OMP_NUM_THREADS` separately.
+extensions compiled with `-fopenmp`, use `OMP_NUM_THREADS` separately. The
+`Threads:` line logged after the `Pipeline:` banner names every count the run
+uses: `Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=18 (OpenMP) | LOCO workers=1`.
 
 ## Validation
 

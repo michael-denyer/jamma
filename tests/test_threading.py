@@ -1,14 +1,17 @@
 """Tests for BLAS thread management module."""
 
 import os
+from dataclasses import replace
 
 import numpy as np
 import pytest
 
 from jamma.core.threading import (
+    RunThreads,
     blas_threads,
     get_blas_thread_count,
     get_c_extension_thread_count,
+    run_threads,
 )
 from jamma.jlinalg import HAS_C_EXTENSION, get_n_threads, set_n_threads
 
@@ -78,6 +81,98 @@ class TestCExtensionThreads:
         assert get_c_extension_thread_count(True, True) == 48
 
 
+_MKL_OPENMP_18 = RunThreads(
+    blas=18,
+    blas_controllable=True,
+    blas_backend="mkl",
+    c_ext=18,
+    c_ext_openmp=True,
+    c_ext_available=True,
+    loco_workers=1,
+)
+
+
+class TestRunThreadsDescribe:
+    """RunThreads.describe() names each thread count and what limits it."""
+
+    @staticmethod
+    def _threads(**overrides) -> RunThreads:
+        return replace(_MKL_OPENMP_18, **overrides)
+
+    def test_controllable_mkl_with_openmp(self):
+        assert _MKL_OPENMP_18.describe() == (
+            "Threads: BLAS=18 (MKL) | C-ext=18 (OpenMP) | LOCO workers=1"
+        )
+
+    def test_uncontrolled_accelerate(self):
+        threads = self._threads(blas_controllable=False, blas_backend="accelerate")
+        assert threads.describe() == (
+            "Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=18 (OpenMP)"
+            " | LOCO workers=1"
+        )
+        assert threads.blas_label() == "uncontrolled (Accelerate)"
+
+    def test_no_c_extension(self):
+        threads = self._threads(c_ext=1, c_ext_openmp=False, c_ext_available=False)
+        assert threads.describe() == (
+            "Threads: BLAS=18 (MKL) | C-ext=none | LOCO workers=1"
+        )
+
+    def test_serial_c_extension(self):
+        threads = self._threads(c_ext=1, c_ext_openmp=False, loco_workers=4)
+        assert threads.describe() == (
+            "Threads: BLAS=18 (MKL) | C-ext=1 (no OpenMP) | LOCO workers=4"
+        )
+        assert threads.blas_label() == "18"
+
+
+class TestRunThreads:
+    """run_threads() reads the machine once and names Accelerate via jlinalg."""
+
+    def test_backend_falls_back_to_jlinalg_when_threadpoolctl_sees_nothing(
+        self, monkeypatch
+    ):
+        import jamma.jlinalg as jlinalg
+        from jamma.core import threading as core_threading
+
+        monkeypatch.setattr(core_threading, "threadpool_info", list)
+        monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: False)
+        monkeypatch.setattr(jlinalg, "blas_backend", "Accelerate-ILP64")
+        threads = run_threads()
+        assert threads.blas_backend == "accelerate"
+        assert threads.blas_controllable is False
+
+    def test_backend_is_unknown_when_jlinalg_is_numpy_fallback(self, monkeypatch):
+        import jamma.jlinalg as jlinalg
+        from jamma.core import threading as core_threading
+
+        monkeypatch.setattr(core_threading, "threadpool_info", list)
+        monkeypatch.setattr(jlinalg, "blas_backend", "numpy-fallback")
+        assert run_threads().blas_backend == "unknown"
+
+    def test_threadpoolctl_name_wins_when_present(self, monkeypatch):
+        from jamma.core import threading as core_threading
+
+        monkeypatch.setattr(
+            core_threading,
+            "threadpool_info",
+            lambda: [{"user_api": "blas", "internal_api": "openblas"}],
+        )
+        assert run_threads().blas_backend == "openblas"
+
+    def test_c_ext_count_matches_the_chunk_runner_input(self, monkeypatch):
+        from jamma.core import threading as core_threading
+        from jamma.lmm import accel
+
+        monkeypatch.setattr(core_threading, "get_physical_core_count", lambda: 18)
+        monkeypatch.setattr(accel, "available", lambda: True)
+        monkeypatch.setattr(accel, "HAS_OPENMP", True)
+        threads = run_threads()
+        assert threads.c_ext == get_c_extension_thread_count(True, True) == 18
+        assert threads.c_ext_available is True
+        assert threads.c_ext_openmp is True
+
+
 class TestEigendecompThreading:
     """Eigendecomp uses all physical cores, not a reduced thread count.
 
@@ -93,9 +188,10 @@ class TestEigendecompThreading:
         count on Databricks (2 threads instead of 48).
         """
         # Mock the thread-count source to report 48 (physical cores, no env
-        # override) — eigen reads it through get_blas_thread_count so the
-        # documented JAMMA_BLAS_THREADS knob also reaches this path.
-        monkeypatch.setattr("jamma.lmm.eigen.get_blas_thread_count", lambda: 48)
+        # override) — eigen reads it through run_threads().blas, which calls
+        # get_blas_thread_count, so the documented JAMMA_BLAS_THREADS knob
+        # also reaches this path.
+        monkeypatch.setattr("jamma.core.threading.get_blas_thread_count", lambda: 48)
         # Force vendor path so blas_threads is actually called
         monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevd", 1)
         monkeypatch.setattr("jamma.lmm.eigen.jlinalg.blas_has_dsyevr", 0)

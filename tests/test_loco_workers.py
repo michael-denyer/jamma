@@ -11,7 +11,6 @@ import dataclasses
 import threading
 import time
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import numpy as np
@@ -45,7 +44,6 @@ def test_worker_budget_charges_each_owned_input_once():
     plan = plan_loco_workers(
         2,
         n_chr=3,
-        n_samples=10_000,
         retained=retained,
         eigen_plan=eigen,
         available_gb=100,
@@ -55,54 +53,27 @@ def test_worker_budget_charges_each_owned_input_once():
     )
 
     assert plan.workers == 2
-    assert plan.consumer_gb == pytest.approx(4.801760064)
-
-
-@pytest.mark.tier0
-def test_consumer_never_overlaps_a_batch_of_eigen_solves():
-    entered = threading.Barrier(4)
-    release = threading.Event()
-    yielded = threading.Event()
-
-    def solve(K: np.ndarray, **kwargs) -> tuple[np.ndarray, np.ndarray]:
-        entered.wait(timeout=5)
-        if len(K) != _ORDER_BY_CHR["1"]:
-            assert release.wait(timeout=5)
-        return np.linalg.eigh(K)
-
-    pairs = _computed_pairs(workers=3, solve=solve)
-
-    def consume():
-        result = next(pairs)
-        yielded.set()
-        return result
-
-    with ThreadPoolExecutor(max_workers=1) as consumer:
-        first = consumer.submit(consume)
-        entered.wait(timeout=5)
-        try:
-            assert not yielded.wait(timeout=0.2), (
-                "association started while eigen workers were active"
-            )
-        finally:
-            release.set()
-            first.result(timeout=5)
-            pairs.close()
+    # Two DSYEVD-inplace peaks of 2.4 GB, each already holding its 0.8 GB input.
+    assert plan.consumer_gb == pytest.approx(2 * 2.400880032)
 
 
 @pytest.mark.tier0
 @pytest.mark.parametrize(
     "requested,n_chr,cores,available,budget,association,expected",
     [
-        (6, 22, 8, 8.8, None, 0.8, 1),
-        (1, 22, 8, 100, None, 0.8, 1),
-        (6, 3, 8, 100, None, 0.8, 3),
-        (6, 22, 4, 100, None, 0.8, 4),
-        (6, 22, 8, 100, 9, 0.8, 2),
-        (6, 22, 8, 1, None, 0.8, 1),
-        (6, 22, 8, 100, 9, 5.0, 2),
+        # The retained set is 3.2 GB and each in-flight DSYEVD-inplace solve
+        # 2.4 GB, so W workers peak at 3.2 + 2.4 * W when association (0.8)
+        # is under one driver peak: 5.6, 8.0, 10.4, ... A 5.0 GB association
+        # replaces one driver peak: 3.2 + 2.4 * (W - 1) + 5.0.
+        (6, 22, 8, 8.8, None, 0.8, 1),  # 8.0 + 0.8 margin is not under 8.8
+        (1, 22, 8, 100, None, 0.8, 1),  # requested one stays one
+        (6, 3, 8, 100, None, 0.8, 3),  # chromosome cap
+        (6, 22, 4, 100, None, 0.8, 4),  # core cap
+        (6, 22, 8, 100, 9, 0.8, 2),  # 8.0 within a 9 GB budget, 10.4 is not
+        (6, 22, 8, 1, None, 0.8, 1),  # nothing fits; the floor is one
+        (6, 22, 8, 100, 9, 5.0, 1),  # 3.2 + 2.4 + 5.0 = 10.6 over budget
         (6, 22, 8, 100, 9, 6.0, 1),
-        (10**12, 3, 8, 100, 9, 0.8, 2),
+        (10**12, 3, 8, 100, 9, 0.8, 2),  # absurd requests do not hang
     ],
 )
 def test_worker_plan_respects_memory_and_execution_caps(
@@ -129,7 +100,6 @@ def test_worker_plan_respects_memory_and_execution_caps(
     plan = plan_loco_workers(
         requested,
         n_chr=n_chr,
-        n_samples=10_000,
         cores=cores,
         retained=retained,
         eigen_plan=eigen,

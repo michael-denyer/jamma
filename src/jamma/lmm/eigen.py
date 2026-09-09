@@ -147,7 +147,7 @@ def eigendecompose_kinship(
     """
     n_threads = get_blas_thread_count()
     with blas_threads(n_threads):
-        return _eigendecompose_kinship(
+        return eigendecompose_kinship_in_scope(
             K,
             threshold,
             check_memory=check_memory,
@@ -158,7 +158,7 @@ def eigendecompose_kinship(
         )
 
 
-def _eigendecompose_kinship(
+def eigendecompose_kinship_in_scope(
     K: np.ndarray,
     threshold: float = 1e-10,
     *,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify LOCO batch BLAS ownership against a real controllable library.
+"""Verify LOCO BLAS scope ownership against a real controllable library.
 
 On Linux, the installed NumPy BLAS usually supplies the controller. On macOS,
 pass --blas-library /path/to/libopenblas.dylib to load a controllable library
@@ -29,7 +29,10 @@ def main() -> None:
 
     from loguru import logger
 
-    from jamma.lmm.eigen import _eigendecompose_kinship, plan_eigen_driver_for_machine
+    from jamma.lmm.eigen import (
+        eigendecompose_kinship_in_scope,
+        plan_eigen_driver_for_machine,
+    )
     from jamma.lmm.loco_config import LocoConfig
     from jamma.lmm.loco_eigen import _computed_eigen_pairs
 
@@ -60,7 +63,7 @@ def main() -> None:
             observed.append(counts())
             if barrier is not None:
                 barrier.wait(timeout=10)
-            result = _eigendecompose_kinship(K, **kwargs)
+            result = eigendecompose_kinship_in_scope(K, **kwargs)
             observed.append(counts())
             return result
 
@@ -89,7 +92,12 @@ def main() -> None:
             consumed = 0
             try:
                 for _name, _values, _U in pairs:
-                    assert counts() == original, "consumer inherited worker BLAS limits"
+                    assert all(n == 1 for n in counts()), "eigen scope not open"
+                    with threadpool_limits(limits=4, user_api="blas"):
+                        assert all(n == 4 for n in counts()), "nested scope not applied"
+                    assert all(n == 1 for n in counts()), (
+                        "nested scope broke eigen scope"
+                    )
                     consumed += 1
                     if mode == "close":
                         break

@@ -31,8 +31,8 @@ from jamma.kinship import (
 from jamma.kinship.loco import LocoRetainedSet, loco_retained_set
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
 from jamma.lmm.eigen import (
-    _eigendecompose_kinship,
     center_kinship,
+    eigendecompose_kinship_in_scope,
     plan_eigen_driver_for_machine,
 )
 from jamma.lmm.eigen_cache import (
@@ -426,17 +426,19 @@ def _computed_eigen_pairs(
     eigen_plan: EigenDriverPlan,
     mem_budget: float | None,
     workers: int = 1,
-    solve: Callable[..., tuple[np.ndarray, np.ndarray]] = _eigendecompose_kinship,
+    solve: Callable[
+        ..., tuple[np.ndarray, np.ndarray]
+    ] = eigendecompose_kinship_in_scope,
 ) -> EigenPairs:
     """Yield per-chromosome eigenpairs by eigendecomposing streamed LOCO kinship.
 
     Each K_loco is optionally saved, subset to the analysed samples and
     eigendecomposed. Cache artifacts are written as the consumer advances.
 
-    Concurrent workers receive owned copies of the stream's reusable buffer.
-    A bounded batch finishes before association consumes its ordered results,
-    so eigen and association phases never race over process-wide BLAS limits.
-    ``solve_eigen_pairs`` owns scheduling, thread limits and worker cleanup.
+    Concurrent workers receive owned copies of the stream's reusable buffer
+    and pairs come out in chromosome order with at most ``workers`` solves in
+    flight. ``solve_eigen_pairs`` owns scheduling, the one BLAS scope every
+    solve runs under, and worker cleanup.
 
     With ``cache_write``, every pair is written under one fresh generation.
     The manifest is replaced only after the consumer drains every chromosome,

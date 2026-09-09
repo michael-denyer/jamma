@@ -29,16 +29,32 @@ kinship and output writing, with memory checks and progress disabled. Each
 worker count ran before/fixed/fixed/before in fresh processes, sequentially.
 The table reports the mean of the two observations per version.
 
-| LOCO workers | Before | Fixed | Change |
-|--------------|--------|-------|--------|
+The first fix serialised eigen solves and association in bounded batches so
+their BLAS scopes could not interleave:
+
+| LOCO workers | Before | Batch barrier | Change |
+|--------------|--------|---------------|--------|
 | 1 | 3.275s | 3.179s | -2.9% |
 | 6 | 1.409s | 1.864s | +32.3% |
 
-The six-worker cost is a correctness tradeoff: eigensolving and association
-no longer overlap while changing the same process-wide BLAS state. Six workers
-remain 1.7x faster than one on this fixture. Every association output was
-byte-identical across all eight runs. These timings do not predict Linux
-MKL/OpenBLAS performance or large-sample memory use.
+The barrier was replaced on 2026-09-10 by one BLAS scope entered on the
+consumer thread for the whole eigen stream. Workers never change limits and
+association's scope nests inside the eigen scope, so the race cannot occur
+and the solves overlap association again. Same machine, same ABBA protocol,
+PR 361's head against the replacement:
+
+| LOCO workers | Batch barrier | One scope | Change |
+|--------------|---------------|-----------|--------|
+| 1 | 3.330s | 3.351s | +0.6% |
+| 6 | 2.113s | 1.568s | -25.8% |
+
+Every association output was byte-identical across all sixteen runs. On
+Accelerate `blas_threads` is a no-op, so neither fix changes thread counts
+here; the difference is the barrier alone. On MKL and OpenBLAS, solves still
+in flight while association runs inherit its rotation limit, which is
+oversubscription rather than a stale restore; `JAMMA_BLAS_THREADS=cores/W`
+bounds it. These timings do not predict Linux MKL/OpenBLAS performance or
+large-sample memory use.
 
 ## master `9d33cc1` on mouse_hs1940 (historical)
 

@@ -174,16 +174,15 @@ timings start with genotypes loaded. Association runs use precomputed kinship.
 | LMM Wald (`-lmm 1`) | 7.7s | 4.1s | 5.4s | 302ms | 408ms | 17.8x | 25.4x | 13.7x |
 | LMM All (`-lmm 4`) | 13.9s | 7.4s | 7.4s | 318ms | 426ms | 23.2x | 43.7x | 23.2x |
 | LMM Wald+4cov (`-lmm 1 -c`) | 27.8s | 11.4s | 16.5s | 868ms | 958ms | 19.0x | 32.0x | 13.2x |
-| LOCO Wald (1 worker) | -- | -- | -- | **3.18s** | -- | -- | -- | -- |
-| LOCO Wald (6 workers) | -- | -- | -- | **1.86s** | -- | -- | -- | -- |
+| LOCO Wald (1 worker) | -- | -- | -- | **3.35s** | -- | -- | -- | -- |
+| LOCO Wald (6 workers) | -- | -- | -- | **1.57s** | -- | -- | -- | -- |
 
 Timings vary substantially between runs; these ratios describe this measurement
 and should not be read as a version-over-version speedup.
 
 LOCO includes kinship, 19 per-chromosome eigendecompositions and association.
-Bounded solve batches finish before association to protect process-wide BLAS
-limits. This costs about 0.46s at six workers versus the earlier overlapping
-implementation on this dataset; all compared association files were identical.
+Eigen solves overlap association under one BLAS scope owned by the consumer
+thread; see [Performance](docs/PERFORMANCE.md#loco-resource-ownership-2026-09-09).
 
 See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the
 version-over-version comparison, and large-scale (125k) results.

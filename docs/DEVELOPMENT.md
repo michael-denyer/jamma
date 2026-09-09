@@ -194,3 +194,24 @@ PyPI publishing uses GitHub trusted publishing (no API tokens needed locally).
 6. The `.github/workflows/build-wheels.yml` workflow builds wheels for Linux x86_64 and macOS arm64 (CPython 3.11–3.14) and uploads them to PyPI automatically on release
 
 AVX2-optimised wheels are also built and attached to the GitHub release as assets (not uploaded to PyPI — they share platform tags with baseline wheels and would conflict).
+
+### The PyPI long description
+
+`README.md` is written for GitHub: live mermaid, relative links. PyPI renders
+the long description with `readme_renderer` and the `nh3` sanitizer, which has
+no mermaid support and resolves relative links against
+`pypi.org/project/jamma/<version>/`. The `fancy-pypi-readme` metadata hook in
+`pyproject.toml` rewrites both at build time, so nothing in `README.md` needs
+to be written twice.
+
+Editing the architecture diagram means regenerating the PNG that PyPI shows in
+its place:
+
+```bash
+scripts/render_readme_diagram.py
+```
+
+The `check-pypi-readme` and `readme-diagram-sync` hooks gate both — the first
+renders the transformed description through the exact renderer PyPI uses and
+fails on any surviving mermaid fence or relative link, the second fails when
+`docs/architecture.png` is stale.

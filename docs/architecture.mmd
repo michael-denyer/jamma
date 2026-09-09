@@ -1,0 +1,59 @@
+flowchart TD
+    subgraph ENTRY["ENTRY"]
+        CLI["CLI / gwas()"]
+        PIPE["PipelineRunner"]
+        CLI --> PIPE
+    end
+
+    subgraph IO["DATA LOADING"]
+        LOAD["Load PLINK +<br/>Phenotypes"]
+    end
+
+    subgraph CORE["CORE COMPUTATION"]
+        KIN["Kinship<br/>(DGEMM, chunked)"]
+        EIG["Eigendecomposition<br/>(jlinalg.eigh → DSYEVD/DSYEVR)"]
+        KIN --> EIG
+    end
+
+    subgraph ASSOC["ASSOCIATION TESTING"]
+        MEM{"Memory<br/>budget?"}
+        NP["Batch Runner<br/>(genotypes in RAM)"]
+        NPS["Streaming Runner<br/>(two-pass disk I/O)"]
+        CEXT{"C extension?"}
+        C["C Extension<br/>OpenMP + SIMD"]
+        PY["Pure Python<br/>fallback"]
+        MEM -->|fits| NP
+        MEM -->|large| NPS
+        NP --> CEXT
+        NPS --> CEXT
+        CEXT -->|yes| C
+        CEXT -->|no| PY
+    end
+
+    RES["AssocResult<br/>(.assoc.txt)"]
+
+    PIPE --> LOAD --> CORE
+    EIG --> ASSOC
+    C --> RES
+    PY --> RES
+
+    style ENTRY fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style IO fill:#1a1a2e,stroke:#53a8b6,color:#eee,stroke-width:2px
+    style CORE fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
+    style ASSOC fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+
+    style CLI fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style PIPE fill:#53a8b6,stroke:#3d8a96,color:#fff
+    style LOAD fill:#53a8b6,stroke:#3d8a96,color:#fff
+
+    style KIN fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style EIG fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+
+    style MEM fill:#e94560,stroke:#c73550,color:#fff
+    style NP fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style NPS fill:#7b68ae,stroke:#5a4d8a,color:#fff
+    style CEXT fill:#e94560,stroke:#c73550,color:#fff
+    style C fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
+    style PY fill:#95a5a6,stroke:#7f8c8d,color:#1a1a2e
+
+    style RES fill:#2ecc71,stroke:#27ae60,color:#1a1a2e

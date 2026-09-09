@@ -229,6 +229,22 @@ repos:
         language: system
         files: ^tests/fixtures/
         pass_filenames: false
+      # jamma 8.0.2 shipped its architecture diagram to PyPI as a wall of
+      # raw mermaid source, and 30 relative links that 404 there. Neither is
+      # visible on GitHub, so nothing but a render check catches it before
+      # release. Cheap: no network, ~1s.
+      - id: check-pypi-readme
+        name: PyPI long description renders (no mermaid source, no relative links)
+        entry: uv run python scripts/check_pypi_readme.py
+        language: system
+        files: ^(README\.md|pyproject\.toml)$
+        pass_filenames: false
+      - id: readme-diagram-sync
+        name: docs/architecture.png matches the README mermaid fence
+        entry: uv run python scripts/render_readme_diagram.py --check
+        language: system
+        files: ^README\.md$
+        pass_filenames: false
       - id: no-compile-flag-literals-outside-build-support
         name: ban compile-flag literals outside jamma._build_support
         entry: scripts/check_compile_flag_literals.py

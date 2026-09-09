@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream's retained set), logs the plan as `LOCO workers: 4 (requested 6; 19
   chromosomes; 18 cores; memory allows 4)`, and `_computed_eigen_pairs` runs
   the solves on a thread pool, yielding pairs in chromosome order. The BLAS
-  thread count per solve is untouched, so results are bit-for-bit the
-  sequential run's; on MKL and OpenBLAS pair it with
+  thread count per solve is untouched. On Accelerate, where each solve is
+  single-threaded, results are identical to the sequential run's; on MKL and
+  OpenBLAS concurrent solves share one thread pool and results agree to
+  rounding (eigenvector entries within 2e-16 in CI), so pair it with
   `JAMMA_BLAS_THREADS=cores/W`. The gain is on macOS, where Accelerate runs
   DSYEVD on one core regardless: concurrent solves reached 3.4x the sequential
   eigen throughput at 6 workers on an 18-core M5 Pro. The per-solve progress

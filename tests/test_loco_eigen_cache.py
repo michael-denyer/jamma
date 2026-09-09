@@ -894,7 +894,11 @@ def test_write_eigen_with_workers_matches_sequential(
     """write_eigen under three workers lays down the same cache as under one.
 
     The same key, components and per-chromosome member names (after the
-    per-run generation id), and bit-identical eigenD/eigenU arrays.
+    per-run generation id), and eigenD/eigenU arrays equal to rounding.
+    Concurrent solves on OpenBLAS or MKL share one thread pool, so the last
+    bits move between runs: run 34404442767 saw 327 of 10,000 eigenvector
+    entries differ by at most 1.94e-16 where the PR run had none. On
+    Accelerate each solve is single-threaded and the arrays are identical.
     """
     require_fixture(LOCO.bed, LOCO.fam)
     from jamma.lmm.eigen_cache import read_eigen_cache_manifest
@@ -931,7 +935,9 @@ def test_write_eigen_with_workers_matches_sequential(
         }
         assert names_one == names_three
         for member in ("eigenD", "eigenU"):
-            np.testing.assert_array_equal(
+            np.testing.assert_allclose(
                 np.load(tmp_path / "w1" / one["artifacts"][chr_name][member]),
                 np.load(tmp_path / "w3" / three["artifacts"][chr_name][member]),
+                rtol=1e-10,
+                atol=1e-14,
             )

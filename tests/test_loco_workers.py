@@ -304,16 +304,24 @@ def test_run_lmm_loco_logs_planned_workers(monkeypatch):
 
 
 @pytest.mark.tier1
-def test_run_lmm_loco_workers_match_sequential_bit_for_bit(monkeypatch):
-    """Three workers and one produce the same associations, field by field."""
+def test_run_lmm_loco_workers_match_sequential_to_rounding(monkeypatch):
+    """Three workers and one produce the same associations, field by field.
+
+    Floats are compared to 1e-8 relative, not bit for bit. Each solve keeps
+    its BLAS thread count, but OpenBLAS and MKL split a solve across one
+    shared pool, and concurrent callers change where that split lands, so
+    reduction order and the last bits move: run 34404442767 on the
+    OpenBLAS-ILP64 leg differed in ``beta`` where the PR run had not. On
+    Accelerate each solve is single-threaded and the arrays are identical.
+    """
     require_fixture(LOCO.bed, LOCO.fam)
 
     sequential = _loco_run(1, monkeypatch)
     concurrent = _loco_run(3, monkeypatch)
 
     assert sequential.n_tested == concurrent.n_tested > 0
-    assert sequential.pve == concurrent.pve
-    assert sequential.pve_se == concurrent.pve_se
+    assert sequential.pve == pytest.approx(concurrent.pve, rel=1e-8)
+    assert sequential.pve_se == pytest.approx(concurrent.pve_se, rel=1e-8)
     for field in dataclasses.fields(AssocResult):
         one = [getattr(r, field.name) for r in sequential.associations]
         three = [getattr(r, field.name) for r in concurrent.associations]
@@ -321,8 +329,8 @@ def test_run_lmm_loco_workers_match_sequential_bit_for_bit(monkeypatch):
             as_float = lambda vs: np.array(  # noqa: E731
                 [np.nan if v is None else v for v in vs], dtype=float
             )
-            assert np.array_equal(as_float(one), as_float(three), equal_nan=True), (
-                field.name
+            np.testing.assert_allclose(
+                as_float(one), as_float(three), rtol=1e-8, atol=0, err_msg=field.name
             )
         else:
             assert one == three, field.name

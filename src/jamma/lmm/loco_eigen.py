@@ -528,9 +528,12 @@ def _computed_eigen_pairs(
     still come out in chromosome order, the oldest future resolved first,
     with at most ``workers`` in flight. ``jlinalg`` releases the GIL around
     the solver, so the solves overlap. Each solve keeps its own BLAS thread
-    count, so results are bit-for-bit the sequential path's; on MKL and
-    OpenBLAS pair ``JAMMA_LOCO_WORKERS=W`` with ``JAMMA_BLAS_THREADS=cores//W``
-    to avoid oversubscription. Accelerate runs DSYEVD on one core whatever the
+    count. On Accelerate every solve is single-threaded and the results are
+    identical to the sequential path's; MKL and OpenBLAS split each solve
+    across one shared pool, and concurrent callers move where that split
+    lands, so results there agree to rounding (last-bit differences in U),
+    and pairing ``JAMMA_LOCO_WORKERS=W`` with ``JAMMA_BLAS_THREADS=cores//W``
+    avoids oversubscription. Accelerate runs DSYEVD on one core whatever the
     setting, which is what makes the overlap worth having there. The first
     failed solve propagates in chromosome order; the rest are cancelled and
     the pool is shut down, also when the consumer closes the generator early.

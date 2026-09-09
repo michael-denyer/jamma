@@ -1,12 +1,12 @@
 [build-system]
-requires = ["hatchling==1.32.0", "numpy==2.4.6"]
+requires = ["hatchling==1.32.0", "hatch-fancy-pypi-readme==25.1.0", "numpy==2.4.6"]
 build-backend = "hatchling.build"
 
 [project]
 name = "jamma"
 version = "8.0.2"
 description = "Highly-Accelerated Multi-method Mixed-Model Association for large-scale GWAS"
-readme = "README.md"
+dynamic = ["readme"]
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "JAMMA Contributors" }]
@@ -102,6 +102,38 @@ markers = [
     "benchmark: marks tests that require pytest-benchmark (run with '--benchmark-only')",
     "requires_c: skips when the _lmm_accel C extension is not available",
 ]
+
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+# PyPI renders the long description with readme_renderer + the nh3 sanitizer.
+# That pipeline ships no mermaid JS (a ```mermaid fence lands as a literal
+# <pre> block of source text) and resolves relative links against
+# pypi.org/project/jamma/<version>/, where they 404. README.md stays
+# GitHub-native — live mermaid, relative links the lychee hook can verify —
+# and these substitutions rewrite it for PyPI at build time.
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+# The rendered PNG comes from the README fence itself, via
+# scripts/render_readme_diagram.py. PNG rather than SVG: raw.githubusercontent
+# serves SVG as text/plain, which PyPI's camo image proxy drops.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(?s)```mermaid\n.*?\n```'
+replacement = '![JAMMA architecture](https://raw.githubusercontent.com/michael-denyer/jamma/master/docs/architecture.png)'
+
+# Relative links -> absolute GitHub URLs. Every relative target in README.md
+# is a file, so /blob/ is correct.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#)([^)]+)\)'
+replacement = '](https://github.com/michael-denyer/jamma/blob/master/\1)'
+
+# In-page anchors: PyPI prefixes heading ids with "user-content-", so a bare
+# "#performance" has no target on the project page. Point them at the README
+# on GitHub instead.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\(#([^)]+)\)'
+replacement = '](https://github.com/michael-denyer/jamma#\1)'
 
 [tool.hatch.build.hooks.custom]
 
@@ -255,4 +287,9 @@ dev = [
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",
     "mpmath==1.4.1",
+    # Both back scripts/check_pypi_readme.py, which reproduces the PyPI
+    # project page locally: fancy-pypi-readme applies the long-description
+    # substitutions, readme-renderer is the exact renderer Warehouse uses.
+    "hatch-fancy-pypi-readme>=25.1.0",
+    "readme-renderer[md]>=46.0",
 ]

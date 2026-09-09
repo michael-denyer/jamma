@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The PyPI project page renders the architecture diagram and the README
+  links.** PyPI renders the long description with `readme_renderer` and the
+  `nh3` sanitizer, which ships no mermaid JS: the ```` ```mermaid ```` fence
+  arrived as a wall of raw source text, and the README's 30 relative links
+  resolved against `pypi.org/project/jamma/<version>/` and 404'd. `README.md`
+  stays GitHub-native; a `hatch-fancy-pypi-readme` metadata hook rewrites it
+  for PyPI at build time, substituting a rendered PNG for the fence and
+  absolute GitHub URLs for the relative links.
+
 ## [8.0.2] - 2026-09-09
 
 ### Breaking

@@ -28,9 +28,8 @@ from jamma.core.estimates import estimate_lmm_seconds
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import (
     blas_threads,
-    get_c_extension_thread_count,
+    run_threads,
 )
-from jamma.lmm import accel
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
 from jamma.lmm.chunk_sizing import LmmChunkPlan
@@ -365,7 +364,7 @@ def run_lmm_chunk_source_numpy_group(
 
     threads = plan_thread_budget(
         n_samples=n_samples,
-        omp_threads=get_c_extension_thread_count(accel.available(), accel.HAS_OPENMP),
+        omp_threads=run_threads().c_ext,
         max_omp_threads=workspace.max_threads,
         use_pipeline=use_pipeline,
     )

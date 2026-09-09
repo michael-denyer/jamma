@@ -147,3 +147,43 @@ class TestLogPipelineBanner:
 
         captured = capsys.readouterr()
         assert f"jlinalg: {jlinalg.blas_backend}" in captured.err
+
+    def test_accelerate_mac_logs_the_c_ext_count_the_kernel_uses(self, monkeypatch):
+        """On an 18-core Mac the kernel runs 18 OpenMP threads; so must the log.
+
+        The banner used to print ``physical_cores // 2`` whenever threadpoolctl
+        could not see the BLAS, and ``Unknown`` for the backend, while the chunk
+        runner gave the C extension every physical core and jlinalg already
+        knew the library was Accelerate. Both lines now come from one
+        ``RunThreads`` read, so this pins their exact text for that machine.
+        """
+        from loguru import logger as _logger
+
+        import jamma.jlinalg as jlinalg
+        from jamma.core import threading as core_threading
+        from jamma.lmm import accel
+        from jamma.lmm.association_plan import ExecutionPlan
+        from jamma.pipeline_banner import log_pipeline_banner
+
+        monkeypatch.setattr(core_threading, "get_physical_core_count", lambda: 18)
+        monkeypatch.setattr(core_threading, "get_blas_thread_count", lambda: 18)
+        monkeypatch.setattr(core_threading, "get_loco_worker_count", lambda: 1)
+        monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: False)
+        monkeypatch.setattr(core_threading, "threadpool_info", list)
+        monkeypatch.setattr(accel, "available", lambda: True)
+        monkeypatch.setattr(accel, "HAS_OPENMP", True)
+        monkeypatch.setattr(jlinalg, "blas_backend", "Accelerate-ILP64")
+
+        captured: list[str] = []
+        sink_id = _logger.add(captured.append, level="INFO", format="{message}")
+        try:
+            log_pipeline_banner(ExecutionPlan(mode="batch", reason="test"))
+        finally:
+            _logger.remove(sink_id)
+
+        assert captured == [
+            "Pipeline: numpy-batch | Accelerate | pending | C-ext (18 threads)"
+            " | jlinalg: Accelerate-ILP64\n",
+            "Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=18 (OpenMP)"
+            " | LOCO workers=1\n",
+        ]

@@ -467,3 +467,51 @@ class TestEigendecomposeKinshipLogsDriverThatRan:
         assert any("Eigendecomp: dsyevr" in m for m in captured_messages), (
             f"Expected an 'Eigendecomp: dsyevr' log line, got: {captured_messages}"
         )
+
+
+@pytest.mark.tier0
+class TestEigendecomposeKinshipLogsBlasThreadsThatApplied:
+    """The 'Eigendecomp:' line prints a thread count only when the BLAS took it.
+
+    ``blas_threads`` is a no-op on Accelerate, so the requested count used to
+    be logged as if it ran while the solver sat on one core. When the BLAS is
+    not controllable the line now says so and names the library instead.
+    """
+
+    @staticmethod
+    def _eigendecomp_line() -> str:
+        from loguru import logger
+
+        rng = np.random.default_rng(7)
+        A = rng.standard_normal((32, 32))
+        K = np.ascontiguousarray(A @ A.T + np.eye(32), dtype=np.float64)
+
+        captured: list[str] = []
+        handler_id = logger.add(captured.append, level="INFO", format="{message}")
+        try:
+            eigendecompose_kinship(K, check_memory=False)
+        finally:
+            logger.remove(handler_id)
+        lines = [m for m in captured if m.startswith("Eigendecomp: ")]
+        assert len(lines) == 1, captured
+        return lines[0].rstrip("\n")
+
+    def test_uncontrollable_blas_names_the_library_not_a_count(self, monkeypatch):
+        import jamma.jlinalg as jlinalg
+        from jamma.core import threading as core_threading
+
+        monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: False)
+        monkeypatch.setattr(core_threading, "threadpool_info", list)
+        monkeypatch.setattr(jlinalg, "blas_backend", "Accelerate-ILP64")
+
+        line = self._eigendecomp_line()
+        assert line.endswith(", threads=uncontrolled (Accelerate)"), line
+
+    def test_controllable_blas_logs_the_requested_count(self, monkeypatch):
+        from jamma.core import threading as core_threading
+
+        monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: True)
+        monkeypatch.setattr(core_threading, "get_blas_thread_count", lambda: 7)
+
+        line = self._eigendecomp_line()
+        assert line.endswith(", threads=7"), line

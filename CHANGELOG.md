@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`JAMMA_LOCO_WORKERS` eigendecomposes that many chromosomes at once.** The
+  variable existed but `-loco` only logged that parallel LOCO was not
+  implemented and ran sequentially. Now `plan_loco_workers` clamps the request
+  to what memory, the chromosome count and the physical cores allow (one owned
+  K_loco copy plus the eigen driver's peak per worker, on top of the kinship
+  stream's retained set), logs the plan as `LOCO workers: 4 (requested 6; 19
+  chromosomes; 18 cores; memory allows 4)`, and `_computed_eigen_pairs` runs
+  the solves on a thread pool, yielding pairs in chromosome order. The BLAS
+  thread count per solve is untouched, so results are bit-for-bit the
+  sequential run's; on MKL and OpenBLAS pair it with
+  `JAMMA_BLAS_THREADS=cores/W`. The gain is on macOS, where Accelerate runs
+  DSYEVD on one core regardless: concurrent solves reached 3.4x the sequential
+  eigen throughput at 6 workers on an 18-core M5 Pro. The per-solve progress
+  bar is suppressed while workers overlap; the per-chromosome log line stays.
+  Default unchanged at 1.
+
 ### Changed
 
 - **The startup log reports the thread counts the run uses.** A `Threads:`

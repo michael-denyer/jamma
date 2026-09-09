@@ -1,0 +1,22 @@
+{
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif",
+    "fontSize": "16px",
+    "lineColor": "#9fb3c8",
+    "textColor": "#eeeeee",
+    "titleColor": "#eeeeee",
+    "edgeLabelBackground": "#0f3460",
+    "clusterBkg": "#1a1a2e",
+    "clusterBorder": "#53a8b6",
+    "nodeBorder": "#53a8b6",
+    "mainBkg": "#1a1a2e"
+  },
+  "flowchart": {
+    "padding": 18,
+    "nodeSpacing": 45,
+    "rankSpacing": 55,
+    "curve": "basis"
+  },
+  "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .edgeLabel div { color: #eeeeee !important; fill: #eeeeee !important; background-color: #0f3460 !important; } .edgeLabel rect { fill: #0f3460 !important; }"
+}

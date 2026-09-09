@@ -28,11 +28,12 @@ REPO_ROOT = repo_root()
 README = REPO_ROOT / "README.md"
 MMD = REPO_ROOT / "docs" / "architecture.mmd"
 PNG = REPO_ROOT / "docs" / "architecture.png"
+CONFIG = REPO_ROOT / "docs" / "mermaid-render.json"
 
 FENCE = re.compile(r"^```mermaid\n(.*?)^```", re.DOTALL | re.MULTILINE)
 
-# Matches the diagram's own dark subgraph fills, so the PNG reads the same on
-# PyPI (always light) as the live mermaid does on GitHub in dark mode.
+# The canvas behind the diagram. GitHub supplies its own in dark mode; a
+# standalone PNG has to carry one, and PyPI's page is always light.
 BACKGROUND = "#1a1a2e"
 
 # 2x for legible text on high-DPI displays; keeps the PNG well under the
@@ -85,6 +86,8 @@ def main() -> int:
             BACKGROUND,
             "--scale",
             SCALE,
+            "--configFile",
+            str(CONFIG),
         ],
         check=True,
     )

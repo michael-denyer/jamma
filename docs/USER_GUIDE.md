@@ -761,8 +761,8 @@ Kinship-only mode (`-gk`) does not emit telemetry regardless of these settings.
 | -------- | ------- | ----------- |
 | `JAMMA_BACKEND` | auto-detect | Force backend: `auto`, `numpy`, or `numpy-streaming`. Auto-detect prefers C+NumPy, then NumPy fallback. |
 | `JAMMA_BLAS_THREADS` | `physical_cores` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
-| `VECLIB_MAXIMUM_THREADS` | *(unset)* | Apple's Accelerate thread cap. Has no effect on the eigensolver: on Accelerate, DSYEVD runs on one core at n=5000 with `VECLIB_MAXIMUM_THREADS=18` exported before Python starts, and `JAMMA_BLAS_THREADS` cannot change that either. The `Threads:` log line shows what the run will use and marks the BLAS `uncontrolled`. |
-| `JAMMA_LOCO_WORKERS` | `1` | How many chromosomes `-loco` eigendecomposes at once. Each worker holds its own copy of one K_loco (`n^2 x 8` bytes over the analysed samples) plus the eigen driver's workspace, on top of the kinship stream's retained set. A memory gate clamps the count to what fits, also capped by the chromosome count and the physical cores, and logs the result as `LOCO workers: 4 (requested 6; 19 chromosomes; 18 cores; memory allows 4)`. On Accelerate the results are identical to a sequential run; on MKL and OpenBLAS, where concurrent solves share one thread pool, they agree to floating-point rounding. |
+| `VECLIB_MAXIMUM_THREADS` | *(unset)* | Apple's Accelerate thread cap. Has no effect on the eigensolver: on Accelerate, DSYEVD runs on one core at n=5000 with `VECLIB_MAXIMUM_THREADS=18` exported before Python starts, and `JAMMA_BLAS_THREADS` cannot change that either. The `Eigendecomp:` and `Association threads:` log lines mark its BLAS limit `uncontrolled`. |
+| `JAMMA_LOCO_WORKERS` | `1` | How many chromosomes `-loco` eigendecomposes at once. Each worker holds its own copy of one K_loco (`n^2 x 8` bytes over the analysed samples) plus the eigen driver's workspace, on top of the kinship stream's retained set. A memory gate clamps the count to what fits, also capped by the chromosome count and the physical cores, and logs the result as `LOCO workers: 4 (requested 6; 19 chromosomes; 18 cores; memory allows 4)`. Each bounded batch finishes before association starts, so the phases can safely apply different BLAS limits. Results agree with sequential execution to floating-point rounding. |
 | `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable benchmark telemetry. See [Telemetry](#telemetry). |
 | `DO_NOT_TRACK` | *(unset)* | Universal telemetry opt-out convention. Set to `1` to disable JAMMA telemetry. See [Telemetry](#telemetry). |
 
@@ -777,8 +777,12 @@ jamma -lmm 1 -bfile data/my_study -loco -o output
 and does not affect OpenMP (`libgomp`/`libomp`). It has no
 effect on macOS Accelerate (which provides no thread-count API). If you have C
 extensions compiled with `-fopenmp`, use `OMP_NUM_THREADS` separately. The
-`Threads:` line logged after the `Pipeline:` banner names every count the run
-uses: `Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=18 (OpenMP) | LOCO workers=1`.
+`Pipeline:` banner identifies the selected backend. Counts are logged after
+planning: for example, `Association threads: rotation=6 | C-ext=12` for a
+pipelined 18-core run with controllable BLAS, or
+`Association threads: rotation=uncontrolled (Accelerate) | C-ext=12` on
+Accelerate. `LOCO workers:` reports the selected count after memory and
+chromosome caps. Cached LOCO eigenpairs report zero eigen workers. The eigen phase logs its own BLAS limit.
 
 `JAMMA_LOCO_WORKERS` matters most on macOS: Accelerate runs each DSYEVD on one
 core whatever the thread setting, so a sequential `-loco` run leaves the other
@@ -787,7 +791,9 @@ eigendecompositions reached 3.4x the sequential throughput at 6 workers and no
 more beyond that, since the solves saturate the 6 performance cores. On Linux
 with MKL or OpenBLAS each solve already uses every core, so pair the two
 settings to avoid oversubscription: `JAMMA_LOCO_WORKERS=W` with
-`JAMMA_BLAS_THREADS=cores/W`.
+`JAMMA_BLAS_THREADS=cores/W` using the integer result of that division.
+LOCO applies this BLAS limit once per eigen batch and restores it before
+association uses its own rotation budget.
 
 ## Validation
 

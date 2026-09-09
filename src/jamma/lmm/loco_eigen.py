@@ -12,21 +12,17 @@ literal in this module.
 
 from __future__ import annotations
 
-import gc
 import uuid
-from collections import deque
 from collections.abc import Callable, Generator, Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
 
-from jamma.core import memory
 from jamma.core.eigen_plan import EigenDriverPlan
-from jamma.core.threading import get_physical_core_count
+from jamma.core.threading import get_blas_thread_count
 from jamma.kinship import (
     SnpStatsCache,
     compute_loco_kinship_streaming,
@@ -35,8 +31,8 @@ from jamma.kinship import (
 from jamma.kinship.loco import LocoRetainedSet, loco_retained_set
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
 from jamma.lmm.eigen import (
+    _eigendecompose_kinship,
     center_kinship,
-    eigendecompose_kinship,
     plan_eigen_driver_for_machine,
 )
 from jamma.lmm.eigen_cache import (
@@ -50,6 +46,7 @@ from jamma.lmm.eigen_cache import (
 )
 from jamma.lmm.eigen_io import read_eigen_files, write_eigen_generation_members
 from jamma.lmm.loco_config import LocoConfig
+from jamma.lmm.loco_workers import LocoWorkerPlan, solve_eigen_pairs
 
 EigenPairs = Generator[tuple[str, np.ndarray, np.ndarray], None, None]
 """``(chr_name, eigenvalues, U)`` per chromosome, in ``chr_names`` order."""
@@ -116,88 +113,6 @@ def loco_retained_set_for(execution: ExecutableAssociationPlan) -> LocoRetainedS
     )
 
 
-class LocoWorkerPlan(NamedTuple):
-    """How many chromosomes eigendecompose at once, and what that reserves.
-
-    Attributes:
-        workers: Concurrent eigendecompositions. One is the sequential path,
-            unchanged from before workers existed.
-        memory_allows: The memory ceiling on its own, before the request, the
-            chromosome count and the core count cap it. Logged so a clamp
-            names its cause.
-        cores: Physical cores, the third cap.
-        consumer_gb: What the kinship stream reserves for the eigen consumer:
-            the driver's peak alone sequentially, else the larger of one
-            owned K_loco copy plus one driver peak per worker, and the
-            association pass plus the ``workers - 1`` still in flight.
-    """
-
-    workers: int
-    memory_allows: int
-    cores: int
-    consumer_gb: float
-
-
-def plan_loco_workers(
-    requested: int,
-    *,
-    n_chr: int,
-    retained: LocoRetainedSet,
-    eigen_plan: EigenDriverPlan,
-    available_gb: float,
-    budget_gb: float | None,
-    association_gb: float,
-    cores: int | None = None,
-) -> LocoWorkerPlan:
-    """Pick how many chromosomes eigendecompose at once.
-
-    Pure sizing math against the two ceilings ``plan_loco_passes`` applies:
-    ``memory.fits`` against ``available_gb`` and, when set, ``budget_gb``.
-    The stream's retained set stays live underneath; each worker adds one
-    owned copy of the streamed K_loco (the stream's buffer is overwritten on
-    the next pull) and the eigen driver's peak on top of it. The consumer's
-    peak is the larger of two moments: every worker solving at once, and the
-    association pass running while the other ``workers - 1`` still solve.
-    The count is the largest that fits, capped by the request, the
-    chromosome count and the physical cores, and never below one. At one
-    worker nothing is copied, so the reservation is the driver's peak alone.
-
-    Args:
-        requested: ``JAMMA_LOCO_WORKERS``, already parsed and at least one.
-        n_chr: Chromosomes in the run; no point in more workers than that.
-        retained: The stream's live matrices and disk buffer.
-        eigen_plan: The driver every chromosome runs; its peak is per worker.
-        available_gb: Free RAM in GB (the caller reads psutil once).
-        budget_gb: User ceiling in GB without the physical-RAM margin, or None.
-        association_gb: Peak of one chromosome's association pass, which
-            overlaps the solves still in flight.
-        cores: Physical core cap, or None to read the machine.
-
-    Returns:
-        The worker count, the memory-only bound, the core cap and the
-        reservation the stream must hold for the consumer.
-    """
-    per_worker_gb = retained.matrix_gb + eigen_plan.required_gb
-
-    def consumer(workers: int) -> float:
-        if workers == 1:
-            return eigen_plan.required_gb
-        return max(
-            workers * per_worker_gb, association_gb + (workers - 1) * per_worker_gb
-        )
-
-    def fits(workers: int) -> bool:
-        peak_gb = retained.while_consuming_gb + consumer(workers)
-        within_budget = budget_gb is None or peak_gb <= budget_gb
-        return within_budget and memory.fits(peak_gb, available_gb)
-
-    memory_allows = next((w for w in range(requested, 1, -1) if fits(w)), 1)
-    if cores is None:
-        cores = get_physical_core_count()
-    workers = max(1, min(requested, n_chr, cores, memory_allows))
-    return LocoWorkerPlan(workers, memory_allows, cores, consumer(workers))
-
-
 def eigen_pairs_for(
     bed_path: Path,
     chr_names: list[str],
@@ -212,7 +127,6 @@ def eigen_pairs_for(
     eigen_plan: EigenDriverPlan,
     workers: LocoWorkerPlan,
     mem_budget: float | None = None,
-    association_peak_gb: float = 0.0,
 ) -> EigenPairSource:
     """Choose the eigenpair source for one LOCO run.
 
@@ -238,9 +152,6 @@ def eigen_pairs_for(
             streamer reserves for the eigen consumer.
         mem_budget: User-set ceiling in GB, or None for no ceiling. Reaches the
             kinship streamer's veto and each decomposition's gate.
-        association_peak_gb: Peak the association phase will hold, so the kinship
-            streamer sizes its chromosome batch around the larger of that and the
-            eigen consumer.
     """
     n_valid = int(np.sum(valid_mask))
     all_samples_valid = n_valid == len(valid_mask)
@@ -263,6 +174,7 @@ def eigen_pairs_for(
                 loco, chr_names, key, eigen_dir=loco.eigen_dir
             )
             if cache is not None:
+                logger.info("LOCO workers: 0 (cached eigenpairs)")
                 if loco.kinship_output_dir is not None:
                     logger.warning(
                         "kinship_output_dir ignored when using cached eigen "
@@ -277,6 +189,7 @@ def eigen_pairs_for(
                 )
                 return EigenPairSource(pairs, snp_stats=None)
 
+    logger.info(workers.describe())
     # Without a kinship file to save, accumulate at n_valid x n_valid rather
     # than materialising n_samples^2 for a post-hoc subset.
     kinship_valid_indices = (
@@ -295,7 +208,7 @@ def eigen_pairs_for(
         valid_indices=kinship_valid_indices,
         filter_sample_indices=None if all_samples_valid else np.where(valid_mask)[0],
         mem_budget=mem_budget,
-        consumer_gb=max(workers.consumer_gb, association_peak_gb),
+        consumer_gb=workers.consumer_gb,
     )
     pairs = _computed_eigen_pairs(
         stream,
@@ -513,33 +426,17 @@ def _computed_eigen_pairs(
     eigen_plan: EigenDriverPlan,
     mem_budget: float | None,
     workers: int = 1,
-    solve: Callable[..., tuple[np.ndarray, np.ndarray]] = eigendecompose_kinship,
+    solve: Callable[..., tuple[np.ndarray, np.ndarray]] = _eigendecompose_kinship,
 ) -> EigenPairs:
     """Yield per-chromosome eigenpairs by eigendecomposing streamed LOCO kinship.
 
-    Each K_loco is optionally saved, subset to the analysed samples,
-    eigendecomposed, optionally written to the eigen cache, then dropped before
-    the next chromosome is pulled, so only one lives at a time.
+    Each K_loco is optionally saved, subset to the analysed samples and
+    eigendecomposed. Cache artifacts are written as the consumer advances.
 
-    With ``workers`` above one, that many chromosomes decompose at once on a
-    thread pool. The stream yields one shared buffer, overwritten on the next
-    pull, so each submitted chromosome is copied first; that copy is the
-    whole per-worker footprint, since the driver overwrites it with U. Pairs
-    still come out in chromosome order, the oldest future resolved first,
-    with at most ``workers`` in flight. ``jlinalg`` releases the GIL around
-    the solver, so the solves overlap. Each solve keeps its own BLAS thread
-    count. On Accelerate every solve is single-threaded and the results are
-    identical to the sequential path's; MKL and OpenBLAS split each solve
-    across one shared pool, and concurrent callers move where that split
-    lands, so results there agree to rounding (last-bit differences in U),
-    and pairing ``JAMMA_LOCO_WORKERS=W`` with ``JAMMA_BLAS_THREADS=cores//W``
-    avoids oversubscription. Accelerate runs DSYEVD on one core whatever the
-    setting, which is what makes the overlap worth having there. The first
-    failed solve propagates in chromosome order; the rest are cancelled and
-    the pool is shut down, also when the consumer closes the generator early.
-
-    ``solve`` is ``eigendecompose_kinship``; tests inject a stand-in with the
-    same keyword signature to observe the overlap without patching.
+    Concurrent workers receive owned copies of the stream's reusable buffer.
+    A bounded batch finishes before association consumes its ordered results,
+    so eigen and association phases never race over process-wide BLAS limits.
+    ``solve_eigen_pairs`` owns scheduling, thread limits and worker cleanup.
 
     With ``cache_write``, every pair is written under one fresh generation.
     The manifest is replaced only after the consumer drains every chromosome,
@@ -557,89 +454,64 @@ def _computed_eigen_pairs(
                 f"Cannot create eigen cache directory {cache_write.eigen_dir}: {e}"
             ) from e
 
-    def decompose(K_loco_valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        center_kinship(K_loco_valid)
+    n_threads = get_blas_thread_count()
+
+    def decompose(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        center_kinship(K)
         return solve(
-            K_loco_valid,
+            K,
             check_memory=check_memory,
             mem_budget=mem_budget,
             eigen_plan=eigen_plan,
             show_progress=show_progress and workers == 1,
+            n_threads=n_threads,
         )
 
-    def publish(chr_name: str, eigenvalues: np.ndarray, U: np.ndarray) -> None:
-        if cache_write is None:
-            return
-        d_path, u_path = _write_loco_eigen(
-            eigenvalues,
-            U,
-            chr_name,
-            loco=loco,
-            eigen_dir=cache_write.eigen_dir,
-            generation=cache_write.generation,
-        )
-        artifacts[chr_name] = {"eigenD": d_path.name, "eigenU": u_path.name}
-
-    pending: deque[tuple[str, Future[tuple[np.ndarray, np.ndarray]]]] = deque()
-
-    def oldest() -> tuple[str, np.ndarray, np.ndarray]:
-        # Built here rather than in the loop so the generator frame holds no
-        # name for the yielded eigenvectors once the consumer has them.
-        chr_name, future = pending.popleft()
-        eigenvalues, U = future.result()
-        del future
-        publish(chr_name, eigenvalues, U)
-        return chr_name, eigenvalues, U
-
-    pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
-    try:
-        # No enumerate() here. CPython's enumerate holds its previous result
-        # tuple, and through it the previous U, until this generator yields the
-        # next item, so chromosome c's eigenvectors would stay live through
-        # c+1's eigendecomposition. The counter feeds the progress line below.
-        chr_idx = -1
+    def inputs() -> Generator[tuple[str, np.ndarray], None, None]:
+        chr_idx = 0
         for chr_name, K_loco in loco_iter:
-            chr_idx += 1
+            chr_idx += 1  # noqa: SIM113 -- enumerate retains the preceding matrix
             if show_progress:
                 logger.info(
-                    f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
+                    f"LOCO: chromosome {chr_name} ({chr_idx}/{len(chr_names)}), "
                     f"{len(partitions[chr_name])} SNPs, eigendecomposing..."
                 )
-
             if loco.kinship_output_dir is not None:
                 _save_loco_kinship(
                     K_loco, chr_name, loco=loco, show_progress=show_progress
                 )
-
-            K_loco_valid = _analysed_subset(
-                K_loco,
-                valid_mask=valid_mask,
-                n_valid=n_valid,
-                pre_subset=pre_subset,
-                all_samples_valid=all_samples_valid,
-                copy=pool is not None,
+            # Yield the owned copy directly so this frame does not retain it
+            # after a non-inplace solver returns a separate eigenvector array.
+            yield (
+                chr_name,
+                _analysed_subset(
+                    K_loco,
+                    valid_mask=valid_mask,
+                    n_valid=n_valid,
+                    pre_subset=pre_subset,
+                    all_samples_valid=all_samples_valid,
+                    copy=workers > 1,
+                ),
             )
             del K_loco
 
-            if pool is None:
-                eigenvalues, U = decompose(K_loco_valid)
-                del K_loco_valid
-                gc.collect()
-                publish(chr_name, eigenvalues, U)
-                yield chr_name, eigenvalues, U
-                del eigenvalues, U
-                continue
-
-            pending.append((chr_name, pool.submit(decompose, K_loco_valid)))
-            del K_loco_valid
-            if len(pending) == workers:
-                yield oldest()
-
-        while pending:
-            yield oldest()
-    finally:
-        if pool is not None:
-            pool.shutdown(wait=True, cancel_futures=True)
+    with closing(
+        solve_eigen_pairs(inputs(), decompose, workers=workers, n_threads=n_threads)
+    ) as pairs:
+        # Do not use enumerate: it retains the preceding eigenvector matrix.
+        for chr_name, eigenvalues, U in pairs:
+            if cache_write is not None:
+                d_path, u_path = _write_loco_eigen(
+                    eigenvalues,
+                    U,
+                    chr_name,
+                    loco=loco,
+                    eigen_dir=cache_write.eigen_dir,
+                    generation=cache_write.generation,
+                )
+                artifacts[chr_name] = {"eigenD": d_path.name, "eigenU": u_path.name}
+            yield chr_name, eigenvalues, U
+            del eigenvalues, U
 
     if cache_write is not None:
         write_eigen_cache_manifest(

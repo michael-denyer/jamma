@@ -176,6 +176,7 @@ src/jamma/
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
 │   ├── loco_config.py      # LocoConfig: LOCO-only knobs and artifact naming
 │   ├── loco_eigen.py       # eigen_pairs_for(): cache-or-compute decision, cache key, manifest, artifact writes
+│   ├── loco_workers.py     # Bounded eigen batches, BLAS scope ownership and worker memory pricing
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
 │   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)
 │   ├── _compile_accel.py   # Dev-mode/runtime compiler; calls run_build(LMM_ACCEL_SPEC)
@@ -238,7 +239,7 @@ Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if
 
 ## LOCO Mode
 
-Leave-one-chromosome-out (LOCO) analysis is orchestrated by `lmm/loco.py`. For each chromosome `c`, a LOCO kinship matrix is derived from the full kinship numerator `S_full` via the subtraction approach: `K_loco_c = (S_full - S_c) / (p - p_c)`. This avoids recomputing kinship from scratch for each chromosome. Each `K_loco_c` is eigendecomposed, LMM is run on chromosome `c`'s SNPs, then `K_loco_c` is discarded before processing the next chromosome. Per-chromosome eigen files can be cached to `--eigen-dir` to skip repeated eigendecompositions.
+Leave-one-chromosome-out (LOCO) analysis is orchestrated by `lmm/loco.py`. For each chromosome `c`, a LOCO kinship matrix is derived from the full kinship numerator `S_full` via the subtraction approach: `K_loco_c = (S_full - S_c) / (p - p_c)`. This avoids recomputing kinship from scratch for each chromosome. With one worker, each `K_loco_c` is eigendecomposed and its chromosome is associated before the next matrix is pulled. Multiple workers receive owned copies in bounded batches. `loco_workers.py` completes the batch under one BLAS scope, restores that scope, then yields its eigenpairs in chromosome order for association. Worker input matrices are included in their driver peaks; only completed eigenvectors remain while association runs. Per-chromosome eigen files can be cached to `--eigen-dir` to skip repeated eigendecompositions.
 
 ## Numerical Compatibility with GEMMA
 

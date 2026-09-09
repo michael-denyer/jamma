@@ -16,7 +16,6 @@ import functools
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import dataclass
 
 import psutil
 from loguru import logger
@@ -28,12 +27,14 @@ _BLAS_DISPLAY: dict[str, str] = {
     "mkl": "MKL",
     "openblas": "OpenBLAS",
     "accelerate": "Accelerate",
+    "numpy-fallback": "NumPy fallback",
 }
 
 
 def blas_display_name(backend: str) -> str:
     """Return the log spelling of a lowercase BLAS backend name."""
-    return _BLAS_DISPLAY.get(backend, backend.title())
+    key = backend.lower().removesuffix("-ilp64").removesuffix("-lp64")
+    return _BLAS_DISPLAY.get(key, key.title())
 
 
 def get_blas_backend() -> str:
@@ -168,87 +169,11 @@ def get_c_extension_thread_count(
     return get_physical_core_count()
 
 
-@dataclass(frozen=True, slots=True)
-class RunThreads:
-    """Every thread decision for one run, read from the machine once.
-
-    The kernels take their counts from here and the logs print the same
-    fields, so a banner cannot show a number the run never used.
-    """
-
-    blas: int
-    """Requested BLAS thread count (``get_blas_thread_count``)."""
-    blas_controllable: bool
-    """Whether ``blas_threads`` can enforce ``blas``; False on Accelerate."""
-    blas_backend: str
-    """Lowercase BLAS name: threadpoolctl's, else derived from jlinalg's."""
-    c_ext: int
-    """OpenMP thread count for ``_lmm_accel``; 1 when serial or absent."""
-    c_ext_openmp: bool
-    """Whether ``_lmm_accel`` was compiled with OpenMP."""
-    c_ext_available: bool
-    """Whether ``_lmm_accel`` loaded."""
-    loco_workers: int
-    """Parallel chromosome workers for LOCO (``get_loco_worker_count``)."""
-
-    @property
-    def blas_display(self) -> str:
-        return blas_display_name(self.blas_backend)
-
-    def blas_label(self) -> str:
-        """``"18"`` when the BLAS honours the request, else what it does instead."""
-        if self.blas_controllable:
-            return str(self.blas)
-        return f"uncontrolled ({self.blas_display})"
-
-    def describe(self) -> str:
-        """One log line naming every thread count the run will use."""
-        blas = f"BLAS={self.blas} ({self.blas_display}"
-        blas += ")" if self.blas_controllable else ", uncontrolled)"
-        if not self.c_ext_available:
-            c_ext = "C-ext=none"
-        elif self.c_ext_openmp:
-            c_ext = f"C-ext={self.c_ext} (OpenMP)"
-        else:
-            c_ext = f"C-ext={self.c_ext} (no OpenMP)"
-        return f"Threads: {blas} | {c_ext} | LOCO workers={self.loco_workers}"
-
-
-def _jlinalg_backend_key(name: str) -> str:
-    """Map jlinalg's ``blas_backend`` ("Accelerate-ILP64") to threadpoolctl's key."""
-    if name.startswith("numpy-fallback"):
-        return "unknown"
-    key = name.lower()
-    for suffix in ("-ilp64", "-lp64"):
-        if key.endswith(suffix):
-            return key[: -len(suffix)]
-    return key
-
-
-def run_threads() -> RunThreads:
-    """Read every thread decision for this run from the machine.
-
-    threadpoolctl cannot see Apple Accelerate, so when it reports no BLAS the
-    backend name comes from ``jlinalg.blas_backend``, which found the library
-    by ``dlopen``. The import is deferred because ``jamma.lmm.accel`` loads
-    the C extension and depends on this module.
-    """
-    from jamma import jlinalg
-    from jamma.lmm import accel
-
-    blas_backend = get_blas_backend()
-    if blas_backend == "unknown":
-        blas_backend = _jlinalg_backend_key(jlinalg.blas_backend)
-    c_ext_available = accel.available()
-    return RunThreads(
-        blas=get_blas_thread_count(),
-        blas_controllable=is_blas_controllable(),
-        blas_backend=blas_backend,
-        c_ext=get_c_extension_thread_count(c_ext_available, accel.HAS_OPENMP),
-        c_ext_openmp=accel.HAS_OPENMP,
-        c_ext_available=c_ext_available,
-        loco_workers=get_loco_worker_count(),
-    )
+def blas_thread_label(n_threads: int, backend: str) -> str:
+    """Describe an applied limit, or name a backend whose limit is uncontrolled."""
+    if is_blas_controllable():
+        return str(n_threads)
+    return f"uncontrolled ({blas_display_name(backend)})"
 
 
 @contextmanager

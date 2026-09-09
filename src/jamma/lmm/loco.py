@@ -10,8 +10,8 @@ Memory profile (sequential processing):
     Each K_loco is discarded after eigendecomp.
 
 With ``JAMMA_LOCO_WORKERS`` above one, ``plan_loco_workers`` lets that many
-chromosomes eigendecompose at once, each on its own copy of K_loco, while
-the association pass stays sequential and in chromosome order.
+chromosomes eigendecompose at once, each on its own copy of K_loco, in bounded batches.
+Association consumes a completed batch in chromosome order before the next starts.
 
 ``LocoConfig`` lives in ``loco_config`` and is re-exported here, so ``from
 jamma.lmm.loco import LocoConfig`` keeps working. Where the eigenpairs come
@@ -41,7 +41,7 @@ from jamma.core.snp_stats import (
     SnpStats,
     collect_snp_stats_from_chunks,
 )
-from jamma.core.threading import get_loco_worker_count
+from jamma.core.threading import get_loco_worker_count, get_physical_core_count
 from jamma.io.plink import (
     get_plink_metadata,
     partitions_from_metadata,
@@ -64,8 +64,8 @@ from jamma.lmm.loco_eigen import (
     eigen_pairs_for,
     loco_retained_set_for,
     plan_loco_eigen_driver,
-    plan_loco_workers,
 )
+from jamma.lmm.loco_workers import plan_loco_workers
 from jamma.lmm.prepare_common import EigenPairs
 from jamma.lmm.runner_numpy import LOCO_LABELS, LmmRunSpec, run_lmm_association
 from jamma.lmm.schema import (
@@ -310,20 +310,14 @@ def run_lmm_loco(
     workers = plan_loco_workers(
         requested_workers,
         n_chr=len(unique_chrs),
+        n_samples=execution.n_samples,
+        cores=get_physical_core_count(),
         retained=loco_retained_set_for(execution),
         eigen_plan=eigen_plan,
         available_gb=available_gb,
         budget_gb=config.mem_budget,
         association_gb=association_gb,
     )
-    if requested_workers == 1:
-        logger.info("LOCO workers: 1")
-    else:
-        logger.info(
-            f"LOCO workers: {workers.workers} (requested {requested_workers}; "
-            f"{len(unique_chrs)} chromosomes; {workers.cores} cores; "
-            f"memory allows {workers.memory_allows})"
-        )
     spec = LmmRunSpec(
         config=replace(config, show_progress=False),
         execution=execution,
@@ -361,7 +355,6 @@ def run_lmm_loco(
             eigen_plan=eigen_plan,
             workers=workers,
             mem_budget=config.mem_budget,
-            association_peak_gb=association_gb,
         )
 
         first_chr_pve: float | None = None

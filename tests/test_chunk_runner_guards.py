@@ -7,19 +7,82 @@ preconditions.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
+import psutil
 import pytest
+from loguru import logger
 
 from jamma.core.snp_stats import SnpSelection
-from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
+from jamma.lmm import accel
+from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
 from jamma.lmm.prepare_common import PreparedLmmRun
 from jamma.lmm.schema import ChunkRunStats, LmmConfig, SnpMeta
 from jamma.lmm.workspace import WorkspaceSpec
+from tests.conftest import requires_c
 
 pytestmark = pytest.mark.tier0
+
+
+@requires_c
+def test_association_logs_the_workspace_thread_cap_used_by_real_kernels(monkeypatch):
+    monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: 18)
+    n_samples, n_snps = 20, 6
+    rng = np.random.default_rng(21)
+    G = rng.integers(0, 3, size=(n_samples, n_snps)).astype(float)
+    config = LmmConfig(lmm_mode=1, show_progress=False)
+    prepared = PreparedLmmRun(
+        eigenvalues=np.ones(n_samples),
+        U=np.eye(n_samples),
+        UtW=np.ones((n_samples, 1)),
+        Uty=rng.normal(size=n_samples),
+        logl_H0=-1.0,
+        Hi_eval_null=np.full(n_samples, 0.5),
+        pve=None,
+        pve_se=None,
+    )
+    genotypes = replace(
+        _prepared_genotypes(n_samples, n_snps),
+        chunk_factory=lambda width: (
+            RawLmmChunk(G[:, i : i + width].copy(), i, i + width)
+            for i in range(0, n_snps, width)
+        ),
+    )
+    workspace = WorkspaceSpec.build(
+        DispatchPath.FUSED,
+        config.lmm_mode,
+        n_samples,
+        n_samples,
+        1,
+        config.n_grid,
+        config.n_refine,
+        2,
+    )
+    written = []
+    messages = []
+    sink = logger.add(messages.append, level="INFO", format="{message}")
+    try:
+        run_lmm_chunk_source_numpy(
+            genotypes=genotypes,
+            chunk_sink=lambda arrays, _start, _end: written.append(arrays["betas"]),
+            dispatch=DispatchPath.FUSED,
+            chunks=LmmChunkPlan(2, 3, 2, True),
+            workspace=workspace,
+            prepared=prepared,
+            config=config,
+        )
+    finally:
+        logger.remove(sink)
+    expected = 2 if accel.HAS_OPENMP else 1
+    line = next(msg for msg in messages if msg.startswith("Association threads:"))
+    assert line.endswith(f" | C-ext={expected}\n")
+    assert sum(len(betas) for betas in written) == n_snps
+    assert all(np.isfinite(betas).all() for betas in written)
+
 
 # ---------------------------------------------------------------------------
 # run_lmm_chunk_source_numpy preconditions

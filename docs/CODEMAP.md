@@ -274,8 +274,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:130](../src/jamma/lmm/runner_numpy.py#L130) |
 | 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:581](../src/jamma/lmm/runner_numpy.py#L581) |
 | 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:406](../src/jamma/lmm/prepare_common.py#L406) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:459](../src/jamma/lmm/chunk_runner_numpy.py#L459) |
-| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:174](../src/jamma/lmm/chunk_runner_numpy.py#L174) |
+| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:464](../src/jamma/lmm/chunk_runner_numpy.py#L464) |
+| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:176](../src/jamma/lmm/chunk_runner_numpy.py#L176) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the prepared run and the config | [chunk_kernel.py:46](../src/jamma/lmm/chunk_kernel.py#L46) |
 | 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:158](../src/jamma/lmm/chunk_kernel.py#L158) |
 | 4Nb | `_overlapped_chunks()` | Generator yielding each prepared chunk while the next rotates on the executor | [chunk_pipeline.py:98](../src/jamma/lmm/chunk_pipeline.py#L98) |
@@ -304,7 +304,9 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Ni | `_build_results()` | Table-driven result building from numpy arrays | [lmm/results.py:35](../src/jamma/lmm/results.py#L35) |
 | 4Ni | `count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/results.py:174](../src/jamma/lmm/results.py#L174) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:169](../src/jamma/lmm/loco.py#L169) |
-| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:193](../src/jamma/lmm/loco_eigen.py#L201) |
+| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:116](../src/jamma/lmm/loco_eigen.py#L116) |
+| 4Nj | `solve_eigen_pairs()` | Bounded concurrent eigen batches with one BLAS scope, closed before association | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
+| 4Nj | `plan_loco_workers()` | Worker cap and complete consumer memory reservation | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 
 ---
 
@@ -321,8 +323,8 @@ Configuration, memory management, threading, and logging.
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:20](../src/jamma/utils/logging.py#L20) |
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:55](../src/jamma/utils/logging.py#L55) |
 | 5c | `log_memory_snapshot()` | RSS + free-RAM snapshot at phase boundaries | [memory_snapshot.py](../src/jamma/core/memory_snapshot.py) |
-| 5e | `get_physical_core_count()` | Physical core detection (consolidated helper) | [threading.py:54](../src/jamma/core/threading.py#L54) |
-| 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:255](../src/jamma/core/threading.py#L255) |
+| 5e | `get_physical_core_count()` | Physical core detection (consolidated helper) | [threading.py:55](../src/jamma/core/threading.py#L55) |
+| 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:180](../src/jamma/core/threading.py#L180) |
 | 5f | `get_hardware_context()` | CPU, BLAS, platform info for benchmarks | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
 | 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:94](../src/jamma/core/progress.py#L94) |
 | 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/core/estimates.py#L149) |
@@ -600,7 +602,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
 | Result writer | [IncrementalAssocWriter](../src/jamma/lmm/io.py#L76) |
 | Memory estimation | [lmm_cost](../src/jamma/core/memory.py#L227) |
-| Threading | [threading.py:54](../src/jamma/core/threading.py#L54) |
+| Threading | [threading.py:55](../src/jamma/core/threading.py#L55) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
 | Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L597) |
 | Formula derivations and validation | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |

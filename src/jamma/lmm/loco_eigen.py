@@ -17,17 +17,20 @@ import uuid
 from collections.abc import Generator, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
 
+from jamma.core import memory
 from jamma.core.eigen_plan import EigenDriverPlan
+from jamma.core.threading import get_physical_core_count
 from jamma.kinship import (
     SnpStatsCache,
     compute_loco_kinship_streaming,
     write_kinship_matrix,
 )
-from jamma.kinship.loco import loco_retained_set
+from jamma.kinship.loco import LocoRetainedSet, loco_retained_set
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
 from jamma.lmm.eigen import (
     center_kinship,
@@ -92,12 +95,7 @@ def plan_loco_eigen_driver(
     after it. A negative remainder needs no clamp: the planner's own fit
     checks already read it as "does not fit".
     """
-    retained = loco_retained_set(
-        execution.resolved_kinship.n_samples,
-        execution.n_input_samples,
-        DEFAULT_STATS_CHUNK,
-    )
-    retained_gb = retained.while_consuming_gb
+    retained_gb = loco_retained_set_for(execution).while_consuming_gb
     budget_gb = execution.mem_budget_gb
     return plan_eigen_driver_for_machine(
         execution.n_samples,
@@ -105,6 +103,89 @@ def plan_loco_eigen_driver(
         budget_gb=None if budget_gb is None else budget_gb - retained_gb,
         inplace_eligible=True,
     )
+
+
+def loco_retained_set_for(execution: ExecutableAssociationPlan) -> LocoRetainedSet:
+    """The kinship stream's retained set for this run's resolved kinship shape."""
+    return loco_retained_set(
+        execution.resolved_kinship.n_samples,
+        execution.n_input_samples,
+        DEFAULT_STATS_CHUNK,
+    )
+
+
+class LocoWorkerPlan(NamedTuple):
+    """How many chromosomes eigendecompose at once, and what that reserves.
+
+    Attributes:
+        workers: Concurrent eigendecompositions. One is the sequential path,
+            unchanged from before workers existed.
+        memory_allows: The memory ceiling on its own, before the request, the
+            chromosome count and the core count cap it. Logged so a clamp
+            names its cause.
+        cores: Physical cores, the third cap.
+        consumer_gb: What the kinship stream reserves for the eigen consumer:
+            the driver's peak alone sequentially, else one owned K_loco copy
+            plus one driver peak per worker.
+    """
+
+    workers: int
+    memory_allows: int
+    cores: int
+    consumer_gb: float
+
+
+def plan_loco_workers(
+    requested: int,
+    *,
+    n_chr: int,
+    retained: LocoRetainedSet,
+    eigen_plan: EigenDriverPlan,
+    available_gb: float,
+    budget_gb: float | None,
+    cores: int | None = None,
+) -> LocoWorkerPlan:
+    """Pick how many chromosomes eigendecompose at once.
+
+    Pure sizing math against the two ceilings ``plan_loco_passes`` applies:
+    ``memory.headroom_gb(available_gb)`` capped by ``budget_gb``, with the
+    same margin and the same tie check. The stream's retained set stays live
+    underneath; each worker adds one owned copy of the streamed K_loco (the
+    stream's buffer is overwritten on the next pull) and the eigen driver's
+    peak on top of it. The count is the largest that fits, capped by the
+    request, the chromosome count and the physical cores, and never below
+    one. At one worker nothing is copied, so the reservation is the driver's
+    peak alone.
+
+    Args:
+        requested: ``JAMMA_LOCO_WORKERS``, already parsed and at least one.
+        n_chr: Chromosomes in the run; no point in more workers than that.
+        retained: The stream's live matrices and disk buffer.
+        eigen_plan: The driver every chromosome runs; its peak is per worker.
+        available_gb: Free RAM in GB (the caller reads psutil once).
+        budget_gb: User ceiling in GB without the physical-RAM margin, or None.
+        cores: Physical core cap, or None to read the machine.
+
+    Returns:
+        The worker count, the memory-only bound, the core cap and the
+        reservation the stream must hold for the consumer.
+    """
+    per_worker_gb = retained.matrix_gb + eigen_plan.required_gb
+    capacity_gb = memory.headroom_gb(available_gb)
+    if budget_gb is not None:
+        capacity_gb = min(capacity_gb, budget_gb)
+    memory_allows = max(
+        1, int((capacity_gb - retained.while_consuming_gb) / per_worker_gb)
+    )
+    if memory_allows > 1 and not memory.fits(
+        retained.while_consuming_gb + memory_allows * per_worker_gb, available_gb
+    ):
+        memory_allows -= 1
+    if cores is None:
+        cores = get_physical_core_count()
+    workers = max(1, min(requested, n_chr, cores, memory_allows))
+    consumer_gb = eigen_plan.required_gb if workers == 1 else workers * per_worker_gb
+    return LocoWorkerPlan(workers, memory_allows, cores, consumer_gb)
 
 
 def eigen_pairs_for(

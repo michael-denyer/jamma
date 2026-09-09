@@ -28,7 +28,6 @@ REPO_ROOT = repo_root()
 README = REPO_ROOT / "README.md"
 MMD = REPO_ROOT / "docs" / "architecture.mmd"
 PNG = REPO_ROOT / "docs" / "architecture.png"
-CONFIG = REPO_ROOT / "docs" / "mermaid-render.json"
 
 FENCE = re.compile(r"^```mermaid\n(.*?)^```", re.DOTALL | re.MULTILINE)
 
@@ -86,8 +85,6 @@ def main() -> int:
             BACKGROUND,
             "--scale",
             SCALE,
-            "--configFile",
-            str(CONFIG),
         ],
         check=True,
     )

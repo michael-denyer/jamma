@@ -226,6 +226,14 @@ version-over-version comparison, and large-scale (125k) results.
 JAMMA uses NumPy for data loading and kinship. Eigendecomposition uses `jlinalg.eigh` which dispatches to vendor DSYEVD (default) or DSYEVR (O(n) workspace, under memory pressure) via the jlinalg C layer. LMM association uses a NumPy backend with an optional C extension for OpenMP-parallel Wald/Score/LRT tests. Mode is auto-selected based on available memory: batch runner when genotypes fit in RAM, streaming runner (two-pass disk I/O) for large datasets.
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    lineColor: "#9fb3c8"
+    primaryTextColor: "#eeeeee"
+    edgeLabelBackground: "#0f3460"
+---
 flowchart TD
     subgraph ENTRY["ENTRY"]
         CLI["CLI / gwas()"]

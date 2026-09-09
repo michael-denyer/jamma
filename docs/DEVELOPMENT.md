@@ -211,12 +211,17 @@ its place:
 scripts/render_readme_diagram.py
 ```
 
-`docs/mermaid-render.json` carries the theme that render uses. mermaid-cli
-defaults to its light theme, which draws dark arrows and white edge-label boxes
-over the diagram's dark fills; the config supplies a light `lineColor`, a
-matching `edgeLabelBackground`, and a `themeCSS` rule for the edge-label text,
-which follows neither `textColor` nor `edgeLabelBackground` on its own. GitHub
-needs none of this because it injects its own dark-mode variables.
+The `config:` frontmatter at the top of the fence carries the theme, and both
+renderers read it — GitHub and mermaid-cli alike. Do not move it into a CLI
+config file: mermaid's default theme is built for a light page, so without
+those variables the diagram's dark fills get dark arrows and white edge-label
+boxes **on GitHub too**, and a config file would fix only the PNG.
+
+Two traps. `primaryTextColor` is what colours the edge labels — `textColor`,
+`tertiaryTextColor` and `labelTextColor` all leave them dark on dark. And the
+theme must be frontmatter, not the older `%%{init: ...}%%` directive, which
+mermaid renders but `maid` 0.0.29 fails to parse, breaking the maid-mermaid
+hook.
 
 The `check-pypi-readme` and `readme-diagram-sync` hooks gate both — the first
 renders the transformed description through the exact renderer PyPI uses and

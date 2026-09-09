@@ -64,6 +64,7 @@ def test_plan_loco_workers_memory_clamps_to_two():
         eigen_plan=eigen_plan,
         available_gb=8.8,
         budget_gb=None,
+        association_gb=0.0,
         cores=8,
     )
 
@@ -84,6 +85,7 @@ def test_plan_loco_workers_requested_one_is_sequential():
         eigen_plan=eigen_plan,
         available_gb=100.0,
         budget_gb=None,
+        association_gb=0.0,
         cores=8,
     )
 
@@ -102,6 +104,7 @@ def test_plan_loco_workers_caps_at_chromosome_count():
         eigen_plan=eigen_plan,
         available_gb=100.0,
         budget_gb=None,
+        association_gb=0.0,
         cores=8,
     )
 
@@ -120,6 +123,7 @@ def test_plan_loco_workers_caps_at_physical_cores():
         eigen_plan=eigen_plan,
         available_gb=100.0,
         budget_gb=None,
+        association_gb=0.0,
         cores=4,
     )
 
@@ -137,6 +141,7 @@ def test_plan_loco_workers_honours_budget_ceiling():
         eigen_plan=eigen_plan,
         available_gb=100.0,
         budget_gb=9.0,
+        association_gb=0.0,
         cores=8,
     )
 
@@ -159,6 +164,7 @@ def test_plan_loco_workers_never_below_one():
         eigen_plan=eigen_plan,
         available_gb=1.0,
         budget_gb=None,
+        association_gb=0.0,
         cores=8,
     )
 
@@ -320,3 +326,45 @@ def test_run_lmm_loco_workers_match_sequential_bit_for_bit(monkeypatch):
             )
         else:
             assert one == three, field.name
+
+
+@pytest.mark.tier0
+def test_plan_loco_workers_prices_the_association_pass_over_the_solves_in_flight():
+    """While chromosome c's association runs, the other workers still hold copies.
+
+    Same machine as ``test_plan_loco_workers_memory_clamps_to_two`` (headroom
+    8.0, retained 3, 2 GB per worker), but a 5 GB association pass. Two
+    workers would need 3 + max(2 * 2, 5 + 1 * 2) = 10 GB, which does not fit;
+    one worker needs 3 + max(1, 5) = 8 GB, the sequential figure, which does.
+    At 13.3 GB free three workers need 3 + max(6, 5 + 2 * 2) = 12 GB, and 12
+    plus its 1.2 GB margin is under 13.3, where 13.2 would tie and fail.
+    """
+    retained, eigen_plan = _worker_plan_inputs()
+    plan = plan_loco_workers(
+        6,
+        n_chr=22,
+        retained=retained,
+        eigen_plan=eigen_plan,
+        available_gb=8.8,
+        budget_gb=None,
+        association_gb=5.0,
+        cores=8,
+    )
+
+    assert plan.workers == 1
+    assert plan.memory_allows == 1
+    assert plan.consumer_gb == 1.0
+
+    roomier = plan_loco_workers(
+        6,
+        n_chr=22,
+        retained=retained,
+        eigen_plan=eigen_plan,
+        available_gb=13.3,
+        budget_gb=None,
+        association_gb=5.0,
+        cores=8,
+    )
+
+    assert roomier.workers == 3
+    assert roomier.consumer_gb == 9.0

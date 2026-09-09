@@ -127,8 +127,9 @@ class LocoWorkerPlan(NamedTuple):
             names its cause.
         cores: Physical cores, the third cap.
         consumer_gb: What the kinship stream reserves for the eigen consumer:
-            the driver's peak alone sequentially, else one owned K_loco copy
-            plus one driver peak per worker.
+            the driver's peak alone sequentially, else the larger of one
+            owned K_loco copy plus one driver peak per worker, and the
+            association pass plus the ``workers - 1`` still in flight.
     """
 
     workers: int
@@ -145,19 +146,21 @@ def plan_loco_workers(
     eigen_plan: EigenDriverPlan,
     available_gb: float,
     budget_gb: float | None,
+    association_gb: float,
     cores: int | None = None,
 ) -> LocoWorkerPlan:
     """Pick how many chromosomes eigendecompose at once.
 
     Pure sizing math against the two ceilings ``plan_loco_passes`` applies:
-    ``memory.headroom_gb(available_gb)`` capped by ``budget_gb``, with the
-    same margin and the same tie check. The stream's retained set stays live
-    underneath; each worker adds one owned copy of the streamed K_loco (the
-    stream's buffer is overwritten on the next pull) and the eigen driver's
-    peak on top of it. The count is the largest that fits, capped by the
-    request, the chromosome count and the physical cores, and never below
-    one. At one worker nothing is copied, so the reservation is the driver's
-    peak alone.
+    ``memory.fits`` against ``available_gb`` and, when set, ``budget_gb``.
+    The stream's retained set stays live underneath; each worker adds one
+    owned copy of the streamed K_loco (the stream's buffer is overwritten on
+    the next pull) and the eigen driver's peak on top of it. The consumer's
+    peak is the larger of two moments: every worker solving at once, and the
+    association pass running while the other ``workers - 1`` still solve.
+    The count is the largest that fits, capped by the request, the
+    chromosome count and the physical cores, and never below one. At one
+    worker nothing is copied, so the reservation is the driver's peak alone.
 
     Args:
         requested: ``JAMMA_LOCO_WORKERS``, already parsed and at least one.
@@ -166,6 +169,8 @@ def plan_loco_workers(
         eigen_plan: The driver every chromosome runs; its peak is per worker.
         available_gb: Free RAM in GB (the caller reads psutil once).
         budget_gb: User ceiling in GB without the physical-RAM margin, or None.
+        association_gb: Peak of one chromosome's association pass, which
+            overlaps the solves still in flight.
         cores: Physical core cap, or None to read the machine.
 
     Returns:
@@ -173,21 +178,24 @@ def plan_loco_workers(
         reservation the stream must hold for the consumer.
     """
     per_worker_gb = retained.matrix_gb + eigen_plan.required_gb
-    capacity_gb = memory.headroom_gb(available_gb)
-    if budget_gb is not None:
-        capacity_gb = min(capacity_gb, budget_gb)
-    memory_allows = max(
-        1, int((capacity_gb - retained.while_consuming_gb) / per_worker_gb)
-    )
-    if memory_allows > 1 and not memory.fits(
-        retained.while_consuming_gb + memory_allows * per_worker_gb, available_gb
-    ):
-        memory_allows -= 1
+
+    def consumer(workers: int) -> float:
+        if workers == 1:
+            return eigen_plan.required_gb
+        return max(
+            workers * per_worker_gb, association_gb + (workers - 1) * per_worker_gb
+        )
+
+    def fits(workers: int) -> bool:
+        peak_gb = retained.while_consuming_gb + consumer(workers)
+        within_budget = budget_gb is None or peak_gb <= budget_gb
+        return within_budget and memory.fits(peak_gb, available_gb)
+
+    memory_allows = next((w for w in range(requested, 1, -1) if fits(w)), 1)
     if cores is None:
         cores = get_physical_core_count()
     workers = max(1, min(requested, n_chr, cores, memory_allows))
-    consumer_gb = eigen_plan.required_gb if workers == 1 else workers * per_worker_gb
-    return LocoWorkerPlan(workers, memory_allows, cores, consumer_gb)
+    return LocoWorkerPlan(workers, memory_allows, cores, consumer(workers))
 
 
 def eigen_pairs_for(

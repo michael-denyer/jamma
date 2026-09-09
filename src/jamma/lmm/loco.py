@@ -305,6 +305,7 @@ def run_lmm_loco(
     available_gb = memory.available_ram_gb()
     if eigen_plan is None:
         eigen_plan = plan_loco_eigen_driver(execution, available_gb)
+    association_gb = execution.price(eigen=None).association_gb
     requested_workers = get_loco_worker_count()
     workers = plan_loco_workers(
         requested_workers,
@@ -313,6 +314,7 @@ def run_lmm_loco(
         eigen_plan=eigen_plan,
         available_gb=available_gb,
         budget_gb=config.mem_budget,
+        association_gb=association_gb,
     )
     if requested_workers == 1:
         logger.info("LOCO workers: 1")
@@ -359,7 +361,7 @@ def run_lmm_loco(
             eigen_plan=eigen_plan,
             workers=workers,
             mem_budget=config.mem_budget,
-            association_peak_gb=execution.price(eigen=None).association_gb,
+            association_peak_gb=association_gb,
         )
 
         first_chr_pve: float | None = None

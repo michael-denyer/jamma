@@ -888,6 +888,39 @@ class TestLocoEigenCacheStaleDetection:
 
 
 @pytest.mark.tier1
+def test_cached_loco_reports_no_eigen_workers(tmp_path, monkeypatch):
+    from loguru import logger
+
+    from jamma.lmm.loco import run_lmm_loco
+
+    require_fixture(LOCO.bed, LOCO.fam)
+    monkeypatch.setenv("JAMMA_LOCO_WORKERS", "3")
+    config = LmmConfig(check_memory=False, show_progress=False)
+    phenotypes = read_fam_phenotypes(LOCO.fam)
+    run_lmm_loco(
+        LOCO.bfile,
+        phenotypes,
+        config=config,
+        loco=LocoConfig(write_eigen=True, eigen_dir=tmp_path),
+    )
+    messages = []
+    sink = logger.add(messages.append, level="INFO", format="{message}")
+    try:
+        result = run_lmm_loco(
+            LOCO.bfile,
+            phenotypes,
+            config=config,
+            loco=LocoConfig(eigen_dir=tmp_path),
+        )
+    finally:
+        logger.remove(sink)
+    assert result.n_tested > 0
+    assert [m for m in messages if m.startswith("LOCO workers:")] == [
+        "LOCO workers: 0 (cached eigenpairs)\n"
+    ]
+
+
+@pytest.mark.tier1
 def test_write_eigen_with_workers_matches_sequential(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

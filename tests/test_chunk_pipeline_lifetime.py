@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-from contextlib import contextmanager
 
 import numpy as np
 import pytest
@@ -20,6 +19,7 @@ from jamma.lmm.prepare_common import PreparedLmmRun
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.workspace import WorkspaceSpec
 from tests.conftest import requires_c
+from tests.fakes.blas import fake_blas_controller
 
 pytestmark = pytest.mark.tier0
 
@@ -124,21 +124,6 @@ def _real_engine(
     return _ObservedEngine(engine, active_limit, fail_compute=fail_compute), written
 
 
-def _fake_blas_controller(active_limit: list[int], transitions: list[tuple[str, int]]):
-    @contextmanager
-    def control(limit: int):
-        previous = active_limit[0]
-        transitions.append(("enter", limit))
-        active_limit[0] = limit
-        try:
-            yield
-        finally:
-            active_limit[0] = previous
-            transitions.append(("restore", previous))
-
-    return control
-
-
 def _drive(engine: _ObservedEngine, rotation_threads: int = 2) -> float:
     return chunk_pipeline._drive_pipeline(
         engine,  # type: ignore[arg-type]
@@ -162,12 +147,12 @@ def test_pipeline_holds_one_blas_limit_while_rotation_and_compute_overlap(
     monkeypatch.setattr(
         chunk_pipeline,
         "blas_threads",
-        _fake_blas_controller(active_limit, transitions),
+        fake_blas_controller(active_limit, transitions),
     )
     monkeypatch.setattr(
         chunk_runner_numpy,
         "blas_threads",
-        _fake_blas_controller(active_limit, transitions),
+        fake_blas_controller(active_limit, transitions),
     )
     engine, written = _real_engine(active_limit, dispatch=dispatch)
 
@@ -189,12 +174,12 @@ def test_pipeline_restores_blas_limit_when_foreground_compute_fails(
     monkeypatch.setattr(
         chunk_pipeline,
         "blas_threads",
-        _fake_blas_controller(active_limit, transitions),
+        fake_blas_controller(active_limit, transitions),
     )
     monkeypatch.setattr(
         chunk_runner_numpy,
         "blas_threads",
-        _fake_blas_controller(active_limit, transitions),
+        fake_blas_controller(active_limit, transitions),
     )
     engine, written = _real_engine(
         active_limit, dispatch=DispatchPath.FUSED, fail_compute=2
@@ -216,7 +201,7 @@ def test_per_chunk_process_limit_would_override_the_overlap_limit(
     """Negative control for the removed ``blas_threads(1)`` kernel wrapper."""
     active_limit = [17]
     transitions: list[tuple[str, int]] = []
-    controller = _fake_blas_controller(active_limit, transitions)
+    controller = fake_blas_controller(active_limit, transitions)
     monkeypatch.setattr(chunk_pipeline, "blas_threads", controller)
     engine, _written = _real_engine(active_limit, dispatch=DispatchPath.FUSED)
     real_compute = engine.compute_and_write

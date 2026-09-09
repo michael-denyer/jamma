@@ -163,24 +163,27 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 ## Performance
 
 JAMMA on mouse_hs1940 (1,940 samples x 12,226 SNPs),
-Apple M5 Pro (18 cores), Accelerate-ILP64, GEMMA 0.98.5. One wall-clock run
-per operation with `scripts/bench_all_backends.py`, measured 2026-09-08 (LOCO retains its
-2026-09-02 measurement). GEMMA timings include the CLI command; JAMMA batch
+Apple M5 Pro (18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best of three wall-clock runs
+per operation with `scripts/bench_all_backends.py`, measured 2026-09-09.
+LOCO timings are the mean of two runs at each worker count. GEMMA timings include the CLI command; JAMMA batch
 timings start with genotypes loaded. Association runs use precomputed kinship.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.9s | 1.2s | 198ms | 198ms | -- | 1.0x | 9.5x | 6.2x |
-| LMM Wald (`-lmm 1`) | 14.5s | 4.3s | 5.1s | 304ms | 428ms | 16.7x | 47.6x | 14.2x |
-| LMM All (`-lmm 4`) | 13.9s | 7.5s | 7.6s | 312ms | 427ms | 24.3x | 44.6x | 24.1x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.4s | 12.5s | 16.2s | 834ms | 919ms | 19.4x | 32.8x | 15.0x |
-| LOCO Wald (`-loco`) | 2m31s | 1m20s | -- | **3.3s** | -- | -- | **~46x** | **~24x** |
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 202ms | 202ms | -- | 1.0x | 5.5x | 6.0x |
+| LMM Wald (`-lmm 1`) | 7.7s | 4.1s | 5.4s | 302ms | 408ms | 17.8x | 25.4x | 13.7x |
+| LMM All (`-lmm 4`) | 13.9s | 7.4s | 7.4s | 318ms | 426ms | 23.2x | 43.7x | 23.2x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.8s | 11.4s | 16.5s | 868ms | 958ms | 19.0x | 32.0x | 13.2x |
+| LOCO Wald (1 worker) | -- | -- | -- | **3.18s** | -- | -- | -- | -- |
+| LOCO Wald (6 workers) | -- | -- | -- | **1.86s** | -- | -- | -- | -- |
 
 Timings vary substantially between runs; these ratios describe this measurement
 and should not be read as a version-over-version speedup.
 
-LOCO includes 19 per-chromosome eigendecompositions. Its historical timing
-predates the REML score refinement; it has not been remeasured for this change.
+LOCO includes kinship, 19 per-chromosome eigendecompositions and association.
+Bounded solve batches finish before association to protect process-wide BLAS
+limits. This costs about 0.46s at six workers versus the earlier overlapping
+implementation on this dataset; all compared association files were identical.
 
 See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the
 version-over-version comparison, and large-scale (125k) results.

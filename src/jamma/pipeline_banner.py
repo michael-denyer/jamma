@@ -22,13 +22,11 @@ def format_pipeline_banner(
     blas: str,
     eigen_driver: str,
     c_ext: bool,
-    threads: int,
     jlinalg_backend: str | None = None,
 ) -> str:
     """Build a single-line pipeline startup banner.
 
-    Consolidates runner, BLAS backend, eigen driver, C extension status,
-    and thread count into one authoritative log line.
+    Thread counts are reported later by each resolved execution plan.
 
     Args:
         runner: Runner name (e.g. "numpy-batch", "numpy-streaming").
@@ -36,8 +34,6 @@ def format_pipeline_banner(
             "accelerate").
         eigen_driver: Eigen driver name (e.g. "DSYEVD", "DSYEVR").
         c_ext: Whether the C extension is usable.
-        threads: OpenMP thread count of the C extension, or the BLAS thread
-            count when no extension is loaded and NumPy does the compute.
         jlinalg_backend: jlinalg's ``blas_backend`` (e.g. "MKL-ILP64",
             "numpy-fallback"). Omitted from the banner when None, since
             jlinalg can report "numpy-fallback" even with its C extension
@@ -48,19 +44,16 @@ def format_pipeline_banner(
         Formatted banner string.
 
     Example:
-        >>> format_pipeline_banner("numpy-batch", "mkl", "DSYEVD", True, 48)
-        'Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads)'
+        >>> format_pipeline_banner("numpy-batch", "mkl", "DSYEVD", True)
+        'Pipeline: numpy-batch | MKL | DSYEVD | C-ext'
         >>> format_pipeline_banner(
-        ...     "numpy-batch", "mkl", "DSYEVD", True, 48, jlinalg_backend="MKL-ILP64"
+        ...     "numpy-batch", "mkl", "DSYEVD", True, jlinalg_backend="MKL-ILP64"
         ... )
-        'Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads) | jlinalg: MKL-ILP64'
+        'Pipeline: numpy-batch | MKL | DSYEVD | C-ext | jlinalg: MKL-ILP64'
     """
     blas_display = blas_display_name(blas)
     c_ext_str = "C-ext" if c_ext else "no C-ext"
-    banner = (
-        f"Pipeline: {runner} | {blas_display} | {eigen_driver}"
-        f" | {c_ext_str} ({threads} threads)"
-    )
+    banner = f"Pipeline: {runner} | {blas_display} | {eigen_driver} | {c_ext_str}"
     if jlinalg_backend is not None:
         banner += f" | jlinalg: {jlinalg_backend}"
     return banner
@@ -97,13 +90,9 @@ def log_dataset_banner(
 
 
 def log_pipeline_banner(plan: ExecutionPlan) -> None:
-    """Emit the pipeline configuration banner and the thread plan beneath it.
+    """Emit the selected backend and available native implementation.
 
-    Gathers runner type, BLAS backend, C extension status, and
-    thread count into a single log line. The banner shows "pending"
-    for the eigen driver; the actual driver is logged separately by
-    eigendecompose_kinship once the matrix size is known. The second
-    line is ``RunThreads.describe()``, the same numbers the kernels use.
+    The eigen driver and execution thread counts are reported when resolved.
 
     This function is purely diagnostic — failures are caught and logged
     as warnings to avoid aborting the GWAS pipeline.
@@ -113,18 +102,19 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
     """
     try:
         import jamma.jlinalg as jlinalg
-        from jamma.core.threading import run_threads
+        from jamma.core.threading import get_blas_backend
+        from jamma.lmm import accel
 
-        threads = run_threads()
+        blas = get_blas_backend()
+        if blas == "unknown":
+            blas = jlinalg.blas_backend
         banner = format_pipeline_banner(
             runner=plan.runner_name,
-            blas=threads.blas_backend,
+            blas=blas,
             eigen_driver="pending",
-            c_ext=threads.c_ext_available,
-            threads=threads.c_ext if threads.c_ext_available else threads.blas,
+            c_ext=accel.available(),
             jlinalg_backend=jlinalg.blas_backend,
         )
         logger.info(banner)
-        logger.info(threads.describe())
     except (ImportError, OSError, RuntimeError, AttributeError) as exc:
         logger.warning(f"Could not build pipeline banner: {exc}")

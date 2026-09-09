@@ -511,7 +511,7 @@ class TestEigendecomposeKinshipLogsBlasThreadsThatApplied:
         from jamma.core import threading as core_threading
 
         monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: True)
-        monkeypatch.setattr(core_threading, "get_blas_thread_count", lambda: 7)
+        monkeypatch.setattr("jamma.lmm.eigen.get_blas_thread_count", lambda: 7)
 
         line = self._eigendecomp_line()
         assert line.endswith(", threads=7"), line

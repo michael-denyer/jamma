@@ -28,7 +28,7 @@ from jamma.core.eigen_plan import (
 )
 from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import timed_progress
-from jamma.core.threading import blas_threads, run_threads
+from jamma.core.threading import blas_thread_label, blas_threads, get_blas_thread_count
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
@@ -145,6 +145,30 @@ def eigendecompose_kinship(
         RuntimeError: If eigendecomposition fails internally or inplace
             mode is unavailable (no vendor DSYEVD/DSYEVR).
     """
+    n_threads = get_blas_thread_count()
+    with blas_threads(n_threads):
+        return _eigendecompose_kinship(
+            K,
+            threshold,
+            check_memory=check_memory,
+            mem_budget=mem_budget,
+            eigen_plan=eigen_plan,
+            show_progress=show_progress,
+            n_threads=n_threads,
+        )
+
+
+def _eigendecompose_kinship(
+    K: np.ndarray,
+    threshold: float = 1e-10,
+    *,
+    check_memory: bool = True,
+    mem_budget: float | None = None,
+    eigen_plan: EigenDriverPlan | None = None,
+    show_progress: bool = True,
+    n_threads: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Decompose within the caller's BLAS scope; never change thread limits."""
     n_samples = K.shape[0]
     n_elements = n_samples * n_samples
 
@@ -226,9 +250,6 @@ def eigendecompose_kinship(
             budget_gb=mem_budget,
         )
 
-    # Use all physical cores for BLAS
-    threads = run_threads()
-    n_threads = threads.blas
     blas_libs = [lib for lib in threadpool_info() if lib.get("user_api") == "blas"]
     if blas_libs:
         active = jlinalg.blas_backend or "numpy-fallback"
@@ -254,21 +275,19 @@ def eigendecompose_kinship(
 
     # jlinalg.eigh dispatches to vendor DSYEVD/DSYEVR or the NumPy fallback, and
     # honours JLINALG_NO_VENDOR_LAPACK itself, so one call covers every driver.
-    # blas_threads sets the process-global thread count (not thread-local) that
-    # governs both vendor and NumPy BLAS, and timed_progress blocks until done.
+    # The caller owns the BLAS scope; workers never restore shared limits.
     def solve():
         return jlinalg.eigh(K, inplace=plan.use_inplace, driver=eigh_driver)
 
     try:
-        with blas_threads(n_threads):
-            if show_progress:
-                eigenvalues, eigenvectors, eigh_status = timed_progress(
-                    solve,
-                    estimated_seconds=est_seconds,
-                    desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
-                )
-            else:
-                eigenvalues, eigenvectors, eigh_status = solve()
+        if show_progress:
+            eigenvalues, eigenvectors, eigh_status = timed_progress(
+                solve,
+                estimated_seconds=est_seconds,
+                desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
+            )
+        else:
+            eigenvalues, eigenvectors, eigh_status = solve()
     except MemoryError:
         logger.error(
             f"MemoryError during eigendecomposition of "
@@ -290,9 +309,8 @@ def eigendecompose_kinship(
         )
         raise
 
-    logger.info(
-        f"Eigendecomp: {eigh_status.driver_used}, threads={threads.blas_label()}"
-    )
+    thread_label = blas_thread_label(n_threads, jlinalg.blas_backend)
+    logger.info(f"Eigendecomp: {eigh_status.driver_used}, threads={thread_label}")
 
     elapsed = time.perf_counter() - start_time
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")

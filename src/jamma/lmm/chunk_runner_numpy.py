@@ -27,9 +27,11 @@ from jamma import jlinalg
 from jamma.core.estimates import estimate_lmm_seconds
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import (
+    blas_thread_label,
     blas_threads,
-    run_threads,
+    get_c_extension_thread_count,
 )
+from jamma.lmm import accel
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
 from jamma.lmm.chunk_sizing import LmmChunkPlan
@@ -364,10 +366,13 @@ def run_lmm_chunk_source_numpy_group(
 
     threads = plan_thread_budget(
         n_samples=n_samples,
-        omp_threads=run_threads().c_ext,
+        omp_threads=get_c_extension_thread_count(dispatch.is_native, accel.HAS_OPENMP),
         max_omp_threads=workspace.max_threads,
         use_pipeline=use_pipeline,
     )
+    compute_label = f"C-ext={threads.omp}" if dispatch.is_native else "compute=NumPy"
+    rotation_label = blas_thread_label(threads.rotation, jlinalg.blas_backend)
+    logger.info(f"Association threads: rotation={rotation_label} | {compute_label}")
     consumer_list = []
     for job in jobs:
         invariants = RunInvariants.build(dispatch, job.prepared, job.config, n_filtered)

@@ -4,9 +4,8 @@
 > noted version. Two separate currency questions matter here, and they have
 > different answers.
 >
-> *Small scale* is current. master at `9d33cc1` was benchmarked on
-> mouse_hs1940 on 2026-09-02, on the same machine that produced the v7.2.0
-> and v6.0.0 runs (sections below).
+> *Small scale* was remeasured for the LOCO resource-ownership fix on
+> 2026-09-09. Older version comparisons remain below with their original dates.
 >
 > *Large scale* is not. The most recent end-to-end large-scale benchmark
 > (125,632 samples) is still from v4.2.0; v4.6.1 added partial scaling data at
@@ -16,7 +15,32 @@
 > backend set is now `numpy` and `numpy-streaming` only, both routing
 > through jlinalg with vendor LAPACK > NumPy fallback.
 
-## master `9d33cc1` on mouse_hs1940 (current)
+## LOCO resource ownership, 2026-09-09
+
+Apple M5 Pro (18 cores), Accelerate-ILP64, NumPy 2.5.1, Python 3.12.13,
+native OpenMP build. The full backend comparison ran sequentially, best of
+three, first at `d4a3a67d` and then with the fix. The refreshed absolute
+timings are in the [README](../README.md#performance). Native Wald, All and
+Wald+4cov took 302ms, 318ms and 868ms respectively, versus 311ms, 350ms
+and 896ms before. These separate benchmark rounds do not establish a speedup.
+
+Complete LOCO Wald runs used `run_lmm_loco` on mouse_hs1940, including
+kinship and output writing, with memory checks and progress disabled. Each
+worker count ran before/fixed/fixed/before in fresh processes, sequentially.
+The table reports the mean of the two observations per version.
+
+| LOCO workers | Before | Fixed | Change |
+|--------------|--------|-------|--------|
+| 1 | 3.275s | 3.179s | -2.9% |
+| 6 | 1.409s | 1.864s | +32.3% |
+
+The six-worker cost is a correctness tradeoff: eigensolving and association
+no longer overlap while changing the same process-wide BLAS state. Six workers
+remain 1.7x faster than one on this fixture. Every association output was
+byte-identical across all eight runs. These timings do not predict Linux
+MKL/OpenBLAS performance or large-sample memory use.
+
+## master `9d33cc1` on mouse_hs1940 (historical)
 
 Measured 2026-09-02. Same machine, toolchain, and dataset as the v7.2.0 run
 below: Apple M5 Pro (18 cores), Accelerate-ILP64, numpy 2.5.1, Python 3.12,

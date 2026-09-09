@@ -20,9 +20,8 @@ class TestFormatPipelineBanner:
             blas="mkl",
             eigen_driver="DSYEVD",
             c_ext=True,
-            threads=48,
         )
-        assert result == "Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads)"
+        assert result == "Pipeline: numpy-batch | MKL | DSYEVD | C-ext"
 
     def test_numpy_batch_without_c_ext(self) -> None:
         result = format_pipeline_banner(
@@ -30,11 +29,8 @@ class TestFormatPipelineBanner:
             blas="openblas",
             eigen_driver="DSYEVR",
             c_ext=False,
-            threads=8,
         )
-        assert (
-            result == "Pipeline: numpy-batch | OpenBLAS | DSYEVR | no C-ext (8 threads)"
-        )
+        assert result == "Pipeline: numpy-batch | OpenBLAS | DSYEVR | no C-ext"
 
     def test_numpy_streaming(self) -> None:
         result = format_pipeline_banner(
@@ -42,9 +38,8 @@ class TestFormatPipelineBanner:
             blas="mkl",
             eigen_driver="DSYEVD",
             c_ext=True,
-            threads=16,
         )
-        assert result == "Pipeline: numpy-streaming | MKL | DSYEVD | C-ext (16 threads)"
+        assert result == "Pipeline: numpy-streaming | MKL | DSYEVD | C-ext"
 
     def test_unknown_blas_backend(self) -> None:
         result = format_pipeline_banner(
@@ -52,9 +47,8 @@ class TestFormatPipelineBanner:
             blas="unknown",
             eigen_driver="DSYEVD",
             c_ext=True,
-            threads=4,
         )
-        assert result == "Pipeline: numpy-batch | Unknown | DSYEVD | C-ext (4 threads)"
+        assert result == "Pipeline: numpy-batch | Unknown | DSYEVD | C-ext"
 
     def test_accelerate_blas(self) -> None:
         result = format_pipeline_banner(
@@ -62,11 +56,8 @@ class TestFormatPipelineBanner:
             blas="accelerate",
             eigen_driver="DSYEVD",
             c_ext=True,
-            threads=10,
         )
-        assert (
-            result == "Pipeline: numpy-batch | Accelerate | DSYEVD | C-ext (10 threads)"
-        )
+        assert result == "Pipeline: numpy-batch | Accelerate | DSYEVD | C-ext"
 
     def test_extra_kwargs_rejected(self) -> None:
         """Extra keyword arguments raise TypeError (fail-fast, no silent swallow)."""
@@ -78,7 +69,6 @@ class TestFormatPipelineBanner:
                 blas="mkl",
                 eigen_driver="DSYEVD",
                 c_ext=False,
-                threads=16,
                 some_extra_param=4,  # type: ignore[unexpected-keyword]
             )
 
@@ -88,12 +78,10 @@ class TestFormatPipelineBanner:
             blas="mkl",
             eigen_driver="DSYEVD",
             c_ext=True,
-            threads=48,
             jlinalg_backend="MKL-ILP64",
         )
         assert result == (
-            "Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads)"
-            " | jlinalg: MKL-ILP64"
+            "Pipeline: numpy-batch | MKL | DSYEVD | C-ext | jlinalg: MKL-ILP64"
         )
 
     def test_jlinalg_numpy_fallback_shown_even_with_c_ext_loaded(self) -> None:
@@ -106,7 +94,6 @@ class TestFormatPipelineBanner:
             blas="mkl",
             eigen_driver="DSYEVD",
             c_ext=True,
-            threads=48,
             jlinalg_backend="numpy-fallback",
         )
         assert "jlinalg: numpy-fallback" in result
@@ -118,14 +105,28 @@ class TestFormatPipelineBanner:
             blas="mkl",
             eigen_driver="DSYEVD",
             c_ext=True,
-            threads=48,
         )
         assert "jlinalg" not in result
-        assert result == "Pipeline: numpy-batch | MKL | DSYEVD | C-ext (48 threads)"
+        assert result == "Pipeline: numpy-batch | MKL | DSYEVD | C-ext"
 
 
 class TestLogPipelineBanner:
     """Tests for log_pipeline_banner()'s end-to-end wiring of jlinalg."""
+
+    def test_startup_does_not_claim_unresolved_thread_counts(self):
+        from loguru import logger
+
+        from jamma.lmm.association_plan import ExecutionPlan
+        from jamma.pipeline_banner import log_pipeline_banner
+
+        captured: list[str] = []
+        sink = logger.add(captured.append, level="INFO", format="{message}")
+        try:
+            log_pipeline_banner(ExecutionPlan(mode="batch", reason="test"))
+        finally:
+            logger.remove(sink)
+        assert len(captured) == 1
+        assert " threads)" not in captured[0]
 
     def test_banner_includes_real_jlinalg_backend(self, capsys):
         """log_pipeline_banner must read jamma.jlinalg.blas_backend and put
@@ -148,16 +149,9 @@ class TestLogPipelineBanner:
         captured = capsys.readouterr()
         assert f"jlinalg: {jlinalg.blas_backend}" in captured.err
 
-    def test_accelerate_mac_logs_the_c_ext_count_the_kernel_uses(self, monkeypatch):
-        """On an 18-core Mac the kernel runs 18 OpenMP threads; so must the log.
-
-        The banner used to print ``physical_cores // 2`` whenever threadpoolctl
-        could not see the BLAS, and ``Unknown`` for the backend, while the chunk
-        runner gave the C extension every physical core and jlinalg already
-        knew the library was Accelerate. Both lines now come from one
-        ``RunThreads`` read, so this pins their exact text for that machine.
-        """
-        from loguru import logger as _logger
+    @pytest.mark.parametrize("native", [False, True])
+    def test_accelerate_is_named_without_threadpoolctl(self, monkeypatch, native):
+        from loguru import logger
 
         import jamma.jlinalg as jlinalg
         from jamma.core import threading as core_threading
@@ -165,63 +159,17 @@ class TestLogPipelineBanner:
         from jamma.lmm.association_plan import ExecutionPlan
         from jamma.pipeline_banner import log_pipeline_banner
 
-        monkeypatch.setattr(core_threading, "get_physical_core_count", lambda: 18)
-        monkeypatch.setattr(core_threading, "get_blas_thread_count", lambda: 18)
-        monkeypatch.setattr(core_threading, "get_loco_worker_count", lambda: 1)
-        monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: False)
         monkeypatch.setattr(core_threading, "threadpool_info", list)
-        monkeypatch.setattr(accel, "available", lambda: True)
-        monkeypatch.setattr(accel, "HAS_OPENMP", True)
+        monkeypatch.setattr(accel, "available", lambda: native)
         monkeypatch.setattr(jlinalg, "blas_backend", "Accelerate-ILP64")
-
         captured: list[str] = []
-        sink_id = _logger.add(captured.append, level="INFO", format="{message}")
+        sink = logger.add(captured.append, level="INFO", format="{message}")
         try:
             log_pipeline_banner(ExecutionPlan(mode="batch", reason="test"))
         finally:
-            _logger.remove(sink_id)
-
+            logger.remove(sink)
+        extension = "C-ext" if native else "no C-ext"
         assert captured == [
-            "Pipeline: numpy-batch | Accelerate | pending | C-ext (18 threads)"
-            " | jlinalg: Accelerate-ILP64\n",
-            "Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=18 (OpenMP)"
-            " | LOCO workers=1\n",
-        ]
-
-    def test_no_c_extension_logs_the_blas_count_numpy_will_use(self, monkeypatch):
-        """Without the extension the banner's count is the BLAS one, not 1.
-
-        NumPy does the compute in that case, and its rotation and eigen work run
-        on the BLAS threads, so ``no C-ext (1 threads)`` would describe nothing.
-        The ``Threads:`` line says ``C-ext=none`` so the two cannot be confused.
-        """
-        from loguru import logger as _logger
-
-        import jamma.jlinalg as jlinalg
-        from jamma.core import threading as core_threading
-        from jamma.lmm import accel
-        from jamma.lmm.association_plan import ExecutionPlan
-        from jamma.pipeline_banner import log_pipeline_banner
-
-        monkeypatch.setattr(core_threading, "get_physical_core_count", lambda: 18)
-        monkeypatch.setattr(core_threading, "get_blas_thread_count", lambda: 18)
-        monkeypatch.setattr(core_threading, "get_loco_worker_count", lambda: 1)
-        monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: False)
-        monkeypatch.setattr(core_threading, "threadpool_info", list)
-        monkeypatch.setattr(accel, "available", lambda: False)
-        monkeypatch.setattr(accel, "HAS_OPENMP", False)
-        monkeypatch.setattr(jlinalg, "blas_backend", "Accelerate-ILP64")
-
-        captured: list[str] = []
-        sink_id = _logger.add(captured.append, level="INFO", format="{message}")
-        try:
-            log_pipeline_banner(ExecutionPlan(mode="batch", reason="test"))
-        finally:
-            _logger.remove(sink_id)
-
-        assert captured == [
-            "Pipeline: numpy-batch | Accelerate | pending | no C-ext (18 threads)"
-            " | jlinalg: Accelerate-ILP64\n",
-            "Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=none"
-            " | LOCO workers=1\n",
+            f"Pipeline: numpy-batch | Accelerate | pending | {extension}"
+            " | jlinalg: Accelerate-ILP64\n"
         ]

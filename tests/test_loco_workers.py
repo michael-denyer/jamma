@@ -11,166 +11,134 @@ import dataclasses
 import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.core.threading import get_physical_core_count
 from jamma.io import read_fam_phenotypes
-from jamma.kinship.loco import LocoRetainedSet
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
-from jamma.lmm.loco_eigen import _computed_eigen_pairs, plan_loco_workers
+from jamma.lmm.loco_eigen import _computed_eigen_pairs
+from jamma.lmm.loco_workers import plan_loco_workers
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.stats import AssocResult
 from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO
 
 
-def _worker_plan_inputs() -> tuple[LocoRetainedSet, EigenDriverPlan]:
-    """A 3 GB retained set and a 1 GB eigen driver: each worker costs 2 GB.
-
-    One 1 GB matrix and no disk buffer make the retained set 3 GB. A worker
-    owns one 1 GB copy of the streamed K_loco plus the driver's 1 GB peak.
-    """
-    retained = LocoRetainedSet(matrix_gb=1.0, chunk_buffer_gb=0.0)
-    eigen_plan = EigenDriverPlan(
-        driver="DSYEVD-inplace",
-        use_inplace=True,
-        use_dsyevr=False,
-        no_vendor=False,
-        required_gb=1.0,
-        pre_fallback_gb=1.0,
-        dsyevr_peak_gb=2.0,
-        inplace_peak_gb=1.0,
-    )
-    return retained, eigen_plan
-
-
 @pytest.mark.tier0
-def test_plan_loco_workers_memory_clamps_to_two():
-    """8.8 GB free: headroom 8.0, minus the 3 GB retained set, is two 2 GB workers.
+def test_worker_budget_charges_each_owned_input_once():
+    from jamma.core.eigen_plan import plan_eigen_driver
+    from jamma.kinship.loco import loco_retained_set
 
-    ``fits(3 + 2 * 2 = 7, 8.8)`` holds (7 + 0.7 < 8.8), so the tie check
-    leaves 2 alone. The request of 6, the 22 chromosomes and 8 cores are all
-    above that, so memory is the binding cap.
-    """
-    retained, eigen_plan = _worker_plan_inputs()
+    retained = loco_retained_set(10_000, 10_000, 10_000)
+    eigen = plan_eigen_driver(
+        10_000,
+        100,
+        has_dsyevd=True,
+        has_dsyevr=True,
+        no_vendor=False,
+        inplace_eligible=True,
+    )
     plan = plan_loco_workers(
-        6,
-        n_chr=22,
+        2,
+        n_chr=3,
+        n_samples=10_000,
         retained=retained,
-        eigen_plan=eigen_plan,
-        available_gb=8.8,
-        budget_gb=None,
-        association_gb=0.0,
-        cores=8,
+        eigen_plan=eigen,
+        available_gb=100,
+        budget_gb=9,
+        association_gb=0.8,
+        cores=18,
     )
 
     assert plan.workers == 2
-    assert plan.memory_allows == 2
-    assert plan.cores == 8
-    assert plan.consumer_gb == 4.0
+    assert plan.consumer_gb == pytest.approx(4.801760064)
 
 
 @pytest.mark.tier0
-def test_plan_loco_workers_requested_one_is_sequential():
-    """Requested 1 stays 1 and reserves the driver's peak alone, no copy."""
-    retained, eigen_plan = _worker_plan_inputs()
-    plan = plan_loco_workers(
-        1,
-        n_chr=22,
-        retained=retained,
-        eigen_plan=eigen_plan,
-        available_gb=100.0,
-        budget_gb=None,
-        association_gb=0.0,
-        cores=8,
-    )
+def test_consumer_never_overlaps_a_batch_of_eigen_solves():
+    entered = threading.Barrier(4)
+    release = threading.Event()
+    yielded = threading.Event()
 
-    assert plan.workers == 1
-    assert plan.consumer_gb == 1.0
+    def solve(K: np.ndarray, **kwargs) -> tuple[np.ndarray, np.ndarray]:
+        entered.wait(timeout=5)
+        if len(K) != _ORDER_BY_CHR["1"]:
+            assert release.wait(timeout=5)
+        return np.linalg.eigh(K)
 
+    pairs = _computed_pairs(workers=3, solve=solve)
 
-@pytest.mark.tier0
-def test_plan_loco_workers_caps_at_chromosome_count():
-    """Requested 6 with 3 chromosomes is 3: no worker would ever get a fourth."""
-    retained, eigen_plan = _worker_plan_inputs()
-    plan = plan_loco_workers(
-        6,
-        n_chr=3,
-        retained=retained,
-        eigen_plan=eigen_plan,
-        available_gb=100.0,
-        budget_gb=None,
-        association_gb=0.0,
-        cores=8,
-    )
+    def consume():
+        result = next(pairs)
+        yielded.set()
+        return result
 
-    assert plan.workers == 3
-    assert plan.memory_allows > 3
+    with ThreadPoolExecutor(max_workers=1) as consumer:
+        first = consumer.submit(consume)
+        entered.wait(timeout=5)
+        try:
+            assert not yielded.wait(timeout=0.2), (
+                "association started while eigen workers were active"
+            )
+        finally:
+            release.set()
+            first.result(timeout=5)
+            pairs.close()
 
 
 @pytest.mark.tier0
-def test_plan_loco_workers_caps_at_physical_cores():
-    """Requested 6 on 4 cores is 4: Accelerate runs one core per solve."""
-    retained, eigen_plan = _worker_plan_inputs()
-    plan = plan_loco_workers(
-        6,
-        n_chr=22,
-        retained=retained,
-        eigen_plan=eigen_plan,
-        available_gb=100.0,
-        budget_gb=None,
-        association_gb=0.0,
-        cores=4,
+@pytest.mark.parametrize(
+    "requested,n_chr,cores,available,budget,association,expected",
+    [
+        (6, 22, 8, 8.8, None, 0.8, 1),
+        (1, 22, 8, 100, None, 0.8, 1),
+        (6, 3, 8, 100, None, 0.8, 3),
+        (6, 22, 4, 100, None, 0.8, 4),
+        (6, 22, 8, 100, 9, 0.8, 2),
+        (6, 22, 8, 1, None, 0.8, 1),
+        (6, 22, 8, 100, 9, 5.0, 2),
+        (6, 22, 8, 100, 9, 6.0, 1),
+        (10**12, 3, 8, 100, 9, 0.8, 2),
+    ],
+)
+def test_worker_plan_respects_memory_and_execution_caps(
+    requested,
+    n_chr,
+    cores,
+    available,
+    budget,
+    association,
+    expected,
+):
+    from jamma.core.eigen_plan import plan_eigen_driver
+    from jamma.kinship.loco import loco_retained_set
+
+    retained = loco_retained_set(10_000, 10_000, 10_000)
+    eigen = plan_eigen_driver(
+        10_000,
+        100,
+        has_dsyevd=True,
+        has_dsyevr=True,
+        no_vendor=False,
+        inplace_eligible=True,
     )
-
-    assert plan.workers == 4
-
-
-@pytest.mark.tier0
-def test_plan_loco_workers_honours_budget_ceiling():
-    """A 9 GB budget under 100 GB free: (9 - 3) / 2 = 3 workers, not 43."""
-    retained, eigen_plan = _worker_plan_inputs()
     plan = plan_loco_workers(
-        6,
-        n_chr=22,
+        requested,
+        n_chr=n_chr,
+        n_samples=10_000,
+        cores=cores,
         retained=retained,
-        eigen_plan=eigen_plan,
-        available_gb=100.0,
-        budget_gb=9.0,
-        association_gb=0.0,
-        cores=8,
+        eigen_plan=eigen,
+        available_gb=available,
+        budget_gb=budget,
+        association_gb=association,
     )
-
-    assert plan.workers == 3
-    assert plan.memory_allows == 3
-
-
-@pytest.mark.tier0
-def test_plan_loco_workers_never_below_one():
-    """1 GB free cannot hold even the retained set; the plan is still 1 worker.
-
-    The stream's own gate vetoes the run; the worker planner only decides how
-    many chromosomes overlap, and one is the sequential path.
-    """
-    retained, eigen_plan = _worker_plan_inputs()
-    plan = plan_loco_workers(
-        6,
-        n_chr=22,
-        retained=retained,
-        eigen_plan=eigen_plan,
-        available_gb=1.0,
-        budget_gb=None,
-        association_gb=0.0,
-        cores=8,
-    )
-
-    assert plan.workers == 1
-    assert plan.memory_allows == 1
-    assert plan.consumer_gb == 1.0
+    assert plan.workers == expected
+    assert plan.consumer_gb >= association
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +159,11 @@ def _synthetic_stream() -> Iterator[tuple[str, np.ndarray]]:
 
 
 def _computed_pairs(*, workers: int, solve):
-    _, eigen_plan = _worker_plan_inputs()
+    from jamma.lmm.eigen import plan_eigen_driver_for_machine
+
+    eigen_plan = plan_eigen_driver_for_machine(
+        8, 100, budget_gb=None, inplace_eligible=True
+    )
     chr_names = list(_ORDER_BY_CHR)
     return _computed_eigen_pairs(
         _synthetic_stream(),
@@ -334,45 +306,3 @@ def test_run_lmm_loco_workers_match_sequential_to_rounding(monkeypatch):
             )
         else:
             assert one == three, field.name
-
-
-@pytest.mark.tier0
-def test_plan_loco_workers_prices_the_association_pass_over_the_solves_in_flight():
-    """While chromosome c's association runs, the other workers still hold copies.
-
-    Same machine as ``test_plan_loco_workers_memory_clamps_to_two`` (headroom
-    8.0, retained 3, 2 GB per worker), but a 5 GB association pass. Two
-    workers would need 3 + max(2 * 2, 5 + 1 * 2) = 10 GB, which does not fit;
-    one worker needs 3 + max(1, 5) = 8 GB, the sequential figure, which does.
-    At 13.3 GB free three workers need 3 + max(6, 5 + 2 * 2) = 12 GB, and 12
-    plus its 1.2 GB margin is under 13.3, where 13.2 would tie and fail.
-    """
-    retained, eigen_plan = _worker_plan_inputs()
-    plan = plan_loco_workers(
-        6,
-        n_chr=22,
-        retained=retained,
-        eigen_plan=eigen_plan,
-        available_gb=8.8,
-        budget_gb=None,
-        association_gb=5.0,
-        cores=8,
-    )
-
-    assert plan.workers == 1
-    assert plan.memory_allows == 1
-    assert plan.consumer_gb == 1.0
-
-    roomier = plan_loco_workers(
-        6,
-        n_chr=22,
-        retained=retained,
-        eigen_plan=eigen_plan,
-        available_gb=13.3,
-        budget_gb=None,
-        association_gb=5.0,
-        cores=8,
-    )
-
-    assert roomier.workers == 3
-    assert roomier.consumer_gb == 9.0

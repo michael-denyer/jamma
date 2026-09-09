@@ -9,39 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`JAMMA_LOCO_WORKERS` eigendecomposes that many chromosomes at once.** The
-  variable existed but `-loco` only logged that parallel LOCO was not
-  implemented and ran sequentially. Now `plan_loco_workers` clamps the request
-  to what memory, the chromosome count and the physical cores allow (one owned
-  K_loco copy plus the eigen driver's peak per worker, on top of the kinship
-  stream's retained set), logs the plan as `LOCO workers: 4 (requested 6; 19
-  chromosomes; 18 cores; memory allows 4)`, and `_computed_eigen_pairs` runs
-  the solves on a thread pool, yielding pairs in chromosome order. The BLAS
-  thread count per solve is untouched. On Accelerate, where each solve is
-  single-threaded, results are identical to the sequential run's; on MKL and
-  OpenBLAS concurrent solves share one thread pool and results agree to
-  rounding (eigenvector entries within 2e-16 in CI), so pair it with
-  `JAMMA_BLAS_THREADS=cores/W`. The gain is on macOS, where Accelerate runs
-  DSYEVD on one core regardless: concurrent solves reached 3.4x the sequential
-  eigen throughput at 6 workers on an 18-core M5 Pro. The per-solve progress
-  bar is suppressed while workers overlap; the per-chromosome log line stays.
-  Default unchanged at 1.
+- `JAMMA_LOCO_WORKERS` selects concurrent eigendecompositions in bounded
+  batches, capped by available memory, chromosome count and physical cores.
+  The default remains one. Results arrive in chromosome order, and cache
+  publication still requires the complete run.
 
-### Changed
+### Fixed
 
-- **The startup log reports the thread counts the run uses.** A `Threads:`
-  line now follows the `Pipeline:` banner, for example
-  `Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=18 (OpenMP) | LOCO workers=1`.
-  Both lines and the chunk runner's OpenMP count come from one `RunThreads`
-  read in `jamma.core.threading`, so the banner cannot print a number the
-  kernel never used. It used to: whenever threadpoolctl could not see the BLAS
-  the banner halved the physical core count, so an 18-core Mac showed
-  `C-ext (9 threads)` while the kernel ran 18, and it named the BLAS `Unknown`
-  because threadpoolctl cannot see Accelerate. The name now falls back to
-  jlinalg's, which found the library. The `Eigendecomp:` line prints
-  `threads=uncontrolled (Accelerate)` instead of the requested count when
-  `blas_threads` cannot enforce it: Accelerate ignores the request and runs
-  the solver on one core, so the old `threads=18` described nothing that ran.
+- LOCO batches now own one BLAS limit and finish every solve before
+  association starts. Worker completion, failure and early close restore
+  the prior limit before another phase can change it.
+- Worker memory pricing counts each input matrix once and reserves only
+  completed eigenvectors during association. The planner uses analysed
+  sample dimensions and a bounded search even for very large requests.
+- Thread counts are logged after execution planning. `Association threads:`
+  reports the selected rotation budget and C workspace count;
+  `LOCO workers:` reports capped concurrency. The startup banner identifies
+  backends without claiming unresolved counts. Accelerate is named even
+  when threadpoolctl cannot detect it, and unenforceable limits are labeled
+  `uncontrolled`.
 
 ## [8.0.4] - 2026-09-09
 

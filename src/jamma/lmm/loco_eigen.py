@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import gc
 import uuid
-from collections.abc import Generator, Iterable
+from collections import deque
+from collections.abc import Callable, Generator, Iterable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -200,6 +202,7 @@ def eigen_pairs_for(
     check_memory: bool,
     show_progress: bool,
     eigen_plan: EigenDriverPlan,
+    workers: LocoWorkerPlan,
     mem_budget: float | None = None,
     association_peak_gb: float = 0.0,
 ) -> EigenPairSource:
@@ -221,13 +224,15 @@ def eigen_pairs_for(
         check_memory: Passed to the kinship streamer and eigendecomposition.
         show_progress: Whether to log per-chromosome progress.
         eigen_plan: The driver every chromosome's decomposition runs, from
-            ``plan_loco_eigen_driver``; its peak is what the kinship streamer
-            reserves for the consumer.
+            ``plan_loco_eigen_driver``.
+        workers: How many chromosomes decompose at once, from
+            ``plan_loco_workers``; its ``consumer_gb`` is what the kinship
+            streamer reserves for the eigen consumer.
         mem_budget: User-set ceiling in GB, or None for no ceiling. Reaches the
             kinship streamer's veto and each decomposition's gate.
         association_peak_gb: Peak the association phase will hold, so the kinship
             streamer sizes its chromosome batch around the larger of that and the
-            eigen driver.
+            eigen consumer.
     """
     n_valid = int(np.sum(valid_mask))
     all_samples_valid = n_valid == len(valid_mask)
@@ -282,7 +287,7 @@ def eigen_pairs_for(
         valid_indices=kinship_valid_indices,
         filter_sample_indices=None if all_samples_valid else np.where(valid_mask)[0],
         mem_budget=mem_budget,
-        consumer_gb=max(eigen_plan.required_gb, association_peak_gb),
+        consumer_gb=max(workers.consumer_gb, association_peak_gb),
     )
     pairs = _computed_eigen_pairs(
         stream,
@@ -298,6 +303,7 @@ def eigen_pairs_for(
         cache_write=cache_write,
         eigen_plan=eigen_plan,
         mem_budget=mem_budget,
+        workers=workers.workers,
     )
     return EigenPairSource(pairs, snp_stats=stream.snp_stats)
 
@@ -456,6 +462,33 @@ def _cached_eigen_pairs(
         del eigenvalues, U
 
 
+def _analysed_subset(
+    K_loco: np.ndarray,
+    *,
+    valid_mask: np.ndarray,
+    n_valid: int,
+    pre_subset: bool,
+    all_samples_valid: bool,
+    copy: bool,
+) -> np.ndarray:
+    """K_loco over the analysed samples, owned by the caller when ``copy`` is set.
+
+    The stream's buffer is returned as-is when it already has the analysed
+    shape and the caller consumes it before the next pull; ``copy`` makes an
+    owned array of it instead, for a worker that outlives that pull. The
+    np.ix_ subset is a fresh array either way.
+    """
+    if pre_subset:
+        if K_loco.shape != (n_valid, n_valid):
+            raise RuntimeError(
+                f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
+                f"subsetting, got {K_loco.shape}"
+            )
+    elif not all_samples_valid:
+        return K_loco[np.ix_(valid_mask, valid_mask)]
+    return K_loco.copy() if copy else K_loco
+
+
 def _computed_eigen_pairs(
     loco_iter: Iterable[tuple[str, np.ndarray]],
     chr_names: list[str],
@@ -471,12 +504,31 @@ def _computed_eigen_pairs(
     cache_write: _EigenCacheWrite | None,
     eigen_plan: EigenDriverPlan,
     mem_budget: float | None,
+    workers: int = 1,
+    solve: Callable[..., tuple[np.ndarray, np.ndarray]] = eigendecompose_kinship,
 ) -> EigenPairs:
     """Yield per-chromosome eigenpairs by eigendecomposing streamed LOCO kinship.
 
     Each K_loco is optionally saved, subset to the analysed samples,
     eigendecomposed, optionally written to the eigen cache, then dropped before
     the next chromosome is pulled, so only one lives at a time.
+
+    With ``workers`` above one, that many chromosomes decompose at once on a
+    thread pool. The stream yields one shared buffer, overwritten on the next
+    pull, so each submitted chromosome is copied first; that copy is the
+    whole per-worker footprint, since the driver overwrites it with U. Pairs
+    still come out in chromosome order, the oldest future resolved first,
+    with at most ``workers`` in flight. ``jlinalg`` releases the GIL around
+    the solver, so the solves overlap. Each solve keeps its own BLAS thread
+    count, so results are bit-for-bit the sequential path's; on MKL and
+    OpenBLAS pair ``JAMMA_LOCO_WORKERS=W`` with ``JAMMA_BLAS_THREADS=cores//W``
+    to avoid oversubscription. Accelerate runs DSYEVD on one core whatever the
+    setting, which is what makes the overlap worth having there. The first
+    failed solve propagates in chromosome order; the rest are cancelled and
+    the pool is shut down, also when the consumer closes the generator early.
+
+    ``solve`` is ``eigendecompose_kinship``; tests inject a stand-in with the
+    same keyword signature to observe the overlap without patching.
 
     With ``cache_write``, every pair is written under one fresh generation.
     The manifest is replaced only after the consumer drains every chromosome,
@@ -494,61 +546,89 @@ def _computed_eigen_pairs(
                 f"Cannot create eigen cache directory {cache_write.eigen_dir}: {e}"
             ) from e
 
-    # No enumerate() here. CPython's enumerate holds its previous result tuple,
-    # and through it the previous U, until this generator yields the next item,
-    # so chromosome c's eigenvectors would stay live through c+1's
-    # eigendecomposition. The counter feeds the progress line below.
-    chr_idx = -1
-    for chr_name, K_loco in loco_iter:
-        chr_idx += 1
-        if show_progress:
-            logger.info(
-                f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
-                f"{len(partitions[chr_name])} SNPs, eigendecomposing..."
-            )
-
-        if loco.kinship_output_dir is not None:
-            _save_loco_kinship(K_loco, chr_name, loco=loco, show_progress=show_progress)
-
-        if pre_subset:
-            if K_loco.shape != (n_valid, n_valid):
-                raise RuntimeError(
-                    f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
-                    f"subsetting, got {K_loco.shape}"
-                )
-            K_loco_valid = K_loco
-            del K_loco
-        elif all_samples_valid:
-            K_loco_valid = K_loco
-            del K_loco
-        else:
-            K_loco_valid = K_loco[np.ix_(valid_mask, valid_mask)]
-            del K_loco
-            gc.collect()
-
+    def decompose(K_loco_valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         center_kinship(K_loco_valid)
-        eigenvalues, U = eigendecompose_kinship(
+        return solve(
             K_loco_valid,
             check_memory=check_memory,
             mem_budget=mem_budget,
             eigen_plan=eigen_plan,
+            show_progress=show_progress and workers == 1,
         )
-        del K_loco_valid
-        gc.collect()
 
-        if cache_write is not None:
-            d_path, u_path = _write_loco_eigen(
-                eigenvalues,
-                U,
-                chr_name,
-                loco=loco,
-                eigen_dir=cache_write.eigen_dir,
-                generation=cache_write.generation,
+    def publish(chr_name: str, eigenvalues: np.ndarray, U: np.ndarray) -> None:
+        if cache_write is None:
+            return
+        d_path, u_path = _write_loco_eigen(
+            eigenvalues,
+            U,
+            chr_name,
+            loco=loco,
+            eigen_dir=cache_write.eigen_dir,
+            generation=cache_write.generation,
+        )
+        artifacts[chr_name] = {"eigenD": d_path.name, "eigenU": u_path.name}
+
+    pending: deque[tuple[str, Future[tuple[np.ndarray, np.ndarray]]]] = deque()
+
+    def oldest() -> tuple[str, np.ndarray, np.ndarray]:
+        # Built here rather than in the loop so the generator frame holds no
+        # name for the yielded eigenvectors once the consumer has them.
+        chr_name, future = pending.popleft()
+        eigenvalues, U = future.result()
+        del future
+        publish(chr_name, eigenvalues, U)
+        return chr_name, eigenvalues, U
+
+    pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
+    try:
+        # No enumerate() here. CPython's enumerate holds its previous result
+        # tuple, and through it the previous U, until this generator yields the
+        # next item, so chromosome c's eigenvectors would stay live through
+        # c+1's eigendecomposition. The counter feeds the progress line below.
+        chr_idx = -1
+        for chr_name, K_loco in loco_iter:
+            chr_idx += 1
+            if show_progress:
+                logger.info(
+                    f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
+                    f"{len(partitions[chr_name])} SNPs, eigendecomposing..."
+                )
+
+            if loco.kinship_output_dir is not None:
+                _save_loco_kinship(
+                    K_loco, chr_name, loco=loco, show_progress=show_progress
+                )
+
+            K_loco_valid = _analysed_subset(
+                K_loco,
+                valid_mask=valid_mask,
+                n_valid=n_valid,
+                pre_subset=pre_subset,
+                all_samples_valid=all_samples_valid,
+                copy=pool is not None,
             )
-            artifacts[chr_name] = {"eigenD": d_path.name, "eigenU": u_path.name}
+            del K_loco
 
-        yield chr_name, eigenvalues, U
-        del eigenvalues, U
+            if pool is None:
+                eigenvalues, U = decompose(K_loco_valid)
+                del K_loco_valid
+                gc.collect()
+                publish(chr_name, eigenvalues, U)
+                yield chr_name, eigenvalues, U
+                del eigenvalues, U
+                continue
+
+            pending.append((chr_name, pool.submit(decompose, K_loco_valid)))
+            del K_loco_valid
+            if len(pending) == workers:
+                yield oldest()
+
+        while pending:
+            yield oldest()
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     if cache_write is not None:
         write_eigen_cache_manifest(

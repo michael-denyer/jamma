@@ -108,6 +108,7 @@ def eigendecompose_kinship(
     check_memory: bool = True,
     mem_budget: float | None = None,
     eigen_plan: EigenDriverPlan | None = None,
+    show_progress: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Eigendecompose kinship matrix, zeroing small eigenvalues.
 
@@ -127,6 +128,10 @@ def eigendecompose_kinship(
         mem_budget: User-set ceiling in GB, or None for no ceiling. Gates the
             run, and picks the driver when ``eigen_plan`` is absent.
         eigen_plan: Driver plan from an earlier preflight, or None to plan here.
+        show_progress: Draw the time-based progress bar around the solve.
+            False runs the solve inline on the calling thread; concurrent
+            LOCO workers pass False, since their bars would overwrite each
+            other on one terminal line. The log lines stay either way.
 
     Returns:
         Tuple of (eigenvalues, eigenvectors) where:
@@ -246,17 +251,24 @@ def eigendecompose_kinship(
     eigh_driver = "dsyevr" if plan.use_dsyevr else "auto"
 
     start_time = time.perf_counter()
+
     # jlinalg.eigh dispatches to vendor DSYEVD/DSYEVR or the NumPy fallback, and
     # honours JLINALG_NO_VENDOR_LAPACK itself, so one call covers every driver.
     # blas_threads sets the process-global thread count (not thread-local) that
     # governs both vendor and NumPy BLAS, and timed_progress blocks until done.
+    def solve():
+        return jlinalg.eigh(K, inplace=plan.use_inplace, driver=eigh_driver)
+
     try:
         with blas_threads(n_threads):
-            eigenvalues, eigenvectors, eigh_status = timed_progress(
-                lambda: jlinalg.eigh(K, inplace=plan.use_inplace, driver=eigh_driver),
-                estimated_seconds=est_seconds,
-                desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
-            )
+            if show_progress:
+                eigenvalues, eigenvectors, eigh_status = timed_progress(
+                    solve,
+                    estimated_seconds=est_seconds,
+                    desc=f"Eigendecomp {n_samples:,}x{n_samples:,}",
+                )
+            else:
+                eigenvalues, eigenvectors, eigh_status = solve()
     except MemoryError:
         logger.error(
             f"MemoryError during eigendecomposition of "

@@ -187,3 +187,41 @@ class TestLogPipelineBanner:
             "Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=18 (OpenMP)"
             " | LOCO workers=1\n",
         ]
+
+    def test_no_c_extension_logs_the_blas_count_numpy_will_use(self, monkeypatch):
+        """Without the extension the banner's count is the BLAS one, not 1.
+
+        NumPy does the compute in that case, and its rotation and eigen work run
+        on the BLAS threads, so ``no C-ext (1 threads)`` would describe nothing.
+        The ``Threads:`` line says ``C-ext=none`` so the two cannot be confused.
+        """
+        from loguru import logger as _logger
+
+        import jamma.jlinalg as jlinalg
+        from jamma.core import threading as core_threading
+        from jamma.lmm import accel
+        from jamma.lmm.association_plan import ExecutionPlan
+        from jamma.pipeline_banner import log_pipeline_banner
+
+        monkeypatch.setattr(core_threading, "get_physical_core_count", lambda: 18)
+        monkeypatch.setattr(core_threading, "get_blas_thread_count", lambda: 18)
+        monkeypatch.setattr(core_threading, "get_loco_worker_count", lambda: 1)
+        monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: False)
+        monkeypatch.setattr(core_threading, "threadpool_info", list)
+        monkeypatch.setattr(accel, "available", lambda: False)
+        monkeypatch.setattr(accel, "HAS_OPENMP", False)
+        monkeypatch.setattr(jlinalg, "blas_backend", "Accelerate-ILP64")
+
+        captured: list[str] = []
+        sink_id = _logger.add(captured.append, level="INFO", format="{message}")
+        try:
+            log_pipeline_banner(ExecutionPlan(mode="batch", reason="test"))
+        finally:
+            _logger.remove(sink_id)
+
+        assert captured == [
+            "Pipeline: numpy-batch | Accelerate | pending | no C-ext (18 threads)"
+            " | jlinalg: Accelerate-ILP64\n",
+            "Threads: BLAS=18 (Accelerate, uncontrolled) | C-ext=none"
+            " | LOCO workers=1\n",
+        ]

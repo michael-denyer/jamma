@@ -36,7 +36,8 @@ def format_pipeline_banner(
             "accelerate").
         eigen_driver: Eigen driver name (e.g. "DSYEVD", "DSYEVR").
         c_ext: Whether the C extension is usable.
-        threads: OpenMP thread count of the C extension (1 when serial).
+        threads: OpenMP thread count of the C extension, or the BLAS thread
+            count when no extension is loaded and NumPy does the compute.
         jlinalg_backend: jlinalg's ``blas_backend`` (e.g. "MKL-ILP64",
             "numpy-fallback"). Omitted from the banner when None, since
             jlinalg can report "numpy-fallback" even with its C extension
@@ -120,7 +121,7 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
             blas=threads.blas_backend,
             eigen_driver="pending",
             c_ext=threads.c_ext_available,
-            threads=threads.c_ext,
+            threads=threads.c_ext if threads.c_ext_available else threads.blas,
             jlinalg_backend=jlinalg.blas_backend,
         )
         logger.info(banner)

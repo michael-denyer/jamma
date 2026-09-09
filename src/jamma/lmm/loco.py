@@ -10,8 +10,8 @@ Memory profile (sequential processing):
     Each K_loco is discarded after eigendecomp.
 
 With ``JAMMA_LOCO_WORKERS`` above one, ``plan_loco_workers`` lets that many
-chromosomes eigendecompose at once, each on its own copy of K_loco, in bounded batches.
-Association consumes a completed batch in chromosome order before the next starts.
+chromosomes eigendecompose at once, each on its own copy of K_loco, while
+the association pass stays sequential and in chromosome order.
 
 ``LocoConfig`` lives in ``loco_config`` and is re-exported here, so ``from
 jamma.lmm.loco import LocoConfig`` keeps working. Where the eigenpairs come
@@ -310,7 +310,6 @@ def run_lmm_loco(
     workers = plan_loco_workers(
         requested_workers,
         n_chr=len(unique_chrs),
-        n_samples=execution.n_samples,
         cores=get_physical_core_count(),
         retained=loco_retained_set_for(execution),
         eigen_plan=eigen_plan,

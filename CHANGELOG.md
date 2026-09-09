@@ -9,19 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `JAMMA_LOCO_WORKERS` selects concurrent eigendecompositions in bounded
-  batches, capped by available memory, chromosome count and physical cores.
+- `JAMMA_LOCO_WORKERS` keeps that many chromosome eigendecompositions in
+  flight, capped by available memory, chromosome count and physical cores.
   The default remains one. Results arrive in chromosome order, and cache
   publication still requires the complete run.
 
 ### Fixed
 
-- LOCO batches now own one BLAS limit and finish every solve before
-  association starts. Worker completion, failure and early close restore
-  the prior limit before another phase can change it.
-- Worker memory pricing counts each input matrix once and reserves only
-  completed eigenvectors during association. The planner uses analysed
-  sample dimensions and a bounded search even for very large requests.
+- LOCO eigen workers no longer race association over the process-wide BLAS
+  limit. One scope, entered on the consumer's thread, wraps the whole eigen
+  stream; workers never change limits, and association's own scope nests
+  inside it between chromosomes, so every limit change happens on one thread
+  in nested order and the prior limit is restored on completion, failure and
+  early close. Solves keep overlapping association, as they did before the
+  batch barrier that briefly replaced this: six-worker LOCO on mouse_hs1940
+  went from 2.11s under the barrier to 1.57s, byte-identical output.
+- Worker memory pricing counts each input matrix once: the driver peak
+  already holds it. The planner uses a bounded search even for very large
+  requests.
+- `_computed_eigen_pairs` no longer calls `gc.collect()` after each
+  sequential solve. The call dated from the first LOCO implementation;
+  NumPy arrays free on the last reference and the solve holds no cycle.
 - Thread counts are logged after execution planning. `Association threads:`
   reports the selected rotation budget and C workspace count;
   `LOCO workers:` reports capped concurrency. The startup banner identifies

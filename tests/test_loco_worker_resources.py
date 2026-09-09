@@ -1,4 +1,4 @@
-"""Allocation and process-wide BLAS lifetimes of real LOCO solve batches."""
+"""Allocation and process-wide BLAS lifetimes of real concurrent LOCO solves."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from jamma.core import memory
 from jamma.core import threading as core_threading
 from jamma.core.eigen_plan import plan_eigen_driver
 from jamma.kinship.loco import loco_retained_set
-from jamma.lmm.eigen import _eigendecompose_kinship, center_kinship
+from jamma.lmm.eigen import center_kinship, eigendecompose_kinship_in_scope
 from jamma.lmm.loco_config import LocoConfig
 from jamma.lmm.loco_eigen import _computed_eigen_pairs
 from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs
@@ -25,18 +25,24 @@ pytestmark = pytest.mark.tier0
 @pytest.mark.parametrize(
     "exit_kind", ["complete", "close", "solve_error", "input_error"]
 )
-def test_batch_restores_blas_before_consumer_or_exception(monkeypatch, exit_kind):
+def test_one_consumer_thread_scope_wraps_every_solve(monkeypatch, exit_kind):
+    """Workers never touch the controller; the consumer enters and restores once."""
     active = [11]
     transitions: list[tuple[str, int]] = []
     controller = fake_blas_controller(active, transitions)
+    consumer_ident = threading.get_ident()
+
+    def control_from_consumer(limit: int):
+        assert threading.get_ident() == consumer_ident, "worker touched BLAS limits"
+        return controller(limit)
+
     monkeypatch.setattr(core_threading, "is_blas_controllable", lambda: True)
     monkeypatch.setattr(
         core_threading,
         "threadpool_limits",
-        lambda *, limits, user_api: controller(limits),
+        lambda *, limits, user_api: control_from_consumer(limits),
     )
     observed: list[int] = []
-    completed: list[int] = []
 
     def inputs() -> Iterator[tuple[str, np.ndarray]]:
         yield "1", np.eye(8)
@@ -46,11 +52,9 @@ def test_batch_restores_blas_before_consumer_or_exception(monkeypatch, exit_kind
 
     def solve(K):
         observed.append(active[0])
-        result = _eigendecompose_kinship(
+        return eigendecompose_kinship_in_scope(
             K, n_threads=2, check_memory=False, show_progress=False
         )
-        completed.append(active[0])
-        return result
 
     pairs = solve_eigen_pairs(inputs(), solve, workers=2, n_threads=2)
     try:
@@ -60,7 +64,7 @@ def test_batch_restores_blas_before_consumer_or_exception(monkeypatch, exit_kind
         else:
             first = next(pairs)
             assert first[0] == "1"
-            assert active == [11]
+            assert active == [2], "consumer runs inside the eigen scope"
             if exit_kind == "solve_error":
                 with pytest.raises(ValueError, match="must be square"):
                     next(pairs)
@@ -69,18 +73,11 @@ def test_batch_restores_blas_before_consumer_or_exception(monkeypatch, exit_kind
     finally:
         pairs.close()
     assert active == [11]
-    if exit_kind == "input_error":
-        assert observed == []
-        assert transitions == []
-        return
-    assert observed
     assert set(observed) == {2}
-    assert set(completed) <= {2}
-    assert transitions[0] == ("enter", 2)
-    assert transitions[-1] == ("restore", 11)
+    assert transitions == [("enter", 2), ("restore", 11)]
 
 
-def test_reused_stream_buffer_is_copied_and_batches_stay_bounded(monkeypatch):
+def test_reused_stream_buffer_is_copied_and_inputs_stay_bounded(monkeypatch):
     monkeypatch.setenv("JLINALG_NO_VENDOR_LAPACK", "1")
     names = [str(i) for i in range(7)]
     rng = np.random.default_rng(38)
@@ -109,10 +106,10 @@ def test_reused_stream_buffer_is_copied_and_batches_stay_bounded(monkeypatch):
             index = calls
         if index <= 6:
             barrier.wait(timeout=5)
-        return _eigendecompose_kinship(K, **kwargs)
+        return eigendecompose_kinship_in_scope(K, **kwargs)
 
-    # The NumPy driver has a separate output, so no worker input may survive
-    # into association once the batch has completed.
+    # The NumPy driver has a separate output, so a finished solve's input is
+    # dead and only the solves in flight can hold one.
     plan = plan_eigen_driver(
         16,
         100,
@@ -141,13 +138,14 @@ def test_reused_stream_buffer_is_copied_and_batches_stay_bounded(monkeypatch):
     try:
         for i, (name, values, U) in enumerate(pairs):
             assert name == names[i]
-            assert len(pulled) == min(3 * (i // 3 + 1), len(names))
+            assert len(pulled) == min(i + 3, len(names))
             expected = matrices[i].copy()
             center_kinship(expected)
             np.testing.assert_allclose(expected @ U, U * values, atol=1e-10)
-            assert all(ref() is None for ref in inputs_alive)
+            assert sum(ref() is not None for ref in inputs_alive) <= 3
     finally:
         pairs.close()
+    assert all(ref() is None for ref in inputs_alive)
 
 
 @pytest.mark.parametrize(
@@ -159,12 +157,18 @@ def test_reused_stream_buffer_is_copied_and_batches_stay_bounded(monkeypatch):
         (False, False, True, False),
     ],
 )
-def test_worker_accounting_uses_driver_peak_and_analysed_output_shape(
+def test_worker_accounting_charges_each_in_flight_driver_peak_once(
     has_dsyevd,
     has_dsyevr,
     no_vendor,
     inplace,
 ):
+    """Association on one chromosome overlaps two solves, each at its driver peak.
+
+    The peak already includes the worker's owned input, so nothing is added
+    for the copy. At 1,000 samples that is 0.008 GB plus workspace per driver;
+    the retained set is 0.032 GB, so every driver fits three workers in 4.3 GB.
+    """
     retained = loco_retained_set(10_000, 10_000, 10_000)
     eigen = plan_eigen_driver(
         1000,
@@ -177,7 +181,6 @@ def test_worker_accounting_uses_driver_peak_and_analysed_output_shape(
     plan = plan_loco_workers(
         3,
         n_chr=3,
-        n_samples=1000,
         retained=retained,
         eigen_plan=eigen,
         available_gb=100,
@@ -186,9 +189,7 @@ def test_worker_accounting_uses_driver_peak_and_analysed_output_shape(
         cores=8,
     )
     assert plan.workers == 3
-    # The other two completed eigenvectors are 0.008 GB each, not the
-    # full-output stream's 0.8 GB matrices or their driver workspaces.
-    assert plan.consumer_gb == pytest.approx(1.016)
+    assert plan.consumer_gb == pytest.approx(2 * eigen.required_gb + 1.0)
 
 
 def test_worker_plan_preserves_strict_ram_tie_and_inclusive_user_budget():
@@ -207,7 +208,6 @@ def test_worker_plan_preserves_strict_ram_tie_and_inclusive_user_budget():
         return plan_loco_workers(
             2,
             n_chr=3,
-            n_samples=1000,
             retained=retained,
             eigen_plan=eigen,
             association_gb=0.0,

@@ -1,15 +1,14 @@
-"""Memory pricing and BLAS ownership for bounded batches of LOCO solves."""
+"""Memory pricing and BLAS ownership for concurrent LOCO eigen solves."""
 
 from collections import deque
 from collections.abc import Callable, Generator, Iterable
-from concurrent.futures import Future, ThreadPoolExecutor, wait
-from itertools import islice
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import NamedTuple
 
 import numpy as np
 
 from jamma.core import memory
-from jamma.core.eigen_plan import EigenDriverPlan, square_matrix_gb
+from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.core.threading import blas_threads
 from jamma.kinship.loco import LocoRetainedSet
 
@@ -41,7 +40,6 @@ def plan_loco_workers(
     requested: int,
     *,
     n_chr: int,
-    n_samples: int,
     retained: LocoRetainedSet,
     eigen_plan: EigenDriverPlan,
     available_gb: float,
@@ -49,20 +47,19 @@ def plan_loco_workers(
     association_gb: float,
     cores: int,
 ) -> LocoWorkerPlan:
-    """Price concurrent solves followed by association over completed pairs.
+    """Price ``workers`` solves in flight while association consumes the oldest.
 
-    The driver peak already includes its owned input. After every solve in
-    the batch finishes, association retains only the other eigenvectors,
-    not their solver workspaces. The kinship stream's retained set is separate.
-    One worker borrows the stream buffer and keeps the sequential reservation.
-    The caller gates the one-worker floor if even that cannot fit.
+    Each driver peak already includes its owned input, so a worker costs
+    ``eigen_plan.required_gb`` and nothing more. The consumer's moment of
+    peak is the larger of every worker solving at once and association
+    running while the other ``workers - 1`` still solve. The kinship stream's
+    retained set sits underneath both. The caller gates the one-worker floor
+    if even that cannot fit.
     """
-    eigenvectors_gb = square_matrix_gb(n_samples)
 
     def consumer(workers: int) -> float:
-        return max(
-            workers * eigen_plan.required_gb,
-            association_gb + (workers - 1) * eigenvectors_gb,
+        return (workers - 1) * eigen_plan.required_gb + max(
+            eigen_plan.required_gb, association_gb
         )
 
     def fits(workers: int) -> bool:
@@ -91,53 +88,30 @@ def solve_eigen_pairs(
     workers: int,
     n_threads: int,
 ) -> Generator[EigenResult, None, None]:
-    """Yield ordered pairs only after all solves in their batch have stopped.
+    """Yield eigenpairs in input order with at most ``workers`` solves in flight.
 
-    The caller supplies owned matrices for concurrent work and a solver that
-    does not change BLAS limits. Each batch has one process-wide BLAS scope.
-    It closes before yielding to association, whose own limits can then apply.
-    At most ``workers`` inputs/results are retained. Input preparation finishes
-    before workers start, and worker cleanup precedes restoring BLAS state.
-    One worker runs inline without copying or creating an executor.
+    One process-wide BLAS scope, entered on the consumer's thread, wraps the
+    whole stream. ``solve`` never changes thread limits, so every limit change
+    happens on that one thread in nested order: association's own scope opens
+    and closes inside this one between pulls. While association runs, solves
+    still in flight inherit its limit, which is oversubscription on MKL and
+    OpenBLAS, not a stale restore. The scope closes, after the pool has
+    stopped, when the stream is drained or the generator is closed early.
     """
 
     def solve_named(name: str, K: np.ndarray) -> EigenResult:
         return name, *solve(K)
 
-    if workers == 1:
-        for name, K in inputs:
-            with blas_threads(n_threads):
-                result = solve_named(name, K)
-            del K
-            yield result
-            del result
-        return
-
     pending: deque[Future[EigenResult]] = deque()
-
-    def oldest() -> EigenResult:
-        # Keep the yielded arrays out of this generator's local variables.
-        return pending.popleft().result()
-
-    source = iter(inputs)
     pool = ThreadPoolExecutor(max_workers=workers)
-    try:
-        while batch := list(islice(source, workers)):
-            with blas_threads(n_threads):
-                try:
-                    pending.extend(
-                        pool.submit(solve_named, name, K) for name, K in batch
-                    )
-                    wait(pending)
-                except BaseException:
-                    # Submission errors and interrupts must stop workers
-                    # before the BLAS scope restores the process-wide limit.
-                    pool.shutdown(wait=True, cancel_futures=True)
-                    raise
-            # A non-inplace solve returns a separate U: release its input
-            # before association, matching the planned retained allocations.
-            batch.clear()
+    with blas_threads(n_threads):
+        try:
+            for name, K in inputs:
+                pending.append(pool.submit(solve_named, name, K))
+                del K
+                if len(pending) == workers:
+                    yield pending.popleft().result()
             while pending:
-                yield oldest()
-    finally:
-        pool.shutdown(wait=True, cancel_futures=True)
+                yield pending.popleft().result()
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)

@@ -1,8 +1,10 @@
 """Memory pricing and BLAS ownership for concurrent LOCO eigen solves."""
 
+import queue
+import threading
 from collections import deque
 from collections.abc import Callable, Generator, Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from typing import NamedTuple
 
 import numpy as np
@@ -97,21 +99,58 @@ def solve_eigen_pairs(
     still in flight inherit its limit, which is oversubscription on MKL and
     OpenBLAS, not a stale restore. The scope closes, after the pool has
     stopped, when the stream is drained or the generator is closed early.
+
+    Workers are daemon threads rather than a ``ThreadPoolExecutor``: a
+    ``KeyboardInterrupt`` on the consumer's thread propagates without joining
+    a solve still inside LAPACK, so Ctrl-C ends the run as promptly as it
+    ends GEMMA. Every other exit joins the workers.
     """
 
     def solve_named(name: str, K: np.ndarray) -> EigenResult:
         return name, *solve(K)
 
+    work: queue.SimpleQueue[tuple[Future[EigenResult], str, np.ndarray] | None] = (
+        queue.SimpleQueue()
+    )
+
+    def run() -> None:
+        while (item := work.get()) is not None:
+            future, name, K = item
+            del item
+            if future.set_running_or_notify_cancel():
+                try:
+                    future.set_result(solve_named(name, K))
+                except BaseException as exc:  # noqa: BLE001 — worker thread routes every failure through its Future; the consumer re-raises it in chromosome order
+                    future.set_exception(exc)
+            del K
+
+    threads = [
+        threading.Thread(target=run, name=f"loco-eigen-{i}", daemon=True)
+        for i in range(workers)
+    ]
+    for thread in threads:
+        thread.start()
     pending: deque[Future[EigenResult]] = deque()
-    pool = ThreadPoolExecutor(max_workers=workers)
+    interrupted = False
     with blas_threads(n_threads):
         try:
             for name, K in inputs:
-                pending.append(pool.submit(solve_named, name, K))
+                future: Future[EigenResult] = Future()
+                pending.append(future)
+                work.put((future, name, K))
                 del K
                 if len(pending) == workers:
                     yield pending.popleft().result()
             while pending:
                 yield pending.popleft().result()
+        except KeyboardInterrupt:
+            interrupted = True
+            raise
         finally:
-            pool.shutdown(wait=True, cancel_futures=True)
+            for future in pending:
+                future.cancel()
+            for _ in threads:
+                work.put(None)
+            if not interrupted:
+                for thread in threads:
+                    thread.join()

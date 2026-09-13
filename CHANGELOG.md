@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ctrl-C during a LOCO eigendecomposition ends the run at once again. The
+  eigen workers are daemon threads fed by a queue, so a `KeyboardInterrupt`
+  on the consumer's thread no longer joins a solve still inside LAPACK, the
+  behaviour JAMMA had before the worker pool and the one GEMMA has on
+  SIGINT. Every other exit still joins the workers.
 - LOCO eigen workers no longer race association over the process-wide BLAS
   limit. One scope, entered on the consumer's thread, wraps the whole eigen
   stream; workers never change limits, and association's own scope nests

@@ -668,15 +668,14 @@ class TestCompareAssocResults:
         relaxed_result = compare_assoc_results(actual, expected, config=relaxed)
         assert relaxed_result.beta.passed is True
 
-    def test_af_normalized_to_maf(self):
-        """AF is normalized to MAF (<=0.5) before comparison."""
-        # JAMMA reports 0.3, GEMMA reports 0.7 (same allele, different convention)
+    def test_complement_af_fails(self):
+        """AF is compared as reported, so a flipped allele (0.3 vs 0.7) fails."""
         actual = [_make_assoc(rs="rs1", af=0.3)]
         expected = [_make_assoc(rs="rs1", af=0.7)]
 
         comparison = compare_assoc_results(actual, expected)
 
-        assert comparison.af.passed is True
+        assert comparison.af.passed is False
 
     def test_lambda_boundary_all_at_lower_bound(self):
         """Lambda values all at REML lower boundary should be skipped."""

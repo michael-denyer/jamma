@@ -241,38 +241,6 @@ def run_lmm_association(
         covariates=covariates,
         output_path=output_path,
         writer=writer,
-        prepared_genotypes=None,
-    )
-
-
-def run_lmm_association_prepared(
-    genotypes: PreparedGenotypes,
-    spec: LmmRunSpec,
-    *,
-    phenotypes: np.ndarray,
-    eigen_input: EigenInput,
-    covariates: np.ndarray | None,
-    output_path: Path | None = None,
-    writer: IncrementalAssocWriter | None = None,
-    prepared_covariates: PreparedCovariates | None = None,
-) -> LmmRunResult:
-    """Run one phenotype over an already prepared genotype selection.
-
-    The prepared object's exact sample basis must match the valid-sample mask
-    derived from this phenotype and its covariates. This keeps shared
-    preparation safe when two masks have the same number of samples at
-    different source positions.
-    """
-    return _run_lmm_association(
-        None,
-        spec,
-        phenotypes=phenotypes,
-        eigen_input=eigen_input,
-        covariates=covariates,
-        output_path=output_path,
-        writer=writer,
-        prepared_genotypes=genotypes,
-        prepared_covariates=prepared_covariates,
     )
 
 
@@ -392,7 +360,7 @@ def run_lmm_association_group_prepared(
 
 
 def _run_lmm_association(
-    source: GenotypeSource | None,
+    source: GenotypeSource,
     spec: LmmRunSpec,
     *,
     phenotypes: np.ndarray,
@@ -400,10 +368,8 @@ def _run_lmm_association(
     covariates: np.ndarray | None,
     output_path: Path | None,
     writer: IncrementalAssocWriter | None,
-    prepared_genotypes: PreparedGenotypes | None,
-    prepared_covariates: PreparedCovariates | None = None,
 ) -> LmmRunResult:
-    """Shared implementation for source-owned and caller-prepared runs."""
+    """Run one phenotype over a genotype source."""
     if output_path is not None and writer is not None:
         raise ValueError("pass output_path or writer, not both")
 
@@ -419,12 +385,7 @@ def _run_lmm_association(
 
     start_time = time.perf_counter()
     n_samples_total = phenotypes.shape[0]
-    if source is not None:
-        n_snps = source.n_snps
-    elif prepared_genotypes is not None:
-        n_snps = len(prepared_genotypes.snp_meta)
-    else:
-        raise RuntimeError("source or prepared genotypes are required")
+    n_snps = source.n_snps
 
     setup = validate_runner_inputs(phenotypes, eigen_input, covariates)
     phenotypes = setup.phenotypes
@@ -442,22 +403,7 @@ def _run_lmm_association(
 
     # === PASS 1: bind sample rows, SNP statistics, filtering, and chunks ===
     t_stats_start = time.perf_counter()
-    sample_basis = SampleBasis.from_mask(valid_mask)
-    if prepared_genotypes is None:
-        if source is None:
-            raise RuntimeError("source is required when genotypes are not prepared")
-        genotypes = prepare_genotypes(source, spec, sample_basis)
-    else:
-        genotypes = prepared_genotypes
-        prepared_basis = genotypes.sample_basis
-        if (
-            prepared_basis.source_row_count != sample_basis.source_row_count
-            or not np.array_equal(prepared_basis.positions, sample_basis.positions)
-        ):
-            raise ValueError(
-                "prepared genotype sample basis does not match phenotype and "
-                "covariate valid-sample mask"
-            )
+    genotypes = prepare_genotypes(source, spec, SampleBasis.from_mask(valid_mask))
     if genotypes.n_unexpected > 0:
         logger.warning(
             f"Genotype validation: {genotypes.n_unexpected} values outside "
@@ -487,18 +433,7 @@ def _run_lmm_association(
 
     # === Eigendecomp + rotation + null model + PVE ===
     t_eigen_start = time.perf_counter()
-    if prepared_covariates is None:
-        W, n_cvt = _build_covariate_matrix(covariates, n_samples)
-        rotated_covariates = None
-    else:
-        W = prepared_covariates.W
-        n_cvt = prepared_covariates.n_cvt
-        rotated_covariates = prepared_covariates.UtW
-        if W.shape[0] != n_samples:
-            raise ValueError(
-                "prepared covariate sample count does not match phenotype: "
-                f"got {W.shape[0]} and {n_samples}"
-            )
+    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
     prepared = prepare_lmm_run(
         eigen_input=eigen_input,
         phenotypes=phenotypes,
@@ -510,7 +445,6 @@ def _run_lmm_association(
         check_memory=check_memory,
         label=labels.label,
         compute_pve=spec.compute_pve,
-        rotated_covariates=rotated_covariates,
     )
     del eigen_input
     gc.collect()

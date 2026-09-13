@@ -707,8 +707,8 @@ requires_c = pytest.mark.skipif(
 def no_c_kernels(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hold the C extension out for this test, so the NumPy path runs for real.
 
-    ``jamma.lmm.accel.available()`` and ``jamma.lmm.dispatch.select_current``
-    read ``accel._accel`` at call time, not at import time, so clearing it
+    ``jamma.lmm.accel.available()`` reads ``accel._accel`` at call time, not
+    at import time, so clearing it
     here drives the fallback path rather than merely describing it. Every
     module that decides on C-vs-NumPy reads through ``accel``, so this one
     monkeypatch is the whole seam.

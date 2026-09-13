@@ -199,19 +199,33 @@ class TestEigenCacheKey:
         assert key == expected
 
 
+def eigen_cache_is_valid(
+    eigen_dir: Path, prefix: str, current_key: str
+) -> tuple[bool, str]:
+    """Read the on-disk manifest and validate it, as the LOCO driver does."""
+    from jamma.lmm.eigen_cache import (
+        eigen_cache_manifest_is_valid,
+        eigen_cache_manifest_path,
+        read_eigen_cache_manifest,
+    )
+
+    manifest = read_eigen_cache_manifest(eigen_dir, prefix)
+    path = eigen_cache_manifest_path(eigen_dir, prefix)
+    if manifest is None:
+        return False, f"no valid cache manifest found at {path}"
+    return eigen_cache_manifest_is_valid(manifest, path, current_key)
+
+
 class TestEigenCacheManifest:
     """Manifest read/write/validate behavior for stale-cache detection."""
 
     def test_absent_manifest_is_invalid(self, tmp_path: Path) -> None:
-        from jamma.lmm.eigen_cache import eigen_cache_is_valid
-
         ok, reason = eigen_cache_is_valid(tmp_path, "result", "somekey")
         assert ok is False
         assert "manifest" in reason.lower()
 
     def test_matching_key_is_valid(self, tmp_path: Path) -> None:
         from jamma.lmm.eigen_cache import (
-            eigen_cache_is_valid,
             write_eigen_cache_manifest,
         )
 
@@ -229,7 +243,6 @@ class TestEigenCacheManifest:
 
     def test_mismatched_key_is_invalid(self, tmp_path: Path) -> None:
         from jamma.lmm.eigen_cache import (
-            eigen_cache_is_valid,
             write_eigen_cache_manifest,
         )
 
@@ -318,7 +331,6 @@ class TestEigenCacheManifest:
 
     def test_corrupt_manifest_is_invalid(self, tmp_path: Path) -> None:
         from jamma.lmm.eigen_cache import (
-            eigen_cache_is_valid,
             eigen_cache_manifest_path,
         )
 
@@ -330,7 +342,6 @@ class TestEigenCacheManifest:
     @pytest.mark.parametrize("payload", ["[]", "null", '"manifest"', "3"])
     def test_non_object_manifest_is_invalid(self, tmp_path: Path, payload: str) -> None:
         from jamma.lmm.eigen_cache import (
-            eigen_cache_is_valid,
             eigen_cache_manifest_path,
         )
 
@@ -351,7 +362,6 @@ class TestEigenCacheManifest:
 
         from jamma.lmm.eigen_cache import (
             EIGEN_CACHE_SCHEMA_VERSION,
-            eigen_cache_is_valid,
             eigen_cache_manifest_path,
         )
 
@@ -384,7 +394,6 @@ class TestEigenCacheManifest:
 
         from jamma.lmm.eigen_cache import (
             EIGEN_CACHE_SCHEMA_VERSION,
-            eigen_cache_is_valid,
             eigen_cache_manifest_path,
         )
 

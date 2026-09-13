@@ -272,7 +272,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:25](../src/jamma/lmm/genotype_source.py#L25) |
 | 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:65](../src/jamma/lmm/genotype_source.py#L65) |
 | 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:130](../src/jamma/lmm/runner_numpy.py#L130) |
-| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:581](../src/jamma/lmm/runner_numpy.py#L581) |
+| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:581](../src/jamma/lmm/runner_numpy.py#L515) |
 | 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:406](../src/jamma/lmm/prepare_common.py#L406) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:464](../src/jamma/lmm/chunk_runner_numpy.py#L464) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:176](../src/jamma/lmm/chunk_runner_numpy.py#L176) |
@@ -327,8 +327,8 @@ Configuration, memory management, threading, and logging.
 | 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:180](../src/jamma/core/threading.py#L180) |
 | 5f | `get_hardware_context()` | CPU, BLAS, platform info for benchmarks | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
 | 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:94](../src/jamma/core/progress.py#L94) |
-| 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/core/estimates.py#L149) |
-| 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:185](../src/jamma/core/estimates.py#L185) |
+| 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/core/estimates.py#L144) |
+| 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:185](../src/jamma/core/estimates.py#L180) |
 | 5i | `PHENOTYPE_MISSING` | Missing phenotype sentinel (-9.0) | [constants.py:10](../src/jamma/core/constants.py#L10) |
 
 ---
@@ -339,7 +339,7 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:55](../src/jamma/validation/tolerances.py#L55) |
+| 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:55](../src/jamma/validation/tolerances.py#L54) |
 | 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:23](../src/jamma/validation/compare.py#L23) |
 | 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:359](../src/jamma/validation/compare.py#L359) |
 | 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:597](../src/jamma/validation/compare.py#L597) |

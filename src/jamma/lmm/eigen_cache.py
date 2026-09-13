@@ -283,26 +283,6 @@ def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict[str, object]
         return None
 
 
-def eigen_cache_is_valid(
-    eigen_dir: Path, prefix: str, current_key: str
-) -> tuple[bool, str]:
-    """Check whether the on-disk eigen cache matches the current inputs.
-
-    Args:
-        eigen_dir: Directory containing eigen files.
-        prefix: Filename prefix.
-        current_key: Hex SHA-256 digest computed from the current inputs.
-
-    Returns:
-        Tuple of (is_valid, reason). reason is always a non-empty string.
-    """
-    manifest = read_eigen_cache_manifest(eigen_dir, prefix)
-    path = eigen_cache_manifest_path(eigen_dir, prefix)
-    if manifest is None:
-        return False, f"no valid cache manifest found at {path}"
-    return eigen_cache_manifest_is_valid(manifest, path, current_key)
-
-
 def eigen_cache_manifest_is_valid(
     manifest: Mapping[str, object], path: Path, current_key: str
 ) -> tuple[bool, str]:

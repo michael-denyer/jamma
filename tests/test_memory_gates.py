@@ -15,9 +15,10 @@ import pytest
 
 from jamma.core import memory
 from jamma.core.eigen_plan import array_gb, square_matrix_gb
+from jamma.lmm import accel
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
-from jamma.lmm.dispatch import select_current
+from jamma.lmm.dispatch import select_dispatch_path
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from tests.conftest import preflight
@@ -101,7 +102,9 @@ class TestMemoryGates:
 
 def _expected_uab_iab_gb(args, kwargs, n_cvt: int) -> float:
     """The Uab/Iab figure a correct preflight passes for this recorded call."""
-    dispatch = select_current(n_cvt, 1, log_choices=False)
+    dispatch = select_dispatch_path(
+        n_cvt, 1, accel=accel.available(), log_choices=False
+    )
     per_snp = lmm_extra_bytes_per_snp(args[0], n_cvt, dispatch)
     return kwargs["lmm_batch_size"] * per_snp / 1e9
 

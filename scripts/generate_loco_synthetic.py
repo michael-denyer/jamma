@@ -8,9 +8,9 @@ The --loco-kinship subcommand writes the per-chromosome LOCO kinship matrices
 and SNP lists that scripts/generate_gemma_fixtures.sh feeds to GEMMA as -k and
 -snps inputs.
 
-The annotation file (test_snps.txt) uses GEMMA's annotation format.
-Not used by the current fixture generation pipeline (which uses -snps
-per-chromosome filtering), but kept for potential GEMMA -loco -a usage.
+The annotation file (test_snps.txt) uses GEMMA's annotation format and is
+read by tests through tests/fixture_paths.py (LOCO_SNPS); generate_gemma_fixtures.sh
+does not pass it to GEMMA.
 Format: 3 tab-separated columns, no header: SNP_ID  bp_position  chromosome
 
 Design:

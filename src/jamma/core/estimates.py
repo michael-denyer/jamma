@@ -46,24 +46,19 @@ _CORE_SCALING_EXP = 0.7  # Sub-linear: BLAS is memory-BW-bound at large N
 
 
 @functools.cache
-def _get_blas_context() -> tuple[str, bool]:
-    """Return (blas_backend, is_ilp64) from jlinalg, with safe fallback.
-
-    Returns:
-        Tuple of (backend_name, is_ilp64). Falls back to
-        ("unknown", False) if jlinalg cannot be imported.
-    """
+def _blas_backend_name() -> str:
+    """Return the jlinalg BLAS backend name, or "unknown" if it cannot load."""
     try:
         from jamma import jlinalg
 
-        return str(jlinalg.blas_backend), bool(jlinalg.blas_is_ilp64)
+        return str(jlinalg.blas_backend)
     except (ImportError, AttributeError) as exc:
         import logging
 
         logging.getLogger(__name__).debug(
             "Could not determine BLAS backend from jlinalg: %s", exc
         )
-        return "unknown", False
+        return "unknown"
 
 
 def _blas_caveat() -> str:
@@ -72,7 +67,7 @@ def _blas_caveat() -> str:
     Empty string when on MKL (estimates are calibrated). Otherwise a
     short warning that the estimate may understate actual runtime.
     """
-    backend, _ = _get_blas_context()
+    backend = _blas_backend_name()
     if "MKL" in backend.upper():
         return ""
     if backend in ("numpy-fallback", "unknown"):

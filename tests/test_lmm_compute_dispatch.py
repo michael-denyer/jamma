@@ -5,7 +5,7 @@ import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
 from jamma.lmm import accel
-from jamma.lmm.dispatch import DispatchPath, select_current
+from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 
 pytestmark = pytest.mark.tier0
 
@@ -25,7 +25,8 @@ def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
     """
     monkeypatch.setattr(accel, "_accel", _EXTENSION_LOADED)
 
-    assert select_current(n_cvt, 1, log_choices=False) is DispatchPath.FUSED_GENERAL
+    path = select_dispatch_path(n_cvt, 1, accel=accel.available(), log_choices=False)
+    assert path is DispatchPath.FUSED_GENERAL
 
 
 @pytest.mark.parametrize(

@@ -12,8 +12,7 @@ separately from ordinary interior relative error.
 
 ``logl_H1`` is REML in mode 1 and MLE in modes 2 and 4. The earlier mode 4
 likelihood mismatch was an output-semantics defect, not evidence for widening
-``logl_rtol``. AF comparisons in the legacy comparator fold to MAF; the independent
-validation driver additionally checks the declared allele-orientation contract.
+``logl_rtol``. AF is compared as reported, so an allele flip fails the comparison.
 """
 
 import math

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `run_lmm_association_prepared` and the prepared-genotype branches of the
+  single-phenotype runner. `run_lmm_association_group_prepared` is the one
+  prepared entry point.
+- `jamma.lmm.dispatch.select_current`. Callers pass
+  `accel=accel.available()` to `select_dispatch_path`.
+- `eigen_cache_is_valid`. The LOCO driver reads the manifest once and calls
+  `eigen_cache_manifest_is_valid`; the read-then-validate combination now
+  lives only in its tests.
+
+### Changed
+
+- `compare_assoc_results` compares AF as reported instead of folding both
+  sides to MAF. The fold dated from when JAMMA wrote MAF; it now writes the
+  counted-allele frequency, so the fold could hide an allele flip.
+
 ### Added
 
 - `JAMMA_LOCO_WORKERS` keeps that many chromosome eigendecompositions in

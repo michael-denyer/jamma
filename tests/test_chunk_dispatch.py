@@ -36,10 +36,14 @@ def test_runner_mode4_uses_fused_dispatch():
     D2 gave the general workspace's one compute every lmm_mode, so there is no
     longer a split path for mode 4 to be refused by.
     """
-    from jamma.lmm.dispatch import DispatchPath, select_current
+    from jamma.lmm import accel
+    from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 
     for n_cvt, expected in ((1, DispatchPath.FUSED), (2, DispatchPath.FUSED_GENERAL)):
-        assert select_current(n_cvt, 4, log_choices=False) is expected
+        path = select_dispatch_path(
+            n_cvt, 4, accel=accel.available(), log_choices=False
+        )
+        assert path is expected
 
 
 # ---------------------------------------------------------------------------

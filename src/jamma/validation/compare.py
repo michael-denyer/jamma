@@ -682,14 +682,10 @@ def compare_assoc_results(
         if a.rs != e.rs
     ]
 
-    # AF is always present and normalized to MAF (<= 0.5) first, because JAMMA
-    # reports MAF while GEMMA's AF can exceed 0.5 for the same allele.
     actual_af = np.array([r.af for r in actual])
     expected_af = np.array([r.af for r in expected])
-    actual_maf = np.minimum(actual_af, 1.0 - actual_af)
-    expected_maf = np.minimum(expected_af, 1.0 - expected_af)
     af_result = compare_arrays(
-        actual_maf, expected_maf, config.af_rtol, config.atol, "af"
+        actual_af, expected_af, config.af_rtol, config.atol, "af"
     )
 
     # beta/se are always-present output slots. LRT reports them as NaN by

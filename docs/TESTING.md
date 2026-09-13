@@ -523,7 +523,7 @@ two are acceptable:
 3. **Test is broken / commented-out** — *not acceptable*. Either fix or
    delete.
 
-`@pytest.mark.xfail` is only for known bugs with an open beads/GitHub
+`@pytest.mark.xfail` is only for known bugs with an open GitHub
 issue. Include the issue ID in the reason string.
 
 ### 2.7 Bug fix workflow

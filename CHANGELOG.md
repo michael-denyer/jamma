@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `scripts/bench_all_backends.py` and `scripts/bench_loco.py` time complete
+  child processes from PLINK input to written association files for every
+  backend, verify each run's output against the first run within the
+  validation tolerances, rotate backend order between repetitions, and save
+  raw repetitions with `--json`. A failed command or comparison produces no
+  table. The README and `docs/PERFORMANCE.md` mark the 2026-09-09 timings as
+  provisional pending an idle-machine rerun; earlier small-scale comparisons
+  move to `docs/PERFORMANCE_HISTORY.md`.
 - `compare_assoc_results` compares AF as reported instead of folding both
   sides to MAF. The fold dated from when JAMMA wrote MAF; it now writes the
   counted-allele frequency, so the fold could hide an allele flip.

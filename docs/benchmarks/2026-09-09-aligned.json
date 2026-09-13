@@ -1,0 +1,538 @@
+{
+  "date": "2026-09-09",
+  "runtime_revision": "7b268ff7047a6e6a67ba1f89c71fdd089f6c4e12",
+  "jamma_version": "8.0.2",
+  "python": "3.12.13",
+  "numpy": "2.5.1",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "cpu": "Apple M5 Pro, 18 physical cores",
+  "jamma_blas": "Accelerate-ILP64",
+  "gemma_version": "0.98.5",
+  "statistic": "minimum of three sequential fresh-process runs, rotating backend order",
+  "reproduce": [
+    "uv run python scripts/bench_all_backends.py --runs 3 --json /tmp/jamma-backends.json",
+    "uv run python scripts/bench_loco.py --runs 3 --json /tmp/jamma-loco.json"
+  ],
+  "input_sha256": {
+    "tests/fixtures/mouse_hs1940/covariates_4.txt": "82e4b5e9eed786d858ae17ea3e65db621fdf3b09b7aa3082fbcf3c0de49adbaa",
+    "tests/fixtures/mouse_hs1940/mouse_hs1940.bed": "82ae9049806a896b12547fe892a85465949005bca8f7e855fdb2b0ea558936d2",
+    "tests/fixtures/mouse_hs1940/mouse_hs1940.bim": "86d28fb5bda51b33972366218f5ad834de937ce55e444fb1a682e77e3adc9cf1",
+    "tests/fixtures/mouse_hs1940/mouse_hs1940.fam": "8b23d60fd5f25a004b3725f6f0c66001b3ddc8a58aca07525b005529b0e1f54c",
+    "tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt": "1aeb66f8aa5465943870320fbccbae9c764ea546ddeb2ad43e9d971ead819a91"
+  },
+  "binary_sha256": {
+    "gemma": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
+    "gemma-accelerate": "25cc94573ea507fd794ed95e24213ca3547ba5593f9a3894029a2053af836004"
+  },
+  "native_extension_sha256": {
+    "src/jamma/jlinalg/_jlinalg.cpython-311-darwin.so": "12d00b049dcb550bb57e27048b1e0eaa32a9af7adca7cdef2963c427ab918e26",
+    "src/jamma/jlinalg/_jlinalg.cpython-312-darwin.so": "bb3c8513d3d36ef8a1e61e7b0781993b8e587530f6b9b7c053e105c638d8f6ea",
+    "src/jamma/jlinalg/_jlinalg.cpython-313-darwin.so": "1fcf88870374819d72b569b2a7f68e51c6006f5996a897ea15ca37b0a2fce97c",
+    "src/jamma/jlinalg/_jlinalg.cpython-314-darwin.so": "9877e6ed334174228f745709ec5fd944308fbd20182c257a099d3d5064e7cde2",
+    "src/jamma/lmm/_lmm_accel.cpython-311-darwin.so": "df7c1ebbd066351fd2879305d6d0d73271849f7507290b13fb880fdf32846581",
+    "src/jamma/lmm/_lmm_accel.cpython-312-darwin.so": "32cb11e162a5c2fbef9021a9b0f9431f9a7c8c39a6318fae9c2532acb49e49c7",
+    "src/jamma/lmm/_lmm_accel.cpython-313-darwin.so": "03da489780cc73dabdfcbbda2c78abb8a857ed01baf71c20a200c45ae77caa2f",
+    "src/jamma/lmm/_lmm_accel.cpython-314-darwin.so": "33f96ff3f01f102edd2957de178ffc062cf9dc7c0de2c849dadf007e692a91fc"
+  },
+  "regular": [
+    {
+      "operation": "kinship",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 1.450728124997113
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 1.5566372909815982
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 0.9482235829927959
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 1.1658667919691652
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 1.7093632919713855
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 0.9798610829748213
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 1.158379500033334
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 2.002558417036198
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 1.1869511249824427
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 1.1396988330525346
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 1.8571891669998877
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 1.5520172910182737
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 9.495846874953713
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 4.293499291001353
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 6.229630874993745
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 0.6248775829444639
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_streaming",
+      "repetition": 1,
+      "seconds": 1.2318380419746973
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 9.526711374986917
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 9.867770875047427
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 0.5926085410173982
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_streaming",
+      "repetition": 2,
+      "seconds": 0.6947067080182023
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 8.195043083047494
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 6.871721749950666
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 0.6683716250117868
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_streaming",
+      "repetition": 3,
+      "seconds": 0.9488980409805663
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 10.685914999980014
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 4.106197708984837
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 15.406255541020073
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 7.8811059999861754
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 10.124414083955344
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 0.6979657909832895
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_streaming",
+      "repetition": 1,
+      "seconds": 0.8946432920056395
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 9.195310832990799
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 9.878702084010001
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 0.8964366249856539
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_streaming",
+      "repetition": 2,
+      "seconds": 0.9377513329964131
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 15.480126167007256
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 9.734268707979936
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 0.7537224579718895
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_streaming",
+      "repetition": 3,
+      "seconds": 1.02257162501337
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 15.17821812495822
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 8.414758208033163
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 11.53599583398318
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 7.081102291995194
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 7.12749108299613
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 1.1767940829740837
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_streaming",
+      "repetition": 1,
+      "seconds": 1.2414008749765344
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 6.490271874994505
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 6.41115074994741
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 0.8571543750003912
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_streaming",
+      "repetition": 2,
+      "seconds": 1.1219783750129864
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 10.721471791970544
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 7.122386083996389
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 1.220222832984291
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_streaming",
+      "repetition": 3,
+      "seconds": 1.441490666999016
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 15.643275125010405
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 5.504233749990817
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 38.802347249991726
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 15.747146542009432
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 20.90104120899923
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 1.675543999997899
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_streaming",
+      "repetition": 1,
+      "seconds": 2.7490366250276566
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 15.23132295900723
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 23.597058542014565
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 2.3256719170021825
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_streaming",
+      "repetition": 2,
+      "seconds": 2.59245658403961
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 36.42918420798378
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 23.93153408402577
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 2.6582325830240734
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_streaming",
+      "repetition": 3,
+      "seconds": 2.637643833004404
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 47.10274408396799
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 17.533294041990303
+    }
+  ],
+  "loco": [
+    {
+      "backend": "GEMMA (OpenBLAS)",
+      "repetition": 1,
+      "seconds": 87.94353124999907,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (Accelerate)",
+      "repetition": 1,
+      "seconds": 66.66536174999783,
+      "snps": 10768
+    },
+    {
+      "backend": "JAMMA NumPy+C",
+      "repetition": 1,
+      "seconds": 5.793471999990288,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (Accelerate)",
+      "repetition": 2,
+      "seconds": 67.4600027090055,
+      "snps": 10768
+    },
+    {
+      "backend": "JAMMA NumPy+C",
+      "repetition": 2,
+      "seconds": 7.004287457966711,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (OpenBLAS)",
+      "repetition": 2,
+      "seconds": 117.11121825000737,
+      "snps": 10768
+    },
+    {
+      "backend": "JAMMA NumPy+C",
+      "repetition": 3,
+      "seconds": 11.160233290982433,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (OpenBLAS)",
+      "repetition": 3,
+      "seconds": 113.64117045898456,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (Accelerate)",
+      "repetition": 3,
+      "seconds": 43.50506245798897,
+      "snps": 10768
+    }
+  ],
+  "additional_validation": {
+    "case": "LOCO chromosome 1 with four covariates",
+    "snps": 950,
+    "status": "failed beta tolerance; excluded from published timings",
+    "snp": "rs13475789",
+    "gemma_beta": 4.366448e-06,
+    "jamma_beta": 4.444851e-06,
+    "beta_rtol": 0.01
+  },
+  "timing_status": "provisional; idle-machine rerun required",
+  "timing_environment_note": "User confirmed another task was using substantial CPU during these measurements. Retain for diagnostics, not performance claims."
+}

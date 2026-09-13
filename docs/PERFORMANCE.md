@@ -1,26 +1,125 @@
 # Performance Summary
 
-> **Currency note.** Headline numbers are historical benchmarks from each
-> noted version. Two separate currency questions matter here, and they have
-> different answers.
->
-> *Small scale* was remeasured for the LOCO resource-ownership fix on
-> 2026-09-09. Older version comparisons remain below with their original dates.
->
-> *Large scale* is not. The most recent end-to-end large-scale benchmark
-> (125,632 samples) is still from v4.2.0; v4.6.1 added partial scaling data at
-> smaller sizes. Nothing in the v5, v6, or v7 line has been re-benchmarked at
-> full scale. The kinship, eigendecomp, and LMM hot paths are unchanged from
-> v4.6.1. JAX and BLIS were stripped in v5.0 (commit `663a22b`) -- the
-> backend set is now `numpy` and `numpy-streaming` only, both routing
-> through jlinalg with vendor LAPACK > NumPy fallback.
+## Provisional aligned process benchmarks
+
+**Idle-machine rerun required.** After these runs, the user confirmed that
+another task was placing a substantial load on the CPU. These timings and
+ratios are retained as diagnostic records only and must not be used as
+performance claims. The numerical-equivalence checks remain valid; passing
+them does not establish that the timing conditions were controlled.
+
+Measured 2026-09-09 on mouse_hs1940: 1,940 samples and 12,226 SNPs,
+with 1,410 samples and 10,768 SNPs retained for association. Apple M5 Pro,
+18 physical cores, macOS 26.6.2, Python 3.12.13, NumPy 2.5.1,
+JAMMA 8.0.2 with the native C extension and Accelerate-ILP64,
+and GEMMA 0.98.5 in OpenBLAS and Accelerate builds. The runtime source is
+revision `7b268ff7`, measured with the revised benchmark scripts in this change. This is the local development installation, not a
+fresh portable-wheel installation.
+
+| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
+|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
+| Kinship (`-gk 1`) | 1.5s | 1.6s | 948ms | 1.1s | — | 0.8x | 1.3x | 1.4x |
+| LMM Wald (`-lmm 1`) | 8.2s | 4.1s | 6.2s | 593ms | 695ms | 10.5x | 13.8x | 6.9x |
+| LMM All (`-lmm 4`) | 15.2s | 7.9s | 9.7s | 698ms | 895ms | 13.9x | 21.7x | 11.3x |
+| Full GWAS Wald (compute kinship + association) | 10.7s | 5.5s | 6.4s | 857ms | 1.1s | 7.5x | 12.5x | 6.4x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 36.4s | 15.2s | 20.9s | 1.7s | 2.6s | 12.5x | 21.7x | 9.1x |
+
+Best of three fresh-process runs per operation and backend, run sequentially
+with backend order rotated between repetitions. This measures a warm filesystem
+cache, not cold-storage performance. It includes process startup, imports,
+input loading, computation and final output writing. There is no untimed JAMMA
+warmup or preloaded genotype/kinship array. Ratios use unrounded times and the
+faster of the JAMMA C batch and streaming backends for each operation.
+The C speedup column includes startup and dispatch differences. Standalone
+kinship does not use the LMM accelerator; enabling C was slower for that
+operation in this measurement.
+
+The required work determines which I/O belongs in each row:
+
+- **Kinship:** both read PLINK and write the same text matrix format. JAMMA uses
+  `--legacy-text` because a saved matrix is the requested result.
+- **Association:** both read the same precomputed text kinship, PLINK and optional
+  covariate files, then write association results. Kinship computation is excluded
+  for both; eigendecomposition is included for both.
+- **Full GWAS:** both start from PLINK and finish with association results. GEMMA
+  runs `-gk 1` followed by `-lmm 1 -k`; JAMMA calls `gwas()` in a fresh Python
+  process and retains kinship in memory. Avoiding intermediate kinship I/O and
+  filtering samples early are workflow benefits included in the timing.
+- **LOCO:** GEMMA computes each chromosome's kinship with an explicit SNP list
+  excluding that chromosome, then associates only that chromosome's SNPs. JAMMA
+  computes LOCO internally in one process. Both test each retained SNP once.
+  GEMMA's required intermediate matrix writes and reads remain timed. Preparing
+  the chromosome SNP lists is outside the timer, as is temporary-directory setup.
+
+GEMMA 0.98.5's PLINK `CalcKin` path does not pass the `-loco`/`-ksnps`
+selection to `PlinkKin`, so the benchmark uses `-snps` with an explicit
+complement list for kinship. See [GEMMA's implementation](https://github.com/genetics-statistics/GEMMA/blob/v0.98.5/src/param.cpp).
+
+| Backend | LOCO Wald | vs fastest GEMMA |
+|---------|-----------|------------------|
+| GEMMA (OpenBLAS) | 1m28s | 0.5x |
+| GEMMA (Accelerate) | 43.5s | 1.0x |
+| JAMMA NumPy+C | 5.8s | 7.5x |
+
+The scripts reject missing/duplicate SNPs, mismatched tested SNP sets or alleles,
+and effect/standard-error/p-value differences outside the existing numerical
+validation tolerances. Saved kinship matrices are also compared. Validation is
+outside the timing window. A failed command or comparison produces no summary
+table or JSON report.
+
+### LOCO with covariates: validation failure
+
+The provisional LOCO row has no covariates. An additional chromosome-1 check with
+four covariates tested 950 SNPs and failed the beta tolerance for `rs13475789`:
+GEMMA reported `4.366448e-6`, JAMMA `4.444851e-6`. The absolute difference was
+`7.8403e-8`, about 1.80% relative to GEMMA, exceeding the existing 1% threshold.
+The benchmark retains that threshold and does not publish a timing for this
+case. `bench_loco.py --covariates` remains subject to the same output checks.
+
+### Reproduce
+
+```bash
+uv run python scripts/bench_all_backends.py --runs 3 --json /tmp/jamma-backends.json
+uv run python scripts/bench_loco.py --runs 3 --json /tmp/jamma-loco.json
+```
+
+Run sequentially on an otherwise idle machine. Both scripts require the C
+extension and auto-detect GEMMA at `~/.local/bin/gemma` and
+`~/.local/bin/gemma-accelerate`. `--json` records each repetition and its exact
+commands. Temporary output paths in those commands are removed after validation;
+the scripts recreate equivalent directories on each invocation.
+
+[Raw repetitions and input/build hashes](benchmarks/2026-09-09-aligned.json)
+record all 81 successful measurements. The checked-in report retains timings
+and provenance; `--json` additionally saves the exact commands with local paths.
+
+### Observed variation
+
+Run-to-run variation was substantial. These are observed minimum-to-maximum
+ranges across the three repetitions, not confidence intervals. The provisional
+ratios compare minima. Concurrent CPU load prevents treating them as reliable
+performance estimates.
+
+| Operation | GEMMA Accelerate range (s) | JAMMA C batch range (s) |
+|-----------|---------------------------|-------------------------|
+| Kinship | 1.552–1.709 | 1.140–1.166 |
+| Wald association | 4.106–9.527 | 0.593–0.668 |
+| All-tests association | 7.881–9.195 | 0.698–0.896 |
+| Full GWAS Wald | 5.504–7.081 | 0.857–1.220 |
+| Wald + four covariates | 15.231–17.533 | 1.676–2.658 |
+| LOCO Wald | 43.505–67.460 | 5.793–11.160 |
+
+The earlier small-scale comparisons used different timing boundaries. Their
+GEMMA ratios and LOCO comparisons are withdrawn; JAMMA version measurements
+remain in [the historical record](PERFORMANCE_HISTORY.md). The historical
+125k measurements below have not been rerun under this protocol and do not
+establish a current, aligned speedup.
 
 ## LOCO resource ownership, 2026-09-09
 
 Apple M5 Pro (18 cores), Accelerate-ILP64, NumPy 2.5.1, Python 3.12.13,
 native OpenMP build. The full backend comparison ran sequentially, best of
-three, first at `d4a3a67d` and then with the fix. The refreshed absolute
-timings are in the [README](../README.md#performance). Native Wald, All and
+three, first at `d4a3a67d` and then with the fix. Native Wald, All and
 Wald+4cov took 302ms, 318ms and 868ms respectively, versus 311ms, 350ms
 and 896ms before. These separate benchmark rounds do not establish a speedup.
 
@@ -56,226 +155,9 @@ oversubscription rather than a stale restore; `JAMMA_BLAS_THREADS=cores/W`
 bounds it. These timings do not predict Linux MKL/OpenBLAS performance or
 large-sample memory use.
 
-## master `9d33cc1` on mouse_hs1940 (historical)
-
-Measured 2026-09-02. Same machine, toolchain, and dataset as the v7.2.0 run
-below: Apple M5 Pro (18 cores), Accelerate-ILP64, numpy 2.5.1, Python 3.12,
-OpenMP on, GEMMA 0.98.5 in the Homebrew OpenBLAS and Apple Accelerate builds,
-dev-mode build with `-march=native`. One round of best-of-3, the v7.2.0
-methodology, so the same caveat applies: a delta inside a few percent is not
-a measured change.
-
-| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
-|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 196ms | 196ms | -- | 1.0x | **5.5x** | **6.3x** |
-| LMM Wald (`-lmm 1`) | 7.3s | 4.2s | 2.4s | 291ms | 416ms | 8.2x | **24.9x** | **14.5x** |
-| LMM All (`-lmm 4`) | 13.3s | 7.6s | 4.8s | 298ms | 400ms | 16.1x | **44.7x** | **25.3x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 11.5s | 5.8s | 654ms | 712ms | 8.9x | **41.6x** | **17.6x** |
-| LOCO Wald (`-loco`) | 2m31s | 1m20s | -- | **3.3s** | -- | -- | **~46x** | **~24x** |
-
-### master against v7.2.0
-
-| Operation | v7.2.0 | master | Delta |
-|-----------|--------|--------|-------|
-| Kinship (`-gk 1`) | 192ms | 196ms | +2.1% |
-| LMM Wald (`-lmm 1`) | 439ms | 291ms | -33.7% |
-| LMM All (`-lmm 4`) | 570ms | 298ms | -47.7% |
-| LMM Wald+4cov (`-lmm 1 -c`) | 827ms | 654ms | -20.9% |
-| LMM Wald, streaming | 551ms | 416ms | -24.5% |
-| LMM All, streaming | 680ms | 400ms | -41.2% |
-| LMM Wald+4cov, streaming | 939ms | 712ms | -24.2% |
-| LOCO Wald (`-loco`) | 3.3s | 3.3s | 0% |
-
-Kinship and LOCO do not reach the changed code. LOCO is 19 eigendecompositions
-of a 1,410 x 1,410 matrix plus 19 short LMM passes, so the kernel gain is
-below its 0.1 s reporting resolution.
-
-The C path uses every physical core under Accelerate, evaluates logdet(H) as
-a mantissa product with an exact exponent (`GEMMA_DIVERGENCES.md` section 3),
-and, under Accelerate only, cuts an input the memory budget leaves in fewer
-than 8 chunks to 16 chunks up to 10,000 samples, so genotype rotation
-overlaps the kernel. The cut is platform- and size-dependent. Measured with
-`scripts/bench_large_n_stages.py --stages association` at 5,000 SNPs,
-interleaved ABBA blocks, cut against no cut:
-
-| Platform | Samples x SNPs | Blocks | Cut vs no cut |
-|----------|----------------|--------|---------------|
-| Apple M5 Pro, 18 cores, Accelerate | 1,410 x 12,226 | best-of-3 | -20% |
-| Apple M5 Pro | 5,000 x 5,000 | 3 | -6.4% |
-| Apple M5 Pro | 10,000 x 5,000 | 4 | -0.2% |
-| Apple M5 Pro | 30,000 x 5,000 | 3 | +5.6% |
-| Linux `Standard_E16ds_v6`, 8 cores, MKL | 1,410 x 12,226 | 5 | +22.4% |
-
-Under MKL the pipelined plan's thread split also changes the rotation GEMM's
-last bits, so two chunk plans are bit-identical only under Accelerate.
-
-At 125,000 samples x 5,000 SNPs on `Standard_E96ds_v6` (48 physical cores,
-MKL ILP64), master runs the association pass 1.8% faster than the
-pre-tuning tree (52.0 s against 52.9 s, 2 interleaved blocks): the
-log-determinant gain at a scale where rotation dominates.
-
-**Pure-NumPy `-lmm 4` is 4.8s.** The v7.2.0 table's 3.5s ran part of mode 4
-through the C extension; with every C route disabled
-(`JAMMA_FORCE_NUMPY_FALLBACK=1`) that commit measures 4.7s.
-
-## v7.2.0 on mouse_hs1940 (superseded by the master run above)
-
-Measured 2026-07-27. Apple M5 Pro (18 cores), 69 GB RAM, macOS 26.5.2.
-Accelerate-ILP64, numpy 2.5.1, Python 3.13.5, OpenMP on. GEMMA 0.98.5 in two
-builds, Homebrew OpenBLAS and Apple Accelerate. Dataset: mouse_hs1940, 1,940
-samples x 12,226 SNPs across 19 chromosomes; 1,410 samples survive
-phenotype-missingness filtering, so the eigendecomposition is 1,410 x 1,410.
-The build came from a clean worktree and carries `-march=native` from the
-dev-mode compile, so these are not portable-wheel timings.
-
-| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
-|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.0s | 1.2s | 192ms | 192ms | -- | 1.0x | **5.3x** | **6.3x** |
-| LMM Wald (`-lmm 1`) | 7.0s | 4.3s | 2.3s | 439ms | 551ms | 5.3x | **15.9x** | **9.7x** |
-| LMM All (`-lmm 4`) | 12.8s | 7.6s | 3.5s* | 570ms | 680ms | 6.2x | **22.4x** | **13.3x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 25.9s | 12.6s | 5.8s | 827ms | 939ms | 7.0x | **31.4x** | **15.2x** |
-| LOCO Wald (`-loco`) | 2m21s | 1m22s | -- | **3.3s** | -- | -- | **~43x** | **~25x** |
-
-*Ran part of mode 4 through the C extension; the fully pure-NumPy time on
-this commit is 4.7s.
-
-**Methodology caveat.** This is one round of best-of-3, where the v6.0.0 run
-below was three interleaved rounds of best-of-3. A single round cannot separate
-a small regression from warm-up noise, so treat the deltas below as "no
-detectable change" rather than as a measured equality.
-
-### v7.2.0 against v6.0.0
-
-Both JAMMA columns, batch and streaming, against the v6.0.0 figures in the next
-section. The largest move is -2.2%, on streaming all-tests. That is a shade
-outside the +/-2% band the v6.0.0 run called noise, and it is negative, so
-nothing here reads as a regression.
-
-| Operation | v6.0.0 | v7.2.0 | Delta |
-|-----------|--------|--------|-------|
-| Kinship (`-gk 1`) | 195ms | 192ms | -1.5% |
-| LMM Wald (`-lmm 1`) | 430ms | 439ms | +2.1% |
-| LMM All (`-lmm 4`) | 580ms | 570ms | -1.7% |
-| LMM Wald+4cov (`-lmm 1 -c`) | 836ms | 827ms | -1.1% |
-| LMM Wald, streaming | 541ms | 551ms | +1.8% |
-| LMM All, streaming | 695ms | 680ms | -2.2% |
-| LMM Wald+4cov, streaming | 945ms | 939ms | -0.6% |
-| LOCO Wald (`-loco`) | 3.3s | 3.3s | 0% |
-
-That is the expected result. The v6.0.0 to v7.2.0 diff is the `PipelineConfig`
-phenotype-field consolidation, the `pipeline.py` and `loco.py` splits, and
-pyrefly type work. None of it reaches the arithmetic in the hot loop.
-
-The GEMMA control columns drifted more than JAMMA's did. GEMMA+Accelerate on
-`-lmm 1 -c` went 11.4s to 12.6s and its LOCO run 1m21s to 1m22s, against an
-unchanged JAMMA binary path. That is machine variation on the GEMMA side, and
-it is why the "vs GEMMA (Accel)" column moved from 13.6x to 15.2x on that row
-without JAMMA getting faster.
-
-## v6.0.0 vs v5.6.0 on mouse_hs1940 (superseded by the v7.2.0 run above)
-
-Measured 2026-07-25. This run answers one narrow question: did the v5.6.0 to
-v6.0.0 changes move the LMM hot path? They did not. Every operation lands
-inside run-to-run noise.
-
-Hardware: Apple M5 Pro (18 cores), 64 GB RAM, macOS 26.5.2. Accelerate-ILP64,
-numpy 2.5.1, Python 3.13.5. GEMMA 0.98.5 in two builds, Homebrew OpenBLAS and
-Apple Accelerate. Dataset: mouse_hs1940, 1,940 samples x 12,226 SNPs across 19
-chromosomes; 1,410 samples survive phenotype-missingness filtering, so the
-eigendecomposition is 1,410 x 1,410.
-
-Both versions were built from clean worktrees with identical compiler flags and
-pinned to the same numpy, leaving JAMMA's own code as the only variable. Both
-carry `-march=native` from the dev-mode compile, so these are not
-portable-wheel timings.
-
-### Version comparison (JAMMA NumPy+C)
-
-Minimum across 3 rounds per version, each round itself a best-of-3. The rounds
-were interleaved v6, v5.6.0, v6, v5.6.0, so machine drift lands on both versions
-equally. GEMMA ran in every round as a fixed control and its times agreed across
-versions, confirming the machine was stable.
-
-| Operation | v5.6.0 | v6.0.0 | Delta |
-|-----------|--------|--------|-------|
-| Kinship (`-gk 1`) | 194ms | 195ms | +0.5% |
-| LMM Wald (`-lmm 1`) | 429ms | 430ms | +0.2% |
-| LMM All (`-lmm 4`) | 573ms | 580ms | +1.2% |
-| LMM Wald+4cov (`-lmm 1 -c`) | 841ms | 836ms | -0.6% |
-| LMM Wald, streaming | 537ms | 541ms | +0.7% |
-| LMM All, streaming | 708ms | 695ms | -1.8% |
-| LMM Wald+4cov, streaming | 941ms | 945ms | +0.4% |
-| LOCO Wald (`-loco`) | 3.3s | 3.3s | 0% |
-
-Nothing exceeds +/-2%, in either direction. The LOCO row is 3 interleaved rounds
-of best-of-5 and returned 3.3s on both versions in every round.
-
-This is the expected result. The v5.6.0 to v6.0.0 diff is the `LmmConfig` API
-consolidation and the split of the C accelerator into separate translation
-units. Neither changes the arithmetic in the hot loop.
-
-One measurement note worth recording. An early v6 round reported 567ms for Wald,
-against 435ms from that same version's best-of-1 pass. A best-of-3 cannot
-legitimately be worse than a best-of-1, which marked it as a warm-up artifact
-rather than a regression; the two later rounds returned 452ms and 430ms. A
-single round of this benchmark is not enough to call a regression on.
-
-**Scope limit.** 1,940 samples exercises the LMM kernels and barely touches
-eigendecomposition, which is 54-72% of wall time at 90k-125k scale. This run
-says nothing about large-scale performance.
-
-### v6.0.0 vs GEMMA 0.98.5
-
-Same runs, same methodology. Every cell is that configuration's best observed
-time across the 3 rounds, and the derived columns are computed from those
-minima.
-
-| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
-|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 195ms | 195ms | -- | 1.0x | **5.6x** | **6.2x** |
-| LMM Wald (`-lmm 1`) | 7.1s | 4.2s | 2.4s | 430ms | 541ms | 5.6x | **16.5x** | **9.8x** |
-| LMM All (`-lmm 4`) | 13.0s | 7.4s | 3.6s | 580ms | 695ms | 6.2x | **22.4x** | **12.8x** |
-| LMM Wald+4cov (`-lmm 1 -c`) | 26.9s | 11.4s | 5.8s | 836ms | 945ms | 6.9x | **32.2x** | **13.6x** |
-| LOCO Wald (`-loco`) | 2m14s | 1m21s | -- | **3.3s** | -- | -- | **~41x** | **~25x** |
-
-Kinship is pure NumPy and BLAS in both JAMMA columns, so its C speedup is 1.0x
-by construction. The LOCO row comes from a separate best-of-3 invocation of
-`scripts/bench_loco.py`; its speedups are rounded because JAMMA's 3.3s is
-reported to 0.1s, which bounds the ratio's precision at about 1.5%.
-
-GEMMA's per-chromosome LOCO spread was tight: 4.3s across all 19 chromosomes on
-the Accelerate build, 7.1-7.2s on OpenBLAS.
-
-### Reproducing
-
-```bash
-uv run python scripts/bench_all_backends.py --runs 3
-uv run python scripts/bench_loco.py --runs 3
-```
-
-Both auto-detect GEMMA at `~/.local/bin/gemma` and `~/.local/bin/gemma-accelerate`.
-Run them sequentially. Parallel execution contaminates the timings, and a single
-round is not enough to separate a regression from warm-up noise.
-
-### Superseded: Apple M2 README table
-
-The README performance table carried these numbers before the 2026-07-25 refresh.
-Hardware was an Apple M2 and the JAMMA version was not recorded, so they are kept
-only as a historical reference and are not comparable to the table above.
-
-| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) |
-|-----------|-----------------|-------------------|-------------|--------------|------------------------|
-| Kinship (`-gk 1`) | 2.1s | 1.7s | 262ms | 262ms | -- |
-| LMM Wald (`-lmm 1`) | 11.0s | 7.6s | 4.1s | 879ms | 1.1s |
-| LMM All (`-lmm 4`) | 20.5s | 13.9s | 6.0s | 1.3s | 1.4s |
-| LMM Wald+4cov (`-lmm 1 -c`) | 40.8s | 18.8s | 9.1s | 2.4s | 2.6s |
-| LOCO Wald (`-loco`) | 3m30s | 2m26s | -- | 7.1s | -- |
-
----
-
 ## v4.2.0 — 125k Scale (most recent full-scale benchmark)
 
-v4.2.0 at 125,632 samples on 91,586 real SNPs. **~10x faster than GEMMA** (2h 29m vs ~27h). 19% faster than v2.10.1 thanks to jlinalg eigendecomp and C extension LMM improvements. Eigendecomp used DSYEVR (memory-constrained fallback from DSYEVD).
+v4.2.0 at 125,632 samples on 91,586 real SNPs. Historical wall times were 2h 29m for JAMMA and approximately 27h for GEMMA. These used different BLAS builds and have not been revalidated under the aligned benchmark protocol. 19% faster than v2.10.1 thanks to jlinalg eigendecomp and C extension LMM improvements. Eigendecomp used DSYEVR (memory-constrained fallback from DSYEVD).
 
 **Note**: GEMMA was compiled with default OpenBLAS, not MKL. Building GEMMA against ILP64 MKL is non-trivial (requires Makefile patches and ILP64 linking for matrices >46k). The comparison reflects typical deployment: GEMMA as-distributed vs JAMMA with ILP64 numpy-mkl.
 
@@ -480,11 +362,9 @@ Full test suite passing. Kinship tolerance aligned from 1e-10 to 1e-8 in v2.5.7 
 
 ---
 
-## Benchmark Methodology Notes
+## Backend interpretation
 
-GEMMA (Accelerate) is GEMMA 0.98.5 compiled against Apple's Accelerate framework instead of Homebrew OpenBLAS — **1.3-2.2x faster** due to AMX-accelerated BLAS, with identical numerical results. **NumPy+C** uses a C extension with OpenMP for Wald (`-lmm 1`) — REML optimization is compute-bound and parallelizes well across SNPs. The C speedup grows with covariates because the Pab table recursion is more expensive. NumPy+C is the fastest backend at all modes including all-tests (`-lmm 4`) with this small scale run. **NumPy+C (stream)** reads genotypes from disk in chunks — slightly slower than batch, but the production code path for large datasets that don't fit in memory. Kinship is always pure NumPy/BLAS. The LOCO speedup has two further sources: (1) JAMMA computes per-chromosome LOCO kinship via streaming and tests only that chromosome's SNPs, while GEMMA `-loco` tests *all* SNPs against each LOCO kinship (19x redundant work on 19 chromosomes); (2) JAMMA runs all chromosomes in a single process, avoiding 19 cold-start overheads.
-
----
-Document last updated: *2026-07-27* (v7.2.0 benchmarked on mouse_hs1940 against
-the v6.0.0 figures; no measurable delta. No full-scale re-benchmark performed --
-hot paths unchanged from v4.6.1).
+GEMMA's OpenBLAS and Accelerate builds are reported separately. The JAMMA NumPy
+column forces NumPy fallback; NumPy+C enables the native LMM and vendor BLAS
+extensions. Streaming includes genotype reads within the timed process. These
+measurements describe this dataset, machine and build, not a universal speedup.

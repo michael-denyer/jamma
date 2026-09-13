@@ -1,20 +1,6 @@
-"""Shared plumbing for the mouse_hs1940 benchmark scripts.
+"""Shared fixtures, process timing and output verification for GWAS benchmarks.
 
-``bench_all_backends.py`` and ``bench_loco.py`` both time JAMMA against a
-GEMMA binary on the same fixture, so both had carried their own copy of the
-fixture paths, the duration formatter, the ``.fam`` phenotype loader, the
-``--gemma-path``/``--runs`` arguments, the GEMMA auto-detection, the
-hardware header, and the best-of-N timing loop. The last one had been
-inlined six times between them.
-
-The other two benchmark scripts share nothing with these and do not import
-this module. ``bench_jlinalg.py`` keeps its own ``_best_time`` because it
-warms up before timing, which ``best_of`` deliberately does not.
-
-Imported bare rather than by path: a script invoked as ``python
-scripts/bench_x.py`` gets ``scripts/`` as ``sys.path[0]``, which is what
-makes ``import _bench_common`` resolve. This is the same arrangement
-``_lint_common`` uses for the ``check_*`` lints.
+Imported directly by scripts launched with ``python scripts/bench_*.py``.
 """
 
 from __future__ import annotations
@@ -22,13 +8,9 @@ from __future__ import annotations
 import argparse
 import shutil
 import time
-from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
 
 import numpy as np
-
-_T = TypeVar("_T")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MOUSE_DIR = REPO_ROOT / "tests" / "fixtures" / "mouse_hs1940"
@@ -72,59 +54,6 @@ def speedup(ref: float | None, fast: float) -> str:
     return f"{ref / fast:.1f}x"
 
 
-def best_of(fn: Callable[[], _T], runs: int) -> float:
-    """Time ``fn`` over ``runs`` repetitions and return the fastest.
-
-    No warmup: the caller decides whether a cold first iteration is part of
-    what it wants to measure.
-
-    Args:
-        fn: Zero-argument callable to time. Its return value is discarded.
-        runs: Number of repetitions.
-
-    Returns:
-        Wall-clock seconds for the fastest repetition.
-    """
-    best = float("inf")
-    for _ in range(runs):
-        t0 = time.perf_counter()
-        fn()
-        best = min(best, time.perf_counter() - t0)
-    return best
-
-
-def load_fam_phenotypes(fam_path: Path) -> np.ndarray:
-    """Read phenotypes from column 6 of a PLINK ``.fam`` file.
-
-    GEMMA's missing-phenotype sentinel and the literal ``"NA"`` both become
-    NaN.
-
-    Args:
-        fam_path: Path to the ``.fam`` file.
-
-    Returns:
-        One float64 phenotype per sample, NaN where missing.
-    """
-    from jamma.core.constants import PHENOTYPE_MISSING
-
-    fam_data = np.loadtxt(fam_path, usecols=5, dtype=str)
-    missing = np.isin(fam_data, [str(int(PHENOTYPE_MISSING)), "NA"])
-    phenotypes = np.where(missing, "0", fam_data).astype(np.float64)
-    phenotypes[missing] = np.nan
-    return phenotypes
-
-
-def load_covariates_4() -> np.ndarray | None:
-    """Load the 4-column mouse_hs1940 covariate file if it is present.
-
-    Returns:
-        The covariate matrix, or None when the file does not exist.
-    """
-    if MOUSE_COVAR_4.exists():
-        return np.loadtxt(MOUSE_COVAR_4)
-    return None
-
-
 def add_gemma_args(parser: argparse.ArgumentParser) -> None:
     """Add the GEMMA path and repetition arguments to ``parser``.
 
@@ -150,8 +79,8 @@ def add_gemma_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--runs",
         type=int,
-        default=1,
-        help="Number of runs, report best (default: 1)",
+        default=3,
+        help="Number of runs, report best (default: 3)",
     )
 
 
@@ -180,13 +109,79 @@ def print_hardware_header(runs: int) -> None:
     Args:
         runs: Repetition count to report.
     """
+    from jamma import jlinalg
     from jamma.core.hardware import get_hardware_context
+    from jamma.lmm import accel
 
+    if accel._accel is None:
+        raise RuntimeError("Build the JAMMA C extension before benchmarking NumPy+C")
     ctx = get_hardware_context()
     phys, log = ctx["cpu_count_physical"], ctx["cpu_count_logical"]
     print(f"CPU: {ctx['cpu_model']} ({phys}P/{log}L)")
-    print(f"BLAS: {ctx['blas_backend']} ({ctx['blas_threads']} threads)")
+    print(f"BLAS: {jlinalg.blas_backend} ({ctx['blas_threads']} threads)")
     print(f"NumPy: {ctx['numpy_version']}")
     print(f"Platform: {ctx['platform']}")
     print(f"Runs: {runs} (best of)")
     print()
+
+
+def run_commands(commands: list[list[str]], env: dict[str, str]) -> float:
+    """Time complete child processes, failing rather than reporting partial work."""
+    import subprocess
+
+    started = time.perf_counter()
+    for command in commands:
+        proc = subprocess.run(command, capture_output=True, text=True, env=env)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Benchmark command failed ({proc.returncode}): {command!r}\n"
+                f"{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}"
+            )
+    return time.perf_counter() - started
+
+
+def read_associations(path: Path) -> dict[str, dict[str, str]]:
+    """Read actual output rows; missing, empty or duplicate results fail the run."""
+    import csv
+
+    with path.open() as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    results = {row["rs"]: row for row in rows}
+    if not results or len(results) != len(rows):
+        raise ValueError(f"Empty or duplicate association results: {path}")
+    return results
+
+
+def verify_associations(
+    reference: dict[str, dict[str, str]], actual: dict[str, dict[str, str]]
+) -> None:
+    """Require the same tested SNPs, alleles and numerically agreeing results."""
+    if reference.keys() != actual.keys():
+        raise ValueError(
+            f"Tested SNP sets differ: {len(reference)} vs {len(actual)}; "
+            f"missing={len(reference.keys() - actual.keys())}, "
+            f"extra={len(actual.keys() - reference.keys())}"
+        )
+    for column in ("allele1", "allele0"):
+        if any(reference[snp][column] != actual[snp][column] for snp in reference):
+            raise ValueError(f"Association {column} differs")
+    from jamma.validation.tolerances import ToleranceConfig
+
+    tolerances = ToleranceConfig()
+    for column, rtol in (
+        ("beta", tolerances.beta_rtol),
+        ("se", tolerances.se_rtol),
+        ("p_wald", tolerances.pvalue_rtol),
+        ("p_lrt", tolerances.p_lrt_rtol),
+        ("p_score", tolerances.pvalue_rtol),
+    ):
+        if column not in next(iter(reference.values())):
+            continue
+        np.testing.assert_allclose(
+            [float(actual[snp][column]) for snp in reference],
+            [float(reference[snp][column]) for snp in reference],
+            rtol=rtol,
+            atol=1e-14,
+            equal_nan=True,
+            err_msg=column,
+        )

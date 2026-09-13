@@ -43,14 +43,19 @@ def test_one_consumer_thread_scope_wraps_every_solve(monkeypatch, exit_kind):
         lambda *, limits, user_api: control_from_consumer(limits),
     )
     observed: list[int] = []
+    started = threading.Event()
 
     def inputs() -> Iterator[tuple[str, np.ndarray]]:
         yield "1", np.eye(8)
         if exit_kind == "input_error":
+            # Wait until the pool has dequeued the first solve, or cancel_futures
+            # could discard it before it runs and `observed` would be empty.
+            assert started.wait(5)
             raise RuntimeError("input failed")
         yield "2", np.ones((8, 7)) if exit_kind == "solve_error" else np.eye(8)
 
     def solve(K):
+        started.set()
         observed.append(active[0])
         return eigendecompose_kinship_in_scope(
             K, n_threads=2, check_memory=False, show_progress=False

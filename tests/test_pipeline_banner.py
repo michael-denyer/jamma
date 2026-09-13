@@ -126,6 +126,7 @@ class TestLogPipelineBanner:
         finally:
             logger.remove(sink)
         assert len(captured) == 1
+        assert captured[0].startswith("Pipeline: ")
         assert " threads)" not in captured[0]
 
     def test_banner_includes_real_jlinalg_backend(self, capsys):

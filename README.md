@@ -4,7 +4,7 @@
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white" alt="Python 3.11+"></a>
   <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-2.4.6+-013243.svg?logo=numpy&logoColor=white" alt="NumPy"></a>
   <a href="https://hypothesis.readthedocs.io/"><img src="https://img.shields.io/badge/tested%20with-Hypothesis-BD1C2B.svg" alt="Hypothesis"></a>
-  <a href="https://doi.org/10.5281/zenodo.22666119"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.22666119-6f42c1.svg" alt="DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.22666119"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.22666119.svg" alt="DOI"></a>
   <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-green.svg" alt="License: GPL-3.0"></a>
   <a href="https://buymeacoffee.com/codenyer"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
 </p>
@@ -162,30 +162,20 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-JAMMA on mouse_hs1940 (1,940 samples x 12,226 SNPs),
-Apple M5 Pro (18 cores), Accelerate-ILP64, GEMMA 0.98.5. Best of three wall-clock runs
-per operation with `scripts/bench_all_backends.py`, measured 2026-09-09.
-LOCO timings are the mean of two runs at each worker count. GEMMA timings include the CLI command; JAMMA batch
-timings start with genotypes loaded. Association runs use precomputed kinship.
+**Benchmark rerun pending.** The 2026-09-09 measurements ran while another task
+was using the CPU. Their timing ratios are provisional and should not be used
+as performance claims. The output-equivalence checks passed for the reported
+cases; the timing measurements need an idle-machine rerun.
 
-| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
-|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 202ms | 202ms | -- | 1.0x | 5.5x | 6.0x |
-| LMM Wald (`-lmm 1`) | 7.7s | 4.1s | 5.4s | 302ms | 408ms | 17.8x | 25.4x | 13.7x |
-| LMM All (`-lmm 4`) | 13.9s | 7.4s | 7.4s | 318ms | 426ms | 23.2x | 43.7x | 23.2x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.8s | 11.4s | 16.5s | 868ms | 958ms | 19.0x | 32.0x | 13.2x |
-| LOCO Wald (1 worker) | -- | -- | -- | **3.35s** | -- | -- | -- | -- |
-| LOCO Wald (6 workers) | -- | -- | -- | **1.57s** | -- | -- | -- | -- |
+The revised benchmarks include fresh-process startup, input loading, computation
+and final output writing. Association comparisons read the same precomputed
+kinship file. Standalone kinship writes the same text format in both tools.
+Full GWAS lets JAMMA retain kinship in memory, preserving its avoided
+intermediate I/O. LOCO tests each retained SNP once with chromosome-excluded
+kinship in both tools.
 
-Timings vary substantially between runs; these ratios describe this measurement
-and should not be read as a version-over-version speedup.
-
-LOCO includes kinship, 19 per-chromosome eigendecompositions and association.
-Eigen solves overlap association under one BLAS scope owned by the consumer
-thread; see [Performance](docs/PERFORMANCE.md#loco-resource-ownership-2026-09-09).
-
-See [Performance](docs/PERFORMANCE.md) for benchmark methodology, the
-version-over-version comparison, and large-scale (125k) results.
+See [Performance](docs/PERFORMANCE.md) for the protocol, provisional measurements,
+raw repetitions and the separate LOCO-with-covariates validation limitation.
 
 ## Supported Features
 

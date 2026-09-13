@@ -66,3 +66,6 @@ docs/superpowers/
 
 # .npy sidecars written beside text fixtures by read_array_artifact
 tests/fixtures/**/*.npy
+
+# PR Lens writes its previews here. They are rebuilt on demand.
+.pr-lens/

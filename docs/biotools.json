@@ -1,0 +1,134 @@
+{
+  "name": "JAMMA",
+  "owner": "michael1",
+  "description": "JAMMA (Highly-Accelerated Multi-method Mixed-Model Association) is an open-source Python and C implementation of GEMMA's core linear mixed-model workflows for genome-wide association studies (GWAS). It reads PLINK binary genotypes and supports kinship estimation, Wald, likelihood-ratio and score association tests, covariates, multiple phenotypes, and leave-one-chromosome-out (LOCO) analysis. JAMMA provides a command-line interface with familiar GEMMA flags, GEMMA-compatible association output, and a Python API. Native C kernels, parallel computation and reusable eigendecompositions support large analyses. Pre-flight memory checks and streamed output help manage memory use. Numerical validation against GEMMA is documented. JAMMA runs on Linux, macOS and Windows; large-cohort analyses require sufficient RAM and a suitable 64-bit BLAS configuration. Released under GPL-3.0-or-later.",
+  "homepage": "https://github.com/michael-denyer/jamma",
+  "biotoolsID": "jamma",
+  "version": ["8.0.4"],
+  "otherID": [
+    {
+      "type": "doi",
+      "value": "doi:10.5281/zenodo.22666119"
+    }
+  ],
+  "toolType": ["Command-line tool", "Library"],
+  "topic": [
+    {
+      "uri": "http://edamontology.org/topic_3055",
+      "term": "Quantitative genetics"
+    },
+    {
+      "uri": "http://edamontology.org/topic_0625",
+      "term": "Genotype and phenotype"
+    },
+    {
+      "uri": "http://edamontology.org/topic_0622",
+      "term": "Genomics"
+    }
+  ],
+  "function": [
+    {
+      "operation": [
+        {
+          "uri": "http://edamontology.org/operation_3197",
+          "term": "Genetic variation analysis"
+        },
+        {
+          "uri": "http://edamontology.org/operation_3664",
+          "term": "Statistical modelling"
+        }
+      ],
+      "input": [
+        {
+          "data": {
+            "uri": "http://edamontology.org/data_3498",
+            "term": "Sequence variations"
+          }
+        }
+      ],
+      "output": [
+        {
+          "data": {
+            "uri": "http://edamontology.org/data_0920",
+            "term": "Genotype/phenotype report"
+          },
+          "format": [
+            {
+              "uri": "http://edamontology.org/format_3475",
+              "term": "TSV"
+            }
+          ]
+        }
+      ],
+      "note": "Linear mixed-model association testing with PLINK .bed/.bim/.fam genotypes, phenotype data, and optional covariates and kinship matrix. Outputs GEMMA-compatible .assoc.txt tables containing effect estimates and test statistics. Supports Wald, likelihood-ratio and score tests, multiple phenotypes, and LOCO analysis.",
+      "cmd": "jamma -lmm 1 -bfile study -k kinship.cXX.txt -o results"
+    }
+  ],
+  "operatingSystem": ["Linux", "Mac", "Windows"],
+  "language": ["Python", "C"],
+  "license": "GPL-3.0-or-later",
+  "maturity": "Emerging",
+  "cost": "Free of charge",
+  "link": [
+    {
+      "url": "https://github.com/michael-denyer/jamma",
+      "type": ["Repository"]
+    },
+    {
+      "url": "https://github.com/michael-denyer/jamma/issues",
+      "type": ["Issue tracker"]
+    },
+    {
+      "url": "https://doi.org/10.5281/zenodo.22666119",
+      "type": ["Other"],
+      "note": "Zenodo concept DOI for citing JAMMA software releases."
+    }
+  ],
+  "download": [
+    {
+      "url": "https://pypi.org/project/jamma/",
+      "type": "Software package",
+      "note": "Python package and platform wheels. Follow the installation guide for large-cohort BLAS requirements."
+    },
+    {
+      "url": "https://github.com/michael-denyer/jamma/releases",
+      "type": "Downloads page"
+    },
+    {
+      "url": "https://github.com/michael-denyer/jamma",
+      "type": "Source code"
+    }
+  ],
+  "documentation": [
+    {
+      "url": "https://github.com/michael-denyer/jamma/blob/master/docs/GETTING-STARTED.md",
+      "type": ["Installation instructions", "Quick start guide"]
+    },
+    {
+      "url": "https://github.com/michael-denyer/jamma/blob/master/docs/USER_GUIDE.md",
+      "type": ["User manual", "Command-line options", "API documentation"]
+    },
+    {
+      "url": "https://github.com/michael-denyer/jamma/blob/master/docs/GEMMA_EQUIVALENCE.md",
+      "type": ["Other"],
+      "note": "Numerical validation against GEMMA, including comparison tolerances."
+    },
+    {
+      "url": "https://github.com/michael-denyer/jamma/blob/master/CITATION.cff",
+      "type": ["Citation instructions"]
+    },
+    {
+      "url": "https://github.com/michael-denyer/jamma/blob/master/CHANGELOG.md",
+      "type": ["Release notes"]
+    }
+  ],
+  "credit": [
+    {
+      "name": "Michael Denyer",
+      "orcidid": "https://orcid.org/0000-0001-9667-5683",
+      "url": "https://github.com/michael-denyer",
+      "typeEntity": "Person",
+      "typeRole": ["Developer", "Maintainer", "Primary contact"]
+    }
+  ]
+}

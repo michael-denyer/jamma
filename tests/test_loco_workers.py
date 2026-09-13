@@ -8,9 +8,11 @@ Related LOCO test files:
 from __future__ import annotations
 
 import dataclasses
+import signal
 import threading
+import time
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future
 from unittest.mock import patch
 
 import numpy as np
@@ -18,9 +20,10 @@ import pytest
 
 from jamma.core.threading import get_physical_core_count
 from jamma.io import read_fam_phenotypes
+from jamma.lmm import loco_workers
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.loco_eigen import _computed_eigen_pairs
-from jamma.lmm.loco_workers import plan_loco_workers
+from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.stats import AssocResult
 from tests.conftest import require_fixture
@@ -167,17 +170,16 @@ def test_computed_eigen_pairs_overlaps_workers_and_keeps_chromosome_order(monkey
     barrier = threading.Barrier(3)
     chr3_done = threading.Event()
     idents: list[int] = []
-    original_submit = ThreadPoolExecutor.submit
 
-    def submit(pool, fn, name, K):
-        future = original_submit(pool, fn, name, K)
-        if name == "3":
+    class TrackedFuture(Future):
+        def set_result(self, result) -> None:
+            super().set_result(result)
             # Signaling inside solve would release chromosome 1 before this
             # future finishes, leaving the completion order scheduler-dependent.
-            future.add_done_callback(lambda _: chr3_done.set())
-        return future
+            if result[0] == "3":
+                chr3_done.set()
 
-    monkeypatch.setattr(ThreadPoolExecutor, "submit", submit)
+    monkeypatch.setattr(loco_workers, "Future", TrackedFuture)
 
     def solve(K: np.ndarray, **kwargs) -> tuple[np.ndarray, np.ndarray]:
         idents.append(threading.get_ident())
@@ -215,6 +217,43 @@ def test_computed_eigen_pairs_propagates_worker_failure_and_shuts_down():
 
     assert threading.active_count() == threads_before
     pairs.close()
+
+
+@pytest.mark.tier0
+def test_keyboard_interrupt_propagates_before_the_in_flight_solve_finishes():
+    """Ctrl-C during a solve unwinds at once instead of joining the worker.
+
+    GEMMA dies on SIGINT mid-DSYEVD; JAMMA did the same before #359 because the
+    solve ran on a daemon thread. The solve here blocks on ``release`` and a
+    helper thread sends SIGINT to the main thread once the solve has started,
+    then releases the solve two seconds later. A pool that joins its worker on
+    the way out cannot raise until after that release.
+    """
+    assert threading.current_thread() is threading.main_thread()
+    main_thread = threading.get_ident()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def solve(K: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        entered.set()
+        assert release.wait(30)
+        return np.zeros(len(K)), np.eye(len(K))
+
+    def interrupt_then_release() -> None:
+        assert entered.wait(10)
+        time.sleep(0.05)
+        signal.pthread_kill(main_thread, signal.SIGINT)
+        time.sleep(2)
+        release.set()
+
+    pairs = solve_eigen_pairs(iter([("1", np.eye(4))]), solve, workers=1, n_threads=1)
+    threading.Thread(target=interrupt_then_release, daemon=True).start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            next(pairs)
+        assert not release.is_set(), "interrupt waited for the in-flight solve"
+    finally:
+        release.set()
 
 
 # ---------------------------------------------------------------------------

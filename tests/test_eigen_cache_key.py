@@ -210,19 +210,18 @@ def eigen_cache_is_valid(
     )
 
     manifest = read_eigen_cache_manifest(eigen_dir, prefix)
+    assert manifest is not None, "helper is for readable manifests only"
     path = eigen_cache_manifest_path(eigen_dir, prefix)
-    if manifest is None:
-        return False, f"no valid cache manifest found at {path}"
     return eigen_cache_manifest_is_valid(manifest, path, current_key)
 
 
 class TestEigenCacheManifest:
     """Manifest read/write/validate behavior for stale-cache detection."""
 
-    def test_absent_manifest_is_invalid(self, tmp_path: Path) -> None:
-        ok, reason = eigen_cache_is_valid(tmp_path, "result", "somekey")
-        assert ok is False
-        assert "manifest" in reason.lower()
+    def test_absent_manifest_reads_as_none(self, tmp_path: Path) -> None:
+        from jamma.lmm.eigen_cache import read_eigen_cache_manifest
+
+        assert read_eigen_cache_manifest(tmp_path, "result") is None
 
     def test_matching_key_is_valid(self, tmp_path: Path) -> None:
         from jamma.lmm.eigen_cache import (
@@ -329,26 +328,26 @@ class TestEigenCacheManifest:
             loco_eigen_paths_from_manifest(tmp_path, "study", ["1"], manifest) is None
         )
 
-    def test_corrupt_manifest_is_invalid(self, tmp_path: Path) -> None:
+    def test_corrupt_manifest_reads_as_none(self, tmp_path: Path) -> None:
         from jamma.lmm.eigen_cache import (
             eigen_cache_manifest_path,
+            read_eigen_cache_manifest,
         )
 
         eigen_cache_manifest_path(tmp_path, "result").write_text("{ not json")
-        ok, reason = eigen_cache_is_valid(tmp_path, "result", "KEY")
-        assert ok is False
-        assert reason
+        assert read_eigen_cache_manifest(tmp_path, "result") is None
 
     @pytest.mark.parametrize("payload", ["[]", "null", '"manifest"', "3"])
-    def test_non_object_manifest_is_invalid(self, tmp_path: Path, payload: str) -> None:
+    def test_non_object_manifest_reads_as_none(
+        self, tmp_path: Path, payload: str
+    ) -> None:
         from jamma.lmm.eigen_cache import (
             eigen_cache_manifest_path,
+            read_eigen_cache_manifest,
         )
 
         eigen_cache_manifest_path(tmp_path, "result").write_text(payload)
-        ok, reason = eigen_cache_is_valid(tmp_path, "result", "KEY")
-        assert ok is False
-        assert "manifest" in reason
+        assert read_eigen_cache_manifest(tmp_path, "result") is None
 
     def test_missing_cache_key_reports_malformed_not_input_change(
         self, tmp_path: Path

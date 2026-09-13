@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import dataclasses
 import threading
-import time
 from collections.abc import Iterator
 from unittest.mock import patch
 
@@ -160,18 +159,22 @@ def test_computed_eigen_pairs_overlaps_workers_and_keeps_chromosome_order():
 
     Every solve waits at a three-party barrier, so the test only passes when
     all three run at the same time: sequential solves would each time out
-    there. Chromosome 1 then sleeps longest and finishes last, so its pair
+    there. Chromosome 1 then waits for chromosome 3 to finish, so its pair
     coming out first proves the generator resolves futures in chromosome
     order rather than completion order.
     """
     barrier = threading.Barrier(3)
+    chr3_done = threading.Event()
     idents: list[int] = []
 
     def solve(K: np.ndarray, **kwargs) -> tuple[np.ndarray, np.ndarray]:
         idents.append(threading.get_ident())
         barrier.wait(timeout=10)
         n = len(K)
-        time.sleep((11 - n) * 0.05)
+        if n == 10:
+            chr3_done.set()
+        elif n == 8:
+            assert chr3_done.wait(10)
         return np.full(n, float(n)), np.eye(n)
 
     pairs = list(_computed_pairs(workers=3, solve=solve))

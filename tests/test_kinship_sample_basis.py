@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from bed_reader import to_bed
 from loguru import logger
 
 from jamma.kinship import compute_kinship_streaming, compute_loco_kinship_streaming
@@ -14,26 +13,6 @@ from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.validation.compare import load_gemma_assoc
 from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, SYNTHETIC
-
-
-@pytest.fixture
-def asymmetric_plink(tmp_path: Path) -> Path:
-    """SNPs cross MAF/missingness/monomorphism thresholds when rows are dropped."""
-    rng = np.random.default_rng(327)
-    genotypes = rng.binomial(2, np.linspace(0.05, 0.5, 61), (80, 61)).astype(float)
-    genotypes[rng.random(genotypes.shape) < 0.04] = np.nan
-    genotypes[:40, 0] = 0  # Polymorphic only outside the retained population.
-    genotypes[40:, 0] = 2
-    genotypes[:40, 1] = np.nan  # Missingness differs between populations.
-    genotypes[:, 2] = 1  # Globally monomorphic.
-    genotypes[:, 3] = np.nan  # Globally missing.
-    bfile = tmp_path / "asymmetric"
-    to_bed(
-        bfile.with_suffix(".bed"),
-        genotypes,
-        properties={"chromosome": ["1"] * 20 + ["2"] * 20 + ["3"] * 21},
-    )
-    return bfile
 
 
 @pytest.mark.tier0

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from bed_reader import to_bed
 
 from jamma.lmm import accel
 
@@ -686,6 +687,26 @@ def output_dir(tmp_path: Path) -> Path:
     out = tmp_path / "output"
     out.mkdir()
     return out
+
+
+@pytest.fixture
+def asymmetric_plink(tmp_path: Path) -> Path:
+    """SNPs cross MAF/missingness/monomorphism thresholds when rows are dropped."""
+    rng = np.random.default_rng(327)
+    genotypes = rng.binomial(2, np.linspace(0.05, 0.5, 61), (80, 61)).astype(float)
+    genotypes[rng.random(genotypes.shape) < 0.04] = np.nan
+    genotypes[:40, 0] = 0  # Polymorphic only outside the retained population.
+    genotypes[40:, 0] = 2
+    genotypes[:40, 1] = np.nan  # Missingness differs between populations.
+    genotypes[:, 2] = 1  # Globally monomorphic.
+    genotypes[:, 3] = np.nan  # Globally missing.
+    bfile = tmp_path / "asymmetric"
+    to_bed(
+        bfile.with_suffix(".bed"),
+        genotypes,
+        properties={"chromosome": ["1"] * 20 + ["2"] * 20 + ["3"] * 21},
+    )
+    return bfile
 
 
 # The one C-extension seam every LMM test drives through. Replaces 26

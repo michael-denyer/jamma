@@ -217,7 +217,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from disk, mode-selected transform; single-passes centered mode when unfiltered, else shared `_stream_kinship_two_pass` | [stream.py:265](../src/jamma/kinship/stream.py#L265) |
+| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from disk in one BED read: `_stream_kinship` filters each chunk with `compute_snp_stats`, applies the mode's transform, accumulates one dsyrk per chunk | [stream.py:265](../src/jamma/kinship/stream.py#L188) |
 | 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:349](../src/jamma/kinship/loco.py#L349) |
 | 3a | `selected_chunks()`, `select_kinship_snps()`, `accumulate_kinship()` | Shared streaming/LOCO selection and rank-k updates; preserve BED chunk grouping and preprocess before selecting output rows | [accumulation.py](../src/jamma/kinship/accumulation.py) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L171) |
@@ -579,7 +579,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:90](../src/jamma/io/matrix_writer.py#L90) |
-| Kinship compute | [stream.py:265](../src/jamma/kinship/stream.py#L265) |
+| Kinship compute | [stream.py:265](../src/jamma/kinship/stream.py#L188) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood (`reml_log_likelihood()`) | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |
 | Pab projection/indexing | [pab.py](../src/jamma/lmm/pab.py) |

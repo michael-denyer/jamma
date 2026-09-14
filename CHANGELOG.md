@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   benchmark output checks. A relative tolerance is meaningless at a null
   effect: `rs13475789` differed by 1.8% on a beta 1e-4 of its standard error.
   Largest observed difference on mouse_hs1940 is 7.7e-6 standard errors.
+- Filtered streaming kinship (`-gk 1`, `-gk 2`, and `-lmm` without `-k`) reads
+  the BED once. Each chunk's MAF, missing-rate and monomorphism filter is
+  decided from the chunk's own statistics before its surviving columns are
+  accumulated, in place of a statistics pass followed by an accumulation
+  pass. The matrix is bit-identical (78 committed digests plus 12 covering
+  the phenotyped filter basis, `-miss`, `-ksnps` and chunk size); the saving
+  is one read of the genotype file, about 40 ms on mouse_hs1940.
 - `scripts/bench_all_backends.py` and `scripts/bench_loco.py` time complete
   child processes from PLINK input to written association files for every
   backend, verify each run's output against the first run within the

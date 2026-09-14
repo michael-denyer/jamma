@@ -29,14 +29,9 @@ from jamma.core import memory
 from jamma.core.estimates import estimate_kinship_seconds
 from jamma.core.memory import estimate_streaming_memory
 from jamma.core.progress import progress_iterator
-from jamma.core.snp_filter import compute_snp_stats
-from jamma.core.snp_stats import collect_streamed_snp_stats
+from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
-from jamma.kinship.accumulation import (
-    accumulate_kinship,
-    select_kinship_snps,
-    selected_chunks,
-)
+from jamma.kinship.accumulation import accumulate_kinship
 from jamma.kinship.accumulation import (
     validate_valid_indices as validate_valid_indices,
 )
@@ -74,92 +69,7 @@ def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
     )
 
 
-def _kinship_single_pass(
-    bed_path: Path,
-    n_samples: int,
-    n_snps: int,
-    chunk_size: int,
-    show_progress: bool,
-    valid_indices: np.ndarray | None = None,
-    filter_sample_indices: np.ndarray | None = None,
-) -> np.ndarray:
-    """Single-pass kinship: compute stats and accumulate in one BED read.
-
-    Only valid when no MAF/missing filters are active (maf_threshold=0.0,
-    miss_threshold>=1.0, ksnps_indices=None) and mode is "centered". Monomorphism
-    filtering (variance > 0) is applied per-chunk inline, matching the two-pass
-    result.
-
-    Args:
-        bed_path: Path prefix for PLINK files.
-        n_samples: Number of samples.
-        n_snps: Total number of SNPs.
-        chunk_size: Number of SNPs per chunk.
-        show_progress: Whether to show progress bar.
-        valid_indices: Optional array of sample indices to keep. When provided,
-            the kinship matrix is accumulated at (n_valid, n_valid) size directly,
-            avoiding allocation of the full (n_samples, n_samples) matrix.
-        filter_sample_indices: Samples used for monomorphism filtering, or all
-            samples when None. Does not change centering or output dimensions.
-
-    Returns:
-        Kinship matrix (n_out, n_out) where n_out = len(valid_indices) or n_samples.
-
-    Raises:
-        ValueError: If no SNPs pass monomorphism filter.
-
-    Note:
-        ``valid_indices`` is trusted here, already validated by the sole caller
-        ``compute_kinship_streaming`` at its public boundary.
-    """
-    n_out = len(valid_indices) if valid_indices is not None else n_samples
-    K = np.zeros((n_out, n_out), dtype=np.float64)
-    n_filtered = 0
-
-    chunk_iter = stream_genotype_chunks(
-        bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
-    )
-    if show_progress:
-        n_chunks = (n_snps + chunk_size - 1) // chunk_size
-        chunk_iter = progress_iterator(
-            chunk_iter,
-            total=n_chunks,
-            desc="Computing kinship (single-pass)",
-            initial_eta_seconds=estimate_kinship_seconds(n_out, n_snps),
-        )
-
-    for chunk, _start, _end in chunk_iter:
-        # Per-chunk monomorphism filter: exclude constant genotype columns.
-        # compute_snp_stats is the canonical variance basis (the C kernel the
-        # two-pass path uses); its var > 0 mask matches np.nanvar > 0 on genotype
-        # data, and it owns the all-NaN-column handling internally.
-        filter_chunk = (
-            chunk if filter_sample_indices is None else chunk[filter_sample_indices, :]
-        )
-        _col_means, _miss_counts, col_vars = compute_snp_stats(filter_chunk)
-        del filter_chunk
-        poly_mask = col_vars > 0
-        n_poly = np.count_nonzero(poly_mask)
-        if n_poly == 0:
-            continue
-
-        X_centered = impute_and_center(chunk[:, poly_mask])
-        if valid_indices is not None:
-            X_centered = X_centered[valid_indices, :]
-        accumulate_kinship(K, X_centered)
-        n_filtered += n_poly
-        del chunk, X_centered
-
-    if n_filtered == 0:
-        raise ValueError(
-            f"No SNPs passed monomorphism filter. Original SNP count: {n_snps}"
-        )
-
-    K /= n_filtered
-    return K
-
-
-def _stream_kinship_two_pass(
+def _stream_kinship(
     bed_path: Path,
     *,
     n_samples: int,
@@ -175,16 +85,15 @@ def _stream_kinship_two_pass(
     transform: Callable[[np.ndarray], np.ndarray],
     desc: str,
 ) -> np.ndarray:
-    """Two-pass streaming kinship accumulation shared by -gk 1 and -gk 2.
+    """Accumulate K from one read of the BED, filtering each chunk as it arrives.
 
-    PASS 1 collects per-SNP stats and applies the MAF/missing/monomorphism filter.
-    PASS 2 streams the filtered columns one file chunk at a time, applies
-    ``transform`` (centering for -gk 1, standardizing for -gk 2), and accumulates
-    K via dsyrk, one call per file chunk. K is scaled by the filtered SNP count.
-
-    The transform is the only difference between the two modes; the disk-read order,
-    column grouping, and accumulation are identical, so the numerics contract of
-    ``selected_chunks`` holds for both.
+    Every BED chunk holds whole SNP columns, so GEMMA's MAF, missing-rate and
+    monomorphism filter is decided per chunk from ``compute_snp_stats`` over
+    the filter samples. The surviving columns are transformed over all samples
+    (centering for -gk 1, standardizing for -gk 2), rows are cut to
+    ``valid_indices``, and one dsyrk per file chunk accumulates K. That is the
+    column grouping a stats pass followed by an accumulation pass produced, so
+    K is bit-identical to it; the second read of the file is what this saves.
 
     Args:
         bed_path: PLINK file prefix.
@@ -194,7 +103,7 @@ def _stream_kinship_two_pass(
         chunk_size: SNPs per disk read.
         maf_threshold: Minimum MAF for inclusion.
         miss_threshold: Maximum missing rate for inclusion.
-        show_progress: Show the PASS-2 progress bar.
+        show_progress: Show the progress bar.
         ksnps_indices: Optional -ksnps restriction, or None.
         valid_indices: Sample indices to retain (already validated), or None.
         filter_sample_indices: Samples used for SNP filtering (already validated),
@@ -209,38 +118,11 @@ def _stream_kinship_two_pass(
     Raises:
         ValueError: If no SNPs pass filtering.
     """
-    stats = collect_streamed_snp_stats(
-        bed_path,
-        n_snps=n_snps,
-        n_samples=n_samples,
-        chunk_size=chunk_size,
-        sample_indices=filter_sample_indices,
-        validate_genotypes=False,
-        show_progress=show_progress,
-        progress_label="Computing SNP statistics",
-        dtype=np.float32,
-        sample_scope="all_samples"
-        if filter_sample_indices is None
-        else "valid_samples",
+    n_filter_samples = (
+        n_samples if filter_sample_indices is None else len(filter_sample_indices)
     )
-    snp_selection = select_kinship_snps(
-        stats, maf_threshold, miss_threshold, ksnps_indices, n_snps
-    )
-    n_filtered = len(snp_selection.indices)
-
-    if n_filtered < n_snps:
-        n_removed = n_snps - n_filtered
-        logger.info(
-            f"Kinship filtering: {n_filtered:,} SNPs retained, "
-            f"{n_removed:,} removed (MAF/missing/monomorphic)"
-        )
-    else:
-        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
-
-    snp_indices = snp_selection.indices
-    del stats, snp_selection
-
     K = np.zeros((n_out, n_out), dtype=np.float64)
+    n_filtered = 0
 
     n_chunks = (n_snps + chunk_size - 1) // chunk_size
     chunk_iter = stream_genotype_chunks(
@@ -254,10 +136,51 @@ def _stream_kinship_two_pass(
             initial_eta_seconds=estimate_kinship_seconds(n_out, n_snps),
         )
 
-    for X_transformed, _global_idx in selected_chunks(
-        chunk_iter, snp_indices, valid_indices, transform=transform
-    ):
-        accumulate_kinship(K, X_transformed)
+    for chunk, file_start, file_end in chunk_iter:
+        filter_chunk = (
+            chunk if filter_sample_indices is None else chunk[filter_sample_indices, :]
+        )
+        col_means, miss_counts, col_vars = compute_snp_stats(filter_chunk)
+        del filter_chunk
+        keep, _afs, _mafs = compute_snp_filter_mask(
+            col_means,
+            miss_counts,
+            col_vars,
+            n_filter_samples,
+            maf_threshold,
+            miss_threshold,
+        )
+        if ksnps_indices is not None:
+            keep &= np.isin(np.arange(file_start, file_end), ksnps_indices)
+        local = np.flatnonzero(keep)
+        if len(local) == 0:
+            continue
+
+        X = transform(chunk[:, local])
+        if valid_indices is not None:
+            X = X[valid_indices, :]
+        accumulate_kinship(K, X)
+        n_filtered += len(local)
+        del chunk, X
+
+    if n_filtered == 0:
+        raise ValueError(
+            f"No SNPs passed filtering (maf>={maf_threshold}, "
+            f"miss<={miss_threshold}, polymorphic). "
+            f"Original SNP count: {n_snps}"
+        )
+    if ksnps_indices is not None:
+        logger.info(
+            f"Kinship SNP list: restricting to {len(ksnps_indices)} requested SNPs "
+            f"({n_filtered} retained after intersection)"
+        )
+    if n_filtered < n_snps:
+        logger.info(
+            f"Kinship filtering: {n_filtered:,} SNPs retained, "
+            f"{n_snps - n_filtered:,} removed (MAF/missing/monomorphic)"
+        )
+    else:
+        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
     return K / n_filtered
 
@@ -284,13 +207,10 @@ def compute_kinship_streaming(
     bed-reader windowed reads, avoiding the need to load the full genotype matrix,
     so this scales past the in-memory genotype limit (see module docstring).
 
-    Two-pass approach for filtering: PASS 1 computes per-SNP MAF, missing rate,
-    and variance; PASS 2 accumulates kinship from the filtered SNPs only.
-    ``mode="centered"`` additionally single-passes (stats and accumulation in one
-    BED read) when no MAF/missing/ksnps filter is active, since monomorphism
-    filtering can then be done inline per-chunk. ``mode="standardized"`` is
-    always two-pass: standardization needs the per-SNP variance the transform
-    computes over each chunk's full rows.
+    The BED is read once. Each chunk holds whole SNP columns, so the MAF,
+    missing-rate and monomorphism filter is decided per chunk before that
+    chunk's surviving columns are transformed and accumulated; standardization
+    likewise takes its per-SNP variance from the chunk's full rows.
 
     Monomorphic SNPs (constant genotype) are always excluded to match GEMMA.
     Imputation, centering, and scaling always use all BED samples. SNP filtering
@@ -373,34 +293,7 @@ def compute_kinship_streaming(
     if check_memory:
         _preflight_kinship_memory(n_samples, chunk_size)
 
-    # Single-pass optimization: only applies to centered mode (-gk 1) when no
-    # MAF/missing filters are active and no ksnps restriction. This eliminates
-    # the stats-only BED read (pass 1), halving I/O at scale (e.g. ~76 GB saved
-    # at 200k samples x 95k SNPs). Standardized mode (-gk 2) always needs the
-    # per-SNP variance from PASS 1, so it never single-passes.
-    use_single_pass = (
-        mode == "centered"
-        and maf_threshold == 0.0
-        and miss_threshold >= 1.0
-        and ksnps_indices is None
-    )
-
-    if use_single_pass:
-        logger.debug("Kinship: single-pass mode (no MAF/missing filters)")
-        K = _kinship_single_pass(
-            bed_path,
-            n_samples,
-            n_snps,
-            chunk_size,
-            show_progress,
-            valid_indices=valid_indices,
-            filter_sample_indices=filter_sample_indices,
-        )
-        elapsed = time.perf_counter() - start_time
-        logger.info(f"Kinship matrix computed in {elapsed:.2f}s")
-        return K
-
-    K = _stream_kinship_two_pass(
+    K = _stream_kinship(
         bed_path,
         n_samples=n_samples,
         n_snps=n_snps,

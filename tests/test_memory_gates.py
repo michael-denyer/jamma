@@ -406,7 +406,7 @@ class TestNumpyFallbackKinshipMemory:
         declared = scratch_bytes(50_000, numpy_impl)
         assert declared > 0
         assert ledger.kinship_gb == pytest.approx(
-            square_matrix_gb(50_000) + array_gb(50_000, 10_000) + declared / 1e9
+            square_matrix_gb(50_000) + 3.25 * array_gb(50_000, 10_000) + declared / 1e9
         )
 
     def test_native_backend_declares_no_scratch(self):

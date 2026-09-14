@@ -52,7 +52,7 @@ _TRANSFORMS: dict[KinshipMode, Callable[[np.ndarray], np.ndarray]] = {
 def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
     """Gate a kinship computation on the memory that phase actually needs.
 
-    Sizes the kinship phase alone — the accumulator plus one genotype chunk.
+    Sizes the kinship phase alone, including decoded and preprocessing blocks.
     Callers that go on to eigendecompose are gated separately by
     ``eigendecompose_kinship``, and whole-workflow planning happens in
     ``PipelineRunner``, so charging kinship for those phases here would refuse
@@ -164,7 +164,7 @@ def _stream_kinship(
         if len(local) == 0:
             continue
 
-        X = transform(chunk[:, local])
+        X = transform(chunk if len(local) == chunk.shape[1] else chunk[:, local])
         if valid_indices is not None:
             X = X[valid_indices, :]
         accumulate_kinship(K, X)

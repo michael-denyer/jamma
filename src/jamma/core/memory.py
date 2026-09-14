@@ -206,10 +206,13 @@ def _dsyrk_scratch_gb(n_samples: int) -> float:
 def kinship_cost(kinship_gb: float, chunk_gb: float, dsyrk_scratch_gb: float) -> float:
     """Peak memory (GB) for the streaming kinship-accumulation phase.
 
-    Kinship accumulator + one genotype chunk + whatever scratch the active
-    dsyrk backend holds (0 on the native path).
+    Three float64 blocks cover decoded data, selected columns, and either
+    transform output or the contiguous input copy made by dsyrk. Two boolean
+    blocks cover preprocessing masks. The standardized transform preserves
+    its input, so it can hold all three float blocks while reducing means.
+    Backend scratch is additional (zero on the native path).
     """
-    return kinship_gb + chunk_gb + dsyrk_scratch_gb
+    return kinship_gb + (3 + 2 / 8) * chunk_gb + dsyrk_scratch_gb
 
 
 def eigen_cost(n_samples: int, eigendecomp_peak_gb: float | None = None) -> float:
@@ -257,7 +260,7 @@ def estimate_streaming_memory(
     Genotypes are O(n * chunk_size), not O(n * n_snps), so the peak is
     usually eigendecomposition. For 200k samples, 10k chunk, n_grid=50:
 
-    - Kinship accumulation: 320GB + 16GB = 336GB
+    - Kinship accumulation: 320GB + 3.25 * 16GB = 372GB
     - Eigendecomp: 320GB + 320GB + ~640GB = ~1280GB (peak)
     - LMM: 320GB + 16GB + 16GB + Uab/Iab
 

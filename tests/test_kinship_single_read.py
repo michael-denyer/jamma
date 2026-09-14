@@ -7,7 +7,6 @@ module binding still shows up here as a second sweep over the SNP columns.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -38,10 +37,6 @@ ONE_SWEEP_OF_61_SNPS_BY_7 = [
     (49, 56),
     (56, 61),
 ]
-REFERENCES: dict[str, Callable[..., np.ndarray]] = {
-    "centered": compute_centered_kinship,
-    "standardized": compute_standardized_kinship,
-}
 
 
 def _column_range(index) -> tuple[int, int]:
@@ -73,7 +68,7 @@ class _RecordingBed:
         return self._bed.read(index=index, **kwargs)
 
 
-def spy_genotype_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+def _spy_genotype_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
     """Record the SNP-column range of every genotype read; reading stays real."""
     reads: list[tuple[int, int]] = []
     real_open_bed = plink.open_bed
@@ -95,8 +90,13 @@ def _kept_columns(genotypes: np.ndarray, rows: np.ndarray) -> np.ndarray:
     return keep
 
 
-def _reference_kinship(mode: str, genotypes: np.ndarray, keep: np.ndarray):
-    return REFERENCES[mode](
+def _reference_kinship(
+    mode: str, genotypes: np.ndarray, keep: np.ndarray
+) -> np.ndarray:
+    reference = (
+        compute_centered_kinship if mode == "centered" else compute_standardized_kinship
+    )
+    return reference(
         genotypes[:, keep], maf_threshold=0.0, miss_threshold=1.0, check_memory=False
     )
 
@@ -109,7 +109,7 @@ def test_subset_filtered_kinship_reads_the_bed_once(
     keep = _kept_columns(genotypes, FILTER_ROWS)
     keep_all = _kept_columns(genotypes, ALL_ROWS)
     assert np.flatnonzero(keep_all & ~keep).tolist() == [0, 57]
-    reads = spy_genotype_reads(monkeypatch)
+    reads = _spy_genotype_reads(monkeypatch)
 
     K = compute_kinship_streaming(
         asymmetric_plink,
@@ -133,7 +133,7 @@ def test_ksnps_restriction_is_applied_inside_the_single_read(
     genotypes = _genotypes(asymmetric_plink)
     keep = _kept_columns(genotypes, ALL_ROWS)
     keep[1::2] = False
-    reads = spy_genotype_reads(monkeypatch)
+    reads = _spy_genotype_reads(monkeypatch)
 
     K = compute_kinship_streaming(
         asymmetric_plink,

@@ -80,6 +80,10 @@ LAPACK_CFLAGS: tuple[str, ...] = (
     "-std=c11",
 )
 
+# Fixed-precision text formatting must preserve NaNs and signed zero, even
+# with user-supplied -Ofast. These flags follow the user extras.
+CXX_CFLAGS: tuple[str, ...] = ("-fno-fast-math", "-fPIC", "-std=c++17")
+
 # Every target in this tree is a Python extension module, so every link is a
 # shared-library link. Both entry points build one; nothing links an executable.
 SHARED_LINK_FLAGS: tuple[str, ...] = ("-shared", "-fPIC")
@@ -146,6 +150,8 @@ class BuildSpec:
     required_attrs: tuple[str, ...] = ()
     # Libraries this target links beyond LINK_LIBS (the BGEN decoder's zlib).
     link_libs: tuple[str, ...] = ()
+    language: Literal["c", "c++"] = "c"
+    uses_openmp: bool = True
 
 
 # -march=native is dev-mode only and portable wheels must not carry it; it
@@ -200,6 +206,20 @@ JLINALG_SPEC = BuildSpec(
         "jlinalg_isa",
         "set_n_threads",
     ),
+)
+
+MATRIX_TEXT_SPEC = BuildSpec(
+    package_parts=("io",),
+    source_parts=(),
+    include_parts=(),
+    sources=("_matrix_text.cpp",),
+    lapack_sources=(),
+    output_stem="_matrix_text",
+    sys_module_key="jamma.io._matrix_text",
+    fallback_label="matrix text",
+    required_attrs=("format_into", "BYTES_PER_VALUE"),
+    language="c++",
+    uses_openmp=False,
 )
 
 # Opt-in sentinel macro for the sanitizer-workflow self-test. When
@@ -304,8 +324,9 @@ def resolve_flags(
 
     Pure: it reads only its arguments, so a test asserts on it with zero mocks.
 
-    Wheel path (``dev_mode=False``): honour ``CFLAGS`` and nothing else, never
-    ``-march=native``, so the wheel stays portable. Dev path: the spec's
+    Wheel path (``dev_mode=False``): honour ``CFLAGS`` (``CXXFLAGS`` for a C++
+    spec) and nothing else, never ``-march=native``, so the wheel stays
+    portable. Dev path: the spec's
     ``dev_extra_cflags`` (``-march=native`` for the accelerator), then the
     sentinel macro when ``JAMMA_SENTINEL_UB`` is set.
 
@@ -319,7 +340,9 @@ def resolve_flags(
         if spec.reads_sentinel_env and _env_on(env, "JAMMA_SENTINEL_UB"):
             base_extra.append(_SENTINEL_UB_DEFINE)
     else:
-        base_extra = env.get("CFLAGS", "").split()
+        base_extra = env.get(
+            "CXXFLAGS" if spec.language == "c++" else "CFLAGS", ""
+        ).split()
     san_cflags: tuple[str, ...] = ()
     san_link: tuple[str, ...] = ()
     if _env_on(env, "JAMMA_SANITIZE"):
@@ -335,7 +358,11 @@ def resolve_flags(
 
 
 def resolve_cflags_for(
-    flags: ResolvedFlags, include_dirs: Sequence[str], *, lapack: bool
+    flags: ResolvedFlags,
+    include_dirs: Sequence[str],
+    *,
+    lapack: bool,
+    cxx: bool = False,
 ) -> list[str]:
     """Return the compile flags for one source.
 
@@ -352,8 +379,13 @@ def resolve_cflags_for(
     IEEE 754, and a user-supplied ``-Ofast`` would defeat that split. They take
     only ``lapack_extra``, the sanitizer flags, none of which break IEEE 754
     rounding.
+
+    C++ sources (``cxx=True``) take ``base_extra`` followed by CXX_CFLAGS, so
+    the trailing ``-fno-fast-math`` overrides a user ``-Ofast``.
     """
     include_flags = [f"-I{d}" for d in include_dirs]
+    if cxx:
+        return ["-O3", *flags.base_extra, *CXX_CFLAGS, *include_flags]
     if lapack:
         return [*LAPACK_CFLAGS, *flags.lapack_extra, *include_flags]
     # Slice BASE_CFLAGS rather than re-listing literals, so a flag added there

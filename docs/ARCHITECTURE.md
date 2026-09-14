@@ -132,7 +132,10 @@ src/jamma/
 │   ├── covariate.py        # GEMMA-format covariate file reader
 │   ├── phenotype.py        # GEMMA -p phenotype file reader, NA/-9 missing parsing
 │   ├── matrix_reader.py    # read_matrix_parallel(): multiprocess large-matrix text reader
-│   ├── matrix_writer.py    # write_matrix_parallel(): multiprocess large-matrix text writer
+│   ├── matrix_writer.py    # Atomic matrix text output; native default and generic fallback
+│   ├── _native_matrix_writer.py # Bounded threaded formatting and ordered output
+│   ├── _matrix_text.cpp    # GIL-free %.10g/tab conversion into borrowed buffers
+│   ├── _compile_matrix_text.py # Optional C++17 formatter build entry point
 │   ├── snp_list.py         # GEMMA-format SNP list file I/O (one RS ID per line)
 │   ├── weight.py           # GEMMA-format individual weight file I/O + kinship weighting
 │   └── _parallel_text.py   # Shared multiprocess text I/O helpers for matrix_reader/matrix_writer

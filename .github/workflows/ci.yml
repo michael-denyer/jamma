@@ -319,6 +319,7 @@ jobs:
           )
           print('jamma.jlinalg.HAS_C_EXTENSION=True')
           "
+          /tmp/smoke_venv/bin/python scripts/smoke_test_matrix_text.py
           /tmp/smoke_venv/bin/jamma --help > /dev/null
 
   coverage:

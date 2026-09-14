@@ -415,7 +415,7 @@ def test_run_build_preflight_returns_the_reason_without_printing(tmp_path):
 def test_compile_extension_reports_a_preflight_failure_once(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "jamma._build_support.compile_and_link.detect_toolchain",
-        lambda report: _toolchain(),
+        lambda report, **_kwargs: _toolchain(),
     )
     warnings: list[str] = []
 

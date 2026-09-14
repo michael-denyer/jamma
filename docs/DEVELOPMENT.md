@@ -4,7 +4,7 @@ This guide covers local setup, build commands, code style, and the PR process fo
 
 ## Local Setup
 
-**Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/), [prek](https://prek.j178.dev), and a C compiler (gcc or clang) for the C extensions.
+**Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/), [prek](https://prek.j178.dev), a C compiler (gcc or clang), and a C++17 compiler with floating-point `std::to_chars` support for the text formatter, such as GCC 11+ or Apple Clang on macOS 14+.
 
 ```bash
 git clone https://github.com/michael-denyer/jamma.git
@@ -19,16 +19,19 @@ prek install
 
 ### Compile C Extensions
 
-The C extensions are not compiled automatically during `uv sync`. Compile them before running tests:
+Build or refresh the native extensions before running tests:
 
 ```bash
 uv run python -m jamma.lmm._compile_accel
 uv run python -m jamma.jlinalg._compile_jlinalg
+uv run python -m jamma.io._compile_matrix_text
 ```
 
 JAMMA falls back to pure Python if extensions are absent, but compiled extensions are required for meaningful test coverage and performance.
 
-**Important:** Native build policy is centralised in `src/jamma/_build_support/build_models.py`; toolchain execution lives in `build_execution.py`; and `compile_and_link.py` composes both behind `run_build` / `compile_extension`. `hatch_build.py` (wheel builds) calls `run_build` directly; `_compile_jlinalg.py` and `_compile_accel.py` (dev-mode and runtime recompile) are thin shims that bind `compile_extension` to their `BuildSpec` and, in their `__main__` block, prove the freshly compiled `.so` imports in a fresh subprocess rather than in-process. Add new sources or flags to `build_models.py`, not the entry points. LAPACK sources inside `jlinalg/src/` are compiled with strict IEEE 754 flags (`-O2 -fno-fast-math`); a pre-commit hook (`scripts/check_compile_flag_literals.py`) rejects bare flag literals (`-O3`, `-fno-fast-math`, etc.) outside `_build_support/`.
+The text formatter uses `CXX` for compiler selection and `CXXFLAGS` for wheel build flags. It needs no OpenMP runtime or NumPy C API. On failure, the existing process writer remains available for `%.10g` output, and custom formats always use the Python paths. `python scripts/smoke_test_matrix_text.py` checks installed native formatting against 603,803 adversarial values.
+
+**Important:** Native build policy is centralised in `src/jamma/_build_support/build_models.py`; toolchain execution lives in `build_execution.py`; and `compile_and_link.py` composes both behind `run_build` / `compile_extension`. `hatch_build.py` (wheel builds) calls `run_build` directly; `_compile_jlinalg.py`, `_compile_accel.py`, and `_compile_matrix_text.py` (dev-mode and runtime recompile) are thin shims that bind `compile_extension` to their `BuildSpec` and, in their `__main__` block, prove the freshly compiled `.so` imports in a fresh subprocess rather than in-process. Add new sources or flags to `build_models.py`, not the entry points. LAPACK sources inside `jlinalg/src/` are compiled with strict IEEE 754 flags (`-O2 -fno-fast-math`); a pre-commit hook (`scripts/check_compile_flag_literals.py`) rejects bare flag literals (`-O3`, `-fno-fast-math`, etc.) outside `_build_support/`.
 
 After modifying C source, recompile in place:
 
@@ -51,6 +54,8 @@ uv run python -c "from jamma.jlinalg._compile_jlinalg import compile_extension; 
 | `uv build` | Build sdist and wheel |
 | `uv run python -m jamma.lmm._compile_accel` | Compile the LMM C extension |
 | `uv run python -m jamma.jlinalg._compile_jlinalg` | Compile the jlinalg BLAS extension |
+| `uv run python -m jamma.io._compile_matrix_text` | Compile the C++17 text formatter |
+| `uv run python scripts/bench_matrix_text.py --cli --json /tmp/text-bench.json` | Compare native and process text writing |
 | `uv run python scripts/bench_all_backends.py` | End-to-end backend comparison benchmark |
 | `uv run pytest tests/lmm_accel/ -v -n0 --benchmark-only -m benchmark` | Microbenchmarks (no parallelism) |
 

@@ -333,6 +333,8 @@ class TestFailureHandling:
             return real_unlink(path, *args, **kwargs)
 
         monkeypatch.setattr(os, "unlink", unlink_failing_once)
+        # The memmap belongs to the process writer; keep the native one out.
+        monkeypatch.setattr("jamma.io.matrix_writer.native_formatter", lambda: None)
         matrix = np.random.default_rng(42).standard_normal((600, 10))
         out_path = tmp_path / "output.txt"
 

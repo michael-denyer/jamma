@@ -147,7 +147,9 @@ def compute_snp_stats_chunk(
     (0, 1, 2) for HWE testing when n_aa/n_ab/n_bb are all provided.
 
     Args:
-        data: Genotype matrix (n_samples, n_snps), float32 or float64, C-contiguous.
+        data: Genotype matrix (n_samples, n_snps), float32 or float64.
+            Aligned native-endian C/F arrays are read directly; other layouts
+            are copied at the boundary.
         means: Output (n_snps,) float64 — per-SNP mean.
         miss_counts: Output (n_snps,) intp — per-SNP NaN count.
         variances: Output (n_snps,) float64 — per-SNP population variance.

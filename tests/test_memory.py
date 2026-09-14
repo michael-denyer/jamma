@@ -410,20 +410,18 @@ class TestPhaseCostFunctions:
     """Table-driven checks over the three phase cost functions.
 
     Each phase function must reproduce the same peak a hand-rolled formula
-    gives at every size in ``BOUNDARY_SIZES`` — the same sizes the jlinalg
-    BLAS tests sweep. This is a re-homing refactor (E5): the phase functions
-    replace inline arithmetic that used to live only inside
-    ``estimate_streaming_memory``, and must not shift any estimate.
+    gives at every size in ``BOUNDARY_SIZES``, the same sizes the jlinalg
+    BLAS tests sweep.
     """
 
     @pytest.mark.parametrize("n", BOUNDARY_SIZES)
-    def test_kinship_cost_is_accumulator_plus_chunk_plus_scratch(self, n):
-        """kinship_cost = kinship accumulator + one genotype chunk + scratch."""
+    def test_kinship_cost_covers_preprocessing_and_backend_scratch(self, n):
+        """Price raw, selected, and transformed data plus two boolean masks."""
         kinship_gb = square_matrix_gb(n)
         chunk_gb = n * 1000 * 8 / 1e9
         scratch_gb = 1.5
         assert kinship_cost(kinship_gb, chunk_gb, scratch_gb) == pytest.approx(
-            kinship_gb + chunk_gb + scratch_gb
+            kinship_gb + 3.25 * chunk_gb + scratch_gb
         )
 
     @pytest.mark.parametrize("n", BOUNDARY_SIZES)

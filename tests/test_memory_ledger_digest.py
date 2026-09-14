@@ -61,7 +61,10 @@ from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
 
-EXPECTED_DIGEST = "c8a00ab6ab0e0f24d3d0e695acbe26e4aacbf946a07cef39f4b0790e45b7e400"
+# Kinship preprocessing pricing moves the 384 streaming rows. The mouse
+# fixture previously traced 487 MB against a 171 MB quote; bounded transforms
+# now trace 415 MB against 520 MB. Eigen, LMM, and LOCO formulas are unchanged.
+EXPECTED_DIGEST = "7309e20149ddd3c12175fde182e1813b7ad74482826e9bce678386b2d264ec7d"
 EXPECTED_ROWS = 2438
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)

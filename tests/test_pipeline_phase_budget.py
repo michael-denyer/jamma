@@ -51,14 +51,17 @@ def test_standalone_eigen_rejects_budget_before_decomposition(monkeypatch):
 
 def test_saved_full_sample_kinship_is_in_batch_preflight(monkeypatch):
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 256.0)
-    config = PipelineConfig(bfile=SYNTHETIC.bfile, mem_budget=1.2, save_kinship=True)
+    # The full saved K alone needs 0.8 GB. Only 100 SNPs exist, so the
+    # preprocessing quote must not assume a full 10,000-column block.
+    config = PipelineConfig(bfile=SYNTHETIC.bfile, mem_budget=0.5, save_kinship=True)
     plan = plan_association(
         100,
         100,
         n_input_samples=10_000,
         requested="numpy",
-        mem_budget=1.2,
+        mem_budget=0.5,
     )
+    preflight(PipelineConfig(bfile=SYNTHETIC.bfile, mem_budget=0.5), plan)
     with pytest.raises(MemoryError, match="exceeds"):
         preflight(config, plan)
 

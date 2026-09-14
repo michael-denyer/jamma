@@ -47,24 +47,29 @@ def impute_and_center(X: np.ndarray) -> np.ndarray:
         >>> # Mean of column 0 is (0+2)/2 = 1.0 (excluding NaN)
         >>> # NaN is replaced with 1.0, then column is centered
     """
-    # All-NaN columns produce a nanmean RuntimeWarning; handled below by nan_to_num
-    with np.errstate(invalid="ignore"):
-        snp_means = np.nanmean(X, axis=0)
+    # nanmean materializes a float copy of the entire input. Reduce through
+    # boolean masks instead, keeping scratch to two bytes per genotype.
+    nan_mask = np.isnan(X)
+    observed = ~nan_mask
+    counts = observed.sum(axis=0)
+    sums = np.sum(X, axis=0, where=observed)
+    mean_dtype = sums.dtype if np.issubdtype(sums.dtype, np.inexact) else np.float64
+    snp_means = np.divide(
+        sums, counts, out=np.zeros_like(sums, dtype=mean_dtype), where=counts > 0
+    )
+    del observed
 
-    # Handle all-missing columns: nanmean returns NaN, replace with 0
-    # This ensures such SNPs contribute nothing to kinship (centered = 0)
+    # All-missing columns have mean zero and contribute nothing after centering.
     snp_means = np.nan_to_num(snp_means, nan=0.0)
 
     # In-place path: writable numpy arrays avoid an O(N*M) copy
     if isinstance(X, np.ndarray) and X.flags.writeable:
-        nan_mask = np.isnan(X)
-        if nan_mask.any():
-            X[nan_mask] = np.take(snp_means, np.where(nan_mask)[1])
+        np.copyto(X, snp_means, where=nan_mask)
         X -= snp_means
         return X
 
     # Copy-based path for immutable or non-writable arrays
-    X_imputed = np.where(np.isnan(X), snp_means, X)
+    X_imputed = np.where(nan_mask, snp_means, X)
     return X_imputed - snp_means
 
 
@@ -99,17 +104,11 @@ def impute_center_and_standardize(X: np.ndarray) -> np.ndarray:
         >>> Z = impute_center_and_standardize(X)
         >>> # Each column is centered and divided by its standard deviation
     """
-    # Compute per-SNP mean excluding NaN values
-    snp_means = np.nanmean(X, axis=0, keepdims=True)
-
-    # Handle all-missing columns: nanmean returns NaN, replace with 0
-    snp_means = np.nan_to_num(snp_means, nan=0.0)
-
-    # Replace NaN with SNP mean
-    X_imputed = np.where(np.isnan(X), snp_means, X)
-
-    # Center by subtracting mean
-    X_centered = X_imputed - snp_means
+    # Preserve this helper's non-mutating contract, including integer inputs
+    # whose means and standardized values require floating-point storage.
+    values = np.asarray(X)
+    dtype = values.dtype if np.issubdtype(values.dtype, np.inexact) else np.float64
+    X_centered = impute_and_center(np.array(values, dtype=dtype, copy=True))
 
     # Compute variance AFTER imputation (matching GEMMA):
     # var(X) = mean((X - mu)^2), computed via einsum to avoid O(N*M) X**2 allocation
@@ -122,11 +121,10 @@ def impute_center_and_standardize(X: np.ndarray) -> np.ndarray:
     # Standard deviation
     snp_sd = np.sqrt(snp_var)
 
-    # Division by zero for monomorphic SNPs handled by np.where guard; result is 0.0.
-    # np.where evaluates both branches eagerly, so the division produces warnings
-    # even though zero-division results are discarded by the condition mask.
+    # Normalize the existing buffer; no full division result or where copy.
     nonzero = snp_sd > 0
     with np.errstate(invalid="ignore", divide="ignore"):
-        X_standardized = np.where(nonzero, X_centered / snp_sd, 0.0)
+        np.divide(X_centered, snp_sd, out=X_centered, where=nonzero)
+    X_centered[:, ~nonzero[0]] = 0.0
 
-    return X_standardized
+    return X_centered

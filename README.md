@@ -170,11 +170,11 @@ rotated. Association rows read the same precomputed kinship file in both tools.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.0s | 1.2s | 800ms | 747ms | — | 1.1x | 1.4x | 1.6x |
-| LMM Wald (`-lmm 1`) | 6.9s | 4.2s | 5.2s | 514ms | 558ms | 10.1x | 13.5x | 8.2x |
-| LMM All (`-lmm 4`) | 12.7s | 7.5s | 7.5s | 537ms | 569ms | 14.0x | 23.7x | 14.0x |
-| Full GWAS Wald (compute kinship + association) | 7.9s | 5.5s | 5.5s | 714ms | 760ms | 7.6x | 11.1x | 7.6x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 26.5s | 12.6s | 16.6s | 1.0s | 1.1s | 15.8x | 25.3x | 12.1x |
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 804ms | 737ms | — | 1.1x | 1.4x | 1.7x |
+| LMM Wald (`-lmm 1`) | 7.1s | 4.3s | 5.4s | 548ms | 605ms | 9.8x | 13.0x | 7.8x |
+| LMM All (`-lmm 4`) | 13.0s | 7.6s | 7.7s | 567ms | 620ms | 13.7x | 23.0x | 13.4x |
+| Full GWAS Wald (compute kinship + association) | 8.2s | 5.5s | 5.6s | 715ms | 772ms | 7.9x | 11.4x | 7.6x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.0s | 12.6s | 16.4s | 1.1s | 1.1s | 15.1x | 24.8x | 11.6x |
 
 | Backend | LOCO Wald | vs fastest GEMMA |
 |---------|-----------|------------------|

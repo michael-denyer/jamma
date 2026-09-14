@@ -291,7 +291,12 @@ class TestKinshipOnlyPreflight:
         )
 
         with patch("jamma.core.memory.available_ram_gb", return_value=40.0):
-            _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
+            _preflight_kinship_memory(
+                n_input_samples=50_000,
+                n_output_samples=50_000,
+                n_snps=10_000,
+                chunk_size=10_000,
+            )
 
     def test_kinship_only_run_still_blocked_when_kinship_does_not_fit(self):
         """The gate still refuses when the kinship phase itself will not fit."""
@@ -299,7 +304,12 @@ class TestKinshipOnlyPreflight:
 
         with patch("jamma.core.memory.available_ram_gb", return_value=1.0):
             with pytest.raises(MemoryError, match="Insufficient memory"):
-                _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
+                _preflight_kinship_memory(
+                    n_input_samples=50_000,
+                    n_output_samples=50_000,
+                    n_snps=10_000,
+                    chunk_size=10_000,
+                )
 
 
 class TestNumpyFallbackKinshipMemory:
@@ -406,7 +416,7 @@ class TestNumpyFallbackKinshipMemory:
         declared = scratch_bytes(50_000, numpy_impl)
         assert declared > 0
         assert ledger.kinship_gb == pytest.approx(
-            square_matrix_gb(50_000) + array_gb(50_000, 10_000) + declared / 1e9
+            square_matrix_gb(50_000) + 3.25 * array_gb(50_000, 10_000) + declared / 1e9
         )
 
     def test_native_backend_declares_no_scratch(self):

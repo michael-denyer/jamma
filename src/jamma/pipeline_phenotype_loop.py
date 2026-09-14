@@ -96,6 +96,9 @@ def run_phenotype_loop(
         labels=_LABELS[plan.mode],
     )
     genotypes = prepare_genotypes(source, spec, SampleBasis.from_mask(valid_mask))
+    # Prepared chunks retain their analyzed rows. Release the original batch
+    # matrix when sample filtering replaced it with a smaller allocation.
+    del source
     if genotypes.n_unexpected > 0:
         logger.warning(
             f"Genotype validation: {genotypes.n_unexpected} values outside "

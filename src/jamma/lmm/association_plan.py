@@ -7,7 +7,11 @@ from typing import Literal
 
 from jamma.core import memory
 from jamma.core.eigen_plan import EigenDriverPlan, array_gb, square_matrix_gb
-from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
+from jamma.core.memory import (
+    estimate_kinship_memory,
+    estimate_lmm_memory,
+    estimate_streaming_memory,
+)
 from jamma.core.threading import get_c_extension_thread_count, is_blas_controllable
 from jamma.lmm import accel
 from jamma.lmm.chunk_sizing import (
@@ -174,12 +178,11 @@ class ExecutableAssociationPlan:
         if kinship.loaded:
             phase_gb = square_matrix_gb(kinship.n_samples)
         else:
-            # The accumulator plus one genotype block over every input sample;
-            # the streamer subsets each block after reading it.
-            phase_gb = estimate_streaming_memory(
-                kinship.n_samples, chunk_size=DEFAULT_STATS_CHUNK
-            ).kinship_gb + array_gb(
-                self.n_input_samples - kinship.n_samples, DEFAULT_STATS_CHUNK
+            phase_gb = estimate_kinship_memory(
+                n_input_samples=self.n_input_samples,
+                n_output_samples=kinship.n_samples,
+                n_snps=self.n_snps_before_filter,
+                chunk_size=DEFAULT_STATS_CHUNK,
             )
         if kinship.n_samples != self.n_samples:
             # The full matrix and its analysed-sample copy are live together.

@@ -15,5 +15,4 @@ def impute_missing_inplace(geno_chunk: np.ndarray, col_means: np.ndarray) -> Non
     """
     missing = np.isnan(geno_chunk)
     if missing.any():
-        cols = np.where(missing)[1]
-        geno_chunk[missing] = col_means[cols]
+        np.copyto(geno_chunk, col_means, where=missing)

@@ -182,7 +182,8 @@ def _stream_kinship(
     else:
         logger.info(f"  Analyzed SNPs: {n_filtered:,}")
 
-    return K / n_filtered
+    K /= n_filtered
+    return K
 
 
 def compute_kinship_streaming(

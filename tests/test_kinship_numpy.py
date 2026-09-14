@@ -22,13 +22,11 @@ from tests.reference.kinship import compute_centered_kinship
 
 @pytest.mark.tier0
 class TestMonomorphismMaskBasis:
-    """The single-pass kinship loop selects columns via compute_snp_stats.
+    """The streaming kinship loop drops monomorphic columns via compute_snp_stats.
 
-    It used np.nanvar > 0 to drop monomorphic columns per chunk; that mask is
-    equal to compute_snp_stats(chunk).col_vars > 0 on genotype data, so the loop
-    now uses the canonical stats path. These tests pin that equality on the edge
-    cases the swap depends on, so the single-pass filter cannot silently diverge
-    from the two-pass filter.
+    Its var > 0 mask equals np.nanvar > 0 on genotype data. These tests pin that
+    equality on the edge cases the per-chunk filter depends on, so a change to
+    the stats kernel cannot silently change which columns are dropped.
     """
 
     @staticmethod

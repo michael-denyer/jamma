@@ -1,8 +1,10 @@
-"""Shared SNP selection, chunk preprocessing, and symmetric kinship accumulation.
+"""Symmetric kinship accumulation, plus LOCO's SNP selection and chunk preprocessing.
 
-Streaming and LOCO own their pass scheduling and matrix lifetimes. These helpers
-preserve BED chunk boundaries and preprocess all samples before output-row
-selection, so both consumers share the same numerical contract.
+``accumulate_kinship`` serves both the streaming and the LOCO kinship loops. The
+selection helpers serve LOCO, which keeps several matrices live and so runs a
+statistics pass before its accumulation pass. They preserve BED chunk boundaries
+and preprocess all samples before output-row selection, the same numerical
+contract the streaming loop follows inline.
 """
 
 from __future__ import annotations
@@ -50,15 +52,12 @@ def selected_chunks(
     valid_indices: np.ndarray | None,
     *,
     keep: Callable[[np.ndarray], bool] | None = None,
-    transform: Callable[[np.ndarray], np.ndarray] = impute_and_center,
 ) -> Iterator[CenteredChunk]:
-    """Select columns, transform all samples, then select output rows per file chunk.
+    """Select columns, center all samples, then select output rows per file chunk.
 
-    Unifies the streaming (PASS 2) and LOCO accumulation loops, which share one
-    mechanism. Pick the filtered columns of each BED chunk via searchsorted against
-    the sorted global ``snp_indices``, apply ``transform`` over all samples, then
-    subset rows to ``valid_indices``. The single-pass monomorphism loop selects
-    columns by a per-chunk variance mask instead.
+    LOCO's accumulation loop. Pick the filtered columns of each BED chunk via
+    searchsorted against the sorted global ``snp_indices``, impute and center
+    them over all samples, then subset rows to ``valid_indices``.
 
     Args:
         chunk_iter: Yields ``(chunk, file_start, file_end)`` from the genotype stream.
@@ -66,14 +65,9 @@ def selected_chunks(
         snp_indices: Global indices of SNPs that passed filtering, sorted ascending.
         valid_indices: Sample indices to keep, or None for all samples.
         keep: Optional predicate on a chunk's global indices, evaluated before any
-            transform. Returning False skips the chunk with no work done, preserving
-            LOCO's "skip chunks that contribute nothing" optimisation. None keeps every
-            chunk with at least one selected column.
-        transform: Per-chunk preprocessing applied to selected columns over all samples.
-            Defaults to ``impute_and_center`` (GEMMA -gk 1). Pass
-            ``impute_center_and_standardize`` for -gk 2; it self-computes each column's
-            variance over the chunk's rows, which equals the full-sample variance since
-            every retained row is present in the chunk.
+            work. Returning False skips the chunk, preserving LOCO's "skip chunks
+            that contribute nothing" optimisation. None keeps every chunk with at
+            least one selected column.
 
     Yields:
         One CenteredChunk per surviving file chunk. Chunks with no selected columns (or
@@ -81,11 +75,11 @@ def selected_chunks(
 
     Numerics contract:
         Exactly one yield per file chunk, never re-batching selected columns across
-        chunks and never splitting one chunk's selection. So one ``accumulate_kinship``
-        per yield reproduces the pre-refactor dsyrk column grouping, which splitting
-        would not (bit-level). ``searchsorted`` runs on full BED chunk boundaries.
-        Preprocessing precedes row selection so means, missing-value imputation,
-        and standardization do not depend on which matrix rows a caller needs.
+        chunks and never splitting one chunk's selection, so one ``accumulate_kinship``
+        per yield keeps the dsyrk column grouping of the BED chunks (bit-level).
+        ``searchsorted`` runs on full BED chunk boundaries. Centering precedes row
+        selection so means and missing-value imputation do not depend on which
+        matrix rows a caller needs.
     """
     assert snp_indices.ndim == 1, "snp_indices must be 1-D"
     assert len(snp_indices) < 2 or np.all(np.diff(snp_indices) > 0), (
@@ -106,7 +100,7 @@ def selected_chunks(
             f"kinship accumulation requires float64 chunks (got {X_chunk.dtype}); "
             "check stream_genotype_chunks dtype arg"
         )
-        X_chunk = transform(X_chunk)
+        X_chunk = impute_and_center(X_chunk)
         if valid_indices is not None:
             X_chunk = X_chunk[valid_indices, :]
         yield CenteredChunk(X_chunk, global_idx)
@@ -121,10 +115,10 @@ def select_kinship_snps(
 ) -> SnpSelection:
     """Apply the kinship MAF/missing/monomorphism filter, raising if none pass.
 
-    The streaming and LOCO kinship passes share this filter step exactly. Both
-    build the same SnpFilterSpec (no HWE, "Kinship SNP list" restriction label)
-    and raise the same message when every SNP is removed. Callers log their own
-    retained/removed line afterwards, since the wording differs between passes.
+    LOCO's filter step over whole-file statistics. It builds the kinship
+    SnpFilterSpec (no HWE, "Kinship SNP list" restriction label) and raises the
+    same message the streaming loop raises when every SNP is removed. The caller
+    logs its own retained/removed line afterwards.
 
     Args:
         stats: Per-SNP statistics from collect_streamed_snp_stats.

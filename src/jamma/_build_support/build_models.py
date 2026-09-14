@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 # ---------------------------------------------------------------------------
 # Data constants — THE single source of truth. The three entry points
@@ -78,6 +79,10 @@ LAPACK_CFLAGS: tuple[str, ...] = (
     "-std=c11",
 )
 
+# Fixed-precision text formatting must preserve NaNs and signed zero, even
+# with user-supplied -Ofast. These flags follow the user extras.
+CXX_CFLAGS: tuple[str, ...] = ("-fno-fast-math", "-fPIC", "-std=c++17")
+
 # Every target in this tree is a Python extension module, so every link is a
 # shared-library link. Both entry points build one; nothing links an executable.
 SHARED_LINK_FLAGS: tuple[str, ...] = ("-shared", "-fPIC")
@@ -141,6 +146,8 @@ class BuildSpec:
     # import failure and rebuilds. ABI equality is the real completeness check;
     # this is the belt-and-braces list the caller used to import by name.
     required_attrs: tuple[str, ...] = ()
+    language: Literal["c", "c++"] = "c"
+    uses_openmp: bool = True
 
 
 # -march=native is dev-mode only and portable wheels must not carry it; it
@@ -201,6 +208,21 @@ JLINALG_SPEC = BuildSpec(
     ),
 )
 
+MATRIX_TEXT_SPEC = BuildSpec(
+    package_parts=("io",),
+    source_parts=(),
+    include_parts=(),
+    sources=("_matrix_text.cpp",),
+    lapack_sources=(),
+    output_stem="_matrix_text",
+    module_name="_matrix_text",
+    sys_module_key="jamma.io._matrix_text",
+    fallback_label="matrix text",
+    required_attrs=("format_into", "BYTES_PER_VALUE"),
+    language="c++",
+    uses_openmp=False,
+)
+
 # Opt-in sentinel macro for the sanitizer-workflow self-test. When
 # JAMMA_SENTINEL_UB is set, _lmm_accel.c's gated heap-OOB function
 # jamma_sentinel_oob is compiled in so ASAN can be proven to catch a real bug.
@@ -237,7 +259,11 @@ def resolve_build_spec(
     """
     resolved_env = os.environ if env is None else env
     if not dev_mode:
-        return tuple(resolved_env.get("CFLAGS", "").split())
+        return tuple(
+            resolved_env.get(
+                "CXXFLAGS" if spec.language == "c++" else "CFLAGS", ""
+            ).split()
+        )
     extras = [*spec.dev_extra_cflags, *diagnose_flags]
     if spec.reads_sentinel_env and _sentinel_env_on(resolved_env):
         extras.append(_SENTINEL_UB_DEFINE)
@@ -341,6 +367,9 @@ def resolve_cflags_for(
     include_flags = [f"-I{d}" for d in include_dirs] + [
         f"-I{d}" for d in extra_source_includes
     ]
+
+    if source_path.suffix == ".cpp":
+        return ["-O3", *extra_cflags, *CXX_CFLAGS, *include_flags]
 
     if str(source_path) in lapack_source_set:
         # LAPACK sources: strict IEEE 754. Caller-supplied extra_cflags (e.g.

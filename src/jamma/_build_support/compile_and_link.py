@@ -21,6 +21,7 @@ from .build_models import (
     JLINALG_SPEC,
     LINK_FLAGS_BY_PLATFORM,
     LMM_ACCEL_SPEC,
+    MATRIX_TEXT_SPEC,
     BuildSpec,
     apply_sanitizer_overrides,
     resolve_build_spec,
@@ -36,6 +37,7 @@ from .build_models import (
 __all__ = (
     "JLINALG_SPEC",
     "LMM_ACCEL_SPEC",
+    "MATRIX_TEXT_SPEC",
     "BuildResult",
     "BuildSpec",
     "Toolchain",
@@ -172,8 +174,8 @@ def run_build(
             include_dirs=include_dirs,
             cc_cmd=toolchain.cc_cmd,
             cc_extra=list(toolchain.cc_extra),
-            omp_compile=list(toolchain.omp_compile),
-            omp_link=list(toolchain.omp_link),
+            omp_compile=list(toolchain.omp_compile) if spec.uses_openmp else [],
+            omp_link=list(toolchain.omp_link) if spec.uses_openmp else [],
             ldflags=ldflags,
             output=out_path,
             tmp_dir=tmp_dir,
@@ -254,7 +256,12 @@ def compile_extension(
         else:
             _say(msg)
 
-    toolchain = detect_toolchain(verbose_print=_detail, error_print=_say)
+    toolchain = detect_toolchain(
+        language=spec.language,
+        uses_openmp=spec.uses_openmp,
+        verbose_print=_detail,
+        error_print=_say,
+    )
     if isinstance(toolchain, str):
         _say(f"ERROR: {spec.output_stem} compilation failed: {toolchain}")
         return False
@@ -276,6 +283,6 @@ def compile_extension(
 
     sys.modules.pop(spec.sys_module_key, None)
 
-    omp_status = "OpenMP" if result.used_openmp else "single-threaded"
+    omp_status = "OpenMP" if result.used_openmp else "without OpenMP"
     _say(f"{spec.output_stem} compiled: {result.output_path} ({omp_status})")
     return True

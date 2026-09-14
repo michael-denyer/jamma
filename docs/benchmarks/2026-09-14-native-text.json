@@ -1,0 +1,139 @@
+{
+  "environment": {
+    "python": "3.12.13 (main, Jul 18 2026, 16:55:18) [Clang 22.1.3 ]",
+    "numpy": "2.5.1",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "physical_cores": 18,
+    "workers": 18,
+    "load_at_start": [
+      3.32763671875,
+      3.87841796875,
+      3.97900390625
+    ],
+    "note": "filesystem cache enabled; no fsync"
+  },
+  "cases": {
+    "mouse": {
+      "shape": [
+        1940,
+        1940
+      ],
+      "output_bytes": 55612768,
+      "sha256": "1aeb66f8aa5465943870320fbccbae9c764ea546ddeb2ad43e9d971ead819a91",
+      "methods": {
+        "process": {
+          "seconds": [
+            0.3197968329768628,
+            0.3472990420414135,
+            0.31379595899488777,
+            0.31382637505885214,
+            0.3202082079369575
+          ],
+          "median_seconds": 0.3197968329768628
+        },
+        "native": {
+          "seconds": [
+            0.014794875052757561,
+            0.012373624951578677,
+            0.014417957980185747,
+            0.011937041999772191,
+            0.013633500086143613
+          ],
+          "median_seconds": 0.013633500086143613
+        }
+      }
+    },
+    "square": {
+      "shape": [
+        5000,
+        5000
+      ],
+      "output_bytes": 362895994,
+      "sha256": "30a9ec6893450786281cff9fac25c02843afedfa5791fedc204a341760a7c06a",
+      "methods": {
+        "process": {
+          "seconds": [
+            0.5685229169903323,
+            0.563706542016007,
+            0.583173125050962,
+            0.6134864169871435,
+            0.5773002919740975
+          ],
+          "median_seconds": 0.5773002919740975
+        },
+        "native": {
+          "seconds": [
+            0.18718495802022517,
+            0.06672054203227162,
+            0.06274433305952698,
+            0.061057457933202386,
+            0.06585016695316881
+          ],
+          "median_seconds": 0.06585016695316881
+        }
+      }
+    },
+    "wide": {
+      "shape": [
+        2000,
+        100000
+      ],
+      "output_bytes": 2903574969,
+      "sha256": "058d757751ff3476fa0cd1a982a85c1beefee581b83a1fd0377164dc1e17021b",
+      "methods": {
+        "process": {
+          "seconds": [
+            2.37081854196731,
+            2.3495888330508024,
+            2.3330302089452744,
+            2.2855537499999627,
+            2.3838740420760587
+          ],
+          "median_seconds": 2.3495888330508024
+        },
+        "native": {
+          "seconds": [
+            0.4994752920465544,
+            0.45076437504030764,
+            0.5975571669405326,
+            0.47416754195000976,
+            0.6770949999336153
+          ],
+          "median_seconds": 0.4994752920465544
+        }
+      }
+    }
+  },
+  "cli": {
+    "sha256": "06ad9f31aabc05c985de9b9d1d4b7cff04604bff6a6e73222dd405bbb88e44f4",
+    "methods": {
+      "process": {
+        "seconds": [
+          0.7733294169884175,
+          0.7588472079951316,
+          0.7729794580955058,
+          0.7568563329987228,
+          0.7812087079510093
+        ],
+        "median_seconds": 0.7729794580955058
+      },
+      "native": {
+        "seconds": [
+          0.4689318329328671,
+          0.4670496250037104,
+          0.4814924579113722,
+          0.46586695802398026,
+          0.478486833977513
+        ],
+        "median_seconds": 0.4689318329328671
+      }
+    }
+  },
+  "runtime_revision": "cca9799dcdc1c3ce55b332bc9a2fb6a3ef06ee3b",
+  "source_sha256": {
+    "src/jamma/io/_matrix_text.cpp": "15561a450d84ceb96a06c5a003b376a8037999e750baf8dd1a647f87b4143004",
+    "src/jamma/io/_native_matrix_writer.py": "1ea3c18b8455c807da60964730e0b6b75e8e1fc1b1fffe160439e96604ba486b",
+    "src/jamma/io/matrix_writer.py": "977a07a19983c94f443912cc4c6b09bd76fa225eedee81ab44f3c9f25f7333b1"
+  },
+  "reproduce": "python scripts/bench_matrix_text.py --cases mouse square wide --cli --repetitions 5 --json result.json"
+}

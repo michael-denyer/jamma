@@ -111,6 +111,14 @@ def test_loco_snp_lists_are_disjoint_and_cover_the_input(tmp_path, monkeypatch):
         assert tested == ({"rs1", "rs2"} if chrom == "1" else {"rs3"})
 
 
+def test_output_validation_accepts_round_off_on_a_null_effect():
+    row = {"allele1": "A", "allele0": "C", "se": "3.515983e-02", "p_wald": "0.9999"}
+    common.verify_associations(
+        {"rs13475789": {**row, "beta": "4.366448e-06"}},
+        {"rs13475789": {**row, "beta": "4.444851e-06"}},
+    )
+
+
 def test_output_validation_rejects_numerical_disagreement():
     row = {"allele1": "A", "allele0": "C", "beta": "1", "se": "1", "p_wald": "0.1"}
     with pytest.raises(AssertionError, match="beta"):

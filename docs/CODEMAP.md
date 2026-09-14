@@ -340,12 +340,12 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:55](../src/jamma/validation/tolerances.py#L54) |
-| 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:23](../src/jamma/validation/compare.py#L23) |
-| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:359](../src/jamma/validation/compare.py#L359) |
-| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:597](../src/jamma/validation/compare.py#L597) |
-| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:154](../src/jamma/validation/compare.py#L154) |
-| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:292](../src/jamma/validation/compare.py#L292) |
-| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:192](../src/jamma/validation/compare.py#L192) |
+| 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:23](../src/jamma/validation/compare.py#L22) |
+| 6b | `AssocComparisonResult` | Per-column comparison results | [compare.py:359](../src/jamma/validation/compare.py#L355) |
+| 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:597](../src/jamma/validation/compare.py#L593) |
+| 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:154](../src/jamma/validation/compare.py#L150) |
+| 6b | `load_gemma_assoc()` | Parse GEMMA `.assoc.txt` (schema-derived) | [compare.py:292](../src/jamma/validation/compare.py#L288) |
+| 6b | `load_gemma_kinship()` | Parse GEMMA `.cXX.txt` | [compare.py:192](../src/jamma/validation/compare.py#L188) |
 
 ---
 
@@ -604,6 +604,6 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Memory estimation | [lmm_cost](../src/jamma/core/memory.py#L227) |
 | Threading | [threading.py:55](../src/jamma/core/threading.py#L55) |
 | Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
-| Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L597) |
+| Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L593) |
 | Formula derivations and validation | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
 | Numerical equivalence bound | [GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md](GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) |

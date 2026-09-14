@@ -48,6 +48,14 @@ def test_standalone_kinship_requires_same_text_artifact(tmp_path):
     assert "-gk" in command
 
 
+def test_default_kinship_row_writes_binary_matrix(tmp_path):
+    command = backends.commands_for(
+        [sys.executable, "-m", "jamma"], "kinship_npy", tmp_path, "numpy"
+    )[0]
+    assert "--legacy-text" not in command
+    assert backends.operation_args("kinship_npy") == ["-gk", "1"]
+
+
 def test_loco_computes_excluded_kinship_then_tests_only_held_out_snps(tmp_path):
     snps = tmp_path / "chr1.snps"
     commands = loco.gemma_commands(Path("gemma"), tmp_path, {"1": snps}, True)

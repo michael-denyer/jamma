@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """End-to-end backend comparison benchmark on mouse_hs1940.
 
-Runs kinship (-gk 1), LMM Wald (-lmm 1), and LMM All (-lmm 4) across
+Runs kinship (-gk 1) as both the GEMMA-compatible text matrix and JAMMA's
+default binary .npy, LMM Wald (-lmm 1), and LMM All (-lmm 4) across
 fresh JAMMA processes (batch, streaming, pure-Python) and GEMMA, then prints
 a formatted table matching the README.
 
@@ -40,12 +41,14 @@ from _bench_common import (
 
 OpTimings = dict[str, float | None]
 
+KINSHIP_OPS = ("kinship", "kinship_npy")
+
 
 @dataclass(frozen=True)
 class Timing:
     """Best-of-N seconds per operation for every benchmarked backend.
 
-    Each field maps an operation key (``kinship``, ``lmm_wald``,
+    Each field maps an operation key (``kinship``, ``kinship_npy``, ``lmm_wald``,
     ``lmm_all``, ``lmm_wald_c4``, ``gwas_wald``) to its fastest observed time, or None
     when that backend did not run the operation.
     """
@@ -59,7 +62,7 @@ class Timing:
 
 def operation_args(op: str) -> list[str]:
     """Identical statistical options and disk inputs for both programs."""
-    if op == "kinship":
+    if op in KINSHIP_OPS:
         return ["-gk", "1"]
     args = ["-lmm", "4" if op == "lmm_all" else "1"]
     if op != "gwas_wald":
@@ -90,6 +93,7 @@ def commands_for(
     options = operation_args(op)
     if backend is not None:
         options += ["--backend", backend, "--no-telemetry"]
+        # Only the text row matches GEMMA's output; kinship_npy times the default.
         if op == "kinship":
             options += ["--legacy-text"]
     if op == "gwas_wald":
@@ -126,7 +130,7 @@ def run_benchmarks(
     )
     timings: dict[str, OpTimings] = {name: {} for name in Timing.__annotations__}
     records: list[dict] = []
-    ops = ["kinship", "lmm_wald", "lmm_all", "gwas_wald"]
+    ops = [*KINSHIP_OPS, "lmm_wald", "lmm_all", "gwas_wald"]
     if MOUSE_COVAR_4.exists():
         ops.append("lmm_wald_c4")
     for op in ops:
@@ -138,7 +142,10 @@ def run_benchmarks(
                 + variants[: repetition % len(variants)]
             )
             for name, executable, backend, pure in ordered:
-                if op == "kinship" and name == "numpy_streaming":
+                if op in KINSHIP_OPS and name == "numpy_streaming":
+                    continue
+                # GEMMA writes only the text matrix, so it has no .npy row.
+                if op == "kinship_npy" and backend is None:
                     continue
                 print(f"{op}: {name}, run {repetition + 1}/{runs}", flush=True)
                 env = dict(os.environ)
@@ -155,8 +162,11 @@ def run_benchmarks(
                         and list(outdir.glob("*.cXX.*"))
                     ):
                         raise ValueError("Full GWAS unexpectedly saved kinship")
-                    if op == "kinship":
-                        matrix = np.loadtxt(outdir / "bench.cXX.txt")
+                    if op in KINSHIP_OPS:
+                        if op == "kinship_npy":
+                            matrix = np.load(outdir / "bench.cXX.npy")
+                        else:
+                            matrix = np.loadtxt(outdir / "bench.cXX.txt")
                         if reference_matrix is None:
                             reference_matrix = matrix
                         else:
@@ -222,6 +232,7 @@ def print_results_table(timing: Timing, covariates_4: bool) -> None:
 
     rows = [
         ("Kinship (`-gk 1`)", "kinship"),
+        ("Kinship (`-gk 1`, default `.npy`)", "kinship_npy"),
         ("LMM Wald (`-lmm 1`)", "lmm_wald"),
         ("LMM All (`-lmm 4`)", "lmm_all"),
         ("Full GWAS Wald (compute kinship + association)", "gwas_wald"),

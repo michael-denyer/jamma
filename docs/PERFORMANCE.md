@@ -1,23 +1,69 @@
 # Performance Summary
 
+## Matrix text output, 2026-09-14
+
+The default `%.10g`/tab writer uses C++17 conversion with ordered Python
+threads. It retains `np.savetxt` for small inputs and the process writer for
+custom formats or unavailable native support.
+
+This speeds explicit text exports. The normal pipeline retains computed
+kinship in memory unless `save_kinship` is requested; saved matrices default
+to binary `.npy`.
+
+Measured on the same 18-core Mac, Python 3.12.13 and NumPy 2.5.1, at revision
+`cca9799d`. Medians of five interleaved runs, using 18 workers for both paths:
+
+| Matrix | Process writer | Native writer | Speedup |
+|--------|----------------|---------------|---------|
+| Mouse, 1,940 × 1,940 | 320ms | 13.6ms | 23.5x |
+| 5,000 × 5,000 | 577ms | 65.9ms | 8.8x |
+| 2,000 × 100,000 | 2.35s | 499ms | 4.7x |
+
+The complete fresh-process mouse `-gk 1 --legacy-text` command fell from
+773ms to 469ms, a 39% reduction. Every timed matrix matched `np.savetxt`
+byte-for-byte; CLI outputs also had identical SHA256 digests. Validation runs
+outside the timer. Timings include file creation, close, and atomic replacement,
+with filesystem caching enabled and no fsync. The wide case gives the process
+writer enough rows to occupy every worker.
+
+Each thread formats at most 65,536 values per block, or one whole row when
+wider. At most two output buffers per worker are in flight, each reserving
+32 bytes per value. Layout or dtype conversion also happens per block. The
+native path needs only the atomic output temporary file; it creates no matrix
+memmap or intermediate text chunks.
+
+Both libc++ on macOS and libstdc++ on Linux passed the 603,803-value precision
+corpus, including random binary64 patterns, decimal ties, notation boundaries,
+NaNs, infinities, and signed zero. Installed macOS 14-targeted and manylinux
+wheels passed. Linux ASan/UBSan checks and a real SIGINT also passed. Linux
+correctness was tested under x86_64 emulation; these performance measurements
+are macOS results, not Databricks or a full 100,000-square matrix measurement.
+
+```bash
+uv run python scripts/bench_matrix_text.py --cases mouse square wide --cli --repetitions 5 --json /tmp/text-bench.json
+uv run python scripts/smoke_test_matrix_text.py
+```
+
+[Raw repetitions, hashes, and environment](benchmarks/2026-09-14-native-text.json).
+
 ## Aligned process benchmarks, 2026-09-14
 
 Measured 2026-09-14 on mouse_hs1940: 1,940 samples and 12,226 SNPs,
 with 1,410 samples and 10,768 SNPs retained for association. Apple M5 Pro,
 18 physical cores, macOS 26.6.2, Python 3.12.13, NumPy 2.5.1,
-JAMMA 8.0.4 with the native C extension and Accelerate-ILP64,
+JAMMA 8.1.0 with native extensions and Accelerate-ILP64,
 and GEMMA 0.98.5 in OpenBLAS and Accelerate builds. The runtime source is
-revision `7b63772a`. The machine was otherwise idle (load average 2.0 on 18
-cores at start). This is the local development installation, not a fresh
+revision `cca9799d`. The machine was otherwise idle; all writer benchmarks
+finished before this backend comparison started. This is the local development installation, not a fresh
 portable-wheel installation.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.0s | 1.2s | 800ms | 747ms | — | 1.1x | 1.4x | 1.6x |
-| LMM Wald (`-lmm 1`) | 6.9s | 4.2s | 5.2s | 514ms | 558ms | 10.1x | 13.5x | 8.2x |
-| LMM All (`-lmm 4`) | 12.7s | 7.5s | 7.5s | 537ms | 569ms | 14.0x | 23.7x | 14.0x |
-| Full GWAS Wald (compute kinship + association) | 7.9s | 5.5s | 5.5s | 714ms | 760ms | 7.6x | 11.1x | 7.6x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 26.5s | 12.6s | 16.6s | 1.0s | 1.1s | 15.8x | 25.3x | 12.1x |
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 835ms | 457ms | — | 1.8x | 2.4x | 2.7x |
+| LMM Wald (`-lmm 1`) | 7.3s | 4.3s | 5.4s | 544ms | 599ms | 10.0x | 13.5x | 7.8x |
+| LMM All (`-lmm 4`) | 13.5s | 7.6s | 7.9s | 567ms | 596ms | 13.9x | 23.8x | 13.3x |
+| Full GWAS Wald (compute kinship + association) | 8.4s | 5.5s | 5.7s | 724ms | 785ms | 7.9x | 11.6x | 7.6x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 12.6s | 16.4s | 1.1s | 1.1s | 15.2x | 25.3x | 11.8x |
 
 Best of three fresh-process runs per operation and backend, run sequentially
 with backend order rotated between repetitions. This measures a warm filesystem
@@ -26,8 +72,8 @@ input loading, computation and final output writing. There is no untimed JAMMA
 warmup or preloaded genotype/kinship array. Ratios use unrounded times and the
 faster of the JAMMA C batch and streaming backends for each operation.
 The C speedup column includes startup and dispatch differences. Standalone
-kinship does not use the LMM accelerator; enabling C was slower for that
-operation in this measurement.
+kinship uses the new native text formatter; its computation does not use the
+LMM accelerator.
 
 The required work determines which I/O belongs in each row:
 
@@ -85,24 +131,24 @@ extension and auto-detect GEMMA at `~/.local/bin/gemma` and
 commands. Temporary output paths in those commands are removed after validation;
 the scripts recreate equivalent directories on each invocation.
 
-[Raw repetitions and input/build hashes](benchmarks/2026-09-14-aligned.json)
-record all 81 measurements; the superseded provisional run is kept in
-[2026-09-09-aligned.json](benchmarks/2026-09-09-aligned.json). The checked-in report retains timings
-and provenance; `--json` additionally saves the exact commands with local paths.
+[Updated backend repetitions and input/build hashes](benchmarks/2026-09-14-native-backends.json)
+record all 72 measurements. The LOCO row retains the earlier measurement at
+`7b63772a` from [the preceding report](benchmarks/2026-09-14-aligned.json).
+The checked-in reports retain timings and provenance; `--json` also saves the
+exact commands with local paths.
 
 ### Observed variation
 
 Minimum-to-maximum ranges across the three repetitions, not confidence
-intervals. The ratios above compare minima. Every range is within 5% of its
-minimum.
+intervals. The ratios above compare minima.
 
 | Operation | GEMMA Accelerate range (s) | JAMMA C batch range (s) |
 |-----------|---------------------------|-------------------------|
-| Kinship | 1.193–1.221 | 0.747–0.759 |
-| Wald association | 4.230–4.261 | 0.514–0.522 |
-| All-tests association | 7.536–7.568 | 0.537–0.539 |
-| Full GWAS Wald | 5.459–5.492 | 0.714–0.722 |
-| Wald + four covariates | 12.636–12.702 | 1.046–1.067 |
+| Kinship | 1.238–1.245 | 0.457–0.474 |
+| Wald association | 4.266–4.284 | 0.544–0.551 |
+| All-tests association | 7.564–7.628 | 0.567–0.574 |
+| Full GWAS Wald | 5.490–5.548 | 0.724–0.738 |
+| Wald + four covariates | 12.627–12.806 | 1.078–1.106 |
 | LOCO Wald | 34.018–34.149 | 3.284–3.329 |
 
 The earlier small-scale comparisons used different timing boundaries. Their

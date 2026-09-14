@@ -32,7 +32,11 @@ operation in this measurement.
 The required work determines which I/O belongs in each row:
 
 - **Kinship:** both read PLINK and write the same text matrix format. JAMMA uses
-  `--legacy-text` because a saved matrix is the requested result.
+  `--legacy-text` because a saved matrix is the requested result. A second
+  JAMMA-only row times the shipped default, which writes the binary `.npy`
+  matrix instead. GEMMA has no binary output, so that row has no counterpart
+  and its GEMMA cells stay blank. The tables above predate the row; it is
+  published with the next idle-machine run.
 - **Association:** both read the same precomputed text kinship, PLINK and optional
   covariate files, then write association results. Kinship computation is excluded
   for both; eigendecomposition is included for both.

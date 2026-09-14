@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `scripts/bench_all_backends.py` times a second kinship row, `kinship_npy`,
+  which runs `-gk 1` without `--legacy-text` and so writes the binary `.npy`
+  matrix JAMMA ships by default. The existing text row remains the
+  like-for-like GEMMA comparison, and the new row has no GEMMA counterpart.
+
 ## [8.1.0] - 2026-09-14
 
 ### Removed

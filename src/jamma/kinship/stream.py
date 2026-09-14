@@ -9,10 +9,10 @@ genotypes, in centered (-gk 1) or standardized (-gk 2) form:
 where X_c/Z is imputed to per-SNP mean (and, for standardized, scaled by
 per-SNP standard deviation), and p is the filtered SNP count.
 
-LOCO (Leave-One-Chromosome-Out) kinship lives in ``jamma.kinship.loco``; it
-shares SNP selection and accumulation through ``jamma.kinship.accumulation``.
-LOCO owns its two-pass batching because it keeps several matrices live
-(S_full plus one S_chr per chromosome) instead of one.
+LOCO (Leave-One-Chromosome-Out) kinship lives in ``jamma.kinship.loco``. The
+two share only ``accumulate_kinship`` from ``jamma.kinship.accumulation``; LOCO
+owns its two-pass batching because it keeps several matrices live (S_full plus
+one S_chr per chromosome) instead of one.
 """
 
 from __future__ import annotations

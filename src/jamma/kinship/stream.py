@@ -29,7 +29,11 @@ from jamma.core import memory
 from jamma.core.estimates import estimate_kinship_seconds
 from jamma.core.memory import estimate_streaming_memory
 from jamma.core.progress import progress_iterator
-from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
+from jamma.core.snp_filter import (
+    compute_snp_filter_mask,
+    compute_snp_stats,
+    validate_snp_indices,
+)
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.kinship.accumulation import accumulate_kinship
 from jamma.kinship.accumulation import (
@@ -104,7 +108,7 @@ def _stream_kinship(
         maf_threshold: Minimum MAF for inclusion.
         miss_threshold: Maximum missing rate for inclusion.
         show_progress: Show the progress bar.
-        ksnps_indices: Optional -ksnps restriction, or None.
+        ksnps_indices: Optional -ksnps restriction (already validated), or None.
         valid_indices: Sample indices to retain (already validated), or None.
         filter_sample_indices: Samples used for SNP filtering (already validated),
             or None for all BED samples.
@@ -123,6 +127,10 @@ def _stream_kinship(
     )
     K = np.zeros((n_out, n_out), dtype=np.float64)
     n_filtered = 0
+    restriction = None
+    if ksnps_indices is not None:
+        restriction = np.zeros(n_snps, dtype=bool)
+        restriction[ksnps_indices] = True
 
     n_chunks = (n_snps + chunk_size - 1) // chunk_size
     chunk_iter = stream_genotype_chunks(
@@ -150,8 +158,8 @@ def _stream_kinship(
             maf_threshold,
             miss_threshold,
         )
-        if ksnps_indices is not None:
-            keep &= np.isin(np.arange(file_start, file_end), ksnps_indices)
+        if restriction is not None:
+            keep &= restriction[file_start:file_end]
         local = np.flatnonzero(keep)
         if len(local) == 0:
             continue
@@ -267,6 +275,7 @@ def compute_kinship_streaming(
         validate_valid_indices(valid_indices, n_samples)
     if filter_sample_indices is not None:
         validate_valid_indices(filter_sample_indices, n_samples)
+    validate_snp_indices(ksnps_indices, n_snps, "-ksnps")
 
     n_out = len(valid_indices) if valid_indices is not None else n_samples
 

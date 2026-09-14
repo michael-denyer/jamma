@@ -150,6 +150,16 @@ def test_ksnps_restriction_is_applied_inside_the_single_read(
     np.testing.assert_allclose(K, expected, rtol=1e-12, atol=1e-14)
 
 
+def test_out_of_range_ksnps_index_is_rejected(asymmetric_plink):
+    with pytest.raises(ValueError, match=r"-ksnps index 61 out of range for 61 SNPs"):
+        compute_kinship_streaming(
+            asymmetric_plink,
+            ksnps_indices=np.array([0, 61]),
+            check_memory=False,
+            show_progress=False,
+        )
+
+
 @pytest.mark.parametrize("filtered", [False, True])
 def test_streaming_kinship_returns_its_accumulator(
     asymmetric_plink, monkeypatch, filtered

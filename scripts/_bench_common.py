@@ -168,6 +168,8 @@ def verify_associations(
     from jamma.validation.tolerances import ToleranceConfig
 
     tolerances = ToleranceConfig()
+    snps = list(reference)
+    first = reference[snps[0]]
     for column, rtol in (
         ("beta", tolerances.beta_rtol),
         ("se", tolerances.se_rtol),
@@ -175,13 +177,20 @@ def verify_associations(
         ("p_lrt", tolerances.p_lrt_rtol),
         ("p_score", tolerances.pvalue_rtol),
     ):
-        if column not in next(iter(reference.values())):
+        if column not in first:
             continue
-        np.testing.assert_allclose(
-            [float(actual[snp][column]) for snp in reference],
-            [float(reference[snp][column]) for snp in reference],
-            rtol=rtol,
-            atol=1e-14,
-            equal_nan=True,
-            err_msg=column,
-        )
+        expected = np.array([float(reference[snp][column]) for snp in snps])
+        observed = np.array([float(actual[snp][column]) for snp in snps])
+        atol: float | np.ndarray = 1e-14
+        if column == "beta":
+            # A null effect is round-off on a value far below its standard
+            # error, so beta carries an absolute floor scaled by that error.
+            se = np.array([float(reference[snp]["se"]) for snp in snps])
+            atol = atol + tolerances.beta_se_floor * np.abs(se)
+        close = np.isclose(observed, expected, rtol=rtol, atol=atol, equal_nan=True)
+        if not close.all():
+            worst = int(np.argmax(np.where(close, 0.0, np.abs(observed - expected))))
+            raise AssertionError(
+                f"{column} differs at {int((~close).sum())} SNPs; worst {snps[worst]}: "
+                f"actual={observed[worst]:.6e} reference={expected[worst]:.6e}"
+            )

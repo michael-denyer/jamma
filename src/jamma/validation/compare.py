@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import overload
 
 import numpy as np
-from numpy.testing import assert_allclose
 
 from jamma.lmm.schema import HEADERS, MODE_SPECS, LmmMode
 from jamma.lmm.stats import AssocResult
@@ -54,11 +53,13 @@ def compare_arrays(
     rtol: float,
     atol: float,
     name: str = "array",
+    *,
+    floor: np.ndarray | None = None,
 ) -> ComparisonResult:
     """Compare two arrays with tolerance and return structured result.
 
-    Uses numpy.testing.assert_allclose internally but catches the assertion
-    to return a structured ComparisonResult instead of raising.
+    Uses numpy.isclose semantics, |a - b| <= atol + rtol * |b|, with NaN equal
+    to NaN, and returns a structured ComparisonResult instead of raising.
 
     Args:
         actual: The computed array to validate.
@@ -66,6 +67,9 @@ def compare_arrays(
         rtol: Relative tolerance for comparison.
         atol: Absolute tolerance for comparison.
         name: Name to use in error messages for context.
+        floor: Optional per-element absolute tolerance added to ``atol``, for
+            columns whose scale is set by another column (beta by its standard
+            error). NaN entries count as zero.
 
     Returns:
         ComparisonResult with pass/fail status and diagnostic information.
@@ -87,14 +91,11 @@ def compare_arrays(
     if actual.size == 0:
         return _passed_without_comparison(f"{name} comparison passed (empty arrays)")
 
-    try:
-        assert_allclose(
-            actual,
-            expected,
-            rtol=rtol,
-            atol=atol,
-            err_msg=f"{name} comparison",
-        )
+    atol_eff: float | np.ndarray = atol
+    if floor is not None:
+        atol_eff = atol + np.nan_to_num(floor, nan=0.0)
+    close = np.isclose(actual, expected, rtol=rtol, atol=atol_eff, equal_nan=True)
+    if bool(np.all(close)):
         # Passed - compute stats anyway for reporting
         abs_diff = np.abs(actual - expected)
         max_abs_diff = float(np.max(abs_diff))
@@ -117,7 +118,7 @@ def compare_arrays(
             ),
         )
 
-    except AssertionError:
+    else:
         # Compute detailed diagnostics
         abs_diff = np.abs(actual - expected)
         max_abs_diff = float(np.max(abs_diff))
@@ -132,12 +133,7 @@ def compare_arrays(
             rel_diff = abs_diff / np.abs(expected)
             rel_diff = np.where(np.isfinite(rel_diff), rel_diff, np.inf)
         max_rel_diff = float(np.max(rel_diff))
-        failed_indices = tuple(
-            int(i)
-            for i in np.flatnonzero(
-                ~np.isclose(actual, expected, rtol=rtol, atol=atol, equal_nan=True)
-            )
-        )
+        failed_indices = tuple(int(i) for i in np.flatnonzero(~close))
 
         return ComparisonResult(
             passed=False,
@@ -698,7 +694,12 @@ def compare_assoc_results(
     actual_se = np.array([r.se for r in actual])
     expected_se = np.array([r.se for r in expected])
     beta_result = compare_arrays(
-        actual_beta, expected_beta, config.beta_rtol, config.atol, "beta"
+        actual_beta,
+        expected_beta,
+        config.beta_rtol,
+        config.atol,
+        "beta",
+        floor=config.beta_se_floor * np.abs(expected_se),
     )
     se_result = compare_arrays(
         actual_se, expected_se, config.se_rtol, config.atol, "se"

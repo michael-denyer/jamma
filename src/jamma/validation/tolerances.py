@@ -77,6 +77,13 @@ class ToleranceConfig:
         beta_rtol: Relative tolerance for effect sizes.
             Max observed: 8.5e-3 due to lambda sensitivity. Typical: 7e-6.
             Scientific conclusions (effect direction, ranking) are identical.
+        beta_se_floor: Absolute floor for beta, in units of the reference
+            standard error: |a - b| <= atol + beta_rtol * |b| + beta_se_floor * se.
+            A relative tolerance is meaningless at a null effect, where beta is
+            round-off on a value far below its own uncertainty. Max observed
+            |a - b| / se on mouse_hs1940 (2026-09-14, modes 1 and 4, with and
+            without covariates, 10,768 SNPs; LOCO chromosome 1 with covariates,
+            950 SNPs): 7.7e-6.
         se_rtol: Relative tolerance for standard errors.
             Max observed: 2e-6. Follows similar pattern to beta.
         pvalue_rtol: Relative tolerance for p-values.
@@ -113,6 +120,9 @@ class ToleranceConfig:
     # Beta: max observed 8.5e-3 due to lambda sensitivity (0.35x amplification)
     # and GEMMA output precision (6 sig figs). Scientific significance unaffected.
     beta_rtol: float = 1e-2
+    # Beta floor in standard errors: max observed |diff|/se 7.7e-6 (2026-09-14).
+    # Below this a beta is round-off on a null effect, not a discrepancy.
+    beta_se_floor: float = 1e-4
     # SE: follows beta sensitivity pattern
     se_rtol: float = 1e-5
     # P-values (Wald/Score): CDF implementation differences (Cephes betainc vs GSL)
@@ -150,6 +160,7 @@ class ToleranceConfig:
         """
         return cls(
             beta_rtol=1e-6,
+            beta_se_floor=1e-5,
             se_rtol=1e-6,
             pvalue_rtol=1e-5,
             kinship_rtol=1e-10,
@@ -172,6 +183,7 @@ class ToleranceConfig:
         """
         return cls(
             beta_rtol=0.1,  # 10x looser than default (1e-2)
+            beta_se_floor=1e-3,  # 10x looser than default (1e-4)
             se_rtol=1e-4,  # 10x looser than default (1e-5)
             pvalue_rtol=1e-3,  # 10x looser than default (1e-4)
             kinship_rtol=1e-6,  # 100x looser than default (1e-8)

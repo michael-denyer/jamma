@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The README performance table and `docs/PERFORMANCE.md` carry the 2026-09-14
   idle-machine benchmark; the provisional 2026-09-09 run is superseded and kept
   in `docs/benchmarks/`.
+- `ToleranceConfig.beta_se_floor` (1e-4) adds an absolute floor of that many
+  standard errors to the beta comparison in `compare_assoc_results` and the
+  benchmark output checks. A relative tolerance is meaningless at a null
+  effect: `rs13475789` differed by 1.8% on a beta 1e-4 of its standard error.
+  Largest observed difference on mouse_hs1940 is 7.7e-6 standard errors.
 - `scripts/bench_all_backends.py` and `scripts/bench_loco.py` time complete
   child processes from PLINK input to written association files for every
   backend, verify each run's output against the first run within the

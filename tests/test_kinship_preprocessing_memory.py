@@ -1,12 +1,15 @@
 """The kinship memory quote bounds real preprocessing allocations."""
 
 import tracemalloc
+from functools import partial
 
 import numpy as np
 import pytest
 from bed_reader import to_bed
 
-from jamma.core.memory import estimate_streaming_memory
+from jamma import jlinalg
+from jamma.core import memory
+from jamma.core.memory import estimate_kinship_memory
 from jamma.kinship import (
     compute_kinship_streaming,
     impute_and_center,
@@ -16,6 +19,40 @@ from tests.conftest import require_fixture, requires_c
 from tests.fixture_paths import MOUSE
 
 pytestmark = pytest.mark.tier0
+
+
+@pytest.mark.parametrize("mode", ["centered", "standardized"])
+@pytest.mark.parametrize("subset", [False, True])
+def test_standalone_gate_prices_actual_kinship_dimensions(
+    tmp_path, monkeypatch, mode, subset
+):
+    values = np.random.default_rng(379).integers(0, 3, (800, 100)).astype(float)
+    values[::11, ::5] = np.nan
+    bfile = tmp_path / "small"
+    to_bed(bfile.with_suffix(".bed"), values)
+    selected = np.arange(0, len(values), 2) if subset else None
+    compute = partial(
+        compute_kinship_streaming,
+        bfile,
+        mode=mode,
+        valid_indices=selected,
+        filter_sample_indices=selected,
+        show_progress=False,
+    )
+    # A 10,000-column request reads only the file's 100 columns. With a
+    # subset, the 400-square output fits this ceiling but an 800-square does not.
+    n_out = 400 if subset else 800
+    scratch_gb = jlinalg.dsyrk_scratch_bytes(n_out) / 1e9
+    available_gb = (0.004 if subset else 0.009) + 1.1 * scratch_gb
+    monkeypatch.setattr(memory, "available_ram_gb", lambda: available_gb)
+    actual = compute()
+    expected = compute(check_memory=False)
+    np.testing.assert_array_equal(actual, expected)
+
+    # A real accumulator cannot fit under this ceiling, even for the subset.
+    monkeypatch.setattr(memory, "available_ram_gb", lambda: 0.001)
+    with pytest.raises(MemoryError, match="Insufficient memory"):
+        compute()
 
 
 @requires_c
@@ -88,7 +125,12 @@ def test_kinship_quote_covers_preprocessing(tmp_path, mode, subset):
     bfile = tmp_path / "memory"
     to_bed(bfile.with_suffix(".bed"), values)
     selected = np.arange(0, len(values), 2) if subset else None
-    quote = estimate_streaming_memory(len(values), chunk_size=values.shape[1])
+    quote = estimate_kinship_memory(
+        n_input_samples=len(values),
+        n_output_samples=len(selected) if selected is not None else len(values),
+        n_snps=values.shape[1],
+        chunk_size=10_000,
+    )
 
     tracemalloc.start()
     try:
@@ -108,6 +150,6 @@ def test_kinship_quote_covers_preprocessing(tmp_path, mode, subset):
 
     assert result.shape == ((400, 400) if subset else (800, 800))
     # Allow metadata and interpreter allocations, not an unpriced matrix.
-    assert peak <= quote.kinship_gb * 1e9 + 1_000_000, (
-        f"peak {peak:,} exceeds kinship quote {quote.kinship_gb * 1e9:,.0f}"
+    assert peak <= quote * 1e9 + 1_000_000, (
+        f"peak {peak:,} exceeds kinship quote {quote * 1e9:,.0f}"
     )

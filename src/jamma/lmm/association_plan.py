@@ -8,9 +8,9 @@ from typing import Literal
 from jamma.core import memory
 from jamma.core.eigen_plan import EigenDriverPlan, array_gb, square_matrix_gb
 from jamma.core.memory import (
+    estimate_kinship_memory,
     estimate_lmm_memory,
     estimate_streaming_memory,
-    kinship_cost,
 )
 from jamma.core.threading import get_c_extension_thread_count, is_blas_controllable
 from jamma.lmm import accel
@@ -178,15 +178,11 @@ class ExecutableAssociationPlan:
         if kinship.loaded:
             phase_gb = square_matrix_gb(kinship.n_samples)
         else:
-            # Every decoded/selected/transform block starts over the full
-            # input population, even when the accumulator uses fewer rows.
-            chunk_size = min(DEFAULT_STATS_CHUNK, self.n_snps_before_filter)
-            phase_gb = estimate_streaming_memory(
-                kinship.n_samples, chunk_size=chunk_size
-            ).kinship_gb + kinship_cost(
-                0.0,
-                array_gb(self.n_input_samples - kinship.n_samples, chunk_size),
-                0.0,
+            phase_gb = estimate_kinship_memory(
+                n_input_samples=self.n_input_samples,
+                n_output_samples=kinship.n_samples,
+                n_snps=self.n_snps_before_filter,
+                chunk_size=DEFAULT_STATS_CHUNK,
             )
         if kinship.n_samples != self.n_samples:
             # The full matrix and its analysed-sample copy are live together.

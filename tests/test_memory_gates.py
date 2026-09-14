@@ -291,7 +291,12 @@ class TestKinshipOnlyPreflight:
         )
 
         with patch("jamma.core.memory.available_ram_gb", return_value=40.0):
-            _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
+            _preflight_kinship_memory(
+                n_input_samples=50_000,
+                n_output_samples=50_000,
+                n_snps=10_000,
+                chunk_size=10_000,
+            )
 
     def test_kinship_only_run_still_blocked_when_kinship_does_not_fit(self):
         """The gate still refuses when the kinship phase itself will not fit."""
@@ -299,7 +304,12 @@ class TestKinshipOnlyPreflight:
 
         with patch("jamma.core.memory.available_ram_gb", return_value=1.0):
             with pytest.raises(MemoryError, match="Insufficient memory"):
-                _preflight_kinship_memory(n_samples=50_000, chunk_size=10_000)
+                _preflight_kinship_memory(
+                    n_input_samples=50_000,
+                    n_output_samples=50_000,
+                    n_snps=10_000,
+                    chunk_size=10_000,
+                )
 
 
 class TestNumpyFallbackKinshipMemory:

@@ -215,6 +215,21 @@ def kinship_cost(kinship_gb: float, chunk_gb: float, dsyrk_scratch_gb: float) ->
     return kinship_gb + (3 + 2 / 8) * chunk_gb + dsyrk_scratch_gb
 
 
+def estimate_kinship_memory(
+    *, n_input_samples: int, n_output_samples: int, n_snps: int, chunk_size: int
+) -> float:
+    """Price streaming kinship in GB from its input and output dimensions.
+
+    Preprocessing uses all input rows; the accumulator and backend scratch
+    use output rows. A short file never allocates the full requested block.
+    """
+    return kinship_cost(
+        square_matrix_gb(n_output_samples),
+        array_gb(n_input_samples, min(chunk_size, n_snps)),
+        _dsyrk_scratch_gb(n_output_samples),
+    )
+
+
 def eigen_cost(n_samples: int, eigendecomp_peak_gb: float | None = None) -> float:
     """Peak memory (GB) for the eigendecomposition phase.
 

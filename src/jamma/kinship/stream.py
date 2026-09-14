@@ -27,7 +27,7 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.estimates import estimate_kinship_seconds
-from jamma.core.memory import estimate_streaming_memory
+from jamma.core.memory import estimate_kinship_memory
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_filter import (
     compute_snp_filter_mask,
@@ -49,7 +49,9 @@ _TRANSFORMS: dict[KinshipMode, Callable[[np.ndarray], np.ndarray]] = {
 }
 
 
-def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
+def _preflight_kinship_memory(
+    *, n_input_samples: int, n_output_samples: int, n_snps: int, chunk_size: int
+) -> None:
     """Gate a kinship computation on the memory that phase actually needs.
 
     Sizes the kinship phase alone, including decoded and preprocessing blocks.
@@ -59,13 +61,20 @@ def _preflight_kinship_memory(n_samples: int, chunk_size: int) -> None:
     ``-gk`` runs that fit comfortably.
 
     Args:
-        n_samples: Number of samples in the kinship matrix.
+        n_input_samples: Number of samples read from the BED file.
+        n_output_samples: Number of samples in the kinship matrix.
+        n_snps: Number of SNPs in the BED file.
         chunk_size: SNPs per genotype chunk held during accumulation.
 
     Raises:
         MemoryError: If the kinship phase will not fit in available memory.
     """
-    kinship_gb = estimate_streaming_memory(n_samples, chunk_size=chunk_size).kinship_gb
+    kinship_gb = estimate_kinship_memory(
+        n_input_samples=n_input_samples,
+        n_output_samples=n_output_samples,
+        n_snps=n_snps,
+        chunk_size=chunk_size,
+    )
     memory.require(
         kinship_gb,
         memory.available_ram_gb(),
@@ -295,13 +304,13 @@ def compute_kinship_streaming(
 
         logger.info(f"  Estimated time: {estimate_kinship_time(n_out, n_snps)}")
 
-    # Memory check before allocation.
-    # Use n_samples (not n_out): stream_genotype_chunks reads full BED rows
-    # at (n_samples, chunk_size), subsetting to valid_indices happens after
-    # allocation. The kinship accumulator uses n_out, but passing n_samples is
-    # conservative and safe.
     if check_memory:
-        _preflight_kinship_memory(n_samples, chunk_size)
+        _preflight_kinship_memory(
+            n_input_samples=n_samples,
+            n_output_samples=n_out,
+            n_snps=n_snps,
+            chunk_size=chunk_size,
+        )
 
     K = _stream_kinship(
         bed_path,

@@ -16,8 +16,7 @@ import numpy as np
 from loguru import logger
 
 from jamma import jlinalg
-from jamma.core.eigen_plan import array_gb, square_matrix_gb
-from jamma.core.memory import kinship_cost
+from jamma.core.memory import estimate_kinship_memory
 from jamma.io.plink import get_plink_metadata, parse_fam_phenotype_column
 from jamma.kinship import compute_kinship_streaming
 
@@ -29,10 +28,11 @@ def measure(bfile: Path, chunk_size: int) -> dict[str, str | int | float]:
     phenotype = parse_fam_phenotype_column(fam, 1)
     indices = np.flatnonzero(np.isfinite(phenotype))
     selected = None if len(indices) == meta.n_samples else indices
-    quote = kinship_cost(
-        square_matrix_gb(len(indices)),
-        array_gb(meta.n_samples, min(chunk_size, meta.n_snps)),
-        jlinalg.dsyrk_scratch_bytes(len(indices)) / 1e9,
+    quote = estimate_kinship_memory(
+        n_input_samples=meta.n_samples,
+        n_output_samples=len(indices),
+        n_snps=meta.n_snps,
+        chunk_size=chunk_size,
     )
 
     tracemalloc.start()

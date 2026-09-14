@@ -162,20 +162,32 @@ GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear er
 
 ## Performance
 
-**Benchmark rerun pending.** The 2026-09-09 measurements ran while another task
-was using the CPU. Their timing ratios are provisional and should not be used
-as performance claims. The output-equivalence checks passed for the reported
-cases; the timing measurements need an idle-machine rerun.
+JAMMA on mouse_hs1940 (1,940 samples x 12,226 SNPs; 1,410 samples and 10,768
+SNPs retained for association), Apple M5 Pro (18 cores), Accelerate-ILP64,
+GEMMA 0.98.5, measured 2026-09-14 on an idle machine. Every row times a fresh
+process from PLINK input to written output, best of three with backend order
+rotated. Association rows read the same precomputed kinship file in both tools.
 
-The revised benchmarks include fresh-process startup, input loading, computation
-and final output writing. Association comparisons read the same precomputed
-kinship file. Standalone kinship writes the same text format in both tools.
-Full GWAS lets JAMMA retain kinship in memory, preserving its avoided
-intermediate I/O. LOCO tests each retained SNP once with chromosome-excluded
-kinship in both tools.
+| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
+|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
+| Kinship (`-gk 1`) | 1.0s | 1.2s | 800ms | 747ms | — | 1.1x | 1.4x | 1.6x |
+| LMM Wald (`-lmm 1`) | 6.9s | 4.2s | 5.2s | 514ms | 558ms | 10.1x | 13.5x | 8.2x |
+| LMM All (`-lmm 4`) | 12.7s | 7.5s | 7.5s | 537ms | 569ms | 14.0x | 23.7x | 14.0x |
+| Full GWAS Wald (compute kinship + association) | 7.9s | 5.5s | 5.5s | 714ms | 760ms | 7.6x | 11.1x | 7.6x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 26.5s | 12.6s | 16.6s | 1.0s | 1.1s | 15.8x | 25.3x | 12.1x |
 
-See [Performance](docs/PERFORMANCE.md) for the protocol, provisional measurements,
-raw repetitions and the separate LOCO-with-covariates validation limitation.
+| Backend | LOCO Wald | vs fastest GEMMA |
+|---------|-----------|------------------|
+| GEMMA (OpenBLAS) | 35.4s | 1.0x |
+| GEMMA (Accelerate) | 34.0s | 1.0x |
+| JAMMA NumPy+C | 3.3s | 10.4x |
+
+LOCO computes each chromosome's excluded kinship and tests each SNP once in both
+tools. Every repetition's output was checked against the first within the
+validation tolerances before any time was recorded.
+
+See [Performance](docs/PERFORMANCE.md) for the protocol, raw repetitions,
+run-to-run ranges and the large-scale (125k) results.
 
 ## Supported Features
 

@@ -1,4 +1,4 @@
-"""Filtered streaming kinship reads the genotype file once.
+"""Filtered streaming kinship reads the genotype file once and returns its accumulator.
 
 Reads are observed at ``bed_reader.open_bed``, the boundary every genotype
 stream crosses. A statistics pass that reaches the reader through some other
@@ -15,7 +15,7 @@ import pytest
 
 from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.io import load_plink_binary, plink
-from jamma.kinship import compute_kinship_streaming
+from jamma.kinship import compute_kinship_streaming, stream
 from tests.reference.kinship import (
     compute_centered_kinship,
     compute_standardized_kinship,
@@ -148,6 +148,31 @@ def test_ksnps_restriction_is_applied_inside_the_single_read(
     assert reads == ONE_SWEEP_OF_61_SNPS_BY_7
     expected = _reference_kinship("centered", genotypes, keep)
     np.testing.assert_allclose(K, expected, rtol=1e-12, atol=1e-14)
+
+
+@pytest.mark.parametrize("filtered", [False, True])
+def test_streaming_kinship_returns_its_accumulator(
+    asymmetric_plink, monkeypatch, filtered
+):
+    accumulators: list[np.ndarray] = []
+    real_accumulate = stream.accumulate_kinship
+
+    def recording(K: np.ndarray, X: np.ndarray) -> None:
+        accumulators.append(K)
+        real_accumulate(K, X)
+
+    monkeypatch.setattr(stream, "accumulate_kinship", recording)
+
+    K = compute_kinship_streaming(
+        asymmetric_plink,
+        maf_threshold=MAF if filtered else 0.0,
+        miss_threshold=MISS if filtered else 1.0,
+        filter_sample_indices=FILTER_ROWS if filtered else None,
+        check_memory=False,
+        show_progress=False,
+    )
+
+    assert np.shares_memory(K, accumulators[0])
 
 
 def test_no_surviving_snp_raises_with_the_filter_in_the_message(asymmetric_plink):

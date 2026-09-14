@@ -99,6 +99,21 @@ class TestByteIdentity:
 
         assert parallel_path.read_bytes() == expected
 
+    def test_rows_wider_than_a_format_slice(self, tmp_path: Path) -> None:
+        """Rows spanning several slices, with a partial last slice, stay identical."""
+        from jamma.io.matrix_writer import _FORMAT_SLICE
+
+        rng = np.random.default_rng(7)
+        n_cols = 2 * _FORMAT_SLICE + 5
+        matrix = rng.uniform(-1e3, 1e3, (500, n_cols)) * 10.0 ** rng.integers(
+            -12, 12, (500, n_cols)
+        )
+        savetxt_path = tmp_path / "savetxt.txt"
+        parallel_path = tmp_path / "parallel.txt"
+        expected = _savetxt_bytes(matrix, savetxt_path)
+        write_matrix_parallel(matrix, parallel_path, n_workers=2)
+        assert parallel_path.read_bytes() == expected
+
     def test_n_workers_1(self, tmp_path: Path) -> None:
         """Single worker still produces byte-identical output."""
         rng = np.random.default_rng(555)

@@ -32,9 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the BED once. Each chunk's MAF, missing-rate and monomorphism filter is
   decided from the chunk's own statistics before its surviving columns are
   accumulated, in place of a statistics pass followed by an accumulation
-  pass. The matrix is bit-identical (78 committed digests plus 12 covering
-  the phenotyped filter basis, `-miss`, `-ksnps` and chunk size); the saving
-  is one read of the genotype file, about 40 ms on mouse_hs1940.
+  pass, and normalization divides the accumulator in place, so the kinship
+  phase holds the one matrix the memory estimator budgets. With the native
+  `snp_stats.c` kernel the matrix is bit-identical (78 committed digests plus
+  12 covering the phenotyped filter basis, `-miss`, `-ksnps` and chunk size);
+  the saving is one read of the genotype file, about 40 ms on mouse_hs1940.
+  Under the NumPy statistics fallback (`JAMMA_FORCE_NUMPY_FALLBACK`) the
+  per-chunk float64 mean can retain a SNP whose float32 whole-file mean fell
+  just below the MAF threshold, which changes the SNP set rather than a last
+  bit.
 - `scripts/bench_all_backends.py` and `scripts/bench_loco.py` time complete
   child processes from PLINK input to written association files for every
   backend, verify each run's output against the first run within the

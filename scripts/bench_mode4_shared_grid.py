@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interleaved A/B benchmark for the fused n_cvt=1 mode-4 kernel.
+"""Interleaved A/B benchmark for the fused n_cvt=1 Wald and mode-4 kernels.
 
 Each revision runs in a persistent, warmed subprocess. Measurements alternate
 in balanced ABBA/BAAB blocks so machine drift is not aliased with revision.
@@ -45,7 +45,9 @@ def _digest_result(result: dict[str, np.ndarray]) -> str:
     return digest.hexdigest()
 
 
-def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> None:
+def _worker(
+    source_root: Path, n_samples: int, n_snps: int, n_threads: int, mode: int = 4
+) -> None:
     """Serve warmed benchmark measurements over a line-oriented protocol."""
     sys.path.insert(0, str(source_root / "src"))
     from jamma.lmm._lmm_accel import (
@@ -54,7 +56,7 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
     )
 
     eigenvalues, uab_inv, w, Uty, utg_t = build_inputs(n_samples, n_snps)
-    hi_eval_null = 1.0 / (eigenvalues + 1.0)
+    hi_eval_null = 1.0 / (eigenvalues + 1.0) if mode == 4 else None
     workspace = create_workspace_ncvt1_c(
         eigenvalues,
         uab_inv,
@@ -65,9 +67,9 @@ def _worker(source_root: Path, n_samples: int, n_snps: int, n_threads: int) -> N
         1e5,
         50,
         20,
-        lmm_mode=4,
+        lmm_mode=mode,
         hi_eval_null=hi_eval_null,
-        logl_H0=0.0,
+        logl_H0=0.0 if mode == 4 else None,
     )
 
     # Exercise the full working set once before any timed command. A small
@@ -97,6 +99,7 @@ class WorkerProcess:
         n_samples: int,
         n_snps: int,
         n_threads: int,
+        mode: int = 4,
     ) -> None:
         command = [
             sys.executable,
@@ -110,6 +113,8 @@ class WorkerProcess:
             str(n_snps),
             "--threads",
             str(n_threads),
+            "--mode",
+            str(mode),
         ]
         self.process = subprocess.Popen(
             command,
@@ -169,11 +174,12 @@ def compare(
     n_snps: int,
     n_threads: int,
     blocks: int,
+    mode: int = 4,
 ) -> dict[str, object]:
     """Run the balanced comparison and return drift-visible summary data."""
     workers = {
-        "A": WorkerProcess(a_root, n_samples, n_snps, n_threads),
-        "B": WorkerProcess(b_root, n_samples, n_snps, n_threads),
+        "A": WorkerProcess(a_root, n_samples, n_snps, n_threads, mode),
+        "B": WorkerProcess(b_root, n_samples, n_snps, n_threads, mode),
     }
     timings: dict[str, list[float]] = {"A": [], "B": []}
     digests: dict[str, set[str]] = {"A": set(), "B": set()}
@@ -221,6 +227,7 @@ def compare(
         "samples": n_samples,
         "snps": n_snps,
         "threads": n_threads,
+        "mode": mode,
         "blocks": blocks,
         "measurements_per_revision": len(timings["A"]),
         "median_a_seconds": median_a,
@@ -246,6 +253,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--samples", type=int, default=1_410)
     parser.add_argument("--snps", type=int, default=10_768)
     parser.add_argument("--threads", type=int, default=18)
+    parser.add_argument("--mode", type=int, choices=(1, 4), default=4)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--source-root", type=Path, help=argparse.SUPPRESS)
@@ -257,7 +265,9 @@ def main() -> None:
     if args.worker:
         if args.source_root is None:
             raise SystemExit("--worker requires --source-root")
-        _worker(args.source_root.resolve(), args.samples, args.snps, args.threads)
+        _worker(
+            args.source_root.resolve(), args.samples, args.snps, args.threads, args.mode
+        )
         return
 
     schedule = balanced_schedule(args.blocks)
@@ -275,6 +285,7 @@ def main() -> None:
         args.snps,
         args.threads,
         args.blocks,
+        args.mode,
     )
     print(json.dumps(result, sort_keys=True))
 

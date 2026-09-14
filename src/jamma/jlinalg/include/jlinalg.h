@@ -270,10 +270,12 @@ int jlinalg_eigh_c(npy_intp N,
  */
 void snp_stats_chunk_f32(const float *data, npy_intp n_samples, npy_intp n_snps_chunk,
                          double *means, npy_intp *miss_counts, double *variances,
-                         int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe);
+                         int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe,
+                         int is_fortran);
 void snp_stats_chunk_f64(const double *data, npy_intp n_samples, npy_intp n_snps_chunk,
                          double *means, npy_intp *miss_counts, double *variances,
-                         int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe);
+                         int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe,
+                         int is_fortran);
 
 /* ---------------------------------------------------------------------------
  * Initialisation and introspection

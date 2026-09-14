@@ -262,7 +262,6 @@ def collect_snp_stats_from_chunks(
                 f"({n_samples}, {expected_width}), got {chunk.shape}"
             )
 
-        chunk = np.ascontiguousarray(chunk)
         if include_hwe:
             assert n_aa is not None
             assert n_ab is not None

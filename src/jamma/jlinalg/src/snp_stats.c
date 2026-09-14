@@ -15,8 +15,8 @@
  * libiomp5 thread pool (OMP Error #13 at kmp_runtime.cpp).  pthreads
  * sidesteps this entirely.
  *
- * Data layout: (n_samples, n_snps_chunk) C-contiguous row-major.
- * Element (i, j) is at data[i * n_snps_chunk + j].
+ * Data layout: (n_samples, n_snps_chunk), C- or F-contiguous.
+ * Both layouts visit samples in the same order for bit-identical reductions.
  */
 
 #include "jlinalg.h"
@@ -31,7 +31,8 @@
 typedef struct {
     const void *data; /* float* or double* */
     npy_intp n_samples;
-    npy_intp n_snps_chunk;
+    npy_intp sample_stride;
+    npy_intp snp_stride;
     double *means;
     npy_intp *miss_counts;
     double *variances;
@@ -56,7 +57,7 @@ static void snp_stats_range(const snp_stats_task_t *t) {
             double dval;
             int is_nan;
             if (t->is_f32) {
-                float fval = ((const float *)t->data)[i * t->n_snps_chunk + j];
+                float fval = ((const float *)t->data)[i * t->sample_stride + j * t->snp_stride];
                 is_nan = isnan(fval);
                 dval = (double)fval;
                 if (!is_nan && t->compute_hwe) {
@@ -68,7 +69,7 @@ static void snp_stats_range(const snp_stats_task_t *t) {
                         cnt_bb++;
                 }
             } else {
-                dval = ((const double *)t->data)[i * t->n_snps_chunk + j];
+                dval = ((const double *)t->data)[i * t->sample_stride + j * t->snp_stride];
                 is_nan = isnan(dval);
                 if (!is_nan && t->compute_hwe) {
                     if (dval == 0.0)
@@ -119,14 +120,15 @@ static void *snp_stats_thread_fn(void *arg) {
 static void snp_stats_chunk_impl(const void *data, npy_intp n_samples, npy_intp n_snps_chunk,
                                  double *means, npy_intp *miss_counts, double *variances,
                                  int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe,
-                                 int is_f32) {
+                                 int is_f32, int is_fortran) {
     int n_threads = jlinalg_get_n_threads();
     if (n_snps_chunk <= 256 || n_threads <= 1) {
         /* Small chunk or single-threaded: run inline */
         snp_stats_task_t task = {
             .data = data,
             .n_samples = n_samples,
-            .n_snps_chunk = n_snps_chunk,
+            .sample_stride = is_fortran ? 1 : n_snps_chunk,
+            .snp_stride = is_fortran ? n_samples : 1,
             .means = means,
             .miss_counts = miss_counts,
             .variances = variances,
@@ -168,7 +170,8 @@ static void snp_stats_chunk_impl(const void *data, npy_intp n_samples, npy_intp 
         snp_stats_task_t task = {
             .data = data,
             .n_samples = n_samples,
-            .n_snps_chunk = n_snps_chunk,
+            .sample_stride = is_fortran ? 1 : n_snps_chunk,
+            .snp_stride = is_fortran ? n_samples : 1,
             .means = means,
             .miss_counts = miss_counts,
             .variances = variances,
@@ -194,7 +197,8 @@ static void snp_stats_chunk_impl(const void *data, npy_intp n_samples, npy_intp 
         tasks[t] = (snp_stats_task_t){
             .data = data,
             .n_samples = n_samples,
-            .n_snps_chunk = n_snps_chunk,
+            .sample_stride = is_fortran ? 1 : n_snps_chunk,
+            .snp_stride = is_fortran ? n_samples : 1,
             .means = means,
             .miss_counts = miss_counts,
             .variances = variances,
@@ -237,14 +241,14 @@ static void snp_stats_chunk_impl(const void *data, npy_intp n_samples, npy_intp 
 
 void snp_stats_chunk_f32(const float *data, npy_intp n_samples, npy_intp n_snps_chunk,
                          double *means, npy_intp *miss_counts, double *variances, int64_t *n_aa,
-                         int64_t *n_ab, int64_t *n_bb, int compute_hwe) {
+                         int64_t *n_ab, int64_t *n_bb, int compute_hwe, int is_fortran) {
     snp_stats_chunk_impl(data, n_samples, n_snps_chunk, means, miss_counts, variances, n_aa, n_ab,
-                         n_bb, compute_hwe, 1);
+                         n_bb, compute_hwe, 1, is_fortran);
 }
 
 void snp_stats_chunk_f64(const double *data, npy_intp n_samples, npy_intp n_snps_chunk,
                          double *means, npy_intp *miss_counts, double *variances, int64_t *n_aa,
-                         int64_t *n_ab, int64_t *n_bb, int compute_hwe) {
+                         int64_t *n_ab, int64_t *n_bb, int compute_hwe, int is_fortran) {
     snp_stats_chunk_impl(data, n_samples, n_snps_chunk, means, miss_counts, variances, n_aa, n_ab,
-                         n_bb, compute_hwe, 0);
+                         n_bb, compute_hwe, 0, is_fortran);
 }

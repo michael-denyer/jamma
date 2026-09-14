@@ -163,7 +163,7 @@ class MatrixSource:
         def _stat_chunks():
             for start in range(0, n_snps, _SNP_STATS_CHUNK_SIZE):
                 end = min(start + _SNP_STATS_CHUNK_SIZE, n_snps)
-                yield np.ascontiguousarray(rows[:, start:end]), start, end
+                yield rows[:, start:end], start, end
 
         stats = collect_snp_stats_from_chunks(
             _stat_chunks(),

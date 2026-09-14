@@ -473,7 +473,8 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
 
     /* Every owned reference is declared and NULL-initialised before the first
      * goto so the single cleanup label can release them unconditionally.
-     * a_data is coerced C-contiguous (no writeback); a_means/miss/vars and the
+     * a_data is aligned, native-endian and contiguous (no writeback);
+     * a_means/miss/vars and the
      * three HWE arrays are INOUT (writeback resolved on success, discarded on
      * error). The `ok` flag selects resolve-vs-discard at the label. */
     PyArrayObject *a_data = NULL, *a_means = NULL, *a_miss = NULL, *a_vars = NULL;
@@ -481,8 +482,10 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
     PyObject *result = NULL;
     int ok = 0;
 
-    /* Extract data array -- accept both float32 and float64. */
-    a_data = (PyArrayObject *)PyArray_FROM_OTF(o_data, NPY_NOTYPE, NPY_ARRAY_C_CONTIGUOUS);
+    /* Preserve either contiguous layout. Normalize alignment and byte order
+     * before passing typed pointers to the kernel. */
+    a_data = (PyArrayObject *)PyArray_CheckFromAny(
+        o_data, NULL, 0, 0, NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ENSUREARRAY, NULL);
     if (!a_data) goto cleanup;
 
     int dtype = PyArray_TYPE(a_data);
@@ -496,8 +499,15 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
         goto cleanup;
     }
 
+    if (!PyArray_ISONESEGMENT(a_data)) {
+        PyArrayObject *contiguous = (PyArrayObject *)PyArray_NewCopy(a_data, NPY_KEEPORDER);
+        if (!contiguous) goto cleanup;
+        Py_SETREF(a_data, contiguous);
+    }
+
     npy_intp n_samples = PyArray_DIM(a_data, 0);
     npy_intp n_snps = PyArray_DIM(a_data, 1);
+    int is_fortran = PyArray_IS_F_CONTIGUOUS(a_data);
 
     /* Validate HWE args: all-None or all-array, not a mix */
     int naa_none = (o_naa == Py_None);
@@ -557,12 +567,14 @@ static PyObject *py_compute_snp_stats_chunk(PyObject *self, PyObject *args) {
     Py_BEGIN_ALLOW_THREADS if (dtype == NPY_FLOAT32) {
         snp_stats_chunk_f32((const float *)PyArray_DATA(a_data), n_samples, n_snps,
                             (double *)PyArray_DATA(a_means), (npy_intp *)PyArray_DATA(a_miss),
-                            (double *)PyArray_DATA(a_vars), naa_ptr, nab_ptr, nbb_ptr, compute_hwe);
+                            (double *)PyArray_DATA(a_vars), naa_ptr, nab_ptr, nbb_ptr, compute_hwe,
+                            is_fortran);
     }
     else {
         snp_stats_chunk_f64((const double *)PyArray_DATA(a_data), n_samples, n_snps,
                             (double *)PyArray_DATA(a_means), (npy_intp *)PyArray_DATA(a_miss),
-                            (double *)PyArray_DATA(a_vars), naa_ptr, nab_ptr, nbb_ptr, compute_hwe);
+                            (double *)PyArray_DATA(a_vars), naa_ptr, nab_ptr, nbb_ptr, compute_hwe,
+                            is_fortran);
     }
     Py_END_ALLOW_THREADS
 

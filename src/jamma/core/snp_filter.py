@@ -71,13 +71,12 @@ def compute_snp_stats(
     # Large in-memory matrices are processed in bounded SNP slices to avoid
     # allocating a full contiguous copy of the genotype matrix at once.
     if n_snps <= _SNP_STATS_CHUNK_SIZE:
-        data = np.ascontiguousarray(genotypes)
-        compute_snp_stats_chunk(data, col_means, miss_counts, col_vars)
+        compute_snp_stats_chunk(genotypes, col_means, miss_counts, col_vars)
         return col_means, miss_counts, col_vars
 
     for start in range(0, n_snps, _SNP_STATS_CHUNK_SIZE):
         end = min(start + _SNP_STATS_CHUNK_SIZE, n_snps)
-        chunk = np.ascontiguousarray(genotypes[:, start:end])
+        chunk = genotypes[:, start:end]
         compute_snp_stats_chunk(
             chunk,
             col_means[start:end],

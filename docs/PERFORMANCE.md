@@ -1,28 +1,23 @@
 # Performance Summary
 
-## Provisional aligned process benchmarks
+## Aligned process benchmarks, 2026-09-14
 
-**Idle-machine rerun required.** After these runs, the user confirmed that
-another task was placing a substantial load on the CPU. These timings and
-ratios are retained as diagnostic records only and must not be used as
-performance claims. The numerical-equivalence checks remain valid; passing
-them does not establish that the timing conditions were controlled.
-
-Measured 2026-09-09 on mouse_hs1940: 1,940 samples and 12,226 SNPs,
+Measured 2026-09-14 on mouse_hs1940: 1,940 samples and 12,226 SNPs,
 with 1,410 samples and 10,768 SNPs retained for association. Apple M5 Pro,
 18 physical cores, macOS 26.6.2, Python 3.12.13, NumPy 2.5.1,
-JAMMA 8.0.2 with the native C extension and Accelerate-ILP64,
+JAMMA 8.0.4 with the native C extension and Accelerate-ILP64,
 and GEMMA 0.98.5 in OpenBLAS and Accelerate builds. The runtime source is
-revision `7b268ff7`, measured with the revised benchmark scripts in this change. This is the local development installation, not a
-fresh portable-wheel installation.
+revision `7b63772a`. The machine was otherwise idle (load average 2.0 on 18
+cores at start). This is the local development installation, not a fresh
+portable-wheel installation.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.5s | 1.6s | 948ms | 1.1s | — | 0.8x | 1.3x | 1.4x |
-| LMM Wald (`-lmm 1`) | 8.2s | 4.1s | 6.2s | 593ms | 695ms | 10.5x | 13.8x | 6.9x |
-| LMM All (`-lmm 4`) | 15.2s | 7.9s | 9.7s | 698ms | 895ms | 13.9x | 21.7x | 11.3x |
-| Full GWAS Wald (compute kinship + association) | 10.7s | 5.5s | 6.4s | 857ms | 1.1s | 7.5x | 12.5x | 6.4x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 36.4s | 15.2s | 20.9s | 1.7s | 2.6s | 12.5x | 21.7x | 9.1x |
+| Kinship (`-gk 1`) | 1.0s | 1.2s | 800ms | 747ms | — | 1.1x | 1.4x | 1.6x |
+| LMM Wald (`-lmm 1`) | 6.9s | 4.2s | 5.2s | 514ms | 558ms | 10.1x | 13.5x | 8.2x |
+| LMM All (`-lmm 4`) | 12.7s | 7.5s | 7.5s | 537ms | 569ms | 14.0x | 23.7x | 14.0x |
+| Full GWAS Wald (compute kinship + association) | 7.9s | 5.5s | 5.5s | 714ms | 760ms | 7.6x | 11.1x | 7.6x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 26.5s | 12.6s | 16.6s | 1.0s | 1.1s | 15.8x | 25.3x | 12.1x |
 
 Best of three fresh-process runs per operation and backend, run sequentially
 with backend order rotated between repetitions. This measures a warm filesystem
@@ -57,9 +52,9 @@ complement list for kinship. See [GEMMA's implementation](https://github.com/gen
 
 | Backend | LOCO Wald | vs fastest GEMMA |
 |---------|-----------|------------------|
-| GEMMA (OpenBLAS) | 1m28s | 0.5x |
-| GEMMA (Accelerate) | 43.5s | 1.0x |
-| JAMMA NumPy+C | 5.8s | 7.5x |
+| GEMMA (OpenBLAS) | 35.4s | 1.0x |
+| GEMMA (Accelerate) | 34.0s | 1.0x |
+| JAMMA NumPy+C | 3.3s | 10.4x |
 
 The scripts reject missing/duplicate SNPs, mismatched tested SNP sets or alleles,
 and effect/standard-error/p-value differences outside the existing numerical
@@ -67,14 +62,15 @@ validation tolerances. Saved kinship matrices are also compared. Validation is
 outside the timing window. A failed command or comparison produces no summary
 table or JSON report.
 
-### LOCO with covariates: validation failure
+### LOCO with covariates
 
-The provisional LOCO row has no covariates. An additional chromosome-1 check with
-four covariates tested 950 SNPs and failed the beta tolerance for `rs13475789`:
-GEMMA reported `4.366448e-6`, JAMMA `4.444851e-6`. The absolute difference was
-`7.8403e-8`, about 1.80% relative to GEMMA, exceeding the existing 1% threshold.
-The benchmark retains that threshold and does not publish a timing for this
-case. `bench_loco.py --covariates` remains subject to the same output checks.
+The LOCO row has no covariates. A chromosome-1 check with four covariates
+(950 SNPs) agrees between the tools to within 3.8e-6 standard errors on every
+beta, but `rs13475789` fails the 1% relative beta tolerance: GEMMA reports
+`4.366448e-6`, JAMMA `4.444851e-6`, a difference of `7.8e-8` on a beta that is
+1e-4 of its standard error (`0.035`, p = 0.9999). A relative tolerance is not
+meaningful at zero, so `bench_loco.py --covariates` produces no table until the
+beta check gains a standard-error-scaled floor.
 
 ### Reproduce
 
@@ -89,25 +85,25 @@ extension and auto-detect GEMMA at `~/.local/bin/gemma` and
 commands. Temporary output paths in those commands are removed after validation;
 the scripts recreate equivalent directories on each invocation.
 
-[Raw repetitions and input/build hashes](benchmarks/2026-09-09-aligned.json)
-record all 81 successful measurements. The checked-in report retains timings
+[Raw repetitions and input/build hashes](benchmarks/2026-09-14-aligned.json)
+record all 81 measurements; the superseded provisional run is kept in
+[2026-09-09-aligned.json](benchmarks/2026-09-09-aligned.json). The checked-in report retains timings
 and provenance; `--json` additionally saves the exact commands with local paths.
 
 ### Observed variation
 
-Run-to-run variation was substantial. These are observed minimum-to-maximum
-ranges across the three repetitions, not confidence intervals. The provisional
-ratios compare minima. Concurrent CPU load prevents treating them as reliable
-performance estimates.
+Minimum-to-maximum ranges across the three repetitions, not confidence
+intervals. The ratios above compare minima. Every range is within 5% of its
+minimum.
 
 | Operation | GEMMA Accelerate range (s) | JAMMA C batch range (s) |
 |-----------|---------------------------|-------------------------|
-| Kinship | 1.552–1.709 | 1.140–1.166 |
-| Wald association | 4.106–9.527 | 0.593–0.668 |
-| All-tests association | 7.881–9.195 | 0.698–0.896 |
-| Full GWAS Wald | 5.504–7.081 | 0.857–1.220 |
-| Wald + four covariates | 15.231–17.533 | 1.676–2.658 |
-| LOCO Wald | 43.505–67.460 | 5.793–11.160 |
+| Kinship | 1.193–1.221 | 0.747–0.759 |
+| Wald association | 4.230–4.261 | 0.514–0.522 |
+| All-tests association | 7.536–7.568 | 0.537–0.539 |
+| Full GWAS Wald | 5.459–5.492 | 0.714–0.722 |
+| Wald + four covariates | 12.636–12.702 | 1.046–1.067 |
+| LOCO Wald | 34.018–34.149 | 3.284–3.329 |
 
 The earlier small-scale comparisons used different timing boundaries. Their
 GEMMA ratios and LOCO comparisons are withdrawn; JAMMA version measurements

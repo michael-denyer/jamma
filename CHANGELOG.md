@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The README performance table and `docs/PERFORMANCE.md` carry the 2026-09-14
+  idle-machine benchmark; the provisional 2026-09-09 run is superseded and kept
+  in `docs/benchmarks/`.
 - `scripts/bench_all_backends.py` and `scripts/bench_loco.py` time complete
   child processes from PLINK input to written association files for every
   backend, verify each run's output against the first run within the

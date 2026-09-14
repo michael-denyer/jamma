@@ -3,13 +3,13 @@
 Writes ``src/jamma/_build_meta.py`` at build time so the release date is
 available at runtime via ``jamma.__release_date__`` without manual upkeep.
 
-Also compiles two C extensions if a C compiler is available:
+Builds optional native extensions when their compilers are available:
   - ``src/jamma/lmm/_lmm_accel*.c``: per-SNP LMM pipelines (with OpenMP)
   - ``src/jamma/jlinalg/src/*.c``: jlinalg BLAS compute layer (with OpenMP)
+  - ``src/jamma/io/_matrix_text.cpp``: C++17 fixed-precision text formatting
 
-If compilation fails for any reason, a warning is logged and a pure-Python
-wheel is produced as a graceful fallback — jamma is fully functional without
-either C extension.
+Failed targets fall back to Python independently; successful targets still
+ship in the wheel. JAMMA remains functional without any native extensions.
 """
 
 import datetime
@@ -66,6 +66,7 @@ _cal = _load_build_support_module(
 
 LMM_ACCEL_SPEC = _cal.LMM_ACCEL_SPEC
 JLINALG_SPEC = _cal.JLINALG_SPEC
+MATRIX_TEXT_SPEC = _cal.MATRIX_TEXT_SPEC
 run_build = _cal.run_build
 detect_toolchain = _cal.detect_toolchain
 
@@ -112,12 +113,18 @@ class CustomBuildHook(BuildHookInterface):
                 f"WARNING: {toolchain} (pure-Python fallback).",
                 file=sys.stderr,
             )
-            return
+        else:
+            self._build_extension(LMM_ACCEL_SPEC, toolchain, build_data)
+            self._build_extension(JLINALG_SPEC, toolchain, build_data)
 
-        # Compile C extensions (graceful fallback if unavailable).
-        # _lmm_accel is more critical — compile first so its errors are visible.
-        self._build_extension(LMM_ACCEL_SPEC, toolchain, build_data)
-        self._build_extension(JLINALG_SPEC, toolchain, build_data)
+        # C++ formatting uses Python threads, independently of C/OpenMP support.
+        text_toolchain = detect_toolchain(
+            language="c++", uses_openmp=False, verbose_print=_err, error_print=_err
+        )
+        if isinstance(text_toolchain, str):
+            _err(f"WARNING: {text_toolchain} (Python text writer fallback).")
+        else:
+            self._build_extension(MATRIX_TEXT_SPEC, text_toolchain, build_data)
 
     def _build_extension(self, spec, toolchain, build_data):
         """Compile one C extension from ``spec`` and register it in the wheel.
@@ -163,13 +170,13 @@ class CustomBuildHook(BuildHookInterface):
         # ships and the user sees 1/N the expected parallel speed with no
         # diagnostic. ``used_openmp`` reflects the compile phase; the link phase
         # is reported separately.
-        if not result.used_openmp:
+        if spec.uses_openmp and not result.used_openmp:
             print(
                 f"WARNING: {spec.output_stem} was built WITHOUT OpenMP. "
                 "The C compute path will run single-threaded.",
                 file=sys.stderr,
             )
-        elif not result.used_openmp_link:
+        elif spec.uses_openmp and not result.used_openmp_link:
             print(
                 f"WARNING: {spec.output_stem} compiled with OpenMP but linked "
                 "WITHOUT the OpenMP runtime. Threads will not spawn at runtime.",

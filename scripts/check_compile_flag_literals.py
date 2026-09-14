@@ -76,6 +76,7 @@ FLAGS: set[str] = {
     "-std=c99",
     "-std=c11",
     "-std=c17",
+    "-std=c++17",
     # Link-step flags that belong in LINK_FLAGS_BY_PLATFORM.
     "-shared",
     "-pthread",
@@ -98,6 +99,7 @@ TARGETS: list[str] = [
     "hatch_build.py",
     "src/jamma/jlinalg/_compile_jlinalg.py",
     "src/jamma/lmm/_compile_accel.py",
+    "src/jamma/io/_compile_matrix_text.py",
     "src/jamma/core/recompile.py",
 ]
 

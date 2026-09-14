@@ -10,7 +10,7 @@ import sysconfig
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 from .build_models import SHARED_LINK_FLAGS as _SHARED_LINK_FLAGS
 from .build_models import resolve_cflags_for
@@ -73,6 +73,8 @@ def _diagnose_flags(cc_cmd: str) -> tuple[str, ...]:
 
 def detect_toolchain(
     *,
+    language: Literal["c", "c++"] = "c",
+    uses_openmp: bool = True,
     verbose_print: Callable[..., None] = print,
     error_print: Callable[..., None] | None = None,
 ) -> Toolchain | str:
@@ -114,13 +116,13 @@ def detect_toolchain(
             "headers (build with numpy >= 2.0 to avoid an ABI mismatch)"
         )
 
-    from .find_compiler import find_c_compiler  # lazy relative import
+    from .find_compiler import find_c_compiler, find_cxx_compiler
 
-    compiler = find_c_compiler()
+    compiler = find_cxx_compiler() if language == "c++" else find_c_compiler()
     if compiler is None:
         return (
-            "no usable C compiler found on PATH (tried $CC, sysconfig, cc, "
-            "clang, gcc). Install: apt-get install -y gcc (Linux) or "
+            f"no usable {language} compiler found on PATH. "
+            "Install: apt-get install -y gcc g++ (Linux) or "
             "xcode-select --install (macOS)"
         )
     cc_cmd, cc_extra = compiler
@@ -138,9 +140,11 @@ def detect_toolchain(
 
     from .openmp_detect import detect_openmp_flags  # lazy relative import
 
-    omp_compile, omp_link, cc_cmd = detect_openmp_flags(
-        cc_cmd, system, verbose_print, _warn=error_print
-    )
+    omp_compile, omp_link = [], []
+    if uses_openmp:
+        omp_compile, omp_link, cc_cmd = detect_openmp_flags(
+            cc_cmd, system, verbose_print, _warn=error_print
+        )
 
     return Toolchain(
         cc_cmd=cc_cmd,

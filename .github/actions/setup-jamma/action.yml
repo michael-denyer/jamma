@@ -51,3 +51,8 @@ runs:
       if: inputs.build-extensions == 'true'
       shell: bash
       run: uv run python -m jamma.jlinalg._compile_jlinalg
+
+    - name: Compile matrix text extension
+      if: inputs.build-extensions == 'true'
+      shell: bash
+      run: uv run python -m jamma.io._compile_matrix_text

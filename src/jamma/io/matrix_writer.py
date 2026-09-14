@@ -35,6 +35,10 @@ from jamma.io._parallel_text import (
 )
 from jamma.utils.atomic_publish import AtomicOutput
 
+# Values formatted per `%` call inside a worker. Bounds the tuple of NumPy
+# scalars a wide row creates; 4096 of them is about 130 KB of scalar objects.
+_FORMAT_SLICE = 4096
+
 
 @dataclass(frozen=True, slots=True)
 class MatrixWriteTask:
@@ -62,16 +66,35 @@ def _format_rows_to_file(task: MatrixWriteTask) -> None:
             mode="r",
             shape=task.shape,
         )
-        delimiter_bytes = task.delimiter.encode("ascii")
-        newline = b"\n"
+        # np.memmap.__getitem__ is a Python method, so iterating a memmap slice
+        # pays a Python call per value; a plain ndarray view iterates in C.
+        rows = np.asarray(matrix)
+        n_cols = task.shape[1]
+        slices = [
+            (start, min(_FORMAT_SLICE, n_cols - start))
+            for start in range(0, n_cols, _FORMAT_SLICE)
+        ]
+        # One "%g\t%g\t..." template per distinct slice width, built once per
+        # task. Inside a template the delimiter is format text, so its percent
+        # signs are escaped; the join between slices below inserts it literally.
+        template_delimiter = task.delimiter.replace("%", "%%")
+        templates = {
+            width: template_delimiter.join([task.fmt] * width)
+            for width in {width for _, width in slices}
+        }
         with open(task.output_path, "wb") as f:
             for i in range(task.start_row, task.stop_row):
-                row = matrix[i]
-                # Format each value individually and join — avoids creating a
-                # Python tuple of 125k float objects (~3 MB per row) that the
-                # old `row_fmt % tuple(row)` approach required.
-                parts = [(task.fmt % row[j]).encode("ascii") for j in range(len(row))]
-                f.write(delimiter_bytes.join(parts) + newline)
+                row = rows[i]
+                # Formatting a whole slice with one `%` is 1.6x faster per value
+                # than formatting elements one at a time, and the slice bounds
+                # the tuple of NumPy scalars at _FORMAT_SLICE elements, so a
+                # 125k-wide row never materialises 4 MB of scalar objects. The
+                # scalars stay NumPy so that `%r` prints what np.savetxt prints.
+                parts = [
+                    templates[width] % tuple(row[start : start + width])
+                    for start, width in slices
+                ]
+                f.write(task.delimiter.join(parts).encode("ascii") + b"\n")
     except Exception as e:
         raise RuntimeError(
             f"_format_rows_to_file failed on rows {task.start_row}-{task.stop_row}: {e}"

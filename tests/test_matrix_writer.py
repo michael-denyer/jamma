@@ -26,6 +26,18 @@ def _savetxt_bytes(
     return path.read_bytes()
 
 
+def _literal_delimiter_bytes(matrix: np.ndarray, fmt: str, delimiter: str) -> bytes:
+    """Format each value on its own and join with the delimiter taken literally.
+
+    This is the per-element formatting the parallel worker used before it
+    formatted rows in slices, written without any template that could
+    reinterpret a percent sign in the delimiter.
+    """
+    sep = delimiter.encode("ascii")
+    rows = [sep.join((fmt % v).encode("ascii") for v in row) for row in matrix]
+    return b"\n".join(rows) + b"\n"
+
+
 class TestByteIdentity:
     """Verify write_matrix_parallel is byte-identical to np.savetxt."""
 
@@ -99,6 +111,21 @@ class TestByteIdentity:
 
         assert parallel_path.read_bytes() == expected
 
+    def test_rows_wider_than_a_format_slice(self, tmp_path: Path) -> None:
+        """Rows spanning several slices, with a partial last slice, stay identical."""
+        from jamma.io.matrix_writer import _FORMAT_SLICE
+
+        rng = np.random.default_rng(7)
+        n_cols = 2 * _FORMAT_SLICE + 5
+        matrix = rng.uniform(-1e3, 1e3, (500, n_cols)) * 10.0 ** rng.integers(
+            -12, 12, (500, n_cols)
+        )
+        savetxt_path = tmp_path / "savetxt.txt"
+        parallel_path = tmp_path / "parallel.txt"
+        expected = _savetxt_bytes(matrix, savetxt_path)
+        write_matrix_parallel(matrix, parallel_path, n_workers=2)
+        assert parallel_path.read_bytes() == expected
+
     def test_n_workers_1(self, tmp_path: Path) -> None:
         """Single worker still produces byte-identical output."""
         rng = np.random.default_rng(555)
@@ -111,6 +138,54 @@ class TestByteIdentity:
         expected = _savetxt_bytes(matrix, savetxt_path)
 
         assert parallel_path.read_bytes() == expected
+
+
+class TestFormatLanguage:
+    """Percent signs in the format and the delimiter keep their per-element meaning."""
+
+    def test_repr_format_keeps_numpy_scalar_repr(self, tmp_path: Path) -> None:
+        """fmt="%r" writes NumPy scalar reprs, as np.savetxt does.
+
+        %r is the one accepted format that can see the scalar's type: np.savetxt
+        formats np.float64 values and writes np.float64(0.0), so the worker must
+        not convert a row to Python floats before formatting it.
+        """
+        values = np.array([0.0, -0.0, np.nan, np.inf, 1e-300, 1.7976931348623157e308])
+        matrix = np.tile(values, 250).reshape(500, 3)
+
+        parallel_path = tmp_path / "parallel.txt"
+        savetxt_path = tmp_path / "savetxt.txt"
+
+        write_matrix_parallel(matrix, parallel_path, fmt="%r", n_workers=2)
+        expected = _savetxt_bytes(matrix, savetxt_path, fmt="%r")
+
+        assert parallel_path.read_bytes() == expected
+
+    @pytest.mark.parametrize("delimiter", ["%", "%%"])
+    def test_percent_delimiter_is_literal_across_slice_boundaries(
+        self, tmp_path: Path, delimiter: str
+    ) -> None:
+        """A delimiter containing % separates every column literally.
+
+        np.savetxt reads "%%" as one "%" and rejects "%", so the parallel
+        worker's contract is that the delimiter is literal, which the
+        per-element worker honoured; a row wider than one slice must use the
+        same separator inside a slice and at the slice boundary.
+        """
+        from jamma.io.matrix_writer import _FORMAT_SLICE
+
+        rng = np.random.default_rng(11)
+        matrix = rng.standard_normal((500, _FORMAT_SLICE + 3))
+        fmt = "%.10g"
+
+        parallel_path = tmp_path / "parallel.txt"
+        write_matrix_parallel(
+            matrix, parallel_path, fmt=fmt, delimiter=delimiter, n_workers=2
+        )
+
+        assert parallel_path.read_bytes() == _literal_delimiter_bytes(
+            matrix, fmt, delimiter
+        )
 
 
 class TestEdgeCases:

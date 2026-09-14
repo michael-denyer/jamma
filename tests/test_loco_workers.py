@@ -207,16 +207,21 @@ def test_computed_eigen_pairs_propagates_worker_failure_and_shuts_down():
             raise RuntimeError("chromosome 2 failed")
         return np.zeros(n), np.eye(n)
 
-    threads_before = threading.active_count()
     pairs = _computed_pairs(workers=3, solve=solve)
 
     chr_name, _, _ = next(pairs)
     assert chr_name == "1"
+    assert _eigen_worker_threads()
     with pytest.raises(RuntimeError, match="chromosome 2 failed"):
         next(pairs)
 
-    assert threading.active_count() == threads_before
+    assert not _eigen_worker_threads()
     pairs.close()
+
+
+def _eigen_worker_threads() -> list[threading.Thread]:
+    """Live LOCO eigen worker threads, by the name solve_eigen_pairs gives them."""
+    return [t for t in threading.enumerate() if t.name.startswith("loco-eigen-")]
 
 
 @pytest.mark.tier0
@@ -225,9 +230,10 @@ def test_keyboard_interrupt_propagates_before_the_in_flight_solve_finishes():
 
     GEMMA dies on SIGINT mid-DSYEVD; JAMMA did the same before #359 because the
     solve ran on a daemon thread. The solve here blocks on ``release`` and a
-    helper thread sends SIGINT to the main thread once the solve has started,
-    then releases the solve two seconds later. A pool that joins its worker on
-    the way out cannot raise until after that release.
+    helper thread sends SIGINT to the main thread once the solve has started.
+    The interrupt must propagate while ``release`` is still clear; only then is
+    the solve released, and every thread the test started is joined so nothing
+    outlives it to disturb the thread accounting of later tests.
     """
     assert threading.current_thread() is threading.main_thread()
     main_thread = threading.get_ident()
@@ -239,21 +245,25 @@ def test_keyboard_interrupt_propagates_before_the_in_flight_solve_finishes():
         assert release.wait(30)
         return np.zeros(len(K)), np.eye(len(K))
 
-    def interrupt_then_release() -> None:
+    def interrupt() -> None:
         assert entered.wait(10)
         time.sleep(0.05)
         signal.pthread_kill(main_thread, signal.SIGINT)
-        time.sleep(2)
-        release.set()
 
     pairs = solve_eigen_pairs(iter([("1", np.eye(4))]), solve, workers=1, n_threads=1)
-    threading.Thread(target=interrupt_then_release, daemon=True).start()
+    helper = threading.Thread(target=interrupt, daemon=True)
+    helper.start()
     try:
         with pytest.raises(KeyboardInterrupt):
             next(pairs)
         assert not release.is_set(), "interrupt waited for the in-flight solve"
     finally:
         release.set()
+        helper.join(10)
+        for worker in _eigen_worker_threads():
+            worker.join(10)
+    assert not helper.is_alive()
+    assert not _eigen_worker_threads()
 
 
 # ---------------------------------------------------------------------------

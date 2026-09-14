@@ -43,8 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bit.
 - The parallel text matrix writer formats each row in slices of 4,096 values
   with one `%` call per slice instead of one per value. Output bytes are
-  unchanged; the worker phase runs 1.7x faster per value, and a wide row
-  still holds at most one slice of Python floats at a time.
+  unchanged; the worker phase runs 1.6x faster per value, and a wide row
+  still holds at most one slice of NumPy scalars at a time. `%r` output and
+  delimiters containing `%` are unchanged from before, pinned by tests to the
+  per-value worker's bytes.
 - `scripts/bench_all_backends.py` and `scripts/bench_loco.py` time complete
   child processes from PLINK input to written association files for every
   backend, verify each run's output against the first run within the

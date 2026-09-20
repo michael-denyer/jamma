@@ -90,14 +90,17 @@ def test_split_uab_all_modes(lmm_mode):
             assert hasattr(r, "beta"), f"Wald result missing beta: {r}"
             assert np.isfinite(r.beta), f"Wald beta not finite: {r}"
             assert hasattr(r, "p_wald"), f"Wald result missing p_wald: {r}"
+            assert r.p_wald is not None
             assert np.isfinite(r.p_wald), f"Wald p not finite: {r}"
     if lmm_mode in (2, 4):  # LRT or All
         for r in results[:5]:
             assert hasattr(r, "p_lrt"), f"LRT result missing p_lrt: {r}"
+            assert r.p_lrt is not None
             assert np.isfinite(r.p_lrt), f"LRT p not finite: {r}"
     if lmm_mode in (3, 4):  # Score or All
         for r in results[:5]:
             assert hasattr(r, "p_score"), f"Score result missing p_score: {r}"
+            assert r.p_score is not None
             assert np.isfinite(r.p_score), f"Score p not finite: {r}"
 
 
@@ -282,13 +285,19 @@ def test_runner_all_mode_c_path():
         # Wald fields
         assert np.isfinite(r.beta), f"beta not finite: {r}"
         assert np.isfinite(r.se), f"se not finite: {r}"
+        assert r.p_wald is not None
         assert np.isfinite(r.p_wald), f"p_wald not finite: {r}"
+        assert r.logl_H1 is not None
         assert np.isfinite(r.logl_H1), f"logl_H1 not finite: {r}"
+        assert r.l_remle is not None
         assert np.isfinite(r.l_remle), f"l_remle not finite: {r}"
         # LRT fields
+        assert r.p_lrt is not None
         assert np.isfinite(r.p_lrt), f"p_lrt not finite: {r}"
+        assert r.l_mle is not None
         assert np.isfinite(r.l_mle), f"l_mle not finite: {r}"
         # Score field
+        assert r.p_score is not None
         assert np.isfinite(r.p_score), f"p_score not finite: {r}"
 
 

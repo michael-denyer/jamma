@@ -105,7 +105,7 @@ def test_with_intercept_sees_constant_column_over_masked_rows_only():
     """A NaN in a masked-out row does not hide the intercept the analysed rows carry."""
     cov = np.column_stack([np.ones(40), np.linspace(-1.0, 1.0, 40)])
     cov[3, :] = np.nan
-    mask = ~np.isnan(cov).any(axis=1)
+    mask = ~np.any(np.isnan(cov), axis=1)
 
     assert with_intercept(cov, mask) is cov
     assert with_intercept(None, mask) is None

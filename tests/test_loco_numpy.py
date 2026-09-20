@@ -341,6 +341,7 @@ def test_loco_numpy_covariates_threaded_and_effective():
         assert np.isfinite(cov_r.beta)
         assert np.isfinite(cov_r.se)
         assert cov_r.se > 0
+        assert cov_r.p_wald is not None
         assert np.isfinite(cov_r.p_wald)
         if abs(cov_r.beta - base_r.beta) > 1e-8:
             any_beta_differs = True

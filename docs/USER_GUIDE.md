@@ -749,7 +749,7 @@ Disable telemetry with either:
    export DO_NOT_TRACK=1
    ```
 
-`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value.
+`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value (not `0`).
 `DO_NOT_TRACK` follows the [Do Not Track convention](https://consoledonottrack.com/):
 only `DO_NOT_TRACK=1` opts out; `DO_NOT_TRACK=0` explicitly opts in.
 
@@ -763,7 +763,7 @@ Kinship-only mode (`-gk`) does not emit telemetry regardless of these settings.
 | `JAMMA_BLAS_THREADS` | `physical_cores` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
 | `VECLIB_MAXIMUM_THREADS` | *(unset)* | Apple's Accelerate thread cap. Has no effect on the eigensolver: on Accelerate, DSYEVD runs on one core at n=5000 with `VECLIB_MAXIMUM_THREADS=18` exported before Python starts, and `JAMMA_BLAS_THREADS` cannot change that either. The `Eigendecomp:` and `Association threads:` log lines mark its BLAS limit `uncontrolled`. |
 | `JAMMA_LOCO_WORKERS` | `1` | How many chromosomes `-loco` eigendecomposes at once. Each worker holds its own copy of one K_loco (`n^2 x 8` bytes over the analysed samples) plus the eigen driver's workspace, on top of the kinship stream's retained set. A memory gate clamps the count to what fits, also capped by the chromosome count and the physical cores, and logs the result as `LOCO workers: 4 (requested 6; 19 chromosomes; 18 cores; memory allows 4)`. Solves overlap association under one BLAS scope that the consumer thread owns, so the phases never race over the process-wide limit. Results agree with sequential execution to floating-point rounding. |
-| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable benchmark telemetry. See [Telemetry](#telemetry). |
+| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value (not `0`) to disable benchmark telemetry. See [Telemetry](#telemetry). |
 | `DO_NOT_TRACK` | *(unset)* | Universal telemetry opt-out convention. Set to `1` to disable JAMMA telemetry. See [Telemetry](#telemetry). |
 
 ```bash

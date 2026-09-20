@@ -10,8 +10,9 @@ opts out.
 ``JAMMA_NO_TELEMETRY`` is parsed once at the boundary — the CLI's
 ``--no-telemetry`` flag and the env var both resolve to
 ``PipelineConfig.no_telemetry``, which callers pass in as ``no_telemetry``
-below, so this module never reads ``os.environ`` itself for it. ``"0"`` and
-``"false"`` disable telemetry, matching :func:`jamma.core.constants.env_flag`.
+below, so this module never reads ``os.environ`` itself for it. ``"0"``
+leaves telemetry on, while ``"false"`` (like any other non-empty value)
+disables it, matching :func:`jamma.core.constants.env_flag`.
 ``DO_NOT_TRACK`` follows the
 `consoledonottrack.com <https://consoledonottrack.com/>`_ convention instead:
 only ``DO_NOT_TRACK=1`` opts out; ``DO_NOT_TRACK=0`` explicitly opts in. That

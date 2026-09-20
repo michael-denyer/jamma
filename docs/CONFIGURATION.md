@@ -31,7 +31,7 @@ in without pulling in the full numpy/loguru stack they are built to avoid.
 | `JAMMA_BACKEND` | `auto` | Force the compute backend: `auto`, `numpy`, or `numpy-streaming`. Auto-detect selects the C+NumPy runner, falling back to streaming when memory is insufficient. |
 | `JAMMA_BLAS_THREADS` | Physical core count | Thread count for NumPy BLAS operations (eigendecomposition, matmul). Controls MKL/OpenBLAS via `threadpoolctl`. **Linux/Windows only** — has no effect on macOS Accelerate. |
 | `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers for LOCO analysis. Each worker holds a full K_loco matrix (`n_samples² × 8` bytes), so increase with caution. |
-| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable local benchmark telemetry. Merged with the CLI's `--no-telemetry` / the Python API's `no_telemetry` argument onto `PipelineConfig.no_telemetry` in `pipeline.py`; `cli.py` no longer writes this variable into `os.environ` to reach `telemetry.py`, and `append_benchmark_record` takes the resolved value as an explicit argument rather than reading the variable itself. |
+| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value (not `0`) to disable local benchmark telemetry. Merged with the CLI's `--no-telemetry` / the Python API's `no_telemetry` argument onto `PipelineConfig.no_telemetry` in `pipeline.py`; `cli.py` no longer writes this variable into `os.environ` to reach `telemetry.py`, and `append_benchmark_record` takes the resolved value as an explicit argument rather than reading the variable itself. |
 | `DO_NOT_TRACK` | *(unset)* | Universal convention: set to `1` to disable JAMMA telemetry. |
 | `JLINALG_NO_VENDOR_LAPACK` | *(unset)* | Set to any non-empty value (not `0`) to force `np.linalg.eigh` instead of vendor LAPACK (DSYEVD/DSYEVR) for eigendecomposition only (scope: `lmm/eigen.py`). Useful for debugging numerical differences. |
 | `JLINALG_NO_VENDOR_DGEMM` | *(unset)* | Set to any non-empty value (not `0`) to leave vendor `dgemm` unwired, so `blas_has_dgemm` reports `0` while the C extension stays loaded and the rest of dispatch (`dsyrk`, DSYEVD/DSYEVR) is untouched. That is the permanent state of an LP64-only host — distro or conda numpy — which CI never reaches because PyPI numpy ships ILP64 `scipy_openblas64`. Narrower than `JAMMA_FORCE_NUMPY_FALLBACK`, which skips the `.so` import entirely. Used by `tests/test_jlinalg_dispatch.py::TestDgemmVendorGate`. |
@@ -420,6 +420,6 @@ export JAMMA_NO_TELEMETRY=1
 export DO_NOT_TRACK=1
 ```
 
-`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value.
+`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value (not `0`).
 `DO_NOT_TRACK=1` opts out; `DO_NOT_TRACK=0` explicitly opts in.
 Kinship-only mode (`-gk`) never emits telemetry regardless of these settings.

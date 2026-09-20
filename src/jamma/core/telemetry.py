@@ -4,7 +4,8 @@ Provides :class:`BenchmarkRecord` and :func:`append_benchmark_record` for
 appending structured run data to ``~/.jamma/benchmarks.jsonl``.
 
 Telemetry is on by default.  ``JAMMA_NO_TELEMETRY`` set to any non-empty
-value (e.g. ``JAMMA_NO_TELEMETRY=1``) or ``DO_NOT_TRACK=1`` opts out.
+value other than ``0`` (e.g. ``JAMMA_NO_TELEMETRY=1``) or ``DO_NOT_TRACK=1``
+opts out.
 
 ``JAMMA_NO_TELEMETRY`` is parsed once at the boundary — the CLI's
 ``--no-telemetry`` flag and the env var both resolve to

@@ -100,7 +100,7 @@ def plan_loco_eigen_driver(
         execution.n_samples,
         available_gb - retained_gb,
         budget_gb=None if budget_gb is None else budget_gb - retained_gb,
-        inplace_eligible=True,
+        inplace_blocker=None,
     )
 
 

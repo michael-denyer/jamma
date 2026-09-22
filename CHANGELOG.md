@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier `1e-3, 1e-2, 5e-4, 5e-3, 1e-4`, so it certified equivalence at a
   p-value tolerance 50x wider than the suite's. The report now has no
   tolerance or path of its own to drift.
+- The "Eigendecomp memory" log line names the planned driver and the real
+  reason for it. On a host with no vendor DSYEVD or DSYEVR and
+  `JLINALG_NO_VENDOR_LAPACK` unset it read `(DSYEVD): ...
+  (JLINALG_NO_VENDOR_LAPACK set, ...)`, contradicting the "No vendor LAPACK"
+  line printed just before it; it now reads `(numpy): ... (no vendor DSYEVD
+  or DSYEVR, using np.linalg.eigh; estimate is DSYEVD-sized)` and the
+  duplicate line is gone. The forced-numpy line names `numpy` too. The
+  planner records the reason where it chooses the driver (`EigenDriverPlan`
+  now carries `driver`, `required_gb` and `reason`; `plan_eigen_driver`
+  takes `forced_numpy` and `inplace_blocker` in place of `no_vendor` and
+  `inplace_eligible`), so the runtime no longer re-derives it. The chosen
+  driver and every memory estimate are unchanged.
 - `run_lmm_association_numpy`, `run_lmm_association_numpy_streaming` and
   `run_lmm_loco` reject a phenotype vector containing `inf` with
   `ValueError("prepared phenotypes must contain only finite values")`, the

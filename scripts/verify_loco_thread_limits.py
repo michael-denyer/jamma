@@ -68,7 +68,7 @@ def main() -> None:
             return result
 
         plan = plan_eigen_driver_for_machine(
-            32, 100, budget_gb=None, inplace_eligible=True
+            32, 100, budget_gb=None, inplace_blocker=None
         )
         pairs = _computed_eigen_pairs(
             stream(),

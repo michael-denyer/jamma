@@ -75,7 +75,7 @@ def plan_eigen_driver_for_machine(
     available_gb: float,
     *,
     budget_gb: float | None,
-    inplace_eligible: bool,
+    inplace_blocker: str | None,
 ) -> EigenDriverPlan:
     """Plan the eigendecomposition driver with this process's LAPACK capabilities.
 
@@ -87,18 +87,28 @@ def plan_eigen_driver_for_machine(
         n_samples: Kinship matrix dimension.
         available_gb: Memory the decomposition may use, in GB.
         budget_gb: User-set ceiling in GB, or None for no ceiling.
-        inplace_eligible: K can be overwritten in place (float64, C-contiguous,
-            writeable). Planners that have not built K yet pass True.
+        inplace_blocker: Why K cannot be overwritten in place, or None when it
+            can.
     """
     return plan_eigen_driver(
         n_samples,
         available_gb,
         has_dsyevd=bool(jlinalg.blas_has_dsyevd),
         has_dsyevr=bool(jlinalg.blas_has_dsyevr),
-        no_vendor=forced_numpy_fallback(),
-        inplace_eligible=inplace_eligible,
+        forced_numpy=forced_numpy_fallback(),
+        inplace_blocker=inplace_blocker,
         budget_gb=budget_gb,
     )
+
+
+def _inplace_blocker(K: np.ndarray) -> str | None:
+    if K.dtype != np.float64:
+        return f"K dtype is {K.dtype}, not float64"
+    if not K.flags["C_CONTIGUOUS"]:
+        return "K is not C-contiguous"
+    if not K.flags["WRITEABLE"]:
+        return "kinship not writeable, cannot use inplace"
+    return None
 
 
 def eigendecompose_kinship(
@@ -196,30 +206,18 @@ def eigendecompose_kinship_in_scope(
     log_memory_snapshot(f"before_eigendecomp_{n_samples}samples")
     available_gb = memory.available_ram_gb()
 
-    # Decide eigendecomp driver: inplace DSYEVD > DSYEVD > DSYEVR.
-    # Inplace requires vendor DSYEVD and a C-contiguous writeable float64 K
-    # (otherwise PyArray_FROM_OTF copies, defeating memory savings).
-    # JLINALG_NO_VENDOR_LAPACK forces np.linalg.eigh instead of vendor LAPACK.
-    no_vendor_env = forced_numpy_fallback()
-    inplace_eligible = (
-        K.dtype == np.float64 and K.flags["C_CONTIGUOUS"] and K.flags["WRITEABLE"]
-    )
     plan = eigen_plan or plan_eigen_driver_for_machine(
         n_samples,
         available_gb,
         budget_gb=mem_budget,
-        inplace_eligible=inplace_eligible,
+        inplace_blocker=_inplace_blocker(K),
     )
-    no_vendor = plan.no_vendor
-    if no_vendor and not no_vendor_env:
-        logger.info("No vendor LAPACK (DSYEVD/DSYEVR) — using np.linalg.eigh")
-
     required_gb = plan.required_gb
 
     # Warn when the chosen DSYEVD peak may exceed available memory and no DSYEVR
     # fallback exists (potential OOM at the real allocation).
     if (
-        not no_vendor
+        not plan.no_vendor
         and not plan.use_dsyevr
         and not memory.fits(required_gb, available_gb)
     ):
@@ -229,18 +227,7 @@ def eigendecompose_kinship_in_scope(
             f"Proceeding with {plan.driver}."
         )
 
-    # Only the DSYEVD-not-inplace line names a K-derived reason. Reaching this
-    # branch means vendor DSYEVD exists (no_vendor and DSYEVR-only both route
-    # elsewhere in plan_eigen_driver), so the K flags are the only reason left.
-    inplace_reason = ""
-    if not plan.use_inplace and not plan.use_dsyevr and not no_vendor:
-        if K.dtype != np.float64:
-            inplace_reason = f"K dtype is {K.dtype}, not float64"
-        elif not K.flags["C_CONTIGUOUS"]:
-            inplace_reason = "K is not C-contiguous"
-        else:
-            inplace_reason = "kinship not writeable, cannot use inplace"
-    logger.info(plan.describe(available_gb, inplace_reason))
+    logger.info(plan.describe(available_gb))
 
     if check_memory:
         memory.require(

@@ -36,6 +36,12 @@ stopped reporting them; the row table was dumped before and after and
 compared cell by cell: 2438 rows, 1026 LOCO rows each 12 columns before
 and 10 after, 0 surviving cells changed. The single-pass column survives
 as the ``required_gb`` of the plan an unlimited machine makes.
+
+The eigen rows lost the ``pre_fallback_gb`` column when
+``EigenDriverPlan`` started recording the reason for its choice instead of
+the peak it fell back from; the table was dumped before and after and
+compared cell by cell: 2438 rows, 684 eigen rows each 13 columns before and
+12 after, 0 surviving cells changed, and the 1754 other rows identical.
 """
 
 from __future__ import annotations
@@ -64,7 +70,7 @@ pytestmark = pytest.mark.tier0
 # Kinship preprocessing pricing moves the 384 streaming rows. The mouse
 # fixture previously traced 487 MB against a 171 MB quote; bounded transforms
 # now trace 415 MB against 520 MB. Eigen, LMM, and LOCO formulas are unchanged.
-EXPECTED_DIGEST = "7309e20149ddd3c12175fde182e1813b7ad74482826e9bce678386b2d264ec7d"
+EXPECTED_DIGEST = "cf9cd519fc9d102417e21ab96c9f588c1d1d1456e91203c647c40bfa13d052dd"
 EXPECTED_ROWS = 2438
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
@@ -210,8 +216,8 @@ def _eigen_driver_rows() -> list[list]:
             1e12,
             has_dsyevd=True,
             has_dsyevr=True,
-            no_vendor=False,
-            inplace_eligible=inplace,
+            forced_numpy=False,
+            inplace_blocker=None if inplace else "K is not C-contiguous",
         )
         rows.append(
             _eigen_driver_row(
@@ -229,8 +235,8 @@ def _eigen_driver_row(
         available,
         has_dsyevd=has_dsyevd,
         has_dsyevr=has_dsyevr,
-        no_vendor=no_vendor,
-        inplace_eligible=inplace,
+        forced_numpy=no_vendor,
+        inplace_blocker=None if inplace else "K is not C-contiguous",
     )
     return [
         tag,
@@ -245,7 +251,6 @@ def _eigen_driver_row(
         plan.use_dsyevr,
         plan.no_vendor,
         _f(plan.required_gb),
-        _f(plan.pre_fallback_gb),
     ]
 
 

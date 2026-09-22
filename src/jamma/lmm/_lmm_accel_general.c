@@ -82,13 +82,8 @@ typedef struct {
     /* Invariant SoA (reference, not owned — Python holds the array) */
     const double *uab_inv;
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
-    /* Fused Uab fields. Every lmm_workspace_general_t is fused now (the
-     * non-fused general workspace was deleted); the NULL checks on these
-     * fields elsewhere in this file are defensive, not a real code path. */
     double *utw_transposed;     /* (n_cvt * n_samples) column-major, owned */
-    const double *UtW;          /* points to utw_transposed (column-major) */
     const double *Uty;          /* (n_samples,) borrowed */
-    int n_cvt;                  /* stored for loop bounds */
     double *scratch_flat;       /* (actual_threads * n_var * n_samples) owned */
     int actual_threads;         /* for scratch deallocation sizing */
     /* Per-thread heap buffers for Pab recursion (replaces stack arrays) */
@@ -146,19 +141,6 @@ static void lmm_workspace_general_destructor(PyObject *cap)
         PyCapsule_GetPointer(cap, "lmm_workspace_general"));
 }
 
-/* The workspace behind a capsule, or NULL with PyErr set on a type mismatch.
- * One compute entry point serves every general workspace regardless of the
- * lmm_mode it was created for, so there is no mode guard here: the compute
- * itself reads ws->mode to decide which blocks to run. */
-static lmm_workspace_general_t *general_workspace_any_mode(
-    PyObject *cap, const char *fn)
-{
-    (void)fn;
-    return (lmm_workspace_general_t *)
-        PyCapsule_GetPointer(cap, "lmm_workspace_general");
-}
-
-
 /* =========================================================================
  * FUSED GENERAL Uab — workspace holds UtW(matrix)/Uty, chunk accepts UtG_T
  *
@@ -180,10 +162,11 @@ static inline const double *get_fused_vector(
     int col_0based,
     const double *x)
 {
-    assert(col_0based >= 0 && col_0based <= ws->n_cvt + 1);
-    if (col_0based < ws->n_cvt)
-        return ws->UtW + (size_t)col_0based * ws->n_samples;
-    if (col_0based == ws->n_cvt)
+    int n_cvt = ws->table.n_cvt;
+    assert(col_0based >= 0 && col_0based <= n_cvt + 1);
+    if (col_0based < n_cvt)
+        return ws->utw_transposed + (size_t)col_0based * ws->n_samples;
+    if (col_0based == n_cvt)
         return x;
     return ws->Uty;  /* col_0based == n_cvt + 1 */
 }
@@ -208,7 +191,6 @@ static int init_fused_general_workspace(
     int n_var   = ws->table.n_var;
 
     ws->n_samples = n_samples;
-    ws->n_cvt = n_cvt;
 
     /* Copy eigenvalues (owned) */
     ws->eigenvalues = (double *)malloc((size_t)n_samples * sizeof(double));
@@ -233,7 +215,6 @@ static int init_fused_general_workspace(
                 dst[i] = src[(size_t)i * n_cvt + c];
         }
     }
-    ws->UtW = ws->utw_transposed;
 
     /* Borrow Uty pointer */
     Py_INCREF(Uty_arr);
@@ -553,8 +534,8 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
         return NULL;
     }
 
-    lmm_workspace_general_t *ws = general_workspace_any_mode(
-        capsule_obj, "compute_lmm_chunk_fused_general_c");
+    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)
+        PyCapsule_GetPointer(capsule_obj, "lmm_workspace_general");
     if (!ws) return NULL;
 
     const int do_score = (ws->mode == 3 || ws->mode == 4);
@@ -695,7 +676,7 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
             }
 
             double logdet_iab = logdet_from_row0(
-                iab_row0, &ws->table, ws->table.n_cvt, my_pab);
+                iab_row0, &ws->table, my_pab);
 
             double logl_reml, wald_beta, wald_se, wald_f;
             int wald_valid;

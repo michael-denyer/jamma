@@ -91,25 +91,22 @@ double golden_section_lambda_mle_general(
  *
  * Encapsulates the identity Pab prepass: calls calc_pab_general into the
  * caller-provided scratch buffer, then extracts diagonal entries for logdet.
- * Replaces the inline copies of the same pattern in fused general Wald and
- * fused general mode-4.
  *
  * row0:        n_index identity-weighted dot products
  * t:           pab_table_t with logdet_diag_rows/cols
- * n_cvt:       number of covariates
- * pab_scratch: caller-provided buffer of at least MAX_PAB_SIZE doubles
+ * pab_scratch: caller-provided buffer of at least n_rows * n_index doubles
  *
  * Returns logdet value, or NAN if any diagonal <= 0.
  * ------------------------------------------------------------------------- */
 static inline double logdet_from_row0(
     const double *row0,
     const pab_table_t *t,
-    int n_cvt,
     double *pab_scratch)
 {
     calc_pab_general(row0, t, pab_scratch);
 
     int ni = t->n_index;
+    int n_cvt = t->n_cvt;
     double logdet = 0.0;
     for (int d = 0; d < n_cvt + 1; d++) {
         double val = pab_scratch[t->logdet_diag_rows[d] * ni

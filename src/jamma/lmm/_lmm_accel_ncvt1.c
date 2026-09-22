@@ -481,20 +481,13 @@ static PyObject *ncvt1_wald_loop(
     int df        = ws->df;
     double reml_const = ws->reml_const;
 
-    /* Per-thread scratch buffers:
-     * - 3 for wx/xx/xy on-the-fly computation
-     * - 1 for MLE golden section refinement (hi_eval_local), mode 4 only */
     double **scratch_wx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
     double **scratch_xx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
     double **scratch_xy = alloc_thread_scratch(actual_threads, (size_t)n_samples);
-    double **thread_bufs = mode4
-        ? alloc_thread_scratch(actual_threads, (size_t)n_samples)
-        : NULL;
-    if (!scratch_wx || !scratch_xx || !scratch_xy || (mode4 && !thread_bufs)) {
+    if (!scratch_wx || !scratch_xx || !scratch_xy) {
         free_thread_scratch(scratch_wx, actual_threads);
         free_thread_scratch(scratch_xx, actual_threads);
         free_thread_scratch(scratch_xy, actual_threads);
-        free_thread_scratch(thread_bufs, actual_threads);
         decref_lmm_output(&out);
         PyErr_NoMemory();
         return NULL;
@@ -590,14 +583,12 @@ static PyObject *ncvt1_wald_loop(
 
         /* ---- (d) LRT: MLE optimization ---- */
         if (mode4) {
-            double *hi_eval_local = thread_bufs[tid];
-
             double logl_H1;
             double lambda_mle = refine_lambda_mle_ncvt1_split(
                 vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
-                ws->eigenvalues, n_samples, grid->lambda_grid,
+                ws->eigenvalues, n_samples,
                 grid->log_l_min, grid->step, n_grid, n_refine,
-                best_mle_idx, ws->lrt->mle_const, hi_eval_local, &logl_H1
+                best_mle_idx, ws->lrt->mle_const, &logl_H1
             );
 
             out_lambdas_mle[snp] = lambda_mle;
@@ -617,7 +608,6 @@ static PyObject *ncvt1_wald_loop(
     free_thread_scratch(scratch_wx, actual_threads);
     free_thread_scratch(scratch_xx, actual_threads);
     free_thread_scratch(scratch_xy, actual_threads);
-    free_thread_scratch(thread_bufs, actual_threads);
 
     if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0) {
         decref_lmm_output(&out);
@@ -728,12 +718,9 @@ static PyObject *ncvt1_lrt_loop(
     double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
 
     /* Allocate per-thread scratch buffers (thread-safe, adapts to retuned n_threads) */
-    double **thread_bufs = alloc_thread_scratch(actual_threads, (size_t)n_samples);
     double **thread_scratch =
         alloc_thread_scratch(actual_threads, (size_t)3 * n_samples);
-    if (!thread_bufs || !thread_scratch) {
-        free_thread_scratch(thread_bufs, actual_threads);
-        free_thread_scratch(thread_scratch, actual_threads);
+    if (!thread_scratch) {
         decref_lrt_output(&out);
         return PyErr_NoMemory();
     }
@@ -748,7 +735,6 @@ static PyObject *ncvt1_lrt_loop(
 #ifdef _OPENMP
         tid = omp_get_thread_num();
 #endif
-        double *hi_eval_local = thread_bufs[tid];
         double *scratch = thread_scratch[tid];
         double *vwx_local = scratch;
         double *vxx_local = scratch + n_samples;
@@ -768,10 +754,10 @@ static PyObject *ncvt1_lrt_loop(
             vwx_local, vxx_local, vxy_local,
             ws->inv_ww, ws->inv_wy, ws->inv_yy,
             ws->eigenvalues, n_samples,
-            ws->grid->lambda_grid, ws->grid->hi_eval_grid, ws->grid->logdet_h_grid,
+            ws->grid->hi_eval_grid, ws->grid->logdet_h_grid,
             ws->grid->grid_inv, ws->grid->log_l_min, ws->grid->step,
             ws->grid->n_grid, ws->grid->n_refine,
-            ws->lrt->mle_const, hi_eval_local, &logl_H1
+            ws->lrt->mle_const, &logl_H1
         );
         out_lambdas_mle[s] = lam_mle;
         out_logls[s] = logl_H1;
@@ -784,7 +770,6 @@ static PyObject *ncvt1_lrt_loop(
     Py_END_ALLOW_THREADS
 
     /* Free per-call scratch */
-    free_thread_scratch(thread_bufs, actual_threads);
     free_thread_scratch(thread_scratch, actual_threads);
 
     return build_lrt_result_dict(&out);

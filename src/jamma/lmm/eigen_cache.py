@@ -13,15 +13,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from collections.abc import Mapping
-from contextlib import suppress
 from pathlib import Path
 from typing import TypedDict
 
 import numpy as np
 from loguru import logger
+
+from jamma.lmm.eigen_io import (
+    EigenGeneration,
+    Partition,
+    load_manifest,
+    member_record,
+    publish_manifest,
+)
 
 # Version 3 adds one immutable generation and a complete chromosome member map.
 # Version 2 separated analysed-sample filtering from full-population centering.
@@ -165,92 +170,64 @@ def eigen_cache_manifest_path(eigen_dir: Path, prefix: str) -> Path:
 
 
 def write_eigen_cache_manifest(
-    eigen_dir: Path,
-    prefix: str,
+    generation: EigenGeneration,
     key: str,
     *,
     components: EigenCacheComponents,
-    generation: str,
-    artifacts: dict[str, dict[str, str]],
+    members: Mapping[str, tuple[Path, Path]],
 ) -> Path:
-    """Write a cache manifest JSON atomically.
+    """Commit a complete LOCO generation under its cache key.
 
     Args:
-        eigen_dir: Directory containing eigen files.
-        prefix: Filename prefix (e.g. "result").
+        generation: The generation whose members were all written.
         key: Hex SHA-256 cache key string.
         components: Key components (the payload that was hashed) for
             debuggability.
+        members: Chromosome -> ``(eigenD, eigenU)`` written by
+            ``generation.write_member``.
 
     Returns:
         Path to the written manifest file.
+
+    Raises:
+        ValueError: If ``members`` is empty or names a missing file.
     """
+    if not members or not all(
+        path.is_file() for pair in members.values() for path in pair
+    ):
+        raise ValueError("LOCO eigen manifest must name a complete existing generation")
     manifest: EigenCacheManifest = {
         "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
         "cache_key": key,
         "components": components,
-        "generation": generation,
-        "artifacts": artifacts,
+        "generation": generation.generation,
+        "artifacts": {
+            chromosome: member_record(*pair) for chromosome, pair in members.items()
+        },
     }
-    if (
-        not artifacts
-        or loco_eigen_paths_from_manifest(eigen_dir, prefix, list(artifacts), manifest)
-        is None
-    ):
-        raise ValueError("LOCO eigen manifest must name a complete existing generation")
-    target = eigen_cache_manifest_path(eigen_dir, prefix)
-    fd, tmp_name = tempfile.mkstemp(dir=eigen_dir, suffix=".json")
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(manifest, fh)
-            fh.flush()
-            os.fsync(fh.fileno())
-        tmp_path.replace(target)
-    except Exception:
-        with suppress(OSError):
-            tmp_path.unlink()
-        raise
+    target = eigen_cache_manifest_path(generation.directory, generation.prefix)
+    publish_manifest(target, json.dumps(manifest))
     return target
 
 
-def loco_eigen_paths_from_manifest(
-    eigen_dir: Path,
-    prefix: str,
-    chr_names: list[str],
-    manifest: Mapping[str, object],
+def resolve_eigen_cache(
+    manifest: Mapping[str, object], eigen_dir: Path, prefix: str, chr_names: list[str]
 ) -> dict[str, tuple[Path, Path]] | None:
-    """Validate and resolve one LOCO generation without rereading its manifest."""
-    generation = manifest.get("generation")
+    """Each chromosome's committed members, or None if any is unsafe or missing."""
+    source = eigen_cache_manifest_path(eigen_dir, prefix)
     artifacts = manifest.get("artifacts")
-    if (
-        not isinstance(generation, str)
-        or not generation
-        or not isinstance(artifacts, dict)
-    ):
+    records: dict[Partition, object] = {
+        chromosome: artifacts.get(chromosome) if isinstance(artifacts, dict) else None
+        for chromosome in chr_names
+    }
+    try:
+        generation = EigenGeneration.committed(manifest, eigen_dir, prefix, source)
+        resolved = generation.resolve(records, source)
+    except ValueError:
         return None
-    generation_prefix = f"{prefix}.generation.{generation}.loco.chr"
-    resolved: dict[str, tuple[Path, Path]] = {}
-    for chromosome in chr_names:
-        members = artifacts.get(chromosome)
-        if not isinstance(members, dict):
-            return None
-        paths: list[Path] = []
-        for kind in ("eigenD", "eigenU"):
-            name = members.get(kind)
-            expected = f"{generation_prefix}{chromosome}.{kind}."
-            if (
-                not isinstance(name, str)
-                or Path(name).name != name
-                or not name.startswith(expected)
-            ):
-                return None
-            path = eigen_dir / name
-            if not path.is_file():
-                return None
-            paths.append(path)
-        resolved[chromosome] = (paths[0], paths[1])
-    return resolved
+    if not all(path.is_file() for pair in resolved.values() for path in pair):
+        return None
+    return {chromosome: resolved[chromosome] for chromosome in chr_names}
 
 
 def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict[str, object] | None:
@@ -265,17 +242,10 @@ def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict[str, object]
     """
     path = eigen_cache_manifest_path(eigen_dir, prefix)
     try:
-        with open(path) as fh:
-            value = json.load(fh)
-            if not isinstance(value, dict):
-                logger.warning(
-                    f"Malformed eigen cache manifest {path}: expected object"
-                )
-                return None
-            return value
+        return load_manifest(path)
     except FileNotFoundError:
         return None
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
         logger.warning(f"Corrupt eigen cache manifest {path}: {exc}")
         return None
     except OSError as exc:

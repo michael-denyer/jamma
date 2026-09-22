@@ -5,6 +5,7 @@ Validates:
 - Round-trip precision for eigenvalues and eigenvectors
 - Dimension validation on read
 - Edge cases (empty files, single value, nested dirs)
+- Manifest-committed generations: resolution rejects members it did not write
 
 Pipeline-level LMM equivalence moved to test_pipeline.py, -d/-u/-loco flag
 validation to test_pipeline_config.py, and the CLI help test to test_cli.py.
@@ -245,6 +246,30 @@ class TestRoundTripPrecision:
 
         with pytest.raises(ValueError, match="different managed generations"):
             read_eigen_files(d_path, u_path)
+
+    def test_whole_genome_manifest_rejects_member_with_extra_name_part(
+        self, tmp_path: Path
+    ) -> None:
+        """A member must be exactly the generation's pair, not merely share its
+        stem, even when the file it names exists."""
+        import json
+
+        from jamma.lmm.eigen_io import eigen_manifest_path
+
+        write_eigen_files(np.ones(2), np.eye(2), tmp_path, prefix="result")
+        manifest_path = eigen_manifest_path(tmp_path, "result")
+        manifest = json.loads(manifest_path.read_text())
+        stem = f"result.generation.{manifest['generation']}"
+        members = {
+            "eigenD": f"{stem}.eigenD.extra.npy",
+            "eigenU": f"{stem}.eigenU.extra.npy",
+        }
+        np.save(tmp_path / members["eigenD"], np.full(2, 9.0))
+        np.save(tmp_path / members["eigenU"], np.fliplr(np.eye(2)))
+        manifest_path.write_text(json.dumps({**manifest, "members": members}))
+
+        with pytest.raises(ValueError, match="Unsafe or malformed member record"):
+            resolve_eigen_generation(tmp_path, "result")
 
 
 # =============================================================================

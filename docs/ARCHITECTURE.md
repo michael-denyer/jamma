@@ -158,7 +158,7 @@ src/jamma/
 │   ├── stats.py            # AssocResult and the batch Wald/LRT/Score statistics
 │   ├── eigen.py            # Kinship eigendecomposition via jlinalg.eigh
 │   ├── eigen_cache.py      # Content + parameter cache key for LOCO per-chromosome eigen
-│   ├── eigen_io.py         # Read/write eigenvalue and eigenvector files (.npy / .txt)
+│   ├── eigen_io.py         # Eigen files (.npy / .txt); EigenGeneration members and manifests
 │   ├── impute.py           # In-place mean imputation for genotype chunks
 │   ├── prepare_common.py   # Typed kinship/eigen inputs, filtering, covariates, and null-model preparation
 │   ├── results.py          # AssocResult building and per-chunk result sinks
@@ -173,7 +173,7 @@ src/jamma/
 │   ├── chunk_kernel.py     # The one dispatch match: workspace + its call
 │   ├── chunk_pipeline.py   # Rotation/compute thread split + overlapped pipeline driver
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
-│   ├── loco_config.py      # LocoConfig: LOCO-only knobs and artifact naming
+│   ├── loco_config.py      # LocoConfig: LOCO-only knobs and kinship naming
 │   ├── loco_eigen.py       # eigen_pairs_for(): cache-or-compute decision, cache key, manifest, artifact writes
 │   ├── loco_workers.py     # Concurrent eigen solves, BLAS scope ownership and worker memory pricing
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers

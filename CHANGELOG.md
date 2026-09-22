@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   betainc non-convergence for standalone Score as the n_cvt = 1 path already
   did. The n_cvt = 1 LRT runs through the same loop as Wald and mode 4. No
   result bit moves.
+- Whole-genome and LOCO eigen generations share one member naming scheme, one
+  manifest validator and one commit protocol (`EigenGeneration` in
+  `jamma.lmm.eigen_io`). The whole-genome `.eigen_manifest.json` is now
+  fsynced before it is published, so like the LOCO cache manifest it survives
+  a power cut. A whole-genome manifest must name its members exactly; a member
+  name with extra parts is rejected. Manifests written by 8.1.0 still resolve.
+  `LocoConfig.eigen_stem` and `LocoConfig.eigen_paths`, which named a
+  pre-generation layout nothing wrote, are removed.
 - `scripts/bench_all_backends.py` times a second kinship row, `kinship_npy`,
   which runs `-gk 1` without `--legacy-text` and so writes the binary `.npy`
   matrix JAMMA ships by default. The existing text row remains the

@@ -6,13 +6,12 @@ and eigendecompose it. The cache key, the manifest, the directory and the
 artifact writers all live here, since the compute path is the only thing that
 touches them; ``run_lmm_loco`` only iterates the result.
 
-Filenames come from :class:`~jamma.lmm.loco_config.LocoConfig`, never from a
-literal in this module.
+Eigen member names come from :class:`~jamma.lmm.eigen_io.EigenGeneration`, the
+same model the whole-genome writer and every reader use.
 """
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable, Generator, Iterable
 from contextlib import closing
 from dataclasses import dataclass
@@ -40,11 +39,11 @@ from jamma.lmm.eigen_cache import (
     compute_eigen_cache_key,
     eigen_cache_manifest_is_valid,
     eigen_cache_manifest_path,
-    loco_eigen_paths_from_manifest,
     read_eigen_cache_manifest,
+    resolve_eigen_cache,
     write_eigen_cache_manifest,
 )
-from jamma.lmm.eigen_io import read_eigen_files, write_eigen_generation_members
+from jamma.lmm.eigen_io import EigenGeneration, read_eigen_files
 from jamma.lmm.loco_config import LocoConfig
 from jamma.lmm.loco_workers import LocoWorkerPlan, solve_eigen_pairs
 
@@ -77,11 +76,9 @@ class _EigenCacheWrite:
     downstream re-tests an Optional.
     """
 
-    eigen_dir: Path
-    prefix: str
+    generation: EigenGeneration
     key: str
     components: EigenCacheComponents
-    generation: str
 
 
 def plan_loco_eigen_driver(
@@ -167,7 +164,7 @@ def eigen_pairs_for(
         )
         if loco.write_eigen:
             cache_write = _EigenCacheWrite(
-                loco.eigen_dir, loco.prefix, key, components, uuid.uuid4().hex
+                EigenGeneration(loco.eigen_dir, loco.prefix), key, components
             )
         else:
             cache = _validated_eigen_cache(
@@ -248,7 +245,7 @@ def _validated_eigen_cache(
             f"({reason}). Kinship and eigendecomposition will be recomputed."
         )
         return None
-    cache = _find_loco_eigen_cache(loco, chr_names, manifest=manifest)
+    cache = resolve_eigen_cache(manifest, eigen_dir, loco.prefix, chr_names)
     if cache is None:
         logger.warning(
             f"LOCO eigen cache manifest in {eigen_dir} is incomplete or unsafe"
@@ -260,49 +257,6 @@ def _validated_eigen_cache(
         f"Skipping kinship computation and eigendecomp."
     )
     return cache
-
-
-def _find_loco_eigen_cache(
-    loco: LocoConfig,
-    chr_names: list[str],
-    *,
-    manifest: dict[str, object] | None = None,
-) -> dict[str, tuple[Path, Path]] | None:
-    """Check for a complete set of per-chromosome cached eigen files.
-
-    File naming comes from ``loco.eigen_paths()``, the same method the writer
-    builds its names with, so the two cannot drift.
-
-    Dimension validation is deferred to the per-chromosome load, where
-    ``read_eigen_files(n_samples=...)`` raises ``ValueError`` on mismatch.
-    This avoids loading all eigen data eagerly just to check dimensions.
-
-    Args:
-        loco: LOCO config supplying eigen_dir, prefix and legacy_text.
-        chr_names: List of chromosome names to check.
-
-    Returns:
-        Dict mapping chr_name -> (eigenD_path, eigenU_path) if ALL chromosomes
-        have both files. None if ANY chromosome is missing either file, or if
-        no eigen_dir was configured — all three mean "compute from scratch".
-    """
-    if loco.eigen_dir is None:
-        return None
-
-    if not loco.eigen_dir.is_dir():
-        logger.warning(
-            f"eigen_dir is not a directory: {loco.eigen_dir}. "
-            f"Will compute from scratch."
-        )
-        return None
-
-    if manifest is None:
-        manifest = read_eigen_cache_manifest(loco.eigen_dir, loco.prefix)
-    if manifest is None:
-        return None
-    return loco_eigen_paths_from_manifest(
-        loco.eigen_dir, loco.prefix, chr_names, manifest
-    )
 
 
 def _save_loco_kinship(
@@ -332,24 +286,18 @@ def _write_loco_eigen(
     U: np.ndarray,
     chr_name: str,
     *,
-    loco: LocoConfig,
-    eigen_dir: Path,
-    generation: str,
+    generation: EigenGeneration,
+    legacy_text: bool,
 ) -> tuple[Path, Path]:
     """Persist one chromosome's eigenpair to the LOCO eigen cache."""
     try:
-        paths = write_eigen_generation_members(
-            eigenvalues,
-            U,
-            eigen_dir,
-            prefix=loco.prefix,
-            generation=generation,
-            legacy_text=loco.legacy_text,
-            label=f"loco.chr{chr_name}",
+        paths = generation.write_member(
+            chr_name, eigenvalues, U, legacy_text=legacy_text
         )
     except OSError as e:
         raise OSError(
-            f"Failed to write LOCO eigen for chromosome {chr_name} to {eigen_dir}: {e}"
+            f"Failed to write LOCO eigen for chromosome {chr_name} to "
+            f"{generation.directory}: {e}"
         ) from e
     logger.info(f"  Wrote LOCO eigen for chr {chr_name}")
     return paths
@@ -447,13 +395,14 @@ def _computed_eigen_pairs(
     ``pre_subset`` records that the kinship streamer already accumulated at
     n_valid x n_valid, which lets the subset step skip a post-hoc np.ix_ copy.
     """
-    artifacts: dict[str, dict[str, str]] = {}
+    members: dict[str, tuple[Path, Path]] = {}
     if cache_write is not None:
+        eigen_dir = cache_write.generation.directory
         try:
-            cache_write.eigen_dir.mkdir(parents=True, exist_ok=True)
+            eigen_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             raise OSError(
-                f"Cannot create eigen cache directory {cache_write.eigen_dir}: {e}"
+                f"Cannot create eigen cache directory {eigen_dir}: {e}"
             ) from e
 
     n_threads = get_blas_thread_count()
@@ -503,25 +452,23 @@ def _computed_eigen_pairs(
         # Do not use enumerate: it retains the preceding eigenvector matrix.
         for chr_name, eigenvalues, U in pairs:
             if cache_write is not None:
-                d_path, u_path = _write_loco_eigen(
+                members[chr_name] = _write_loco_eigen(
                     eigenvalues,
                     U,
                     chr_name,
-                    loco=loco,
-                    eigen_dir=cache_write.eigen_dir,
                     generation=cache_write.generation,
+                    legacy_text=loco.legacy_text,
                 )
-                artifacts[chr_name] = {"eigenD": d_path.name, "eigenU": u_path.name}
             yield chr_name, eigenvalues, U
             del eigenvalues, U
 
     if cache_write is not None:
         write_eigen_cache_manifest(
-            cache_write.eigen_dir,
-            cache_write.prefix,
+            cache_write.generation,
             cache_write.key,
             components=cache_write.components,
-            generation=cache_write.generation,
-            artifacts=artifacts,
+            members=members,
         )
-        logger.info(f"Wrote LOCO eigen cache manifest to {cache_write.eigen_dir}")
+        logger.info(
+            f"Wrote LOCO eigen cache manifest to {cache_write.generation.directory}"
+        )

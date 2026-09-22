@@ -15,11 +15,20 @@ from typing import NamedTuple
 import numpy as np
 from loguru import logger
 
-from jamma.io.plink import PlinkMetadata
+from jamma.io.plink import PlinkMetadata, load_plink_binary
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
 from jamma.lmm.genotype_source import GenotypeSource, SampleBasis
 from jamma.lmm.prepare_common import prepare_rotated_covariates
-from jamma.lmm.runner_numpy import BATCH_LABELS, STREAMING_LABELS
+from jamma.lmm.runner_numpy import (
+    BATCH_LABELS,
+    STREAMING_LABELS,
+    LmmRunSpec,
+    MatrixSource,
+    PreparedPhenotypeSpec,
+    prepare_genotypes,
+    run_lmm_association_group_prepared,
+)
+from jamma.lmm.runner_numpy_streaming import BedSource
 from jamma.lmm.schema import ChunkRunStats, SnpMeta
 from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import PhenotypeResult, PipelineConfig
@@ -72,11 +81,6 @@ def run_phenotype_loop(
         per-phenotype output paths, the loop wall time, runner timing, and
         the PVE estimate.
     """
-    from jamma.lmm.runner_numpy import (
-        LmmRunSpec,
-        prepare_genotypes,
-    )
-
     pheno_columns = config.phenotype_columns
     is_multi = len(pheno_columns) > 1
     plan = analysis.execution.summary
@@ -112,10 +116,6 @@ def run_phenotype_loop(
     )
 
     prefix = config.output_prefix
-    from jamma.lmm.runner_numpy import (
-        PreparedPhenotypeSpec,
-        run_lmm_association_group_prepared,
-    )
 
     shared_rotation_s = 0.0
     group_size = analysis.execution.phenotype_group_size
@@ -215,8 +215,6 @@ def _genotype_source(
     """Build the one genotype source every phenotype in this run reads from."""
     snp_meta = SnpMeta.from_plink_meta(meta)
     if mode == "streaming":
-        from jamma.lmm.runner_numpy_streaming import BedSource
-
         return BedSource(
             bfile,
             snp_meta=snp_meta,
@@ -226,9 +224,6 @@ def _genotype_source(
             validate_genotypes=True,
             show_progress=analysis.lmm.show_progress,
         )
-
-    from jamma.io import load_plink_binary
-    from jamma.lmm.runner_numpy import MatrixSource
 
     logger.info(
         f"{runner_name}: loading all genotypes into memory"

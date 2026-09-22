@@ -77,9 +77,7 @@ typedef struct {
     const double *inv_yy;   /* uab_invariant_soa row 2 */
     PyObject *eigenvalues_ref;  /* keeps eigenvalues array alive */
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
-    /* The lmm_mode the workspace was created for: 1 Wald, 2 LRT, 3 Score,
-     * 4 all three. Each compute entry point checks it. */
-    int mode;
+    lmm_tests_t tests;
     /* Sub-blocks: NULL when the owning mode does not use them, so ws->lrt
      * == NULL is the contract rather than a comment. */
     ncvt1_grid_t *grid;
@@ -326,6 +324,7 @@ PyObject *create_workspace_ncvt1_c_py(
     PyObject *hi_eval_null_obj = NULL, *logl_H0_obj = NULL;
     int n_samples, n_grid, n_refine, lmm_mode = 0;
     double l_min, l_max, logl_H0 = 0.0;
+    lmm_tests_t tests;
 
     if (!PyArg_ParseTupleAndKeywords(
             args, kwargs, "OOOOiddii|$iOO", (char **)kwlist,
@@ -334,32 +333,10 @@ PyObject *create_workspace_ncvt1_c_py(
             &lmm_mode, &hi_eval_null_obj, &logl_H0_obj)) {
         return NULL;
     }
-    if (lmm_mode < 1 || lmm_mode > 4) {
-        PyErr_Format(PyExc_ValueError,
-            "lmm_mode must be 1, 2, 3 or 4, got %d", lmm_mode);
+    if (parse_mode_inputs(lmm_mode, &hi_eval_null_obj, logl_H0_obj,
+                          &tests, &logl_H0) < 0)
         return NULL;
-    }
-    int wants_hi = (lmm_mode == 3 || lmm_mode == 4);
-    int wants_logl = (lmm_mode == 2 || lmm_mode == 4);
-    if (hi_eval_null_obj == Py_None) hi_eval_null_obj = NULL;
-    if (logl_H0_obj == Py_None) logl_H0_obj = NULL;
-    if (wants_hi != (hi_eval_null_obj != NULL)) {
-        PyErr_Format(PyExc_ValueError,
-            "lmm_mode=%d %s hi_eval_null", lmm_mode,
-            wants_hi ? "requires" : "does not take");
-        return NULL;
-    }
-    if (wants_logl != (logl_H0_obj != NULL)) {
-        PyErr_Format(PyExc_ValueError,
-            "lmm_mode=%d %s logl_H0", lmm_mode,
-            wants_logl ? "requires" : "does not take");
-        return NULL;
-    }
-    if (wants_logl) {
-        logl_H0 = PyFloat_AsDouble(logl_H0_obj);
-        if (logl_H0 == -1.0 && PyErr_Occurred()) return NULL;
-        if (validate_logl_H0(logl_H0) < 0) return NULL;
-    }
+    int score_only = !tests.reml && !tests.lrt;
 
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
@@ -378,30 +355,30 @@ PyObject *create_workspace_ncvt1_c_py(
     if (!w_arr) goto err_input;
     Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
     if (!Uty_arr) goto err_input;
-    if (wants_hi) {
+    if (tests.score) {
         hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
         if (!hi_eval_null_arr) goto err_input;
     }
     if (validate_eigenvalues(
             (const double *)PyArray_DATA(eigenvalues_arr), n_samples, l_max) < 0)
         goto err_input;
-    if (wants_hi && validate_hi_eval_null(
+    if (tests.score && validate_hi_eval_null(
             (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
         goto err_input;
 
     ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
-    ws->mode = lmm_mode;
+    ws->tests = tests;
     if (init_ncvt1_workspace(ws, eigenvalues_arr, uab_inv_arr, w_arr, Uty_arr,
                              n_samples, l_min, l_max, n_grid, n_refine,
-                             lmm_mode != 3) < 0)
+                             !score_only) < 0)
         goto err_ws;
-    if (wants_hi && init_ncvt1_null_hi(
+    if (tests.score && init_ncvt1_null_hi(
             ws, (const double *)PyArray_DATA(hi_eval_null_arr)) < 0)
         goto err_ws;
-    if (wants_logl && set_ncvt1_null_logl(ws, logl_H0) < 0)
+    if (tests.lrt && set_ncvt1_null_logl(ws, logl_H0) < 0)
         goto err_ws;
-    if (lmm_mode == 3 && init_ncvt1_score_vectors(ws) < 0)
+    if (score_only && init_ncvt1_score_vectors(ws) < 0)
         goto err_ws;
 
     capsule = PyCapsule_New(ws, NCVT1_CAPSULE, lmm_workspace_destructor);
@@ -425,36 +402,14 @@ err_input:
     return NULL;
 }
 
-/* Clamp a caller-supplied thread count to the workspace semantics every
- * ncvt1 compute now shares: at most n_snps, at least 1. Thread count never
- * enters the per-SNP arithmetic (each iteration is independent under
- * schedule(static)), so this choice cannot move a result bit. */
-static int clamp_threads(int n_threads, int n_snps)
-{
-    int actual = n_threads;
-    if (actual > n_snps) actual = n_snps;
-    if (actual < 1) actual = 1;
-    return actual;
-}
-
-/* -------------------------------------------------------------------------
- * ncvt1_wald_loop
- *
- * Wald (lmm_mode 1) or Wald + Score + LRT (lmm_mode 4) over one chunk of an
- * n_cvt=1 workspace. Hoisted verbatim from the per-mode entry points this
- * replaces: computes wx/xx/xy on-the-fly from the w/Uty stored in the
- * workspace rather than taking them prebuilt, which does not change the
- * arithmetic or its order. The REML lambda search is the same coarse grid
- * plus golden-section refinement in both modes; mode 4 additionally reads
- * the MLE bracket that same grid pass produces.
- * ------------------------------------------------------------------------- */
-static PyObject *ncvt1_wald_loop(
+static PyObject *ncvt1_test_loop(
     lmm_workspace_t *ws, const double *utg_t_data, int n_snps,
-    int actual_threads, int mode4)
+    int actual_threads)
 {
+    const lmm_tests_t tests = ws->tests;
     lmm_output_t out = {0};
 
-    if (alloc_lmm_output(&out, (npy_intp)n_snps, ws->mode) < 0) {
+    if (alloc_lmm_output(&out, (npy_intp)n_snps, tests) < 0) {
         if (!PyErr_Occurred()) PyErr_NoMemory();
         return NULL;
     }
@@ -466,20 +421,21 @@ static PyObject *ncvt1_wald_loop(
     const double *w_ptr = ws->w;
     const double *Uty_ptr = ws->Uty;
 
-    double *out_lambdas     = (double *)PyArray_DATA(out.lambdas);
     double *out_logls       = (double *)PyArray_DATA(out.logls);
-    double *out_betas       = (double *)PyArray_DATA(out.betas);
-    double *out_ses         = (double *)PyArray_DATA(out.ses);
-    double *out_pwalds      = (double *)PyArray_DATA(out.pwalds);
-    double *out_p_scores    = mode4 ? (double *)PyArray_DATA(out.p_scores) : NULL;
-    double *out_lambdas_mle = mode4 ? (double *)PyArray_DATA(out.lambdas_mle) : NULL;
-    double *out_p_lrts      = mode4 ? (double *)PyArray_DATA(out.p_lrts) : NULL;
+    double *out_lambdas     = tests.reml ? (double *)PyArray_DATA(out.lambdas) : NULL;
+    double *out_betas       = tests.reml ? (double *)PyArray_DATA(out.betas) : NULL;
+    double *out_ses         = tests.reml ? (double *)PyArray_DATA(out.ses) : NULL;
+    double *out_pwalds      = tests.reml ? (double *)PyArray_DATA(out.pwalds) : NULL;
+    double *out_p_scores    = tests.score ? (double *)PyArray_DATA(out.p_scores) : NULL;
+    double *out_lambdas_mle = tests.lrt ? (double *)PyArray_DATA(out.lambdas_mle) : NULL;
+    double *out_p_lrts      = tests.lrt ? (double *)PyArray_DATA(out.p_lrts) : NULL;
 
     const ncvt1_grid_t *grid = ws->grid;
     int n_grid    = grid->n_grid;
     int n_refine  = grid->n_refine;
     int df        = ws->df;
     double reml_const = ws->reml_const;
+    double mle_const  = tests.lrt ? ws->lrt->mle_const : 0.0;
 
     double **scratch_wx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
     double **scratch_xx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
@@ -509,7 +465,6 @@ static PyObject *ncvt1_wald_loop(
 
         const double *x = utg_t_data + (size_t)snp * n_samples;
 
-        /* Compute wx/xx/xy on-the-fly */
         for (int i = 0; i < n_samples; i++) {
             vwx[i] = w_ptr[i] * x[i];
             vxx[i] = x[i] * x[i];
@@ -517,7 +472,7 @@ static PyObject *ncvt1_wald_loop(
         }
 
         /* ---- (a) Score: null-model Pab ---- */
-        if (mode4) {
+        if (tests.score) {
             const ncvt1_null_model_t *nm = ws->null_model;
             double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
             #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
@@ -541,59 +496,63 @@ static PyObject *ncvt1_wald_loop(
                 ws->beta_a, ws->beta_b, ws->lbeta_ab);
         }
 
-        /* ---- (b) logdet_iab ---- */
-        double iab_s_wx = 0.0, iab_s_xx = 0.0;
-        #pragma omp simd reduction(+:iab_s_wx,iab_s_xx)
-        for (int i = 0; i < n_samples; i++) {
-            iab_s_wx += vwx[i];
-            iab_s_xx += vxx[i];
+        double logdet_iab = 0.0;
+        if (tests.reml) {
+            double iab_s_wx = 0.0, iab_s_xx = 0.0;
+            #pragma omp simd reduction(+:iab_s_wx,iab_s_xx)
+            for (int i = 0; i < n_samples; i++) {
+                iab_s_wx += vwx[i];
+                iab_s_xx += vxx[i];
+            }
+
+            double iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * ws->iab_inv_ww;
+            logdet_iab = ws->iab_log_ww
+                         + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
         }
 
-        double iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * ws->iab_inv_ww;
-        double logdet_iab = ws->iab_log_ww
-                            + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
-
         int best_reml_idx, best_mle_idx;
-        coarse_grid_mode4_ncvt1_split(
+        coarse_grid_ncvt1_split(
             vwx, vxx, vxy, n_samples,
             grid->hi_eval_grid, grid->logdet_h_grid, grid->grid_inv, n_grid,
-            logdet_iab, df, reml_const, mode4 ? ws->lrt->mle_const : 0.0,
-            &best_reml_idx, &best_mle_idx
+            logdet_iab, df, reml_const, mle_const,
+            tests.reml ? &best_reml_idx : NULL,
+            tests.lrt ? &best_mle_idx : NULL
         );
 
         /* ---- (c) Wald: REML refinement from the shared coarse grid ---- */
-        double logl_reml, wald_beta, wald_se, wald_f;
-        int wald_valid;
-        double lambda_reml = refine_lambda_ncvt1_split(
-            vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
-            ws->eigenvalues, logdet_iab,
-            n_samples, grid->lambda_grid, grid->log_l_min, grid->step,
-            n_grid, n_refine, best_reml_idx,
-            df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
-            &wald_valid
-        );
+        if (tests.reml) {
+            double logl_reml, wald_beta, wald_se, wald_f;
+            int wald_valid;
+            double lambda_reml = refine_lambda_ncvt1_split(
+                vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
+                ws->eigenvalues, logdet_iab,
+                n_samples, grid->lambda_grid, grid->log_l_min, grid->step,
+                n_grid, n_refine, best_reml_idx,
+                df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
+                &wald_valid
+            );
 
-        out_lambdas[snp] = lambda_reml;
-        out_logls[snp]   = logl_reml;
-        out_betas[snp]   = wald_beta;
-        out_ses[snp]     = wald_se;
-        out_pwalds[snp]  = f_to_pvalue(
-            wald_f, df, wald_valid,
-            ws->beta_a, ws->beta_b, ws->lbeta_ab);
+            out_lambdas[snp] = lambda_reml;
+            out_logls[snp]   = logl_reml;
+            out_betas[snp]   = wald_beta;
+            out_ses[snp]     = wald_se;
+            out_pwalds[snp]  = f_to_pvalue(
+                wald_f, df, wald_valid,
+                ws->beta_a, ws->beta_b, ws->lbeta_ab);
+        }
 
-        /* ---- (d) LRT: MLE optimization ---- */
-        if (mode4) {
+        if (tests.lrt) {
             double logl_H1;
             double lambda_mle = refine_lambda_mle_ncvt1_split(
                 vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
                 ws->eigenvalues, n_samples,
                 grid->log_l_min, grid->step, n_grid, n_refine,
-                best_mle_idx, ws->lrt->mle_const, &logl_H1
+                best_mle_idx, mle_const, &logl_H1
             );
 
             out_lambdas_mle[snp] = lambda_mle;
-            /* GEMMA mode 4 reports the LRT alternative-model MLE likelihood
-             * in logl_H1. Mode 1 leaves the REML likelihood written above. */
+            /* GEMMA modes 2 and 4 report the LRT alternative-model MLE
+             * likelihood in logl_H1, overwriting mode 4's REML logl. */
             out_logls[snp] = logl_H1;
 
             double lrt_stat = 2.0 * (logl_H1 - ws->lrt->logl_H0);
@@ -604,37 +563,24 @@ static PyObject *ncvt1_wald_loop(
 
     Py_END_ALLOW_THREADS
 
-    /* Free per-thread scratch buffers */
     free_thread_scratch(scratch_wx, actual_threads);
     free_thread_scratch(scratch_xx, actual_threads);
     free_thread_scratch(scratch_xy, actual_threads);
 
-    if (warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0) {
-        decref_lmm_output(&out);
-        return NULL;
-    }
-
-    return build_lmm_result_dict(&out);
+    return finish_lmm_output(&out, tests, n_snps);
 }
 
-/* -------------------------------------------------------------------------
- * ncvt1_score_loop
- *
- * Score (lmm_mode 3) over one chunk of an n_cvt=1 workspace, hoisted
- * verbatim from the entry point this replaces. Sums (h*w)*x per SNP from
- * the mode-3-only h_null_w/h_null_Uty the workspace precomputed; mode 4's
- * Score block instead sums h*(w*x) from scratch it builds per SNP, and the
- * two associations are not bit-identical, so this body stays mode-3 only.
- * ------------------------------------------------------------------------- */
+/* Standalone Score sums (h*w)*x; mode 4's Score block sums h*(w*x). The two
+ * are not bit-identical, so standalone Score keeps its own loop. */
 static PyObject *ncvt1_score_loop(
     lmm_workspace_t *ws, const double *utg_t_data, int n_snps,
     int actual_threads)
 {
     int n_samples = ws->n_samples;
 
-    score_output_t out;
-    if (alloc_score_output(&out, (npy_intp)n_snps) < 0) {
-        PyErr_NoMemory();
+    lmm_output_t out = {0};
+    if (alloc_lmm_output(&out, (npy_intp)n_snps, ws->tests) < 0) {
+        if (!PyErr_Occurred()) PyErr_NoMemory();
         return NULL;
     }
 
@@ -642,7 +588,6 @@ static PyObject *ncvt1_score_loop(
     double *out_ses      = (double *)PyArray_DATA(out.ses);
     double *out_p_scores = (double *)PyArray_DATA(out.p_scores);
 
-    /* Read precomputed invariants from workspace */
     const double *h_null_w   = ws->score->h_null_w;
     const double *h_null_Uty = ws->score->h_null_Uty;
     const double *hi_eval_null = ws->null_model->hi_eval_null;
@@ -662,7 +607,6 @@ static PyObject *ncvt1_score_loop(
     for (int s = 0; s < n_snps; s++) {
         const double *x = utg_t_data + (size_t)s * n_samples;
 
-        /* Compute varying null-model dot products on-the-fly from utg_t */
         double s_wx = 0.0, s_xx = 0.0, s_xy = 0.0;
         #pragma omp simd reduction(+:s_wx,s_xx,s_xy)
         for (int i = 0; i < n_samples; i++) {
@@ -671,7 +615,6 @@ static PyObject *ncvt1_score_loop(
             s_xy += h_null_Uty[i] * x[i];
         }
 
-        /* Build Pab from split sums */
         double pab[3][6];
         calc_pab_ncvt1_split(null_s_ww, s_wx, null_s_wy,
                               s_xx, s_xy, null_s_yy, pab);
@@ -686,103 +629,12 @@ static PyObject *ncvt1_score_loop(
 
     Py_END_ALLOW_THREADS
 
-    if (warn_betainc_convergence(out_betas, out_p_scores, n_snps) < 0) {
-        decref_score_output(&out);
-        return NULL;
-    }
-
-    return build_score_result_dict(&out);
-}
-
-/* -------------------------------------------------------------------------
- * ncvt1_lrt_loop
- *
- * LRT (lmm_mode 2) over one chunk of an n_cvt=1 workspace, hoisted verbatim
- * from the entry point this replaces. Per-thread scratch is allocated per
- * call so the thread count can be retuned between chunks.
- * ------------------------------------------------------------------------- */
-static PyObject *ncvt1_lrt_loop(
-    lmm_workspace_t *ws, const double *utg_t_data, int n_snps,
-    int actual_threads)
-{
-    int n_samples = ws->n_samples;
-
-    lrt_output_t out;
-    if (alloc_lrt_output(&out, (npy_intp)n_snps) < 0) {
-        PyErr_NoMemory();
-        return NULL;
-    }
-
-    double *out_lambdas_mle = (double *)PyArray_DATA(out.lambdas_mle);
-    double *out_logls       = (double *)PyArray_DATA(out.logls);
-    double *out_p_lrts      = (double *)PyArray_DATA(out.p_lrts);
-
-    /* Allocate per-thread scratch buffers (thread-safe, adapts to retuned n_threads) */
-    double **thread_scratch =
-        alloc_thread_scratch(actual_threads, (size_t)3 * n_samples);
-    if (!thread_scratch) {
-        decref_lrt_output(&out);
-        return PyErr_NoMemory();
-    }
-
-    Py_BEGIN_ALLOW_THREADS
-
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(static) num_threads(actual_threads)
-#endif
-    for (int s = 0; s < n_snps; s++) {
-        int tid = 0;
-#ifdef _OPENMP
-        tid = omp_get_thread_num();
-#endif
-        double *scratch = thread_scratch[tid];
-        double *vwx_local = scratch;
-        double *vxx_local = scratch + n_samples;
-        double *vxy_local = scratch + 2 * n_samples;
-
-        const double *x = utg_t_data + (size_t)s * n_samples;
-
-        /* Compute vwx/vxx/vxy on-the-fly from utg_t column */
-        for (int i = 0; i < n_samples; i++) {
-            vwx_local[i] = ws->w[i] * x[i];
-            vxx_local[i] = x[i] * x[i];
-            vxy_local[i] = ws->Uty[i] * x[i];
-        }
-
-        double logl_H1;
-        double lam_mle = golden_section_lambda_mle_ncvt1_split(
-            vwx_local, vxx_local, vxy_local,
-            ws->inv_ww, ws->inv_wy, ws->inv_yy,
-            ws->eigenvalues, n_samples,
-            ws->grid->hi_eval_grid, ws->grid->logdet_h_grid,
-            ws->grid->grid_inv, ws->grid->log_l_min, ws->grid->step,
-            ws->grid->n_grid, ws->grid->n_refine,
-            ws->lrt->mle_const, &logl_H1
-        );
-        out_lambdas_mle[s] = lam_mle;
-        out_logls[s] = logl_H1;
-
-        double lrt_stat = 2.0 * (logl_H1 - ws->lrt->logl_H0);
-        if (lrt_stat < 0.0) lrt_stat = 0.0;
-        out_p_lrts[s] = chi2_sf_c(lrt_stat);
-    }
-
-    Py_END_ALLOW_THREADS
-
-    /* Free per-call scratch */
-    free_thread_scratch(thread_scratch, actual_threads);
-
-    return build_lrt_result_dict(&out);
+    PyObject *result = finish_lmm_output(&out, ws->tests, n_snps);
+    return result;
 }
 
 /* -------------------------------------------------------------------------
  * compute_lmm_chunk_ncvt1_c
- *
- * One compute entry point for every n_cvt=1 workspace. Intake, clamp_threads,
- * then dispatch on ws->mode to the loop function that mode built its
- * workspace for. This is a dispatcher selecting a whole loop body, not
- * interleaved gating: each loop function above is one of the three former
- * entry points, hoisted verbatim.
  *
  * Python signature:
  *   compute_lmm_chunk_ncvt1_c(workspace, utg_t, n_threads)
@@ -812,33 +664,16 @@ PyObject *compute_lmm_chunk_ncvt1_c_py(
         PyCapsule_GetPointer(capsule_obj, NCVT1_CAPSULE);
     if (!ws) return NULL;
 
-    int n_samples = ws->n_samples;
     int n_snps;
-    PyArrayObject *utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
+    PyArrayObject *utg_t_arr = take_chunk(utg_t_obj, ws->n_samples, &n_snps);
     if (!utg_t_arr) return NULL;
 
     int actual_threads = clamp_threads(n_threads, n_snps);
     const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
 
-    PyObject *result;
-    switch (ws->mode) {
-        case 1:
-        case 4:
-            result = ncvt1_wald_loop(
-                ws, utg_t_data, n_snps, actual_threads, ws->mode == 4);
-            break;
-        case 2:
-            result = ncvt1_lrt_loop(ws, utg_t_data, n_snps, actual_threads);
-            break;
-        case 3:
-            result = ncvt1_score_loop(ws, utg_t_data, n_snps, actual_threads);
-            break;
-        default:
-            PyErr_Format(PyExc_ValueError,
-                "compute_lmm_chunk_ncvt1_c: workspace has invalid lmm_mode=%d",
-                ws->mode);
-            result = NULL;
-    }
+    PyObject *result = ws->score
+        ? ncvt1_score_loop(ws, utg_t_data, n_snps, actual_threads)
+        : ncvt1_test_loop(ws, utg_t_data, n_snps, actual_threads);
 
     Py_DECREF(utg_t_arr);
     return result;

@@ -12,6 +12,7 @@ from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.schema import LmmConfig
 from tests.conftest import requires_c
 from tests.lmm_accel._helpers import (
+    _fused_general_mode4_workspace,
     _fused_general_workspace,
     _prepare_fused_general_data,
     _run_general_ncvt_c_vs_python,
@@ -248,6 +249,42 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
         assert np.isfinite(result["betas"][snp_idx]), (
             f"SNP {snp_idx}: expected finite beta"
         )
+
+
+@pytest.mark.tier0
+@requires_c
+def test_empty_chunk_returns_empty_columns_in_both_families(
+    general_score_lrt_ncvt2, fused_data
+):
+    """An empty chunk yields every mode-4 key with zero rows, whatever n_cvt."""
+    general = _prepare_fused_general_data(general_score_lrt_ncvt2)
+    general_ws = _fused_general_mode4_workspace(general)
+    empty_general = np.empty((0, general["n_samples"]))
+    general_out = accel.require().compute_lmm_chunk_fused_general_c(
+        general_ws, empty_general, 1
+    )
+
+    eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+    ncvt1_ws = accel.require().create_workspace_ncvt1_c(
+        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
+    )
+    empty_ncvt1 = np.empty((0, n_samples))
+    ncvt1_out = accel.require().compute_lmm_chunk_ncvt1_c(ncvt1_ws, empty_ncvt1, 1)
+
+    mode4_keys = {
+        "lambdas",
+        "logls",
+        "betas",
+        "ses",
+        "pwalds",
+        "p_scores",
+        "lambdas_mle",
+        "p_lrts",
+    }
+    assert set(general_out) == mode4_keys
+    assert all(general_out[k].shape == (0,) for k in mode4_keys)
+    assert set(ncvt1_out) == {"lambdas", "logls", "betas", "ses", "pwalds"}
+    assert all(v.shape == (0,) for v in ncvt1_out.values())
 
 
 @pytest.mark.tier0

@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A failing native kernel names its mode as `-lmm N` in the error, for example
   `Fused general -lmm 4 dispatch failed ...`, in place of per-mode labels such
   as `Fused general mode-4 Uab dispatch`.
+- The C accelerator decodes `lmm_mode` once into the set of tests it runs,
+  and both covariate families share one null-model argument contract, thread
+  clamp, and result builder. Two behaviours now match across families: the
+  general (n_cvt >= 2) path accepts an empty genotype chunk and returns
+  zero-row columns instead of raising `ValueError`, and it warns about
+  betainc non-convergence for standalone Score as the n_cvt = 1 path already
+  did. The n_cvt = 1 LRT runs through the same loop as Wald and mode 4. No
+  result bit moves.
 - `scripts/bench_all_backends.py` times a second kinship row, `kinship_npy`,
   which runs `-gk 1` without `--legacy-text` and so writes the binary `.npy`
   matrix JAMMA ships by default. The existing text row remains the

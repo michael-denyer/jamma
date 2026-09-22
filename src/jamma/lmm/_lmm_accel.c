@@ -38,7 +38,7 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "iiiii", &n_samples, &n_cvt, &n_grid,
                           &lmm_mode, &n_threads)) return NULL;
     if (n_samples < 1 || n_cvt < 1 || n_cvt > MAX_N_CVT || n_grid < 2 ||
-        lmm_mode < 1 || lmm_mode > 4 || n_threads < 1) {
+        !lmm_mode_valid(lmm_mode) || n_threads < 1) {
         PyErr_SetString(PyExc_ValueError, "invalid workspace sizing dimensions");
         return NULL;
     }
@@ -53,6 +53,7 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
         return NULL;
     }
 
+    lmm_tests_t tests = lmm_tests(lmm_mode);
     size_t persistent = 0, per_thread = 0, transient_per_thread = 0;
     int output_columns = lmm_mode == 1 ? 5 : lmm_mode == 2 ? 2 :
                          lmm_mode == 3 ? 3 : 8;
@@ -60,13 +61,13 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
         /* RunInvariants retains eigenvalues, UtW, Uty, Hi_eval_null, w and
          * the three invariant Uab rows while the capsule borrows the arrays. */
         persistent = (size_t)8 * n_samples * sizeof(double);
-        if (lmm_mode != 3) {
+        if (tests.reml || tests.lrt) {
             persistent += (size_t)n_grid * 6 * sizeof(double);
             persistent += aligned_double_bytes(grid_doubles(n_samples, n_grid));
         }
-        if (lmm_mode == 3 || lmm_mode == 4)
+        if (tests.score)
             persistent += aligned_double_bytes((size_t)n_samples);
-        if (lmm_mode == 3)
+        if (!tests.reml && !tests.lrt)
             persistent += (size_t)2 * aligned_double_bytes((size_t)n_samples);
         int scratch_arrays = lmm_mode == 1 ? 3 : lmm_mode == 3 ? 0 : 4;
         transient_per_thread = (size_t)scratch_arrays *
@@ -86,17 +87,17 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
                      sizeof(double);
         persistent += aligned_double_bytes(grid_doubles(n_samples, n_grid));
         persistent += ((size_t)n_grid * (inv + 2) + inv) * sizeof(double);
-        if (lmm_mode == 3 || lmm_mode == 4)
+        if (tests.score)
             persistent += aligned_double_bytes((size_t)n_samples) +
                           inv * sizeof(double);
         persistent += pab_table_bytes(n_cvt);
         per_thread = (general_scratch_doubles(n_samples, (int)rows) +
                       general_pab_doubles((int)rows, (int)index) + index) *
                      sizeof(double);
-        if (lmm_mode == 1 || lmm_mode == 4)
+        if (tests.reml)
             per_thread += general_pab_doubles((int)rows, (int)index)
                           * sizeof(double);
-        if (lmm_mode == 2 || lmm_mode == 4)
+        if (tests.lrt)
             per_thread += general_lrt_thread_doubles(n_samples, (int)index) *
                           sizeof(double);
     }

@@ -37,37 +37,15 @@
  * kernels read them and must not need <Python.h> to do it. */
 #include "_lmm_types.h"
 
-/* ---------------------------------------------------------------------------
- * Result shapes. One struct per set of output arrays a kernel family returns,
- * each with an alloc / decref / build triple below.
- * ------------------------------------------------------------------------- */
-
-/* Score: 3 arrays. */
-typedef struct {
-    PyArrayObject *betas;
-    PyArrayObject *ses;
-    PyArrayObject *p_scores;
-} score_output_t;
-
-/* LRT: alternative MLE likelihood, lambda, and p-value. */
-typedef struct {
-    PyArrayObject *logls;
-    PyArrayObject *lambdas_mle;
-    PyArrayObject *p_lrts;
-} lrt_output_t;
-
-/* What one compute_lmm_chunk_fused_*_c call returns: the five Wald arrays,
- * plus the three mode-4 extras, which stay NULL when the workspace is Wald-only
- * (with_mode4 = 0 at alloc). Both families share this one shape. */
 typedef struct {
     PyArrayObject *lambdas;      /* REML lambda */
-    PyArrayObject *logls;        /* REML log-likelihood */
-    PyArrayObject *betas;        /* Wald beta (REML-optimized) */
-    PyArrayObject *ses;          /* Wald SE (REML-optimized) */
+    PyArrayObject *logls;
+    PyArrayObject *betas;
+    PyArrayObject *ses;
     PyArrayObject *pwalds;       /* Wald p-value */
-    PyArrayObject *p_scores;     /* Score p-value, mode 4 only */
-    PyArrayObject *lambdas_mle;  /* MLE lambda, mode 4 only */
-    PyArrayObject *p_lrts;       /* LRT p-value, mode 4 only */
+    PyArrayObject *p_scores;
+    PyArrayObject *lambdas_mle;
+    PyArrayObject *p_lrts;
 } lmm_output_t;
 
 /* ---------------------------------------------------------------------------
@@ -118,22 +96,11 @@ int warn_betainc_convergence(const double *betas, const double *pvalues,
  * success the dict holds its own, on failure everything is released.
  * ------------------------------------------------------------------------- */
 
-int alloc_score_output(score_output_t *out, npy_intp n_snps);
-void decref_score_output(score_output_t *out);
-PyObject *build_score_result_dict(score_output_t *out);
-
-int alloc_lrt_output(lrt_output_t *out, npy_intp n_snps);
-void decref_lrt_output(lrt_output_t *out);
-PyObject *build_lrt_result_dict(lrt_output_t *out);
-
-/* betas/ses/p_scores are always allocated: mode 1 leaves p_scores unused,
- * mode 3 has no Wald block and writes Score's beta/se into betas/ses
- * instead. lambdas/pwalds are mode 1 and 4 only; logls is mode 1, 2, and 4;
- * lambdas_mle/p_lrts are mode 2 and 4 only. build_lmm_result_dict emits the non-NULL
- * arrays, so a mode's absent keys never reach the Python dict. */
-int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int lmm_mode);
+int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, lmm_tests_t tests);
 void decref_lmm_output(lmm_output_t *out);
 PyObject *build_lmm_result_dict(lmm_output_t *out);
+
+PyObject *finish_lmm_output(lmm_output_t *out, lmm_tests_t tests, int n_snps);
 
 /* ---------------------------------------------------------------------------
  * Pab recursion table, built from n_cvt at workspace creation. The typedef
@@ -170,6 +137,11 @@ PyArrayObject *take_chunk(PyObject *obj, int n_samples, int *n_snps_out);
 /* Each 0 on success, -1 with PyErr set. */
 int validate_logl_H0(double logl_H0);
 int validate_hi_eval_null(const double *hi, int n_samples);
+
+int parse_mode_inputs(int lmm_mode, PyObject **hi_obj, PyObject *logl_obj,
+                      lmm_tests_t *tests, double *logl_H0);
+
+int clamp_threads(int n_threads, int n_snps);
 
 /* ---------------------------------------------------------------------------
  * n_cvt = 1 lambda grid. Fills the caller-allocated lambda_grid (n_grid,),

@@ -183,12 +183,12 @@ src/jamma/
 │   ├── _lmm_accel_ncvt1.c  # Public n_cvt=1 workspace and chunk-compute entry points
 │   ├── _lmm_accel_general.c # Public general-workspace and chunk-compute entry points
 │   ├── _lmm_accel_internal.h # Private declarations shared with module registration
-│   ├── _lmm_support.c/.h   # Shared thread-scratch alloc/free and NumPy C-API glue
+│   ├── _lmm_support.c/.h   # Shared shell: mode-input parse, thread clamp, result dict, NumPy C-API glue
 │   ├── _lmm_stats.c/.h     # Wald/Score/LRT statistics kernels shared by both workspaces
 │   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) workspace creator and fused compute
 │   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 workspace creator and fused compute
 │   ├── _lmm_logdet.h       # logdet(H) as a mantissa product with exact exponent; hot-loop inline
-│   └── _lmm_types.h        # Shared workspace/result struct definitions
+│   └── _lmm_types.h        # Plain-C shared types: Pab table, lmm_tests_t mode decode
 │                          #
 │                          # LMM_ACCEL_SOURCES in _build_support/build_models.py is the
 │                          # source list every build entry point reads; do not trust a file

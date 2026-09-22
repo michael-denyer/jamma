@@ -29,8 +29,8 @@ class AtomicOutput:
 
     This is the ordinary non-durable publish protocol: callers own opening and
     writing the temp file, while this context owns replacement and cleanup. It
-    deliberately does not fsync; durable commit markers such as LOCO eigen-cache
-    manifests keep their own descriptor-based protocol.
+    deliberately does not fsync; durable commit markers such as eigen generation
+    manifests fsync the temp themselves before it is published.
 
     ``retain`` transfers the temp to a recovery artifact. If its rename fails,
     the original temp survives context exit at the path returned to the caller.

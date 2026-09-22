@@ -38,26 +38,9 @@ pytestmark = pytest.mark.tier0
     ],
 )
 def test_compared_columns_match_mode_spec(mode, sample):
-    """The set of columns compare_assoc_results actively compares for a mode
-    equals MODE_SPECS[mode].stat_columns, so the comparator cannot drift from
-    the schema's declared column set for that mode.
-
-    beta/se are excluded from this check: they are always-present output slots,
-    not entries in MODE_SPECS[mode].stat_columns, and LRT compares them too
-    (both sides all-NaN by construction) rather than skipping them outright.
-    """
+    """compare_assoc_results compares exactly af plus MODE_SPECS[mode]'s columns,
+    so the comparator cannot drift from the schema's declared column set."""
     comparison = compare_assoc_results([sample], [sample])
-    expected = frozenset(
-        column.field_name for column in MODE_SPECS[mode].stat_columns
-    ) - {"beta", "se"}
-    actual = frozenset(
-        field
-        for field in ("p_wald", "logl_H1", "l_remle", "p_score", "p_lrt", "l_mle")
-        if (result := getattr(comparison, field)) is not None
-        and not (
-            result.passed
-            and result.worst_location is None
-            and "skipped" in result.message
-        )
-    )
+    expected = {"af"} | {c.field_name for c in MODE_SPECS[mode].stat_columns}
+    actual = set(comparison.columns)
     assert actual == expected

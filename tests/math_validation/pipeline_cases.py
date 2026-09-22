@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-from tests.math_validation.compare import compare_files, read_rows
+from jamma.validation.compare import load_gemma_assoc
+from tests.math_validation.compare import compare_files
 from tests.math_validation.evidence import (
     bundle_status,
     environment,
@@ -317,7 +318,10 @@ def compare_pipeline(
                     reference_optional_logl=True,
                 )
                 actual_ids = [
-                    row["rs"] for row in read_rows(result.assoc_path, case["mode"])
+                    row.rs
+                    for row in load_gemma_assoc(
+                        result.assoc_path, mode=case["mode"], require_logl=True
+                    )
                 ]
                 actual_indices = np.asarray(result.analyzed_sample_indices)
                 actual_samples = [f"F{i}:I{i}" for i in actual_indices]

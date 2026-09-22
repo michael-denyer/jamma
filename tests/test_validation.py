@@ -290,4 +290,4 @@ class TestAssocAfGate:
 
         comparison = compare_assoc_results(actual, expected)
 
-        assert comparison.af.passed is passed
+        assert comparison["af"].passed is passed

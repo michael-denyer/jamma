@@ -295,21 +295,13 @@ def print_performance_summary(timings: list[SectionTiming], total: float):
 def _assoc_rows(
     jamma: Sequence[AssocResult], gemma: Sequence[AssocResult], tol: ToleranceConfig
 ) -> tuple[bool, list[tuple[str, float, ComparisonResult]]]:
-    """Compare one mode's results and lay the active columns out as rows.
-
-    Columns compare_assoc_results skipped for the detected mode (a
-    vacuously-passing result with no measured difference) stay out of the
-    table, so each mode shows only the fields GEMMA wrote for it.
-    """
+    """Compare one mode's results and lay the compared columns out as rows."""
     comparison = compare_assoc_results(jamma, gemma, tol)
-    rows = []
-    for field, tol_field in _ASSOC_COLUMNS:
-        r = getattr(comparison, field)
-        if r is None or (
-            r.passed and r.worst_location is None and "skipped" in r.message
-        ):
-            continue
-        rows.append((field, getattr(tol, tol_field), r))
+    rows = [
+        (field, getattr(tol, tol_field), comparison[field])
+        for field, tol_field in _ASSOC_COLUMNS
+        if field in comparison.columns
+    ]
     if comparison.mismatched_snps:
         print(f"  SNP id mismatches: {len(comparison.mismatched_snps)}")
     return comparison.passed, rows

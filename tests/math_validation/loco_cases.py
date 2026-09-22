@@ -8,7 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
-from tests.math_validation.compare import compare_files, read_rows
+from jamma.validation.compare import load_gemma_assoc
+from tests.math_validation.compare import compare_files
 from tests.math_validation.evidence import (
     bundle_status,
     environment,
@@ -251,7 +252,10 @@ def compare_loco(destination: Path, case_ids: tuple[str, ...] | None = None) -> 
                 reference_optional_logl=True,
             )
             actual_ids = [
-                row["rs"] for row in read_rows(result.assoc_path, case["mode"])
+                row.rs
+                for row in load_gemma_assoc(
+                    result.assoc_path, mode=case["mode"], require_logl=True
+                )
             ]
             expected_ids = json.loads((source / "model.json").read_text())["snp_ids"]
             reused = route == "cold" or any(

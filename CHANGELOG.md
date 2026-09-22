@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `AssocComparisonResult` holds one comparison per column the mode carries,
+  plus `af`, in `columns`; read one with `comparison["l_remle"]`. A column the
+  mode does not carry is absent instead of a vacuous pass, a SNP count
+  mismatch reports the single column `n_snps`, and `passed` is derived.
+  `ComparisonResult` is frozen.
+- `compare_assoc_results` raises `ValueError` for LRT rows whose beta or se is
+  not NaN, instead of returning a failed verdict with every column passing.
+- `load_gemma_assoc` rejects duplicate SNP IDs, and takes `mode=` and
+  `require_logl=` to check the header, so the math-validation wrapper no
+  longer parses headers or rows itself.
 - The memory plan prices `-lmm 2` at three result columns per SNP, the
   `logl_H1`, `l_mle` and `p_lrt` arrays the kernels allocate, instead of two.
   The chunk sizer and the NumPy and native workspace estimates all read the

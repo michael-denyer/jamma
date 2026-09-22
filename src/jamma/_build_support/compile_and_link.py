@@ -96,7 +96,6 @@ def run_build(
     toolchain: Toolchain,
     *,
     dev_mode: bool,
-    diagnose: bool = False,
     on_retry: Callable[[str], None] | None = None,
     verbose_print: Callable[..., None] = print,
     error_print: Callable[..., None] | None = None,
@@ -147,12 +146,7 @@ def run_build(
     include_dirs = [toolchain.python_inc, toolchain.numpy_inc]
     include_dirs.extend(str(pkg_dir.joinpath(*parts)) for parts in spec.include_parts)
 
-    diag_flags = (
-        toolchain.diagnose_flags() if spec.supports_diagnose and diagnose else ()
-    )
-    base_extras = resolve_build_spec(
-        spec, dev_mode=dev_mode, env=resolved_env, diagnose_flags=diag_flags
-    )
+    base_extras = resolve_build_spec(spec, dev_mode=dev_mode, env=resolved_env)
 
     # -lm is the universal extra link flag; apply_sanitizer_overrides is a no-op
     # unless JAMMA_SANITIZE is set, and also instruments the LAPACK sources.
@@ -208,7 +202,6 @@ def compile_extension(
     package_dir: Path,
     *,
     verbose: bool = False,
-    diagnose: bool = False,
     on_retry: Callable[[str], None] | None = None,
     out: TextIO | None = None,
 ) -> bool:
@@ -229,8 +222,6 @@ def compile_extension(
         package_dir: The installed ``jamma/`` package directory.
         verbose: Print per-command compile details. When False (default), only
             errors and a one-line summary print.
-        diagnose: Emit compiler vectorization reports (accel only; ignored when
-            ``spec.supports_diagnose`` is False).
         on_retry: Optional callback invoked with a message when the build
             retries without OpenMP. Defaults to the same output stream as
             everything else this function prints.
@@ -264,7 +255,6 @@ def compile_extension(
         package_dir,
         toolchain,
         dev_mode=True,
-        diagnose=diagnose,
         on_retry=_retry,
         verbose_print=_detail,
         error_print=_say,

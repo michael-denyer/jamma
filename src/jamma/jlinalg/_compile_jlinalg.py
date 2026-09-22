@@ -19,7 +19,6 @@ The jlinalg extension compiles per-file to enable per-source-group compiler flag
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 # jamma._build_support ships inside the installed package, so the same
@@ -34,10 +33,7 @@ from jamma._build_support.compile_and_link import compile_extension as _compile
 from jamma._build_support.load_proof import load_proof as _load_proof_for
 
 
-def compile_extension(
-    verbose: bool = False,
-    on_retry: Callable[[str], None] | None = None,
-) -> bool:
+def compile_extension(verbose: bool = False) -> bool:
     """Compile jlinalg C sources into a shared library in the installed package.
 
     Thin shim over ``jamma._build_support.compile_and_link.compile_extension``
@@ -50,8 +46,6 @@ def compile_extension(
     Args:
         verbose: Print per-command compile details. When False (default),
             only errors and a one-line summary are printed.
-        on_retry: Optional callback invoked with a single string argument
-            when the build retries without OpenMP.
 
     Returns:
         True if compilation succeeded, False otherwise.
@@ -60,7 +54,6 @@ def compile_extension(
         JLINALG_SPEC,
         Path(__file__).parents[1],  # the installed jamma/ package directory
         verbose=verbose,
-        on_retry=on_retry,
         out=sys.stderr,
     )
 

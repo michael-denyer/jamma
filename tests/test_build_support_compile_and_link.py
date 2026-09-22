@@ -639,6 +639,8 @@ def test_toolchain_detected_once_across_run_build_of_both_specs(monkeypatch, tmp
             sources=("one.c",),
             lapack_sources=(),
             output_stem=f"_{name}",
+            sys_module_key=f"jamma.{name}._{name}",
+            fallback_label=name,
         )
 
     package_dir = tmp_path

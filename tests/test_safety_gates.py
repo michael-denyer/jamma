@@ -135,8 +135,8 @@ class TestJlinalgABIValidation:
             sources=(),
             lapack_sources=(),
             output_stem="_fake_abi_probe",
-            module_name="_fake_abi_probe",
             sys_module_key=key,
+            fallback_label="fake",
             required_attrs=("NEEDED",),
         )
 

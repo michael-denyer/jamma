@@ -38,6 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and vetoes the run before the first genotype read, as
   `compute_loco_kinship_streaming` does, and the eigendecomposition plans
   its driver against the budget as the `-lmm` path already did.
+- `jamma.jlinalg.eigh(K, driver="dsyevr")` raises `RuntimeError` when vendor
+  DSYEVR is not wired, as documented, instead of running DSYEVD. The memory
+  plan chooses DSYEVR for its O(N) workspace, so a DSYEVD run would touch
+  pages the plan never reserved. `jlinalg_eigh_c` now calls DSYEVR through
+  one helper on both paths. The pipeline is unchanged: `core/eigen_plan.py`
+  only plans DSYEVR when `blas_has_dsyevr` is set.
+- The raw `_jlinalg.dgemm` and `_jlinalg.dsyrk` entry points raise
+  `RuntimeError` when their vendor routine is not wired, as `jlinalg.h`,
+  `_jlinalg.pyi`, and `pymodule.c` document, instead of calling `abort()`.
+  The public `jamma.jlinalg.dgemm` and `dsyrk` bind NumPy in that state and
+  were unaffected. `JLINALG_NO_VENDOR_DSYRK` and `JLINALG_NO_VENDOR_DSYEVR`
+  join `JLINALG_NO_VENDOR_DGEMM` as test seams that leave one vendor routine
+  unwired.
 
 ## [8.1.0] - 2026-09-14
 

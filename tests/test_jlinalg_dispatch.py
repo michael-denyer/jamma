@@ -521,10 +521,6 @@ class TestUnwiredRoutinesRaise:
         last = proc.stdout.strip().splitlines()[-1]
         assert last.startswith("RuntimeError:"), f"{last}\n{proc.stderr}"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="py_dgemm calls jlinalg_dgemm_ext, which abort()s without vendor dgemm",
-    )
     def test_raw_dgemm_raises_when_vendor_dgemm_unwired(self):
         proc = _run_in_fresh_interpreter(
             """
@@ -544,10 +540,6 @@ class TestUnwiredRoutinesRaise:
         )
         self._assert_raised_runtime_error(proc)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="py_dsyrk calls jlinalg_dsyrk_ext, which abort()s without vendor dsyrk",
-    )
     def test_raw_dsyrk_raises_when_vendor_dsyrk_unwired(self):
         proc = _run_in_fresh_interpreter(
             """
@@ -569,10 +561,6 @@ class TestUnwiredRoutinesRaise:
 
     @pytest.mark.skipif(
         not blas_has_dsyevd, reason="needs vendor DSYEVD to bind C eigh"
-    )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="jlinalg_eigh_c runs DSYEVD when driver='dsyevr' has no vendor DSYEVR",
     )
     def test_eigh_dsyevr_driver_raises_when_dsyevr_unwired(self):
         proc = _run_in_fresh_interpreter(

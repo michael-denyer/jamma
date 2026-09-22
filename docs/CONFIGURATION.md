@@ -262,7 +262,10 @@ and vendor capability flags, in priority order:
 `driver="auto"` otherwise. `jlinalg_eigh_c` honours it directly -- when
 `driver="dsyevr"` it skips the DSYEVD attempt outright rather than trying
 DSYEVD first and falling back to DSYEVR only on an allocation failure, so a
-memory-constrained run never touches pages the plan did not reserve. `eigh`
+memory-constrained run never touches pages the plan did not reserve. With
+vendor DSYEVR not wired, `driver="dsyevr"` raises `RuntimeError` rather than
+running DSYEVD; the plan only picks DSYEVR when `blas_has_dsyevr` is set, so
+the pipeline never reaches that error. `eigh`
 returns the driver that actually ran as `status.driver_used`, and
 `eigendecompose_kinship` logs that value (`Eigendecomp: dsyevr`), not the
 planned one, since a DSYEVD allocation failure can still fall through to

@@ -98,6 +98,10 @@ def dsyrk(
 
     Returns:
         Symmetric result matrix, shape (N, N), float64.
+
+    Raises:
+        RuntimeError: If no vendor dsyrk is wired (blas_has_dsyrk == 0).
+            jamma.jlinalg binds the NumPy dsyrk in that case.
     """
 
 def eigh(

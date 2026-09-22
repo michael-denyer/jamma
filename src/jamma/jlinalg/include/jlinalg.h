@@ -119,8 +119,8 @@ int blas_has_external(void);
  */
 
 /* Vendor-dispatch dsyrk: C = X @ X.T + beta*C (lower triangle + mirror).
- * Routes to vendor cblas_dsyrk when available, else returns without computing
- * (caller must use numpy fallback). */
+ * Routes to vendor dsyrk and aborts when none is wired, so callers check
+ * blas_has_dsyrk() first. */
 void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
                      const double *X, npy_intp ldx,
                      double *C, npy_intp ldc, double beta);
@@ -198,8 +198,8 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
  * Row-major convention: C(M x N) = alpha * op(A)(M x K) * op(B)(K x N) + beta * C
  * transa/transb: 0 = no transpose, 1 = transpose.
  *
- * When no vendor BLAS is available, these functions return without computing
- * (caller should check blas_has_external() and use numpy fallback).
+ * When no vendor BLAS is wired, jlinalg_dgemm_ext aborts, so callers check
+ * blas_has_external() first.
  */
 
 /* C = op(A) * op(B), zeroes C first. */
@@ -244,15 +244,17 @@ typedef struct {
  * eigenvalues: caller-allocated N doubles (ascending order on return).
  * eigenvectors: caller-allocated N x N doubles, row-major. U[:,j] is the
  *               eigenvector for eigenvalues[j].
- * prefer_dsyevr: when nonzero and vendor DSYEVR is available, skip the DSYEVD
- *                attempt and go straight to DSYEVR. The plan that decided a
+ * require_dsyevr: when nonzero, run DSYEVR only. The plan that decided a
  *                DSYEVR-sized memory footprint owns this call, so the driver
- *                that runs must match the one that was budgeted for.
+ *                that runs must match the one that was budgeted for; without
+ *                vendor DSYEVR the call returns JLINALG_EXT_UNAVAILABLE
+ *                rather than running DSYEVD.
  * status: if non-NULL, populated with diagnostic flags, including which
  *         driver ran (status->driver_used).
  * ldk, ldz: must equal N. Padded strides are rejected with JLINALG_EXT_BAD_STRIDE.
  *
- * Returns 0 on success, JLINALG_EXT_UNAVAILABLE if no vendor LAPACK,
+ * Returns 0 on success, JLINALG_EXT_UNAVAILABLE if no vendor LAPACK (or no
+ * vendor DSYEVR with require_dsyevr set),
  * JLINALG_EXT_ALLOC_FAIL on allocation failure, JLINALG_EXT_BAD_STRIDE if
  * ldk != N or ldz != N, positive i on convergence failure, negative -i on
  * LAPACK illegal-argument error.
@@ -261,7 +263,7 @@ int jlinalg_eigh_c(npy_intp N,
                  double *K, npy_intp ldk,
                  double *eigenvalues,
                  double *eigenvectors, npy_intp ldz,
-                 int prefer_dsyevr,
+                 int require_dsyevr,
                  jlinalg_eigh_status_t *status);
 
 /* ---------------------------------------------------------------------------

@@ -31,6 +31,23 @@
 #include <numpy/arrayobject.h>
 #include "jlinalg.h"
 
+static int eigh_dsyevr(npy_intp N, double *K, double *eigenvalues, double *eigenvectors,
+                       jlinalg_eigh_status_t *status) {
+    int ret = jlinalg_dsyevr_ext(N, K, N, eigenvalues, eigenvectors, N);
+    if (ret == JLINALG_EXT_SUCCESS) {
+        if (status) status->driver_used = JLINALG_DRIVER_DSYEVR;
+        return 0;
+    }
+    if (ret == JLINALG_EXT_ALLOC_FAIL) {
+        fprintf(stderr,
+                "jlinalg_eigh_c: vendor dsyevr workspace allocation failed "
+                "(N=%ld) -- no smaller-footprint driver left\n",
+                (long)N);
+        if (status) status->vendor_lapack_skipped = 1;
+    }
+    return ret;
+}
+
 /* ---------------------------------------------------------------------------
  * jlinalg_eigh_c -- Full symmetric eigensolver (public API, vendor-only).
  *
@@ -41,7 +58,7 @@
  * ---------------------------------------------------------------------------
  */
 int jlinalg_eigh_c(npy_intp N, double *K, npy_intp ldk, double *eigenvalues, double *eigenvectors,
-                   npy_intp ldz, int prefer_dsyevr, jlinalg_eigh_status_t *status) {
+                   npy_intp ldz, int require_dsyevr, jlinalg_eigh_status_t *status) {
     if (N <= 0) return 0;
 
     /* Every caller passes ldk == ldz == N (tight row-major storage). A padded
@@ -56,31 +73,7 @@ int jlinalg_eigh_c(npy_intp N, double *K, npy_intp ldk, double *eigenvalues, dou
         return 0;
     }
 
-    /* --- Vendor dsyevr direct path ---
-     * The caller's memory plan already decided DSYEVD's O(N^2) peak would not
-     * fit and budgeted for DSYEVR's O(N) footprint instead. Running DSYEVD
-     * here anyway would touch pages the plan never reserved -- skip straight
-     * to DSYEVR so the driver that runs matches the one that was budgeted. */
-    if (prefer_dsyevr && blas_has_dsyevr()) {
-        int evr_ret = jlinalg_dsyevr_ext(N, K, ldk, eigenvalues, eigenvectors, ldz);
-        if (evr_ret == JLINALG_EXT_SUCCESS) {
-            if (status) status->driver_used = JLINALG_DRIVER_DSYEVR;
-            return 0;
-        }
-        if (evr_ret == JLINALG_EXT_ALLOC_FAIL) {
-            fprintf(stderr,
-                    "jlinalg_eigh_c: vendor dsyevr workspace allocation failed "
-                    "(N=%ld, prefer_dsyevr) -- no smaller-footprint driver left\n",
-                    (long)N);
-            if (status) status->vendor_lapack_skipped = 1;
-            return JLINALG_EXT_ALLOC_FAIL;
-        }
-        if (evr_ret != JLINALG_EXT_UNAVAILABLE) {
-            /* Convergence or argument failure -- return error */
-            return evr_ret;
-        }
-        /* evr_ret == JLINALG_EXT_UNAVAILABLE: fall through to dsyevd below. */
-    }
+    if (require_dsyevr) return eigh_dsyevr(N, K, eigenvalues, eigenvectors, status);
 
     /* --- Vendor dsyevd fast path ---
      * When vendor LAPACK dsyevd is available (Accelerate, MKL), call it
@@ -119,31 +112,5 @@ int jlinalg_eigh_c(npy_intp N, double *K, npy_intp ldk, double *eigenvalues, dou
         return ext_ret;
     }
 
-    /* --- Vendor dsyevr fast path (memory-pressure fallback) ---
-     * DSYEVR uses O(N) workspace (vs O(N^2) for DSYEVD).  Try it when:
-     *   - vendor dsyevd was unavailable, OR
-     *   - dsyevd workspace allocation failed
-     * DSYEVR reads K directly (no work copy needed). */
-    if (blas_has_dsyevr()) {
-        int evr_ret = jlinalg_dsyevr_ext(N, K, ldk, eigenvalues, eigenvectors, ldz);
-        if (evr_ret == JLINALG_EXT_SUCCESS) {
-            if (status) status->driver_used = JLINALG_DRIVER_DSYEVR;
-            return 0;
-        }
-        if (evr_ret == JLINALG_EXT_ALLOC_FAIL) {
-            fprintf(stderr,
-                    "jlinalg_eigh_c: vendor dsyevr workspace allocation failed "
-                    "(N=%ld) -- both DSYEVD and DSYEVR workspace allocs failed\n",
-                    (long)N);
-            if (status) status->vendor_lapack_skipped = 1;
-            return JLINALG_EXT_ALLOC_FAIL;
-        }
-        if (evr_ret != JLINALG_EXT_UNAVAILABLE) {
-            /* Convergence or argument failure -- return error */
-            return evr_ret;
-        }
-    }
-
-    /* No vendor LAPACK available -- caller must use numpy.linalg.eigh */
-    return JLINALG_EXT_UNAVAILABLE;
+    return eigh_dsyevr(N, K, eigenvalues, eigenvectors, status);
 }

@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of copying `S_full` once per empty chromosome, and the "PVE computed from
   chromosome N" log states the real reason: earlier chromosomes had no SNPs
   to test.
+- `--mem-budget` now reaches the `-gk` kinship accumulation gate and the
+  `-gk -eigen` eigendecomposition gate. `jamma -gk 1 -eigen --mem-budget 0.001`
+  previously exited 0 and wrote every file while `-gk 1 -loco` and `-lmm`
+  rejected the same budget. `compute_kinship_streaming` takes `mem_budget`
+  and vetoes the run before the first genotype read, as
+  `compute_loco_kinship_streaming` does, and the eigendecomposition plans
+  its driver against the budget as the `-lmm` path already did.
 
 ## [8.1.0] - 2026-09-14
 

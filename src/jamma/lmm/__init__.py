@@ -18,10 +18,11 @@ Modules:
 - special: NumPy betainc_batch and chi2_sf_batch (no scipy)
 - results: Result building functions
 - eigen: Eigendecomposition with GEMMA-compatible thresholding
-- stats: AssocResult dataclass and the batch Wald/Score/LRT statistics
+- stats: the batch Wald/Score/LRT statistics
 - io: Result file I/O
 """
 
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
     ExecutionPlan,
@@ -33,7 +34,6 @@ from jamma.lmm.loco import DEFAULT_LOCO_CONFIG, LocoConfig, run_lmm_loco
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
 from jamma.lmm.schema import LmmConfig, LmmRunResult
-from jamma.lmm.stats import AssocResult
 
 __all__ = [
     "DEFAULT_LOCO_CONFIG",

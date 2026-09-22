@@ -21,11 +21,11 @@ import pytest
 from jamma.core.threading import get_physical_core_count
 from jamma.io import read_fam_phenotypes
 from jamma.lmm import loco_workers
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.loco_eigen import _computed_eigen_pairs
 from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs
 from jamma.lmm.schema import LmmConfig
-from jamma.lmm.stats import AssocResult
 from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO
 

@@ -299,7 +299,7 @@ mathematical validation plan covers additional conditioning and boundary cases.
 
 When the grid search maximum falls at the first or last grid point, the bracket
 may not contain the true optimum. JAMMA tracks this via
-`count_lambda_boundary_hits()` in `results.py` and emits a warning:
+`_count_lambda_boundary_hits()` in `chunk_runner_numpy.py` and emits a warning:
 
 ```text
 Lambda bound convergence: 42 SNPs at l_min=1.0e-05

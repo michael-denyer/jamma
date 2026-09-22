@@ -4,8 +4,11 @@ from dataclasses import replace
 
 import pytest
 
+from jamma.lmm.schema import MODE_SPECS
 from jamma.validation.compare import compare_assoc_results
 from tests.assoc_test_helpers import make_assoc
+
+_HEADER = {spec.test_type: spec.header for spec in MODE_SPECS.values()}
 
 pytestmark = pytest.mark.tier0
 
@@ -27,11 +30,10 @@ def test_inconsistent_rows_after_initial_sample_are_rejected():
 
 @pytest.mark.parametrize("test_type", ["wald", "lrt", "score", "all"])
 def test_empty_file_compares_as_zero_snps(tmp_path, test_type):
-    from jamma.lmm.schema import HEADERS
     from jamma.validation.compare import load_gemma_assoc
 
     path = tmp_path / "empty.assoc.txt"
-    path.write_text(HEADERS[test_type] + "\n")
+    path.write_text(_HEADER[test_type] + "\n")
     rows = load_gemma_assoc(path)
     assert len(rows) == 0
     result = compare_assoc_results(rows, rows)
@@ -55,12 +57,11 @@ def test_absent_likelihood_does_not_match_present_nan():
 @pytest.mark.parametrize("actual_type", ["wald", "lrt", "score", "all"])
 @pytest.mark.parametrize("expected_type", ["wald", "lrt", "score", "all"])
 def test_empty_files_keep_their_modes(tmp_path, actual_type, expected_type):
-    from jamma.lmm.schema import HEADERS
     from jamma.validation.compare import load_gemma_assoc
 
     actual_path, expected_path = tmp_path / "actual.txt", tmp_path / "expected.txt"
-    actual_path.write_text(HEADERS[actual_type] + "\n")
-    expected_path.write_text(HEADERS[expected_type] + "\n")
+    actual_path.write_text(_HEADER[actual_type] + "\n")
+    expected_path.write_text(_HEADER[expected_type] + "\n")
     actual, expected = load_gemma_assoc(actual_path), load_gemma_assoc(expected_path)
     if actual_type == expected_type:
         assert compare_assoc_results(actual, expected).passed
@@ -87,11 +88,10 @@ def test_empty_in_memory_rows_report_count_mismatch(row):
 
 
 def test_empty_slice_preserves_the_parsed_mode(tmp_path):
-    from jamma.lmm.schema import HEADERS
     from jamma.validation.compare import load_gemma_assoc
 
     path = tmp_path / "score.txt"
-    path.write_text(HEADERS["score"] + "\n")
+    path.write_text(_HEADER["score"] + "\n")
     rows = load_gemma_assoc(path)
     assert rows[:0].mode == 3
 
@@ -150,9 +150,8 @@ def test_lrt_rows_with_finite_beta_are_rejected():
 
 
 def _write_assoc(path, header, rs_ids):
-    from jamma.lmm.schema import HEADERS
 
-    cols = HEADERS[header].split("\t")
+    cols = _HEADER[header].split("\t")
     values = {"chr": "1", "ps": "1", "n_miss": "0", "allele1": "A", "allele0": "G"}
     lines = ["\t".join(cols)]
     lines += [

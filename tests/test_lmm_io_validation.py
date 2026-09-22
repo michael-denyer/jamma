@@ -1,10 +1,9 @@
 """LMM I/O and dispatch validation.
 
-Covers format_assoc_line per test_type, IncrementalAssocWriter rejection of
-unknown test_types, _build_results field mapping per lmm_mode, the
-``python -m jamma --help`` smoke test, the erfc-vs-chi2.sf equivalence used
-by HWE p-values, and degenerate-SNP NaN propagation through the NumPy
-batch-stat functions.
+Covers write_arrays_batch's per-mode TSV formatting, build_results field
+mapping per mode, the ``python -m jamma --help`` smoke test, the
+erfc-vs-chi2.sf equivalence used by HWE p-values, and degenerate-SNP NaN
+propagation through the NumPy batch-stat functions.
 """
 
 import math
@@ -14,20 +13,8 @@ import sys
 import numpy as np
 import pytest
 
-from jamma.lmm.io import (
-    HEADER_WALD,
-    IncrementalAssocWriter,
-    format_assoc_line,
-)
-from jamma.lmm.results import _build_results
-from jamma.lmm.schema import (
-    FORMAT_COLUMNS,
-    HEADERS,
-    RESULT_FIELDS,
-    LmmConfig,
-    SnpMeta,
-)
-from jamma.lmm.stats import AssocResult
+from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter, build_results
+from jamma.lmm.schema import MODE_SPECS, LmmConfig, SnpMeta, get_spec
 
 # ---------------------------------------------------------------------------
 # Shared test data
@@ -58,65 +45,66 @@ def _make_result(**overrides) -> AssocResult:
 
 
 # ---------------------------------------------------------------------------
-# format_assoc_line tests (#6)
+# write_arrays_batch formatting tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.tier0
-class TestFormatAssocLine:
-    """Verify format_assoc_line produces correct columns for each test_type."""
+class TestWriteArraysBatchFormatting:
+    """Verify write_arrays_batch produces correct columns for each mode."""
 
-    @pytest.mark.parametrize("test_type", ["wald", "score", "lrt", "all"])
-    def test_column_count_matches_header(self, test_type: str) -> None:
-        """Each test_type line should have same number of columns as its header."""
-        result = _make_result()
-        line = format_assoc_line(result, test_type)
-        header = HEADERS[test_type]
-        assert len(line.split("\t")) == len(header.split("\t"))
+    def _make_arrays(self, mode, n: int = 1) -> dict[str, np.ndarray]:
+        """Create arrays dict matching the mode's stat_columns."""
+        return {
+            c.array_key: np.array([1.0 + i + 0.1 * j for j in range(n)])
+            for i, c in enumerate(mode.stat_columns)
+        }
 
-    @pytest.mark.parametrize("test_type", ["wald", "score", "lrt", "all"])
-    def test_stat_columns_match_format_columns(self, test_type: str) -> None:
-        """Stat columns (after 7-column prefix) should match FORMAT_COLUMNS."""
-        result = _make_result()
-        line = format_assoc_line(result, test_type)
-        parts = line.split("\t")
-        stat_parts = parts[7:]  # Skip 7-column prefix
-        expected_cols = FORMAT_COLUMNS[test_type]
-        assert len(stat_parts) == len(expected_cols)
-        # Verify each stat column is the correct field value
-        for col_name, col_val in zip(expected_cols, stat_parts, strict=True):
-            expected_val = getattr(result, col_name)
-            assert float(col_val) == pytest.approx(expected_val, rel=1e-5)
+    def _write_one(self, tmp_path, mode) -> tuple[str, str]:
+        """Write a single-SNP batch and return (header_line, data_line)."""
+        arrays = self._make_arrays(mode)
+        snp_info = SnpMeta.from_dicts(
+            [{"chr": "1", "rs": "rs1", "pos": 100, "a1": "A", "a0": "G"}]
+        )
+        path = tmp_path / f"out_{mode.test_type}.txt"
+        with IncrementalAssocWriter(path, mode) as writer:
+            writer.write_arrays_batch(
+                np.array([0]), snp_info, np.array([0.25]), np.array([0]), arrays
+            )
+        header, data = path.read_text().strip().split("\n")
+        return header, data
 
-    def test_invalid_test_type_raises_value_error(self) -> None:
-        """Invalid test_type should raise ValueError, not KeyError."""
-        result = _make_result()
-        with pytest.raises(ValueError, match="Unknown test_type"):
-            format_assoc_line(result, "waldd")
+    @pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4])
+    def test_column_count_matches_header(self, tmp_path, lmm_mode: int) -> None:
+        """Each mode's data line has as many columns as its header."""
+        mode = get_spec(lmm_mode)
+        header, data = self._write_one(tmp_path, mode)
+        assert len(data.split("\t")) == len(header.split("\t"))
 
-    def test_headers_generated_from_format_columns(self) -> None:
-        """Verify HEADERS dict matches the named constant in io.py."""
-        assert HEADERS["wald"] == HEADER_WALD
-
-    def test_writer_rejects_invalid_test_type(self, tmp_path) -> None:
-        """IncrementalAssocWriter should reject invalid test_type at init."""
-        with pytest.raises(ValueError, match="Unknown test_type"):
-            IncrementalAssocWriter(tmp_path / "out.txt", test_type="bad")
+    @pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4])
+    def test_stat_columns_match_spec_order(self, tmp_path, lmm_mode: int) -> None:
+        """Stat columns (after the 7-column prefix) follow stat_columns order."""
+        mode = get_spec(lmm_mode)
+        arrays = self._make_arrays(mode)
+        _, data = self._write_one(tmp_path, mode)
+        stat_parts = data.split("\t")[7:]
+        expected = [f"{float(arrays[c.array_key][0]):.6e}" for c in mode.stat_columns]
+        assert stat_parts == expected
 
 
 # ---------------------------------------------------------------------------
-# _build_results tests (#7)
+# build_results tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.tier0
 class TestBuildResults:
-    """Verify _build_results field mapping for each lmm_mode."""
+    """Verify build_results field mapping for each mode."""
 
-    def _make_arrays(self, lmm_mode: int, n: int = 3) -> dict[str, np.ndarray]:
-        """Create arrays dict matching RESULT_FIELDS for the given mode."""
+    def _make_arrays(self, mode, n: int = 3) -> dict[str, np.ndarray]:
+        """Create arrays dict matching the mode's stat_columns."""
         return {
-            key: np.arange(n, dtype=np.float64) + 1.0 for key in RESULT_FIELDS[lmm_mode]
+            c.array_key: np.arange(n, dtype=np.float64) + 1.0 for c in mode.stat_columns
         }
 
     def _make_snp_info(self, n: int = 3) -> SnpMeta:
@@ -129,32 +117,34 @@ class TestBuildResults:
 
     @pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4])
     def test_correct_fields_populated(self, lmm_mode: int) -> None:
-        """Each mode should populate exactly the fields in RESULT_FIELDS."""
+        """Each mode should populate exactly the fields in its stat_columns."""
+        mode = get_spec(lmm_mode)
         n = 3
-        arrays = self._make_arrays(lmm_mode, n)
+        arrays = self._make_arrays(mode, n)
         snp_indices = np.arange(n)
         afs = np.full(n, 0.3)
         miss = np.zeros(n, dtype=int)
         snp_info = self._make_snp_info(n)
 
-        results = _build_results(lmm_mode, snp_indices, afs, miss, snp_info, arrays)
+        results = build_results(mode, snp_indices, afs, miss, snp_info, arrays)
         assert len(results) == n
 
-        field_map = RESULT_FIELDS[lmm_mode]
+        field_map = {c.array_key: c.field_name for c in mode.stat_columns}
         for j, r in enumerate(results):
             for array_key, field_name in field_map.items():
                 val = getattr(r, field_name)
                 assert val is not None, (
-                    f"Field {field_name} is None for mode {lmm_mode}"
+                    f"Field {field_name} is None for mode {mode.test_type}"
                 )
                 assert val == pytest.approx(float(arrays[array_key][j]))
 
     def test_lrt_mode_has_nan_beta_se(self) -> None:
-        """LRT mode (2) should set beta and se to NaN."""
+        """LRT mode should leave beta and se at their NaN default."""
+        mode = MODE_SPECS[2]
         n = 2
-        arrays = self._make_arrays(2, n)
-        results = _build_results(
-            2,
+        arrays = self._make_arrays(mode, n)
+        results = build_results(
+            mode,
             np.arange(n),
             np.full(n, 0.3),
             np.zeros(n, dtype=int),
@@ -165,29 +155,15 @@ class TestBuildResults:
             assert math.isnan(r.beta)
             assert math.isnan(r.se)
 
-    def test_invalid_lmm_mode_raises_value_error(self) -> None:
-        """Invalid lmm_mode should raise ValueError, not KeyError."""
-        snp = SnpMeta.from_dicts(
-            [{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}]
-        )
-        with pytest.raises(ValueError, match="lmm_mode must be"):
-            _build_results(
-                99,
-                np.array([0]),
-                np.array([0.3]),
-                np.array([0]),
-                snp,
-                {},
-            )
-
     def test_missing_array_key_raises_value_error(self) -> None:
         """Missing array key should raise ValueError with helpful message."""
+        mode = MODE_SPECS[1]
         n = 1
-        # Provide incomplete arrays for mode 1 (missing 'pwalds')
-        arrays = {k: np.ones(n) for k in list(RESULT_FIELDS[1].keys())[:-1]}
+        # Provide incomplete arrays for wald mode (missing 'pwalds')
+        arrays = {c.array_key: np.ones(n) for c in mode.stat_columns[:-1]}
         with pytest.raises(ValueError, match="Missing arrays"):
-            _build_results(
-                1,
+            build_results(
+                mode,
                 np.arange(n),
                 np.full(n, 0.3),
                 np.zeros(n, dtype=int),

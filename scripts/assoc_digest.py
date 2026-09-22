@@ -55,13 +55,15 @@ from jamma import jlinalg  # noqa: E402
 from jamma.io import load_plink_binary  # noqa: E402
 from jamma.io.plink import get_plink_metadata, read_fam_phenotypes  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
+
+# The base side runs this head copy, so import only names both sides export.
 from jamma.lmm import (  # noqa: E402
+    AssocResult,
     LmmConfig,
     run_lmm_association_numpy,
     run_lmm_association_numpy_streaming,
 )
 from jamma.lmm.schema import SnpMeta  # noqa: E402
-from jamma.lmm.stats import AssocResult  # noqa: E402
 from jamma.pipeline import PipelineRunner  # noqa: E402
 from jamma.pipeline_config import PipelineConfig  # noqa: E402
 from tests.fixture_paths import LOCO, SYNTHETIC  # noqa: E402

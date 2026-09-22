@@ -32,6 +32,7 @@ from jamma.core.threading import (
     get_c_extension_thread_count,
 )
 from jamma.lmm import accel
+from jamma.lmm.assoc_output import ChunkSink
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
 from jamma.lmm.chunk_sizing import LmmChunkPlan
@@ -40,13 +41,56 @@ from jamma.lmm.genotype_source import PreparedGenotypes
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.pab import reset_p_yy_warned
 from jamma.lmm.prepare_common import PreparedLmmRun
-from jamma.lmm.results import (
-    ChunkSink,
-    count_lambda_boundary_hits,
-    log_lambda_boundary_warning,
-)
-from jamma.lmm.schema import ChunkRunStats, LmmConfig
+from jamma.lmm.schema import ChunkRunStats, LmmConfig, ModeSpec
 from jamma.lmm.workspace import WorkspaceSpec
+
+# Relative tolerance for detecting lambda convergence at optimization bounds
+LAMBDA_BOUND_TOL = 1e-3
+
+
+def _count_lambda_boundary_hits(
+    mode: ModeSpec,
+    arrays: dict[str, np.ndarray],
+    l_min: float,
+    l_max: float,
+) -> tuple[int, int]:
+    """Count SNPs whose optimised lambdas sit at the lower and upper bound.
+
+    Returns:
+        Tuple of (n_at_lmin, n_at_lmax), summed over the mode's lambda keys.
+    """
+    n_at_lmin = 0
+    n_at_lmax = 0
+    for key in mode.lambda_keys:
+        lambdas = np.asarray(arrays[key])
+        n_at_lmin += int(np.sum(lambdas / l_min < 1 + LAMBDA_BOUND_TOL))
+        n_at_lmax += int(np.sum(lambdas / l_max > 1 - LAMBDA_BOUND_TOL))
+    return n_at_lmin, n_at_lmax
+
+
+def _log_lambda_boundary_warning(
+    n_at_lmin: int,
+    n_at_lmax: int,
+    l_min: float,
+    l_max: float,
+    prefix: str = "",
+) -> None:
+    """Emit a warning if any SNPs converged at lambda bounds.
+
+    Args:
+        n_at_lmin: Count of SNPs at lower bound.
+        n_at_lmax: Count of SNPs at upper bound.
+        l_min: Lower lambda bound.
+        l_max: Upper lambda bound.
+        prefix: Optional prefix for log message (e.g. "LOCO ").
+    """
+    if n_at_lmin > 0 or n_at_lmax > 0:
+        parts = []
+        if n_at_lmin > 0:
+            parts.append(f"{n_at_lmin} SNPs at l_min={l_min:.1e}")
+        if n_at_lmax > 0:
+            parts.append(f"{n_at_lmax} SNPs at l_max={l_max:.1e}")
+        logger.warning(f"{prefix}Lambda bound convergence: {', '.join(parts)}")
 
 
 class LmmChunkRange(NamedTuple):
@@ -139,8 +183,8 @@ class _PhenotypeConsumer:
             column.array_key: cr[column.array_key][:actual_len]
             for column in self.inv.mode.stat_columns
         }
-        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-            self.inv.lmm_mode, chunk_arrays, self.inv.l_min, self.inv.l_max
+        chunk_lmin, chunk_lmax = _count_lambda_boundary_hits(
+            self.inv.mode, chunk_arrays, self.inv.l_min, self.inv.l_max
         )
         self.n_at_lmin += chunk_lmin
         self.n_at_lmax += chunk_lmax
@@ -440,7 +484,7 @@ def run_lmm_chunk_source_numpy_group(
                 f"{n_nan}/{n_filtered} SNPs have NaN {key}; check for "
                 "degenerate genotypes and kinship matrix quality"
             )
-        log_lambda_boundary_warning(
+        _log_lambda_boundary_warning(
             consumer.n_at_lmin,
             consumer.n_at_lmax,
             l_min,

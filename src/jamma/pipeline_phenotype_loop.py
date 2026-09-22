@@ -16,6 +16,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.io.plink import PlinkMetadata, load_plink_binary
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
 from jamma.lmm.genotype_source import GenotypeSource, SampleBasis
 from jamma.lmm.prepare_common import prepare_rotated_covariates
@@ -30,7 +31,6 @@ from jamma.lmm.runner_numpy import (
 )
 from jamma.lmm.runner_numpy_streaming import BedSource
 from jamma.lmm.schema import ChunkRunStats, SnpMeta
-from jamma.lmm.stats import AssocResult
 from jamma.pipeline_config import PhenotypeResult, PipelineConfig
 from jamma.pipeline_plan import StandardAnalysisPlan
 

@@ -13,8 +13,8 @@ from typing import overload
 
 import numpy as np
 
-from jamma.lmm.schema import HEADERS, MODE_SPECS, LmmMode
-from jamma.lmm.stats import AssocResult
+from jamma.lmm.assoc_output import AssocResult
+from jamma.lmm.schema import MODE_SPECS, LmmMode
 from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig
 
 
@@ -230,11 +230,11 @@ def load_gemma_kinship(path: Path) -> np.ndarray:
 def _assoc_header_layouts() -> frozenset[tuple[str, ...]]:
     """Build the accepted .assoc.txt header layouts from the output schema.
 
-    The four canonical layouts are ``schema.HEADERS`` (one per LMM mode). Three
+    The four canonical layouts are the ``ModeSpec.header`` of each LMM mode. Three
     extra layouts are GEMMA-version quirks the schema does not model: they differ
     only by an optional ``logl_H1`` column that some runs omit.
     """
-    cols = {tt: tuple(h.split("\t")) for tt, h in HEADERS.items()}
+    cols = {s.test_type: tuple(s.header.split("\t")) for s in MODE_SPECS.values()}
     wald, lrt, all_tests = cols["wald"], cols["lrt"], cols["all"]
     return frozenset(
         {
@@ -263,7 +263,7 @@ def _float_or_nan(row: dict[str, str], name: str) -> float:
 
     Separate from ``_opt_float`` because the two absences mean different things.
     A missing optional column is None, meaning the test does not report it. A
-    missing beta or se is NaN, because ``AssocResult`` requires both and GEMMA's
+    missing beta or se is NaN, ``AssocResult``'s default, because GEMMA's
     LRT formats do not write them.
     """
     raw = row.get(name)

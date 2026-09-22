@@ -10,9 +10,9 @@ from typing import TypedDict, cast
 import numpy as np
 
 from jamma.lmm import accel
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.likelihood import compute_null_model_mle
-from jamma.lmm.stats import AssocResult
 from jamma.lmm.uab import batch_compute_uab_numpy, compute_uab_invariant_soa
 from jamma.validation.compare import _classify_lambdas, compare_assoc_results
 from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig

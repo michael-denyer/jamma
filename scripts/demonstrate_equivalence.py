@@ -30,9 +30,9 @@ sys.path.insert(0, str(ROOT))
 
 from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
+from jamma.lmm.assoc_output import AssocResult  # noqa: E402
 from jamma.lmm.runner_numpy import run_lmm_association_numpy  # noqa: E402
 from jamma.lmm.schema import LmmConfig, LmmMode  # noqa: E402
-from jamma.lmm.stats import AssocResult  # noqa: E402
 from jamma.validation import (  # noqa: E402
     ToleranceConfig,
     compare_assoc_results,

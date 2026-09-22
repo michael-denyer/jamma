@@ -21,6 +21,7 @@ from typing import Literal
 
 import numpy as np
 
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.schema import (
     DEFAULT_L_MAX,
     DEFAULT_L_MIN,
@@ -30,13 +31,33 @@ from jamma.lmm.schema import (
     DEFAULT_N_REFINE,
     ChunkRunStats,
     LmmConfig,
-    PipelineTiming,
     parse_lmm_mode,
 )
-from jamma.lmm.stats import AssocResult
 
 BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
 VALID_BACKENDS: tuple[BackendRequest, ...] = ("auto", "numpy", "numpy-streaming")
+
+
+@dataclass
+class PipelineTiming:
+    """Timing breakdown from pipeline execution.
+
+    All fields default to 0.0; fields from the runner are merged at
+    pipeline exit.
+
+    Attributes:
+        kinship_s: Kinship load/compute time (seconds).
+        load_s: Total data loading time through kinship (seconds).
+        lmm_s: LMM association runtime (seconds).
+        total_s: Total pipeline wall time (seconds).
+        rotation_s: UT@G rotation time from the runner (seconds).
+    """
+
+    kinship_s: float = 0.0
+    load_s: float = 0.0
+    lmm_s: float = 0.0
+    total_s: float = 0.0
+    rotation_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)

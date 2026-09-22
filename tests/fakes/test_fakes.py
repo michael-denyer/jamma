@@ -26,9 +26,9 @@ import pytest
 
 import jamma.jlinalg
 from jamma.lmm import eigen
-from jamma.lmm.io import IncrementalAssocWriter
-from jamma.lmm.schema import PipelineTiming
+from jamma.lmm.assoc_output import IncrementalAssocWriter
 from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
+from jamma.pipeline_config import PipelineTiming
 from tests.fakes import (
     FakeAssocWriter,
     FakeJlinalg,
@@ -71,12 +71,12 @@ class TestFakeAssocWriter:
         miss = np.array([0])
         arrays = {"betas": np.array([0.5])}
 
-        writer.write_arrays_batch(1, snp_indices, snp_info, afs, miss, arrays)
-        writer.write_arrays_batch(2, snp_indices, snp_info, afs, miss, arrays)
+        writer.write_arrays_batch(snp_indices, snp_info, afs, miss, arrays)
+        writer.write_arrays_batch(snp_indices[:1], snp_info, afs, miss, arrays)
 
         assert len(writer.batches) == 2
-        assert writer.batches[0][0] == 1
-        assert writer.batches[1][0] == 2
+        assert writer.batches[0][0] is snp_indices
+        assert list(writer.batches[1][0]) == [0]
 
     def test_unknown_attribute_raises(self) -> None:
         """Unlike MagicMock, accessing an unknown attribute fails loudly."""

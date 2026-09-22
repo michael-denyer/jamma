@@ -67,8 +67,18 @@ from jamma.lmm.loco_eigen import (
     plan_loco_eigen_driver,
 )
 from jamma.lmm.loco_workers import plan_loco_workers
-from jamma.lmm.prepare_common import EigenPairs, compute_valid_mask, with_intercept
-from jamma.lmm.runner_numpy import LOCO_LABELS, LmmRunSpec, run_lmm_association
+from jamma.lmm.prepare_common import (
+    AnalysedPhenotype,
+    EigenPairs,
+    compute_valid_mask,
+    with_intercept,
+)
+from jamma.lmm.runner_numpy import (
+    LOCO_LABELS,
+    AssocDestination,
+    LmmRunSpec,
+    run_single,
+)
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     MODE_SPECS,
@@ -303,9 +313,13 @@ def run_lmm_loco_prepared(
         logger.info(f"  Total SNPs: {n_snps_total:,}")
         logger.info(f"  Chromosomes: {len(unique_chrs)}")
 
-    n_valid = int(np.sum(valid_mask))
-    phenotypes_valid = phenotypes[valid_mask]
-    covariates_valid = covariates[valid_mask, :] if covariates is not None else None
+    analysed = AnalysedPhenotype.from_mask(phenotypes, covariates, valid_mask)
+    n_valid = analysed.n_samples
+    # _LocoChrSource rows are already the analysed samples, so every
+    # chromosome run sees an all-valid mask over them.
+    samples = AnalysedPhenotype(
+        analysed.phenotypes, analysed.covariates, np.ones(n_valid, dtype=bool)
+    )
 
     if show_progress:
         n_filtered_samples = n_samples_total - n_valid
@@ -316,7 +330,7 @@ def run_lmm_loco_prepared(
     # Build SNP metadata columns for result construction
     snp_info = SnpMeta.from_plink_meta(meta)
 
-    n_cvt = covariates_valid.shape[1] if covariates_valid is not None else 1
+    n_cvt = samples.n_cvt
     if execution is None:
         execution = plan_association(
             n_valid,
@@ -417,21 +431,17 @@ def run_lmm_loco_prepared(
                 chr_snp_indices=chr_snp_indices,
                 eigenvalues=eigenvalues_np,
                 eigenvectors=U,
-                phenotypes=phenotypes_valid,
-                covariates=covariates_valid,
+                samples=samples,
                 snp_meta=snp_info,
                 valid_mask=valid_mask,
                 spec=spec,
                 col_chunk_size=loco.col_chunk_size,
-                writer=writer,
+                destination=all_results if writer is None else writer,
                 chr_name=chr_name,
                 snp_stats_cache=source.snp_stats,
                 compute_pve=(first_chr_pve is None),
             )
             chr_pve, chr_pve_se = chr_result.pve, chr_result.pve_se
-
-            if writer is None:
-                all_results.extend(chr_result.associations)
 
             if first_chr_pve is None and chr_pve is not None:
                 if chr_name != unique_chrs[0]:
@@ -575,21 +585,20 @@ def _run_lmm_for_chromosome_numpy(
     chr_snp_indices: np.ndarray,
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
-    phenotypes: np.ndarray,
-    covariates: np.ndarray | None,
+    samples: AnalysedPhenotype,
     snp_meta: SnpMeta,
     valid_mask: np.ndarray,
     spec: LmmRunSpec,
     col_chunk_size: int,
     chr_name: str,
-    writer: IncrementalAssocWriter | None = None,
+    destination: AssocDestination,
     snp_stats_cache: SnpStatsCache | None = None,
     compute_pve: bool = False,
 ) -> LmmRunResult:
     """Run the shared NumPy LMM body on a single chromosome's SNPs.
 
     Builds a per-chromosome genotype source over this chromosome's columns
-    and hands it to ``run_lmm_association`` with the LOCO eigenpairs and the
+    and hands it to ``run_single`` with the LOCO eigenpairs and the
     run's shared spec, relabelled for this chromosome. The spec is silenced
     (``show_progress=False``): the chromosome loop owns progress output, and
     a per-chromosome banner would repeat 20 times.
@@ -599,22 +608,22 @@ def _run_lmm_for_chromosome_numpy(
         chr_snp_indices: Global column indices for this chromosome's SNPs.
         eigenvalues: Eigenvalues from LOCO kinship eigendecomp.
         eigenvectors: Eigenvectors from LOCO kinship eigendecomp.
-        phenotypes: Phenotype vector (n_valid_samples,), already filtered.
-        covariates: Covariate matrix (n_valid_samples, n_cvt) or None.
+        samples: Phenotype and covariates over the analysed samples, in the
+            chromosome source's run-local row coordinates.
         snp_meta: Full SNP metadata columns (indexed by global SNP index).
         valid_mask: Boolean mask for valid samples (for disk row reads).
         spec: The run's shared spec: silenced config, the one association
             plan, and the -snps restriction.
         col_chunk_size: Cap on SNP columns per disk read chunk.
         chr_name: Chromosome label, used in progress output.
-        writer: Shared incremental writer, or None to collect in memory.
+        destination: Shared incremental writer, or the run's result list.
         snp_stats_cache: Global SNP statistics from kinship PASS 1.
         compute_pve: Whether to estimate PVE from this chromosome's null
             model (True only until one chromosome succeeds).
 
     Returns:
-        LmmRunResult for this chromosome. ``associations`` is empty when
-        ``writer`` is used; ``pve``/``pve_se`` are None unless computed.
+        LmmRunResult for this chromosome; ``pve``/``pve_se`` are None unless
+        computed.
     """
     source = _LocoChrSource(
         bed_path,
@@ -624,7 +633,7 @@ def _run_lmm_for_chromosome_numpy(
         col_chunk_size=col_chunk_size,
         snp_stats_cache=snp_stats_cache,
     )
-    return run_lmm_association(
+    return run_single(
         source,
         replace(
             spec,
@@ -633,8 +642,7 @@ def _run_lmm_for_chromosome_numpy(
                 spec.labels, progress_label=f"LOCO chr {chr_name} association"
             ),
         ),
-        phenotypes=phenotypes,
-        eigen_input=EigenPairs(eigenvalues, eigenvectors),
-        covariates=covariates,
-        writer=writer,
+        samples,
+        EigenPairs(eigenvalues, eigenvectors),
+        destination,
     )

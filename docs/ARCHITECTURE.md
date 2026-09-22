@@ -164,7 +164,7 @@ src/jamma/
 │   ├── association_plan.py # plan_association(); ExecutionPlan, ExecutableAssociationPlan
 │   ├── workspace.py        # Kernel allocation contract and native sizing query
 │   ├── genotype_source.py  # SampleBasis, PreparedGenotypes, GenotypeSource protocol
-│   ├── runner_numpy.py     # Shared run body (run_lmm_association), LmmRunSpec, MatrixSource, batch entry
+│   ├── runner_numpy.py     # Shared run body (run_association, run_single), LmmRunSpec, MatrixSource, batch entry
 │   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming entry
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 │   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation

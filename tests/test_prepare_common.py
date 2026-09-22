@@ -17,8 +17,9 @@ from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
     _eigendecompose_or_reuse,
+    fit_null,
     parse_eigen_input,
-    prepare_lmm_run,
+    rotate_basis,
     with_intercept,
 )
 from jamma.lmm.schema import LmmConfig
@@ -27,14 +28,13 @@ pytestmark = pytest.mark.tier0
 
 
 def test_null_model_populated_regardless_of_caller_intent():
-    """prepare_lmm_run populates NullModel the same way for every caller.
+    """fit_null populates the null model the same way for every lmm_mode.
 
     The mode gate this replaced saved nothing: the null MLE costs 0.8 ms at
-    n=2k and 28.8 ms at n=100k. prepare_lmm_run no longer takes lmm_mode at
-    all, so a caller that only wants Wald gets the identical logl_H0 and
-    Hi_eval_null a Score/All caller would get from the same rotated inputs —
-    proven here by comparing prepare_lmm_run's populated fields directly
-    against _compute_null_model_common on the same UtW/Uty.
+    n=2k and 28.8 ms at n=100k. A caller that only wants Wald gets the
+    identical logl_H0 and Hi_eval_null a Score/All caller would get from the
+    same rotated inputs, proven here by comparing fit_null's fields for each
+    mode directly against _compute_null_model_common on the same UtW/Uty.
     """
     rng = np.random.default_rng(0)
     n_samples = 50
@@ -43,31 +43,29 @@ def test_null_model_populated_regardless_of_caller_intent():
     phenotypes = rng.standard_normal(n_samples)
     W = np.ones((n_samples, 1))
 
-    prepared = prepare_lmm_run(
-        eigen_input=KinshipMatrix(kinship),
-        phenotypes=phenotypes,
-        W=W,
-        n_cvt=1,
-        l_min=1e-5,
-        l_max=1e5,
-        show_progress=False,
-        check_memory=False,
-        label="test",
-        compute_pve=False,
+    eigenvalues, U = _eigendecompose_or_reuse(
+        KinshipMatrix(kinship), show_progress=False, label="test", check_memory=False
     )
-    assert prepared.logl_H0 is not None
-    assert prepared.Hi_eval_null is not None
-    assert prepared.Hi_eval_null.shape == (n_samples,)
+    basis = rotate_basis(eigenvalues, U, W)
 
-    expected = _compute_null_model_common(
-        eigenvalues_np=prepared.eigenvalues,
-        UtW=prepared.UtW,
-        Uty=prepared.Uty,
-        n_cvt=1,
-        show_progress=False,
-    )
-    assert prepared.logl_H0 == expected.logl_H0
-    np.testing.assert_array_equal(prepared.Hi_eval_null, expected.hi_eval_null)
+    for lmm_mode in (1, 2, 3, 4):
+        fit = fit_null(
+            basis,
+            phenotypes,
+            LmmConfig(lmm_mode=lmm_mode, show_progress=False, check_memory=False),
+            compute_pve=False,
+        )
+        assert fit.Hi_eval_null.shape == (n_samples,)
+
+        expected = _compute_null_model_common(
+            eigenvalues_np=basis.eigenvalues,
+            UtW=basis.UtW,
+            Uty=fit.Uty,
+            n_cvt=1,
+            show_progress=False,
+        )
+        assert fit.logl_H0 == expected.logl_H0
+        np.testing.assert_array_equal(fit.Hi_eval_null, expected.hi_eval_null)
 
 
 def test_build_covariate_matrix_from_common():

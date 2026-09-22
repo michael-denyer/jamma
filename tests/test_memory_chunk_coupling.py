@@ -405,10 +405,10 @@ class TestChunkPlanMatchesEngine:
     ):
         """LmmChunkPlan.plan' chunk size is exactly what the engine sizes.
 
-        chunk_runner_numpy.run_lmm_chunk_source_numpy calls LmmChunkPlan.plan
-        with these same arguments to size chunk_size/n_chunks/n_buffers for
-        the engine's _ChunkEngine, so calling it directly here with the same
-        inputs reproduces the engine's own sizing decision.
+        chunk_runner_numpy.run_lmm_chunk_source_numpy_group sizes the
+        engine's _ChunkEngine from the chunk_size/n_chunks/n_buffers that
+        LmmChunkPlan.plan returns for these same arguments, so calling it
+        directly here reproduces the engine's own sizing decision.
         """
         from jamma.lmm.dispatch import select_dispatch_path
         from jamma.lmm.schema import parse_lmm_mode
@@ -798,18 +798,24 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     """The final chunk engine requests the width allowed by mem_budget."""
     from jamma.core.snp_stats import SnpSelection
     from jamma.lmm import accel
-    from jamma.lmm.chunk_runner_numpy import run_lmm_chunk_source_numpy
+    from jamma.lmm.chunk_runner_numpy import (
+        PhenotypeChunkJob,
+        run_lmm_chunk_source_numpy_group,
+    )
     from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
-    from jamma.lmm.prepare_common import PreparedLmmRun
+    from jamma.lmm.prepare_common import NullFit, RotatedBasis
     from jamma.lmm.schema import LmmConfig, SnpMeta
 
     monkeypatch.setattr(accel, "_accel", None)
     n_samples, n_snps, n_cvt = 30, 200, 1
     mem_budget = 12e-6
-    prepared = PreparedLmmRun(
+    basis = RotatedBasis(
         eigenvalues=np.ones(n_samples),
         U=np.eye(n_samples),
+        W=np.ones((n_samples, n_cvt)),
         UtW=np.ones((n_samples, n_cvt)),
+    )
+    fit = NullFit(
         Uty=np.ones(n_samples),
         logl_H0=-1.0,
         Hi_eval_null=np.ones(n_samples),
@@ -856,18 +862,18 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
         mem_budget=mem_budget,
     )
     with pytest.raises(GeometryObserved):
-        run_lmm_chunk_source_numpy(
+        run_lmm_chunk_source_numpy_group(
             genotypes=genotypes,
-            chunk_sink=lambda _arrays, _start, _end: None,
-            dispatch=exec_plan.dispatch,
-            chunks=exec_plan.conservative_chunks.narrow(n_snps),
-            workspace=exec_plan.workspace,
-            prepared=prepared,
+            basis=basis,
+            jobs=(PhenotypeChunkJob(fit, lambda _arrays, _start, _end: None),),
             config=LmmConfig(
                 lmm_mode=1,
                 mem_budget=mem_budget,
                 show_progress=False,
             ),
+            dispatch=exec_plan.dispatch,
+            chunks=exec_plan.conservative_chunks.narrow(n_snps),
+            workspace=exec_plan.workspace,
         )
 
     assert exec_plan.conservative_chunks.chunk_size == 1

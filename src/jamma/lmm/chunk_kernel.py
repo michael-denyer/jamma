@@ -24,7 +24,7 @@ import numpy as np
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy, compute_wald_split_numpy
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.prepare_common import PreparedLmmRun
+from jamma.lmm.prepare_common import NullFit, RotatedBasis
 from jamma.lmm.schema import MODE_SPECS, LmmConfig, LmmMode, LmmTest, ModeSpec
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
@@ -67,31 +67,32 @@ class RunInvariants:
     def build(
         cls,
         dispatch: DispatchPath,
-        prepared: PreparedLmmRun,
+        basis: RotatedBasis,
+        fit: NullFit,
         config: LmmConfig,
         n_filtered: int,
     ) -> RunInvariants:
         """Derive the path-dependent members and freeze the rest."""
-        UtW = prepared.UtW
-        n_cvt = prepared.n_cvt
+        UtW = basis.UtW
+        n_cvt = basis.n_cvt
         return cls(
             dispatch=dispatch,
             lmm_mode=config.lmm_mode,
             n_cvt=n_cvt,
-            n_samples=prepared.n_samples,
+            n_samples=basis.n_samples,
             n_filtered=n_filtered,
-            eigenvalues=prepared.eigenvalues,
+            eigenvalues=basis.eigenvalues,
             UtW=UtW,
-            Uty=prepared.Uty,
-            Hi_eval_null=prepared.Hi_eval_null,
-            logl_H0=prepared.logl_H0,
+            Uty=fit.Uty,
+            Hi_eval_null=fit.Hi_eval_null,
+            logl_H0=fit.logl_H0,
             l_min=config.l_min,
             l_max=config.l_max,
             n_grid=config.n_grid,
             n_refine=config.n_refine,
             w=UtW[:, 0].copy() if dispatch.needs_null_w else None,
             uab_invariant_soa=(
-                compute_uab_invariant_soa(UtW, prepared.Uty, n_cvt)
+                compute_uab_invariant_soa(UtW, fit.Uty, n_cvt)
                 if dispatch.invariant_rows(n_cvt) > 0
                 else None
             ),

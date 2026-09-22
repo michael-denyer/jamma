@@ -1,10 +1,10 @@
 """Shared NumPy LMM run body and the in-memory batch runner.
 
-One body, many sources: ``run_lmm_association`` drives per-SNP statistics,
-filtering, preparation, and the chunk engine over a ``GenotypeSource`` under
-one ``LmmRunSpec``. The batch and streaming entries build a source and a
-spec from their public arguments; the pipeline builds one source per run;
-LOCO builds one per chromosome.
+One body: ``run_association`` runs a bounded phenotype group over prepared
+genotypes and one rotated basis. The pipeline calls it once per group.
+``run_single`` runs one phenotype as a group of one: it prepares genotypes,
+decomposes the kinship when needed, and hands the body one run. The batch and
+streaming entries and every LOCO chromosome go through ``run_single``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import contextlib
 import gc
 import time
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -30,6 +30,7 @@ from jamma.core.snp_stats import (
 )
 from jamma.lmm.assoc_output import (
     AssocResult,
+    ChunkSink,
     IncrementalAssocWriter,
     make_result_list_sink,
     make_writer_sink,
@@ -41,7 +42,6 @@ from jamma.lmm.association_plan import (
 from jamma.lmm.chunk_runner_numpy import (
     PhenotypeChunkJob,
     RawLmmChunk,
-    run_lmm_chunk_source_numpy,
     run_lmm_chunk_source_numpy_group,
 )
 from jamma.lmm.genotype_source import (
@@ -51,21 +51,22 @@ from jamma.lmm.genotype_source import (
     bind_prepared_genotypes,
 )
 from jamma.lmm.prepare_common import (
+    AnalysedPhenotype,
     EigenInput,
-    EigenPairs,
-    PreparedCovariates,
+    RotatedBasis,
     _build_covariate_matrix,
-    compute_valid_mask,
+    _eigendecompose_or_reuse,
+    fit_null,
     parse_eigen_input,
-    prepare_lmm_run,
-    validate_runner_inputs,
-    with_intercept,
+    restrict_eigen_input,
+    rotate_basis,
 )
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     MODE_SPECS,
     LmmConfig,
     LmmRunResult,
+    ModeSpec,
     SnpInfoRecord,
     SnpMeta,
 )
@@ -115,12 +116,17 @@ class LmmRunSpec:
     labels: RunLabels = BATCH_LABELS
 
 
+AssocDestination = Path | IncrementalAssocWriter | list[AssocResult]
+"""Where one phenotype's rows go: a file this run opens, a caller-owned
+writer it appends to, or a list it collects in memory."""
+
+
 @dataclass(frozen=True, slots=True)
-class PreparedPhenotypeSpec:
-    """One already sample-filtered phenotype and its output destination."""
+class PhenotypeRun:
+    """One phenotype over the analysed samples and its result destination."""
 
     phenotypes: np.ndarray
-    output_path: Path
+    destination: AssocDestination
 
 
 class GroupedLmmRunResult(NamedTuple):
@@ -203,56 +209,12 @@ class MatrixSource:
         )
 
 
-def run_lmm_association(
-    source: GenotypeSource,
-    spec: LmmRunSpec,
-    *,
-    phenotypes: np.ndarray,
-    eigen_input: EigenInput,
-    covariates: np.ndarray | None,
-    output_path: Path | None = None,
-    writer: IncrementalAssocWriter | None = None,
-) -> LmmRunResult:
-    """Run one NumPy LMM association over any genotype source.
-
-    Statistics, filtering, eigen preparation, the chunk loop, and result
-    routing are identical for every runner; only where genotypes come from
-    differs, and that lives in ``source``, and what policy the run follows,
-    which lives in ``spec``.
-
-    Args:
-        source: Genotype provider; owns sample-row filtering and stats dtype.
-        spec: The run's policy: config, execution plan, SNP restriction,
-            HWE threshold, PVE choice, and labels.
-        phenotypes: Phenotype vector (n_samples_total,), NaN for missing.
-        eigen_input: Kinship matrix or complete pre-computed eigenpairs.
-        covariates: Covariate matrix or None for intercept-only.
-        output_path: Stream results to this file, or None for in-memory.
-        writer: A caller-owned writer to append results to, instead of
-            output_path. LOCO shares one writer across its chromosome
-            loop; the body neither opens nor closes it.
-
-    Returns:
-        LmmRunResult with associations (empty when output_path routed them
-        to disk), n_tested, PVE, and the run's timing breakdown.
-    """
-    return _run_lmm_association(
-        source,
-        spec,
-        phenotypes=phenotypes,
-        eigen_input=eigen_input,
-        covariates=covariates,
-        output_path=output_path,
-        writer=writer,
-    )
-
-
 def prepare_genotypes(
     source: GenotypeSource, spec: LmmRunSpec, sample_basis: SampleBasis
 ) -> PreparedGenotypes:
     """Collect and filter phenotype-independent genotype data once."""
     config = spec.config
-    return source.prepare(
+    genotypes = source.prepare(
         sample_basis,
         SnpFilterSpec(
             maf_threshold=config.maf_threshold,
@@ -262,18 +224,50 @@ def prepare_genotypes(
             restrict_label="SNP list filter",
         ),
     )
+    if genotypes.n_unexpected > 0:
+        logger.warning(
+            f"Genotype validation: {genotypes.n_unexpected} values outside "
+            "expected range {0, 1, 2, NaN}"
+        )
+    return genotypes
 
 
-def run_lmm_association_group_prepared(
+def _publish_empty(destination: AssocDestination, mode: ModeSpec) -> LmmRunResult:
+    """Give a file destination its header row when no SNP passed filtering."""
+    if isinstance(destination, Path):
+        with IncrementalAssocWriter(destination, mode):
+            pass
+    return LmmRunResult(associations=[], n_tested=0)
+
+
+def _chunk_sink(
+    destination: AssocDestination,
+    stack: contextlib.ExitStack,
+    mode: ModeSpec,
+    genotypes: PreparedGenotypes,
+) -> ChunkSink:
+    if isinstance(destination, list):
+        return make_result_list_sink(destination, mode, genotypes)
+    if isinstance(destination, Path):
+        destination = stack.enter_context(IncrementalAssocWriter(destination, mode))
+    return make_writer_sink(destination, genotypes)
+
+
+def run_association(
     genotypes: PreparedGenotypes,
     spec: LmmRunSpec,
-    runs: tuple[PreparedPhenotypeSpec, ...],
-    *,
-    eigenvalues: np.ndarray,
-    eigenvectors: np.ndarray,
-    prepared_covariates: PreparedCovariates,
+    basis: RotatedBasis,
+    runs: Sequence[PhenotypeRun],
 ) -> GroupedLmmRunResult:
-    """Run a bounded phenotype group through one genotype chunk stream."""
+    """Run a bounded phenotype group through one genotype chunk stream.
+
+    Every run shares ``basis``. A ``Path`` destination receives a header even
+    when no SNP passed filtering; a caller-owned writer or list is left alone.
+
+    Returns:
+        One result per run, in order. ``associations`` is the destination list
+        for an in-memory run and empty otherwise.
+    """
     if not runs:
         raise ValueError("at least one prepared phenotype run is required")
     if len(runs) > spec.execution.phenotype_group_size:
@@ -283,224 +277,141 @@ def run_lmm_association_group_prepared(
         )
 
     config = spec.config
-    eigen_input = EigenPairs(eigenvalues, eigenvectors)
     mode = MODE_SPECS[config.lmm_mode]
     if genotypes.n_filtered == 0:
-        for run in runs:
-            with IncrementalAssocWriter(run.output_path, mode):
-                pass
         return GroupedLmmRunResult(
-            tuple(LmmRunResult([], 0) for _run in runs), rotation_s=0.0
+            tuple(_publish_empty(run.destination, mode) for run in runs),
+            rotation_s=0.0,
         )
 
-    prepared_runs = []
-    for run in runs:
-        if run.phenotypes.shape != (genotypes.analyzed_sample_count,):
-            raise ValueError(
-                "prepared phenotype length does not match genotype sample basis: "
-                f"got {run.phenotypes.shape}, expected "
-                f"({genotypes.analyzed_sample_count},)"
-            )
-        prepared_runs.append(
-            prepare_lmm_run(
-                eigen_input=eigen_input,
-                phenotypes=run.phenotypes,
-                W=prepared_covariates.W,
-                n_cvt=prepared_covariates.n_cvt,
-                l_min=config.l_min,
-                l_max=config.l_max,
-                show_progress=config.show_progress,
-                check_memory=config.check_memory,
-                label=spec.labels.label,
-                compute_pve=spec.compute_pve,
-                rotated_covariates=prepared_covariates.UtW,
-            )
-        )
-
-    chunks = spec.execution.conservative_chunks.narrow(genotypes.n_filtered)
+    fits = tuple(
+        fit_null(basis, run.phenotypes, config, compute_pve=spec.compute_pve)
+        for run in runs
+    )
     with contextlib.ExitStack() as stack:
-        writers = tuple(
-            stack.enter_context(IncrementalAssocWriter(run.output_path, mode))
-            for run in runs
-        )
         jobs = tuple(
-            PhenotypeChunkJob(
-                prepared=prepared,
-                chunk_sink=make_writer_sink(writer, genotypes),
-                config=config,
-                lambda_warning_prefix=spec.labels.lambda_warning_prefix,
-            )
-            for prepared, writer in zip(prepared_runs, writers, strict=True)
+            PhenotypeChunkJob(fit, _chunk_sink(run.destination, stack, mode, genotypes))
+            for fit, run in zip(fits, runs, strict=True)
         )
         grouped = run_lmm_chunk_source_numpy_group(
             genotypes=genotypes,
+            basis=basis,
             jobs=jobs,
+            config=config,
             dispatch=spec.execution.dispatch,
-            chunks=chunks,
+            chunks=spec.execution.conservative_chunks.narrow(genotypes.n_filtered),
             workspace=spec.execution.workspace,
             progress_label=spec.labels.progress_label,
+            lambda_warning_prefix=spec.labels.lambda_warning_prefix,
         )
 
     results = tuple(
         LmmRunResult(
-            associations=[],
+            associations=run.destination if isinstance(run.destination, list) else [],
             n_tested=timing.processed,
-            pve=prepared.pve,
-            pve_se=prepared.pve_se,
+            pve=fit.pve,
+            pve_se=fit.pve_se,
             timing=timing,
         )
-        for prepared, timing in zip(prepared_runs, grouped.phenotypes, strict=True)
+        for run, fit, timing in zip(runs, fits, grouped.phenotypes, strict=True)
     )
     return GroupedLmmRunResult(results=results, rotation_s=grouped.rotation_s)
 
 
-def _run_lmm_association(
+def run_single(
     source: GenotypeSource,
     spec: LmmRunSpec,
-    *,
-    phenotypes: np.ndarray,
+    samples: AnalysedPhenotype,
     eigen_input: EigenInput,
-    covariates: np.ndarray | None,
-    output_path: Path | None,
-    writer: IncrementalAssocWriter | None,
+    destination: AssocDestination,
 ) -> LmmRunResult:
-    """Run one phenotype over a genotype source."""
-    if output_path is not None and writer is not None:
-        raise ValueError("pass output_path or writer, not both")
+    """Run one phenotype as a group of one.
 
+    SNP statistics run before the eigendecomposition, and the decomposition is
+    skipped when every SNP is filtered out.
+
+    Args:
+        source: Genotype provider over the rows ``samples.valid_mask`` indexes.
+        spec: The run's policy.
+        samples: The phenotype and covariates over the analysed samples.
+        eigen_input: Kinship or eigenpairs over the analysed samples. A kinship
+            is consumed by the eigendecomposition.
+        destination: Output file, caller-owned writer, or in-memory list.
+
+    Returns:
+        LmmRunResult whose timing carries the whole genotype rotation time.
+    """
     config = spec.config
-    execution = spec.execution
     labels = spec.labels
-    maf_threshold = config.maf_threshold
-    miss_threshold = config.miss_threshold
-    l_min, l_max = config.l_min, config.l_max
-    check_memory = config.check_memory
     show_progress = config.show_progress
-    mode = MODE_SPECS[config.lmm_mode]
-
     start_time = time.perf_counter()
-    n_samples_total = phenotypes.shape[0]
     n_snps = source.n_snps
-
-    setup = validate_runner_inputs(phenotypes, eigen_input, covariates)
-    phenotypes = setup.phenotypes
-    eigen_input = setup.eigen_input
-    covariates = setup.covariates
-    valid_mask = setup.valid_mask
-    n_samples = phenotypes.shape[0]
 
     if show_progress:
         logger.info(f"Performing LMM Association Test ({labels.banner})")
-        logger.info(f"  Total individuals: {n_samples_total:,}")
-        logger.info(f"  Analyzed individuals: {n_samples:,}")
+        logger.info(f"  Total individuals: {samples.valid_mask.shape[0]:,}")
+        logger.info(f"  Analyzed individuals: {samples.n_samples:,}")
         logger.info(f"  Total SNPs: {n_snps:,}")
-        logger.info(f"  Lambda range: [{l_min:.2e}, {l_max:.2e}]")
+        logger.info(f"  Lambda range: [{config.l_min:.2e}, {config.l_max:.2e}]")
 
-    # === PASS 1: bind sample rows, SNP statistics, filtering, and chunks ===
     t_stats_start = time.perf_counter()
-    genotypes = prepare_genotypes(source, spec, SampleBasis.from_mask(valid_mask))
-    if genotypes.n_unexpected > 0:
-        logger.warning(
-            f"Genotype validation: {genotypes.n_unexpected} values outside "
-            f"expected range {{0, 1, 2, NaN}}"
-        )
-
-    n_filtered = genotypes.n_filtered
-    tightened_chunks = execution.conservative_chunks.narrow(n_filtered)
-
+    genotypes = prepare_genotypes(
+        source, spec, SampleBasis.from_mask(samples.valid_mask)
+    )
     if show_progress:
-        logger.info(f"  Analyzed SNPs: {n_filtered:,}")
+        logger.info(f"  Analyzed SNPs: {genotypes.n_filtered:,}")
 
-    if n_filtered == 0:
+    if genotypes.n_filtered == 0:
         logger.warning(
-            f"All {n_snps} SNPs filtered out (MAF>{maf_threshold}, "
-            f"miss<{miss_threshold}). No association tests to run. "
+            f"All {n_snps} SNPs filtered out (MAF>{config.maf_threshold}, "
+            f"miss<{config.miss_threshold}). No association tests to run. "
             f"Consider relaxing --maf or --miss thresholds."
         )
-        if output_path is not None:
-            with IncrementalAssocWriter(output_path, mode):
-                pass  # Context manager writes the header, no data rows
-        return LmmRunResult(associations=[], n_tested=0)
-
+        return _publish_empty(destination, MODE_SPECS[config.lmm_mode])
     t_stats_end = time.perf_counter()
 
-    # === Eigendecomp + rotation + null model + PVE ===
     t_eigen_start = time.perf_counter()
-    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
-    prepared = prepare_lmm_run(
-        eigen_input=eigen_input,
-        phenotypes=phenotypes,
-        W=W,
-        n_cvt=n_cvt,
-        l_min=l_min,
-        l_max=l_max,
-        show_progress=show_progress,
-        check_memory=check_memory,
-        label=labels.label,
-        compute_pve=spec.compute_pve,
+    W, _n_cvt = _build_covariate_matrix(samples.covariates, samples.n_samples)
+    eigenvalues, U = _eigendecompose_or_reuse(
+        eigen_input, show_progress, labels.label, check_memory=config.check_memory
     )
     del eigen_input
+    basis = rotate_basis(eigenvalues, U, W)
     gc.collect()
     t_eigen_end = time.perf_counter()
 
-    # === PASS 2: association per chunk ===
-    all_results: list[AssocResult] = []
-    with contextlib.ExitStack() as stack:
-        if output_path is not None:
-            writer = stack.enter_context(IncrementalAssocWriter(output_path, mode))
+    grouped = run_association(
+        genotypes, spec, basis, (PhenotypeRun(samples.phenotypes, destination),)
+    )
+    result = grouped.results[0]
+    timing = replace(result.timing, rotation_s=grouped.rotation_s)
 
-        chunk_sink = (
-            make_writer_sink(writer, genotypes)
-            if writer is not None
-            else make_result_list_sink(all_results, mode, genotypes)
+    if show_progress:
+        log_memory_snapshot(f"{labels.label}:after_association")
+        elapsed = time.perf_counter() - start_time
+        t_stats = t_stats_end - t_stats_start
+        t_eigen = t_eigen_end - t_eigen_start
+        accounted = (
+            t_stats
+            + t_eigen
+            + timing.rotation_s
+            + timing.compute_s
+            + timing.result_write_s
         )
+        logger.info("Timing breakdown:")
+        logger.info(f"  SNP statistics:      {t_stats:.2f}s")
+        logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
+        logger.info(f"  UT@G rotation:       {timing.rotation_s:.2f}s")
+        logger.info(f"  NumPy compute:       {timing.compute_s:.2f}s")
+        logger.info(f"  Result write:        {timing.result_write_s:.2f}s")
+        logger.info("  ----")
+        logger.info(f"  Accounted:           {accounted:.2f}s")
+        logger.info(f"  Total:               {elapsed:.2f}s")
+        if isinstance(destination, Path):
+            logger.info(f"Wrote {result.n_tested:,} results to {destination}")
+        logger.info(f"LMM Association completed in {elapsed:.2f}s")
 
-        chunk_stats = run_lmm_chunk_source_numpy(
-            genotypes=genotypes,
-            chunk_sink=chunk_sink,
-            dispatch=execution.dispatch,
-            chunks=tightened_chunks,
-            workspace=execution.workspace,
-            prepared=prepared,
-            config=config,
-            progress_label=labels.progress_label,
-            lambda_warning_prefix=labels.lambda_warning_prefix,
-        )
-
-        if show_progress:
-            log_memory_snapshot(f"{labels.label}:after_association")
-
-            elapsed = time.perf_counter() - start_time
-            t_stats = t_stats_end - t_stats_start
-            t_eigen = t_eigen_end - t_eigen_start
-            accounted = (
-                t_stats
-                + t_eigen
-                + chunk_stats.rotation_s
-                + chunk_stats.compute_s
-                + chunk_stats.result_write_s
-            )
-            logger.info("Timing breakdown:")
-            logger.info(f"  SNP statistics:      {t_stats:.2f}s")
-            logger.info(f"  Setup (eigen+null):  {t_eigen:.2f}s")
-            logger.info(f"  UT@G rotation:       {chunk_stats.rotation_s:.2f}s")
-            logger.info(f"  NumPy compute:       {chunk_stats.compute_s:.2f}s")
-            logger.info(f"  Result write:        {chunk_stats.result_write_s:.2f}s")
-            logger.info("  ----")
-            logger.info(f"  Accounted:           {accounted:.2f}s")
-            logger.info(f"  Total:               {elapsed:.2f}s")
-
-            if output_path is not None and writer is not None:
-                logger.info(f"Wrote {writer.count:,} results to {output_path}")
-            logger.info(f"LMM Association completed in {elapsed:.2f}s")
-
-        return LmmRunResult(
-            associations=all_results if writer is None else [],
-            n_tested=chunk_stats.processed,
-            pve=prepared.pve,
-            pve_se=prepared.pve_se,
-            timing=chunk_stats,
-        )
+    return replace(result, timing=timing)
 
 
 def run_lmm_association_numpy(
@@ -556,16 +467,14 @@ def run_lmm_association_numpy(
             eigenvectors is provided, or no valid samples remain after filtering.
     """
     n_input_samples, n_snps = genotypes.shape
-    valid_mask = compute_valid_mask(phenotypes, covariates)
-    covariates = with_intercept(covariates, valid_mask)
-    n_samples = int(np.count_nonzero(valid_mask))
-    n_cvt = covariates.shape[1] if covariates is not None else 1
+    samples = AnalysedPhenotype.from_inputs(phenotypes, covariates)
+    n_samples = samples.n_samples
     execution = plan_association(
         n_samples,
         n_snps,
         n_input_samples=n_input_samples,
         requested="numpy",
-        n_cvt=n_cvt,
+        n_cvt=samples.n_cvt,
         lmm_mode=config.lmm_mode,
         n_grid=config.n_grid,
         n_refine=config.n_refine,
@@ -590,11 +499,12 @@ def run_lmm_association_numpy(
     snp_meta = (
         snp_info if isinstance(snp_info, SnpMeta) else SnpMeta.from_dicts(snp_info)
     )
-    return run_lmm_association(
+    return run_single(
         MatrixSource(genotypes, snp_meta),
         LmmRunSpec(config=config, execution=execution, hwe_threshold=hwe_threshold),
-        phenotypes=phenotypes,
-        eigen_input=parse_eigen_input(kinship, eigenvalues, eigenvectors),
-        covariates=covariates,
-        output_path=output_path,
+        samples,
+        restrict_eigen_input(
+            parse_eigen_input(kinship, eigenvalues, eigenvectors), samples.valid_mask
+        ),
+        output_path if output_path is not None else [],
     )

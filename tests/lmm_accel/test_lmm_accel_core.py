@@ -91,6 +91,8 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
         eigenvalues=eigenvalues,
         Uab_batch=Uab_batch,
         n_samples=n_samples,
+        Hi_eval_null=np.ones(n_samples),
+        logl_H0=0.0,
     )
 
     assert result["lambdas"] is not None

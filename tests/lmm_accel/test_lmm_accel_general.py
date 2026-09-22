@@ -182,13 +182,15 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2, monkeypatch):
         n_finite = np.sum(np.isfinite(arr))
         assert n_finite > n_snps * 0.8, f"{key}: only {n_finite}/{n_snps} finite values"
 
-    result_lrt = compute_lmm_chunk_numpy(lmm_mode=2, logl_H0=logl_H0, **common)
+    result_lrt = compute_lmm_chunk_numpy(
+        lmm_mode=2, logl_H0=logl_H0, Hi_eval_null=Hi_eval_null, **common
+    )
     assert result_lrt["lambdas_mle"] is not None
     assert result_lrt["p_lrts"] is not None
     assert result_lrt["lambdas_mle"].shape == (n_snps,)
 
     result_score = compute_lmm_chunk_numpy(
-        lmm_mode=3, Hi_eval_null=Hi_eval_null, **common
+        lmm_mode=3, logl_H0=logl_H0, Hi_eval_null=Hi_eval_null, **common
     )
     assert result_score["p_scores"] is not None
     assert result_score["betas"] is not None

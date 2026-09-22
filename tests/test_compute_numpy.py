@@ -32,6 +32,7 @@ from jamma.lmm.compute_numpy import (
 )
 from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.schema import get_spec
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
@@ -689,7 +690,7 @@ def chunk_dispatch_data():
 
 
 def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
-    """compute_lmm_chunk_numpy must return non-None expected keys for each mode.
+    """compute_lmm_chunk_numpy returns exactly each mode's keys, mode 4 composed.
 
     The extension is cleared because this function is the full-Uab NumPy path,
     and the runner reaches it only on NUMPY_FALLBACK, which is selected only
@@ -706,64 +707,29 @@ def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
 
-    # Mode 1: Wald — expects lambdas, logls, betas, ses, pwalds
-    result1 = compute_lmm_chunk_numpy(1, 1, eigenvalues, Uab_batch, n_samples)
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        assert result1[key] is not None, f"Mode 1: key '{key}' is None"
-    assert result1["lambdas_mle"] is None
-    assert result1["p_lrts"] is None
-    assert result1["p_scores"] is None
-
-    # Mode 2: LRT — reports the alternative MLE likelihood, lambda, and p-value
-    result2 = compute_lmm_chunk_numpy(
-        2, 1, eigenvalues, Uab_batch, n_samples, logl_H0=logl_H0
+    result1, result2, result3, result4 = (
+        compute_lmm_chunk_numpy(
+            mode,
+            1,
+            eigenvalues,
+            Uab_batch,
+            n_samples,
+            Hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+        )
+        for mode in (1, 2, 3, 4)
     )
-    for key in ("logls", "lambdas_mle", "p_lrts"):
-        assert result2[key] is not None, f"Mode 2: key '{key}' is None"
-    assert result2["lambdas"] is None
-    assert result2["betas"] is None
-    assert result2["ses"] is None
-    assert result2["pwalds"] is None
-    assert result2["p_scores"] is None
-
-    # Mode 3: Score — expects betas, ses, p_scores
-    result3 = compute_lmm_chunk_numpy(
-        3, 1, eigenvalues, Uab_batch, n_samples, Hi_eval_null=Hi_eval_null
-    )
-    for key in ("betas", "ses", "p_scores"):
-        assert result3[key] is not None, f"Mode 3: key '{key}' is None"
-    assert result3["lambdas"] is None
-    assert result3["logls"] is None
-    assert result3["pwalds"] is None
-    assert result3["lambdas_mle"] is None
-    assert result3["p_lrts"] is None
-
-    # Mode 4: All — all keys non-None
-    result4 = compute_lmm_chunk_numpy(
-        4,
-        1,
-        eigenvalues,
-        Uab_batch,
-        n_samples,
-        Hi_eval_null=Hi_eval_null,
-        logl_H0=logl_H0,
-    )
-    for key in (
-        "lambdas",
-        "logls",
-        "betas",
-        "ses",
-        "pwalds",
-        "lambdas_mle",
-        "p_lrts",
-        "p_scores",
+    for mode, result in zip(
+        (1, 2, 3, 4), (result1, result2, result3, result4), strict=True
     ):
-        assert result4[key] is not None, f"Mode 4: key '{key}' is None"
+        assert set(result) == {c.array_key for c in get_spec(mode).stat_columns}
 
-    assert result1["lambdas"] is not None
-    assert result1["logls"] is not None
-    assert result4["lambdas_mle"] is not None
-    assert result4["logls"] is not None
+    # Mode 4 takes beta/se from Wald, logl_H1 from LRT, and p_score from Score.
+    for key in ("betas", "ses", "lambdas", "pwalds"):
+        np.testing.assert_array_equal(result4[key], result1[key])
+    for key in ("logls", "lambdas_mle", "p_lrts"):
+        np.testing.assert_array_equal(result4[key], result2[key])
+    np.testing.assert_array_equal(result4["p_scores"], result3["p_scores"])
 
     # GEMMA gives logl_H1 two mode-specific meanings: REML for Wald mode 1,
     # and the alternative-model MLE likelihood calculated by LRT for mode 4.
@@ -801,25 +767,3 @@ def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
     )
     np.testing.assert_allclose(result1["logls"], expected_reml, rtol=2e-14)
     np.testing.assert_allclose(result4["logls"], expected_mle, rtol=2e-14)
-
-
-def test_compute_lmm_chunk_numpy_missing_args_raise(chunk_dispatch_data):
-    """compute_lmm_chunk_numpy must raise ValueError when required args are absent."""
-    eigenvalues, UtW, Uty, UtG = chunk_dispatch_data
-    n_samples = eigenvalues.shape[0]
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-
-    with pytest.raises(ValueError, match="logl_H0 is required"):
-        compute_lmm_chunk_numpy(2, 1, eigenvalues, Uab_batch, n_samples)
-
-    with pytest.raises(ValueError, match="Hi_eval_null is required"):
-        compute_lmm_chunk_numpy(3, 1, eigenvalues, Uab_batch, n_samples)
-
-    # Mode 4 (All) requires both logl_H0 and Hi_eval_null.
-    # Missing logl_H0 is checked first (line order in source).
-    with pytest.raises(ValueError, match="logl_H0 is required"):
-        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples)
-
-    # Providing logl_H0 but omitting Hi_eval_null also raises.
-    with pytest.raises(ValueError, match="Hi_eval_null is required"):
-        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples, logl_H0=-50.0)

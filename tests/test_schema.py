@@ -145,7 +145,7 @@ class TestDerivedTables:
             assert header_cols == cols, f"Header mismatch for {tt}"
 
     def test_get_spec_invalid_mode_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown lmm_mode=99"):
+        with pytest.raises(ValueError, match="lmm_mode must be"):
             get_spec(99)
 
     def test_get_spec_valid_modes(self) -> None:
@@ -172,10 +172,10 @@ class TestDerivedTables:
             StatColumn("x", "x", "x", fmt="{bad}")
 
     def test_mode_spec_empty_columns_rejected(self) -> None:
-        from jamma.lmm.schema import ModeSpec
+        from jamma.lmm.schema import LmmTest, ModeSpec
 
         with pytest.raises(ValueError, match="stat_columns must not be empty"):
-            ModeSpec("empty", ())
+            ModeSpec("empty", LmmTest.WALD, ())
 
     def test_stat_column_empty_array_key_rejected(self) -> None:
         from jamma.lmm.schema import StatColumn
@@ -196,28 +196,28 @@ class TestDerivedTables:
             StatColumn("x", "x", "")
 
     def test_mode_spec_duplicate_array_key_rejected(self) -> None:
-        from jamma.lmm.schema import ModeSpec, StatColumn
+        from jamma.lmm.schema import LmmTest, ModeSpec, StatColumn
 
         col_a = StatColumn("same_key", "name_a", "hdr_a")
         col_b = StatColumn("same_key", "name_b", "hdr_b")
         with pytest.raises(ValueError, match="Duplicate array_key"):
-            ModeSpec("test", (col_a, col_b))
+            ModeSpec("test", LmmTest.WALD, (col_a, col_b))
 
     def test_mode_spec_duplicate_field_name_rejected(self) -> None:
-        from jamma.lmm.schema import ModeSpec, StatColumn
+        from jamma.lmm.schema import LmmTest, ModeSpec, StatColumn
 
         col_a = StatColumn("key_a", "same_name", "hdr_a")
         col_b = StatColumn("key_b", "same_name", "hdr_b")
         with pytest.raises(ValueError, match="Duplicate field_name"):
-            ModeSpec("test", (col_a, col_b))
+            ModeSpec("test", LmmTest.WALD, (col_a, col_b))
 
     def test_mode_spec_duplicate_header_rejected(self) -> None:
-        from jamma.lmm.schema import ModeSpec, StatColumn
+        from jamma.lmm.schema import LmmTest, ModeSpec, StatColumn
 
         col_a = StatColumn("key_a", "name_a", "same_hdr")
         col_b = StatColumn("key_b", "name_b", "same_hdr")
         with pytest.raises(ValueError, match="Duplicate header"):
-            ModeSpec("test", (col_a, col_b))
+            ModeSpec("test", LmmTest.WALD, (col_a, col_b))
 
     def test_stat_column_non_string_fmt_rejected(self) -> None:
         from jamma.lmm.schema import StatColumn

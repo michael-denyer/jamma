@@ -39,7 +39,13 @@ def test_numpy_wald_raw_chunk_matches_full_product_reference():
         WorkspaceSpec.build(dispatch, 1, n, n, 1, config.n_grid, config.n_refine, 1),
     )
     expected = compute_lmm_chunk_numpy(
-        1, 1, eigenvalues, batch_compute_uab_numpy(1, w, y, utg), n
+        1,
+        1,
+        eigenvalues,
+        batch_compute_uab_numpy(1, w, y, utg),
+        n,
+        Hi_eval_null=prepared.Hi_eval_null,
+        logl_H0=prepared.logl_H0,
     )
     actual = kernel.compute_chunk(utg, 1, 0)
     for key in ("betas", "ses", "pwalds", "lambdas", "logls"):

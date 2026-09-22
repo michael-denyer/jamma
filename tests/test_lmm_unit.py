@@ -10,11 +10,11 @@ import numpy as np
 import pytest
 
 from jamma.lmm.eigen import eigendecompose_kinship
-from jamma.lmm.likelihood import reml_log_likelihood
 from jamma.lmm.pab import calc_pab, compute_Uab, get_ab_index
 from jamma.lmm.stats import AssocResult
 from tests.fakes import FakeJlinalg, use_fake_jlinalg
 from tests.fakes.memory import use_fake_psutil
+from tests.reference.likelihood import reml_log_likelihood_alt
 from tests.reference.stats import calc_wald_test, f_sf
 
 pytestmark = pytest.mark.tier0
@@ -309,9 +309,7 @@ class TestRemlLogLikelihood:
         Uab = compute_Uab(UtW, Uty, Utx)
         lambda_val = 1.0
 
-        logl = reml_log_likelihood(
-            lambda_val, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1
-        )
+        logl = reml_log_likelihood_alt(lambda_val, eigenvalues, Uab, n_cvt)
 
         assert np.isfinite(logl), "REML should return finite value"
 
@@ -343,8 +341,7 @@ class TestRemlLogLikelihood:
         # Sample at multiple lambda values across the optimization range
         lambdas = np.logspace(-4, 4, 50)
         logls = [
-            reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1)
-            for lam in lambdas
+            reml_log_likelihood_alt(lam, eigenvalues, Uab, n_cvt) for lam in lambdas
         ]
 
         # Find maximum (REML returns positive log-likelihood)

@@ -6,10 +6,7 @@ import numpy as np
 import pytest
 from scipy.optimize import brentq
 
-from jamma.lmm.likelihood import (
-    _golden_section_minimize,
-    reml_log_likelihood,
-)
+from jamma.lmm.likelihood import _golden_section_minimize
 from jamma.lmm.likelihood_numpy import (
     _batch_reml_at_lambda_numpy,
     golden_section_optimize_lambda_numpy,
@@ -25,6 +22,7 @@ from jamma.lmm.uab import (
 )
 from tests.builders import rotated_lmm_inputs
 from tests.independent_lmm_oracle import dense_reml_score_log_lambda
+from tests.reference.likelihood import reml_log_likelihood_alt
 
 pytestmark = pytest.mark.tier0
 
@@ -357,9 +355,7 @@ def test_scalar_vs_batch_reml_multi_snp_consistency():
         Uab_i = compute_Uab(UtW, Uty, UtG[:, i])
 
         def _scalar_obj(lam, uab=Uab_i):
-            return -reml_log_likelihood(
-                lam, eigenvalues, uab, n_cvt=n_cvt, nc_total=n_cvt + 1
-            )
+            return -reml_log_likelihood_alt(lam, eigenvalues, uab, n_cvt=n_cvt)
 
         lambda_scalars[i], _ = _golden_section_minimize(
             _scalar_obj, 1e-5, 1e5, n_grid=50, n_iter=20
@@ -397,9 +393,7 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
     Uab_scalar = compute_Uab(UtW, Uty, Utx)
 
     def scalar_neg_reml(lam: float) -> float:
-        return -reml_log_likelihood(
-            lam, eigenvalues, Uab_scalar, n_cvt=n_cvt, nc_total=n_cvt + 1
-        )
+        return -reml_log_likelihood_alt(lam, eigenvalues, Uab_scalar, n_cvt=n_cvt)
 
     lambda_scalar, logl_scalar = _golden_section_minimize(
         scalar_neg_reml, l_min=1e-5, l_max=1e5, n_grid=50, n_iter=20

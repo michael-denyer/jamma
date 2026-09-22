@@ -12,9 +12,9 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from jamma.lmm.likelihood import reml_log_likelihood
 from jamma.lmm.pab import calc_pab, compute_Uab
 from tests.hypothesis_strategies import genotype_matrix
+from tests.reference.likelihood import reml_log_likelihood_alt
 from tests.reference.stats import calc_wald_test
 
 # -----------------------------------------------------------------------------
@@ -144,9 +144,7 @@ class TestRemlProperties:
         eigenvalues, Uab, n_cvt, n_samples = data
         lambda_val = 1.0
 
-        logl = reml_log_likelihood(
-            lambda_val, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1
-        )
+        logl = reml_log_likelihood_alt(lambda_val, eigenvalues, Uab, n_cvt)
 
         assert np.isfinite(logl), f"Non-finite likelihood: {logl}"
 
@@ -161,9 +159,7 @@ class TestRemlProperties:
         """REML should be finite across typical lambda range."""
         eigenvalues, Uab, n_cvt, n_samples = data
 
-        logl = reml_log_likelihood(
-            lambda_val, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1
-        )
+        logl = reml_log_likelihood_alt(lambda_val, eigenvalues, Uab, n_cvt)
 
         assert np.isfinite(logl), f"Non-finite at lambda={lambda_val}"
 
@@ -184,8 +180,7 @@ class TestRemlProperties:
         # Sample at multiple lambda values
         lambdas = np.logspace(-4, 4, 20)
         logls = [
-            reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1)
-            for lam in lambdas
+            reml_log_likelihood_alt(lam, eigenvalues, Uab, n_cvt) for lam in lambdas
         ]
 
         logls_arr = np.array(logls)
@@ -278,9 +273,7 @@ class TestNumericalStability:
         eigenvalues, Uab, n_cvt, n_samples = data
         lambda_val = 1e-8
 
-        logl = reml_log_likelihood(
-            lambda_val, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1
-        )
+        logl = reml_log_likelihood_alt(lambda_val, eigenvalues, Uab, n_cvt)
 
         assert np.isfinite(logl), f"Non-finite likelihood at lambda={lambda_val}"
 
@@ -293,9 +286,7 @@ class TestNumericalStability:
         eigenvalues, Uab, n_cvt, n_samples = data
         lambda_val = 1e6
 
-        logl = reml_log_likelihood(
-            lambda_val, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1
-        )
+        logl = reml_log_likelihood_alt(lambda_val, eigenvalues, Uab, n_cvt)
 
         assert np.isfinite(logl), f"Non-finite likelihood at lambda={lambda_val}"
 
@@ -323,7 +314,7 @@ class TestNumericalStability:
         x = rng.standard_normal(n_samples)
         Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
 
-        logl = reml_log_likelihood(1.0, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1)
+        logl = reml_log_likelihood_alt(1.0, eigenvalues, Uab, n_cvt)
 
         assert np.isfinite(logl), (
             f"Non-finite likelihood with {n_small} small eigenvalues"
@@ -453,6 +444,6 @@ class TestDegenerateSNPEdgeCases:
         Uab = compute_Uab(U.T @ W, U.T @ y, U.T @ x)
 
         # REML should still be finite
-        logl = reml_log_likelihood(1.0, eigenvalues, Uab, n_cvt, nc_total=n_cvt + 1)
+        logl = reml_log_likelihood_alt(1.0, eigenvalues, Uab, n_cvt)
 
         assert np.isfinite(logl), f"Non-finite REML with negative eigenvalues: {logl}"

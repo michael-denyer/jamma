@@ -9,8 +9,8 @@ from __future__ import annotations
 import numpy as np
 
 from jamma.lmm.pab import get_ab_index
-from jamma.lmm.special import betainc, chi2_sf
 from tests.reference import P_YY_FLOOR
+from tests.reference.special import betainc, chi2_sf
 
 
 def safe_sqrt(d: float) -> float:

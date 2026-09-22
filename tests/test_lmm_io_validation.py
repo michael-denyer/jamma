@@ -381,13 +381,13 @@ class TestBetaincValidation:
     """betainc must validate a > 0 and b > 0."""
 
     def test_a_zero_raises(self) -> None:
-        from jamma.lmm.special import betainc
+        from tests.reference.special import betainc
 
         with pytest.raises(ValueError, match="a must be > 0"):
             betainc(0.0, 0.5, 0.5)
 
     def test_b_negative_raises(self) -> None:
-        from jamma.lmm.special import betainc
+        from tests.reference.special import betainc
 
         with pytest.raises(ValueError, match="b must be > 0"):
             betainc(1.0, -1.0, 0.5)

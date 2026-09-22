@@ -109,24 +109,14 @@ class TestPyyInLogLikelihood:
         Uab = compute_Uab(UtW, Uty)
         return Uab
 
-    def test_reml_returns_finite(self, synthetic_eigen, synthetic_uab):
-        eigenvalues, _ = synthetic_eigen
-        result = reml_log_likelihood(0.5, eigenvalues, synthetic_uab, 1, nc_total=2)
-        assert np.isfinite(result)
-
     def test_reml_null_returns_finite(self, synthetic_eigen, synthetic_uab):
         eigenvalues, _ = synthetic_eigen
-        result = reml_log_likelihood(0.5, eigenvalues, synthetic_uab, 1, nc_total=1)
-        assert np.isfinite(result)
-
-    def test_mle_returns_finite(self, synthetic_eigen, synthetic_uab):
-        eigenvalues, _ = synthetic_eigen
-        result = mle_log_likelihood(0.5, eigenvalues, synthetic_uab, 1, nc_total=2)
+        result = reml_log_likelihood(0.5, eigenvalues, synthetic_uab, 1)
         assert np.isfinite(result)
 
     def test_mle_null_returns_finite(self, synthetic_eigen, synthetic_uab):
         eigenvalues, _ = synthetic_eigen
-        result = mle_log_likelihood(0.5, eigenvalues, synthetic_uab, 1, nc_total=1)
+        result = mle_log_likelihood(0.5, eigenvalues, synthetic_uab, 1)
         assert np.isfinite(result)
 
 

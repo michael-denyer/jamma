@@ -111,8 +111,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     stale module from ``sys.modules``, and returns True on success.
 
     Args:
-        spec: The ``BuildSpec`` for the target. Uses ``module_name`` (log name),
-            ``sys_module_key`` (the key to evict), and ``fallback_label``.
+        spec: The ``BuildSpec`` for the target.
 
     Returns:
         True if recompilation succeeded; False otherwise.
@@ -121,12 +120,12 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
 
     from jamma._build_support.compile_and_link import compile_extension
 
-    module_name = spec.module_name
+    log_name = spec.output_stem
     sys_module_key = spec.sys_module_key
     label = spec.fallback_label
 
     logger.info(
-        f"C extension {module_name} needs recompilation "
+        f"C extension {log_name} needs recompilation "
         f"(ABI mismatch or missing). Compiling now..."
     )
 
@@ -135,7 +134,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
         # whose runtime recompile silently falls back to single-threaded can see
         # it. The build-time path in hatch_build.py already warns on OMP
         # downgrade; this closes the gap for ABI-mismatch recompiles on wheels.
-        logger.warning(f"{module_name} recompile retry: {msg}")
+        logger.warning(f"{log_name} recompile retry: {msg}")
 
     # Serialize concurrent recompiles (pytest-xdist workers, parallel Databricks
     # jobs, multiple notebook kernels). Without this, two workers can race on the
@@ -158,7 +157,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
             try:
                 importlib.import_module(sys_module_key)
                 logger.info(
-                    f"C extension {module_name} was recompiled by another "
+                    f"C extension {log_name} was recompiled by another "
                     f"process; using existing build."
                 )
                 return True
@@ -184,7 +183,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
             # so they surface as real tracebacks instead of a silent
             # pure-Python fallback.
             logger.warning(
-                f"Auto-recompilation of {module_name} raised "
+                f"Auto-recompilation of {log_name} raised "
                 f"{type(e).__name__}: {e}. "
                 f"Falling back to pure-Python ({label}).",
                 exc_info=True,
@@ -193,7 +192,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
 
         if not success:
             logger.warning(
-                f"Auto-recompilation of {module_name} failed. "
+                f"Auto-recompilation of {log_name} failed. "
                 f"Falling back to pure-Python ({label})."
             )
             return False
@@ -201,7 +200,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
         # Evict stale module from sys.modules so re-import picks up the new .so
         sys.modules.pop(sys_module_key, None)
 
-    logger.info(f"C extension {module_name} recompiled successfully.")
+    logger.info(f"C extension {log_name} recompiled successfully.")
     return True
 
 
@@ -219,7 +218,7 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
         mod = importlib.import_module(spec.sys_module_key)
     except ImportError as e:
         logger.warning(
-            f"{spec.module_name} not available ({e}) — usually an ABI "
+            f"{spec.output_stem} not available ({e}) — usually an ABI "
             f"mismatch or a missing build artifact. Falling back to "
             f"pure-Python ({spec.fallback_label})."
         )
@@ -228,14 +227,14 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
     abi = getattr(mod, "ABI_VERSION", None)
     if abi is None:
         logger.warning(
-            f"{spec.module_name} not available: ABI_VERSION missing from the "
+            f"{spec.output_stem} not available: ABI_VERSION missing from the "
             f"compiled module — usually an ABI mismatch. Falling back to "
             f"pure-Python ({spec.fallback_label})."
         )
         return None
     if abi != expected_abi:
         logger.warning(
-            f"{spec.module_name} ABI mismatch: compiled={abi}, "
+            f"{spec.output_stem} ABI mismatch: compiled={abi}, "
             f"expected={expected_abi}. Stale .so needs recompilation."
         )
         return None
@@ -243,7 +242,7 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
     missing = [name for name in spec.required_attrs if getattr(mod, name, None) is None]
     if missing:
         logger.warning(
-            f"{spec.module_name} not available: required symbols missing: "
+            f"{spec.output_stem} not available: required symbols missing: "
             f"{missing} — usually an ABI mismatch from a partial build. "
             f"Falling back to pure-Python ({spec.fallback_label})."
         )

@@ -25,12 +25,8 @@ from jamma.core.recompile import _import_and_validate, auto_recompile_c_extensio
 pytestmark = pytest.mark.tier0
 
 
-def _fake_spec(*, module_name, sys_module_key, label):
-    """Build a BuildSpec carrying only the load identity these tests exercise.
-
-    The build fields are dummies — auto_recompile_c_extension reads only
-    module_name / sys_module_key / fallback_label.
-    """
+def _fake_spec(*, output_stem, sys_module_key, label):
+    """Build a BuildSpec carrying only the load identity these tests exercise."""
     from jamma._build_support.build_models import BuildSpec
 
     return BuildSpec(
@@ -39,17 +35,16 @@ def _fake_spec(*, module_name, sys_module_key, label):
         include_parts=(),
         sources=(),
         lapack_sources=(),
-        output_stem=module_name,
-        module_name=module_name,
+        output_stem=output_stem,
         sys_module_key=sys_module_key,
         fallback_label=label,
     )
 
 
-def _recompile(*, module_name, sys_module_key, label):
+def _recompile(*, output_stem, sys_module_key, label):
     return auto_recompile_c_extension(
         _fake_spec(
-            module_name=module_name,
+            output_stem=output_stem,
             sys_module_key=sys_module_key,
             label=label,
         )
@@ -112,7 +107,7 @@ def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     monkeypatch.setitem(sys.modules, sys_key, sentinel)
 
     result = _recompile(
-        module_name="_fake_ext_raises",
+        output_stem="_fake_ext_raises",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -133,7 +128,7 @@ def test_compiler_returns_false_does_not_evict(monkeypatch):
     monkeypatch.setitem(sys.modules, sys_key, sentinel)
 
     result = _recompile(
-        module_name="_fake_ext_false",
+        output_stem="_fake_ext_false",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -152,7 +147,7 @@ def test_successful_recompile_evicts_stale_module(monkeypatch):
     monkeypatch.setitem(sys.modules, sys_key, stale)
 
     result = _recompile(
-        module_name="_fake_ext_success",
+        output_stem="_fake_ext_success",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -173,7 +168,7 @@ def test_successful_recompile_with_no_prior_sys_modules_entry(monkeypatch):
     monkeypatch.delitem(sys.modules, sys_key, raising=False)
 
     result = _recompile(
-        module_name="_fake_ext_no_prior",
+        output_stem="_fake_ext_no_prior",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -206,7 +201,7 @@ def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
     sink_id = _logger.add(sys.stderr, level="WARNING")
     try:
         result = _recompile(
-            module_name="_fake_ext_retry",
+            output_stem="_fake_ext_retry",
             sys_module_key=sys_key,
             label="fake",
         )
@@ -274,7 +269,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
 
     def worker(sys_key: str) -> None:
         r = _recompile(
-            module_name="_fake_ext_concurrent",
+            output_stem="_fake_ext_concurrent",
             sys_module_key=sys_key,
             label="fake",
         )
@@ -351,7 +346,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
 
     def worker(sys_key: str) -> None:
         _recompile(
-            module_name="_fake_ext_nolock",
+            output_stem="_fake_ext_nolock",
             sys_module_key=sys_key,
             label="fake",
         )
@@ -493,7 +488,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
     monkeypatch.setattr(recompile_mod.importlib, "import_module", fake_import)
 
     result = _recompile(
-        module_name="_fake_ext_skip",
+        output_stem="_fake_ext_skip",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -508,7 +503,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
 # --- WARNING-level logging on load failure (surface reason, not silence it) ---
 
 
-def _fake_build_spec(*, module_name, sys_module_key, fallback_label, required_attrs=()):
+def _fake_build_spec(*, output_stem, sys_module_key, fallback_label, required_attrs=()):
     from jamma._build_support.build_models import BuildSpec
 
     return BuildSpec(
@@ -517,8 +512,7 @@ def _fake_build_spec(*, module_name, sys_module_key, fallback_label, required_at
         include_parts=(),
         sources=(),
         lapack_sources=(),
-        output_stem=module_name,
-        module_name=module_name,
+        output_stem=output_stem,
         sys_module_key=sys_module_key,
         fallback_label=fallback_label,
         required_attrs=required_attrs,
@@ -533,7 +527,7 @@ def test_import_and_validate_import_error_logs_warning_with_reason(capsys):
     from loguru import logger as _logger
 
     spec = _fake_build_spec(
-        module_name="_fake_ext_importerr",
+        output_stem="_fake_ext_importerr",
         sys_module_key="jamma._fake_ext_that_does_not_exist_importerr",
         fallback_label="fake-fallback",
     )
@@ -565,7 +559,7 @@ def test_import_and_validate_missing_abi_version_logs_warning(monkeypatch, capsy
     monkeypatch.setitem(sys.modules, sys_key, fake_mod)
 
     spec = _fake_build_spec(
-        module_name="_fake_ext_no_abi",
+        output_stem="_fake_ext_no_abi",
         sys_module_key=sys_key,
         fallback_label="fake-fallback",
     )
@@ -598,7 +592,7 @@ def test_import_and_validate_missing_required_attrs_logs_warning_with_names(
     monkeypatch.setitem(sys.modules, sys_key, fake_mod)
 
     spec = _fake_build_spec(
-        module_name="_fake_ext_missing_attr",
+        output_stem="_fake_ext_missing_attr",
         sys_module_key=sys_key,
         fallback_label="fake-fallback",
         required_attrs=("dgemm", "eigh"),

@@ -126,15 +126,14 @@ class BuildSpec:
     sources: tuple[str, ...]
     lapack_sources: tuple[str, ...]
     output_stem: str  # "_lmm_accel" / "_jlinalg" — EXT_SUFFIX appended at build
-    # Dev-mode-only base cflags. The wheel path never applies these.
-    dev_extra_cflags: tuple[str, ...] = ()  # ("-march=native",) / ()
-    reads_sentinel_env: bool = False  # honour JAMMA_SENTINEL_UB (accel only)
     # Runtime load identity — used by core.recompile._load_c_module and
     # auto_recompile_c_extension when a stale/missing .so must be reimported or
     # rebuilt. Stored rather than derived so tests can inject synthetic keys.
-    module_name: str = ""  # log name, e.g. "_lmm_accel"
-    sys_module_key: str = ""  # sys.modules key of the built extension
-    fallback_label: str = ""  # human label for the pure-Python fallback path
+    sys_module_key: str
+    fallback_label: str
+    # Dev-mode-only base cflags. The wheel path never applies these.
+    dev_extra_cflags: tuple[str, ...] = ()  # ("-march=native",) / ()
+    reads_sentinel_env: bool = False  # honour JAMMA_SENTINEL_UB (accel only)
     # Symbols a valid, ABI-matched build always exports. Their absence means a
     # corrupt build rather than a stale one, so _load_c_module treats it as an
     # import failure and rebuilds. ABI equality is the real completeness check;
@@ -154,7 +153,6 @@ LMM_ACCEL_SPEC = BuildSpec(
     output_stem="_lmm_accel",
     dev_extra_cflags=("-march=native",),
     reads_sentinel_env=True,
-    module_name="_lmm_accel",
     sys_module_key="jamma.lmm._lmm_accel",
     fallback_label="LMM",
     required_attrs=(
@@ -176,7 +174,6 @@ JLINALG_SPEC = BuildSpec(
     output_stem="_jlinalg",
     dev_extra_cflags=(),
     reads_sentinel_env=False,
-    module_name="_jlinalg",
     sys_module_key="jamma.jlinalg._jlinalg",
     fallback_label="jlinalg",
     required_attrs=(

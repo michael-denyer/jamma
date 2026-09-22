@@ -285,7 +285,7 @@ void snp_stats_chunk_f64(const double *data, npy_intp n_samples, npy_intp n_snps
  */
 
 /**
- * jlinalg_init -- Detect ISA and initialise vendor BLAS dispatch.
+ * jlinalg_init -- Initialise the thread count and vendor BLAS dispatch.
  * Idempotent (guarded by a static flag).
  *
  * Returns: 0 on success.
@@ -293,8 +293,9 @@ void snp_stats_chunk_f64(const double *data, npy_intp n_samples, npy_intp n_snps
 int jlinalg_init(void);
 
 /**
- * jlinalg_isa_name -- Return the active ISA as a C string.
+ * jlinalg_isa_name -- Return the SIMD ISA the extension was compiled for.
  *
- * Returns: "AVX2", "NEON", or "generic" (never NULL).
+ * Returns: "AVX2" when built with __AVX2__, "NEON" with __ARM_NEON,
+ * otherwise "generic" (never NULL).
  */
 const char *jlinalg_isa_name(void);

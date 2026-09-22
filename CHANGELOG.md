@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which runs `-gk 1` without `--legacy-text` and so writes the binary `.npy`
   matrix JAMMA ships by default. The existing text row remains the
   like-for-like GEMMA comparison, and the new row has no GEMMA counterpart.
+- `jamma.jlinalg.jlinalg_isa` reports the SIMD ISA the extension was compiled
+  for, read from the preprocessor, instead of probing the CPU with CPUID,
+  XGETBV, and `getauxval` at import. A baseline Linux x86_64 wheel built
+  without `-mavx2` said `"AVX2"` on any AVX2 CPU; it now says `"generic"`.
+  The AVX2 release wheels still say `"AVX2"`, and AArch64 builds, including
+  Apple Silicon, still say `"NEON"`. The attribute's name, its possible
+  values, and `ABI_VERSION` are unchanged.
 
 ### Fixed
 

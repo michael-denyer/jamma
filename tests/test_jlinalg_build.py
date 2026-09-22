@@ -1,13 +1,16 @@
 """Build and import verification tests for jamma.jlinalg.
 
 - Import succeeds and module constants have correct types
-- ISA detection returns a valid string
 - All documented exports are present
 """
+
+import os
+import platform
 
 import pytest
 
 import jamma.jlinalg as jlinalg
+from jamma._build_support.build_models import BASE_CFLAGS, JLINALG_SPEC, LAPACK_CFLAGS
 from jamma.jlinalg import (
     HAS_C_EXTENSION,
     HAS_OPENMP,
@@ -29,6 +32,17 @@ def test_isa_detection():
     assert jlinalg_isa in _VALID_ISA_STRINGS, (
         f"Unknown ISA string: {jlinalg_isa!r}. Expected one of {_VALID_ISA_STRINGS}"
     )
+
+
+@pytest.mark.skipif(not HAS_C_EXTENSION, reason="reports the compiled extension")
+@pytest.mark.skipif(
+    bool(os.environ.get("CFLAGS")), reason="CFLAGS may change the target ISA"
+)
+def test_isa_reports_build_target_not_cpu():
+    build_flags = (*BASE_CFLAGS, *LAPACK_CFLAGS, *JLINALG_SPEC.dev_extra_cflags)
+    assert not [f for f in build_flags if f.startswith("-m")]
+    expected = {"arm64": "NEON", "aarch64": "NEON"}.get(platform.machine(), "generic")
+    assert jlinalg_isa == expected
 
 
 def test_has_c_extension_type():

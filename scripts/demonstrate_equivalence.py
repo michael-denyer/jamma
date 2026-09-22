@@ -160,7 +160,7 @@ class SectionTiming:
 _ASSOC_COLUMNS = (
     ("beta", "beta_rtol"),
     ("se", "se_rtol"),
-    ("af", "af_rtol"),
+    ("af", "af_atol"),
     ("p_wald", "pvalue_rtol"),
     ("p_score", "pvalue_rtol"),
     ("p_lrt", "p_lrt_rtol"),

@@ -12,7 +12,7 @@ separately from ordinary interior relative error.
 
 ``logl_H1`` is REML in mode 1 and MLE in modes 2 and 4. The earlier mode 4
 likelihood mismatch was an output-semantics defect, not evidence for widening
-``logl_rtol``. AF is compared as reported, so an allele flip fails the comparison.
+``logl_rtol``.
 """
 
 import math
@@ -101,9 +101,11 @@ class ToleranceConfig:
             Max observed: 1.2e-5 from Brent convergence differences.
         lambda_boundary: Bounds used by both optimizers and the relative margin
             used to classify lower- and upper-bound hits.
-        af_rtol: Relative tolerance for allele frequency.
-            JAMMA reports MAF (<=0.5), GEMMA reports AF (can be >0.5).
-            Comparison normalizes both to MAF before comparing.
+        af_atol: Absolute tolerance for the counted-allele frequency (BIM A1).
+            Both writers print AF with three decimals, so two reports of one
+            frequency differ by at most one printing unit. The gate is
+            |a - b| <= atol + af_atol with no relative term, so an allele flip
+            fails unless AF is within 0.0005 of 0.5.
         atol: Absolute tolerance floor for near-zero comparisons.
             Values smaller than atol are considered equal regardless of
             relative difference. Used by np.allclose: |a-b| <= atol + rtol*|b|
@@ -141,8 +143,7 @@ class ToleranceConfig:
     lambda_rtol: float = DEFAULT_LAMBDA_RTOL
     # Optimizer bounds and classification tolerance for boundary exemptions.
     lambda_boundary: LambdaBoundaryPolicy = field(default_factory=LambdaBoundaryPolicy)
-    # AF: JAMMA reports MAF (<=0.5), GEMMA reports AF. Max diff from rounding: 0.04
-    af_rtol: float = 0.05
+    af_atol: float = 1e-3
     # Absolute tolerance floor for near-zero comparisons.
     # Values smaller than atol are considered equal regardless of relative difference.
     # Used by np.allclose: |a-b| <= atol + rtol*|b|
@@ -166,7 +167,6 @@ class ToleranceConfig:
             kinship_rtol=1e-10,
             logl_rtol=1e-7,
             lambda_rtol=1e-5,
-            af_rtol=1e-2,
             atol=1e-14,
         )
 
@@ -189,6 +189,5 @@ class ToleranceConfig:
             kinship_rtol=1e-6,  # 100x looser than default (1e-8)
             logl_rtol=1e-5,  # 10x looser than default (1e-6)
             lambda_rtol=2e-4,  # 10x looser than default (2e-5)
-            af_rtol=0.5,  # Allow full complement range
             atol=1e-10,  # 100x looser than default (1e-12)
         )

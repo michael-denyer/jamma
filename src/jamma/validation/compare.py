@@ -609,7 +609,7 @@ def compare_assoc_results(
     - logl_H1: logl_rtol (log-likelihood values) - Wald test only
     - l_remle: lambda_rtol (variance ratio estimates) - Wald test only
     - l_mle: lambda_rtol (MLE lambda values) - LRT only
-    - af: af_rtol (allele frequency of counted allele, BIM A1)
+    - af: af_atol (absolute; counted-allele frequency, BIM A1)
 
     Args:
         actual: Computed association results from JAMMA.
@@ -681,7 +681,7 @@ def compare_assoc_results(
     actual_af = np.array([r.af for r in actual])
     expected_af = np.array([r.af for r in expected])
     af_result = compare_arrays(
-        actual_af, expected_af, config.af_rtol, config.atol, "af"
+        actual_af, expected_af, 0.0, config.atol + config.af_atol, "af"
     )
 
     # beta/se are always-present output slots. LRT reports them as NaN by

@@ -2,7 +2,6 @@
 
 import csv
 from dataclasses import asdict
-from decimal import Decimal
 
 from jamma.lmm.schema import HEADERS, TEST_TYPE_MAP
 from jamma.validation.compare import compare_assoc_results, load_gemma_assoc
@@ -57,20 +56,6 @@ def compare_files(
         for field in ("chr", "rs", "ps", "n_miss", "allele1", "allele0"):
             if getattr(a, field) != getattr(b, field):
                 errors.append(f"{b.rs}:{field}")
-        # Both current writers emit BIM A1 dosage frequency. Keep its direction:
-        # folding to MAF would hide flips. Two .3f values have at most 1e-3
-        # combined rounding uncertainty; this supplements the existing gate.
-        # Compare the printed decimals exactly at the formatting limit.
-        # Binary subtraction makes 0.538 - 0.537 slightly greater than 0.001.
-        actual_af = Decimal(str(a.af))
-        reference_af = Decimal(str(b.af))
-        if not (
-            actual_af.is_finite()
-            and reference_af.is_finite()
-            and 0 <= actual_af <= 1
-            and abs(actual_af - reference_af) <= Decimal("0.001")
-        ):
-            errors.append(f"{b.rs}:af_orientation")
     fields = asdict(result)
     failures = [
         f"{b_rows[i].rs if i < len(b_rows) else a_rows[i].rs}:{field}"

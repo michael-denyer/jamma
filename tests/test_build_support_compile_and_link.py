@@ -6,6 +6,7 @@ execute_build (subprocess monkeypatched so the test doesn't shell out).
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -437,6 +438,88 @@ def test_execute_build_link_failure_retries_without_omp_runtime(monkeypatch, tmp
     assert "omp link failed" in retry_reasons[0]
     assert "-liomp5" in calls[-2]
     assert "-liomp5" not in calls[-1]
+
+
+def _fail_first_openmp_step(failing_step: str):
+    def _fake_run(cmd, **_kwargs):
+        compiling = "-c" in cmd
+        if failing_step == "compile" and compiling and "-fopenmp" in cmd:
+            return _FakeCompleted(returncode=1, stderr="omp compile failed")
+        if failing_step == "link" and not compiling and "-liomp5" in cmd:
+            return _FakeCompleted(returncode=1, stderr="omp link failed")
+        if "-o" in cmd:
+            Path(cmd[cmd.index("-o") + 1]).write_bytes(b"")
+        return _FakeCompleted(returncode=0)
+
+    return _fake_run
+
+
+def _to_stderr(*args: object) -> None:
+    print(*args, file=sys.stderr)
+
+
+def _execute_build_with_openmp(tmp_path: Path, **printers) -> CompileResult:
+    source = tmp_path / "platform.c"
+    source.write_text("// stub\n")
+    return execute_build(
+        sources=[source],
+        lapack_sources=[],
+        include_dirs=[],
+        cc_cmd="cc",
+        cc_extra=[],
+        omp_compile=["-fopenmp"],
+        omp_link=["-liomp5"],
+        ldflags=[],
+        output=tmp_path / "out.so",
+        tmp_dir=tmp_path / "objs",
+        **printers,
+    )
+
+
+@pytest.mark.xfail(
+    strict=True, reason="execute_build reports each retry on on_retry and verbose_print"
+)
+@pytest.mark.parametrize("failing_step", ["compile", "link"])
+def test_openmp_retry_notice_prints_once_on_a_shared_stream(
+    monkeypatch, tmp_path, capsys, failing_step
+):
+    monkeypatch.setattr(
+        "jamma._build_support.build_execution.subprocess.run",
+        _fail_first_openmp_step(failing_step),
+    )
+
+    result = _execute_build_with_openmp(
+        tmp_path,
+        on_retry=_to_stderr,
+        verbose_print=_to_stderr,
+        error_print=_to_stderr,
+    )
+
+    assert result.success
+    assert capsys.readouterr().err.count("retrying without OpenMP") == 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="execute_build reports a retry without on_retry on verbose_print only",
+)
+@pytest.mark.parametrize("failing_step", ["compile", "link"])
+def test_openmp_retry_notice_reaches_error_print_without_on_retry(
+    monkeypatch, tmp_path, capsys, failing_step
+):
+    monkeypatch.setattr(
+        "jamma._build_support.build_execution.subprocess.run",
+        _fail_first_openmp_step(failing_step),
+    )
+
+    result = _execute_build_with_openmp(
+        tmp_path,
+        verbose_print=lambda *_args: None,
+        error_print=_to_stderr,
+    )
+
+    assert result.success
+    assert capsys.readouterr().err.count("retrying without OpenMP") == 1
 
 
 def test_atomic_replace_failure_preserves_used_openmp_link(monkeypatch, tmp_path):

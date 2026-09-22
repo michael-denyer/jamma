@@ -7,13 +7,21 @@ paths) and test_loco_eigen_cache.py (which covers cache I/O).
 
 import numpy as np
 import pytest
+from loguru import logger
 
+from jamma.io import read_fam_phenotypes
+from jamma.io.plink import get_plink_metadata
 from jamma.kinship.loco import (
     LocoKinshipStream,
     _yield_full_kinship_fallback,
     _yield_loco_matrices,
+    compute_loco_kinship_streaming,
 )
+from jamma.lmm.loco import LocoConfig, run_lmm_loco
+from jamma.lmm.schema import LmmConfig
 from jamma.utils import chr_sort_key
+from tests.conftest import require_fixture
+from tests.fixture_paths import LOCO
 
 pytestmark = pytest.mark.tier0
 
@@ -246,3 +254,97 @@ class TestFallbackOrderingBiological:
         results = list(_yield_full_kinship_fallback(S_full, chrs, n_filtered=10))
         yielded_order = [name for name, _ in results]
         assert yielded_order == ["1", "2", "10", "X"]
+
+
+def _loco_run(phenotypes, **loco_fields):
+    messages: list[str] = []
+    sink = logger.add(messages.append, level="INFO", format="{message}")
+    try:
+        result = run_lmm_loco(
+            LOCO.bfile,
+            phenotypes,
+            config=LmmConfig(check_memory=False, show_progress=False),
+            loco=LocoConfig(**loco_fields),
+        )
+    finally:
+        logger.remove(sink)
+    pve_lines = [m.strip() for m in messages if "PVE computed from" in m]
+    return result, pve_lines
+
+
+_YIELDED_LAST = pytest.mark.xfail(
+    strict=True,
+    reason="a chromosome with no kinship SNPs is yielded after every other one",
+)
+
+
+class TestChromosomeWithoutKinshipSnps:
+    """A chromosome with no kinship SNPs keeps its place in chromosome order.
+
+    Its LOCO kinship is the full kinship, since there is nothing to leave
+    out. It must be yielded, tested, and used for PVE in biological order
+    like every other chromosome, not scheduled after all of them.
+    """
+
+    @pytest.mark.parametrize(
+        "max_batch_chrs", [None, 1], ids=["single-pass", "multi-pass"]
+    )
+    @pytest.mark.parametrize(
+        "empty_chr",
+        [
+            pytest.param("1", marks=_YIELDED_LAST),
+            pytest.param("2", marks=_YIELDED_LAST),
+            "3",
+        ],
+    )
+    def test_stream_keeps_chromosome_order_and_yields_full_kinship(
+        self, empty_chr, max_batch_chrs
+    ):
+        """With S_empty = 0, K_empty * p equals S_full.
+
+        Each other chromosome's K_c * (p - p_c) is S_full - S_c, and with two
+        such chromosomes those sum to S_full, so the empty chromosome's matrix
+        is pinned by the other two without reaching into the accumulators.
+        """
+        require_fixture(LOCO.bfile.with_suffix(".bed"))
+        meta = get_plink_metadata(LOCO.bfile)
+        ksnps = np.flatnonzero(meta.chromosome != empty_chr)
+
+        matrices = compute_loco_kinship_streaming(
+            LOCO.bfile,
+            ksnps_indices=ksnps,
+            check_memory=False,
+            show_progress=False,
+            consumer_gb=0.0,
+            _max_batch_chrs=max_batch_chrs,
+        ).materialize()
+
+        assert list(matrices) == ["1", "2", "3"]
+        p = len(ksnps)
+        others = {c: K for c, K in matrices.items() if c != empty_chr}
+        assert len(others) == 2
+        p_c = {c: int(np.sum(meta.chromosome[ksnps] == c)) for c in others}
+        expected = sum(K * (p - p_c[c]) for c, K in others.items()) / p
+        np.testing.assert_allclose(matrices[empty_chr], expected, rtol=1e-12)
+
+    @_YIELDED_LAST
+    def test_run_lmm_loco_tests_in_chromosome_order_with_pve_from_chr_1(self):
+        require_fixture(LOCO.bfile.with_suffix(".bed"), LOCO.bfile.with_suffix(".fam"))
+        meta = get_plink_metadata(LOCO.bfile)
+        phenotypes = read_fam_phenotypes(LOCO.bfile.with_suffix(".fam"))
+        ksnps = np.flatnonzero(meta.chromosome != "1")
+
+        result, pve_lines = _loco_run(phenotypes, ksnps_indices=ksnps)
+        chr_1_only, _ = _loco_run(
+            phenotypes,
+            ksnps_indices=ksnps,
+            snps_indices=np.flatnonzero(meta.chromosome == "1"),
+        )
+
+        assert list(dict.fromkeys(r.chr for r in result.associations)) == [
+            "1",
+            "2",
+            "3",
+        ]
+        assert pve_lines == []
+        assert result.pve == pytest.approx(chr_1_only.pve, rel=1e-9)

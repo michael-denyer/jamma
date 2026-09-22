@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from bed_reader import to_bed
 
+import jamma.pipeline_phenotype_loop as phenotype_loop
 from jamma.lmm import runner_numpy
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from tests.builders import write_fam
@@ -40,7 +41,7 @@ def test_pipeline_releases_replaced_batch_matrix(tmp_path, monkeypatch, subset):
             return replace(prepared, chunk_factory=observe_chunks)
 
     # allow-patch: observe lifetime while delegating all reads and computation.
-    monkeypatch.setattr(runner_numpy, "MatrixSource", ObservedMatrixSource)
+    monkeypatch.setattr(phenotype_loop, "MatrixSource", ObservedMatrixSource)
     result = PipelineRunner(
         PipelineConfig(
             bfile=bfile,

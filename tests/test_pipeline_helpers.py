@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal, cast
 import numpy as np
 import pytest
 
+import jamma.pipeline as pipeline_mod
 from jamma.core import memory
 from jamma.lmm.association_plan import plan_association
 from jamma.pipeline import PipelineConfig, PipelineRunner
@@ -362,9 +363,7 @@ class TestRunLoco:
         runner = _make_runner(tmp_path, loco=True)
         monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
-        from jamma import lmm as lmm_pkg
-
-        monkeypatch.setattr(lmm_pkg, "run_lmm_loco", lambda **_kw: loco_result)
+        monkeypatch.setattr(pipeline_mod, "run_lmm_loco", lambda **_kw: loco_result)
         return runner
 
     @staticmethod
@@ -496,9 +495,7 @@ class TestRunLoco:
 
         Regression guard for config drift. _run_loco once wrote the nine
         LmmConfig fields out by hand, because LOCO needs check_memory passed
-        through where the batch and streaming paths force it off. That left two
-        copies of one projection, so a field added to LmmConfig could reach
-        _run_batch and miss LOCO.
+        through where the batch and streaming paths force it off.
 
         Asserted by dataclass equality rather than field by field: a tenth
         LmmConfig field that a re-inlined literal forgot to set would take its
@@ -529,15 +526,11 @@ class TestRunLoco:
         )
         monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
-        from jamma import lmm as lmm_pkg
-
-        monkeypatch.setattr(lmm_pkg, "run_lmm_loco", _capturing_loco)
+        monkeypatch.setattr(pipeline_mod, "run_lmm_loco", _capturing_loco)
 
         self._call(runner, tmp_path, phenos, None)
 
         assert captured["config"] == runner.config.lmm_config(check_memory=True)
-        # The distinguishing field: LOCO returns before memory_preflight, so
-        # unlike _run_batch it must not force the runner's memory gate off.
         assert captured["config"].check_memory is True  # type: ignore[union-attr]
 
     def test_propagates_loco_runner_exception(
@@ -548,12 +541,10 @@ class TestRunLoco:
         runner = _make_runner(tmp_path, loco=True)
         monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
-        from jamma import lmm as lmm_pkg
-
         def _raising_loco(**_kw):
             raise RuntimeError("sentinel: LOCO failed")
 
-        monkeypatch.setattr(lmm_pkg, "run_lmm_loco", _raising_loco)
+        monkeypatch.setattr(pipeline_mod, "run_lmm_loco", _raising_loco)
 
         with pytest.raises(RuntimeError, match="sentinel: LOCO failed"):
             self._call(runner, tmp_path, phenos, None)

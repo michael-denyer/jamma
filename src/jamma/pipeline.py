@@ -29,13 +29,21 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+import jamma
 from jamma.core.constants import Env
 from jamma.core.eigen_plan import EigenDriverPlan
+from jamma.core.telemetry import BenchmarkRecord, append_benchmark_record
 from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
 from jamma.io.snp_list import resolve_snp_list_file
+from jamma.io.weight import (
+    apply_individual_weights,
+    apply_weights_to_eigenvectors,
+    read_analysis_weights,
+)
 from jamma.kinship import (
     compute_kinship_streaming,
     read_kinship_matrix,
+    validate_valid_indices,
     write_kinship_matrix,
 )
 from jamma.lmm.association_plan import (
@@ -49,6 +57,7 @@ from jamma.lmm.eigen_io import (
     read_eigen_files,
     write_eigen_files,
 )
+from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
 from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
@@ -160,16 +169,6 @@ class PipelineRunner:
 
     def _emit_telemetry(self, result: PipelineResult, plan: ExecutionPlan) -> None:
         """Emit benchmark telemetry record. Never raises."""
-        try:
-            import jamma
-            from jamma.core.telemetry import (
-                BenchmarkRecord,
-                append_benchmark_record,
-            )
-        except ImportError:
-            logger.warning("Telemetry module not available", exc_info=True)
-            return
-
         try:
             record: BenchmarkRecord = {
                 "timestamp": datetime.now(UTC).isoformat(),
@@ -316,8 +315,6 @@ class PipelineRunner:
             or n_samples.
         """
         if valid_indices is not None:
-            from jamma.kinship import validate_valid_indices
-
             validate_valid_indices(valid_indices, n_samples)
 
         full = kinship.n_samples == n_samples
@@ -353,8 +350,6 @@ class PipelineRunner:
 
         # Apply individual weights before eigendecomposition
         if weights is not None:
-            from jamma.io.weight import apply_individual_weights
-
             logger.info(f"Applying individual weights from {self.config.weight_file}")
             K = apply_individual_weights(K, weights)
 
@@ -566,11 +561,6 @@ class PipelineRunner:
                     "be ignored."
                 )
         else:
-            from jamma.io.weight import (
-                apply_weights_to_eigenvectors,
-                read_analysis_weights,
-            )
-
             valid_indices = None if n_valid == n_samples else analyzed_sample_indices
             weights = (
                 read_analysis_weights(self.config.weight_file, n_samples, valid_indices)
@@ -632,8 +622,6 @@ class PipelineRunner:
         Single-phenotype only — multi-phenotype LOCO is rejected at
         PipelineConfig.__post_init__.
         """
-        from jamma.lmm import run_lmm_loco
-
         n_valid = int(np.sum(valid_mask))
         n_cvt = covariates.shape[1] if covariates is not None else 1
         plan = analysis.execution.summary

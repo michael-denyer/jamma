@@ -14,8 +14,6 @@ dispatch. Every call is synchronous; results are available when it returns.
 
 from __future__ import annotations
 
-from typing import TypedDict
-
 import numpy as np
 
 from jamma.lmm.likelihood_numpy import (
@@ -34,16 +32,6 @@ from jamma.lmm.uab import batch_compute_iab_numpy, compute_iab_invariant_scalars
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_types.h
 
 
-class WaldResult(TypedDict):
-    """Result dict from REML Wald pipeline (both C and Python paths)."""
-
-    lambdas: np.ndarray
-    logls: np.ndarray
-    betas: np.ndarray
-    ses: np.ndarray
-    pwalds: np.ndarray
-
-
 def compute_wald_split_numpy(
     eigenvalues: np.ndarray,
     uab_varying_soa: np.ndarray,
@@ -55,7 +43,7 @@ def compute_wald_split_numpy(
     l_max: float,
     n_grid: int,
     n_refine: int,
-) -> WaldResult:
+) -> dict[str, np.ndarray]:
     """Intercept-only Wald from three varying rows and shared invariant products."""
     iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = iab_scalars
     lambdas, logls, Pab_final = golden_section_optimize_lambda_split_ncvt1_numpy(
@@ -90,7 +78,7 @@ def _compute_wald_numpy(
     l_max: float,
     n_grid: int,
     n_refine: int,
-) -> WaldResult:
+) -> dict[str, np.ndarray]:
     """Compute REML-optimized Wald test statistics.
 
     Pure NumPy. The runner reaches this only on ``DispatchPath.NUMPY_FALLBACK``,
@@ -249,26 +237,6 @@ _LOGL_H0_REQUIRED = "logl_H0 is required for LRT (mode 2) and All (mode 4)"
 _HI_EVAL_NULL_REQUIRED = "Hi_eval_null is required for Score (mode 3) and All (mode 4)"
 
 
-def _store_wald(result: dict[str, np.ndarray | None], wald: WaldResult) -> None:
-    """Copy a WaldResult's five arrays into the mode-agnostic result dict.
-
-    Spelled out per key rather than ``result.update(wald)`` because a TypedDict
-    is not a ``Mapping[str, ndarray | None]`` — its value types are per-key, so
-    the update overloads reject it.
-
-    Args:
-        result: The chunk result dict to populate.
-        wald: Wald statistics for the chunk.
-    """
-    result.update(
-        lambdas=wald["lambdas"],
-        logls=wald["logls"],
-        betas=wald["betas"],
-        ses=wald["ses"],
-        pwalds=wald["pwalds"],
-    )
-
-
 def compute_lmm_chunk_numpy(
     lmm_mode: LmmMode,
     n_cvt: int,
@@ -319,8 +287,7 @@ def compute_lmm_chunk_numpy(
     }
 
     if lmm_mode == 1:
-        _store_wald(
-            result,
+        result.update(
             _compute_wald_numpy(
                 n_cvt,
                 eigenvalues,
@@ -378,8 +345,7 @@ def compute_lmm_chunk_numpy(
             n_samples,
         )
         result["p_scores"] = score_result["p_scores"]
-        _store_wald(
-            result,
+        result.update(
             _compute_wald_numpy(
                 n_cvt,
                 eigenvalues,

@@ -1,12 +1,7 @@
 """Loader for the `_lmm_accel` C extension.
 
 The one place that imports, ABI-validates, and (on failure) auto-recompiles
-`_lmm_accel`, through the shared seam in `jamma.core.recompile`. Every module
-that needs to know whether the C extension is usable — `compute_numpy`,
-`chunk_kernel`, `chunk_runner_numpy`, `runner`, `pipeline_memory`,
-`pipeline_banner` — reads it from here instead of reaching into
-`compute_numpy`'s private state, which used to be the only tenant of the
-loader despite being a pure-NumPy fallback module in its own right.
+`_lmm_accel`, through the shared seam in `jamma.core.recompile`.
 
 ``available()`` and ``HAS_OPENMP`` are read at call time, not cached at
 import time in the caller, so a test that clears ``accel._accel`` (directly,

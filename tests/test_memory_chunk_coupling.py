@@ -589,12 +589,7 @@ class TestChunkPlanMatchesEngine:
         chunk_plan = exec_plan.conservative_chunks
         uab_iab_gb = (
             chunk_plan.chunk_size
-            * lmm_extra_bytes_per_snp(
-                n_samples,
-                n_cvt,
-                exec_plan.dispatch,
-                n_buffers=chunk_plan.n_buffers,
-            )
+            * lmm_extra_bytes_per_snp(n_samples, n_cvt, exec_plan.dispatch)
             / 1e9
         )
         est_hardcoded_two = estimate_streaming_memory(

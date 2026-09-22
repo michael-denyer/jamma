@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import WaldResult, _compute_wald_numpy
+from jamma.lmm.compute_numpy import _compute_wald_numpy
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.pab import _NCVT1, build_index_table
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
@@ -240,7 +240,7 @@ def _numpy_general_lrt(data: dict) -> dict:
     }
 
 
-def _fused_general_wald(data: dict, n_threads: int = 1) -> WaldResult:
+def _fused_general_wald(data: dict, n_threads: int = 1) -> dict[str, np.ndarray]:
     """Run the live fused-general Wald kernel over *data*."""
     if "uab_inv_soa" not in data:
         data = _prepare_fused_general_data(data)
@@ -250,7 +250,7 @@ def _fused_general_wald(data: dict, n_threads: int = 1) -> WaldResult:
     )
 
 
-def _numpy_general_wald(data: dict) -> WaldResult:
+def _numpy_general_wald(data: dict) -> dict[str, np.ndarray]:
     """Run the NumPy Wald path over *data*, with the extension held out.
 
     ``_compute_wald_numpy`` consults ``accel._accel`` at call time and
@@ -326,7 +326,7 @@ def _uab_from_fused_inputs(w, Uty, utg_t):
     return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t)
 
 
-def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> WaldResult:
+def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> dict[str, np.ndarray]:
     """NumPy REML Wald for the fused kernel's n_cvt=1 inputs."""
     orig = accel._accel
     try:

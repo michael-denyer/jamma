@@ -239,11 +239,6 @@ class PipelineConfig:
 
         Args:
             check_memory: Whether the runner should run its own memory gate.
-                Defaults to False for the batch and streaming paths, where
-                PipelineRunner._memory_preflight has already gated and
-                re-checking would double-count. The LOCO path returns before
-                that preflight and owns its per-chromosome estimate, so it
-                passes the caller's flag through.
 
         Returns:
             LmmConfig carrying this config's optimizer and filter knobs.
@@ -329,9 +324,6 @@ class PipelineResult:
 @dataclass
 class KinshipResult:
     """Outcome of a kinship computation (the ``-gk`` path).
-
-    Returned by ``PipelineRunner.compute_kinship`` so the CLI can write its
-    GEMMA log and summary without owning the compute/write orchestration.
 
     Attributes:
         kinship_paths: Written kinship matrix paths. One entry for a standard

@@ -135,12 +135,6 @@ def _resolve_dispatch_path(n_cvt: int, lmm_mode: LmmMode, accel: bool) -> Dispat
             else DispatchPath.NUMPY_FALLBACK
         )
 
-    # n_cvt > MAX_C_N_CVT resolves to a C path here and is rejected by the
-    # kernel itself, which raises "n_cvt must be 1..100". There used to be a
-    # Python guard further down in compute_numpy that fell back instead, but it
-    # sat inside _compute_wald_numpy, which the runner reaches only when the
-    # extension is absent, so it never ran.
-
     if n_cvt >= 2:
         return DispatchPath.FUSED_GENERAL
 

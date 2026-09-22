@@ -37,7 +37,8 @@ static PyObject *LinAlgError = NULL;
  * jamma.jlinalg.dgemm validates the full public contract (transa/transb
  * values, dimension match, out shape) once in Python before calling this
  * entry point on either backend, so the semantic checks live there. This
- * function keeps only what memory safety needs: dtype, contiguity,
+ * function keeps only what memory safety needs: a wired vendor dgemm
+ * (jlinalg_dgemm_ext aborts without one), dtype, contiguity,
  * alignment, and writeability of out, none of which Python re-derives from
  * flags a caller could still get wrong when calling this entry point
  * directly (e.g. from C tests).
@@ -53,6 +54,13 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|ssO", kwlist, &oA, &oB, &transa_str,
                                      &transb_str, &oOut))
         return NULL;
+
+    if (!blas_has_external()) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "dgemm: vendor dgemm is not wired (blas_has_dgemm == 0); "
+                        "jamma.jlinalg.dgemm falls back to NumPy in this state");
+        return NULL;
+    }
 
     int transa = (transa_str[0] == 'T' || transa_str[0] == 't') ? 1 : 0;
     int transb = (transb_str[0] == 'T' || transb_str[0] == 't') ? 1 : 0;
@@ -147,9 +155,6 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
     npy_intp lda = PyArray_DIM(aA, 1);
     npy_intp ldb = PyArray_DIM(aB, 1);
 
-    /* Release the GIL for the O(N^3) computation. jlinalg_dgemm_ext aborts if
-     * vendor BLAS is not wired -- the bind in jamma.jlinalg only ever routes
-     * here when blas_has_dgemm is true, so that is the one guard this needs. */
     Py_BEGIN_ALLOW_THREADS jlinalg_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
     Py_END_ALLOW_THREADS
 
@@ -169,7 +174,8 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
  * jamma.jlinalg.dsyrk validates the full public contract (beta requires out,
  * out shape) once in Python before calling this entry point on either
  * backend, so the semantic checks live there. This function keeps only what
- * memory safety needs: dtype, contiguity, alignment, and writeability of
+ * memory safety needs: a wired vendor dsyrk (jlinalg_dsyrk_ext aborts
+ * without one), dtype, contiguity, alignment, and writeability of
  * out, none of which Python re-derives from flags a caller could still get
  * wrong when calling this entry point directly (e.g. from C tests).
  * ---------------------------------------------------------------------------
@@ -180,6 +186,13 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
     PyObject *oOut = Py_None;
     double beta = 0.0;
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|$Od", kwlist, &oX, &oOut, &beta)) return NULL;
+
+    if (!blas_has_dsyrk()) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "dsyrk: vendor dsyrk is not wired (blas_has_dsyrk == 0); "
+                        "jamma.jlinalg.dsyrk falls back to NumPy in this state");
+        return NULL;
+    }
 
     PyArrayObject *aX = (PyArrayObject *)PyArray_FROM_OTF(oX, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
     if (!aX) return NULL;
@@ -278,11 +291,11 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|p$s", kwlist, &oK, &inplace, &driver_str))
         return NULL;
 
-    int prefer_dsyevr;
+    int require_dsyevr;
     if (strcmp(driver_str, "auto") == 0 || strcmp(driver_str, "dsyevd") == 0) {
-        prefer_dsyevr = 0;
+        require_dsyevr = 0;
     } else if (strcmp(driver_str, "dsyevr") == 0) {
-        prefer_dsyevr = 1;
+        require_dsyevr = 1;
     } else {
         PyErr_Format(PyExc_ValueError,
                      "eigh: driver must be 'auto', 'dsyevd', or 'dsyevr', got '%s'", driver_str);
@@ -345,13 +358,13 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
     memset(&eigh_status, 0, sizeof(eigh_status));
 
     int ret;
-    Py_BEGIN_ALLOW_THREADS ret = jlinalg_eigh_c(N, pK, N, pW, pU, N, prefer_dsyevr, &eigh_status);
+    Py_BEGIN_ALLOW_THREADS ret = jlinalg_eigh_c(N, pK, N, pW, pU, N, require_dsyevr, &eigh_status);
     Py_END_ALLOW_THREADS
 
         if (ret != 0) {
         if (ret == JLINALG_EXT_UNAVAILABLE) {
             PyErr_Format(PyExc_RuntimeError,
-                         prefer_dsyevr
+                         require_dsyevr
                              ? "jlinalg eigh: driver='dsyevr' requested but vendor DSYEVR is "
                                "not available. Use numpy.linalg.eigh instead."
                              : "jlinalg eigh: no vendor LAPACK available "

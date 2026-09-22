@@ -35,6 +35,8 @@ in without pulling in the full numpy/loguru stack they are built to avoid.
 | `DO_NOT_TRACK` | *(unset)* | Universal convention: set to `1` to disable JAMMA telemetry. |
 | `JLINALG_NO_VENDOR_LAPACK` | *(unset)* | Set to any non-empty value (not `0`) to force `np.linalg.eigh` instead of vendor LAPACK (DSYEVD/DSYEVR) for eigendecomposition only (scope: `lmm/eigen.py`). Useful for debugging numerical differences. |
 | `JLINALG_NO_VENDOR_DGEMM` | *(unset)* | Set to any non-empty value (not `0`) to leave vendor `dgemm` unwired, so `blas_has_dgemm` reports `0` while the C extension stays loaded and the rest of dispatch (`dsyrk`, DSYEVD/DSYEVR) is untouched. That is the permanent state of an LP64-only host — distro or conda numpy — which CI never reaches because PyPI numpy ships ILP64 `scipy_openblas64`. Narrower than `JAMMA_FORCE_NUMPY_FALLBACK`, which skips the `.so` import entirely. Used by `tests/test_jlinalg_dispatch.py::TestDgemmVendorGate`. |
+| `JLINALG_NO_VENDOR_DSYRK` | *(unset)* | Same truthy rule. Leaves vendor `dsyrk` unwired, so `blas_has_dsyrk` reports `0` and the public `dsyrk` binds NumPy, with `dgemm` and DSYEVD/DSYEVR untouched. Test seam for the unwired-`dsyrk` contract of the raw `_jlinalg` module; used by `tests/test_jlinalg_dispatch.py::TestUnwiredRoutinesRaise`. |
+| `JLINALG_NO_VENDOR_DSYEVR` | *(unset)* | Same truthy rule. Leaves vendor DSYEVR unwired, so `blas_has_dsyevr` reports `0` while DSYEVD stays wired and `driver="auto"` still runs DSYEVD. Test seam for the `eigh(K, driver="dsyevr")` contract when DSYEVR is missing; used by the same test class. |
 | `JLINALG_DISPATCH_DEBUG` | *(unset)* | Set to `1` to print jlinalg BLAS dispatch diagnostics (backend detection, ILP64 status, library path) from the `jlinalg` C layer. Debug aid only. |
 | `JAMMA_FORCE_NUMPY_FALLBACK` | *(unset)* | Set to any non-empty value (not `0`) to force the **entire jlinalg layer** onto its NumPy fallback path even when vendor BLAS is loaded. Wider scope than `JLINALG_NO_VENDOR_LAPACK`: also affects `dgemm`, `dsyrk`. Used by the weekly sanitizer workflow and by full numerical-divergence debugging. |
 | `JAMMA_NO_OPENMP` | *(unset)* | Set to any non-empty value (not `0`) to disable OpenMP when compiling the C extension. The extension will be single-threaded. |
@@ -260,7 +262,10 @@ and vendor capability flags, in priority order:
 `driver="auto"` otherwise. `jlinalg_eigh_c` honours it directly -- when
 `driver="dsyevr"` it skips the DSYEVD attempt outright rather than trying
 DSYEVD first and falling back to DSYEVR only on an allocation failure, so a
-memory-constrained run never touches pages the plan did not reserve. `eigh`
+memory-constrained run never touches pages the plan did not reserve. With
+vendor DSYEVR not wired, `driver="dsyevr"` raises `RuntimeError` rather than
+running DSYEVD; the plan only picks DSYEVR when `blas_has_dsyevr` is set, so
+the pipeline never reaches that error. `eigh`
 returns the driver that actually ran as `status.driver_used`, and
 `eigendecompose_kinship` logs that value (`Eigendecomp: dsyevr`), not the
 planned one, since a DSYEVD allocation failure can still fall through to

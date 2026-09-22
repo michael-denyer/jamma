@@ -153,7 +153,7 @@ results that diverge from GEMMA's validation tolerances.
 | `include/blas_dispatch_internal.h` | Private selected-backend state shared by discovery and operation wrappers |
 | `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym and selected-backend ownership. Candidate directories come from `_blas_dirs.probe_plan()` (Python); C keeps every dlopen/dlsym call |
 | `src/blas_operations.c` | DGEMM, DSYRK, DSYEVD, and DSYEVR wrappers over the selected backend |
-| `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. `jlinalg_eigh_c` requires tightly packed row-major storage (`ldk == ldz == N`); a padded stride returns `JLINALG_EXT_BAD_STRIDE` rather than being serviced by a second code path, since no caller in the tree ever passes one. A `prefer_dsyevr` flag lets the caller skip the DSYEVD attempt outright -- the memory plan that already reserved DSYEVR's smaller footprint passes it through `jlinalg.eigh(K, driver="dsyevr")` so the driver that runs matches the one that was budgeted, rather than being decided a second time by an allocation failure. `status->driver_used` reports which routine actually ran. |
+| `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. `jlinalg_eigh_c` requires tightly packed row-major storage (`ldk == ldz == N`); a padded stride returns `JLINALG_EXT_BAD_STRIDE` rather than being serviced by a second code path, since no caller in the tree ever passes one. A `require_dsyevr` flag lets the caller skip the DSYEVD attempt outright -- the memory plan that already reserved DSYEVR's smaller footprint passes it through `jlinalg.eigh(K, driver="dsyevr")` so the driver that runs matches the one that was budgeted, rather than being decided a second time by an allocation failure. With the flag set and no vendor DSYEVR it returns `JLINALG_EXT_UNAVAILABLE` (a `RuntimeError` from `py_eigh`) rather than running DSYEVD. `status->driver_used` reports which routine actually ran. |
 | `src/snp_stats.c` | SNP statistics kernel (chunked mean/variance/MAF) |
 
 There are no own-C LAPACK translations in the tree. As of commit
@@ -268,6 +268,10 @@ duplicating flag/source lists.
   LP64-only host: `dgemm()` binds `_dgemm_backend` to the NumPy
   implementation rather than `py_dgemm`, so the C entry point is never
   called and never has the chance to raise.
+- Set `JLINALG_NO_VENDOR_DSYRK=1` or `JLINALG_NO_VENDOR_DSYEVR=1` to leave
+  that one vendor routine unwired the same way. They exist so the contracts
+  of the raw `_jlinalg.dsyrk` entry point and of `eigh(K, driver="dsyevr")`
+  with no DSYEVR can be exercised on a host that has both routines.
 - Set `JAMMA_SANITIZE=address,undefined` (or any subset) at build time to
   rebuild C extensions with `-fsanitize=...`. Used by
   `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10.

@@ -16,6 +16,8 @@ Env vars:
     JLINALG_NO_VENDOR_DGEMM: when truthy, dispatch leaves vendor dgemm
         unwired, so blas_has_dgemm reports 0 with the extension loaded. That
         is the permanent state of an LP64-only host, which CI never reaches.
+    JLINALG_NO_VENDOR_DSYRK, JLINALG_NO_VENDOR_DSYEVR: the same for vendor
+        dsyrk and DSYEVR. Test seams for the unwired-routine contracts.
     JLINALG_NO_VENDOR_LAPACK: when truthy, eigh routes to the NumPy fallback
         regardless of the bound backend. Checked per call. eigendecompose_kinship
         and the pre-flight memory estimators read the same var via

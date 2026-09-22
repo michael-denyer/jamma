@@ -225,7 +225,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3b | `impute_and_center()` | NaN -> mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
 | 3b | `impute_missing_inplace()` | In-place NaN -> col-mean for genotype chunks (used by all runners) | [lmm/impute.py:6](../src/jamma/lmm/impute.py#L6) |
 | 3c | `eigendecompose_kinship()` | Eigendecomp via `jlinalg.eigh` with BLAS thread control | [eigen.py](../src/jamma/lmm/eigen.py) |
-| 3c' | `jlinalg.eigh()` | Facade dispatch to vendor DSYEVD/DSYEVR or the operation-specific NumPy fallback | [jlinalg/\_\_init\_\_.py:127](../src/jamma/jlinalg/__init__.py#L144), [jlinalg/\_eigh.py](../src/jamma/jlinalg/_eigh.py) |
+| 3c' | `jlinalg.eigh()` | Facade dispatch to vendor DSYEVD/DSYEVR or the operation-specific NumPy fallback | [jlinalg/\_\_init\_\_.py:146](../src/jamma/jlinalg/__init__.py#L146), [jlinalg/\_eigh.py](../src/jamma/jlinalg/_eigh.py) |
 | 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n^2) workspace) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
 | 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
 | 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |

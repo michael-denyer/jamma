@@ -505,7 +505,7 @@ two are acceptable:
 1. **Hardware/library availability** — vendor LAPACK absent, ILP64 not
    active, BLAS backend mismatch. Use module-level
    `pytestmark = pytest.mark.skipif(...)` so the file skips at collection
-   time. Example: [`tests/test_jlinalg_dispatch.py:13`](../tests/test_jlinalg_dispatch.py#L13).
+   time. Example: [`tests/test_jlinalg_dispatch.py:18`](../tests/test_jlinalg_dispatch.py#L18).
    For the `_lmm_accel` C extension specifically, use the `requires_c` marker
    from `tests/conftest.py` (`@requires_c` above the test or class) rather
    than a hand-written `skipif(not accel.available(), ...)`; it is one

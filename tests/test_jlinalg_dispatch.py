@@ -8,7 +8,12 @@ import textwrap
 import numpy as np
 import pytest
 
-from jamma.jlinalg import HAS_C_EXTENSION, blas_backend, blas_is_ilp64
+from jamma.jlinalg import (
+    HAS_C_EXTENSION,
+    blas_backend,
+    blas_has_dsyevd,
+    blas_is_ilp64,
+)
 
 pytestmark = [
     pytest.mark.tier0,
@@ -377,6 +382,18 @@ class TestCapabilityFlags:
 # ---------------------------------------------------------------------------
 
 
+def _run_in_fresh_interpreter(
+    body: str, **env: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(body)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+        timeout=60,
+    )
+
+
 class TestDgemmVendorGate:
     """``dgemm`` must reach NumPy when vendor dgemm is not wired.
 
@@ -390,22 +407,12 @@ class TestDgemmVendorGate:
     """
 
     @staticmethod
-    def _run_unwired(body: str) -> subprocess.CompletedProcess[str]:
-        """Run ``body`` in a fresh interpreter with vendor dgemm unwired.
-
-        A subprocess is required: dispatch resolves once, at extension import.
-        """
-        return subprocess.run(
-            [sys.executable, "-c", textwrap.dedent(body)],
-            capture_output=True,
-            text=True,
-            env={**os.environ, "JLINALG_NO_VENDOR_DGEMM": "1"},
-            timeout=60,
-        )
+    def _run_with_dgemm_unwired(body: str) -> subprocess.CompletedProcess[str]:
+        return _run_in_fresh_interpreter(body, JLINALG_NO_VENDOR_DGEMM="1")
 
     def test_rotation_still_computes_without_vendor_dgemm(self):
         """The chunk-rotation call shape returns the right numbers, not an error."""
-        proc = self._run_unwired("""
+        proc = self._run_with_dgemm_unwired("""
             import numpy as np
             from jamma.jlinalg import HAS_C_EXTENSION, dgemm
 
@@ -429,7 +436,7 @@ class TestDgemmVendorGate:
         Here it still reads as a vendor backend while vendor dgemm is absent,
         which is why the binding keys on the flag.
         """
-        proc = self._run_unwired("""
+        proc = self._run_with_dgemm_unwired("""
             from jamma.jlinalg import HAS_C_EXTENSION, blas_backend, blas_has_dgemm
 
             assert HAS_C_EXTENSION, "this test needs the compiled extension"
@@ -445,7 +452,7 @@ class TestDgemmVendorGate:
 
     def test_numpy_dgemm_keeps_the_c_input_contract(self):
         """The fallback rejects what the C entry point rejects."""
-        proc = self._run_unwired("""
+        proc = self._run_with_dgemm_unwired("""
             import numpy as np
             from jamma.jlinalg import dgemm
 
@@ -505,3 +512,128 @@ class TestEighBackendReporting:
 
         assert isinstance(blas_has_dsyevr, int)
         assert blas_has_dsyevr in (0, 1)
+
+
+class TestUnwiredRoutinesRaise:
+    @staticmethod
+    def _assert_raised_runtime_error(proc: subprocess.CompletedProcess[str]) -> None:
+        assert proc.returncode == 0, f"exit {proc.returncode}\n{proc.stderr}"
+        last = proc.stdout.strip().splitlines()[-1]
+        assert last.startswith("RuntimeError:"), f"{last}\n{proc.stderr}"
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="py_dgemm calls jlinalg_dgemm_ext, which abort()s without vendor dgemm",
+    )
+    def test_raw_dgemm_raises_when_vendor_dgemm_unwired(self):
+        proc = _run_in_fresh_interpreter(
+            """
+            import numpy as np
+            from jamma.jlinalg import HAS_C_EXTENSION, _jlinalg
+
+            assert HAS_C_EXTENSION, "this test needs the compiled extension"
+            assert _jlinalg.blas_has_dgemm == 0
+            try:
+                _jlinalg.dgemm(np.eye(2), np.eye(2))
+            except RuntimeError as exc:
+                print(f"RuntimeError: {exc}")
+            else:
+                print("returned")
+            """,
+            JLINALG_NO_VENDOR_DGEMM="1",
+        )
+        self._assert_raised_runtime_error(proc)
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="py_dsyrk calls jlinalg_dsyrk_ext, which abort()s without vendor dsyrk",
+    )
+    def test_raw_dsyrk_raises_when_vendor_dsyrk_unwired(self):
+        proc = _run_in_fresh_interpreter(
+            """
+            import numpy as np
+            from jamma.jlinalg import HAS_C_EXTENSION, _jlinalg
+
+            assert HAS_C_EXTENSION, "this test needs the compiled extension"
+            assert _jlinalg.blas_has_dsyrk == 0
+            try:
+                _jlinalg.dsyrk(np.eye(2))
+            except RuntimeError as exc:
+                print(f"RuntimeError: {exc}")
+            else:
+                print("returned")
+            """,
+            JLINALG_NO_VENDOR_DSYRK="1",
+        )
+        self._assert_raised_runtime_error(proc)
+
+    @pytest.mark.skipif(
+        not blas_has_dsyevd, reason="needs vendor DSYEVD to bind C eigh"
+    )
+    @pytest.mark.xfail(
+        strict=True,
+        reason="jlinalg_eigh_c runs DSYEVD when driver='dsyevr' has no vendor DSYEVR",
+    )
+    def test_eigh_dsyevr_driver_raises_when_dsyevr_unwired(self):
+        proc = _run_in_fresh_interpreter(
+            """
+            import numpy as np
+            from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevd
+            from jamma.jlinalg import blas_has_dsyevr, eigh
+
+            assert HAS_C_EXTENSION, "this test needs the compiled extension"
+            assert blas_has_dsyevr == 0
+            assert blas_has_dsyevd == 1, "DSYEVD must stay wired to bind C eigh"
+            try:
+                _, _, status = eigh(np.eye(8), driver="dsyevr")
+            except RuntimeError as exc:
+                print(f"RuntimeError: {exc}")
+            else:
+                print(f"returned driver_used={status.driver_used}")
+            """,
+            JLINALG_NO_VENDOR_DSYEVR="1",
+        )
+        self._assert_raised_runtime_error(proc)
+
+
+class TestVendorRoutineSeams:
+    def test_dsyrk_seam_routes_public_dsyrk_to_numpy(self):
+        proc = _run_in_fresh_interpreter(
+            """
+            import numpy as np
+            from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyrk, dsyrk
+
+            assert HAS_C_EXTENSION, "this test needs the compiled extension"
+            assert blas_has_dsyrk == 0, blas_has_dsyrk
+            rng = np.random.default_rng(11)
+            X = np.ascontiguousarray(rng.standard_normal((12, 5)))
+            np.testing.assert_allclose(dsyrk(X), X @ X.T, rtol=1e-12, atol=1e-14)
+            print("OK")
+            """,
+            JLINALG_NO_VENDOR_DSYRK="1",
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip().splitlines()[-1] == "OK", proc.stdout
+
+    @pytest.mark.skipif(
+        not blas_has_dsyevd, reason="needs vendor DSYEVD to bind C eigh"
+    )
+    def test_dsyevr_seam_leaves_the_auto_driver_on_dsyevd(self):
+        proc = _run_in_fresh_interpreter(
+            """
+            import numpy as np
+            from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevr, eigh
+
+            assert HAS_C_EXTENSION, "this test needs the compiled extension"
+            assert blas_has_dsyevr == 0, blas_has_dsyevr
+            rng = np.random.default_rng(12)
+            A = rng.standard_normal((16, 16))
+            K = np.ascontiguousarray(A @ A.T + np.eye(16))
+            w, v, status = eigh(K.copy())
+            np.testing.assert_allclose((v * w) @ v.T, K, rtol=1e-10, atol=1e-12)
+            print(status.driver_used)
+            """,
+            JLINALG_NO_VENDOR_DSYEVR="1",
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip().splitlines()[-1] == "dsyevd", proc.stdout

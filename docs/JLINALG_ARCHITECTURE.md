@@ -268,6 +268,10 @@ duplicating flag/source lists.
   LP64-only host: `dgemm()` binds `_dgemm_backend` to the NumPy
   implementation rather than `py_dgemm`, so the C entry point is never
   called and never has the chance to raise.
+- Set `JLINALG_NO_VENDOR_DSYRK=1` or `JLINALG_NO_VENDOR_DSYEVR=1` to leave
+  that one vendor routine unwired the same way. They exist so the contracts
+  of the raw `_jlinalg.dsyrk` entry point and of `eigh(K, driver="dsyevr")`
+  with no DSYEVR can be exercised on a host that has both routines.
 - Set `JAMMA_SANITIZE=address,undefined` (or any subset) at build time to
   rebuild C extensions with `-fsanitize=...`. Used by
   `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10.

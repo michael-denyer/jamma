@@ -57,14 +57,8 @@ static int _debug_enabled(void) {
     return val && val[0] == '1';
 }
 
-/* JLINALG_NO_VENDOR_DGEMM — leave vendor dgemm unwired even when an ILP64
- * backend resolves, so blas_has_external() reports 0 with the extension
- * loaded and the rest of dispatch intact.  That is the state an LP64-only
- * host is permanently in (distro or conda numpy), and CI never reaches it
- * because PyPI numpy ships ILP64 scipy_openblas64.  Truthy values follow
- * jamma.core.constants.env_flag: anything except unset, "" and "0". */
-static int _no_vendor_dgemm(void) {
-    const char *val = getenv("JLINALG_NO_VENDOR_DGEMM");
+static int _env_flag(const char *name) {
+    const char *val = getenv(name);
     return val && val[0] != '\0' && !(val[0] == '0' && val[1] == '\0');
 }
 
@@ -716,7 +710,7 @@ int blas_dispatch_init(void) {
 
         /* dgemm is wired unless JLINALG_NO_VENDOR_DGEMM asks to leave it
          * unwired for testing the numpy-fallback path on an ILP64 host. */
-        if (_no_vendor_dgemm()) {
+        if (_env_flag("JLINALG_NO_VENDOR_DGEMM")) {
             fprintf(stderr, "jlinalg_dispatch: INFO: JLINALG_NO_VENDOR_DGEMM set -- "
                             "vendor dgemm left unwired, numpy fallback in use.\n");
             g_active.dgemm_ilp64 = NULL;
@@ -725,6 +719,19 @@ int blas_dispatch_init(void) {
             if (dbg)
                 fprintf(stderr, "jlinalg_dispatch: using %s (ILP64) for dgemm\n", g_active.name);
             g_has_vendor_dgemm = 1;
+        }
+        if (_env_flag("JLINALG_NO_VENDOR_DSYRK")) {
+            fprintf(stderr, "jlinalg_dispatch: INFO: JLINALG_NO_VENDOR_DSYRK set -- "
+                            "vendor dsyrk left unwired, numpy fallback in use.\n");
+            g_active.cblas_dsyrk_ilp64 = NULL;
+            g_active.dsyrk_ilp64 = NULL;
+            g_active.has_dsyrk = 0;
+        }
+        if (_env_flag("JLINALG_NO_VENDOR_DSYEVR")) {
+            fprintf(stderr, "jlinalg_dispatch: INFO: JLINALG_NO_VENDOR_DSYEVR set -- "
+                            "vendor dsyevr left unwired.\n");
+            g_active.dsyevr_ilp64 = NULL;
+            g_active.has_dsyevr = 0;
         }
 
         if (dbg) {

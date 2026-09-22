@@ -1,9 +1,7 @@
 """Every public LMM association entry rejects a non-finite phenotype.
 
-``compute_valid_mask`` treats NaN and -9 as missing. An infinite phenotype is
-neither, so it reached the rotated ``Uty`` and every statistic came back NaN
-with no error. The batch, streaming and LOCO entries all pass through that
-mask, so one rule there covers all three.
+The batch, streaming and LOCO entries all pass through ``compute_valid_mask``,
+so these three tests pin one rule at each of its public callers.
 """
 
 from __future__ import annotations
@@ -23,14 +21,11 @@ from tests.conftest import make_runner_synthetic_data, require_fixture
 from tests.fixture_paths import LOCO, SYNTHETIC
 
 _QUIET = LmmConfig(check_memory=False, show_progress=False)
-_XFAIL_REASON = "an inf phenotype passes the mask and yields all-NaN stats"
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.tier0
 @pytest.mark.parametrize("value", [np.inf, -np.inf])
 def test_batch_rejects_non_finite_phenotype(value: float) -> None:
-    """run_lmm_association_numpy raises before any statistic is computed."""
     genotypes, phenotypes, kinship, snp_info = make_runner_synthetic_data()
     phenotypes[7] = value
     with pytest.raises(ValueError, match="only finite values"):
@@ -39,10 +34,8 @@ def test_batch_rejects_non_finite_phenotype(value: float) -> None:
         )
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.tier1
 def test_streaming_rejects_non_finite_phenotype() -> None:
-    """run_lmm_association_numpy_streaming raises before reading genotypes."""
     require_fixture(SYNTHETIC.bed, SYNTHETIC.bim, SYNTHETIC.fam, SYNTHETIC.kinship)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
     phenotypes[3] = np.inf
@@ -53,10 +46,8 @@ def test_streaming_rejects_non_finite_phenotype() -> None:
         )
 
 
-@pytest.mark.xfail(strict=True, reason=_XFAIL_REASON)
 @pytest.mark.tier1
 def test_loco_rejects_non_finite_phenotype() -> None:
-    """run_lmm_loco raises before any per-chromosome kinship is built."""
     require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
     phenotypes = read_fam_phenotypes(LOCO.fam)
     phenotypes[3] = np.inf

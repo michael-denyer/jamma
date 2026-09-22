@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matrix JAMMA ships by default. The existing text row remains the
   like-for-like GEMMA comparison, and the new row has no GEMMA counterpart.
 
+### Fixed
+
+- `run_lmm_association_numpy`, `run_lmm_association_numpy_streaming` and
+  `run_lmm_loco` reject a phenotype vector containing `inf` with
+  `ValueError("prepared phenotypes must contain only finite values")`, the
+  error the CLI already raised. Before, `inf` passed the missing-sample mask
+  and every statistic came back NaN with no error. The rule lives once, in
+  `compute_valid_mask`, which every entry runs first; the grouped runner's
+  separate copy is gone.
+
 ## [8.1.0] - 2026-09-14
 
 ### Removed

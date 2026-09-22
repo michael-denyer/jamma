@@ -38,7 +38,13 @@ def compute_valid_mask(
     Returns:
         Boolean mask array of shape (n_samples,) where True indicates
         a sample with valid phenotype and covariate values.
+
+    Raises:
+        ValueError: If any phenotype is infinite. Unlike NaN and -9, inf is
+            not a missing-value code, so it is rejected rather than masked.
     """
+    if np.isinf(phenotypes).any():
+        raise ValueError("prepared phenotypes must contain only finite values")
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
     if covariates is not None:
         valid_covariate = np.all(~np.isnan(covariates), axis=1)
@@ -142,8 +148,8 @@ def validate_runner_inputs(
         RunnerSetup with filtered arrays and validated n_samples.
 
     Raises:
-        ValueError: If no valid samples remain after filtering or eigenpair
-            dimensions do not match.
+        ValueError: If a phenotype is infinite, no valid samples remain after
+            filtering, or eigenpair dimensions do not match.
     """
     # Compute valid-sample mask from phenotype and covariate NaN
     valid_mask = compute_valid_mask(phenotypes, covariates)

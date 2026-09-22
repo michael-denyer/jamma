@@ -16,8 +16,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import SnpMeta
+from jamma.lmm.schema import SnpMeta, get_spec
 from jamma.lmm.stats import AssocResult
 
 if TYPE_CHECKING:
@@ -53,11 +52,7 @@ def _build_results(
     Returns:
         List of AssocResult objects.
     """
-    if lmm_mode not in _RESULT_FIELDS:
-        raise ValueError(
-            f"Unknown lmm_mode={lmm_mode}; expected one of {list(_RESULT_FIELDS)}"
-        )
-    field_map = _RESULT_FIELDS[lmm_mode]
+    field_map = {c.array_key: c.field_name for c in get_spec(lmm_mode).stat_columns}
     missing_keys = set(field_map.keys()) - set(arrays.keys())
     if missing_keys:
         raise ValueError(
@@ -79,7 +74,6 @@ def _build_results(
     a0_list = snp_info.a0[snp_indices].tolist()
 
     nan = float("nan")
-    is_lrt = lmm_mode == 2
     results = []
     for j in range(len(snp_indices)):
         meta: dict[str, Any] = {
@@ -90,12 +84,9 @@ def _build_results(
             "allele1": a1_list[j],
             "allele0": a0_list[j],
             "af": af_list[j],
+            "beta": nan,
+            "se": nan,
         }
-
-        if is_lrt:
-            meta["beta"] = nan
-            meta["se"] = nan
-
         for field_name, vals in stat_lists.items():
             meta[field_name] = vals[j]
 
@@ -190,14 +181,8 @@ def count_lambda_boundary_hits(
     """
     n_at_lmin = 0
     n_at_lmax = 0
-    if lmm_mode in (1, 4):
-        lmin, lmax = _count_boundary_hits(np.asarray(arrays["lambdas"]), l_min, l_max)
-        n_at_lmin += lmin
-        n_at_lmax += lmax
-    if lmm_mode in (2, 4):
-        lmin, lmax = _count_boundary_hits(
-            np.asarray(arrays["lambdas_mle"]), l_min, l_max
-        )
+    for key in get_spec(lmm_mode).lambda_keys:
+        lmin, lmax = _count_boundary_hits(np.asarray(arrays[key]), l_min, l_max)
         n_at_lmin += lmin
         n_at_lmax += lmax
     return n_at_lmin, n_at_lmax

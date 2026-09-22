@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, assert_never
+from typing import assert_never
 
 import numpy as np
 
@@ -25,7 +25,7 @@ from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy, compute_wald_split_numpy
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.prepare_common import PreparedLmmRun
-from jamma.lmm.schema import LmmConfig, LmmMode
+from jamma.lmm.schema import MODE_SPECS, LmmConfig, LmmMode, LmmTest, ModeSpec
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
     batch_compute_uab_varying_soa_numpy,
@@ -34,7 +34,7 @@ from jamma.lmm.uab import (
 )
 from jamma.lmm.workspace import WorkspaceSpec
 
-KernelResult = Mapping[str, Any]
+KernelResult = Mapping[str, np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -96,6 +96,11 @@ class RunInvariants:
                 else None
             ),
         )
+
+    @property
+    def mode(self) -> ModeSpec:
+        """The specification of ``lmm_mode``."""
+        return MODE_SPECS[self.lmm_mode]
 
     def require_invariant_soa(self) -> np.ndarray:
         """The invariant Uab columns, which every split path is built with."""
@@ -179,17 +184,6 @@ def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
             assert_never(inv.dispatch)
 
 
-# The kernel label for each n_cvt=1 lmm_mode. One C entry point serves every
-# mode, reading the mode off the workspace; the label is what a failure
-# reports, so mode 4 keeps its own.
-_NCVT1_LABEL: dict[int, str] = {
-    1: "Fused Uab dispatch",
-    2: "Fused LRT WS dispatch",
-    3: "Fused Score WS dispatch",
-    4: "Fused mode-4 Uab dispatch",
-}
-
-
 def _ncvt1_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
     """n_cvt=1, any mode: one workspace keyed by lmm_mode, one compute.
 
@@ -212,19 +206,11 @@ def _ncvt1_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
     )
     compute = accel.require().compute_lmm_chunk_ncvt1_c
     return Kernel(
-        label=_NCVT1_LABEL[inv.lmm_mode],
+        label=f"Fused -lmm {inv.lmm_mode} dispatch",
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         max_threads=max_threads,
     )
-
-
-_GENERAL_LABEL: dict[int, str] = {
-    1: "Fused general Uab dispatch",
-    2: "Fused general LRT Uab dispatch",
-    3: "Fused general Score Uab dispatch",
-    4: "Fused general mode-4 Uab dispatch",
-}
 
 
 def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
@@ -250,7 +236,7 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
     )
     compute = accel.require().compute_lmm_chunk_fused_general_c
     return Kernel(
-        label=_GENERAL_LABEL[inv.lmm_mode],
+        label=f"Fused general -lmm {inv.lmm_mode} dispatch",
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         max_threads=n_threads,
@@ -315,15 +301,15 @@ def _numpy_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
     )
 
 
-def _null_model_kwargs(inv: RunInvariants) -> dict[str, Any]:
+def _null_model_kwargs(inv: RunInvariants) -> dict[str, np.ndarray | float]:
     """The null-model inputs a C workspace creator takes for this mode.
 
-    Score (3) needs ``hi_eval_null``, LRT (2) needs ``logl_H0``, mode 4 both,
-    Wald (1) neither. Both creators reject an input their mode does not use.
+    Score needs ``hi_eval_null`` and LRT needs ``logl_H0``. Both creators
+    reject an input their mode does not use.
     """
-    kwargs: dict[str, Any] = {}
-    if inv.lmm_mode in (3, 4):
+    kwargs: dict[str, np.ndarray | float] = {}
+    if LmmTest.SCORE in inv.mode.tests:
         kwargs["hi_eval_null"] = inv.Hi_eval_null
-    if inv.lmm_mode in (2, 4):
+    if LmmTest.LRT in inv.mode.tests:
         kwargs["logl_H0"] = inv.logl_H0
     return kwargs

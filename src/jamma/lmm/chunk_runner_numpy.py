@@ -45,7 +45,6 @@ from jamma.lmm.results import (
     count_lambda_boundary_hits,
     log_lambda_boundary_warning,
 )
-from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
 from jamma.lmm.schema import ChunkRunStats, LmmConfig
 from jamma.lmm.workspace import WorkspaceSpec
 
@@ -137,7 +136,8 @@ class _PhenotypeConsumer:
 
         t_write_start = time.perf_counter()
         chunk_arrays = {
-            key: cr[key][:actual_len] for key in _RESULT_FIELDS[self.inv.lmm_mode]
+            column.array_key: cr[column.array_key][:actual_len]
+            for column in self.inv.mode.stat_columns
         }
         chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
             self.inv.lmm_mode, chunk_arrays, self.inv.l_min, self.inv.l_max

@@ -8,6 +8,7 @@ LMM subsystem are derived views of MODE_SPECS.
 
 from __future__ import annotations
 
+import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -121,16 +122,46 @@ class StatColumn:
             raise ValueError(f"Invalid format spec {self.fmt!r}: {e}") from None
 
 
+class LmmTest(enum.Flag):
+    """The three association tests a mode can run.
+
+    ``-lmm 4`` runs all three. Every per-mode decision (which null-model
+    inputs a kernel needs, which lambdas it optimises, which kernel runs)
+    is a membership question against a mode's ``tests``.
+    """
+
+    WALD = enum.auto()
+    LRT = enum.auto()
+    SCORE = enum.auto()
+
+
 @dataclass(frozen=True, slots=True)
 class ModeSpec:
-    """Complete output specification for one LMM mode.
+    """Complete specification for one LMM mode.
 
     ``test_type`` is the string name used for headers and format lookup.
+    ``tests`` is the set of tests the mode runs.
     ``stat_columns`` defines column order, array keys, and formatting.
     """
 
     test_type: str
+    tests: LmmTest
     stat_columns: tuple[StatColumn, ...]
+
+    @property
+    def lambda_keys(self) -> tuple[str, ...]:
+        """Array keys of the optimised lambdas: REML for Wald, MLE for LRT."""
+        keys: tuple[str, ...] = ()
+        if LmmTest.WALD in self.tests:
+            keys += ("lambdas",)
+        if LmmTest.LRT in self.tests:
+            keys += ("lambdas_mle",)
+        return keys
+
+    @property
+    def output_bytes_per_snp(self) -> int:
+        """Bytes of float64 result arrays the mode holds per SNP."""
+        return 8 * len(self.stat_columns)
 
     def __post_init__(self) -> None:
         if not self.stat_columns:
@@ -165,11 +196,12 @@ _P_SCORE = StatColumn("p_scores", "p_score", "p_score")
 
 MODE_SPECS: Mapping[LmmMode, ModeSpec] = MappingProxyType(
     {
-        1: ModeSpec("wald", (_BETA, _SE, _LOGL, _L_REMLE, _P_WALD)),
-        2: ModeSpec("lrt", (_LOGL, _L_MLE, _P_LRT)),
-        3: ModeSpec("score", (_BETA, _SE, _P_SCORE)),
+        1: ModeSpec("wald", LmmTest.WALD, (_BETA, _SE, _LOGL, _L_REMLE, _P_WALD)),
+        2: ModeSpec("lrt", LmmTest.LRT, (_LOGL, _L_MLE, _P_LRT)),
+        3: ModeSpec("score", LmmTest.SCORE, (_BETA, _SE, _P_SCORE)),
         4: ModeSpec(
             "all",
+            LmmTest.WALD | LmmTest.LRT | LmmTest.SCORE,
             (_BETA, _SE, _LOGL, _L_REMLE, _L_MLE, _P_WALD, _P_LRT, _P_SCORE),
         ),
     }
@@ -178,8 +210,6 @@ MODE_SPECS: Mapping[LmmMode, ModeSpec] = MappingProxyType(
 
 def get_spec(mode: int) -> ModeSpec:
     """Look up ModeSpec by lmm_mode int, or raise ValueError."""
-    if mode not in MODE_SPECS:
-        raise ValueError(f"Unknown lmm_mode={mode}; expected one of {list(MODE_SPECS)}")
     return MODE_SPECS[parse_lmm_mode(mode)]
 
 
@@ -267,11 +297,7 @@ class LmmConfig:
     mem_budget: float | None = None
 
     def __post_init__(self) -> None:
-        if self.lmm_mode not in (1, 2, 3, 4):
-            raise ValueError(
-                f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), "
-                f"got {self.lmm_mode}"
-            )
+        parse_lmm_mode(self.lmm_mode)
         if not 0 <= self.maf_threshold <= 0.5:
             raise ValueError(
                 f"maf_threshold must be in [0, 0.5], got {self.maf_threshold}"

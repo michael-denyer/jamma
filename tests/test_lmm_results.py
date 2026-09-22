@@ -373,7 +373,7 @@ class TestErrorMessageDifferentiation:
         """A kernel that succeeds hands its dict straight back."""
         from jamma.lmm.chunk_kernel import Kernel
 
-        expected = {"betas": [1.0], "ses": [0.1]}
+        expected = {"betas": np.array([1.0]), "ses": np.array([0.1])}
         kernel = Kernel(
             label="Fused Uab dispatch",
             n_filtered=100,

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The memory plan prices `-lmm 2` at three result columns per SNP, the
+  `logl_H1`, `l_mle` and `p_lrt` arrays the kernels allocate, instead of two.
+  The chunk sizer and the NumPy and native workspace estimates all read the
+  column count from the mode's specification. Chunk width can shrink by a few
+  SNPs in LRT runs; results are unchanged.
+- A failing native kernel names its mode as `-lmm N` in the error, for example
+  `Fused general -lmm 4 dispatch failed ...`, in place of per-mode labels such
+  as `Fused general mode-4 Uab dispatch`.
 - `scripts/bench_all_backends.py` times a second kinship row, `kinship_npy`,
   which runs `-gk 1` without `--legacy-text` and so writes the binary `.npy`
   matrix JAMMA ships by default. The existing text row remains the

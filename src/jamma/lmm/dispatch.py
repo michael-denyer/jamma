@@ -13,7 +13,7 @@ from typing import assert_never
 from loguru import logger
 
 from jamma.core.constants import n_index
-from jamma.lmm.schema import LmmMode
+from jamma.lmm.schema import LmmMode, LmmTest, get_spec
 
 
 class DispatchPath(Enum):
@@ -123,15 +123,11 @@ def select_dispatch_path(
 
 def _resolve_dispatch_path(n_cvt: int, lmm_mode: LmmMode, accel: bool) -> DispatchPath:
     """Map ``(n_cvt, lmm_mode, accel)`` to a path. Pure, no logging."""
-    if lmm_mode not in (1, 2, 3, 4):
-        raise ValueError(
-            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
-        )
-
+    wald_only = get_spec(lmm_mode).tests == LmmTest.WALD
     if not accel:
         return (
             DispatchPath.NUMPY_WALD
-            if n_cvt == lmm_mode == 1
+            if n_cvt == 1 and wald_only
             else DispatchPath.NUMPY_FALLBACK
         )
 

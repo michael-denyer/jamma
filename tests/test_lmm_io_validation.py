@@ -170,7 +170,7 @@ class TestBuildResults:
         snp = SnpMeta.from_dicts(
             [{"chr": "1", "rs": "x", "pos": 0, "a1": "A", "a0": "G"}]
         )
-        with pytest.raises(ValueError, match="Unknown lmm_mode"):
+        with pytest.raises(ValueError, match="lmm_mode must be"):
             _build_results(
                 99,
                 np.array([0]),
@@ -373,6 +373,8 @@ class TestComputeNumpyInvalidMode:
                 eigenvalues=np.ones(10),
                 Uab_batch=np.ones((5, 10, 3)),
                 n_samples=10,
+                Hi_eval_null=np.ones(10),
+                logl_H0=0.0,
             )
 
 
@@ -439,6 +441,8 @@ class TestMode4WaldOverwritesScore:
             eigenvalues=eigenvalues,
             Uab_batch=Uab,
             n_samples=n_samples,
+            Hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
         )
 
         # Mode 4 — All tests composed

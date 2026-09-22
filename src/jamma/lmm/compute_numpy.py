@@ -21,7 +21,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_numpy,
     golden_section_optimize_lambda_split_ncvt1_numpy,
 )
-from jamma.lmm.schema import MIN_N_REFINE, LmmMode
+from jamma.lmm.schema import MIN_N_REFINE, LmmMode, LmmTest, get_spec
 from jamma.lmm.stats import (
     _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
@@ -233,10 +233,6 @@ def _compute_score_numpy(
     return {"betas": betas, "ses": ses, "p_scores": p_scores}
 
 
-_LOGL_H0_REQUIRED = "logl_H0 is required for LRT (mode 2) and All (mode 4)"
-_HI_EVAL_NULL_REQUIRED = "Hi_eval_null is required for Score (mode 3) and All (mode 4)"
-
-
 def compute_lmm_chunk_numpy(
     lmm_mode: LmmMode,
     n_cvt: int,
@@ -244,17 +240,19 @@ def compute_lmm_chunk_numpy(
     Uab_batch: np.ndarray,
     n_samples: int,
     *,
+    Hi_eval_null: np.ndarray,
+    logl_H0: float,
     l_min: float = 1e-5,
     l_max: float = 1e5,
     n_grid: int = 50,
     n_refine: int = MIN_N_REFINE,
-    Hi_eval_null: np.ndarray | None = None,
-    logl_H0: float | None = None,
-) -> dict[str, np.ndarray | None]:
+) -> dict[str, np.ndarray]:
     """Compute LMM statistics for a chunk of SNPs (NumPy backend).
 
-    Computes LMM statistics for a chunk of SNPs using NumPy batch functions.
-    No async dispatch — results are immediately available.
+    Runs the mode's tests in the order Score, Wald, LRT, so in mode 4 Wald's
+    REML beta and se replace Score's, and LRT's MLE likelihood replaces
+    Wald's REML one: GEMMA writes the alternative-model MLE likelihood into
+    ``logl_H1`` whenever LRT runs.
 
     Args:
         lmm_mode: Test type: 1=Wald, 2=LRT, 3=Score, 4=All.
@@ -262,31 +260,24 @@ def compute_lmm_chunk_numpy(
         eigenvalues: Kinship eigenvalues (n_samples,).
         Uab_batch: Pre-computed Uab matrices (n_snps, n_samples, n_index).
         n_samples: Number of samples.
+        Hi_eval_null: Pre-computed 1/(lambda_null*eval+1), read by Score.
+        logl_H0: Null model MLE log-likelihood, read by LRT.
         l_min: Minimum lambda for optimization.
         l_max: Maximum lambda for optimization.
         n_grid: Grid search resolution for lambda bracketing.
         n_refine: Golden section iterations. ``LmmConfig`` raises this to
             ``MIN_N_REFINE`` for every runner; a direct caller passes it.
-        Hi_eval_null: Pre-computed 1/(lambda_null*eval+1) for Score test.
-        logl_H0: Null model MLE log-likelihood for LRT.
 
     Returns:
-        Dict with keys: lambdas, logls, betas, ses, pwalds,
-        lambdas_mle, p_lrts, p_scores. Keys not relevant to the
-        mode are set to None.
+        Dict keyed by the mode's ``stat_columns`` array keys.
     """
-    result: dict[str, np.ndarray | None] = {
-        "lambdas": None,
-        "logls": None,
-        "betas": None,
-        "ses": None,
-        "pwalds": None,
-        "lambdas_mle": None,
-        "p_lrts": None,
-        "p_scores": None,
-    }
-
-    if lmm_mode == 1:
+    tests = get_spec(lmm_mode).tests
+    result: dict[str, np.ndarray] = {}
+    if LmmTest.SCORE in tests:
+        result.update(
+            _compute_score_numpy(n_cvt, eigenvalues, Hi_eval_null, Uab_batch, n_samples)
+        )
+    if LmmTest.WALD in tests:
         result.update(
             _compute_wald_numpy(
                 n_cvt,
@@ -297,12 +288,9 @@ def compute_lmm_chunk_numpy(
                 l_max,
                 n_grid,
                 n_refine,
-            ),
+            )
         )
-
-    elif lmm_mode == 2:
-        if logl_H0 is None:
-            raise ValueError(_LOGL_H0_REQUIRED)
+    if LmmTest.LRT in tests:
         result.update(
             _compute_lrt_numpy(
                 n_cvt,
@@ -315,66 +303,4 @@ def compute_lmm_chunk_numpy(
                 logl_H0,
             )
         )
-
-    elif lmm_mode == 3:
-        if Hi_eval_null is None:
-            raise ValueError(_HI_EVAL_NULL_REQUIRED)
-        result.update(
-            _compute_score_numpy(
-                n_cvt,
-                eigenvalues,
-                Hi_eval_null,
-                Uab_batch,
-                n_samples,
-            )
-        )
-
-    elif lmm_mode == 4:
-        # logl_H0 checked first: with both absent, it is the one reported.
-        if logl_H0 is None:
-            raise ValueError(_LOGL_H0_REQUIRED)
-        if Hi_eval_null is None:
-            raise ValueError(_HI_EVAL_NULL_REQUIRED)
-        # Compose all three tests; only take p_scores from Score —
-        # Wald provides REML-optimized beta/SE below
-        score_result = _compute_score_numpy(
-            n_cvt,
-            eigenvalues,
-            Hi_eval_null,
-            Uab_batch,
-            n_samples,
-        )
-        result["p_scores"] = score_result["p_scores"]
-        result.update(
-            _compute_wald_numpy(
-                n_cvt,
-                eigenvalues,
-                Uab_batch,
-                n_samples,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-            ),
-        )
-        # GEMMA mode 4 writes the alternative-model MLE likelihood calculated
-        # by LRT into logl_H1. Mode 1 keeps the REML likelihood from Wald.
-        result.update(
-            _compute_lrt_numpy(
-                n_cvt,
-                eigenvalues,
-                Uab_batch,
-                l_min,
-                l_max,
-                n_grid,
-                n_refine,
-                logl_H0,
-            )
-        )
-
-    else:
-        raise ValueError(
-            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
-        )
-
     return result

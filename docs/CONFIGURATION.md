@@ -78,8 +78,8 @@ or `-lmm` is required.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `-maf` | float | `0.01` (lmm) / `0.0` (gk) | Minor allele frequency threshold. Default is `0.0` in `-gk` mode to match GEMMA kinship behavior. |
-| `-miss` | float | `0.05` (lmm) / `1.0` (gk) | Missing rate threshold. Default is `1.0` in `-gk` mode. |
+| `-maf` | float | `0.01` | Minor allele frequency threshold. Applies to `-gk` and `-lmm` alike, as in GEMMA. |
+| `-miss` | float | `0.05` | Missing rate threshold. Applies to `-gk` and `-lmm` alike. |
 | `-hwe` | float | `0.0` | HWE p-value threshold (0 = no filtering). Requires `numpy-streaming` backend. |
 | `-snps` | path | — | SNP list file for association testing |
 | `-ksnps` | path | — | SNP list file for kinship computation |

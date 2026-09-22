@@ -103,6 +103,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `jamma.core.cleanup_memory`. It ran `gc.collect()` twice and logged RSS,
+  and nothing in JAMMA or its scripts called it. Call `gc.collect()` and
+  `jamma.core.log_memory_snapshot()` directly instead.
 - Three one-shot developer scripts whose job is done, none of which a
   workflow, hook, test or doc invokes. `scripts/codemod_test_builders.py`
   migrated tests onto `rotated_lmm_inputs` in #266 and now finds nothing to

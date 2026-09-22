@@ -320,8 +320,7 @@ Configuration, memory management, threading, and logging.
 |----|-----------|-------------|-----------|
 | 5c | `MemoryLedger` | Peak memory per streaming phase; the gate reads `available_ram_gb()` once | [memory.py:119](../src/jamma/core/memory.py#L119) |
 | 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:137](../src/jamma/core/memory.py#L137) |
-| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:28](../src/jamma/core/memory_snapshot.py#L28) |
-| 5c | `cleanup_memory()` | GC + clear caches | [memory_snapshot.py:79](../src/jamma/core/memory_snapshot.py#L79) |
+| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:27](../src/jamma/core/memory_snapshot.py#L27) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:20](../src/jamma/utils/logging.py#L20) |
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:55](../src/jamma/utils/logging.py#L55) |
 | 5c | `log_memory_snapshot()` | RSS + free-RAM snapshot at phase boundaries | [memory_snapshot.py](../src/jamma/core/memory_snapshot.py) |
@@ -473,7 +472,6 @@ flowchart TD
     subgraph Runtime["⚡ Runtime Controls"]
         INC["IncrementalAssocWriter<br/><small>2d</small>"]
         STR["Streaming chunks<br/><small>4Ne</small>"]
-        CLN["cleanup_memory()<br/><small>5c</small>"]
     end
 
     EST --> CHK
@@ -495,7 +493,6 @@ flowchart TD
     style FAIL fill:#e74c3c,stroke:#c0392b,color:#fff
     style INC fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
     style STR fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
-    style CLN fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
     style DISK fill:#53a8b6,stroke:#3d8a96,color:#fff
     style LOW fill:#53a8b6,stroke:#3d8a96,color:#fff
 ```

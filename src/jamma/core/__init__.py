@@ -11,7 +11,6 @@ from jamma.core.memory import (
 )
 from jamma.core.memory_snapshot import (
     MemorySnapshot,
-    cleanup_memory,
     get_memory_snapshot,
     log_memory_snapshot,
 )
@@ -19,7 +18,6 @@ from jamma.core.memory_snapshot import (
 __all__ = [
     "MemoryLedger",
     "MemorySnapshot",
-    "cleanup_memory",
     "estimate_lmm_memory",
     "estimate_streaming_memory",
     "get_memory_snapshot",

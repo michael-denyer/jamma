@@ -99,7 +99,7 @@ static inline double reml_finish_cached_split(
  * its own buffer to read the Pab this call computed for Wald extraction,
  * without a second n_samples pass.
  * ------------------------------------------------------------------------- */
-double reml_logl_ncvt1_split(
+static double reml_logl_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -360,7 +360,7 @@ static inline double mle_finish(
  *   - Uses n_samples (not df)
  *   - Uses mle_const (not reml_const)
  * ------------------------------------------------------------------------- */
-double mle_logl_ncvt1_cached_split(
+static double mle_logl_ncvt1_cached_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -379,7 +379,7 @@ double mle_logl_ncvt1_cached_split(
 }
 
 
-int coarse_grid_mle_ncvt1_split(
+static int coarse_grid_mle_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -461,12 +461,10 @@ void coarse_grid_mode4_ncvt1_split(
  * mle_logl_ncvt1_split
  *
  * MLE log-likelihood from SoA split data at an arbitrary lambda.
- * Used during golden section refinement. Computes hi_eval from scratch,
+ * Used during golden section refinement. Computes each Hi_eval term inline,
  * accumulates all 6 dot products (3 invariant + 3 varying), builds Pab.
- *
- * hi_eval is a caller-provided scratch buffer of size (n_samples,).
  * ------------------------------------------------------------------------- */
-double mle_logl_ncvt1_split(
+static double mle_logl_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -476,8 +474,7 @@ double mle_logl_ncvt1_split(
     const double * restrict eigenvalues,
     int n_samples,
     double lambda,
-    double mle_const,
-    double * restrict hi_eval
+    double mle_const
 )
 {
     double logdet_h = logdet_h_lambda(eigenvalues, n_samples, lambda);
@@ -488,7 +485,6 @@ double mle_logl_ncvt1_split(
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         double h = 1.0 / v;
-        hi_eval[i] = h;
 
         s_wx += h * var_wx[i];
         s_xx += h * var_xx[i];
@@ -511,7 +507,6 @@ double mle_logl_ncvt1_split(
  * Golden section refinement for MLE using a caller-selected coarse bracket.
  *
  * Returns optimal MLE lambda; writes log-likelihood to *logl_out.
- * hi_eval is a caller-provided scratch buffer of size (n_samples,).
  * ------------------------------------------------------------------------- */
 double refine_lambda_mle_ncvt1_split(
     const double * restrict var_wx,
@@ -522,12 +517,10 @@ double refine_lambda_mle_ncvt1_split(
     const double * restrict inv_yy,
     const double * restrict eigenvalues,
     int n_samples,
-    const double *lambda_grid,
     double log_l_min, double step,
     int n_grid, int n_refine,
     int best_idx,
     double mle_const,
-    double * restrict hi_eval,
     double *logl_out
 )
 {
@@ -550,10 +543,10 @@ double refine_lambda_mle_ncvt1_split(
     double d = a + phi * (b - a);
     double fc = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                       inv_ww, inv_wy, inv_yy, eigenvalues,
-                                      n_samples, exp(c), mle_const, hi_eval);
+                                      n_samples, exp(c), mle_const);
     double fd = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                       inv_ww, inv_wy, inv_yy, eigenvalues,
-                                      n_samples, exp(d), mle_const, hi_eval);
+                                      n_samples, exp(d), mle_const);
 
     for (int iter = 0; iter < n_refine; iter++) {
         if (fc > fd) {
@@ -561,13 +554,13 @@ double refine_lambda_mle_ncvt1_split(
             c = b - phi * (b - a);
             fc = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                        inv_ww, inv_wy, inv_yy, eigenvalues,
-                                       n_samples, exp(c), mle_const, hi_eval);
+                                       n_samples, exp(c), mle_const);
         } else {
             a = c; c = d; fc = fd;
             d = a + phi * (b - a);
             fd = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                        inv_ww, inv_wy, inv_yy, eigenvalues,
-                                       n_samples, exp(d), mle_const, hi_eval);
+                                       n_samples, exp(d), mle_const);
         }
     }
 
@@ -575,7 +568,7 @@ double refine_lambda_mle_ncvt1_split(
     double lambda_opt = exp(log_opt);
     *logl_out = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
                                       inv_ww, inv_wy, inv_yy, eigenvalues,
-                                      n_samples, lambda_opt, mle_const, hi_eval);
+                                      n_samples, lambda_opt, mle_const);
 
     return lambda_opt;
 }
@@ -590,14 +583,12 @@ double golden_section_lambda_mle_ncvt1_split(
     const double * restrict inv_yy,
     const double * restrict eigenvalues,
     int n_samples,
-    const double *lambda_grid,
     const double *hi_eval_grid,
     const double *logdet_h_grid,
     const grid_invariant_t *grid_inv,
     double log_l_min, double step,
     int n_grid, int n_refine,
     double mle_const,
-    double * restrict hi_eval,
     double *logl_out
 )
 {
@@ -607,8 +598,8 @@ double golden_section_lambda_mle_ncvt1_split(
     );
     return refine_lambda_mle_ncvt1_split(
         var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
-        eigenvalues, n_samples, lambda_grid, log_l_min, step,
-        n_grid, n_refine, best_idx, mle_const, hi_eval, logl_out
+        eigenvalues, n_samples, log_l_min, step,
+        n_grid, n_refine, best_idx, mle_const, logl_out
     );
 }
 

@@ -24,36 +24,6 @@
 #include <math.h>
 
 /* -------------------------------------------------------------------------
- * reml_logl_ncvt1_split
- *
- * Refinement path: fused hi_eval computation + all 6 dot products in
- * a single pass over n_samples. Eliminates the separate calc_pab call.
- *
- * Used during golden section where lambda is SNP-specific.
- *
- * SoA layout: varying and invariant columns are contiguous (stride-1),
- * enabling SIMD vectorized loads instead of stride-3 gathers.
- *
- * pab_out is NULL during refinement iteration; the final evaluation passes
- * its own buffer to read the Pab this call computed for Wald extraction,
- * without a second n_samples pass.
- * ------------------------------------------------------------------------- */
-double reml_logl_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    double logdet_iab,
-    int n_samples,
-    double lambda,
-    double reml_const,
-    double (*pab_out)[6]
-);
-
-/* -------------------------------------------------------------------------
  * refine_lambda_ncvt1_split
  *
  * Golden section refinement using a caller-selected split-Uab coarse bracket.
@@ -83,38 +53,6 @@ double refine_lambda_ncvt1_split(
     int *is_valid_out
 );
 
-/* -------------------------------------------------------------------------
- * mle_logl_ncvt1_cached_split
- *
- * MLE log-likelihood from SoA split data using cached grid hi_eval.
- * Pattern-matches reml_logl_ncvt1_cached_split but:
- *   - No logdet_iab / logdet_hiw terms
- *   - Uses n_samples (not df)
- *   - Uses mle_const (not reml_const)
- * ------------------------------------------------------------------------- */
-double mle_logl_ncvt1_cached_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict cached_hi_eval,
-    double cached_logdet_h,
-    const grid_invariant_t *ginv,
-    int n_samples,
-    double mle_const
-);
-
-int coarse_grid_mle_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    int n_samples,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    int n_grid,
-    double mle_const
-);
-
 void coarse_grid_mode4_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
@@ -133,35 +71,11 @@ void coarse_grid_mode4_ncvt1_split(
 );
 
 /* -------------------------------------------------------------------------
- * mle_logl_ncvt1_split
- *
- * MLE log-likelihood from SoA split data at an arbitrary lambda.
- * Used during golden section refinement. Computes hi_eval from scratch,
- * accumulates all 6 dot products (3 invariant + 3 varying), builds Pab.
- *
- * hi_eval is a caller-provided scratch buffer of size (n_samples,).
- * ------------------------------------------------------------------------- */
-double mle_logl_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    int n_samples,
-    double lambda,
-    double mle_const,
-    double * restrict hi_eval
-);
-
-/* -------------------------------------------------------------------------
  * refine_lambda_mle_ncvt1_split
  *
  * Golden section refinement for MLE using a caller-selected coarse bracket.
  *
  * Returns optimal MLE lambda; writes log-likelihood to *logl_out.
- * hi_eval is a caller-provided scratch buffer of size (n_samples,).
  * ------------------------------------------------------------------------- */
 double refine_lambda_mle_ncvt1_split(
     const double * restrict var_wx,
@@ -172,12 +86,10 @@ double refine_lambda_mle_ncvt1_split(
     const double * restrict inv_yy,
     const double * restrict eigenvalues,
     int n_samples,
-    const double *lambda_grid,
     double log_l_min, double step,
     int n_grid, int n_refine,
     int best_idx,
     double mle_const,
-    double * restrict hi_eval,
     double *logl_out
 );
 
@@ -190,14 +102,12 @@ double golden_section_lambda_mle_ncvt1_split(
     const double * restrict inv_yy,
     const double * restrict eigenvalues,
     int n_samples,
-    const double *lambda_grid,
     const double *hi_eval_grid,
     const double *logdet_h_grid,
     const grid_invariant_t *grid_inv,
     double log_l_min, double step,
     int n_grid, int n_refine,
     double mle_const,
-    double * restrict hi_eval,
     double *logl_out
 );
 

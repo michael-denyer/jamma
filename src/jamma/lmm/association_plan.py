@@ -237,12 +237,7 @@ class ExecutableAssociationPlan:
             n_grid=0,
             uab_iab_gb=(
                 chunks.chunk_size
-                * lmm_extra_bytes_per_snp(
-                    self.n_samples,
-                    self.n_cvt,
-                    self.dispatch,
-                    n_buffers=chunks.n_buffers,
-                )
+                * lmm_extra_bytes_per_snp(self.n_samples, self.n_cvt, self.dispatch)
                 / 1e9
             ),
         )

@@ -77,9 +77,7 @@ def _bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     return 8 * n_samples * max(1, dispatch.varying_rows(n_cvt))
 
 
-def lmm_extra_bytes_per_snp(
-    n_samples: int, n_cvt: int, dispatch: DispatchPath, *, n_buffers: int = 1
-) -> int:
+def lmm_extra_bytes_per_snp(n_samples: int, n_cvt: int, dispatch: DispatchPath) -> int:
     """Per-SNP bytes live in the LMM phase beyond the UtG rotation buffers.
 
     The preflight prices the association phase as rotation buffers plus this
@@ -89,10 +87,6 @@ def lmm_extra_bytes_per_snp(
         n_samples: Number of samples.
         n_cvt: Number of covariates.
         dispatch: The run's active kernel path.
-        n_buffers: Live buffer count from the same ``LmmChunkPlan`` the
-            engine allocates from (1 sequential, 2 pipelined). Unused by
-            every current dispatch path's pricing, kept so a future
-            per-buffer-scaled path does not have to change this signature.
     """
     return 8 * (n_samples * dispatch.varying_rows(n_cvt) + dispatch.iab_cells(n_cvt))
 
@@ -126,10 +120,6 @@ def compute_chunk_size_numpy(
     Returns:
         Chunk size (number of SNPs per chunk).
     """
-    if not isinstance(pipeline_buffers, int):
-        raise TypeError(
-            f"pipeline_buffers must be an int, got {type(pipeline_buffers).__name__}"
-        )
     if pipeline_buffers < 1:
         raise ValueError(f"pipeline_buffers must be >= 1, got {pipeline_buffers}")
 

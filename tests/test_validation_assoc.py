@@ -7,7 +7,6 @@ import math
 import pytest
 
 from jamma.validation.compare import (
-    AssocComparisonResult,
     compare_assoc_results,
     load_gemma_assoc,
 )
@@ -390,10 +389,10 @@ class TestCompareAssocResults:
 
         assert comparison.passed is True
         assert comparison.n_snps == 5
-        assert comparison.beta.passed is True
-        assert comparison.se.passed is True
-        assert comparison.af.passed is True
-        assert comparison.p_wald.passed is True
+        assert comparison["beta"].passed is True
+        assert comparison["se"].passed is True
+        assert comparison["af"].passed is True
+        assert comparison["p_wald"].passed is True
         assert len(comparison.mismatched_snps) == 0
 
     def test_small_differences_within_tolerance(self):
@@ -413,7 +412,7 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.beta.passed is False
+        assert comparison["beta"].passed is False
 
     def test_numeric_failure_reports_every_snp_index(self):
         """A column result identifies every failing association row."""
@@ -428,61 +427,22 @@ class TestCompareAssocResults:
 
         comparison = compare_assoc_results(actual, expected)
 
-        assert comparison.beta.failed_indices == (0, 2)
+        assert comparison["beta"].failed_indices == (0, 2)
 
     def test_snp_count_mismatch(self):
-        """Different number of SNPs populates the early-return skip fields."""
+        """A different SNP count reports only the count, not vacuous columns."""
         actual = [_make_assoc(rs="rs1")]
         expected = [_make_assoc(rs="rs1"), _make_assoc(rs="rs2")]
 
         comparison = compare_assoc_results(actual, expected)
 
-        # Overall fails; beta carries the mismatch diagnostic
         assert comparison.passed is False
         assert comparison.n_snps == 1  # reports len(actual)
-        assert comparison.beta.passed is False
-        assert "SNP count mismatch" in comparison.beta.message
-        assert comparison.beta.max_abs_diff == float("inf")
-        assert comparison.beta.failed_indices == (1,)
-
-        # All other Wald-always-present fields must carry the skip result
-        skip_substr = "Skipped due to SNP count mismatch"
-        for field in (
-            comparison.se,
-            comparison.p_wald,
-            comparison.logl_H1,
-            comparison.l_remle,
-            comparison.af,
-        ):
-            assert field.passed is True  # skipped results pass vacuously
-            assert skip_substr in field.message
-
-        # Wald-test input → score/lrt/mle should be None (not present in test type)
-        assert comparison.p_score is None
-        assert comparison.p_lrt is None
-        assert comparison.l_mle is None
-
-        # No IDs populated because early-return skips the ID-diff loop
-        assert comparison.mismatched_snps == []
-
-    def test_snp_count_mismatch_all_tests_populates_optional_fields(self):
-        """SNP-count-mismatch in all-tests mode populates p_score/p_lrt/l_mle skips."""
-        actual = [_make_assoc(rs="rs1", p_score=0.05, p_lrt=0.02, l_mle=0.8)]
-        expected = [
-            _make_assoc(rs="rs1", p_score=0.05, p_lrt=0.02, l_mle=0.8),
-            _make_assoc(rs="rs2", p_score=0.06, p_lrt=0.03, l_mle=0.9),
-        ]
-
-        comparison = compare_assoc_results(actual, expected)
-
-        assert comparison.passed is False
-        # All-tests detected → optional fields must be skip-results, not None
-        assert comparison.p_score is not None
-        assert comparison.p_lrt is not None
-        assert comparison.l_mle is not None
-        assert "Skipped due to SNP count mismatch" in comparison.p_score.message
-        assert "Skipped due to SNP count mismatch" in comparison.p_lrt.message
-        assert "Skipped due to SNP count mismatch" in comparison.l_mle.message
+        assert set(comparison.columns) == {"n_snps"}
+        assert "SNP count mismatch" in comparison["n_snps"].message
+        assert comparison["n_snps"].max_abs_diff == float("inf")
+        assert comparison["n_snps"].failed_indices == (1,)
+        assert comparison.mismatched_snps == ()
 
     def test_snp_id_mismatch_fails_overall(self):
         """Mismatched SNP IDs populate the list AND fail overall comparison."""
@@ -521,8 +481,8 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.p_score is not None
-        assert comparison.p_score.passed is False
+        assert "p_score" in comparison.columns
+        assert comparison["p_score"].passed is False
 
     def test_score_test_detection_skips_wald(self):
         """Score-test detection skips Wald-specific columns with a skip message."""
@@ -539,10 +499,9 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(results, results)
 
         assert comparison.passed is True
-        assert comparison.p_score is not None
-        assert comparison.p_score.passed is True
-        assert comparison.p_wald.passed is True  # skipped → passes vacuously
-        assert "skipped" in comparison.p_wald.message.lower()
+        assert "p_score" in comparison.columns
+        assert comparison["p_score"].passed is True
+        assert "p_wald" not in comparison.columns
 
     def test_lrt_with_real_difference_fails(self):
         """LRT detection runs the comparison (not a tautological pass)."""
@@ -575,8 +534,8 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.p_lrt is not None
-        assert comparison.p_lrt.passed is False
+        assert "p_lrt" in comparison.columns
+        assert comparison["p_lrt"].passed is False
 
     def test_lrt_test_detection(self):
         """LRT results compare p_lrt and l_mle, skip Wald columns."""
@@ -596,10 +555,10 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(results, results)
 
         assert comparison.passed is True
-        assert comparison.p_lrt is not None
-        assert comparison.p_lrt.passed is True
-        assert comparison.l_mle is not None
-        assert comparison.l_mle.passed is True
+        assert "p_lrt" in comparison.columns
+        assert comparison["p_lrt"].passed is True
+        assert "l_mle" in comparison.columns
+        assert comparison["l_mle"].passed is True
 
     def test_all_tests_with_real_difference_fails(self):
         """All-tests mode runs the comparison (not a tautological pass)."""
@@ -630,8 +589,8 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.p_score is not None
-        assert comparison.p_score.passed is False
+        assert "p_score" in comparison.columns
+        assert comparison["p_score"].passed is False
 
     def test_all_tests_detection(self):
         """All-tests mode (-lmm 4) compares all column types."""
@@ -650,9 +609,9 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(results, results)
 
         assert comparison.passed is True
-        assert comparison.p_score is not None
-        assert comparison.p_lrt is not None
-        assert comparison.l_mle is not None
+        assert "p_score" in comparison.columns
+        assert "p_lrt" in comparison.columns
+        assert "l_mle" in comparison.columns
 
     def test_custom_tolerance_config(self):
         """Custom tolerance config should be respected."""
@@ -661,12 +620,12 @@ class TestCompareAssocResults:
 
         # Default beta_rtol (1e-2) should fail (10% diff)
         default_result = compare_assoc_results(actual, expected)
-        assert default_result.beta.passed is False
+        assert default_result["beta"].passed is False
 
         # Relaxed config should pass
         relaxed = ToleranceConfig.relaxed()
         relaxed_result = compare_assoc_results(actual, expected, config=relaxed)
-        assert relaxed_result.beta.passed is True
+        assert relaxed_result["beta"].passed is True
 
     def test_complement_af_fails(self):
         """AF is compared as reported, so a flipped allele (0.3 vs 0.7) fails."""
@@ -675,7 +634,7 @@ class TestCompareAssocResults:
 
         comparison = compare_assoc_results(actual, expected)
 
-        assert comparison.af.passed is False
+        assert comparison["af"].passed is False
 
     def test_lambda_boundary_all_at_lower_bound(self):
         """Lambda values all at REML lower boundary should be skipped."""
@@ -685,7 +644,7 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is True
-        assert "boundary" in comparison.l_remle.message.lower()
+        assert "boundary" in comparison["l_remle"].message.lower()
 
     @pytest.mark.parametrize(
         ("actual_lambda", "expected_lambda", "expected_classes"),
@@ -706,8 +665,8 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.l_remle.passed is False
-        assert expected_classes in comparison.l_remle.message
+        assert comparison["l_remle"].passed is False
+        assert expected_classes in comparison["l_remle"].message
 
     def test_matching_lower_boundary_values_are_exempt(self):
         """Small pinning differences pass when both values classify as lower-bound."""
@@ -717,7 +676,7 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is True
-        assert "matching lower boundary" in comparison.l_remle.message
+        assert "matching boundary values" in comparison["l_remle"].message
 
     def test_interior_lambda_values_keep_strict_tolerance(self):
         """Boundary handling does not relax comparison of interior optima."""
@@ -727,7 +686,7 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.l_remle.passed is False
+        assert comparison["l_remle"].passed is False
 
     def test_former_lower_threshold_values_are_interior(self):
         """Values above the optimizer bound do not inherit the old exemption."""
@@ -737,8 +696,8 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.l_remle.passed is False
-        assert "boundary" not in comparison.l_remle.message
+        assert comparison["l_remle"].passed is False
+        assert "boundary" not in comparison["l_remle"].message
 
     def test_lambda_failure_location_uses_original_snp_index(self):
         """Filtering an exempt pair does not renumber a later failing SNP."""
@@ -753,10 +712,10 @@ class TestCompareAssocResults:
 
         comparison = compare_assoc_results(actual, expected)
 
-        assert comparison.l_remle.passed is False
-        assert comparison.l_remle.worst_location == (1,)
-        assert comparison.l_remle.failed_indices == (1,)
-        assert "at (1,)" in comparison.l_remle.message
+        assert comparison["l_remle"].passed is False
+        assert comparison["l_remle"].worst_location == (1,)
+        assert comparison["l_remle"].failed_indices == (1,)
+        assert "at (1,)" in comparison["l_remle"].message
 
     def test_lambda_failures_map_every_filtered_index_to_original_rows(self):
         """Boundary filtering preserves all failing association row indices."""
@@ -775,7 +734,7 @@ class TestCompareAssocResults:
 
         comparison = compare_assoc_results(actual, expected)
 
-        assert comparison.l_remle.failed_indices == (1, 3)
+        assert comparison["l_remle"].failed_indices == (1, 3)
 
     @pytest.mark.parametrize("field", ["l_remle", "l_mle"])
     def test_lambda_class_and_numeric_failures_are_both_reported(self, field):
@@ -788,7 +747,7 @@ class TestCompareAssocResults:
             for i, value in enumerate((1.0, 1.0, 1e-5 * (1 + 1e-5)))
         ]
         comparison = compare_assoc_results(actual, expected)
-        assert getattr(comparison, field).failed_indices == (0, 1)
+        assert comparison[field].failed_indices == (0, 1)
 
     def test_lambda_class_mismatch_reports_worst_difference(self):
         """Class mismatch diagnostics keep the largest full-column error."""
@@ -803,10 +762,10 @@ class TestCompareAssocResults:
 
         comparison = compare_assoc_results(actual, expected)
 
-        assert comparison.l_remle.passed is False
-        assert comparison.l_remle.max_abs_diff == pytest.approx(99999.0)
-        assert comparison.l_remle.worst_location == (1,)
-        assert comparison.l_remle.failed_indices == (0, 1)
+        assert comparison["l_remle"].passed is False
+        assert comparison["l_remle"].max_abs_diff == pytest.approx(99999.0)
+        assert comparison["l_remle"].worst_location == (1,)
+        assert comparison["l_remle"].failed_indices == (0, 1)
 
     def test_remle_matching_upper_values_use_strict_tolerance(self):
         """REML keeps its prior policy of no upper-bound magnitude exemption."""
@@ -816,7 +775,7 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.l_remle.passed is False
+        assert comparison["l_remle"].passed is False
 
     def test_lambda_boundary_policy_uses_configured_optimizer_bounds(self):
         """Callers can match the comparator policy to non-default optimizer bounds."""
@@ -828,7 +787,7 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected, config)
 
         assert comparison.passed is True
-        assert "matching lower boundary" in comparison.l_remle.message
+        assert "matching boundary values" in comparison["l_remle"].message
 
     def test_mle_boundary_class_mismatch_fails(self):
         """The MLE lambda exemption also requires the same boundary class."""
@@ -860,9 +819,9 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is False
-        assert comparison.l_mle is not None
-        assert comparison.l_mle.passed is False
-        assert "upper/interior" in comparison.l_mle.message
+        assert "l_mle" in comparison.columns
+        assert comparison["l_mle"].passed is False
+        assert "upper/interior" in comparison["l_mle"].message
 
     @pytest.mark.parametrize(
         ("actual_lambda", "expected_lambda", "passes"),
@@ -883,8 +842,8 @@ class TestCompareAssocResults:
         comparison = compare_assoc_results(actual, expected)
 
         assert comparison.passed is passes
-        assert comparison.l_remle.passed is passes
-        assert "invalid" in comparison.l_remle.message.lower()
+        assert comparison["l_remle"].passed is passes
+        assert "invalid" in comparison["l_remle"].message.lower()
 
     def test_lambda_boundary_partial_in_all_tests(self):
         """Partial boundary lambda values: boundary excluded, rest compared."""
@@ -927,9 +886,9 @@ class TestCompareAssocResults:
 
         assert comparison.passed is True
         # Partial-boundary branch emits "excluding N boundary values"
-        assert "excluding 1 boundary values" in comparison.l_remle.message
-        assert comparison.l_mle is not None
-        assert "excluding 1 boundary values" in comparison.l_mle.message
+        assert "excluding 1 matching boundary values" in comparison["l_remle"].message
+        assert "l_mle" in comparison.columns
+        assert "excluding 1 matching boundary values" in comparison["l_mle"].message
 
     def test_lambda_boundary_l_mle_upper_bound(self):
         """l_mle at upper boundary (>= 1e4) is excluded but l_remle is not."""
@@ -957,22 +916,6 @@ class TestCompareAssocResults:
 
         assert comparison.passed is True
         # l_mle had one boundary value excluded; l_remle had none
-        assert comparison.l_mle is not None
-        assert "excluding 1 boundary values" in comparison.l_mle.message
-        assert "boundary" not in comparison.l_remle.message.lower()
-
-    def test_result_dataclass_fields(self):
-        """AssocComparisonResult has expected fields."""
-        results = [_make_assoc(rs="rs1")]
-        comparison = compare_assoc_results(results, results)
-
-        assert isinstance(comparison, AssocComparisonResult)
-        assert isinstance(comparison.n_snps, int)
-        assert comparison.n_snps == 1
-        assert hasattr(comparison, "beta")
-        assert hasattr(comparison, "se")
-        assert hasattr(comparison, "p_wald")
-        assert hasattr(comparison, "logl_H1")
-        assert hasattr(comparison, "l_remle")
-        assert hasattr(comparison, "af")
-        assert hasattr(comparison, "mismatched_snps")
+        assert "l_mle" in comparison.columns
+        assert "excluding 1 matching boundary values" in comparison["l_mle"].message
+        assert "boundary" not in comparison["l_remle"].message.lower()

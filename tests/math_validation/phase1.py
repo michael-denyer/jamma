@@ -169,7 +169,7 @@ def _named_detectors(expected, row_factory, fields, prefix):
         comparison = compare_assoc_results(
             [row_factory(changed)], [row_factory(expected)], config
         )
-        field_result = getattr(comparison, field)
+        field_result = comparison[field]
         detectors[field] = {
             "detector": f"{prefix}:{field}",
             "passed": not comparison.passed and not field_result.passed,
@@ -211,15 +211,13 @@ def mode4_evidence(*, backend="numpy", n_cvt=1, seed=911):
         }
         comparison = compare_assoc_results([_row(actual)], [_row(oracle)])
         field_checks = {
-            field: bool(getattr(comparison, field).passed)
-            for field in MODE4_ORACLE_FIELDS
+            field: bool(comparison[field].passed) for field in MODE4_ORACLE_FIELDS
         }
         mode1_comparison = compare_assoc_results(
             [_mode1_row(mode1_actual)], [_mode1_row(mode1_oracle)]
         )
         mode1_field_checks = {
-            field: bool(getattr(mode1_comparison, field).passed)
-            for field in MODE1_FIELDS
+            field: bool(mode1_comparison[field].passed) for field in MODE1_FIELDS
         }
         records.append(
             {

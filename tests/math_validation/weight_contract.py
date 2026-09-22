@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from tests.math_validation.compare import compare_files, read_rows
+from jamma.validation.compare import load_gemma_assoc
+from tests.math_validation.compare import compare_files
 from tests.math_validation.dense_oracle import evaluate
 from tests.math_validation.evidence import (
     bundle_status,
@@ -274,16 +275,18 @@ def write_oracle(path: Path, *, model_override: dict | None = None) -> None:
 
 
 def _l_mle_extrema(actual: Path, reference: Path) -> dict:
-    actual_rows = read_rows(actual, 4)
-    reference_rows = read_rows(reference, 4)
+    actual_rows = load_gemma_assoc(actual, mode=4, require_logl=True)
+    reference_rows = load_gemma_assoc(reference, mode=4, require_logl=True)
     values = []
     for observed, expected in zip(actual_rows, reference_rows, strict=True):
-        actual_value = float(observed["l_mle"])
-        reference_value = float(expected["l_mle"])
+        actual_value = observed.l_mle
+        reference_value = expected.l_mle
+        assert actual_value is not None
+        assert reference_value is not None
         absolute = abs(actual_value - reference_value)
         values.append(
             {
-                "rs": expected["rs"],
+                "rs": expected.rs,
                 "actual": actual_value,
                 "reference": reference_value,
                 "absolute": absolute,
@@ -368,7 +371,12 @@ def compare_weights(destination: Path, case_ids: tuple[str, ...] | None = None) 
                 mode=4,
                 reference_optional_logl=True,
             )
-            actual_snp_ids = [row["rs"] for row in read_rows(result.assoc_path, 4)]
+            actual_snp_ids = [
+                row.rs
+                for row in load_gemma_assoc(
+                    result.assoc_path, mode=4, require_logl=True
+                )
+            ]
             actual_indices = result.analyzed_sample_indices
             actual_samples = [fam_ids[index] for index in actual_indices]
             stages = {

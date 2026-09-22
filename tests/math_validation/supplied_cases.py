@@ -6,10 +6,10 @@ import sys
 
 import numpy as np
 
+from jamma.validation.compare import load_gemma_assoc
 from tests.math_validation.compare import (
     check_boundary_coverage,
     compare_files,
-    read_rows,
 )
 from tests.math_validation.evidence import bundle_status, environment, write_json
 from tests.math_validation.fixtures import verify_reference
@@ -82,14 +82,14 @@ def compare(manifest, reference, destination):
                 from jamma.validation.tolerances import LambdaBoundaryPolicy
                 from tests.math_validation.phase1 import boundary_trace
 
-                actual_rows = read_rows(target / "jamma.assoc.txt", mode)
-                reference_rows = read_rows(
-                    target / "gemma.assoc.txt", mode, optional_logl=True
+                actual_rows = load_gemma_assoc(
+                    target / "jamma.assoc.txt", mode=mode, require_logl=True
                 )
+                reference_rows = load_gemma_assoc(target / "gemma.assoc.txt", mode=mode)
                 for j, (actual, reference_row) in enumerate(
                     zip(actual_rows, reference_rows, strict=True)
                 ):
-                    pair = [float(row["l_remle"]) for row in (actual, reference_row)]
+                    pair = [row.l_remle for row in (actual, reference_row)]
                     classes = _classify_lambdas(np.array(pair), LambdaBoundaryPolicy())
                     if classes[0] == classes[1] and classes[0] in {"lower", "upper"}:
                         trace = boundary_trace(
@@ -103,7 +103,7 @@ def compare(manifest, reference, destination):
                             np.array(model["phenotype"]),
                             *pair,
                         )
-                        boundary_records.append({"rs": actual["rs"], **trace})
+                        boundary_records.append({"rs": actual.rs, **trace})
                 boundary_coverage = check_boundary_coverage(
                     case, boundary_records, manifest["boundary_expectations"]
                 )
@@ -132,7 +132,10 @@ def compare(manifest, reference, destination):
                         "all FAM rows valid; sample counts checked in both raw logs"
                     ),
                     "selected_snp_ids": [
-                        r["rs"] for r in read_rows(target / "jamma.assoc.txt", mode)
+                        r.rs
+                        for r in load_gemma_assoc(
+                            target / "jamma.assoc.txt", mode=mode, require_logl=True
+                        )
                     ],
                     "execution_log": [
                         line

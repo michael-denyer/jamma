@@ -6,7 +6,7 @@ rather than raising exceptions, enabling programmatic validation workflows.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import overload
@@ -18,7 +18,7 @@ from jamma.lmm.stats import AssocResult
 from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig
 
 
-@dataclass
+@dataclass(frozen=True)
 class ComparisonResult:
     """Result of a numerical array comparison.
 
@@ -55,6 +55,7 @@ def compare_arrays(
     name: str = "array",
     *,
     floor: np.ndarray | None = None,
+    exempt: np.ndarray | None = None,
 ) -> ComparisonResult:
     """Compare two arrays with tolerance and return structured result.
 
@@ -70,6 +71,8 @@ def compare_arrays(
         floor: Optional per-element absolute tolerance added to ``atol``, for
             columns whose scale is set by another column (beta by its standard
             error). NaN entries count as zero.
+        exempt: Optional boolean mask of entries that pass without comparison
+            and are left out of the reported differences.
 
     Returns:
         ComparisonResult with pass/fail status and diagnostic information.
@@ -89,21 +92,31 @@ def compare_arrays(
         )
 
     if actual.size == 0:
-        return _passed_without_comparison(f"{name} comparison passed (empty arrays)")
+        return ComparisonResult(
+            passed=True,
+            max_abs_diff=0.0,
+            max_rel_diff=0.0,
+            worst_location=None,
+            failed_indices=(),
+            message=f"{name} comparison passed (empty arrays)",
+        )
 
     atol_eff: float | np.ndarray = atol
     if floor is not None:
         atol_eff = atol + np.nan_to_num(floor, nan=0.0)
     close = np.isclose(actual, expected, rtol=rtol, atol=atol_eff, equal_nan=True)
+    abs_diff = np.abs(actual - expected)
+    if exempt is not None:
+        close |= exempt
+        abs_diff[exempt] = 0.0
     if bool(np.all(close)):
         # Passed - compute stats anyway for reporting
-        abs_diff = np.abs(actual - expected)
         max_abs_diff = float(np.max(abs_diff))
 
         # Relative difference: avoid division by zero
         with np.errstate(divide="ignore", invalid="ignore"):
             rel_diff = abs_diff / np.abs(expected)
-            rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
+        rel_diff = np.where(np.isfinite(rel_diff), rel_diff, 0.0)
         max_rel_diff = float(np.max(rel_diff))
 
         return ComparisonResult(
@@ -119,8 +132,6 @@ def compare_arrays(
         )
 
     else:
-        # Compute detailed diagnostics
-        abs_diff = np.abs(actual - expected)
         max_abs_diff = float(np.max(abs_diff))
 
         # Find location of worst absolute difference
@@ -131,7 +142,9 @@ def compare_arrays(
         # Relative difference at worst location
         with np.errstate(divide="ignore", invalid="ignore"):
             rel_diff = abs_diff / np.abs(expected)
-            rel_diff = np.where(np.isfinite(rel_diff), rel_diff, np.inf)
+        rel_diff = np.where(np.isfinite(rel_diff), rel_diff, np.inf)
+        if exempt is not None:
+            rel_diff[exempt] = 0.0
         max_rel_diff = float(np.max(rel_diff))
         failed_indices = tuple(int(i) for i in np.flatnonzero(~close))
 
@@ -285,7 +298,9 @@ class AssocDataset(Sequence[AssocResult]):
         return self.rows[index]
 
 
-def load_gemma_assoc(path: Path) -> AssocDataset:
+def load_gemma_assoc(
+    path: Path, *, mode: LmmMode | None = None, require_logl: bool = False
+) -> AssocDataset:
     """Load GEMMA association results from .assoc.txt format.
 
     Parses the tab-separated .assoc.txt format produced by GEMMA's LMM modes:
@@ -300,13 +315,18 @@ def load_gemma_assoc(path: Path) -> AssocDataset:
 
     Args:
         path: Path to the association results file (.assoc.txt).
+        mode: The LMM mode the header must declare. Any mode when None.
+        require_logl: Reject a header that omits ``logl_H1`` for a mode that
+            carries it. GEMMA omits the column in some layouts; JAMMA never does.
 
     Returns:
         A sequence of AssocResult rows retaining the mode declared by its header.
 
     Raises:
         FileNotFoundError: If the file does not exist.
-        ValueError: If the file format is invalid.
+        ValueError: If the header is not an accepted layout, declares a mode
+            other than ``mode``, omits a required ``logl_H1``, or if two rows
+            share an rs ID.
 
     Example:
         >>> results = load_gemma_assoc(Path("output/result.assoc.txt"))
@@ -347,44 +367,46 @@ def load_gemma_assoc(path: Path) -> AssocDataset:
                     p_lrt=_opt_float(row, "p_lrt"),
                 )
             )
-    mode = _MODE_BY_P_VALUE_FIELDS[frozenset(cols) & _P_VALUE_FIELDS]
-    return AssocDataset(mode, tuple(results))
+    header_mode = _MODE_BY_P_VALUE_FIELDS[frozenset(cols) & _P_VALUE_FIELDS]
+    if mode is not None and header_mode != mode:
+        raise ValueError(f"Expected a mode {mode} header, got mode {header_mode}")
+    carried = {c.field_name for c in MODE_SPECS[header_mode].stat_columns}
+    if require_logl and "logl_H1" in carried - set(cols):
+        raise ValueError(f"Mode {header_mode} header omits logl_H1: {list(cols)}")
+    if len({row.rs for row in results}) != len(results):
+        raise ValueError(f"Duplicate SNP IDs in {path}")
+    return AssocDataset(header_mode, tuple(results))
 
 
-@dataclass
+@dataclass(frozen=True)
 class AssocComparisonResult:
     """Result of comparing two sets of association results.
 
-    Provides structured comparison results for each numeric column
-    (beta, se, p_wald, logl_H1, l_remle, af) and overall pass/fail status.
-
     Attributes:
-        passed: Whether all column comparisons passed.
-        n_snps: Number of SNPs compared.
-        beta: Comparison result for effect sizes.
-        se: Comparison result for standard errors.
-        p_wald: Comparison result for p-values (Wald test).
-        logl_H1: Comparison result for log-likelihoods.
-        l_remle: Comparison result for lambda REML values.
-        af: Comparison result for allele frequencies.
-        mismatched_snps: List of SNP rs IDs that don't match between files.
-        p_score: Comparison result for Score test p-values (only for lmm_mode=3).
-        p_lrt: Comparison result for LRT p-values (only for lmm_mode=2).
-        l_mle: Comparison result for MLE lambda values (only for lmm_mode=2).
+        n_snps: Number of SNPs in the actual results.
+        columns: One comparison per column the mode carries, plus ``af``. A
+            ``logl_H1`` the reference omits is absent; a SNP count mismatch
+            leaves the single column ``n_snps``.
+        mismatched_snps: ``index:actual!=expected`` for each differing rs ID.
+
+    Example:
+        >>> comparison["l_remle"].failed_indices
+        (3,)
     """
 
-    passed: bool
     n_snps: int
-    beta: ComparisonResult
-    se: ComparisonResult
-    p_wald: ComparisonResult
-    logl_H1: ComparisonResult
-    l_remle: ComparisonResult
-    af: ComparisonResult
-    mismatched_snps: list[str]
-    p_score: ComparisonResult | None = None  # Only for Score test (-lmm 3)
-    p_lrt: ComparisonResult | None = None  # Only for LRT (-lmm 2)
-    l_mle: ComparisonResult | None = None  # Only for LRT (-lmm 2)
+    columns: Mapping[str, ComparisonResult]
+    mismatched_snps: tuple[str, ...]
+
+    @property
+    def passed(self) -> bool:
+        """Whether every rs ID matches and every column passed."""
+        return not self.mismatched_snps and all(
+            column.passed for column in self.columns.values()
+        )
+
+    def __getitem__(self, column: str) -> ComparisonResult:
+        return self.columns[column]
 
 
 _P_VALUE_FIELDS = frozenset({"p_wald", "p_lrt", "p_score"})
@@ -398,6 +420,13 @@ _MODE_BY_P_VALUE_FIELDS: dict[frozenset[str], LmmMode] = {
     ): mode
     for mode, spec in MODE_SPECS.items()
 }
+
+
+_BETA_MODES = frozenset(
+    mode
+    for mode, spec in MODE_SPECS.items()
+    if any(c.field_name == "beta" for c in spec.stat_columns)
+)
 
 
 def _present_fields(rows: Sequence[AssocResult]) -> frozenset[str]:
@@ -425,11 +454,16 @@ def _mode_from_rows(rows: Sequence[AssocResult]) -> LmmMode | None:
         return None
     p_fields = _present_fields(rows) & _P_VALUE_FIELDS
     try:
-        return _MODE_BY_P_VALUE_FIELDS[p_fields]
+        mode = _MODE_BY_P_VALUE_FIELDS[p_fields]
     except KeyError:
         raise ValueError(
             f"Association schema has no recognized p-value columns: {sorted(p_fields)}"
         ) from None
+    if mode not in _BETA_MODES and not all(
+        np.isnan(row.beta) and np.isnan(row.se) for row in rows
+    ):
+        raise ValueError(f"Mode {mode} rows carry beta or se; they must be NaN")
+    return mode
 
 
 def _failed_result(
@@ -446,22 +480,10 @@ def _failed_result(
     )
 
 
-def _passed_without_comparison(message: str) -> ComparisonResult:
-    """A vacuously-passing result for a column that was never compared."""
-    return ComparisonResult(
-        passed=True,
-        max_abs_diff=0.0,
-        max_rel_diff=0.0,
-        worst_location=None,
-        failed_indices=(),
-        message=message,
-    )
-
-
-def _column(field: str, rows: Sequence[AssocResult], default: float) -> np.ndarray:
-    """Extract one AssocResult field across rows, substituting default for None."""
+def _column(field: str, rows: Sequence[AssocResult]) -> np.ndarray:
+    """Extract one AssocResult field across rows, with NaN for None."""
     return np.array(
-        [getattr(r, field) if getattr(r, field) is not None else default for r in rows]
+        [np.nan if getattr(r, field) is None else getattr(r, field) for r in rows]
     )
 
 
@@ -541,53 +563,12 @@ def _compare_lambdas(
             ),
         )
 
-    if np.all(exempt):
-        lower_count = int(np.sum(actual_classes == "lower"))
-        upper_count = int(np.sum(actual_classes == "upper"))
-        nan_count = int(np.sum(paired_nan))
-        exemptions = []
-        if lower_count:
-            exemptions.append(f"{lower_count} matching lower boundary")
-        if upper_count:
-            exemptions.append(f"{upper_count} matching upper boundary")
-        if nan_count:
-            exemptions.append(f"{nan_count} paired invalid NaN")
-        return _passed_without_comparison(
-            f"{name} comparison exempted ({', '.join(exemptions)})"
-        )
-
     if np.any(exempt):
-        boundary_count = int(np.sum(matching_boundary))
-        nan_count = int(np.sum(paired_nan))
-        details = f"matching classes; {nan_count} paired invalid NaN"
-        keep = ~exempt
-        result = compare_arrays(
-            actual_arr[keep],
-            expected_arr[keep],
-            rtol,
-            atol,
-            f"{name} (excluding {boundary_count} boundary values with {details})",
+        name = (
+            f"{name} (excluding {int(np.sum(matching_boundary))} matching boundary "
+            f"values and {int(np.sum(paired_nan))} paired invalid NaN values)"
         )
-        if not result.passed and result.worst_location is not None:
-            filtered_index = result.worst_location[0]
-            original_index = int(np.flatnonzero(keep)[filtered_index])
-            original_abs_diff = abs(
-                actual_arr[original_index] - expected_arr[original_index]
-            )
-            result.worst_location = (original_index,)
-            result.failed_indices = tuple(
-                int(i) for i in np.flatnonzero(keep)[list(result.failed_indices)]
-            )
-            result.message = (
-                f"{name} comparison failed at ({original_index},): "
-                f"actual={actual_arr[original_index]:.10e}, "
-                f"expected={expected_arr[original_index]:.10e}, "
-                f"abs_diff={original_abs_diff:.2e} "
-                f"(rtol={rtol}, atol={atol}; excluded {boundary_count} matching "
-                f"boundary values and {nan_count} paired invalid NaN values)"
-            )
-        return result
-    return compare_arrays(actual_arr, expected_arr, rtol, atol, name)
+    return compare_arrays(actual_arr, expected_arr, rtol, atol, name, exempt=exempt)
 
 
 def compare_assoc_results(
@@ -641,115 +622,49 @@ def compare_assoc_results(
             f"but reference mode {mode}"
         )
     mode = mode if mode is not None else actual_mode
-    active_columns = (
-        frozenset(c.field_name for c in MODE_SPECS[mode].stat_columns)
-        if mode is not None
-        else frozenset()
-    )
 
-    # Check for SNP count mismatch
     if len(actual) != len(expected):
-        mismatch_result = _failed_result(
+        count_result = _failed_result(
             f"SNP count mismatch: {len(actual)} vs {len(expected)}",
             tuple(
                 range(min(len(actual), len(expected)), max(len(actual), len(expected)))
             ),
         )
-        skip_result = _passed_without_comparison("Skipped due to SNP count mismatch")
-        return AssocComparisonResult(
-            passed=False,
-            n_snps=len(actual),
-            beta=mismatch_result,
-            se=skip_result,
-            p_wald=skip_result,
-            logl_H1=skip_result,
-            l_remle=skip_result,
-            af=skip_result,
-            mismatched_snps=[],
-            p_score=skip_result if "p_score" in active_columns else None,
-            p_lrt=skip_result if "p_lrt" in active_columns else None,
-            l_mle=skip_result if "l_mle" in active_columns else None,
-        )
+        return AssocComparisonResult(len(actual), {"n_snps": count_result}, ())
 
-    # Check for mismatched SNP IDs
-    mismatched = [
+    mismatched = tuple(
         f"{i}:{a.rs}!={e.rs}"
         for i, (a, e) in enumerate(zip(actual, expected, strict=True))
         if a.rs != e.rs
-    ]
-
-    actual_af = np.array([r.af for r in actual])
-    expected_af = np.array([r.af for r in expected])
-    af_result = compare_arrays(
-        actual_af, expected_af, 0.0, config.atol + config.af_atol, "af"
     )
 
-    # beta/se are always-present output slots. LRT reports them as NaN by
-    # construction (GEMMA's LRT format has no beta/se columns); compare_arrays
-    # treats NaN as equal to NaN, so the comparison itself passes vacuously for
-    # LRT, but the overall verdict additionally verifies both sides are all-NaN
-    # rather than trusting a coincidental NaN match.
-    actual_beta = np.array([r.beta for r in actual])
-    expected_beta = np.array([r.beta for r in expected])
-    actual_se = np.array([r.se for r in actual])
-    expected_se = np.array([r.se for r in expected])
-    beta_result = compare_arrays(
-        actual_beta,
-        expected_beta,
-        config.beta_rtol,
-        config.atol,
-        "beta",
-        floor=config.beta_se_floor * np.abs(expected_se),
-    )
-    se_result = compare_arrays(
-        actual_se, expected_se, config.se_rtol, config.atol, "se"
-    )
-    if mode == 2:
-        beta_se_ok = bool(
-            np.all(np.isnan(actual_beta)) and np.all(np.isnan(expected_beta))
-        ) and bool(np.all(np.isnan(actual_se)) and np.all(np.isnan(expected_se)))
-    else:
-        beta_se_ok = True
-
-    # One rule per stat column that a mode can carry (schema.MODE_SPECS is the
-    # single source of which columns each mode carries; this is the single
-    # source of how to compare each one). A mode not carrying a column gets a
-    # skip-result for the always-present slots (p_wald, logl_H1, l_remle) or
-    # stays None for the optional slots (p_score, p_lrt, l_mle).
-    def _pvalue(field: str, rtol: float) -> ComparisonResult:
+    def _plain(field: str, rtol: float, atol: float = config.atol) -> ComparisonResult:
         return compare_arrays(
-            _column(field, actual, np.nan),
-            _column(field, expected, np.nan),
-            rtol,
+            _column(field, actual), _column(field, expected), rtol, atol, field
+        )
+
+    def _beta() -> ComparisonResult:
+        return compare_arrays(
+            _column("beta", actual),
+            _column("beta", expected),
+            config.beta_rtol,
             config.atol,
-            field,
+            "beta",
+            floor=config.beta_se_floor * np.abs(_column("se", expected)),
         )
 
     def _logl() -> ComparisonResult:
-        expected_logl = _column("logl_H1", expected, np.nan)
-        if all(row.logl_H1 is None for row in expected):
-            return _passed_without_comparison(
-                "logl_H1 skipped (reference missing logl_H1 column)"
-            )
-        if any(row.logl_H1 is None for row in actual):
+        missing = tuple(i for i, row in enumerate(actual) if row.logl_H1 is None)
+        if missing:
             return _failed_result(
-                "logl_H1 column missing from actual association schema",
-                tuple(i for i, row in enumerate(actual) if row.logl_H1 is None),
+                "logl_H1 column missing from actual association schema", missing
             )
-        return compare_arrays(
-            _column("logl_H1", actual, np.nan),
-            expected_logl,
-            config.logl_rtol,
-            config.atol,
-            "logl_H1",
-        )
+        return _plain("logl_H1", config.logl_rtol)
 
     def _lambda(field: str, *, exempt_upper: bool) -> ComparisonResult:
-        actual_arr = _column(field, actual, np.nan)
-        expected_arr = _column(field, expected, np.nan)
         return _compare_lambdas(
-            actual_arr,
-            expected_arr,
+            _column(field, actual),
+            _column(field, expected),
             config.lambda_boundary,
             config.lambda_rtol,
             config.atol,
@@ -757,42 +672,24 @@ def compare_assoc_results(
             exempt_upper=exempt_upper,
         )
 
+    # schema.MODE_SPECS says which columns a mode carries; this says how each
+    # one is compared.
     column_rules: dict[str, Callable[[], ComparisonResult]] = {
-        "p_wald": lambda: _pvalue("p_wald", config.pvalue_rtol),
-        "p_score": lambda: _pvalue("p_score", config.pvalue_rtol),
-        "p_lrt": lambda: _pvalue("p_lrt", config.p_lrt_rtol),
+        "af": lambda: _plain("af", 0.0, config.atol + config.af_atol),
+        "beta": _beta,
+        "se": lambda: _plain("se", config.se_rtol),
+        "p_wald": lambda: _plain("p_wald", config.pvalue_rtol),
+        "p_score": lambda: _plain("p_score", config.pvalue_rtol),
+        "p_lrt": lambda: _plain("p_lrt", config.p_lrt_rtol),
         "logl_H1": _logl,
         "l_remle": lambda: _lambda("l_remle", exempt_upper=False),
         "l_mle": lambda: _lambda("l_mle", exempt_upper=True),
     }
-
-    results: dict[str, ComparisonResult] = {"beta": beta_result, "se": se_result}
-    for field, compute in column_rules.items():
-        results[field] = (
-            compute()
-            if field in active_columns
-            else _passed_without_comparison(f"{field} skipped")
-        )
-
-    no_id_mismatch = len(mismatched) == 0
-    all_passed = (
-        all(results[column].passed for column in active_columns)
-        and af_result.passed
-        and beta_se_ok
-        and no_id_mismatch
-    )
-
+    fields = ["af"]
+    if mode is not None:
+        fields += [c.field_name for c in MODE_SPECS[mode].stat_columns]
+    if all(row.logl_H1 is None for row in expected):
+        fields = [f for f in fields if f != "logl_H1"]
     return AssocComparisonResult(
-        passed=all_passed,
-        n_snps=len(actual),
-        beta=beta_result,
-        se=se_result,
-        p_wald=results["p_wald"],
-        logl_H1=results["logl_H1"],
-        l_remle=results["l_remle"],
-        af=af_result,
-        mismatched_snps=mismatched,
-        p_score=results["p_score"] if "p_score" in active_columns else None,
-        p_lrt=results["p_lrt"] if "p_lrt" in active_columns else None,
-        l_mle=results["l_mle"] if "l_mle" in active_columns else None,
+        len(actual), {f: column_rules[f]() for f in fields}, mismatched
     )

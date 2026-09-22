@@ -811,10 +811,10 @@ def test_loco_gemma_equivalence():
         result = compare_assoc_results(jamma_chr, gemma_ref, config=tol)
         assert result.passed, (
             f"Chr {chr_name} GEMMA equivalence failed:\n"
-            f"  beta: {result.beta.message}\n"
-            f"  se: {result.se.message}\n"
-            f"  p_wald: {result.p_wald.message}\n"
-            f"  logl_H1: {result.logl_H1.message}\n"
-            f"  l_remle: {result.l_remle.message}\n"
+            f"  beta: {result['beta'].message}\n"
+            f"  se: {result['se'].message}\n"
+            f"  p_wald: {result['p_wald'].message}\n"
+            f"  logl_H1: {result['logl_H1'].message}\n"
+            f"  l_remle: {result['l_remle'].message}\n"
             f"  mismatched_snps: {result.mismatched_snps}"
         )

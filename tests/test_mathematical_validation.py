@@ -11,11 +11,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.validation.compare import load_gemma_assoc
 from tests.math_validation import dense_oracle
 from tests.math_validation.compare import (
     check_boundary_coverage,
     compare_files,
-    read_rows,
 )
 from tests.math_validation.fixtures import (
     REFERENCE,
@@ -175,13 +175,13 @@ def test_header_and_record_order_are_observed(tmp_path):
     model = json.loads((source / "model.json").read_text())
     path = tmp_path / "oracle.assoc.txt"
     write_oracle_assoc(model, path)
-    assert tuple(read_rows(path)[0]) == WALD_HEADER
+    assert tuple(path.read_text().splitlines()[0].split("\t")) == WALD_HEADER
     lines = path.read_text().splitlines()
     path.write_text("\n".join([lines[0], *reversed(lines[1:])]) + "\n")
     assert compare_files(path, source / "gemma.assoc.txt")["status"] == "NOT VERIFIED"
     path.write_text("\n".join(["\t".join(reversed(WALD_HEADER)), *lines[1:]]) + "\n")
     with pytest.raises(ValueError, match="header"):
-        read_rows(path)
+        load_gemma_assoc(path)
 
 
 @pytest.mark.tier0

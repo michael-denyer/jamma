@@ -1,8 +1,4 @@
-"""Core infrastructure modules for JAMMA.
-
-This package contains configuration, memory estimation, threading, hardware
-context, and telemetry.
-"""
+"""Core infrastructure modules for JAMMA."""
 
 from jamma.core.memory import (
     MemoryLedger,

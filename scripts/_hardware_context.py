@@ -1,8 +1,4 @@
-"""Hardware context collection for benchmark reproducibility.
-
-This module provides utilities for collecting hardware and software context
-needed to make benchmark results comparable across machines.
-"""
+"""Hardware context collection for benchmark reproducibility."""
 
 from __future__ import annotations
 

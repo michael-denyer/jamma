@@ -553,17 +553,21 @@ class TestMultiNParsing:
 def _mock_pipeline_result(outdir: Path):
     """Create a minimal mock PipelineResult for CLI tests."""
     from jamma.pipeline import PipelineResult
-    from jamma.pipeline_config import PipelineTiming
+    from jamma.pipeline_config import PhenotypeResult, PipelineTiming
 
     outdir.mkdir(parents=True, exist_ok=True)
     assoc_path = outdir / "result.assoc.txt"
     assoc_path.write_text("chr\trs\tps\tn_miss\tn_obs\n")
     return PipelineResult(
-        associations=[],
+        phenotype_results=[
+            PhenotypeResult(
+                column=1,
+                associations=[],
+                n_snps_tested=500,
+                assoc_path=assoc_path,
+            )
+        ],
         n_samples=100,
-        n_snps_tested=500,
-        assoc_path=assoc_path,
-        assoc_paths=[assoc_path],
         timing=PipelineTiming(total_s=1.0, load_s=0.1, lmm_s=0.9),
         n_covariates=1,
     )

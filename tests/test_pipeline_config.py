@@ -16,7 +16,8 @@ import pytest
 
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import MIN_N_GRID
-from jamma.pipeline import PipelineConfig, PipelineRunner
+from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
+from jamma.pipeline_config import PhenotypeResult
 from tests.conftest import preflight
 from tests.fixture_paths import SYNTHETIC
 
@@ -560,3 +561,44 @@ class TestFlagInteractions:
         )
         # Should NOT raise -- kinship is optional with eigen files
         PipelineRunner(config).validate_inputs()
+
+
+def _phenotype(column: int, associations: list, pve: float) -> PhenotypeResult:
+    return PhenotypeResult(
+        column=column,
+        associations=associations,
+        n_snps_tested=len(associations),
+        assoc_path=Path(f"out.pheno{column}.assoc.txt"),
+        pve_estimate=pve,
+        pve_se=pve / 10,
+    )
+
+
+@pytest.mark.tier0
+def test_pipeline_result_aggregates_phenotypes_in_column_order():
+    """Run-level fields concatenate or sum the records; PVE is single-only."""
+    result = PipelineResult(
+        phenotype_results=[_phenotype(1, ["a", "b"], 0.3), _phenotype(2, ["c"], 0.5)],
+        n_samples=10,
+    )
+
+    assert result.associations == ["a", "b", "c"]
+    assert result.n_snps_tested == 3
+    assert result.assoc_paths == [
+        Path("out.pheno1.assoc.txt"),
+        Path("out.pheno2.assoc.txt"),
+    ]
+    assert result.assoc_path == Path("out.pheno2.assoc.txt")
+    assert result.pve_estimate is None
+    assert result.pve_se is None
+
+
+@pytest.mark.tier0
+def test_pipeline_result_reports_the_single_phenotype_pve():
+    result = PipelineResult(
+        phenotype_results=[_phenotype(1, [], 0.3)],
+        n_samples=10,
+    )
+
+    assert result.pve_estimate == 0.3
+    assert result.pve_se == pytest.approx(0.03)

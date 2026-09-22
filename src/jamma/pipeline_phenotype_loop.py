@@ -8,17 +8,14 @@ the shared LMM body" is answered, without the surrounding orchestration.
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
-from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
 
 from jamma.io.plink import PlinkMetadata, load_plink_binary
-from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
-from jamma.lmm.genotype_source import GenotypeSource, SampleBasis
+from jamma.lmm.genotype_source import GenotypeSource
 from jamma.lmm.prepare_common import prepare_rotated_covariates
 from jamma.lmm.runner_numpy import (
     BATCH_LABELS,
@@ -33,62 +30,38 @@ from jamma.lmm.runner_numpy_streaming import BedSource
 from jamma.lmm.schema import ChunkRunStats, SnpMeta
 from jamma.pipeline_config import PhenotypeResult, PipelineConfig
 from jamma.pipeline_plan import StandardAnalysisPlan
+from jamma.pipeline_samples import AnalysedSamples
 
-__all__ = ["PhenoLoopOutcome", "run_phenotype_loop"]
-
-
-class PhenoLoopOutcome(NamedTuple):
-    """Aggregated results of the per-phenotype LMM loop.
-
-    Returned by ``run_phenotype_loop`` so ``PipelineRunner.run`` can
-    assemble the final ``PipelineResult`` without holding the loop's locals.
-    """
-
-    associations: list[AssocResult]
-    n_tested: int
-    assoc_paths: list[Path]
-    phenotype_results: list[PhenotypeResult]
-    lmm_s: float
-    runner_timing: ChunkRunStats
-    pve: float | None
-    pve_se: float | None
+__all__ = ["run_phenotype_loop"]
 
 
 def run_phenotype_loop(
     config: PipelineConfig,
     analysis: StandardAnalysisPlan,
-    phenotypes: dict[int, np.ndarray],
-    valid_mask: np.ndarray,
-    covariates: np.ndarray | None,
+    samples: AnalysedSamples,
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
     assoc_path: Path,
     meta: PlinkMetadata,
-) -> PhenoLoopOutcome:
-    """Run the per-phenotype LMM loop and aggregate its results.
+) -> tuple[list[PhenotypeResult], float]:
+    """Run the per-phenotype LMM loop over the analysed samples.
 
     Builds one genotype source for the plan's mode, then iterates the
     configured phenotype columns, masking each to the shared valid-sample
     intersection and running the shared LMM body over one prepared genotype
-    selection. Aggregate runner timing sums every phenotype's work.
-    ``meta`` is the pipeline's already-parsed PLINK metadata, so the
-    streaming source never re-reads the .bim per phenotype. The ``-snps``
+    selection. ``meta`` is the pipeline's already-parsed PLINK metadata, so
+    the streaming source never re-reads the .bim per phenotype. The ``-snps``
     restriction reaches the body as ``snps_indices`` in both modes, where it
     joins the MAF, missingness and HWE filters.
 
     Returns:
-        A PhenoLoopOutcome bundling associations, total SNPs tested, the
-        per-phenotype output paths, the loop wall time, runner timing, and
-        the PVE estimate.
+        One ``PhenotypeResult`` per configured column, in column order, and
+        the genotype rotation time shared across them.
     """
     pheno_columns = config.phenotype_columns
     is_multi = len(pheno_columns) > 1
     plan = analysis.execution.summary
 
-    t_lmm = time.perf_counter()
-    all_results: list[AssocResult] = []
-    total_tested = 0
-    all_assoc_paths: list[Path] = []
     phenotype_results: list[PhenotypeResult] = []
 
     source = _genotype_source(plan.mode, plan.runner_name, config.bfile, meta, analysis)
@@ -99,7 +72,7 @@ def run_phenotype_loop(
         hwe_threshold=config.hwe_threshold,
         labels=_LABELS[plan.mode],
     )
-    genotypes = prepare_genotypes(source, spec, SampleBasis.from_mask(valid_mask))
+    genotypes = prepare_genotypes(source, spec, samples.basis)
     # Prepared chunks retain their analyzed rows. Release the original batch
     # matrix when sample filtering replaced it with a smaller allocation.
     del source
@@ -110,7 +83,10 @@ def run_phenotype_loop(
         )
     if genotypes.n_filtered == 0:
         logger.warning("All SNPs were filtered out. No association tests will run.")
-    filtered_covariates = covariates[valid_mask, :] if covariates is not None else None
+    covariates = samples.covariates
+    filtered_covariates = (
+        covariates[samples.valid_mask, :] if covariates is not None else None
+    )
     prepared_covariates = prepare_rotated_covariates(
         eigenvectors, filtered_covariates, genotypes.analyzed_sample_count
     )
@@ -126,7 +102,7 @@ def run_phenotype_loop(
         for col in columns:
             if is_multi:
                 logger.info(f"Starting LMM for phenotype column {col}")
-            phenotypes_col = phenotypes[col][valid_mask]
+            phenotypes_col = samples.phenotypes[col][samples.valid_mask]
             col_path = (
                 config.output_dir / f"{prefix}.pheno{col}.assoc.txt"
                 if is_multi
@@ -151,9 +127,6 @@ def run_phenotype_loop(
         for col, col_path, run_result, rotation_share in zip(
             columns, group_paths, grouped.results, rotation_shares, strict=True
         ):
-            all_results.extend(run_result.associations)
-            total_tested += run_result.n_tested
-            all_assoc_paths.append(col_path)
             phenotype_results.append(
                 PhenotypeResult(
                     column=col,
@@ -174,32 +147,7 @@ def run_phenotype_loop(
                 f"Phenotype {col}: {run_result.n_tested} SNPs tested -> {col_path}"
             )
 
-    lmm_s = time.perf_counter() - t_lmm
-    runner_timing = _sum_chunk_stats(phenotype_results, shared_rotation_s)
-    single = phenotype_results[0] if len(phenotype_results) == 1 else None
-
-    return PhenoLoopOutcome(
-        associations=all_results,
-        n_tested=total_tested,
-        assoc_paths=all_assoc_paths,
-        phenotype_results=phenotype_results,
-        lmm_s=lmm_s,
-        runner_timing=runner_timing,
-        pve=single.pve_estimate if single is not None else None,
-        pve_se=single.pve_se if single is not None else None,
-    )
-
-
-def _sum_chunk_stats(
-    results: list[PhenotypeResult], shared_rotation_s: float
-) -> ChunkRunStats:
-    """Sum work and stage timings across every phenotype run."""
-    return ChunkRunStats(
-        processed=sum(result.timing.processed for result in results),
-        rotation_s=shared_rotation_s,
-        compute_s=sum(result.timing.compute_s for result in results),
-        result_write_s=sum(result.timing.result_write_s for result in results),
-    )
+    return phenotype_results, shared_rotation_s
 
 
 _LABELS = {"batch": BATCH_LABELS, "streaming": STREAMING_LABELS}

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `PipelineResult` takes `phenotype_results`, `n_samples`, `timing`,
+  `n_covariates` and `analyzed_sample_indices`. `associations`,
+  `n_snps_tested`, `assoc_path`, `assoc_paths`, `pve_estimate` and `pve_se`
+  are now read-only properties derived from `phenotype_results`, so reading
+  them is unchanged but passing them to the constructor is an error.
+- `jamma.lmm.loco.run_lmm_loco_prepared` runs LOCO over samples the caller
+  has already resolved. The pipeline enters there with its analysed samples,
+  so a `--loco` run no longer parses the `.bim` a second time for it.
 - `AssocComparisonResult` holds one comparison per column the mode carries,
   plus `af`, in `columns`; read one with `comparison["l_remle"]`. A column the
   mode does not carry is absent instead of a vacuous pass, a SNP count

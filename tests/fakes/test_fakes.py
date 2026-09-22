@@ -28,7 +28,7 @@ import jamma.jlinalg
 from jamma.lmm import eigen
 from jamma.lmm.assoc_output import IncrementalAssocWriter
 from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
-from jamma.pipeline_config import PipelineTiming
+from jamma.pipeline_config import PhenotypeResult, PipelineTiming
 from tests.fakes import (
     FakeAssocWriter,
     FakeJlinalg,
@@ -52,11 +52,15 @@ def _make_config(phenotype_columns: list[int]) -> PipelineConfig:
 
 def _make_result() -> PipelineResult:
     return PipelineResult(
-        associations=[],
+        phenotype_results=[
+            PhenotypeResult(
+                column=1,
+                associations=[],
+                n_snps_tested=0,
+                assoc_path=Path("/tmp/jamma_fake.assoc.txt"),
+            )
+        ],
         n_samples=0,
-        n_snps_tested=0,
-        assoc_path=Path("/tmp/jamma_fake.assoc.txt"),
-        assoc_paths=[Path("/tmp/jamma_fake.assoc.txt")],
         timing=PipelineTiming(total_s=0.0),
         n_covariates=1,
     )

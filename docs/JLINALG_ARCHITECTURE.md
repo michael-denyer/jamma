@@ -23,7 +23,7 @@ graph TD
     subgraph BRIDGE["C EXTENSION"]
         C{"C extension<br/>loaded?"}
         D["pymodule.c<br/>NumPy buffer bridge"]
-        F["ISA + Vendor Init<br/>(platform.c)"]
+        F["Vendor Init<br/>(platform.c)"]
         G{"Vendor BLAS<br/>available?"}
         D --> F --> G
     end
@@ -58,8 +58,9 @@ The facade in `__init__.py` owns extension discovery, ABI validation, public
 exports, and package-reload semantics. `_dgemm.py`, `_dsyrk.py`, `_eigh.py`,
 and `_snp_stats.py` own their operation contracts and NumPy implementations.
 If the extension import fails, the facade binds those fallbacks. When the C
-extension loads, `jlinalg_init()` in `platform.c` detects the CPU ISA and
-populates the dispatch table.
+extension loads, `jlinalg_init()` in `platform.c` populates the dispatch
+table. `jlinalg_isa` reports the SIMD ISA the extension was compiled for, not
+the CPU it runs on.
 
 ## Dispatch Chain
 
@@ -149,7 +150,7 @@ results that diverge from GEMMA's validation tolerances.
 |------|---------|
 | `include/jlinalg.h` | Public C API, ABI version, function pointer typedefs |
 | `src/pymodule.c` | Python/NumPy bridge (buffer extraction, GIL release, error translation) |
-| `src/platform.c` | ISA detection (CPUID/hwcap), vendor BLAS dispatch init |
+| `src/platform.c` | Compile-time ISA report, vendor BLAS dispatch init |
 | `include/blas_dispatch_internal.h` | Private selected-backend state shared by discovery and operation wrappers |
 | `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym and selected-backend ownership. Candidate directories come from `_blas_dirs.probe_plan()` (Python); C keeps every dlopen/dlsym call |
 | `src/blas_operations.c` | DGEMM, DSYRK, DSYEVD, and DSYEVR wrappers over the selected backend |

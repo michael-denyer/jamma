@@ -25,7 +25,7 @@ ABI_VERSION: Final[int]
 """JLINALG ABI version number for compatibility checking."""
 
 jlinalg_isa: Final[Literal["AVX2", "NEON", "generic"]]
-"""Active ISA name: "AVX2", "NEON", or "generic"."""
+"""SIMD ISA the extension was compiled for: "AVX2", "NEON", or "generic"."""
 
 blas_backend: Final[
     Literal[

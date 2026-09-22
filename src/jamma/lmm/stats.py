@@ -34,8 +34,8 @@ class AssocResult:
     allele1: str  # minor allele
     allele0: str  # major allele
     af: float  # allele frequency
-    beta: float
-    se: float
+    beta: float = float("nan")  # NaN in LRT mode, which reports no effect size
+    se: float = float("nan")
     logl_H1: float | None = None  # REML in mode 1, MLE in modes 2 and 4
     l_remle: float | None = None  # Not present for Score-only
     p_wald: float | None = None  # Only for Wald/-lmm 1

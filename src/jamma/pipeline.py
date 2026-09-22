@@ -59,7 +59,7 @@ from jamma.lmm.eigen_io import (
 )
 from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
-from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
+from jamma.lmm.schema import parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
     VALID_BACKENDS,
@@ -68,6 +68,7 @@ from jamma.pipeline_config import (
     PhenotypeResult,
     PipelineConfig,
     PipelineResult,
+    PipelineTiming,
 )
 from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_phenotype_loop import run_phenotype_loop

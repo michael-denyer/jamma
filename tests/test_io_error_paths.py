@@ -18,9 +18,8 @@ from jamma.io.plink import (
     partitions_from_metadata,
     validate_plink_dimensions,
 )
-from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
-from jamma.lmm.schema import SnpMeta, get_spec
-from jamma.lmm.stats import AssocResult
+from jamma.lmm.assoc_output import IncrementalAssocWriter
+from jamma.lmm.schema import MODE_SPECS, SnpMeta
 from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, SYNTHETIC
 
@@ -91,59 +90,9 @@ class TestPlinkIOErrorPaths:
 class TestLmmIOErrorPaths:
     """Error-path tests for LMM I/O association writer.
 
-    Tests format_assoc_line (unknown test_type), IncrementalAssocWriter
-    (invalid test_type), and write_arrays_batch (mode mismatch, missing
-    stat keys, missing snp_info keys, length mismatch).
+    Tests write_arrays_batch (missing stat keys, missing snp_info keys,
+    length mismatch).
     """
-
-    def _make_assoc_result(self) -> AssocResult:
-        """Create a minimal AssocResult with dummy values for testing."""
-        return AssocResult(
-            chr="1",
-            rs="rs1",
-            ps=100,
-            n_miss=0,
-            allele1="A",
-            allele0="G",
-            af=0.3,
-            beta=0.1,
-            se=0.01,
-            logl_H1=-100.0,
-            l_remle=1.0,
-            p_wald=0.05,
-        )
-
-    def test_format_assoc_line_unknown_type_raises(self) -> None:
-        """format_assoc_line rejects unknown test_type with ValueError."""
-        result = self._make_assoc_result()
-        with pytest.raises(ValueError, match="Unknown test_type"):
-            format_assoc_line(result, test_type="unknown")
-
-    def test_incremental_writer_invalid_type_raises(self, tmp_path: Path) -> None:
-        """IncrementalAssocWriter rejects invalid test_type with ValueError."""
-        with pytest.raises(ValueError, match="Unknown test_type"):
-            IncrementalAssocWriter(tmp_path / "out.txt", test_type="bad")
-
-    def test_write_arrays_batch_mode_mismatch_raises(self, tmp_path: Path) -> None:
-        """write_arrays_batch rejects lmm_mode whose test_type != writer's test_type."""
-        snp_indices = np.array([0])
-        snp_info = SnpMeta.from_dicts(
-            [{"chr": "1", "rs": "rs1", "pos": 100, "a1": "A", "a0": "G"}]
-        )
-        afs = np.array([0.3])
-        miss_counts = np.array([0])
-
-        with IncrementalAssocWriter(tmp_path / "out.txt", test_type="wald") as writer:
-            with pytest.raises(ValueError, match="does not match"):
-                # lmm_mode=2 is LRT but writer expects wald
-                writer.write_arrays_batch(
-                    lmm_mode=2,
-                    snp_indices=snp_indices,
-                    snp_info=snp_info,
-                    afs=afs,
-                    miss_counts=miss_counts,
-                    arrays={},
-                )
 
     def test_write_arrays_batch_missing_stat_keys_raises(self, tmp_path: Path) -> None:
         """write_arrays_batch rejects empty arrays (missing all wald stat keys)."""
@@ -154,11 +103,10 @@ class TestLmmIOErrorPaths:
         afs = np.array([0.3])
         miss_counts = np.array([0])
 
-        with IncrementalAssocWriter(tmp_path / "out.txt", test_type="wald") as writer:
+        with IncrementalAssocWriter(tmp_path / "out.txt", MODE_SPECS[1]) as writer:
             with pytest.raises(ValueError, match="missing arrays"):
-                # lmm_mode=1 is wald, but arrays={} is missing all required keys
+                # arrays={} is missing all required wald stat keys
                 writer.write_arrays_batch(
-                    lmm_mode=1,
                     snp_indices=snp_indices,
                     snp_info=snp_info,
                     afs=afs,
@@ -185,13 +133,12 @@ class TestLmmIOErrorPaths:
         afs = np.array([0.3])  # length 1, mismatches snp_indices length 2
         miss_counts = np.array([0, 0])
 
-        spec = get_spec(1)
+        spec = MODE_SPECS[1]
         arrays = {c.array_key: np.array([0.1, 0.2]) for c in spec.stat_columns}
 
-        with IncrementalAssocWriter(tmp_path / "out.txt", test_type="wald") as writer:
+        with IncrementalAssocWriter(tmp_path / "out.txt", spec) as writer:
             with pytest.raises(ValueError, match="length"):
                 writer.write_arrays_batch(
-                    lmm_mode=1,
                     snp_indices=snp_indices,
                     snp_info=snp_info,
                     afs=afs,

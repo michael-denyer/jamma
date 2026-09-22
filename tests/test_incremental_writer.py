@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 from loguru import logger
 
-from jamma.lmm.io import IncrementalAssocWriter
-from jamma.lmm.schema import SnpMeta
+from jamma.lmm.assoc_output import IncrementalAssocWriter
+from jamma.lmm.schema import MODE_SPECS, SnpMeta
 
 pytestmark = pytest.mark.tier0
 
@@ -88,8 +88,8 @@ class SampleBatch:
 
     write_arrays_batch is the only writer entry point left, so tests drive
     it with a small batch of pre-built arrays rather than AssocResult
-    objects. ``lmm_mode=1`` (Wald) throughout; ``arrays`` keys match
-    RESULT_FIELDS[1]'s array_key names (betas, ses, logls, lambdas, pwalds).
+    objects. Wald mode (``MODE_SPECS[1]``) throughout; ``arrays`` keys match
+    its stat_columns' array_key names (betas, ses, logls, lambdas, pwalds).
     """
 
     snp_indices: np.ndarray
@@ -104,7 +104,6 @@ class SampleBatch:
     def as_call_args(self) -> tuple:
         """Positional args for writer.write_arrays_batch(*batch.as_call_args())."""
         return (
-            1,
             self.snp_indices,
             self.snp_info,
             self.afs,
@@ -186,7 +185,7 @@ class TestIncrementalAssocWriter:
         """Should write GEMMA-compatible header on open."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path):
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]):
             pass  # Just open and close
 
         content = output_path.read_text()
@@ -198,7 +197,7 @@ class TestIncrementalAssocWriter:
         """Should write single result correctly."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             writer.write_arrays_batch(*sample_result.as_call_args())
 
         content = output_path.read_text()
@@ -211,7 +210,7 @@ class TestIncrementalAssocWriter:
         """Should write multiple results correctly."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             writer.write_arrays_batch(*sample_results.as_call_args())
 
         content = output_path.read_text()
@@ -225,7 +224,7 @@ class TestIncrementalAssocWriter:
         """write_arrays_batch should write all results at once."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             writer.write_arrays_batch(*sample_results.as_call_args())
 
         assert writer.count == len(sample_results)
@@ -242,7 +241,7 @@ class TestIncrementalAssocWriter:
         """
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             original_flush = open_handle(writer).flush
             flush_count = 0
 
@@ -268,9 +267,8 @@ class TestIncrementalAssocWriter:
         """write_arrays_batch with empty snp_indices is a no-op: count stays 0."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             writer.write_arrays_batch(
-                1,
                 np.array([], dtype=int),
                 SnpMeta.from_dicts([]),
                 np.array([]),
@@ -289,14 +287,14 @@ class TestIncrementalAssocWriter:
         """Should create parent directories if needed."""
         output_path = tmp_path / "deep" / "nested" / "dir" / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             writer.write_arrays_batch(*sample_result.as_call_args())
 
         assert output_path.exists()
 
     def test_raises_if_not_opened(self, sample_result: SampleBatch):
         """Should raise error if write_arrays_batch called without context manager."""
-        writer = IncrementalAssocWriter(Path("dummy.txt"))
+        writer = IncrementalAssocWriter(Path("dummy.txt"), MODE_SPECS[1])
 
         with pytest.raises(RuntimeError, match="not opened"):
             writer.write_arrays_batch(*sample_result.as_call_args())
@@ -305,9 +303,9 @@ class TestIncrementalAssocWriter:
         """Should retry on OSError and succeed on second attempt."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             with _inject_write_failure(writer, message="Disk full", fail_on=1):
-                with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                with patch("jamma.lmm.assoc_output.time.sleep") as mock_sleep:
                     writer.write_arrays_batch(*sample_result.as_call_args())
                     # Should have slept once with 0.1s (first retry backoff)
                     mock_sleep.assert_called_once_with(0.1)
@@ -320,9 +318,9 @@ class TestIncrementalAssocWriter:
         """Should delete partial file after exhausting all retries."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with patch("jamma.lmm.io.time.sleep"):
+        with patch("jamma.lmm.assoc_output.time.sleep"):
             with pytest.raises(OSError):
-                with IncrementalAssocWriter(output_path) as writer:
+                with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                     with _inject_write_failure(
                         writer, message="Disk full", always=True, tab_only=True
                     ):
@@ -334,16 +332,17 @@ class TestIncrementalAssocWriter:
         """Non-OSError exceptions propagate immediately without retries."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+        # float(None) raises TypeError while the row is formatted, before any
+        # bytes are written: a non-OSError formatting failure.
+        b = sample_result
+        arrays = {**b.arrays, "betas": np.array([None] * len(b))}
+
+        with patch("jamma.lmm.assoc_output.time.sleep") as mock_sleep:
             with pytest.raises(TypeError):
-                with IncrementalAssocWriter(output_path) as writer:
-                    # Patch spec lookup to raise TypeError before any bytes
-                    # are formatted, mirroring a non-OSError formatting failure.
-                    with patch(
-                        "jamma.lmm.io.get_spec",
-                        side_effect=TypeError("bad format"),
-                    ):
-                        writer.write_arrays_batch(*sample_result.as_call_args())
+                with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
+                    writer.write_arrays_batch(
+                        b.snp_indices, b.snp_info, b.afs, b.miss_counts, arrays
+                    )
 
             # time.sleep should NOT have been called
             mock_sleep.assert_not_called()
@@ -354,9 +353,9 @@ class TestIncrementalAssocWriter:
         """Partial file deleted when OSError propagates through context exit."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with patch("jamma.lmm.io.time.sleep"):
+        with patch("jamma.lmm.assoc_output.time.sleep"):
             with pytest.raises(OSError):
-                with IncrementalAssocWriter(output_path) as writer:
+                with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                     with _inject_write_failure(
                         writer, message="Disk full", always=True, tab_only=True
                     ):
@@ -371,7 +370,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with pytest.raises(KeyboardInterrupt):
-            with IncrementalAssocWriter(output_path) as writer:
+            with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise KeyboardInterrupt()
 
@@ -386,7 +385,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with pytest.raises(SystemExit):
-            with IncrementalAssocWriter(output_path) as writer:
+            with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise SystemExit(1)
 
@@ -401,7 +400,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with pytest.raises(ValueError, match="bad data"):
-            with IncrementalAssocWriter(output_path) as writer:
+            with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise ValueError("bad data")
 
@@ -413,11 +412,11 @@ class TestIncrementalAssocWriter:
         """write_arrays_batch retries on first OSError, succeeds on the second."""
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             with _inject_write_failure(
                 writer, message="Transient I/O error", fail_on=1, tab_only=True
             ):
-                with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                with patch("jamma.lmm.assoc_output.time.sleep") as mock_sleep:
                     writer.write_arrays_batch(*sample_results.as_call_args())
                     mock_sleep.assert_called_once_with(0.1)
 
@@ -431,7 +430,7 @@ class TestIncrementalAssocWriter:
 
     def test_write_arrays_batch_raises_if_not_opened(self, sample_results: SampleBatch):
         """write_arrays_batch on unopened writer raises RuntimeError."""
-        writer = IncrementalAssocWriter(Path("dummy.txt"))
+        writer = IncrementalAssocWriter(Path("dummy.txt"), MODE_SPECS[1])
 
         with pytest.raises(RuntimeError, match="not opened"):
             writer.write_arrays_batch(*sample_results.as_call_args())
@@ -446,11 +445,11 @@ class TestIncrementalAssocWriter:
         """
         output_path = tmp_path / "test.assoc.txt"
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             with _inject_write_failure(
                 writer, message="I/O error", fail_on=1, errno_code=errno.EIO
             ):
-                with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+                with patch("jamma.lmm.assoc_output.time.sleep") as mock_sleep:
                     writer.write_arrays_batch(*sample_result.as_call_args())
                     mock_sleep.assert_called_once_with(0.1)
 
@@ -469,9 +468,9 @@ class TestIncrementalAssocWriter:
         """
         output_path = tmp_path / "test.assoc.txt"
 
-        with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+        with patch("jamma.lmm.assoc_output.time.sleep") as mock_sleep:
             with pytest.raises(OSError):
-                with IncrementalAssocWriter(output_path) as writer:
+                with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                     with _inject_write_failure(
                         writer,
                         message="Permission denied",
@@ -497,9 +496,9 @@ class TestIncrementalAssocWriter:
         """
         output_path = tmp_path / "test.assoc.txt"
 
-        with patch("jamma.lmm.io.time.sleep"):
+        with patch("jamma.lmm.assoc_output.time.sleep"):
             with pytest.raises(OSError):
-                with IncrementalAssocWriter(output_path) as writer:
+                with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                     # Write first result successfully
                     writer.write_arrays_batch(
                         *sample_results.slice_one(0).as_call_args()
@@ -524,7 +523,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with pytest.raises(MemoryError):
-            with IncrementalAssocWriter(output_path) as writer:
+            with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise MemoryError("OOM at 90% completion")
 
@@ -539,7 +538,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with pytest.raises(GeneratorExit):
-            with IncrementalAssocWriter(output_path) as writer:
+            with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 raise GeneratorExit()
 
@@ -554,7 +553,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with pytest.raises(OSError, match="Disk full"):
-            with IncrementalAssocWriter(output_path) as writer:
+            with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                 writer.write_arrays_batch(*sample_result.as_call_args())
 
                 def failing_flush():
@@ -571,7 +570,7 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
 
         with pytest.raises(KeyboardInterrupt):
-            with IncrementalAssocWriter(output_path) as writer:
+            with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 original_close = open_handle(writer).close
 
@@ -601,7 +600,7 @@ class TestIncrementalAssocWriter:
         flush_call_count = 0
         failed_once = False
 
-        with IncrementalAssocWriter(output_path) as writer:
+        with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
             original_flush = open_handle(writer).flush
 
             def flaky_flush():
@@ -619,7 +618,7 @@ class TestIncrementalAssocWriter:
 
             open_handle(writer).flush = flaky_flush
 
-            with patch("jamma.lmm.io.time.sleep") as mock_sleep:
+            with patch("jamma.lmm.assoc_output.time.sleep") as mock_sleep:
                 writer.write_arrays_batch(*sample_result.as_call_args())
                 # Should have slept once with first retry backoff delay
                 mock_sleep.assert_called_once_with(0.1)
@@ -639,9 +638,9 @@ class TestIncrementalAssocWriter:
         """
         output_path = tmp_path / "test.assoc.txt"
 
-        with patch("jamma.lmm.io.time.sleep"):
+        with patch("jamma.lmm.assoc_output.time.sleep"):
             with pytest.raises(OSError):
-                with IncrementalAssocWriter(output_path) as writer:
+                with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                     original_write = open_handle(writer).write
 
                     def eperm_write(data):
@@ -677,9 +676,9 @@ class TestIncrementalAssocWriter:
         """
         output_path = tmp_path / "test.assoc.txt"
 
-        with patch("jamma.lmm.io.time.sleep"):
+        with patch("jamma.lmm.assoc_output.time.sleep"):
             with pytest.raises(OSError, match="Illegal seek"):
-                with IncrementalAssocWriter(output_path) as writer:
+                with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
 
                     def failing_tell():
                         err = OSError("Illegal seek")
@@ -713,8 +712,8 @@ class TestIncrementalAssocWriter:
         output_path = tmp_path / "test.assoc.txt"
         debris = "X" * 500
 
-        with patch("jamma.lmm.io.time.sleep"):
-            with IncrementalAssocWriter(output_path) as writer:
+        with patch("jamma.lmm.assoc_output.time.sleep"):
+            with IncrementalAssocWriter(output_path, MODE_SPECS[1]) as writer:
                 handle = open_handle(writer)
                 original_write = handle.write
                 data_attempts = 0
@@ -756,7 +755,7 @@ class TestAssocPublication:
         destination.write_bytes(b"previous completed run\n")
 
         with pytest.raises(ValueError, match="computation failed"):
-            with IncrementalAssocWriter(destination):
+            with IncrementalAssocWriter(destination, MODE_SPECS[1]):
                 raise ValueError("computation failed")
 
         assert destination.read_bytes() == b"previous completed run\n"
@@ -768,7 +767,7 @@ class TestAssocPublication:
         destination.write_bytes(b"previous completed run\n")
 
         with pytest.raises(OSError, match="close failed"):
-            with IncrementalAssocWriter(destination) as writer:
+            with IncrementalAssocWriter(destination, MODE_SPECS[1]) as writer:
                 handle = open_handle(writer)
                 original_close = handle.close
 
@@ -788,7 +787,7 @@ class TestAssocPublication:
         destination.write_bytes(b"previous completed run\n")
 
         with pytest.raises(error):
-            with IncrementalAssocWriter(destination):
+            with IncrementalAssocWriter(destination, MODE_SPECS[1]):
                 raise error()
 
         assert destination.read_bytes() == b"previous completed run\n"
@@ -803,7 +802,7 @@ class TestAssocPublication:
         tmp_path.chmod(0o500)
         try:
             with pytest.raises(PermissionError):
-                with IncrementalAssocWriter(destination):
+                with IncrementalAssocWriter(destination, MODE_SPECS[1]):
                     pass
         finally:
             tmp_path.chmod(0o700)
@@ -826,7 +825,7 @@ class TestAssocPublication:
             monkeypatch.setattr(Path, "replace", fail)
 
         with pytest.raises(OSError, match="publication failed"):
-            with IncrementalAssocWriter(destination) as writer:
+            with IncrementalAssocWriter(destination, MODE_SPECS[1]) as writer:
                 if operation == "flush":
                     open_handle(writer).flush = fail
 
@@ -838,7 +837,7 @@ class TestAssocPublication:
         destination = tmp_path / "result.assoc.txt"
         destination.write_bytes(b"previous completed run\n")
 
-        with IncrementalAssocWriter(destination):
+        with IncrementalAssocWriter(destination, MODE_SPECS[1]):
             assert destination.read_bytes() == b"previous completed run\n"
 
         assert destination.read_text().startswith("chr\trs\t")
@@ -852,7 +851,7 @@ class TestAssocPublication:
 
         with _captured_warnings() as messages:
             with pytest.raises(KeyboardInterrupt):
-                with IncrementalAssocWriter(destination) as writer:
+                with IncrementalAssocWriter(destination, MODE_SPECS[1]) as writer:
                     writer.write_arrays_batch(*sample_result.as_call_args())
                     raise KeyboardInterrupt()
 
@@ -870,7 +869,7 @@ class TestAssocPublication:
 
         with _captured_warnings() as messages:
             with pytest.raises(ValueError, match="computation failed"):
-                with IncrementalAssocWriter(destination) as writer:
+                with IncrementalAssocWriter(destination, MODE_SPECS[1]) as writer:
                     writer.write_arrays_batch(*sample_result.as_call_args())
                     raise ValueError("computation failed")
 
@@ -886,7 +885,7 @@ class TestAssocPublication:
         destination = tmp_path / "result.assoc.txt"
 
         with _captured_warnings() as messages:
-            with IncrementalAssocWriter(destination) as writer:
+            with IncrementalAssocWriter(destination, MODE_SPECS[1]) as writer:
                 writer.write_arrays_batch(*sample_result.as_call_args())
 
         assert sorted(p.name for p in tmp_path.iterdir()) == ["result.assoc.txt"]
@@ -905,7 +904,7 @@ class TestAssocPublication:
 
         with _captured_warnings() as messages:
             with pytest.raises(error):
-                with IncrementalAssocWriter(destination) as writer:
+                with IncrementalAssocWriter(destination, MODE_SPECS[1]) as writer:
                     writer.write_arrays_batch(*sample_result.as_call_args())
                     raise error()
         del writer  # Cleanup on finalization must not undo retention either.

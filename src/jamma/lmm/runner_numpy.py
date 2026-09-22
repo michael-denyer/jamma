@@ -28,6 +28,11 @@ from jamma.core.snp_stats import (
     SnpSelection,
     collect_snp_stats_from_chunks,
 )
+from jamma.lmm.assoc_output import (
+    IncrementalAssocWriter,
+    make_result_list_sink,
+    make_writer_sink,
+)
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
     plan_association,
@@ -44,7 +49,6 @@ from jamma.lmm.genotype_source import (
     SampleBasis,
     bind_prepared_genotypes,
 )
-from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.prepare_common import (
     EigenInput,
     EigenPairs,
@@ -56,15 +60,14 @@ from jamma.lmm.prepare_common import (
     validate_runner_inputs,
     with_intercept,
 )
-from jamma.lmm.results import make_result_list_sink, make_writer_sink
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
+    MODE_SPECS,
     LmmConfig,
     LmmRunResult,
     SnpInfoRecord,
     SnpMeta,
 )
-from jamma.lmm.schema import TEST_TYPE_MAP as _TEST_TYPE_MAP
 from jamma.lmm.stats import AssocResult
 
 
@@ -281,12 +284,10 @@ def run_lmm_association_group_prepared(
 
     config = spec.config
     eigen_input = EigenPairs(eigenvalues, eigenvectors)
-    lmm_mode = config.lmm_mode
+    mode = MODE_SPECS[config.lmm_mode]
     if genotypes.n_filtered == 0:
         for run in runs:
-            with IncrementalAssocWriter(
-                run.output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
-            ):
+            with IncrementalAssocWriter(run.output_path, mode):
                 pass
         return GroupedLmmRunResult(
             tuple(LmmRunResult([], 0) for _run in runs), rotation_s=0.0
@@ -319,17 +320,13 @@ def run_lmm_association_group_prepared(
     chunks = spec.execution.conservative_chunks.narrow(genotypes.n_filtered)
     with contextlib.ExitStack() as stack:
         writers = tuple(
-            stack.enter_context(
-                IncrementalAssocWriter(
-                    run.output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
-                )
-            )
+            stack.enter_context(IncrementalAssocWriter(run.output_path, mode))
             for run in runs
         )
         jobs = tuple(
             PhenotypeChunkJob(
                 prepared=prepared,
-                chunk_sink=make_writer_sink(writer, lmm_mode, genotypes),
+                chunk_sink=make_writer_sink(writer, genotypes),
                 config=config,
                 lambda_warning_prefix=spec.labels.lambda_warning_prefix,
             )
@@ -379,7 +376,7 @@ def _run_lmm_association(
     l_min, l_max = config.l_min, config.l_max
     check_memory = config.check_memory
     show_progress = config.show_progress
-    lmm_mode = config.lmm_mode
+    mode = MODE_SPECS[config.lmm_mode]
 
     start_time = time.perf_counter()
     n_samples_total = phenotypes.shape[0]
@@ -421,9 +418,7 @@ def _run_lmm_association(
             f"Consider relaxing --maf or --miss thresholds."
         )
         if output_path is not None:
-            with IncrementalAssocWriter(
-                output_path, test_type=_TEST_TYPE_MAP[lmm_mode]
-            ):
+            with IncrementalAssocWriter(output_path, mode):
                 pass  # Context manager writes the header, no data rows
         return LmmRunResult(associations=[], n_tested=0)
 
@@ -452,14 +447,12 @@ def _run_lmm_association(
     all_results: list[AssocResult] = []
     with contextlib.ExitStack() as stack:
         if output_path is not None:
-            writer = stack.enter_context(
-                IncrementalAssocWriter(output_path, test_type=_TEST_TYPE_MAP[lmm_mode])
-            )
+            writer = stack.enter_context(IncrementalAssocWriter(output_path, mode))
 
         chunk_sink = (
-            make_writer_sink(writer, lmm_mode, genotypes)
+            make_writer_sink(writer, genotypes)
             if writer is not None
-            else make_result_list_sink(all_results, lmm_mode, genotypes)
+            else make_result_list_sink(all_results, mode, genotypes)
         )
 
         chunk_stats = run_lmm_chunk_source_numpy(

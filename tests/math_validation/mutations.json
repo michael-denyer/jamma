@@ -95,7 +95,7 @@
       "id": "production-wrong-allele-orientation",
       "category": "emit the wrong allele orientation while preserving MAF",
       "tier": "smoke",
-      "path": "src/jamma/lmm/results.py",
+      "path": "src/jamma/lmm/assoc_output.py",
       "find": "    a1_list = snp_info.a1[snp_indices].tolist()\n    a0_list = snp_info.a0[snp_indices].tolist()",
       "replace": "    a1_list = snp_info.a0[snp_indices].tolist()\n    a0_list = snp_info.a1[snp_indices].tolist()",
       "detector": "tests/test_mathematical_mutations.py::test_tiny_wald_results_preserve_external_allele_orientation",

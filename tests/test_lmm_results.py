@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
-from jamma.lmm.schema import LmmConfig, LmmMode
+from jamma.lmm.schema import MODE_SPECS, LmmConfig, LmmMode
 from jamma.validation import load_gemma_assoc
 from tests.conftest import make_runner_synthetic_data, requires_c
 
@@ -24,7 +24,7 @@ from tests.conftest import make_runner_synthetic_data, requires_c
 
 @pytest.mark.tier0
 class TestLambdaBoundaryDiagnostics:
-    """Unit tests for count_lambda_boundary_hits and log_lambda_boundary_warning.
+    """Unit tests for _count_lambda_boundary_hits and _log_lambda_boundary_warning.
 
     Verifies that flat-optima SNPs with lambda converging at l_min or l_max
     are correctly counted, and that the boundary warning logger path does not crash.
@@ -32,67 +32,67 @@ class TestLambdaBoundaryDiagnostics:
 
     def test_mode1_lower_bound_count(self):
         """Mode 1 (Wald): count 3 lambdas at l_min, 0 at l_max."""
-        from jamma.lmm.results import count_lambda_boundary_hits
+        from jamma.lmm.chunk_runner_numpy import _count_lambda_boundary_hits
 
         arrays = {"lambdas": np.array([1e-5, 1e-5, 0.5, 1e-5, 2.0])}
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode=1, arrays=arrays, l_min=1e-5, l_max=1e5
+        n_at_lmin, n_at_lmax = _count_lambda_boundary_hits(
+            mode=MODE_SPECS[1], arrays=arrays, l_min=1e-5, l_max=1e5
         )
         assert n_at_lmin == 3
         assert n_at_lmax == 0
 
     def test_mode2_upper_bound_count(self):
         """Mode 2 (LRT): count 1 at l_min, 2 at l_max using lambdas_mle."""
-        from jamma.lmm.results import count_lambda_boundary_hits
+        from jamma.lmm.chunk_runner_numpy import _count_lambda_boundary_hits
 
         arrays = {"lambdas_mle": np.array([1e-5, 1e5, 1e5])}
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode=2, arrays=arrays, l_min=1e-5, l_max=1e5
+        n_at_lmin, n_at_lmax = _count_lambda_boundary_hits(
+            mode=MODE_SPECS[2], arrays=arrays, l_min=1e-5, l_max=1e5
         )
         assert n_at_lmin == 1
         assert n_at_lmax == 2
 
     def test_mode4_combines_reml_and_mle(self):
         """Mode 4 (All): counts from both lambdas (REML) and lambdas_mle (MLE)."""
-        from jamma.lmm.results import count_lambda_boundary_hits
+        from jamma.lmm.chunk_runner_numpy import _count_lambda_boundary_hits
 
         arrays = {
             "lambdas": np.array([1e-5, 0.5]),
             "lambdas_mle": np.array([1e5, 0.5]),
         }
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode=4, arrays=arrays, l_min=1e-5, l_max=1e5
+        n_at_lmin, n_at_lmax = _count_lambda_boundary_hits(
+            mode=MODE_SPECS[4], arrays=arrays, l_min=1e-5, l_max=1e5
         )
         assert n_at_lmin == 1  # one REML lambda at l_min
         assert n_at_lmax == 1  # one MLE lambda at l_max
 
     def test_empty_array_returns_zeros(self):
         """Empty lambda arrays return (0, 0) without error."""
-        from jamma.lmm.results import count_lambda_boundary_hits
+        from jamma.lmm.chunk_runner_numpy import _count_lambda_boundary_hits
 
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode=1, arrays={"lambdas": np.array([])}, l_min=1e-5, l_max=1e5
+        n_at_lmin, n_at_lmax = _count_lambda_boundary_hits(
+            mode=MODE_SPECS[1], arrays={"lambdas": np.array([])}, l_min=1e-5, l_max=1e5
         )
         assert n_at_lmin == 0
         assert n_at_lmax == 0
 
     def test_warning_lower_bound_does_not_crash(self):
-        """log_lambda_boundary_warning with lower-bound hits does not raise."""
-        from jamma.lmm.results import log_lambda_boundary_warning
+        """_log_lambda_boundary_warning with lower-bound hits does not raise."""
+        from jamma.lmm.chunk_runner_numpy import _log_lambda_boundary_warning
 
-        log_lambda_boundary_warning(3, 0, 1e-5, 1e5)  # should not raise
+        _log_lambda_boundary_warning(3, 0, 1e-5, 1e5)  # should not raise
 
     def test_warning_upper_bound_does_not_crash(self):
-        """log_lambda_boundary_warning with upper-bound hits does not raise."""
-        from jamma.lmm.results import log_lambda_boundary_warning
+        """_log_lambda_boundary_warning with upper-bound hits does not raise."""
+        from jamma.lmm.chunk_runner_numpy import _log_lambda_boundary_warning
 
-        log_lambda_boundary_warning(0, 2, 1e-5, 1e5)  # should not raise
+        _log_lambda_boundary_warning(0, 2, 1e-5, 1e5)  # should not raise
 
     def test_warning_no_hits_is_noop(self):
-        """log_lambda_boundary_warning with zero counts is a no-op."""
-        from jamma.lmm.results import log_lambda_boundary_warning
+        """_log_lambda_boundary_warning with zero counts is a no-op."""
+        from jamma.lmm.chunk_runner_numpy import _log_lambda_boundary_warning
 
-        log_lambda_boundary_warning(0, 0, 1e-5, 1e5)  # should not raise
+        _log_lambda_boundary_warning(0, 0, 1e-5, 1e5)  # should not raise
 
 
 # ---------------------------------------------------------------------------

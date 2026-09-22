@@ -552,8 +552,8 @@ class TestMultiNParsing:
 
 def _mock_pipeline_result(outdir: Path):
     """Create a minimal mock PipelineResult for CLI tests."""
-    from jamma.lmm.schema import PipelineTiming
     from jamma.pipeline import PipelineResult
+    from jamma.pipeline_config import PipelineTiming
 
     outdir.mkdir(parents=True, exist_ok=True)
     assoc_path = outdir / "result.assoc.txt"

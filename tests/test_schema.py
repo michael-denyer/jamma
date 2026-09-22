@@ -1,8 +1,7 @@
 """Tests for the unified output schema.
 
-Verifies that derived dispatch tables match their original hardcoded values
-exactly, and that write_arrays_batch produces byte-identical output to
-format_assoc_line via AssocResult.
+Pins each mode's columns in MODE_SPECS, and checks that
+write_arrays_batch produces the expected TSV rows.
 """
 
 from pathlib import Path
@@ -11,20 +10,17 @@ import numpy as np
 import pytest
 
 from jamma.io.plink import PlinkMetadata, get_plink_metadata
+from jamma.lmm.assoc_output import IncrementalAssocWriter, build_results
 from jamma.lmm.schema import (
-    ACCUM_KEYS,
     DEFAULT_L_MAX,
     DEFAULT_L_MIN,
     DEFAULT_MAF,
     DEFAULT_MISS,
     DEFAULT_N_GRID,
     DEFAULT_N_REFINE,
-    FORMAT_COLUMNS,
     HEADERS,
     MIN_N_REFINE,
     MODE_SPECS,
-    RESULT_FIELDS,
-    TEST_TYPE_MAP,
     SnpMeta,
     get_spec,
 )
@@ -58,179 +54,74 @@ class TestDefaultKnobs:
         assert DEFAULT_N_REFINE == MIN_N_REFINE == 20
 
 
-# ── Schema correctness: derived tables match old hardcoded values ────
+# ── Schema correctness: each mode's columns match GEMMA's ─────────────
 
 
-class TestDerivedTables:
-    """Assert derived views match the original dispatch tables exactly."""
+class TestModeSpecs:
+    """Pin each mode's name, kernel array keys, and output column names."""
 
-    def test_test_type_map(self) -> None:
-        assert TEST_TYPE_MAP == {1: "wald", 2: "lrt", 3: "score", 4: "all"}
+    @pytest.mark.parametrize(
+        ("mode", "test_type", "columns"),
+        [
+            (
+                1,
+                "wald",
+                [
+                    ("betas", "beta"),
+                    ("ses", "se"),
+                    ("logls", "logl_H1"),
+                    ("lambdas", "l_remle"),
+                    ("pwalds", "p_wald"),
+                ],
+            ),
+            (
+                2,
+                "lrt",
+                [("logls", "logl_H1"), ("lambdas_mle", "l_mle"), ("p_lrts", "p_lrt")],
+            ),
+            (3, "score", [("betas", "beta"), ("ses", "se"), ("p_scores", "p_score")]),
+            (
+                4,
+                "all",
+                [
+                    ("betas", "beta"),
+                    ("ses", "se"),
+                    ("logls", "logl_H1"),
+                    ("lambdas", "l_remle"),
+                    ("lambdas_mle", "l_mle"),
+                    ("pwalds", "p_wald"),
+                    ("p_lrts", "p_lrt"),
+                    ("p_scores", "p_score"),
+                ],
+            ),
+        ],
+    )
+    def test_columns(self, mode: int, test_type: str, columns: list) -> None:
+        spec = get_spec(mode)
+        assert spec.test_type == test_type
+        assert [(c.array_key, c.field_name) for c in spec.stat_columns] == columns
 
-    def test_accum_keys_mode1(self) -> None:
-        assert ACCUM_KEYS[1] == ("betas", "ses", "logls", "lambdas", "pwalds")
-
-    def test_accum_keys_mode2(self) -> None:
-        assert ACCUM_KEYS[2] == ("logls", "lambdas_mle", "p_lrts")
-
-    def test_accum_keys_mode3(self) -> None:
-        assert ACCUM_KEYS[3] == ("betas", "ses", "p_scores")
-
-    def test_accum_keys_mode4(self) -> None:
-        assert ACCUM_KEYS[4] == (
-            "betas",
-            "ses",
-            "logls",
-            "lambdas",
-            "lambdas_mle",
-            "pwalds",
-            "p_lrts",
-            "p_scores",
+    def test_header_is_gemma_prefix_then_stat_columns(self) -> None:
+        assert MODE_SPECS[1].header == (
+            "chr\trs\tps\tn_miss\tallele1\tallele0\taf"
+            "\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
         )
-
-    def test_result_fields(self) -> None:
-        expected = {
-            1: {
-                "betas": "beta",
-                "ses": "se",
-                "logls": "logl_H1",
-                "lambdas": "l_remle",
-                "pwalds": "p_wald",
-            },
-            2: {
-                "logls": "logl_H1",
-                "lambdas_mle": "l_mle",
-                "p_lrts": "p_lrt",
-            },
-            3: {"betas": "beta", "ses": "se", "p_scores": "p_score"},
-            4: {
-                "betas": "beta",
-                "ses": "se",
-                "logls": "logl_H1",
-                "lambdas": "l_remle",
-                "lambdas_mle": "l_mle",
-                "pwalds": "p_wald",
-                "p_lrts": "p_lrt",
-                "p_scores": "p_score",
-            },
-        }
-        assert expected == RESULT_FIELDS
-
-    def test_format_columns(self) -> None:
-        expected = {
-            "wald": ["beta", "se", "logl_H1", "l_remle", "p_wald"],
-            "score": ["beta", "se", "p_score"],
-            "lrt": ["logl_H1", "l_mle", "p_lrt"],
-            "all": [
-                "beta",
-                "se",
-                "logl_H1",
-                "l_remle",
-                "l_mle",
-                "p_wald",
-                "p_lrt",
-                "p_score",
-            ],
-        }
-        assert expected == FORMAT_COLUMNS
-
-    def test_headers_contain_prefix(self) -> None:
-        prefix = "chr\trs\tps\tn_miss\tallele1\tallele0\taf"
-        for header in HEADERS.values():
-            assert header.startswith(prefix)
-
-    def test_headers_match_format_columns(self) -> None:
-        for tt, cols in FORMAT_COLUMNS.items():
-            header_cols = HEADERS[tt].split("\t")[7:]  # skip 7-col prefix
-            assert header_cols == cols, f"Header mismatch for {tt}"
+        for spec in MODE_SPECS.values():
+            assert HEADERS[spec.test_type] == spec.header
 
     def test_get_spec_invalid_mode_raises(self) -> None:
         with pytest.raises(ValueError, match="lmm_mode must be"):
             get_spec(99)
 
-    def test_get_spec_valid_modes(self) -> None:
-        for mode in (1, 2, 3, 4):
-            spec = get_spec(mode)
-            assert spec.test_type == TEST_TYPE_MAP[mode]
-
     def test_all_modes_have_specs(self) -> None:
         assert set(MODE_SPECS.keys()) == {1, 2, 3, 4}
-
-    def test_lrt_has_no_beta_se_columns(self) -> None:
-        lrt_keys = {c.field_name for c in MODE_SPECS[2].stat_columns}
-        assert "beta" not in lrt_keys
-        assert "se" not in lrt_keys
-        for mode in (1, 3, 4):
-            keys = {c.field_name for c in MODE_SPECS[mode].stat_columns}
-            assert "beta" in keys
-            assert "se" in keys
-
-    def test_stat_column_fmt_validation(self) -> None:
-        from jamma.lmm.schema import StatColumn
-
-        with pytest.raises(ValueError, match="Invalid format spec"):
-            StatColumn("x", "x", "x", fmt="{bad}")
-
-    def test_mode_spec_empty_columns_rejected(self) -> None:
-        from jamma.lmm.schema import LmmTest, ModeSpec
-
-        with pytest.raises(ValueError, match="stat_columns must not be empty"):
-            ModeSpec("empty", LmmTest.WALD, ())
-
-    def test_stat_column_empty_array_key_rejected(self) -> None:
-        from jamma.lmm.schema import StatColumn
-
-        with pytest.raises(ValueError, match="array_key must be a non-empty"):
-            StatColumn("", "x", "x")
-
-    def test_stat_column_empty_field_name_rejected(self) -> None:
-        from jamma.lmm.schema import StatColumn
-
-        with pytest.raises(ValueError, match="field_name must be a non-empty"):
-            StatColumn("x", "", "x")
-
-    def test_stat_column_empty_header_rejected(self) -> None:
-        from jamma.lmm.schema import StatColumn
-
-        with pytest.raises(ValueError, match=r"StatColumn.header must be a non-empty"):
-            StatColumn("x", "x", "")
-
-    def test_mode_spec_duplicate_array_key_rejected(self) -> None:
-        from jamma.lmm.schema import LmmTest, ModeSpec, StatColumn
-
-        col_a = StatColumn("same_key", "name_a", "hdr_a")
-        col_b = StatColumn("same_key", "name_b", "hdr_b")
-        with pytest.raises(ValueError, match="Duplicate array_key"):
-            ModeSpec("test", LmmTest.WALD, (col_a, col_b))
-
-    def test_mode_spec_duplicate_field_name_rejected(self) -> None:
-        from jamma.lmm.schema import LmmTest, ModeSpec, StatColumn
-
-        col_a = StatColumn("key_a", "same_name", "hdr_a")
-        col_b = StatColumn("key_b", "same_name", "hdr_b")
-        with pytest.raises(ValueError, match="Duplicate field_name"):
-            ModeSpec("test", LmmTest.WALD, (col_a, col_b))
-
-    def test_mode_spec_duplicate_header_rejected(self) -> None:
-        from jamma.lmm.schema import LmmTest, ModeSpec, StatColumn
-
-        col_a = StatColumn("key_a", "name_a", "same_hdr")
-        col_b = StatColumn("key_b", "name_b", "same_hdr")
-        with pytest.raises(ValueError, match="Duplicate header"):
-            ModeSpec("test", LmmTest.WALD, (col_a, col_b))
-
-    def test_stat_column_non_string_fmt_rejected(self) -> None:
-        from jamma.lmm.schema import StatColumn
-
-        with pytest.raises(ValueError, match="fmt must be a non-empty"):
-            StatColumn("x", "x", "x", fmt=123)  # type: ignore[bad-argument-type]
 
     def test_mode_specs_is_immutable(self) -> None:
         with pytest.raises(TypeError):
             MODE_SPECS[99] = "should fail"  # type: ignore[index]
 
 
-# ── Byte-identical output: write_arrays_batch vs format_assoc_line ───
+# ── Both sinks render the same row ────────────────────────────────────
 
 
 def _make_snp_info(n: int) -> SnpMeta:
@@ -249,18 +140,26 @@ def _make_snp_info(n: int) -> SnpMeta:
 
 
 def _make_arrays(mode: int, n: int, rng: np.random.Generator) -> dict:
-    """Create stat arrays matching RESULT_FIELDS for the given mode."""
-    return {key: rng.random(n) for key in RESULT_FIELDS[mode]}
+    """Create stat arrays keyed by the mode's array keys."""
+    return {c.array_key: rng.random(n) for c in get_spec(mode).stat_columns}
+
+
+def _render(results: list, mode: int) -> str:
+    """Render AssocResult records as .assoc.txt text, the test's own oracle."""
+    spec = get_spec(mode)
+    lines = [spec.header]
+    for r in results:
+        meta = (
+            f"{r.chr}\t{r.rs}\t{r.ps}\t{r.n_miss}\t{r.allele1}\t{r.allele0}\t{r.af:.3f}"
+        )
+        stats = "\t".join(f"{getattr(r, c.field_name):.6e}" for c in spec.stat_columns)
+        lines.append(f"{meta}\t{stats}")
+    return "\n".join(lines) + "\n"
 
 
 @pytest.mark.parametrize("mode", [1, 2, 3, 4])
-def test_write_arrays_batch_matches_format_assoc_line(
-    mode: int, tmp_path: Path
-) -> None:
-    """write_arrays_batch produces byte-identical output to format_assoc_line."""
-    from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
-    from jamma.lmm.results import _build_results
-
+def test_writer_matches_built_results(mode: int, tmp_path: Path) -> None:
+    """The disk writer and the in-memory AssocResult sink carry the same row."""
     n = 5
     rng = np.random.default_rng(42)
     snp_info = _make_snp_info(n)
@@ -268,29 +167,19 @@ def test_write_arrays_batch_matches_format_assoc_line(
     miss_counts = rng.integers(0, 3, size=n)
     arrays = _make_arrays(mode, n, rng)
     snp_indices = np.arange(n)
-    test_type = TEST_TYPE_MAP[mode]
+    spec = get_spec(mode)
 
-    # Path A: format_assoc_line via AssocResult (using production _build_results)
-    results = _build_results(mode, snp_indices, afs, miss_counts, snp_info, arrays)
-    expected = (
-        HEADERS[test_type]
-        + "\n"
-        + "".join(format_assoc_line(r, test_type) + "\n" for r in results)
-    )
+    results = build_results(spec, snp_indices, afs, miss_counts, snp_info, arrays)
 
-    # Path B: write_arrays_batch (no AssocResult)
-    path_b = tmp_path / "via_arrays.txt"
-    with IncrementalAssocWriter(path_b, test_type=test_type) as w:
-        w.write_arrays_batch(mode, snp_indices, snp_info, afs, miss_counts, arrays)
+    path = tmp_path / "via_arrays.txt"
+    with IncrementalAssocWriter(path, spec) as w:
+        w.write_arrays_batch(snp_indices, snp_info, afs, miss_counts, arrays)
 
-    assert path_b.read_text() == expected, (
-        f"Mode {mode}: write_arrays_batch output differs from format_assoc_line"
-    )
+    assert path.read_text() == _render(results, mode)
 
 
 def test_write_arrays_batch_with_pre_sliced_subset(tmp_path: Path) -> None:
     """write_arrays_batch works with pre-sliced subset arrays."""
-    from jamma.lmm.io import IncrementalAssocWriter
 
     n_total = 10
     rng = np.random.default_rng(99)
@@ -304,9 +193,8 @@ def test_write_arrays_batch_with_pre_sliced_subset(tmp_path: Path) -> None:
     arrays_subset = {k: v[subset] for k, v in arrays_full.items()}
 
     path = tmp_path / "subset.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
+    with IncrementalAssocWriter(path, MODE_SPECS[1]) as w:
         w.write_arrays_batch(
-            1,
             subset,
             snp_info,
             afs[subset],
@@ -320,12 +208,10 @@ def test_write_arrays_batch_with_pre_sliced_subset(tmp_path: Path) -> None:
 
 def test_write_arrays_batch_empty(tmp_path: Path) -> None:
     """write_arrays_batch with empty snp_indices writes nothing."""
-    from jamma.lmm.io import IncrementalAssocWriter
 
     path = tmp_path / "empty.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
+    with IncrementalAssocWriter(path, MODE_SPECS[1]) as w:
         w.write_arrays_batch(
-            1,
             np.array([], dtype=int),
             SnpMeta.from_dicts([]),
             np.array([]),
@@ -338,30 +224,21 @@ def test_write_arrays_batch_empty(tmp_path: Path) -> None:
 
 
 def test_write_arrays_batch_nan_formatting(tmp_path: Path) -> None:
-    """NaN values format identically via both paths."""
-    from jamma.lmm.io import IncrementalAssocWriter, format_assoc_line
-    from jamma.lmm.results import _build_results
-
-    mode = 1
+    """NaN statistics render as GEMMA's ``nan``."""
     n = 2
     snp_info = _make_snp_info(n)
-    afs = np.array([0.25, 0.5])
-    miss_counts = np.array([0, 1])
-    arrays = {k: np.array([float("nan")] * n) for k in RESULT_FIELDS[mode]}
-    snp_indices = np.arange(n)
+    arrays = {c.array_key: np.full(n, np.nan) for c in MODE_SPECS[1].stat_columns}
 
-    results = _build_results(mode, snp_indices, afs, miss_counts, snp_info, arrays)
-    expected = (
-        HEADERS["wald"]
-        + "\n"
-        + "".join(format_assoc_line(r, "wald") + "\n" for r in results)
-    )
+    path = tmp_path / "nan_arrays.txt"
+    with IncrementalAssocWriter(path, MODE_SPECS[1]) as w:
+        w.write_arrays_batch(
+            np.arange(n), snp_info, np.array([0.25, 0.5]), np.array([0, 1]), arrays
+        )
 
-    path_b = tmp_path / "nan_arrays.txt"
-    with IncrementalAssocWriter(path_b, test_type="wald") as w:
-        w.write_arrays_batch(mode, snp_indices, snp_info, afs, miss_counts, arrays)
-
-    assert path_b.read_text() == expected
+    assert path.read_text().splitlines()[1:] == [
+        "1\trs1000\t0\t0\tA\tG\t0.250\tnan\tnan\tnan\tnan\tnan",
+        "2\trs1001\t100\t1\tA\tG\t0.500\tnan\tnan\tnan\tnan\tnan",
+    ]
 
 
 # ── write_arrays_batch error handling ────────────────────────────────
@@ -369,12 +246,10 @@ def test_write_arrays_batch_nan_formatting(tmp_path: Path) -> None:
 
 def test_write_arrays_batch_raises_if_not_opened(tmp_path: Path) -> None:
     """write_arrays_batch raises RuntimeError when writer is not opened."""
-    from jamma.lmm.io import IncrementalAssocWriter
 
-    writer = IncrementalAssocWriter(tmp_path / "dummy.txt")
+    writer = IncrementalAssocWriter(tmp_path / "dummy.txt", MODE_SPECS[1])
     with pytest.raises(RuntimeError, match="not opened"):
         writer.write_arrays_batch(
-            1,
             np.array([0]),
             _make_snp_info(1),
             np.array([0.5]),
@@ -383,32 +258,13 @@ def test_write_arrays_batch_raises_if_not_opened(tmp_path: Path) -> None:
         )
 
 
-def test_write_arrays_batch_mode_mismatch_raises(tmp_path: Path) -> None:
-    """write_arrays_batch raises ValueError on mode/test_type mismatch."""
-    from jamma.lmm.io import IncrementalAssocWriter
-
-    path = tmp_path / "mismatch.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
-        with pytest.raises(ValueError, match="does not match"):
-            w.write_arrays_batch(
-                3,  # score mode, but writer is wald
-                np.array([0]),
-                _make_snp_info(1),
-                np.array([0.5]),
-                np.array([0]),
-                _make_arrays(3, 1, np.random.default_rng(0)),
-            )
-
-
 def test_write_arrays_batch_missing_array_key_raises(tmp_path: Path) -> None:
     """write_arrays_batch raises ValueError when arrays dict is incomplete."""
-    from jamma.lmm.io import IncrementalAssocWriter
 
     path = tmp_path / "missing.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
+    with IncrementalAssocWriter(path, MODE_SPECS[1]) as w:
         with pytest.raises(ValueError, match="missing arrays"):
             w.write_arrays_batch(
-                1,
                 np.array([0]),
                 _make_snp_info(1),
                 np.array([0.5]),
@@ -419,13 +275,11 @@ def test_write_arrays_batch_missing_array_key_raises(tmp_path: Path) -> None:
 
 def test_write_arrays_batch_length_mismatch_raises(tmp_path: Path) -> None:
     """write_arrays_batch raises ValueError when array lengths don't match."""
-    from jamma.lmm.io import IncrementalAssocWriter
 
     path = tmp_path / "length.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
+    with IncrementalAssocWriter(path, MODE_SPECS[1]) as w:
         with pytest.raises(ValueError, match="afs has length 2, expected 1"):
             w.write_arrays_batch(
-                1,
                 np.array([0]),
                 _make_snp_info(1),
                 np.array([0.5, 0.6]),  # length 2, but snp_indices has length 1
@@ -436,7 +290,6 @@ def test_write_arrays_batch_length_mismatch_raises(tmp_path: Path) -> None:
 
 def test_write_arrays_batch_stat_array_length_mismatch_raises(tmp_path: Path) -> None:
     """write_arrays_batch raises ValueError when a stat array has wrong length."""
-    from jamma.lmm.io import IncrementalAssocWriter
 
     rng = np.random.default_rng(42)
     n = 3
@@ -448,9 +301,9 @@ def test_write_arrays_batch_stat_array_length_mismatch_raises(tmp_path: Path) ->
     arrays["betas"] = np.array([1.0, 2.0])  # length 2, expected 3
 
     path = tmp_path / "bad_stat.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
+    with IncrementalAssocWriter(path, MODE_SPECS[1]) as w:
         with pytest.raises(ValueError, match="stat array 'betas' has length 2"):
-            w.write_arrays_batch(1, np.arange(n), snp_info, afs, miss_counts, arrays)
+            w.write_arrays_batch(np.arange(n), snp_info, afs, miss_counts, arrays)
 
 
 def test_snp_meta_from_dicts_missing_key_raises() -> None:
@@ -506,17 +359,15 @@ def test_snp_meta_from_plink_meta_no_indices_keeps_every_snp() -> None:
 
 def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:
     """write_arrays_batch accumulates count correctly across multiple calls."""
-    from jamma.lmm.io import IncrementalAssocWriter
 
     rng = np.random.default_rng(77)
     snp_info = _make_snp_info(6)
 
     path = tmp_path / "multi.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
+    with IncrementalAssocWriter(path, MODE_SPECS[1]) as w:
         for start in (0, 3):
             batch = np.arange(start, start + 3)
             w.write_arrays_batch(
-                1,
                 batch,
                 snp_info,
                 rng.random(3),
@@ -534,7 +385,6 @@ def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:
 
 def test_write_arrays_batch_with_plink_meta(tmp_path: Path) -> None:
     """write_arrays_batch works with SnpMeta built from PLINK metadata."""
-    from jamma.lmm.io import IncrementalAssocWriter
 
     meta = PlinkMetadata(
         n_samples=4,
@@ -551,9 +401,8 @@ def test_write_arrays_batch_with_plink_meta(tmp_path: Path) -> None:
     rng = np.random.default_rng(55)
     n = 3
     path = tmp_path / "lazy.txt"
-    with IncrementalAssocWriter(path, test_type="wald") as w:
+    with IncrementalAssocWriter(path, MODE_SPECS[1]) as w:
         w.write_arrays_batch(
-            1,
             np.arange(n),
             snp_info,
             rng.random(n),

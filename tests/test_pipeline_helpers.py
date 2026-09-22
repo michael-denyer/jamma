@@ -6,7 +6,7 @@ Covers the helpers extracted out of ``_run_inner``:
   insufficient)
 - ``pipeline_samples.load_analysed_samples`` (happy, disjoint, shrink-warning,
   unreadable .fam, covariate row count, appended intercept)
-- ``_run_loco`` (delegation contract: LocoResult fields map to
+- ``_run_loco`` (delegation contract: LmmRunResult fields map to
   PipelineResult fields, timing is non-negative, covariates drive n_cvt).
 """
 
@@ -397,15 +397,15 @@ class TestRunLoco:
     def test_loco_result_fields_map_to_pipeline_result(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """n_tested, associations, pve, pve_se from LocoResult reach PipelineResult."""
-        from jamma.lmm.schema import LocoResult
+        """n_tested, associations, pve, pve_se from the LOCO run reach the result."""
+        from jamma.lmm.schema import LmmRunResult
 
         # 4 samples, one NaN — valid mask has 3 True.
         phenos = np.array([1.0, 2.0, np.nan, 4.0], dtype=np.float64)
         covs = np.array(
             [[1.0], [1.0], [1.0], [1.0]], dtype=np.float64
         )  # intercept only
-        loco = LocoResult(
+        loco = LmmRunResult(
             associations=cast(
                 "list[AssocResult]", ["snp1", "snp2", "snp3"]
             ),  # sentinel strings for ordering
@@ -436,12 +436,12 @@ class TestRunLoco:
         Regression guard: the extracted helper must not hard-code n_cvt=1
         when multi-covariate LOCO runs arrive here.
         """
-        from jamma.lmm.schema import LocoResult
+        from jamma.lmm.schema import LmmRunResult
 
         phenos = np.array([1.0, 2.0, 3.0], dtype=np.float64)
         # 3 covariate columns.
         covs = np.ones((3, 3), dtype=np.float64)
-        loco = LocoResult(associations=[], n_tested=0, pve=None, pve_se=None)
+        loco = LmmRunResult(associations=[], n_tested=0, pve=None, pve_se=None)
         runner = self._build_loco_runner(
             tmp_path, loco_result=loco, monkeypatch=monkeypatch
         )
@@ -454,10 +454,10 @@ class TestRunLoco:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """No covariates -> n_covariates=1 (intercept only)."""
-        from jamma.lmm.schema import LocoResult
+        from jamma.lmm.schema import LmmRunResult
 
         phenos = np.array([1.0, 2.0], dtype=np.float64)
-        loco = LocoResult(associations=[], n_tested=0, pve=None, pve_se=None)
+        loco = LmmRunResult(associations=[], n_tested=0, pve=None, pve_se=None)
         runner = self._build_loco_runner(
             tmp_path, loco_result=loco, monkeypatch=monkeypatch
         )
@@ -472,11 +472,11 @@ class TestRunLoco:
         """Timing dict is populated with lmm_s and total_s; kinship_s/load_s
         are zero (LOCO owns its own kinship/load; the pipeline does not).
         """
-        from jamma.lmm.schema import LocoResult
+        from jamma.lmm.schema import LmmRunResult
 
         phenos = np.array([1.0, 2.0], dtype=np.float64)
         covs = np.ones((2, 1), dtype=np.float64)
-        loco = LocoResult(associations=[], n_tested=0)
+        loco = LmmRunResult(associations=[], n_tested=0)
         runner = self._build_loco_runner(
             tmp_path, loco_result=loco, monkeypatch=monkeypatch
         )
@@ -501,14 +501,14 @@ class TestRunLoco:
         LmmConfig field that a re-inlined literal forgot to set would take its
         default and break equality here.
         """
-        from jamma.lmm.schema import LocoResult
+        from jamma.lmm.schema import LmmRunResult
 
         captured: dict[str, object] = {}
         phenos = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
         def _capturing_loco(**kwargs):  # type: ignore[no-untyped-def]
             captured.update(kwargs)
-            return LocoResult(associations=[], n_tested=0)
+            return LmmRunResult(associations=[], n_tested=0)
 
         # Every knob off its default, so a projection that dropped one shows up.
         runner = _make_runner(

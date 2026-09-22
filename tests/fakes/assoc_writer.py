@@ -1,4 +1,4 @@
-"""In-memory fake for jamma.lmm.io.IncrementalAssocWriter."""
+"""In-memory fake for jamma.lmm.assoc_output.IncrementalAssocWriter."""
 
 from __future__ import annotations
 
@@ -24,11 +24,10 @@ class FakeAssocWriter:
 
     def write_arrays_batch(
         self,
-        lmm_mode: int,
         snp_indices: np.ndarray,
         snp_info: list,
         afs: np.ndarray,
         miss_counts: np.ndarray,
         arrays: dict[str, np.ndarray],
     ) -> None:
-        self.batches.append((lmm_mode, snp_indices, snp_info, afs, miss_counts, arrays))
+        self.batches.append((snp_indices, snp_info, afs, miss_counts, arrays))

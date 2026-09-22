@@ -47,6 +47,7 @@ from jamma.io.plink import (
     partitions_from_metadata,
 )
 from jamma.kinship import SnpStatsCache
+from jamma.lmm.assoc_output import IncrementalAssocWriter
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
     KinshipShape,
@@ -58,7 +59,6 @@ from jamma.lmm.genotype_source import (
     SampleBasis,
     bind_prepared_genotypes,
 )
-from jamma.lmm.io import IncrementalAssocWriter
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig
 from jamma.lmm.loco_eigen import (
     eigen_pairs_for,
@@ -70,10 +70,9 @@ from jamma.lmm.prepare_common import EigenPairs
 from jamma.lmm.runner_numpy import LOCO_LABELS, LmmRunSpec, run_lmm_association
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
-    TEST_TYPE_MAP,
+    MODE_SPECS,
     LmmConfig,
     LmmRunResult,
-    LocoResult,
     SnpMeta,
 )
 from jamma.lmm.stats import AssocResult
@@ -175,7 +174,7 @@ def run_lmm_loco(
     output_path: Path | None = None,
     execution: ExecutableAssociationPlan | None = None,
     eigen_plan: EigenDriverPlan | None = None,
-) -> LocoResult:
+) -> LmmRunResult:
     """Run LOCO LMM association: per-chromosome eigendecomp and association.
 
     For each chromosome:
@@ -210,7 +209,7 @@ def run_lmm_loco(
             this run, or None to plan it here, once, the same way.
 
     Returns:
-        LocoResult with associations in biological chromosome order
+        LmmRunResult with associations in biological chromosome order
         (1-22, X, Y, XY, MT). Associations list is empty if output_path
         is set (results written to disk).
 
@@ -324,8 +323,6 @@ def run_lmm_loco(
         labels=LOCO_LABELS,
     )
 
-    test_type = TEST_TYPE_MAP[config.lmm_mode]
-
     if output_path is None and n_snps_total > 100_000:
         logger.warning(
             f"LOCO in-memory mode with {n_snps_total:,} total SNPs. Results will "
@@ -338,7 +335,7 @@ def run_lmm_loco(
         writer = None
         if output_path is not None:
             writer = stack.enter_context(
-                IncrementalAssocWriter(output_path, test_type=test_type)
+                IncrementalAssocWriter(output_path, MODE_SPECS[config.lmm_mode])
             )
 
         source = eigen_pairs_for(
@@ -425,7 +422,7 @@ def run_lmm_loco(
             )
 
         n_tested = writer.count if writer is not None else len(all_results)
-        return LocoResult(
+        return LmmRunResult(
             associations=[] if output_path is not None else all_results,
             n_tested=n_tested,
             pve=first_chr_pve,

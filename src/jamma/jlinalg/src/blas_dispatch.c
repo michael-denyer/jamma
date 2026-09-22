@@ -82,15 +82,14 @@ static const char *_detect_backend_name(const char *lib_path, int is_ilp64) {
  * Module-level state
  *
  * g_active is the winning candidate, copied in whole by blas_dispatch_init().
- * Every has_* accessor below derives its answer from whichever pointer field
- * that candidate carries, instead of a second bank of hand-set booleans that
- * could drift from the pointers they describe.
  * ---------------------------------------------------------------------------
  */
 static blas_candidate_t g_active = {0};
 static const char *g_backend_name = "numpy-fallback";
-static int g_has_vendor_dgemm =
-    0; /* dgemm actually wired; JLINALG_NO_VENDOR_DGEMM can suppress it */
+
+static int candidate_has_dsyevd(const blas_candidate_t *c) {
+    return c->dsyevd_ilp64 != NULL || c->lapacke_dsyevd_ilp64 != NULL;
+}
 
 /* ---------------------------------------------------------------------------
  * Symbol resolution -- one resolver, driven by a name table
@@ -119,12 +118,8 @@ typedef struct {
     const char *label;        /* for debug logging */
     const char *const *names; /* candidate symbol names, in try order, NULL-terminated */
     size_t field_offset;      /* offsetof(blas_candidate_t, <pointer field>) */
-    size_t flag_offset;       /* offsetof(blas_candidate_t, <has_* flag>), or (size_t)-1 for none */
 } blas_sym_entry_t;
 
-/* dgemm: MKL/OpenBLAS ILP64 Fortran names, tried on every platform. Apple's
- * CBLAS + Fortran-fallback pair is resolved separately below, since it also
- * sets is_ilp64/name/found/handle rather than only a pointer field. */
 static const char *const ilp64_dgemm_names[] = {"dgemm_64_",       /* MKL ILP64 */
                                                 "scipy_dgemm_64_", /* scipy-openblas64 */
                                                 "dgemm64_",        /* OpenBLAS INTERFACE64=1 */
@@ -153,7 +148,6 @@ static int try_resolve_dgemm_candidate(void *handle, const char *lib_path, blas_
         c->is_ilp64 = 1;
         c->name = _detect_backend_name(lib_path, 1);
         c->found = 1;
-        c->handle = handle;
         return 1;
     }
 
@@ -166,7 +160,6 @@ static int try_resolve_dgemm_candidate(void *handle, const char *lib_path, blas_
         c->is_ilp64 = 1;
         c->name = "Accelerate-ILP64";
         c->found = 1;
-        c->handle = handle;
         /* Also try Fortran interface as fallback */
         const char *fmatched = NULL;
         void *fsym = resolve_first_symbol(handle, accel_ilp64_dgemm_names, &fmatched);
@@ -184,7 +177,6 @@ static int try_resolve_dgemm_candidate(void *handle, const char *lib_path, blas_
         c->is_ilp64 = 0;
         c->name = _detect_backend_name(lib_path, 0);
         c->found = 1;
-        c->handle = handle;
         if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved dgemm_ (LP64, not wired)\n");
         return 1;
     }
@@ -199,10 +191,7 @@ static int try_resolve_dgemm_candidate(void *handle, const char *lib_path, blas_
  * Every entry's candidate-name list carries the Apple $NEWLAPACK$ILP64 name
  * first, then the MKL/OpenBLAS names; a lookup against a non-Accelerate
  * handle simply never matches the Apple name, so one list works on every
- * platform and no #ifdef __APPLE__ survives in these three routines. Each
- * entry names the primary pointer field to set (by offset) and the has_*
- * flag to set alongside it (by offset); resolve_syms_table() is the one loop
- * that walks SYMS[] and does both assignments through a byte pointer.
+ * platform and no #ifdef __APPLE__ survives in these three routines.
  *
  * A resolved symbol always fills a `void *`-sized function-pointer slot
  * regardless of the pointer typedef in blas_candidate_t, so writing through
@@ -228,17 +217,12 @@ static const char *const dsyrk_fortran_fallback_names[] = {"dsyrk$NEWLAPACK$ILP6
 static const char *const lapacke_dsyevd_names[] = {"LAPACKE_dsyevd", NULL};
 
 static const blas_sym_entry_t SYMS[] = {
-    {"dsyrk", dsyrk_names, offsetof(blas_candidate_t, cblas_dsyrk_ilp64),
-     offsetof(blas_candidate_t, has_dsyrk)},
-    {"dsyevd", dsyevd_names, offsetof(blas_candidate_t, dsyevd_ilp64),
-     offsetof(blas_candidate_t, has_lapack)},
-    {"dsyevr", dsyevr_names, offsetof(blas_candidate_t, dsyevr_ilp64),
-     offsetof(blas_candidate_t, has_dsyevr)},
+    {"dsyrk", dsyrk_names, offsetof(blas_candidate_t, cblas_dsyrk_ilp64)},
+    {"dsyevd", dsyevd_names, offsetof(blas_candidate_t, dsyevd_ilp64)},
+    {"dsyevr", dsyevr_names, offsetof(blas_candidate_t, dsyevr_ilp64)},
 };
 #define N_SYMS (sizeof(SYMS) / sizeof(SYMS[0]))
 
-/* Resolve every table entry against one handle, writing the primary pointer
- * and has_* flag fields in blas_candidate_t at their recorded offsets. */
 static void resolve_syms_table(void *handle, blas_candidate_t *c) {
     int dbg = _debug_enabled();
     for (size_t i = 0; i < N_SYMS; i++) {
@@ -247,16 +231,10 @@ static void resolve_syms_table(void *handle, blas_candidate_t *c) {
         void *sym = resolve_first_symbol(handle, entry->names, &matched);
         if (!sym) continue;
         *(void **)((char *)c + entry->field_offset) = sym;
-        *(int *)((char *)c + entry->flag_offset) = 1;
         if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved %s (%s)\n", matched, entry->label);
     }
 
-    /* Two secondary pointers hang off a table hit but land in a field
-     * distinct from the routine's own has_* flag, so they stay outside the
-     * generic loop: Accelerate's Fortran dsyrk (alongside its CBLAS entry),
-     * and LAPACKE_dsyevd (a fallback C interface with its own has_* flag,
-     * MKL/OpenBLAS only -- Accelerate carries no LAPACKE). */
-    if (c->has_dsyrk && c->cblas_dsyrk_ilp64 && !c->dsyrk_ilp64) {
+    if (c->cblas_dsyrk_ilp64 && !c->dsyrk_ilp64) {
         const char *fmatched = NULL;
         void *fsym = resolve_first_symbol(handle, dsyrk_fortran_fallback_names, &fmatched);
         if (fsym) {
@@ -264,15 +242,13 @@ static void resolve_syms_table(void *handle, blas_candidate_t *c) {
             if (dbg) fprintf(stderr, "jlinalg_dispatch:   also resolved %s\n", fmatched);
         }
     }
-    if (!c->has_lapacke_dsyevd) {
+    if (!c->lapacke_dsyevd_ilp64) {
         const char *matched = NULL;
         void *le64 = resolve_first_symbol(handle, lapacke_dsyevd_names, &matched);
         if (le64) {
             /* When loaded from an ILP64 library, LAPACKE_dsyevd uses
              * lapack_int = long long.  Cast to our ILP64 typedef. */
             c->lapacke_dsyevd_ilp64 = (jlinalg_lapacke_dsyevd_ilp64_fn)le64;
-            c->has_lapacke_dsyevd = 1;
-            c->has_lapack = 1;
             if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved %s (ILP64)\n", matched);
         }
     }
@@ -631,7 +607,7 @@ static int _visit_pip_mkl_dir(const char *kind, const char *dirpath, blas_candid
     resolve_secondary_ops(RTLD_DEFAULT, c);
     if (dbg)
         fprintf(stderr, "jlinalg_dispatch: pip-mkl -- resolved (ilp64=%d, lapack=%d)\n",
-                c->is_ilp64, c->has_lapack);
+                c->is_ilp64, candidate_has_dsyevd(c));
     return 1;
 }
 
@@ -645,13 +621,6 @@ static void discover_pip_mkl(blas_candidate_t *c) {
 /* ---------------------------------------------------------------------------
  * Candidate scoring and selection
  *
- * A has_* flag and its pointer are always set together by the same table
- * entry in resolve_syms_table() (or, for dgemm, by the same branch in
- * try_resolve_dgemm_candidate()), so a flag can no longer be true with its
- * pointer NULL -- that invariant used to need a separate validation pass
- * that zeroed out an inconsistent candidate; construction now makes the
- * inconsistency it guarded against unrepresentable.
- *
  * _score_candidate:    ILP64 + LAPACK = 4, ILP64 BLAS-only = 3, LP64 = 1.
  * select_best_backend: returns highest-scoring candidate (NULL if none).
  *   LP64 candidates are returned for logging but not wired for dgemm.
@@ -660,7 +629,7 @@ static void discover_pip_mkl(blas_candidate_t *c) {
 
 static int _score_candidate(const blas_candidate_t *c) {
     if (!c->found) return 0;
-    if (c->is_ilp64 && c->has_lapack) return 4;
+    if (c->is_ilp64 && candidate_has_dsyevd(c)) return 4;
     if (c->is_ilp64) return 3;
     return 1; /* LP64 */
 }
@@ -715,33 +684,29 @@ int blas_dispatch_init(void) {
                             "vendor dgemm left unwired, numpy fallback in use.\n");
             g_active.dgemm_ilp64 = NULL;
             g_active.cblas_dgemm_ilp64 = NULL;
-        } else {
-            if (dbg)
-                fprintf(stderr, "jlinalg_dispatch: using %s (ILP64) for dgemm\n", g_active.name);
-            g_has_vendor_dgemm = 1;
+        } else if (dbg) {
+            fprintf(stderr, "jlinalg_dispatch: using %s (ILP64) for dgemm\n", g_active.name);
         }
         if (_env_flag("JLINALG_NO_VENDOR_DSYRK")) {
             fprintf(stderr, "jlinalg_dispatch: INFO: JLINALG_NO_VENDOR_DSYRK set -- "
                             "vendor dsyrk left unwired, numpy fallback in use.\n");
             g_active.cblas_dsyrk_ilp64 = NULL;
             g_active.dsyrk_ilp64 = NULL;
-            g_active.has_dsyrk = 0;
         }
         if (_env_flag("JLINALG_NO_VENDOR_DSYEVR")) {
             fprintf(stderr, "jlinalg_dispatch: INFO: JLINALG_NO_VENDOR_DSYEVR set -- "
                             "vendor dsyevr left unwired.\n");
             g_active.dsyevr_ilp64 = NULL;
-            g_active.has_dsyevr = 0;
         }
 
         if (dbg) {
-            if (g_active.has_dsyrk) fprintf(stderr, "jlinalg_dispatch: vendor dsyrk wired\n");
-            if (g_active.has_lapack) {
+            if (blas_has_dsyrk()) fprintf(stderr, "jlinalg_dispatch: vendor dsyrk wired\n");
+            if (blas_has_dsyevd()) {
                 fprintf(stderr, "jlinalg_dispatch: vendor dsyevd wired (%s)\n",
-                        g_active.has_lapacke_dsyevd ? "LAPACKE, row-major"
-                                                    : "Fortran, transpose required");
+                        blas_has_lapacke_dsyevd() ? "LAPACKE, row-major"
+                                                  : "Fortran, transpose required");
             }
-            if (g_active.has_dsyevr)
+            if (blas_has_dsyevr())
                 fprintf(stderr,
                         "jlinalg_dispatch: vendor dsyevr wired (memory-pressure fallback)\n");
         }
@@ -777,29 +742,22 @@ int blas_is_ilp64(void) {
 }
 
 int blas_has_external(void) {
-    /* Only true when external BLAS is actually wired (i.e., ILP64 found and
-     * JLINALG_NO_VENDOR_DGEMM did not veto it). LP64-only discovery never
-     * wires dispatch. */
-    return g_has_vendor_dgemm;
+    return g_active.cblas_dgemm_ilp64 != NULL || g_active.dgemm_ilp64 != NULL;
 }
 
 int blas_has_dsyrk(void) {
     return g_active.cblas_dsyrk_ilp64 != NULL || g_active.dsyrk_ilp64 != NULL;
 }
 int blas_has_dsyevd(void) {
-    return g_active.dsyevd_ilp64 != NULL || g_active.lapacke_dsyevd_ilp64 != NULL;
+    return candidate_has_dsyevd(&g_active);
 }
 int blas_has_lapacke_dsyevd(void) {
     return g_active.lapacke_dsyevd_ilp64 != NULL;
 }
 int blas_has_dsyevr(void) {
-    return g_active.dsyevr_ilp64 != NULL && g_active.is_ilp64;
+    return g_active.dsyevr_ilp64 != NULL;
 }
 
 const blas_candidate_t *blas_dispatch_active(void) {
     return &g_active;
-}
-
-int blas_dispatch_has_vendor_dgemm(void) {
-    return g_has_vendor_dgemm;
 }

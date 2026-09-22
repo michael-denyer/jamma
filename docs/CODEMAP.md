@@ -228,13 +228,14 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3c' | `jlinalg.eigh()` | Facade dispatch to vendor DSYEVD/DSYEVR or the operation-specific NumPy fallback | [jlinalg/\_\_init\_\_.py:146](../src/jamma/jlinalg/__init__.py#L146), [jlinalg/\_eigh.py](../src/jamma/jlinalg/_eigh.py) |
 | 3c' | `jlinalg_dsyevd_ext()` | C: vendor DSYEVD dispatch (O(n^2) workspace) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
 | 3c' | `jlinalg_dsyevr_ext()` | C: vendor DSYEVR dispatch (O(n) workspace, memory-pressure fallback) | [blas_operations.c](../src/jamma/jlinalg/src/blas_operations.c) |
-| 3d | `reml_log_likelihood()` | REML l(lambda) for variance component estimation | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |
-| 3d | `mle_log_likelihood()` | MLE l(lambda) for LRT | [likelihood.py:368](../src/jamma/lmm/likelihood.py#L368) |
+| 3d | `reml_log_likelihood()` | Null-model REML l(lambda) for variance component estimation | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |
+| 3d | `mle_log_likelihood()` | Null-model MLE l(lambda) for LRT | [likelihood.py:316](../src/jamma/lmm/likelihood.py#L316) |
+| 3d | `reml_log_likelihood_alt()` | Alternative-model REML l(lambda), scalar reference for the batch Wald path; tests only | [tests/reference/likelihood.py](../tests/reference/likelihood.py) |
 | 3d | `compute_Uab()` | Element-wise products of rotated vectors | [pab.py:168](../src/jamma/lmm/pab.py#L168) |
 | 3d | `calc_pab()` | Recursive Schur complement projection (GEMMA CalcPab) | [pab.py:223](../src/jamma/lmm/pab.py#L223) |
 | 3d | `get_ab_index()` | GEMMA GetabIndex -- 1-based upper triangular | [pab.py:114](../src/jamma/lmm/pab.py#L114) |
-| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:326](../src/jamma/lmm/likelihood.py#L326) |
-| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:428](../src/jamma/lmm/likelihood.py#L428) |
+| 3d | `compute_null_model_lambda()` | Null model REML for Score test | [likelihood.py:275](../src/jamma/lmm/likelihood.py#L275) |
+| 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:370](../src/jamma/lmm/likelihood.py#L370) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3e | `golden_section_optimize_lambda_mle_numpy()` | MLE optimization per SNP (LRT) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:20](../src/jamma/lmm/stats.py#L20) |
@@ -250,14 +251,15 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3h | `parse_eigen_input()` | Converts public nullable arguments once to `KinshipMatrix` or complete `EigenPairs`; supplied eigenpairs take precedence | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
 | 3h | `_eigendecompose_or_reuse()` | Dispatches on the complete eigen input to decompose kinship or reuse both eigen arrays | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
 | 3h | `_compute_null_model_common()` | Null model fitting | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
-| 3i | `betainc()` | Regularized incomplete beta (pure-stdlib, no scipy) | [special.py](../src/jamma/lmm/special.py) |
-| 3i | `chi2_sf()` | Chi-squared survival function (pure-stdlib) | [special.py](../src/jamma/lmm/special.py) |
+| 3i | `betainc_batch()` | Production: regularized incomplete beta over a chunk (Cephes CF, no scipy) | [special.py](../src/jamma/lmm/special.py) |
+| 3i | `chi2_sf_batch()` | Production: chi-squared survival over a chunk (erfc, no scipy) | [special.py](../src/jamma/lmm/special.py) |
+| 3i | `betainc()`, `chi2_sf()` | Scalar references for the batch forms; tests only | [tests/reference/special.py](../tests/reference/special.py) |
 
 ---
 
 ### [4N] NumPy Backend
 
-Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and stdlib-only special functions for p-value computation. The optional multi-source `_lmm_accel` extension provides OpenMP-parallelized LMM kernels, with automatic fallback to pure Python. Batch, disk-streaming, and LOCO runners share `chunk_runner_numpy.py` for chunk sizing, rotation, C/Python dispatch, diagnostics, and per-chunk result writes.
+Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux). Uses `np.vectorize` for batch operations and NumPy special functions (no scipy) for p-value computation. The optional multi-source `_lmm_accel` extension provides OpenMP-parallelized LMM kernels, with automatic fallback to pure Python. Batch, disk-streaming, and LOCO runners share `chunk_runner_numpy.py` for chunk sizing, rotation, C/Python dispatch, diagnostics, and per-chunk result writes.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|

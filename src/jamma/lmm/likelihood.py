@@ -2,11 +2,11 @@
 
 Implements restricted maximum likelihood (REML) and maximum likelihood (MLE)
 functions for variance component estimation in LMM. This closely follows
-GEMMA's lmm.cpp CalcPab, LogRL_f and LogL_f. One function serves the null
-and the alternative model of each likelihood: ``nc_total`` is the number of
-columns projected out, ``n_cvt`` for the null model and ``n_cvt + 1`` once
-the genotype joins. The scalar ports GEMMA keeps alongside (CalcPPab,
-CalcPPPab, LogRL_dev2, CalcRLWald, CalcRLScore) live in ``tests/reference``.
+GEMMA's lmm.cpp CalcPab, LogRL_f and LogL_f for the null model
+(``calc_null=true``), the only form production evaluates in scalar. The
+alternative-model LogRL_f and the scalar ports GEMMA keeps alongside
+(CalcPPab, CalcPPPab, LogRL_dev2, CalcRLWald, CalcRLScore) live in
+``tests/reference``.
 
 Also provides null model optimization via golden section search for Score
 and LRT tests.
@@ -80,7 +80,7 @@ def finite_difference_dev2(
     can_go_right = (lambda_val + h) < l_max
 
     def f(lam: float) -> float:
-        return reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        return reml_log_likelihood(lam, eigenvalues, Uab, n_cvt)
 
     if can_go_left and can_go_right:
         # Central stencil
@@ -105,10 +105,8 @@ def reml_log_likelihood(
     eigenvalues: np.ndarray,
     Uab: np.ndarray,
     n_cvt: int,
-    *,
-    nc_total: int,
 ) -> float:
-    """Compute REML log-likelihood following GEMMA's LogRL_f exactly.
+    """Compute the null-model REML log-likelihood following GEMMA's LogRL_f.
 
     The REML log-likelihood is:
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * log(P_yy)
@@ -116,23 +114,21 @@ def reml_log_likelihood(
     where:
     - c = 0.5 * df * (log(df) - log(2*pi) - 1)
     - logdet_h = sum(log(lambda * eval + 1))
-    - logdet_hiw = sum(log(Pab[i,ww])) - sum(log(Iab[i,ww])) over nc_total rows
-    - P_yy = Pab[nc_total, index_yy]
-    - df = n - nc_total
+    - logdet_hiw = sum(log(Pab[i,ww])) - sum(log(Iab[i,ww])) over n_cvt rows
+    - P_yy = Pab[n_cvt, index_yy]
+    - df = n - n_cvt
 
     Args:
         lambda_val: Variance component ratio (sigma_g^2 / sigma_e^2)
         eigenvalues: Eigenvalues of kinship matrix (n_samples,)
         Uab: Matrix products from compute_Uab (n_samples, n_index)
         n_cvt: Number of covariates
-        nc_total: Columns projected out. ``n_cvt`` for the null model
-            (GEMMA ``calc_null=true``), ``n_cvt + 1`` for the alternative.
 
     Returns:
         Log-likelihood value (positive for maximization)
     """
     n = len(eigenvalues)
-    df = n - nc_total
+    df = n - n_cvt
 
     v_temp = lambda_val * eigenvalues + 1.0
     Hi_eval = 1.0 / v_temp
@@ -143,7 +139,7 @@ def reml_log_likelihood(
     Iab = calc_iab(n_cvt, Uab)
 
     logdet_hiw = 0.0
-    for i, index_ww in table.logdet_diag_indices[:nc_total]:
+    for i, index_ww in table.logdet_diag_indices[:n_cvt]:
         d_pab = Pab[i, index_ww]
         d_iab = Iab[i, index_ww]
         if d_pab > 0:
@@ -151,7 +147,7 @@ def reml_log_likelihood(
         if d_iab > 0:
             logdet_hiw -= np.log(d_iab)
 
-    P_yy = float(guard_p_yy(Pab[nc_total, table.idx_yy]))
+    P_yy = float(guard_p_yy(Pab[n_cvt, table.idx_yy]))
 
     c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
     f = c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)
@@ -159,57 +155,10 @@ def reml_log_likelihood(
     return f
 
 
-def _mle_p_yy_scalar_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
-    """Compute MLE P_yy via scalar Schur complements for n_cvt=1.
-
-    Avoids allocating full (3, 6) Pab matrix — computes only the 6 dot products
-    and 2 Schur complement steps needed for P_yy = Pab[2][5].
-
-    For n_cvt=1, nc_total=2, the trace is:
-      Row 0: s_ww, s_wx, s_wy, s_xx, s_xy, s_yy = Hi_eval @ Uab[:, 0..5]
-      Row 1: p1_xx = s_xx - s_wx^2/s_ww
-              p1_xy = s_xy - s_wx*s_wy/s_ww
-              p1_yy = s_yy - s_wy^2/s_ww
-      Row 2: P_yy = p1_yy - p1_xy^2/p1_xx
-
-    Args:
-        Hi_eval: 1/(lambda*eigenvalues + 1) vector (n_samples,).
-        Uab: Matrix products (n_samples, 6) for n_cvt=1.
-
-    Returns:
-        P_yy scalar (the projected phenotype variance).
-    """
-    s_ww = Hi_eval @ Uab[:, _NCVT1.ww]
-    s_wx = Hi_eval @ Uab[:, _NCVT1.wx]
-    s_wy = Hi_eval @ Uab[:, _NCVT1.wy]
-    s_xx = Hi_eval @ Uab[:, _NCVT1.xx]
-    s_xy = Hi_eval @ Uab[:, _NCVT1.xy]
-    s_yy = Hi_eval @ Uab[:, _NCVT1.yy]
-
-    # Row 1: project out W (Schur complement)
-    if s_ww <= 0:
-        if s_ww < 0:
-            logger.warning(
-                f"Negative s_ww ({s_ww:.6e}) in scalar MLE P_yy — "
-                "eigendecomposition may be degenerate."
-            )
-        return float(s_yy)  # degenerate
-    inv_ww = 1.0 / s_ww
-    p1_xx = s_xx - s_wx * s_wx * inv_ww
-    p1_xy = s_xy - s_wx * s_wy * inv_ww
-    p1_yy = s_yy - s_wy * s_wy * inv_ww
-
-    # Row 2: project out X (Schur complement)
-    if p1_xx == 0:
-        return float(p1_yy)  # degenerate
-    P_yy = p1_yy - p1_xy * p1_xy / p1_xx
-    return float(P_yy)
-
-
 def _mle_p_yy_scalar_null_ncvt1(Hi_eval: np.ndarray, Uab: np.ndarray) -> float:
     """Compute null-model MLE P_yy for n_cvt=1.
 
-    Null model: nc_total=n_cvt=1, so P_yy = Pab[1][5] = p1_yy.
+    Null model with n_cvt=1, so P_yy = Pab[1][5] = p1_yy.
     Only row 0 and row 1 Schur complement needed.
 
     Args:
@@ -336,8 +285,7 @@ def compute_null_model_lambda(
     Used by Score test (-lmm 3) which reuses null model lambda for all SNPs
     instead of re-optimizing per SNP (as Wald does).
 
-    Uses reml_log_likelihood() with nc_total = n_cvt, GEMMA's LogRL_f with
-    calc_null=true.
+    Uses reml_log_likelihood(), GEMMA's LogRL_f with calc_null=true.
 
     Args:
         eigenvalues: Kinship eigenvalues (n_samples,)
@@ -357,7 +305,7 @@ def compute_null_model_lambda(
 
     # Create closure for null model REML optimization
     def neg_reml_null(lam: float) -> float:
-        return -reml_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        return -reml_log_likelihood(lam, eigenvalues, Uab, n_cvt)
 
     # Optimize lambda under the null model using golden section search
     lambda_null, logl_null = _golden_section_minimize(neg_reml_null, l_min, l_max)
@@ -370,10 +318,8 @@ def mle_log_likelihood(
     eigenvalues: np.ndarray,
     Uab: np.ndarray,
     n_cvt: int,
-    *,
-    nc_total: int,
 ) -> float:
-    """Compute MLE log-likelihood (NOT REML) following GEMMA's LogL_f.
+    """Compute the null-model MLE log-likelihood following GEMMA's LogL_f.
 
     Key differences from REML:
     - Uses n (sample size) instead of df
@@ -386,7 +332,7 @@ def mle_log_likelihood(
     where:
     - c = 0.5 * n * (log(n) - log(2*pi) - 1)
     - logdet_h = sum(log(lambda * eval + 1))
-    - P_yy = Pab[nc_total, index_yy]
+    - P_yy = Pab[n_cvt, index_yy]
 
     Used by LRT (-lmm 2) which requires MLE likelihood.
 
@@ -395,8 +341,6 @@ def mle_log_likelihood(
         eigenvalues: Eigenvalues of kinship matrix (n_samples,)
         Uab: Matrix products from compute_Uab (n_samples, n_index)
         n_cvt: Number of covariates
-        nc_total: Columns projected out. ``n_cvt`` for the null model
-            (GEMMA ``calc_null=true``), ``n_cvt + 1`` for the alternative.
 
     Returns:
         Log-likelihood value (positive for maximization)
@@ -408,13 +352,11 @@ def mle_log_likelihood(
     logdet_h = np.sum(np.log(np.abs(v_temp)))
 
     # Scalar path for n_cvt=1: skip full Pab allocation
-    if n_cvt == nc_total == 1:
+    if n_cvt == 1:
         P_yy_raw = _mle_p_yy_scalar_null_ncvt1(Hi_eval, Uab)
-    elif n_cvt == 1:
-        P_yy_raw = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
     else:
         Pab = calc_pab(n_cvt, Hi_eval, Uab)
-        P_yy_raw = Pab[nc_total, build_index_table(n_cvt).idx_yy]
+        P_yy_raw = Pab[n_cvt, build_index_table(n_cvt).idx_yy]
 
     P_yy = float(guard_p_yy(P_yy_raw))
 
@@ -438,8 +380,7 @@ def compute_null_model_mle(
     Used by LRT (-lmm 2) which requires MLE (not REML) likelihood.
     The null model MLE is computed once and reused for all SNPs.
 
-    Uses mle_log_likelihood() with nc_total = n_cvt, GEMMA's LogL_f with
-    calc_null=true.
+    Uses mle_log_likelihood(), GEMMA's LogL_f with calc_null=true.
 
     Args:
         eigenvalues: Kinship eigenvalues (n_samples,)
@@ -458,7 +399,7 @@ def compute_null_model_mle(
 
     # Create closure for null model MLE optimization
     def neg_mle_null(lam: float) -> float:
-        return -mle_log_likelihood(lam, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+        return -mle_log_likelihood(lam, eigenvalues, Uab, n_cvt)
 
     # Optimize lambda under the null model using golden section search
     lambda_null_mle, logl_H0 = _golden_section_minimize(neg_mle_null, l_min, l_max)

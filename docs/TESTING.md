@@ -34,7 +34,7 @@ GEMMA. This document is split into three parts:
 
 > **Never make `scipy` a runtime dependency.** It overwrites the ILP64
 > numpy build and breaks 100k+ sample eigendecomposition. Production code
-> uses the stdlib-only `jamma.special` module instead. New stat functions
+> uses the NumPy `jamma.lmm.special` module instead. New stat functions
 > go there first; reach for `scipy.stats` only to produce a reference value.
 
 ### 1.2 Setup
@@ -644,7 +644,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 | **Fingerprint / sanitizer harness** | `test_fingerprint_harness.py`, `test_compare_fingerprints.py`, `test_sanitizer_sentinel.py`, `test_compile_accel_sentinel_injection.py`, `test_sanitizer_workflow_yaml.py`, `test_asan_suppressions.py` | The machinery behind `fingerprint.yml` and `sanitizers.yml`. These test the gates themselves, so a broken harness cannot go green by doing nothing |
 | **Validation / parity** | `test_validation.py`, `test_validation_assoc.py`, `test_validation_assoc_mode_schema.py`, `test_validate_runner_inputs.py`, `test_kinship_validation.py`, `test_demonstrate_equivalence.py` | GEMMA parity machinery; tolerance config; assoc file diff and schema-derived compared columns; the equivalence demonstration script |
 | **Suite meta** | `test_conftest_tier_gate.py`, `test_fixture_manifest.py`, `tests/fakes/test_fakes.py` | The mandatory-tier-marker gate (§1.6), the fixture manifest (§3.5), and the fakes' own contract tests |
-| **Reference oracles** | `tests/reference/likelihood.py`, `tests/reference/stats.py` | GEMMA-literal scalar ports (CalcPPab, CalcPPPab, LogRL_dev2, CalcRLWald, CalcRLScore, CalcLRT, `f_sf`, `safe_sqrt`) with no production caller; the batch and C paths are held to them |
+| **Reference oracles** | `tests/reference/likelihood.py`, `tests/reference/stats.py`, `tests/reference/special.py` | GEMMA-literal scalar ports (CalcPPab, CalcPPPab, LogRL_dev2, alternative-model LogRL_f, CalcRLWald, CalcRLScore, CalcLRT, `f_sf`, `safe_sqrt`) and the scalar Cephes `betainc` and `chi2_sf`, all with no production caller; the batch and C paths are held to them |
 | **Numerics / utilities** | `test_special.py`, `test_schema.py`, `test_snp_filter.py`, `test_snp_filter_perf.py`, `test_snp_stats.py`, `test_core_snp_stats.py`, `test_categorical.py`, `test_missingness.py`, `test_weights.py`, `test_prepare_common.py`, `test_telemetry.py`, `test_progress.py`, `test_hypothesis.py` | Cephes betainc / chi2_sf; data-class schemas; SNP filtering and statistics; phenotype prep; progress bars |
 
 ### 3.2 Tests to improve

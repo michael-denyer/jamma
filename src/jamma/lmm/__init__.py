@@ -13,10 +13,10 @@ Modules:
 - chunk: Chunk size computation
 - prepare_common: Shared setup (covariates, eigendecomp, null model)
 - compute_numpy: NumPy mode dispatch for chunk computation
-- likelihood: Index tables, scalar REML/MLE, null-model optimisation
+- likelihood: Null-model scalar REML/MLE and optimisation
 - uab: Uab/Pab/Iab batch builders in full, split and SoA layouts
 - likelihood_numpy: Pure-NumPy batch REML/MLE and optimization
-- special: Pure-stdlib betainc and chi2_sf (no numpy/scipy)
+- special: NumPy betainc_batch and chi2_sf_batch (no scipy)
 - results: Result building functions
 - eigen: Eigendecomposition with GEMMA-compatible thresholding
 - stats: AssocResult dataclass and the batch Wald/Score/LRT statistics

@@ -63,7 +63,7 @@ A typical LMM association run proceeds as follows:
 
 6. **Null model** — The rotated data `U.T @ Y` and covariates are used to optimize the variance component `lambda` via a 50-point grid search followed by golden section refinement (`lmm/likelihood.py` REML path).
 
-7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size, cut to 16 chunks when the budget alone would leave too few to pipeline, the run has at most 10,000 samples, and the BLAS cannot be throttled), `lmm/chunk_kernel.py` (the one dispatch match, which builds each path's persistent C workspace and binds the call that consumes it), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/results.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics through the batched `lmm/likelihood_numpy.py` routines, or through `_lmm_accel` when the C extension is loaded. `lmm/stats.py` holds the `AssocResult` record and the scalar reference implementations the tests check the batch path against; production does not call them. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
+7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size, cut to 16 chunks when the budget alone would leave too few to pipeline, the run has at most 10,000 samples, and the BLAS cannot be throttled), `lmm/chunk_kernel.py` (the one dispatch match, which builds each path's persistent C workspace and binds the call that consumes it), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/results.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics through the batched `lmm/likelihood_numpy.py` routines, or through `_lmm_accel` when the C extension is loaded. `lmm/stats.py` holds the `AssocResult` record and the batch statistics; the scalar references the tests check them against live in `tests/reference/`, and production does not call them. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
 
 8. **Output** — `AssocResult` records are written to a GEMMA-compatible `.assoc.txt` file via `lmm/io.py:IncrementalAssocWriter`. When `output_path` is set, results stream to disk per chunk to avoid accumulating a large in-memory list.
 
@@ -152,7 +152,7 @@ src/jamma/
 │   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, AssocResult, SnpMeta
 │   ├── accel.py            # available()/require(): the one loader for _lmm_accel
 │   ├── io.py               # IncrementalAssocWriter and the GEMMA .assoc.txt line format
-│   ├── likelihood.py       # Index tables, scalar REML/MLE, null-model golden section search
+│   ├── likelihood.py       # Null-model scalar REML/MLE and golden section search
 │   ├── pab.py              # Pab indexing, Uab products, and Schur-complement recursion
 │   ├── uab.py              # Uab/Pab/Iab batch builders in full, split and SoA layouts
 │   ├── likelihood_numpy.py # NumPy batch REML/MLE evaluation and lambda optimisation
@@ -178,7 +178,7 @@ src/jamma/
 │   ├── loco_eigen.py       # eigen_pairs_for(): cache-or-compute decision, cache key, manifest, artifact writes
 │   ├── loco_workers.py     # Concurrent eigen solves, BLAS scope ownership and worker memory pricing
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
-│   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)
+│   ├── special.py          # NumPy betainc_batch (Cephes CF) and chi2_sf_batch (erfc)
 │   ├── _compile_accel.py   # Dev-mode/runtime compiler; calls run_build(LMM_ACCEL_SPEC)
 │   ├── _lmm_accel.c        # CPython module init; the only unit calling import_array()
 │   ├── _lmm_accel_ncvt1.c  # Public n_cvt=1 workspace and chunk-compute entry points
@@ -247,6 +247,6 @@ JAMMA targets exact output compatibility with GEMMA v0.98.5. Key design choices 
 
 - The `pab.py` recursion follows GEMMA's `CalcPab` using identical index ordering (GEMMA's `GetabIndex` formula with 1-based indices).
 - REML optimization uses a 50-point grid search followed by golden section refinement (`n_refine >= 20` for ~1e-5 tolerance), matching GEMMA's convergence behaviour.
-- `lmm/special.py` provides pure-stdlib `betainc` (Cephes Lentz CF) and `chi2_sf` (erfc) to avoid a `scipy` runtime dependency, which would overwrite ILP64 numpy with LP64 numpy on installation.
+- `lmm/special.py` provides NumPy `betainc_batch` (Cephes Lentz CF) and `chi2_sf_batch` (erfc) to avoid a `scipy` runtime dependency, which would overwrite ILP64 numpy with LP64 numpy on installation.
 - `guard_p_yy` replaces an exactly zero projected residual with `_P_YY_ZERO_REPLACEMENT = 1e-8` before `log`, as GEMMA v0.98.5's `LogRL_f`/`LogL_f` do, and turns a negative one into NaN.
 - Calibrated tolerances are documented in `src/jamma/validation/tolerances.py` and `docs/GEMMA_EQUIVALENCE.md`.

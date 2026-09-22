@@ -1,8 +1,10 @@
-"""Scalar ports of GEMMA's CalcPPab, CalcPPPab and LogRL_dev2.
+"""Scalar ports of GEMMA's CalcPPab, CalcPPPab, LogRL_dev2 and alternative LogRL_f.
 
 Production computes se(pve) by finite differences on the null REML
 log-likelihood (``jamma.lmm.likelihood.finite_difference_dev2``). The
 analytical second derivative here is what that stencil is checked against.
+Production evaluates the alternative-model REML only in batch; the scalar
+form here is what the batch Wald path is checked against.
 """
 
 from __future__ import annotations
@@ -10,7 +12,14 @@ from __future__ import annotations
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.pab import calc_iab, calc_pab, get_ab_index, n_index
+from jamma.lmm.pab import (
+    build_index_table,
+    calc_iab,
+    calc_pab,
+    get_ab_index,
+    guard_p_yy,
+    n_index,
+)
 from tests.reference import P_YY_FLOOR
 
 
@@ -261,3 +270,50 @@ def reml_log_likelihood_dev2(
     )
 
     return dev2
+
+
+def reml_log_likelihood_alt(
+    lambda_val: float,
+    eigenvalues: np.ndarray,
+    Uab: np.ndarray,
+    n_cvt: int,
+) -> float:
+    """Compute the alternative-model REML log-likelihood, GEMMA's LogRL_f.
+
+    The genotype joins the projected-out columns (``calc_null=false``), so
+    ``n_cvt + 1`` rows enter logdet_hiw and df = n - n_cvt - 1.
+
+    Args:
+        lambda_val: Variance component ratio (sigma_g^2 / sigma_e^2).
+        eigenvalues: Kinship eigenvalues (n_samples,).
+        Uab: Matrix products from compute_Uab with a genotype (n_samples, n_index).
+        n_cvt: Number of covariates.
+
+    Returns:
+        Log-likelihood value (positive for maximization).
+    """
+    nc_total = n_cvt + 1
+    n = len(eigenvalues)
+    df = n - nc_total
+
+    v_temp = lambda_val * eigenvalues + 1.0
+    Hi_eval = 1.0 / v_temp
+    logdet_h = np.sum(np.log(np.abs(v_temp)))
+
+    table = build_index_table(n_cvt)
+    Pab = calc_pab(n_cvt, Hi_eval, Uab)
+    Iab = calc_iab(n_cvt, Uab)
+
+    logdet_hiw = 0.0
+    for i, index_ww in table.logdet_diag_indices[:nc_total]:
+        d_pab = Pab[i, index_ww]
+        d_iab = Iab[i, index_ww]
+        if d_pab > 0:
+            logdet_hiw += np.log(d_pab)
+        if d_iab > 0:
+            logdet_hiw -= np.log(d_iab)
+
+    P_yy = float(guard_p_yy(Pab[nc_total, table.idx_yy]))
+
+    c = 0.5 * df * (np.log(df) - np.log(2 * np.pi) - 1.0)
+    return c - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * np.log(P_yy)

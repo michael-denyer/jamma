@@ -116,6 +116,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `jamma.jlinalg._compile_jlinalg` no longer takes `on_retry`. Nothing in the
   repository passed it. The OpenMP retry notice still prints, on the same
   stream as the rest of the build output.
+- `jamma.lmm.likelihood.reml_log_likelihood` and `mle_log_likelihood` drop
+  the `nc_total` keyword and evaluate the null model only, the one form
+  production calls. The alternative-model REML moves to
+  `tests/reference/likelihood.py` as `reml_log_likelihood_alt`, and the
+  alternative-model MLE fast path `_mle_p_yy_scalar_ncvt1`, which only tests
+  reached, is deleted.
+- `jamma.lmm.special` no longer exports the scalar `betainc` and `chi2_sf`.
+  Production calls only `betainc_batch` and `chi2_sf_batch`; the scalar forms
+  move to `tests/reference/special.py` as their test oracles. No result
+  changes.
 
 ## [8.1.0] - 2026-09-14
 

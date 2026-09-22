@@ -185,43 +185,6 @@ def test_p_yy_warn_once_scalar():
 # ---------------------------------------------------------------------------
 
 
-def test_mle_scalar_pab_ncvt1():
-    """_mle_p_yy_scalar_ncvt1 must match calc_pab path to rtol=1e-14."""
-    from jamma.lmm.likelihood import (
-        _mle_p_yy_scalar_ncvt1,
-    )
-    from jamma.lmm.pab import calc_pab, get_ab_index
-
-    n_samples = 50
-    n_cvt = 1
-
-    d = rotated_lmm_inputs(n_samples, 1, seed=123)
-    eigenvalues, UtW, Uty = d.eigenvalues, d.UtW, d.Uty
-    Utx = d.UtG[:, 0]
-
-    lambda_val = 0.5
-    v_temp = lambda_val * eigenvalues + 1.0
-    Hi_eval = 1.0 / v_temp
-
-    Uab = compute_Uab(UtW, Uty, Utx)
-    Pab = calc_pab(n_cvt, Hi_eval, Uab)
-
-    # Full Pab path: nc_total = n_cvt + 1 = 2
-    nc_total = n_cvt + 1
-    index_yy = get_ab_index(n_cvt + 2, n_cvt + 2, n_cvt)
-    p_yy_full = Pab[nc_total, index_yy]
-
-    # Scalar path
-    p_yy_scalar = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
-
-    np.testing.assert_allclose(
-        p_yy_scalar,
-        p_yy_full,
-        rtol=1e-14,
-        err_msg="_mle_p_yy_scalar_ncvt1 does not match calc_pab P_yy",
-    )
-
-
 def test_mle_null_scalar_ncvt1():
     """Null-model mle_log_likelihood with n_cvt=1 matches the full Pab path."""
     from jamma.lmm.likelihood import (
@@ -262,18 +225,15 @@ def test_mle_null_scalar_ncvt1():
     )
 
     # Verify end-to-end: the null-model MLE should produce a finite result
-    logl = mle_log_likelihood(lambda_val, eigenvalues, Uab, n_cvt, nc_total=n_cvt)
+    logl = mle_log_likelihood(lambda_val, eigenvalues, Uab, n_cvt)
     assert np.isfinite(logl), (
         f"null-model mle_log_likelihood returned non-finite: {logl}"
     )
 
 
 def test_mle_scalar_degenerate_s_ww_zero():
-    """Scalar MLE P_yy returns s_yy when s_ww == 0 (degenerate intercept)."""
-    from jamma.lmm.likelihood import (
-        _mle_p_yy_scalar_ncvt1,
-        _mle_p_yy_scalar_null_ncvt1,
-    )
+    """Scalar null MLE P_yy returns s_yy when s_ww == 0 (degenerate intercept)."""
+    from jamma.lmm.likelihood import _mle_p_yy_scalar_null_ncvt1
     from jamma.lmm.pab import calc_pab, get_ab_index
 
     n_samples = 50
@@ -284,53 +244,13 @@ def test_mle_scalar_degenerate_s_ww_zero():
 
     Hi_eval = np.ones(n_samples)
 
-    # s_ww = 0 -> should return s_yy
-    p_yy = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
-    expected_s_yy = float(Hi_eval @ Uab[:, 5])
-    assert p_yy == expected_s_yy, f"Expected s_yy={expected_s_yy}, got {p_yy}"
-
-    # Null path: same behavior
     p_yy_null = _mle_p_yy_scalar_null_ncvt1(Hi_eval, Uab)
-    assert p_yy_null == expected_s_yy
+    expected_s_yy = float(Hi_eval @ Uab[:, 5])
+    assert p_yy_null == expected_s_yy, f"Expected s_yy={expected_s_yy}, got {p_yy_null}"
 
-    # Full Pab path should also handle this
     Pab = calc_pab(1, Hi_eval, Uab)
-    p_yy_full = Pab[2, get_ab_index(3, 3, 1)]
-    # Both should be s_yy since ww=0 means no projection happens
-    np.testing.assert_allclose(p_yy, p_yy_full, rtol=1e-12)
-
-
-def test_mle_scalar_degenerate_p1_xx_zero():
-    """Scalar MLE P_yy returns p1_yy when p1_xx == 0 (constant genotype)."""
-    from jamma.lmm.likelihood import _mle_p_yy_scalar_ncvt1
-    from jamma.lmm.pab import calc_pab, get_ab_index
-
-    n_samples = 50
-    rng = np.random.default_rng(222)
-    Hi_eval = np.ones(n_samples)
-
-    # Construct Uab where genotype column produces p1_xx = 0:
-    # s_xx - s_wx^2/s_ww = 0 when s_xx = s_wx^2/s_ww
-    # Easiest: make wx and xx columns such that genotype is proportional to intercept
-    w = np.ones(n_samples)
-    x = 2.0 * w  # genotype proportional to intercept -> p1_xx = 0
-    y = rng.standard_normal(n_samples)
-
-    Uab = np.zeros((n_samples, 6), dtype=np.float64)
-    Uab[:, 0] = w * w  # ww
-    Uab[:, 1] = w * x  # wx
-    Uab[:, 2] = w * y  # wy
-    Uab[:, 3] = x * x  # xx
-    Uab[:, 4] = x * y  # xy
-    Uab[:, 5] = y * y  # yy
-
-    p_yy_scalar = _mle_p_yy_scalar_ncvt1(Hi_eval, Uab)
-
-    # Full Pab path for reference
-    Pab = calc_pab(1, Hi_eval, Uab)
-    p_yy_full = Pab[2, get_ab_index(3, 3, 1)]
-
-    np.testing.assert_allclose(p_yy_scalar, p_yy_full, rtol=1e-12)
+    p_yy_full = Pab[1, get_ab_index(3, 3, 1)]
+    np.testing.assert_allclose(p_yy_null, p_yy_full, rtol=1e-12)
 
 
 # ---------------------------------------------------------------------------

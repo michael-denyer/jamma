@@ -197,7 +197,7 @@ def test_wrong_af_orientation_preserving_maf_is_rejected(tmp_path):
     path.write_text("\n".join(lines) + "\n")
     result = compare_files(path, source / "gemma.assoc.txt")
     assert result["status"] == "NOT VERIFIED"
-    assert "snp0:af_orientation" in result["failure_ids"]
+    assert "snp0:af" in result["failure_ids"]
 
 
 @pytest.mark.tier0

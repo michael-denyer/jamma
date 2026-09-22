@@ -68,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one warning naming each one given on the command line,
   matching GEMMA's tolerance of flags a mode does not use. `-lmm` is
   unchanged.
+- `compare_assoc_results` gates AF with an absolute tolerance of one printing
+  unit, `ToleranceConfig.af_atol = 1e-3`, in place of `af_rtol = 0.05`. The
+  relative gate passed a flipped allele whenever AF was within about 0.013 of
+  0.5 (`0.49` against `0.51`), while the docstring promised that a flip fails.
+  `strict()` and `relaxed()` no longer widen AF, and the math-validation
+  wrapper's separate `af_orientation` check is gone because the oracle now
+  enforces the same bound; its failure ids read `<rs>:af`.
 
 ## [8.1.0] - 2026-09-14
 

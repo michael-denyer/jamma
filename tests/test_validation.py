@@ -39,8 +39,7 @@ class TestToleranceConfig:
         assert config.logl_rtol == 1e-6
         # Lambda: Brent optimization convergence (max observed: 1.2e-5)
         assert config.lambda_rtol == 2e-5
-        # AF: JAMMA reports MAF, GEMMA reports AF (max diff: 0.04)
-        assert config.af_rtol == 0.05
+        assert config.af_atol == 1e-3
         assert config.atol == 1e-12
 
     def test_tolerance_config_strict(self):
@@ -277,34 +276,15 @@ class TestComparisonResult:
 
 
 class TestAssocAfGate:
-    """AF is gated at one unit of the three decimals both writers print."""
-
     @pytest.mark.parametrize(
         ("actual_af", "expected_af", "passed"),
         [
-            pytest.param(
-                0.49,
-                0.51,
-                False,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    reason="af_rtol=0.05 passes a flipped allele whose AF is near 0.5",
-                ),
-            ),
-            pytest.param(
-                0.539,
-                0.537,
-                False,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    reason="af_rtol=0.05 passes AF two printing units apart",
-                ),
-            ),
+            (0.49, 0.51, False),
+            (0.539, 0.537, False),
             (0.538, 0.537, True),
         ],
     )
     def test_af_is_gated_at_one_printing_unit(self, actual_af, expected_af, passed):
-        """One unit is rounding; two units, or a flip near 0.5, is a new frequency."""
         actual = [make_assoc(rs="rs1", af=actual_af)]
         expected = [make_assoc(rs="rs1", af=expected_af)]
 

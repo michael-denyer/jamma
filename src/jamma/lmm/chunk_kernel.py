@@ -34,11 +34,6 @@ from jamma.lmm.uab import (
 )
 from jamma.lmm.workspace import WorkspaceSpec
 
-# What a kernel hands back. The Wald C kernels return the WaldResult
-# TypedDict; every other C kernel and the split paths return a plain
-# dict[str, NDArray], and a TypedDict is not assignable to dict[str, Any].
-# The engine only ever reads keys, so the read-only supertype is both
-# accurate and wide enough for every path.
 KernelResult = Mapping[str, Any]
 
 

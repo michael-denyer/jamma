@@ -7,7 +7,7 @@ import pytest
 from scipy.stats import f
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import WaldResult, _compute_wald_numpy
+from jamma.lmm.compute_numpy import _compute_wald_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.conftest import requires_c
 from tests.independent_lmm_oracle import (
@@ -29,7 +29,7 @@ def _valid_shared_case() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray
 
 
 def _assert_matches_oracle(
-    result: WaldResult,
+    result: dict[str, np.ndarray],
     eigenvalues: np.ndarray,
     UtW: np.ndarray,
     Uty: np.ndarray,

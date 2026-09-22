@@ -215,8 +215,6 @@ def _batch_lrt_pvalues_numpy(
     Compute LRT p-values for a batch of SNPs.
     LRT statistic = 2 * (logl_H1 - logl_H0), chi2 with df=1.
 
-    Uses special.chi2_sf_batch (erfc-based, stdlib-only).
-
     Args:
         logls_mle: Per-SNP MLE log-likelihoods under alternative (n_snps,).
         logl_H0: Null model MLE log-likelihood (scalar).

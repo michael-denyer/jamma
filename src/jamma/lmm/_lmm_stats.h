@@ -30,7 +30,7 @@
 
 /* ---------------------------------------------------------------------------
  * Regularized incomplete beta I_z(a, b), with the symmetry relation applied.
- * Matches special.py betainc() scalar interface.
+ * Matches the scalar betainc() oracle in tests/reference/special.py.
  *
  * complement_z is the algebraically exact 1-z, kept separate for precision
  * near z=1. lbeta_ab is a precomputed lgamma term, hoisted by callers so the
@@ -42,7 +42,7 @@ double betainc(double a, double b, double z, double complement_z,
 
 /* ---------------------------------------------------------------------------
  * F statistic to p-value via the regularized incomplete beta.
- * Matches _f_to_pvalue in likelihood_numpy.py.
+ * Matches _f_to_pvalue in stats.py.
  * Returns NaN when is_valid is false, which is how a degenerate SNP arrives.
  * ------------------------------------------------------------------------- */
 double f_to_pvalue(double f_stat, int df, int is_valid, double a, double b,
@@ -50,7 +50,7 @@ double f_to_pvalue(double f_stat, int df, int is_valid, double a, double b,
 
 /* ---------------------------------------------------------------------------
  * Chi-squared survival function for df=1: P(X > x) = erfc(sqrt(x/2)).
- * Matches special.py chi2_sf exactly.
+ * Matches the scalar chi2_sf() oracle in tests/reference/special.py exactly.
  *
  * Inline in the header rather than compiled into _lmm_stats.c: it is four
  * branches over a libm call, so an out-of-line version would cost a call to

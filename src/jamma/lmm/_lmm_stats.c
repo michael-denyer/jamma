@@ -17,7 +17,8 @@
  * betainc_cf
  *
  * Lentz continued fraction for regularized incomplete beta I_x(a, b).
- * Based on special.py _betainc_cf / codeplea incbeta (zlib license).
+ * Based on _betainc_cf in tests/reference/special.py / codeplea incbeta
+ * (zlib license).
  * Differs: takes precomputed lbeta_ab to avoid per-call lgamma;
  * returns NaN (not exception) on non-convergence.
  * Caller guarantees x < (a+1)/(a+b+2) (symmetry threshold).
@@ -64,7 +65,7 @@ static double betainc_cf(double a, double b, double x, double lbeta_ab)
  * betainc
  *
  * Regularized incomplete beta I_z(a, b) with symmetry relation.
- * Matches special.py betainc() scalar interface.
+ * Matches the scalar betainc() oracle in tests/reference/special.py.
  *
  * complement_z is the algebraically exact 1-z, used for precision near z=1.
  * ------------------------------------------------------------------------- */
@@ -91,7 +92,7 @@ double betainc(
  * f_to_pvalue
  *
  * Convert F-statistic to p-value via regularized incomplete beta.
- * Matches _f_to_pvalue in likelihood_numpy.py.
+ * Matches _f_to_pvalue in stats.py.
  * Returns NaN if is_valid is false (degenerate SNP).
  * ------------------------------------------------------------------------- */
 double f_to_pvalue(
@@ -122,7 +123,6 @@ double f_to_pvalue(
 }
 
 /* Wald statistics from a populated pab array.
- * Shared by golden_section_lambda_ncvt1 and refine_lambda_ncvt1_split.
  *
  * Returns 1 if the SNP is valid (P_XX > 0), 0 if degenerate (P_XX <= 0).
  * Degenerate SNPs get beta = se = f_stat = NaN.

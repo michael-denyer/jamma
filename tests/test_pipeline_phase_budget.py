@@ -186,7 +186,7 @@ def test_gk_eigen_budget_gates_eigendecomposition(tmp_path):
     from jamma.core.memory import estimate_kinship_memory
     from jamma.pipeline_kinship import compute_kinship
 
-    n_samples, n_snps = 500, 10
+    n_samples, n_snps = 2000, 10
     values = np.random.default_rng(1).integers(0, 3, (n_samples, n_snps))
     bfile = tmp_path / "small"
     to_bed(bfile.with_suffix(".bed"), values.astype(float))
@@ -196,7 +196,7 @@ def test_gk_eigen_budget_gates_eigendecomposition(tmp_path):
         n_snps=n_snps,
         chunk_size=10_000,
     )
-    budget_gb = 1.2 * kinship_gb
+    budget_gb = (kinship_gb + dsyevr_peak_gb(n_samples)) / 2
     assert kinship_gb < budget_gb < dsyevr_peak_gb(n_samples)
     config = PipelineConfig(
         bfile=bfile,

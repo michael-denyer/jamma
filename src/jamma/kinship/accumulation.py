@@ -154,11 +154,8 @@ def select_kinship_snps(
 def validate_valid_indices(valid_indices: np.ndarray, n_samples: int) -> None:
     """Validate valid_indices for emptiness, bounds, duplicates, and ordering.
 
-    The single source of truth for the sample-subset invariant. Called once per
-    public entry path (``compute_kinship_streaming``,
-    ``compute_loco_kinship_streaming``, and ``PipelineRunner._load_or_compute_kinship``
-    before its ``np.ix_`` file subset). Internal helpers below a validating boundary
-    trust the value and do not re-check.
+    The single source of truth for the sample-subset invariant. Internal helpers
+    below a validating boundary trust the value and do not re-check.
 
     Args:
         valid_indices: Array of sample indices to keep.

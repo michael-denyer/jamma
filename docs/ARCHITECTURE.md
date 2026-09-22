@@ -235,7 +235,7 @@ Two compiled C extensions accelerate the hot paths:
 | `jamma.jlinalg._jlinalg` | `src/jamma/jlinalg/src/` | BLAS dispatch (DGEMM, DSYRK), LAPACK dispatch (DSYEVD, DSYEVR), single-pass per-SNP statistics |
 | `jamma.lmm._lmm_accel` | `src/jamma/lmm/_lmm_*.c` | Per-SNP REML Wald pipeline with OpenMP parallelism over SNP chunks |
 
-Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). The streaming runner is only auto-selected by `plan_association()` when `_lmm_accel` is available; an explicit `--backend numpy-streaming` request is rejected with `ValueError` at the pipeline boundary if the extension is missing.
+Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). Batch-or-streaming selection does not depend on `_lmm_accel`: `plan_association()` picks streaming whenever the batch quote does not fit in memory, and honours an explicit `--backend numpy-streaming` request with or without the extension. The extension decides only the dispatch path each chunk runs.
 
 ## LOCO Mode
 

@@ -6,7 +6,7 @@
  * protocol.
  *
  * Module-level constants:
- *   jlinalg_isa   -- active ISA string ("AVX2", "NEON", or "generic")
+ *   jlinalg_isa   -- compile-time ISA string ("AVX2", "NEON", or "generic")
  *   HAS_OPENMP    -- True if compiled with OpenMP (-fopenmp)
  *   ABI_VERSION   -- integer (JLINALG_ABI_VERSION from jlinalg.h)
  *
@@ -65,20 +65,18 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
     int transa = (transa_str[0] == 'T' || transa_str[0] == 't') ? 1 : 0;
     int transb = (transb_str[0] == 'T' || transb_str[0] == 't') ? 1 : 0;
 
+    PyArrayObject *aA = NULL, *aB = NULL, *aC = NULL;
+    PyObject *result = NULL;
+
     /* Coerce to C-contiguous float64. */
-    PyArrayObject *aA = (PyArrayObject *)PyArray_FROM_OTF(oA, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
-    PyArrayObject *aB = (PyArrayObject *)PyArray_FROM_OTF(oB, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
-    if (!aA || !aB) {
-        Py_XDECREF(aA);
-        Py_XDECREF(aB);
-        return NULL;
-    }
+    aA = (PyArrayObject *)PyArray_FROM_OTF(oA, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    if (!aA) goto cleanup;
+    aB = (PyArrayObject *)PyArray_FROM_OTF(oB, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    if (!aB) goto cleanup;
 
     if (PyArray_NDIM(aA) != 2 || PyArray_NDIM(aB) != 2) {
         PyErr_SetString(PyExc_ValueError, "dgemm: A and B must be 2-D arrays");
-        Py_DECREF(aA);
-        Py_DECREF(aB);
-        return NULL;
+        goto cleanup;
     }
 
     /* Effective dimensions after transpose */
@@ -91,60 +89,42 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
         PyErr_Format(PyExc_ValueError,
                      "dgemm: inner dimensions mismatch: op(A) is %ldx%ld, op(B) is %ldx%ld",
                      (long)M, (long)K_a, (long)K_b, (long)N);
-        Py_DECREF(aA);
-        Py_DECREF(aB);
-        return NULL;
+        goto cleanup;
     }
 
     /* Output C (M x N): use caller-provided buffer or allocate fresh */
-    PyArrayObject *aC;
     if (oOut != Py_None) {
-        PyArrayObject *tmp = (PyArrayObject *)oOut;
         if (!PyArray_Check(oOut)) {
             PyErr_SetString(PyExc_TypeError, "dgemm: out must be a numpy array");
-            Py_DECREF(aA);
-            Py_DECREF(aB);
-            return NULL;
+            goto cleanup;
         }
-        if (PyArray_TYPE(tmp) != NPY_DOUBLE) {
+        PyArrayObject *out = (PyArrayObject *)oOut;
+        if (PyArray_TYPE(out) != NPY_DOUBLE) {
             PyErr_Format(PyExc_ValueError, "dgemm: out must be float64, got dtype %d",
-                         PyArray_TYPE(tmp));
-            Py_DECREF(aA);
-            Py_DECREF(aB);
-            return NULL;
+                         PyArray_TYPE(out));
+            goto cleanup;
         }
-        if (!PyArray_IS_C_CONTIGUOUS(tmp) || !PyArray_ISWRITEABLE(tmp)) {
+        if (!PyArray_IS_C_CONTIGUOUS(out) || !PyArray_ISWRITEABLE(out)) {
             PyErr_SetString(PyExc_ValueError, "dgemm: out must be C-contiguous and writeable");
-            Py_DECREF(aA);
-            Py_DECREF(aB);
-            return NULL;
+            goto cleanup;
         }
-        if (!PyArray_ISALIGNED(tmp)) {
+        if (!PyArray_ISALIGNED(out)) {
             PyErr_SetString(PyExc_ValueError, "dgemm: out must be aligned");
-            Py_DECREF(aA);
-            Py_DECREF(aB);
-            return NULL;
+            goto cleanup;
         }
-        Py_INCREF(oOut);
-        aC = (PyArrayObject *)oOut;
-        if (PyArray_NDIM(aC) != 2 || PyArray_DIM(aC, 0) != M || PyArray_DIM(aC, 1) != N) {
+        if (PyArray_NDIM(out) != 2 || PyArray_DIM(out, 0) != M || PyArray_DIM(out, 1) != N) {
             PyErr_Format(PyExc_ValueError,
                          "dgemm: out shape (%zd, %zd) doesn't match result shape (%zd, %zd)",
-                         (Py_ssize_t)PyArray_DIM(aC, 0), (Py_ssize_t)PyArray_DIM(aC, 1),
+                         (Py_ssize_t)PyArray_DIM(out, 0), (Py_ssize_t)PyArray_DIM(out, 1),
                          (Py_ssize_t)M, (Py_ssize_t)N);
-            Py_DECREF(aC);
-            Py_DECREF(aA);
-            Py_DECREF(aB);
-            return NULL;
+            goto cleanup;
         }
+        Py_INCREF(oOut);
+        aC = out;
     } else {
         npy_intp dims[2] = {M, N};
         aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);
-        if (!aC) {
-            Py_DECREF(aA);
-            Py_DECREF(aB);
-            return NULL;
-        }
+        if (!aC) goto cleanup;
     }
 
     const double *pA = (const double *)PyArray_DATA(aA);
@@ -158,9 +138,12 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
     Py_BEGIN_ALLOW_THREADS jlinalg_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
     Py_END_ALLOW_THREADS
 
-        Py_DECREF(aA);
-    Py_DECREF(aB);
-    return (PyObject *)aC;
+        result = (PyObject *)aC;
+
+cleanup:
+    Py_XDECREF(aA);
+    Py_XDECREF(aB);
+    return result;
 }
 
 /* ---------------------------------------------------------------------------
@@ -194,61 +177,52 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
         return NULL;
     }
 
+    PyArrayObject *aC = NULL;
+    PyObject *result = NULL;
     PyArrayObject *aX = (PyArrayObject *)PyArray_FROM_OTF(oX, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
-    if (!aX) return NULL;
+    if (!aX) goto cleanup;
 
     if (PyArray_NDIM(aX) != 2) {
         PyErr_SetString(PyExc_ValueError, "dsyrk: X must be a 2-D array");
-        Py_DECREF(aX);
-        return NULL;
+        goto cleanup;
     }
 
     npy_intp N = PyArray_DIM(aX, 0);
     npy_intp K = PyArray_DIM(aX, 1);
 
-    PyArrayObject *aC;
     if (oOut != Py_None) {
         if (!PyArray_Check(oOut)) {
             PyErr_SetString(PyExc_TypeError, "dsyrk: out must be a numpy array");
-            Py_DECREF(aX);
-            return NULL;
+            goto cleanup;
         }
         PyArrayObject *out = (PyArrayObject *)oOut;
         if (PyArray_TYPE(out) != NPY_DOUBLE) {
             PyErr_SetString(PyExc_ValueError, "dsyrk: out must be float64");
-            Py_DECREF(aX);
-            return NULL;
+            goto cleanup;
         }
         if (!PyArray_IS_C_CONTIGUOUS(out)) {
             PyErr_SetString(PyExc_ValueError, "dsyrk: out must be C-contiguous");
-            Py_DECREF(aX);
-            return NULL;
+            goto cleanup;
         }
         if (!PyArray_ISALIGNED(out)) {
             PyErr_SetString(PyExc_ValueError, "dsyrk: out must be aligned");
-            Py_DECREF(aX);
-            return NULL;
+            goto cleanup;
         }
         if (!PyArray_ISWRITEABLE(out)) {
             PyErr_SetString(PyExc_ValueError, "dsyrk: out must be writeable");
-            Py_DECREF(aX);
-            return NULL;
+            goto cleanup;
         }
         if (PyArray_NDIM(out) != 2 || PyArray_DIM(out, 0) != N || PyArray_DIM(out, 1) != N) {
             PyErr_Format(PyExc_ValueError, "dsyrk: out shape doesn't match result shape (%zd, %zd)",
                          (Py_ssize_t)N, (Py_ssize_t)N);
-            Py_DECREF(aX);
-            return NULL;
+            goto cleanup;
         }
         Py_INCREF(oOut);
-        aC = (PyArrayObject *)oOut;
+        aC = out;
     } else {
         npy_intp dims[2] = {N, N};
         aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);
-        if (!aC) {
-            Py_DECREF(aX);
-            return NULL;
-        }
+        if (!aC) goto cleanup;
     }
 
     const double *pX = (const double *)PyArray_DATA(aX);
@@ -257,8 +231,11 @@ static PyObject *py_dsyrk(PyObject *self, PyObject *args, PyObject *kwargs) {
     Py_BEGIN_ALLOW_THREADS jlinalg_dsyrk_ext(N, K, pX, K, pC, N, beta);
     Py_END_ALLOW_THREADS
 
-        Py_DECREF(aX);
-    return (PyObject *)aC;
+        result = (PyObject *)aC;
+
+cleanup:
+    Py_XDECREF(aX);
+    return result;
 }
 
 /* ---------------------------------------------------------------------------
@@ -302,52 +279,40 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
         return NULL;
     }
 
-    PyArrayObject *aK = (PyArrayObject *)PyArray_FROM_OTF(oK, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
-    if (!aK) return NULL;
+    PyArrayObject *aK = NULL, *aW = NULL, *aU = NULL;
+    PyObject *result = NULL;
+
+    aK = (PyArrayObject *)PyArray_FROM_OTF(oK, NPY_DOUBLE, NPY_ARRAY_INOUT_ARRAY2);
+    if (!aK) goto cleanup;
 
     if (PyArray_NDIM(aK) != 2 || PyArray_DIM(aK, 0) != PyArray_DIM(aK, 1)) {
         PyErr_SetString(PyExc_ValueError, "eigh: K must be 2-D square float64");
-        PyArray_DiscardWritebackIfCopy(aK);
-        Py_DECREF(aK);
-        return NULL;
+        goto cleanup;
     }
 
     npy_intp N = PyArray_DIM(aK, 0);
     double *pK = (double *)PyArray_DATA(aK);
 
     /* Allocate eigenvalues (N,) -- always needed */
-    PyArrayObject *aW = (PyArrayObject *)PyArray_SimpleNew(1, &N, NPY_DOUBLE);
-    if (!aW) {
-        PyArray_DiscardWritebackIfCopy(aK);
-        Py_DECREF(aK);
-        return NULL;
-    }
+    aW = (PyArrayObject *)PyArray_SimpleNew(1, &N, NPY_DOUBLE);
+    if (!aW) goto cleanup;
 
     /* Reject inplace when FROM_OTF created a temporary copy */
     if (inplace && (PyArray_FLAGS(aK) & NPY_ARRAY_WRITEBACKIFCOPY)) {
         PyErr_SetString(PyExc_ValueError,
                         "eigh: inplace=True requires a C-contiguous, writeable, float64 array. "
                         "The input was converted to a temporary copy.");
-        Py_DECREF(aW);
-        PyArray_DiscardWritebackIfCopy(aK);
-        Py_DECREF(aK);
-        return NULL;
+        goto cleanup;
     }
 
     /* Eigenvector buffer: when inplace=True, reuse K directly (no N*N alloc). */
-    PyArrayObject *aU = NULL;
     double *pU;
     if (inplace) {
         pU = pK; /* K and eigenvectors share the same buffer */
     } else {
         npy_intp dims2[2] = {N, N};
         aU = (PyArrayObject *)PyArray_SimpleNew(2, dims2, NPY_DOUBLE);
-        if (!aU) {
-            Py_DECREF(aW);
-            PyArray_DiscardWritebackIfCopy(aK);
-            Py_DECREF(aK);
-            return NULL;
-        }
+        if (!aU) goto cleanup;
         pU = (double *)PyArray_DATA(aU);
     }
 
@@ -390,52 +355,32 @@ static PyObject *py_eigh(PyObject *self, PyObject *args, PyObject *kwds) {
             /* Convergence failure -- raise numpy.linalg.LinAlgError */
             PyErr_Format(LinAlgError, "jlinalg eigh: convergence failure (returned %d)", ret);
         }
-        Py_DECREF(aW);
-        Py_XDECREF(aU);
-        PyArray_DiscardWritebackIfCopy(aK);
-        Py_DECREF(aK);
-        return NULL;
+        goto cleanup;
     }
 
-    /* Surface performance fallback warnings to Python (non-fatal). */
-#define EMIT_STATUS_WARNING(msg)                                                                   \
-    do {                                                                                           \
-        if (PyErr_WarnEx(PyExc_RuntimeWarning, (msg), 1) < 0) {                                    \
-            if (inplace) {                                                                         \
-                PyErr_Clear();                                                                     \
-            } else {                                                                               \
-                goto warn_error;                                                                   \
-            }                                                                                      \
-        }                                                                                          \
-    } while (0)
-
-    if (eigh_status.vendor_lapack_skipped) {
-        EMIT_STATUS_WARNING("jlinalg eigh: vendor LAPACK work buffer allocation failed -- "
-                            "eigendecomposition may have used a slower path. "
-                            "Free memory or reduce matrix size.");
+    /* The performance-fallback warning is non-fatal. When a warnings filter
+     * turns it into an error, an inplace call has already overwritten K, so
+     * it returns the result rather than raise over a clobbered input. */
+    if (eigh_status.vendor_lapack_skipped &&
+        PyErr_WarnEx(PyExc_RuntimeWarning,
+                     "jlinalg eigh: vendor LAPACK work buffer allocation failed -- "
+                     "eigendecomposition may have used a slower path. "
+                     "Free memory or reduce matrix size.",
+                     1) < 0) {
+        if (!inplace) goto cleanup;
+        PyErr_Clear();
     }
 
-#undef EMIT_STATUS_WARNING
-
-    /* Commit writeback */
     PyArray_ResolveWritebackIfCopy(aK);
+    result = Py_BuildValue("(OOi)", aW, inplace ? (PyObject *)aK : (PyObject *)aU,
+                           eigh_status.driver_used);
 
-    /* Build result tuple.  Py_BuildValue("(NNi)") steals the N references. */
-    PyObject *result;
-    if (inplace) {
-        result = Py_BuildValue("(NNi)", aW, (PyObject *)aK, eigh_status.driver_used);
-    } else {
-        Py_DECREF(aK);
-        result = Py_BuildValue("(NNi)", aW, aU, eigh_status.driver_used);
-    }
-    return result;
-
-warn_error:
-    Py_DECREF(aW);
+cleanup:
+    if (!result && aK) PyArray_DiscardWritebackIfCopy(aK);
+    Py_XDECREF(aK);
+    Py_XDECREF(aW);
     Py_XDECREF(aU);
-    PyArray_DiscardWritebackIfCopy(aK);
-    Py_DECREF(aK);
-    return NULL;
+    return result;
 }
 
 /* ---------------------------------------------------------------------------
@@ -683,89 +628,44 @@ PyMODINIT_FUNC PyInit__jlinalg(void) {
         }
     }
 
-    /* Detect ISA and initialise vendor BLAS dispatch */
     if (jlinalg_init() != 0) {
         PyErr_SetString(PyExc_ImportError,
-                        "_jlinalg: initialisation failed (ISA detection or vendor BLAS "
-                        "dispatch -- try reducing OMP_NUM_THREADS if memory-constrained)");
+                        "_jlinalg: initialisation failed (vendor BLAS dispatch -- try "
+                        "reducing OMP_NUM_THREADS if memory-constrained)");
         return NULL;
     }
 
     PyObject *m = PyModule_Create(&jlinalgmodule);
     if (!m) return NULL;
 
-    /* jlinalg_isa: active ISA string constant */
-    PyObject *isa = PyUnicode_FromString(jlinalg_isa_name());
-    if (!isa || PyModule_AddObject(m, "jlinalg_isa", isa) < 0) {
-        Py_XDECREF(isa);
-        Py_DECREF(m);
-        return NULL;
-    }
-
-    /* blas_backend: identifies which dgemm backend is active */
-    if (PyModule_AddStringConstant(m, "blas_backend", blas_backend_name()) < 0) {
-        Py_DECREF(m);
-        return NULL;
-    }
-
-    /* HAS_OPENMP: True if compiled with OpenMP */
 #ifdef _OPENMP
-    int has_openmp = 1;
+    PyObject *has_openmp = Py_True;
 #else
-    int has_openmp = 0;
+    PyObject *has_openmp = Py_False;
 #endif
-    PyObject *openmp = PyBool_FromLong(has_openmp);
-    if (!openmp || PyModule_AddObject(m, "HAS_OPENMP", openmp) < 0) {
-        Py_XDECREF(openmp);
-        Py_DECREF(m);
-        return NULL;
-    }
+    if (PyModule_AddStringConstant(m, "jlinalg_isa", jlinalg_isa_name()) < 0 ||
+        PyModule_AddStringConstant(m, "blas_backend", blas_backend_name()) < 0 ||
+        PyModule_AddObjectRef(m, "HAS_OPENMP", has_openmp) < 0 ||
+        PyModule_AddIntConstant(m, "ABI_VERSION", JLINALG_ABI_VERSION) < 0)
+        goto fail;
 
-    /* ABI_VERSION: integer from jlinalg.h */
-    PyObject *abi = PyLong_FromLong(JLINALG_ABI_VERSION);
-    if (!abi || PyModule_AddObject(m, "ABI_VERSION", abi) < 0) {
-        Py_XDECREF(abi);
-        Py_DECREF(m);
-        return NULL;
+    static const struct {
+        const char *name;
+        int (*get)(void);
+    } BLAS_FLAGS[] = {
+        {"blas_is_ilp64", blas_is_ilp64},
+        {"blas_has_dgemm", blas_has_external},
+        {"blas_has_dsyrk", blas_has_dsyrk},
+        {"blas_has_dsyevd", blas_has_dsyevd},
+        {"blas_has_lapacke_dsyevd", blas_has_lapacke_dsyevd},
+        {"blas_has_dsyevr", blas_has_dsyevr},
+    };
+    for (size_t i = 0; i < sizeof BLAS_FLAGS / sizeof *BLAS_FLAGS; i++) {
+        if (PyModule_AddIntConstant(m, BLAS_FLAGS[i].name, BLAS_FLAGS[i].get()) < 0) goto fail;
     }
-
-    /* blas_is_ilp64: 1 if external dgemm uses ILP64 (64-bit) integers, 0 otherwise */
-    if (PyModule_AddIntConstant(m, "blas_is_ilp64", blas_is_ilp64()) < 0) {
-        Py_DECREF(m);
-        return NULL;
-    }
-
-    /* blas_has_dgemm: 1 if vendor dgemm is wired, 0 otherwise. py_dgemm raises
-     * RuntimeError when this is 0, so jlinalg/__init__.py binds the NumPy
-     * dgemm instead of the C one. */
-    if (PyModule_AddIntConstant(m, "blas_has_dgemm", blas_has_external()) < 0) {
-        Py_DECREF(m);
-        return NULL;
-    }
-
-    /* blas_has_dsyrk: 1 if vendor cblas_dsyrk is available, 0 otherwise */
-    if (PyModule_AddIntConstant(m, "blas_has_dsyrk", blas_has_dsyrk()) < 0) {
-        Py_DECREF(m);
-        return NULL;
-    }
-
-    /* blas_has_dsyevd: 1 if vendor LAPACK dsyevd is available, 0 otherwise */
-    if (PyModule_AddIntConstant(m, "blas_has_dsyevd", blas_has_dsyevd()) < 0) {
-        Py_DECREF(m);
-        return NULL;
-    }
-
-    /* blas_has_lapacke_dsyevd: 1 if LAPACKE C interface for dsyevd is available (MKL). */
-    if (PyModule_AddIntConstant(m, "blas_has_lapacke_dsyevd", blas_has_lapacke_dsyevd()) < 0) {
-        Py_DECREF(m);
-        return NULL;
-    }
-
-    /* blas_has_dsyevr: 1 if vendor LAPACK dsyevr is available (memory-pressure fallback). */
-    if (PyModule_AddIntConstant(m, "blas_has_dsyevr", blas_has_dsyevr()) < 0) {
-        Py_DECREF(m);
-        return NULL;
-    }
-
     return m;
+
+fail:
+    Py_DECREF(m);
+    return NULL;
 }

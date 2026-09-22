@@ -218,7 +218,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from disk in one BED read: `_stream_kinship` filters each chunk with `compute_snp_stats`, applies the mode's transform, accumulates one dsyrk per chunk | [stream.py:206](../src/jamma/kinship/stream.py#L206) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:349](../src/jamma/kinship/loco.py#L349) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship via one batch loop, returns a consume-once `LocoKinshipStream` | [loco.py:313](../src/jamma/kinship/loco.py#L313) |
 | 3a | `selected_chunks()`, `select_kinship_snps()`, `accumulate_kinship()` | LOCO column selection and the rank-k update shared with streaming; preserve BED chunk grouping and preprocess before selecting output rows | [accumulation.py](../src/jamma/kinship/accumulation.py) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L171) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |

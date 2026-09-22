@@ -82,78 +82,28 @@ class LocoKinshipStream:
         return {chr_name: K.copy() for chr_name, K in self}
 
 
-def _yield_full_kinship_fallback(
-    S_full_np: np.ndarray,
-    chrs_without_snps: list[str],
-    n_filtered: int,
-) -> Iterator[tuple[str, np.ndarray]]:
-    """Yield full kinship for chromosomes with 0 filtered SNPs.
-
-    When a chromosome has no SNPs after filtering, there is nothing to leave
-    out, so K_loco equals K_full.
-
-    Divides S_full_np in-place to avoid allocating a separate K_full buffer
-    (saves n^2 * 8 bytes — 320GB at 200k samples).  Callers must not use
-    S_full_np after this function returns.
-
-    Args:
-        S_full_np: Full kinship numerator as numpy array (n_samples, n_samples).
-            **Consumed in-place** — contents are overwritten with K_full.
-        chrs_without_snps: Chromosomes with 0 filtered SNPs.
-        n_filtered: Total number of filtered SNPs.
-
-    Yields:
-        (chr_name, K_full) pairs in biological chromosome order.
-        Each matrix is an independent allocation (safe to mutate in-place).
-    """
-    if not chrs_without_snps:
-        return
-    if n_filtered == 0:
-        raise ValueError(
-            "Cannot compute fallback kinship: n_filtered is 0 "
-            "(no SNPs passed filtering)"
-        )
-    # In-place division: S_full_np becomes K_full, no extra n^2 allocation.
-    S_full_np /= n_filtered
-    S_full_np.flags.writeable = False  # Guard against accidental re-mutation
-    for chr_name in sorted(chrs_without_snps, key=chr_sort_key):
-        logger.debug(f"LOCO chr {chr_name}: 0 SNPs after filtering, using full kinship")
-        yield (chr_name, S_full_np.copy())
-
-
 def _yield_loco_matrices(
     S_full_np: np.ndarray,
     S_chr: dict[str, np.ndarray],
+    batch_chrs: list[str],
     n_chr_filtered: dict[str, int],
     n_filtered: int,
     K_loco_buf: np.ndarray,
 ) -> Iterator[tuple[str, np.ndarray]]:
     """Compute and yield LOCO kinship matrices from S_full and per-chr accumulators.
 
-    For each chromosome, computes K_loco = (S_full - S_chr[c]) / (p - p_c),
-    freeing S_chr[c] after each yield.
-
     Each yielded matrix IS the shared ``K_loco_buf``, overwritten on the next
     iteration (LOCO-03: no per-chromosome allocation). This is the consume-once
     contract ``LocoKinshipStream`` documents; consumers that need every matrix at
     once go through ``LocoKinshipStream.materialize()``, which copies.
 
-    Args:
-        S_full_np: Full kinship numerator as numpy array (n_samples, n_samples).
-        S_chr: Per-chromosome kinship contributions.
-        n_chr_filtered: Count of filtered SNPs per chromosome.
-        n_filtered: Total number of filtered SNPs.
-        K_loco_buf: Pre-allocated workspace (n_samples, n_samples) reused for every
-            K_loco via ``np.subtract(out=)``, avoiding a per-chromosome temporary.
-
     Yields:
-        (chr_name, K_loco) pairs in biological chromosome order.
+        (chr_name, K_loco) pairs in ``batch_chrs`` order.
 
     Raises:
         ValueError: If all filtered SNPs are on a single chromosome.
     """
-    # Safe to del during iteration: sorted() materializes keys into a list.
-    for chr_name in sorted(S_chr.keys(), key=chr_sort_key):
+    for chr_name in batch_chrs:
         p_chr = n_chr_filtered[chr_name]
         p_loco = n_filtered - p_chr
 
@@ -163,15 +113,14 @@ def _yield_loco_matrices(
                 f"are on chromosome '{chr_name}'."
             )
 
-        # In-place subtraction avoids a temporary array (LOCO-03). K_loco is the
-        # shared buffer; the consume-once contract lets sequential consumers reuse
-        # it and avoid one extra n x n allocation per chromosome.
-        np.subtract(S_full_np, np.asarray(S_chr[chr_name]), out=K_loco_buf)
-        K_loco_buf /= p_loco
+        if p_chr == 0:
+            np.divide(S_full_np, p_loco, out=K_loco_buf)
+        else:
+            np.subtract(S_full_np, S_chr.pop(chr_name), out=K_loco_buf)
+            K_loco_buf /= p_loco
         logger.debug(
             f"LOCO chr {chr_name}: {p_chr} SNPs excluded, {p_loco} SNPs retained"
         )
-        del S_chr[chr_name]
         yield (chr_name, K_loco_buf)
 
 
@@ -346,6 +295,21 @@ def plan_loco_passes(
     )
 
 
+def _batch_chromosomes(
+    chrs: list[str], n_chr_filtered: dict[str, int], batch_size: int
+) -> list[list[str]]:
+    batches: list[list[str]] = [[]]
+    accumulators = 0
+    for chr_name in chrs:
+        if n_chr_filtered[chr_name] > 0:
+            if accumulators == batch_size:
+                batches.append([])
+                accumulators = 0
+            accumulators += 1
+        batches[-1].append(chr_name)
+    return batches
+
+
 def compute_loco_kinship_streaming(
     bed_path: Path,
     chunk_size: int = 10_000,
@@ -516,7 +480,6 @@ def compute_loco_kinship_streaming(
     n_chr_filtered: dict[str, int] = {
         chr_name: int(np.sum(chr_for_filtered == chr_name)) for chr_name in unique_chrs
     }
-    chrs_with_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) > 0]
     chrs_without_snps = [c for c in unique_chrs if n_chr_filtered.get(c, 0) == 0]
     if chrs_without_snps:
         logger.warning(
@@ -524,7 +487,7 @@ def compute_loco_kinship_streaming(
             f"{chrs_without_snps}. LOCO will use full kinship for these "
             f"(nothing to leave out)."
         )
-    n_chr_with_snps = len(chrs_with_snps)
+    n_chr_with_snps = len(unique_chrs) - len(chrs_without_snps)
 
     available_gb = memory.available_ram_gb()
     plan = plan_loco_passes(
@@ -549,10 +512,8 @@ def compute_loco_kinship_streaming(
         logger.info(f"  Memory budget: {mem_budget:.1f}GB")
 
     batch_size = plan.batch_size
-    # At least one batch always runs, even when n_chr_with_snps == 0 (every
-    # chromosome lost all its SNPs to filtering): that lone batch still computes
-    # S_full, which _yield_full_kinship_fallback below needs for every chromosome.
-    n_batches = max(1, -(-n_chr_with_snps // batch_size)) if batch_size else 1
+    batches = _batch_chromosomes(unique_chrs, n_chr_filtered, batch_size)
+    n_batches = len(batches)
 
     def _generate() -> Iterator[tuple[str, np.ndarray]]:
         if plan.single_pass and plan.required_gb > 10:
@@ -578,14 +539,13 @@ def compute_loco_kinship_streaming(
         # and threaded into every later batch, which accumulates only its S_chr.
         S_full_np: np.ndarray | None = None
         K_loco_buf: np.ndarray | None = None
-        for i in range(n_batches):
-            batch_start = i * batch_size
-            batch_chrs = chrs_with_snps[batch_start : batch_start + batch_size]
+        for i, batch_chrs in enumerate(batches):
+            accumulated = [c for c in batch_chrs if n_chr_filtered[c] > 0]
             desc = (
                 "LOCO: kinship accumulation"
                 if n_batches == 1
                 else f"LOCO: pass {i + 1}/{n_batches} "
-                f"({'S_full + ' if i == 0 else ''}{len(batch_chrs)} chr)"
+                f"({'S_full + ' if i == 0 else ''}{len(accumulated)} chr)"
             )
 
             batch_S_full, S_chr = _stream_s_full_and_chr(
@@ -594,7 +554,7 @@ def compute_loco_kinship_streaming(
                 n_snps,
                 snp_indices,
                 chromosomes,
-                batch_chrs,
+                accumulated,
                 chunk_size,
                 show_progress,
                 desc=desc,
@@ -607,7 +567,7 @@ def compute_loco_kinship_streaming(
                 elapsed = time.perf_counter() - start_time
                 logger.info(
                     f"LOCO streaming accumulation complete in {elapsed:.2f}s, "
-                    f"computing {len(S_chr)} LOCO matrices"
+                    f"computing {len(batch_chrs)} LOCO matrices"
                     if n_batches == 1
                     else f"LOCO: pass 1/{n_batches} accumulation complete in "
                     f"{elapsed:.2f}s"
@@ -616,15 +576,10 @@ def compute_loco_kinship_streaming(
             assert S_full_np is not None
             assert K_loco_buf is not None
             yield from _yield_loco_matrices(
-                S_full_np, S_chr, n_chr_filtered, n_filtered, K_loco_buf
+                S_full_np, S_chr, batch_chrs, n_chr_filtered, n_filtered, K_loco_buf
             )
             del S_chr
             gc.collect()
-
-        assert S_full_np is not None  # batch 0 always ran and set it
-        yield from _yield_full_kinship_fallback(
-            S_full_np, chrs_without_snps, n_filtered
-        )
 
         if n_batches > 1:
             elapsed = time.perf_counter() - start_time

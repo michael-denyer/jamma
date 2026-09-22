@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and every statistic came back NaN with no error. The rule lives once, in
   `compute_valid_mask`, which every entry runs first; the grouped runner's
   separate copy is gone.
+- LOCO yields a chromosome with no kinship SNPs (one that `-ksnps` or the
+  MAF filter left empty) in biological order instead of after every other
+  chromosome, so `run_lmm_loco` output and the reported PVE follow chromosome
+  order whether the eigenpairs are computed or read from the cache. The
+  stream writes that chromosome's full kinship into its shared buffer instead
+  of copying `S_full` once per empty chromosome, and the "PVE computed from
+  chromosome N" log states the real reason: earlier chromosomes had no SNPs
+  to test.
 
 ## [8.1.0] - 2026-09-14
 

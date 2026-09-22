@@ -437,7 +437,7 @@ catch. The carve-out is:
 
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
-| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` (`TestLOCOIteratorRuntimeError`, [`tests/test_safety_gates.py:30`](../tests/test_safety_gates.py#L30)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
+| The shared LMM chunk runner passes a transpose flag to jlinalg's dgemm rather than a transposed array (`test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm`, [`tests/test_numpy_streaming.py:53`](../tests/test_numpy_streaming.py#L53)) | jlinalg copies a non-contiguous input, so a transposed `U` costs an O(n^2) copy per chunk. That changes speed, not results |
 | Compile-flag literals not in three forbidden entry points ([`scripts/check_compile_flag_literals.py`](../scripts/check_compile_flag_literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
 | Every `_lmm_accel*.c` unit reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 

@@ -272,8 +272,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:25](../src/jamma/lmm/genotype_source.py#L25) |
 | 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:65](../src/jamma/lmm/genotype_source.py#L65) |
 | 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:130](../src/jamma/lmm/runner_numpy.py#L130) |
-| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:581](../src/jamma/lmm/runner_numpy.py#L515) |
-| 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:406](../src/jamma/lmm/prepare_common.py#L406) |
+| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:513](../src/jamma/lmm/runner_numpy.py#L513) |
+| 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:412](../src/jamma/lmm/prepare_common.py#L412) |
 | 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:464](../src/jamma/lmm/chunk_runner_numpy.py#L464) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:176](../src/jamma/lmm/chunk_runner_numpy.py#L176) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the prepared run and the config | [chunk_kernel.py:46](../src/jamma/lmm/chunk_kernel.py#L46) |

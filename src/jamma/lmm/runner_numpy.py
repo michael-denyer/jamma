@@ -300,8 +300,6 @@ def run_lmm_association_group_prepared(
                 f"got {run.phenotypes.shape}, expected "
                 f"({genotypes.analyzed_sample_count},)"
             )
-        if not np.all(np.isfinite(run.phenotypes)):
-            raise ValueError("prepared phenotypes must contain only finite values")
         prepared_runs.append(
             prepare_lmm_run(
                 eigen_input=eigen_input,
@@ -561,8 +559,8 @@ def run_lmm_association_numpy(
 
     Raises:
         MemoryError: If check_memory=True and insufficient memory.
-        ValueError: If only one of eigenvalues/eigenvectors is provided,
-            or if no valid samples remain after filtering.
+        ValueError: If a phenotype is infinite, only one of eigenvalues and
+            eigenvectors is provided, or no valid samples remain after filtering.
     """
     n_input_samples, n_snps = genotypes.shape
     valid_mask = compute_valid_mask(phenotypes, covariates)

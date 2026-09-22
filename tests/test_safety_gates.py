@@ -39,11 +39,6 @@ class TestLOCOIteratorRuntimeError:
     under ``-O`` where any surviving ``assert`` is stripped.
     """
 
-    def _loco_source_path(self) -> Path:
-        return (
-            Path(__file__).resolve().parent.parent / "src" / "jamma" / "lmm" / "loco.py"
-        )
-
     def test_loco_module_imports_cleanly_under_optimisation(self) -> None:
         """Runtime check: loco.py imports under ``python -O``.
 

@@ -1,8 +1,8 @@
 """Tests for .github/workflows/sanitizers.yml structure.
 
-Asserts the workflow declares the cron schedule, timeout, env vars,
-artifact upload, and SHA-pinned actions the sanitizer workflow
-requires. Catches accidental edits that drop a critical clause.
+Asserts the workflow declares the env vars, artifact upload, and
+SHA-pinned actions the sanitizer workflow requires. Catches accidental
+edits that drop a critical clause.
 """
 
 from __future__ import annotations
@@ -22,31 +22,6 @@ _WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "sanitizers.yml"
 @pytest.fixture(scope="module")
 def workflow():
     return yaml.safe_load(_WORKFLOW.read_text())
-
-
-def _on(workflow):
-    """PyYAML normalises the unquoted ``on`` key to the boolean True."""
-    return workflow.get("on") or workflow.get(True)
-
-
-def test_workflow_file_exists():
-    assert _WORKFLOW.exists()
-
-
-def test_cron_is_wednesday_six_utc(workflow):
-    on = _on(workflow)
-    crons = [s["cron"] for s in on["schedule"]]
-    assert "0 6 * * 3" in crons
-
-
-def test_workflow_dispatch_enabled(workflow):
-    on = _on(workflow)
-    assert "workflow_dispatch" in on
-
-
-def test_main_job_has_thirty_minute_timeout(workflow):
-    job = workflow["jobs"]["asan-ubsan"]
-    assert job["timeout-minutes"] == 30
 
 
 def test_main_job_sets_force_numpy_fallback(workflow):

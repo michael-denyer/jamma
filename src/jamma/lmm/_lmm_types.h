@@ -53,6 +53,25 @@ static inline double replace_zero_p_yy(double p_yy)
  * <Python.h> to do so. */
 #define REML_SENTINEL (-INFINITY)
 
+typedef struct {
+    int reml, lrt, score;
+} lmm_tests_t;
+
+static inline int lmm_mode_valid(int mode)
+{
+    return mode >= 1 && mode <= 4;
+}
+
+static inline lmm_tests_t lmm_tests(int mode)
+{
+    lmm_tests_t t = {
+        .reml  = mode == 1 || mode == 4,
+        .lrt   = mode == 2 || mode == 4,
+        .score = mode == 3 || mode == 4,
+    };
+    return t;
+}
+
 /* Pre-computed invariant dot products for one coarse grid point.
  * Memory: n_grid * sizeof(grid_invariant_t) ~ 50 * 32 = 1.6 KB (fits L1). */
 typedef struct {

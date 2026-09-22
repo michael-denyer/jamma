@@ -351,64 +351,7 @@ static inline double mle_finish(
     return mle_const - 0.5 * logdet_h - 0.5 * n_samples * log(P_yy);
 }
 
-/* -------------------------------------------------------------------------
- * mle_logl_ncvt1_cached_split
- *
- * MLE log-likelihood from SoA split data using cached grid hi_eval.
- * Pattern-matches reml_logl_ncvt1_cached_split but:
- *   - No logdet_iab / logdet_hiw terms
- *   - Uses n_samples (not df)
- *   - Uses mle_const (not reml_const)
- * ------------------------------------------------------------------------- */
-static double mle_logl_ncvt1_cached_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict cached_hi_eval,
-    double cached_logdet_h,
-    const grid_invariant_t *ginv,
-    int n_samples,
-    double mle_const
-)
-{
-    double pab[3][6];
-    calc_pab_ncvt1_cached_split(
-        var_wx, var_xx, var_xy, cached_hi_eval, ginv, n_samples, pab
-    );
-    return mle_finish(pab, cached_logdet_h, n_samples, mle_const);
-}
-
-
-static int coarse_grid_mle_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    int n_samples,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    int n_grid,
-    double mle_const
-)
-{
-    double best_logl = REML_SENTINEL;
-    int best_idx = -1;
-    for (int g = 0; g < n_grid; g++) {
-        double logl = mle_logl_ncvt1_cached_split(
-            var_wx, var_xx, var_xy,
-            hi_eval_grid + (size_t)g * n_samples,
-            logdet_h_grid[g], &grid_inv[g], n_samples, mle_const
-        );
-        if (!isnan(logl) && logl > best_logl) {
-            best_logl = logl;
-            best_idx = g;
-        }
-    }
-    return best_idx;
-}
-
-
-void coarse_grid_mode4_ncvt1_split(
+void coarse_grid_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -427,8 +370,8 @@ void coarse_grid_mode4_ncvt1_split(
 {
     double best_reml = REML_SENTINEL;
     double best_mle = REML_SENTINEL;
-    *best_reml_idx = -1;
-    *best_mle_idx = -1;
+    if (best_reml_idx) *best_reml_idx = -1;
+    if (best_mle_idx) *best_mle_idx = -1;
 
     for (int g = 0; g < n_grid; g++) {
         const grid_invariant_t *ginv = &grid_inv[g];
@@ -439,20 +382,23 @@ void coarse_grid_mode4_ncvt1_split(
             ginv, n_samples, pab
         );
 
-        double reml_logl = reml_finish_cached_split(
-            pab, logdet_h_grid[g], logdet_iab, ginv, df, reml_const
-        );
-        double mle_logl = mle_finish(
-            pab, logdet_h_grid[g], n_samples, mle_const
-        );
-
-        if (!isnan(reml_logl) && reml_logl > best_reml) {
-            best_reml = reml_logl;
-            *best_reml_idx = g;
+        if (best_reml_idx) {
+            double reml_logl = reml_finish_cached_split(
+                pab, logdet_h_grid[g], logdet_iab, ginv, df, reml_const
+            );
+            if (!isnan(reml_logl) && reml_logl > best_reml) {
+                best_reml = reml_logl;
+                *best_reml_idx = g;
+            }
         }
-        if (!isnan(mle_logl) && mle_logl > best_mle) {
-            best_mle = mle_logl;
-            *best_mle_idx = g;
+        if (best_mle_idx) {
+            double mle_logl = mle_finish(
+                pab, logdet_h_grid[g], n_samples, mle_const
+            );
+            if (!isnan(mle_logl) && mle_logl > best_mle) {
+                best_mle = mle_logl;
+                *best_mle_idx = g;
+            }
         }
     }
 }
@@ -573,35 +519,6 @@ double refine_lambda_mle_ncvt1_split(
     return lambda_opt;
 }
 
-
-double golden_section_lambda_mle_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    int n_samples,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
-    double mle_const,
-    double *logl_out
-)
-{
-    int best_idx = coarse_grid_mle_ncvt1_split(
-        var_wx, var_xx, var_xy, n_samples,
-        hi_eval_grid, logdet_h_grid, grid_inv, n_grid, mle_const
-    );
-    return refine_lambda_mle_ncvt1_split(
-        var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
-        eigenvalues, n_samples, log_l_min, step,
-        n_grid, n_refine, best_idx, mle_const, logl_out
-    );
-}
 
 /* -------------------------------------------------------------------------
  * calc_pab_ncvt1_split

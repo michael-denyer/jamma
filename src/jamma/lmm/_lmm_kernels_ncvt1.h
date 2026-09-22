@@ -53,7 +53,7 @@ double refine_lambda_ncvt1_split(
     int *is_valid_out
 );
 
-void coarse_grid_mode4_ncvt1_split(
+void coarse_grid_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -89,24 +89,6 @@ double refine_lambda_mle_ncvt1_split(
     double log_l_min, double step,
     int n_grid, int n_refine,
     int best_idx,
-    double mle_const,
-    double *logl_out
-);
-
-double golden_section_lambda_mle_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    int n_samples,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
     double mle_const,
     double *logl_out
 );

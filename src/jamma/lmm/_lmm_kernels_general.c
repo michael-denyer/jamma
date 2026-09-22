@@ -483,7 +483,6 @@ static double mle_logl_general_cached(
 /* -------------------------------------------------------------------------
  * golden_section_lambda_mle_general — Grid + golden section for MLE (general n_cvt).
  *
- * Mirrors golden_section_lambda_mle_ncvt1 but uses mle_logl_general.
  * Returns optimal lambda; writes logl to *logl_out.
  * ------------------------------------------------------------------------- */
 double golden_section_lambda_mle_general(

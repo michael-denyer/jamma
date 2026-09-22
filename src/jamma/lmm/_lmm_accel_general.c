@@ -92,7 +92,7 @@ typedef struct {
     double *row0_per_thread;    /* (actual_threads * n_index) owned */
     int pab_size;               /* n_rows * n_index for this workspace */
     PyObject *Uty_ref;          /* keeps Uty array alive */
-    int mode;                   /* 1 Wald, 2 LRT, 3 Score, 4 all three */
+    lmm_tests_t tests;
     /* Sub-blocks: grid is always present; null_model and lrt are NULL when
      * the owning mode does not use them, so ws->lrt == NULL is the contract
      * rather than a comment. */
@@ -240,7 +240,7 @@ static int init_fused_general_workspace(
         (size_t)actual_threads * general_pab_doubles(n_rows, n_index)
         * sizeof(double));
     if (!ws->pab_per_thread) { PyErr_NoMemory(); return -1; }
-    if (ws->mode == 1 || ws->mode == 4) {
+    if (ws->tests.reml) {
         ws->dpab_per_thread = (double *)malloc(
             (size_t)actual_threads * general_pab_doubles(n_rows, n_index)
             * sizeof(double));
@@ -356,6 +356,7 @@ PyObject *create_workspace_general_c_py(
     PyObject *hi_eval_null_obj = NULL, *logl_H0_obj = NULL;
     int n_samples, n_grid, n_refine, n_threads, n_cvt, lmm_mode = 0;
     double l_min, l_max, logl_H0 = 0.0;
+    lmm_tests_t tests;
 
     if (!PyArg_ParseTupleAndKeywords(
             args, kwargs, "OOOOiddiiii|$iOO", (char **)kwlist,
@@ -364,32 +365,9 @@ PyObject *create_workspace_general_c_py(
             &n_cvt, &lmm_mode, &hi_eval_null_obj, &logl_H0_obj)) {
         return NULL;
     }
-    if (lmm_mode < 1 || lmm_mode > 4) {
-        PyErr_Format(PyExc_ValueError,
-            "lmm_mode must be 1, 2, 3 or 4, got %d", lmm_mode);
+    if (parse_mode_inputs(lmm_mode, &hi_eval_null_obj, logl_H0_obj,
+                          &tests, &logl_H0) < 0)
         return NULL;
-    }
-    int wants_hi = (lmm_mode == 3 || lmm_mode == 4);
-    int wants_logl = (lmm_mode == 2 || lmm_mode == 4);
-    if (hi_eval_null_obj == Py_None) hi_eval_null_obj = NULL;
-    if (logl_H0_obj == Py_None) logl_H0_obj = NULL;
-    if (wants_hi != (hi_eval_null_obj != NULL)) {
-        PyErr_Format(PyExc_ValueError,
-            "lmm_mode=%d %s hi_eval_null", lmm_mode,
-            wants_hi ? "requires" : "does not take");
-        return NULL;
-    }
-    if (wants_logl != (logl_H0_obj != NULL)) {
-        PyErr_Format(PyExc_ValueError,
-            "lmm_mode=%d %s logl_H0", lmm_mode,
-            wants_logl ? "requires" : "does not take");
-        return NULL;
-    }
-    if (wants_logl) {
-        logl_H0 = PyFloat_AsDouble(logl_H0_obj);
-        if (logl_H0 == -1.0 && PyErr_Occurred()) return NULL;
-        if (validate_logl_H0(logl_H0) < 0) return NULL;
-    }
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
 
@@ -401,7 +379,7 @@ PyObject *create_workspace_general_c_py(
 
     ws = (lmm_workspace_general_t *)calloc(1, sizeof(lmm_workspace_general_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
-    ws->mode = lmm_mode;
+    ws->tests = tests;
     if (build_pab_table(n_cvt, &ws->table, n_samples) < 0)
         goto err_ws;
 
@@ -416,7 +394,7 @@ PyObject *create_workspace_general_c_py(
     if (!UtW_arr) goto err_ws;
     Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
     if (!Uty_arr) goto err_ws;
-    if (wants_hi) {
+    if (tests.score) {
         hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
         if (!hi_eval_null_arr) goto err_ws;
         if (validate_hi_eval_null(
@@ -429,7 +407,7 @@ PyObject *create_workspace_general_c_py(
             n_samples, l_min, l_max, n_grid, n_refine, n_threads) < 0)
         goto err_ws;
 
-    if (wants_hi) {
+    if (tests.score) {
         general_null_model_t *nm =
             (general_null_model_t *)calloc(1, sizeof(general_null_model_t));
         if (!nm) { PyErr_NoMemory(); goto err_ws; }
@@ -458,7 +436,7 @@ PyObject *create_workspace_general_c_py(
         }
         ws->null_model = nm;
     }
-    if (wants_logl) {
+    if (tests.lrt) {
         general_lrt_t *lrt = (general_lrt_t *)calloc(1, sizeof(general_lrt_t));
         if (!lrt) { PyErr_NoMemory(); goto err_ws; }
 
@@ -498,15 +476,111 @@ err_input:
     return NULL;
 }
 
+static double general_score_block(
+    const lmm_workspace_general_t *ws, const double *scratch,
+    double *row0, double *pab, double *beta_out, double *se_out)
+{
+    const pab_table_t *t = &ws->table;
+    int n_samples = ws->n_samples;
+
+    for (int i = 0; i < t->n_index; i++) row0[i] = 0.0;
+    for (int c = 0; c < t->n_inv; c++)
+        row0[t->invariant_indices[c]] = ws->null_model->null_inv_sums[c];
+    for (int c = 0; c < t->n_var; c++) {
+        double s = 0.0;
+        const double *col = scratch + (size_t)c * n_samples;
+        for (int i = 0; i < n_samples; i++)
+            s += ws->null_model->hi_eval_null[i] * col[i];
+        row0[t->varying_indices[c]] = s;
+    }
+
+    calc_pab_general(row0, t, pab);
+
+    double score_f;
+    int score_valid = score_from_pab_general(
+        pab, t, n_samples, beta_out, se_out, &score_f);
+    return f_to_pvalue(score_f, t->df, score_valid,
+                       ws->beta_a, ws->beta_b, ws->lbeta_ab);
+}
+
+static double general_reml_block(
+    const lmm_workspace_general_t *ws, const double *scratch,
+    double *row0, double *pab, double *dpab,
+    double *logl_out, double *beta_out, double *se_out, double *pwald_out)
+{
+    const pab_table_t *t = &ws->table;
+    const general_grid_t *grid = ws->grid;
+    int n_samples = ws->n_samples;
+
+    for (int i = 0; i < t->n_index; i++) row0[i] = 0.0;
+    for (int c = 0; c < t->n_inv; c++)
+        row0[t->invariant_indices[c]] = ws->inv_identity_sums[c];
+    for (int c = 0; c < t->n_var; c++) {
+        double s = 0.0;
+        const double *col = scratch + (size_t)c * n_samples;
+        for (int i = 0; i < n_samples; i++) s += col[i];
+        row0[t->varying_indices[c]] = s;
+    }
+
+    double logdet_iab = logdet_from_row0(row0, t, pab);
+
+    double wald_f;
+    int wald_valid;
+    double lambda_reml = golden_section_lambda_general(
+        ws->uab_inv, scratch, ws->eigenvalues,
+        n_samples, grid->lambda_grid, grid->hi_eval_grid,
+        grid->logdet_h_grid, grid->inv_sums_grid,
+        grid->log_l_min, grid->step, grid->n_grid, grid->n_refine,
+        logdet_iab, ws->reml_const, t,
+        logl_out, beta_out, se_out, &wald_f, &wald_valid,
+        row0, pab, dpab
+    );
+    *pwald_out = f_to_pvalue(wald_f, t->df, wald_valid,
+                             ws->beta_a, ws->beta_b, ws->lbeta_ab);
+    return lambda_reml;
+}
+
+static double general_lrt_block(
+    const lmm_workspace_general_t *ws, const double *scratch,
+    double *uab_snp, double *row0, double *pab,
+    double *logl_H1_out, double *p_lrt_out)
+{
+    const pab_table_t *t = &ws->table;
+    const general_grid_t *grid = ws->grid;
+    int n_samples = ws->n_samples;
+    int n_index = t->n_index;
+
+    memset(uab_snp, 0, (size_t)n_index * (size_t)n_samples * sizeof(double));
+    for (int c = 0; c < t->n_inv; c++) {
+        int idx = t->invariant_indices[c];
+        const double *src = ws->uab_inv + (size_t)c * n_samples;
+        for (int i = 0; i < n_samples; i++)
+            uab_snp[(size_t)i * n_index + idx] = src[i];
+    }
+    for (int c = 0; c < t->n_var; c++) {
+        int idx = t->varying_indices[c];
+        const double *src = scratch + (size_t)c * n_samples;
+        for (int i = 0; i < n_samples; i++)
+            uab_snp[(size_t)i * n_index + idx] = src[i];
+    }
+
+    double lambda_mle = golden_section_lambda_mle_general(
+        uab_snp, ws->eigenvalues, n_samples,
+        grid->lambda_grid, grid->hi_eval_grid, grid->logdet_h_grid,
+        grid->log_l_min, grid->step, grid->n_grid, grid->n_refine,
+        ws->lrt->mle_const, t, logl_H1_out, row0, pab
+    );
+
+    double lrt_stat = 2.0 * (*logl_H1_out - ws->lrt->logl_H0);
+    if (lrt_stat < 0.0) lrt_stat = 0.0;
+    *p_lrt_out = chi2_sf_c(lrt_stat);
+    return lambda_mle;
+}
+
 /* -------------------------------------------------------------------------
  * compute_lmm_chunk_fused_general_c
  *
  * Per-chunk compute for one general (n_cvt >= 2) workspace, any lmm_mode.
- * Computes n_var varying dot products on-the-fly from UtW/Uty/UtG_T per SNP,
- * then feeds them into the table-driven Pab recursion and golden section.
- *
- * The workspace's lmm_mode picks which blocks of the per-SNP body run
- * (do_score, do_reml, do_lrt below) and which output arrays come back.
  *
  * Python signature:
  *   compute_lmm_chunk_fused_general_c(
@@ -538,63 +612,37 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
         PyCapsule_GetPointer(capsule_obj, "lmm_workspace_general");
     if (!ws) return NULL;
 
-    const int do_score = (ws->mode == 3 || ws->mode == 4);
-    const int do_reml  = (ws->mode == 1 || ws->mode == 4);
-    const int do_lrt   = (ws->mode == 2 || ws->mode == 4);
-
-    PyArrayObject *utg_t_arr = NULL;
-    lmm_output_t out = {0};
-    PyObject *result = NULL;
-
+    const lmm_tests_t tests = ws->tests;
     int n_samples = ws->n_samples;
     int n_var = ws->table.n_var;
-    int n_inv = ws->table.n_inv;
+    int n_index = ws->table.n_index;
     int n_snps;
-    utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
+    PyArrayObject *utg_t_arr = take_chunk(utg_t_obj, n_samples, &n_snps);
     if (!utg_t_arr) return NULL;
-    if (n_snps == 0) {
-        PyErr_SetString(PyExc_ValueError, "n_snps must be > 0");
-        goto err_input_fg;
-    }
 
-    if (alloc_lmm_output(&out, (npy_intp)n_snps, ws->mode) < 0) {
+    lmm_output_t out = {0};
+    if (alloc_lmm_output(&out, (npy_intp)n_snps, tests) < 0) {
         if (!PyErr_Occurred()) PyErr_NoMemory();
-        goto err_input_fg;
+        Py_DECREF(utg_t_arr);
+        return NULL;
     }
 
     const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
 
-    /* betas/ses hold Wald's beta/se whenever REML runs (modes 1 and 4);
-     * mode 3 has no Wald block, so they hold Score's beta/se instead, the
-     * same shape the ncvt1 Score loop returns standalone. Mode 2 (LRT
-     * alone) allocates neither, so both stay NULL. */
-    const int has_beta_se   = do_reml || do_score;
-    double *out_lambdas     = do_reml    ? (double *)PyArray_DATA(out.lambdas)     : NULL;
-    double *out_logls       = (do_reml || do_lrt)
+    double *out_lambdas     = tests.reml ? (double *)PyArray_DATA(out.lambdas) : NULL;
+    double *out_logls       = (tests.reml || tests.lrt)
         ? (double *)PyArray_DATA(out.logls) : NULL;
-    double *out_betas       = has_beta_se ? (double *)PyArray_DATA(out.betas)     : NULL;
-    double *out_ses         = has_beta_se ? (double *)PyArray_DATA(out.ses)       : NULL;
-    double *out_pwalds      = do_reml    ? (double *)PyArray_DATA(out.pwalds)      : NULL;
-    double *out_p_scores    = do_score   ? (double *)PyArray_DATA(out.p_scores)    : NULL;
-    double *out_lambdas_mle = do_lrt     ? (double *)PyArray_DATA(out.lambdas_mle) : NULL;
-    double *out_p_lrts      = do_lrt     ? (double *)PyArray_DATA(out.p_lrts)      : NULL;
+    double *out_betas       = (tests.reml || tests.score)
+        ? (double *)PyArray_DATA(out.betas) : NULL;
+    double *out_ses         = (tests.reml || tests.score)
+        ? (double *)PyArray_DATA(out.ses) : NULL;
+    double *out_pwalds      = tests.reml ? (double *)PyArray_DATA(out.pwalds) : NULL;
+    double *out_p_scores    = tests.score ? (double *)PyArray_DATA(out.p_scores) : NULL;
+    double *out_lambdas_mle = tests.lrt ? (double *)PyArray_DATA(out.lambdas_mle) : NULL;
+    double *out_p_lrts      = tests.lrt ? (double *)PyArray_DATA(out.p_lrts) : NULL;
 
-    int n_grid = ws->grid->n_grid;
-    int n_refine = ws->grid->n_refine;
-    int df = ws->table.df;
-    int n_index = ws->table.n_index;
-    double reml_const = ws->reml_const;
-
-    double log_l_min = ws->grid->log_l_min;
-    double step = ws->grid->step;
-
-    /* Clamp n_threads */
-    int actual_threads = 1;
-#ifdef _OPENMP
-    actual_threads = (n_threads < n_snps) ? n_threads : n_snps;
-    if (actual_threads < 1) actual_threads = 1;
+    int actual_threads = clamp_threads(n_threads, n_snps);
     if (actual_threads > ws->actual_threads) actual_threads = ws->actual_threads;
-#endif
 
     Py_BEGIN_ALLOW_THREADS
 
@@ -614,7 +662,6 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
             ? ws->dpab_per_thread + (size_t)tid * ws->pab_size : NULL;
         double *my_row0 = ws->row0_per_thread + (size_t)tid * n_index;
 
-        /* Compute n_var varying columns on-the-fly */
         for (int v = 0; v < n_var; v++) {
             double *out_v = scratch + (size_t)v * n_samples;
             const double *a = get_fused_vector(ws, ws->table.var_a_cols[v], x);
@@ -624,144 +671,36 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
                 out_v[i] = a[i] * b[i];
         }
 
-        /* ---- (a) Score: null-model Pab ---- */
-        if (do_score) {
-            double *null_row0 = my_row0;  /* reuse per-thread heap buffer */
-            for (int i = 0; i < n_index; i++) null_row0[i] = 0.0;
-
-            /* Invariant null sums from precomputed workspace */
-            for (int c = 0; c < n_inv; c++)
-                null_row0[ws->table.invariant_indices[c]] = ws->null_model->null_inv_sums[c];
-            /* Varying null sums: weight scratch by hi_eval_null */
-            for (int c = 0; c < n_var; c++) {
-                double s = 0.0;
-                const double *col = scratch + (size_t)c * n_samples;
-                for (int i = 0; i < n_samples; i++)
-                    s += ws->null_model->hi_eval_null[i] * col[i];
-                null_row0[ws->table.varying_indices[c]] = s;
-            }
-
-            calc_pab_general(null_row0, &ws->table, my_pab);
-
-            double score_beta, score_se, score_f;
-            int score_valid = score_from_pab_general(
-                my_pab, &ws->table, n_samples,
-                &score_beta, &score_se, &score_f);
-
-            out_p_scores[snp] = f_to_pvalue(
-                score_f, df, score_valid,
-                ws->beta_a, ws->beta_b, ws->lbeta_ab);
-
-            /* Mode 3 has no Wald block below, so betas/ses carry Score's
-             * beta/se here, the same shape a standalone Score compute
-             * returns. Mode 4 overwrites both with Wald's below. */
-            if (!do_reml) {
+        if (tests.score) {
+            double score_beta, score_se;
+            out_p_scores[snp] = general_score_block(
+                ws, scratch, my_row0, my_pab, &score_beta, &score_se);
+            if (!tests.reml) {
                 out_betas[snp] = score_beta;
                 out_ses[snp]   = score_se;
             }
         }
 
-        /* ---- (b) Wald: REML optimization ---- */
-        if (do_reml) {
-            double *iab_row0 = my_row0;  /* reuse per-thread heap buffer */
-            for (int i = 0; i < n_index; i++) iab_row0[i] = 0.0;
-
-            for (int c = 0; c < n_inv; c++)
-                iab_row0[ws->table.invariant_indices[c]] = ws->inv_identity_sums[c];
-            for (int c = 0; c < n_var; c++) {
-                double s = 0.0;
-                const double *col = scratch + (size_t)c * n_samples;
-                for (int i = 0; i < n_samples; i++) s += col[i];
-                iab_row0[ws->table.varying_indices[c]] = s;
-            }
-
-            double logdet_iab = logdet_from_row0(
-                iab_row0, &ws->table, my_pab);
-
-            double logl_reml, wald_beta, wald_se, wald_f;
-            int wald_valid;
-            double lambda_reml = golden_section_lambda_general(
-                ws->uab_inv, scratch, ws->eigenvalues,
-                n_samples, ws->grid->lambda_grid, ws->grid->hi_eval_grid,
-                ws->grid->logdet_h_grid, ws->grid->inv_sums_grid,
-                log_l_min, step, n_grid, n_refine,
-                logdet_iab, reml_const, &ws->table,
-                &logl_reml, &wald_beta, &wald_se, &wald_f, &wald_valid,
-                my_row0, my_pab, my_dpab
-            );
-
-            out_lambdas[snp] = lambda_reml;
-            out_logls[snp]   = logl_reml;
-            out_betas[snp]   = wald_beta;
-            out_ses[snp]     = wald_se;
-            out_pwalds[snp]  = f_to_pvalue(
-                wald_f, df, wald_valid,
-                ws->beta_a, ws->beta_b, ws->lbeta_ab);
+        if (tests.reml) {
+            out_lambdas[snp] = general_reml_block(
+                ws, scratch, my_row0, my_pab, my_dpab,
+                &out_logls[snp], &out_betas[snp], &out_ses[snp],
+                &out_pwalds[snp]);
         }
 
-        /* ---- (c) LRT: MLE optimization ---- */
-        if (do_lrt) {
-            /* MLE requires the full (n_samples, n_index) Uab for one SNP
-             * in row-major layout (mle_logl_general_cached accesses as
-             * uab_snp[sample * n_index + col]).
-             * Assemble from ws->uab_inv (invariant) + scratch (varying).
-             * Uses pre-allocated per-thread buffer from workspace to avoid
-             * per-SNP malloc inside the OpenMP loop. */
+        if (tests.lrt) {
             double *uab_snp = ws->lrt->uab_snp_flat +
                 (size_t)tid * (size_t)n_index * (size_t)n_samples;
-
-            /* Zero fill then scatter invariant and varying columns
-             * into row-major layout. */
-            memset(uab_snp, 0,
-                   (size_t)n_index * (size_t)n_samples * sizeof(double));
-            for (int c = 0; c < n_inv; c++) {
-                int idx = ws->table.invariant_indices[c];
-                const double *src = ws->uab_inv + (size_t)c * n_samples;
-                for (int i = 0; i < n_samples; i++)
-                    uab_snp[(size_t)i * n_index + idx] = src[i];
-            }
-            for (int c = 0; c < n_var; c++) {
-                int idx = ws->table.varying_indices[c];
-                const double *src = scratch + (size_t)c * n_samples;
-                for (int i = 0; i < n_samples; i++)
-                    uab_snp[(size_t)i * n_index + idx] = src[i];
-            }
-
-            double logl_H1;
-            double lambda_mle = golden_section_lambda_mle_general(
-                uab_snp, ws->eigenvalues, n_samples,
-                ws->grid->lambda_grid, ws->grid->hi_eval_grid, ws->grid->logdet_h_grid,
-                log_l_min, step, n_grid, n_refine,
-                ws->lrt->mle_const, &ws->table,
-                &logl_H1,
-                my_row0, my_pab
-            );
-
-            out_lambdas_mle[snp] = lambda_mle;
-            /* GEMMA modes 2 and 4 report the LRT alternative-model MLE likelihood
-             * in logl_H1. Mode 1 leaves the REML likelihood written above. */
-            out_logls[snp] = logl_H1;
-
-            double lrt_stat = 2.0 * (logl_H1 - ws->lrt->logl_H0);
-            if (lrt_stat < 0.0) lrt_stat = 0.0;
-            out_p_lrts[snp] = chi2_sf_c(lrt_stat);
+            /* GEMMA modes 2 and 4 report the LRT alternative-model MLE
+             * likelihood in logl_H1, overwriting mode 4's REML logl. */
+            out_lambdas_mle[snp] = general_lrt_block(
+                ws, scratch, uab_snp, my_row0, my_pab,
+                &out_logls[snp], &out_p_lrts[snp]);
         }
     }
 
     Py_END_ALLOW_THREADS
 
-    if (do_reml && warn_betainc_convergence(out_betas, out_pwalds, n_snps) < 0)
-        goto err_output_fg;
-
-    result = build_lmm_result_dict(&out);
-    if (!result) goto err_input_fg;
-
     Py_DECREF(utg_t_arr);
-    return result;
-
-err_output_fg:
-    decref_lmm_output(&out);
-err_input_fg:
-    Py_XDECREF(utg_t_arr);
-    return NULL;
+    return finish_lmm_output(&out, tests, n_snps);
 }

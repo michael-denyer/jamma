@@ -164,120 +164,30 @@ int warn_betainc_convergence(
     return 0;
 }
 
-int alloc_score_output(score_output_t *out, npy_intp n_snps)
+int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, lmm_tests_t tests)
 {
     npy_intp dims[1] = { n_snps };
-    out->betas    = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->ses      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->p_scores = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-
-    if (!out->betas || !out->ses || !out->p_scores) {
-        Py_XDECREF(out->betas);
-        Py_XDECREF(out->ses);
-        Py_XDECREF(out->p_scores);
-        return -1;
-    }
-    return 0;
-}
-
-void decref_score_output(score_output_t *out)
-{
-    Py_DECREF(out->betas);
-    Py_DECREF(out->ses);
-    Py_DECREF(out->p_scores);
-}
-
-PyObject *build_score_result_dict(score_output_t *out)
-{
-    PyObject *result = PyDict_New();
-    if (!result) {
-        decref_score_output(out);
-        return NULL;
-    }
-
-    if (PyDict_SetItemString(result, "betas",    (PyObject *)out->betas)    < 0 ||
-        PyDict_SetItemString(result, "ses",      (PyObject *)out->ses)      < 0 ||
-        PyDict_SetItemString(result, "p_scores", (PyObject *)out->p_scores) < 0) {
-        Py_DECREF(result);
-        decref_score_output(out);
-        return NULL;
-    }
-
-    decref_score_output(out);
-    return result;
-}
-
-int alloc_lrt_output(lrt_output_t *out, npy_intp n_snps)
-{
-    npy_intp dims[1] = { n_snps };
-    out->logls       = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-    out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
-
-    if (!out->logls || !out->lambdas_mle || !out->p_lrts) {
-        Py_XDECREF(out->logls);
-        Py_XDECREF(out->lambdas_mle);
-        Py_XDECREF(out->p_lrts);
-        return -1;
-    }
-    return 0;
-}
-
-void decref_lrt_output(lrt_output_t *out)
-{
-    Py_DECREF(out->logls);
-    Py_DECREF(out->lambdas_mle);
-    Py_DECREF(out->p_lrts);
-}
-
-PyObject *build_lrt_result_dict(lrt_output_t *out)
-{
-    PyObject *result = PyDict_New();
-    if (!result) {
-        decref_lrt_output(out);
-        return NULL;
-    }
-
-    if (PyDict_SetItemString(result, "logls",       (PyObject *)out->logls)       < 0 ||
-        PyDict_SetItemString(result, "lambdas_mle", (PyObject *)out->lambdas_mle) < 0 ||
-        PyDict_SetItemString(result, "p_lrts",      (PyObject *)out->p_lrts)      < 0) {
-        Py_DECREF(result);
-        decref_lrt_output(out);
-        return NULL;
-    }
-
-    decref_lrt_output(out);
-    return result;
-}
-
-int alloc_lmm_output(lmm_output_t *out, npy_intp n_snps, int lmm_mode)
-{
-    npy_intp dims[1] = { n_snps };
-    int do_reml  = (lmm_mode == 1 || lmm_mode == 4);
-    int do_score = (lmm_mode == 3 || lmm_mode == 4);
-    int do_lrt   = (lmm_mode == 2 || lmm_mode == 4);
 
     int ok = 1;
-    if (do_reml) {
+    if (tests.reml) {
         out->lambdas = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         out->pwalds  = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         ok = ok && out->lambdas && out->pwalds;
     }
-    if (do_reml || do_lrt) {
+    if (tests.reml || tests.lrt) {
         out->logls = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         ok = ok && out->logls;
     }
-    /* betas/ses hold Wald's beta/se (modes 1, 4) or Score's (mode 3). */
-    if (do_reml || do_score) {
+    if (tests.reml || tests.score) {
         out->betas = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         out->ses   = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         ok = ok && out->betas && out->ses;
     }
-    if (do_score) {
+    if (tests.score) {
         out->p_scores = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         ok = ok && out->p_scores;
     }
-    if (do_lrt) {
+    if (tests.lrt) {
         out->lambdas_mle = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         out->p_lrts      = (PyArrayObject *)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
         ok = ok && out->lambdas_mle && out->p_lrts;
@@ -337,6 +247,22 @@ PyObject *build_lmm_result_dict(lmm_output_t *out)
 
     decref_lmm_output(out);
     return result;
+}
+
+PyObject *finish_lmm_output(lmm_output_t *out, lmm_tests_t tests, int n_snps)
+{
+    PyArrayObject *paired_p = NULL;
+    if (tests.reml)
+        paired_p = out->pwalds;
+    else if (tests.score)
+        paired_p = out->p_scores;
+    if (paired_p && warn_betainc_convergence(
+            (const double *)PyArray_DATA(out->betas),
+            (const double *)PyArray_DATA(paired_p), n_snps) < 0) {
+        decref_lmm_output(out);
+        return NULL;
+    }
+    return build_lmm_result_dict(out);
 }
 
 static int get_pab_index(int a, int b, int n_cvt)
@@ -535,4 +461,43 @@ void build_grid_ncvt1(int n_grid, int n_samples, double log_l_min, double step,
         grid_inv[g].s_yy    = sy;
         grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
     }
+}
+
+int parse_mode_inputs(int lmm_mode, PyObject **hi_obj, PyObject *logl_obj,
+                      lmm_tests_t *tests, double *logl_H0)
+{
+    if (!lmm_mode_valid(lmm_mode)) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode must be 1, 2, 3 or 4, got %d", lmm_mode);
+        return -1;
+    }
+    *tests = lmm_tests(lmm_mode);
+    if (*hi_obj == Py_None) *hi_obj = NULL;
+    if (logl_obj == Py_None) logl_obj = NULL;
+    if (tests->score != (*hi_obj != NULL)) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode=%d %s hi_eval_null", lmm_mode,
+            tests->score ? "requires" : "does not take");
+        return -1;
+    }
+    if (tests->lrt != (logl_obj != NULL)) {
+        PyErr_Format(PyExc_ValueError,
+            "lmm_mode=%d %s logl_H0", lmm_mode,
+            tests->lrt ? "requires" : "does not take");
+        return -1;
+    }
+    if (tests->lrt) {
+        *logl_H0 = PyFloat_AsDouble(logl_obj);
+        if (*logl_H0 == -1.0 && PyErr_Occurred()) return -1;
+        if (validate_logl_H0(*logl_H0) < 0) return -1;
+    }
+    return 0;
+}
+
+int clamp_threads(int n_threads, int n_snps)
+{
+    int actual = n_threads;
+    if (actual > n_snps) actual = n_snps;
+    if (actual < 1) actual = 1;
+    return actual;
 }

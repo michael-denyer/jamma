@@ -112,6 +112,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports to the dev rebuild. Nothing in the repository passed it. To see the
   reports, run with `verbose=True`, copy a printed compile command, and add
   the flag by hand.
+- `compile_extension` in `jamma.lmm._compile_accel` and
+  `jamma.jlinalg._compile_jlinalg` no longer takes `on_retry`. Nothing in the
+  repository passed it. The OpenMP retry notice still prints, on the same
+  stream as the rest of the build output.
 
 ## [8.1.0] - 2026-09-14
 

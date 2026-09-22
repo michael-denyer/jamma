@@ -476,9 +476,6 @@ def _execute_build_with_openmp(tmp_path: Path, **printers) -> CompileResult:
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="execute_build reports each retry on on_retry and verbose_print"
-)
 @pytest.mark.parametrize("failing_step", ["compile", "link"])
 def test_openmp_retry_notice_prints_once_on_a_shared_stream(
     monkeypatch, tmp_path, capsys, failing_step
@@ -499,10 +496,6 @@ def test_openmp_retry_notice_prints_once_on_a_shared_stream(
     assert capsys.readouterr().err.count("retrying without OpenMP") == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="execute_build reports a retry without on_retry on verbose_print only",
-)
 @pytest.mark.parametrize("failing_step", ["compile", "link"])
 def test_openmp_retry_notice_reaches_error_print_without_on_retry(
     monkeypatch, tmp_path, capsys, failing_step

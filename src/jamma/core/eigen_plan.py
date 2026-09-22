@@ -5,7 +5,8 @@ peak formulas and the margin from here, never the reverse. The margin and
 the GB-per-array helpers live here because both layers apply them.
 """
 
-from typing import Literal, NamedTuple
+from enum import StrEnum
+from typing import NamedTuple
 
 from jamma.core.constants import env_flag
 
@@ -97,88 +98,49 @@ def dsyevr_peak_gb(n: int) -> float:
     return 2 * square_matrix_gb(n) + _dsyevr_workspace_gb(n)
 
 
+class EigenDriver(StrEnum):
+    DSYEVD_INPLACE = "DSYEVD-inplace"
+    DSYEVD = "DSYEVD"
+    DSYEVR = "DSYEVR"
+    NUMPY = "numpy"
+
+
 class EigenDriverPlan(NamedTuple):
-    """Chosen eigendecomposition driver and its peak-memory estimate.
+    """Chosen eigendecomposition driver, its peak-memory estimate, and why.
 
     Single source of truth for the DSYEVD-inplace -> DSYEVD -> DSYEVR -> numpy
     driver decision. The runtime path (``eigendecompose_kinship``) builds its
     plan here, so a pre-flight caller using the same function cannot drift from
-    it. The chosen driver can still differ per caller when they pass different
-    ``inplace_eligible`` inputs.
+    it.
 
     Attributes:
-        driver: Chosen driver name (one of the four ``Literal`` values).
-        use_inplace: Pass ``inplace=True`` to ``jlinalg.eigh`` (K reused as the
-            eigenvector output buffer).
-        use_dsyevr: DSYEVR was selected — either as the memory-pressure fallback
-            from DSYEVD, or because it is the only available vendor driver.
-        no_vendor: No vendor LAPACK will run (``np.linalg.eigh`` fallback).
         required_gb: Peak memory (GB) for the chosen driver. For the ``numpy``
             fallback this is a conservative DSYEVD-sized proxy, not numpy's exact
             peak.
-        pre_fallback_gb: ``required_gb`` before any DSYEVR fallback (used to log
-            which driver we fell back from).
-        dsyevr_peak_gb: DSYEVR peak (GB).
-        inplace_peak_gb: In-place DSYEVD peak (GB).
+        reason: Written by the branch that chose ``driver``; ``describe`` prints
+            it verbatim.
     """
 
-    driver: Literal["DSYEVD-inplace", "DSYEVD", "DSYEVR", "numpy"]
-    use_inplace: bool
-    use_dsyevr: bool
-    no_vendor: bool
+    driver: EigenDriver
     required_gb: float
-    pre_fallback_gb: float
-    dsyevr_peak_gb: float
-    inplace_peak_gb: float
+    reason: str
 
-    def describe(self, available_gb: float, inplace_reason: str = "") -> str:
-        """One memory-log line for the chosen driver.
+    @property
+    def use_inplace(self) -> bool:
+        return self.driver is EigenDriver.DSYEVD_INPLACE
 
-        Reproduces the three per-driver log strings that ``eigendecompose_kinship``
-        used to spell inline. The eigenvalue counts are all on the plan; only the
-        DSYEVD-not-inplace ``inplace_reason`` is derived from the runtime kinship
-        matrix (dtype, contiguity, writeability), so the caller passes it in.
+    @property
+    def use_dsyevr(self) -> bool:
+        return self.driver is EigenDriver.DSYEVR
 
-        Args:
-            available_gb: Available memory (GB), for the log line.
-            inplace_reason: Why inplace was not chosen, for the DSYEVD line. The
-                numpy fallback and the vendor-DSYEVD-absent cases carry their own
-                phrasing; a caller-supplied reason covers the K-derived cases.
+    @property
+    def no_vendor(self) -> bool:
+        return self.driver is EigenDriver.NUMPY
 
-        Returns:
-            The formatted log line.
-        """
-        if self.use_inplace:
-            return (
-                f"Eigendecomp memory (DSYEVD-inplace): estimated "
-                f"{self.inplace_peak_gb:.1f}GB, available {available_gb:.1f}GB "
-                f"(kinship in memory, overwriting in place; "
-                f"DSYEVR fallback={self.dsyevr_peak_gb:.1f}GB)"
-            )
-        if self.use_dsyevr:
-            if self.pre_fallback_gb > self.required_gb:
-                fell_from = (
-                    "DSYEVD-inplace"
-                    if self.pre_fallback_gb == self.inplace_peak_gb
-                    else "DSYEVD"
-                )
-                detail = f"{fell_from}={self.pre_fallback_gb:.1f}GB would not fit"
-            else:
-                detail = "vendor DSYEVD unavailable"
-            return (
-                f"Eigendecomp memory (DSYEVR): estimated {self.dsyevr_peak_gb:.1f}GB, "
-                f"available {available_gb:.1f}GB "
-                f"({detail})"
-            )
-        reason = inplace_reason or (
-            "JLINALG_NO_VENDOR_LAPACK set, using np.linalg.eigh"
-            if self.no_vendor
-            else "no vendor DSYEVD available"
-        )
+    def describe(self, available_gb: float) -> str:
         return (
-            f"Eigendecomp memory (DSYEVD): estimated {self.required_gb:.1f}GB, "
-            f"available {available_gb:.1f}GB "
-            f"({reason}; DSYEVR fallback={self.dsyevr_peak_gb:.1f}GB)"
+            f"Eigendecomp memory ({self.driver}): estimated {self.required_gb:.1f}GB, "
+            f"available {available_gb:.1f}GB ({self.reason})"
         )
 
 
@@ -188,8 +150,8 @@ def plan_eigen_driver(
     *,
     has_dsyevd: bool,
     has_dsyevr: bool,
-    no_vendor: bool,
-    inplace_eligible: bool,
+    forced_numpy: bool,
+    inplace_blocker: str | None,
     budget_gb: float | None = None,
 ) -> EigenDriverPlan:
     """Select the eigendecomposition driver from memory and capability flags.
@@ -197,68 +159,56 @@ def plan_eigen_driver(
     Prefers in-place DSYEVD (smallest footprint), falls back to non-inplace
     DSYEVD, then to DSYEVR (O(N) workspace) when the DSYEVD peak plus safety
     margin would not fit. When only vendor DSYEVR is available, plans DSYEVR
-    directly. With no vendor DSYEVD/DSYEVR (or a caller-forced ``no_vendor``),
+    directly. With no vendor DSYEVD/DSYEVR, or when ``forced_numpy`` is set,
     reports the numpy fallback and its conservative DSYEVD-sized footprint.
 
-    Pure function — takes flags, returns a plan, performs no I/O. The runtime
-    caller passes the real ``inplace_eligible`` (K is float64, C-contiguous,
-    writeable); the pre-flight estimator passes ``inplace_eligible=True`` because
-    the kinship matrix is not built yet and will normally be in-place eligible.
+    Pure function — takes flags, returns a plan, performs no I/O.
 
     Args:
         n_samples: Kinship matrix dimension.
         available_gb: Available memory (GB).
         has_dsyevd: Vendor DSYEVD available.
         has_dsyevr: Vendor DSYEVR available.
-        no_vendor: Force the numpy fallback (e.g. JLINALG_NO_VENDOR_LAPACK set).
-        inplace_eligible: K can be overwritten in place (float64, C-contiguous,
-            writeable).
+        forced_numpy: ``JLINALG_NO_VENDOR_LAPACK`` forces the numpy fallback.
+        inplace_blocker: Why K cannot be overwritten in place (not float64, not
+            C-contiguous, not writeable), or ``None`` when it can.
         budget_gb: User-set ceiling in GB, or None for no ceiling. Falls back to
             DSYEVR when the DSYEVD peak exceeds it, the same way an available-RAM
             shortfall does.
 
     Returns:
-        EigenDriverPlan with the chosen driver, flags, and peak estimates.
+        EigenDriverPlan with the chosen driver, its peak estimate, and the reason.
     """
     dsyevd_peak = _dsyevd_peak_gb(n_samples)
     dsyevr_peak = dsyevr_peak_gb(n_samples)
     inplace_peak = _dsyevd_inplace_peak_gb(n_samples)
 
-    # No vendor DSYEVD *and* no vendor DSYEVR -> numpy fallback.
-    if not no_vendor and not has_dsyevd and not has_dsyevr:
-        no_vendor = True
-
-    if no_vendor:
+    if forced_numpy:
         return EigenDriverPlan(
-            driver="numpy",
-            use_inplace=False,
-            use_dsyevr=False,
-            no_vendor=True,
-            required_gb=dsyevd_peak,
-            pre_fallback_gb=dsyevd_peak,
-            dsyevr_peak_gb=dsyevr_peak,
-            inplace_peak_gb=inplace_peak,
+            EigenDriver.NUMPY,
+            dsyevd_peak,
+            "JLINALG_NO_VENDOR_LAPACK set, using np.linalg.eigh; "
+            "estimate is DSYEVD-sized",
+        )
+    if not has_dsyevd and not has_dsyevr:
+        return EigenDriverPlan(
+            EigenDriver.NUMPY,
+            dsyevd_peak,
+            "no vendor DSYEVD or DSYEVR, using np.linalg.eigh; "
+            "estimate is DSYEVD-sized",
         )
 
-    # Only vendor DSYEVR is available (has_dsyevd is False, but the no-vendor
-    # check above means has_dsyevr is True): jlinalg.eigh dispatches to DSYEVR
-    # directly — there is no in-place path and no DSYEVD peak to reserve.
     if not has_dsyevd:
         return EigenDriverPlan(
-            driver="DSYEVR",
-            use_inplace=False,
-            use_dsyevr=True,
-            no_vendor=False,
-            required_gb=dsyevr_peak,
-            pre_fallback_gb=dsyevr_peak,
-            dsyevr_peak_gb=dsyevr_peak,
-            inplace_peak_gb=inplace_peak,
+            EigenDriver.DSYEVR, dsyevr_peak, "vendor DSYEVD unavailable"
         )
 
-    use_inplace = inplace_eligible
-    required_gb = inplace_peak if use_inplace else dsyevd_peak
-    pre_fallback_gb = required_gb
-    use_dsyevr = False
+    if inplace_blocker is None:
+        driver, required_gb = EigenDriver.DSYEVD_INPLACE, inplace_peak
+        reason = "kinship in memory, overwriting in place"
+    else:
+        driver, required_gb = EigenDriver.DSYEVD, dsyevd_peak
+        reason = inplace_blocker
 
     from jamma.core.memory import fits  # deferred: memory imports the sizes above
 
@@ -266,19 +216,12 @@ def plan_eigen_driver(
         not fits(required_gb, available_gb)
         or (budget_gb is not None and required_gb > budget_gb)
     ):
-        pre_fallback_gb = required_gb
-        required_gb = dsyevr_peak
-        use_inplace = False
-        use_dsyevr = True
+        return EigenDriverPlan(
+            EigenDriver.DSYEVR,
+            dsyevr_peak,
+            f"{driver}={required_gb:.1f}GB would not fit",
+        )
 
-    driver = "DSYEVR" if use_dsyevr else ("DSYEVD-inplace" if use_inplace else "DSYEVD")
     return EigenDriverPlan(
-        driver=driver,
-        use_inplace=use_inplace,
-        use_dsyevr=use_dsyevr,
-        no_vendor=False,
-        required_gb=required_gb,
-        pre_fallback_gb=pre_fallback_gb,
-        dsyevr_peak_gb=dsyevr_peak,
-        inplace_peak_gb=inplace_peak,
+        driver, required_gb, f"{reason}; DSYEVR fallback={dsyevr_peak:.1f}GB"
     )

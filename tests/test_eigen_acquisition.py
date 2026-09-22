@@ -82,8 +82,8 @@ def test_reserved_dsyevr_plan_prices_the_decomposition_a_dsyevd_plan_cannot():
         256.0,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
         budget_gb=0.02,
     )
     assert dsyevr.driver == "DSYEVR"
@@ -102,8 +102,8 @@ def test_reserved_dsyevr_plan_prices_the_decomposition_a_dsyevd_plan_cannot():
         256.0,
         has_dsyevd=True,
         has_dsyevr=False,
-        no_vendor=False,
-        inplace_eligible=False,
+        forced_numpy=False,
+        inplace_blocker="K is not C-contiguous",
     )
     assert dsyevd.driver == "DSYEVD"
     assert dsyevd.required_gb == pytest.approx(0.032088032)

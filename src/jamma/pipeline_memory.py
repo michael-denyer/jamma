@@ -26,7 +26,7 @@ def _eigen_driver(
         execution.n_samples,
         available_gb,
         budget_gb=execution.mem_budget_gb,
-        inplace_eligible=True,
+        inplace_blocker=None,
     )
 
 

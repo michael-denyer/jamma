@@ -39,8 +39,8 @@ def test_eigen_driver_selection_respects_user_ceiling():
         256.0,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
         budget_gb=2.0,
     )
     assert plan.driver == "DSYEVR"

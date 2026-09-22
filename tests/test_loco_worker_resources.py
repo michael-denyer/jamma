@@ -120,8 +120,8 @@ def test_reused_stream_buffer_is_copied_and_inputs_stay_bounded(monkeypatch):
         100,
         has_dsyevd=False,
         has_dsyevr=False,
-        no_vendor=True,
-        inplace_eligible=False,
+        forced_numpy=True,
+        inplace_blocker="K is not C-contiguous",
     )
     pairs = _computed_eigen_pairs(
         stream(),
@@ -180,8 +180,8 @@ def test_worker_accounting_charges_each_in_flight_driver_peak_once(
         100,
         has_dsyevd=has_dsyevd,
         has_dsyevr=has_dsyevr,
-        no_vendor=no_vendor,
-        inplace_eligible=inplace,
+        forced_numpy=no_vendor,
+        inplace_blocker=None if inplace else "K is not C-contiguous",
     )
     plan = plan_loco_workers(
         3,
@@ -204,8 +204,8 @@ def test_worker_plan_preserves_strict_ram_tie_and_inclusive_user_budget():
         100,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
     )
     peak = retained.while_consuming_gb + 2 * eigen.required_gb
 

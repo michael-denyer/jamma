@@ -41,8 +41,8 @@ def test_worker_budget_charges_each_owned_input_once():
         100,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
     )
     plan = plan_loco_workers(
         2,
@@ -97,8 +97,8 @@ def test_worker_plan_respects_memory_and_execution_caps(
         100,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
     )
     plan = plan_loco_workers(
         requested,
@@ -135,7 +135,7 @@ def _computed_pairs(*, workers: int, solve):
     from jamma.lmm.eigen import plan_eigen_driver_for_machine
 
     eigen_plan = plan_eigen_driver_for_machine(
-        8, 100, budget_gb=None, inplace_eligible=True
+        8, 100, budget_gb=None, inplace_blocker=None
     )
     chr_names = list(_ORDER_BY_CHR)
     return _computed_eigen_pairs(

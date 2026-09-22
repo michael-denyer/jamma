@@ -34,8 +34,8 @@ class TestPlanEigenDriver:
             available_gb=1e6,
             has_dsyevd=True,
             has_dsyevr=True,
-            no_vendor=False,
-            inplace_eligible=True,
+            forced_numpy=False,
+            inplace_blocker=None,
         )
         assert plan.driver == "DSYEVD-inplace"
         assert plan.use_inplace is True
@@ -50,8 +50,8 @@ class TestPlanEigenDriver:
             available_gb=1e6,
             has_dsyevd=True,
             has_dsyevr=True,
-            no_vendor=False,
-            inplace_eligible=False,
+            forced_numpy=False,
+            inplace_blocker="K is not C-contiguous",
         )
         assert plan.driver == "DSYEVD"
         assert plan.use_inplace is False
@@ -66,15 +66,16 @@ class TestPlanEigenDriver:
             available_gb=available,
             has_dsyevd=True,
             has_dsyevr=True,
-            no_vendor=False,
-            inplace_eligible=True,
+            forced_numpy=False,
+            inplace_blocker=None,
         )
         assert plan.driver == "DSYEVR"
         assert plan.use_dsyevr is True
         assert plan.use_inplace is False
         assert plan.required_gb == pytest.approx(dsyevr_peak_gb(self.N))
-        # pre_fallback_gb records the in-place peak we fell back from.
-        assert plan.pre_fallback_gb == pytest.approx(_dsyevd_inplace_peak_gb(self.N))
+        assert plan.reason == (
+            f"DSYEVD-inplace={_dsyevd_inplace_peak_gb(self.N):.1f}GB would not fit"
+        )
 
     def test_no_dsyevr_stays_on_dsyevd_when_tight(self):
         """Tight memory, no DSYEVR available -> stay on DSYEVD (no fallback)."""
@@ -84,22 +85,21 @@ class TestPlanEigenDriver:
             available_gb=available,
             has_dsyevd=True,
             has_dsyevr=False,
-            no_vendor=False,
-            inplace_eligible=True,
+            forced_numpy=False,
+            inplace_blocker=None,
         )
         assert plan.driver == "DSYEVD-inplace"
         assert plan.use_dsyevr is False
         assert plan.use_inplace is True
 
     def test_no_vendor_forces_numpy(self):
-        """no_vendor -> numpy fallback with conservative DSYEVD footprint."""
         plan = plan_eigen_driver(
             self.N,
             available_gb=1e6,
             has_dsyevd=True,
             has_dsyevr=True,
-            no_vendor=True,
-            inplace_eligible=True,
+            forced_numpy=True,
+            inplace_blocker=None,
         )
         assert plan.driver == "numpy"
         assert plan.no_vendor is True
@@ -114,11 +114,50 @@ class TestPlanEigenDriver:
             available_gb=1e6,
             has_dsyevd=False,
             has_dsyevr=False,
-            no_vendor=False,
-            inplace_eligible=True,
+            forced_numpy=False,
+            inplace_blocker=None,
         )
         assert plan.driver == "numpy"
         assert plan.no_vendor is True
+
+    def test_numpy_reason_separates_forced_from_absent_vendor(self):
+        forced = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            forced_numpy=True,
+            inplace_blocker=None,
+        )
+        absent = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=False,
+            has_dsyevr=False,
+            forced_numpy=False,
+            inplace_blocker=None,
+        )
+        assert forced.describe(64.0).startswith("Eigendecomp memory (numpy): ")
+        assert absent.describe(64.0).startswith("Eigendecomp memory (numpy): ")
+        assert "JLINALG_NO_VENDOR_LAPACK set" in forced.reason
+        assert "JLINALG_NO_VENDOR_LAPACK" not in absent.reason
+        assert "no vendor DSYEVD or DSYEVR" in absent.reason
+
+    def test_dsyevd_reason_carries_the_blocker(self):
+        plan = plan_eigen_driver(
+            self.N,
+            available_gb=1e6,
+            has_dsyevd=True,
+            has_dsyevr=True,
+            forced_numpy=False,
+            inplace_blocker="K dtype is float32, not float64",
+        )
+        assert plan.driver == "DSYEVD"
+        assert plan.describe(64.0) == (
+            f"Eigendecomp memory (DSYEVD): estimated {plan.required_gb:.1f}GB, "
+            "available 64.0GB (K dtype is float32, not float64; "
+            f"DSYEVR fallback={dsyevr_peak_gb(self.N):.1f}GB)"
+        )
 
     def test_dsyevr_only_when_no_dsyevd(self):
         """Only vendor DSYEVR available -> plan DSYEVR, not DSYEVD.
@@ -132,8 +171,8 @@ class TestPlanEigenDriver:
             available_gb=1e6,
             has_dsyevd=False,
             has_dsyevr=True,
-            no_vendor=False,
-            inplace_eligible=True,
+            forced_numpy=False,
+            inplace_blocker=None,
         )
         assert plan.driver == "DSYEVR"
         assert plan.use_dsyevr is True
@@ -142,21 +181,11 @@ class TestPlanEigenDriver:
         assert plan.required_gb == pytest.approx(dsyevr_peak_gb(self.N))
 
     def test_pure_function_is_deterministic(self):
-        """Same inputs -> identical plan.
-
-        Guards against accidental global state or nondeterminism in the shared
-        constructor — this is what lets pre-flight and runtime reuse one plan
-        function. It does NOT by itself prove the two call sites pass identical
-        inputs: pre-flight hard-codes inplace_eligible=True while the runtime
-        passes the real K eligibility, so their chosen driver can legitimately
-        differ (see test_forced_numpy_uses_conservative_estimate and
-        plan_eigen_driver's docstring for that boundary).
-        """
         args = {
             "has_dsyevd": True,
             "has_dsyevr": True,
-            "no_vendor": False,
-            "inplace_eligible": True,
+            "forced_numpy": False,
+            "inplace_blocker": None,
         }
         assert plan_eigen_driver(self.N, 1e6, **args) == plan_eigen_driver(
             self.N, 1e6, **args
@@ -427,7 +456,7 @@ class TestEigendecomposeKinshipLogsDriverThatRan:
     def test_forced_dsyevr_plan_logs_dsyevr(self, monkeypatch):
         from loguru import logger
 
-        from jamma.core.eigen_plan import EigenDriverPlan
+        from jamma.core.eigen_plan import EigenDriver, EigenDriverPlan
         from jamma.jlinalg import blas_has_dsyevr
 
         if not blas_has_dsyevr:
@@ -439,14 +468,7 @@ class TestEigendecomposeKinshipLogsDriverThatRan:
         K = np.ascontiguousarray(A @ A.T + np.eye(n), dtype=np.float64)
 
         forced_plan = EigenDriverPlan(
-            driver="DSYEVR",
-            use_inplace=False,
-            use_dsyevr=True,
-            no_vendor=False,
-            required_gb=0.001,
-            pre_fallback_gb=0.001,
-            dsyevr_peak_gb=0.001,
-            inplace_peak_gb=0.001,
+            driver=EigenDriver.DSYEVR, required_gb=0.001, reason="forced by test"
         )
         monkeypatch.setattr(
             "jamma.lmm.eigen.plan_eigen_driver", lambda *args, **kwargs: forced_plan
@@ -515,3 +537,37 @@ class TestEigendecomposeKinshipLogsBlasThreadsThatApplied:
 
         line = self._eigendecomp_line()
         assert line.endswith(", threads=7"), line
+
+
+@pytest.mark.tier0
+class TestEigendecomposeKinshipMemoryLineNamesTheDriver:
+    @staticmethod
+    def _memory_line(monkeypatch, *, has_dsyevd: bool, has_dsyevr: bool) -> str:
+        from loguru import logger
+
+        import jamma.jlinalg as jlinalg
+
+        monkeypatch.setattr(jlinalg, "blas_has_dsyevd", has_dsyevd)
+        monkeypatch.setattr(jlinalg, "blas_has_dsyevr", has_dsyevr)
+        monkeypatch.delenv("JLINALG_NO_VENDOR_LAPACK", raising=False)
+        use_fake_psutil(monkeypatch, available=64e9, total=64e9, rss=1e9, vms=2e9)
+
+        rng = np.random.default_rng(11)
+        A = rng.standard_normal((32, 32))
+        K = np.ascontiguousarray(A @ A.T + np.eye(32), dtype=np.float64)
+
+        captured: list[str] = []
+        handler_id = logger.add(captured.append, level="INFO", format="{message}")
+        try:
+            eigendecompose_kinship(K, check_memory=False)
+        finally:
+            logger.remove(handler_id)
+        lines = [m for m in captured if m.startswith("Eigendecomp memory (")]
+        assert len(lines) == 1, captured
+        return lines[0].rstrip("\n")
+
+    def test_no_vendor_with_env_unset_names_numpy_and_absent_vendor(self, monkeypatch):
+        line = self._memory_line(monkeypatch, has_dsyevd=False, has_dsyevr=False)
+        assert line.startswith("Eigendecomp memory (numpy): "), line
+        assert "JLINALG_NO_VENDOR_LAPACK" not in line, line
+        assert "no vendor DSYEVD or DSYEVR" in line, line

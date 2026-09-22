@@ -1,14 +1,13 @@
 """Numerical equivalence and performance report: JAMMA vs GEMMA.
 
 Runs JAMMA's NumPy runner against GEMMA reference data on two datasets:
-  1. gemma_synthetic (100 samples, 500 SNPs) — tight tolerances
-  2. mouse_hs1940 (1940 samples, 12226 SNPs) — real data, wider tolerances
+  1. gemma_synthetic (100 samples, 500 SNPs)
+  2. mouse_hs1940 (1940 samples, 12226 SNPs)
 
 Produces per-field max difference tables, scientific equivalence metrics,
 and per-section performance timing. The per-field comparison is the same
-``compare_assoc_results`` the tier1 parity tests use, with the same
-``ToleranceConfig`` overrides, so the report and the suite cannot disagree
-about what "within tolerance" means.
+``compare_assoc_results`` the tier1 parity tests use, at the tolerances the
+suite enforces, so the report and the suite cannot disagree.
 
 Usage:
     uv run python scripts/demonstrate_equivalence.py
@@ -42,6 +41,7 @@ from jamma.validation import (  # noqa: E402
     load_gemma_kinship,
 )
 from jamma.validation.compare import ComparisonResult  # noqa: E402
+from tests import fixture_paths  # noqa: E402
 from tests.reference.kinship import compute_centered_kinship  # noqa: E402
 
 # Common runner config knobs, merged with each spec's mode at the call site.
@@ -81,92 +81,66 @@ class DatasetConfig:
 # Synthetic dataset
 SYNTHETIC = DatasetConfig(
     name="gemma_synthetic (100 samples, 500 SNPs)",
-    plink_prefix=ROOT / "tests/fixtures/gemma_synthetic/test",
-    kinship_path=ROOT / "tests/fixtures/gemma_synthetic/gemma_kinship.cXX.txt",
-    covariate_path=ROOT / "tests/fixtures/gemma_covariate/covariates.txt",
+    plink_prefix=fixture_paths.SYNTHETIC.bfile,
+    kinship_path=fixture_paths.SYNTHETIC.kinship,
+    covariate_path=fixture_paths.SYNTHETIC.covariates,
     # Golden section vs Brent: ~6.6e-5 per 20-iteration bracket, same value
     # the tier1 suite uses on this dataset.
     tolerances=ToleranceConfig(lambda_rtol=5e-5),
     tests=[
-        TestSpec(
-            "Wald (-lmm 1)",
-            ROOT / "tests/fixtures/gemma_synthetic/gemma_assoc.assoc.txt",
-            1,
-        ),
-        TestSpec(
-            "Score (-lmm 3)",
-            ROOT / "tests/fixtures/gemma_score/gemma_score.assoc.txt",
-            3,
-        ),
-        TestSpec(
-            "LRT (-lmm 2)",
-            ROOT / "tests/fixtures/gemma_synthetic/gemma_lrt.assoc.txt",
-            2,
-        ),
-        TestSpec(
-            "All tests (-lmm 4)",
-            ROOT / "tests/fixtures/gemma_all_tests/gemma_all.assoc.txt",
-            4,
-        ),
+        TestSpec("Wald (-lmm 1)", fixture_paths.SYNTHETIC.ref("wald"), 1),
+        TestSpec("Score (-lmm 3)", fixture_paths.SYNTHETIC.ref("score"), 3),
+        TestSpec("LRT (-lmm 2)", fixture_paths.SYNTHETIC.ref("lrt"), 2),
+        TestSpec("All tests (-lmm 4)", fixture_paths.SYNTHETIC.ref("all"), 4),
         TestSpec(
             "Wald+covar (-lmm 1 -c)",
-            ROOT / "tests/fixtures/gemma_covariate/gemma_covariate.assoc.txt",
+            fixture_paths.SYNTHETIC.ref("covar_wald"),
             1,
             use_covariates=True,
         ),
         TestSpec(
             "All+covar (-lmm 4 -c)",
-            ROOT / "tests/fixtures/gemma_all_tests/gemma_all_covar.assoc.txt",
+            fixture_paths.SYNTHETIC.ref("covar_all"),
             4,
             use_covariates=True,
         ),
     ],
 )
 
-# Mouse HS1940 dataset (wider tolerances for real data)
-MOUSE_DIR = ROOT / "tests/fixtures/mouse_hs1940"
 MOUSE_HS1940 = DatasetConfig(
     name="mouse_hs1940 (1940 samples, 12226 SNPs)",
-    plink_prefix=MOUSE_DIR / "mouse_hs1940",
-    kinship_path=MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt",
-    covariate_path=MOUSE_DIR / "covariates.txt",
+    plink_prefix=fixture_paths.MOUSE.bfile,
+    kinship_path=fixture_paths.MOUSE.kinship,
+    covariate_path=fixture_paths.MOUSE.covariates,
     compare_kinship=False,  # GEMMA kinship used as input, not compared
     # covariates.txt lacks intercept column; CI tests prepend it
     prepend_intercept=True,
-    # The same overrides tests/test_runner_numpy.py::NUMPY_GEMMA_TOLERANCES
-    # applies to this dataset.
-    tolerances=ToleranceConfig(
-        lambda_rtol=1e-3,
-        pvalue_rtol=1e-2,
-        se_rtol=5e-4,
-        logl_rtol=5e-3,
-        atol=1e-4,
-    ),
+    tolerances=fixture_paths.NUMPY_GEMMA_TOLERANCES,
     tests=[
-        TestSpec("LRT (-lmm 2)", MOUSE_DIR / "mouse_hs1940_lrt.assoc.txt", 2),
-        TestSpec("Score (-lmm 3)", MOUSE_DIR / "mouse_hs1940_score.assoc.txt", 3),
-        TestSpec("All tests (-lmm 4)", MOUSE_DIR / "mouse_hs1940_all.assoc.txt", 4),
+        TestSpec("LRT (-lmm 2)", fixture_paths.MOUSE.ref("lrt"), 2),
+        TestSpec("Score (-lmm 3)", fixture_paths.MOUSE.ref("score"), 3),
+        TestSpec("All tests (-lmm 4)", fixture_paths.MOUSE.ref("all"), 4),
         TestSpec(
             "Wald+covar (-lmm 1 -c)",
-            MOUSE_DIR / "mouse_hs1940_covar_wald.assoc.txt",
+            fixture_paths.MOUSE.ref("covar_wald"),
             1,
             use_covariates=True,
         ),
         TestSpec(
             "LRT+covar (-lmm 2 -c)",
-            MOUSE_DIR / "mouse_hs1940_covar_lrt.assoc.txt",
+            fixture_paths.MOUSE.ref("covar_lrt"),
             2,
             use_covariates=True,
         ),
         TestSpec(
             "Score+covar (-lmm 3 -c)",
-            MOUSE_DIR / "mouse_hs1940_covar_score.assoc.txt",
+            fixture_paths.MOUSE.ref("covar_score"),
             3,
             use_covariates=True,
         ),
         TestSpec(
             "All+covar (-lmm 4 -c)",
-            MOUSE_DIR / "mouse_hs1940_covar_all.assoc.txt",
+            fixture_paths.MOUSE.ref("covar_all"),
             4,
             use_covariates=True,
         ),

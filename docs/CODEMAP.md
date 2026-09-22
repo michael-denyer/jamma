@@ -320,14 +320,13 @@ Configuration, memory management, threading, and logging.
 |----|-----------|-------------|-----------|
 | 5c | `MemoryLedger` | Peak memory per streaming phase; the gate reads `available_ram_gb()` once | [memory.py:119](../src/jamma/core/memory.py#L119) |
 | 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:137](../src/jamma/core/memory.py#L137) |
-| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:28](../src/jamma/core/memory_snapshot.py#L28) |
-| 5c | `cleanup_memory()` | GC + clear caches | [memory_snapshot.py:79](../src/jamma/core/memory_snapshot.py#L79) |
+| 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:27](../src/jamma/core/memory_snapshot.py#L27) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:20](../src/jamma/utils/logging.py#L20) |
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:55](../src/jamma/utils/logging.py#L55) |
 | 5c | `log_memory_snapshot()` | RSS + free-RAM snapshot at phase boundaries | [memory_snapshot.py](../src/jamma/core/memory_snapshot.py) |
 | 5e | `get_physical_core_count()` | Physical core detection (consolidated helper) | [threading.py:55](../src/jamma/core/threading.py#L55) |
 | 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:180](../src/jamma/core/threading.py#L180) |
-| 5f | `get_hardware_context()` | CPU, BLAS, platform info for benchmarks | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
+| 5f | `get_hardware_context()` | CPU, BLAS, platform info for benchmarks | [_hardware_context.py:33](../scripts/_hardware_context.py#L33) |
 | 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:94](../src/jamma/core/progress.py#L94) |
 | 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/core/estimates.py#L144) |
 | 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:185](../src/jamma/core/estimates.py#L180) |
@@ -473,7 +472,6 @@ flowchart TD
     subgraph Runtime["⚡ Runtime Controls"]
         INC["IncrementalAssocWriter<br/><small>2d</small>"]
         STR["Streaming chunks<br/><small>4Ne</small>"]
-        CLN["cleanup_memory()<br/><small>5c</small>"]
     end
 
     EST --> CHK
@@ -495,7 +493,6 @@ flowchart TD
     style FAIL fill:#e74c3c,stroke:#c0392b,color:#fff
     style INC fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
     style STR fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
-    style CLN fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
     style DISK fill:#53a8b6,stroke:#3d8a96,color:#fff
     style LOW fill:#53a8b6,stroke:#3d8a96,color:#fff
 ```
@@ -605,7 +602,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Result writer | [IncrementalAssocWriter](../src/jamma/lmm/io.py#L76) |
 | Memory estimation | [lmm_cost](../src/jamma/core/memory.py#L245) |
 | Threading | [threading.py:55](../src/jamma/core/threading.py#L55) |
-| Hardware context | [hardware.py:37](../src/jamma/core/hardware.py#L37) |
+| Hardware context | [_hardware_context.py:33](../scripts/_hardware_context.py#L33) |
 | Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L593) |
 | Formula derivations and validation | [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) |
 | Numerical equivalence bound | [GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md](GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) |

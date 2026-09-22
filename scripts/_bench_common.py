@@ -109,8 +109,9 @@ def print_hardware_header(runs: int) -> None:
     Args:
         runs: Repetition count to report.
     """
+    from _hardware_context import get_hardware_context
+
     from jamma import jlinalg
-    from jamma.core.hardware import get_hardware_context
     from jamma.lmm import accel
 
     if accel._accel is None:

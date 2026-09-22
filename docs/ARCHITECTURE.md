@@ -115,8 +115,7 @@ src/jamma/
 │   ├── estimates.py        # Wall-clock time estimates for GWAS pipeline phases
 │   ├── memory.py           # Cost model: estimators, RAM seam, sufficiency check
 │   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives
-│   ├── memory_snapshot.py  # Process RSS / free-RAM snapshots and cleanup
-│   ├── hardware.py         # Hardware/software context collection for benchmark repro
+│   ├── memory_snapshot.py  # Process RSS / free-RAM snapshots
 │   ├── progress.py         # timed_progress() and progress_iterator() wrappers
 │   ├── recompile.py        # _load_c_module(): the one runtime C-import seam, auto-recompile-once
 │   ├── snp_filter.py       # Shared per-SNP statistics and filtering utilities

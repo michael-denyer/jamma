@@ -5,7 +5,6 @@ old ``utils.logging.log_rss_memory``; runners log through it at phase
 boundaries.
 """
 
-import gc
 from typing import NamedTuple
 
 import psutil
@@ -74,57 +73,3 @@ def log_memory_snapshot(label: str = "", level: str = "INFO") -> MemorySnapshot:
     )
     logger.log(level, msg)
     return snap
-
-
-def cleanup_memory(verbose: bool = True) -> MemorySnapshot:
-    """Free memory after a computation run.
-
-    Call this between benchmark runs or after large computations to
-    prevent memory accumulation that can cause OOM/SIGSEGV errors.
-
-    This function:
-    1. Runs Python garbage collection
-    2. Runs a second GC pass
-    3. Logs memory before/after cleanup if verbose
-
-    Args:
-        verbose: If True (default), log memory before and after cleanup.
-
-    Returns:
-        MemorySnapshot after cleanup.
-
-    Example:
-        >>> # After a benchmark run
-        >>> del kinship, eigenvectors, results
-        >>> cleanup_memory()
-        INFO | Memory [before_cleanup]: using 89.5GB, 160.2GB free of 256.0GB
-        INFO | Memory [after_cleanup]: using 12.3GB, 237.4GB free of 256.0GB
-        INFO | Freed 77.2GB (process was using 89.5GB, now 12.3GB)
-
-    Note:
-        For best results, explicitly `del` large arrays before calling
-        this function. Python's reference counting means arrays won't
-        be freed if references still exist.
-    """
-    before = log_memory_snapshot("before_cleanup") if verbose else get_memory_snapshot()
-
-    gc.collect()
-    gc.collect()
-
-    if verbose:
-        after = log_memory_snapshot("after_cleanup")
-        freed_gb = before.rss_gb - after.rss_gb
-        if freed_gb > 0.1:  # Only log if meaningful change
-            logger.info(
-                f"Freed {freed_gb:.1f}GB (process was using "
-                f"{before.rss_gb:.1f}GB, now {after.rss_gb:.1f}GB)"
-            )
-        elif freed_gb < -0.1:
-            logger.warning(
-                f"Memory increased by {-freed_gb:.1f}GB during cleanup "
-                f"(was {before.rss_gb:.1f}GB, now {after.rss_gb:.1f}GB)"
-            )
-    else:
-        after = get_memory_snapshot()
-
-    return after

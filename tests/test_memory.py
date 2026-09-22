@@ -5,7 +5,6 @@ import pytest
 
 from jamma.core import (
     MemorySnapshot,
-    cleanup_memory,
     get_memory_snapshot,
     log_memory_snapshot,
 )
@@ -111,56 +110,6 @@ class TestMemorySnapshot:
 
         assert isinstance(snap, MemorySnapshot)
         assert snap.rss_gb > 0
-
-
-class TestCleanupMemory:
-    """Tests for memory cleanup function."""
-
-    def test_cleanup_memory_returns_snapshot(self):
-        """cleanup_memory should return MemorySnapshot after cleanup."""
-        snap = cleanup_memory(verbose=False)
-
-        assert isinstance(snap, MemorySnapshot)
-        assert snap.rss_gb > 0
-
-    def test_cleanup_memory_verbose_logs(self):
-        """cleanup_memory with verbose=True runs gc and returns valid snapshot."""
-        from unittest.mock import patch
-
-        with patch("gc.collect", wraps=__import__("gc").collect) as mock_gc:
-            snap = cleanup_memory(verbose=True)
-
-        mock_gc.assert_called()
-
-        assert isinstance(snap, MemorySnapshot)
-        assert snap.rss_gb > 0, "RSS should be positive after cleanup"
-        assert snap.available_gb > 0, "Available memory should be positive"
-
-    def test_cleanup_frees_memory_after_allocation(self):
-        """Cleanup completes without error after allocating and deleting arrays.
-
-        RSS-based assertions are non-deterministic under parallel test workers
-        (-n3) because other workers allocate/free memory concurrently. This test
-        verifies that the allocate/delete/gc/cleanup_memory sequence runs without
-        error and returns a valid snapshot -- not that RSS decreased by a
-        specific amount.
-        """
-        import gc
-
-        # Allocate a moderate array
-        big_array = np.zeros((1000, 1000), dtype=np.float64)  # 8MB
-        _ = big_array.sum()  # Touch it
-
-        # Delete and cleanup
-        del big_array
-        gc.collect()
-
-        after = cleanup_memory(verbose=False)
-
-        # Structural assertions: cleanup returned a valid snapshot
-        assert after is not None
-        assert isinstance(after.rss_gb, float)
-        assert after.rss_gb > 0
 
 
 def _batch_non_buffer_gb(n_samples: int, n_snps: int) -> float:

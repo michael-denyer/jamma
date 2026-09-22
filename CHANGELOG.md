@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were unaffected. `JLINALG_NO_VENDOR_DSYRK` and `JLINALG_NO_VENDOR_DSYEVR`
   join `JLINALG_NO_VENDOR_DGEMM` as test seams that leave one vendor routine
   unwired.
+- `jamma -gk` no longer applies `-lmm`'s rules to options it never reads,
+  and no longer accepts them silently. `-gk 1 -lmin -1` and
+  `-gk 1 -loco -hwe 0.01` exited 2 with `-lmm`'s validation messages, while
+  `-gk 1 -k missing.cXX.txt -snps missing.txt` ran without a word. `-gk` now
+  leaves every `-lmm`-only option (`-k`, `-d`, `-u`, `--eigen-dir`, `-hwe`,
+  `-lmin`, `-lmax`, `-snps`, `-widv`, `--backend`) at its default and logs
+  one warning naming each one given on the command line,
+  matching GEMMA's tolerance of flags a mode does not use. `-lmm` is
+  unchanged.
 
 ## [8.1.0] - 2026-09-14
 

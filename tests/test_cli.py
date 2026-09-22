@@ -247,9 +247,7 @@ def test_gk2_with_loco_reports_cli_error(tmp_path: Path):
 _GK_IGNORES = "-gk ignores -lmm-only options set on the command line: "
 
 
-@pytest.mark.xfail(strict=True, reason="-gk validates -lmin, a knob it never reads")
 def test_gk_ignores_lmin_instead_of_validating_it(tmp_path: Path) -> None:
-    """-gk 1 -lmin -1 warns and runs; only -lmm reads l_min."""
     result = runner.invoke(
         main,
         [
@@ -269,11 +267,7 @@ def test_gk_ignores_lmin_instead_of_validating_it(tmp_path: Path) -> None:
     assert (tmp_path / "result.cXX.npy").exists()
 
 
-@pytest.mark.xfail(
-    strict=True, reason="-gk applies -lmm's hwe-with-loco rule to a knob it never reads"
-)
 def test_gk_loco_ignores_hwe_instead_of_applying_the_lmm_rule(tmp_path: Path) -> None:
-    """-gk 1 -loco -hwe 0.01 warns and writes every LOCO matrix."""
     result = runner.invoke(
         main,
         [
@@ -294,12 +288,7 @@ def test_gk_loco_ignores_hwe_instead_of_applying_the_lmm_rule(tmp_path: Path) ->
     assert "Wrote 3 LOCO kinship matrices" in result.output
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="-gk accepts -lmm-only options, and files it never opens, without a warning",
-)
 def test_gk_warns_once_naming_every_lmm_only_option_set(tmp_path: Path) -> None:
-    """One warning names each -lmm-only option set; the files need not exist."""
     missing = tmp_path / "missing"
     result = runner.invoke(
         main,
@@ -331,7 +320,6 @@ def test_gk_warns_once_naming_every_lmm_only_option_set(tmp_path: Path) -> None:
             str(missing / "w.txt"),
             "--backend",
             "numpy-streaming",
-            "--no-telemetry",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -348,11 +336,48 @@ def test_gk_warns_once_naming_every_lmm_only_option_set(tmp_path: Path) -> None:
             "-snps",
             "-widv",
             "--backend",
-            "--no-telemetry",
         ]
     )
     assert _GK_IGNORES + named in result.output
     assert (tmp_path / "result.cXX.npy").exists()
+
+
+def test_gk_does_not_warn_about_options_it_reads(tmp_path: Path) -> None:
+    ksnps = tmp_path / "ksnps.txt"
+    ksnps.write_text("\n".join(f"rs{i:04d}" for i in range(100)) + "\n")
+    result = runner.invoke(
+        main,
+        [
+            "-gk",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-c",
+            str(SYNTHETIC.covariates),
+            "-o",
+            "kin",
+            "-outdir",
+            str(tmp_path),
+            "-maf",
+            "0.05",
+            "-miss",
+            "0.1",
+            "-n",
+            "1",
+            "-ksnps",
+            str(ksnps),
+            "-eigen",
+            "--mem-budget",
+            "1",
+            "--legacy-text",
+            "--no-check-memory",
+            "--no-telemetry",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "-gk ignores" not in result.output
+    assert (tmp_path / "kin.cXX.txt").exists()
+    assert "Eigenvalues written to" in result.output
 
 
 def test_cli_help_shows_widv():

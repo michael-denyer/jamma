@@ -17,7 +17,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from jamma.io.plink import PlinkMetadata
-    from jamma.lmm.stats import AssocResult
+    from jamma.lmm.assoc_output import AssocResult
 
 LmmMode = Literal[1, 2, 3, 4]
 
@@ -150,8 +150,6 @@ def get_spec(mode: int) -> ModeSpec:
     """Look up ModeSpec by lmm_mode int, or raise ValueError."""
     return MODE_SPECS[parse_lmm_mode(mode)]
 
-
-HEADERS: dict[str, str] = {s.test_type: s.header for s in MODE_SPECS.values()}
 
 # Default LMM knobs — single source of truth for the config surface
 # (PipelineConfig, LmmConfig, and the CLI/gwas() maf/miss/l_min/l_max options)

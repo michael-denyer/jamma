@@ -20,7 +20,7 @@ graph TD
     StreamRunner["lmm/runner_numpy_streaming.py (Streaming)"]
     ChunkRunner["lmm/chunk_runner_numpy.py (Shared chunk engine)"]
     Likelihood["lmm/likelihood.py / pab.py / uab.py / likelihood_numpy.py"]
-    Stats["lmm/stats.py (AssocResult, batch Wald/LRT/Score)"]
+    Stats["lmm/stats.py (batch Wald/LRT/Score)"]
     LOCO["lmm/loco.py (LOCO orchestrator)"]
     jlinalg["jlinalg/ (BLAS/LAPACK dispatch)"]
     Core["core/ (Memory, progress)"]
@@ -63,7 +63,7 @@ A typical LMM association run proceeds as follows:
 
 6. **Null model** — The rotated data `U.T @ Y` and covariates are used to optimize the variance component `lambda` via a 50-point grid search followed by golden section refinement (`lmm/likelihood.py` REML path).
 
-7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size, cut to 16 chunks when the budget alone would leave too few to pipeline, the run has at most 10,000 samples, and the BLAS cannot be throttled), `lmm/chunk_kernel.py` (the one dispatch match, which builds each path's persistent C workspace and binds the call that consumes it), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/assoc_output.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics through the batched `lmm/likelihood_numpy.py` routines, or through `_lmm_accel` when the C extension is loaded. `lmm/stats.py` holds the `AssocResult` record and the batch statistics; the scalar references the tests check them against live in `tests/reference/`, and production does not call them. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
+7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size, cut to 16 chunks when the budget alone would leave too few to pipeline, the run has at most 10,000 samples, and the BLAS cannot be throttled), `lmm/chunk_kernel.py` (the one dispatch match, which builds each path's persistent C workspace and binds the call that consumes it), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/assoc_output.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics through the batched `lmm/likelihood_numpy.py` routines, or through `_lmm_accel` when the C extension is loaded. `lmm/stats.py` holds the batch statistics; the scalar references the tests check them against live in `tests/reference/`, and production does not call them. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
 
 8. **Output** — `AssocResult` records are written to a GEMMA-compatible `.assoc.txt` file via `lmm/assoc_output.py:IncrementalAssocWriter`. When `output_path` is set, results stream to disk per chunk to avoid accumulating a large in-memory list.
 
@@ -81,7 +81,7 @@ A typical LMM association run proceeds as follows:
 | `WorkspaceSpec` | `src/jamma/lmm/workspace.py` | Kernel dimensions, thread capacity, and allocation bounds shared by the planner and workspace creation |
 | `LmmConfig` | `src/jamma/lmm/schema.py` | Frozen configuration dataclass shared by all LMM runners (MAF, lambda bounds, test type, etc.) |
 | `LmmRunResult` | `src/jamma/lmm/schema.py` | Return type for all runners; bundles association list, PVE estimate, and SNP count |
-| `AssocResult` | `src/jamma/lmm/stats.py` | Per-SNP association result dataclass matching GEMMA's output columns |
+| `AssocResult` | `src/jamma/lmm/assoc_output.py` | Per-SNP association result dataclass matching GEMMA's output columns |
 | `MODE_SPECS` / `ModeSpec` | `src/jamma/lmm/schema.py` | Single source of truth mapping `lmm_mode` integers to the tests each mode runs (`Test` flags) and its output column names and header |
 | `SnpMeta` | `src/jamma/lmm/schema.py` | SNP metadata as one array per column; writers and result builders slice arrays directly, no per-SNP dicts |
 | `PlinkData` | `src/jamma/io/plink.py` | Container for loaded PLINK binary data (genotypes, sample IDs, SNP IDs, positions, alleles) |
@@ -150,12 +150,12 @@ src/jamma/
 ├── lmm/                    # LMM association subsystem
 │   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, SnpMeta
 │   ├── accel.py            # available()/require(): the one loader for _lmm_accel
-│   ├── assoc_output.py     # IncrementalAssocWriter, build_results and the chunk sinks: the .assoc.txt row
+│   ├── assoc_output.py     # AssocResult, IncrementalAssocWriter, build_results and the chunk sinks
 │   ├── likelihood.py       # Null-model scalar REML/MLE and golden section search
 │   ├── pab.py              # Pab indexing, Uab products, and Schur-complement recursion
 │   ├── uab.py              # Uab/Pab/Iab batch builders in full, split and SoA layouts
 │   ├── likelihood_numpy.py # NumPy batch REML/MLE evaluation and lambda optimisation
-│   ├── stats.py            # AssocResult and the batch Wald/LRT/Score statistics
+│   ├── stats.py            # The batch Wald/LRT/Score statistics
 │   ├── eigen.py            # Kinship eigendecomposition via jlinalg.eigh
 │   ├── eigen_cache.py      # Content + parameter cache key for LOCO per-chromosome eigen
 │   ├── eigen_io.py         # Eigen files (.npy / .txt); EigenGeneration members and manifests

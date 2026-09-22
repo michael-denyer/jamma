@@ -12,9 +12,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from jamma.lmm.assoc_output import AssocResult  # noqa: F401
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig
-from jamma.lmm.stats import AssocResult  # noqa: F401
 from jamma.validation import (
     ToleranceConfig,
     compare_assoc_results,

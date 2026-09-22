@@ -21,6 +21,7 @@ from typing import Literal
 
 import numpy as np
 
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.schema import (
     DEFAULT_L_MAX,
     DEFAULT_L_MIN,
@@ -32,7 +33,6 @@ from jamma.lmm.schema import (
     LmmConfig,
     parse_lmm_mode,
 )
-from jamma.lmm.stats import AssocResult
 
 BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
 VALID_BACKENDS: tuple[BackendRequest, ...] = ("auto", "numpy", "numpy-streaming")

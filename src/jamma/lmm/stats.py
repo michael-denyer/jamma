@@ -1,4 +1,4 @@
-"""AssocResult and the batch Wald, Score and LRT statistics that fill it.
+"""The batch Wald, Score and LRT statistics that fill an ``AssocResult``.
 
 The vectorised forms of GEMMA's CalcRLWald, CalcRLScore and the LRT
 p-value, applied to a chunk of SNPs at once. The scalar ports they are
@@ -7,41 +7,11 @@ checked against live in ``tests/reference/stats.py``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 
 from jamma.lmm.pab import build_index_table, replace_zero_p_yy
 from jamma.lmm.special import betainc_batch, chi2_sf_batch
 from jamma.lmm.uab import batch_compute_pab_numpy
-
-
-@dataclass
-class AssocResult:
-    """Association test result for a single SNP.
-
-    Matches GEMMA's output format. Fields present depend on test type:
-    - Wald (-lmm 1): REML logl_H1, l_remle, p_wald
-    - LRT (-lmm 2): MLE logl_H1, l_mle, p_lrt (no beta/se in GEMMA output)
-    - Score (-lmm 3): p_score only (no per-SNP logl_H1/l_remle)
-    - All (-lmm 4): All fields; logl_H1 is the alternative-model MLE
-    """
-
-    chr: str
-    rs: str
-    ps: int  # base position
-    n_miss: int  # missing count for this SNP
-    allele1: str  # minor allele
-    allele0: str  # major allele
-    af: float  # allele frequency
-    beta: float = float("nan")  # NaN in LRT mode, which reports no effect size
-    se: float = float("nan")
-    logl_H1: float | None = None  # REML in mode 1, MLE in modes 2 and 4
-    l_remle: float | None = None  # Not present for Score-only
-    p_wald: float | None = None  # Only for Wald/-lmm 1
-    p_score: float | None = None  # Only for Score/-lmm 3
-    l_mle: float | None = None  # MLE lambda (for LRT/-lmm 2)
-    p_lrt: float | None = None  # LRT p-value (for LRT/-lmm 2)
 
 
 def _beta_se_from_pab(

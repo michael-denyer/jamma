@@ -27,7 +27,7 @@ from jamma.pipeline_samples import load_analysed_samples
 from tests.conftest import preflight
 
 if TYPE_CHECKING:
-    from jamma.lmm.stats import AssocResult
+    from jamma.lmm.assoc_output import AssocResult
 
 pytestmark = pytest.mark.tier0
 

@@ -29,6 +29,7 @@ from jamma.core.snp_stats import (
     collect_snp_stats_from_chunks,
 )
 from jamma.lmm.assoc_output import (
+    AssocResult,
     IncrementalAssocWriter,
     make_result_list_sink,
     make_writer_sink,
@@ -68,7 +69,6 @@ from jamma.lmm.schema import (
     SnpInfoRecord,
     SnpMeta,
 )
-from jamma.lmm.stats import AssocResult
 
 
 @dataclass(frozen=True, slots=True)

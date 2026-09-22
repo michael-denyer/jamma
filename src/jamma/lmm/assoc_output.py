@@ -12,6 +12,7 @@ from __future__ import annotations
 import errno
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,7 +20,6 @@ import numpy as np
 from loguru import logger
 
 from jamma.lmm.schema import ModeSpec, SnpMeta
-from jamma.lmm.stats import AssocResult
 from jamma.utils.atomic_publish import AtomicOutput
 
 if TYPE_CHECKING:
@@ -37,6 +37,34 @@ _RETRYABLE_ERRNOS = frozenset(
         errno.EBUSY,  # Device or resource busy
     }
 )
+
+
+@dataclass
+class AssocResult:
+    """Association test result for a single SNP.
+
+    Matches GEMMA's output format. Fields present depend on test type:
+    - Wald (-lmm 1): REML logl_H1, l_remle, p_wald
+    - LRT (-lmm 2): MLE logl_H1, l_mle, p_lrt (no beta/se in GEMMA output)
+    - Score (-lmm 3): p_score only (no per-SNP logl_H1/l_remle)
+    - All (-lmm 4): All fields; logl_H1 is the alternative-model MLE
+    """
+
+    chr: str
+    rs: str
+    ps: int  # base position
+    n_miss: int  # missing count for this SNP
+    allele1: str  # minor allele
+    allele0: str  # major allele
+    af: float  # allele frequency
+    beta: float = float("nan")  # NaN in LRT mode, which reports no effect size
+    se: float = float("nan")
+    logl_H1: float | None = None  # REML in mode 1, MLE in modes 2 and 4
+    l_remle: float | None = None  # Not present for Score-only
+    p_wald: float | None = None  # Only for Wald/-lmm 1
+    p_score: float | None = None  # Only for Score/-lmm 3
+    l_mle: float | None = None  # MLE lambda (for LRT/-lmm 2)
+    p_lrt: float | None = None  # LRT p-value (for LRT/-lmm 2)
 
 
 class IncrementalAssocWriter:

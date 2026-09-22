@@ -141,10 +141,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `jamma.lmm.assoc_output`, which owns the `.assoc.txt` row.
   `IncrementalAssocWriter(path, mode)` takes a `ModeSpec` in place of a
   `test_type` string, and `write_arrays_batch` no longer takes `lmm_mode`.
-  `format_assoc_line`, `TEST_TYPE_MAP`, `ACCUM_KEYS`, `RESULT_FIELDS`,
-  `FORMAT_COLUMNS` and `LocoResult` are gone; `run_lmm_loco` returns
-  `LmmRunResult`. `PipelineTiming` moves to `jamma.pipeline_config`. Output
-  bytes are unchanged.
+  `AssocResult` moves there from `jamma.lmm.stats`, and `ModeSpec.header`
+  replaces `HEADERS`. `format_assoc_line`, `TEST_TYPE_MAP`, `ACCUM_KEYS`,
+  `RESULT_FIELDS`, `FORMAT_COLUMNS` and `LocoResult` are gone;
+  `run_lmm_loco` returns `LmmRunResult`. `PipelineTiming` moves to
+  `jamma.pipeline_config`. Output bytes are unchanged.
 - `jamma.core.cleanup_memory`. It ran `gc.collect()` twice and logged RSS,
   and nothing in JAMMA or its scripts called it. Call `gc.collect()` and
   `jamma.core.log_memory_snapshot()` directly instead.

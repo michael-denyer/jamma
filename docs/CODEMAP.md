@@ -196,7 +196,7 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:21](../src/jamma/io/covariate.py#L21) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L46) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L87) |
-| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/assoc_output.py:42](../src/jamma/lmm/assoc_output.py#L42) |
+| 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/assoc_output.py:70](../src/jamma/lmm/assoc_output.py#L70) |
 | 2e | `read_snp_list_file()` | Parse SNP list file (one RS ID per line) | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2e | `resolve_snp_list_to_indices()` | Map SNP IDs to dataset indices | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2f | `read_eigen_files()` | Load eigenvalue/eigenvector files (auto-detects `.npy` or `.txt`) | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
@@ -237,7 +237,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3d | `compute_null_model_mle()` | Null model MLE for LRT | [likelihood.py:370](../src/jamma/lmm/likelihood.py#L370) |
 | 3e | `golden_section_optimize_lambda_numpy()` | REML optimization per SNP (Wald) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | 3e | `golden_section_optimize_lambda_mle_numpy()` | MLE optimization per SNP (LRT) | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
-| 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [stats.py:20](../src/jamma/lmm/stats.py#L20) |
+| 3f | `AssocResult` | Per-SNP result dataclass (all test fields) | [assoc_output.py:43](../src/jamma/lmm/assoc_output.py#L43) |
 | 3f | `batch_calc_wald_stats_from_pab_numpy()` | Production: beta, SE, p_wald across a chunk | [stats.py](../src/jamma/lmm/stats.py) |
 | 3f | `batch_calc_score_stats_numpy()` | Production: p_score across a chunk | [stats.py](../src/jamma/lmm/stats.py) |
 | 3f | `calc_wald_test()` | Scalar reference for the batch path; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
@@ -302,10 +302,10 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:129](../src/jamma/lmm/runner_numpy_streaming.py#L129) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:60](../src/jamma/lmm/schema.py#L60) |
 | 4Nh | `ModeSpec` | Per-mode test set and column specification (single source of truth) | [lmm/schema.py:88](../src/jamma/lmm/schema.py#L88) |
-| 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:286](../src/jamma/lmm/assoc_output.py#L286) |
+| 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:314](../src/jamma/lmm/assoc_output.py#L314) |
 | 4Ni | `_count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/chunk_runner_numpy.py:51](../src/jamma/lmm/chunk_runner_numpy.py#L51) |
-| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:168](../src/jamma/lmm/loco.py#L168) |
-| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:116](../src/jamma/lmm/loco_eigen.py#L116) |
+| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:167](../src/jamma/lmm/loco.py#L167) |
+| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:113](../src/jamma/lmm/loco_eigen.py#L113) |
 | 4Nj | `solve_eigen_pairs()` | Ordered eigenpairs with `workers` solves in flight under one consumer-thread BLAS scope | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 | 4Nj | `plan_loco_workers()` | Worker cap and complete consumer memory reservation | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 
@@ -598,7 +598,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO runner | [lmm/loco.py](../src/jamma/lmm/loco.py) |
 | LOCO config | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
-| Result writer | [IncrementalAssocWriter](../src/jamma/lmm/assoc_output.py#L42) |
+| Result writer | [IncrementalAssocWriter](../src/jamma/lmm/assoc_output.py#L70) |
 | Memory estimation | [lmm_cost](../src/jamma/core/memory.py#L245) |
 | Threading | [threading.py:55](../src/jamma/core/threading.py#L55) |
 | Hardware context | [_hardware_context.py:33](../scripts/_hardware_context.py#L33) |

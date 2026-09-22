@@ -47,7 +47,7 @@ from jamma.io.plink import (
     partitions_from_metadata,
 )
 from jamma.kinship import SnpStatsCache
-from jamma.lmm.assoc_output import IncrementalAssocWriter
+from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
     KinshipShape,
@@ -75,7 +75,6 @@ from jamma.lmm.schema import (
     LmmRunResult,
     SnpMeta,
 )
-from jamma.lmm.stats import AssocResult
 from jamma.utils import chr_sort_key
 
 __all__ = [

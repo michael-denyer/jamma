@@ -60,8 +60,8 @@ from jamma.lmm import (  # noqa: E402
     run_lmm_association_numpy,
     run_lmm_association_numpy_streaming,
 )
+from jamma.lmm.assoc_output import AssocResult  # noqa: E402
 from jamma.lmm.schema import SnpMeta  # noqa: E402
-from jamma.lmm.stats import AssocResult  # noqa: E402
 from jamma.pipeline import PipelineRunner  # noqa: E402
 from jamma.pipeline_config import PipelineConfig  # noqa: E402
 from tests.fixture_paths import LOCO, SYNTHETIC  # noqa: E402

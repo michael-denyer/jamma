@@ -18,7 +18,6 @@ from jamma.lmm.schema import (
     DEFAULT_MISS,
     DEFAULT_N_GRID,
     DEFAULT_N_REFINE,
-    HEADERS,
     MIN_N_REFINE,
     MODE_SPECS,
     SnpMeta,
@@ -106,8 +105,6 @@ class TestModeSpecs:
             "chr\trs\tps\tn_miss\tallele1\tallele0\taf"
             "\tbeta\tse\tlogl_H1\tl_remle\tp_wald"
         )
-        for spec in MODE_SPECS.values():
-            assert HEADERS[spec.test_type] == spec.header
 
     def test_get_spec_invalid_mode_raises(self) -> None:
         with pytest.raises(ValueError, match="lmm_mode must be"):

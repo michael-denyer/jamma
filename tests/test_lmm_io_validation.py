@@ -13,9 +13,8 @@ import sys
 import numpy as np
 import pytest
 
-from jamma.lmm.assoc_output import IncrementalAssocWriter, build_results
+from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter, build_results
 from jamma.lmm.schema import MODE_SPECS, LmmConfig, SnpMeta, get_spec
-from jamma.lmm.stats import AssocResult
 
 # ---------------------------------------------------------------------------
 # Shared test data

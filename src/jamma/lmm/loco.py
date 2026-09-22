@@ -395,7 +395,7 @@ def run_lmm_loco(
                 if chr_name != unique_chrs[0]:
                     logger.info(
                         f"PVE computed from chromosome {chr_name} "
-                        f"(earlier chromosomes had all SNPs filtered)"
+                        f"(earlier chromosomes had no SNPs to test)"
                     )
                 first_chr_pve = chr_pve
                 first_chr_pve_se = chr_pve_se

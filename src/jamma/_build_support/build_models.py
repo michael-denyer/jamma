@@ -129,7 +129,6 @@ class BuildSpec:
     # Dev-mode-only base cflags. The wheel path never applies these.
     dev_extra_cflags: tuple[str, ...] = ()  # ("-march=native",) / ()
     reads_sentinel_env: bool = False  # honour JAMMA_SENTINEL_UB (accel only)
-    supports_diagnose: bool = False  # accept the vectorization-report flags
     # Runtime load identity — used by core.recompile._load_c_module and
     # auto_recompile_c_extension when a stale/missing .so must be reimported or
     # rebuilt. Stored rather than derived so tests can inject synthetic keys.
@@ -155,7 +154,6 @@ LMM_ACCEL_SPEC = BuildSpec(
     output_stem="_lmm_accel",
     dev_extra_cflags=("-march=native",),
     reads_sentinel_env=True,
-    supports_diagnose=True,
     module_name="_lmm_accel",
     sys_module_key="jamma.lmm._lmm_accel",
     fallback_label="LMM",
@@ -178,7 +176,6 @@ JLINALG_SPEC = BuildSpec(
     output_stem="_jlinalg",
     dev_extra_cflags=(),
     reads_sentinel_env=False,
-    supports_diagnose=False,
     module_name="_jlinalg",
     sys_module_key="jamma.jlinalg._jlinalg",
     fallback_label="jlinalg",
@@ -220,25 +217,21 @@ def resolve_build_spec(
     *,
     dev_mode: bool,
     env: dict[str, str] | os._Environ[str] | None = None,
-    diagnose_flags: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Return the base ``extra_cflags`` for a build, pre-sanitizer.
 
     Pure and toolchain-independent: it reads only the spec and the environment,
-    so a test can assert on it with zero mocks. ``run_build`` calls it once the
-    compiler is known (to pass ``diagnose_flags``); the sentinel meta-test calls
-    it directly to prove ``-DJAMMA_SENTINEL_UB`` lands when the env var is set.
+    so a test can assert on it with zero mocks.
 
     Wheel path (``dev_mode=False``): honour ``CFLAGS`` and nothing else — never
     ``-march=native`` — so the wheel stays portable. Dev path: the spec's
-    ``dev_extra_cflags`` (``-march=native`` for the accelerator), then any
-    diagnose flags, then the sentinel macro when the env var is set. The order
-    matches the four hand-written call sites this replaces.
+    ``dev_extra_cflags`` (``-march=native`` for the accelerator), then the
+    sentinel macro when the env var is set.
     """
     resolved_env = os.environ if env is None else env
     if not dev_mode:
         return tuple(resolved_env.get("CFLAGS", "").split())
-    extras = [*spec.dev_extra_cflags, *diagnose_flags]
+    extras = list(spec.dev_extra_cflags)
     if spec.reads_sentinel_env and _sentinel_env_on(resolved_env):
         extras.append(_SENTINEL_UB_DEFINE)
     return tuple(extras)

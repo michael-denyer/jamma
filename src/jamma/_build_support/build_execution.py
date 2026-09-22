@@ -41,35 +41,6 @@ class Toolchain:
     omp_compile: tuple[str, ...]
     omp_link: tuple[str, ...]
 
-    def diagnose_flags(self) -> tuple[str, ...]:
-        """Vectorization-report flags for this compiler (clang vs gcc).
-
-        Identifying the compiler is toolchain probing, so it belongs here
-        rather than in the composition root. Called only on the
-        ``diagnose=True`` path, so an ordinary build spends no ``cc
-        --version`` subprocess, and the answer is the same for every
-        ``BuildSpec`` built with this toolchain.
-        """
-        return _diagnose_flags(self.cc_cmd)
-
-
-def _diagnose_flags(cc_cmd: str) -> tuple[str, ...]:
-    """Vectorization-report flags for ``cc_cmd`` (clang ``-Rpass`` vs gcc)."""
-    try:
-        probe = subprocess.run(
-            [cc_cmd, "--version"], capture_output=True, text=True, timeout=5
-        )
-        compiler_id = probe.stdout.lower() if probe.returncode == 0 else ""
-    except (subprocess.TimeoutExpired, OSError):
-        compiler_id = ""
-    if "clang" in compiler_id:
-        return (
-            "-Rpass=loop-vectorize",
-            "-Rpass-missed=loop-vectorize",
-            "-Rpass-analysis=loop-vectorize",
-        )
-    return ("-fopt-info-vec-all",)
-
 
 def detect_toolchain(
     *,

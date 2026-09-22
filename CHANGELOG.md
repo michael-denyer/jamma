@@ -107,6 +107,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/lmm_accel_sections.py` and its test were the section census for
   splitting `_lmm_accel.c`, and that split is done. Git history keeps all
   three.
+- `jamma.lmm._compile_accel.compile_extension` no longer takes `diagnose`,
+  which added clang `-Rpass` or gcc `-fopt-info-vec-all` vectorization
+  reports to the dev rebuild. Nothing in the repository passed it. To see the
+  reports, run with `verbose=True`, copy a printed compile command, and add
+  the flag by hand.
 
 ## [8.1.0] - 2026-09-14
 

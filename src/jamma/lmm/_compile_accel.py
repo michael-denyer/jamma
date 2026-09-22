@@ -41,7 +41,6 @@ from jamma._build_support.load_proof import load_proof as _load_proof_for
 
 def compile_extension(
     verbose: bool = False,
-    diagnose: bool = False,
     on_retry: Callable[[str], None] | None = None,
 ) -> bool:
     """Compile the _lmm_accel sources into a shared library in the package.
@@ -56,9 +55,6 @@ def compile_extension(
     Args:
         verbose: Print per-command compile details. When False (default),
             only errors and a one-line summary are printed.
-        diagnose: Emit compiler vectorization reports (clang ``-Rpass``,
-            gcc ``-fopt-info-vec-all``). Use to verify AVX-512 codegen on
-            target hardware.
         on_retry: Optional callback invoked with a single string argument
             when the build retries without OpenMP.
 
@@ -69,7 +65,6 @@ def compile_extension(
         LMM_ACCEL_SPEC,
         Path(__file__).parents[1],  # the installed jamma/ package directory
         verbose=verbose,
-        diagnose=diagnose,
         on_retry=on_retry,
         out=sys.stdout,
     )

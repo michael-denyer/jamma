@@ -17,6 +17,7 @@ import pytest
 
 from jamma.lmm.association_plan import KinshipShape
 from jamma.lmm.eigen import center_kinship
+from jamma.lmm.genotype_source import SampleBasis
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_kinship import compute_kinship
 from jamma.pipeline_plan import ProvidedKinship, resolve_kinship_source
@@ -39,8 +40,9 @@ def _load_kinship(
         loaded=isinstance(source, ProvidedKinship),
         saved=runner.config.save_kinship,
     )
+    positions = np.arange(n_samples) if valid_indices is None else valid_indices
     return runner._load_kinship_from_source(
-        source, n_samples, kinship, valid_indices, weights
+        source, kinship, SampleBasis(positions, n_samples), weights
     )
 
 

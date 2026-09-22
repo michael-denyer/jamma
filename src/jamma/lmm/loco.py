@@ -43,6 +43,7 @@ from jamma.core.snp_stats import (
 )
 from jamma.core.threading import get_loco_worker_count, get_physical_core_count
 from jamma.io.plink import (
+    PlinkMetadata,
     get_plink_metadata,
     partitions_from_metadata,
 )
@@ -66,7 +67,7 @@ from jamma.lmm.loco_eigen import (
     plan_loco_eigen_driver,
 )
 from jamma.lmm.loco_workers import plan_loco_workers
-from jamma.lmm.prepare_common import EigenPairs
+from jamma.lmm.prepare_common import EigenPairs, compute_valid_mask, with_intercept
 from jamma.lmm.runner_numpy import LOCO_LABELS, LmmRunSpec, run_lmm_association
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
@@ -81,6 +82,7 @@ __all__ = [
     "DEFAULT_LOCO_CONFIG",
     "LocoConfig",
     "run_lmm_loco",
+    "run_lmm_loco_prepared",
 ]
 
 
@@ -219,11 +221,64 @@ def run_lmm_loco(
             eigen_dir are rejected earlier, when LmmConfig and LocoConfig are
             constructed.
     """
+    meta = get_plink_metadata(bed_path)
+    valid_mask = compute_valid_mask(phenotypes, covariates)
+    if not valid_mask.any():
+        raise ValueError("No samples with valid phenotypes")
+    return run_lmm_loco_prepared(
+        bed_path,
+        meta,
+        phenotypes,
+        with_intercept(covariates, valid_mask),
+        valid_mask,
+        config=config,
+        loco=loco,
+        output_path=output_path,
+        execution=execution,
+        eigen_plan=eigen_plan,
+    )
+
+
+def run_lmm_loco_prepared(
+    bed_path: Path,
+    meta: PlinkMetadata,
+    phenotypes: np.ndarray,
+    covariates: np.ndarray | None,
+    valid_mask: np.ndarray,
+    *,
+    config: LmmConfig = DEFAULT_LMM_CONFIG,
+    loco: LocoConfig = DEFAULT_LOCO_CONFIG,
+    output_path: Path | None = None,
+    execution: ExecutableAssociationPlan | None = None,
+    eigen_plan: EigenDriverPlan | None = None,
+) -> LmmRunResult:
+    """Run LOCO association over samples the caller has already resolved.
+
+    ``run_lmm_loco`` without the input parsing: ``meta`` is the already-read
+    PLINK metadata, ``valid_mask`` is the non-empty analysed-sample mask, and
+    ``covariates`` already carries its intercept over that mask. The pipeline
+    enters here with its ``AnalysedSamples`` so the mask and the ``.bim``
+    parse happen once per run.
+
+    Args:
+        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
+        meta: PLINK metadata read from ``bed_path``.
+        phenotypes: Phenotype vector (n_samples_total,) with NaN for missing.
+        covariates: Covariate matrix (n_samples_total, n_cvt) including the
+            intercept, or None for the intercept-only model.
+        valid_mask: Boolean analysed-sample mask of length n_samples_total.
+        config: See ``run_lmm_loco``.
+        loco: See ``run_lmm_loco``.
+        output_path: See ``run_lmm_loco``.
+        execution: See ``run_lmm_loco``.
+        eigen_plan: See ``run_lmm_loco``.
+
+    Returns:
+        See ``run_lmm_loco``.
+    """
     show_progress = config.show_progress
     start_time = time.perf_counter()
 
-    # Get metadata
-    meta = get_plink_metadata(bed_path)
     n_samples_total = meta.n_samples
     n_snps_total = meta.n_snps
 
@@ -248,16 +303,7 @@ def run_lmm_loco(
         logger.info(f"  Total SNPs: {n_snps_total:,}")
         logger.info(f"  Chromosomes: {len(unique_chrs)}")
 
-    # Sample filtering: missing phenotypes, covariate NaNs
-    from jamma.lmm.prepare_common import compute_valid_mask, with_intercept
-
-    valid_mask = compute_valid_mask(phenotypes, covariates)
-    covariates = with_intercept(covariates, valid_mask)
     n_valid = int(np.sum(valid_mask))
-
-    if n_valid == 0:
-        raise ValueError("No samples with valid phenotypes")
-
     phenotypes_valid = phenotypes[valid_mask]
     covariates_valid = covariates[valid_mask, :] if covariates is not None else None
 

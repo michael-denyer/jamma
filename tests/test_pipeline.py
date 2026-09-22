@@ -357,18 +357,18 @@ def test_pipeline_output_path_content_matches_n_tested(
 
 @pytest.mark.tier1
 def test_pipeline_loco_prices_and_threads_one_plan(tmp_path: Path, monkeypatch):
-    """The LOCO branch runs the shared preflight and hands run_lmm_loco its plan."""
+    """The LOCO branch runs the shared preflight and hands the LOCO body its plan."""
     import jamma.pipeline
     from jamma.core import memory
 
     seen: dict = {}
-    real_run_lmm_loco = jamma.pipeline.run_lmm_loco
+    real_run_lmm_loco = jamma.pipeline.run_lmm_loco_prepared
 
     def _spy(*args, **kwargs):
         seen["execution"] = kwargs["execution"]
         return real_run_lmm_loco(*args, **kwargs)
 
-    monkeypatch.setattr(jamma.pipeline, "run_lmm_loco", _spy)
+    monkeypatch.setattr(jamma.pipeline, "run_lmm_loco_prepared", _spy)
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 1000.0)
     quotes: list[str] = []
     handle = logger.add(quotes.append, format="{message}", level="INFO")

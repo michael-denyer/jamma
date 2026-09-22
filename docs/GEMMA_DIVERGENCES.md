@@ -525,7 +525,7 @@ silently produced binary `.npy` artifacts instead of the GEMMA-compatible
 **Fixed.** `run_lmm_loco()` now accepts a `legacy_text` parameter and threads it
 through the kinship save (filename suffix + `write_kinship_matrix`) and the
 per-chromosome eigen write (`EigenGeneration.write_member`); the cache reader
-follows whichever format its manifest names. `PipelineRunner._run_loco` forwards
+follows whichever format its manifest names. `PipelineRunner._associate_loco` forwards
 `config.legacy_text`, so `--loco --legacy-text` now writes GEMMA text artifacts
 on the LOCO path identically to the standard path. As with the non-LOCO path,
 text mode writes the `.txt` files plus `.npy` sidecars for fast reload.

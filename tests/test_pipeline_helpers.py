@@ -6,8 +6,8 @@ Covers the helpers extracted out of ``_run_inner``:
   insufficient)
 - ``pipeline_samples.load_analysed_samples`` (happy, disjoint, shrink-warning,
   unreadable .fam, covariate row count, appended intercept)
-- ``_run_loco`` (delegation contract: LmmRunResult fields map to
-  PipelineResult fields, timing is non-negative, covariates drive n_cvt).
+- ``_associate_loco`` (delegation contract: LmmRunResult fields map to
+  PipelineResult fields, only lmm_s is timed, config and errors pass through).
 """
 
 from __future__ import annotations
@@ -21,12 +21,16 @@ import pytest
 import jamma.pipeline as pipeline_mod
 from jamma.core import memory
 from jamma.lmm.association_plan import plan_association
-from jamma.pipeline import PipelineConfig, PipelineRunner
+from jamma.lmm.genotype_source import SampleBasis
+from jamma.lmm.prepare_common import compute_valid_mask, with_intercept
+from jamma.lmm.schema import LmmRunResult
+from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
 from jamma.pipeline_plan import LocoAnalysisPlan, resolve_analysis_plan
-from jamma.pipeline_samples import load_analysed_samples
+from jamma.pipeline_samples import AnalysedSamples, load_analysed_samples
 from tests.conftest import preflight
 
 if TYPE_CHECKING:
+    from jamma.io.plink import PlinkMetadata
     from jamma.lmm.assoc_output import AssocResult
 
 pytestmark = pytest.mark.tier0
@@ -343,13 +347,12 @@ class TestLoadAnalysedSamples:
         assert np.array_equal(samples.covariates[:, 2], np.ones(4))
 
 
-class TestRunLoco:
-    """Direct tests for the extracted _run_loco helper.
+class TestAssociateLoco:
+    """Direct tests for the LOCO branch of ``PipelineRunner.run``.
 
-    Replaces transitive coverage via test_loco_numpy.py / test_pipeline.py.
-    run() hands _run_loco the loaded phenotype, covariates and valid mask, so
-    the tests pass those directly, stub run_lmm_loco, and assert on the
-    observable PipelineResult returned.
+    run() hands ``_associate_loco`` its ``AnalysedSamples``, so the tests
+    build those directly, stub the LOCO body, and assert on the
+    ``PipelineResult`` the branch's records derive.
     """
 
     def _build_loco_runner(
@@ -361,9 +364,9 @@ class TestRunLoco:
     ) -> PipelineRunner:
         """Construct a runner and stub out the LOCO orchestrator."""
         runner = _make_runner(tmp_path, loco=True)
-        monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
-
-        monkeypatch.setattr(pipeline_mod, "run_lmm_loco", lambda **_kw: loco_result)
+        monkeypatch.setattr(
+            pipeline_mod, "run_lmm_loco_prepared", lambda *_a, **_kw: loco_result
+        )
         return runner
 
     @staticmethod
@@ -372,10 +375,8 @@ class TestRunLoco:
         tmp_path: Path,
         phenotypes: np.ndarray,
         covariates: np.ndarray | None,
-    ):  # type: ignore[no-untyped-def]
-        """Invoke _run_loco the way run() does, with the mask run() would build."""
-        from jamma.lmm.prepare_common import compute_valid_mask
-
+    ) -> PipelineResult:
+        """Run the LOCO branch on the samples run() would build."""
         analysis = resolve_analysis_plan(
             runner.config,
             execution=plan_association(4, 1, requested="numpy"),
@@ -384,31 +385,33 @@ class TestRunLoco:
         )
         assert isinstance(analysis, LocoAnalysisPlan)
         valid_mask = compute_valid_mask(phenotypes, covariates)
-        return runner._run_loco(
-            analysis=analysis,
-            t_start=0.0,
-            phenotypes=phenotypes,
-            covariates=covariates,
+        samples = AnalysedSamples(
+            phenotypes={runner.config.phenotype_columns[0]: phenotypes},
+            covariates=with_intercept(covariates, valid_mask),
             valid_mask=valid_mask,
-            analyzed_sample_indices=np.flatnonzero(valid_mask),
-            assoc_path=tmp_path / "out.assoc.txt",
+            basis=SampleBasis.from_mask(valid_mask),
+        )
+        records, timing = runner._associate_loco(
+            analysis,
+            samples,
+            cast("PlinkMetadata", None),
+            tmp_path / "out.assoc.txt",
+            None,
+        )
+        return PipelineResult(
+            phenotype_results=records,
+            n_samples=samples.basis.analyzed_sample_count,
+            timing=timing,
         )
 
     def test_loco_result_fields_map_to_pipeline_result(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """n_tested, associations, pve, pve_se from the LOCO run reach the result."""
-        from jamma.lmm.schema import LmmRunResult
-
-        # 4 samples, one NaN — valid mask has 3 True.
         phenos = np.array([1.0, 2.0, np.nan, 4.0], dtype=np.float64)
-        covs = np.array(
-            [[1.0], [1.0], [1.0], [1.0]], dtype=np.float64
-        )  # intercept only
+        covs = np.ones((4, 1), dtype=np.float64)
         loco = LmmRunResult(
-            associations=cast(
-                "list[AssocResult]", ["snp1", "snp2", "snp3"]
-            ),  # sentinel strings for ordering
+            associations=cast("list[AssocResult]", ["snp1", "snp2", "snp3"]),
             n_tested=3,
             pve=0.42,
             pve_se=0.05,
@@ -425,75 +428,30 @@ class TestRunLoco:
         assert result.pve_se == 0.05
         assert result.assoc_path == tmp_path / "out.assoc.txt"
         assert result.assoc_paths == [tmp_path / "out.assoc.txt"]
-        # 3 valid samples after NaN filtering (observable n_valid).
         assert result.n_samples == 3
 
-    def test_n_covariates_reflects_loaded_covariates(
+    def test_timing_has_lmm_only(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """n_covariates in the result matches covariates.shape[1].
-
-        Regression guard: the extracted helper must not hard-code n_cvt=1
-        when multi-covariate LOCO runs arrive here.
-        """
-        from jamma.lmm.schema import LmmRunResult
-
-        phenos = np.array([1.0, 2.0, 3.0], dtype=np.float64)
-        # 3 covariate columns.
-        covs = np.ones((3, 3), dtype=np.float64)
-        loco = LmmRunResult(associations=[], n_tested=0, pve=None, pve_se=None)
-        runner = self._build_loco_runner(
-            tmp_path, loco_result=loco, monkeypatch=monkeypatch
-        )
-
-        result = self._call(runner, tmp_path, phenos, covs)
-
-        assert result.n_covariates == 3
-
-    def test_n_covariates_defaults_to_one_without_covariates(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """No covariates -> n_covariates=1 (intercept only)."""
-        from jamma.lmm.schema import LmmRunResult
-
+        """LOCO owns its kinship and load, so only lmm_s is timed here."""
         phenos = np.array([1.0, 2.0], dtype=np.float64)
-        loco = LmmRunResult(associations=[], n_tested=0, pve=None, pve_se=None)
+        loco = LmmRunResult(associations=[], n_tested=0)
         runner = self._build_loco_runner(
             tmp_path, loco_result=loco, monkeypatch=monkeypatch
         )
 
         result = self._call(runner, tmp_path, phenos, None)
 
-        assert result.n_covariates == 1
-
-    def test_timing_has_lmm_and_total_nonnegative(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Timing dict is populated with lmm_s and total_s; kinship_s/load_s
-        are zero (LOCO owns its own kinship/load; the pipeline does not).
-        """
-        from jamma.lmm.schema import LmmRunResult
-
-        phenos = np.array([1.0, 2.0], dtype=np.float64)
-        covs = np.ones((2, 1), dtype=np.float64)
-        loco = LmmRunResult(associations=[], n_tested=0)
-        runner = self._build_loco_runner(
-            tmp_path, loco_result=loco, monkeypatch=monkeypatch
-        )
-
-        result = self._call(runner, tmp_path, phenos, covs)
-
         assert result.timing.kinship_s == 0.0
         assert result.timing.load_s == 0.0
         assert result.timing.lmm_s >= 0.0
-        assert result.timing.total_s >= 0.0
 
     def test_lmm_config_handed_to_runner_is_the_shared_projection(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_run_loco must build its LmmConfig via PipelineConfig.lmm_config().
+        """The LOCO branch must build its LmmConfig via PipelineConfig.lmm_config().
 
-        Regression guard for config drift. _run_loco once wrote the nine
+        Regression guard for config drift. The branch once wrote the nine
         LmmConfig fields out by hand, because LOCO needs check_memory passed
         through where the batch and streaming paths force it off.
 
@@ -501,12 +459,10 @@ class TestRunLoco:
         LmmConfig field that a re-inlined literal forgot to set would take its
         default and break equality here.
         """
-        from jamma.lmm.schema import LmmRunResult
-
         captured: dict[str, object] = {}
         phenos = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
-        def _capturing_loco(**kwargs):  # type: ignore[no-untyped-def]
+        def _capturing_loco(*_args, **kwargs):  # type: ignore[no-untyped-def]
             captured.update(kwargs)
             return LmmRunResult(associations=[], n_tested=0)
 
@@ -524,9 +480,7 @@ class TestRunLoco:
             n_refine=23,
             loco=True,
         )
-        monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
-
-        monkeypatch.setattr(pipeline_mod, "run_lmm_loco", _capturing_loco)
+        monkeypatch.setattr(pipeline_mod, "run_lmm_loco_prepared", _capturing_loco)
 
         self._call(runner, tmp_path, phenos, None)
 
@@ -536,15 +490,14 @@ class TestRunLoco:
     def test_propagates_loco_runner_exception(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """If run_lmm_loco raises, _run_loco must propagate — no swallowing."""
+        """If the LOCO body raises, the branch must propagate it."""
         phenos = np.array([1.0, 2.0], dtype=np.float64)
         runner = _make_runner(tmp_path, loco=True)
-        monkeypatch.setattr(runner, "_emit_telemetry", lambda *a, **k: None)
 
-        def _raising_loco(**_kw):
+        def _raising_loco(*_args, **_kw):
             raise RuntimeError("sentinel: LOCO failed")
 
-        monkeypatch.setattr(pipeline_mod, "run_lmm_loco", _raising_loco)
+        monkeypatch.setattr(pipeline_mod, "run_lmm_loco_prepared", _raising_loco)
 
         with pytest.raises(RuntimeError, match="sentinel: LOCO failed"):
             self._call(runner, tmp_path, phenos, None)

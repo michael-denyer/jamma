@@ -304,42 +304,60 @@ class PhenotypeResult:
 class PipelineResult:
     """Result of a pipeline run.
 
+    Every per-phenotype aggregate is derived from ``phenotype_results``, so a
+    new per-phenotype field needs adding in one place.
+
     Attributes:
-        associations: Per-SNP association results. Empty when results are
-            written to disk via output_path.
+        phenotype_results: One result record per phenotype, in column order,
+            including its output, count, PVE estimate, and chunk timing.
         n_samples: Number of samples after phenotype and covariate filtering.
-        n_snps_tested: Number of SNPs tested after MAF/missingness/HWE/SNP-list
-            filtering.
-        assoc_path: Path to the written association results file. For multi-phenotype
-            runs, this is the last phenotype's output file. Use assoc_paths for
-            the full list.
-        assoc_paths: List of all per-phenotype association result paths. For
-            single-phenotype runs, this is a single-element list matching assoc_path.
-        phenotype_results: One result record per phenotype, including its output,
-            count, PVE estimate, and chunk timing.
         timing: Timing breakdown by pipeline phase (seconds).
         n_covariates: Number of covariate columns (1 = intercept-only).
-        pve_estimate: PVE from the single phenotype's null model REML. None for
-            multi-phenotype runs; use phenotype_results for those estimates.
-        pve_se: Standard error of PVE from REML second derivative delta method.
-            None if not computed or likelihood surface is flat.
         analyzed_sample_indices: Zero-based input sample indices retained after
             phenotype and covariate filtering, in analysis order.
     """
 
-    associations: list[AssocResult]
+    phenotype_results: list[PhenotypeResult]
     n_samples: int
-    n_snps_tested: int
-    assoc_path: Path
-    assoc_paths: list[Path] = field(default_factory=list)
     timing: PipelineTiming = field(default_factory=PipelineTiming)
     n_covariates: int = 1
-    pve_estimate: float | None = None
-    pve_se: float | None = None
-    phenotype_results: list[PhenotypeResult] = field(default_factory=list)
     analyzed_sample_indices: np.ndarray = field(
         default_factory=lambda: np.array([], dtype=np.intp)
     )
+
+    @property
+    def associations(self) -> list[AssocResult]:
+        """Per-SNP results of every phenotype. Empty when written to disk."""
+        return [a for p in self.phenotype_results for a in p.associations]
+
+    @property
+    def n_snps_tested(self) -> int:
+        """SNPs tested after MAF, missingness, HWE and SNP-list filtering."""
+        return sum(p.n_snps_tested for p in self.phenotype_results)
+
+    @property
+    def assoc_path(self) -> Path:
+        """The last phenotype's output file; ``assoc_paths`` lists them all."""
+        return self.phenotype_results[-1].assoc_path
+
+    @property
+    def assoc_paths(self) -> list[Path]:
+        """Every phenotype's output file, in column order."""
+        return [p.assoc_path for p in self.phenotype_results]
+
+    @property
+    def pve_estimate(self) -> float | None:
+        """The single phenotype's REML PVE, or None for multi-phenotype runs."""
+        return self._single.pve_estimate if self._single is not None else None
+
+    @property
+    def pve_se(self) -> float | None:
+        """Standard error of ``pve_estimate``, or None when it has none."""
+        return self._single.pve_se if self._single is not None else None
+
+    @property
+    def _single(self) -> PhenotypeResult | None:
+        return self.phenotype_results[0] if len(self.phenotype_results) == 1 else None
 
 
 @dataclass

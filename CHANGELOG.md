@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The build prints each OpenMP retry notice once. `execute_build` reported a
+  failed OpenMP compile or link through both `on_retry` and `verbose_print`,
+  so the wheel build and `python -m jamma.lmm._compile_accel`, which point
+  both at stderr, logged the same line twice. The notice now goes to
+  `on_retry`, or to `error_print` when no callback is given, so a caller that
+  silences `verbose_print` still sees the single-threaded downgrade.
 - `scripts/demonstrate_equivalence.py` judges mouse_hs1940 at
   `tests.fixture_paths.NUMPY_GEMMA_TOLERANCES`, the tolerances the parity
   suite enforces, and reads every fixture path from the same module. #321

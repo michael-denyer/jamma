@@ -412,6 +412,7 @@ def execute_build(
     # with verbose=False) should pass an always-visible printer here.
     if error_print is None:
         error_print = verbose_print
+    notify_retry = error_print if on_retry is None else on_retry
 
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -448,9 +449,7 @@ def execute_build(
             f"(single-threaded). first-attempt stderr: "
             f"{compile_attempt.stderr or '<empty>'}"
         )
-        if on_retry is not None:
-            on_retry(msg)
-        verbose_print(msg + "...")
+        notify_retry(msg)
         compile_attempt = _compile_sources(
             compile_request,
             omp_compile=[],
@@ -498,9 +497,7 @@ def execute_build(
             "link failed, retrying without OpenMP runtime. "
             f"first-attempt stderr: {first_stderr or '<empty>'}"
         )
-        if on_retry is not None:
-            on_retry(msg)
-        verbose_print(msg + "...")
+        notify_retry(msg)
         link_attempt = _link_objects(
             cc_cmd=cc_cmd,
             cc_extra=cc_extra,

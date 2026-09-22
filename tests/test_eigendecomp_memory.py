@@ -515,3 +515,49 @@ class TestEigendecomposeKinshipLogsBlasThreadsThatApplied:
 
         line = self._eigendecomp_line()
         assert line.endswith(", threads=7"), line
+
+
+@pytest.mark.tier0
+class TestEigendecomposeKinshipMemoryLineNamesTheDriver:
+    """The 'Eigendecomp memory' line names the planned driver and its real cause.
+
+    With no vendor DSYEVD or DSYEVR and ``JLINALG_NO_VENDOR_LAPACK`` unset, the
+    plan is ``numpy`` because nothing else exists. The line used to fall through
+    to the DSYEVD wording and blame the environment variable that was not set.
+    """
+
+    @staticmethod
+    def _memory_line(monkeypatch, *, has_dsyevd: bool, has_dsyevr: bool) -> str:
+        from loguru import logger
+
+        import jamma.jlinalg as jlinalg
+
+        monkeypatch.setattr(jlinalg, "blas_has_dsyevd", has_dsyevd)
+        monkeypatch.setattr(jlinalg, "blas_has_dsyevr", has_dsyevr)
+        monkeypatch.delenv("JLINALG_NO_VENDOR_LAPACK", raising=False)
+        use_fake_psutil(monkeypatch, available=64e9, total=64e9, rss=1e9, vms=2e9)
+
+        rng = np.random.default_rng(11)
+        A = rng.standard_normal((32, 32))
+        K = np.ascontiguousarray(A @ A.T + np.eye(32), dtype=np.float64)
+
+        captured: list[str] = []
+        handler_id = logger.add(captured.append, level="INFO", format="{message}")
+        try:
+            eigendecompose_kinship(K, check_memory=False)
+        finally:
+            logger.remove(handler_id)
+        lines = [m for m in captured if m.startswith("Eigendecomp memory (")]
+        assert len(lines) == 1, captured
+        return lines[0].rstrip("\n")
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="describe() falls through to the DSYEVD wording and blames "
+        "JLINALG_NO_VENDOR_LAPACK when no vendor driver exists",
+    )
+    def test_no_vendor_with_env_unset_names_numpy_and_absent_vendor(self, monkeypatch):
+        line = self._memory_line(monkeypatch, has_dsyevd=False, has_dsyevr=False)
+        assert line.startswith("Eigendecomp memory (numpy): "), line
+        assert "JLINALG_NO_VENDOR_LAPACK" not in line, line
+        assert "no vendor DSYEVD or DSYEVR" in line, line

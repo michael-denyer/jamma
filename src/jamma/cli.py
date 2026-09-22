@@ -8,9 +8,10 @@ mode selection, and output configuration.
 import sys
 import time
 from pathlib import Path
-from typing import Literal, NoReturn
+from typing import Any, Literal, NoReturn
 
 import click
+from click.core import ParameterSource
 from loguru import logger
 
 import jamma
@@ -18,6 +19,21 @@ from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_kinship import compute_kinship
 from jamma.utils import setup_logging, write_gemma_log
+
+# Click parameter name -> PipelineConfig field, for every option whose field
+# compute_kinship, load_analysed_samples and write_gemma_log never read.
+_LMM_ONLY_OPTIONS: dict[str, str] = {
+    "k": "kinship_file",
+    "d": "eigenvalue_file",
+    "u": "eigenvector_file",
+    "eigen_dir": "eigen_dir",
+    "hwe": "hwe_threshold",
+    "lmin": "l_min",
+    "lmax": "l_max",
+    "snps": "snps_file",
+    "widv": "weight_file",
+    "backend": "backend",
+}
 
 
 def _cli_error(message: str) -> NoReturn:
@@ -253,36 +269,53 @@ def main(
     phenotype_columns = _int_list(n, "-n")
     cat_columns = _int_list(cat, "-cat") if cat is not None else None
 
+    config_kwargs: dict[str, Any] = {
+        "bfile": bfile,
+        "kinship_file": k,
+        "covariate_file": c,
+        "lmm_mode": 1 if lmm is None else lmm,
+        "maf": maf,
+        "miss": miss,
+        "output_dir": outdir,
+        "output_prefix": o,
+        "check_memory": check_memory,
+        "show_progress": True,
+        "mem_budget": mem_budget,
+        "loco": loco,
+        "eigenvalue_file": d,
+        "eigenvector_file": u,
+        "write_eigen": eigen,
+        "eigen_dir": eigen_dir,
+        "phenotype_columns": phenotype_columns,
+        "snps_file": snps,
+        "ksnps_file": ksnps,
+        "hwe_threshold": hwe,
+        "l_min": lmin,
+        "l_max": lmax,
+        "weight_file": widv,
+        "cat_columns": cat_columns,
+        "backend": backend,
+        "legacy_text": legacy_text,
+        "no_telemetry": no_telemetry,
+    }
+    if gk is not None:
+        ctx = click.get_current_context()
+        by_name = {param.name: param for param in ctx.command.params}
+        ignored = [
+            by_name[name].opts[0]
+            for name in _LMM_ONLY_OPTIONS
+            if ctx.get_parameter_source(name) is ParameterSource.COMMANDLINE
+        ]
+        if ignored:
+            logger.warning(
+                "-gk ignores -lmm-only options set on the command line: "
+                + ", ".join(ignored)
+            )
+        for field in _LMM_ONLY_OPTIONS.values():
+            del config_kwargs[field]
+
     try:
-        pipeline_config = PipelineConfig(
-            bfile=bfile,
-            kinship_file=k,
-            covariate_file=c,
-            lmm_mode=1 if lmm is None else lmm,
-            maf=maf,
-            miss=miss,
-            output_dir=outdir,
-            output_prefix=o,
-            check_memory=check_memory,
-            show_progress=True,
-            mem_budget=mem_budget,
-            loco=loco,
-            eigenvalue_file=d,
-            eigenvector_file=u,
-            write_eigen=eigen,
-            eigen_dir=eigen_dir,
-            phenotype_columns=phenotype_columns,
-            snps_file=snps,
-            ksnps_file=ksnps,
-            hwe_threshold=hwe,
-            l_min=lmin,
-            l_max=lmax,
-            weight_file=widv,
-            cat_columns=cat_columns,
-            backend=backend,
-            legacy_text=legacy_text,
-            no_telemetry=no_telemetry,
-        )
+        pipeline_config = PipelineConfig(**config_kwargs)
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 

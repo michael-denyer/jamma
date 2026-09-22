@@ -63,6 +63,13 @@ The C extension still uses every physical core for its OpenMP threads.
 JAMMA's CLI is Click-based and mirrors GEMMA's flat flag interface. One of `-gk`
 or `-lmm` is required.
 
+`-gk` reads only the options its kinship computation uses. It accepts the
+`-lmm`-only options (`-k`, `-d`, `-u`, `--eigen-dir`, `-hwe`, `-lmin`, `-lmax`,
+`-snps`, `-widv`, `--backend`) the way GEMMA does: it neither validates their
+values nor opens the files they name, and it logs one warning naming each one
+given on the command line. `--no-telemetry` is not warned about, because `-gk`
+never emits telemetry.
+
 ### Input and mode selection
 
 | Flag | Type | Default | Description |

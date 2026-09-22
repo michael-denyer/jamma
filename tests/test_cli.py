@@ -7,7 +7,7 @@ from click.testing import CliRunner
 
 from jamma.cli import main
 from tests.fakes import FakePipelineRunnerFactory
-from tests.fixture_paths import SYNTHETIC
+from tests.fixture_paths import LOCO, SYNTHETIC
 
 runner = CliRunner()
 
@@ -242,6 +242,142 @@ def test_gk2_with_loco_reports_cli_error(tmp_path: Path):
     )
     assert result.exit_code == 1
     assert "-gk 2 (standardized) is not supported with -loco" in result.output
+
+
+_GK_IGNORES = "-gk ignores -lmm-only options set on the command line: "
+
+
+def test_gk_ignores_lmin_instead_of_validating_it(tmp_path: Path) -> None:
+    result = runner.invoke(
+        main,
+        [
+            "-gk",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-lmin",
+            "-1",
+            "-outdir",
+            str(tmp_path),
+            "--no-check-memory",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert f"{_GK_IGNORES}-lmin" in result.output
+    assert (tmp_path / "result.cXX.npy").exists()
+
+
+def test_gk_loco_ignores_hwe_instead_of_applying_the_lmm_rule(tmp_path: Path) -> None:
+    result = runner.invoke(
+        main,
+        [
+            "-gk",
+            "1",
+            "-bfile",
+            str(LOCO.bfile),
+            "-loco",
+            "-hwe",
+            "0.01",
+            "-outdir",
+            str(tmp_path),
+            "--no-check-memory",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert f"{_GK_IGNORES}-hwe" in result.output
+    assert "Wrote 3 LOCO kinship matrices" in result.output
+
+
+def test_gk_warns_once_naming_every_lmm_only_option_set(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    result = runner.invoke(
+        main,
+        [
+            "-gk",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-outdir",
+            str(tmp_path),
+            "--no-check-memory",
+            "-k",
+            str(missing / "k.cXX.txt"),
+            "-d",
+            str(missing / "d.eigenD.txt"),
+            "-u",
+            str(missing / "u.eigenU.txt"),
+            "--eigen-dir",
+            str(missing),
+            "-hwe",
+            "0.01",
+            "-lmin",
+            "1e-4",
+            "-lmax",
+            "1e4",
+            "-snps",
+            str(missing / "snps.txt"),
+            "-widv",
+            str(missing / "w.txt"),
+            "--backend",
+            "numpy-streaming",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert result.output.count("-gk ignores") == 1
+    named = ", ".join(
+        [
+            "-k",
+            "-d",
+            "-u",
+            "--eigen-dir",
+            "-hwe",
+            "-lmin",
+            "-lmax",
+            "-snps",
+            "-widv",
+            "--backend",
+        ]
+    )
+    assert _GK_IGNORES + named in result.output
+    assert (tmp_path / "result.cXX.npy").exists()
+
+
+def test_gk_does_not_warn_about_options_it_reads(tmp_path: Path) -> None:
+    ksnps = tmp_path / "ksnps.txt"
+    ksnps.write_text("\n".join(f"rs{i:04d}" for i in range(100)) + "\n")
+    result = runner.invoke(
+        main,
+        [
+            "-gk",
+            "1",
+            "-bfile",
+            str(EXAMPLE_BFILE),
+            "-c",
+            str(SYNTHETIC.covariates),
+            "-o",
+            "kin",
+            "-outdir",
+            str(tmp_path),
+            "-maf",
+            "0.05",
+            "-miss",
+            "0.1",
+            "-n",
+            "1",
+            "-ksnps",
+            str(ksnps),
+            "-eigen",
+            "--mem-budget",
+            "1",
+            "--legacy-text",
+            "--no-check-memory",
+            "--no-telemetry",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "-gk ignores" not in result.output
+    assert (tmp_path / "kin.cXX.txt").exists()
+    assert "Eigenvalues written to" in result.output
 
 
 def test_cli_help_shows_widv():

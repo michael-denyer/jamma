@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `scripts/demonstrate_equivalence.py` judges mouse_hs1940 at
+  `tests.fixture_paths.NUMPY_GEMMA_TOLERANCES`, the tolerances the parity
+  suite enforces, and reads every fixture path from the same module. #321
+  tightened the suite to `lambda_rtol=5e-5, pvalue_rtol=2e-4, se_rtol=1e-5,
+  logl_rtol=1e-6, atol=1e-12` while the report kept its own copy of the
+  earlier `1e-3, 1e-2, 5e-4, 5e-3, 1e-4`, so it certified equivalence at a
+  p-value tolerance 50x wider than the suite's. The report now has no
+  tolerance or path of its own to drift.
 - `run_lmm_association_numpy`, `run_lmm_association_numpy_streaming` and
   `run_lmm_loco` reject a phenotype vector containing `inf` with
   `ValueError("prepared phenotypes must contain only finite values")`, the

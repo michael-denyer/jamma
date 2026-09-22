@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tests.fixture_paths import NUMPY_GEMMA_TOLERANCES
+
 pytestmark = pytest.mark.tier1
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,18 +94,6 @@ def test_rank_correlation_matches_scipy_spearman_without_importing_scipy():
 
 
 @pytest.mark.tier0
-@pytest.mark.xfail(
-    strict=True,
-    reason="script hard-codes the pre-#321 mouse tolerances instead of the suite's",
-)
 def test_mouse_report_uses_the_suites_tolerances():
-    """The report certifies mouse parity at the tolerances the tier1 suite enforces.
-
-    The docstring promises the report and the suite cannot disagree. #321
-    tightened ``NUMPY_GEMMA_TOLERANCES`` and left the script on the old numbers,
-    so the report accepted a p-value error 50x larger than the suite did.
-    """
-    from tests.fixture_paths import NUMPY_GEMMA_TOLERANCES
-
     script = _load_script()
     assert script.MOUSE_HS1940.tolerances == NUMPY_GEMMA_TOLERANCES

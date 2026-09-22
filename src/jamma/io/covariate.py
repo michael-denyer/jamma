@@ -111,9 +111,6 @@ def encode_categorical_covariates(
     k-1 levels produce one dummy column each (0/1). Rows with NaN in the
     original categorical column get NaN in all resulting dummy columns.
 
-    After encoding, any zero-variance dummy columns are warned about and removed
-    (they would cause rank-deficient W).
-
     Args:
         covariates: (n_samples, n_cvt) float64 array from read_covariate_file.
         cat_columns: 1-indexed column indices to treat as categorical
@@ -145,14 +142,12 @@ def encode_categorical_covariates(
     # categorical), its k-1 dummy columns, a NaN marker column, or nothing
     # (constant categorical with no missing rows).
     blocks: list[np.ndarray] = []
-    is_dummy: list[bool] = []
 
     for col_idx in range(n_cvt):
         col_values = covariates[:, col_idx]
 
         if col_idx not in zero_indexed_cat_columns:
             blocks.append(col_values.reshape(n_samples, 1))
-            is_dummy.append(False)
             continue
 
         # Get sorted unique non-NaN values
@@ -179,7 +174,6 @@ def encode_categorical_covariates(
                 marker = np.zeros((n_samples, 1), dtype=np.float64)
                 marker[nan_mask_col, 0] = np.nan
                 blocks.append(marker)
-                is_dummy.append(False)
                 logger.warning(
                     f"Categorical column {col_idx + 1} has only 1 non-NaN level; "
                     f"kept as NaN marker column to preserve {int(nan_mask_col.sum())} "
@@ -198,27 +192,5 @@ def encode_categorical_covariates(
             dummies[nan_mask, i] = np.nan
 
         blocks.append(dummies)
-        is_dummy.extend([True] * n_dummies)
 
-    result = np.hstack(blocks) if blocks else np.empty((n_samples, 0), dtype=np.float64)
-
-    # Check for zero-variance among ONLY the newly created dummy columns
-    dummy_col_indices = [i for i, d in enumerate(is_dummy) if d]
-    if dummy_col_indices:
-        col_vars = np.nanvar(result[:, dummy_col_indices], axis=0)
-        zero_var_positions = [
-            dummy_col_indices[i] for i, v in enumerate(col_vars) if v == 0.0
-        ]
-        n_zero_var = len(zero_var_positions)
-
-        if n_zero_var > 0:
-            logger.warning(
-                f"Dropped {n_zero_var} zero-variance dummy column"
-                f"{'s' if n_zero_var > 1 else ''} from categorical encoding"
-            )
-            keep_mask = np.ones(result.shape[1], dtype=bool)
-            for idx in zero_var_positions:
-                keep_mask[idx] = False
-            result = result[:, keep_mask]
-
-    return result
+    return np.hstack(blocks) if blocks else np.empty((n_samples, 0), dtype=np.float64)

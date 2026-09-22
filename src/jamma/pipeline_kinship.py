@@ -137,6 +137,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
         ksnps_indices=ksnps_indices,
         filter_sample_indices=filter_samples,
         mode="centered" if mode == 1 else "standardized",
+        mem_budget=config.mem_budget,
     )
 
     kinship_s = time.perf_counter() - t_kinship
@@ -149,7 +150,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
     eigen_paths: tuple[Path, Path] | None = None
     if config.write_eigen:
         eigenvalues, eigenvectors = eigendecompose_kinship(
-            K, check_memory=config.check_memory
+            K, check_memory=config.check_memory, mem_budget=config.mem_budget
         )
         del K  # K may be overwritten by eigendecomp; prevent accidental reuse
         d_path, u_path = write_eigen_files(

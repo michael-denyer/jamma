@@ -1,14 +1,25 @@
 """Pipeline budgets include phases before association starts."""
 
+import shutil
+from pathlib import Path
+
 import pytest
 
 from jamma.core import memory
 from jamma.lmm.association_plan import plan_association
 from jamma.pipeline_config import PipelineConfig
 from tests.conftest import preflight
-from tests.fixture_paths import SYNTHETIC
+from tests.fixture_paths import SYNTHETIC, FixtureDataset
 
 pytestmark = pytest.mark.tier0
+
+
+def _header_only_bed(tmp_path: Path, dataset: FixtureDataset) -> Path:
+    bfile = tmp_path / "header_only"
+    for suffix in (".bim", ".fam"):
+        shutil.copy(dataset.bfile.with_suffix(suffix), bfile.with_suffix(suffix))
+    bfile.with_suffix(".bed").write_bytes(b"\x6c\x1b\x01")
+    return bfile
 
 
 def test_batch_preflight_rejects_unaffordable_eigen_phase(monkeypatch):
@@ -93,17 +104,12 @@ def test_impossible_loco_budget_fails_before_genotype_statistics(tmp_path):
     An impossible budget therefore has to surface as MemoryError, and the
     same call without a budget surfaces the truncated read.
     """
-    import shutil
-
     from jamma.kinship import compute_loco_kinship_streaming
     from tests.conftest import require_fixture
     from tests.fixture_paths import LOCO
 
     require_fixture(LOCO.bfile.with_suffix(".bed"), LOCO.bfile.with_suffix(".fam"))
-    bfile = tmp_path / "loco"
-    for suffix in (".bim", ".fam"):
-        shutil.copy(LOCO.bfile.with_suffix(suffix), bfile.with_suffix(suffix))
-    bfile.with_suffix(".bed").write_bytes(b"\x6c\x1b\x01")
+    bfile = _header_only_bed(tmp_path, LOCO)
 
     with pytest.raises(MemoryError, match="exceeds budget"):
         compute_loco_kinship_streaming(
@@ -143,38 +149,19 @@ def test_loco_rechecks_capacity_after_genotype_statistics(monkeypatch):
         next(iter(stream))
 
 
-@pytest.mark.xfail(
-    strict=True, reason="compute_kinship_streaming has no mem_budget gate"
-)
 def test_impossible_kinship_budget_fails_before_genotype_read(tmp_path):
-    """The standalone kinship gate honours ``mem_budget`` as the LOCO gate does.
-
-    A header-only .bed makes the two orderings raise different exceptions:
-    an impossible budget must surface as MemoryError before the first genotype
-    read, and the same call without a budget surfaces the truncated read.
-    """
-    import shutil
-
     from jamma.kinship import compute_kinship_streaming
     from tests.conftest import require_fixture
 
     require_fixture(SYNTHETIC.bim, SYNTHETIC.fam)
-    bfile = tmp_path / "synthetic"
-    for suffix in (".bim", ".fam"):
-        shutil.copy(SYNTHETIC.bfile.with_suffix(suffix), bfile.with_suffix(suffix))
-    bfile.with_suffix(".bed").write_bytes(b"\x6c\x1b\x01")
+    bfile = _header_only_bed(tmp_path, SYNTHETIC)
 
     with pytest.raises(MemoryError, match="exceeds budget"):
-        compute_kinship_streaming(
-            bfile,
-            mem_budget=1e-8,  # type: ignore[unexpected-keyword]
-            show_progress=False,
-        )
+        compute_kinship_streaming(bfile, mem_budget=1e-8, show_progress=False)
     with pytest.raises(ValueError, match="Ill-formed BED file"):
         compute_kinship_streaming(bfile, show_progress=False)
 
 
-@pytest.mark.xfail(strict=True, reason="-gk drops mem_budget before kinship")
 def test_gk_budget_gates_kinship_accumulation(tmp_path):
     from jamma.pipeline_kinship import compute_kinship
     from tests.conftest import require_fixture
@@ -191,26 +178,31 @@ def test_gk_budget_gates_kinship_accumulation(tmp_path):
     assert not (tmp_path / "result.cXX.npy").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="-gk -eigen drops mem_budget before eigen")
 def test_gk_eigen_budget_gates_eigendecomposition(tmp_path):
-    """Ten SNPs keep the kinship phase under a budget every eigen driver exceeds."""
     import numpy as np
     from bed_reader import to_bed
 
+    from jamma.core.eigen_plan import dsyevr_peak_gb
     from jamma.core.memory import estimate_kinship_memory
     from jamma.pipeline_kinship import compute_kinship
 
-    values = np.random.default_rng(1).integers(0, 3, (500, 10)).astype(float)
+    n_samples, n_snps = 500, 10
+    values = np.random.default_rng(1).integers(0, 3, (n_samples, n_snps))
     bfile = tmp_path / "small"
-    to_bed(bfile.with_suffix(".bed"), values)
+    to_bed(bfile.with_suffix(".bed"), values.astype(float))
     kinship_gb = estimate_kinship_memory(
-        n_input_samples=500, n_output_samples=500, n_snps=10, chunk_size=10_000
+        n_input_samples=n_samples,
+        n_output_samples=n_samples,
+        n_snps=n_snps,
+        chunk_size=10_000,
     )
+    budget_gb = 1.2 * kinship_gb
+    assert kinship_gb < budget_gb < dsyevr_peak_gb(n_samples)
     config = PipelineConfig(
         bfile=bfile,
         output_dir=tmp_path,
         write_eigen=True,
-        mem_budget=1.2 * kinship_gb,
+        mem_budget=budget_gb,
         show_progress=False,
     )
     with pytest.raises(MemoryError, match=r"eigendecomposition.*exceeds budget"):

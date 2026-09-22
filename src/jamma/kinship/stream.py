@@ -50,7 +50,12 @@ _TRANSFORMS: dict[KinshipMode, Callable[[np.ndarray], np.ndarray]] = {
 
 
 def _preflight_kinship_memory(
-    *, n_input_samples: int, n_output_samples: int, n_snps: int, chunk_size: int
+    *,
+    n_input_samples: int,
+    n_output_samples: int,
+    n_snps: int,
+    chunk_size: int,
+    mem_budget: float | None,
 ) -> None:
     """Gate a kinship computation on the memory that phase actually needs.
 
@@ -65,9 +70,11 @@ def _preflight_kinship_memory(
         n_output_samples: Number of samples in the kinship matrix.
         n_snps: Number of SNPs in the BED file.
         chunk_size: SNPs per genotype chunk held during accumulation.
+        mem_budget: User-set ceiling in GB, or None for no ceiling.
 
     Raises:
-        MemoryError: If the kinship phase will not fit in available memory.
+        MemoryError: If the kinship phase will not fit in available memory,
+            or exceeds ``mem_budget``.
     """
     kinship_gb = estimate_kinship_memory(
         n_input_samples=n_input_samples,
@@ -79,6 +86,7 @@ def _preflight_kinship_memory(
         kinship_gb,
         memory.available_ram_gb(),
         f"kinship accumulation (peak: {kinship_gb:.1f}GB)",
+        budget_gb=mem_budget,
     )
 
 
@@ -215,6 +223,7 @@ def compute_kinship_streaming(
     mode: KinshipMode = "centered",
     *,
     filter_sample_indices: np.ndarray | None = None,
+    mem_budget: float | None = None,
 ) -> np.ndarray:
     """Compute kinship matrix from disk-streamed genotypes (GEMMA -gk 1 or -gk 2).
 
@@ -252,13 +261,15 @@ def compute_kinship_streaming(
         filter_sample_indices: Samples used for MAF, missingness, and monomorphism
             filtering. Independent of output rows; the LMM pipeline supplies its
             analysed samples even when saving a full matrix, matching GEMMA.
+        mem_budget: User-set ceiling in GB, or None for no ceiling.
 
     Returns:
         Kinship matrix (n_out, n_out) where n_out = len(valid_indices) or n_samples.
         Symmetric, scaled by n_filtered_snps.
 
     Raises:
-        MemoryError: If check_memory=True and insufficient memory available.
+        MemoryError: If check_memory=True and the kinship phase does not fit
+            available memory, or exceeds ``mem_budget``.
         FileNotFoundError: If the PLINK .bed file does not exist.
         ValueError: If no SNPs pass filtering, or mode is not recognized.
 
@@ -310,6 +321,7 @@ def compute_kinship_streaming(
             n_output_samples=n_out,
             n_snps=n_snps,
             chunk_size=chunk_size,
+            mem_budget=mem_budget,
         )
 
     K = _stream_kinship(

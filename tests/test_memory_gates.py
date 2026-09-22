@@ -296,6 +296,7 @@ class TestKinshipOnlyPreflight:
                 n_output_samples=50_000,
                 n_snps=10_000,
                 chunk_size=10_000,
+                mem_budget=None,
             )
 
     def test_kinship_only_run_still_blocked_when_kinship_does_not_fit(self):
@@ -309,6 +310,7 @@ class TestKinshipOnlyPreflight:
                     n_output_samples=50_000,
                     n_snps=10_000,
                     chunk_size=10_000,
+                    mem_budget=None,
                 )
 
 

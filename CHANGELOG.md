@@ -94,6 +94,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrapper's separate `af_orientation` check is gone because the oracle now
   enforces the same bound; its failure ids read `<rs>:af`.
 
+### Removed
+
+- Three one-shot developer scripts whose job is done, none of which a
+  workflow, hook, test or doc invokes. `scripts/codemod_test_builders.py`
+  migrated tests onto `rotated_lmm_inputs` in #266 and now finds nothing to
+  rewrite. `scripts/verify_loco_thread_limits.py` checked LOCO BLAS scope
+  ownership for #361 and #362 through a private function.
+  `tests/test_loco_worker_resources.py` covers the same completion, early
+  close and input-failure exits, plus a solve failure, with a fake BLAS
+  controller.
+  `scripts/lmm_accel_sections.py` and its test were the section census for
+  splitting `_lmm_accel.c`, and that split is done. Git history keeps all
+  three.
+
 ## [8.1.0] - 2026-09-14
 
 ### Removed

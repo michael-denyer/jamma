@@ -163,20 +163,18 @@ class TestPipelineConfigWeightFile:
             runner.validate_inputs()
 
     def test_weight_file_with_loco_raises(self) -> None:
-        """validate_inputs raises ValueError for -widv with -loco."""
+        """PipelineConfig rejects -widv with -loco."""
         weight_path = SYNTHETIC.fam  # Use any existing file
-        config = PipelineConfig(
-            bfile=BFILE,
-            weight_file=weight_path,
-            loco=True,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="not yet supported with -loco"):
-            runner.validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                weight_file=weight_path,
+                loco=True,
+                check_memory=False,
+            )
 
     def test_weight_file_with_eigen_raises(self, tmp_path: Path) -> None:
-        """validate_inputs raises ValueError for -widv with -d/-u."""
+        """PipelineConfig rejects -widv with -d/-u."""
         weight_path = SYNTHETIC.fam  # Use any existing file
         # Create dummy eigen files
         d_file = tmp_path / "test.eigenD.txt"
@@ -184,16 +182,14 @@ class TestPipelineConfigWeightFile:
         d_file.write_text("1.0\n")
         u_file.write_text("1.0\n")
 
-        config = PipelineConfig(
-            bfile=BFILE,
-            weight_file=weight_path,
-            eigenvalue_file=d_file,
-            eigenvector_file=u_file,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="cannot be used with -d/-u"):
-            runner.validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                weight_file=weight_path,
+                eigenvalue_file=d_file,
+                eigenvector_file=u_file,
+                check_memory=False,
+            )
 
 
 @pytest.mark.tier1

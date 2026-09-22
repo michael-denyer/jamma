@@ -6,13 +6,11 @@ import numpy as np
 import pytest
 
 from jamma.lmm.association_plan import KinshipShape, plan_association
-from jamma.pipeline_config import PipelineConfig
+from jamma.pipeline_config import PipelineConfig, ProvidedEigen, ProvidedKinship
 from jamma.pipeline_plan import (
     ComputedKinship,
     KinshipToEigen,
     LocoAnalysisPlan,
-    ProvidedEigen,
-    ProvidedKinship,
     StandardAnalysisPlan,
     resolve_analysis_plan,
 )

@@ -168,9 +168,9 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 1a | `main()` | Click command — all flags (`-gk`, `-lmm`, `-bfile`, `-o`, `-outdir`) | [cli.py](../src/jamma/cli.py) |
-| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:339](../src/jamma/cli.py#L339) |
-| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:383](../src/jamma/cli.py#L383) |
-| 1b | `gwas()` | One-call GWAS pipeline (load -> kinship -> LMM -> results) | [gwas.py:37](../src/jamma/gwas.py#L37) |
+| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:337](../src/jamma/cli.py#L337) |
+| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:381](../src/jamma/cli.py#L381) |
+| 1b | `gwas()` | One-call GWAS pipeline (load -> kinship -> LMM -> results) | [gwas.py:38](../src/jamma/gwas.py#L38) |
 | 1c | `PipelineRunner` | `-lmm` orchestration (validate -> parse -> memory -> kinship -> LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
 | 1c | `resolve_analysis_plan()` | Converts the validated flat public config into explicit standard/LOCO and eigen/kinship variants | [pipeline_plan.py](../src/jamma/pipeline_plan.py) |
 | 1c | `run_phenotype_loop()` | Prepares shared genotype selection and covariates once, then runs each phenotype and retains its result metadata | [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py) |
@@ -570,7 +570,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 
 | Area | Entry Point |
 |------|-------------|
-| `gwas()` API | [gwas.py:37](../src/jamma/gwas.py#L37) |
+| `gwas()` API | [gwas.py:38](../src/jamma/gwas.py#L38) |
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
 | CLI dispatch (`main`) | [cli.py:223](../src/jamma/cli.py#L223) |

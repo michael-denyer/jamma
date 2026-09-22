@@ -490,28 +490,26 @@ class TestFlagInteractions:
         d_path = tmp_path / "test.eigenD.txt"
         d_path.write_text("1.0\n2.0\n")
 
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=None,
-            check_memory=False,
-        )
         with pytest.raises(ValueError, match=r"Both -d.*and -u.*must be provided"):
-            PipelineRunner(config).validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                eigenvalue_file=d_path,
+                eigenvector_file=None,
+                check_memory=False,
+            )
 
     def test_validate_u_without_d_raises(self, tmp_path: Path) -> None:
         """Eigenvector file without eigenvalue file raises ValueError."""
         u_path = tmp_path / "test.eigenU.txt"
         u_path.write_text("1.0\t0.0\n0.0\t1.0\n")
 
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=None,
-            eigenvector_file=u_path,
-            check_memory=False,
-        )
         with pytest.raises(ValueError, match=r"Both -d.*and -u.*must be provided"):
-            PipelineRunner(config).validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                eigenvalue_file=None,
+                eigenvector_file=u_path,
+                check_memory=False,
+            )
 
     def test_validate_eigen_with_loco_raises(self, tmp_path: Path) -> None:
         """Eigen files with -loco raises ValueError (use --eigen-dir instead)."""
@@ -520,15 +518,14 @@ class TestFlagInteractions:
         d_path.write_text("1.0\n")
         u_path.write_text("1.0\n")
 
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=u_path,
-            loco=True,
-            check_memory=False,
-        )
         with pytest.raises(ValueError, match="not supported with -loco"):
-            PipelineRunner(config).validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                eigenvalue_file=d_path,
+                eigenvector_file=u_path,
+                loco=True,
+                check_memory=False,
+            )
 
     def test_validate_eigen_files_not_found_raises(self, tmp_path: Path) -> None:
         """Nonexistent eigenvalue file raises FileNotFoundError."""

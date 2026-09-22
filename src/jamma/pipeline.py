@@ -73,14 +73,14 @@ from jamma.pipeline_config import (
     PipelineConfig,
     PipelineResult,
     PipelineTiming,
+    ProvidedEigen,
+    ProvidedKinship,
 )
 from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_phenotype_loop import run_phenotype_loop
 from jamma.pipeline_plan import (
     KinshipSource,
     LocoAnalysisPlan,
-    ProvidedEigen,
-    ProvidedKinship,
     StandardAnalysisPlan,
     resolve_analysis_plan,
 )
@@ -201,15 +201,14 @@ class PipelineRunner:
     def validate_inputs(self) -> None:
         """Validate that required input files exist and combine legally.
 
-        Only checks that need the filesystem live here, plus the cross-field
-        rules that mention a file. Everything decidable from the config alone
-        (the LMM knobs, hwe_threshold, cat_columns, phenotype_columns) is
-        already guaranteed by PipelineConfig.__post_init__.
+        Only checks that need the filesystem live here. Everything decidable
+        from the config alone, including how the kinship and eigen fields
+        combine, is already guaranteed by PipelineConfig.__post_init__.
 
         Raises:
             FileNotFoundError: If PLINK files (.bed, .bim, .fam) are missing,
-                or if kinship_file/covariate_file is specified but missing.
-            ValueError: If mutually exclusive options are combined.
+                or if an input file the config names is missing.
+            ValueError: If the .bed size disagrees with the .fam and .bim.
         """
         bfile = self.config.bfile
         for ext in (".bed", ".bim", ".fam"):
@@ -219,26 +218,6 @@ class PipelineRunner:
 
         # Validate .bed file size matches .fam/.bim dimensions (VALID-01)
         validate_plink_dimensions(bfile)
-
-        if self.config.loco and self.config.kinship_file is not None:
-            raise ValueError(
-                "-k and -loco are mutually exclusive in this version. "
-                "LOCO computes kinship internally."
-            )
-
-        # Eigen file validation: -d and -u must be paired
-        has_eigen = self.config.eigenvalue_file is not None
-        has_eigenvec = self.config.eigenvector_file is not None
-        if has_eigen != has_eigenvec:
-            raise ValueError(
-                "Both -d (eigenvalues) and -u (eigenvectors) must be provided together"
-            )
-
-        if has_eigen and self.config.loco:
-            raise ValueError(
-                "-d/-u (pre-computed eigen) not supported with -loco mode. "
-                "Use --eigen-dir for per-chromosome eigen caching."
-            )
 
         # Every option that names an input file gets the same check, so they
         # share one. The order is part of the contract: a config naming two
@@ -254,8 +233,7 @@ class PipelineRunner:
             (self.config.weight_file, "Weight file"),
         )
         managed_pair = (
-            has_eigen
-            and self.config.eigenvalue_file is not None
+            self.config.eigenvalue_file is not None
             and self.config.eigenvector_file is not None
             and managed_eigen_pair_exists(
                 self.config.eigenvalue_file, self.config.eigenvector_file
@@ -267,21 +245,6 @@ class PipelineRunner:
             if path is not None and not path.exists():
                 raise FileNotFoundError(f"{label} not found: {path}")
 
-        if self.config.weight_file is not None and self.config.loco:
-            raise ValueError(
-                "-widv (individual weights) is not yet supported with -loco mode. "
-                "Apply weights to pre-computed kinship and use -k instead."
-            )
-        if (
-            self.config.weight_file is not None
-            and self.config.eigenvalue_file is not None
-        ):
-            raise ValueError(
-                "-widv (individual weights) cannot be used with -d/-u "
-                "(pre-computed eigen). "
-                "Weights must be applied to kinship before eigendecomposition."
-            )
-
     def _load_kinship_from_source(
         self,
         source: KinshipSource,
@@ -292,9 +255,8 @@ class PipelineRunner:
         """Load or compute the kinship matrix over the valid samples.
 
         A ``ProvidedKinship`` source loads from disk; ``ComputedKinship``
-        streams from genotypes. Derive the source with
-        ``pipeline_plan.resolve_kinship_source`` so it cannot drift from
-        the resolver's choice.
+        streams from genotypes. ``resolve_analysis_plan`` derives the source
+        from ``PipelineConfig.source()``.
 
         If weights are provided, applies individual weights to K via
         K[i,j] /= sqrt(w_i * w_j) after centering the analysed matrix.

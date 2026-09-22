@@ -16,6 +16,13 @@ the two ``cat_columns`` checks used to be in this ordering. They moved to
 never reaches ``validate_inputs`` to be ordered against anything. Their
 replacements live in ``test_pipeline.py`` (``TestMultiPhenotypeConfig`` and
 ``TestValidateInputsSnpsFields``).
+
+The five kinship and eigen source rules (-k with -loco, -d/-u pairing, -d/-u
+with -loco, -widv with -loco, -widv with -d/-u) moved to
+``PipelineConfig.source()`` for the same reason. They keep their relative
+order, but they now beat every filesystem check, so two expectations flipped
+deliberately: a source conflict is reported before a missing PLINK file, and
+the -widv/-loco conflict before a missing weight file.
 """
 
 from __future__ import annotations
@@ -31,6 +38,12 @@ BFILE = Path(__file__).resolve().parent / "fixtures/mouse_hs1940/mouse_hs1940"
 pytestmark = pytest.mark.tier0
 
 
+def _rejected_at_construction(**fields: object) -> str:
+    with pytest.raises(ValueError) as excinfo:
+        PipelineConfig(check_memory=False, **fields)  # type: ignore[arg-type]
+    return str(excinfo.value)
+
+
 def _raises(config: PipelineConfig) -> tuple[type, str]:
     runner = PipelineRunner(config)
     with pytest.raises((ValueError, FileNotFoundError)) as excinfo:
@@ -38,13 +51,12 @@ def _raises(config: PipelineConfig) -> tuple[type, str]:
     return type(excinfo.value), str(excinfo.value)
 
 
-def test_missing_plink_beats_every_other_violation(tmp_path):
-    """Nothing is checked until the dataset itself is known to exist."""
+def test_missing_plink_beats_every_missing_input_file(tmp_path):
+    """No input file is checked until the dataset itself is known to exist."""
     kind, message = _raises(
         PipelineConfig(
             bfile=tmp_path / "nonexistent",
             kinship_file=tmp_path / "missing.cXX.txt",
-            loco=True,
             check_memory=False,
         )
     )
@@ -52,45 +64,70 @@ def test_missing_plink_beats_every_other_violation(tmp_path):
     assert "PLINK .bed file" in message
 
 
-def test_loco_kinship_conflict_beats_the_file_not_existing(tmp_path):
-    """The conflict is reported even though the same file is also missing."""
-    kind, message = _raises(
-        PipelineConfig(
-            bfile=BFILE,
-            loco=True,
-            kinship_file=tmp_path / "missing.cXX.txt",
-            check_memory=False,
-        )
+def test_source_conflict_beats_missing_plink(tmp_path):
+    """A source conflict needs no filesystem, so it fails at construction."""
+    message = _rejected_at_construction(
+        bfile=tmp_path / "nonexistent",
+        kinship_file=tmp_path / "missing.cXX.txt",
+        loco=True,
     )
-    assert kind is ValueError
     assert "mutually exclusive" in message
 
 
-def test_eigen_pairing_beats_eigen_file_existence(tmp_path):
-    """An unpaired -d is reported before we ask whether the file is there."""
-    kind, message = _raises(
-        PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=tmp_path / "missing.d.txt",
-            check_memory=False,
-        )
+def test_loco_kinship_conflict_beats_eigen_pairing(tmp_path):
+    message = _rejected_at_construction(
+        bfile=BFILE,
+        loco=True,
+        kinship_file=tmp_path / "missing.cXX.txt",
+        eigenvalue_file=tmp_path / "missing.d.txt",
     )
-    assert kind is ValueError
+    assert "mutually exclusive" in message
+
+
+def test_eigen_pairing_beats_loco_eigen_conflict(tmp_path):
+    message = _rejected_at_construction(
+        bfile=BFILE,
+        loco=True,
+        eigenvalue_file=tmp_path / "missing.d.txt",
+    )
     assert "must be provided together" in message
 
 
-def test_loco_eigen_conflict_beats_eigen_file_existence(tmp_path):
-    kind, message = _raises(
-        PipelineConfig(
-            bfile=BFILE,
-            loco=True,
-            eigenvalue_file=tmp_path / "missing.d.txt",
-            eigenvector_file=tmp_path / "missing.u.txt",
-            check_memory=False,
-        )
+def test_loco_eigen_conflict_beats_loco_weight_conflict(tmp_path):
+    message = _rejected_at_construction(
+        bfile=BFILE,
+        loco=True,
+        eigenvalue_file=tmp_path / "missing.d.txt",
+        eigenvector_file=tmp_path / "missing.u.txt",
+        weight_file=tmp_path / "missing.weights.txt",
     )
-    assert kind is ValueError
-    assert "not supported with -loco" in message
+    assert "-d/-u (pre-computed eigen) not supported with -loco" in message
+
+
+def test_loco_weight_conflict_beats_weight_file_existence(tmp_path):
+    message = _rejected_at_construction(
+        bfile=BFILE,
+        loco=True,
+        weight_file=tmp_path / "missing.weights.txt",
+    )
+    assert "-widv (individual weights) is not yet supported with -loco" in message
+
+
+def test_eigen_weight_conflict_beats_eigen_dir_without_loco(tmp_path):
+    message = _rejected_at_construction(
+        bfile=BFILE,
+        eigenvalue_file=tmp_path / "missing.d.txt",
+        eigenvector_file=tmp_path / "missing.u.txt",
+        weight_file=tmp_path / "missing.weights.txt",
+        eigen_dir=tmp_path,
+    )
+    assert "cannot be used with -d/-u" in message
+
+
+def test_eigen_dir_without_loco_is_rejected(tmp_path):
+    """gwas(eigen_dir=..., loco=False) used to be accepted and ignored."""
+    message = _rejected_at_construction(bfile=BFILE, eigen_dir=tmp_path)
+    assert "--eigen-dir is only supported with -loco" in message
 
 
 def test_eigenvalue_file_checked_before_kinship_file(tmp_path):
@@ -133,20 +170,6 @@ def test_file_existence_checks_keep_their_relative_order(
     )
     assert kind is FileNotFoundError
     assert expected in message
-
-
-def test_weight_file_existence_beats_its_loco_conflict(tmp_path):
-    """The file is checked before the -widv/-loco incompatibility."""
-    kind, message = _raises(
-        PipelineConfig(
-            bfile=BFILE,
-            loco=True,
-            weight_file=tmp_path / "missing.weights.txt",
-            check_memory=False,
-        )
-    )
-    assert kind is FileNotFoundError
-    assert "Weight file not found" in message
 
 
 def test_cat_requires_covariate_before_checking_column_indices():

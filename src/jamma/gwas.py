@@ -11,6 +11,7 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from jamma.lmm.schema import (
@@ -53,7 +54,7 @@ def gwas(
     eigenvector_file: str | Path | None = None,
     write_eigen: bool = False,
     eigen_dir: str | Path | None = None,
-    phenotype_columns: list[int] | None = None,
+    phenotype_columns: Sequence[int] = (1,),
     snps_file: str | Path | None = None,
     ksnps_file: str | Path | None = None,
     hwe: float = 0.0,
@@ -71,84 +72,11 @@ def gwas(
 
     Orchestrates data loading, kinship computation (or loading), LMM
     association testing, and result writing. Equivalent to the CLI
-    ``jamma -lmm`` command but as a Python function: every keyword here is
-    one ``PipelineConfig`` field, and ``tests/test_gwas_api.py`` pins that
-    the two sets match.
+    ``jamma -lmm`` command but as a Python function.
 
-    When ``loco=True``, runs leave-one-chromosome-out analysis: computes
-    a separate LOCO kinship matrix for each chromosome, eigendecomposes
-    it, and runs LMM association on that chromosome's SNPs. This
-    eliminates proximal contamination. The ``kinship_file`` parameter
-    must be None when ``loco=True`` (mutually exclusive).
-
-    When ``eigenvalue_file`` and ``eigenvector_file`` are provided,
-    loads pre-computed eigendecomposition and skips both kinship loading
-    and eigendecomposition. Both must be provided together.
-
-    Args:
-        bfile: PLINK binary file prefix (without .bed/.bim/.fam extension).
-        kinship_file: Pre-computed kinship matrix file (.cXX.txt format).
-            If None, kinship is computed from genotypes. Must be None
-            when loco=True.
-        covariate_file: GEMMA-format covariate file (whitespace-delimited,
-            no header). If None, intercept-only model is used.
-        lmm_mode: LMM test type: 1=Wald, 2=LRT, 3=Score, 4=All.
-        maf: Minor allele frequency threshold for SNP filtering.
-        miss: Missing rate threshold for SNP filtering.
-        output_dir: Directory for output files (created if needed).
-        output_prefix: Prefix for output filenames.
-        save_kinship: If True, save computed kinship matrix to disk.
-            In LOCO mode, saves per-chromosome kinship files.
-        check_memory: If True, check available memory before computation.
-        show_progress: If True, show progress bars and log messages.
-        mem_budget: Hard memory budget in GB, or None for no budget.
-            The CLI's ``--mem-budget``.
-        loco: If True, enable leave-one-chromosome-out analysis.
-            Computes per-chromosome kinship internally.
-        eigenvalue_file: Pre-computed eigenvalue file (.eigenD.txt).
-            Must be paired with eigenvector_file.
-        eigenvector_file: Pre-computed eigenvector file (.eigenU.txt).
-            Must be paired with eigenvalue_file.
-        write_eigen: If True, write eigendecomposition files as
-            side effect of the pipeline run.
-        eigen_dir: Directory for the LOCO per-chromosome eigen cache. With
-            ``loco=True`` and ``write_eigen=True`` it defaults to
-            ``output_dir``. The CLI's ``--eigen-dir``.
-        phenotype_columns: 1-based phenotype column indices in the .fam
-            file, in the order they are tested. ``[1]`` (the default) selects
-            the standard phenotype (column 6), ``[2]`` selects column 7, and
-            ``[1, 2]`` runs both against one eigendecomposition. Matches
-            GEMMA's ``-n`` flag.
-        snps_file: File with SNP IDs to restrict association testing. One
-            SNP ID per line (first token used). Matches GEMMA's ``-snps`` flag.
-            None means test all SNPs.
-        ksnps_file: File with SNP IDs to restrict kinship computation. One
-            SNP ID per line. Matches GEMMA's ``-ksnps`` flag. None means
-            use all SNPs for kinship.
-        hwe: HWE p-value threshold. SNPs with Hardy-Weinberg equilibrium
-            p-value below this threshold are excluded. 0.0 disables HWE
-            filtering. Matches GEMMA's ``-hwe`` flag.
-        l_min: Minimum lambda for optimization (default 1e-5, matches GEMMA).
-        l_max: Maximum lambda for optimization (default 1e5, matches GEMMA).
-        n_grid: Grid search resolution for lambda bracketing (default 50).
-        n_refine: Golden section refinement iterations (default 20; a lower
-            value is raised to 20).
-        weight_file: Individual weight file for kinship pre-transformation.
-            One weight per line, matching sample order. Applies
-            K[i,j] /= sqrt(w_i * w_j) before eigendecomposition.
-            GEMMA's ``-widv`` flag. None means no weight application.
-        cat_columns: 1-indexed covariate column indices to treat as
-            categorical. JAMMA-specific feature (not GEMMA's ``-cat`` which
-            is for SNP categories in VC mode). Columns are one-hot encoded
-            with the first sorted level dropped as reference. Requires
-            covariate_file to be set.
-        backend: Compute backend: "auto" (default) or "numpy". "auto"
-            selects the best available numpy runner.
-        legacy_text: If True, write kinship and eigen files in GEMMA text
-            format instead of binary .npy. The CLI's ``--legacy-text``.
-        no_telemetry: If True, skip local benchmark telemetry for this run.
-            The CLI's ``--no-telemetry``. ``JAMMA_NO_TELEMETRY`` is honoured
-            regardless of this flag.
+    Each keyword is the ``PipelineConfig`` field of the same name, except
+    ``hwe``, which is ``hwe_threshold``. ``PipelineConfig`` documents every
+    field, and ``tests/test_gwas_api.py`` pins that the two sets match.
 
     Returns:
         PipelineResult with association results, sample/SNP counts, output
@@ -156,9 +84,8 @@ def gwas(
 
     Raises:
         FileNotFoundError: If PLINK files (.bed, .bim, .fam) do not exist.
-        ValueError: If lmm_mode is not in (1, 2, 3, 4), no valid phenotypes
-            found, covariate row count mismatches sample count, or if both
-            kinship_file and loco are specified.
+        ValueError: If the keywords combine illegally, no valid phenotypes
+            are found, or the covariate row count mismatches the sample count.
         MemoryError: If check_memory=True and insufficient memory available.
 
     Example:
@@ -184,7 +111,7 @@ def gwas(
         eigenvector_file=_opt_path(eigenvector_file),
         write_eigen=write_eigen,
         eigen_dir=_opt_path(eigen_dir),
-        phenotype_columns=[1] if phenotype_columns is None else list(phenotype_columns),
+        phenotype_columns=phenotype_columns,
         snps_file=_opt_path(snps_file),
         ksnps_file=_opt_path(ksnps_file),
         hwe_threshold=hwe,

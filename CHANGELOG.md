@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `PipelineConfig` rejects an illegal kinship or eigen source at
+  construction: `-k` with `-loco`, an unpaired `-d`/`-u`, `-d`/`-u` with
+  `-loco`, and `-widv` with `-loco` or with `-d`/`-u`. These used to wait for
+  `validate_inputs()`, after the PLINK and input-file checks, so they now win
+  over a missing file. On the CLI they exit with the usage-error code 2
+  instead of 1, with the same message.
+- `gwas(eigen_dir=...)` and `PipelineConfig(eigen_dir=...)` without
+  `loco=True` raise `ValueError`. They used to accept the directory and
+  ignore it; only the CLI rejected `--eigen-dir` outside `-loco`.
+- `gwas(phenotype_columns=...)` defaults to `(1,)` instead of `None`.
 - `PipelineResult` takes `phenotype_results`, `n_samples`, `timing`,
   `n_covariates` and `analyzed_sample_indices`. `associations`,
   `n_snps_tested`, `assoc_path`, `assoc_paths`, `pve_estimate` and `pve_se`

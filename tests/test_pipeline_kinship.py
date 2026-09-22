@@ -19,8 +19,9 @@ from jamma.lmm.association_plan import KinshipShape
 from jamma.lmm.eigen import center_kinship
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.pipeline import PipelineConfig, PipelineRunner
+from jamma.pipeline_config import ProvidedKinship
 from jamma.pipeline_kinship import compute_kinship
-from jamma.pipeline_plan import ProvidedKinship, resolve_kinship_source
+from jamma.pipeline_plan import ComputedKinship, KinshipSource
 from tests.builders import write_fam
 from tests.conftest import require_fixture
 from tests.fixture_paths import FIXTURES, MOUSE, SYNTHETIC
@@ -33,7 +34,10 @@ def _load_kinship(
     weights: np.ndarray | None = None,
 ) -> np.ndarray:
     """Load kinship the way run() does: shared source derivation, then load."""
-    source = resolve_kinship_source(runner.config.kinship_file, None)
+    kinship_file = runner.config.kinship_file
+    source: KinshipSource = (
+        ComputedKinship(None) if kinship_file is None else ProvidedKinship(kinship_file)
+    )
     kinship = KinshipShape.resolve(
         n_samples if valid_indices is None else len(valid_indices),
         n_samples,

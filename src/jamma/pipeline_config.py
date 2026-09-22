@@ -61,6 +61,31 @@ class PipelineTiming:
 
 
 @dataclass(frozen=True, slots=True)
+class ProvidedEigen:
+    eigenvalue_file: Path
+    eigenvector_file: Path
+    ignored_kinship_file: Path | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProvidedKinship:
+    path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class GenotypeKinship:
+    """Whole-genome kinship computed from the genotypes."""
+
+
+@dataclass(frozen=True, slots=True)
+class LocoKinship:
+    eigen_dir: Path | None
+
+
+AnalysisSource = ProvidedEigen | ProvidedKinship | GenotypeKinship | LocoKinship
+
+
+@dataclass(frozen=True, slots=True)
 class PipelineConfig:
     """Configuration for a GWAS pipeline run.
 
@@ -110,9 +135,10 @@ class PipelineConfig:
             categorical. JAMMA-specific feature (not GEMMA's -cat which is
             for SNP categories in VC mode). Columns are one-hot encoded with
             the first sorted level dropped as reference.
-        backend: Compute backend selection: "auto" (default) or "numpy".
-            "auto" selects based on C extension availability and memory.
-            "numpy" forces the pure-NumPy backend.
+        backend: Compute backend selection: "auto" (default), "numpy", or
+            "numpy-streaming". "auto" selects based on C extension availability
+            and memory. "numpy" forces the batch runner, and "numpy-streaming"
+            the runner that streams genotypes from disk.
         legacy_text: If True, write kinship and eigen files in GEMMA text format
             (.cXX.txt / .eigenD.txt / .eigenU.txt) instead of binary .npy.
             Default False writes binary for performance at scale.
@@ -227,13 +253,12 @@ class PipelineConfig:
                 "(-n with multiple columns). "
                 "Run each phenotype separately."
             )
-        # LOCO writes a per-chromosome eigen cache keyed by eigen_dir. When the
-        # caller asks to write eigen but gives no directory, default it to
-        # output_dir so the Python API matches the CLI (which applies the same
-        # default) instead of raising in run_lmm_loco. The non-LOCO write_eigen
-        # path writes to output_dir directly and never consults eigen_dir.
+        # LOCO writes a per-chromosome eigen cache keyed by eigen_dir; without
+        # a directory it lands in output_dir. The non-LOCO write_eigen path
+        # writes to output_dir directly and never consults eigen_dir.
         if self.loco and self.write_eigen and self.eigen_dir is None:
             object.__setattr__(self, "eigen_dir", self.output_dir)
+        self.source()
 
     @property
     def log_path(self) -> Path:
@@ -247,6 +272,53 @@ class PipelineConfig:
     def ensure_outdir(self) -> None:
         """Create the output directory if it doesn't exist."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def source(self) -> AnalysisSource:
+        """Parse the kinship and eigen fields into the one source they name.
+
+        Returns:
+            The eigen files, kinship file, genotype kinship, or LOCO kinship
+            the run reads.
+
+        Raises:
+            ValueError: If the kinship, eigen, weight, and LOCO fields
+                combine illegally.
+        """
+        d, u = self.eigenvalue_file, self.eigenvector_file
+        if self.loco and self.kinship_file is not None:
+            raise ValueError(
+                "-k and -loco are mutually exclusive in this version. "
+                "LOCO computes kinship internally."
+            )
+        if (d is None) != (u is None):
+            raise ValueError(
+                "Both -d (eigenvalues) and -u (eigenvectors) must be provided together"
+            )
+        if d is not None and self.loco:
+            raise ValueError(
+                "-d/-u (pre-computed eigen) not supported with -loco mode. "
+                "Use --eigen-dir for per-chromosome eigen caching."
+            )
+        if self.weight_file is not None and self.loco:
+            raise ValueError(
+                "-widv (individual weights) is not yet supported with -loco mode. "
+                "Apply weights to pre-computed kinship and use -k instead."
+            )
+        if self.weight_file is not None and d is not None:
+            raise ValueError(
+                "-widv (individual weights) cannot be used with -d/-u "
+                "(pre-computed eigen). "
+                "Weights must be applied to kinship before eigendecomposition."
+            )
+        if self.loco:
+            return LocoKinship(self.eigen_dir)
+        if self.eigen_dir is not None:
+            raise ValueError("--eigen-dir is only supported with -loco mode")
+        if d is not None and u is not None:
+            return ProvidedEigen(d, u, self.kinship_file)
+        if self.kinship_file is not None:
+            return ProvidedKinship(self.kinship_file)
+        return GenotypeKinship()
 
     def lmm_config(self, *, check_memory: bool = False) -> LmmConfig:
         """Project the LMM knobs onto the config the runners take.

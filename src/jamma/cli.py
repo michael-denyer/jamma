@@ -330,8 +330,6 @@ def main(
             "-k (kinship matrix) is required for -lmm "
             "(or use -d/-u for pre-computed eigen)"
         )
-    if eigen_dir is not None and not loco:
-        _cli_error("--eigen-dir is only supported with -loco mode")
 
     _run_lmm(pipeline_config)
 

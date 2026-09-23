@@ -172,7 +172,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
         try:
             success = compile_and_link.compile_extension(
                 spec,
-                Path(__file__).parents[1],  # the installed jamma/ package dir
+                Path(__file__).parent,  # the installed jamma/ package dir
                 report,
             )
         except (OSError, subprocess.SubprocessError, RuntimeError) as e:
@@ -275,6 +275,17 @@ def _load_c_module(spec: BuildSpec, expected_abi: int) -> ModuleType | None:
     if mod is not None:
         return mod
 
-    if auto_recompile_c_extension(spec):
-        mod = _import_and_validate(spec, expected_abi)
-    return mod
+    # A build that imported but failed validation stays loaded: CPython keeps a
+    # single-phase C extension for the life of the process, so a rebuilt .so
+    # can only be picked up by a new process.
+    loaded_stale = spec.sys_module_key in sys.modules
+    if not auto_recompile_c_extension(spec):
+        return None
+    if loaded_stale:
+        logger.warning(
+            f"{spec.output_stem} was rebuilt, but this process already loaded "
+            f"the stale build; restart Python to use it. Falling back to "
+            f"pure-Python ({spec.fallback_label})."
+        )
+        return None
+    return _import_and_validate(spec, expected_abi)

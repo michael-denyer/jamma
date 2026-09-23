@@ -599,3 +599,89 @@ def test_import_and_validate_missing_required_attrs_logs_warning_with_names(
     assert "dgemm" in captured.err
     assert "eigh" in captured.err
     assert "fake-fallback" in captured.err
+
+
+@pytest.mark.parametrize("spec_name", ["LMM_ACCEL_SPEC", "JLINALG_SPEC"])
+def test_recompile_builds_from_the_directory_holding_the_sources(
+    monkeypatch, spec_name
+):
+    """The shim must hand ``compile_extension`` the installed ``jamma/`` dir.
+
+    ``run_build`` joins the spec's parts onto it and refuses to build when a
+    source is missing, so a wrong directory turns every runtime rebuild into a
+    "C source files missing" warning and a permanent NumPy fallback.
+    """
+    from jamma._build_support import build_models
+
+    spec = getattr(build_models, spec_name)
+    seen: list[Path] = []
+
+    def _record(spec, package_dir, report):
+        seen.append(package_dir)
+        return False
+
+    _patch_compile_extension(monkeypatch, _record)
+    # A loaded entry skips the post-lock sibling probe, so the build always runs.
+    monkeypatch.setitem(sys.modules, spec.sys_module_key, type(sys)("stale"))
+
+    auto_recompile_c_extension(spec)
+
+    src_dir = seen[0].joinpath(*spec.package_parts, *spec.source_parts)
+    assert [n for n in spec.sources if not (src_dir / n).exists()] == []
+
+
+def test_rebuild_after_stale_abi_load_falls_back_and_asks_for_restart(
+    monkeypatch, capsys
+):
+    """A build that imported but failed its ABI check stays loaded.
+
+    CPython keeps a single-phase C extension for the life of the process, so
+    re-importing after a rebuild returns the same stale module. The loader
+    must fall back and say a restart picks up the rebuilt ``.so``.
+    """
+    import importlib.abc
+    import importlib.util
+
+    from loguru import logger as _logger
+
+    from jamma._native import _load_c_module
+
+    sys_key = "jamma._fake_ext_stale_abi"
+    stale = type(sys)(sys_key)
+    stale.ABI_VERSION = 1
+
+    class _ExtensionCache(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+        """Serve the one loaded module, as CPython's extension cache does."""
+
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname != sys_key:
+                return None
+            return importlib.util.spec_from_loader(fullname, self)
+
+        def create_module(self, spec):
+            return stale
+
+        def exec_module(self, module):
+            pass
+
+    monkeypatch.setattr(sys, "meta_path", [_ExtensionCache(), *sys.meta_path])
+    monkeypatch.delitem(sys.modules, sys_key, raising=False)
+    builds: list[str] = []
+    _patch_compile_extension(
+        monkeypatch, lambda spec, package_dir, report: builds.append("x") or True
+    )
+    spec = _fake_spec(
+        output_stem="_fake_ext_stale_abi", sys_module_key=sys_key, label="fake"
+    )
+
+    sink_id = _logger.add(sys.stderr, level="WARNING")
+    try:
+        result = _load_c_module(spec, expected_abi=2)
+    finally:
+        _logger.remove(sink_id)
+
+    assert result is None
+    assert builds == ["x"]
+    err = capsys.readouterr().err
+    assert "restart" in err
+    assert err.count("ABI mismatch") == 1, "the stale module must not be re-validated"

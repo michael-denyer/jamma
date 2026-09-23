@@ -125,7 +125,7 @@ void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
                      const double *X, npy_intp ldx,
                      double *C, npy_intp ldc, double beta);
 
-/* Returns 1 if vendor dsyrk is available (cblas_dsyrk resolved), 0 otherwise. */
+/* Returns 1 if vendor dsyrk is available (CBLAS or Fortran dsyrk resolved), 0 otherwise. */
 int blas_has_dsyrk(void);
 
 /* Returns 1 if vendor dsyevd is available, 0 otherwise. */

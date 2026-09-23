@@ -160,6 +160,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `jlinalg.dsyrk` no longer segfaults under MKL ILP64 (`libmkl_rt`, pip `mkl`
+  on Linux x86_64). The dispatcher stored the Fortran symbol `dsyrk_64_` in
+  the CBLAS slot and called it with CBLAS enums, so MKL dereferenced the
+  integer `101` as the `uplo` string. Fortran and CBLAS names now resolve into
+  separately typed slots, and a name whose prefix contradicts its slot is left
+  unwired with a warning instead of being called. The MKL and OpenBLAS ILP64
+  names take the Fortran path, which `dgemm` already used; Accelerate wiring
+  is unchanged.
 - With `JAMMA_FORCE_NUMPY_FALLBACK`, SNP means from float32 genotype chunks
   are now accumulated in float64, as the C kernel does, instead of rounded to
   float32. Allele frequencies and missing-genotype imputation under the

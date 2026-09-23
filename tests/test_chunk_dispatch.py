@@ -12,49 +12,22 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from jamma.lmm.assoc_output import AssocResult  # noqa: F401
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import LmmConfig
-from jamma.lmm.stats import AssocResult  # noqa: F401
 from jamma.validation import (
     ToleranceConfig,
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.builders import rotated_lmm_inputs
-from tests.conftest import make_runner_synthetic_data, requires_c
+from tests.builders import make_runner_synthetic_data
 from tests.fixture_paths import SYNTHETIC
-
-
-@requires_c
-@pytest.mark.tier0
-def test_runner_mode4_uses_fused_dispatch():
-    """Mode 4 takes the fused path at n_cvt=1 and the fused general path at n_cvt>=2.
-
-    This used to wrap _compose_mode4_from_split and assert it was never called.
-    That helper has gone, and so has the standalone split dispatcher and its
-    kernel-construction mode guard that replaced it as this test's second half:
-    D2 gave the general workspace's one compute every lmm_mode, so there is no
-    longer a split path for mode 4 to be refused by.
-    """
-    from jamma.lmm import accel
-    from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
-
-    for n_cvt, expected in ((1, DispatchPath.FUSED), (2, DispatchPath.FUSED_GENERAL)):
-        path = select_dispatch_path(
-            n_cvt, 4, accel=accel.available(), log_choices=False
-        )
-        assert path is expected
-
-
-# ---------------------------------------------------------------------------
-# Split-Uab all modes and reconstruct_uab_from_soa tests (RUN-01)
-# ---------------------------------------------------------------------------
+from tests.support import requires_c
 
 
 @pytest.mark.tier1
 @pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4], ids=["Wald", "LRT", "Score", "All"])
-def test_split_uab_all_modes(lmm_mode):
-    """All LMM modes produce valid results with split-Uab layout (RUN-01)."""
+def test_all_lmm_modes_end_to_end(lmm_mode):
     rng = np.random.default_rng(42)
     n_samples, n_snps = 100, 50
 
@@ -90,46 +63,18 @@ def test_split_uab_all_modes(lmm_mode):
             assert hasattr(r, "beta"), f"Wald result missing beta: {r}"
             assert np.isfinite(r.beta), f"Wald beta not finite: {r}"
             assert hasattr(r, "p_wald"), f"Wald result missing p_wald: {r}"
+            assert r.p_wald is not None
             assert np.isfinite(r.p_wald), f"Wald p not finite: {r}"
     if lmm_mode in (2, 4):  # LRT or All
         for r in results[:5]:
             assert hasattr(r, "p_lrt"), f"LRT result missing p_lrt: {r}"
+            assert r.p_lrt is not None
             assert np.isfinite(r.p_lrt), f"LRT p not finite: {r}"
     if lmm_mode in (3, 4):  # Score or All
         for r in results[:5]:
             assert hasattr(r, "p_score"), f"Score result missing p_score: {r}"
+            assert r.p_score is not None
             assert np.isfinite(r.p_score), f"Score p not finite: {r}"
-
-
-@pytest.mark.tier1
-def test_reconstruct_uab_from_soa_matches_direct():
-    """reconstruct_uab_from_soa matches batch_compute_uab_numpy exactly (RUN-01)."""
-    from jamma.lmm.uab import (
-        batch_compute_uab_numpy,
-        batch_compute_uab_varying_soa_numpy,
-        compute_uab_invariant_soa,
-    )
-    from tests.lmm_accel._helpers import reconstruct_uab_from_soa
-
-    inputs = rotated_lmm_inputs(n_samples=50, n_snps=20, n_cvt=1, seed=42)
-    UtW, Uty, UtG = inputs.UtW, inputs.Uty, inputs.UtG
-
-    # Direct full Uab construction
-    Uab_direct = batch_compute_uab_numpy(n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T)
-
-    # Split construction + reconstruction
-    invariant = compute_uab_invariant_soa(UtW, Uty, 1)
-    varying = batch_compute_uab_varying_soa_numpy(
-        n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T
-    )
-    Uab_reconstructed = reconstruct_uab_from_soa(invariant, varying, 1)
-
-    np.testing.assert_allclose(
-        Uab_reconstructed,
-        Uab_direct,
-        atol=1e-14,
-        err_msg="Reconstructed Uab does not match direct construction",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -282,13 +227,19 @@ def test_runner_all_mode_c_path():
         # Wald fields
         assert np.isfinite(r.beta), f"beta not finite: {r}"
         assert np.isfinite(r.se), f"se not finite: {r}"
+        assert r.p_wald is not None
         assert np.isfinite(r.p_wald), f"p_wald not finite: {r}"
+        assert r.logl_H1 is not None
         assert np.isfinite(r.logl_H1), f"logl_H1 not finite: {r}"
+        assert r.l_remle is not None
         assert np.isfinite(r.l_remle), f"l_remle not finite: {r}"
         # LRT fields
+        assert r.p_lrt is not None
         assert np.isfinite(r.p_lrt), f"p_lrt not finite: {r}"
+        assert r.l_mle is not None
         assert np.isfinite(r.l_mle), f"l_mle not finite: {r}"
         # Score field
+        assert r.p_score is not None
         assert np.isfinite(r.p_score), f"p_score not finite: {r}"
 
 
@@ -360,8 +311,8 @@ def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
 def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
     """LRT (mode 2) with n_cvt=2 uses C general path and matches GEMMA reference.
 
-    Verifies the full path: FUSED_GENERAL dispatch -> a general workspace
-    created with lmm_mode=2 -> compute_lmm_chunk_fused_general_c.
+    Verifies the full path: FUSED dispatch -> a general workspace
+    created with lmm_mode=2 -> compute_lmm_chunk_c.
     """
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
 
@@ -397,8 +348,8 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
 def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
     """Score (mode 3) with n_cvt=2 uses C general path and matches GEMMA reference.
 
-    Verifies the full path: FUSED_GENERAL dispatch -> a general workspace
-    created with lmm_mode=3 -> compute_lmm_chunk_fused_general_c.
+    Verifies the full path: FUSED dispatch -> a general workspace
+    created with lmm_mode=3 -> compute_lmm_chunk_c.
     """
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
 

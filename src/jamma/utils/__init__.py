@@ -1,13 +1,13 @@
 """Utility modules for JAMMA.
 
 This package contains supporting utilities:
-- logging: Loguru configuration and GEMMA-compatible log output
+- logging: Loguru configuration
 - chr_sort_key: Biological chromosome ordering (numeric, then X, Y, XY, MT)
 """
 
 from loguru import logger
 
-from jamma.utils.logging import setup_logging, write_gemma_log
+from jamma.utils.logging import setup_logging
 
 # Chromosome ordering: numeric first (by integer value), then special (X, Y, XY, MT)
 _CHR_SPECIAL_ORDER = {"X": 23, "Y": 24, "XY": 25, "MT": 26, "M": 26}
@@ -37,4 +37,4 @@ def chr_sort_key(chrom: str) -> tuple[int, str]:
         return (1000, chrom)
 
 
-__all__ = ["chr_sort_key", "setup_logging", "write_gemma_log"]
+__all__ = ["chr_sort_key", "setup_logging"]

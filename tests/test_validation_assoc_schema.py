@@ -4,8 +4,11 @@ from dataclasses import replace
 
 import pytest
 
+from jamma.lmm.schema import MODE_SPECS
 from jamma.validation.compare import compare_assoc_results
 from tests.assoc_test_helpers import make_assoc
+
+_HEADER = {spec.test_type: spec.header for spec in MODE_SPECS.values()}
 
 pytestmark = pytest.mark.tier0
 
@@ -15,7 +18,7 @@ def test_zero_likelihood_is_compared():
     actual = replace(expected, logl_H1=100.0)
     result = compare_assoc_results([actual], [expected])
     assert not result.passed
-    assert not result.logl_H1.passed
+    assert not result["logl_H1"].passed
 
 
 def test_inconsistent_rows_after_initial_sample_are_rejected():
@@ -27,11 +30,10 @@ def test_inconsistent_rows_after_initial_sample_are_rejected():
 
 @pytest.mark.parametrize("test_type", ["wald", "lrt", "score", "all"])
 def test_empty_file_compares_as_zero_snps(tmp_path, test_type):
-    from jamma.lmm.schema import HEADERS
     from jamma.validation.compare import load_gemma_assoc
 
     path = tmp_path / "empty.assoc.txt"
-    path.write_text(HEADERS[test_type] + "\n")
+    path.write_text(_HEADER[test_type] + "\n")
     rows = load_gemma_assoc(path)
     assert len(rows) == 0
     result = compare_assoc_results(rows, rows)
@@ -55,12 +57,11 @@ def test_absent_likelihood_does_not_match_present_nan():
 @pytest.mark.parametrize("actual_type", ["wald", "lrt", "score", "all"])
 @pytest.mark.parametrize("expected_type", ["wald", "lrt", "score", "all"])
 def test_empty_files_keep_their_modes(tmp_path, actual_type, expected_type):
-    from jamma.lmm.schema import HEADERS
     from jamma.validation.compare import load_gemma_assoc
 
     actual_path, expected_path = tmp_path / "actual.txt", tmp_path / "expected.txt"
-    actual_path.write_text(HEADERS[actual_type] + "\n")
-    expected_path.write_text(HEADERS[expected_type] + "\n")
+    actual_path.write_text(_HEADER[actual_type] + "\n")
+    expected_path.write_text(_HEADER[expected_type] + "\n")
     actual, expected = load_gemma_assoc(actual_path), load_gemma_assoc(expected_path)
     if actual_type == expected_type:
         assert compare_assoc_results(actual, expected).passed
@@ -73,7 +74,9 @@ def test_empty_files_keep_their_modes(tmp_path, actual_type, expected_type):
     "row",
     [
         make_assoc(),
-        make_assoc(p_wald=None, p_lrt=0.02, l_mle=0.8),
+        make_assoc(
+            beta=float("nan"), se=float("nan"), p_wald=None, p_lrt=0.02, l_mle=0.8
+        ),
         make_assoc(p_wald=None, p_score=0.05),
         make_assoc(p_lrt=0.02, p_score=0.05, l_mle=0.8),
     ],
@@ -81,15 +84,14 @@ def test_empty_files_keep_their_modes(tmp_path, actual_type, expected_type):
 def test_empty_in_memory_rows_report_count_mismatch(row):
     result = compare_assoc_results([], [row])
     assert not result.passed
-    assert "SNP count mismatch" in result.beta.message
+    assert "SNP count mismatch" in result["n_snps"].message
 
 
 def test_empty_slice_preserves_the_parsed_mode(tmp_path):
-    from jamma.lmm.schema import HEADERS
     from jamma.validation.compare import load_gemma_assoc
 
     path = tmp_path / "score.txt"
-    path.write_text(HEADERS["score"] + "\n")
+    path.write_text(_HEADER["score"] + "\n")
     rows = load_gemma_assoc(path)
     assert rows[:0].mode == 3
 
@@ -138,4 +140,57 @@ def test_comparison_still_compares_mutated_numeric_values(loaded_wald_pair):
     actual[0].p_wald = 0.9
     result = compare_assoc_results(actual, expected)
     assert not result.passed
-    assert not result.p_wald.passed
+    assert not result["p_wald"].passed
+
+
+def test_lrt_rows_with_finite_beta_are_rejected():
+    row = make_assoc(p_wald=None, p_lrt=0.02, l_mle=0.8)
+    with pytest.raises(ValueError, match="Mode 2 rows carry beta or se"):
+        compare_assoc_results([row], [row])
+
+
+def _write_assoc(path, header, rs_ids):
+
+    cols = _HEADER[header].split("\t")
+    values = {"chr": "1", "ps": "1", "n_miss": "0", "allele1": "A", "allele0": "G"}
+    lines = ["\t".join(cols)]
+    lines += [
+        "\t".join(values.get(c, rs if c == "rs" else "0.5") for c in cols)
+        for rs in rs_ids
+    ]
+    path.write_text("\n".join(lines) + "\n")
+    return cols
+
+
+def test_loader_rejects_a_header_for_another_mode(tmp_path):
+    from jamma.validation.compare import load_gemma_assoc
+
+    path = tmp_path / "wald.assoc.txt"
+    _write_assoc(path, "wald", ["rs1"])
+    assert load_gemma_assoc(path, mode=1).mode == 1
+    with pytest.raises(ValueError, match="Expected a mode 4 header, got mode 1"):
+        load_gemma_assoc(path, mode=4)
+
+
+def test_loader_requires_logl_only_when_asked(tmp_path):
+    from jamma.validation.compare import load_gemma_assoc
+
+    path = tmp_path / "all.assoc.txt"
+    cols = _write_assoc(path, "all", ["rs1"])
+    keep = [i for i, c in enumerate(cols) if c != "logl_H1"]
+    lines = path.read_text().splitlines()
+    path.write_text(
+        "\n".join("\t".join(line.split("\t")[i] for i in keep) for line in lines) + "\n"
+    )
+    assert load_gemma_assoc(path, mode=4)[0].logl_H1 is None
+    with pytest.raises(ValueError, match="Mode 4 header omits logl_H1"):
+        load_gemma_assoc(path, mode=4, require_logl=True)
+
+
+def test_loader_rejects_duplicate_snp_ids(tmp_path):
+    from jamma.validation.compare import load_gemma_assoc
+
+    path = tmp_path / "dup.assoc.txt"
+    _write_assoc(path, "wald", ["rs1", "rs1"])
+    with pytest.raises(ValueError, match="Duplicate SNP IDs"):
+        load_gemma_assoc(path)

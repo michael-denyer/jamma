@@ -105,7 +105,7 @@ if Px_yy == 0.0:
 
 | Condition | GEMMA | JAMMA |
 |-----------|-------|-------|
-| P_xx = 0 (constant SNP) | beta=NaN, se=inf, p=NaN | beta=NaN, se=NaN, p=NaN |
+| P_xx = 0 (constant SNP) | beta=NaN, se=inf, p=NaN; REML logl NaN (`log(0) - log(0)`) | beta=NaN, se=NaN, p=NaN; REML logl NaN, `l_remle` = l_min |
 | Px_yy = 1e-12 | tau=1e12, se≈0 | tau=1e12, se≈0 |
 
 ### Rationale
@@ -290,8 +290,8 @@ those errors.
 
 The analytic-score refinement recovers information lost in the objective
 comparison. `tests/fixtures/reml_flat_optima.npz` stores the eight cases and
-independent 80-digit stationary points. Generic NumPy, split NumPy, and native
-C are checked against those points at `5e-6` relative tolerance. The wider
+independent 80-digit stationary points. NumPy and native C are checked against
+those points at `5e-6` relative tolerance. The wider
 mathematical validation plan covers additional conditioning and boundary cases.
 `ToleranceConfig.lambda_rtol` remains `2e-5`.
 
@@ -299,7 +299,7 @@ mathematical validation plan covers additional conditioning and boundary cases.
 
 When the grid search maximum falls at the first or last grid point, the bracket
 may not contain the true optimum. JAMMA tracks this via
-`count_lambda_boundary_hits()` in `results.py` and emits a warning:
+`_count_lambda_boundary_hits()` in `chunk_runner_numpy.py` and emits a warning:
 
 ```text
 Lambda bound convergence: 42 SNPs at l_min=1.0e-05
@@ -353,7 +353,7 @@ Uses the **Wigginton exact test** — a permutation-based exact test for Hardy-W
 
 ### JAMMA
 
-Uses a **chi-squared goodness-of-fit test** (df=1) computed via `math.erfc` (stdlib) vectorized over SNPs — no scipy dependency. The chi-squared test compares observed genotype counts to expected counts under HWE. Implementation is in `core/snp_filter.py:compute_hwe_pvalues`.
+Uses a **chi-squared goodness-of-fit test** (df=1) computed via `math.erfc` (stdlib) vectorized over SNPs — no scipy dependency. The chi-squared test compares observed genotype counts to expected counts under HWE. Implementation is in `genotype/snp_filter.py:compute_hwe_pvalues`.
 
 ### Divergence Impact
 
@@ -523,9 +523,9 @@ silently produced binary `.npy` artifacts instead of the GEMMA-compatible
 `.cXX.txt` / `.eigenD.txt` / `.eigenU.txt` files the user asked for.
 
 **Fixed.** `run_lmm_loco()` now accepts a `legacy_text` parameter and threads it
-through the per-chromosome eigen-cache lookup (`_find_loco_eigen_cache`), the
-kinship save (filename suffix + `write_kinship_matrix`), and the eigen write
-(`write_eigen_files`). `PipelineRunner._run_loco` forwards
+through the kinship save (filename suffix + `write_kinship_matrix`) and the
+per-chromosome eigen write (`EigenGeneration.write_member`); the cache reader
+follows whichever format its manifest names. `PipelineRunner._associate_loco` forwards
 `config.legacy_text`, so `--loco --legacy-text` now writes GEMMA text artifacts
 on the LOCO path identically to the standard path. As with the non-LOCO path,
 text mode writes the `.txt` files plus `.npy` sidecars for fast reload.

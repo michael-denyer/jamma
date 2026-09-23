@@ -183,10 +183,15 @@ jobs:
           uv run python -c "
           import os
           from jamma.jlinalg import blas_backend, blas_is_ilp64, HAS_C_EXTENSION
+          from jamma.jlinalg import blas_has_dgemm, blas_has_dsyrk, blas_has_dsyevd, blas_has_dsyevr
           assert HAS_C_EXTENSION, 'C extension failed to load — aborting CI'
           print(f'HAS_C_EXTENSION={HAS_C_EXTENSION}')
           print(f'blas_backend={blas_backend}')
           print(f'blas_is_ilp64={blas_is_ilp64}')
+          print(f'blas_has_dgemm={blas_has_dgemm}')
+          print(f'blas_has_dsyrk={blas_has_dsyrk}')
+          print(f'blas_has_dsyevd={blas_has_dsyevd}')
+          print(f'blas_has_dsyevr={blas_has_dsyevr}')
           expected = os.environ['EXPECTED_BLAS_BACKEND']
           assert blas_backend == expected, (
               f'blas_backend={blas_backend!r} but this leg expects '
@@ -240,7 +245,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Set up Python 3.12
         run: uv python install 3.12
@@ -249,7 +254,7 @@ jobs:
         run: uv build
 
       # Both archives must ship _build_support/ — without it, the runtime
-      # ABI-mismatch recompile path (jamma.core.recompile) fails on
+      # ABI-mismatch recompile path (jamma._native) fails on
       # end-user machines after a wheel install. This is a structural
       # check; the wheel import step below exercises the runtime path.
       - name: Verify _build_support ships in sdist

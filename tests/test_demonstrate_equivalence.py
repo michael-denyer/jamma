@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tests.fixture_paths import NUMPY_GEMMA_TOLERANCES
+
 pytestmark = pytest.mark.tier1
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -89,3 +91,9 @@ def test_rank_correlation_matches_scipy_spearman_without_importing_scipy():
     source = (ROOT / "scripts/demonstrate_equivalence.py").read_text()
     assert "from scipy" not in source
     assert "import scipy" not in source
+
+
+@pytest.mark.tier0
+def test_mouse_report_uses_the_suites_tolerances():
+    script = _load_script()
+    assert script.MOUSE_HS1940.tolerances == NUMPY_GEMMA_TOLERANCES

@@ -1,7 +1,8 @@
-"""Tests for validate_runner_inputs() and LmmConfig validation.
+"""Tests for runner input validation and LmmConfig validation.
 
-Covers all error branches in validate_runner_inputs() and LmmConfig.__post_init__,
-plus the happy path with sample filtering.
+Covers the error branches of parse_eigen_input, AnalysedPhenotype,
+restrict_eigen_input and LmmConfig.__post_init__, plus the happy path with
+sample filtering.
 """
 
 import numpy as np
@@ -9,21 +10,31 @@ import pytest
 
 from jamma.core.constants import PHENOTYPE_MISSING
 from jamma.lmm.prepare_common import (
+    AnalysedPhenotype,
+    EigenInput,
     EigenPairs,
     KinshipMatrix,
-    RunnerSetup,
     parse_eigen_input,
-    validate_runner_inputs,
+    restrict_eigen_input,
 )
 from jamma.lmm.schema import MIN_N_REFINE, LmmConfig
 
 pytestmark = pytest.mark.tier0
 
-# ── validate_runner_inputs ─────────────────────────────────────────
+
+def _analyse(
+    y: np.ndarray, eigen_input: EigenInput, covariates: np.ndarray | None
+) -> tuple[AnalysedPhenotype, EigenInput]:
+    """Mask the samples and restrict the eigen input as run_single's caller does."""
+    samples = AnalysedPhenotype.from_inputs(y, covariates)
+    return samples, restrict_eigen_input(eigen_input, samples.valid_mask)
 
 
-class TestValidateRunnerInputsErrors:
-    """Error branches in validate_runner_inputs."""
+# ── AnalysedPhenotype and restrict_eigen_input ─────────────────────
+
+
+class TestRunnerInputErrors:
+    """Error branches in eigen-input parsing, sample masking and restriction."""
 
     def test_only_eigenvalues_raises(self):
         """Providing eigenvalues without eigenvectors raises ValueError."""
@@ -45,16 +56,14 @@ class TestValidateRunnerInputsErrors:
     def test_all_phenotypes_missing_raises(self):
         """All phenotypes NaN raises ValueError."""
         y = np.array([np.nan, np.nan, np.nan])
-        K = np.eye(3)
         with pytest.raises(ValueError, match="No valid samples"):
-            validate_runner_inputs(y, KinshipMatrix(K), None)
+            AnalysedPhenotype.from_inputs(y, None)
 
     def test_all_phenotypes_sentinel_raises(self):
         """All phenotypes equal to PHENOTYPE_MISSING raises ValueError."""
         y = np.full(3, PHENOTYPE_MISSING, dtype=np.float64)
-        K = np.eye(3)
         with pytest.raises(ValueError, match="No valid samples"):
-            validate_runner_inputs(y, KinshipMatrix(K), None)
+            AnalysedPhenotype.from_inputs(y, None)
 
     def test_eigenpair_dimension_mismatch_eigenvalues(self):
         """Eigenvalue length mismatch after filtering raises ValueError."""
@@ -63,7 +72,7 @@ class TestValidateRunnerInputsErrors:
         evals = np.ones(4)
         evecs = np.eye(4)
         with pytest.raises(ValueError, match="eigenvalues length"):
-            validate_runner_inputs(y, EigenPairs(evals, evecs), None)
+            _analyse(y, EigenPairs(evals, evecs), None)
 
     def test_eigenpair_dimension_mismatch_eigenvectors(self):
         """Eigenvector shape mismatch raises ValueError."""
@@ -71,35 +80,34 @@ class TestValidateRunnerInputsErrors:
         evals = np.ones(3)
         evecs = np.eye(4)  # Wrong shape
         with pytest.raises(ValueError, match="eigenvectors shape"):
-            validate_runner_inputs(y, EigenPairs(evals, evecs), None)
+            _analyse(y, EigenPairs(evals, evecs), None)
 
 
-class TestValidateRunnerInputsHappyPath:
-    """Happy-path behaviour of validate_runner_inputs."""
+class TestRunnerInputsHappyPath:
+    """Happy-path behaviour of AnalysedPhenotype and restrict_eigen_input."""
 
-    def test_returns_runner_setup(self):
-        """Valid inputs return a RunnerSetup."""
+    def test_returns_analysed_phenotype(self):
+        """Valid inputs return an AnalysedPhenotype over every sample."""
         y = np.array([1.0, 2.0, 3.0])
-        K = np.eye(3)
-        result = validate_runner_inputs(y, KinshipMatrix(K), None)
-        assert isinstance(result, RunnerSetup)
-        assert result.n_samples == 3
+        samples = AnalysedPhenotype.from_inputs(y, None)
+        assert isinstance(samples, AnalysedPhenotype)
+        assert samples.n_samples == 3
 
     def test_no_copy_when_all_valid(self):
         """When all samples are valid, arrays are not copied."""
         y = np.array([1.0, 2.0, 3.0])
         K = np.eye(3)
-        result = validate_runner_inputs(y, KinshipMatrix(K), None)
+        samples, eigen_input = _analyse(y, KinshipMatrix(K), None)
         # Same object — no copy made
-        assert result.phenotypes is y
-        assert isinstance(result.eigen_input, KinshipMatrix)
-        assert result.eigen_input.value is K
+        assert samples.phenotypes is y
+        assert isinstance(eigen_input, KinshipMatrix)
+        assert eigen_input.value is K
 
     def test_filters_nan_phenotypes(self):
         """NaN phenotypes are filtered out."""
         y = np.array([1.0, np.nan, 3.0])
         K = np.eye(3)
-        result = validate_runner_inputs(y, KinshipMatrix(K), None)
+        result, _ = _analyse(y, KinshipMatrix(K), None)
         assert result.n_samples == 2
         np.testing.assert_array_equal(result.phenotypes, [1.0, 3.0])
 
@@ -107,7 +115,7 @@ class TestValidateRunnerInputsHappyPath:
         """PHENOTYPE_MISSING (-9) phenotypes are filtered out."""
         y = np.array([1.0, PHENOTYPE_MISSING, 3.0], dtype=np.float64)
         K = np.eye(3)
-        result = validate_runner_inputs(y, KinshipMatrix(K), None)
+        result, _ = _analyse(y, KinshipMatrix(K), None)
         assert result.n_samples == 2
 
     def test_filters_nan_covariates(self):
@@ -115,7 +123,7 @@ class TestValidateRunnerInputsHappyPath:
         y = np.array([1.0, 2.0, 3.0])
         K = np.eye(3)
         cov = np.array([[1.0], [np.nan], [1.0]])
-        result = validate_runner_inputs(y, KinshipMatrix(K), cov)
+        result, _ = _analyse(y, KinshipMatrix(K), cov)
         assert result.n_samples == 2
         np.testing.assert_array_equal(result.phenotypes, [1.0, 3.0])
 
@@ -123,16 +131,16 @@ class TestValidateRunnerInputsHappyPath:
         """Kinship is subsetted via np.ix_ when samples are removed."""
         y = np.array([1.0, np.nan, 3.0])
         K = np.arange(9, dtype=np.float64).reshape(3, 3)
-        result = validate_runner_inputs(y, KinshipMatrix(K), None)
+        _, eigen_input = _analyse(y, KinshipMatrix(K), None)
         expected = K[np.ix_([True, False, True], [True, False, True])]
-        assert isinstance(result.eigen_input, KinshipMatrix)
-        np.testing.assert_array_equal(result.eigen_input.value, expected)
+        assert isinstance(eigen_input, KinshipMatrix)
+        np.testing.assert_array_equal(eigen_input.value, expected)
 
     def test_valid_mask_shape_matches_original(self):
         """valid_mask has the original (pre-filter) length."""
         y = np.array([1.0, np.nan, 3.0, 4.0])
         K = np.eye(4)
-        result = validate_runner_inputs(y, KinshipMatrix(K), None)
+        result, _ = _analyse(y, KinshipMatrix(K), None)
         assert result.valid_mask.shape == (4,)
         np.testing.assert_array_equal(result.valid_mask, [True, False, True, True])
 
@@ -141,10 +149,10 @@ class TestValidateRunnerInputsHappyPath:
         y = np.array([1.0, 2.0, 3.0])
         evals = np.ones(3)
         evecs = np.eye(3)
-        result = validate_runner_inputs(y, EigenPairs(evals, evecs), None)
-        assert isinstance(result.eigen_input, EigenPairs)
-        assert result.eigen_input.values is evals
-        assert result.eigen_input.vectors is evecs
+        _, eigen_input = _analyse(y, EigenPairs(evals, evecs), None)
+        assert isinstance(eigen_input, EigenPairs)
+        assert eigen_input.values is evals
+        assert eigen_input.vectors is evecs
 
     def test_complete_eigenpairs_take_precedence_over_kinship(self):
         kinship = np.eye(3)

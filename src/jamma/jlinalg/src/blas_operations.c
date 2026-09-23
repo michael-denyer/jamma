@@ -312,7 +312,7 @@ static int _dgemm_external_full(npy_intp M, npy_intp N, npy_intp K, const double
 void jlinalg_dgemm_ext(npy_intp M, npy_intp N, npy_intp K, const double *A, npy_intp lda,
                        const double *B, npy_intp ldb, double *C, npy_intp ldc, int transa,
                        int transb) {
-    if (blas_dispatch_has_vendor_dgemm() &&
+    if (blas_has_external() &&
         _dgemm_external_full(M, N, K, A, lda, B, ldb, C, ldc, transa, transb, 1.0, 0.0)) {
         return;
     }

@@ -33,35 +33,31 @@ Usage::
 
 from __future__ import annotations
 
-import argparse
-import hashlib
-import json
-import platform
 import shutil
-import struct
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from _digest_common import digest_values, run_cli
 from loguru import logger
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from jamma import jlinalg  # noqa: E402
 from jamma.io import load_plink_binary  # noqa: E402
 from jamma.io.plink import get_plink_metadata, read_fam_phenotypes  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
+
+# The base side runs this head copy, so import only names both sides export.
 from jamma.lmm import (  # noqa: E402
+    AssocResult,
     LmmConfig,
     run_lmm_association_numpy,
     run_lmm_association_numpy_streaming,
 )
 from jamma.lmm.schema import SnpMeta  # noqa: E402
-from jamma.lmm.stats import AssocResult  # noqa: E402
 from jamma.pipeline import PipelineRunner  # noqa: E402
 from jamma.pipeline_config import PipelineConfig  # noqa: E402
 from tests.fixture_paths import LOCO, SYNTHETIC  # noqa: E402
@@ -70,55 +66,33 @@ BACKENDS = ("numpy", "numpy-streaming")
 MODES = (1, 2, 3, 4)
 
 
-def _feed(h: Any, value: Any) -> None:
-    if value is None:
-        h.update(b"N|")
-    elif isinstance(value, bool):
-        h.update(b"b|" + repr(value).encode())
-    elif isinstance(value, int):
-        h.update(b"i|" + repr(value).encode())
-    elif isinstance(value, float):
-        h.update(b"f|" + struct.pack("<d", value))
-    elif isinstance(value, str):
-        h.update(b"s|" + value.encode() + b"|")
-    elif isinstance(value, bytes):
-        h.update(b"B|" + value)
-    else:
-        raise TypeError(f"cannot digest {type(value).__name__}")
-
-
-def digest_values(*values: Any) -> str:
-    h = hashlib.sha256()
-    for value in values:
-        _feed(h, value)
-    return h.hexdigest()
-
-
 def digest_results(results: list[AssocResult], n_tested: int, pve, pve_se) -> str:
-    h = hashlib.sha256()
-    _feed(h, n_tested)
-    _feed(h, pve)
-    _feed(h, pve_se)
-    for r in results:
-        for field in (
-            r.chr,
-            r.rs,
-            r.ps,
-            r.n_miss,
-            r.allele1,
-            r.allele0,
-            r.af,
-            r.beta,
-            r.se,
-            r.logl_H1,
-            r.l_remle,
-            r.p_wald,
-            r.p_score,
-            r.l_mle,
-            r.p_lrt,
-        ):
-            _feed(h, None if field is None else field)
-    return h.hexdigest()
+    return digest_values(
+        n_tested,
+        pve,
+        pve_se,
+        *(
+            field
+            for r in results
+            for field in (
+                r.chr,
+                r.rs,
+                r.ps,
+                r.n_miss,
+                r.allele1,
+                r.allele0,
+                r.af,
+                r.beta,
+                r.se,
+                r.logl_H1,
+                r.l_remle,
+                r.p_wald,
+                r.p_score,
+                r.l_mle,
+                r.p_lrt,
+            )
+        ),
+    )
 
 
 def _every_third_snp_file(bfile: Path, dest: Path) -> tuple[Path, np.ndarray]:
@@ -217,7 +191,7 @@ def _pipeline_keys(work: Path) -> dict[str, str]:
 def _api_keys(work: Path) -> dict[str, str]:
     digests: dict[str, str] = {}
     data = load_plink_binary(SYNTHETIC.bfile)
-    kinship = read_kinship_matrix(SYNTHETIC.kinship, data.n_samples)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship, data.meta.n_samples)
     phenotypes = read_fam_phenotypes(SYNTHETIC.bfile.with_suffix(".fam"))
     covariates = np.loadtxt(SYNTHETIC.covariates, dtype=np.float64)
     snp_meta = SnpMeta.from_plink_meta(data.meta)
@@ -266,90 +240,8 @@ def compute_all_digests() -> dict[str, str]:
     return digests
 
 
-def _header() -> dict[str, Any]:
-    try:
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        sha = None
-    return {
-        "blas_backend": jlinalg.blas_backend,
-        "numpy_version": np.__version__,
-        "platform": platform.platform(),
-        "machine": platform.machine(),
-        "sha": sha,
-    }
-
-
-def cmd_out(path: Path) -> int:
-    payload = {"header": _header(), "digests": compute_all_digests()}
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    print(f"assoc_digest: {len(payload['digests'])} keys -> {path}")
-    return 0
-
-
-def _load(path: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    payload = json.loads(path.read_text())
-    return payload["header"], payload["digests"]
-
-
-def cmd_diff(path_a: Path, path_b: Path) -> int:
-    header_a, digests_a = _load(path_a)
-    header_b, digests_b = _load(path_b)
-
-    for field in ("blas_backend", "platform"):
-        if header_a.get(field) != header_b.get(field):
-            print(
-                f"ERROR: {field} differs between runs "
-                f"({header_a.get(field)!r} vs {header_b.get(field)!r}); "
-                "a digest comparison across backends or platforms is meaningless.",
-                file=sys.stderr,
-            )
-            return 2
-
-    keys_a, keys_b = set(digests_a), set(digests_b)
-    shared = keys_a & keys_b
-    only_a = sorted(keys_a - keys_b)
-    only_b = sorted(keys_b - keys_a)
-    differing = sorted(k for k in shared if digests_a[k] != digests_b[k])
-
-    for label, keys in (("only in A", only_a), ("only in B", only_b)):
-        if keys:
-            print(f"{len(keys)} key(s) {label} (coverage change, not compared):")
-            for key in keys:
-                print(f"  {key}")
-
-    if differing:
-        print(f"{len(differing)} keys differ:", file=sys.stderr)
-        for key in differing:
-            print(f"  {key}  A={digests_a[key]}  B={digests_b[key]}", file=sys.stderr)
-        return 1
-
-    print(f"0 keys differ ({len(shared)} shared, {len(shared)} identical)")
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--out", type=Path, metavar="FILE", help="write digests to FILE")
-    group.add_argument(
-        "--diff",
-        nargs=2,
-        type=Path,
-        metavar=("A", "B"),
-        help="compare two digest files",
-    )
-    args = parser.parse_args(argv)
-
-    if args.out is not None:
-        return cmd_out(args.out)
-    return cmd_diff(*args.diff)
+    return run_cli("assoc_digest", __doc__, compute_all_digests, argv)
 
 
 if __name__ == "__main__":

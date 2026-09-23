@@ -11,6 +11,7 @@ from jamma.core.threading import (
     get_c_extension_thread_count,
 )
 from jamma.jlinalg import HAS_C_EXTENSION, get_n_threads, set_n_threads
+from jamma.lmm.schema import LmmConfig
 
 pytestmark = pytest.mark.tier0
 
@@ -194,19 +195,19 @@ class TestBlasThreadsKnobReachesRotation:
         n = 30
         x = rng.standard_normal((n, n))
         kinship = np.ascontiguousarray(x @ x.T / n)
-        prepare_common.prepare_lmm_run(
-            eigen_input=prepare_common.KinshipMatrix(kinship),
-            phenotypes=rng.standard_normal(n),
-            W=np.ones((n, 1)),
-            n_cvt=1,
-            l_min=1e-5,
-            l_max=1e5,
-            show_progress=False,
-            check_memory=False,
-            label="test",
+        eigenvalues, eigenvectors = np.linalg.eigh(kinship)
+        basis = prepare_common.rotate_basis(eigenvalues, eigenvectors, np.ones((n, 1)))
+        prepare_common.fit_null(
+            basis,
+            rng.standard_normal(n),
+            LmmConfig(show_progress=False, check_memory=False),
+            compute_pve=False,
         )
 
-        assert seen == [2], f"rotation must run under JAMMA_BLAS_THREADS=2, saw {seen}"
+        assert seen == [2, 2], (
+            f"covariate and phenotype rotations must run under "
+            f"JAMMA_BLAS_THREADS=2, saw {seen}"
+        )
 
 
 class TestThreadControl:
@@ -228,7 +229,7 @@ class TestThreadControl:
 
     @pytest.mark.skipif(
         not HAS_C_EXTENSION,
-        reason="the NumPy fallback clamps to os.cpu_count; unclamped storage is C-only",
+        reason="the NumPy fallback is unthreaded and always reports 1 thread",
     )
     def test_set_n_threads_accepts_large(self) -> None:
         """set_n_threads(9999) stores the value (no clamping after own-BLAS removal)."""

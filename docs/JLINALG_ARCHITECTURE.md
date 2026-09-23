@@ -23,7 +23,7 @@ graph TD
     subgraph BRIDGE["C EXTENSION"]
         C{"C extension<br/>loaded?"}
         D["pymodule.c<br/>NumPy buffer bridge"]
-        F["ISA + Vendor Init<br/>(platform.c)"]
+        F["Vendor Init<br/>(platform.c)"]
         G{"Vendor BLAS<br/>available?"}
         D --> F --> G
     end
@@ -58,8 +58,9 @@ The facade in `__init__.py` owns extension discovery, ABI validation, public
 exports, and package-reload semantics. `_dgemm.py`, `_dsyrk.py`, `_eigh.py`,
 and `_snp_stats.py` own their operation contracts and NumPy implementations.
 If the extension import fails, the facade binds those fallbacks. When the C
-extension loads, `jlinalg_init()` in `platform.c` detects the CPU ISA and
-populates the dispatch table.
+extension loads, `jlinalg_init()` in `platform.c` populates the dispatch
+table. `jlinalg_isa` reports the SIMD ISA the extension was compiled for, not
+the CPU it runs on.
 
 ## Dispatch Chain
 
@@ -149,11 +150,11 @@ results that diverge from GEMMA's validation tolerances.
 |------|---------|
 | `include/jlinalg.h` | Public C API, ABI version, function pointer typedefs |
 | `src/pymodule.c` | Python/NumPy bridge (buffer extraction, GIL release, error translation) |
-| `src/platform.c` | ISA detection (CPUID/hwcap), vendor BLAS dispatch init |
+| `src/platform.c` | Compile-time ISA report, vendor BLAS dispatch init |
 | `include/blas_dispatch_internal.h` | Private selected-backend state shared by discovery and operation wrappers |
 | `src/blas_dispatch.c` | Vendor BLAS/LAPACK discovery via dlopen/dlsym and selected-backend ownership. Candidate directories come from `_blas_dirs.probe_plan()` (Python); C keeps every dlopen/dlsym call |
 | `src/blas_operations.c` | DGEMM, DSYRK, DSYEVD, and DSYEVR wrappers over the selected backend |
-| `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. `jlinalg_eigh_c` requires tightly packed row-major storage (`ldk == ldz == N`); a padded stride returns `JLINALG_EXT_BAD_STRIDE` rather than being serviced by a second code path, since no caller in the tree ever passes one. A `prefer_dsyevr` flag lets the caller skip the DSYEVD attempt outright -- the memory plan that already reserved DSYEVR's smaller footprint passes it through `jlinalg.eigh(K, driver="dsyevr")` so the driver that runs matches the one that was budgeted, rather than being decided a second time by an allocation failure. `status->driver_used` reports which routine actually ran. |
+| `src/eigh.c` | Eigendecomposition dispatcher: vendor DSYEVD then DSYEVR, then `JLINALG_EXT_UNAVAILABLE` for NumPy fallback. Only LAPACK-related C source. `jlinalg_eigh_c` requires tightly packed row-major storage (`ldk == ldz == N`); a padded stride returns `JLINALG_EXT_BAD_STRIDE` rather than being serviced by a second code path, since no caller in the tree ever passes one. A `require_dsyevr` flag lets the caller skip the DSYEVD attempt outright -- the memory plan that already reserved DSYEVR's smaller footprint passes it through `jlinalg.eigh(K, driver="dsyevr")` so the driver that runs matches the one that was budgeted, rather than being decided a second time by an allocation failure. With the flag set and no vendor DSYEVR it returns `JLINALG_EXT_UNAVAILABLE` (a `RuntimeError` from `py_eigh`) rather than running DSYEVD. `status->driver_used` reports which routine actually ran. |
 | `src/snp_stats.c` | SNP statistics kernel (chunked mean/variance/MAF) |
 
 There are no own-C LAPACK translations in the tree. As of commit
@@ -220,10 +221,10 @@ uv run pytest tests/ -x
    translation; put the semantic contract (argument values, shape math) in
    the Python validator in step 4, so a bad call raises identical text
    whether or not the C extension is loaded (`dgemm`/`dsyrk` are the model).
-4. **Add a public Python function** in `__init__.py`: a `_validate_<op>`
-   that raises on a bad call, a `_<op>_numpy_impl` (unchecked NumPy compute),
-   and the public `<op>()` that validates once and dispatches to whichever
-   backend the module bound (`_<op>_backend`).
+4. **Add a Python operation module** `_<op>.py` holding `validate` (raises
+   on a bad call) and `numpy_impl` (unchecked NumPy compute), then the public
+   `<op>()` in `__init__.py` that validates once and calls whichever backend
+   the module bound (`_<op>_backend`).
 5. **Register source files** in `src/jamma/_build_support/build_models.py`
    -- add to `BASELINE_SOURCES` for routines that should compile with the
    default flags, or `LAPACK_SOURCES` for LAPACK routines that need strict
@@ -268,6 +269,10 @@ duplicating flag/source lists.
   LP64-only host: `dgemm()` binds `_dgemm_backend` to the NumPy
   implementation rather than `py_dgemm`, so the C entry point is never
   called and never has the chance to raise.
+- Set `JLINALG_NO_VENDOR_DSYRK=1` or `JLINALG_NO_VENDOR_DSYEVR=1` to leave
+  that one vendor routine unwired the same way. They exist so the contracts
+  of the raw `_jlinalg.dsyrk` entry point and of `eigh(K, driver="dsyevr")`
+  with no DSYEVR can be exercised on a host that has both routines.
 - Set `JAMMA_SANITIZE=address,undefined` (or any subset) at build time to
   rebuild C extensions with `-fsanitize=...`. Used by
   `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10.

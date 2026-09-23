@@ -33,16 +33,27 @@ class TestCExtensionPerformance:
         y = rng.standard_normal(n_samples)
         utg_t = np.ascontiguousarray(rng.standard_normal((n_snps, n_samples)))
         invariant = np.stack((w * w, w * y, y * y))
-        workspace = accel.require().create_workspace_ncvt1_c(
-            eigenvalues, invariant, w, y, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
+        workspace = accel.require().create_workspace_c(
+            eigenvalues,
+            invariant,
+            w[:, None],
+            y,
+            n_samples,
+            1e-5,
+            1e5,
+            50,
+            20,
+            n_threads,
+            1,
+            lmm_mode=1,
         )
 
         # Warmup: amortise OpenMP thread-pool startup before timing
-        accel.require().compute_lmm_chunk_ncvt1_c(workspace, utg_t[:50], n_threads)
+        accel.require().compute_lmm_chunk_c(workspace, utg_t[:50], n_threads)
 
         # pytest-benchmark tracks native latency history; it asserts no speed ratio.
         benchmark(
-            accel.require().compute_lmm_chunk_ncvt1_c,
+            accel.require().compute_lmm_chunk_c,
             workspace,
             utg_t,
             n_threads,

@@ -9,10 +9,378 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `jamma.core` now holds only leaf infrastructure and imports no other jamma
+  package. Domain modules moved to the packages that own them, with no aliases
+  left at the old paths: `jamma.core.snp_stats` and `jamma.core.snp_filter`
+  are now `jamma.genotype.snp_stats` and `jamma.genotype.snp_filter`;
+  `jamma.core.eigen_plan` is `jamma.lmm.eigen_plan`; `jamma.core.recompile` is
+  `jamma._native`; `jamma.core.estimates` is `jamma.estimates`; and
+  `estimate_kinship_memory` moved from `jamma.core.memory` to
+  `jamma.kinship.memory`. `write_gemma_log` moved from `jamma.utils` to
+  `jamma.gemma_log`. Results are unchanged.
+- The NumPy reference kernels the C accelerator is held to are now public:
+  `jamma.lmm.compute_numpy.compute_wald_numpy`, `compute_lrt_numpy` and
+  `compute_score_numpy`, and `jamma.lmm.stats.batch_lrt_pvalues_numpy`. They
+  were underscore-prefixed although tests import them directly. Results do not
+  change.
+- Without the jlinalg C extension, `jamma.jlinalg.get_n_threads()` and
+  `set_n_threads()` return 1, because the NumPy SNP-statistics fallback is
+  unthreaded. They used to store a thread count that nothing read.
+  `set_n_threads` still rejects counts below 1.
+- `jamma.jlinalg` drops the private `_dgemm_numpy`, `_dgemm_numpy_impl`,
+  `_dsyrk_numpy`, `_dsyrk_numpy_impl`, and `_eigh_numpy` aliases. The NumPy
+  implementations stay in `jamma.jlinalg._dgemm`, `_dsyrk`, and `_eigh`.
+- `jamma._native` is the only code that evicts a rebuilt extension from
+  `sys.modules`. `compile_and_link.compile_extension` no longer does it too.
+- `jamma.io.read_genotypes(bfile)` reads the `.bed` genotype matrix on its
+  own. The in-memory pipeline uses it instead of `load_plink_binary`, so it no
+  longer parses the `.bim` and `.fam` files a second time.
+  `load_plink_binary` drops its unused `meta` argument, and `PlinkData` drops
+  the eight properties that forwarded to `PlinkData.meta`; read
+  `data.meta.n_samples` and so on.
+- `read_matrix_parallel` raises `ValueError` for `n_workers < 1`, as
+  `write_matrix_parallel` already did, instead of clamping to one worker. It
+  scans the input once rather than twice to find chunk boundaries.
+- The parallel matrix reader and writer remove their `.jamma_mread_*` and
+  `.jamma_mwrite_*` temp directories and everything in them on every exit.
+  A failed early delete of the writer's memmap no longer leaves the directory,
+  with the memmap inside, beside the output.
+- `scripts/bench_memory.py` replaces `bench_impute_memory.py`,
+  `bench_snp_stats_layout.py` and `bench_kinship_memory.py` as the
+  subcommands `impute`, `snp-stats` and `kinship`. The digest scripts share
+  one hashing and `--out`/`--diff` module, `scripts/_digest_common.py`, which
+  the digest workflows stage beside the head script. Digest keys and values
+  are unchanged.
+- The native build resolves its compile and link flags once per extension,
+  and every build step reports through one `BuildReport` with a verbose
+  channel and an always-visible warning channel. Compiler command lines are
+  byte-identical to before. A runtime recompile after an ABI mismatch now
+  logs compiler failures and OpenMP retries through the logger instead of
+  printing them to stderr. `python -m jamma.lmm._compile_accel` and
+  `python -m jamma.jlinalg._compile_jlinalg` print the same output as
+  before; a `compile_extension()` call without `verbose=True` no longer
+  prints the success line.
+
+- Without the C extension, the REML and MLE likelihoods each have one
+  finisher shared by the grid search and the per-SNP refinement, and the
+  identity-weighted log-determinant is computed once per chunk. The REML
+  `logl_H1` that the Python API returns for `-lmm 1` can move by one ulp
+  (at most 2.1e-16 relative, 11 of 500 SNPs on `gemma_synthetic`); lambdas,
+  every p-value, and the `.assoc.txt` bytes on `mouse_hs1940` are unchanged.
+- Without the C extension, the Wald statistics of an intercept-only run
+  (`-lmm 1` or `-lmm 4`, no `-c`) now come from the same NumPy REML optimiser
+  as every other mode and covariate count. The separate split-Uab optimiser
+  and the `numpy_wald` dispatch path are removed. Results on `mouse_hs1940`
+  are byte-identical. On that fixture's one 10,768-SNP chunk the fallback's
+  association pass is 12 percent slower for `-lmm 1` and 5 percent slower for
+  `-lmm 4`, because the full Uab doubles the per-SNP memory traffic. At
+  2,000-SNP chunks the general optimiser is 4 to 9 percent faster. For
+  `-lmm 1` the per-SNP chunk quote rises by three `n_samples` rows plus 18 Iab
+  cells, so the planner picks smaller chunks.
+- The `_lmm_accel` extension has one workspace creator and one chunk compute
+  for every covariate count, `create_workspace_c` and `compute_lmm_chunk_c`,
+  replacing the separate n_cvt=1 and general entry points (ABI 23). The C
+  side picks the kernel family from `n_cvt`, so `DispatchPath.FUSED_GENERAL`
+  is gone and `DispatchPath.FUSED` covers every covariate count. The n_cvt=1
+  workspace now allocates its per-thread scratch once at creation, as the
+  general one does, and reads the null-model `w` column straight from `UtW`
+  instead of a copy. `workspace_sizes_c` returns persistent and per-thread
+  bytes only, and an n_cvt=1 quote falls by 8 bytes per sample. Results are
+  bit-identical.
+- The likelihood-ratio test with more than one covariate (`-lmm 2` and
+  `-lmm 4`) now reads the same per-SNP column layout as the REML search,
+  instead of copying each SNP's inputs into a second per-thread buffer of
+  `n_index * n_samples` doubles. That buffer took 22.4 MB per thread at
+  100,000 samples and 5 covariates, and the memory planner no longer prices
+  it. The MLE coarse grid also reuses the grid's cached invariant sums.
+  Results are bit-identical.
+- LOCO kinship no longer runs a separate SNP-statistics pass over the BED.
+  Standard and LOCO kinship now share one chunk generator that filters each
+  chunk as it is read, so a LOCO run reads the genotypes once fewer. The
+  batch planner sizes passes against every chromosome the BIM and `-ksnps`
+  leave SNPs on, and allocates a per-chromosome accumulator only for a
+  chromosome that keeps SNPs after filtering. `LocoKinshipStream.snp_stats`
+  is readable once the first matrix has been yielded, and a filtering error
+  surfaces on the stream's first advance. Kinship matrices and statistics
+  are bit-identical.
+- LOCO association reuses the SNP statistics kinship PASS 1 computed over the
+  analysed samples, so a run with missing phenotypes no longer reads every
+  chromosome's genotypes a second time. A run on cached eigenpairs computes
+  the statistics in one streamed pass before the chromosome loop. Results are
+  unchanged.
+- Score-only runs (`-lmm 3`) with two or more covariates no longer build the
+  lambda grid, which only Wald and LRT read: at 100,000 samples and the
+  default 50 grid points that is 40 MB less per workspace. The memory quote
+  now comes from the same per-family layout each native workspace allocates
+  from, so it drops that grid, the REML-only identity sums in `-lmm 2` and
+  `-lmm 3`, and one of four scratch vectors the `n_cvt=1` LRT loop never
+  allocated. Results are unchanged.
+- `jamma.lmm.plan_association` takes an `LmmConfig` as `config=` in place of
+  the separate `lmm_mode`, `n_grid`, `n_refine` and `mem_budget` arguments,
+  and one `backend=` literal (`"auto"`, `"numpy"`, `"numpy-streaming"` or
+  `"loco"`) in place of `requested=` plus `loco=True`. The
+  `log_dispatch_choices` argument is gone: the dispatch path is always logged
+  at debug level, once.
+- The pipeline logs the backend request and its source as one line,
+  `Backend request: numpy (config)` or `Backend request: numpy-streaming
+  (JAMMA_BACKEND)`, in place of the three `Backend: numpy (...)` variants.
+- `run_lmm_loco` no longer takes `execution` or `eigen_plan`. A caller with
+  its own plan builds a `LocoRun` and calls `run_loco(run, output_path)`
+  instead; `LocoRun` rejects a plan wider than `loco.col_chunk_size` or
+  without a resolved kinship shape at construction. A pipeline LOCO run now
+  resolves its samples, plan and kinship shape once, and reads the `.bim`
+  once instead of twice.
+- `PipelineConfig` rejects an illegal kinship or eigen source at
+  construction: `-k` with `-loco`, an unpaired `-d`/`-u`, `-d`/`-u` with
+  `-loco`, and `-widv` with `-loco` or with `-d`/`-u`. These used to wait for
+  `validate_inputs()`, after the PLINK and input-file checks, so they now win
+  over a missing file. On the CLI they exit with the usage-error code 2
+  instead of 1, with the same message.
+- `gwas(eigen_dir=...)` and `PipelineConfig(eigen_dir=...)` without
+  `loco=True` raise `ValueError`. They used to accept the directory and
+  ignore it; only the CLI rejected `--eigen-dir` outside `-loco`.
+- `gwas(phenotype_columns=...)` defaults to `(1,)` instead of `None`.
+- `PipelineResult` takes `phenotype_results`, `n_samples`, `timing`,
+  `n_covariates` and `analyzed_sample_indices`. `associations`,
+  `n_snps_tested`, `assoc_path`, `assoc_paths`, `pve_estimate` and `pve_se`
+  are now read-only properties derived from `phenotype_results`, so reading
+  them is unchanged but passing them to the constructor is an error.
+- `jamma.lmm.loco.run_lmm_loco_prepared` runs LOCO over samples the caller
+  has already resolved. The pipeline enters there with its analysed samples,
+  so a `--loco` run no longer parses the `.bim` a second time for it.
+- `AssocComparisonResult` holds one comparison per column the mode carries,
+  plus `af`, in `columns`; read one with `comparison["l_remle"]`. A column the
+  mode does not carry is absent instead of a vacuous pass, a SNP count
+  mismatch reports the single column `n_snps`, and `passed` is derived.
+  `ComparisonResult` is frozen.
+- `compare_assoc_results` raises `ValueError` for LRT rows whose beta or se is
+  not NaN, instead of returning a failed verdict with every column passing.
+- `load_gemma_assoc` rejects duplicate SNP IDs, and takes `mode=` and
+  `require_logl=` to check the header, so the math-validation wrapper no
+  longer parses headers or rows itself.
+- The memory plan prices `-lmm 2` at three result columns per SNP, the
+  `logl_H1`, `l_mle` and `p_lrt` arrays the kernels allocate, instead of two.
+  The chunk sizer and the NumPy and native workspace estimates all read the
+  column count from the mode's specification. Chunk width can shrink by a few
+  SNPs in LRT runs; results are unchanged.
+- A failing native kernel names its mode as `-lmm N` in the error, for example
+  `Fused general -lmm 4 dispatch failed ...`, in place of per-mode labels such
+  as `Fused general mode-4 Uab dispatch`.
+- The C accelerator decodes `lmm_mode` once into the set of tests it runs,
+  and both covariate families share one null-model argument contract, thread
+  clamp, and result builder. Two behaviours now match across families: the
+  general (n_cvt >= 2) path accepts an empty genotype chunk and returns
+  zero-row columns instead of raising `ValueError`, and it warns about
+  betainc non-convergence for standalone Score as the n_cvt = 1 path already
+  did. The n_cvt = 1 LRT runs through the same loop as Wald and mode 4. No
+  result bit moves.
+- Whole-genome and LOCO eigen generations share one member naming scheme, one
+  manifest validator and one commit protocol (`EigenGeneration` in
+  `jamma.lmm.eigen_io`). The whole-genome `.eigen_manifest.json` is now
+  fsynced before it is published, so like the LOCO cache manifest it survives
+  a power cut. A whole-genome manifest must name its members exactly; a member
+  name with extra parts is rejected. Manifests written by 8.1.0 still resolve.
+  `LocoConfig.eigen_stem` and `LocoConfig.eigen_paths`, which named a
+  pre-generation layout nothing wrote, are removed.
 - `scripts/bench_all_backends.py` times a second kinship row, `kinship_npy`,
   which runs `-gk 1` without `--legacy-text` and so writes the binary `.npy`
   matrix JAMMA ships by default. The existing text row remains the
   like-for-like GEMMA comparison, and the new row has no GEMMA counterpart.
+- `jamma.jlinalg.jlinalg_isa` reports the SIMD ISA the extension was compiled
+  for, read from the preprocessor, instead of probing the CPU with CPUID,
+  XGETBV, and `getauxval` at import. A baseline Linux x86_64 wheel built
+  without `-mavx2` said `"AVX2"` on any AVX2 CPU; it now says `"generic"`.
+  The AVX2 release wheels still say `"AVX2"`, and AArch64 builds, including
+  Apple Silicon, still say `"NEON"`. The attribute's name, its possible
+  values, and `ABI_VERSION` are unchanged.
+
+### Fixed
+
+- The association pass no longer collapses to one SNP per chunk on large
+  sample counts. Since 8.0.0 the chunk sizer subtracted the whole eigenvector
+  matrix from the per-chunk budget, whose auto ceiling is 40 GB, so above
+  about 70,000 samples (80 GB of eigenvectors) nothing was left and every SNP
+  became its own chunk, each re-streaming the matrix through the rotation
+  GEMM: a 100,000 x 50,000 `-lmm 1` run spent 6 hours in the association
+  loop. Per-run allocations are priced once by the memory preflight, and the
+  sizer floors the chunk at 100 SNPs again; a budget that cannot hold the
+  floored chunk is refused by the preflight rather than planned narrower.
+  Results are unchanged.
+- `jlinalg` now wires vendor `dsyrk`, `dsyevd`, and `dsyevr` from the
+  scipy-openblas64 library that NumPy's Linux wheels bundle. Its exports carry
+  a `scipy_` prefix (`scipy_dsyrk_64_`) that only the `dgemm` name table
+  listed, so on those installs `jlinalg.dsyrk` and `jlinalg.eigh` fell back to
+  NumPy while `blas_backend` reported `OpenBLAS-ILP64`. Linux results move
+  in the last bits: kinship by at most 7.4e-16 and association outputs by at
+  most 1.2e-11, relative to each output's largest magnitude.
+- A SNP whose projected genotype variance is not positive (a constant
+  genotype, or one collinear with a covariate) now gets a NaN REML
+  log-likelihood and `l_remle` at the lower bound on every path. The
+  `n_cvt=1` C path and the NumPy path used to skip the non-positive Pab
+  diagonal and report a finite likelihood and an optimised lambda, while the
+  general C path returned NaN. One rule, `logdet_diag_term` in
+  `_lmm_types.h` and `_logdet_diag` in `likelihood_numpy.py`, now holds for
+  all three, matching GEMMA's `LogRL_f`, which takes an unguarded `log` of
+  each diagonal entry. beta, se and the p-values were already NaN; results
+  for SNPs with positive projected variance do not change. Such SNPs never
+  pass the polymorphism filter, so `jamma` CLI output on mouse_hs1940 is
+  byte-identical.
+- The `forced-lower-bound` mathematical mutation plants its defect again. Its
+  patch targeted the grid-evaluation call that the likelihood finisher
+  refactor rewrote, so `scripts/mathematical_mutations.py --all` reported it
+  INCONCLUSIVE and the post-merge slow suite failed. The runner now checks
+  every patch against the source before running any test and reports a
+  non-matching one as `STALE PATCH`, naming the mutation and file, and a
+  tier0 test pins each Python patch to exactly one match.
+- `jlinalg.dsyrk` no longer segfaults under MKL ILP64 (`libmkl_rt`, pip `mkl`
+  on Linux x86_64). The dispatcher stored the Fortran symbol `dsyrk_64_` in
+  the CBLAS slot and called it with CBLAS enums, so MKL dereferenced the
+  integer `101` as the `uplo` string. Fortran and CBLAS names now resolve into
+  separately typed slots, and a name whose prefix contradicts its slot is left
+  unwired with a warning instead of being called. The MKL and OpenBLAS ILP64
+  names take the Fortran path, which `dgemm` already used; Accelerate wiring
+  is unchanged.
+- With `JAMMA_FORCE_NUMPY_FALLBACK`, SNP means from float32 genotype chunks
+  are now accumulated in float64, as the C kernel does, instead of rounded to
+  float32. Allele frequencies and missing-genotype imputation under the
+  fallback now match the C path; results with the C kernel are unchanged.
+- The build prints each OpenMP retry notice once. `execute_build` reported a
+  failed OpenMP compile or link through both `on_retry` and `verbose_print`,
+  so the wheel build and `python -m jamma.lmm._compile_accel`, which point
+  both at stderr, logged the same line twice. The notice now goes to
+  `on_retry`, or to `error_print` when no callback is given, so a caller that
+  silences `verbose_print` still sees the single-threaded downgrade.
+- `scripts/demonstrate_equivalence.py` judges mouse_hs1940 at
+  `tests.fixture_paths.NUMPY_GEMMA_TOLERANCES`, the tolerances the parity
+  suite enforces, and reads every fixture path from the same module. #321
+  tightened the suite to `lambda_rtol=5e-5, pvalue_rtol=2e-4, se_rtol=1e-5,
+  logl_rtol=1e-6, atol=1e-12` while the report kept its own copy of the
+  earlier `1e-3, 1e-2, 5e-4, 5e-3, 1e-4`, so it certified equivalence at a
+  p-value tolerance 50x wider than the suite's. The report now has no
+  tolerance or path of its own to drift.
+- The "Eigendecomp memory" log line names the planned driver and the real
+  reason for it. On a host with no vendor DSYEVD or DSYEVR and
+  `JLINALG_NO_VENDOR_LAPACK` unset it read `(DSYEVD): ...
+  (JLINALG_NO_VENDOR_LAPACK set, ...)`, contradicting the "No vendor LAPACK"
+  line printed just before it; it now reads `(numpy): ... (no vendor DSYEVD
+  or DSYEVR, using np.linalg.eigh; estimate is DSYEVD-sized)` and the
+  duplicate line is gone. The forced-numpy line names `numpy` too. The
+  planner records the reason where it chooses the driver (`EigenDriverPlan`
+  now carries `driver`, `required_gb` and `reason`; `plan_eigen_driver`
+  takes `forced_numpy` and `inplace_blocker` in place of `no_vendor` and
+  `inplace_eligible`), so the runtime no longer re-derives it. The chosen
+  driver and every memory estimate are unchanged.
+- `run_lmm_association_numpy`, `run_lmm_association_numpy_streaming` and
+  `run_lmm_loco` reject a phenotype vector containing `inf` with
+  `ValueError("prepared phenotypes must contain only finite values")`, the
+  error the CLI already raised. Before, `inf` passed the missing-sample mask
+  and every statistic came back NaN with no error. The rule lives once, in
+  `compute_valid_mask`, which every entry runs first; the grouped runner's
+  separate copy is gone.
+- LOCO yields a chromosome with no kinship SNPs (one that `-ksnps` or the
+  MAF filter left empty) in biological order instead of after every other
+  chromosome, so `run_lmm_loco` output and the reported PVE follow chromosome
+  order whether the eigenpairs are computed or read from the cache. The
+  stream writes that chromosome's full kinship into its shared buffer instead
+  of copying `S_full` once per empty chromosome, and the "PVE computed from
+  chromosome N" log states the real reason: earlier chromosomes had no SNPs
+  to test.
+- `--mem-budget` now reaches the `-gk` kinship accumulation gate and the
+  `-gk -eigen` eigendecomposition gate. `jamma -gk 1 -eigen --mem-budget 0.001`
+  previously exited 0 and wrote every file while `-gk 1 -loco` and `-lmm`
+  rejected the same budget. `compute_kinship_streaming` takes `mem_budget`
+  and vetoes the run before the first genotype read, as
+  `compute_loco_kinship_streaming` does, and the eigendecomposition plans
+  its driver against the budget as the `-lmm` path already did.
+- `jamma.jlinalg.eigh(K, driver="dsyevr")` raises `RuntimeError` when vendor
+  DSYEVR is not wired, as documented, instead of running DSYEVD. The memory
+  plan chooses DSYEVR for its O(N) workspace, so a DSYEVD run would touch
+  pages the plan never reserved. `jlinalg_eigh_c` now calls DSYEVR through
+  one helper on both paths. The pipeline is unchanged: `core/eigen_plan.py`
+  only plans DSYEVR when `blas_has_dsyevr` is set.
+- The raw `_jlinalg.dgemm` and `_jlinalg.dsyrk` entry points raise
+  `RuntimeError` when their vendor routine is not wired, as `jlinalg.h`,
+  `_jlinalg.pyi`, and `pymodule.c` document, instead of calling `abort()`.
+  The public `jamma.jlinalg.dgemm` and `dsyrk` bind NumPy in that state and
+  were unaffected. `JLINALG_NO_VENDOR_DSYRK` and `JLINALG_NO_VENDOR_DSYEVR`
+  join `JLINALG_NO_VENDOR_DGEMM` as test seams that leave one vendor routine
+  unwired.
+- `jamma -gk` no longer applies `-lmm`'s rules to options it never reads,
+  and no longer accepts them silently. `-gk 1 -lmin -1` and
+  `-gk 1 -loco -hwe 0.01` exited 2 with `-lmm`'s validation messages, while
+  `-gk 1 -k missing.cXX.txt -snps missing.txt` ran without a word. `-gk` now
+  leaves every `-lmm`-only option (`-k`, `-d`, `-u`, `--eigen-dir`, `-hwe`,
+  `-lmin`, `-lmax`, `-snps`, `-widv`, `--backend`) at its default and logs
+  one warning naming each one given on the command line,
+  matching GEMMA's tolerance of flags a mode does not use. `-lmm` is
+  unchanged.
+- `compare_assoc_results` gates AF with an absolute tolerance of one printing
+  unit, `ToleranceConfig.af_atol = 1e-3`, in place of `af_rtol = 0.05`. The
+  relative gate passed a flipped allele whenever AF was within about 0.013 of
+  0.5 (`0.49` against `0.51`), while the docstring promised that a flip fails.
+  `strict()` and `relaxed()` no longer widen AF, and the math-validation
+  wrapper's separate `af_orientation` check is gone because the oracle now
+  enforces the same bound; its failure ids read `<rs>:af`.
+
+### Removed
+
+- `jamma.kinship.SnpStatsCache` and the `sample_scope` field on `SnpStats`.
+  `LocoKinshipStream.snp_stats` is now always a `SnpStats` over the rows the
+  kinship pass filtered on, never `None`.
+- `jamma.core.memory.MemoryLedger`, `estimate_lmm_memory`,
+  `estimate_streaming_memory`, `kinship_cost`, `eigen_cost` and `lmm_cost`,
+  and their `jamma.core` re-exports. `ExecutableAssociationPlan.price()`
+  (`plan_association(...).price(eigen=...)`) is the one memory quote, the
+  figure every preflight gates on. `jamma.core.eigen_plan.square_matrix_gb`
+  is gone too; `array_gb` now lives in `jamma.core.memory`, and
+  `array_gb(n, n)` replaces `square_matrix_gb(n)`. The batch association
+  quote drops `4 * n` float64 it carried and streaming never did (3.2 MB at
+  100,000 samples). Streaming and LOCO quotes are unchanged.
+- `jamma.lmm.io` and `jamma.lmm.results` are merged into
+  `jamma.lmm.assoc_output`, which owns the `.assoc.txt` row.
+  `IncrementalAssocWriter(path, mode)` takes a `ModeSpec` in place of a
+  `test_type` string, and `write_arrays_batch` no longer takes `lmm_mode`.
+  `AssocResult` moves there from `jamma.lmm.stats`, and `ModeSpec.header`
+  replaces `HEADERS`. `format_assoc_line`, `TEST_TYPE_MAP`, `ACCUM_KEYS`,
+  `RESULT_FIELDS`, `FORMAT_COLUMNS` and `LocoResult` are gone;
+  `run_lmm_loco` returns `LmmRunResult`. `PipelineTiming` moves to
+  `jamma.pipeline_config`. Output bytes are unchanged.
+- `jamma.core.cleanup_memory`. It ran `gc.collect()` twice and logged RSS,
+  and nothing in JAMMA or its scripts called it. Call `gc.collect()` and
+  `jamma.core.log_memory_snapshot()` directly instead.
+- `jamma.core.hardware`. `get_hardware_context()` and `HardwareContext` now
+  live in `scripts/_hardware_context.py`, beside the benchmark scripts that
+  are their only users.
+- Three one-shot developer scripts whose job is done, none of which a
+  workflow, hook, test or doc invokes. `scripts/codemod_test_builders.py`
+  migrated tests onto `rotated_lmm_inputs` in #266 and now finds nothing to
+  rewrite. `scripts/verify_loco_thread_limits.py` checked LOCO BLAS scope
+  ownership for #361 and #362 through a private function.
+  `tests/test_loco_worker_resources.py` covers the same completion, early
+  close and input-failure exits, plus a solve failure, with a fake BLAS
+  controller.
+  `scripts/lmm_accel_sections.py` and its test were the section census for
+  splitting `_lmm_accel.c`, and that split is done. Git history keeps all
+  three.
+- `jamma.lmm._compile_accel.compile_extension` no longer takes `diagnose`,
+  which added clang `-Rpass` or gcc `-fopt-info-vec-all` vectorization
+  reports to the dev rebuild. Nothing in the repository passed it. To see the
+  reports, run with `verbose=True`, copy a printed compile command, and add
+  the flag by hand.
+- `compile_extension` in `jamma.lmm._compile_accel` and
+  `jamma.jlinalg._compile_jlinalg` no longer takes `on_retry`. Nothing in the
+  repository passed it. The OpenMP retry notice still prints, on the same
+  stream as the rest of the build output.
+- `jamma.lmm.likelihood.reml_log_likelihood` and `mle_log_likelihood` drop
+  the `nc_total` keyword and evaluate the null model only, the one form
+  production calls. The alternative-model REML moves to
+  `tests/reference/likelihood.py` as `reml_log_likelihood_alt`, and the
+  alternative-model MLE fast path `_mle_p_yy_scalar_ncvt1`, which only tests
+  reached, is deleted.
+- `jamma.lmm.special` no longer exports the scalar `betainc` and `chi2_sf`.
+  Production calls only `betainc_batch` and `chi2_sf_batch`; the scalar forms
+  move to `tests/reference/special.py` as their test oracles. No result
+  changes.
 
 ## [8.1.0] - 2026-09-14
 

@@ -1,13 +1,9 @@
 """C compiler discovery for build-time AND runtime recompile.
 
-Canonical location for ``find_c_compiler``. Consumers:
-
-  * hatch_build.py (PEP 517 wheel build backend)
-  * src/jamma/jlinalg/_compile_jlinalg.py (dev-mode + runtime recompile)
-  * src/jamma/lmm/_compile_accel.py (dev-mode + runtime recompile)
+Canonical location for ``find_c_compiler``.
 
 Ships inside the installed package as ``jamma._build_support.find_compiler``
-so runtime ABI-mismatch recompile via ``jamma.core.recompile`` reaches the
+so runtime ABI-mismatch recompile via ``jamma._native`` reaches the
 same discovery logic the wheel was built with — no separate minimal
 fallback exists or should be added.
 """

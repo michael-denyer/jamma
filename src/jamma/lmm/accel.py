@@ -1,12 +1,7 @@
 """Loader for the `_lmm_accel` C extension.
 
 The one place that imports, ABI-validates, and (on failure) auto-recompiles
-`_lmm_accel`, through the shared seam in `jamma.core.recompile`. Every module
-that needs to know whether the C extension is usable — `compute_numpy`,
-`chunk_kernel`, `chunk_runner_numpy`, `runner`, `pipeline_memory`,
-`pipeline_banner` — reads it from here instead of reaching into
-`compute_numpy`'s private state, which used to be the only tenant of the
-loader despite being a pure-NumPy fallback module in its own right.
+`_lmm_accel`, through the shared seam in `jamma._native`.
 
 ``available()`` and ``HAS_OPENMP`` are read at call time, not cached at
 import time in the caller, so a test that clears ``accel._accel`` (directly,
@@ -19,16 +14,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
+from jamma._native import _load_c_module
 from jamma.core.constants import env_flag
-from jamma.core.recompile import _load_c_module
 
 if TYPE_CHECKING:
     from types import ModuleType
 
-_EXPECTED_ABI_VERSION = 21  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 23  # Must match ABI_VERSION in _lmm_accel.c
 
 # Load and validate the C accelerator through the one shared seam in
-# jamma.core.recompile. It honours JAMMA_FORCE_NUMPY_FALLBACK (returns None
+# jamma._native. It honours JAMMA_FORCE_NUMPY_FALLBACK (returns None
 # without importing, so ASAN never dlopens the .so), checks ABI_VERSION against
 # _EXPECTED_ABI_VERSION, confirms the fused-kernel core symbols listed in
 # LMM_ACCEL_SPEC.required_attrs are present, and rebuilds a stale .so once

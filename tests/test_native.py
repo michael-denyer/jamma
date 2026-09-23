@@ -1,4 +1,4 @@
-"""Tests for jamma.core.recompile.auto_recompile_c_extension.
+"""Tests for jamma._native.auto_recompile_c_extension.
 
 Covers the observable outcomes of the runtime recompile shim:
   1. compile_extension raises -> False + warning log + fallback msg
@@ -20,17 +20,13 @@ from pathlib import Path
 
 import pytest
 
-from jamma.core.recompile import _import_and_validate, auto_recompile_c_extension
+from jamma._native import _import_and_validate, auto_recompile_c_extension
 
 pytestmark = pytest.mark.tier0
 
 
-def _fake_spec(*, module_name, sys_module_key, label):
-    """Build a BuildSpec carrying only the load identity these tests exercise.
-
-    The build fields are dummies — auto_recompile_c_extension reads only
-    module_name / sys_module_key / fallback_label.
-    """
+def _fake_spec(*, output_stem, sys_module_key, label):
+    """Build a BuildSpec carrying only the load identity these tests exercise."""
     from jamma._build_support.build_models import BuildSpec
 
     return BuildSpec(
@@ -39,17 +35,16 @@ def _fake_spec(*, module_name, sys_module_key, label):
         include_parts=(),
         sources=(),
         lapack_sources=(),
-        output_stem=module_name,
-        module_name=module_name,
+        output_stem=output_stem,
         sys_module_key=sys_module_key,
         fallback_label=label,
     )
 
 
-def _recompile(*, module_name, sys_module_key, label):
+def _recompile(*, output_stem, sys_module_key, label):
     return auto_recompile_c_extension(
         _fake_spec(
-            module_name=module_name,
+            output_stem=output_stem,
             sys_module_key=sys_module_key,
             label=label,
         )
@@ -59,10 +54,8 @@ def _recompile(*, module_name, sys_module_key, label):
 def _patch_compile_extension(monkeypatch, fn):
     """Patch the ``compile_extension`` the shim calls.
 
-    ``auto_recompile_c_extension`` imports it lazily
-    (``from jamma._build_support.compile_and_link import compile_extension``)
-    inside the function body, so patching the attribute on the source module
-    is what the lazy import picks up.
+    ``auto_recompile_c_extension`` looks it up on the ``compile_and_link``
+    module at call time, so patching the module attribute redirects it.
     """
     import jamma._build_support.compile_and_link as compile_and_link_mod
 
@@ -70,10 +63,10 @@ def _patch_compile_extension(monkeypatch, fn):
 
 
 def _stub_compile(result):
-    """Build a fake ``compile_extension(spec, package_dir, ..., on_retry=...)``
+    """Build a fake ``compile_extension(spec, package_dir, report)``
     that ignores every argument and returns ``result``."""
 
-    def _fake(spec, package_dir, *, on_retry=None):
+    def _fake(spec, package_dir, report):
         return result
 
     return _fake
@@ -87,7 +80,7 @@ def _isolate_lock_files(monkeypatch, tmp_path):
     sys_module_key (e.g. "jamma._fake_ext_success") and writes a
     .lock file into the real src/jamma/ source tree on every run.
     """
-    from jamma.core import recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     monkeypatch.setattr(
         recompile_mod,
@@ -104,7 +97,7 @@ def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     """
     sys_key = "jamma._fake_ext_raises"
 
-    def _raises(spec, package_dir, *, on_retry=None):
+    def _raises(spec, package_dir, report):
         raise RuntimeError("fake failure")
 
     _patch_compile_extension(monkeypatch, _raises)
@@ -112,7 +105,7 @@ def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     monkeypatch.setitem(sys.modules, sys_key, sentinel)
 
     result = _recompile(
-        module_name="_fake_ext_raises",
+        output_stem="_fake_ext_raises",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -133,7 +126,7 @@ def test_compiler_returns_false_does_not_evict(monkeypatch):
     monkeypatch.setitem(sys.modules, sys_key, sentinel)
 
     result = _recompile(
-        module_name="_fake_ext_false",
+        output_stem="_fake_ext_false",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -152,7 +145,7 @@ def test_successful_recompile_evicts_stale_module(monkeypatch):
     monkeypatch.setitem(sys.modules, sys_key, stale)
 
     result = _recompile(
-        module_name="_fake_ext_success",
+        output_stem="_fake_ext_success",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -173,7 +166,7 @@ def test_successful_recompile_with_no_prior_sys_modules_entry(monkeypatch):
     monkeypatch.delitem(sys.modules, sys_key, raising=False)
 
     result = _recompile(
-        module_name="_fake_ext_no_prior",
+        output_stem="_fake_ext_no_prior",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -181,22 +174,19 @@ def test_successful_recompile_with_no_prior_sys_modules_entry(monkeypatch):
     assert result is True
 
 
-def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
-    """The runtime recompile shim must pass a non-None on_retry callback
-    to compile_extension AND invoking it must emit a warning the user
-    can see. Without this, runtime recompile silently falls back to
-    single-threaded with no user-visible signal — the exact gap this
-    test guards.
+def test_build_warnings_reach_the_log_as_warnings(monkeypatch, capsys):
+    """A build warning (an OpenMP retry) reported during runtime recompile
+    must reach the user as a logged warning. Without this, runtime recompile
+    silently falls back to single-threaded with no user-visible signal.
     """
     from loguru import logger as _logger
 
     sys_key = "jamma._fake_ext_retry"
-    captured_retry: list[object] = []
+    calls: list[str] = []
 
-    def _compile(spec, package_dir, *, on_retry=None):
-        captured_retry.append(on_retry)
-        if on_retry is not None:
-            on_retry("OpenMP compilation failed, retrying without OpenMP")
+    def _compile(spec, package_dir, report):
+        calls.append(spec.output_stem)
+        report.warn("OpenMP compilation failed, retrying without OpenMP")
         return True
 
     _patch_compile_extension(monkeypatch, _compile)
@@ -206,7 +196,7 @@ def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
     sink_id = _logger.add(sys.stderr, level="WARNING")
     try:
         result = _recompile(
-            module_name="_fake_ext_retry",
+            output_stem="_fake_ext_retry",
             sys_module_key=sys_key,
             label="fake",
         )
@@ -214,15 +204,10 @@ def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
         _logger.remove(sink_id)
 
     assert result is True
-    assert captured_retry, "compile_extension must be called"
-    assert captured_retry[0] is not None, (
-        "auto_recompile_c_extension must pass a non-None on_retry to "
-        "compile_extension so OMP downgrade signals surface"
-    )
+    assert calls == ["_fake_ext_retry"]
     captured = capsys.readouterr()
-    assert "OpenMP compilation failed" in captured.err, (
-        "on_retry invocation must produce a user-visible warning — "
-        "loguru must emit, not silently discard, retry notices"
+    assert captured.err.count("OpenMP compilation failed") == 1, (
+        "a build warning must be logged exactly once at WARNING level"
     )
 
 
@@ -239,7 +224,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
     import threading
     import time
 
-    from jamma.core import recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     # All threads share one lock file — the invariant under test.
     shared_lock = tmp_path / "shared.lock"
@@ -252,7 +237,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
     intervals: list[tuple[int, int]] = []
     intervals_lock = threading.Lock()
 
-    def slow_compile(spec, package_dir, *, on_retry=None):
+    def slow_compile(spec, package_dir, report):
         enter_ns = time.monotonic_ns()
         time.sleep(critical_sleep_s)
         exit_ns = time.monotonic_ns()
@@ -274,7 +259,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
 
     def worker(sys_key: str) -> None:
         r = _recompile(
-            module_name="_fake_ext_concurrent",
+            output_stem="_fake_ext_concurrent",
             sys_module_key=sys_key,
             label="fake",
         )
@@ -316,7 +301,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
     import threading
     import time
 
-    from jamma.core import recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     shared_lock = tmp_path / "shared.lock"
     monkeypatch.setattr(recompile_mod, "_lock_path_for", lambda key: shared_lock)
@@ -335,7 +320,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
     intervals: list[tuple[int, int]] = []
     intervals_lock = threading.Lock()
 
-    def slow_compile(spec, package_dir, *, on_retry=None):
+    def slow_compile(spec, package_dir, report):
         enter_ns = time.monotonic_ns()
         time.sleep(critical_sleep_s)
         exit_ns = time.monotonic_ns()
@@ -351,7 +336,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
 
     def worker(sys_key: str) -> None:
         _recompile(
-            module_name="_fake_ext_nolock",
+            output_stem="_fake_ext_nolock",
             sys_module_key=sys_key,
             label="fake",
         )
@@ -391,7 +376,7 @@ def test_lock_path_for_installed_package_lives_in_package_dir(monkeypatch):
     """
     monkeypatch.undo()  # drop the autouse _lock_path_for patch
 
-    from jamma.core.recompile import _lock_path_for
+    from jamma._native import _lock_path_for
 
     path = _lock_path_for("jamma.core._fake_ext")
 
@@ -419,7 +404,7 @@ def test_lock_path_for_unknown_package_falls_back_to_tempdir(monkeypatch):
 
     import tempfile as _tempfile
 
-    from jamma.core.recompile import _lock_path_for
+    from jamma._native import _lock_path_for
 
     path = _lock_path_for("jamma_nonexistent_pkg_xyz._x")
 
@@ -439,7 +424,7 @@ def test_lock_path_for_toplevel_module_falls_back_to_tempdir(monkeypatch):
 
     import tempfile as _tempfile
 
-    from jamma.core.recompile import _lock_path_for
+    from jamma._native import _lock_path_for
 
     path = _lock_path_for("_toplevel_ext")
 
@@ -456,7 +441,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
     """
     import importlib as importlib_mod
 
-    from jamma.core import recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     monkeypatch.setattr(
         recompile_mod, "_lock_path_for", lambda key: tmp_path / "shared.lock"
@@ -466,7 +451,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
 
     compile_calls = [0]
 
-    def should_not_compile(spec, package_dir, *, on_retry=None):
+    def should_not_compile(spec, package_dir, report):
         compile_calls[0] += 1
         return True
 
@@ -493,7 +478,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
     monkeypatch.setattr(recompile_mod.importlib, "import_module", fake_import)
 
     result = _recompile(
-        module_name="_fake_ext_skip",
+        output_stem="_fake_ext_skip",
         sys_module_key=sys_key,
         label="fake",
     )
@@ -508,7 +493,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
 # --- WARNING-level logging on load failure (surface reason, not silence it) ---
 
 
-def _fake_build_spec(*, module_name, sys_module_key, fallback_label, required_attrs=()):
+def _fake_build_spec(*, output_stem, sys_module_key, fallback_label, required_attrs=()):
     from jamma._build_support.build_models import BuildSpec
 
     return BuildSpec(
@@ -517,8 +502,7 @@ def _fake_build_spec(*, module_name, sys_module_key, fallback_label, required_at
         include_parts=(),
         sources=(),
         lapack_sources=(),
-        output_stem=module_name,
-        module_name=module_name,
+        output_stem=output_stem,
         sys_module_key=sys_module_key,
         fallback_label=fallback_label,
         required_attrs=required_attrs,
@@ -533,7 +517,7 @@ def test_import_and_validate_import_error_logs_warning_with_reason(capsys):
     from loguru import logger as _logger
 
     spec = _fake_build_spec(
-        module_name="_fake_ext_importerr",
+        output_stem="_fake_ext_importerr",
         sys_module_key="jamma._fake_ext_that_does_not_exist_importerr",
         fallback_label="fake-fallback",
     )
@@ -565,7 +549,7 @@ def test_import_and_validate_missing_abi_version_logs_warning(monkeypatch, capsy
     monkeypatch.setitem(sys.modules, sys_key, fake_mod)
 
     spec = _fake_build_spec(
-        module_name="_fake_ext_no_abi",
+        output_stem="_fake_ext_no_abi",
         sys_module_key=sys_key,
         fallback_label="fake-fallback",
     )
@@ -598,7 +582,7 @@ def test_import_and_validate_missing_required_attrs_logs_warning_with_names(
     monkeypatch.setitem(sys.modules, sys_key, fake_mod)
 
     spec = _fake_build_spec(
-        module_name="_fake_ext_missing_attr",
+        output_stem="_fake_ext_missing_attr",
         sys_module_key=sys_key,
         fallback_label="fake-fallback",
         required_attrs=("dgemm", "eigh"),

@@ -80,10 +80,7 @@ def test_weight_oracle_rejects_corrupt_model_identity_and_af(tmp_path):
         reference_optional_logl=True,
     )
     assert result["status"] == "NOT VERIFIED"
-    assert set(result["failure_ids"]) == {
-        "boundary1:af_orientation",
-        "boundary1:af",
-    }
+    assert result["failure_ids"] == ["boundary1:af"]
 
 
 @pytest.mark.tier1

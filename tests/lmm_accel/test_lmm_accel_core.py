@@ -6,7 +6,7 @@ live in tests/lmm_accel/_helpers.py.
 The kernel under test is the fused n_cvt=1 Wald workspace, which is what
 ``DispatchPath.FUSED`` reaches for lmm_mode 1. This module used to drive
 ``compute_lmm_batch_c``, a batch entry point no dispatch path selects, through
-``_compute_wald_numpy``. That function's inner C ladder is unreachable by
+``compute_wald_numpy``. That function's inner C ladder is unreachable by
 construction: its only production caller is ``compute_lmm_chunk_numpy``, which
 the runner reaches only on ``NUMPY_FALLBACK``, and that path is chosen only when
 the extension is absent.
@@ -23,7 +23,8 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.schema import MIN_N_GRID
-from tests.conftest import requires_c
+from tests.builders import gram_uab_batch
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -45,17 +46,19 @@ def _make_workspace(
     the call stays typed; a dict merge widens every value to the union of the
     dict's types and pyrefly rejects the call.
     """
-    fixture_eigenvalues, w, Uty, _, fixture_inv_soa, _, fixture_n = fused_data
-    return accel.require().create_workspace_ncvt1_c(
+    fixture_eigenvalues, w, Uty, _, fixture_inv_soa, fixture_n = fused_data
+    return accel.require().create_workspace_c(
         fixture_eigenvalues if eigenvalues is None else eigenvalues,
         fixture_inv_soa if uab_invariant_soa is None else uab_invariant_soa,
-        w,
+        w[:, None],
         Uty,
         fixture_n if n_samples is None else n_samples,
         l_min,
         l_max,
         n_grid,
         n_refine,
+        1,
+        1,
         lmm_mode=1,
     )
 
@@ -63,25 +66,16 @@ def _make_workspace(
 @requires_c
 def test_c_extension_importable():
     """The kernels the dispatch table names are importable and callable."""
-    from jamma.lmm._lmm_accel import (
-        compute_lmm_chunk_fused_general_c,
-        compute_lmm_chunk_ncvt1_c,
-        create_workspace_general_c,
-        create_workspace_ncvt1_c,
-    )
+    from jamma.lmm._lmm_accel import compute_lmm_chunk_c, create_workspace_c
 
-    for fn in (
-        create_workspace_ncvt1_c,
-        compute_lmm_chunk_ncvt1_c,
-        create_workspace_general_c,
-        compute_lmm_chunk_fused_general_c,
-    ):
+    for fn in (create_workspace_c, compute_lmm_chunk_c):
         assert callable(fn)
 
 
-def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch):
+def test_c_fallback_when_extension_unavailable(monkeypatch):
     """With no extension loaded, the Python path runs without error."""
-    eigenvalues, Uab_batch, n_samples = synthetic_wald_data
+    eigenvalues, Uab_batch = gram_uab_batch()
+    n_samples = eigenvalues.shape[0]
 
     monkeypatch.setattr(accel, "_accel", None)
 
@@ -91,6 +85,8 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
         eigenvalues=eigenvalues,
         Uab_batch=Uab_batch,
         n_samples=n_samples,
+        Hi_eval_null=np.ones(n_samples),
+        logl_H0=0.0,
     )
 
     assert result["lambdas"] is not None
@@ -102,9 +98,9 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
 @requires_c
 def test_c_extension_single_snp(fused_data):
     """Minimal case: n_snps=1 works without index errors."""
-    _, _, _, utg_t, _, _, _ = fused_data
+    _, _, _, utg_t, _, _ = fused_data
 
-    result = accel.require().compute_lmm_chunk_ncvt1_c(
+    result = accel.require().compute_lmm_chunk_c(
         _make_workspace(fused_data), utg_t[:1], 1
     )
 
@@ -116,13 +112,13 @@ def test_c_extension_single_snp(fused_data):
 @requires_c
 def test_c_extension_all_degenerate_snps(fused_data):
     """Every SNP degenerate: the whole output is NaN rather than a crash."""
-    _, _, _, utg_t, _, _, _ = fused_data
+    _, _, _, utg_t, _, _ = fused_data
 
     # A constant genotype rotates to an all-zero UtG column, driving xx and so
     # P_XX to zero. Zeroing every row makes the entire batch degenerate.
     utg_degen = np.zeros_like(utg_t)
 
-    result = accel.require().compute_lmm_chunk_ncvt1_c(
+    result = accel.require().compute_lmm_chunk_c(
         _make_workspace(fused_data), utg_degen, 1
     )
 
@@ -165,10 +161,10 @@ class TestFusedWorkspaceInputValidation:
             _make_workspace(fused_data, uab_invariant_soa=uab_inv_soa.T)
 
     def test_wrong_utg_t_n_samples(self, fused_data):
-        _, _, _, utg_t, _, _, _ = fused_data
+        _, _, _, utg_t, _, _ = fused_data
         ws = _make_workspace(fused_data)
         with pytest.raises(ValueError, match="utg_t"):
-            accel.require().compute_lmm_chunk_ncvt1_c(
+            accel.require().compute_lmm_chunk_c(
                 ws, np.ascontiguousarray(utg_t[:, :10]), 1
             )
 

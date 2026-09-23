@@ -21,19 +21,19 @@ import pytest
 from jamma.core.threading import get_physical_core_count
 from jamma.io import read_fam_phenotypes
 from jamma.lmm import loco_workers
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.loco_eigen import _computed_eigen_pairs
 from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs
 from jamma.lmm.schema import LmmConfig
-from jamma.lmm.stats import AssocResult
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO
+from tests.support import require_fixture
 
 
 @pytest.mark.tier0
 def test_worker_budget_charges_each_owned_input_once():
-    from jamma.core.eigen_plan import plan_eigen_driver
     from jamma.kinship.loco import loco_retained_set
+    from jamma.lmm.eigen_plan import plan_eigen_driver
 
     retained = loco_retained_set(10_000, 10_000, 10_000)
     eigen = plan_eigen_driver(
@@ -41,8 +41,8 @@ def test_worker_budget_charges_each_owned_input_once():
         100,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
     )
     plan = plan_loco_workers(
         2,
@@ -88,8 +88,8 @@ def test_worker_plan_respects_memory_and_execution_caps(
     association,
     expected,
 ):
-    from jamma.core.eigen_plan import plan_eigen_driver
     from jamma.kinship.loco import loco_retained_set
+    from jamma.lmm.eigen_plan import plan_eigen_driver
 
     retained = loco_retained_set(10_000, 10_000, 10_000)
     eigen = plan_eigen_driver(
@@ -97,8 +97,8 @@ def test_worker_plan_respects_memory_and_execution_caps(
         100,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
     )
     plan = plan_loco_workers(
         requested,
@@ -135,23 +135,16 @@ def _computed_pairs(*, workers: int, solve):
     from jamma.lmm.eigen import plan_eigen_driver_for_machine
 
     eigen_plan = plan_eigen_driver_for_machine(
-        8, 100, budget_gb=None, inplace_eligible=True
+        8, 100, budget_gb=None, inplace_blocker=None
     )
-    chr_names = list(_ORDER_BY_CHR)
     return _computed_eigen_pairs(
         _synthetic_stream(),
-        chr_names,
-        valid_mask=np.ones(8, dtype=bool),
-        n_valid=8,
-        pre_subset=False,
-        all_samples_valid=True,
-        partitions={c: np.arange(5) for c in chr_names},
-        check_memory=False,
-        show_progress=False,
+        {c: np.arange(5) for c in _ORDER_BY_CHR},
+        subset_rows=None,
+        config=LmmConfig(check_memory=False, show_progress=False),
         loco=LocoConfig(),
         cache_write=None,
         eigen_plan=eigen_plan,
-        mem_budget=None,
         workers=workers,
         solve=solve,
     )

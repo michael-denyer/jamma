@@ -1,7 +1,7 @@
 """Guard/precondition tests for the shared NumPy LMM chunk runner.
 
 These cover the cheap, isolated failure paths that the end-to-end parity
-suites never exercise: the ``run_lmm_chunk_source_numpy`` argument
+suites never exercise: the ``run_lmm_chunk_source_numpy_group`` argument
 preconditions.
 """
 
@@ -14,16 +14,20 @@ import psutil
 import pytest
 from loguru import logger
 
-from jamma.core.snp_stats import SnpSelection
+from jamma.genotype.snp_stats import SnpSelection
 from jamma.lmm import accel
-from jamma.lmm.chunk_runner_numpy import RawLmmChunk, run_lmm_chunk_source_numpy
+from jamma.lmm.chunk_runner_numpy import (
+    PhenotypeChunkJob,
+    RawLmmChunk,
+    run_lmm_chunk_source_numpy_group,
+)
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
-from jamma.lmm.prepare_common import PreparedLmmRun
-from jamma.lmm.schema import ChunkRunStats, LmmConfig, SnpMeta
+from jamma.lmm.prepare_common import NullFit, RotatedBasis
+from jamma.lmm.schema import LmmConfig, SnpMeta
 from jamma.lmm.workspace import WorkspaceSpec
-from tests.conftest import requires_c
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -35,15 +39,9 @@ def test_association_logs_the_workspace_thread_cap_used_by_real_kernels(monkeypa
     rng = np.random.default_rng(21)
     G = rng.integers(0, 3, size=(n_samples, n_snps)).astype(float)
     config = LmmConfig(lmm_mode=1, show_progress=False)
-    prepared = PreparedLmmRun(
-        eigenvalues=np.ones(n_samples),
-        U=np.eye(n_samples),
-        UtW=np.ones((n_samples, 1)),
-        Uty=rng.normal(size=n_samples),
-        logl_H0=-1.0,
+    fit = replace(
+        _null_fit(n_samples, Uty=rng.normal(size=n_samples)),
         Hi_eval_null=np.full(n_samples, 0.5),
-        pve=None,
-        pve_se=None,
     )
     genotypes = replace(
         _prepared_genotypes(n_samples, n_snps),
@@ -66,14 +64,19 @@ def test_association_logs_the_workspace_thread_cap_used_by_real_kernels(monkeypa
     messages = []
     sink = logger.add(messages.append, level="INFO", format="{message}")
     try:
-        run_lmm_chunk_source_numpy(
+        run_lmm_chunk_source_numpy_group(
             genotypes=genotypes,
-            chunk_sink=lambda arrays, _start, _end: written.append(arrays["betas"]),
+            basis=_basis(n_samples),
+            jobs=(
+                PhenotypeChunkJob(
+                    fit,
+                    lambda arrays, _start, _end: written.append(arrays["betas"]),
+                ),
+            ),
+            config=config,
             dispatch=DispatchPath.FUSED,
             chunks=LmmChunkPlan(2, 3, 2, True),
             workspace=workspace,
-            prepared=prepared,
-            config=config,
         )
     finally:
         logger.remove(sink)
@@ -85,7 +88,7 @@ def test_association_logs_the_workspace_thread_cap_used_by_real_kernels(monkeypa
 
 
 # ---------------------------------------------------------------------------
-# run_lmm_chunk_source_numpy preconditions
+# run_lmm_chunk_source_numpy_group preconditions
 # ---------------------------------------------------------------------------
 
 
@@ -128,74 +131,52 @@ def _workspace(n_samples: int, config: LmmConfig | None = None) -> WorkspaceSpec
     )
 
 
-def test_prepared_run_and_config_define_an_empty_chunk_run() -> None:
-    """The chunk interface derives counts instead of accepting parallel integers."""
-    n_samples = 4
-    prepared = PreparedLmmRun(
+def test_prepared_genotype_sample_count_must_match_prepared_run() -> None:
+    with pytest.raises(ValueError, match="sample count does not match"):
+        run_lmm_chunk_source_numpy_group(
+            **_run_kwargs(genotypes=_prepared_genotypes(3, 5))
+        )
+
+
+def _basis(n_samples: int) -> RotatedBasis:
+    return RotatedBasis(
         eigenvalues=np.ones(n_samples),
         U=np.eye(n_samples),
+        W=np.ones((n_samples, 1)),
         UtW=np.ones((n_samples, 1)),
-        Uty=np.ones(n_samples),
+    )
+
+
+def _null_fit(n_samples: int, Uty: np.ndarray) -> NullFit:
+    return NullFit(
+        Uty=Uty,
         logl_H0=-1.0,
         Hi_eval_null=np.ones(n_samples),
         pve=None,
         pve_se=None,
     )
-
-    stats = run_lmm_chunk_source_numpy(
-        genotypes=_prepared_genotypes(n_samples, 0),
-        chunk_sink=lambda _arrays, _start, _end: None,
-        dispatch=DispatchPath.NUMPY_FALLBACK,
-        chunks=LmmChunkPlan(1, 0, 1, False),
-        workspace=_workspace(n_samples),
-        prepared=prepared,
-        config=LmmConfig(show_progress=False),
-    )
-
-    assert stats == ChunkRunStats()
-
-
-def test_prepared_genotype_sample_count_must_match_prepared_run() -> None:
-    with pytest.raises(ValueError, match="sample count does not match"):
-        run_lmm_chunk_source_numpy(**_run_kwargs(genotypes=_prepared_genotypes(3, 5)))
 
 
 def _run_kwargs(**overrides):
-    """Minimal valid arguments for the shared chunk interface.
-
-    The prepared source and sink are never reached by the empty-run paths.
-    """
+    """Minimal valid arguments for the shared chunk interface."""
     n_samples = 4
-    prepared = PreparedLmmRun(
-        eigenvalues=np.ones(n_samples),
-        U=np.eye(n_samples),
-        UtW=np.ones((n_samples, 1)),
-        Uty=np.ones(n_samples),
-        logl_H0=-1.0,
-        Hi_eval_null=np.ones(n_samples),
-        pve=None,
-        pve_se=None,
-    )
     config = LmmConfig(lmm_mode=1, show_progress=False)
     base = {
         "genotypes": _prepared_genotypes(n_samples, 5),
-        "chunk_sink": lambda _arrays, _start, _end: None,
+        "basis": _basis(n_samples),
+        "jobs": (
+            PhenotypeChunkJob(
+                _null_fit(n_samples, np.linspace(-1.0, 1.0, n_samples)),
+                lambda _arrays, _start, _end: None,
+            ),
+        ),
+        "config": config,
         "dispatch": DispatchPath.NUMPY_FALLBACK,
         "chunks": LmmChunkPlan(5, 1, 1, False),
         "workspace": _workspace(n_samples, config),
-        "prepared": prepared,
-        "config": config,
     }
     base.update(overrides)
     return base
-
-
-def test_empty_filtered_returns_zeroed_stats():
-    """No SNPs means no work and no time spent, on every field the caller reads."""
-    stats = run_lmm_chunk_source_numpy(
-        **_run_kwargs(genotypes=_prepared_genotypes(4, 0))
-    )
-    assert stats == ChunkRunStats()
 
 
 def test_shared_chunk_entry_resets_the_p_yy_warning():
@@ -207,6 +188,18 @@ def test_shared_chunk_entry_resets_the_p_yy_warning():
     """
     from jamma.lmm import pab
 
+    n_samples, n_snps = 4, 5
+    G = np.array(
+        [[0, 1, 2, 0, 1], [1, 2, 0, 2, 0], [2, 0, 1, 1, 2], [0, 1, 1, 2, 0]],
+        dtype=float,
+    )
+    genotypes = replace(
+        _prepared_genotypes(n_samples, n_snps),
+        chunk_factory=lambda width: (
+            RawLmmChunk(G[:, i : i + width].copy(), i, i + width)
+            for i in range(0, n_snps, width)
+        ),
+    )
     pab._p_yy_state.warned = True
-    run_lmm_chunk_source_numpy(**_run_kwargs(genotypes=_prepared_genotypes(4, 0)))
+    run_lmm_chunk_source_numpy_group(**_run_kwargs(genotypes=genotypes))
     assert getattr(pab._p_yy_state, "warned", False) is False

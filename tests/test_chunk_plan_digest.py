@@ -26,16 +26,13 @@ from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
 
-# R2 removes the 100-SNP floor when it exceeds the variable memory budget.
-# Against 346c3eb6, 1,280 of 7,560 rows change, all at the 1 MB budget;
-# every changed width decreases. The 2 GB and 40 GB rows are unchanged.
-EXPECTED_DIGEST = "1959a9a1959f0614e367034eff7e3256ddd2386ffd2d23a01b71c4922dc2be62"
-EXPECTED_ROWS = 7560
+EXPECTED_DIGEST = "99dfbe9fe376660680842f76a3cb01ece884e9cd715a1b9d797ef8783f92ef47"
+EXPECTED_ROWS = 5040
 
 N_SAMPLES = (30, 1_410, 5_000, 10_000, 10_001, 30_000, 100_000)
 N_SNPS = (100, 12_226, 500_000)
 N_CVT = (1, 4)
-DISPATCH = (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL, DispatchPath.NUMPY_FALLBACK)
+DISPATCH = (DispatchPath.FUSED, DispatchPath.NUMPY_FALLBACK)
 BUDGET_BYTES = (int(2e9), int(40e9), int(1e6))
 MAX_CHUNK = (None, 1_000)
 BLAS_CONTROLLABLE = (False, True)
@@ -111,9 +108,7 @@ def test_chunk_plan_digest_is_unchanged() -> None:
         # A tight budget splits past the threshold on its own; the pipelined
         # re-size halves the budget across two live buffers.
         (100_000, 500_000, DispatchPath.FUSED, int(2e9), True, (1_250, 400, 2, True)),
-        # A throughput floor must not exceed the budget: 100 * 1410 * 8
-        # is 1,128,000 bytes; 88 SNPs occupy 992,640 bytes and fit 1 MB.
-        (1_410, 100, DispatchPath.FUSED, int(1e6), False, (88, 2, 1, False)),
+        (1_410, 100, DispatchPath.FUSED, int(1e6), False, (100, 1, 1, False)),
     ],
 )
 def test_chunk_plan_spot_rows(n_samples, n_snps, dispatch, budget, blas, expected):

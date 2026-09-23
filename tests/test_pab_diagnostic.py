@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 
-from tests.conftest import requires_c
 from tests.math_validation.dense_oracle import evaluate
 from tests.math_validation.native_observer import native_wald
 from tests.math_validation.pab_cases import (
@@ -11,6 +10,7 @@ from tests.math_validation.pab_cases import (
     numpy_routes,
     reduced_inputs,
 )
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

@@ -1,27 +1,13 @@
-"""Core infrastructure modules for JAMMA.
+"""Core infrastructure modules for JAMMA."""
 
-This package contains configuration, memory estimation, threading, hardware
-context, and telemetry.
-"""
-
-from jamma.core.memory import (
-    MemoryLedger,
-    estimate_lmm_memory,
-    estimate_streaming_memory,
-)
 from jamma.core.memory_snapshot import (
     MemorySnapshot,
-    cleanup_memory,
     get_memory_snapshot,
     log_memory_snapshot,
 )
 
 __all__ = [
-    "MemoryLedger",
     "MemorySnapshot",
-    "cleanup_memory",
-    "estimate_lmm_memory",
-    "estimate_streaming_memory",
     "get_memory_snapshot",
     "log_memory_snapshot",
 ]

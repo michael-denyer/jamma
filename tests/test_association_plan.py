@@ -13,7 +13,7 @@ from jamma.lmm.association_plan import (
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.workspace import WorkspaceSpec
-from tests.conftest import requires_c
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -53,7 +53,7 @@ def test_plan_is_frozen_and_tightening_returns_a_chunk_plan(
 @pytest.mark.parametrize(
     "dispatch",
     [
-        pytest.param(DispatchPath.FUSED_GENERAL, marks=requires_c),
+        pytest.param(DispatchPath.FUSED, marks=requires_c),
         DispatchPath.NUMPY_FALLBACK,
     ],
 )

@@ -29,16 +29,29 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+import jamma
+from jamma.core import memory
 from jamma.core.constants import Env
-from jamma.core.eigen_plan import EigenDriverPlan
-from jamma.io.plink import get_plink_metadata, validate_plink_dimensions
+from jamma.core.telemetry import BenchmarkRecord, append_benchmark_record
+from jamma.io.plink import (
+    PlinkMetadata,
+    get_plink_metadata,
+    validate_plink_dimensions,
+)
 from jamma.io.snp_list import resolve_snp_list_file
+from jamma.io.weight import (
+    apply_individual_weights,
+    apply_weights_to_eigenvectors,
+    read_analysis_weights,
+)
 from jamma.kinship import (
     compute_kinship_streaming,
     read_kinship_matrix,
     write_kinship_matrix,
 )
 from jamma.lmm.association_plan import (
+    VALID_BACKENDS,
+    BackendRequest,
     ExecutionPlan,
     KinshipShape,
     plan_association,
@@ -49,28 +62,31 @@ from jamma.lmm.eigen_io import (
     read_eigen_files,
     write_eigen_files,
 )
+from jamma.lmm.eigen_plan import EigenDriverPlan
+from jamma.lmm.genotype_source import SampleBasis
+from jamma.lmm.loco import LocoRun, run_loco
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
-from jamma.lmm.schema import PipelineTiming, parse_lmm_mode
+from jamma.lmm.loco_eigen import plan_loco_eigen_driver
+from jamma.lmm.prepare_common import AnalysedPhenotype
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
-    VALID_BACKENDS,
-    BackendRequest,
     KinshipResult,
     PhenotypeResult,
     PipelineConfig,
     PipelineResult,
+    PipelineTiming,
+    ProvidedEigen,
+    ProvidedKinship,
 )
 from jamma.pipeline_memory import memory_preflight
 from jamma.pipeline_phenotype_loop import run_phenotype_loop
 from jamma.pipeline_plan import (
     KinshipSource,
     LocoAnalysisPlan,
-    ProvidedEigen,
-    ProvidedKinship,
     StandardAnalysisPlan,
     resolve_analysis_plan,
 )
-from jamma.pipeline_samples import load_analysed_samples
+from jamma.pipeline_samples import AnalysedSamples, load_analysed_samples
 
 __all__ = [
     "BackendRequest",
@@ -82,23 +98,28 @@ __all__ = [
 ]
 
 
-def _parse_backend_override(value: str) -> BackendRequest:
-    """Validate a JAMMA_BACKEND value against the accepted backend requests.
+def requested_backend(config: PipelineConfig) -> BackendRequest:
+    """Resolve the backend request, letting ``JAMMA_BACKEND`` override config.
 
     Args:
-        value: Raw ``JAMMA_BACKEND`` environment variable value.
+        config: Pipeline config carrying the validated ``backend`` field.
 
     Returns:
-        The value, narrowed to a valid backend request.
+        The environment override when set, otherwise ``config.backend``.
 
     Raises:
-        ValueError: If the value is not a recognised backend.
+        ValueError: If ``JAMMA_BACKEND`` is not a recognised backend.
     """
-    if value not in VALID_BACKENDS:
+    env_backend = Env.current().backend_raw
+    if env_backend is None:
+        logger.info(f"Backend request: {config.backend} (config)")
+        return config.backend
+    if env_backend not in VALID_BACKENDS:
         raise ValueError(
-            f"JAMMA_BACKEND must be one of {VALID_BACKENDS}, got {value!r}"
+            f"JAMMA_BACKEND must be one of {VALID_BACKENDS}, got {env_backend!r}"
         )
-    return value
+    logger.info(f"Backend request: {env_backend} (JAMMA_BACKEND)")
+    return env_backend
 
 
 SMALL_SAMPLE_WARNING_THRESHOLD = 50
@@ -161,16 +182,6 @@ class PipelineRunner:
     def _emit_telemetry(self, result: PipelineResult, plan: ExecutionPlan) -> None:
         """Emit benchmark telemetry record. Never raises."""
         try:
-            import jamma
-            from jamma.core.telemetry import (
-                BenchmarkRecord,
-                append_benchmark_record,
-            )
-        except ImportError:
-            logger.warning("Telemetry module not available", exc_info=True)
-            return
-
-        try:
             record: BenchmarkRecord = {
                 "timestamp": datetime.now(UTC).isoformat(),
                 "jamma_version": jamma.__version__,
@@ -197,15 +208,14 @@ class PipelineRunner:
     def validate_inputs(self) -> None:
         """Validate that required input files exist and combine legally.
 
-        Only checks that need the filesystem live here, plus the cross-field
-        rules that mention a file. Everything decidable from the config alone
-        (the LMM knobs, hwe_threshold, cat_columns, phenotype_columns) is
-        already guaranteed by PipelineConfig.__post_init__.
+        Only checks that need the filesystem live here. Everything decidable
+        from the config alone, including how the kinship and eigen fields
+        combine, is already guaranteed by PipelineConfig.__post_init__.
 
         Raises:
             FileNotFoundError: If PLINK files (.bed, .bim, .fam) are missing,
-                or if kinship_file/covariate_file is specified but missing.
-            ValueError: If mutually exclusive options are combined.
+                or if an input file the config names is missing.
+            ValueError: If the .bed size disagrees with the .fam and .bim.
         """
         bfile = self.config.bfile
         for ext in (".bed", ".bim", ".fam"):
@@ -215,26 +225,6 @@ class PipelineRunner:
 
         # Validate .bed file size matches .fam/.bim dimensions (VALID-01)
         validate_plink_dimensions(bfile)
-
-        if self.config.loco and self.config.kinship_file is not None:
-            raise ValueError(
-                "-k and -loco are mutually exclusive in this version. "
-                "LOCO computes kinship internally."
-            )
-
-        # Eigen file validation: -d and -u must be paired
-        has_eigen = self.config.eigenvalue_file is not None
-        has_eigenvec = self.config.eigenvector_file is not None
-        if has_eigen != has_eigenvec:
-            raise ValueError(
-                "Both -d (eigenvalues) and -u (eigenvectors) must be provided together"
-            )
-
-        if has_eigen and self.config.loco:
-            raise ValueError(
-                "-d/-u (pre-computed eigen) not supported with -loco mode. "
-                "Use --eigen-dir for per-chromosome eigen caching."
-            )
 
         # Every option that names an input file gets the same check, so they
         # share one. The order is part of the contract: a config naming two
@@ -250,8 +240,7 @@ class PipelineRunner:
             (self.config.weight_file, "Weight file"),
         )
         managed_pair = (
-            has_eigen
-            and self.config.eigenvalue_file is not None
+            self.config.eigenvalue_file is not None
             and self.config.eigenvector_file is not None
             and managed_eigen_pair_exists(
                 self.config.eigenvalue_file, self.config.eigenvector_file
@@ -263,35 +252,18 @@ class PipelineRunner:
             if path is not None and not path.exists():
                 raise FileNotFoundError(f"{label} not found: {path}")
 
-        if self.config.weight_file is not None and self.config.loco:
-            raise ValueError(
-                "-widv (individual weights) is not yet supported with -loco mode. "
-                "Apply weights to pre-computed kinship and use -k instead."
-            )
-        if (
-            self.config.weight_file is not None
-            and self.config.eigenvalue_file is not None
-        ):
-            raise ValueError(
-                "-widv (individual weights) cannot be used with -d/-u "
-                "(pre-computed eigen). "
-                "Weights must be applied to kinship before eigendecomposition."
-            )
-
     def _load_kinship_from_source(
         self,
         source: KinshipSource,
-        n_samples: int,
         kinship: KinshipShape,
-        valid_indices: np.ndarray | None,
+        basis: SampleBasis,
         weights: np.ndarray | None,
     ) -> np.ndarray:
         """Load or compute the kinship matrix over the valid samples.
 
         A ``ProvidedKinship`` source loads from disk; ``ComputedKinship``
-        streams from genotypes. Derive the source with
-        ``pipeline_plan.resolve_kinship_source`` so it cannot drift from
-        the resolver's choice.
+        streams from genotypes. ``resolve_analysis_plan`` derives the source
+        from ``PipelineConfig.source()``.
 
         If weights are provided, applies individual weights to K via
         K[i,j] /= sqrt(w_i * w_j) after centering the analysed matrix.
@@ -305,21 +277,15 @@ class PipelineRunner:
 
         Args:
             source: Where the kinship comes from, per the resolved plan.
-            n_samples: Number of samples (for validation of loaded kinship).
             kinship: The matrix order the plan resolved, full or analysed.
-            valid_indices: Sample indices to keep, or None for all samples.
-                Must be sorted, unique, and within [0, n_samples).
+            basis: The analysed samples within the PLINK sample order.
             weights: Weights already selected into analyzed-sample order, or None.
 
         Returns:
-            Kinship matrix of shape (n_out, n_out) where n_out = len(valid_indices)
-            or n_samples.
+            Kinship matrix of shape (n_valid, n_valid) over ``basis``.
         """
-        if valid_indices is not None:
-            from jamma.kinship import validate_valid_indices
-
-            validate_valid_indices(valid_indices, n_samples)
-
+        n_samples = basis.source_row_count
+        valid_indices = None if basis.is_all_samples else basis.positions
         full = kinship.n_samples == n_samples
 
         if isinstance(source, ProvidedKinship):
@@ -353,8 +319,6 @@ class PipelineRunner:
 
         # Apply individual weights before eigendecomposition
         if weights is not None:
-            from jamma.io.weight import apply_individual_weights
-
             logger.info(f"Applying individual weights from {self.config.weight_file}")
             K = apply_individual_weights(K, weights)
 
@@ -370,37 +334,22 @@ class PipelineRunner:
         4. Load covariates, then every phenotype column (one .fam read) and
            intersect their valid-sample masks
         5. Select the execution plan once, with the post-mask sample count
-        6. LOCO returns here to its own orchestrator, which owns
-           per-chromosome kinship, eigendecomposition and the memory gate
-        7. Check memory against the selected plan
-        8. Load eigen files or kinship matrix (once, shared)
-        9. Per-phenotype loop: run LMM association and write results
+        6. Check memory against the selected plan
+        7. Dispatch on the plan. LOCO hands the phenotype to its orchestrator,
+           which owns per-chromosome kinship and eigendecomposition. The
+           standard path loads eigen files or the kinship matrix once, then
+           runs the per-phenotype loop.
 
         Returns:
-            PipelineResult with associations, counts, output path, and timing.
+            PipelineResult with per-phenotype results and timing.
         """
         t_start = time.perf_counter()
 
-        # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
-        # It arrives as an unvalidated string, so check it here rather than
-        # letting an unknown value reach plan_association after the
-        # pipeline has already read PLINK metadata off disk.
-        env_backend = Env.current().backend_raw
-        requested: BackendRequest = (
-            _parse_backend_override(env_backend)
-            if env_backend is not None
-            else self.config.backend
-        )
+        # Before any disk read, so a bad JAMMA_BACKEND fails first.
+        requested = requested_backend(self.config)
         # Read once and pass it down. get_plink_metadata parses the whole .bim
         # (sid, chromosome, bp_position and both allele arrays).
         meta = get_plink_metadata(self.config.bfile)
-
-        if env_backend is not None:
-            logger.info(f"Backend: numpy (from JAMMA_BACKEND={env_backend})")
-        elif self.config.backend != "auto":
-            logger.info("Backend: numpy (explicitly requested)")
-        else:
-            logger.info("Backend: numpy (auto-selected)")
 
         self.validate_inputs()
 
@@ -417,41 +366,31 @@ class PipelineRunner:
 
         pheno_columns = self.config.phenotype_columns
         samples = load_analysed_samples(self.config, n_samples)
-        covariates = samples.covariates
-        valid_mask = samples.valid_mask
-        analyzed_sample_indices = samples.basis.positions
         n_valid = samples.basis.analyzed_sample_count
-        n_cvt = samples.n_covariates
 
         log_dataset_banner(
             n_samples,
             n_valid,
             n_snps,
-            n_covariates=n_cvt,
+            n_covariates=samples.n_covariates,
             n_phenotypes=len(pheno_columns),
         )
         warn_if_small_sample(n_valid)
 
         # Select the plan once, with the post-mask sample count and the real
         # n_cvt: masking can reduce n_valid below the PLINK-header n_samples,
-        # and Uab sizing depends on n_cvt. A prior version selected twice
-        # (once here with the pre-mask n_samples, once again after masking),
-        # re-running estimate_lmm_memory both times; this is the single call.
+        # and Uab sizing depends on n_cvt.
         execution = plan_association(
-            n_samples=n_valid,
+            n_valid,
+            n_snps,
+            config=self.config.lmm_config(),
+            backend="loco" if self.config.loco else requested,
+            n_cvt=samples.n_covariates,
             n_input_samples=n_samples,
-            n_snps=n_snps,
-            requested=requested,
-            n_cvt=n_cvt,
-            lmm_mode=parse_lmm_mode(self.config.lmm_mode),
-            n_grid=self.config.n_grid,
-            n_refine=self.config.n_refine,
             n_phenotypes=len(pheno_columns),
-            mem_budget=self.config.mem_budget,
             max_chunk_size=DEFAULT_LOCO_CONFIG.col_chunk_size
             if self.config.loco
             else None,
-            loco=self.config.loco,
         )
         analysis = resolve_analysis_plan(
             self.config,
@@ -461,76 +400,111 @@ class PipelineRunner:
         )
         plan = analysis.execution.summary
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
-
-        # LOCO is single-phenotype (PipelineConfig rejects more) and owns its
-        # own per-chromosome kinship and eigendecomposition, so it leaves
-        # before the shared eigen acquisition below; its branch runs the same
-        # memory preflight on the same plan.
-        if isinstance(analysis, LocoAnalysisPlan):
-            return self._run_loco(
-                analysis=analysis,
-                t_start=t_start,
-                phenotypes=samples.phenotypes[pheno_columns[0]],
-                covariates=covariates,
-                valid_mask=valid_mask,
-                analyzed_sample_indices=analyzed_sample_indices,
-                assoc_path=assoc_path,
-            )
-
         log_pipeline_banner(plan)
-
         eigen_plan = memory_preflight(analysis, check_memory=self.config.check_memory)
 
-        # Load/compute eigendecomposition ONCE (shared across phenotypes). The
-        # kinship matrix is consumed here; runners use the eigen arrays directly.
+        match analysis:
+            case LocoAnalysisPlan():
+                phenotype_results, timing = self._associate_loco(
+                    analysis, samples, meta, assoc_path, eigen_plan
+                )
+            case StandardAnalysisPlan():
+                phenotype_results, timing = self._associate_standard(
+                    analysis, samples, meta, assoc_path, eigen_plan, t_start
+                )
+
+        timing.total_s = time.perf_counter() - t_start
+        result = PipelineResult(
+            phenotype_results=phenotype_results,
+            n_samples=n_valid,
+            timing=timing,
+            n_covariates=samples.n_covariates,
+            analyzed_sample_indices=samples.basis.positions,
+        )
+        logger.info(
+            f"GWAS complete: {result.n_snps_tested} SNPs tested "
+            f"in {timing.total_s:.1f}s"
+        )
+        self._emit_telemetry(result, plan)
+        return result
+
+    def _associate_standard(
+        self,
+        analysis: StandardAnalysisPlan,
+        samples: AnalysedSamples,
+        meta: PlinkMetadata,
+        assoc_path: Path,
+        eigen_plan: EigenDriverPlan | None,
+        t_start: float,
+    ) -> tuple[list[PhenotypeResult], PipelineTiming]:
+        """Decompose the kinship once and run every phenotype over it."""
         eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
-            analysis, n_samples, n_valid, analyzed_sample_indices, eigen_plan=eigen_plan
+            analysis, samples, eigen_plan=eigen_plan
         )
         load_s = time.perf_counter() - t_start
 
-        outcome = run_phenotype_loop(
+        t_lmm = time.perf_counter()
+        phenotype_results, rotation_s = run_phenotype_loop(
             self.config,
             analysis,
-            samples.phenotypes,
-            valid_mask,
-            covariates,
+            samples,
             eigenvalues,
             eigenvectors,
             assoc_path,
             meta,
         )
-
-        total_s = time.perf_counter() - t_start
-        logger.info(f"GWAS complete: {outcome.n_tested} SNPs tested in {total_s:.1f}s")
-
-        result = PipelineResult(
-            associations=outcome.associations,
-            n_samples=n_valid,
-            n_snps_tested=outcome.n_tested,
-            assoc_path=outcome.assoc_paths[-1],
-            assoc_paths=outcome.assoc_paths,
-            phenotype_results=outcome.phenotype_results,
-            timing=PipelineTiming(
-                kinship_s=kinship_s,
-                load_s=load_s,
-                lmm_s=outcome.lmm_s,
-                total_s=total_s,
-                rotation_s=outcome.runner_timing.rotation_s,
-            ),
-            n_covariates=n_cvt,
-            pve_estimate=outcome.pve,
-            pve_se=outcome.pve_se,
-            analyzed_sample_indices=analyzed_sample_indices,
+        return phenotype_results, PipelineTiming(
+            kinship_s=kinship_s,
+            load_s=load_s,
+            lmm_s=time.perf_counter() - t_lmm,
+            rotation_s=rotation_s,
         )
-        self._emit_telemetry(result, plan)
-        return result
+
+    def _associate_loco(
+        self,
+        analysis: LocoAnalysisPlan,
+        samples: AnalysedSamples,
+        meta: PlinkMetadata,
+        assoc_path: Path,
+        eigen_plan: EigenDriverPlan | None,
+    ) -> tuple[list[PhenotypeResult], PipelineTiming]:
+        """Hand the single phenotype to the LOCO orchestrator.
+
+        The orchestrator owns its per-chromosome kinship and
+        eigendecomposition. Multi-phenotype LOCO is rejected at
+        ``PipelineConfig.__post_init__``.
+        """
+        column = self.config.phenotype_columns[0]
+        t_loco = time.perf_counter()
+        execution = analysis.execution
+        run = LocoRun(
+            self.config.bfile,
+            meta,
+            AnalysedPhenotype.from_mask(
+                samples.phenotypes[column], samples.covariates, samples.valid_mask
+            ),
+            analysis.lmm,
+            analysis.loco,
+            execution,
+            eigen_plan
+            if eigen_plan is not None
+            else plan_loco_eigen_driver(execution, memory.available_ram_gb()),
+        )
+        loco = run_loco(run, assoc_path)
+        phenotype = PhenotypeResult(
+            column=column,
+            associations=loco.associations,
+            n_snps_tested=loco.n_tested,
+            assoc_path=assoc_path,
+            pve_estimate=loco.pve,
+            pve_se=loco.pve_se,
+        )
+        return [phenotype], PipelineTiming(lmm_s=time.perf_counter() - t_loco)
 
     def _acquire_eigendecomposition(
         self,
         analysis: StandardAnalysisPlan,
-        n_samples: int,
-        n_valid: int,
-        analyzed_sample_indices: np.ndarray,
+        samples: AnalysedSamples,
         *,
         eigen_plan: EigenDriverPlan | None = None,
     ) -> tuple[np.ndarray, np.ndarray, float]:
@@ -553,7 +527,7 @@ class PipelineRunner:
             eigenvalues, eigenvectors = read_eigen_files(
                 source.eigenvalue_file,
                 source.eigenvector_file,
-                n_samples=n_valid,
+                n_samples=samples.basis.analyzed_sample_count,
             )
             logger.info(
                 f"Loaded pre-computed eigendecomposition "
@@ -566,23 +540,20 @@ class PipelineRunner:
                     "be ignored."
                 )
         else:
-            from jamma.io.weight import (
-                apply_weights_to_eigenvectors,
-                read_analysis_weights,
-            )
-
-            valid_indices = None if n_valid == n_samples else analyzed_sample_indices
             weights = (
-                read_analysis_weights(self.config.weight_file, n_samples, valid_indices)
+                read_analysis_weights(
+                    self.config.weight_file,
+                    samples.basis.source_row_count,
+                    samples.filter_indices,
+                )
                 if self.config.weight_file is not None
                 else None
             )
             K = self._load_kinship_from_source(
                 source.source,
-                n_samples,
                 analysis.execution.resolved_kinship,
-                valid_indices=valid_indices,
-                weights=weights,
+                samples.basis,
+                weights,
             )
             eigenvalues, eigenvectors = eigendecompose_kinship(
                 K,
@@ -608,79 +579,3 @@ class PipelineRunner:
 
         kinship_s = time.perf_counter() - t_kinship
         return eigenvalues, eigenvectors, kinship_s
-
-    def _run_loco(
-        self,
-        *,
-        analysis: LocoAnalysisPlan,
-        t_start: float,
-        phenotypes: np.ndarray,
-        covariates: np.ndarray | None,
-        valid_mask: np.ndarray,
-        analyzed_sample_indices: np.ndarray,
-        assoc_path: Path,
-    ) -> PipelineResult:
-        """LOCO branch of the pipeline.
-
-        Entered from ``run`` once the shared preamble has loaded the single
-        phenotype and the covariates. Prices the run's one association plan
-        through the shared preflight, hands that plan and the eigen driver the
-        preflight selected to the LOCO orchestrator (which owns its own
-        per-chromosome kinship and eigendecomposition) and assembles a
-        PipelineResult.
-
-        Single-phenotype only — multi-phenotype LOCO is rejected at
-        PipelineConfig.__post_init__.
-        """
-        from jamma.lmm import run_lmm_loco
-
-        n_valid = int(np.sum(valid_mask))
-        n_cvt = covariates.shape[1] if covariates is not None else 1
-        plan = analysis.execution.summary
-        log_pipeline_banner(plan)
-        eigen_plan = memory_preflight(analysis, check_memory=self.config.check_memory)
-
-        t_loco = time.perf_counter()
-        loco = run_lmm_loco(
-            bed_path=self.config.bfile,
-            phenotypes=phenotypes,
-            covariates=covariates,
-            config=analysis.lmm,
-            loco=analysis.loco,
-            output_path=assoc_path,
-            execution=analysis.execution,
-            eigen_plan=eigen_plan,
-        )
-        loco_s = time.perf_counter() - t_loco
-        total_s = time.perf_counter() - t_start
-        logger.info(
-            f"LOCO GWAS complete: {loco.n_tested} SNPs tested in {total_s:.1f}s"
-        )
-
-        result = PipelineResult(
-            associations=loco.associations,
-            n_samples=n_valid,
-            n_snps_tested=loco.n_tested,
-            assoc_path=assoc_path,
-            assoc_paths=[assoc_path],
-            phenotype_results=[
-                PhenotypeResult(
-                    column=self.config.phenotype_columns[0],
-                    associations=loco.associations,
-                    n_snps_tested=loco.n_tested,
-                    assoc_path=assoc_path,
-                    pve_estimate=loco.pve,
-                    pve_se=loco.pve_se,
-                )
-            ],
-            timing=PipelineTiming(
-                lmm_s=loco_s,
-                total_s=total_s,
-            ),
-            n_covariates=n_cvt,
-            pve_estimate=loco.pve,
-            pve_se=loco.pve_se,
-            analyzed_sample_indices=analyzed_sample_indices,
-        )
-        self._emit_telemetry(result, plan)
-        return result

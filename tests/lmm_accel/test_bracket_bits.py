@@ -3,7 +3,7 @@
 D1 found that the split LRT entry (``compute_lrt_split_general_c``, since
 deleted by D2) computed ``log_l_min`` and ``step`` directly from
 ``l_min``/``l_max``, while the general workspace's fused compute
-(``compute_lmm_chunk_fused_general_c``) re-derived the same two scalars from
+(``compute_lmm_chunk_c``) re-derived the same two scalars from
 ``log(lambda_grid[0])`` and ``log(lambda_grid[-1])``, which is
 ``log(exp(log_l_min))`` and can differ from ``log_l_min`` by an ulp. That ulp
 shifted the golden-section bracket endpoints and, on this fixture, 46 of 50
@@ -32,37 +32,32 @@ import numpy as np
 import pytest
 
 from jamma.lmm import accel
-from tests.conftest import _build_synthetic_covariate_data, requires_c
-from tests.lmm_accel._helpers import (
-    _fused_general_mode4_workspace,
-    _make_general_score_lrt_data,
-    _prepare_fused_general_data,
-)
+from tests.builders import covariate_lmm_inputs
+from tests.lmm_accel._helpers import GeneralCase, _fused_general_mode4_workspace
+from tests.support import requires_c
 
 pytestmark = [pytest.mark.tier0, requires_c]
 
 
 def _general_score_lrt_fixture():
-    return _prepare_fused_general_data(
-        _make_general_score_lrt_data(_build_synthetic_covariate_data(n_cvt=2, seed=42))
-    )
+    return GeneralCase(covariate_lmm_inputs(n_cvt=2, seed=42))
 
 
 def test_mode2_workspace_matches_mode4_workspace_bracket():
     """A standalone LRT workspace (lmm_mode=2) and the mode-4 workspace's LRT
     block compute the same bracket, so their outputs are byte-equal."""
     data = _general_score_lrt_fixture()
-    n_samples = data["n_samples"]
-    n_cvt = data["n_cvt"]
+    n_samples = data.n_samples
+    n_cvt = data.n_cvt
 
     ws4 = _fused_general_mode4_workspace(data, n_threads=1)
-    result4 = accel.require().compute_lmm_chunk_fused_general_c(ws4, data["utg_t"], 1)
+    result4 = accel.require().compute_lmm_chunk_c(ws4, data.utg_t, 1)
 
-    ws2 = accel.require().create_workspace_general_c(
-        data["eigenvalues"],
-        data["uab_inv_soa"],
-        data["UtW"],
-        data["Uty"],
+    ws2 = accel.require().create_workspace_c(
+        data.inputs.eigenvalues,
+        data.uab_inv_soa,
+        data.inputs.UtW,
+        data.inputs.Uty,
         n_samples,
         1e-5,
         1e5,
@@ -71,9 +66,9 @@ def test_mode2_workspace_matches_mode4_workspace_bracket():
         1,
         n_cvt,
         lmm_mode=2,
-        logl_H0=data["logl_H0"],
+        logl_H0=data.logl_H0,
     )
-    result2 = accel.require().compute_lmm_chunk_fused_general_c(ws2, data["utg_t"], 1)
+    result2 = accel.require().compute_lmm_chunk_c(ws2, data.utg_t, 1)
 
     np.testing.assert_array_equal(
         result2["lambdas_mle"],

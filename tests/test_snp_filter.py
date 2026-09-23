@@ -13,7 +13,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from jamma.core.snp_filter import (
+from jamma.genotype.snp_filter import (
     compute_hwe_pvalues,
     compute_snp_filter_mask,
     compute_snp_stats,
@@ -255,7 +255,7 @@ class TestComputeSnpStats:
 
     def test_large_matrix_uses_chunked_stats_path(self, monkeypatch) -> None:
         """Large matrices are processed in bounded SNP chunks."""
-        import jamma.core.snp_filter as snp_filter
+        import jamma.genotype.snp_filter as snp_filter
 
         genotypes = np.array(
             [
@@ -299,7 +299,7 @@ class TestHweProperties:
     )
     def test_hwe_pvalues_in_bounds(self, n_aa, n_ab, n_bb):
         """HWE p-values must be in [0, 1] for any genotype counts."""
-        from jamma.core.snp_filter import compute_hwe_pvalues
+        from jamma.genotype.snp_filter import compute_hwe_pvalues
 
         pvals = compute_hwe_pvalues(
             np.array([n_aa]), np.array([n_ab]), np.array([n_bb])
@@ -318,7 +318,7 @@ class TestHweProperties:
     )
     def test_hwe_allele_swap_symmetry(self, n_aa, n_ab, n_bb):
         """Swapping alleles (n_aa <-> n_bb) must produce identical p-values."""
-        from jamma.core.snp_filter import compute_hwe_pvalues
+        from jamma.genotype.snp_filter import compute_hwe_pvalues
 
         pval_original = compute_hwe_pvalues(
             np.array([n_aa]), np.array([n_ab]), np.array([n_bb])
@@ -341,7 +341,7 @@ class TestHweProperties:
     )
     def test_hwe_perfect_equilibrium_high_pvalue(self, n):
         """Genotype counts exactly at HWE frequencies should have high p-values."""
-        from jamma.core.snp_filter import compute_hwe_pvalues
+        from jamma.genotype.snp_filter import compute_hwe_pvalues
 
         # p = 0.5 -> expected: AA=0.25n, AB=0.5n, BB=0.25n
         n_aa = n // 4
@@ -356,14 +356,14 @@ class TestHweProperties:
 
     def test_hwe_degenerate_all_zero(self):
         """All-zero genotype counts should return p=1.0 (pass by convention)."""
-        from jamma.core.snp_filter import compute_hwe_pvalues
+        from jamma.genotype.snp_filter import compute_hwe_pvalues
 
         pval = compute_hwe_pvalues(np.array([0]), np.array([0]), np.array([0]))
         assert pval[0] == 1.0, f"Expected p=1.0 for all-zero, got {pval[0]}"
 
     def test_hwe_monomorphic_returns_one(self):
         """Monomorphic SNPs (only one genotype class) should return p=1.0."""
-        from jamma.core.snp_filter import compute_hwe_pvalues
+        from jamma.genotype.snp_filter import compute_hwe_pvalues
 
         # All AA
         pval = compute_hwe_pvalues(np.array([100]), np.array([0]), np.array([0]))
@@ -382,7 +382,7 @@ class TestHweProperties:
     )
     def test_hwe_vectorized_matches_scalar(self, seed, n_snps):
         """Vectorized HWE computation should match per-SNP scalar computation."""
-        from jamma.core.snp_filter import compute_hwe_pvalues
+        from jamma.genotype.snp_filter import compute_hwe_pvalues
 
         rng = np.random.default_rng(seed)
         n_aa = rng.integers(0, 200, size=n_snps)

@@ -9,8 +9,8 @@ at a flag a refactor removed (#182).
 ``FileNotFoundError`` naming every missing path, so a wrong path fails loudly and
 a wrong *directory* reports all of its files at once.
 
-``_enforce_no_dormant_skips`` is the gate that stops such a guard coming back. It
-parses every test file at ``pytest_configure`` and rejects three shapes: a skip
+``scripts/check_test_markers.py`` is the lint that stops such a guard coming back.
+It parses every test file and rejects three shapes: a skip
 whose reason names a fixture, a skip control-dependent on a filesystem check, and
 a skip gated on whether a name still exists.
 
@@ -25,14 +25,14 @@ import ast
 from pathlib import Path
 
 import pytest
-
-from tests.conftest import (
+from check_test_markers import (
     _attribute_probed_skip_lines,
-    _enforce_no_dormant_skips,
+    _dormant_skip_message,
     _fixture_skip_lines,
     _path_guarded_skip_lines,
-    require_fixture,
 )
+
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier0
 
@@ -283,16 +283,14 @@ class TestGateOverTheRealSuite:
     def test_the_real_suite_is_clean(self) -> None:
         """No in-tree test guards a fixture or a path with a skip.
 
-        Runs the same sweep ``pytest_configure`` runs. #149 replaced the guards it
+        Runs the same sweep the lint runs. #149 replaced the guards it
         knew about; ``test_fixture_manifest.py`` kept one whose reason avoided the
         old backstop's phrase, and this sweep is what found it. #156 removed the
         last path-guarded one, which no wording-based check could ever have seen.
         """
-        _enforce_no_dormant_skips()
+        assert _dormant_skip_message(Path(__file__).parent) is None
 
-    def test_a_planted_fixture_skip_is_caught(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_planted_fixture_skip_is_caught(self, tmp_path: Path) -> None:
         """Prove the gate can fail, so a clean run means something."""
         planted = tmp_path / "test_planted.py"
         planted.write_text(
@@ -300,13 +298,11 @@ class TestGateOverTheRealSuite:
             "def test_needs_data():\n"
             '    pytest.skip("mouse_hs1940 fixture not available")\n'
         )
-        monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
-        with pytest.raises(pytest.UsageError, match=r"name a fixture in their reason"):
-            _enforce_no_dormant_skips()
+        assert "name a fixture in their reason" in (
+            _dormant_skip_message(tmp_path) or ""
+        )
 
-    def test_a_planted_path_guarded_skip_is_caught(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_planted_path_guarded_skip_is_caught(self, tmp_path: Path) -> None:
         """The reason says nothing incriminating; only the shape gives it away."""
         planted = tmp_path / "test_planted.py"
         planted.write_text(
@@ -317,13 +313,11 @@ class TestGateOverTheRealSuite:
             "    if not src.exists():\n"
             '        pytest.skip("source not available")\n'
         )
-        monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
-        with pytest.raises(pytest.UsageError, match=r"guarded by a filesystem check"):
-            _enforce_no_dormant_skips()
+        assert "guarded by a filesystem check" in (
+            _dormant_skip_message(tmp_path) or ""
+        )
 
-    def test_a_planted_attribute_probed_skip_is_caught(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_planted_attribute_probed_skip_is_caught(self, tmp_path: Path) -> None:
         """The path is fine and the reason is honest; only the probe gives it away."""
         planted = tmp_path / "test_planted.py"
         planted.write_text(
@@ -336,13 +330,11 @@ class TestGateOverTheRealSuite:
             "def test_fused_kernel():\n"
             "    pass\n"
         )
-        monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
-        with pytest.raises(pytest.UsageError, match=r"gated on whether a name exists"):
-            _enforce_no_dormant_skips()
+        assert "gated on whether a name exists" in (
+            _dormant_skip_message(tmp_path) or ""
+        )
 
-    def test_every_category_reports_together(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_every_category_reports_together(self, tmp_path: Path) -> None:
         """One run must name every offender, not stop at the first category.
 
         Same reasoning as ``require_fixture`` naming every missing path at once:
@@ -363,10 +355,7 @@ class TestGateOverTheRealSuite:
             '    if not hasattr(m, "k"):\n'
             '        pytest.skip("nope")\n'
         )
-        monkeypatch.setattr("tests.conftest._TESTS_DIR", tmp_path)
-        with pytest.raises(pytest.UsageError) as excinfo:
-            _enforce_no_dormant_skips()
-        message = str(excinfo.value)
+        message = _dormant_skip_message(tmp_path) or ""
         assert "test_word.py" in message
         assert "test_shape.py" in message
         assert "test_probe.py" in message

@@ -1,6 +1,6 @@
 """Tests for the JAMMA_FORCE_NUMPY_FALLBACK env-var gate at the two C
 extension import shims (jamma.jlinalg.__init__ and
-jamma.core.recompile._load_c_module).
+jamma._native._load_c_module).
 
 The gate is the load-bearing knob the ASAN/UBSAN
 sanitizer workflow uses to skip the .so imports entirely — see
@@ -234,7 +234,7 @@ def test_natural_fallback_blas_backend_value(monkeypatch, reload_jlinalg_after_t
     monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
     # Also block the auto-recompile retry — without this, the recompile
     # actually rebuilds the .so and the test sees HAS_C_EXTENSION=True.
-    import jamma.core.recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     monkeypatch.setattr(
         recompile_mod, "auto_recompile_c_extension", lambda *a, **kw: False
@@ -263,13 +263,13 @@ def test_natural_fallback_blas_backend_value(monkeypatch, reload_jlinalg_after_t
 
 class TestForceNumpyLmmAccel:
     """Tests for the JAMMA_FORCE_NUMPY_FALLBACK gate inside
-    jamma.core.recompile._load_c_module for LMM_ACCEL_SPEC."""
+    jamma._native._load_c_module for LMM_ACCEL_SPEC."""
 
     def test_returns_unavailable(self, monkeypatch):
         """Forced env: _load_c_module reports no extension."""
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
-        from jamma.core.recompile import _load_c_module
+        from jamma._native import _load_c_module
         from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
         assert _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION) is None
@@ -278,7 +278,7 @@ class TestForceNumpyLmmAccel:
         """Forced env: no .so import attempted — sys.modules stays clean."""
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
-        from jamma.core.recompile import _load_c_module
+        from jamma._native import _load_c_module
         from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
         sys.modules.pop("jamma.lmm._lmm_accel", None)
@@ -293,7 +293,7 @@ class TestForceNumpyLmmAccel:
         """
         monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
-        from jamma.core.recompile import _load_c_module
+        from jamma._native import _load_c_module
         from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
         result = _load_c_module(LMM_ACCEL_SPEC, _EXPECTED_ABI_VERSION)
@@ -309,7 +309,7 @@ class TestForceNumpyLmmAccel:
         """
         monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", value)
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
-        from jamma.core.recompile import _load_c_module
+        from jamma._native import _load_c_module
         from jamma.lmm import accel
         from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
@@ -322,7 +322,7 @@ class TestForceNumpyLmmAccel:
     def test_truthy_values_engage_gate(self, monkeypatch):
         """Multiple truthy values all engage the gate."""
         from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
-        from jamma.core.recompile import _load_c_module
+        from jamma._native import _load_c_module
         from jamma.lmm.accel import _EXPECTED_ABI_VERSION
 
         for value in ["1", "true", "yes", "TRUE", " 1 "]:

@@ -13,9 +13,10 @@ import numpy as np
 import pytest
 
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
-from jamma.lmm.schema import LmmConfig, LmmMode
+from jamma.lmm.schema import MODE_SPECS, LmmConfig, LmmMode
 from jamma.validation import load_gemma_assoc
-from tests.conftest import make_runner_synthetic_data, requires_c
+from tests.builders import make_runner_synthetic_data
+from tests.support import requires_c
 
 # ---------------------------------------------------------------------------
 # Lambda boundary diagnostic tests (REGR-03)
@@ -24,7 +25,7 @@ from tests.conftest import make_runner_synthetic_data, requires_c
 
 @pytest.mark.tier0
 class TestLambdaBoundaryDiagnostics:
-    """Unit tests for count_lambda_boundary_hits and log_lambda_boundary_warning.
+    """Unit tests for _count_lambda_boundary_hits and _log_lambda_boundary_warning.
 
     Verifies that flat-optima SNPs with lambda converging at l_min or l_max
     are correctly counted, and that the boundary warning logger path does not crash.
@@ -32,67 +33,67 @@ class TestLambdaBoundaryDiagnostics:
 
     def test_mode1_lower_bound_count(self):
         """Mode 1 (Wald): count 3 lambdas at l_min, 0 at l_max."""
-        from jamma.lmm.results import count_lambda_boundary_hits
+        from jamma.lmm.chunk_runner_numpy import _count_lambda_boundary_hits
 
         arrays = {"lambdas": np.array([1e-5, 1e-5, 0.5, 1e-5, 2.0])}
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode=1, arrays=arrays, l_min=1e-5, l_max=1e5
+        n_at_lmin, n_at_lmax = _count_lambda_boundary_hits(
+            mode=MODE_SPECS[1], arrays=arrays, l_min=1e-5, l_max=1e5
         )
         assert n_at_lmin == 3
         assert n_at_lmax == 0
 
     def test_mode2_upper_bound_count(self):
         """Mode 2 (LRT): count 1 at l_min, 2 at l_max using lambdas_mle."""
-        from jamma.lmm.results import count_lambda_boundary_hits
+        from jamma.lmm.chunk_runner_numpy import _count_lambda_boundary_hits
 
         arrays = {"lambdas_mle": np.array([1e-5, 1e5, 1e5])}
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode=2, arrays=arrays, l_min=1e-5, l_max=1e5
+        n_at_lmin, n_at_lmax = _count_lambda_boundary_hits(
+            mode=MODE_SPECS[2], arrays=arrays, l_min=1e-5, l_max=1e5
         )
         assert n_at_lmin == 1
         assert n_at_lmax == 2
 
     def test_mode4_combines_reml_and_mle(self):
         """Mode 4 (All): counts from both lambdas (REML) and lambdas_mle (MLE)."""
-        from jamma.lmm.results import count_lambda_boundary_hits
+        from jamma.lmm.chunk_runner_numpy import _count_lambda_boundary_hits
 
         arrays = {
             "lambdas": np.array([1e-5, 0.5]),
             "lambdas_mle": np.array([1e5, 0.5]),
         }
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode=4, arrays=arrays, l_min=1e-5, l_max=1e5
+        n_at_lmin, n_at_lmax = _count_lambda_boundary_hits(
+            mode=MODE_SPECS[4], arrays=arrays, l_min=1e-5, l_max=1e5
         )
         assert n_at_lmin == 1  # one REML lambda at l_min
         assert n_at_lmax == 1  # one MLE lambda at l_max
 
     def test_empty_array_returns_zeros(self):
         """Empty lambda arrays return (0, 0) without error."""
-        from jamma.lmm.results import count_lambda_boundary_hits
+        from jamma.lmm.chunk_runner_numpy import _count_lambda_boundary_hits
 
-        n_at_lmin, n_at_lmax = count_lambda_boundary_hits(
-            lmm_mode=1, arrays={"lambdas": np.array([])}, l_min=1e-5, l_max=1e5
+        n_at_lmin, n_at_lmax = _count_lambda_boundary_hits(
+            mode=MODE_SPECS[1], arrays={"lambdas": np.array([])}, l_min=1e-5, l_max=1e5
         )
         assert n_at_lmin == 0
         assert n_at_lmax == 0
 
     def test_warning_lower_bound_does_not_crash(self):
-        """log_lambda_boundary_warning with lower-bound hits does not raise."""
-        from jamma.lmm.results import log_lambda_boundary_warning
+        """_log_lambda_boundary_warning with lower-bound hits does not raise."""
+        from jamma.lmm.chunk_runner_numpy import _log_lambda_boundary_warning
 
-        log_lambda_boundary_warning(3, 0, 1e-5, 1e5)  # should not raise
+        _log_lambda_boundary_warning(3, 0, 1e-5, 1e5)  # should not raise
 
     def test_warning_upper_bound_does_not_crash(self):
-        """log_lambda_boundary_warning with upper-bound hits does not raise."""
-        from jamma.lmm.results import log_lambda_boundary_warning
+        """_log_lambda_boundary_warning with upper-bound hits does not raise."""
+        from jamma.lmm.chunk_runner_numpy import _log_lambda_boundary_warning
 
-        log_lambda_boundary_warning(0, 2, 1e-5, 1e5)  # should not raise
+        _log_lambda_boundary_warning(0, 2, 1e-5, 1e5)  # should not raise
 
     def test_warning_no_hits_is_noop(self):
-        """log_lambda_boundary_warning with zero counts is a no-op."""
-        from jamma.lmm.results import log_lambda_boundary_warning
+        """_log_lambda_boundary_warning with zero counts is a no-op."""
+        from jamma.lmm.chunk_runner_numpy import _log_lambda_boundary_warning
 
-        log_lambda_boundary_warning(0, 0, 1e-5, 1e5)  # should not raise
+        _log_lambda_boundary_warning(0, 0, 1e-5, 1e5)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -240,13 +241,16 @@ def _tiny_invariants(n_cvt: int, lmm_mode: LmmMode, n_samples: int = 8):
     """Smallest RunInvariants every dispatch path will build a kernel from."""
     from jamma.lmm.chunk_kernel import RunInvariants
     from jamma.lmm.dispatch import select_dispatch_path
-    from jamma.lmm.prepare_common import PreparedLmmRun
+    from jamma.lmm.prepare_common import NullFit, RotatedBasis
     from jamma.lmm.schema import LmmConfig
 
-    prepared = PreparedLmmRun(
+    basis = RotatedBasis(
         eigenvalues=np.linspace(0.1, 2.0, n_samples),
         U=np.eye(n_samples),
+        W=np.ones((n_samples, n_cvt)),
         UtW=np.ones((n_samples, n_cvt)) * np.arange(1, n_cvt + 1),
+    )
+    fit = NullFit(
         Uty=np.linspace(-1.0, 1.0, n_samples),
         logl_H0=-10.0,
         Hi_eval_null=np.ones(n_samples),
@@ -254,8 +258,9 @@ def _tiny_invariants(n_cvt: int, lmm_mode: LmmMode, n_samples: int = 8):
         pve_se=None,
     )
     return RunInvariants.build(
-        select_dispatch_path(n_cvt, lmm_mode, accel=True, log_choices=False),
-        prepared,
+        select_dispatch_path(accel=True),
+        basis,
+        fit,
         LmmConfig(lmm_mode=lmm_mode, n_grid=20, n_refine=20),
         n_filtered=500,
     )
@@ -306,13 +311,11 @@ class TestErrorMessageDifferentiation:
         )
 
     @requires_c
-    def test_every_path_has_its_own_label(self):
-        """All eight (n_cvt, mode) shapes report a distinct label.
+    def test_every_mode_has_its_own_label(self):
+        """Each lmm_mode reports a distinct label, the same at every n_cvt.
 
-        D2 gave the general workspace's one compute a label per lmm_mode
-        (previously modes 2 and 3 at n_cvt>=2 shared one SoA-split kernel
-        label), so every shape is now distinguishable, including mode 4
-        against Wald within each fused family.
+        One fused workspace serves every n_cvt, so the label names the mode,
+        including mode 4 against Wald and LRT against Score.
         """
         from jamma.lmm.chunk_kernel import make_kernel
 
@@ -323,7 +326,8 @@ class TestErrorMessageDifferentiation:
             for n_cvt in (1, 2)
             for mode in (1, 2, 3, 4)
         }
-        assert len(set(labels.values())) == 8, labels
+        assert len(set(labels.values())) == 4, labels
+        assert all(labels[1, mode] == labels[2, mode] for mode in (1, 2, 3, 4))
         assert labels[1, 4] != labels[1, 1], "mode 4 must not report as Wald"
         assert labels[2, 4] != labels[2, 1], "mode 4 must not report as Wald"
         assert labels[2, 2] != labels[2, 3], "LRT and Score must not share a label"
@@ -373,7 +377,7 @@ class TestErrorMessageDifferentiation:
         """A kernel that succeeds hands its dict straight back."""
         from jamma.lmm.chunk_kernel import Kernel
 
-        expected = {"betas": [1.0], "ses": [0.1]}
+        expected = {"betas": np.array([1.0]), "ses": np.array([0.1])}
         kernel = Kernel(
             label="Fused Uab dispatch",
             n_filtered=100,

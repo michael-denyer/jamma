@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import csv
 import json
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
-from tests.math_validation.compare import compare_files, read_rows
+from jamma.validation.compare import load_gemma_assoc
+from tests.math_validation.compare import compare_files
 from tests.math_validation.dense_oracle import evaluate
 from tests.math_validation.evidence import (
     bundle_status,
-    environment,
+    evidence_bundle,
     run_pipeline,
-    write_json,
+    select_cases,
 )
 from tests.math_validation.oracle_io import write_oracle_assoc
 from tests.math_validation.reference import (
@@ -274,16 +274,18 @@ def write_oracle(path: Path, *, model_override: dict | None = None) -> None:
 
 
 def _l_mle_extrema(actual: Path, reference: Path) -> dict:
-    actual_rows = read_rows(actual, 4)
-    reference_rows = read_rows(reference, 4)
+    actual_rows = load_gemma_assoc(actual, mode=4, require_logl=True)
+    reference_rows = load_gemma_assoc(reference, mode=4, require_logl=True)
     values = []
     for observed, expected in zip(actual_rows, reference_rows, strict=True):
-        actual_value = float(observed["l_mle"])
-        reference_value = float(expected["l_mle"])
+        actual_value = observed.l_mle
+        reference_value = expected.l_mle
+        assert actual_value is not None
+        assert reference_value is not None
         absolute = abs(actual_value - reference_value)
         values.append(
             {
-                "rs": expected["rs"],
+                "rs": expected.rs,
                 "actual": actual_value,
                 "reference": reference_value,
                 "absolute": absolute,
@@ -299,126 +301,122 @@ def _l_mle_extrema(actual: Path, reference: Path) -> dict:
 def compare_weights(destination: Path, case_ids: tuple[str, ...] | None = None) -> dict:
     """Compare declared weighted routes, recording default and refined results."""
     declared = [*load_weight_cases(), *load_nonpositive_weight_cases()]
-    requested = {case["id"] for case in declared} if case_ids is None else set(case_ids)
-    if not requested or requested - {case["id"] for case in declared}:
-        raise ValueError("case_ids must name at least one declared weight case")
-    destination.mkdir(parents=True, exist_ok=False)
-    bundle = {
-        "schema_version": 1,
-        "status": "INCONCLUSIVE",
-        "environment": environment(),
-        "invocation": sys.argv,
-        "references": {},
-        "cases": [],
-    }
-    refined_statuses, default_statuses, default_gaps = [], [], []
-    for case in declared:
-        if case["id"] not in requested:
-            continue
-        nonpositive = case.get("nonpositive", False)
-        source, provenance = (
-            require_nonpositive_reference() if nonpositive else require_reference()
-        )
-        if source.name not in bundle["references"]:
-            copy_reference(source, destination / source.name, provenance)
-            bundle["references"][source.name] = provenance
-        model = json.loads((source / "model.json").read_text())
-        if not nonpositive and "dense" not in bundle:
-            oracle_path = destination / "oracle.assoc.txt"
-            write_oracle(oracle_path)
-            oracle_gemma = compare_files(
-                oracle_path,
-                source / "gemma.assoc.txt",
-                mode=4,
-                reference_optional_logl=True,
+    cases = select_cases(declared, case_ids, "weight")
+    with evidence_bundle(destination, references={}, cases=[]) as bundle:
+        refined_statuses, default_statuses, default_gaps = [], [], []
+        for case in cases:
+            nonpositive = case.get("nonpositive", False)
+            source, provenance = (
+                require_nonpositive_reference() if nonpositive else require_reference()
             )
-            bundle["dense"] = {
-                "optimized_gemma": oracle_gemma,
-                "fixed_lambda_max_abs": fixed_lambda_differences(),
-            }
-            refined_statuses.append(oracle_gemma["status"])
-        fam_ids = [
-            f"{fields[0]}:{fields[1]}"
-            for line in (source / "tiny.fam").read_text().splitlines()
-            if (fields := line.split())
-        ]
-        runs = []
-        refinements = (
-            ((30, "refined"),) if nonpositive else ((20, "default"), (30, "refined"))
-        )
-        for n_refine, label in refinements:
-            out = destination / case["id"] / label
-            result, logs, config = run_pipeline(
-                source,
-                out,
-                kinship_file=source / "gemma_kinship.cXX.txt"
-                if case["kinship"] == "supplied-k"
-                else None,
-                covariate_file=source / "covariates.txt",
-                weight_file=source / "weights.txt",
-                lmm_mode=4,
-                maf=0.1,
-                miss=0.1,
-                n_refine=n_refine,
-                backend=case["backend"],
-            )
-            comparison = compare_files(
-                result.assoc_path,
-                source / "gemma.assoc.txt",
-                mode=4,
-                reference_optional_logl=True,
-            )
-            actual_snp_ids = [row["rs"] for row in read_rows(result.assoc_path, 4)]
-            actual_indices = result.analyzed_sample_indices
-            actual_samples = [fam_ids[index] for index in actual_indices]
-            stages = {
-                "selected-sample-ids": actual_samples == model["selected_sample_ids"],
-                "selected-snp-ids": actual_snp_ids == model["selected_snp_ids"],
-                "sample-count": result.n_samples == len(model["selected_sample_ids"]),
-                "snp-count": result.n_snps_tested == len(model["selected_snp_ids"]),
-            }
-            comparison["failure_ids"].extend(
-                f"stage:actual-{stage}"
-                for stage, passed in stages.items()
-                if not passed
-            )
-            if not all(stages.values()):
-                comparison["status"] = "NOT VERIFIED"
-            run = {
-                "label": label,
-                "n_refine": n_refine,
-                "status": comparison["status"],
-                "comparison": comparison,
-                "l_mle_extrema": _l_mle_extrema(
-                    result.assoc_path, source / "gemma.assoc.txt"
-                ),
-                "pipeline_config": config,
-                "actual": {
-                    "n_samples": result.n_samples,
-                    "n_snps": result.n_snps_tested,
-                    "selected_snp_ids": actual_snp_ids,
-                    "selected_sample_ids": actual_samples,
-                    "valid_indices": actual_indices,
-                },
-                "logs": logs,
-                "files": snapshot_files(out),
-            }
-            runs.append(run)
-            (default_statuses if label == "default" else refined_statuses).append(
-                comparison["status"]
-            )
-            if label == "default" and comparison["status"] != "VERIFIED":
-                default_gaps.append(
-                    {
-                        "case": case["id"],
-                        "failure_ids": comparison["failure_ids"],
-                        "l_mle_extrema": run["l_mle_extrema"],
-                    }
+            if source.name not in bundle["references"]:
+                copy_reference(source, destination / source.name, provenance)
+                bundle["references"][source.name] = provenance
+            model = json.loads((source / "model.json").read_text())
+            if not nonpositive and "dense" not in bundle:
+                oracle_path = destination / "oracle.assoc.txt"
+                write_oracle(oracle_path)
+                oracle_gemma = compare_files(
+                    oracle_path,
+                    source / "gemma.assoc.txt",
+                    mode=4,
+                    reference_optional_logl=True,
                 )
-        bundle["cases"].append({**case, "runs": runs})
-    bundle["status"] = bundle_status(refined_statuses)
-    if default_statuses:
-        bundle["default_optimizer_status"] = bundle_status(default_statuses)
-        bundle["default_optimizer_gaps"] = default_gaps
-    write_json(destination / "bundle.json", bundle)
+                bundle["dense"] = {
+                    "optimized_gemma": oracle_gemma,
+                    "fixed_lambda_max_abs": fixed_lambda_differences(),
+                }
+                refined_statuses.append(oracle_gemma["status"])
+            fam_ids = [
+                f"{fields[0]}:{fields[1]}"
+                for line in (source / "tiny.fam").read_text().splitlines()
+                if (fields := line.split())
+            ]
+            runs = []
+            refinements = (
+                ((30, "refined"),)
+                if nonpositive
+                else ((20, "default"), (30, "refined"))
+            )
+            for n_refine, label in refinements:
+                out = destination / case["id"] / label
+                result, logs, config = run_pipeline(
+                    source,
+                    out,
+                    kinship_file=source / "gemma_kinship.cXX.txt"
+                    if case["kinship"] == "supplied-k"
+                    else None,
+                    covariate_file=source / "covariates.txt",
+                    weight_file=source / "weights.txt",
+                    lmm_mode=4,
+                    maf=0.1,
+                    miss=0.1,
+                    n_refine=n_refine,
+                    backend=case["backend"],
+                )
+                comparison = compare_files(
+                    result.assoc_path,
+                    source / "gemma.assoc.txt",
+                    mode=4,
+                    reference_optional_logl=True,
+                )
+                actual_snp_ids = [
+                    row.rs
+                    for row in load_gemma_assoc(
+                        result.assoc_path, mode=4, require_logl=True
+                    )
+                ]
+                actual_indices = result.analyzed_sample_indices
+                actual_samples = [fam_ids[index] for index in actual_indices]
+                stages = {
+                    "selected-sample-ids": actual_samples
+                    == model["selected_sample_ids"],
+                    "selected-snp-ids": actual_snp_ids == model["selected_snp_ids"],
+                    "sample-count": result.n_samples
+                    == len(model["selected_sample_ids"]),
+                    "snp-count": result.n_snps_tested == len(model["selected_snp_ids"]),
+                }
+                comparison["failure_ids"].extend(
+                    f"stage:actual-{stage}"
+                    for stage, passed in stages.items()
+                    if not passed
+                )
+                if not all(stages.values()):
+                    comparison["status"] = "NOT VERIFIED"
+                run = {
+                    "label": label,
+                    "n_refine": n_refine,
+                    "status": comparison["status"],
+                    "comparison": comparison,
+                    "l_mle_extrema": _l_mle_extrema(
+                        result.assoc_path, source / "gemma.assoc.txt"
+                    ),
+                    "pipeline_config": config,
+                    "actual": {
+                        "n_samples": result.n_samples,
+                        "n_snps": result.n_snps_tested,
+                        "selected_snp_ids": actual_snp_ids,
+                        "selected_sample_ids": actual_samples,
+                        "valid_indices": actual_indices,
+                    },
+                    "logs": logs,
+                    "files": snapshot_files(out),
+                }
+                runs.append(run)
+                (default_statuses if label == "default" else refined_statuses).append(
+                    comparison["status"]
+                )
+                if label == "default" and comparison["status"] != "VERIFIED":
+                    default_gaps.append(
+                        {
+                            "case": case["id"],
+                            "failure_ids": comparison["failure_ids"],
+                            "l_mle_extrema": run["l_mle_extrema"],
+                        }
+                    )
+            bundle["cases"].append({**case, "runs": runs})
+        bundle["status"] = bundle_status(refined_statuses)
+        if default_statuses:
+            bundle["default_optimizer_status"] = bundle_status(default_statuses)
+            bundle["default_optimizer_gaps"] = default_gaps
     return bundle

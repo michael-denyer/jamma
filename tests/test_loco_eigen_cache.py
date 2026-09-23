@@ -1,8 +1,7 @@
 """Tests for LOCO per-chromosome eigendecomposition caching.
 
 Validates:
-- _find_loco_eigen_cache: complete cache, partial cache rejection, .txt fallback,
-  non-directory guard
+- _validated_eigen_cache: complete cache, partial cache rejection, .txt fallback
 - run_lmm_loco write_eigen: per-chr eigen file creation with correct dimensions
 - write_eigen=True without eigen_dir raises ValueError
 - Dimension mismatch on cached read raises ValueError
@@ -20,17 +19,16 @@ from jamma.io import read_fam_phenotypes
 from jamma.lmm.eigen_cache import (
     EIGEN_CACHE_SCHEMA_VERSION,
     EigenCacheComponents,
+    read_eigen_cache_manifest,
+    resolve_eigen_cache,
+    write_eigen_cache_manifest,
 )
-from jamma.lmm.eigen_io import (
-    read_eigen_files,
-    write_eigen_files,
-    write_eigen_generation_members,
-)
+from jamma.lmm.eigen_io import EigenGeneration, read_eigen_files, write_eigen_files
 from jamma.lmm.loco import LocoConfig
-from jamma.lmm.loco_eigen import _cached_eigen_pairs, _find_loco_eigen_cache
+from jamma.lmm.loco_eigen import _cached_eigen_pairs, _validated_eigen_cache
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, MOUSE
+from tests.support import require_fixture
 
 # ---------------------------------------------------------------------------
 # Fixture paths
@@ -66,8 +64,10 @@ def _dummy_components(maf_threshold: float = 0.01) -> EigenCacheComponents:
 
 
 # ---------------------------------------------------------------------------
-# _find_loco_eigen_cache tests
+# _validated_eigen_cache tests
 # ---------------------------------------------------------------------------
+
+_TEST_KEY = "TESTKEY"
 
 
 def _write_cache_entries(
@@ -75,34 +75,41 @@ def _write_cache_entries(
 ) -> None:
     """Populate the eigen cache for the given chromosomes.
 
-    Names the files via ``loco.eigen_stem()`` — the method the production writer
-    uses — so a test cannot pass by re-encoding the naming convention the reader
-    is supposed to agree with.
+    Names the files via ``EigenGeneration.write_member``, the method the
+    production writer uses, so a test cannot pass by re-encoding the naming
+    convention the reader is supposed to agree with.
     """
     assert loco.eigen_dir is not None
-    generation = "testgeneration"
-    artifacts: dict[str, dict[str, str]] = {}
-    for ch in chr_names:
-        d_path, u_path = write_eigen_generation_members(
+    generation = EigenGeneration(loco.eigen_dir, loco.prefix, "testgeneration")
+    members = {
+        ch: generation.write_member(
+            ch,
             np.random.default_rng(42).random(n),
             np.eye(n),
-            loco.eigen_dir,
-            loco.prefix,
-            generation,
             legacy_text=loco.legacy_text,
-            label=f"loco.chr{ch}",
         )
-        artifacts[ch] = {"eigenD": d_path.name, "eigenU": u_path.name}
-    from jamma.lmm.eigen_cache import write_eigen_cache_manifest
-
+        for ch in chr_names
+    }
     write_eigen_cache_manifest(
-        loco.eigen_dir,
-        loco.prefix,
-        "TESTKEY",
-        components=_dummy_components(),
-        generation=generation,
-        artifacts=artifacts,
+        generation, _TEST_KEY, components=_dummy_components(), members=members
     )
+
+
+def _cache(
+    loco: LocoConfig, chr_names: list[str]
+) -> dict[str, tuple[Path, Path]] | None:
+    """Look the cache up under the key ``_write_cache_entries`` commits."""
+    assert loco.eigen_dir is not None
+    return _validated_eigen_cache(loco, chr_names, _TEST_KEY, eigen_dir=loco.eigen_dir)
+
+
+def _committed_cache(
+    eigen_dir: Path, prefix: str, chr_names: list[str]
+) -> dict[str, tuple[Path, Path]] | None:
+    """Resolve whatever generation a real run committed, whatever its key."""
+    manifest = read_eigen_cache_manifest(eigen_dir, prefix)
+    assert manifest is not None, f"no LOCO eigen manifest in {eigen_dir}"
+    return resolve_eigen_cache(manifest, eigen_dir, prefix, chr_names)
 
 
 @pytest.mark.tier0
@@ -126,37 +133,12 @@ def test_loco_config_still_importable_from_jamma_lmm_loco() -> None:
 
 @pytest.mark.tier0
 class TestLocoConfigArtifactNaming:
-    """LocoConfig owns the on-disk names for LOCO kinship and eigen artifacts.
+    """LocoConfig owns the on-disk names for LOCO kinship artifacts.
 
     Pinned literally rather than derived, because these filenames are the
     contract with the CLI's -eigen-dir cache and with GEMMA's .cXX.txt layout.
     Building them from the config under test would assert nothing.
     """
-
-    def test_eigen_paths_npy(self, tmp_path: Path) -> None:
-        loco = LocoConfig(eigen_dir=tmp_path, prefix="study")
-        d_path, u_path = loco.eigen_paths("7")
-        assert d_path == tmp_path / "study.loco.chr7.eigenD.npy"
-        assert u_path == tmp_path / "study.loco.chr7.eigenU.npy"
-
-    def test_eigen_paths_legacy_text(self, tmp_path: Path) -> None:
-        loco = LocoConfig(eigen_dir=tmp_path, prefix="study", legacy_text=True)
-        d_path, u_path = loco.eigen_paths("X")
-        assert d_path == tmp_path / "study.loco.chrX.eigenD.txt"
-        assert u_path == tmp_path / "study.loco.chrX.eigenU.txt"
-
-    def test_eigen_stem_is_the_write_prefix(self, tmp_path: Path) -> None:
-        """eigen_stem() feeds write_eigen_files(prefix=), so the writer's output
-        must land exactly on the paths eigen_paths() looks for."""
-        loco = LocoConfig(eigen_dir=tmp_path, prefix="study")
-        paths = write_eigen_files(
-            np.arange(4, dtype=np.float64),
-            np.eye(4),
-            tmp_path,
-            prefix=loco.eigen_stem("21"),
-        )
-        for path in paths:
-            assert path.exists(), f"writer and reader disagree on {path.name}"
 
     def test_kinship_path(self, tmp_path: Path) -> None:
         loco = LocoConfig(kinship_output_dir=tmp_path, prefix="study")
@@ -167,29 +149,16 @@ class TestLocoConfigArtifactNaming:
         assert loco.kinship_path("3") == tmp_path / "study.loco.cXX.chr3.txt"
 
     def test_paths_raise_without_their_directory(self) -> None:
-        """Both path builders name their missing field rather than returning a
+        """The path builder names its missing field rather than returning a
         path rooted at the process cwd."""
         loco = LocoConfig()
-        with pytest.raises(ValueError, match=r"eigen_paths\(\) requires eigen_dir"):
-            loco.eigen_paths("1")
         with pytest.raises(ValueError, match="requires kinship_output_dir"):
             loco.kinship_path("1")
 
 
 @pytest.mark.tier0
-class TestFindLocoEigenCache:
-    """Tests for _find_loco_eigen_cache helper function."""
-
-    def test_non_directory_returns_none(self, tmp_path: Path) -> None:
-        """Passing a file path instead of directory returns None."""
-        fake_file = tmp_path / "not_a_dir.txt"
-        fake_file.write_text("hello")
-        result = _find_loco_eigen_cache(LocoConfig(eigen_dir=fake_file), ["1", "2"])
-        assert result is None
-
-    def test_no_eigen_dir_returns_none(self) -> None:
-        """An unset eigen_dir means "compute from scratch", not a raise."""
-        assert _find_loco_eigen_cache(LocoConfig(), ["1", "2"]) is None
+class TestValidatedEigenCache:
+    """Tests for the _validated_eigen_cache lookup."""
 
     def test_complete_cache_returns_dict(self, tmp_path: Path) -> None:
         """When all per-chr .npy files exist, returns dict mapping chr -> (d, u)."""
@@ -197,7 +166,7 @@ class TestFindLocoEigenCache:
         loco = LocoConfig(eigen_dir=tmp_path)
         _write_cache_entries(loco, chr_names)
 
-        result = _find_loco_eigen_cache(loco, chr_names)
+        result = _cache(loco, chr_names)
         assert result is not None
         assert set(result.keys()) == set(chr_names)
         for ch in chr_names:
@@ -210,7 +179,7 @@ class TestFindLocoEigenCache:
         loco = LocoConfig(eigen_dir=tmp_path)
         _write_cache_entries(loco, ["1", "2"])
 
-        assert _find_loco_eigen_cache(loco, ["1", "2", "3"]) is None
+        assert _cache(loco, ["1", "2", "3"]) is None
 
     def test_legacy_text_fallback(self, tmp_path: Path) -> None:
         """When legacy_text=True, checks for .txt files instead of .npy."""
@@ -218,7 +187,7 @@ class TestFindLocoEigenCache:
         loco = LocoConfig(eigen_dir=tmp_path, legacy_text=True)
         _write_cache_entries(loco, chr_names)
 
-        result = _find_loco_eigen_cache(loco, chr_names)
+        result = _cache(loco, chr_names)
         assert result is not None
         assert set(result.keys()) == set(chr_names)
 
@@ -229,7 +198,7 @@ class TestFindLocoEigenCache:
         _write_cache_entries(LocoConfig(eigen_dir=tmp_path), ["1"])
 
         text_lookup = LocoConfig(eigen_dir=tmp_path, legacy_text=True)
-        cache = _find_loco_eigen_cache(text_lookup, ["1"])
+        cache = _cache(text_lookup, ["1"])
         assert cache is not None
         assert cache["1"][0].suffix == ".npy"
 
@@ -237,53 +206,37 @@ class TestFindLocoEigenCache:
         """The .npy sidecar written alongside GEMMA text is a usable cache."""
         _write_cache_entries(LocoConfig(eigen_dir=tmp_path, legacy_text=True), ["1"])
 
-        assert _find_loco_eigen_cache(LocoConfig(eigen_dir=tmp_path), ["1"]) is not None
+        assert _cache(LocoConfig(eigen_dir=tmp_path), ["1"]) is not None
 
     def test_empty_dir_returns_none(self, tmp_path: Path) -> None:
         """Empty directory returns None (no cache found)."""
-        result = _find_loco_eigen_cache(LocoConfig(eigen_dir=tmp_path), ["1", "2"])
+        result = _cache(LocoConfig(eigen_dir=tmp_path), ["1", "2"])
         assert result is None
 
     def test_reader_retains_selected_loco_generation_after_commit(
         self, tmp_path: Path
     ) -> None:
-        from jamma.lmm.eigen_cache import write_eigen_cache_manifest
-
         loco = LocoConfig(eigen_dir=tmp_path, prefix="study")
         _write_cache_entries(loco, ["1", "2"], n=2)
-        selected = _find_loco_eigen_cache(loco, ["1", "2"])
+        selected = _cache(loco, ["1", "2"])
         assert selected is not None
 
-        generation = "replacement"
-        artifacts: dict[str, dict[str, str]] = {}
-        for chromosome in ("1", "2"):
-            d_path, u_path = write_eigen_generation_members(
-                np.full(2, 4.0),
-                np.fliplr(np.eye(2)),
-                tmp_path,
-                "study",
-                generation,
-                label=f"loco.chr{chromosome}",
+        replacement = EigenGeneration(tmp_path, "study", "replacement")
+        members = {
+            chromosome: replacement.write_member(
+                chromosome, np.full(2, 4.0), np.fliplr(np.eye(2))
             )
-            artifacts[chromosome] = {
-                "eigenD": d_path.name,
-                "eigenU": u_path.name,
-            }
+            for chromosome in ("1", "2")
+        }
         write_eigen_cache_manifest(
-            tmp_path,
-            "study",
-            "NEWKEY",
-            components=_dummy_components(),
-            generation=generation,
-            artifacts=artifacts,
+            replacement, "NEWKEY", components=_dummy_components(), members=members
         )
 
         pairs = list(
             _cached_eigen_pairs(
                 selected,
-                ["1", "2"],
+                {"1": np.array([0]), "2": np.array([1])},
                 n_valid=2,
-                partitions={"1": np.array([0]), "2": np.array([1])},
                 show_progress=False,
             )
         )
@@ -325,9 +278,7 @@ class TestLocoWriteEigen:
         )
         assert result.n_tested > 0
 
-        cache = _find_loco_eigen_cache(
-            LocoConfig(eigen_dir=tmp_path, prefix="result"), unique_chrs
-        )
+        cache = _committed_cache(tmp_path, "result", unique_chrs)
         assert cache is not None
         # Verify manifest-selected files contain complete eigendecompositions.
         for ch in unique_chrs:
@@ -506,9 +457,7 @@ class TestLocoEigenCacheFallback:
             loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir, prefix="result"),
         )
 
-        cache = _find_loco_eigen_cache(
-            LocoConfig(eigen_dir=eigen_dir, prefix="result"), unique_chrs
-        )
+        cache = _committed_cache(eigen_dir, "result", unique_chrs)
         assert cache is not None
         # Delete one manifest-referenced member to simulate a partial generation.
         first_chr = unique_chrs[0]
@@ -810,7 +759,6 @@ class TestLocoEigenCacheStaleDetection:
         maf=0.05 but is interrupted on the second chromosome. The maf=0.01
         manifest remains the commit record for the old immutable generation.
         """
-        import jamma.lmm.loco_eigen as loco_eigen_mod
         from jamma.lmm.eigen_cache import eigen_cache_manifest_path
         from jamma.lmm.loco import run_lmm_loco
 
@@ -843,37 +791,29 @@ class TestLocoEigenCacheStaleDetection:
         assert manifest.exists()
         old_manifest = manifest.read_bytes()
 
-        real_write_members = loco_eigen_mod.write_eigen_generation_members
+        real_write_member = EigenGeneration.write_member
         calls = {"n": 0}
 
-        def interrupting_write_members(
+        def interrupting_write_member(
+            self: EigenGeneration,
+            partition: str | None,
             eigenvalues: np.ndarray,
             eigenvectors: np.ndarray,
-            output_dir: Path,
-            prefix: str = "result",
-            generation: str = "",
             *,
             legacy_text: bool = False,
-            label: str | None = None,
         ) -> tuple[Path, Path]:
             calls["n"] += 1
             if calls["n"] == 1:
-                return real_write_members(
+                return real_write_member(
+                    self,
+                    partition,
                     eigenvalues,
                     eigenvectors,
-                    output_dir,
-                    prefix,
-                    generation,
                     legacy_text=legacy_text,
-                    label=label,
                 )
             raise RuntimeError("simulated interruption")
 
-        monkeypatch.setattr(
-            loco_eigen_mod,
-            "write_eigen_generation_members",
-            interrupting_write_members,
-        )
+        monkeypatch.setattr(EigenGeneration, "write_member", interrupting_write_member)
 
         with pytest.raises(RuntimeError, match="simulated interruption"):
             run_lmm_loco(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from jamma.lmm.stats import AssocResult
+from jamma.lmm.assoc_output import AssocResult
 
 
 def make_assoc(

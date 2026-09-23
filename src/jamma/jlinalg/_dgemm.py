@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import numpy as np
-
-DgemmBackend = Callable[
-    [np.ndarray, np.ndarray, str, str, np.ndarray | None], np.ndarray
-]
 
 
 def validate(
@@ -80,28 +74,3 @@ def numpy_impl(
         ),
         dtype=np.float64,
     )
-
-
-def numpy(
-    a: np.ndarray,
-    b: np.ndarray,
-    transa: str = "N",
-    transb: str = "N",
-    out: np.ndarray | None = None,
-) -> np.ndarray:
-    """Validated NumPy implementation exposed for backend-specific tests."""
-    validate(a, b, transa, transb, out)
-    return numpy_impl(a, b, transa, transb, out)
-
-
-def run(
-    backend: DgemmBackend,
-    a: np.ndarray,
-    b: np.ndarray,
-    transa: str,
-    transb: str,
-    out: np.ndarray | None,
-) -> np.ndarray:
-    """Validate once and dispatch to the selected implementation."""
-    validate(a, b, transa, transb, out)
-    return backend(a, b, transa, transb, out)

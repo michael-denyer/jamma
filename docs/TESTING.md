@@ -34,7 +34,7 @@ GEMMA. This document is split into three parts:
 
 > **Never make `scipy` a runtime dependency.** It overwrites the ILP64
 > numpy build and breaks 100k+ sample eigendecomposition. Production code
-> uses the stdlib-only `jamma.special` module instead. New stat functions
+> uses the NumPy `jamma.lmm.special` module instead. New stat functions
 > go there first; reach for `scipy.stats` only to produce a reference value.
 
 ### 1.2 Setup
@@ -107,19 +107,21 @@ import pytest
 pytestmark = pytest.mark.tier0
 ```
 
-A `pytest_configure` hook in `tests/conftest.py` unions the module
-`pytestmark`, the enclosing class's decorators, and the function's own
-decorators for every test item, and aborts the run naming any function whose
-union carries none of `tier0`/`tier1`/`tier2`/`slow`/`benchmark`. The check
-is per-item, not per-file: a module marker or a marker on one function in a
-file does not cover a sibling test that carries none of its own. An earlier,
-file-granular version of this gate passed a file the moment *any* test in it
-had a marker, so 88 tests across nine files ran with no tier for their whole
-lifetime. The gate runs once on the controller before xdist forks workers (a
-collection-based gate failed open under `-n N` because xdist controllers
-skip collection of the worker test files). Recognises parametrised markers
-(`@pytest.mark.skipif(...)`) and list-form `pytestmark`. Promote the
-function (or its file) to its correct tier rather than silencing the check.
+The `scripts/check_test_markers.py` lint (pre-commit, and the CI `lint` job)
+unions the module `pytestmark`, the enclosing class's decorators, and the
+function's own decorators for every test item, and fails naming any function
+whose union carries none of `tier0`/`tier1`/`tier2`/`slow`/`benchmark`. The
+check is per-item, not per-file: a module marker or a marker on one function
+in a file does not cover a sibling test that carries none of its own. An
+earlier, file-granular version of this gate passed a file the moment *any*
+test in it had a marker, so 88 tests across nine files ran with no tier for
+their whole lifetime. The gate reads source rather than collected items,
+because a collection-based gate failed open under `-n N`: xdist controllers
+skip collection of the worker test files. A bare `pytest` run does not apply
+it; run `scripts/check_test_markers.py` or `prek run --all-files`. Recognises
+parametrised markers (`@pytest.mark.skipif(...)`) and list-form `pytestmark`.
+Promote the function (or its file) to its correct tier rather than silencing
+the check.
 
 `tier1` means the test reads a GEMMA reference: a `FixtureDataset.ref(...)`
 path, a `.kinship` fixture file, or a recorded GEMMA constant, and compares
@@ -209,7 +211,7 @@ typically on the default `LD_PRELOAD` path.
 export JAMMA_FORCE_NUMPY_FALLBACK=1
 
 # Tell the build helpers to inject sanitizer flags via
-# apply_sanitizer_overrides.
+# resolve_flags.
 export JAMMA_SANITIZE=address,undefined
 
 # Use gcc to match the LD_PRELOAD libasan path (mixing gcc-built .so
@@ -261,7 +263,7 @@ uv run python -m jamma.lmm._compile_accel
 See also: [`.github/workflows/sanitizers.yml`](../.github/workflows/sanitizers.yml),
 [`scripts/asan-suppressions.txt`](../scripts/asan-suppressions.txt),
 [`src/jamma/_build_support/build_models.py`](../src/jamma/_build_support/build_models.py)
-(the `apply_sanitizer_overrides` helper).
+(`resolve_flags`, which reads `JAMMA_SANITIZE`).
 
 ### 1.11 A missing fixture is a bug, not a skip
 
@@ -277,12 +279,12 @@ kinship filename was wrong, and a single `.exists()` guard turned both into
 one skip (#147).
 
 **Guard with `require_fixture`, not `pytest.skip`.** `require_fixture` in
-`tests/conftest.py` raises `FileNotFoundError` when any argument does not
+`tests/support.py` raises `FileNotFoundError` when any argument does not
 exist, naming every missing path relative to the repository root, and
 returns `None` otherwise:
 
 ```python
-from tests.conftest import require_fixture
+from tests.support import require_fixture
 
 def test_something():
     require_fixture(MOUSE_BFILE.with_suffix(".bed"), MOUSE_KINSHIP)
@@ -294,11 +296,10 @@ which is the half of #147 a single check could not show. For a file whose
 tests all need the same fixture, call it once at module level, as
 `tests/test_loco_eigen_cache.py` does; a wrong path there fails collection.
 
-**The skip gate is the backstop.** `_enforce_no_dormant_skips` in
-`tests/conftest.py` parses every `tests/**/test_*.py` at `pytest_configure` and
-fails the session, listing each file and line. Same mechanism as the §1.6 tier
-gate: source-parsed and run once, so it holds under xdist, `-k` and `-m`, and it
-flags the guard even in a file whose tests never ran.
+**The skip gate is the backstop.** `scripts/check_test_markers.py` parses every
+`tests/**/test_*.py` and fails, listing each file and line. Same lint as the §1.6
+tier gate: source-parsed, so no collection filter hides a guard, and it flags the
+guard even in a file whose tests never ran.
 
 It applies **three independent detectors**, and reports every category in one
 failure so a sweep clears in a single pass:
@@ -352,8 +353,8 @@ built.
 
 **Gate on the capability, not on the name.** For the C extension that is
 `accel.available()` (`jamma.lmm.accel`), which is the one bit the ABI-equality
-gate actually admits. Use the `requires_c` marker and `no_c_kernels` fixture
-from `tests/conftest.py` rather than spelling the check out per test. If a
+gate actually admits. Use the `requires_c` marker from `tests/support.py` and the
+`no_c_kernels` fixture from `tests/conftest.py` rather than spelling the check out per test. If a
 test needs a specific attribute to be present, `assert` it: the assert fails
 when the name goes, which is the whole point.
 
@@ -437,7 +438,7 @@ catch. The carve-out is:
 
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
-| LOCO iterator-None guard uses `raise RuntimeError`, not bare `assert` (`TestLOCOIteratorRuntimeError`, [`tests/test_safety_gates.py:30`](../tests/test_safety_gates.py#L30)) | `python -O` strips bare `assert`; behavior-only test passes in dev and silently breaks in prod |
+| The shared LMM chunk runner passes a transpose flag to jlinalg's dgemm rather than a transposed array (`test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm`, [`tests/test_numpy_streaming.py:53`](../tests/test_numpy_streaming.py#L53)) | jlinalg copies a non-contiguous input, so a transposed `U` costs an O(n^2) copy per chunk. That changes speed, not results |
 | Compile-flag literals not in three forbidden entry points ([`scripts/check_compile_flag_literals.py`](../scripts/check_compile_flag_literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
 | Every `_lmm_accel*.c` unit reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 
@@ -461,7 +462,7 @@ a structural test. Test the behavior.
 | Anti-pattern | Preferred approach |
 |---|---|
 | `inspect.getsource()` assertions | Assert on warnings, exceptions, return values |
-| `MagicMock()` for data classes (`MemoryLedger`, `ExecutionPlan`, `Path`) | Construct real instances with test values |
+| `MagicMock()` for data classes (`MemoryPlan`, `ExecutionPlan`, `Path`) | Construct real instances with test values |
 | `MagicMock(spec=Path)` to stand in for a path | Use `tmp_path` or `Path("/tmp/x")` |
 | `@patch` on a non-boundary collaborator (`PipelineRunner`, `numpy.linalg.eigh`) | Inject a fake; or test against real values |
 | Mocking numerical functions (eigh, BLAS, likelihood) | Use small synthetic data with known results |
@@ -505,9 +506,9 @@ two are acceptable:
 1. **Hardware/library availability** — vendor LAPACK absent, ILP64 not
    active, BLAS backend mismatch. Use module-level
    `pytestmark = pytest.mark.skipif(...)` so the file skips at collection
-   time. Example: [`tests/test_jlinalg_dispatch.py:13`](../tests/test_jlinalg_dispatch.py#L13).
+   time. Example: [`tests/test_jlinalg_dispatch.py:18`](../tests/test_jlinalg_dispatch.py#L18).
    For the `_lmm_accel` C extension specifically, use the `requires_c` marker
-   from `tests/conftest.py` (`@requires_c` above the test or class) rather
+   from `tests/support.py` (`@requires_c` above the test or class) rather
    than a hand-written `skipif(not accel.available(), ...)`; it is one
    spelling for the one capability bit. To hold the extension out for a test
    that exercises the NumPy fallback deliberately, use the `no_c_kernels`
@@ -587,14 +588,28 @@ Defined in [`tests/conftest.py`](../tests/conftest.py):
 
 | Fixture | Description |
 |---------|-------------|
-| `sample_plink_data` | Path prefix for synthetic PLINK files (`tests/fixtures/gemma_synthetic/test`) |
+| `sample_plink_data` | Path prefix for synthetic PLINK files (`SYNTHETIC.bfile`) |
 | `output_dir` | Temporary output directory wrapping `tmp_path` |
-| `synthetic_covariate_data_ncvt2` | Rotated data with 2 covariates (200 samples, 50 SNPs) |
-| `synthetic_covariate_data_ncvt4` | Rotated data with 4 covariates (200 samples, 50 SNPs) |
+| `asymmetric_plink` | PLINK prefix whose SNPs cross QC thresholds when rows are dropped |
+| `no_c_kernels` | Holds the `_lmm_accel` extension out for one test |
+| `synthetic_data` | `gemma_synthetic` PLINK data, kinship, phenotypes and `snp_info` |
+| `synthetic_data_with_covariates` | `synthetic_data` plus the `gemma_covariate` covariates |
+| `math_evidence_dir` | Evidence bundle path for a GEMMA comparison; raises unless the test is `tier1` |
+
+[`tests/lmm_accel/conftest.py`](../tests/lmm_accel/conftest.py) adds
+`synthetic_covariate_data_ncvt2` and `synthetic_covariate_data_ncvt4`, a
+`GeneralCase` over `covariate_lmm_inputs` with 2 or 4 covariates (200
+samples, 50 SNPs). `GeneralCase` in `tests/lmm_accel/_helpers.py` derives
+the Uab layouts and the null model the general kernels read.
 
 If you add a fixture, also add a row here.
 
-Two modules beside `conftest.py` hold what the fixtures do not:
+Three modules beside `conftest.py` hold what the fixtures do not:
+
+- [`tests/support.py`](../tests/support.py) is the helper library test
+  modules import: `require_fixture`, `requires_c`, `preflight`,
+  and `install_lint_script`.
+  `conftest.py` holds only fixtures and hooks.
 
 - [`tests/fixture_paths.py`](../tests/fixture_paths.py) names every
   committed dataset once. `SYNTHETIC`, `MOUSE` and `LOCO` are frozen
@@ -606,7 +621,12 @@ Two modules beside `conftest.py` hold what the fixtures do not:
   `rotated_lmm_inputs(n_samples, n_snps, n_cvt=1, seed=42)` returns an
   `LmmInputs` (eigenvalues, `UtW`, `Uty`, `UtG`, `uab_batch()`) drawn in
   the order the inline recipe used, so a migrated test sees bit-identical
-  arrays. `write_fam(path, *columns, missing_at=...)` writes a `.fam`.
+  arrays. `covariate_lmm_inputs(n_cvt, ...)` is the general-kernel recipe
+  (descending eigenvalues, `|normal| + 0.5` covariates), `gram_uab_batch()`
+  builds an n_cvt=1 Uab batch from per-SNP vectors, and
+  `make_runner_synthetic_data()` returns unrotated genotypes, phenotypes,
+  kinship and `snp_info` for runner tests. `tests/test_builders.py` pins
+  each recipe's bytes. `write_fam(path, *columns, missing_at=...)` writes a `.fam`.
   Phenotypes are read back with `jamma.io.read_fam_phenotypes`, the same
   parser the pipeline uses.
 
@@ -640,12 +660,12 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 | **Memory & gates** | `test_memory.py`, `test_memory_gates.py`, `test_memory_chunk_coupling.py`, `test_eigendecomp_memory.py`, `test_safety_gates.py` | Memory estimation; OOM gates. `compute_chunk_size_numpy` sizing and its pipeline-buffer pricing moved to `test_chunk_sizing.py` under LMM runners |
 | **CLI / API** | `test_cli.py`, `test_cli_memory.py`, `test_gwas_api.py` | Click entry point; `-lmm` flag handling; programmatic GWAS API |
 | **Backend / hardware** | `test_backend_detection.py`, `test_hardware_context.py`, `test_threading.py`, `test_jlinalg_dispatch.py`, `test_force_numpy_fallback.py` | Backend autodetection; physical core count; threading limits; the `JAMMA_FORCE_NUMPY_FALLBACK` escape hatch |
-| **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_build_support_sanitizer_override.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_file_size_limits.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_check_doc_anchors.py`, `test_dockerfile_provenance.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_c_include_order.py`, `test_c_lint_coverage.py`, `test_core_recompile.py` | Compile-flag and file-size invariants; OpenMP detection; wheel and container provenance; sanitizer flag injection; include order; cppcheck coverage; doc line anchors; runtime recompile |
-| **Fingerprint / sanitizer harness** | `test_fingerprint_harness.py`, `test_compare_fingerprints.py`, `test_lmm_accel_sections.py`, `test_sanitizer_sentinel.py`, `test_compile_accel_sentinel_injection.py`, `test_sanitizer_workflow_yaml.py`, `test_asan_suppressions.py` | The machinery behind `fingerprint.yml` and `sanitizers.yml`. These test the gates themselves, so a broken harness cannot go green by doing nothing |
+| **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_build_support_sanitizer_override.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_file_size_limits.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_check_doc_anchors.py`, `test_dockerfile_provenance.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_c_include_order.py`, `test_c_lint_coverage.py`, `test_native.py` | Compile-flag and file-size invariants; OpenMP detection; wheel and container provenance; sanitizer flag injection; include order; cppcheck coverage; doc line anchors; runtime recompile |
+| **Fingerprint / sanitizer harness** | `test_fingerprint_harness.py`, `test_compare_fingerprints.py`, `test_sanitizer_sentinel.py`, `test_compile_accel_sentinel_injection.py`, `test_sanitizer_workflow_yaml.py`, `test_asan_suppressions.py` | The machinery behind `fingerprint.yml` and `sanitizers.yml`. These test the gates themselves, so a broken harness cannot go green by doing nothing |
 | **Validation / parity** | `test_validation.py`, `test_validation_assoc.py`, `test_validation_assoc_mode_schema.py`, `test_validate_runner_inputs.py`, `test_kinship_validation.py`, `test_demonstrate_equivalence.py` | GEMMA parity machinery; tolerance config; assoc file diff and schema-derived compared columns; the equivalence demonstration script |
-| **Suite meta** | `test_conftest_tier_gate.py`, `test_fixture_manifest.py`, `tests/fakes/test_fakes.py` | The mandatory-tier-marker gate (§1.6), the fixture manifest (§3.5), and the fakes' own contract tests |
-| **Reference oracles** | `tests/reference/likelihood.py`, `tests/reference/stats.py` | GEMMA-literal scalar ports (CalcPPab, CalcPPPab, LogRL_dev2, CalcRLWald, CalcRLScore, CalcLRT, `f_sf`, `safe_sqrt`) with no production caller; the batch and C paths are held to them |
-| **Numerics / utilities** | `test_special.py`, `test_schema.py`, `test_snp_filter.py`, `test_snp_filter_perf.py`, `test_snp_stats.py`, `test_core_snp_stats.py`, `test_categorical.py`, `test_missingness.py`, `test_weights.py`, `test_prepare_common.py`, `test_telemetry.py`, `test_progress.py`, `test_hypothesis.py` | Cephes betainc / chi2_sf; data-class schemas; SNP filtering and statistics; phenotype prep; progress bars |
+| **Suite meta** | `test_conftest_tier_gate.py`, `test_fixture_manifest.py`, `tests/fakes/test_fakes.py` | The mandatory-tier-marker lint (§1.6), the fixture manifest (§3.5), and the fakes' own contract tests |
+| **Reference oracles** | `tests/reference/likelihood.py`, `tests/reference/stats.py`, `tests/reference/special.py` | GEMMA-literal scalar ports (CalcPPab, CalcPPPab, LogRL_dev2, alternative-model LogRL_f, CalcRLWald, CalcRLScore, CalcLRT, `f_sf`, `safe_sqrt`) and the scalar Cephes `betainc` and `chi2_sf`, all with no production caller; the batch and C paths are held to them |
+| **Numerics / utilities** | `test_special.py`, `test_schema.py`, `test_snp_filter.py`, `test_snp_filter_perf.py`, `test_snp_stats.py`, `test_genotype_snp_stats.py`, `test_categorical.py`, `test_missingness.py`, `test_weights.py`, `test_prepare_common.py`, `test_telemetry.py`, `test_progress.py`, `test_hypothesis.py` | Cephes betainc / chi2_sf; data-class schemas; SNP filtering and statistics; phenotype prep; progress bars |
 
 ### 3.2 Tests to improve
 

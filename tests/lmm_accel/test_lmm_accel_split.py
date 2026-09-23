@@ -16,7 +16,7 @@ import pytest
 
 from jamma.lmm import accel
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import requires_c
+from tests.support import requires_c
 
 
 @pytest.mark.tier1
@@ -158,16 +158,27 @@ def test_fused_workspace_reuse_across_chunks(fused_data):
     This is the runner's pattern: the workspace is built once before the chunk
     loop and fed successive genotype slices.
     """
-    eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+    eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples = fused_data
 
-    ws = accel.require().create_workspace_ncvt1_c(
-        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
+    ws = accel.require().create_workspace_c(
+        eigenvalues,
+        uab_inv_soa,
+        w[:, None],
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        1,
+        lmm_mode=1,
     )
 
     mid = utg_t.shape[0] // 2
-    first = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t[:mid], 1)
-    second = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t[mid:], 1)
-    full = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
+    first = accel.require().compute_lmm_chunk_c(ws, utg_t[:mid], 1)
+    second = accel.require().compute_lmm_chunk_c(ws, utg_t[mid:], 1)
+    full = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
     for key in ("lambdas", "betas"):
         np.testing.assert_allclose(

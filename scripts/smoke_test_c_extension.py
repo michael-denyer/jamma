@@ -5,7 +5,7 @@ Verifies:
 2. The fused Wald kernel produces finite outputs on synthetic data
 3. Degenerate SNPs (P_XX <= 0) produce NaN beta/se/pwald via is_valid flag
 
-Drives create_workspace_fused_c and compute_lmm_chunk_ncvt1_c, which is what
+Drives create_workspace_c and compute_lmm_chunk_c, which is what
 DispatchPath.FUSED resolves to for n_cvt=1. It used to drive
 compute_lmm_batch_c, an entry point no dispatch path selected, so a wheel could
 have passed this while shipping a broken production kernel.
@@ -18,8 +18,8 @@ import numpy as np
 try:
     from jamma.lmm._lmm_accel import (
         HAS_OPENMP,
-        compute_lmm_chunk_ncvt1_c,
-        create_workspace_ncvt1_c,
+        compute_lmm_chunk_c,
+        create_workspace_c,
     )
 except ImportError as exc:
     print(f"FAIL: C extension import failed (ABI mismatch?): {exc}", file=sys.stderr)
@@ -51,10 +51,21 @@ uab_inv_soa[0] = w * w
 uab_inv_soa[1] = w * Uty
 uab_inv_soa[2] = Uty * Uty
 
-ws = create_workspace_ncvt1_c(
-    eigenvalues, uab_inv_soa, w, Uty, n, 1e-5, 1e5, 50, 20, lmm_mode=1
+ws = create_workspace_c(
+    eigenvalues,
+    uab_inv_soa,
+    w[:, None],
+    Uty,
+    n,
+    1e-5,
+    1e5,
+    50,
+    20,
+    n_threads,
+    1,
+    lmm_mode=1,
 )
-result = compute_lmm_chunk_ncvt1_c(ws, utg_t, n_threads)
+result = compute_lmm_chunk_c(ws, utg_t, n_threads)
 
 # First 3 SNPs: lambdas should be finite
 if not np.isfinite(result["lambdas"][:3]).all():

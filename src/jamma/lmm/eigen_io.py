@@ -20,9 +20,13 @@ Format follows GEMMA param.cpp WriteVector/WriteMatrix:
 - No headers in either file
 """
 
+from __future__ import annotations
+
 import json
+import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +42,8 @@ from jamma.utils.npy_cache import (
 )
 
 EIGEN_MANIFEST_SCHEMA_VERSION = 1
+
+_GENERATION_MARK = ".generation."
 
 # ---------------------------------------------------------------------------
 # .npy sidecar cache helpers (used for text-format files only)
@@ -202,8 +208,7 @@ def read_eigen_files(
 
 def _member_generation(path: Path) -> str | None:
     """Return the full managed generation identity embedded in a member name."""
-    marker = ".generation."
-    if marker not in path.name:
+    if _GENERATION_MARK not in path.name:
         return None
     for kind in (".eigenD.", ".eigenU."):
         if kind in path.name:
@@ -224,7 +229,7 @@ def _stable_pair_identity(
         if eigenD_path.name.endswith(d_tail) and eigenU_path.name.endswith(u_tail):
             d_prefix = eigenD_path.name[: -len(d_tail)]
             u_prefix = eigenU_path.name[: -len(u_tail)]
-            if d_prefix == u_prefix and ".generation." not in d_prefix:
+            if d_prefix == u_prefix and _GENERATION_MARK not in d_prefix:
                 return eigenD_path.parent, d_prefix
     return None
 
@@ -299,6 +304,126 @@ def _write_eigenvectors(
     )
 
 
+WHOLE_GENOME = None
+"""The partition of a whole-genome generation; LOCO partitions are chromosomes."""
+
+Partition = str | None
+
+
+@dataclass(frozen=True)
+class EigenGeneration:
+    """One immutable set of eigenpair members, one pair per partition.
+
+    A generation is written member by member and becomes visible only when a
+    manifest naming it is published with :func:`publish_manifest`, so a reader
+    sees the previous generation until the new one is complete. Whole-genome
+    and LOCO manifests differ in schema, not in how members are named, checked
+    or committed.
+    """
+
+    directory: Path
+    prefix: str
+    generation: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    @classmethod
+    def committed(
+        cls, manifest: Mapping[str, object], directory: Path, prefix: str, source: Path
+    ) -> EigenGeneration:
+        """The generation a parsed manifest commits to.
+
+        Raises:
+            ValueError: If the manifest names no generation.
+        """
+        generation = manifest.get("generation")
+        if not isinstance(generation, str) or not generation:
+            raise ValueError(f"Malformed eigen manifest: {source}")
+        return cls(Path(directory), prefix, generation)
+
+    def member_paths(self, partition: Partition, suffix: str) -> tuple[Path, Path]:
+        """``(eigenD, eigenU)`` paths of one partition's member pair."""
+        stem = f"{self.prefix}{_GENERATION_MARK}{self.generation}"
+        if partition is not WHOLE_GENOME:
+            stem = f"{stem}.loco.chr{partition}"
+        return (
+            self.directory / f"{stem}.eigenD{suffix}",
+            self.directory / f"{stem}.eigenU{suffix}",
+        )
+
+    def write_member(
+        self,
+        partition: Partition,
+        eigenvalues: np.ndarray,
+        eigenvectors: np.ndarray,
+        *,
+        legacy_text: bool = False,
+    ) -> tuple[Path, Path]:
+        """Write one partition's pair without publishing a commit record."""
+        eigenD_path, eigenU_path = self.member_paths(
+            partition, ".txt" if legacy_text else ".npy"
+        )
+        _write_eigenvalues(eigenvalues, eigenD_path, legacy_text=legacy_text)
+        _write_eigenvectors(eigenvectors, eigenU_path, legacy_text=legacy_text)
+        return eigenD_path, eigenU_path
+
+    def resolve(
+        self, records: Mapping[Partition, object], source: Path
+    ) -> dict[Partition, tuple[Path, Path]]:
+        """Member paths for each partition's manifest record.
+
+        A record is ``{"eigenD": name, "eigenU": name}`` and must name exactly
+        this generation's pair for its partition, both in one format.
+
+        Raises:
+            ValueError: If any record is missing, malformed or names a file
+                this generation would not have written.
+        """
+        resolved: dict[Partition, tuple[Path, Path]] = {}
+        for partition, record in records.items():
+            if not isinstance(record, dict):
+                raise ValueError(f"Unsafe or malformed member record in {source}")
+            names = (record.get("eigenD"), record.get("eigenU"))
+            suffix = Path(names[0]).suffix if isinstance(names[0], str) else ""
+            expected = self.member_paths(partition, suffix)
+            if suffix not in {".npy", ".txt"} or names != tuple(
+                p.name for p in expected
+            ):
+                raise ValueError(f"Unsafe or malformed member record in {source}")
+            resolved[partition] = expected
+        return resolved
+
+
+def member_record(eigenD_path: Path, eigenU_path: Path) -> dict[str, str]:
+    """The manifest record naming one partition's member pair."""
+    return {"eigenD": eigenD_path.name, "eigenU": eigenU_path.name}
+
+
+def load_manifest(path: Path) -> dict[str, object]:
+    """Parse a manifest JSON object.
+
+    Raises:
+        FileNotFoundError: If no manifest is committed.
+        json.JSONDecodeError: If the manifest is not JSON.
+        ValueError: If it is not a JSON object.
+    """
+    with open(path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Malformed eigen manifest: {path}")
+    return manifest
+
+
+def publish_manifest(path: Path, text: str) -> None:
+    """Commit a generation by durably replacing its manifest with ``text``.
+
+    The members it names must already exist. The fsync makes the commit survive
+    a power cut; the manifest is a few hundred bytes, so it costs nothing.
+    """
+    with AtomicOutput(path) as temporary, open(temporary, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 def write_eigen_files(
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
@@ -329,25 +454,18 @@ def write_eigen_files(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    generation = uuid.uuid4().hex
-    eigenD_path, eigenU_path = write_eigen_generation_members(
-        eigenvalues,
-        eigenvectors,
-        output_dir,
-        prefix,
-        generation,
-        legacy_text=legacy_text,
+    generation = EigenGeneration(output_dir, prefix)
+    eigenD_path, eigenU_path = generation.write_member(
+        WHOLE_GENOME, eigenvalues, eigenvectors, legacy_text=legacy_text
     )
-    _write_manifest(
+    manifest = {
+        "schema_version": EIGEN_MANIFEST_SCHEMA_VERSION,
+        "generation": generation.generation,
+        "members": member_record(eigenD_path, eigenU_path),
+    }
+    publish_manifest(
         eigen_manifest_path(output_dir, prefix),
-        {
-            "schema_version": EIGEN_MANIFEST_SCHEMA_VERSION,
-            "generation": generation,
-            "members": {
-                "eigenD": eigenD_path.name,
-                "eigenU": eigenU_path.name,
-            },
-        },
+        json.dumps(manifest, sort_keys=True) + "\n",
     )
     return eigenD_path, eigenU_path
 
@@ -357,67 +475,13 @@ def eigen_manifest_path(output_dir: Path, prefix: str) -> Path:
     return Path(output_dir) / f"{prefix}.eigen_manifest.json"
 
 
-def _generation_prefix(prefix: str, generation: str) -> str:
-    return f"{prefix}.generation.{generation}"
-
-
-def _write_manifest(path: Path, payload: dict[str, object]) -> None:
-    """Publish a small JSON commit record after all referenced files exist."""
-    with AtomicOutput(path) as temporary, open(temporary, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, sort_keys=True)
-        fh.write("\n")
-
-
 def resolve_eigen_generation(output_dir: Path, prefix: str) -> tuple[Path, Path]:
     """Resolve the latest managed eigenpair from one manifest read."""
     manifest_path = eigen_manifest_path(output_dir, prefix)
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+    manifest = load_manifest(manifest_path)
+    if manifest.get("schema_version") != EIGEN_MANIFEST_SCHEMA_VERSION:
         raise ValueError(f"Unsupported eigen manifest: {manifest_path}")
-    generation = manifest.get("generation")
-    members = manifest.get("members")
-    if not isinstance(generation, str) or not isinstance(members, dict):
-        raise ValueError(f"Malformed eigen manifest: {manifest_path}")
-    expected_prefix = _generation_prefix(prefix, generation)
-    resolved: list[Path] = []
-    formats: list[str] = []
-    for kind in ("eigenD", "eigenU"):
-        name = members.get(kind)
-        if (
-            not isinstance(name, str)
-            or Path(name).name != name
-            or not name.startswith(f"{expected_prefix}.{kind}.")
-        ):
-            raise ValueError(f"Unsafe or malformed {kind} member in {manifest_path}")
-        artifact_format = Path(name).suffix
-        if artifact_format not in {".npy", ".txt"}:
-            raise ValueError(f"Unsupported {kind} member format in {manifest_path}")
-        formats.append(artifact_format)
-        resolved.append(Path(output_dir) / name)
-    if formats[0] != formats[1]:
-        raise ValueError(f"Mixed member formats in eigen manifest: {manifest_path}")
-    return resolved[0], resolved[1]
-
-
-def write_eigen_generation_members(
-    eigenvalues: np.ndarray,
-    eigenvectors: np.ndarray,
-    output_dir: Path,
-    prefix: str,
-    generation: str,
-    *,
-    legacy_text: bool = False,
-    label: str | None = None,
-) -> tuple[Path, Path]:
-    """Write immutable pair members without publishing a commit record."""
-    output_dir = Path(output_dir)
-    suffix = ".txt" if legacy_text else ".npy"
-    member_prefix = _generation_prefix(prefix, generation)
-    if label is not None:
-        member_prefix = f"{member_prefix}.{label}"
-    eigenD_path = output_dir / f"{member_prefix}.eigenD{suffix}"
-    eigenU_path = output_dir / f"{member_prefix}.eigenU{suffix}"
-    _write_eigenvalues(eigenvalues, eigenD_path, legacy_text=legacy_text)
-    _write_eigenvectors(eigenvectors, eigenU_path, legacy_text=legacy_text)
-    return eigenD_path, eigenU_path
+    generation = EigenGeneration.committed(manifest, output_dir, prefix, manifest_path)
+    return generation.resolve({WHOLE_GENOME: manifest.get("members")}, manifest_path)[
+        WHOLE_GENOME
+    ]

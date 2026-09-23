@@ -15,11 +15,11 @@ from jamma.lmm.chunk_runner_numpy import (
     _PhenotypeConsumer,
 )
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.prepare_common import PreparedLmmRun
+from jamma.lmm.prepare_common import NullFit, RotatedBasis
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.workspace import WorkspaceSpec
-from tests.conftest import requires_c
 from tests.fakes.blas import fake_blas_controller
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -86,17 +86,17 @@ def _real_engine(
         miss_threshold=1.0,
         show_progress=False,
     )
-    prepared = PreparedLmmRun(
-        eigenvalues=eigenvalues,
-        U=U,
-        UtW=UtW,
+    basis = RotatedBasis(
+        eigenvalues=eigenvalues, U=U, W=np.ones((n_samples, 1)), UtW=UtW
+    )
+    fit = NullFit(
         Uty=Uty,
         logl_H0=-1.0,
         Hi_eval_null=1.0 / (eigenvalues + 1.0),
         pve=None,
         pve_se=None,
     )
-    invariants = RunInvariants.build(dispatch, prepared, config, n_snps)
+    invariants = RunInvariants.build(dispatch, basis, fit, config, n_snps)
     workspace = WorkspaceSpec.build(
         dispatch, 1, n_samples, n_samples, 1, config.n_grid, config.n_refine, 1
     )

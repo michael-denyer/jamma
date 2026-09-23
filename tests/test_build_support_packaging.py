@@ -2,16 +2,15 @@
 
 Contract: jamma._build_support holds the canonical compile flags and the
 compile+link driver. It MUST ship inside the installed wheel so that
-jamma.core.recompile.auto_recompile_c_extension (the runtime ABI-mismatch
+jamma._native.auto_recompile_c_extension (the runtime ABI-mismatch
 recompile path end users depend on) can reach the same helpers the wheel
 was built with. A wheel that omits jamma._build_support makes
 auto_recompile_c_extension dead code — every ABI mismatch silently falls
 back to pure-Python.
 
 Runs via ``uv build``. Marked tier2 because it shells out to the build
-backend and takes several seconds; the hard contract is also checked
-structurally in test_wheel_contains_build_support_structural below,
-which is tier0 and runs in every CI job.
+backend and takes several seconds; the required ``Package smoke`` job in
+ci.yml checks the same contract on every PR.
 """
 
 from __future__ import annotations
@@ -31,42 +30,6 @@ _BUILD_SUPPORT_MODULES = (
     "compile_and_link.py",
     "load_proof.py",
 )
-
-
-@pytest.mark.tier0
-def test_wheel_contains_build_support_structural():
-    """pyproject.toml must list src/jamma in the wheel-target packages.
-
-    jamma._build_support is a subpackage of jamma, so any config that
-    includes ``src/jamma`` automatically ships it. But we check the config
-    text explicitly: if someone splits the packages list to exclude
-    _build_support, the other (tier2) test will catch it — but tier2 is
-    gated behind ``-m slow`` and excluded from default runs. This tier0
-    check fails instantly in CI so the regression cannot slip through.
-    """
-    pyproject = (_REPO_ROOT / "pyproject.toml").read_text()
-    # Look for the wheel target. We want either packages=["src/jamma"]
-    # (blanket) or an explicit jamma._build_support entry. Anything that
-    # excludes _build_support will fail the literal-match check below.
-    assert "[tool.hatch.build.targets.wheel]" in pyproject, (
-        "pyproject.toml missing [tool.hatch.build.targets.wheel] section"
-    )
-    assert 'packages = ["src/jamma"]' in pyproject, (
-        "pyproject.toml wheel target does not ship src/jamma as a blanket "
-        "package — jamma._build_support may be excluded. If the packages "
-        "list is split, ensure jamma._build_support is listed explicitly "
-        "AND update this assertion."
-    )
-
-
-@pytest.mark.tier0
-def test_build_support_responsibilities_are_separate_modules():
-    """Models, compiler execution, and orchestration must not collapse again."""
-    support_dir = _REPO_ROOT / "src/jamma/_build_support"
-    missing = [
-        name for name in _BUILD_SUPPORT_MODULES if not (support_dir / name).is_file()
-    ]
-    assert not missing, f"build-support modules missing: {missing}"
 
 
 def _build(tmp_out: Path) -> tuple[Path, Path]:
@@ -101,7 +64,7 @@ def test_build_support_ships_in_sdist_and_wheel(tmp_path):
     """jamma._build_support must be present in both distributions.
 
     sdist: hatch_build.py imports it at wheel-build time via sys.path+src.
-    wheel: jamma.core.recompile calls compile_extension() which imports it
+    wheel: jamma._native calls compile_extension() which imports it
     as a regular package. Missing from either distribution is a regression.
     """
     sdist_path, wheel_path = _build(tmp_path)

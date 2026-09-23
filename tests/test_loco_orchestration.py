@@ -1,80 +1,26 @@
-"""LOCO kinship orchestration: buffer aliasing, biological chromosome
-ordering, fallback-path cleanup.
-
-Companion to test_loco_numpy.py (which covers the NumPy LOCO computation
+"""Companion to test_loco_numpy.py (which covers the NumPy LOCO computation
 paths) and test_loco_eigen_cache.py (which covers cache I/O).
 """
 
 import numpy as np
 import pytest
+from loguru import logger
 
+from jamma.io import read_fam_phenotypes
+from jamma.io.plink import get_plink_metadata
 from jamma.kinship.loco import (
     LocoKinshipStream,
-    _yield_full_kinship_fallback,
     _yield_loco_matrices,
+    compute_loco_kinship_streaming,
 )
+from jamma.kinship.stream import SnpStatsSink
+from jamma.lmm.loco import LocoConfig, run_lmm_loco
+from jamma.lmm.schema import LmmConfig
 from jamma.utils import chr_sort_key
+from tests.fixture_paths import LOCO
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier0
-
-
-class TestFallbackKinshipAliasing:
-    """Verify _yield_full_kinship_fallback yields independent copies."""
-
-    def test_yielded_matrices_are_independent(self):
-        """Each yielded matrix must be a separate buffer, not aliased."""
-        n = 10
-        S_full = np.random.default_rng(42).standard_normal((n, n))
-        S_full = S_full @ S_full.T  # symmetric
-        chrs = ["3", "7"]
-
-        results = list(_yield_full_kinship_fallback(S_full, chrs, n_filtered=100))
-
-        assert len(results) == 2
-        _, K0 = results[0]
-        _, K1 = results[1]
-        # Must be different buffer objects
-        assert K0.ctypes.data != K1.ctypes.data
-        # But numerically equal (both are K_full)
-        np.testing.assert_array_equal(K0, K1)
-
-    def test_mutation_does_not_propagate(self):
-        """Mutating one yielded matrix must not affect the other."""
-        n = 5
-        S_full = np.eye(n, dtype=np.float64)
-        chrs = ["1", "2"]
-
-        results = list(_yield_full_kinship_fallback(S_full, chrs, n_filtered=1))
-        _, K0 = results[0]
-        _, K1 = results[1]
-
-        original = K0.copy()
-        K0[:] = 999.0  # mutate first
-        np.testing.assert_array_equal(K1, original)
-
-    def test_empty_chrs_yields_nothing(self):
-        """No chromosomes = no output."""
-        S_full = np.eye(3)
-        assert list(_yield_full_kinship_fallback(S_full, [], n_filtered=10)) == []
-
-    def test_raises_on_zero_n_filtered(self):
-        """n_filtered=0 raises ValueError (division by zero guard)."""
-        S_full = np.eye(3, dtype=np.float64)
-        with pytest.raises(ValueError, match="n_filtered is 0"):
-            list(_yield_full_kinship_fallback(S_full, ["1"], n_filtered=0))
-
-    def test_yields_correctly_normalized_kinship(self):
-        """Yielded matrices equal S_full / n_filtered."""
-        n = 5
-        rng = np.random.default_rng(42)
-        S_full = rng.standard_normal((n, n))
-        S_full = S_full @ S_full.T
-        expected = S_full / 100
-        results = list(
-            _yield_full_kinship_fallback(S_full.copy(), ["1", "2"], n_filtered=100)
-        )
-        for _, K in results:
-            np.testing.assert_allclose(K, expected, rtol=1e-14)
 
 
 class TestChromosomeSortKey:
@@ -119,27 +65,6 @@ class TestChromosomeSortKey:
         assert sorted(shuffled, key=chr_sort_key) == chrs
 
 
-class TestYieldLocoMatricesOrdering:
-    """Verify _yield_loco_matrices produces biological order."""
-
-    def test_biological_order(self):
-        """Chromosomes yielded in biological order, not lexicographic."""
-        n = 4
-        S_full = np.eye(n, dtype=np.float64) * 100
-        chr_names = ["1", "10", "2", "X"]
-        S_chr = {name: np.eye(n, dtype=np.float64) for name in chr_names}
-        n_chr_filtered = dict.fromkeys(chr_names, 10)
-        K_loco_buf = np.empty((n, n), dtype=np.float64)
-
-        yielded_order = [
-            name
-            for name, _ in _yield_loco_matrices(
-                S_full, S_chr, n_chr_filtered, n_filtered=40, K_loco_buf=K_loco_buf
-            )
-        ]
-        assert yielded_order == ["1", "2", "10", "X"]
-
-
 def _loco_fixtures(n=10):
     """Shared LOCO test fixtures: S_full, S_chr, n_chr_filtered, K_loco_buf."""
     chr_names = ["1", "2", "3"]
@@ -161,8 +86,14 @@ class TestLocoKinshipStreamMaterialize:
 
         stream = LocoKinshipStream(
             _matrices=_yield_loco_matrices(
-                S_full, S_chr, n_chr_filtered, n_filtered=30, K_loco_buf=K_loco_buf
-            )
+                S_full,
+                S_chr,
+                ["1", "2", "3"],
+                n_chr_filtered,
+                n_filtered=30,
+                K_loco_buf=K_loco_buf,
+            ),
+            _stats=SnpStatsSink.for_snps(1),
         )
         results = stream.materialize()
 
@@ -190,6 +121,7 @@ class TestYieldLocoMatricesBufferReuse:
             for chr_name, K in _yield_loco_matrices(
                 S_full,
                 _loco_fixtures()[1],  # fresh S_chr (consumed by iterator)
+                ["1", "2", "3"],
                 n_chr_filtered,
                 n_filtered=30,
                 K_loco_buf=K_loco_buf.copy(),
@@ -200,6 +132,7 @@ class TestYieldLocoMatricesBufferReuse:
         for chr_name, K_loco in _yield_loco_matrices(
             S_full,
             _loco_fixtures()[1],  # fresh S_chr
+            ["1", "2", "3"],
             n_chr_filtered,
             n_filtered=30,
             K_loco_buf=K_loco_buf,
@@ -225,6 +158,7 @@ class TestYieldLocoMatricesBufferReuse:
             _yield_loco_matrices(
                 S_full,
                 S_chr,
+                ["1", "2", "3"],
                 n_chr_filtered,
                 n_filtered=30,
                 K_loco_buf=K_loco_buf,
@@ -234,15 +168,83 @@ class TestYieldLocoMatricesBufferReuse:
         assert np.array_equal(results["1"], results["3"])
 
 
-class TestFallbackOrderingBiological:
-    """Verify _yield_full_kinship_fallback produces biological order."""
+def _loco_run(**loco_fields):
+    messages: list[str] = []
+    sink = logger.add(messages.append, level="INFO", format="{message}")
+    try:
+        result = run_lmm_loco(
+            LOCO.bfile,
+            read_fam_phenotypes(LOCO.fam),
+            config=LmmConfig(check_memory=False, show_progress=False),
+            loco=LocoConfig(**loco_fields),
+        )
+    finally:
+        logger.remove(sink)
+    pve_lines = [m.strip() for m in messages if "PVE computed from" in m]
+    return result, pve_lines
 
-    def test_biological_order(self):
-        """Fallback chromosomes yielded in biological order."""
-        n = 3
-        S_full = np.eye(n, dtype=np.float64)
-        chrs = ["10", "2", "1", "X"]
 
-        results = list(_yield_full_kinship_fallback(S_full, chrs, n_filtered=10))
-        yielded_order = [name for name, _ in results]
-        assert yielded_order == ["1", "2", "10", "X"]
+class TestChromosomeWithoutKinshipSnps:
+    @pytest.mark.parametrize(
+        "max_batch_chrs", [None, 1], ids=["single-pass", "multi-pass"]
+    )
+    @pytest.mark.parametrize("empty_chr", ["1", "2", "3"])
+    def test_stream_keeps_chromosome_order_and_yields_full_kinship(
+        self, empty_chr, max_batch_chrs
+    ):
+        require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
+        meta = get_plink_metadata(LOCO.bfile)
+        ksnps = np.flatnonzero(meta.chromosome != empty_chr)
+
+        matrices = compute_loco_kinship_streaming(
+            LOCO.bfile,
+            ksnps_indices=ksnps,
+            check_memory=False,
+            show_progress=False,
+            consumer_gb=0.0,
+            _max_batch_chrs=max_batch_chrs,
+        ).materialize()
+
+        assert list(matrices) == ["1", "2", "3"]
+        p = len(ksnps)
+        p_c = {c: int(np.sum(meta.chromosome[ksnps] == c)) for c in matrices}
+        s_full_minus_s_c = {
+            c: matrices[c] * (p - p_c[c]) for c in matrices if c != empty_chr
+        }
+        assert len(s_full_minus_s_c) == 2
+        s_full = sum(s_full_minus_s_c.values())
+        np.testing.assert_allclose(
+            matrices[empty_chr], s_full / p, rtol=1e-12, atol=1e-14
+        )
+
+    def test_run_lmm_loco_tests_in_chromosome_order_with_pve_from_chr_1(self):
+        require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
+        meta = get_plink_metadata(LOCO.bfile)
+        ksnps = np.flatnonzero(meta.chromosome != "1")
+
+        result, pve_lines = _loco_run(ksnps_indices=ksnps)
+        chr_1_only, _ = _loco_run(
+            ksnps_indices=ksnps,
+            snps_indices=np.flatnonzero(meta.chromosome == "1"),
+        )
+
+        assert list(dict.fromkeys(r.chr for r in result.associations)) == [
+            "1",
+            "2",
+            "3",
+        ]
+        assert pve_lines == []
+        assert result.pve == pytest.approx(chr_1_only.pve, rel=1e-9)
+
+    def test_pve_log_names_the_first_tested_chromosome(self):
+        require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
+        meta = get_plink_metadata(LOCO.bfile)
+
+        result, pve_lines = _loco_run(
+            snps_indices=np.flatnonzero(meta.chromosome != "1")
+        )
+
+        assert list(dict.fromkeys(r.chr for r in result.associations)) == ["2", "3"]
+        assert pve_lines == [
+            "PVE computed from chromosome 2 (earlier chromosomes had no SNPs to test)"
+        ]

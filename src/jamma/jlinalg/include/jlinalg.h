@@ -3,7 +3,7 @@
  *
  * Declares blas_dispatch_init(), vendor-dispatch functions (dgemm_ext,
  * dsyrk_ext, dsyevd_ext, dsyevr_ext),
- * eigh driver, SNP statistics, ISA detection, and thread control.
+ * eigh driver, SNP statistics, the compile-time ISA name, and thread control.
  *
  * The C layer is a thin vendor-dispatch shim; all computation is handled
  * by vendor BLAS/LAPACK or NumPy.
@@ -93,14 +93,13 @@ typedef void (*jlinalg_dsyevr_ilp64_fn)(
 
 /* Initialise external BLAS dispatch: discovers system BLAS and pip MKL,
  * then selects the best candidate.
- * Called from jlinalg_init() after ISA detection.
+ * Called from jlinalg_init().
  * Returns 0 always (discovery failure is not fatal -- falls back to numpy). */
 int blas_dispatch_init(void);
 
-/* Returns a string identifying the active dgemm backend:
- *   "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64", "OpenBLAS-LP64",
- *   "Accelerate", "Accelerate-ILP64",
- *   "numpy-fallback", "system-BLAS-ILP64", "system-BLAS-LP64"
+/* Returns a string identifying the active dgemm backend. Only an ILP64
+ * backend is ever wired, so this is one of "MKL-ILP64", "OpenBLAS-ILP64",
+ * "Accelerate-ILP64", "system-BLAS-ILP64", or "numpy-fallback".
  * Never returns NULL. */
 const char *blas_backend_name(void);
 
@@ -119,13 +118,13 @@ int blas_has_external(void);
  */
 
 /* Vendor-dispatch dsyrk: C = X @ X.T + beta*C (lower triangle + mirror).
- * Routes to vendor cblas_dsyrk when available, else returns without computing
- * (caller must use numpy fallback). */
+ * Routes to vendor dsyrk and aborts when none is wired, so callers check
+ * blas_has_dsyrk() first. */
 void jlinalg_dsyrk_ext(npy_intp N, npy_intp K,
                      const double *X, npy_intp ldx,
                      double *C, npy_intp ldc, double beta);
 
-/* Returns 1 if vendor dsyrk is available (cblas_dsyrk resolved), 0 otherwise. */
+/* Returns 1 if vendor dsyrk is available (CBLAS or Fortran dsyrk resolved), 0 otherwise. */
 int blas_has_dsyrk(void);
 
 /* Returns 1 if vendor dsyevd is available, 0 otherwise. */
@@ -198,8 +197,8 @@ int jlinalg_dsyevr_ext(npy_intp N, double *K, npy_intp ldk,
  * Row-major convention: C(M x N) = alpha * op(A)(M x K) * op(B)(K x N) + beta * C
  * transa/transb: 0 = no transpose, 1 = transpose.
  *
- * When no vendor BLAS is available, these functions return without computing
- * (caller should check blas_has_external() and use numpy fallback).
+ * When no vendor BLAS is wired, jlinalg_dgemm_ext aborts, so callers check
+ * blas_has_external() first.
  */
 
 /* C = op(A) * op(B), zeroes C first. */
@@ -244,15 +243,17 @@ typedef struct {
  * eigenvalues: caller-allocated N doubles (ascending order on return).
  * eigenvectors: caller-allocated N x N doubles, row-major. U[:,j] is the
  *               eigenvector for eigenvalues[j].
- * prefer_dsyevr: when nonzero and vendor DSYEVR is available, skip the DSYEVD
- *                attempt and go straight to DSYEVR. The plan that decided a
+ * require_dsyevr: when nonzero, run DSYEVR only. The plan that decided a
  *                DSYEVR-sized memory footprint owns this call, so the driver
- *                that runs must match the one that was budgeted for.
+ *                that runs must match the one that was budgeted for; without
+ *                vendor DSYEVR the call returns JLINALG_EXT_UNAVAILABLE
+ *                rather than running DSYEVD.
  * status: if non-NULL, populated with diagnostic flags, including which
  *         driver ran (status->driver_used).
  * ldk, ldz: must equal N. Padded strides are rejected with JLINALG_EXT_BAD_STRIDE.
  *
- * Returns 0 on success, JLINALG_EXT_UNAVAILABLE if no vendor LAPACK,
+ * Returns 0 on success, JLINALG_EXT_UNAVAILABLE if no vendor LAPACK (or no
+ * vendor DSYEVR with require_dsyevr set),
  * JLINALG_EXT_ALLOC_FAIL on allocation failure, JLINALG_EXT_BAD_STRIDE if
  * ldk != N or ldz != N, positive i on convergence failure, negative -i on
  * LAPACK illegal-argument error.
@@ -261,7 +262,7 @@ int jlinalg_eigh_c(npy_intp N,
                  double *K, npy_intp ldk,
                  double *eigenvalues,
                  double *eigenvectors, npy_intp ldz,
-                 int prefer_dsyevr,
+                 int require_dsyevr,
                  jlinalg_eigh_status_t *status);
 
 /* ---------------------------------------------------------------------------
@@ -283,7 +284,7 @@ void snp_stats_chunk_f64(const double *data, npy_intp n_samples, npy_intp n_snps
  */
 
 /**
- * jlinalg_init -- Detect ISA and initialise vendor BLAS dispatch.
+ * jlinalg_init -- Initialise the thread count and vendor BLAS dispatch.
  * Idempotent (guarded by a static flag).
  *
  * Returns: 0 on success.
@@ -291,8 +292,9 @@ void snp_stats_chunk_f64(const double *data, npy_intp n_samples, npy_intp n_snps
 int jlinalg_init(void);
 
 /**
- * jlinalg_isa_name -- Return the active ISA as a C string.
+ * jlinalg_isa_name -- Return the SIMD ISA the extension was compiled for.
  *
- * Returns: "AVX2", "NEON", or "generic" (never NULL).
+ * Returns: "AVX2" when built with __AVX2__, "NEON" with __ARM_NEON,
+ * otherwise "generic" (never NULL).
  */
 const char *jlinalg_isa_name(void);

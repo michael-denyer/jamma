@@ -10,8 +10,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.conftest import require_fixture
 from tests.fixture_paths import SYNTHETIC
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier1
 
@@ -20,6 +20,7 @@ SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "kinship_dige
 
 @pytest.fixture
 def digest_module(monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT_PATH.parent))
     # Restrict to gemma_synthetic; the full mouse_hs1940 sweep is the
     # live-lane's job, not a unit test's.
     spec = importlib.util.spec_from_file_location("kinship_digest", SCRIPT_PATH)

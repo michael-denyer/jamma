@@ -5,7 +5,7 @@ The runner feeds the general workspace's compute directly rather than
 reconstructing a full Uab per chunk. These check on real data that this does
 not change the statistics.
 
-Run at n_cvt=2, which is where ``DispatchPath.FUSED_GENERAL`` is selected for
+Run at n_cvt=2, which takes the general kernels of ``DispatchPath.FUSED`` for
 every lmm_mode. modes 2 and 3 at n_cvt=1 take the n_cvt=1 fused workspace
 kernels instead (``tests/lmm_accel/test_lmm_accel_workspace_score_lrt.py``).
 
@@ -26,28 +26,28 @@ from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import (
-    _compute_lrt_numpy,
-    _compute_score_numpy,
     compute_lmm_chunk_numpy,
+    compute_lrt_numpy,
+    compute_score_numpy,
 )
 from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
+from jamma.lmm.schema import get_spec
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
-    batch_compute_uab_varying_soa_numpy,
     compute_uab_invariant_soa,
 )
 from tests.builders import rotated_lmm_inputs
-from tests.conftest import requires_c
 from tests.fixture_paths import MOUSE
-from tests.independent_lmm_oracle import dense_lmm_log_likelihood
+from tests.math_validation.dense_oracle import evaluate
+from tests.support import requires_c
 
 
 @contextlib.contextmanager
 def _numpy_only():
     """Hold the extension out.
 
-    Belt-and-braces: ``_compute_score_numpy``/``_compute_lrt_numpy`` are pure
+    Belt-and-braces: ``compute_score_numpy``/``compute_lrt_numpy`` are pure
     NumPy and never read ``accel``, but this keeps the parity tests provably
     isolated from the C path even if that changes.
     """
@@ -81,7 +81,7 @@ def mouse_data():
     K = read_kinship_matrix(MOUSE.kinship)
 
     n_samples = genotypes.shape[0]
-    # n_cvt=2, so the general workspace (FUSED_GENERAL) is exercised.
+    # n_cvt=2, so the general kernels of the fused workspace are exercised.
     n_cvt = 2
 
     # Eigendecomposition
@@ -139,7 +139,7 @@ def mouse_data():
 
 def _general_score_only_result(d):
     """The general workspace's lmm_mode=3 (Score only) compute for *d*."""
-    ws = accel.require().create_workspace_general_c(
+    ws = accel.require().create_workspace_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
         d["UtW"],
@@ -154,12 +154,12 @@ def _general_score_only_result(d):
         lmm_mode=3,
         hi_eval_null=d["Hi_eval_null"],
     )
-    return accel.require().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
+    return accel.require().compute_lmm_chunk_c(ws, d["utg_t"], 1)
 
 
 def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
     """The general workspace's lmm_mode=2 (LRT only) compute for *d*."""
-    ws = accel.require().create_workspace_general_c(
+    ws = accel.require().create_workspace_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
         d["UtW"],
@@ -174,7 +174,7 @@ def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
         lmm_mode=2,
         logl_H0=d["logl_H0"],
     )
-    return accel.require().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
+    return accel.require().compute_lmm_chunk_c(ws, d["utg_t"], 1)
 
 
 @requires_c
@@ -186,7 +186,7 @@ class TestScoreSplitParity:
         d = mouse_data
         # Full-Uab reference, via NumPy
         with _numpy_only():
-            full_result = _compute_score_numpy(
+            full_result = compute_score_numpy(
                 d["n_cvt"],
                 d["eigenvalues"],
                 d["Hi_eval_null"],
@@ -228,7 +228,7 @@ class TestLrtSplitParity:
 
         # Full-Uab reference, via NumPy
         with _numpy_only():
-            full_result = _compute_lrt_numpy(
+            full_result = compute_lrt_numpy(
                 d["n_cvt"],
                 d["eigenvalues"],
                 d["Uab_batch"],
@@ -329,7 +329,7 @@ class TestDegenerateSplitParity:
         """Score-only general workspace produces NaN for constant-genotype SNPs."""
         d = degenerate_data
         with _numpy_only():
-            full_result = _compute_score_numpy(
+            full_result = compute_score_numpy(
                 d["n_cvt"],
                 d["eigenvalues"],
                 d["Hi_eval_null"],
@@ -362,7 +362,7 @@ class TestDegenerateSplitParity:
         n_grid, n_refine = 50, 20
 
         with _numpy_only():
-            full_result = _compute_lrt_numpy(
+            full_result = compute_lrt_numpy(
                 d["n_cvt"],
                 d["eigenvalues"],
                 d["Uab_batch"],
@@ -402,13 +402,13 @@ class TestDegenerateSplitParity:
 
 
 # ---------------------------------------------------------------------------
-# Plan 53-03 Task 2: _compute_wald_numpy dispatch tests
+# Plan 53-03 Task 2: compute_wald_numpy dispatch tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def compute_wald_data():
-    """Synthetic data for _compute_wald_numpy dispatch tests.
+    """Synthetic data for compute_wald_numpy dispatch tests.
 
     Returns:
         (eigenvalues, Uab_batch, n_samples) with n_samples=80, n_snps=30.
@@ -421,141 +421,6 @@ def compute_wald_data():
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
     return eigenvalues, Uab_batch, n_samples
-
-
-@pytest.mark.tier0
-def test_compute_wald_numpy_dispatches_split_ncvt1(compute_wald_data):
-    """_compute_wald_numpy with n_cvt=1 (C ext disabled) calls split optimizer."""
-    from unittest.mock import patch
-
-    from jamma.lmm import compute_numpy as cn
-    from jamma.lmm.likelihood_numpy import (
-        golden_section_optimize_lambda_split_ncvt1_numpy,
-    )
-
-    eigenvalues, Uab_batch, n_samples = compute_wald_data
-
-    call_log = []
-    real_split_fn = golden_section_optimize_lambda_split_ncvt1_numpy
-
-    def spy_split(*args, **kwargs):
-        call_log.append("split")
-        return real_split_fn(*args, **kwargs)
-
-    split_generic_log = []
-    real_generic_fn = cn.golden_section_optimize_lambda_numpy
-
-    def spy_generic(*args, **kwargs):
-        split_generic_log.append("generic")
-        return real_generic_fn(*args, **kwargs)
-
-    # allow-patch: dispatch spy. Which optimiser _compute_wald_numpy selects
-    # for n_cvt is the contract; both spies forward to the real function.
-    with (
-        patch.object(cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split),
-        patch.object(cn, "golden_section_optimize_lambda_numpy", spy_generic),
-    ):
-        cn._compute_wald_numpy(1, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20)
-
-    assert len(call_log) == 1, (
-        f"Split optimizer called {len(call_log)} times for n_cvt=1, expected 1"
-    )
-    assert len(split_generic_log) == 0, (
-        "Generic optimizer should NOT be called for n_cvt=1 Python path"
-    )
-
-    # Also verify n_cvt=2 uses generic, not split
-    n_samples2 = 80
-    d2 = rotated_lmm_inputs(n_samples2, 10, n_cvt=2, seed=456)
-    eigenvalues2, UtW2, Uty2, UtG2 = d2.eigenvalues, d2.UtW, d2.Uty, d2.UtG
-    from jamma.lmm.uab import batch_compute_uab_numpy
-
-    Uab_batch2 = batch_compute_uab_numpy(2, UtW2, Uty2, UtG2.T)
-
-    call_log2 = []
-    generic_log2 = []
-
-    def spy_split2(*args, **kwargs):
-        call_log2.append("split")
-        return real_split_fn(*args, **kwargs)
-
-    def spy_generic2(*args, **kwargs):
-        generic_log2.append("generic")
-        return real_generic_fn(*args, **kwargs)
-
-    # allow-patch: dispatch spy, as above.
-    with (
-        patch.object(
-            cn, "golden_section_optimize_lambda_split_ncvt1_numpy", spy_split2
-        ),
-        patch.object(cn, "golden_section_optimize_lambda_numpy", spy_generic2),
-    ):
-        cn._compute_wald_numpy(
-            2, eigenvalues2, Uab_batch2, n_samples2, 1e-5, 1e5, 50, 20
-        )
-
-    assert len(call_log2) == 0, "Split should NOT be called for n_cvt=2"
-    assert len(generic_log2) == 1, "Generic should be called exactly once for n_cvt=2"
-
-
-@pytest.mark.tier0
-def test_compute_wald_numpy_split_matches_generic(compute_wald_data):
-    """split path (n_cvt=1) in _compute_wald_numpy produces same results as generic."""
-
-    from jamma.lmm import compute_numpy as cn
-    from jamma.lmm.uab import batch_compute_iab_numpy
-
-    eigenvalues, Uab_batch, n_samples = compute_wald_data
-    n_cvt = 1
-    Iab_batch = batch_compute_iab_numpy(n_cvt, Uab_batch)
-
-    # Split path (n_cvt=1 Python branch)
-    result_split = cn._compute_wald_numpy(
-        n_cvt, eigenvalues, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
-    )
-
-    # Generic path: bypass n_cvt==1 branch by calling generic optimizer directly
-    import jamma.lmm.likelihood_numpy as ln
-    from jamma.lmm import stats
-
-    lambdas_gen, logls_gen, Pab_gen = ln.golden_section_optimize_lambda_numpy(
-        n_cvt,
-        eigenvalues,
-        Uab_batch,
-        Iab_batch,
-        l_min=1e-5,
-        l_max=1e5,
-        n_grid=50,
-        n_iter=20,
-    )
-    betas_gen, ses_gen, pwalds_gen = stats.batch_calc_wald_stats_from_pab_numpy(
-        n_cvt, Pab_gen, n_samples
-    )
-
-    np.testing.assert_allclose(
-        result_split["lambdas"],
-        lambdas_gen,
-        rtol=1e-10,
-        err_msg="lambdas: split path vs generic path",
-    )
-    np.testing.assert_allclose(
-        result_split["betas"],
-        betas_gen,
-        rtol=1e-12,
-        err_msg="betas: split path vs generic path",
-    )
-    np.testing.assert_allclose(
-        result_split["ses"],
-        ses_gen,
-        rtol=1e-12,
-        err_msg="ses: split path vs generic path",
-    )
-    np.testing.assert_allclose(
-        result_split["pwalds"],
-        pwalds_gen,
-        rtol=1e-12,
-        err_msg="pwalds: split path vs generic path",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -628,25 +493,6 @@ def test_invariant_columns_constant_across_snps(n_cvt):
 
 
 @pytest.mark.tier0
-@pytest.mark.parametrize("n_cvt", [2, 3, 4])
-def test_batch_compute_uab_varying_soa_rejects_ncvt_above_one(n_cvt):
-    """batch_compute_uab_varying_soa_numpy is n_cvt=1 only.
-
-    No production path builds this for n_cvt>1: the general dispatch path
-    (``DispatchPath.FUSED_GENERAL``) forms its varying columns on the fly
-    inside the C workspace instead.
-    """
-    rng = np.random.default_rng(55)
-    n_samples, n_snps = 50, 10
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
-
-    with pytest.raises(ValueError, match="n_cvt must be 1"):
-        batch_compute_uab_varying_soa_numpy(n_cvt, UtW, Uty, UtG.T)
-
-
-@pytest.mark.tier0
 def test_batch_compute_uab_numpy_rejects_wrong_layout():
     """batch_compute_uab_numpy raises ValueError when given (n_samples, n_snps)."""
     rng = np.random.default_rng(99)
@@ -657,19 +503,6 @@ def test_batch_compute_uab_numpy_rejects_wrong_layout():
 
     with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
         batch_compute_uab_numpy(1, UtW, Uty, UtG)
-
-
-@pytest.mark.tier0
-def test_batch_compute_uab_varying_soa_rejects_wrong_layout():
-    """batch_compute_uab_varying_soa_numpy raises ValueError when given old layout."""
-    rng = np.random.default_rng(99)
-    n_samples, n_snps = 50, 10
-    UtW = rng.standard_normal((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))  # wrong layout for this fn
-
-    with pytest.raises(ValueError, match="Pass \\(n_snps, n_samples\\)"):
-        batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG)
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +522,7 @@ def chunk_dispatch_data():
 
 
 def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
-    """compute_lmm_chunk_numpy must return non-None expected keys for each mode.
+    """compute_lmm_chunk_numpy returns exactly each mode's keys, mode 4 composed.
 
     The extension is cleared because this function is the full-Uab NumPy path,
     and the runner reaches it only on NUMPY_FALLBACK, which is selected only
@@ -706,64 +539,29 @@ def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
 
     Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
 
-    # Mode 1: Wald — expects lambdas, logls, betas, ses, pwalds
-    result1 = compute_lmm_chunk_numpy(1, 1, eigenvalues, Uab_batch, n_samples)
-    for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
-        assert result1[key] is not None, f"Mode 1: key '{key}' is None"
-    assert result1["lambdas_mle"] is None
-    assert result1["p_lrts"] is None
-    assert result1["p_scores"] is None
-
-    # Mode 2: LRT — reports the alternative MLE likelihood, lambda, and p-value
-    result2 = compute_lmm_chunk_numpy(
-        2, 1, eigenvalues, Uab_batch, n_samples, logl_H0=logl_H0
+    result1, result2, result3, result4 = (
+        compute_lmm_chunk_numpy(
+            mode,
+            1,
+            eigenvalues,
+            Uab_batch,
+            n_samples,
+            Hi_eval_null=Hi_eval_null,
+            logl_H0=logl_H0,
+        )
+        for mode in (1, 2, 3, 4)
     )
-    for key in ("logls", "lambdas_mle", "p_lrts"):
-        assert result2[key] is not None, f"Mode 2: key '{key}' is None"
-    assert result2["lambdas"] is None
-    assert result2["betas"] is None
-    assert result2["ses"] is None
-    assert result2["pwalds"] is None
-    assert result2["p_scores"] is None
-
-    # Mode 3: Score — expects betas, ses, p_scores
-    result3 = compute_lmm_chunk_numpy(
-        3, 1, eigenvalues, Uab_batch, n_samples, Hi_eval_null=Hi_eval_null
-    )
-    for key in ("betas", "ses", "p_scores"):
-        assert result3[key] is not None, f"Mode 3: key '{key}' is None"
-    assert result3["lambdas"] is None
-    assert result3["logls"] is None
-    assert result3["pwalds"] is None
-    assert result3["lambdas_mle"] is None
-    assert result3["p_lrts"] is None
-
-    # Mode 4: All — all keys non-None
-    result4 = compute_lmm_chunk_numpy(
-        4,
-        1,
-        eigenvalues,
-        Uab_batch,
-        n_samples,
-        Hi_eval_null=Hi_eval_null,
-        logl_H0=logl_H0,
-    )
-    for key in (
-        "lambdas",
-        "logls",
-        "betas",
-        "ses",
-        "pwalds",
-        "lambdas_mle",
-        "p_lrts",
-        "p_scores",
+    for mode, result in zip(
+        (1, 2, 3, 4), (result1, result2, result3, result4), strict=True
     ):
-        assert result4[key] is not None, f"Mode 4: key '{key}' is None"
+        assert set(result) == {c.array_key for c in get_spec(mode).stat_columns}
 
-    assert result1["lambdas"] is not None
-    assert result1["logls"] is not None
-    assert result4["lambdas_mle"] is not None
-    assert result4["logls"] is not None
+    # Mode 4 takes beta/se from Wald, logl_H1 from LRT, and p_score from Score.
+    for key in ("betas", "ses", "lambdas", "pwalds"):
+        np.testing.assert_array_equal(result4[key], result1[key])
+    for key in ("logls", "lambdas_mle", "p_lrts"):
+        np.testing.assert_array_equal(result4[key], result2[key])
+    np.testing.assert_array_equal(result4["p_scores"], result3["p_scores"])
 
     # GEMMA gives logl_H1 two mode-specific meanings: REML for Wald mode 1,
     # and the alternative-model MLE likelihood calculated by LRT for mode 4.
@@ -775,51 +573,19 @@ def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
 
     expected_reml = np.array(
         [
-            dense_lmm_log_likelihood(
-                eigenvalues,
-                UtW,
-                Uty,
-                UtG[:, snp],
-                result1["lambdas"][snp],
-                restricted=True,
-            )
+            evaluate(
+                np.diag(eigenvalues), UtW, UtG[:, snp], Uty, result1["lambdas"][snp]
+            )["reml"]
             for snp in range(UtG.shape[1])
         ]
     )
     expected_mle = np.array(
         [
-            dense_lmm_log_likelihood(
-                eigenvalues,
-                UtW,
-                Uty,
-                UtG[:, snp],
-                result4["lambdas_mle"][snp],
-                restricted=False,
-            )
+            evaluate(
+                np.diag(eigenvalues), UtW, UtG[:, snp], Uty, result4["lambdas_mle"][snp]
+            )["mle"]
             for snp in range(UtG.shape[1])
         ]
     )
     np.testing.assert_allclose(result1["logls"], expected_reml, rtol=2e-14)
     np.testing.assert_allclose(result4["logls"], expected_mle, rtol=2e-14)
-
-
-def test_compute_lmm_chunk_numpy_missing_args_raise(chunk_dispatch_data):
-    """compute_lmm_chunk_numpy must raise ValueError when required args are absent."""
-    eigenvalues, UtW, Uty, UtG = chunk_dispatch_data
-    n_samples = eigenvalues.shape[0]
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-
-    with pytest.raises(ValueError, match="logl_H0 is required"):
-        compute_lmm_chunk_numpy(2, 1, eigenvalues, Uab_batch, n_samples)
-
-    with pytest.raises(ValueError, match="Hi_eval_null is required"):
-        compute_lmm_chunk_numpy(3, 1, eigenvalues, Uab_batch, n_samples)
-
-    # Mode 4 (All) requires both logl_H0 and Hi_eval_null.
-    # Missing logl_H0 is checked first (line order in source).
-    with pytest.raises(ValueError, match="logl_H0 is required"):
-        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples)
-
-    # Providing logl_H0 but omitting Hi_eval_null also raises.
-    with pytest.raises(ValueError, match="Hi_eval_null is required"):
-        compute_lmm_chunk_numpy(4, 1, eigenvalues, Uab_batch, n_samples, logl_H0=-50.0)

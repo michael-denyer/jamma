@@ -23,7 +23,24 @@ from jamma.lmm.likelihood import (
     finite_difference_dev2,
 )
 from jamma.lmm.pab import compute_Uab
-from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, NullModel
+from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, LmmConfig
+
+
+@dataclass(frozen=True, slots=True)
+class NullModel:
+    """The null-model MLE, computed unconditionally for every LMM run.
+
+    The MLE optimization costs 0.8 ms at n=2k and 28.8 ms at n=100k, so
+    gating it by lmm_mode saves nothing. Every runner computes both fields
+    regardless of which test the run reports.
+
+    Attributes:
+        logl_H0: Null-model MLE log-likelihood.
+        hi_eval_null: 1/(lambda_null_mle * eigenvalues + 1), per sample.
+    """
+
+    logl_H0: float
+    hi_eval_null: np.ndarray
 
 
 def compute_valid_mask(
@@ -38,7 +55,13 @@ def compute_valid_mask(
     Returns:
         Boolean mask array of shape (n_samples,) where True indicates
         a sample with valid phenotype and covariate values.
+
+    Raises:
+        ValueError: If any phenotype is infinite. Unlike NaN and -9, inf is
+            not a missing-value code, so it is rejected rather than masked.
     """
+    if np.isinf(phenotypes).any():
+        raise ValueError("prepared phenotypes must contain only finite values")
     valid_mask = ~np.isnan(phenotypes) & (phenotypes != PHENOTYPE_MISSING)
     if covariates is not None:
         valid_covariate = np.all(~np.isnan(covariates), axis=1)
@@ -99,98 +122,105 @@ def parse_eigen_input(
 
 
 @dataclass(frozen=True, slots=True)
-class RunnerSetup:
-    """Validated and filtered inputs for LMM runners.
-
-    Returned by validate_runner_inputs() after applying the valid-sample
-    mask, checking all invariants, and validating eigenpair dimensions.
+class AnalysedPhenotype:
+    """One phenotype and its covariates, restricted to the analysed samples.
 
     Attributes:
-        phenotypes: Filtered phenotype vector (n_samples,).
-        eigen_input: Filtered kinship matrix or complete pre-computed eigenpairs.
-        covariates: Filtered covariate matrix (n_samples, n_cvt) or None.
-        valid_mask: Boolean mask used to filter samples (original length).
-        n_samples: Number of valid samples after filtering.
+        phenotypes: Phenotype values of the analysed samples only.
+        covariates: Covariates of the analysed samples, carrying an intercept
+            column, or None for the intercept-only model.
+        valid_mask: Boolean analysed-sample mask over the caller's input rows.
     """
 
     phenotypes: np.ndarray
-    eigen_input: EigenInput
     covariates: np.ndarray | None
     valid_mask: np.ndarray
-    n_samples: int
+
+    @classmethod
+    def from_inputs(
+        cls, phenotypes: np.ndarray, covariates: np.ndarray | None
+    ) -> AnalysedPhenotype:
+        """Mask missing samples and add the intercept GEMMA's CheckCvt would.
+
+        Raises:
+            ValueError: If a phenotype is infinite or no valid sample remains.
+        """
+        valid_mask = compute_valid_mask(phenotypes, covariates)
+        return cls.from_mask(
+            phenotypes, with_intercept(covariates, valid_mask), valid_mask
+        )
+
+    @classmethod
+    def from_mask(
+        cls,
+        phenotypes: np.ndarray,
+        covariates: np.ndarray | None,
+        valid_mask: np.ndarray,
+    ) -> AnalysedPhenotype:
+        """Apply an already-computed analysed-sample mask.
+
+        Raises:
+            ValueError: If the mask selects no sample.
+        """
+        if not valid_mask.any():
+            raise ValueError(
+                "No valid samples: all phenotypes are missing or -9"
+                + (", or all have missing covariates" if covariates is not None else "")
+            )
+        if valid_mask.all():
+            return cls(phenotypes, covariates, valid_mask)
+        return cls(
+            phenotypes[valid_mask],
+            covariates[valid_mask, :] if covariates is not None else None,
+            valid_mask,
+        )
+
+    @property
+    def n_samples(self) -> int:
+        """Number of analysed samples."""
+        return self.phenotypes.shape[0]
+
+    @property
+    def n_cvt(self) -> int:
+        """Covariate columns including the intercept."""
+        return self.covariates.shape[1] if self.covariates is not None else 1
 
 
-def validate_runner_inputs(
-    phenotypes: np.ndarray,
-    eigen_input: EigenInput,
-    covariates: np.ndarray | None,
-) -> RunnerSetup:
-    """Validate LMM runner inputs and apply sample filtering.
-
-    Performs the common validation sequence shared by both runners: valid-sample
-    mask computation and application, the empty-sample guard, and eigenpair
-    dimension validation.
-
-    Does NOT include: memory checks (differ between batch/streaming).
+def restrict_eigen_input(eigen_input: EigenInput, valid_mask: np.ndarray) -> EigenInput:
+    """Restrict a kinship to the analysed samples, or check eigenpairs fit them.
 
     Args:
-        phenotypes: Phenotype vector (n_samples,), with NaN for missing.
-        eigen_input: Kinship matrix or complete pre-computed eigenpairs.
-        covariates: Covariate matrix (n_samples, n_cvt) or None.
-
-    Returns:
-        RunnerSetup with filtered arrays and validated n_samples.
+        eigen_input: Kinship over every input sample, or eigenpairs that the
+            caller computed over the analysed samples.
+        valid_mask: Boolean analysed-sample mask over the input rows.
 
     Raises:
-        ValueError: If no valid samples remain after filtering or eigenpair
-            dimensions do not match.
+        ValueError: If eigenpair dimensions do not match the analysed sample
+            count.
     """
-    # Compute valid-sample mask from phenotype and covariate NaN
-    valid_mask = compute_valid_mask(phenotypes, covariates)
+    if isinstance(eigen_input, KinshipMatrix):
+        if valid_mask.all():
+            return eigen_input
+        return KinshipMatrix(eigen_input.value[np.ix_(valid_mask, valid_mask)])
 
-    # Apply mask only when needed (avoid a copy if all samples are valid)
-    if not np.all(valid_mask):
-        phenotypes = phenotypes[valid_mask]
-        if isinstance(eigen_input, KinshipMatrix):
-            eigen_input = KinshipMatrix(
-                eigen_input.value[np.ix_(valid_mask, valid_mask)]
-            )
-        if covariates is not None:
-            covariates = covariates[valid_mask, :]
-
-    n_samples = phenotypes.shape[0]
-    if n_samples == 0:
-        raise ValueError(
-            "No valid samples: all phenotypes are missing or -9"
-            + (", or all have missing covariates" if covariates is not None else "")
-        )
-
-    # Validate precomputed eigenpair dimensions against (possibly filtered) n_samples
-    if isinstance(eigen_input, EigenPairs):
-        hint = (
-            "Recompute eigenpairs on the filtered kinship, or pass kinship= "
-            "and let JAMMA compute the eigendecomposition."
-        )
-        if eigen_input.values.shape[0] != n_samples:
-            raise ValueError(
-                f"eigenvalues length ({eigen_input.values.shape[0]}) does not match "
-                f"n_samples ({n_samples}) after removing missing "
-                f"phenotypes/covariates. {hint}"
-            )
-        if eigen_input.vectors.shape != (n_samples, n_samples):
-            raise ValueError(
-                f"eigenvectors shape {eigen_input.vectors.shape} does not match "
-                f"({n_samples}, {n_samples}) after removing missing "
-                f"phenotypes/covariates. {hint}"
-            )
-
-    return RunnerSetup(
-        phenotypes=phenotypes,
-        eigen_input=eigen_input,
-        covariates=covariates,
-        valid_mask=valid_mask,
-        n_samples=n_samples,
+    n_samples = int(np.count_nonzero(valid_mask))
+    hint = (
+        "Recompute eigenpairs on the filtered kinship, or pass kinship= "
+        "and let JAMMA compute the eigendecomposition."
     )
+    if eigen_input.values.shape[0] != n_samples:
+        raise ValueError(
+            f"eigenvalues length ({eigen_input.values.shape[0]}) does not match "
+            f"n_samples ({n_samples}) after removing missing "
+            f"phenotypes/covariates. {hint}"
+        )
+    if eigen_input.vectors.shape != (n_samples, n_samples):
+        raise ValueError(
+            f"eigenvectors shape {eigen_input.vectors.shape} does not match "
+            f"({n_samples}, {n_samples}) after removing missing "
+            f"phenotypes/covariates. {hint}"
+        )
+    return eigen_input
 
 
 def _covariates_include_intercept(covariates: np.ndarray) -> bool:
@@ -271,36 +301,39 @@ def _build_covariate_matrix(
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedCovariates:
-    """Covariate matrix and eigen rotation shared across phenotypes."""
+class RotatedBasis:
+    """The eigenbasis and rotated covariates every phenotype in a group shares.
 
+    Attributes:
+        eigenvalues: Kinship eigenvalues, ascending.
+        U: Kinship eigenvectors.
+        W: Covariate matrix from ``_build_covariate_matrix``.
+        UtW: Rotated covariates ``U.T @ W``.
+    """
+
+    eigenvalues: np.ndarray
+    U: np.ndarray
     W: np.ndarray
-    n_cvt: int
     UtW: np.ndarray
 
-    def __post_init__(self) -> None:
-        if self.W.ndim != 2 or self.W.shape[1] != self.n_cvt:
-            raise ValueError(
-                "prepared covariate matrix shape does not match n_cvt: "
-                f"got {self.W.shape} and {self.n_cvt}"
-            )
-        if self.UtW.shape != self.W.shape:
-            raise ValueError(
-                "rotated covariates must match covariate matrix shape: "
-                f"got {self.UtW.shape} and {self.W.shape}"
-            )
+    @property
+    def n_samples(self) -> int:
+        """Number of analysed samples the basis spans."""
+        return self.U.shape[0]
+
+    @property
+    def n_cvt(self) -> int:
+        """Number of covariate columns, including the intercept."""
+        return self.W.shape[1]
 
 
-def prepare_rotated_covariates(
-    eigenvectors: np.ndarray,
-    covariates: np.ndarray | None,
-    n_samples: int,
-) -> PreparedCovariates:
-    """Build and rotate phenotype-independent covariates once."""
-    W, n_cvt = _build_covariate_matrix(covariates, n_samples)
+def rotate_basis(
+    eigenvalues: np.ndarray, eigenvectors: np.ndarray, W: np.ndarray
+) -> RotatedBasis:
+    """Rotate the phenotype-independent covariates into the eigenbasis once."""
     with blas_threads(get_blas_thread_count()):
         UtW = eigenvectors.T @ W
-    return PreparedCovariates(W=W, n_cvt=n_cvt, UtW=UtW)
+    return RotatedBasis(eigenvalues=eigenvalues, U=eigenvectors, W=W, UtW=UtW)
 
 
 def _eigendecompose_or_reuse(
@@ -403,13 +436,10 @@ def _compute_null_model_common(
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedLmmRun:
-    """The rotated, null-model-solved state every NumPy LMM runner starts from.
+class NullFit:
+    """One phenotype's rotated values and null model over a shared basis.
 
     Attributes:
-        eigenvalues: Kinship eigenvalues, ascending.
-        U: Kinship eigenvectors.
-        UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
         logl_H0: Null-model MLE log-likelihood, computed on every run.
         Hi_eval_null: Null-model Hi_eval, computed on every run.
@@ -419,99 +449,58 @@ class PreparedLmmRun:
             or when PVE was skipped.
     """
 
-    eigenvalues: np.ndarray
-    U: np.ndarray
-    UtW: np.ndarray
     Uty: np.ndarray
     logl_H0: float
     Hi_eval_null: np.ndarray
     pve: float | None
     pve_se: float | None
 
-    @property
-    def n_samples(self) -> int:
-        """Number of samples represented by every prepared array."""
-        return self.Uty.shape[0]
 
-    @property
-    def n_cvt(self) -> int:
-        """Number of rotated covariate columns."""
-        return self.UtW.shape[1]
-
-
-def prepare_lmm_run(
-    *,
-    eigen_input: EigenInput,
+def fit_null(
+    basis: RotatedBasis,
     phenotypes: np.ndarray,
-    W: np.ndarray,
-    n_cvt: int,
-    l_min: float,
-    l_max: float,
-    show_progress: bool,
-    check_memory: bool,
-    label: str,
-    compute_pve: bool = True,
-    rotated_covariates: np.ndarray | None = None,
-) -> PreparedLmmRun:
-    """Eigendecompose, rotate, solve the null model, and estimate PVE.
-
-    The batch and streaming runners ran this same sequence with only a memory
-    label differing between them. Sharing it means their setup cannot drift,
-    which matters because a divergence here moves every downstream statistic.
-
-    The caller keeps ownership of a supplied kinship matrix and should drop its
-    reference once this returns; the eigendecomposition may reuse that buffer for
-    the eigenvectors, so holding it pins a second n-by-n matrix.
+    config: LmmConfig,
+    *,
+    compute_pve: bool,
+) -> NullFit:
+    """Rotate one phenotype, solve its null model, and estimate PVE.
 
     Args:
-        eigen_input: Kinship matrix to decompose or complete eigenpairs to reuse.
-        phenotypes: Phenotype vector, already filtered to valid samples.
-        W: Covariate matrix from ``_build_covariate_matrix``.
-        n_cvt: Number of covariates, including the intercept.
-        l_min: Minimum lambda for optimization.
-        l_max: Maximum lambda for optimization.
-        show_progress: Whether to log memory and null-model diagnostics.
-        check_memory: Whether to gate the eigendecomposition on memory.
-        label: Memory-log label identifying the calling runner.
+        basis: The group's shared eigenbasis and rotated covariates.
+        phenotypes: Phenotype values of the analysed samples.
+        config: Lambda bounds and the progress switch.
         compute_pve: Whether to run the extra null-REML golden section for
             PVE. LOCO passes False on every chromosome after the first.
+
+    Raises:
+        ValueError: If the phenotype length does not match the basis.
     """
-    eigenvalues_np, U = _eigendecompose_or_reuse(
-        eigen_input,
-        show_progress,
-        label,
-        check_memory=check_memory,
-    )
-
-    # Rotation is pure BLAS — use all physical cores.
-    with blas_threads(get_blas_thread_count()):
-        UtW = U.T @ W if rotated_covariates is None else rotated_covariates
-        Uty = U.T @ phenotypes
-
-    if UtW.shape != (phenotypes.shape[0], n_cvt):
+    if phenotypes.shape != (basis.n_samples,):
         raise ValueError(
-            "rotated covariate shape does not match prepared LMM inputs: "
-            f"got {UtW.shape}, expected {(phenotypes.shape[0], n_cvt)}"
+            "prepared phenotype length does not match genotype sample basis: "
+            f"got {phenotypes.shape}, expected ({basis.n_samples},)"
         )
+    l_min, l_max = config.l_min, config.l_max
+    with blas_threads(get_blas_thread_count()):
+        Uty = basis.U.T @ phenotypes
 
     null_model = _compute_null_model_common(
-        eigenvalues_np,
-        UtW,
+        basis.eigenvalues,
+        basis.UtW,
         Uty,
-        n_cvt,
-        show_progress,
+        basis.n_cvt,
+        config.show_progress,
         l_min=l_min,
         l_max=l_max,
     )
     pve: float | None = None
     pve_se: float | None = None
     if compute_pve:
-        pve, pve_se = compute_and_log_pve(eigenvalues_np, UtW, Uty, n_cvt, l_min, l_max)
+        pve, pve_se = compute_and_log_pve(
+            basis.eigenvalues, basis.UtW, Uty, basis.n_cvt, l_min, l_max
+        )
 
-    return PreparedLmmRun(
-        eigenvalues=eigenvalues_np,
-        U=U,
-        UtW=UtW,
+    return NullFit(
         Uty=Uty,
         logl_H0=null_model.logl_H0,
         Hi_eval_null=null_model.hi_eval_null,

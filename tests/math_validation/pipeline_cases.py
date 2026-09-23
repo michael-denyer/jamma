@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 
 import numpy as np
 
-from tests.math_validation.compare import compare_files, read_rows
+from jamma.validation.compare import load_gemma_assoc
+from tests.math_validation.compare import compare_files
 from tests.math_validation.evidence import (
     bundle_status,
-    environment,
+    evidence_bundle,
     run_pipeline,
-    write_json,
+    select_cases,
 )
 from tests.math_validation.fixtures import (
     EXTERNAL_HEADERS,
@@ -256,133 +256,124 @@ def compare_pipeline(
     backends = ("numpy", "numpy-streaming") if backends is None else tuple(backends)
     if not backends or set(backends) - {"numpy", "numpy-streaming"}:
         raise ValueError("backends must name at least one supported pipeline route")
-    selected_cases = [
-        case for case in manifest["cases"] if case_ids is None or case["id"] in case_ids
-    ]
-    if not selected_cases or (
-        case_ids is not None
-        and {case["id"] for case in selected_cases} != set(case_ids)
-    ):
-        raise ValueError("case_ids must name at least one declared pipeline case")
-    destination.mkdir(parents=True, exist_ok=False)
-    bundle = {
-        "schema_version": 1,
-        "status": "INCONCLUSIVE",
-        "environment": environment(),
-        "manifest": manifest,
-        "backends": list(backends),
-        "forced_global": bool(
+    selected_cases = select_cases(manifest["cases"], case_ids, "pipeline")
+    with evidence_bundle(
+        destination,
+        manifest=manifest,
+        backends=list(backends),
+        forced_global=bool(
             forced_global or os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK") == "1"
         ),
-        "invocation": sys.argv,
-        "cases": [],
-        "untested": manifest["untested"],
-    }
-    statuses = []
-    for case in selected_cases:
-        source, provenance = require_pipeline_reference(case)
-        copy_reference(source, destination / f"{case['id']}-reference", provenance)
-        model = json.loads((source / "model.json").read_text())
-        oracle_path = destination / f"{case['id']}.oracle.assoc.txt"
-        _oracle_rows(model, case["mode"], oracle_path)
-        external_oracle = compare_files(
-            oracle_path,
-            source / "gemma.assoc.txt",
-            af_contract="counted-allele",
-            mode=case["mode"],
-            reference_optional_logl=True,
-        )
-        statuses.append(external_oracle["status"])
-        runs = []
-        for backend in backends:
-            for save_kinship in (False, True):
-                route = f"{backend}-save-{str(save_kinship).lower()}"
-                out = destination / f"{case['id']}-{route}"
-                result, messages, serialized_config = run_pipeline(
-                    source,
-                    out,
-                    covariate_file=source / "covariates.txt",
-                    lmm_mode=case["mode"],
-                    maf=manifest["maf"],
-                    miss=manifest["miss"],
-                    backend="numpy" if backend == "numpy" else "numpy-streaming",
-                    save_kinship=save_kinship,
-                    write_eigen=True,
-                )
-                comparison = compare_files(
-                    result.assoc_path,
-                    source / "gemma.assoc.txt",
-                    af_contract="counted-allele",
-                    mode=case["mode"],
-                    reference_optional_logl=True,
-                )
-                actual_ids = [
-                    row["rs"] for row in read_rows(result.assoc_path, case["mode"])
-                ]
-                actual_indices = np.asarray(result.analyzed_sample_indices)
-                actual_samples = [f"F{i}:I{i}" for i in actual_indices]
-                eigenvalues, eigenvectors = read_eigen_files(
-                    out / "jamma.eigenD.txt",
-                    out / "jamma.eigenU.txt",
-                    n_samples=result.n_samples,
-                )
-                actual_k = (eigenvectors * eigenvalues) @ eigenvectors.T
-                expected_k = np.asarray(model["kinship"])
-                gemma_k = np.asarray(model["gemma_centered_analysis_kinship"])
-                stage_ok = (
-                    actual_samples == model["selected_sample_ids"]
-                    and actual_ids == model["selected_snp_ids"]
-                    and result.n_samples == len(model["selected_sample_ids"])
-                    and np.allclose(actual_k, expected_k, rtol=1e-8, atol=1e-10)
-                    and np.allclose(actual_k, gemma_k, rtol=1e-8, atol=1e-10)
-                )
-                if not stage_ok:
-                    comparison["status"] = "NOT VERIFIED"
-                    comparison["failure_ids"].append(
-                        "stage:actual-pipeline-samples-snps-or-kinship"
+        cases=[],
+        untested=manifest["untested"],
+    ) as bundle:
+        statuses = []
+        for case in selected_cases:
+            source, provenance = require_pipeline_reference(case)
+            copy_reference(source, destination / f"{case['id']}-reference", provenance)
+            model = json.loads((source / "model.json").read_text())
+            oracle_path = destination / f"{case['id']}.oracle.assoc.txt"
+            _oracle_rows(model, case["mode"], oracle_path)
+            external_oracle = compare_files(
+                oracle_path,
+                source / "gemma.assoc.txt",
+                af_contract="counted-allele",
+                mode=case["mode"],
+                reference_optional_logl=True,
+            )
+            statuses.append(external_oracle["status"])
+            runs = []
+            for backend in backends:
+                for save_kinship in (False, True):
+                    route = f"{backend}-save-{str(save_kinship).lower()}"
+                    out = destination / f"{case['id']}-{route}"
+                    result, messages, serialized_config = run_pipeline(
+                        source,
+                        out,
+                        covariate_file=source / "covariates.txt",
+                        lmm_mode=case["mode"],
+                        maf=manifest["maf"],
+                        miss=manifest["miss"],
+                        backend="numpy" if backend == "numpy" else "numpy-streaming",
+                        save_kinship=save_kinship,
+                        write_eigen=True,
                     )
-                statuses.append(comparison["status"])
-                runs.append(
-                    {
-                        "route": route,
-                        "backend": backend,
-                        "save_kinship": save_kinship,
-                        "pipeline_config": serialized_config,
-                        "association": comparison,
-                        "stage_boundaries": {
-                            "actual_selected_sample_ids": actual_samples,
-                            "actual_selected_snp_ids": actual_ids,
-                            "actual_pipeline_centered_kinship": (
-                                "VERIFIED" if stage_ok else "NOT VERIFIED"
-                            ),
-                            "reconstructed_association_imputation_means": model[
-                                "association_imputation_means"
-                            ],
-                            "reconstructed_kinship_imputation_means": model[
-                                "kinship_imputation_means"
-                            ],
+                    comparison = compare_files(
+                        result.assoc_path,
+                        source / "gemma.assoc.txt",
+                        af_contract="counted-allele",
+                        mode=case["mode"],
+                        reference_optional_logl=True,
+                    )
+                    actual_ids = [
+                        row.rs
+                        for row in load_gemma_assoc(
+                            result.assoc_path, mode=case["mode"], require_logl=True
+                        )
+                    ]
+                    actual_indices = np.asarray(result.analyzed_sample_indices)
+                    actual_samples = [f"F{i}:I{i}" for i in actual_indices]
+                    eigenvalues, eigenvectors = read_eigen_files(
+                        out / "jamma.eigenD.txt",
+                        out / "jamma.eigenU.txt",
+                        n_samples=result.n_samples,
+                    )
+                    actual_k = (eigenvectors * eigenvalues) @ eigenvectors.T
+                    expected_k = np.asarray(model["kinship"])
+                    gemma_k = np.asarray(model["gemma_centered_analysis_kinship"])
+                    stage_ok = (
+                        actual_samples == model["selected_sample_ids"]
+                        and actual_ids == model["selected_snp_ids"]
+                        and result.n_samples == len(model["selected_sample_ids"])
+                        and np.allclose(actual_k, expected_k, rtol=1e-8, atol=1e-10)
+                        and np.allclose(actual_k, gemma_k, rtol=1e-8, atol=1e-10)
+                    )
+                    if not stage_ok:
+                        comparison["status"] = "NOT VERIFIED"
+                        comparison["failure_ids"].append(
+                            "stage:actual-pipeline-samples-snps-or-kinship"
+                        )
+                    statuses.append(comparison["status"])
+                    runs.append(
+                        {
+                            "route": route,
+                            "backend": backend,
+                            "save_kinship": save_kinship,
+                            "pipeline_config": serialized_config,
+                            "association": comparison,
+                            "stage_boundaries": {
+                                "actual_selected_sample_ids": actual_samples,
+                                "actual_selected_snp_ids": actual_ids,
+                                "actual_pipeline_centered_kinship": (
+                                    "VERIFIED" if stage_ok else "NOT VERIFIED"
+                                ),
+                                "reconstructed_association_imputation_means": model[
+                                    "association_imputation_means"
+                                ],
+                                "reconstructed_kinship_imputation_means": model[
+                                    "kinship_imputation_means"
+                                ],
+                            },
+                            "logs": messages,
+                            "files": snapshot_files(out),
+                        }
+                    )
+            bundle["cases"].append(
+                {
+                    "id": case["id"],
+                    "mode": case["mode"],
+                    "reference": {
+                        "directory": str(source),
+                        "provenance": provenance,
+                        "files": {
+                            path.name: digest(path)
+                            for path in sorted(source.iterdir())
+                            if path.is_file()
                         },
-                        "logs": messages,
-                        "files": snapshot_files(out),
-                    }
-                )
-        bundle["cases"].append(
-            {
-                "id": case["id"],
-                "mode": case["mode"],
-                "reference": {
-                    "directory": str(source),
-                    "provenance": provenance,
-                    "files": {
-                        path.name: digest(path)
-                        for path in sorted(source.iterdir())
-                        if path.is_file()
                     },
-                },
-                "oracle_gemma": external_oracle,
-                "runs": runs,
-            }
-        )
-    bundle["status"] = bundle_status(statuses)
-    write_json(destination / "bundle.json", bundle)
+                    "oracle_gemma": external_oracle,
+                    "runs": runs,
+                }
+            )
+        bundle["status"] = bundle_status(statuses)
     return bundle

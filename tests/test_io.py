@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.io import load_plink_binary, read_covariate_file
+from jamma.io import load_plink_binary, read_covariate_file, read_genotypes
 
 pytestmark = pytest.mark.tier0
 
@@ -24,12 +24,14 @@ class TestLoadPlinkBinary:
         """Verify metadata arrays have correct lengths."""
         data = load_plink_binary(sample_plink_data)
 
-        assert len(data.iid) == 100, "iid length should match n_samples"
-        assert len(data.sid) == 500, "sid length should match n_snps"
-        assert len(data.chromosome) == 500, "chromosome length should match n_snps"
-        assert len(data.bp_position) == 500, "bp_position length should match n_snps"
-        assert len(data.allele_1) == 500, "allele_1 length should match n_snps"
-        assert len(data.allele_2) == 500, "allele_2 length should match n_snps"
+        assert len(data.meta.iid) == 100, "iid length should match n_samples"
+        assert len(data.meta.sid) == 500, "sid length should match n_snps"
+        assert len(data.meta.chromosome) == 500, "chromosome length should match n_snps"
+        assert len(data.meta.bp_position) == 500, (
+            "bp_position length should match n_snps"
+        )
+        assert len(data.meta.allele_1) == 500, "allele_1 length should match n_snps"
+        assert len(data.meta.allele_2) == 500, "allele_2 length should match n_snps"
 
     def test_load_plink_binary_genotype_values(self, sample_plink_data: Path) -> None:
         """Verify genotype values are in valid set {0, 1, 2, NaN}."""
@@ -59,27 +61,20 @@ class TestLoadPlinkBinary:
             load_plink_binary(nonexistent)
 
 
-class TestPlinkDataProperties:
-    """Tests for PlinkData dataclass properties."""
+class TestReadGenotypes:
+    """read_genotypes returns the matrix load_plink_binary pairs with metadata."""
 
-    def test_n_samples_property(self, sample_plink_data: Path) -> None:
-        """Verify n_samples property returns correct count."""
+    def test_matches_load_plink_binary(self, sample_plink_data: Path) -> None:
         data = load_plink_binary(sample_plink_data)
+        genotypes = read_genotypes(sample_plink_data)
 
-        assert data.n_samples == 100
+        assert genotypes.dtype == np.float32
+        assert genotypes.shape == (data.meta.n_samples, data.meta.n_snps)
+        np.testing.assert_array_equal(genotypes, data.genotypes)
 
-    def test_n_snps_property(self, sample_plink_data: Path) -> None:
-        """Verify n_snps property returns correct count."""
-        data = load_plink_binary(sample_plink_data)
-
-        assert data.n_snps == 500
-
-    def test_properties_match_shape(self, sample_plink_data: Path) -> None:
-        """Verify n_samples and n_snps match genotypes shape."""
-        data = load_plink_binary(sample_plink_data)
-
-        assert data.n_samples == data.genotypes.shape[0]
-        assert data.n_snps == data.genotypes.shape[1]
+    def test_missing_bed_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError, match=r"PLINK .bed file not found"):
+            read_genotypes(tmp_path / "absent")
 
 
 class TestReadCovariateFile:

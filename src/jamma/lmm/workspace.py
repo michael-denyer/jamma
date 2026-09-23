@@ -6,13 +6,9 @@ from dataclasses import dataclass
 from math import comb
 
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.schema import LmmMode
+from jamma.lmm.schema import LmmMode, LmmTest, get_spec
 
 _DOUBLE = 8
-
-
-def _output_columns(mode: LmmMode) -> int:
-    return {1: 5, 2: 2, 3: 3, 4: 8}[mode]
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +17,7 @@ class WorkspaceSpec:
 
     ``persistent_bytes`` includes arrays retained by the Python invariants and
     arrays owned by a native workspace. ``per_thread_bytes`` is multiplied by
-    ``max_threads`` because the general workspace allocates its capacity once.
+    ``max_threads`` because the native workspace allocates its capacity once.
     ``bytes_per_snp`` covers result arrays; rotation and fallback Uab/Iab
     buffers remain part of the chunk geometry where they are allocated. The
     native query derives the owned Pab table storage from its dimensions,
@@ -39,14 +35,11 @@ class WorkspaceSpec:
     max_threads: int
     persistent_bytes: int
     per_thread_bytes: int
-    transient_per_thread_bytes: int
     bytes_per_snp: int
 
     @property
     def fixed_bytes(self) -> int:
-        return self.persistent_bytes + self.max_threads * (
-            self.per_thread_bytes + self.transient_per_thread_bytes
-        )
+        return self.persistent_bytes + self.max_threads * self.per_thread_bytes
 
     @classmethod
     def build(
@@ -62,21 +55,22 @@ class WorkspaceSpec:
     ) -> WorkspaceSpec:
         if max_threads < 1:
             raise ValueError(f"max_threads must be >= 1, got {max_threads}")
-        output_bytes = _output_columns(lmm_mode) * _DOUBLE
+        mode = get_spec(lmm_mode)
+        output_bytes = mode.output_bytes_per_snp
         # Null-model calculations retain Python's reference recursion table.
         # Each entry owns a six-int tuple; 384 bytes bounds its Python objects.
         reference_bytes = comb(n_cvt + 3, 3) * 384
         if not dispatch.is_native:
             fixed_bytes = 0
             bytes_per_snp = output_bytes
-            if lmm_mode in (1, 2, 4):
+            if mode.tests & (LmmTest.WALD | LmmTest.LRT):
                 idx = (n_cvt + 3) * (n_cvt + 2) // 2
                 rows = n_cvt + 2
                 # _batch_grid_pab_numpy holds v_temp and Hi_eval_grid, then
                 # Pab and the tensordot result for the whole SNP chunk.
                 fixed_bytes = 2 * n_grid * n_samples * _DOUBLE
                 bytes_per_snp += n_grid * (rows * idx + idx) * _DOUBLE
-                if lmm_mode in (1, 4):
+                if LmmTest.WALD in mode.tests:
                     # Interior REML refinement: the masked Uab input,
                     # h/dh, trace temporaries, compensated reductions, and
                     # Pab/derivative recursion arrays coexist.
@@ -95,16 +89,13 @@ class WorkspaceSpec:
                 1,
                 fixed_bytes + reference_bytes,
                 0,
-                0,
                 bytes_per_snp,
             )
 
         from jamma.lmm import accel
 
-        persistent, per_thread, transient, output_bytes = (
-            accel.require().workspace_sizes_c(
-                n_samples, n_cvt, n_grid, lmm_mode, max_threads
-            )
+        persistent, per_thread = accel.require().workspace_sizes_c(
+            n_samples, n_cvt, n_grid, lmm_mode, max_threads
         )
         return cls(
             dispatch,
@@ -117,6 +108,5 @@ class WorkspaceSpec:
             max_threads,
             persistent + reference_bytes,
             per_thread,
-            transient,
             output_bytes,
         )

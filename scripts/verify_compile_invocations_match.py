@@ -15,7 +15,7 @@ dropped. The remaining AST check resolves only bindings imported from the
 shared facade, plus the equivalent isolated-build loader binding; a same-named
 local function cannot satisfy it.
 
-``src/jamma/core/recompile.py`` is deliberately EXCLUDED from ENTRY_POINTS. It
+``src/jamma/_native.py`` is deliberately EXCLUDED from ENTRY_POINTS. It
 is an import-retry shim that delegates to ``compile_and_link.compile_extension``
 rather than driving ``run_build`` itself.
 """

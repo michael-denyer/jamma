@@ -1,9 +1,8 @@
 """The LOCO-only half of run_lmm_loco's configuration.
 
 Its own module for the same reason ``pipeline_config`` is: this is data, and
-``loco`` is behaviour. ``LocoConfig`` also owns the naming of every artifact a
-LOCO run reads or writes, so the writer and the cache reader compose filenames
-from one place instead of agreeing by convention.
+``loco`` is behaviour. Eigen member names belong to
+:class:`~jamma.lmm.eigen_io.EigenGeneration`, not to this config.
 
 ``jamma.lmm.loco`` re-exports both names, so ``from jamma.lmm.loco import
 LocoConfig`` keeps working — that is the path ``jamma.pipeline`` and
@@ -16,6 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+from jamma.io.plink import PlinkMetadata
+from jamma.lmm.association_plan import ExecutableAssociationPlan
+from jamma.lmm.eigen_plan import EigenDriverPlan
+from jamma.lmm.prepare_common import AnalysedPhenotype
+from jamma.lmm.schema import LmmConfig
 
 
 @dataclass(frozen=True)
@@ -37,7 +42,8 @@ class LocoConfig:
         snps_indices: Global indices of SNPs to test. None tests all.
         ksnps_indices: Global indices of SNPs used to build kinship. None
             uses all.
-        col_chunk_size: Columns per streaming chunk when building kinship.
+        col_chunk_size: Widest SNP chunk for association. Kinship and SNP
+            statistics use their own chunk width.
         write_eigen: Write per-chromosome eigenvalues and eigenvectors.
         eigen_dir: Directory for eigen files. Required when write_eigen is set.
         legacy_text: Write kinship and eigen files as GEMMA text rather than
@@ -71,32 +77,6 @@ class LocoConfig:
         """Extension for kinship and eigen artifacts: .txt for GEMMA, else .npy."""
         return ".txt" if self.legacy_text else ".npy"
 
-    def eigen_stem(self, chr_name: str) -> str:
-        """Filename stem for one chromosome's eigenpair, extension excluded.
-
-        ``write_eigen_files`` appends ``.eigenD``/``.eigenU`` and the extension
-        itself, so this is what it takes as ``prefix=`` — and what
-        :meth:`eigen_paths` composes the read-side names from, which is how the
-        writer and the cache reader stay in step.
-        """
-        return f"{self.prefix}.loco.chr{chr_name}"
-
-    def eigen_paths(self, chr_name: str) -> tuple[Path, Path]:
-        """``(eigenD, eigenU)`` paths for one chromosome's cache entry.
-
-        Raises:
-            ValueError: If ``eigen_dir`` is None — there is no directory to
-                name the files under. Cache readers check ``eigen_dir`` before
-                asking; on the write side ``__post_init__`` has it covered.
-        """
-        if self.eigen_dir is None:
-            raise ValueError("eigen_paths() requires eigen_dir, which is None")
-        stem = self.eigen_stem(chr_name)
-        return (
-            self.eigen_dir / f"{stem}.eigenD{self.artifact_suffix}",
-            self.eigen_dir / f"{stem}.eigenU{self.artifact_suffix}",
-        )
-
     def kinship_path(self, chr_name: str) -> Path:
         """Path for one chromosome's LOCO kinship matrix.
 
@@ -117,3 +97,46 @@ DEFAULT_LOCO_CONFIG = LocoConfig()
 
 LocoConfig is frozen, so one instance is safe to share.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class LocoRun:
+    """One LOCO run, resolved once and read by every stage below it.
+
+    Attributes:
+        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
+        meta: PLINK metadata read from ``bed_path``.
+        samples: The phenotype and covariates over the analysed samples; its
+            ``valid_mask`` indexes the BED rows.
+        config: Numerical settings shared with every other runner.
+        loco: LOCO-only settings.
+        execution: The association plan, with its kinship shape resolved.
+        eigen_plan: The driver every chromosome's eigendecomposition runs.
+
+    Raises:
+        ValueError: If ``execution`` resolves no kinship shape, or plans chunks
+            wider than ``loco.col_chunk_size``.
+    """
+
+    bed_path: Path
+    meta: PlinkMetadata
+    samples: AnalysedPhenotype
+    config: LmmConfig
+    loco: LocoConfig
+    execution: ExecutableAssociationPlan
+    eigen_plan: EigenDriverPlan
+
+    def __post_init__(self) -> None:
+        if self.execution.kinship is None:
+            raise ValueError("LOCO needs a plan with its kinship shape resolved")
+        chunk_size = self.execution.conservative_chunks.chunk_size
+        if chunk_size > self.loco.col_chunk_size:
+            raise ValueError(
+                f"execution plans {chunk_size}-SNP chunks but "
+                f"loco.col_chunk_size is {self.loco.col_chunk_size}"
+            )
+
+    @property
+    def analysed_rows(self) -> np.ndarray:
+        """BED row indices of the analysed samples."""
+        return np.flatnonzero(self.samples.valid_mask)

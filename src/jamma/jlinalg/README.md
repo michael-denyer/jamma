@@ -35,7 +35,7 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 
 | Name | Type | Description |
 |------|------|-------------|
-| `jlinalg_isa` | `str` | Active ISA: "AVX2", "NEON", "generic", or "numpy-fallback" |
+| `jlinalg_isa` | `str` | ISA the extension was compiled for: "AVX2", "NEON", "generic", or "numpy-fallback" |
 | `blas_backend` | `str` | Active BLAS backend: "MKL-ILP64", "Accelerate-ILP64", "numpy-fallback", etc. |
 | `blas_is_ilp64` | `int` | 1 if active BLAS uses 64-bit integers |
 | `blas_has_dgemm` | `int` | 1 if vendor DGEMM is wired; when 0, `dgemm` is the NumPy implementation |
@@ -53,9 +53,9 @@ All functions accept and return `numpy.ndarray` (float64, C-contiguous).
 
 | Platform | ISA | Vendor Dispatch |
 |----------|-----|-----------------|
-| Linux x86_64 | AVX2 | MKL-ILP64, OpenBLAS-ILP64 |
+| Linux x86_64 | generic (AVX2 wheels: AVX2) | MKL-ILP64, OpenBLAS-ILP64 |
 | macOS ARM (M1+) | NEON | Accelerate-ILP64 (macOS 13.3+) |
-| macOS x86_64 | AVX2 | NumPy fallback (LP64 Accelerate not wired) |
+| macOS x86_64 | generic | NumPy fallback (LP64 Accelerate not wired) |
 | Other / fallback | generic | NumPy fallback |
 
 Vendor dispatch is ILP64-only. LP64 backends are detected but not wired
@@ -91,7 +91,7 @@ isolating numerical differences between vendor LAPACK and NumPy, and
 required by the weekly sanitizer workflow. The narrower
 `JLINALG_NO_VENDOR_LAPACK` only affects eigendecomposition: `jlinalg.eigh`
 checks it per call and routes to the NumPy fallback, and the pre-flight
-memory estimators read the same var (via `core.eigen_plan.forced_numpy_fallback`)
+memory estimators read the same var (via `lmm.eigen_plan.forced_numpy_fallback`)
 so pre-flight and runtime agree. It does not affect the BLAS primitives.
 `JLINALG_NO_VENDOR_DGEMM=1`
 is narrower still: dispatch leaves vendor dgemm unwired, so

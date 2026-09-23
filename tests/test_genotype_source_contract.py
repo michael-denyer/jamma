@@ -7,11 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from jamma.core.snp_stats import (
-    SnpFilterSpec,
-    SnpStatsCache,
-    collect_streamed_snp_stats,
-)
+from jamma.genotype.snp_stats import SnpFilterSpec, collect_streamed_snp_stats
 from jamma.io import load_plink_binary
 from jamma.io.plink import get_plink_metadata, partitions_from_metadata
 from jamma.lmm.genotype_source import GenotypeSource, PreparedGenotypes, SampleBasis
@@ -19,8 +15,8 @@ from jamma.lmm.loco import _LocoChrSource
 from jamma.lmm.runner_numpy import MatrixSource
 from jamma.lmm.runner_numpy_streaming import BedSource
 from jamma.lmm.schema import SnpMeta
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, SYNTHETIC
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier1
 
@@ -65,7 +61,7 @@ def source_case(request: pytest.FixtureRequest) -> _SourceCase:
                 source_matrix,
                 SnpMeta.from_plink_meta(plink.meta, source_columns),
             ),
-            samples=_sample_basis(plink.n_samples, positions),
+            samples=_sample_basis(plink.meta.n_samples, positions),
             filters=SnpFilterSpec(
                 maf_threshold=0.0,
                 miss_threshold=1.0,
@@ -85,13 +81,13 @@ def source_case(request: pytest.FixtureRequest) -> _SourceCase:
             source=BedSource(
                 SYNTHETIC.bfile,
                 snp_meta=SnpMeta.from_plink_meta(plink.meta),
-                n_samples=plink.n_samples,
-                n_snps=plink.n_snps,
+                n_samples=plink.meta.n_samples,
+                n_snps=plink.meta.n_snps,
                 stats_chunk_size=17,
                 validate_genotypes=True,
                 show_progress=False,
             ),
-            samples=_sample_basis(plink.n_samples, positions),
+            samples=_sample_basis(plink.meta.n_samples, positions),
             filters=SnpFilterSpec(
                 maf_threshold=0.0,
                 miss_threshold=1.0,
@@ -106,19 +102,23 @@ def source_case(request: pytest.FixtureRequest) -> _SourceCase:
     partitions = partitions_from_metadata(plink.meta)
     chromosome_indices = next(iter(partitions.values()))
     selected = chromosome_indices[np.array([3, 10, 21], dtype=np.intp)]
-    source_rows = np.array([1, 4, 8, 10, 15, 22, 31, 47, 63, 88], dtype=np.intp)
-    local_positions = np.array([0, 2, 3, 6, 8], dtype=np.intp)
-    physical_rows = source_rows[local_positions]
+    physical_rows = np.array([1, 8, 10, 31, 63], dtype=np.intp)
     return _SourceCase(
         source=_LocoChrSource(
             LOCO.bfile,
-            chromosome_indices,
-            source_rows,
+            collect_streamed_snp_stats(
+                LOCO.bfile,
+                n_snps=plink.meta.n_snps,
+                n_samples=plink.meta.n_samples,
+                chunk_size=17,
+                sample_indices=physical_rows,
+                snp_indices=chromosome_indices,
+                show_progress=False,
+            ),
+            plink.meta.n_samples,
             snp_meta=SnpMeta.from_plink_meta(plink.meta),
-            col_chunk_size=17,
-            snp_stats_cache=None,
         ),
-        samples=_sample_basis(len(source_rows), local_positions),
+        samples=_sample_basis(plink.meta.n_samples, physical_rows),
         filters=SnpFilterSpec(
             maf_threshold=0.0,
             miss_threshold=1.0,
@@ -257,56 +257,9 @@ def test_bed_source_statistics_match_float32_streaming_pass() -> None:
         validate_genotypes=True,
         show_progress=False,
         dtype=np.float32,
-        sample_scope="valid_samples",
     )
 
     np.testing.assert_array_equal(
         prepared.selection.filtered_means,
         expected.col_means[prepared.selection.local_indices],
     )
-
-
-def test_loco_source_reuses_cache_only_for_the_full_physical_sample_basis() -> None:
-    require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
-    plink = load_plink_binary(LOCO.bfile)
-    partitions = partitions_from_metadata(plink.meta)
-    chromosome_indices = next(iter(partitions.values()))
-    selected = chromosome_indices[np.array([3, 10, 21], dtype=np.intp)]
-    distinctive_mean = 0.75
-    cache = SnpStatsCache(
-        col_means=np.full(plink.n_snps, distinctive_mean),
-        miss_counts=np.zeros(plink.n_snps, dtype=np.intp),
-        col_vars=np.ones(plink.n_snps),
-        n_samples=plink.n_samples,
-        global_indices=np.arange(plink.n_snps, dtype=np.intp),
-        sample_scope="all_samples",
-    )
-    source = _LocoChrSource(
-        LOCO.bfile,
-        chromosome_indices,
-        np.arange(plink.n_samples, dtype=np.intp),
-        snp_meta=SnpMeta.from_plink_meta(plink.meta),
-        col_chunk_size=17,
-        snp_stats_cache=cache,
-    )
-    filters = SnpFilterSpec(
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        restrict_indices=selected,
-    )
-
-    full = source.prepare(
-        SampleBasis.from_mask(np.ones(plink.n_samples, dtype=bool)), filters
-    )
-    subset_positions = np.array([1, 8, 10, 31, 63], dtype=np.intp)
-    subset = source.prepare(_sample_basis(plink.n_samples, subset_positions), filters)
-
-    np.testing.assert_array_equal(
-        full.selection.filtered_means,
-        np.full(len(selected), distinctive_mean),
-    )
-    np.testing.assert_allclose(
-        subset.selection.filtered_means,
-        np.mean(plink.genotypes[np.ix_(subset_positions, selected)], axis=0),
-    )
-    assert np.all(subset.selection.filtered_means != distinctive_mean)

@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
+from jamma.genotype.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.io import load_plink_binary, plink
 from jamma.kinship import compute_kinship_streaming, stream
 from tests.reference.kinship import (

@@ -21,7 +21,7 @@ from textwrap import dedent
 
 import pytest
 
-from tests.conftest import install_lint_script
+from tests.support import install_lint_script
 
 pytestmark = pytest.mark.tier0
 
@@ -59,7 +59,7 @@ _STUB_EMPTY_TARGETS: dict[str, str] = {
     "hatch_build.py": "# stub\n",
     "src/jamma/jlinalg/_compile_jlinalg.py": "# stub\n",
     "src/jamma/lmm/_compile_accel.py": "# stub\n",
-    "src/jamma/core/recompile.py": "# stub\n",
+    "src/jamma/_native.py": "# stub\n",
 }
 
 
@@ -116,7 +116,7 @@ def test_inline_comment_with_literal_on_code_line_still_flags(tmp_path):
         "-shared",
         "-pthread",
         # Sanitizer additions. Hardcoding any of these in an
-        # entry point bypasses apply_sanitizer_overrides() and breaks the
+        # entry point bypasses resolve_flags() and breaks the
         # single-source-of-truth invariant.
         "-fsanitize=address",
         "-fsanitize=undefined",
@@ -129,7 +129,7 @@ def test_widened_flag_set_is_detected(tmp_path, flag):
     """Portability footguns, link-phase flags, and sanitizer flags beyond
     the original -O/-f set must trip the lint — particularly -march=native
     which must stay dev-only per CLAUDE.md, and the sanitizer
-    flags that must flow through apply_sanitizer_overrides()."""
+    flags that must flow through resolve_flags()."""
     files = dict(_STUB_EMPTY_TARGETS)
     files["hatch_build.py"] = f'cflags.append("{flag}")\n'
     result = _run_with_targets(tmp_path, files)
@@ -138,7 +138,7 @@ def test_widened_flag_set_is_detected(tmp_path, flag):
 
 
 def test_sanitizer_flags_in_helper_file_are_not_lint_targets(tmp_path):
-    """The lint inspects the four entry points only — apply_sanitizer_overrides()
+    """The lint inspects the four entry points only — resolve_flags()
     in src/jamma/_build_support/build_models.py legitimately holds the
     sanitizer flag literals. The TARGETS list does NOT include _build_support,
     so even if the helper file existed in the synthetic tree it would be
@@ -207,10 +207,10 @@ def test_missing_target_file_is_reported(tmp_path):
     """If a target is absent entirely, that's a cleanup-went-wrong signal
     and must surface as a violation rather than passing silently."""
     files = dict(_STUB_EMPTY_TARGETS)
-    del files["src/jamma/core/recompile.py"]
+    del files["src/jamma/_native.py"]
     result = _run_with_targets(tmp_path, files)
     assert result.returncode == 1
-    assert "recompile.py" in result.stderr
+    assert "_native.py" in result.stderr
 
 
 # ---------------------------------------------------------------------------

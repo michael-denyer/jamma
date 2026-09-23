@@ -163,20 +163,18 @@ class TestPipelineConfigWeightFile:
             runner.validate_inputs()
 
     def test_weight_file_with_loco_raises(self) -> None:
-        """validate_inputs raises ValueError for -widv with -loco."""
+        """PipelineConfig rejects -widv with -loco."""
         weight_path = SYNTHETIC.fam  # Use any existing file
-        config = PipelineConfig(
-            bfile=BFILE,
-            weight_file=weight_path,
-            loco=True,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="not yet supported with -loco"):
-            runner.validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                weight_file=weight_path,
+                loco=True,
+                check_memory=False,
+            )
 
     def test_weight_file_with_eigen_raises(self, tmp_path: Path) -> None:
-        """validate_inputs raises ValueError for -widv with -d/-u."""
+        """PipelineConfig rejects -widv with -d/-u."""
         weight_path = SYNTHETIC.fam  # Use any existing file
         # Create dummy eigen files
         d_file = tmp_path / "test.eigenD.txt"
@@ -184,16 +182,14 @@ class TestPipelineConfigWeightFile:
         d_file.write_text("1.0\n")
         u_file.write_text("1.0\n")
 
-        config = PipelineConfig(
-            bfile=BFILE,
-            weight_file=weight_path,
-            eigenvalue_file=d_file,
-            eigenvector_file=u_file,
-            check_memory=False,
-        )
-        runner = PipelineRunner(config)
         with pytest.raises(ValueError, match="cannot be used with -d/-u"):
-            runner.validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                weight_file=weight_path,
+                eigenvalue_file=d_file,
+                eigenvector_file=u_file,
+                check_memory=False,
+            )
 
 
 @pytest.mark.tier1
@@ -243,9 +239,8 @@ def test_pipeline_builds_association_plan_once(
 
     A prior version called it twice: once before the phenotype/covariate
     masks existed (pricing the pre-mask n_samples), and again after masking
-    to catch a post-filter mode flip. Both calls ran estimate_lmm_memory.
-    Now there is a single call, made after the masks exist so it never needs
-    a second pass.
+    to catch a post-filter mode flip. Now there is a single call, made after
+    the masks exist so it never needs a second pass.
     """
     import jamma.pipeline as pipeline_module
 
@@ -357,18 +352,18 @@ def test_pipeline_output_path_content_matches_n_tested(
 
 @pytest.mark.tier1
 def test_pipeline_loco_prices_and_threads_one_plan(tmp_path: Path, monkeypatch):
-    """The LOCO branch runs the shared preflight and hands run_lmm_loco its plan."""
-    import jamma.lmm
+    """The LOCO branch runs the shared preflight and hands the LOCO body its plan."""
+    import jamma.pipeline
     from jamma.core import memory
 
     seen: dict = {}
-    real_run_lmm_loco = jamma.lmm.run_lmm_loco
+    real_run_loco = jamma.pipeline.run_loco
 
-    def _spy(*args, **kwargs):
-        seen["execution"] = kwargs["execution"]
-        return real_run_lmm_loco(*args, **kwargs)
+    def _spy(run, output_path):  # type: ignore[no-untyped-def]
+        seen["execution"] = run.execution
+        return real_run_loco(run, output_path)
 
-    monkeypatch.setattr(jamma.lmm, "run_lmm_loco", _spy)
+    monkeypatch.setattr(jamma.pipeline, "run_loco", _spy)
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 1000.0)
     quotes: list[str] = []
     handle = logger.add(quotes.append, format="{message}", level="INFO")
@@ -799,7 +794,7 @@ def test_pipeline_emits_telemetry(tmp_path: Path, sample_plink_data: Path) -> No
         show_progress=False,
         backend="numpy",
     )
-    with patch("jamma.core.telemetry.append_benchmark_record", side_effect=spy_append):
+    with patch("jamma.pipeline.append_benchmark_record", side_effect=spy_append):
         PipelineRunner(config).run()
 
     assert len(records) == 1, f"Expected 1 telemetry record, got {len(records)}"

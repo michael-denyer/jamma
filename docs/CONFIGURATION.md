@@ -31,10 +31,12 @@ in without pulling in the full numpy/loguru stack they are built to avoid.
 | `JAMMA_BACKEND` | `auto` | Force the compute backend: `auto`, `numpy`, or `numpy-streaming`. Auto-detect selects the C+NumPy runner, falling back to streaming when memory is insufficient. |
 | `JAMMA_BLAS_THREADS` | Physical core count | Thread count for NumPy BLAS operations (eigendecomposition, matmul). Controls MKL/OpenBLAS via `threadpoolctl`. **Linux/Windows only** — has no effect on macOS Accelerate. |
 | `JAMMA_LOCO_WORKERS` | `1` | Parallel chromosome workers for LOCO analysis. Each worker holds a full K_loco matrix (`n_samples² × 8` bytes), so increase with caution. |
-| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable local benchmark telemetry. Merged with the CLI's `--no-telemetry` / the Python API's `no_telemetry` argument onto `PipelineConfig.no_telemetry` in `pipeline.py`; `cli.py` no longer writes this variable into `os.environ` to reach `telemetry.py`, and `append_benchmark_record` takes the resolved value as an explicit argument rather than reading the variable itself. |
+| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value (not `0`) to disable local benchmark telemetry. Merged with the CLI's `--no-telemetry` / the Python API's `no_telemetry` argument onto `PipelineConfig.no_telemetry` in `pipeline.py`; `cli.py` no longer writes this variable into `os.environ` to reach `telemetry.py`, and `append_benchmark_record` takes the resolved value as an explicit argument rather than reading the variable itself. |
 | `DO_NOT_TRACK` | *(unset)* | Universal convention: set to `1` to disable JAMMA telemetry. |
 | `JLINALG_NO_VENDOR_LAPACK` | *(unset)* | Set to any non-empty value (not `0`) to force `np.linalg.eigh` instead of vendor LAPACK (DSYEVD/DSYEVR) for eigendecomposition only (scope: `lmm/eigen.py`). Useful for debugging numerical differences. |
 | `JLINALG_NO_VENDOR_DGEMM` | *(unset)* | Set to any non-empty value (not `0`) to leave vendor `dgemm` unwired, so `blas_has_dgemm` reports `0` while the C extension stays loaded and the rest of dispatch (`dsyrk`, DSYEVD/DSYEVR) is untouched. That is the permanent state of an LP64-only host — distro or conda numpy — which CI never reaches because PyPI numpy ships ILP64 `scipy_openblas64`. Narrower than `JAMMA_FORCE_NUMPY_FALLBACK`, which skips the `.so` import entirely. Used by `tests/test_jlinalg_dispatch.py::TestDgemmVendorGate`. |
+| `JLINALG_NO_VENDOR_DSYRK` | *(unset)* | Same truthy rule. Leaves vendor `dsyrk` unwired, so `blas_has_dsyrk` reports `0` and the public `dsyrk` binds NumPy, with `dgemm` and DSYEVD/DSYEVR untouched. Test seam for the unwired-`dsyrk` contract of the raw `_jlinalg` module; used by `tests/test_jlinalg_dispatch.py::TestUnwiredRoutinesRaise`. |
+| `JLINALG_NO_VENDOR_DSYEVR` | *(unset)* | Same truthy rule. Leaves vendor DSYEVR unwired, so `blas_has_dsyevr` reports `0` while DSYEVD stays wired and `driver="auto"` still runs DSYEVD. Test seam for the `eigh(K, driver="dsyevr")` contract when DSYEVR is missing; used by the same test class. |
 | `JLINALG_DISPATCH_DEBUG` | *(unset)* | Set to `1` to print jlinalg BLAS dispatch diagnostics (backend detection, ILP64 status, library path) from the `jlinalg` C layer. Debug aid only. |
 | `JAMMA_FORCE_NUMPY_FALLBACK` | *(unset)* | Set to any non-empty value (not `0`) to force the **entire jlinalg layer** onto its NumPy fallback path even when vendor BLAS is loaded. Wider scope than `JLINALG_NO_VENDOR_LAPACK`: also affects `dgemm`, `dsyrk`. Used by the weekly sanitizer workflow and by full numerical-divergence debugging. |
 | `JAMMA_NO_OPENMP` | *(unset)* | Set to any non-empty value (not `0`) to disable OpenMP when compiling the C extension. The extension will be single-threaded. |
@@ -61,6 +63,13 @@ The C extension still uses every physical core for its OpenMP threads.
 JAMMA's CLI is Click-based and mirrors GEMMA's flat flag interface. One of `-gk`
 or `-lmm` is required.
 
+`-gk` reads only the options its kinship computation uses. It accepts the
+`-lmm`-only options (`-k`, `-d`, `-u`, `--eigen-dir`, `-hwe`, `-lmin`, `-lmax`,
+`-snps`, `-widv`, `--backend`) the way GEMMA does: it neither validates their
+values nor opens the files they name, and it logs one warning naming each one
+given on the command line. `--no-telemetry` is not warned about, because `-gk`
+never emits telemetry.
+
 ### Input and mode selection
 
 | Flag | Type | Default | Description |
@@ -76,8 +85,8 @@ or `-lmm` is required.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `-maf` | float | `0.01` (lmm) / `0.0` (gk) | Minor allele frequency threshold. Default is `0.0` in `-gk` mode to match GEMMA kinship behavior. |
-| `-miss` | float | `0.05` (lmm) / `1.0` (gk) | Missing rate threshold. Default is `1.0` in `-gk` mode. |
+| `-maf` | float | `0.01` | Minor allele frequency threshold. Applies to `-gk` and `-lmm` alike, as in GEMMA. |
+| `-miss` | float | `0.05` | Missing rate threshold. Applies to `-gk` and `-lmm` alike. |
 | `-hwe` | float | `0.0` | HWE p-value threshold (0 = no filtering). Requires `numpy-streaming` backend. |
 | `-snps` | path | — | SNP list file for association testing |
 | `-ksnps` | path | — | SNP list file for kinship computation |
@@ -153,7 +162,7 @@ generations automatically.
 |---|---|---|---|
 | `--backend` | choice | `auto` | Compute backend: `auto`, `numpy`, or `numpy-streaming`. Overridden by `JAMMA_BACKEND` env var. |
 | `--check-memory` / `--no-check-memory` | flag | on | Enable/disable pre-flight memory check before eigendecomposition. |
-| `--mem-budget` | float | — | Ceiling in GB. Narrows the chunk size the batch/streaming preflight and LOCO/`-gk` size against (so a tight budget can shrink the plan's chunk rather than only reject it), and still raises `MemoryError` if the plan cannot fit within it. |
+| `--mem-budget` | float | — | Ceiling in GB. Narrows the chunk size the batch/streaming preflight and LOCO size against (so a tight budget can shrink the plan's chunk rather than only reject it), gates `-gk` kinship accumulation and the `-eigen` driver choice, and still raises `MemoryError` if the plan cannot fit within it. |
 | `-v` / `--verbose` | flag | off | Verbose logging output |
 | `--no-telemetry` | flag | off | Disable benchmark telemetry for this run (equivalent to `JAMMA_NO_TELEMETRY=1`) |
 | `--version` | flag | — | Print version and backend info, then exit |
@@ -248,7 +257,7 @@ ILP64 uses 64-bit integers and handles arbitrarily large matrices.
 
 ### Eigendecomposition driver selection
 
-`core.eigen_plan.plan_eigen_driver` picks a driver from the available memory
+`lmm.eigen_plan.plan_eigen_driver` picks a driver from the available memory
 and vendor capability flags, in priority order:
 
 1. **DSYEVD** (in-place, vendor LAPACK) — fastest; requires `O(N²)` workspace (~240 GB for 100k samples)
@@ -260,7 +269,10 @@ and vendor capability flags, in priority order:
 `driver="auto"` otherwise. `jlinalg_eigh_c` honours it directly -- when
 `driver="dsyevr"` it skips the DSYEVD attempt outright rather than trying
 DSYEVD first and falling back to DSYEVR only on an allocation failure, so a
-memory-constrained run never touches pages the plan did not reserve. `eigh`
+memory-constrained run never touches pages the plan did not reserve. With
+vendor DSYEVR not wired, `driver="dsyevr"` raises `RuntimeError` rather than
+running DSYEVD; the plan only picks DSYEVR when `blas_has_dsyevr` is set, so
+the pipeline never reaches that error. `eigh`
 returns the driver that actually ran as `status.driver_used`, and
 `eigendecompose_kinship` logs that value (`Eigendecomp: dsyevr`), not the
 planned one, since a DSYEVD allocation failure can still fall through to
@@ -420,6 +432,6 @@ export JAMMA_NO_TELEMETRY=1
 export DO_NOT_TRACK=1
 ```
 
-`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value.
+`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value (not `0`).
 `DO_NOT_TRACK=1` opts out; `DO_NOT_TRACK=0` explicitly opts in.
 Kinship-only mode (`-gk`) never emits telemetry regardless of these settings.

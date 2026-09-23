@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 
-from tests.math_validation.compare import compare_files, read_rows
+from jamma.validation.compare import load_gemma_assoc
+from tests.math_validation.compare import compare_files
 from tests.math_validation.evidence import (
     bundle_status,
-    environment,
+    evidence_bundle,
     run_pipeline,
-    write_json,
+    select_cases,
 )
 from tests.math_validation.fixtures import (
     EXTERNAL_HEADERS,
@@ -206,87 +206,80 @@ def compare_loco(destination: Path, case_ids: tuple[str, ...] | None = None) -> 
     """Compare cold and proven-warm JAMMA LOCO runs independently with GEMMA."""
 
     manifest = load_loco_manifest()
-    cases = [
-        case for case in manifest["cases"] if case_ids is None or case["id"] in case_ids
-    ]
-    if not cases or (
-        case_ids is not None and {c["id"] for c in cases} != set(case_ids)
-    ):
-        raise ValueError("case_ids must name at least one declared LOCO case")
-    destination.mkdir(parents=True, exist_ok=False)
-    bundle = {
-        "schema_version": 1,
-        "status": "INCONCLUSIVE",
-        "environment": environment(),
-        "manifest": manifest,
-        "invocation": sys.argv,
-        "cases": [],
-        "untested": manifest["untested"],
-    }
-    statuses = []
-    for case in cases:
-        source, provenance = require_loco_reference(case)
-        copy_reference(source, destination / f"{case['id']}-reference", provenance)
-        cache = destination / f"{case['id']}-cache"
-        runs = []
-        for route, write_eigen in (("cold", True), ("warm", False)):
-            out = destination / f"{case['id']}-{route}"
-            result, messages, serialized_config = run_pipeline(
-                source,
-                out,
-                lmm_mode=case["mode"],
-                maf=0,
-                miss=1,
-                backend="numpy-streaming",
-                output_prefix="study",
-                loco=True,
-                write_eigen=write_eigen,
-                eigen_dir=cache,
-            )
-            comparison = compare_files(
-                result.assoc_path,
-                source / "gemma.assoc.txt",
-                af_contract="counted-allele",
-                mode=case["mode"],
-                reference_optional_logl=True,
-            )
-            actual_ids = [
-                row["rs"] for row in read_rows(result.assoc_path, case["mode"])
-            ]
-            expected_ids = json.loads((source / "model.json").read_text())["snp_ids"]
-            reused = route == "cold" or any(
-                "Found complete LOCO eigen cache" in message for message in messages
-            )
-            if actual_ids != expected_ids or not reused:
-                comparison["status"] = "NOT VERIFIED"
-                comparison["failure_ids"].append("loco:ordered-case-ids-or-cache-reuse")
-            statuses.append(comparison["status"])
-            runs.append(
+    cases = select_cases(manifest["cases"], case_ids, "LOCO")
+    with evidence_bundle(
+        destination, manifest=manifest, cases=[], untested=manifest["untested"]
+    ) as bundle:
+        statuses = []
+        for case in cases:
+            source, provenance = require_loco_reference(case)
+            copy_reference(source, destination / f"{case['id']}-reference", provenance)
+            cache = destination / f"{case['id']}-cache"
+            runs = []
+            for route, write_eigen in (("cold", True), ("warm", False)):
+                out = destination / f"{case['id']}-{route}"
+                result, messages, serialized_config = run_pipeline(
+                    source,
+                    out,
+                    lmm_mode=case["mode"],
+                    maf=0,
+                    miss=1,
+                    backend="numpy-streaming",
+                    output_prefix="study",
+                    loco=True,
+                    write_eigen=write_eigen,
+                    eigen_dir=cache,
+                )
+                comparison = compare_files(
+                    result.assoc_path,
+                    source / "gemma.assoc.txt",
+                    af_contract="counted-allele",
+                    mode=case["mode"],
+                    reference_optional_logl=True,
+                )
+                actual_ids = [
+                    row.rs
+                    for row in load_gemma_assoc(
+                        result.assoc_path, mode=case["mode"], require_logl=True
+                    )
+                ]
+                expected_ids = json.loads((source / "model.json").read_text())[
+                    "snp_ids"
+                ]
+                reused = route == "cold" or any(
+                    "Found complete LOCO eigen cache" in message for message in messages
+                )
+                if actual_ids != expected_ids or not reused:
+                    comparison["status"] = "NOT VERIFIED"
+                    comparison["failure_ids"].append(
+                        "loco:ordered-case-ids-or-cache-reuse"
+                    )
+                statuses.append(comparison["status"])
+                runs.append(
+                    {
+                        "route": route,
+                        "cache_reused": route == "warm" and reused,
+                        "pipeline_config": serialized_config,
+                        "comparison": comparison,
+                        "logs": messages,
+                        "files": snapshot_files(out),
+                    }
+                )
+            bundle["cases"].append(
                 {
-                    "route": route,
-                    "cache_reused": route == "warm" and reused,
-                    "pipeline_config": serialized_config,
-                    "comparison": comparison,
-                    "logs": messages,
-                    "files": snapshot_files(out),
+                    "id": case["id"],
+                    "mode": case["mode"],
+                    "reference": {
+                        "directory": str(source),
+                        "provenance": provenance,
+                        "files": {
+                            path.name: digest(path)
+                            for path in sorted(source.iterdir())
+                            if path.is_file()
+                        },
+                    },
+                    "runs": runs,
                 }
             )
-        bundle["cases"].append(
-            {
-                "id": case["id"],
-                "mode": case["mode"],
-                "reference": {
-                    "directory": str(source),
-                    "provenance": provenance,
-                    "files": {
-                        path.name: digest(path)
-                        for path in sorted(source.iterdir())
-                        if path.is_file()
-                    },
-                },
-                "runs": runs,
-            }
-        )
-    bundle["status"] = bundle_status(statuses)
-    write_json(destination / "bundle.json", bundle)
+        bundle["status"] = bundle_status(statuses)
     return bundle

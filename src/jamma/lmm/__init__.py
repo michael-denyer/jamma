@@ -5,24 +5,24 @@ Core algorithm follows Zhou & Stephens (2012) Nature Genetics.
 
 Modules:
 - runner_numpy: Pure-NumPy batch runner
-- runner_numpy_streaming: Disk streaming with C extension
+- runner_numpy_streaming: Two-pass disk streaming runner
 - chunk_runner_numpy: Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 - chunk_sizing: RAM-budgeted chunk-size computation
 - chunk_kernel: The one dispatch match, and the per-run state it needs
 - chunk_pipeline: Rotation/compute thread split and overlapped pipeline driver
-- chunk: Chunk size computation
 - prepare_common: Shared setup (covariates, eigendecomp, null model)
 - compute_numpy: NumPy mode dispatch for chunk computation
-- likelihood: Index tables, scalar REML/MLE, null-model optimisation
+- likelihood: Null-model scalar REML/MLE and optimisation
 - uab: Uab/Pab/Iab batch builders in full, split and SoA layouts
 - likelihood_numpy: Pure-NumPy batch REML/MLE and optimization
-- special: Pure-stdlib betainc and chi2_sf (no numpy/scipy)
+- special: NumPy betainc_batch and chi2_sf_batch (no scipy)
 - results: Result building functions
 - eigen: Eigendecomposition with GEMMA-compatible thresholding
-- stats: AssocResult dataclass and the batch Wald/Score/LRT statistics
+- stats: the batch Wald/Score/LRT statistics
 - io: Result file I/O
 """
 
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
     ExecutionPlan,
@@ -34,7 +34,6 @@ from jamma.lmm.loco import DEFAULT_LOCO_CONFIG, LocoConfig, run_lmm_loco
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
 from jamma.lmm.schema import LmmConfig, LmmRunResult
-from jamma.lmm.stats import AssocResult
 
 __all__ = [
     "DEFAULT_LOCO_CONFIG",

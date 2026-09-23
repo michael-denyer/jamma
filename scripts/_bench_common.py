@@ -7,8 +7,13 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import statistics
+import subprocess
 import time
+import tracemalloc
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import numpy as np
 
@@ -19,6 +24,8 @@ MOUSE_KINSHIP = MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt"
 MOUSE_COVAR_4 = MOUSE_DIR / "covariates_4.txt"
 DEFAULT_GEMMA = Path.home() / ".local" / "bin" / "gemma"
 DEFAULT_GEMMA_ACCELERATE = Path.home() / ".local" / "bin" / "gemma-accelerate"
+
+T = TypeVar("T")
 
 
 def fmt_seconds(seconds: float) -> str:
@@ -109,8 +116,9 @@ def print_hardware_header(runs: int) -> None:
     Args:
         runs: Repetition count to report.
     """
+    from _hardware_context import get_hardware_context
+
     from jamma import jlinalg
-    from jamma.core.hardware import get_hardware_context
     from jamma.lmm import accel
 
     if accel._accel is None:
@@ -194,3 +202,61 @@ def verify_associations(
                 f"{column} differs at {int((~close).sum())} SNPs; worst {snps[worst]}: "
                 f"actual={observed[worst]:.6e} reference={expected[worst]:.6e}"
             )
+
+
+def traced_peak(fn: Callable[..., T], *args: object) -> tuple[T, float, int]:
+    """Tracemalloc sees NumPy allocations but not native BLAS or C scratch."""
+    tracemalloc.start()
+    try:
+        start = time.perf_counter()
+        result = fn(*args)
+        elapsed = time.perf_counter() - start
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return result, elapsed, peak
+
+
+def balanced_schedule(blocks: int) -> list[list[str]]:
+    if blocks < 1:
+        raise ValueError("blocks must be >= 1")
+    return [
+        ["A", "B", "B", "A"] if block % 2 == 0 else ["B", "A", "A", "B"]
+        for block in range(blocks)
+    ]
+
+
+def percent_change(after: float, before: float) -> float:
+    return 100.0 * (after / before - 1.0)
+
+
+def git_revision(source_root: Path) -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+
+def summarize_ab(
+    timings: dict[str, list[float]],
+    block_deltas: list[float],
+    block_medians: list[float],
+) -> dict[str, object]:
+    median_a = statistics.median(timings["A"])
+    median_b = statistics.median(timings["B"])
+    return {
+        "median_a_seconds": median_a,
+        "median_b_seconds": median_b,
+        "b_vs_a_percent": percent_change(median_b, median_a),
+        "paired_block_median_percent": statistics.median(block_deltas),
+        "block_delta_min_percent": min(block_deltas),
+        "block_delta_max_percent": max(block_deltas),
+        "session_drift_percent": percent_change(block_medians[-1], block_medians[0]),
+        "conclusion": (
+            "no_stable_winner"
+            if min(block_deltas) <= 0.0 <= max(block_deltas)
+            else "consistent_direction_requires_replication"
+        ),
+        "a_timings_seconds": timings["A"],
+        "b_timings_seconds": timings["B"],
+        "block_deltas_percent": block_deltas,
+    }

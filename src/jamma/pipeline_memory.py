@@ -5,10 +5,11 @@ from __future__ import annotations
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.lmm.eigen import plan_eigen_driver_for_machine
+from jamma.lmm.eigen_plan import EigenDriverPlan
 from jamma.lmm.loco_eigen import plan_loco_eigen_driver
-from jamma.pipeline_plan import AnalysisPlan, LocoAnalysisPlan, ProvidedEigen
+from jamma.pipeline_config import ProvidedEigen
+from jamma.pipeline_plan import AnalysisPlan, LocoAnalysisPlan
 
 __all__ = ["memory_preflight"]
 
@@ -26,7 +27,7 @@ def _eigen_driver(
         execution.n_samples,
         available_gb,
         budget_gb=execution.mem_budget_gb,
-        inplace_eligible=True,
+        inplace_blocker=None,
     )
 
 

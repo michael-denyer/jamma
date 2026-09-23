@@ -39,11 +39,6 @@ class TestLOCOIteratorRuntimeError:
     under ``-O`` where any surviving ``assert`` is stripped.
     """
 
-    def _loco_source_path(self) -> Path:
-        return (
-            Path(__file__).resolve().parent.parent / "src" / "jamma" / "lmm" / "loco.py"
-        )
-
     def test_loco_module_imports_cleanly_under_optimisation(self) -> None:
         """Runtime check: loco.py imports under ``python -O``.
 
@@ -130,7 +125,7 @@ class TestJlinalgABIValidation:
         import types
 
         from jamma._build_support.build_models import BuildSpec
-        from jamma.core.recompile import _import_and_validate
+        from jamma._native import _import_and_validate
 
         key = "jamma._fake_abi_probe"
         spec = BuildSpec(
@@ -140,8 +135,8 @@ class TestJlinalgABIValidation:
             sources=(),
             lapack_sources=(),
             output_stem="_fake_abi_probe",
-            module_name="_fake_abi_probe",
             sys_module_key=key,
+            fallback_label="fake",
             required_attrs=("NEEDED",),
         )
 
@@ -218,13 +213,13 @@ class TestJlinalgABIValidation:
             fake.set_n_threads = lambda *a, **k: None
             sys.modules["jamma.jlinalg._jlinalg"] = fake
 
-            # Fully fake jamma.core.recompile BEFORE importing jamma, so no real
+            # Fully fake jamma._native BEFORE importing jamma, so no real
             # recompile can paper over the simulated ABI mismatch by rebuilding
             # (importing the real module would eager-load jamma.jlinalg and
             # rebuild). The fake _load_c_module runs the same ABI check the real
             # one does against the planted fake, so the wrong ABI drives None and
             # jamma.jlinalg falls back.
-            recompile_mod = types.ModuleType("jamma.core.recompile")
+            recompile_mod = types.ModuleType("jamma._native")
 
             def _fake_load(spec, expected_abi):
                 mod = sys.modules.get(spec.sys_module_key)
@@ -233,7 +228,7 @@ class TestJlinalgABIValidation:
                 return mod
 
             recompile_mod._load_c_module = _fake_load
-            sys.modules["jamma.core.recompile"] = recompile_mod
+            sys.modules["jamma._native"] = recompile_mod
 
             with warnings.catch_warnings(record=True) as captured:
                 warnings.simplefilter("always")

@@ -11,8 +11,8 @@ each own a copy of that import/ABI/recompile/retry machine; now they call this.
 serialises concurrent callers on a file lock, evicts the stale ``sys.modules``
 entry, and returns True on success. ``compile_extension`` ships inside the
 wheel, so ABI-mismatch recompile succeeds on wheel installs as it does from a
-source checkout. It evicts only the extension module itself, never the parent
-package, so nothing here re-enters its own import machinery: the #181
+source checkout. The eviction covers only the extension module, never the
+parent package, so nothing here re-enters its own import machinery: the #181
 self-deadlock (flock is per open-file-description, so a re-entrant second
 acquisition on the same thread blocks forever) cannot recur because there is
 no re-import of the parent package to trigger it.
@@ -37,10 +37,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
+from jamma._build_support import compile_and_link
+from jamma._build_support.build_models import BuildReport, BuildSpec
+from jamma.core.constants import Env
+
 if TYPE_CHECKING:
     from types import ModuleType
-
-    from jamma._build_support.build_models import BuildSpec
 
 
 def _lock_path_for(sys_module_key: str) -> Path:
@@ -78,8 +82,6 @@ def _file_lock(lock_path: Path) -> Iterator[None]:
     matches how pip/uv handle their own lockfiles and avoids a TOCTOU between
     unlink and re-lock by a sibling process.
     """
-    from loguru import logger
-
     fd = None
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,35 +109,31 @@ def _file_lock(lock_path: Path) -> Iterator[None]:
 def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     """Auto-recompile a C extension when its import or ABI check failed.
 
-    Calls ``compile_extension(spec, ..., on_retry=...)`` directly, evicts the
-    stale module from ``sys.modules``, and returns True on success.
+    Calls ``compile_extension`` with a ``BuildReport`` that logs, evicts the
+    stale extension module (never its parent package) from ``sys.modules``,
+    and returns True on success.
 
     Args:
-        spec: The ``BuildSpec`` for the target. Uses ``module_name`` (log name),
-            ``sys_module_key`` (the key to evict), and ``fallback_label``.
+        spec: The ``BuildSpec`` for the target.
 
     Returns:
         True if recompilation succeeded; False otherwise.
     """
-    from loguru import logger
-
-    from jamma._build_support.compile_and_link import compile_extension
-
-    module_name = spec.module_name
+    log_name = spec.output_stem
     sys_module_key = spec.sys_module_key
     label = spec.fallback_label
 
     logger.info(
-        f"C extension {module_name} needs recompilation "
+        f"C extension {log_name} needs recompilation "
         f"(ABI mismatch or missing). Compiling now..."
     )
 
-    def _on_retry(msg: str) -> None:
-        # Surface OMP downgrade (or other retry notices) as a warning so users
-        # whose runtime recompile silently falls back to single-threaded can see
-        # it. The build-time path in hatch_build.py already warns on OMP
-        # downgrade; this closes the gap for ABI-mismatch recompiles on wheels.
-        logger.warning(f"{module_name} recompile retry: {msg}")
+    # Warnings (compile failures, OpenMP retries) log as warnings so a runtime
+    # recompile that falls back to single-threaded is visible.
+    report = BuildReport(
+        detail=lambda msg: logger.debug(f"{log_name} recompile: {msg}"),
+        warn=lambda msg: logger.warning(f"{log_name} recompile: {msg}"),
+    )
 
     # Serialize concurrent recompiles (pytest-xdist workers, parallel Databricks
     # jobs, multiple notebook kernels). Without this, two workers can race on the
@@ -158,7 +156,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
             try:
                 importlib.import_module(sys_module_key)
                 logger.info(
-                    f"C extension {module_name} was recompiled by another "
+                    f"C extension {log_name} was recompiled by another "
                     f"process; using existing build."
                 )
                 return True
@@ -172,10 +170,10 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
                 )
 
         try:
-            success = compile_extension(
+            success = compile_and_link.compile_extension(
                 spec,
                 Path(__file__).parents[1],  # the installed jamma/ package dir
-                on_retry=_on_retry,
+                report,
             )
         except (OSError, subprocess.SubprocessError, RuntimeError) as e:
             # Narrow catch: genuine build-environment failures (missing compiler,
@@ -184,7 +182,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
             # so they surface as real tracebacks instead of a silent
             # pure-Python fallback.
             logger.warning(
-                f"Auto-recompilation of {module_name} raised "
+                f"Auto-recompilation of {log_name} raised "
                 f"{type(e).__name__}: {e}. "
                 f"Falling back to pure-Python ({label}).",
                 exc_info=True,
@@ -193,7 +191,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
 
         if not success:
             logger.warning(
-                f"Auto-recompilation of {module_name} failed. "
+                f"Auto-recompilation of {log_name} failed. "
                 f"Falling back to pure-Python ({label})."
             )
             return False
@@ -201,7 +199,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
         # Evict stale module from sys.modules so re-import picks up the new .so
         sys.modules.pop(sys_module_key, None)
 
-    logger.info(f"C extension {module_name} recompiled successfully.")
+    logger.info(f"C extension {log_name} recompiled successfully.")
     return True
 
 
@@ -213,13 +211,11 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
     otherwise ABI-matched build means a corrupt build, so it is treated the same
     as an import failure and drives a rebuild in the caller.
     """
-    from loguru import logger
-
     try:
         mod = importlib.import_module(spec.sys_module_key)
     except ImportError as e:
         logger.warning(
-            f"{spec.module_name} not available ({e}) — usually an ABI "
+            f"{spec.output_stem} not available ({e}) — usually an ABI "
             f"mismatch or a missing build artifact. Falling back to "
             f"pure-Python ({spec.fallback_label})."
         )
@@ -228,14 +224,14 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
     abi = getattr(mod, "ABI_VERSION", None)
     if abi is None:
         logger.warning(
-            f"{spec.module_name} not available: ABI_VERSION missing from the "
+            f"{spec.output_stem} not available: ABI_VERSION missing from the "
             f"compiled module — usually an ABI mismatch. Falling back to "
             f"pure-Python ({spec.fallback_label})."
         )
         return None
     if abi != expected_abi:
         logger.warning(
-            f"{spec.module_name} ABI mismatch: compiled={abi}, "
+            f"{spec.output_stem} ABI mismatch: compiled={abi}, "
             f"expected={expected_abi}. Stale .so needs recompilation."
         )
         return None
@@ -243,7 +239,7 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
     missing = [name for name in spec.required_attrs if getattr(mod, name, None) is None]
     if missing:
         logger.warning(
-            f"{spec.module_name} not available: required symbols missing: "
+            f"{spec.output_stem} not available: required symbols missing: "
             f"{missing} — usually an ABI mismatch from a partial build. "
             f"Falling back to pure-Python ({spec.fallback_label})."
         )
@@ -272,8 +268,6 @@ def _load_c_module(spec: BuildSpec, expected_abi: int) -> ModuleType | None:
     Returns:
         The validated extension module, or None to use the pure-Python fallback.
     """
-    from jamma.core.constants import Env
-
     if Env.current().force_numpy_fallback:
         return None
 

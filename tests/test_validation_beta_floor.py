@@ -21,7 +21,7 @@ def test_null_effect_beta_is_compared_against_its_standard_error():
         actual, expected, ToleranceConfig(beta_se_floor=0.0)
     )
     assert without_floor.passed is False
-    assert without_floor.beta.passed is False
+    assert without_floor["beta"].passed is False
 
 
 def test_beta_floor_scales_with_the_standard_error():
@@ -34,5 +34,5 @@ def test_beta_floor_scales_with_the_standard_error():
         [_make_assoc(rs="rs1", beta=1e-3, se=0.01)],
         [_make_assoc(rs="rs1", beta=0.0, se=0.01)],
     )
-    assert loose.beta.passed is True
-    assert tight.beta.passed is False
+    assert loose["beta"].passed is True
+    assert tight["beta"].passed is False

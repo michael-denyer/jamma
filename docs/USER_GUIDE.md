@@ -749,7 +749,7 @@ Disable telemetry with either:
    export DO_NOT_TRACK=1
    ```
 
-`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value.
+`JAMMA_NO_TELEMETRY` disables telemetry for any non-empty value (not `0`).
 `DO_NOT_TRACK` follows the [Do Not Track convention](https://consoledonottrack.com/):
 only `DO_NOT_TRACK=1` opts out; `DO_NOT_TRACK=0` explicitly opts in.
 
@@ -763,7 +763,7 @@ Kinship-only mode (`-gk`) does not emit telemetry regardless of these settings.
 | `JAMMA_BLAS_THREADS` | `physical_cores` | Thread count for NumPy BLAS operations (eigendecomp, matmul). Controls MKL/OpenBLAS via `threadpoolctl`, not OpenMP. **Linux only** — has no effect on macOS Accelerate. |
 | `VECLIB_MAXIMUM_THREADS` | *(unset)* | Apple's Accelerate thread cap. Has no effect on the eigensolver: on Accelerate, DSYEVD runs on one core at n=5000 with `VECLIB_MAXIMUM_THREADS=18` exported before Python starts, and `JAMMA_BLAS_THREADS` cannot change that either. The `Eigendecomp:` and `Association threads:` log lines mark its BLAS limit `uncontrolled`. |
 | `JAMMA_LOCO_WORKERS` | `1` | How many chromosomes `-loco` eigendecomposes at once. Each worker holds its own copy of one K_loco (`n^2 x 8` bytes over the analysed samples) plus the eigen driver's workspace, on top of the kinship stream's retained set. A memory gate clamps the count to what fits, also capped by the chromosome count and the physical cores, and logs the result as `LOCO workers: 4 (requested 6; 19 chromosomes; 18 cores; memory allows 4)`. Solves overlap association under one BLAS scope that the consumer thread owns, so the phases never race over the process-wide limit. Results agree with sequential execution to floating-point rounding. |
-| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value to disable benchmark telemetry. See [Telemetry](#telemetry). |
+| `JAMMA_NO_TELEMETRY` | *(unset)* | Set to any non-empty value (not `0`) to disable benchmark telemetry. See [Telemetry](#telemetry). |
 | `DO_NOT_TRACK` | *(unset)* | Universal telemetry opt-out convention. Set to `1` to disable JAMMA telemetry. See [Telemetry](#telemetry). |
 
 ```bash
@@ -904,23 +904,16 @@ jamma -lmm 1 ... --no-check-memory
 ### Programmatic Memory Estimation
 
 ```python
-from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
-
-# Full pipeline estimate (before starting anything; streaming is the
-# production path, so genotypes are counted per chunk, not in full)
 from jamma.core.memory import available_ram_gb, fits
+from jamma.lmm.association_plan import plan_association
 
-full = estimate_streaming_memory(n_samples=200_000)
-print(f"Full pipeline peak: {full.peak_gb:.1f}GB")
-print(f"Eigendecomp phase: {full.eigen_gb:.1f}GB")
+# The quote the pipeline preflight gates on. plan_association reads the
+# machine once to size its chunks; price() itself is pure.
+plan = plan_association(200_000, 95_000, backend="numpy-streaming")
+quote = plan.price(eigen=None)  # pass an EigenDriverPlan to price the decomposition
+print(f"Association phase: {quote.association_gb:.1f}GB")
 print(f"Available: {available_ram_gb():.1f}GB")
-print(f"Sufficient: {fits(full.peak_gb, available_ram_gb())}")
-
-# LMM-only estimate (after eigendecomp is done, kinship freed). uab_iab_gb is
-# the per-buffer Uab/Iab figure the run's dispatch path holds; the fused C
-# paths form Uab in place and hold none.
-lmm_gb = estimate_lmm_memory(n_samples=200_000, n_snps=95_000, uab_iab_gb=0.0)
-print(f"LMM phase: {lmm_gb:.1f}GB")
+print(f"Sufficient: {fits(quote.total_peak_gb, available_ram_gb())}")
 ```
 
 ## Troubleshooting

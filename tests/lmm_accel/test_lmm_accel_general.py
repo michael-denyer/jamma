@@ -10,12 +10,13 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import requires_c
+from tests.builders import gram_uab_batch
 from tests.lmm_accel._helpers import (
+    _fused_general_mode4_workspace,
     _fused_general_workspace,
-    _prepare_fused_general_data,
     _run_general_ncvt_c_vs_python,
 )
+from tests.support import requires_c
 
 
 @pytest.mark.tier0
@@ -40,22 +41,22 @@ def test_general_ncvt_reml_wald_ncvt4(
 @requires_c
 def test_general_ncvt_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """C-GEN-02: Workspace create/compute/destroy cycle works for n_cvt>1."""
-    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
-    utg_t = data["utg_t"]
+    data = synthetic_covariate_data_ncvt2
+    utg_t = data.utg_t
     n_snps = utg_t.shape[0]
 
     ws = _fused_general_workspace(data)
     assert ws is not None
 
     mid = n_snps // 2
-    r1 = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t[:mid], 1)
+    r1 = accel.require().compute_lmm_chunk_c(ws, utg_t[:mid], 1)
     assert r1["lambdas"].shape == (mid,)
 
     # Reuse the same workspace for the second chunk.
-    r2 = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t[mid:], 1)
+    r2 = accel.require().compute_lmm_chunk_c(ws, utg_t[mid:], 1)
     assert r2["lambdas"].shape == (n_snps - mid,)
 
-    r_full = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+    r_full = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
     np.testing.assert_allclose(
         np.concatenate([r1["lambdas"], r2["lambdas"]]),
         r_full["lambdas"],
@@ -92,15 +93,15 @@ def test_general_ncvt_gemma_covariate_match():
     covariates = np.loadtxt(SYNTHETIC.covariates)
     snp_info = [
         {
-            "chr": str(plink.chromosome[i]),
-            "rs": plink.sid[i],
-            "pos": plink.bp_position[i],
-            "a1": plink.allele_1[i],
-            "a0": plink.allele_2[i],
+            "chr": str(plink.meta.chromosome[i]),
+            "rs": plink.meta.sid[i],
+            "pos": plink.meta.bp_position[i],
+            "a1": plink.meta.allele_1[i],
+            "a0": plink.meta.allele_2[i],
             "maf": 0.0,
             "n_miss": 0,
         }
-        for i in range(plink.n_snps)
+        for i in range(plink.meta.n_snps)
     ]
 
     run_result = run_lmm_association_numpy(
@@ -136,12 +137,12 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2, monkeypatch):
     from jamma.lmm.uab import batch_compute_uab_numpy
 
     data = synthetic_covariate_data_ncvt2
-    n_cvt = data["n_cvt"]
-    eigenvalues = data["eigenvalues"]
-    n_samples = data["n_samples"]
-    UtW = data["UtW"]
-    Uty = data["Uty"]
-    UtG = data["UtG"]
+    n_cvt = data.n_cvt
+    eigenvalues = data.inputs.eigenvalues
+    n_samples = data.n_samples
+    UtW = data.inputs.UtW
+    Uty = data.inputs.Uty
+    UtG = data.inputs.UtG
 
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
     n_snps = Uab_batch.shape[0]
@@ -182,13 +183,15 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2, monkeypatch):
         n_finite = np.sum(np.isfinite(arr))
         assert n_finite > n_snps * 0.8, f"{key}: only {n_finite}/{n_snps} finite values"
 
-    result_lrt = compute_lmm_chunk_numpy(lmm_mode=2, logl_H0=logl_H0, **common)
+    result_lrt = compute_lmm_chunk_numpy(
+        lmm_mode=2, logl_H0=logl_H0, Hi_eval_null=Hi_eval_null, **common
+    )
     assert result_lrt["lambdas_mle"] is not None
     assert result_lrt["p_lrts"] is not None
     assert result_lrt["lambdas_mle"].shape == (n_snps,)
 
     result_score = compute_lmm_chunk_numpy(
-        lmm_mode=3, Hi_eval_null=Hi_eval_null, **common
+        lmm_mode=3, logl_H0=logl_H0, Hi_eval_null=Hi_eval_null, **common
     )
     assert result_score["p_scores"] is not None
     assert result_score["betas"] is not None
@@ -205,11 +208,11 @@ def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
     if n_threads < 2:
         pytest.skip("Need >=2 cores for multi-threaded test")
 
-    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
-    ws = _fused_general_workspace(data)
+    data = synthetic_covariate_data_ncvt2
+    ws = _fused_general_workspace(data, n_threads)
 
-    r1 = accel.require().compute_lmm_chunk_fused_general_c(ws, data["utg_t"], 1)
-    rn = accel.require().compute_lmm_chunk_fused_general_c(ws, data["utg_t"], n_threads)
+    r1 = accel.require().compute_lmm_chunk_c(ws, data.utg_t, 1)
+    rn = accel.require().compute_lmm_chunk_c(ws, data.utg_t, n_threads)
 
     for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
         np.testing.assert_allclose(
@@ -226,16 +229,16 @@ def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
 @requires_c
 def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
     """C-GEN-06: Constant genotypes produce NaN beta/se/p-value for n_cvt>1."""
-    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
+    data = synthetic_covariate_data_ncvt2
 
     # A constant genotype rotates to an all-zero UtG column, which drives xx to
     # zero and so P_XX to zero. Zeroing the row is how the fused kernel, which
     # builds Uab from UtG itself, is given a degenerate SNP.
-    utg_t = data["utg_t"].copy()
+    utg_t = data.utg_t.copy()
     utg_t[[0, 2]] = 0.0
 
     ws = _fused_general_workspace(data)
-    result = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+    result = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
     for snp_idx in (0, 2):
         assert np.isnan(result["betas"][snp_idx]), f"SNP {snp_idx}: expected NaN beta"
@@ -250,6 +253,51 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 
 @pytest.mark.tier0
 @requires_c
+def test_empty_chunk_returns_empty_columns_in_both_families(
+    synthetic_covariate_data_ncvt2, fused_data
+):
+    """An empty chunk yields every mode-4 key with zero rows, whatever n_cvt."""
+    general = synthetic_covariate_data_ncvt2
+    general_ws = _fused_general_mode4_workspace(general)
+    empty_general = np.empty((0, general.n_samples))
+    general_out = accel.require().compute_lmm_chunk_c(general_ws, empty_general, 1)
+
+    eigenvalues, w, Uty, _, uab_inv_soa, n_samples = fused_data
+    ncvt1_ws = accel.require().create_workspace_c(
+        eigenvalues,
+        uab_inv_soa,
+        w[:, None],
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        1,
+        lmm_mode=1,
+    )
+    empty_ncvt1 = np.empty((0, n_samples))
+    ncvt1_out = accel.require().compute_lmm_chunk_c(ncvt1_ws, empty_ncvt1, 1)
+
+    mode4_keys = {
+        "lambdas",
+        "logls",
+        "betas",
+        "ses",
+        "pwalds",
+        "p_scores",
+        "lambdas_mle",
+        "p_lrts",
+    }
+    assert set(general_out) == mode4_keys
+    assert all(general_out[k].shape == (0,) for k in mode4_keys)
+    assert set(ncvt1_out) == {"lambdas", "logls", "betas", "ses", "pwalds"}
+    assert all(v.shape == (0,) for v in ncvt1_out.values())
+
+
+@pytest.mark.tier0
+@requires_c
 def test_general_ncvt_abi_version():
     """C-GEN-07: ABI is >= 17, set when the general workspace took every lmm_mode."""
     from jamma.lmm._lmm_accel import ABI_VERSION
@@ -259,13 +307,14 @@ def test_general_ncvt_abi_version():
 
 @pytest.mark.tier0
 @requires_c
-def test_existing_ncvt1_regression(synthetic_wald_data):
+def test_existing_ncvt1_regression():
     """C-GEN-08: the n_cvt=1 fused workspace path still works after the general work.
 
     Ensures the general n_cvt additions (ABI bump, extra workspace types) did not
     regress the original n_cvt=1 path.
     """
-    eigenvalues, Uab_batch, n_samples = synthetic_wald_data
+    eigenvalues, Uab_batch = gram_uab_batch()
+    n_samples = eigenvalues.shape[0]
 
     # The fused kernel builds Uab from w and UtG itself, so it is given the
     # invariant SoA plus the raw rotated vectors rather than a prebuilt Uab.
@@ -278,10 +327,21 @@ def test_existing_ncvt1_regression(synthetic_wald_data):
         [Uab_batch[0, :, 0], Uab_batch[0, :, 2], Uab_batch[0, :, 5]], axis=0
     )
 
-    ws = accel.require().create_workspace_ncvt1_c(
-        eigenvalues, uab_inv_soa, w, Uty, n_samples, 1e-5, 1e5, 50, 20, lmm_mode=1
+    ws = accel.require().create_workspace_c(
+        eigenvalues,
+        uab_inv_soa,
+        w[:, None],
+        Uty,
+        n_samples,
+        1e-5,
+        1e5,
+        50,
+        20,
+        1,
+        1,
+        lmm_mode=1,
     )
-    result = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
+    result = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
     assert result["lambdas"].shape == (Uab_batch.shape[0],)
     assert result["betas"].shape == (Uab_batch.shape[0],)

@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Set up Python
         run: uv python install 3.12
@@ -51,9 +51,10 @@ jobs:
 
       # Staged outside the worktree so the base checkout below cannot swap it
       # for an older copy; both sides must run the head's key set.
-      - name: Stage the digest script
+      - name: Stage the digest script and its helper
         run: |
           install -m 755 scripts/assoc_digest.py "${RUNNER_TEMP}/assoc_digest.py"
+          install -m 644 scripts/_digest_common.py "${RUNNER_TEMP}/_digest_common.py"
 
       - name: Digest the head
         run: |
@@ -70,6 +71,7 @@ jobs:
           set -euo pipefail
           git checkout --detach "${BASE_SHA}"
           install -m 755 "${RUNNER_TEMP}/assoc_digest.py" scripts/assoc_digest.py
+          install -m 644 "${RUNNER_TEMP}/_digest_common.py" scripts/_digest_common.py
           uv sync --locked
           uv run python -m jamma.lmm._compile_accel
           uv run python -m jamma.jlinalg._compile_jlinalg

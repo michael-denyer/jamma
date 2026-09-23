@@ -38,16 +38,11 @@ backend or platform, since that comparison would not mean anything.
 
 from __future__ import annotations
 
-import argparse
-import hashlib
-import json
-import platform
-import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import numpy as np
+from _digest_common import digest_array, run_cli
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -73,43 +68,14 @@ LOCO_FIXTURES = {"gemma_loco"}
 FILTERS = {"unfiltered": 0.0, "maf0.05": 0.05}
 
 
-def digest_array(arr: np.ndarray) -> str:
-    """Shape-prefixed so a reshape cannot collide with a same-byte-count array."""
-    arr = np.ascontiguousarray(arr)
-    h = hashlib.sha256()
-    h.update(repr(arr.shape).encode())
-    h.update(arr.tobytes())
-    return h.hexdigest()
-
-
 def _valid_indices(n_samples: int) -> np.ndarray:
     n_valid = max(1, n_samples - max(1, n_samples // 10))
     return np.arange(n_valid)
 
 
-def _header() -> dict[str, Any]:
-    try:
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        sha = None
-    return {
-        "blas_backend": jlinalg.blas_backend,
-        "numpy_version": np.__version__,
-        "platform": platform.platform(),
-        "machine": platform.machine(),
-        "sha": sha,
-    }
-
-
 def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
     data = load_plink_binary(bfile)
-    n_samples = data.n_samples
+    n_samples = data.meta.n_samples
     digests: dict[str, str] = {}
 
     for sample_label, valid_indices in (
@@ -158,7 +124,7 @@ def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
 
 def _loco_keys(fixture: str, bfile: Path) -> dict[str, str]:
     data = load_plink_binary(bfile)
-    n_samples = data.n_samples
+    n_samples = data.meta.n_samples
     digests: dict[str, str] = {}
 
     for sample_label, valid_indices in (
@@ -209,70 +175,8 @@ def compute_all_digests() -> dict[str, str]:
     return digests
 
 
-def cmd_out(path: Path) -> int:
-    payload = {"header": _header(), "digests": compute_all_digests()}
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    print(f"kinship_digest: {len(payload['digests'])} keys -> {path}")
-    return 0
-
-
-def _load(path: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    payload = json.loads(path.read_text())
-    return payload["header"], payload["digests"]
-
-
-def cmd_diff(path_a: Path, path_b: Path) -> int:
-    header_a, digests_a = _load(path_a)
-    header_b, digests_b = _load(path_b)
-
-    for field in ("blas_backend", "platform"):
-        if header_a.get(field) != header_b.get(field):
-            print(
-                f"ERROR: {field} differs between runs "
-                f"({header_a.get(field)!r} vs {header_b.get(field)!r}); "
-                "a digest comparison across backends or platforms is meaningless.",
-                file=sys.stderr,
-            )
-            return 2
-
-    keys_a, keys_b = set(digests_a), set(digests_b)
-    shared = keys_a & keys_b
-    only_a = sorted(keys_a - keys_b)
-    only_b = sorted(keys_b - keys_a)
-    differing = sorted(k for k in shared if digests_a[k] != digests_b[k])
-
-    for label, keys in (("only in A", only_a), ("only in B", only_b)):
-        if keys:
-            print(f"{len(keys)} key(s) {label} (coverage change, not compared):")
-            for key in keys:
-                print(f"  {key}")
-
-    if differing:
-        print(f"{len(differing)} keys differ:", file=sys.stderr)
-        for key in differing:
-            print(f"  {key}  A={digests_a[key]}  B={digests_b[key]}", file=sys.stderr)
-        return 1
-
-    print(f"0 keys differ ({len(shared)} shared, {len(shared)} identical)")
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--out", type=Path, metavar="FILE", help="write digests to FILE")
-    group.add_argument(
-        "--diff",
-        nargs=2,
-        type=Path,
-        metavar=("A", "B"),
-        help="compare two digest files",
-    )
-    args = parser.parse_args(argv)
-
-    if args.out is not None:
-        return cmd_out(args.out)
-    return cmd_diff(*args.diff)
+    return run_cli("kinship_digest", __doc__, compute_all_digests, argv)
 
 
 if __name__ == "__main__":

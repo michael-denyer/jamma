@@ -7,13 +7,13 @@ itself is the shared body in ``runner_numpy``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import numpy as np
 
-from jamma.core.snp_filter import validate_snp_indices
-from jamma.core.snp_stats import (
+from jamma.genotype.snp_filter import validate_snp_indices
+from jamma.genotype.snp_stats import (
     SnpFilterSpec,
     SnpSelection,
     collect_streamed_snp_stats,
@@ -27,14 +27,14 @@ from jamma.lmm.genotype_source import (
     bind_prepared_genotypes,
 )
 from jamma.lmm.prepare_common import (
-    compute_valid_mask,
+    AnalysedPhenotype,
     parse_eigen_input,
-    with_intercept,
+    restrict_eigen_input,
 )
 from jamma.lmm.runner_numpy import (
     STREAMING_LABELS,
     LmmRunSpec,
-    run_lmm_association,
+    run_single,
 )
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
@@ -43,6 +43,34 @@ from jamma.lmm.schema import (
     SnpInfoRecord,
     SnpMeta,
 )
+
+
+def bed_chunk_source(
+    bed_path: Path, samples: SampleBasis
+) -> Callable[[SnpSelection, int], Iterator[RawLmmChunk]]:
+    """Stream a selection's .bed columns as float64 chunks over the analysed rows.
+
+    Args:
+        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
+        samples: The analysed rows, as positions among the BED rows.
+
+    Returns:
+        A chunk source for ``bind_prepared_genotypes``.
+    """
+
+    def _iter_chunks(selection: SnpSelection, chunk_size: int) -> Iterator[RawLmmChunk]:
+        for chunk, filt_start, filt_end in stream_genotype_chunks(
+            bed_path,
+            chunk_size=chunk_size,
+            dtype=np.float64,
+            show_progress=False,
+            snp_indices=selection.indices,
+        ):
+            if not samples.is_all_samples:
+                chunk = chunk[samples.positions, :]
+            yield RawLmmChunk(np.ascontiguousarray(chunk), filt_start, filt_end)
+
+    return _iter_chunks
 
 
 class BedSource:
@@ -100,29 +128,14 @@ class BedSource:
             show_progress=self._show_progress,
             progress_label="Computing SNP statistics",
             dtype=np.float32,
-            sample_scope="all_samples" if samples.is_all_samples else "valid_samples",
         )
-
-        def _iter_chunks(
-            selection: SnpSelection, chunk_size: int
-        ) -> Iterator[RawLmmChunk]:
-            for chunk, filt_start, filt_end in stream_genotype_chunks(
-                self._bed_path,
-                chunk_size=chunk_size,
-                dtype=np.float64,
-                show_progress=False,
-                snp_indices=selection.indices,
-            ):
-                if not samples.is_all_samples:
-                    chunk = chunk[samples.positions, :]
-                yield RawLmmChunk(np.ascontiguousarray(chunk), filt_start, filt_end)
 
         return bind_prepared_genotypes(
             snp_meta=self._snp_meta,
             stats=stats,
             filters=filters,
             sample_basis=samples,
-            chunk_source=_iter_chunks,
+            chunk_source=bed_chunk_source(self._bed_path, samples),
         )
 
 
@@ -189,20 +202,14 @@ def run_lmm_association_numpy_streaming(
 
     meta = get_plink_metadata(bed_path)
     validate_snp_indices(snps_indices, meta.n_snps)
-    valid_mask = compute_valid_mask(phenotypes, covariates)
-    covariates = with_intercept(covariates, valid_mask)
-    n_cvt = covariates.shape[1] if covariates is not None else 1
-    n_analyzed = int(np.count_nonzero(valid_mask))
+    samples = AnalysedPhenotype.from_inputs(phenotypes, covariates)
     execution = plan_association(
-        n_analyzed,
+        samples.n_samples,
         meta.n_snps,
+        config=config,
+        backend="numpy-streaming",
+        n_cvt=samples.n_cvt,
         n_input_samples=meta.n_samples,
-        requested="numpy-streaming",
-        n_cvt=n_cvt,
-        lmm_mode=config.lmm_mode,
-        n_grid=config.n_grid,
-        n_refine=config.n_refine,
-        mem_budget=config.mem_budget,
         max_chunk_size=chunk_size,
     )
 
@@ -223,7 +230,7 @@ def run_lmm_association_numpy_streaming(
         validate_genotypes=validate_genotypes,
         show_progress=config.show_progress,
     )
-    return run_lmm_association(
+    return run_single(
         source,
         LmmRunSpec(
             config=config,
@@ -232,8 +239,9 @@ def run_lmm_association_numpy_streaming(
             hwe_threshold=hwe_threshold,
             labels=STREAMING_LABELS,
         ),
-        phenotypes=phenotypes,
-        eigen_input=parse_eigen_input(kinship, eigenvalues, eigenvectors),
-        covariates=covariates,
-        output_path=output_path,
+        samples,
+        restrict_eigen_input(
+            parse_eigen_input(kinship, eigenvalues, eigenvectors), samples.valid_mask
+        ),
+        output_path if output_path is not None else [],
     )

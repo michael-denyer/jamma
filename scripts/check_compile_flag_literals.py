@@ -25,7 +25,7 @@ Target files:
   - hatch_build.py
   - src/jamma/jlinalg/_compile_jlinalg.py
   - src/jamma/lmm/_compile_accel.py
-  - src/jamma/core/recompile.py  (runtime module must stay clean)
+  - src/jamma/_native.py  (runtime module must stay clean)
 
 Flag set (the ones we've actually seen duplicated, plus portability
 footguns like ``-march=native`` that MUST stay dev-only per
@@ -80,11 +80,8 @@ FLAGS: set[str] = {
     "-shared",
     "-pthread",
     # Sanitizer flags. Must NEVER appear in the four entry
-    # points; they are assembled by
-    # jamma._build_support.compile_and_link.apply_sanitizer_overrides()
-    # and reach hatch_build.py / _compile_jlinalg.py / _compile_accel.py /
-    # core/recompile.py via the existing extra_cflags / extra_link_flags /
-    # extra_lapack_cflags machinery.
+    # points; jamma._build_support.build_models.resolve_flags() assembles
+    # them from JAMMA_SANITIZE for every build.
     # The FLAG_PATTERN regex above already covers -f and -s prefixes, so no
     # regex change is needed for these additions — only the FLAGS set.
     "-fsanitize=address",
@@ -98,7 +95,7 @@ TARGETS: list[str] = [
     "hatch_build.py",
     "src/jamma/jlinalg/_compile_jlinalg.py",
     "src/jamma/lmm/_compile_accel.py",
-    "src/jamma/core/recompile.py",
+    "src/jamma/_native.py",
 ]
 
 # Match a flag literal inside single or double quotes: '-O3' or "-O3".

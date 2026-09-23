@@ -17,8 +17,9 @@ from jamma.lmm.prepare_common import (
     _build_covariate_matrix,
     _compute_null_model_common,
     _eigendecompose_or_reuse,
+    fit_null,
     parse_eigen_input,
-    prepare_lmm_run,
+    rotate_basis,
     with_intercept,
 )
 from jamma.lmm.schema import LmmConfig
@@ -27,14 +28,13 @@ pytestmark = pytest.mark.tier0
 
 
 def test_null_model_populated_regardless_of_caller_intent():
-    """prepare_lmm_run populates NullModel the same way for every caller.
+    """fit_null populates the null model the same way for every lmm_mode.
 
     The mode gate this replaced saved nothing: the null MLE costs 0.8 ms at
-    n=2k and 28.8 ms at n=100k. prepare_lmm_run no longer takes lmm_mode at
-    all, so a caller that only wants Wald gets the identical logl_H0 and
-    Hi_eval_null a Score/All caller would get from the same rotated inputs —
-    proven here by comparing prepare_lmm_run's populated fields directly
-    against _compute_null_model_common on the same UtW/Uty.
+    n=2k and 28.8 ms at n=100k. A caller that only wants Wald gets the
+    identical logl_H0 and Hi_eval_null a Score/All caller would get from the
+    same rotated inputs, proven here by comparing fit_null's fields for each
+    mode directly against _compute_null_model_common on the same UtW/Uty.
     """
     rng = np.random.default_rng(0)
     n_samples = 50
@@ -43,31 +43,29 @@ def test_null_model_populated_regardless_of_caller_intent():
     phenotypes = rng.standard_normal(n_samples)
     W = np.ones((n_samples, 1))
 
-    prepared = prepare_lmm_run(
-        eigen_input=KinshipMatrix(kinship),
-        phenotypes=phenotypes,
-        W=W,
-        n_cvt=1,
-        l_min=1e-5,
-        l_max=1e5,
-        show_progress=False,
-        check_memory=False,
-        label="test",
-        compute_pve=False,
+    eigenvalues, U = _eigendecompose_or_reuse(
+        KinshipMatrix(kinship), show_progress=False, label="test", check_memory=False
     )
-    assert prepared.logl_H0 is not None
-    assert prepared.Hi_eval_null is not None
-    assert prepared.Hi_eval_null.shape == (n_samples,)
+    basis = rotate_basis(eigenvalues, U, W)
 
-    expected = _compute_null_model_common(
-        eigenvalues_np=prepared.eigenvalues,
-        UtW=prepared.UtW,
-        Uty=prepared.Uty,
-        n_cvt=1,
-        show_progress=False,
-    )
-    assert prepared.logl_H0 == expected.logl_H0
-    np.testing.assert_array_equal(prepared.Hi_eval_null, expected.hi_eval_null)
+    for lmm_mode in (1, 2, 3, 4):
+        fit = fit_null(
+            basis,
+            phenotypes,
+            LmmConfig(lmm_mode=lmm_mode, show_progress=False, check_memory=False),
+            compute_pve=False,
+        )
+        assert fit.Hi_eval_null.shape == (n_samples,)
+
+        expected = _compute_null_model_common(
+            eigenvalues_np=basis.eigenvalues,
+            UtW=basis.UtW,
+            Uty=fit.Uty,
+            n_cvt=1,
+            show_progress=False,
+        )
+        assert fit.logl_H0 == expected.logl_H0
+        np.testing.assert_array_equal(fit.Hi_eval_null, expected.hi_eval_null)
 
 
 def test_build_covariate_matrix_from_common():
@@ -105,7 +103,7 @@ def test_with_intercept_sees_constant_column_over_masked_rows_only():
     """A NaN in a masked-out row does not hide the intercept the analysed rows carry."""
     cov = np.column_stack([np.ones(40), np.linspace(-1.0, 1.0, 40)])
     cov[3, :] = np.nan
-    mask = ~np.isnan(cov).any(axis=1)
+    mask = ~np.any(np.isnan(cov), axis=1)
 
     assert with_intercept(cov, mask) is cov
     assert with_intercept(None, mask) is None
@@ -255,10 +253,9 @@ def test_compute_null_model_common_accepts_near_zero_eigenvalues():
     )
 
 
-def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
+def test_numpy_score_chunk_rejects_negative_hi_eval_null():
     """Python fallback Score path rejects non-positive Hi_eval_null."""
-    import jamma.lmm.compute_numpy as compute_numpy
-    from jamma.lmm import accel
+    from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 
     rng = np.random.default_rng(101)
     n_samples, n_snps, n_cvt = 50, 5, 1
@@ -271,21 +268,21 @@ def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
     hi_bad = Hi_eval_null.copy()
     hi_bad[2] = -0.5
 
-    # Force Python fallback by hiding C extension
-    monkeypatch.setattr(
-        accel, "_accel", None
-    )  # allow-patch: dropping the extension forces the NumPy path
-
     with pytest.raises(ValueError, match="non-positive"):
-        compute_numpy._compute_score_numpy(
-            n_cvt, eigenvalues, hi_bad, Uab_batch, n_samples
+        compute_lmm_chunk_numpy(
+            3,
+            n_cvt,
+            eigenvalues,
+            Uab_batch,
+            n_samples,
+            Hi_eval_null=hi_bad,
+            logl_H0=0.0,
         )
 
 
-def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
+def test_numpy_score_chunk_rejects_nan_hi_eval_null():
     """Python fallback Score path rejects NaN Hi_eval_null."""
-    import jamma.lmm.compute_numpy as compute_numpy
-    from jamma.lmm import accel
+    from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 
     rng = np.random.default_rng(102)
     n_samples, n_snps, n_cvt = 50, 5, 1
@@ -298,14 +295,15 @@ def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
     hi_bad = Hi_eval_null.copy()
     hi_bad[0] = np.nan
 
-    # Force Python fallback by hiding C extension
-    monkeypatch.setattr(
-        accel, "_accel", None
-    )  # allow-patch: dropping the extension forces the NumPy path
-
     with pytest.raises(ValueError, match="non-finite"):
-        compute_numpy._compute_score_numpy(
-            n_cvt, eigenvalues, hi_bad, Uab_batch, n_samples
+        compute_lmm_chunk_numpy(
+            3,
+            n_cvt,
+            eigenvalues,
+            Uab_batch,
+            n_samples,
+            Hi_eval_null=hi_bad,
+            logl_H0=0.0,
         )
 
 

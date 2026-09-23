@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import pytest
 
 from jamma.io import parse_fam_phenotype_column, read_fam_phenotypes
 from jamma.lmm.pab import compute_Uab
-from tests.builders import rotated_lmm_inputs, write_fam
+from tests.builders import (
+    covariate_lmm_inputs,
+    gram_uab_batch,
+    make_runner_synthetic_data,
+    rotated_lmm_inputs,
+    write_fam,
+)
 from tests.fixture_paths import LOCO, MOUSE, SYNTHETIC, FixtureDataset, KinshipDataset
 
 pytestmark = pytest.mark.tier0
@@ -50,6 +58,78 @@ class TestRotatedLmmInputs:
             np.testing.assert_array_equal(
                 uab[i], compute_Uab(d.UtW, d.Uty, d.UtG[:, i])
             )
+
+
+def _sha256(array: np.ndarray) -> str:
+    return hashlib.sha256(array.tobytes()).hexdigest()[:32]
+
+
+def _sorted_uniform(seed: int) -> np.ndarray:
+    return np.sort(np.random.default_rng(seed).uniform(0.1, 2.0, 200))
+
+
+# Digests of the ad-hoc constructions these builders replaced, taken at
+# d867e2d3: _build_synthetic_covariate_data and the lmm_accel split_wald_data
+# and synthetic_wald_data fixtures. Seeded tests read these arrays, so a
+# builder that drifts by one bit fails here before it moves a tolerance test.
+# The eigenvalues are left out: rng.uniform rounds its scale-and-shift
+# differently on arm64 and x86, so they are checked against the replaced
+# recipe's first draw instead.
+_INPUT_PINS = [
+    pytest.param(
+        lambda: covariate_lmm_inputs(n_cvt=2, seed=42),
+        _sorted_uniform(42)[::-1],
+        {
+            "UtW": "a687661e66ab5c62f8e46fb8794669df",
+            "Uty": "9fd56376eeb7fd4c49f550322f9c4e37",
+            "UtG": "d71f0d9e42973293c6186d07990cc991",
+        },
+        id="cov2",
+    ),
+    pytest.param(
+        lambda: covariate_lmm_inputs(n_cvt=4, seed=99),
+        _sorted_uniform(99)[::-1],
+        {
+            "UtW": "ebdc2f076b5c9de76a5a7e6100ae4c3a",
+            "Uty": "eed43517f40182f008fb1b673a493ff1",
+            "UtG": "443b7705d3323765f4f1674feabeb328",
+        },
+        id="cov4",
+    ),
+    pytest.param(
+        lambda: rotated_lmm_inputs(200, 50, eig_range=(0.1, 2.0), intercept=False),
+        _sorted_uniform(42),
+        {
+            "UtW": "61c54a0602bcbd562d0f70024708275f",
+            "Uty": "8921c9425356085ede38930444928283",
+            "UtG": "552133c65030a80c9f7f26e4d6e72255",
+        },
+        id="split",
+    ),
+]
+
+
+class TestBuilderBytePins:
+    @pytest.mark.parametrize(("build", "eigenvalues", "digests"), _INPUT_PINS)
+    def test_lmm_inputs_match_the_replaced_recipe(self, build, eigenvalues, digests):
+        inputs = build()
+        np.testing.assert_array_equal(inputs.eigenvalues, eigenvalues)
+        assert {k: _sha256(getattr(inputs, k)) for k in digests} == digests
+
+    def test_gram_uab_batch_matches_the_replaced_fixture(self):
+        eigenvalues, uab_batch = gram_uab_batch()
+        np.testing.assert_array_equal(eigenvalues, _sorted_uniform(42))
+        assert _sha256(uab_batch) == "b9a0bf4c0c0b01b7c2f88fcebc22c493"
+
+    def test_covariate_uab_batch_matches_the_replaced_recipe(self):
+        uab_batch = covariate_lmm_inputs(n_cvt=2, seed=42).uab_batch()
+        assert _sha256(uab_batch) == "71f7328fc08c5860f9641e0a686352b0"
+
+    def test_runner_data_matches_the_moved_builder(self):
+        genotypes, phenotypes, _, snp_info = make_runner_synthetic_data()
+        assert _sha256(genotypes) == "6b96f49bb7b24df50fe909a81c860a1f"
+        assert _sha256(phenotypes) == "7a847cdbb62cae6b94f65c56ae2f0ea0"
+        assert len(snp_info) == 50
 
 
 class TestWriteFam:

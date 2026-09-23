@@ -137,23 +137,3 @@ def numpy_impl(
                 result[i:j, :j] += x64[i:j] @ x64[:j].T
     _mirror_lower_to_upper(result)
     return result
-
-
-def numpy(
-    x: np.ndarray, *, out: np.ndarray | None = None, beta: float = 0.0
-) -> np.ndarray:
-    """Validated NumPy implementation exposed for backend-specific tests."""
-    validate(x, out, beta)
-    return numpy_impl(x, out=out, beta=beta)
-
-
-def run(
-    backend: DsyrkBackend,
-    x: np.ndarray,
-    *,
-    out: np.ndarray | None,
-    beta: float,
-) -> np.ndarray:
-    """Validate once and dispatch to the selected implementation."""
-    validate(x, out, beta)
-    return backend(x, out=out, beta=beta)

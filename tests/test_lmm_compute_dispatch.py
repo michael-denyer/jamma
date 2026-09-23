@@ -5,7 +5,6 @@ import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
 from jamma.lmm import accel
-from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 
 pytestmark = pytest.mark.tier0
 
@@ -14,24 +13,9 @@ pytestmark = pytest.mark.tier0
 _EXTENSION_LOADED = object()
 
 
-@pytest.mark.parametrize("n_cvt", [2, 76, compute_numpy.MAX_C_N_CVT])
-def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
-    """Wald routes to the fused general C kernel for every n_cvt up to the limit.
-
-    This used to assert that _compute_wald_numpy took a general C branch. That
-    branch could not run: the runner reaches _compute_wald_numpy only on
-    NUMPY_FALLBACK, which is selected only when the extension is absent. The
-    decision the runner actually makes is this one.
-    """
-    monkeypatch.setattr(accel, "_accel", _EXTENSION_LOADED)
-
-    path = select_dispatch_path(n_cvt, 1, accel=accel.available(), log_choices=False)
-    assert path is DispatchPath.FUSED_GENERAL
-
-
 @pytest.mark.parametrize(
     "helper",
-    ["_compute_wald_numpy", "_compute_lrt_numpy", "_compute_score_numpy"],
+    ["compute_wald_numpy", "compute_lrt_numpy", "compute_score_numpy"],
 )
 def test_full_uab_helpers_never_touch_the_extension(monkeypatch, helper):
     """The full-Uab helpers are pure NumPy, and must stay that way.
@@ -75,13 +59,13 @@ def test_full_uab_helpers_never_touch_the_extension(monkeypatch, helper):
         Uab_batch[i] = compute_Uab(UtW, Uty, UtG[:, i])
 
     common = (n_cvt, eigenvalues)
-    if helper == "_compute_wald_numpy":
-        compute_numpy._compute_wald_numpy(
+    if helper == "compute_wald_numpy":
+        compute_numpy.compute_wald_numpy(
             *common, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
         )
-    elif helper == "_compute_lrt_numpy":
-        compute_numpy._compute_lrt_numpy(*common, Uab_batch, 1e-5, 1e5, 50, 20, -100.0)
+    elif helper == "compute_lrt_numpy":
+        compute_numpy.compute_lrt_numpy(*common, Uab_batch, 1e-5, 1e5, 50, 20, -100.0)
     else:
-        compute_numpy._compute_score_numpy(
+        compute_numpy.compute_score_numpy(
             *common, 1.0 / (0.5 * eigenvalues + 1.0), Uab_batch, n_samples
         )

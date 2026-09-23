@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from loguru import logger
 
-from jamma.core.threading import blas_display_name
+import jamma
+import jamma.jlinalg as jlinalg
+from jamma.core.threading import blas_display_name, get_blas_backend
+from jamma.lmm import accel
 from jamma.lmm.association_plan import ExecutionPlan
 
 __all__ = ["log_dataset_banner", "log_pipeline_banner"]
@@ -78,8 +81,6 @@ def log_dataset_banner(
         n_covariates: Number of covariate columns (1 = intercept-only).
         n_phenotypes: Number of phenotype columns being analyzed.
     """
-    import jamma
-
     logger.info(f"JAMMA v{jamma.__version__} ({jamma.__release_date__})")
     logger.info("Reading Files ...")
     logger.info(f"## number of total individuals = {n_total:,}")
@@ -101,10 +102,6 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
         plan: ExecutionPlan with backend and mode already decided.
     """
     try:
-        import jamma.jlinalg as jlinalg
-        from jamma.core.threading import get_blas_backend
-        from jamma.lmm import accel
-
         blas = get_blas_backend()
         if blas == "unknown":
             blas = jlinalg.blas_backend
@@ -116,5 +113,5 @@ def log_pipeline_banner(plan: ExecutionPlan) -> None:
             jlinalg_backend=jlinalg.blas_backend,
         )
         logger.info(banner)
-    except (ImportError, OSError, RuntimeError, AttributeError) as exc:
+    except (OSError, RuntimeError, AttributeError) as exc:
         logger.warning(f"Could not build pipeline banner: {exc}")

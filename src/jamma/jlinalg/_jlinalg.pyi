@@ -25,7 +25,7 @@ ABI_VERSION: Final[int]
 """JLINALG ABI version number for compatibility checking."""
 
 jlinalg_isa: Final[Literal["AVX2", "NEON", "generic"]]
-"""Active ISA name: "AVX2", "NEON", or "generic"."""
+"""SIMD ISA the extension was compiled for: "AVX2", "NEON", or "generic"."""
 
 blas_backend: Final[
     Literal[
@@ -98,6 +98,10 @@ def dsyrk(
 
     Returns:
         Symmetric result matrix, shape (N, N), float64.
+
+    Raises:
+        RuntimeError: If no vendor dsyrk is wired (blas_has_dsyrk == 0).
+            jamma.jlinalg binds the NumPy dsyrk in that case.
     """
 
 def eigh(

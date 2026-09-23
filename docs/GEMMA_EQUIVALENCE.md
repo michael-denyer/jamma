@@ -122,7 +122,7 @@ ILP64 for large matrices (>46k x 46k). See
 
 ## 4. REML Log-Likelihood
 
-Both compute (GEMMA: `LogRL_f`, JAMMA: `reml_log_likelihood`):
+Both compute (GEMMA: `LogRL_f`; JAMMA: the batched `likelihood_numpy` routines per SNP, with the scalar `reml_log_likelihood_alt` in `tests/reference/likelihood.py` as their reference):
 
 ```text
 l_REML(lambda) = c - 1/2 log|H| - 1/2 log|W'H^-1 W| - 1/2(n-c-1) log(P_yy)
@@ -181,8 +181,8 @@ original coarse bracket, and a smaller absolute score. This remains vectorized
 across SNPs in NumPy. MLE retains its existing golden-section optimizer.
 
 The eight committed reference roots are independently reproducible with
-`scripts/verify_reml_precision_oracle.py`. Tests compare generic NumPy, split
-NumPy, and native C at `5e-6` relative tolerance. These cases establish a
+`scripts/verify_reml_precision_oracle.py`. Tests compare NumPy and native C at
+`5e-6` relative tolerance. These cases establish a
 regression contract, not a universal error bound for arbitrarily ill-conditioned
 inputs. Neither the production tolerance nor the existing real-data test
 tolerances were widened.
@@ -241,7 +241,7 @@ Uses **null model lambda** (computed once, reused for all SNPs).
 ## 8. Likelihood Ratio Test
 
 Both compute the same formula (GEMMA: `CalcLRT`; JAMMA's production path is
-`_batch_lrt_pvalues_numpy` in `lmm/stats.py` and the C kernels, with
+`batch_lrt_pvalues_numpy` in `lmm/stats.py` and the C kernels, with
 `calc_lrt_test` in `tests/reference/stats.py` kept as a scalar reference for
 tests):
 
@@ -353,14 +353,14 @@ uv run python scripts/demonstrate_equivalence.py
 | `GetabIndex` | `get_ab_index` | lmm/pab.py |
 | `CalcUab` | `compute_Uab` | lmm/pab.py |
 | `CalcPab` | `calc_pab` | lmm/pab.py |
-| `LogRL_f` | `reml_log_likelihood` | lmm/likelihood.py |
-| `LogL_f` | `mle_log_likelihood` | lmm/likelihood.py |
+| `LogRL_f` | `reml_log_likelihood` (null model); `reml_log_likelihood_alt` (alternative model, scalar reference, tests only) | lmm/likelihood.py; tests/reference/likelihood.py |
+| `LogL_f` | `mle_log_likelihood` (null model) | lmm/likelihood.py |
 | `CalcLambda` | `golden_section_optimize_lambda_numpy` | lmm/likelihood_numpy.py |
 | `CalcRLWald` | `batch_calc_wald_stats_from_pab_numpy` (production); `calc_wald_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
 | `CalcRLScore` | `batch_calc_score_stats_numpy` (production); `calc_score_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
-| `CalcLRT` | `_batch_lrt_pvalues_numpy` (production); `calc_lrt_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
+| `CalcLRT` | `batch_lrt_pvalues_numpy` (production); `calc_lrt_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
 | `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`, scalar reference, tests only); `_f_to_pvalue` (production) | tests/reference/stats.py; lmm/stats.py |
-| `gsl_cdf_chisq_Q` | `chi2_sf` / `chi2_sf_batch` (erfc) | lmm/special.py |
+| `gsl_cdf_chisq_Q` | `chi2_sf_batch` (erfc, production); `chi2_sf` (scalar reference, tests only) | lmm/special.py; tests/reference/special.py |
 
 ---
 

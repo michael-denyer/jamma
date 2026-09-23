@@ -47,7 +47,7 @@
       "tier": "smoke",
       "path": "src/jamma/lmm/compute_numpy.py",
       "find": "    return result",
-      "replace": "    if lmm_mode == 4:\n        result[\"logls\"] = _compute_wald_numpy(\n            n_cvt, eigenvalues, Uab_batch, n_samples, l_min, l_max, n_grid, n_refine\n        )[\"logls\"]\n    return result",
+      "replace": "    if lmm_mode == 4:\n        result[\"logls\"] = compute_wald_numpy(\n            n_cvt, eigenvalues, Uab_batch, n_samples, l_min, l_max, n_grid, n_refine\n        )[\"logls\"]\n    return result",
       "detector": "tests/test_compute_numpy.py::test_compute_lmm_chunk_numpy_all_modes",
       "testcase": "test_compute_lmm_chunk_numpy_all_modes"
     },
@@ -95,7 +95,7 @@
       "id": "production-wrong-allele-orientation",
       "category": "emit the wrong allele orientation while preserving MAF",
       "tier": "smoke",
-      "path": "src/jamma/lmm/results.py",
+      "path": "src/jamma/lmm/assoc_output.py",
       "find": "    a1_list = snp_info.a1[snp_indices].tolist()\n    a0_list = snp_info.a0[snp_indices].tolist()",
       "replace": "    a1_list = snp_info.a0[snp_indices].tolist()\n    a0_list = snp_info.a1[snp_indices].tolist()",
       "detector": "tests/test_mathematical_mutations.py::test_tiny_wald_results_preserve_external_allele_orientation",
@@ -117,8 +117,8 @@
       "category": "force a lower-bound result against an interior reference",
       "tier": "slow",
       "path": "src/jamma/lmm/likelihood_numpy.py",
-      "find": "        n_cvt, lambdas_grid, eigenvalues, Uab_batch, Iab_batch",
-      "replace": "        n_cvt, np.full_like(lambdas_grid, l_min), eigenvalues, Uab_batch, Iab_batch",
+      "find": "_reml_logl(\n        *_batch_grid_pab_numpy(n_cvt, np.exp(log_lambdas), eigenvalues, Uab_batch),",
+      "replace": "_reml_logl(\n        *_batch_grid_pab_numpy(n_cvt, np.full_like(log_lambdas, l_min), eigenvalues, Uab_batch),",
       "detector": "tests/test_reml_refinement_contract.py::test_tiny_reml_peak_optimizer_matches_independent_root[numpy]",
       "testcase": "test_tiny_reml_peak_optimizer_matches_independent_root"
     }

@@ -1,9 +1,4 @@
-"""LMM dispatch-path selection.
-
-Pure derivation of which C kernel path the NumPy LMM runner should take,
-based on n_cvt, lmm_mode, and which optional C extension symbols are
-present at import time.
-"""
+"""LMM dispatch-path selection."""
 
 from __future__ import annotations
 
@@ -13,48 +8,33 @@ from typing import assert_never
 from loguru import logger
 
 from jamma.core.constants import n_index
-from jamma.lmm.schema import LmmMode
 
 
 class DispatchPath(Enum):
     """The one authoritative C-kernel dispatch decision for an LMM run.
 
-    Derived once by ``select_dispatch_path`` from ``(n_cvt, lmm_mode, accel)``
+    Derived once by ``select_dispatch_path`` from ``accel``
     and consulted per chunk. Exactly one member is active, so the
     contradictory flag combinations a multi-boolean form admits are
     unrepresentable and need no runtime guard. Every C path resolves the mode it runs
     from ``lmm_mode`` at workspace creation, in ``chunk_kernel.py``.
     """
 
-    NUMPY_FALLBACK = "numpy_fallback"  # not split: pure-NumPy full-Uab path
-    NUMPY_WALD = "numpy_wald"  # intercept-only Wald, split products
-    FUSED = "fused"  # n_cvt==1 fused Uab, any lmm_mode
-    FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab, any lmm_mode
+    NUMPY_FALLBACK = "numpy_fallback"
+    FUSED = "fused"  # C workspace, fused Uab, any n_cvt and lmm_mode
 
     @property
     def is_native(self) -> bool:
-        """True for the C workspace paths, which pipeline, own a C workspace,
-        and consume raw ``utg_t``.
-        """
-        return self in (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL)
-
-    @property
-    def needs_null_w(self) -> bool:
-        """True when the run needs the null-model ``w = UtW[:, 0]`` vector.
-
-        The fused Wald/mode-4 workspace packs it in at construction; the fused
-        Score/LRT kernels take it per call. Both consumers read the same vector,
-        so the chunk runner materialises it once for either.
+        """True for the C workspace path, which pipelines, owns a C workspace,
+        and consumes raw ``utg_t``.
         """
         return self is DispatchPath.FUSED
 
     def varying_rows(self, n_cvt: int) -> int:
         """Rows of ``n_samples`` float64 one SNP materialises beyond ``utg_t``."""
         match self:
-            case DispatchPath.FUSED | DispatchPath.FUSED_GENERAL:
+            case DispatchPath.FUSED:
                 return 0
-            case DispatchPath.NUMPY_WALD:
-                return 3
             case DispatchPath.NUMPY_FALLBACK:
                 return n_index(n_cvt)
             case _:
@@ -63,11 +43,7 @@ class DispatchPath(Enum):
     def iab_cells(self, n_cvt: int) -> int:
         """Per-SNP Iab float64 cells held alongside the varying rows."""
         match self:
-            case (
-                DispatchPath.FUSED
-                | DispatchPath.FUSED_GENERAL
-                | DispatchPath.NUMPY_WALD
-            ):
+            case DispatchPath.FUSED:
                 return 0
             case DispatchPath.NUMPY_FALLBACK:
                 return (n_cvt + 2) * n_index(n_cvt)
@@ -77,11 +53,7 @@ class DispatchPath(Enum):
     def invariant_rows(self, n_cvt: int) -> int:
         """Rows of ``n_samples`` the run holds once for the invariant Uab columns."""
         match self:
-            case (
-                DispatchPath.FUSED
-                | DispatchPath.FUSED_GENERAL
-                | DispatchPath.NUMPY_WALD
-            ):
+            case DispatchPath.FUSED:
                 return n_index(n_cvt) - (n_cvt + 2)
             case DispatchPath.NUMPY_FALLBACK:
                 return 0
@@ -89,85 +61,23 @@ class DispatchPath(Enum):
                 assert_never(self)
 
 
-def select_dispatch_path(
-    n_cvt: int,
-    lmm_mode: LmmMode,
-    *,
-    accel: bool,
-    log_choices: bool = True,
-) -> DispatchPath:
-    """Derive the single active C kernel path for this run.
-
-    Resolved directly: each branch returns the path it selects rather than
-    setting a flag for a later ladder to re-interpret. Reading top to bottom
-    gives the whole decision, and the priorities (fused beats the split mode-4
-    kernel; a workspace Score/LRT variant beats its stateless twin) are the
-    order of the returns.
+def select_dispatch_path(*, accel: bool) -> DispatchPath:
+    """Derive the single active kernel path for this run.
 
     Args:
-        n_cvt: Number of covariates (intercept counts as 1).
-        lmm_mode: 1=Wald, 2=LRT, 3=Score, 4=All.
         accel: Whether the C extension is loaded. One bit, because the
             ABI-equality gate admits all of ``methods[]`` or none of it.
-        log_choices: If True, emit debug logs describing the chosen path. Off
-            in unit tests to keep output clean.
 
     Returns:
         The single active ``DispatchPath`` for this run.
     """
-    path = _resolve_dispatch_path(n_cvt, lmm_mode, accel)
-    if log_choices:
-        _log_dispatch_choice(path, n_cvt, lmm_mode)
+    path = DispatchPath.FUSED if accel else DispatchPath.NUMPY_FALLBACK
+    message = _PATH_LOG_MESSAGES.get(path)
+    if message is not None:
+        logger.debug(message)
     return path
 
 
-def _resolve_dispatch_path(n_cvt: int, lmm_mode: LmmMode, accel: bool) -> DispatchPath:
-    """Map ``(n_cvt, lmm_mode, accel)`` to a path. Pure, no logging."""
-    if lmm_mode not in (1, 2, 3, 4):
-        raise ValueError(
-            f"lmm_mode must be 1 (Wald), 2 (LRT), 3 (Score), or 4 (All), got {lmm_mode}"
-        )
-
-    if not accel:
-        return (
-            DispatchPath.NUMPY_WALD
-            if n_cvt == lmm_mode == 1
-            else DispatchPath.NUMPY_FALLBACK
-        )
-
-    # n_cvt > MAX_C_N_CVT resolves to a C path here and is rejected by the
-    # kernel itself, which raises "n_cvt must be 1..100". There used to be a
-    # Python guard further down in compute_numpy that fell back instead, but it
-    # sat inside _compute_wald_numpy, which the runner reaches only when the
-    # extension is absent, so it never ran.
-
-    if n_cvt >= 2:
-        return DispatchPath.FUSED_GENERAL
-
-    return DispatchPath.FUSED
-
-
 _PATH_LOG_MESSAGES = {
-    DispatchPath.FUSED: (
-        "Fused Uab path active: utg_t passed directly to C workspace "
-        "(eliminates uab_varying_soa buffer)"
-    ),
-    DispatchPath.FUSED_GENERAL: (
-        "Fused general Uab path active: utg_t passed directly to C workspace"
-    ),
+    DispatchPath.FUSED: "Fused Uab path active: utg_t passed directly to C workspace",
 }
-
-
-def _log_dispatch_choice(path: DispatchPath, n_cvt: int, lmm_mode: LmmMode) -> None:
-    """Debug-log the chosen path. Pure side-effect."""
-    message = _PATH_LOG_MESSAGES.get(path)
-    if message is not None:
-        logger.debug(f"{message} (n_cvt={n_cvt}, mode={lmm_mode})")
-
-    if lmm_mode != 4:
-        return
-
-    if path is DispatchPath.FUSED_GENERAL:
-        logger.debug("Mode-4 dispatch: fused general Uab kernel (single pass)")
-    elif path is DispatchPath.FUSED:
-        logger.debug("Mode-4 dispatch: fused Uab kernel (single pass)")

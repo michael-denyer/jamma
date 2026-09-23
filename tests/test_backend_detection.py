@@ -8,8 +8,8 @@ from unittest.mock import patch
 import pytest
 
 from jamma.lmm.association_plan import ExecutionPlan, plan_association
-from tests.conftest import requires_c
 from tests.fixture_paths import LOCO
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -72,8 +72,8 @@ class TestExecutionMode:
     def test_loco_selects_loco_mode_whatever_was_requested(self):
         """loco=True plans the loco mode and prices one chunk, not the matrix."""
         with _pin_ram(AMPLE_GB):
-            loco = plan_association(*OVERFLOWS_SHAPE, loco=True)
-            batch = plan_association(*OVERFLOWS_SHAPE, requested="numpy")
+            loco = plan_association(*OVERFLOWS_SHAPE, backend="loco")
+            batch = plan_association(*OVERFLOWS_SHAPE, backend="numpy")
         assert loco.summary.mode == "loco"
         assert loco.summary.runner_name == "numpy-loco"
         assert (
@@ -92,7 +92,7 @@ class TestExecutionMode:
     def test_explicit_numpy_returns_numpy_batch(self):
         """explicit 'numpy' -> numpy-batch regardless of memory."""
         with _pin_ram(AMPLE_GB):
-            plan = _select_mode(*OVERFLOWS_SHAPE, requested="numpy")
+            plan = _select_mode(*OVERFLOWS_SHAPE, backend="numpy")
         assert plan.mode == "batch"
 
     def test_explicit_numpy_bypasses_auto(self):
@@ -107,7 +107,7 @@ class TestExecutionMode:
     @requires_c
     def test_explicit_numpy_streaming_returns_numpy_streaming(self):
         """explicit 'numpy-streaming' -> numpy-streaming directly."""
-        plan = _select_mode(100, 1000, requested="numpy-streaming")
+        plan = _select_mode(100, 1000, backend="numpy-streaming")
         assert plan.mode == "streaming"
 
     def test_explicit_numpy_streaming_no_c_ext_selects_streaming(self):
@@ -116,7 +116,7 @@ class TestExecutionMode:
         Streaming is a storage policy and works without the extension.
         """
         with patch("jamma.lmm.accel._accel", None):
-            plan = _select_mode(100, 1000, requested="numpy-streaming")
+            plan = _select_mode(100, 1000, backend="numpy-streaming")
         assert plan.mode == "streaming"
 
     @pytest.mark.tier1
@@ -141,12 +141,12 @@ class TestExecutionMode:
     def test_invalid_requested_backend_raises(self):
         """Unknown requested backend raises ValueError."""
         with pytest.raises(ValueError, match="Unknown backend"):
-            _select_mode(100, 1000, requested="gpu")  # type: ignore[bad-argument-type]
+            _select_mode(100, 1000, backend="gpu")  # type: ignore[bad-argument-type]
 
     def test_jax_requested_raises(self):
         """Requesting 'jax' backend raises ValueError (removed backend)."""
         with pytest.raises(ValueError, match="Unknown backend"):
-            _select_mode(100, 1000, requested="jax")  # type: ignore[bad-argument-type]
+            _select_mode(100, 1000, backend="jax")  # type: ignore[bad-argument-type]
 
     # -- ExecutionPlan invariants --
 
@@ -206,27 +206,30 @@ class TestExecutionMode:
     def test_batch_quote_prices_the_selected_dispatch_path(self):
         """plan_association prices the Uab/Iab batch its dispatch path holds.
 
-        n_cvt=4 with the extension loaded selects FUSED_GENERAL, whose C
-        workspace forms Uab in place, so the quote charges no Uab/Iab buffer.
+        n_cvt=4 with the extension loaded selects FUSED, whose C
+        workspace forms Uab in place, so the quote charges no Uab/Iab buffer:
+        with the kernel workspace emptied, U, the genotypes, and the rotation
+        buffers are the whole quote.
         """
-        calls = []
+        from dataclasses import replace
 
-        def capturing_estimate(n_samples, n_snps, **kwargs):
-            calls.append(kwargs)
-            return 1.0
+        from jamma.core.memory import array_gb
+        from jamma.lmm.dispatch import DispatchPath
+        from tests.builders import empty_workspace
 
-        with (
-            _pin_ram(AMPLE_GB),
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                side_effect=capturing_estimate,
-            ),
-        ):
-            _select_mode(1000, 10000, n_cvt=4)
+        n_samples, n_snps = 1000, 10000
+        with _pin_ram(AMPLE_GB):
+            plan = plan_association(n_samples, n_snps, n_cvt=4)
 
-        assert calls, "estimate_lmm_memory was never called"
-        assert all(c["uab_iab_gb"] == 0.0 for c in calls), (
-            f"FUSED_GENERAL must be quoted with no Uab/Iab batch; calls={calls}"
+        assert plan.dispatch is DispatchPath.FUSED
+        chunks = plan.conservative_chunks
+        bare = replace(
+            plan, workspace=empty_workspace(plan.dispatch, n_samples, n_samples, 4)
+        )
+        assert bare.price(eigen=None).association_gb == pytest.approx(
+            array_gb(n_samples, n_samples)
+            + array_gb(n_samples, n_snps)
+            + chunks.n_buffers * array_gb(n_samples, chunks.chunk_size)
         )
 
     def test_no_c_general_falls_to_numpy_batch_for_n_cvt_gt1(self):

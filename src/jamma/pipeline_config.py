@@ -17,10 +17,11 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 
+from jamma.lmm.assoc_output import AssocResult
+from jamma.lmm.association_plan import VALID_BACKENDS, BackendRequest
 from jamma.lmm.schema import (
     DEFAULT_L_MAX,
     DEFAULT_L_MIN,
@@ -30,13 +31,55 @@ from jamma.lmm.schema import (
     DEFAULT_N_REFINE,
     ChunkRunStats,
     LmmConfig,
-    PipelineTiming,
     parse_lmm_mode,
 )
-from jamma.lmm.stats import AssocResult
 
-BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
-VALID_BACKENDS: tuple[BackendRequest, ...] = ("auto", "numpy", "numpy-streaming")
+
+@dataclass
+class PipelineTiming:
+    """Timing breakdown from pipeline execution.
+
+    All fields default to 0.0; fields from the runner are merged at
+    pipeline exit.
+
+    Attributes:
+        kinship_s: Kinship load/compute time (seconds).
+        load_s: Total data loading time through kinship (seconds).
+        lmm_s: LMM association runtime (seconds).
+        total_s: Total pipeline wall time (seconds).
+        rotation_s: UT@G rotation time from the runner (seconds).
+    """
+
+    kinship_s: float = 0.0
+    load_s: float = 0.0
+    lmm_s: float = 0.0
+    total_s: float = 0.0
+    rotation_s: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ProvidedEigen:
+    eigenvalue_file: Path
+    eigenvector_file: Path
+    ignored_kinship_file: Path | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProvidedKinship:
+    path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class GenotypeKinship:
+    """Whole-genome kinship computed from the genotypes."""
+
+
+@dataclass(frozen=True, slots=True)
+class LocoKinship:
+    eigen_dir: Path | None
+
+
+AnalysisSource = ProvidedEigen | ProvidedKinship | GenotypeKinship | LocoKinship
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,9 +132,10 @@ class PipelineConfig:
             categorical. JAMMA-specific feature (not GEMMA's -cat which is
             for SNP categories in VC mode). Columns are one-hot encoded with
             the first sorted level dropped as reference.
-        backend: Compute backend selection: "auto" (default) or "numpy".
-            "auto" selects based on C extension availability and memory.
-            "numpy" forces the pure-NumPy backend.
+        backend: Compute backend selection: "auto" (default), "numpy", or
+            "numpy-streaming". "auto" selects based on C extension availability
+            and memory. "numpy" forces the batch runner, and "numpy-streaming"
+            the runner that streams genotypes from disk.
         legacy_text: If True, write kinship and eigen files in GEMMA text format
             (.cXX.txt / .eigenD.txt / .eigenU.txt) instead of binary .npy.
             Default False writes binary for performance at scale.
@@ -206,13 +250,12 @@ class PipelineConfig:
                 "(-n with multiple columns). "
                 "Run each phenotype separately."
             )
-        # LOCO writes a per-chromosome eigen cache keyed by eigen_dir. When the
-        # caller asks to write eigen but gives no directory, default it to
-        # output_dir so the Python API matches the CLI (which applies the same
-        # default) instead of raising in run_lmm_loco. The non-LOCO write_eigen
-        # path writes to output_dir directly and never consults eigen_dir.
+        # LOCO writes a per-chromosome eigen cache keyed by eigen_dir; without
+        # a directory it lands in output_dir. The non-LOCO write_eigen path
+        # writes to output_dir directly and never consults eigen_dir.
         if self.loco and self.write_eigen and self.eigen_dir is None:
             object.__setattr__(self, "eigen_dir", self.output_dir)
+        self.source()
 
     @property
     def log_path(self) -> Path:
@@ -227,6 +270,53 @@ class PipelineConfig:
         """Create the output directory if it doesn't exist."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def source(self) -> AnalysisSource:
+        """Parse the kinship and eigen fields into the one source they name.
+
+        Returns:
+            The eigen files, kinship file, genotype kinship, or LOCO kinship
+            the run reads.
+
+        Raises:
+            ValueError: If the kinship, eigen, weight, and LOCO fields
+                combine illegally.
+        """
+        d, u = self.eigenvalue_file, self.eigenvector_file
+        if self.loco and self.kinship_file is not None:
+            raise ValueError(
+                "-k and -loco are mutually exclusive in this version. "
+                "LOCO computes kinship internally."
+            )
+        if (d is None) != (u is None):
+            raise ValueError(
+                "Both -d (eigenvalues) and -u (eigenvectors) must be provided together"
+            )
+        if d is not None and self.loco:
+            raise ValueError(
+                "-d/-u (pre-computed eigen) not supported with -loco mode. "
+                "Use --eigen-dir for per-chromosome eigen caching."
+            )
+        if self.weight_file is not None and self.loco:
+            raise ValueError(
+                "-widv (individual weights) is not yet supported with -loco mode. "
+                "Apply weights to pre-computed kinship and use -k instead."
+            )
+        if self.weight_file is not None and d is not None:
+            raise ValueError(
+                "-widv (individual weights) cannot be used with -d/-u "
+                "(pre-computed eigen). "
+                "Weights must be applied to kinship before eigendecomposition."
+            )
+        if self.loco:
+            return LocoKinship(self.eigen_dir)
+        if self.eigen_dir is not None:
+            raise ValueError("--eigen-dir is only supported with -loco mode")
+        if d is not None and u is not None:
+            return ProvidedEigen(d, u, self.kinship_file)
+        if self.kinship_file is not None:
+            return ProvidedKinship(self.kinship_file)
+        return GenotypeKinship()
+
     def lmm_config(self, *, check_memory: bool = False) -> LmmConfig:
         """Project the LMM knobs onto the config the runners take.
 
@@ -239,11 +329,6 @@ class PipelineConfig:
 
         Args:
             check_memory: Whether the runner should run its own memory gate.
-                Defaults to False for the batch and streaming paths, where
-                PipelineRunner._memory_preflight has already gated and
-                re-checking would double-count. The LOCO path returns before
-                that preflight and owns its per-chromosome estimate, so it
-                passes the caller's flag through.
 
         Returns:
             LmmConfig carrying this config's optimizer and filter knobs.
@@ -288,50 +373,65 @@ class PhenotypeResult:
 class PipelineResult:
     """Result of a pipeline run.
 
+    Every per-phenotype aggregate is derived from ``phenotype_results``, so a
+    new per-phenotype field needs adding in one place.
+
     Attributes:
-        associations: Per-SNP association results. Empty when results are
-            written to disk via output_path.
+        phenotype_results: One result record per phenotype, in column order,
+            including its output, count, PVE estimate, and chunk timing.
         n_samples: Number of samples after phenotype and covariate filtering.
-        n_snps_tested: Number of SNPs tested after MAF/missingness/HWE/SNP-list
-            filtering.
-        assoc_path: Path to the written association results file. For multi-phenotype
-            runs, this is the last phenotype's output file. Use assoc_paths for
-            the full list.
-        assoc_paths: List of all per-phenotype association result paths. For
-            single-phenotype runs, this is a single-element list matching assoc_path.
-        phenotype_results: One result record per phenotype, including its output,
-            count, PVE estimate, and chunk timing.
         timing: Timing breakdown by pipeline phase (seconds).
         n_covariates: Number of covariate columns (1 = intercept-only).
-        pve_estimate: PVE from the single phenotype's null model REML. None for
-            multi-phenotype runs; use phenotype_results for those estimates.
-        pve_se: Standard error of PVE from REML second derivative delta method.
-            None if not computed or likelihood surface is flat.
         analyzed_sample_indices: Zero-based input sample indices retained after
             phenotype and covariate filtering, in analysis order.
     """
 
-    associations: list[AssocResult]
+    phenotype_results: list[PhenotypeResult]
     n_samples: int
-    n_snps_tested: int
-    assoc_path: Path
-    assoc_paths: list[Path] = field(default_factory=list)
     timing: PipelineTiming = field(default_factory=PipelineTiming)
     n_covariates: int = 1
-    pve_estimate: float | None = None
-    pve_se: float | None = None
-    phenotype_results: list[PhenotypeResult] = field(default_factory=list)
     analyzed_sample_indices: np.ndarray = field(
         default_factory=lambda: np.array([], dtype=np.intp)
     )
+
+    @property
+    def associations(self) -> list[AssocResult]:
+        """Per-SNP results of every phenotype. Empty when written to disk."""
+        return [a for p in self.phenotype_results for a in p.associations]
+
+    @property
+    def n_snps_tested(self) -> int:
+        """SNPs tested after MAF, missingness, HWE and SNP-list filtering."""
+        return sum(p.n_snps_tested for p in self.phenotype_results)
+
+    @property
+    def assoc_path(self) -> Path:
+        """The last phenotype's output file; ``assoc_paths`` lists them all."""
+        return self.phenotype_results[-1].assoc_path
+
+    @property
+    def assoc_paths(self) -> list[Path]:
+        """Every phenotype's output file, in column order."""
+        return [p.assoc_path for p in self.phenotype_results]
+
+    @property
+    def pve_estimate(self) -> float | None:
+        """The single phenotype's REML PVE, or None for multi-phenotype runs."""
+        return self._single.pve_estimate if self._single is not None else None
+
+    @property
+    def pve_se(self) -> float | None:
+        """Standard error of ``pve_estimate``, or None when it has none."""
+        return self._single.pve_se if self._single is not None else None
+
+    @property
+    def _single(self) -> PhenotypeResult | None:
+        return self.phenotype_results[0] if len(self.phenotype_results) == 1 else None
 
 
 @dataclass
 class KinshipResult:
     """Outcome of a kinship computation (the ``-gk`` path).
-
-    Returned by ``PipelineRunner.compute_kinship`` so the CLI can write its
-    GEMMA log and summary without owning the compute/write orchestration.
 
     Attributes:
         kinship_paths: Written kinship matrix paths. One entry for a standard

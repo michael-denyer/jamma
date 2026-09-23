@@ -1,15 +1,11 @@
 """OpenMP detection for C extension compilation.
 
-Canonical location: consumed by hatch_build.py (PEP 517 wheel build
-backend), src/jamma/jlinalg/_compile_jlinalg.py (dev-mode + runtime
-recompile), and src/jamma/lmm/_compile_accel.py (dev-mode + runtime
-recompile). Ships inside the installed package as
+Ships inside the installed package as
 ``jamma._build_support.openmp_detect``. hatch_build.py loads this module
 via ``importlib.util.spec_from_file_location`` under the distinct
-namespace ``jamma_build_support.openmp_detect`` — see the comment block
-at hatch_build.py:28-40 — because the package is not yet installed at
-wheel-build time and a regular import would pull in the full jamma
-runtime (loguru, numpy, ...).
+namespace ``jamma_build_support.openmp_detect`` because the package is
+not yet installed at wheel-build time and a regular import would pull in
+the full jamma runtime (loguru, numpy, ...).
 
 The core problem: MKL-backed numpy bundles Intel OpenMP (libiomp5).  Two
 failure modes exist when compiling C extensions with OpenMP on such systems:
@@ -34,8 +30,11 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .build_models import BuildReport
 
 _LIBIOMP5_SHARED_NAME = re.compile(r"^libiomp5(?:-[0-9a-fA-F]{6,})?\.so(?:\.[0-9]+)*$")
 
@@ -75,17 +74,15 @@ def openmp_disabled_by_env() -> bool:
 def detect_openmp_flags(
     cc_cmd: str,
     system: str,
-    _print: Callable[..., None] = print,
-    _warn: Callable[..., None] | None = None,
+    report: BuildReport,
 ) -> tuple[list[str], list[str], str]:
     """Detect OpenMP compile and link flags for the current platform.
 
     Args:
         cc_cmd: C compiler command name (e.g. "gcc", "cc").
         system: Platform name from ``platform.system()`` ("Linux" or "Darwin").
-        _print: Print function for verbose output.
-        _warn: Print function for warnings that must always be shown.
-            Defaults to ``_print`` if not provided.
+        report: Output channel; probe progress goes to ``detail`` and unsafe
+            OpenMP setups to ``warn``.
 
     Returns:
         ``(compile_flags, link_flags, cc_override)`` for OpenMP, or
@@ -93,22 +90,20 @@ def detect_openmp_flags(
         from *cc_cmd* when the detector switches to clang for libiomp5
         compatibility (see ``_detect_linux_openmp_flags``).
     """
-    if _warn is None:
-        _warn = _print
     if openmp_disabled_by_env():
-        _print(
+        report.detail(
             "OpenMP disabled (JAMMA_NO_OPENMP set). "
             "C extensions will be single-threaded."
         )
         return ([], [], cc_cmd)
     if system == "Darwin":
-        cflags, lflags = _detect_darwin_openmp_flags(_print)
+        cflags, lflags = _detect_darwin_openmp_flags(report)
         return (cflags, lflags, cc_cmd)
-    return _detect_linux_openmp_flags(cc_cmd, _print, _warn)
+    return _detect_linux_openmp_flags(cc_cmd, report)
 
 
 def _detect_darwin_openmp_flags(
-    _print: Callable[..., None],
+    report: BuildReport,
 ) -> tuple[list[str], list[str]]:
     """Detect OpenMP via Homebrew libomp on macOS."""
     try:
@@ -120,7 +115,7 @@ def _detect_darwin_openmp_flags(
         )
         if result.returncode != 0:
             stderr = result.stderr.strip()
-            _print(
+            report.detail(
                 "OpenMP not available (brew --prefix libomp failed, "
                 f"exit code {result.returncode}): {stderr or '<no stderr>'}. "
                 "Extension will be single-threaded. "
@@ -130,24 +125,24 @@ def _detect_darwin_openmp_flags(
         prefix = result.stdout.strip()
         lib_dir = Path(prefix) / "lib"
         if lib_dir.is_dir():
-            _print(f"OpenMP: Homebrew libomp at {prefix}")
+            report.detail(f"OpenMP: Homebrew libomp at {prefix}")
             return (
                 [f"-I{prefix}/include", "-Xpreprocessor", "-fopenmp"],
                 [f"-L{prefix}/lib", "-lomp"],
             )
-        _print(
+        report.detail(
             f"OpenMP: Homebrew prefix {prefix} exists but lib/ not found. "
             "Extension will be single-threaded. "
             "Install for parallelism: brew install libomp"
         )
     except FileNotFoundError:
-        _print(
+        report.detail(
             "OpenMP not available (brew not found on PATH). "
             "Extension will be single-threaded. "
             "Install for parallelism: brew install libomp"
         )
     except subprocess.TimeoutExpired:
-        _print(
+        report.detail(
             "OpenMP not available (brew --prefix libomp timed out after 10s — "
             "stuck brew install?). Extension will be single-threaded."
         )
@@ -156,8 +151,7 @@ def _detect_darwin_openmp_flags(
 
 def _detect_linux_openmp_flags(
     cc_cmd: str,
-    _print: Callable[..., None],
-    _warn: Callable[..., None] | None = None,
+    report: BuildReport,
 ) -> tuple[list[str], list[str], str]:
     """Detect the best OpenMP flags for Linux.
 
@@ -178,20 +172,18 @@ def _detect_linux_openmp_flags(
     2. libiomp5 via system paths → prefer clang, fallback to GCC
     3. libgomp (GNU OpenMP) → standard fallback via -fopenmp
     """
-    if _warn is None:
-        _warn = _print
-    libiomp5_path = _find_libiomp5(_print)
+    libiomp5_path = _find_libiomp5(report)
     if libiomp5_path is not None:
-        return _openmp_flags_for_libiomp5(cc_cmd, libiomp5_path, _print, _warn)
+        return _openmp_flags_for_libiomp5(cc_cmd, libiomp5_path, report)
 
     # Fallback to GNU OpenMP (libgomp). Safe to use -fopenmp for both
     # compile and link on systems without libiomp5. Surface this via
-    # _warn, not _print: on an MKL-backed numpy box where libiomp5 was
+    # warn, not detail: on an MKL-backed numpy box where libiomp5 was
     # expected but the detector missed it (unusual install layout),
     # silently linking libgomp produces dual-runtime crashes at runtime
     # ("OMP: Error #15"). An always-visible log line lets the user catch
     # this before they deploy.
-    _warn(
+    report.warn(
         f"OpenMP: using GNU libgomp via -fopenmp ({cc_cmd}). If this is "
         "an MKL-backed numpy environment, libiomp5 should have been "
         "detected — missing it risks dual OpenMP runtime crashes."
@@ -199,9 +191,7 @@ def _detect_linux_openmp_flags(
     return (["-fopenmp"], ["-fopenmp"], cc_cmd)
 
 
-def _find_libiomp5(
-    _print: Callable[..., None],
-) -> Path | None:
+def _find_libiomp5(report: BuildReport) -> Path | None:
     """Locate libiomp5.so — first in numpy's bundled libs, then system-wide."""
     try:
         import numpy as np
@@ -217,14 +207,14 @@ def _find_libiomp5(
                 continue
             lib = _libiomp5_candidate(d)
             if lib is not None:
-                _print(f"Intel OpenMP found: {lib}")
+                report.detail(f"Intel OpenMP found: {lib}")
                 return lib
     except ImportError as e:
         # numpy failing to import during a probe is itself a signal — an
         # ILP64 ABI mismatch is exactly what runtime recompile exists to fix,
         # and silently skipping to the system-path fallback can pick up a
         # mismatched libiomp5. Log so post-mortems can see the miss.
-        _print(
+        report.detail(
             f"libiomp5 probe: numpy import failed ({e}); "
             "falling through to system paths"
         )
@@ -235,7 +225,7 @@ def _find_libiomp5(
             continue
         lib = _libiomp5_candidate(search_dir)
         if lib is not None:
-            _print(f"Intel OpenMP found (system): {lib}")
+            report.detail(f"Intel OpenMP found (system): {lib}")
             return lib
 
     return None
@@ -244,8 +234,7 @@ def _find_libiomp5(
 def _openmp_flags_for_libiomp5(
     cc_cmd: str,
     libiomp5_path: Path,
-    _print: Callable[..., None],
-    _warn: Callable[..., None] | None = None,
+    report: BuildReport,
 ) -> tuple[list[str], list[str], str]:
     """Build OpenMP flags for linking against a specific libiomp5.
 
@@ -293,27 +282,27 @@ def _openmp_flags_for_libiomp5(
             # compiler (TimeoutExpired) must not crash detection — the whole
             # point of this probe is to decide whether to use clang. Fall
             # through to the GCC+libiomp5 path.
-            _print(
+            report.detail(
                 f"clang found but probe failed ({type(e).__name__}: {e}); "
                 "falling back to GCC"
             )
         else:
             if result.returncode == 0:
-                _print(
+                report.detail(
                     f"Using clang ({clang_path}) for libiomp5 compatibility "
                     f"(avoids GCC GOMP shim assertion failures)"
                 )
                 return (["-fopenmp"], link_flags, clang_path)
-            _print(f"clang found but OpenMP test failed: {result.stderr.strip()}")
+            report.detail(
+                f"clang found but OpenMP test failed: {result.stderr.strip()}"
+            )
 
     # Fallback to GCC — compile with -fopenmp (generates GOMP_* calls),
     # link against libiomp5 by full path.  This relies on libiomp5's GOMP
     # compatibility shim, which may trigger assertion failures after MKL
     # LAPACK operations on some systems.
-    # Use _warn (always-visible) instead of _print (verbose-only) since
-    # this is a known-crashy configuration.
-    warn_fn = _warn if _warn is not None else _print
-    warn_fn(
+    # warn (always visible), not detail: this is a known-crashy configuration.
+    report.warn(
         f"WARNING: Using {cc_cmd} with libiomp5 — GCC's GOMP compatibility "
         f"shim may cause assertion failures after MKL LAPACK calls.  "
         f"Install clang to avoid this: apt-get install clang"

@@ -210,6 +210,12 @@ repos:
         language: system
         files: ^tests/.*\.py$
         pass_filenames: false
+      - id: check-test-markers
+        name: require a tier marker on every test and reject path-hiding skips
+        entry: scripts/check_test_markers.py
+        language: system
+        files: ^tests/.*\.py$
+        pass_filenames: false
       # docs/CODEMAP.md navigates the tree with ~120 `file.py#Lnnn` links.
       # Nothing kept those line numbers honest and 53 of them had rotted by
       # 7.2.0 — lychee and markdownlint both pass, because the *file*

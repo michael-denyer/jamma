@@ -11,12 +11,13 @@ import pytest
 
 from jamma.core import memory
 from jamma.core import threading as core_threading
-from jamma.core.eigen_plan import plan_eigen_driver
 from jamma.kinship.loco import loco_retained_set
 from jamma.lmm.eigen import center_kinship, eigendecompose_kinship_in_scope
+from jamma.lmm.eigen_plan import plan_eigen_driver
 from jamma.lmm.loco_config import LocoConfig
 from jamma.lmm.loco_eigen import _computed_eigen_pairs
 from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs
+from jamma.lmm.schema import LmmConfig
 from tests.fakes.blas import fake_blas_controller
 
 pytestmark = pytest.mark.tier0
@@ -120,23 +121,17 @@ def test_reused_stream_buffer_is_copied_and_inputs_stay_bounded(monkeypatch):
         100,
         has_dsyevd=False,
         has_dsyevr=False,
-        no_vendor=True,
-        inplace_eligible=False,
+        forced_numpy=True,
+        inplace_blocker="K is not C-contiguous",
     )
     pairs = _computed_eigen_pairs(
         stream(),
-        names,
-        valid_mask=np.ones(16, dtype=bool),
-        n_valid=16,
-        pre_subset=True,
-        all_samples_valid=True,
-        partitions={name: np.arange(1) for name in names},
-        check_memory=False,
-        show_progress=False,
+        {name: np.arange(1) for name in names},
+        subset_rows=None,
+        config=LmmConfig(check_memory=False, show_progress=False),
         loco=LocoConfig(),
         cache_write=None,
         eigen_plan=plan,
-        mem_budget=None,
         workers=3,
         solve=solve,
     )
@@ -180,8 +175,8 @@ def test_worker_accounting_charges_each_in_flight_driver_peak_once(
         100,
         has_dsyevd=has_dsyevd,
         has_dsyevr=has_dsyevr,
-        no_vendor=no_vendor,
-        inplace_eligible=inplace,
+        forced_numpy=no_vendor,
+        inplace_blocker=None if inplace else "K is not C-contiguous",
     )
     plan = plan_loco_workers(
         3,
@@ -204,8 +199,8 @@ def test_worker_plan_preserves_strict_ram_tie_and_inclusive_user_budget():
         100,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
     )
     peak = retained.while_consuming_gb + 2 * eigen.required_gb
 

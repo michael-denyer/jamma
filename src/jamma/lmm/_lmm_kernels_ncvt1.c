@@ -7,11 +7,10 @@
 
 #include "_lmm_kernels_ncvt1.h"
 
-/* wald_from_pab and score_from_pab live with the other statistic extractors
- * in _lmm_stats.c; the optimizers call them once per SNP on convergence. */
 #include "_lmm_stats.h"
 /* logdet_h_lambda: the logdet(H) term every REML and MLE evaluation needs. */
 #include "_lmm_logdet.h"
+#include "_lmm_lambda_search.h"
 
 #include <math.h>
 #include <float.h>
@@ -26,9 +25,7 @@ static inline double reml_finish(
     double reml_const
 )
 {
-    double logdet_pab = 0.0;
-    if (pab[0][0] > 0.0) logdet_pab += log(pab[0][0]);
-    if (pab[1][3] > 0.0) logdet_pab += log(pab[1][3]);
+    double logdet_pab = logdet_diag_term(pab[0][0]) + logdet_diag_term(pab[1][3]);
     double logdet_hiw = logdet_pab - logdet_iab;
 
     double P_yy = replace_zero_p_yy(pab[2][5]);
@@ -72,8 +69,7 @@ static inline double reml_finish_cached_split(
     double reml_const
 )
 {
-    double logdet_pab = ginv->log_s_ww;
-    if (pab[1][3] > 0.0) logdet_pab += log(pab[1][3]);
+    double logdet_pab = ginv->log_s_ww + logdet_diag_term(pab[1][3]);
     double logdet_hiw = logdet_pab - logdet_iab;
 
     double P_yy = replace_zero_p_yy(pab[2][5]);
@@ -99,21 +95,20 @@ static inline double reml_finish_cached_split(
  * its own buffer to read the Pab this call computed for Wald extraction,
  * without a second n_samples pass.
  * ------------------------------------------------------------------------- */
-double reml_logl_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    double logdet_iab,
-    int n_samples,
+static double reml_logl_ncvt1_split(
+    const ncvt1_snp_t *snp,
     double lambda,
-    double reml_const,
     double (*pab_out)[6]
 )
 {
+    const double * restrict var_wx = snp->var_wx;
+    const double * restrict var_xx = snp->var_xx;
+    const double * restrict var_xy = snp->var_xy;
+    const double * restrict inv_ww = snp->inv_ww;
+    const double * restrict inv_wy = snp->inv_wy;
+    const double * restrict inv_yy = snp->inv_yy;
+    const double * restrict eigenvalues = snp->eigenvalues;
+    int n_samples = snp->n_samples;
     int df = n_samples - 2;
 
     /* Fused: hi_eval + all 6 dot products in a single pass. logdet_h is a
@@ -147,15 +142,25 @@ double reml_logl_ncvt1_split(
 
     if (pab_out) memcpy(pab_out, pab, sizeof(pab));
 
-    return reml_finish(pab, logdet_h, logdet_iab, df, reml_const);
+    return reml_finish(pab, logdet_h, snp->logdet_iab, df, snp->reml_const);
 }
 
-static double reml_score_loglambda_ncvt1_split(
-    const double * restrict var_wx, const double * restrict var_xx,
-    const double * restrict var_xy, const double * restrict inv_ww,
-    const double * restrict inv_wy, const double * restrict inv_yy,
-    const double * restrict eigenvalues, int n_samples, double lambda)
+static double reml_objective_ncvt1(const void *ctx, double lambda)
 {
+    return reml_logl_ncvt1_split((const ncvt1_snp_t *)ctx, lambda, NULL);
+}
+
+static double reml_score_loglambda_ncvt1(const void *ctx, double lambda)
+{
+    const ncvt1_snp_t *snp = (const ncvt1_snp_t *)ctx;
+    const double * restrict var_wx = snp->var_wx;
+    const double * restrict var_xx = snp->var_xx;
+    const double * restrict var_xy = snp->var_xy;
+    const double * restrict inv_ww = snp->inv_ww;
+    const double * restrict inv_wy = snp->inv_wy;
+    const double * restrict inv_yy = snp->inv_yy;
+    const double * restrict eigenvalues = snp->eigenvalues;
+    int n_samples = snp->n_samples;
     double s[6] = {0}, ds[6] = {0}, cs[6] = {0}, cds[6] = {0};
     double trace = 0.0, ctrace = 0.0;
     for (int i = 0; i < n_samples; i++) {
@@ -205,35 +210,18 @@ static double reml_score_loglambda_ncvt1_split(
 /* -------------------------------------------------------------------------
  * refine_lambda_ncvt1_split
  *
- * Golden section refinement using a caller-selected split-Uab coarse bracket.
- *
- * SoA layout: var_wx/xx/xy and inv_ww/wy/yy are contiguous (stride-1).
- *
- * The final evaluation fuses REML logl + Wald stats in a single pass,
- * eliminating a redundant n_samples traversal per SNP.
+ * REML lambda from the caller's coarse-grid index.
  * ------------------------------------------------------------------------- */
 double refine_lambda_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    double logdet_iab,
-    int n_samples,
-    const double *lambda_grid,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
+    const ncvt1_snp_t *snp,
+    const lambda_search_t *search,
     int best_idx,
-    int df, double reml_const,
+    int df,
     double *logl_out,
     double *beta_out, double *se_out, double *f_stat_out,
     int *is_valid_out
 )
 {
-    const double phi = 0.6180339887498949;
-
     /* Every grid point produced NaN — fully degenerate SNP. */
     if (best_idx < 0) {
         *logl_out    = (double)NAN;
@@ -241,90 +229,20 @@ double refine_lambda_ncvt1_split(
         *se_out      = (double)NAN;
         *f_stat_out  = (double)NAN;
         *is_valid_out = 0;
-        return lambda_grid[0];
+        return search->lambda_grid[0];
     }
 
-    /* Bracket around best grid point */
-    int idx_low = (best_idx > 0) ? best_idx - 1 : 0;
-    int idx_high = (best_idx < n_grid - 1) ? best_idx + 1 : n_grid - 1;
-    double a = log_l_min + idx_low * step;
-    double b = log_l_min + idx_high * step;
-    const double coarse_a = a, coarse_b = b;
-
-    /* Stage 2: golden section refinement (fused single-pass) */
-    double c = b - phi * (b - a);
-    double d = a + phi * (b - a);
-    double fc = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                       inv_ww, inv_wy, inv_yy, eigenvalues,
-                                       logdet_iab, n_samples, exp(c),
-                                       reml_const, NULL);
-    double fd = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                       inv_ww, inv_wy, inv_yy, eigenvalues,
-                                       logdet_iab, n_samples, exp(d),
-                                       reml_const, NULL);
-
-    for (int iter = 0; iter < n_refine; iter++) {
-        if (fc > fd) {
-            b = d; d = c; fd = fc;
-            c = b - phi * (b - a);
-            fc = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                        inv_ww, inv_wy, inv_yy, eigenvalues,
-                                        logdet_iab, n_samples, exp(c),
-                                        reml_const, NULL);
-        } else {
-            a = c; c = d; fc = fd;
-            d = a + phi * (b - a);
-            fd = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                        inv_ww, inv_wy, inv_yy, eigenvalues,
-                                        logdet_iab, n_samples, exp(d),
-                                        reml_const, NULL);
-        }
-    }
-
-    double log_opt = (a + b) / 2.0;
-    /* Refine enclosed peaks independently of rounded objective ties. */
-    for (int step = 0; step < 3 && a > coarse_a && b < coarse_b; step++) {
-        double delta = fmin(1e-3, 0.25 * (coarse_b - coarse_a));
-        delta = fmin(delta, 0.5 * (log_opt - coarse_a));
-        delta = fmin(delta, 0.5 * (coarse_b - log_opt));
-        double score = reml_score_loglambda_ncvt1_split(
-            var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
-            eigenvalues, n_samples, exp(log_opt));
-        double sm = reml_score_loglambda_ncvt1_split(
-            var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
-            eigenvalues, n_samples, exp(log_opt - delta));
-        double sp = reml_score_loglambda_ncvt1_split(
-            var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
-            eigenvalues, n_samples, exp(log_opt + delta));
-        double curvature = (sp - sm) / (2.0 * delta);
-        if (isfinite(delta) && delta > 0.0 && isfinite(score)
-            && isfinite(curvature) && curvature < 0.0) {
-            double candidate = log_opt - score / curvature;
-            if (isfinite(candidate) && candidate >= coarse_a && candidate <= coarse_b) {
-                double candidate_score = reml_score_loglambda_ncvt1_split(
-                    var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
-                    eigenvalues, n_samples, exp(candidate));
-                if (isfinite(candidate_score) && fabs(candidate_score) < fabs(score)) {
-                    log_opt = candidate;
-                    /* Score magnitude must be scaled by the local curvature. */
-                    if (fabs(candidate_score / curvature) > 1e-10)
-                        continue;
-                }
-            }
-        }
-        break;
-    }
-    double lambda_opt = exp(log_opt);
+    double lambda_opt = exp(golden_section_log_lambda(
+        reml_objective_ncvt1, reml_score_loglambda_ncvt1, snp,
+        search, best_idx));
 
     /* Final evaluation: reml_logl_ncvt1_split fills pab as a side effect, so
      * the Wald extraction below reads the same Pab the logl was computed
      * from without a second n_samples pass. */
     double pab[3][6];
-    *logl_out = reml_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                       inv_ww, inv_wy, inv_yy, eigenvalues,
-                                       logdet_iab, n_samples, lambda_opt,
-                                       reml_const, pab);
-    *is_valid_out = wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
+    *logl_out = reml_logl_ncvt1_split(snp, lambda_opt, pab);
+    *is_valid_out = wald_stats(pab_terms_ncvt1(pab), df,
+                               beta_out, se_out, f_stat_out);
 
     return lambda_opt;
 }
@@ -351,64 +269,7 @@ static inline double mle_finish(
     return mle_const - 0.5 * logdet_h - 0.5 * n_samples * log(P_yy);
 }
 
-/* -------------------------------------------------------------------------
- * mle_logl_ncvt1_cached_split
- *
- * MLE log-likelihood from SoA split data using cached grid hi_eval.
- * Pattern-matches reml_logl_ncvt1_cached_split but:
- *   - No logdet_iab / logdet_hiw terms
- *   - Uses n_samples (not df)
- *   - Uses mle_const (not reml_const)
- * ------------------------------------------------------------------------- */
-double mle_logl_ncvt1_cached_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict cached_hi_eval,
-    double cached_logdet_h,
-    const grid_invariant_t *ginv,
-    int n_samples,
-    double mle_const
-)
-{
-    double pab[3][6];
-    calc_pab_ncvt1_cached_split(
-        var_wx, var_xx, var_xy, cached_hi_eval, ginv, n_samples, pab
-    );
-    return mle_finish(pab, cached_logdet_h, n_samples, mle_const);
-}
-
-
-int coarse_grid_mle_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    int n_samples,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    int n_grid,
-    double mle_const
-)
-{
-    double best_logl = REML_SENTINEL;
-    int best_idx = -1;
-    for (int g = 0; g < n_grid; g++) {
-        double logl = mle_logl_ncvt1_cached_split(
-            var_wx, var_xx, var_xy,
-            hi_eval_grid + (size_t)g * n_samples,
-            logdet_h_grid[g], &grid_inv[g], n_samples, mle_const
-        );
-        if (!isnan(logl) && logl > best_logl) {
-            best_logl = logl;
-            best_idx = g;
-        }
-    }
-    return best_idx;
-}
-
-
-void coarse_grid_mode4_ncvt1_split(
+void coarse_grid_ncvt1_split(
     const double * restrict var_wx,
     const double * restrict var_xx,
     const double * restrict var_xy,
@@ -427,8 +288,8 @@ void coarse_grid_mode4_ncvt1_split(
 {
     double best_reml = REML_SENTINEL;
     double best_mle = REML_SENTINEL;
-    *best_reml_idx = -1;
-    *best_mle_idx = -1;
+    if (best_reml_idx) *best_reml_idx = -1;
+    if (best_mle_idx) *best_mle_idx = -1;
 
     for (int g = 0; g < n_grid; g++) {
         const grid_invariant_t *ginv = &grid_inv[g];
@@ -439,20 +300,23 @@ void coarse_grid_mode4_ncvt1_split(
             ginv, n_samples, pab
         );
 
-        double reml_logl = reml_finish_cached_split(
-            pab, logdet_h_grid[g], logdet_iab, ginv, df, reml_const
-        );
-        double mle_logl = mle_finish(
-            pab, logdet_h_grid[g], n_samples, mle_const
-        );
-
-        if (!isnan(reml_logl) && reml_logl > best_reml) {
-            best_reml = reml_logl;
-            *best_reml_idx = g;
+        if (best_reml_idx) {
+            double reml_logl = reml_finish_cached_split(
+                pab, logdet_h_grid[g], logdet_iab, ginv, df, reml_const
+            );
+            if (!isnan(reml_logl) && reml_logl > best_reml) {
+                best_reml = reml_logl;
+                *best_reml_idx = g;
+            }
         }
-        if (!isnan(mle_logl) && mle_logl > best_mle) {
-            best_mle = mle_logl;
-            *best_mle_idx = g;
+        if (best_mle_idx) {
+            double mle_logl = mle_finish(
+                pab, logdet_h_grid[g], n_samples, mle_const
+            );
+            if (!isnan(mle_logl) && mle_logl > best_mle) {
+                best_mle = mle_logl;
+                *best_mle_idx = g;
+            }
         }
     }
 }
@@ -461,25 +325,20 @@ void coarse_grid_mode4_ncvt1_split(
  * mle_logl_ncvt1_split
  *
  * MLE log-likelihood from SoA split data at an arbitrary lambda.
- * Used during golden section refinement. Computes hi_eval from scratch,
+ * Used during golden section refinement. Computes each Hi_eval term inline,
  * accumulates all 6 dot products (3 invariant + 3 varying), builds Pab.
- *
- * hi_eval is a caller-provided scratch buffer of size (n_samples,).
  * ------------------------------------------------------------------------- */
-double mle_logl_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    int n_samples,
-    double lambda,
-    double mle_const,
-    double * restrict hi_eval
-)
+static double mle_logl_ncvt1_split(const void *ctx, double lambda)
 {
+    const ncvt1_snp_t *snp = (const ncvt1_snp_t *)ctx;
+    const double * restrict var_wx = snp->var_wx;
+    const double * restrict var_xx = snp->var_xx;
+    const double * restrict var_xy = snp->var_xy;
+    const double * restrict inv_ww = snp->inv_ww;
+    const double * restrict inv_wy = snp->inv_wy;
+    const double * restrict inv_yy = snp->inv_yy;
+    const double * restrict eigenvalues = snp->eigenvalues;
+    int n_samples = snp->n_samples;
     double logdet_h = logdet_h_lambda(eigenvalues, n_samples, lambda);
     double s_ww = 0.0, s_wx = 0.0, s_wy = 0.0;
     double s_xx = 0.0, s_xy = 0.0, s_yy = 0.0;
@@ -488,7 +347,6 @@ double mle_logl_ncvt1_split(
     for (int i = 0; i < n_samples; i++) {
         double v = lambda * eigenvalues[i] + 1.0;
         double h = 1.0 / v;
-        hi_eval[i] = h;
 
         s_wx += h * var_wx[i];
         s_xx += h * var_xx[i];
@@ -502,115 +360,35 @@ double mle_logl_ncvt1_split(
     double pab[3][6];
     calc_pab_ncvt1_split(s_ww, s_wx, s_wy, s_xx, s_xy, s_yy, pab);
 
-    return mle_finish(pab, logdet_h, n_samples, mle_const);
+    return mle_finish(pab, logdet_h, n_samples, snp->mle_const);
 }
 
 /* -------------------------------------------------------------------------
  * refine_lambda_mle_ncvt1_split
  *
- * Golden section refinement for MLE using a caller-selected coarse bracket.
- *
- * Returns optimal MLE lambda; writes log-likelihood to *logl_out.
- * hi_eval is a caller-provided scratch buffer of size (n_samples,).
+ * MLE lambda from the caller's coarse-grid index. Returns the optimal
+ * lambda; writes the log-likelihood to *logl_out.
  * ------------------------------------------------------------------------- */
 double refine_lambda_mle_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    int n_samples,
-    const double *lambda_grid,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
+    const ncvt1_snp_t *snp,
+    const lambda_search_t *search,
     int best_idx,
-    double mle_const,
-    double * restrict hi_eval,
     double *logl_out
 )
 {
-    const double phi = 0.6180339887498949;
-
     /* Fully degenerate SNP */
     if (best_idx < 0) {
         *logl_out = (double)NAN;
         return (double)NAN;
     }
 
-    /* Bracket around best grid point */
-    int idx_low = (best_idx > 0) ? best_idx - 1 : 0;
-    int idx_high = (best_idx < n_grid - 1) ? best_idx + 1 : n_grid - 1;
-    double a = log_l_min + idx_low * step;
-    double b = log_l_min + idx_high * step;
-
-    /* Stage 2: golden section refinement */
-    double c = b - phi * (b - a);
-    double d = a + phi * (b - a);
-    double fc = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                      inv_ww, inv_wy, inv_yy, eigenvalues,
-                                      n_samples, exp(c), mle_const, hi_eval);
-    double fd = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                      inv_ww, inv_wy, inv_yy, eigenvalues,
-                                      n_samples, exp(d), mle_const, hi_eval);
-
-    for (int iter = 0; iter < n_refine; iter++) {
-        if (fc > fd) {
-            b = d; d = c; fd = fc;
-            c = b - phi * (b - a);
-            fc = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                       inv_ww, inv_wy, inv_yy, eigenvalues,
-                                       n_samples, exp(c), mle_const, hi_eval);
-        } else {
-            a = c; c = d; fc = fd;
-            d = a + phi * (b - a);
-            fd = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                       inv_ww, inv_wy, inv_yy, eigenvalues,
-                                       n_samples, exp(d), mle_const, hi_eval);
-        }
-    }
-
-    double log_opt = (a + b) / 2.0;
-    double lambda_opt = exp(log_opt);
-    *logl_out = mle_logl_ncvt1_split(var_wx, var_xx, var_xy,
-                                      inv_ww, inv_wy, inv_yy, eigenvalues,
-                                      n_samples, lambda_opt, mle_const, hi_eval);
+    double lambda_opt = exp(golden_section_log_lambda(
+        mle_logl_ncvt1_split, NULL, snp, search, best_idx));
+    *logl_out = mle_logl_ncvt1_split(snp, lambda_opt);
 
     return lambda_opt;
 }
 
-
-double golden_section_lambda_mle_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    int n_samples,
-    const double *lambda_grid,
-    const double *hi_eval_grid,
-    const double *logdet_h_grid,
-    const grid_invariant_t *grid_inv,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
-    double mle_const,
-    double * restrict hi_eval,
-    double *logl_out
-)
-{
-    int best_idx = coarse_grid_mle_ncvt1_split(
-        var_wx, var_xx, var_xy, n_samples,
-        hi_eval_grid, logdet_h_grid, grid_inv, n_grid, mle_const
-    );
-    return refine_lambda_mle_ncvt1_split(
-        var_wx, var_xx, var_xy, inv_ww, inv_wy, inv_yy,
-        eigenvalues, n_samples, lambda_grid, log_l_min, step,
-        n_grid, n_refine, best_idx, mle_const, hi_eval, logl_out
-    );
-}
 
 /* -------------------------------------------------------------------------
  * calc_pab_ncvt1_split

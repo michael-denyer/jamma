@@ -16,8 +16,8 @@ Ships inside the installed package (``jamma._build_support``). Consumed by:
     ``jamma._build_support`` normally (jamma is installed at runtime).
   * ``src/jamma/lmm/_compile_accel.py`` — dev-mode and runtime recompile
     entry point for the ``_lmm_accel`` C extension. Same import story.
-  * ``src/jamma/core/recompile.py`` — runtime ABI-mismatch shim; calls
-    the two compile_extension() entry points above.
+  * ``src/jamma/_native.py`` — runtime ABI-mismatch rebuild; calls
+    ``compile_and_link.compile_extension`` with the target's ``BuildSpec``.
 
 The underscore prefix marks this as internal/unstable API — third-party
 code must not import from ``jamma._build_support``.

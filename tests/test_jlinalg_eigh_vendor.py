@@ -63,7 +63,7 @@ def _load_jlinalg_eigh_c():
         ctypes.c_void_p,  # double *eigenvalues
         ctypes.c_void_p,  # double *eigenvectors
         ctypes.c_longlong,  # npy_intp ldz
-        ctypes.c_int,  # int prefer_dsyevr
+        ctypes.c_int,  # int require_dsyevr
         ctypes.POINTER(_EighStatus),  # jlinalg_eigh_status_t *status
     ]
     return fn
@@ -75,13 +75,13 @@ def _ptr(arr: np.ndarray) -> ctypes.c_void_p:
 
 
 def _call_eigh_with_status(
-    K: np.ndarray, *, prefer_dsyevr: bool = False
+    K: np.ndarray, *, require_dsyevr: bool = False
 ) -> tuple[np.ndarray, np.ndarray, _EighStatus]:
     """Call jlinalg_eigh_c via ctypes, returning eigenvalues, eigenvectors, status.
 
     Args:
         K: Symmetric matrix (N x N, float64, C-contiguous). Modified in place.
-        prefer_dsyevr: Skip the DSYEVD attempt and require DSYEVR directly.
+        require_dsyevr: Skip the DSYEVD attempt and require DSYEVR directly.
 
     Returns:
         Tuple of (eigenvalues, eigenvectors, status).
@@ -99,7 +99,7 @@ def _call_eigh_with_status(
         _ptr(eigenvalues),
         _ptr(eigenvectors),
         N,
-        int(prefer_dsyevr),
+        int(require_dsyevr),
         ctypes.byref(status),
     )
     assert ret == 0, f"jlinalg_eigh_c returned {ret}"
@@ -180,7 +180,7 @@ class TestEighPaddedStrideRejected:
             _ptr(eigenvalues),
             _ptr(eigenvectors),
             n,
-            0,  # prefer_dsyevr
+            0,  # require_dsyevr
             ctypes.byref(status),
         )
         assert ret == _JLINALG_EXT_BAD_STRIDE
@@ -202,7 +202,7 @@ class TestEighPaddedStrideRejected:
             _ptr(eigenvalues),
             _ptr(eigenvectors),
             n + 1,  # ldz != N
-            0,  # prefer_dsyevr
+            0,  # require_dsyevr
             ctypes.byref(status),
         )
         assert ret == _JLINALG_EXT_BAD_STRIDE

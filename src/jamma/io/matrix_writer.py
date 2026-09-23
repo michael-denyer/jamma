@@ -28,12 +28,12 @@ import numpy as np
 from loguru import logger
 
 from jamma.io._parallel_text import (
+    MemmapRef,
     default_worker_count,
     run_spawn_pool,
     temp_dir_beside,
-    unlink_quietly,
 )
-from jamma.utils.atomic_publish import AtomicOutput
+from jamma.utils.atomic_publish import AtomicOutput, unlink_quietly
 
 # Values formatted per `%` call inside a worker. Bounds the tuple of NumPy
 # scalars a wide row creates; 4096 of them is about 130 KB of scalar objects.
@@ -44,14 +44,12 @@ _FORMAT_SLICE = 4096
 class MatrixWriteTask:
     """Picklable message passed to one matrix-formatting worker."""
 
-    memmap_path: str
+    matrix: MemmapRef
     output_path: str
     start_row: int
     stop_row: int
     fmt: str
     delimiter: str
-    shape: tuple[int, int]
-    dtype: str
 
 
 def _format_rows_to_file(task: MatrixWriteTask) -> None:
@@ -60,16 +58,11 @@ def _format_rows_to_file(task: MatrixWriteTask) -> None:
     Must be a top-level function for pickling with spawn context.
     """
     try:
-        matrix = np.memmap(
-            task.memmap_path,
-            dtype=np.dtype(task.dtype),
-            mode="r",
-            shape=task.shape,
-        )
+        matrix = task.matrix.open("r")
         # np.memmap.__getitem__ is a Python method, so iterating a memmap slice
         # pays a Python call per value; a plain ndarray view iterates in C.
         rows = np.asarray(matrix)
-        n_cols = task.shape[1]
+        n_cols = task.matrix.shape[1]
         slices = [
             (start, min(_FORMAT_SLICE, n_cols - start))
             for start in range(0, n_cols, _FORMAT_SLICE)
@@ -186,86 +179,41 @@ def write_matrix_parallel(
             f"Could not check disk space for {path.parent}: {e}. Skipping space check."
         )
 
-    # Create temp dir on same filesystem as output (avoids filling /tmp)
-    tmp_dir = temp_dir_beside(path, prefix=".jamma_mwrite_")
-    tmp_dir_p = Path(tmp_dir)
-    memmap_path = str(tmp_dir_p / "matrix.dat")
-    chunk_paths: list[str] = []
-
-    try:
+    with temp_dir_beside(path, prefix=".jamma_mwrite_") as tmp_dir:
+        memmap = MemmapRef(str(tmp_dir / "matrix.dat"), matrix.shape, str(matrix.dtype))
         try:
-            matrix.tofile(memmap_path)
+            matrix.tofile(memmap.path)
         except OSError as e:
             raise OSError(
                 f"Failed to write {matrix.nbytes / (1024**3):.1f} GB temp file "
-                f"to {memmap_path} for parallel matrix IPC. "
+                f"to {memmap.path} for parallel matrix IPC. "
                 f"Ensure the output directory has sufficient disk space."
             ) from e
 
-        # Build chunk args — each worker writes to its own temp file
-        chunks_args: list[MatrixWriteTask] = []
-        for idx, start in enumerate(range(0, n_rows, rows_per_chunk)):
-            chunk_out = str(tmp_dir_p / f"chunk_{idx:06d}.txt")
-            chunk_paths.append(chunk_out)
-            chunks_args.append(
-                MatrixWriteTask(
-                    memmap_path=memmap_path,
-                    output_path=chunk_out,
-                    start_row=start,
-                    stop_row=min(start + rows_per_chunk, n_rows),
-                    fmt=fmt,
-                    delimiter=delimiter,
-                    shape=matrix.shape,
-                    dtype=str(matrix.dtype),
-                )
+        tasks = [
+            MatrixWriteTask(
+                matrix=memmap,
+                output_path=str(tmp_dir / f"chunk_{idx:06d}.txt"),
+                start_row=start,
+                stop_row=min(start + rows_per_chunk, n_rows),
+                fmt=fmt,
+                delimiter=delimiter,
             )
-
+            for idx, start in enumerate(range(0, n_rows, rows_per_chunk))
+        ]
         run_spawn_pool(
             _format_rows_to_file,
-            chunks_args,
+            tasks,
             error_context=f"writing {path}",
             n_workers=n_workers,
         )
 
-        # Free memmap before concatenation — at 125k samples this is 126 GB
-        try:
-            Path(memmap_path).unlink()
-        except OSError as e:
-            logger.warning(f"Could not delete memmap {memmap_path}: {e}")
-        memmap_path = None  # prevent double-delete in finally
-
-        # Concatenate chunk files in order, deleting each after use.
-        # Concatenate into a sibling temp and os.replace() onto the final
-        # path, so a failure mid-concatenation never destroys a pre-existing
-        # valid file at the destination.
-        try:
-            with AtomicOutput(path) as publish_tmp, open(publish_tmp, "wb") as f_out:
-                for chunk_path in chunk_paths:
-                    with open(chunk_path, "rb") as f_in:
-                        while True:
-                            buf = f_in.read(8 * 1024 * 1024)  # 8 MB reads
-                            if not buf:
-                                break
-                            f_out.write(buf)
-                    # Eagerly delete — frees disk before writing the next chunk
-                    try:
-                        Path(chunk_path).unlink()
-                    except OSError as e:
-                        logger.debug(
-                            f"Could not eagerly delete chunk {chunk_path}: {e}"
-                        )
-        except BaseException as e:
-            logger.opt(exception=e).error(
-                f"Failed during chunk concatenation to {path}: {e}"
-            )
-            raise
-    finally:
-        # Clean up any remaining temp files (error paths)
-        if memmap_path is not None:
-            unlink_quietly(memmap_path)
-        for p in chunk_paths:
-            unlink_quietly(p)
-        try:
-            tmp_dir_p.rmdir()
-        except OSError as e:
-            logger.debug(f"Could not remove temp dir {tmp_dir}: {e}")
+        # Eager deletes bound peak disk: the memmap is 126 GB at 125k samples,
+        # and each chunk goes as soon as it is copied. Concatenating into an
+        # AtomicOutput temp means a failure never destroys an existing file.
+        unlink_quietly(memmap.path)
+        with AtomicOutput(path) as publish_tmp, open(publish_tmp, "wb") as f_out:
+            for task in tasks:
+                with open(task.output_path, "rb") as f_in:
+                    shutil.copyfileobj(f_in, f_out, 8 << 20)
+                unlink_quietly(task.output_path)

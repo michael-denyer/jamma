@@ -251,3 +251,19 @@ class TestSnpStatsErrorPaths:
         compute_snp_stats_chunk(data, means, miss, vari, None, None, None)
         assert_allclose(means, [1.0])
         assert miss[0] == 1
+
+
+def test_numpy_fallback_means_float32_input_in_double():
+    """The fallback matches the C kernel: float32 genotypes give float64 means."""
+    from jamma.jlinalg._snp_stats import compute_snp_stats_chunk as fallback
+
+    rng = np.random.default_rng(7)
+    data = rng.integers(0, 3, size=(1001, 6)).astype(np.float64)
+    data[::13, 2] = np.nan
+
+    def means_of(chunk):
+        means = np.empty(6)
+        fallback(chunk, means, np.empty(6, dtype=np.intp), np.empty(6))
+        return means
+
+    np.testing.assert_array_equal(means_of(data.astype(np.float32)), means_of(data))

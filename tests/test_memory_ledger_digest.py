@@ -30,12 +30,40 @@ at ``n_chr`` 0; 134 flipped ``single_pass`` from False to True, 64 at
 tie rows moved the ``available`` figure their tie is built from.
 ``eigendecomp_min_gb`` did not move in any row.
 
+``405a6224``: 6144 ``price`` rows pin ``ExecutableAssociationPlan.price()``,
+the quote every preflight gates on, which the table did not cover before.
+The 2438 existing rows are unchanged.
+
+``e85356a0``: ``price()`` became the only association quote. The 384
+``streaming`` and 96 ``batch`` rows went with the ledger functions they
+hashed. Of the 6144 ``price`` rows, the 2048 in batch mode moved
+``association_gb`` down by exactly ``4 * n`` float64 (the eigenvalue and
+three rotated-vector terms the old batch formula carried and streaming never
+did), and ``total_peak_gb`` with it where association is the peak. Every
+streaming and LOCO row, every kinship, eigen, and statistics cell, and every
+gate, eigen-driver, and LOCO row is unchanged.
+
 ``c8a00ab6``: the LOCO rows lost two columns,
 ``min_required_gb`` and ``eigendecomp_min_gb``, when ``plan_loco_passes``
 stopped reporting them; the row table was dumped before and after and
 compared cell by cell: 2438 rows, 1026 LOCO rows each 12 columns before
 and 10 after, 0 surviving cells changed. The single-pass column survives
 as the ``required_gb`` of the plan an unlimited machine makes.
+
+The eigen rows lost the ``pre_fallback_gb`` column when
+``EigenDriverPlan`` started recording the reason for its choice instead of
+the peak it fell back from; the table was dumped before and after and
+compared cell by cell: 2438 rows, 684 eigen rows each 13 columns before and
+12 after, 0 surviving cells changed, and the 1754 other rows identical.
+
+``6aacdc05``: the n_cvt>=2 dispatch member merged into ``FUSED``, removing
+its 2304 ``price`` rows, and the synthetic workspace folded its 10,000 transient
+bytes into ``per_thread_bytes`` so ``fixed_bytes`` is unchanged. Of the
+surviving 5798 rows, only the 1152 ``fused`` rows at phenotype group 3 moved,
+in ``association_gb`` and ``total_peak_gb`` alone, each by exactly
+``80,000 - 16 * n`` bytes: per-thread scratch is now per kernel, so the two
+extra kernels add ``2 * 4 * 10,000``, and the null ``w`` row, no longer
+retained, drops ``2 * n`` float64. Every other row is identical.
 """
 
 from __future__ import annotations
@@ -49,35 +77,28 @@ from unittest.mock import patch
 import pytest
 
 from jamma.core import memory
-from jamma.core.eigen_plan import dsyevr_peak_gb, plan_eigen_driver
-from jamma.core.memory import (
-    estimate_lmm_memory,
-    estimate_streaming_memory,
-    margin_gb,
-)
+from jamma.core.memory import margin_gb
 from jamma.kinship.loco import loco_retained_set, plan_loco_passes
-from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
+from jamma.lmm.association_plan import (
+    ExecutableAssociationPlan,
+    ExecutionPlan,
+    KinshipShape,
+)
+from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm.eigen_plan import dsyevr_peak_gb, plan_eigen_driver
+from jamma.lmm.workspace import WorkspaceSpec
 
 pytestmark = pytest.mark.tier0
 
-# Kinship preprocessing pricing moves the 384 streaming rows. The mouse
-# fixture previously traced 487 MB against a 171 MB quote; bounded transforms
-# now trace 415 MB against 520 MB. Eigen, LMM, and LOCO formulas are unchanged.
-EXPECTED_DIGEST = "7309e20149ddd3c12175fde182e1813b7ad74482826e9bce678386b2d264ec7d"
-EXPECTED_ROWS = 2438
+EXPECTED_DIGEST = "53b7584a3bea58b5bef9aae939d668655ee716c9d20aba3d43c22f55cfbcbde6"
+EXPECTED_ROWS = 5030
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
 CHUNK_SIZE = (10_000, 1_000)
 N_CVT = (1, 4)
-PIPELINE_BUFFERS = (1, 2)
-COMPUTE_CHUNK = (None, 765)
-EIGEN_PEAK_GB = (None, 12.5)
-UAB_IAB_GB = (None, 0.7)
 
 N_SNPS = (100, 500_000)
-LMM_BATCH = (20_000, 765)
-N_BUFFERS = (1, 2)
 
 PEAKS_GB = (0.0, 0.5, 9.99, 50.0, 99.999, 100.0, 100.001, 1_000.0)
 AVAILABLE_GB = (0.001, 1.0, 8.0, 40.0, 64.0, 110.0, 1_000.0)
@@ -85,6 +106,13 @@ BUDGET_GB = (None, 1.0, 64.0)
 FLAGS = (False, True)
 N_CHR = (0, 1, 22)
 MAX_BATCH_CHRS = (None, 3)
+
+PRICE_MODES = ("batch", "streaming", "loco")
+PRICE_N_SAMPLES = (1_410, 200_000)
+PRICE_EXTRA_INPUT = (0, 7)
+PRICE_CHUNKS = ((765, 1), (765, 2), (20_000, 2))
+PRICE_GROUP = (1, 3)
+PRICE_KINSHIP = (None, (False, False), (True, False), (False, True))
 
 
 def _f(x: float) -> str:
@@ -95,62 +123,87 @@ def _tie(required_gb: float) -> float:
     return required_gb + margin_gb(required_gb)
 
 
-def _streaming_rows() -> list[list]:
+def _price_plan(
+    dispatch, mode, n, extra, n_snps, chunk, buffers, n_cvt, group, kinship
+) -> ExecutableAssociationPlan:
+    """A plan with a fixed synthetic workspace, so no row reads the C sizers."""
+    n_input = n + extra
+    workspace = WorkspaceSpec(
+        dispatch, 1, n, n_input, n_cvt, 50, 20, 4, 1_000_000, 110_000, 64
+    )
+    return ExecutableAssociationPlan(
+        summary=ExecutionPlan(mode, "digest"),
+        dispatch=dispatch,
+        conservative_chunks=LmmChunkPlan(
+            chunk, -(-n_snps // chunk), buffers, buffers > 1
+        ),
+        n_samples=n,
+        n_input_samples=n_input,
+        n_snps_before_filter=n_snps,
+        n_cvt=n_cvt,
+        mem_budget_gb=None,
+        workspace=workspace,
+        phenotype_group_size=group,
+        kinship=(
+            None
+            if kinship is None
+            else KinshipShape.resolve(n, n_input, loaded=kinship[0], saved=kinship[1])
+        ),
+    )
+
+
+def _price_rows() -> list[list]:
+    """``price()``, the quote every preflight gates on, over a grid of plans."""
+    eigen = plan_eigen_driver(
+        1_410,
+        1e12,
+        has_dsyevd=True,
+        has_dsyevr=True,
+        forced_numpy=False,
+        inplace_blocker=None,
+    )
     rows: list[list] = []
-    for n, chunk, n_cvt, buffers, compute, eigen_peak, uab in itertools.product(
-        N_SAMPLES,
-        CHUNK_SIZE,
+    grid = itertools.product(
+        DispatchPath,
+        PRICE_MODES,
+        PRICE_N_SAMPLES,
+        PRICE_EXTRA_INPUT,
+        N_SNPS,
+        PRICE_CHUNKS,
         N_CVT,
-        PIPELINE_BUFFERS,
-        COMPUTE_CHUNK,
-        EIGEN_PEAK_GB,
-        UAB_IAB_GB,
-    ):
-        ledger = estimate_streaming_memory(
-            n,
-            chunk_size=chunk,
-            n_cvt=n_cvt,
-            pipeline_buffers=buffers,
-            compute_chunk_size=compute,
-            eigendecomp_peak_gb=eigen_peak,
-            uab_iab_gb=uab,
+        PRICE_GROUP,
+        PRICE_KINSHIP,
+    )
+    for dispatch, mode, n, extra, n_snps, (chunk, buffers), n_cvt, group, kin in grid:
+        if buffers > 1 and not dispatch.is_native:
+            continue  # LmmChunkPlan pipelines native dispatch paths only
+        plan = _price_plan(
+            dispatch, mode, n, extra, n_snps, chunk, buffers, n_cvt, group, kin
         )
-        rows.append(
-            [
-                "streaming",
-                n,
-                chunk,
-                n_cvt,
-                buffers,
-                compute,
-                eigen_peak,
-                uab,
-                _f(ledger.kinship_gb),
-                _f(ledger.eigen_gb),
-                _f(ledger.lmm_gb),
-                _f(ledger.peak_gb),
-            ]
-        )
-    return rows
-
-
-def _batch_rows() -> list[list]:
-    rows: list[list] = []
-    for n, n_snps, batch, n_cvt, buffers in itertools.product(
-        N_SAMPLES, N_SNPS, LMM_BATCH, N_CVT, N_BUFFERS
-    ):
-        batch_gb = estimate_lmm_memory(
-            n,
-            n_snps,
-            lmm_batch_size=batch,
-            n_buffers=buffers,
-            uab_iab_gb=(
-                batch
-                * lmm_extra_bytes_per_snp(n, n_cvt, DispatchPath.NUMPY_FALLBACK)
-                / 1e9
-            ),
-        )
-        rows.append(["batch", n, n_snps, batch, n_cvt, buffers, _f(batch_gb)])
+        for eigen_plan in (None, eigen):
+            quote = plan.price(eigen=eigen_plan)
+            rows.append(
+                [
+                    "price",
+                    dispatch.value,
+                    mode,
+                    n,
+                    extra,
+                    n_snps,
+                    chunk,
+                    buffers,
+                    n_cvt,
+                    group,
+                    kin,
+                    eigen_plan is not None,
+                    quote.compute_chunk_size,
+                    _f(quote.kinship_gb),
+                    _f(quote.eigen_gb),
+                    _f(quote.statistics_gb),
+                    _f(quote.association_gb),
+                    _f(quote.total_peak_gb),
+                ]
+            )
     return rows
 
 
@@ -210,8 +263,8 @@ def _eigen_driver_rows() -> list[list]:
             1e12,
             has_dsyevd=True,
             has_dsyevr=True,
-            no_vendor=False,
-            inplace_eligible=inplace,
+            forced_numpy=False,
+            inplace_blocker=None if inplace else "K is not C-contiguous",
         )
         rows.append(
             _eigen_driver_row(
@@ -229,8 +282,8 @@ def _eigen_driver_row(
         available,
         has_dsyevd=has_dsyevd,
         has_dsyevr=has_dsyevr,
-        no_vendor=no_vendor,
-        inplace_eligible=inplace,
+        forced_numpy=no_vendor,
+        inplace_blocker=None if inplace else "K is not C-contiguous",
     )
     return [
         tag,
@@ -245,7 +298,6 @@ def _eigen_driver_row(
         plan.use_dsyevr,
         plan.no_vendor,
         _f(plan.required_gb),
-        _f(plan.pre_fallback_gb),
     ]
 
 
@@ -319,8 +371,7 @@ def ledger_table() -> list[list]:
         # redirect dispatch.
     ):
         return [
-            *_streaming_rows(),
-            *_batch_rows(),
+            *_price_rows(),
             *_gate_rows(),
             *_eigen_driver_rows(),
             *_loco_rows(),

@@ -2,17 +2,19 @@
 
 import functools
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from unittest.mock import patch
 
 import numpy as np
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import WaldResult, _compute_wald_numpy
+from jamma.lmm.compute_numpy import compute_wald_numpy
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
-from jamma.lmm.pab import _NCVT1, build_index_table
-from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
+from jamma.lmm.pab import build_index_table
+from jamma.lmm.stats import batch_calc_score_stats_numpy, batch_lrt_pvalues_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
+from tests.builders import LmmInputs
 
 
 @functools.lru_cache(maxsize=8)
@@ -37,56 +39,11 @@ def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
     return tuple(invariant), tuple(varying)
 
 
-def reconstruct_uab_from_soa(
-    uab_invariant_soa: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    n_cvt: int,
-) -> np.ndarray:
-    """Rebuild the full Uab matrix from its split SoA components.
-
-    For n_cvt=1, combine invariant columns [ww, wy, yy] with per-SNP varying
-    columns [wx, xx, xy] into the standard layout (n_snps, n_samples, 6). For
-    n_cvt>1, place each column at the linear index ``classify_uab_columns``
-    assigns it, broadcasting the invariant columns across SNPs.
-
-    Args:
-        uab_invariant_soa: Shape (n_inv, n_samples), one row per invariant column.
-        uab_varying_soa: Shape (n_snps, n_var, n_samples), one axis-1 row per
-            varying column.
-        n_cvt: Number of covariates.
-
-    Returns:
-        Full Uab array (n_snps, n_samples, n_index) matching
-        ``batch_compute_uab_numpy`` layout.
-    """
-    n_snps, _, n_samples = uab_varying_soa.shape
-
-    if n_cvt == 1:
-        Uab = np.empty((n_snps, n_samples, 6), dtype=np.float64)
-        Uab[:, :, _NCVT1.ww] = uab_invariant_soa[0]
-        Uab[:, :, _NCVT1.wy] = uab_invariant_soa[1]
-        Uab[:, :, _NCVT1.yy] = uab_invariant_soa[2]
-        Uab[:, :, _NCVT1.wx] = uab_varying_soa[:, 0, :]
-        Uab[:, :, _NCVT1.xx] = uab_varying_soa[:, 1, :]
-        Uab[:, :, _NCVT1.xy] = uab_varying_soa[:, 2, :]
-        return Uab
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    Uab = np.empty(
-        (n_snps, n_samples, build_index_table(n_cvt).n_index), dtype=np.float64
-    )
-    for row_i, col_idx in enumerate(inv_indices):
-        Uab[:, :, col_idx] = uab_invariant_soa[row_i]
-    for row_i, col_idx in enumerate(var_indices):
-        Uab[:, :, col_idx] = uab_varying_soa[:, row_i, :]
-    return Uab
-
-
 def assert_fused_matches_reference(
     run: Callable[[], Any],
     *,
     fields: dict[str, float],
-    kernel: str | None = "compute_lmm_chunk_ncvt1_c",
+    kernel: str | None = "compute_lmm_chunk_c",
     min_count: float | None = None,
     atol: float = 0.0,
     label: str = "",
@@ -140,94 +97,127 @@ def assert_fused_matches_reference(
                 )
 
 
-def _prepare_fused_general_data(data: dict) -> dict:
-    """Add the invariant SoA, varying SoA and UtG_T the kernels need.
+@dataclass(frozen=True)
+class GeneralCase:
+    """Synthetic inputs plus the derived arrays the general (n_cvt >= 2) kernels read.
 
-    Args:
-        data: Dict from _build_synthetic_covariate_data.
-
-    Returns:
-        Dict with uab_inv_soa, uab_var_soa, utg_t, and the original keys.
+    Each derived array is computed on first read and cached.
     """
-    n_cvt = data["n_cvt"]
-    Uab_batch = data["Uab_batch"]
 
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    return {
-        **data,
-        "uab_inv_soa": np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)]),
-        "uab_var_soa": np.ascontiguousarray(
-            Uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
-        ),
-        "utg_t": np.ascontiguousarray(data["UtG"].T),
-    }
+    inputs: LmmInputs
+
+    @property
+    def n_cvt(self) -> int:
+        return self.inputs.n_cvt
+
+    @property
+    def n_samples(self) -> int:
+        return self.inputs.n_samples
+
+    @functools.cached_property
+    def uab_batch(self) -> np.ndarray:
+        return self.inputs.uab_batch()
+
+    @functools.cached_property
+    def uab_inv_soa(self) -> np.ndarray:
+        inv_indices, _ = classify_uab_columns(self.n_cvt)
+        return np.ascontiguousarray(self.uab_batch[0, :, list(inv_indices)])
+
+    @functools.cached_property
+    def uab_var_soa(self) -> np.ndarray:
+        _, var_indices = classify_uab_columns(self.n_cvt)
+        return np.ascontiguousarray(
+            self.uab_batch[:, :, list(var_indices)].transpose(0, 2, 1)
+        )
+
+    @functools.cached_property
+    def utg_t(self) -> np.ndarray:
+        return np.ascontiguousarray(self.inputs.UtG.T)
+
+    @functools.cached_property
+    def _null_model(self) -> tuple[np.ndarray, float]:
+        """Fit the null model: the same Uab with every genotype column zeroed."""
+        eigenvalues = self.inputs.eigenvalues
+        inv_indices, _ = classify_uab_columns(self.n_cvt)
+        Uab_null = np.zeros((1, *self.uab_batch.shape[1:]), dtype=np.float64)
+        for idx in inv_indices:
+            Uab_null[0, :, idx] = self.uab_batch[0, :, idx]
+        lambdas_null, logls_null = golden_section_optimize_lambda_mle_numpy(
+            self.n_cvt,
+            eigenvalues,
+            Uab_null,
+            l_min=1e-5,
+            l_max=1e5,
+            n_grid=50,
+            n_iter=20,
+        )
+        lambda_null = float(lambdas_null[0])
+        return 1.0 / (lambda_null * eigenvalues + 1.0), float(logls_null[0])
+
+    @property
+    def Hi_eval_null(self) -> np.ndarray:
+        return self._null_model[0]
+
+    @property
+    def logl_H0(self) -> float:
+        return self._null_model[1]
 
 
-def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
-    """Build the live fused-general Wald workspace for *data*.
+def _fused_general_workspace(case: GeneralCase, n_threads: int = 1) -> object:
+    """Build the live fused-general Wald workspace for *case*.
 
-    This is what ``DispatchPath.FUSED_GENERAL`` reaches for n_cvt>=2 in mode 1.
-    Accepts either a raw _build_synthetic_covariate_data dict or one already
-    through _prepare_fused_general_data.
+    This is what ``DispatchPath.FUSED`` reaches for n_cvt>=2 in mode 1.
     """
-    if "uab_inv_soa" not in data:
-        data = _prepare_fused_general_data(data)
-    return accel.require().create_workspace_general_c(
-        data["eigenvalues"],
-        data["uab_inv_soa"],
-        data["UtW"],
-        data["Uty"],
-        data["n_samples"],
+    return accel.require().create_workspace_c(
+        case.inputs.eigenvalues,
+        case.uab_inv_soa,
+        case.inputs.UtW,
+        case.inputs.Uty,
+        case.n_samples,
         1e-5,
         1e5,
         50,
         20,
         n_threads,
-        data["n_cvt"],
+        case.n_cvt,
         lmm_mode=1,
     )
 
 
-def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
-    """Build the live fused-general mode-4 workspace for *data*.
-
-    *data* must carry Hi_eval_null and logl_H0, so it has to have been through
-    _make_general_score_lrt_data.
-    """
-    if "uab_inv_soa" not in data:
-        data = _prepare_fused_general_data(data)
-    return accel.require().create_workspace_general_c(
-        data["eigenvalues"],
-        data["uab_inv_soa"],
-        data["UtW"],
-        data["Uty"],
-        data["n_samples"],
+def _fused_general_mode4_workspace(case: GeneralCase, n_threads: int = 1) -> object:
+    """Build the live fused-general mode-4 workspace for *case*."""
+    return accel.require().create_workspace_c(
+        case.inputs.eigenvalues,
+        case.uab_inv_soa,
+        case.inputs.UtW,
+        case.inputs.Uty,
+        case.n_samples,
         1e-5,
         1e5,
         50,
         20,
         n_threads,
-        data["n_cvt"],
+        case.n_cvt,
         lmm_mode=4,
-        hi_eval_null=data["Hi_eval_null"],
-        logl_H0=data["logl_H0"],
+        hi_eval_null=case.Hi_eval_null,
+        logl_H0=case.logl_H0,
     )
 
 
-def _numpy_general_score(data: dict) -> dict:
-    """NumPy Score statistics for a general n_cvt fixture."""
+def _numpy_general_score(case: GeneralCase) -> dict:
+    """NumPy Score statistics for a general n_cvt case."""
     betas, ses, p_scores = batch_calc_score_stats_numpy(
-        data["n_cvt"], data["Hi_eval_null"], data["Uab_batch"], data["n_samples"]
+        case.n_cvt, case.Hi_eval_null, case.uab_batch, case.n_samples
     )
     return {"betas": betas, "ses": ses, "p_scores": p_scores}
 
 
-def _numpy_general_lrt(data: dict) -> dict:
+def _numpy_general_lrt(case: GeneralCase) -> dict:
     """NumPy mode-4 MLE likelihoods, lambdas, and LRT p-values."""
     lambdas_mle, logls_mle = golden_section_optimize_lambda_mle_numpy(
-        data["n_cvt"],
-        data["eigenvalues"],
-        data["Uab_batch"],
+        case.n_cvt,
+        case.inputs.eigenvalues,
+        case.uab_batch,
         l_min=1e-5,
         l_max=1e5,
         n_grid=50,
@@ -236,35 +226,31 @@ def _numpy_general_lrt(data: dict) -> dict:
     return {
         "logls": logls_mle,
         "lambdas_mle": lambdas_mle,
-        "p_lrts": _batch_lrt_pvalues_numpy(logls_mle, data["logl_H0"]),
+        "p_lrts": batch_lrt_pvalues_numpy(logls_mle, case.logl_H0),
     }
 
 
-def _fused_general_wald(data: dict, n_threads: int = 1) -> WaldResult:
-    """Run the live fused-general Wald kernel over *data*."""
-    if "uab_inv_soa" not in data:
-        data = _prepare_fused_general_data(data)
-    ws = _fused_general_workspace(data, n_threads)
-    return accel.require().compute_lmm_chunk_fused_general_c(
-        ws, data["utg_t"], n_threads
-    )
+def _fused_general_wald(case: GeneralCase, n_threads: int = 1) -> dict[str, np.ndarray]:
+    """Run the live fused-general Wald kernel over *case*."""
+    ws = _fused_general_workspace(case, n_threads)
+    return accel.require().compute_lmm_chunk_c(ws, case.utg_t, n_threads)
 
 
-def _numpy_general_wald(data: dict) -> WaldResult:
-    """Run the NumPy Wald path over *data*, with the extension held out.
+def _numpy_general_wald(case: GeneralCase) -> dict[str, np.ndarray]:
+    """Run the NumPy Wald path over *case*, with the extension held out.
 
-    ``_compute_wald_numpy`` consults ``accel._accel`` at call time and
+    ``compute_wald_numpy`` consults ``accel._accel`` at call time and
     takes a C branch when it is set, so the attribute has to be cleared rather
     than the argument changed.
     """
     orig = accel._accel
     try:
         accel._accel = None
-        return _compute_wald_numpy(
-            data["n_cvt"],
-            data["eigenvalues"],
-            data["Uab_batch"],
-            data["n_samples"],
+        return compute_wald_numpy(
+            case.n_cvt,
+            case.inputs.eigenvalues,
+            case.uab_batch,
+            case.n_samples,
             l_min=1e-5,
             l_max=1e5,
             n_grid=50,
@@ -274,10 +260,10 @@ def _numpy_general_wald(data: dict) -> WaldResult:
         accel._accel = orig
 
 
-def _run_general_ncvt_c_vs_python(data: dict) -> None:
+def _run_general_ncvt_c_vs_python(case: GeneralCase) -> None:
     """Compare the fused-general C Wald kernel against the NumPy Wald path.
 
-    The C side used to be ``_compute_wald_numpy`` with the extension loaded,
+    The C side used to be ``compute_wald_numpy`` with the extension loaded,
     which took an inner C ladder that no dispatch path reaches: the only
     production caller of that function runs when ``_accel`` is None. Comparing
     it against the same function with ``_accel`` cleared would have gone
@@ -287,9 +273,9 @@ def _run_general_ncvt_c_vs_python(data: dict) -> None:
     kernel is bitwise identical to the non-fused general kernel it replaces as
     the subject here, so the deviation from NumPy is unchanged.
     """
-    n_cvt = data["n_cvt"]
-    result_c = _fused_general_wald(data)
-    result_py = _numpy_general_wald(data)
+    n_cvt = case.n_cvt
+    result_c = _fused_general_wald(case)
+    result_py = _numpy_general_wald(case)
 
     for key in ("lambdas", "logls", "betas", "ses"):
         np.testing.assert_allclose(
@@ -326,12 +312,12 @@ def _uab_from_fused_inputs(w, Uty, utg_t):
     return batch_compute_uab_numpy(1, w[:, None], Uty, utg_t)
 
 
-def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> WaldResult:
+def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> dict[str, np.ndarray]:
     """NumPy REML Wald for the fused kernel's n_cvt=1 inputs."""
     orig = accel._accel
     try:
         accel._accel = None
-        return _compute_wald_numpy(
+        return compute_wald_numpy(
             1,
             eigenvalues,
             _uab_from_fused_inputs(w, Uty, utg_t),
@@ -400,7 +386,7 @@ def _numpy_ncvt1_lrt(eigenvalues, w, Uty, utg_t, logl_H0, n_refine=20) -> dict:
     return {
         "logls": logls_mle,
         "lambdas_mle": lambdas_mle,
-        "p_lrts": _batch_lrt_pvalues_numpy(logls_mle, logl_H0),
+        "p_lrts": batch_lrt_pvalues_numpy(logls_mle, logl_H0),
     }
 
 
@@ -415,43 +401,3 @@ def assert_matches_numpy(result, reference, label) -> None:
             equal_nan=True,
             err_msg=f"{label} {key} does not match the NumPy reference",
         )
-
-
-def _make_general_score_lrt_data(data: dict) -> dict:
-    """Extend synthetic covariate data with null-model Hi_eval and logl_H0.
-
-    Computes the null-model MLE lambda via golden section on the null Uab
-    (zero genotype), then derives Hi_eval_null and logl_H0.
-
-    Args:
-        data: Dict from _build_synthetic_covariate_data.
-
-    Returns:
-        Dict with all original keys plus Hi_eval_null and logl_H0.
-    """
-    eigenvalues = data["eigenvalues"]
-    Uab_batch = data["Uab_batch"]
-    n_cvt = data["n_cvt"]
-    n_samples = data["n_samples"]
-    n_index = Uab_batch.shape[2]  # (n_cvt+3)*(n_cvt+2)//2
-
-    # Null Uab: zero all varying (genotype) columns.
-    inv_indices, _ = classify_uab_columns(n_cvt)
-    Uab_null = np.zeros((1, n_samples, n_index), dtype=np.float64)
-    for idx in inv_indices:
-        Uab_null[0, :, idx] = Uab_batch[0, :, idx]
-
-    lambdas_null, logls_null = golden_section_optimize_lambda_mle_numpy(
-        n_cvt,
-        eigenvalues,
-        Uab_null,
-        l_min=1e-5,
-        l_max=1e5,
-        n_grid=50,
-        n_iter=20,
-    )
-    lambda_null = float(lambdas_null[0])
-    logl_H0 = float(logls_null[0])
-    Hi_eval_null = 1.0 / (lambda_null * eigenvalues + 1.0)
-
-    return {**data, "Hi_eval_null": Hi_eval_null, "logl_H0": logl_H0}

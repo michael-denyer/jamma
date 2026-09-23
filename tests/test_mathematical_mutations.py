@@ -25,7 +25,7 @@ def test_tiny_wald_results_preserve_external_allele_orientation() -> None:
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.schema import LmmConfig, SnpMeta
     from jamma.validation import compare_assoc_results, load_gemma_assoc
-    from tests.conftest import require_fixture
+    from tests.support import require_fixture
 
     fixture = (
         mutations.ROOT
@@ -97,3 +97,37 @@ def test_single_mutation_is_isolated_and_detected() -> None:
     assert report["actual_detectors"]
     assert all(case["outcome"] != "error" for case in report["actual_testcases"])
     assert report["source_sha256_before"] == report["source_sha256_after"] == before
+
+
+def test_every_python_patch_matches_its_source_exactly_once() -> None:
+    manifest = mutations.load_manifest(mutations.DEFAULT_MANIFEST)
+    counts = {
+        m["id"]: (mutations.ROOT / m["path"]).read_text().count(m["find"])
+        for m in manifest["mutations"]
+        if m["path"].endswith(".py")
+    }
+    assert {k: v for k, v in counts.items() if v != 1} == {}
+
+
+def test_non_matching_patch_is_a_stale_patch_failure_before_any_pytest_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse_to_run(*args, **kwargs):
+        raise AssertionError("a stale patch must be reported before pytest runs")
+
+    monkeypatch.setattr(mutations, "_pytest", refuse_to_run)
+    report = mutations.run_mutation(
+        {
+            "id": "stale-example",
+            "category": "stale",
+            "path": "src/jamma/lmm/likelihood_numpy.py",
+            "find": "this text is not in the source",
+            "replace": "anything",
+            "detector": "tests/test_x.py::test_x",
+        },
+        timeout=1,
+    )
+    assert report["status"] == "STALE PATCH"
+    assert report["patch_match_count"] == 0
+    assert "stale-example" in report["reason"]
+    assert "likelihood_numpy.py" in report["reason"]

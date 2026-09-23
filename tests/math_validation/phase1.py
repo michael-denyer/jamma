@@ -10,9 +10,9 @@ from typing import TypedDict, cast
 import numpy as np
 
 from jamma.lmm import accel
+from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.likelihood import compute_null_model_mle
-from jamma.lmm.stats import AssocResult
 from jamma.lmm.uab import batch_compute_uab_numpy, compute_uab_invariant_soa
 from jamma.validation.compare import _classify_lambdas, compare_assoc_results
 from jamma.validation.tolerances import LambdaBoundaryPolicy, ToleranceConfig
@@ -88,42 +88,24 @@ def _production_results(data, backend) -> dict[int, dict[str, np.ndarray | None]
         optional = {"logl_H0": logl_h0} if mode == 2 else {}
         if mode == 4:
             optional = {"logl_H0": logl_h0, "hi_eval_null": hi_null}
-        if data.n_cvt == 1:
-            workspace = module.create_workspace_ncvt1_c(
-                data.eigenvalues,
-                invariant,
-                data.UtW[:, 0],
-                data.Uty,
-                data.n_samples,
-                L_MIN,
-                L_MAX,
-                50,
-                20,
-                lmm_mode=mode,
-                **optional,
-            )
-            results[mode] = module.compute_lmm_chunk_ncvt1_c(
-                workspace, np.ascontiguousarray(data.UtG.T), 1
-            )
-        else:
-            workspace = module.create_workspace_general_c(
-                data.eigenvalues,
-                invariant,
-                data.UtW,
-                data.Uty,
-                data.n_samples,
-                L_MIN,
-                L_MAX,
-                50,
-                20,
-                1,
-                data.n_cvt,
-                lmm_mode=mode,
-                **optional,
-            )
-            results[mode] = module.compute_lmm_chunk_fused_general_c(
-                workspace, np.ascontiguousarray(data.UtG.T), 1
-            )
+        workspace = module.create_workspace_c(
+            data.eigenvalues,
+            invariant,
+            data.UtW,
+            data.Uty,
+            data.n_samples,
+            L_MIN,
+            L_MAX,
+            50,
+            20,
+            1,
+            data.n_cvt,
+            lmm_mode=mode,
+            **optional,
+        )
+        results[mode] = module.compute_lmm_chunk_c(
+            workspace, np.ascontiguousarray(data.UtG.T), 1
+        )
     return cast(dict[int, dict[str, np.ndarray | None]], results)
 
 
@@ -169,7 +151,7 @@ def _named_detectors(expected, row_factory, fields, prefix):
         comparison = compare_assoc_results(
             [row_factory(changed)], [row_factory(expected)], config
         )
-        field_result = getattr(comparison, field)
+        field_result = comparison[field]
         detectors[field] = {
             "detector": f"{prefix}:{field}",
             "passed": not comparison.passed and not field_result.passed,
@@ -211,15 +193,13 @@ def mode4_evidence(*, backend="numpy", n_cvt=1, seed=911):
         }
         comparison = compare_assoc_results([_row(actual)], [_row(oracle)])
         field_checks = {
-            field: bool(getattr(comparison, field).passed)
-            for field in MODE4_ORACLE_FIELDS
+            field: bool(comparison[field].passed) for field in MODE4_ORACLE_FIELDS
         }
         mode1_comparison = compare_assoc_results(
             [_mode1_row(mode1_actual)], [_mode1_row(mode1_oracle)]
         )
         mode1_field_checks = {
-            field: bool(getattr(mode1_comparison, field).passed)
-            for field in MODE1_FIELDS
+            field: bool(mode1_comparison[field].passed) for field in MODE1_FIELDS
         }
         records.append(
             {
@@ -546,17 +526,11 @@ def phase1_evidence(*, backends=("numpy", "native")):
 
 
 def compare_phase1(destination):
-    from tests.math_validation.evidence import environment, write_json
+    from tests.math_validation.evidence import evidence_bundle
 
-    destination.mkdir(parents=True, exist_ok=False)
-    identity = environment()
-    backends = ("numpy",) if identity["forced_numpy"] else ("numpy", "native")
-    result = {
-        "schema_version": 1,
-        "environment": identity,
-        "status": "INCONCLUSIVE",
-        "evidence": phase1_evidence(backends=backends),
-    }
-    result["status"] = result["evidence"]["status"]
-    write_json(destination / "bundle.json", result)
-    return result
+    with evidence_bundle(destination) as bundle:
+        forced_numpy = bundle["environment"]["forced_numpy"]
+        backends = ("numpy",) if forced_numpy else ("numpy", "native")
+        bundle["evidence"] = phase1_evidence(backends=backends)
+        bundle["status"] = bundle["evidence"]["status"]
+    return bundle

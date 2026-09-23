@@ -11,12 +11,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.validation.compare import load_gemma_assoc
 from tests.math_validation import dense_oracle
 from tests.math_validation.compare import (
     check_boundary_coverage,
     compare_files,
-    read_rows,
 )
+from tests.math_validation.evidence import evidence_bundle, select_cases
 from tests.math_validation.fixtures import (
     REFERENCE,
     WALD_HEADER,
@@ -175,13 +176,13 @@ def test_header_and_record_order_are_observed(tmp_path):
     model = json.loads((source / "model.json").read_text())
     path = tmp_path / "oracle.assoc.txt"
     write_oracle_assoc(model, path)
-    assert tuple(read_rows(path)[0]) == WALD_HEADER
+    assert tuple(path.read_text().splitlines()[0].split("\t")) == WALD_HEADER
     lines = path.read_text().splitlines()
     path.write_text("\n".join([lines[0], *reversed(lines[1:])]) + "\n")
     assert compare_files(path, source / "gemma.assoc.txt")["status"] == "NOT VERIFIED"
     path.write_text("\n".join(["\t".join(reversed(WALD_HEADER)), *lines[1:]]) + "\n")
     with pytest.raises(ValueError, match="header"):
-        read_rows(path)
+        load_gemma_assoc(path)
 
 
 @pytest.mark.tier0
@@ -197,7 +198,7 @@ def test_wrong_af_orientation_preserving_maf_is_rejected(tmp_path):
     path.write_text("\n".join(lines) + "\n")
     result = compare_files(path, source / "gemma.assoc.txt")
     assert result["status"] == "NOT VERIFIED"
-    assert "snp0:af_orientation" in result["failure_ids"]
+    assert "snp0:af" in result["failure_ids"]
 
 
 @pytest.mark.tier0
@@ -235,3 +236,32 @@ def test_printed_af_rounding_limit_is_decimal_exact(
         path.write_text("\n".join(lines) + "\n")
     result = compare_files(*paths)
     assert result["status"] == status, result
+
+
+@pytest.mark.tier0
+def test_evidence_bundle_is_written_with_the_error_when_a_family_raises(tmp_path):
+    with (
+        pytest.raises(RuntimeError, match="comparison crashed"),
+        evidence_bundle(tmp_path / "run", cases=[]) as bundle,
+    ):
+        bundle["cases"].append({"id": "first"})
+        raise RuntimeError("comparison crashed")
+    written = json.loads((tmp_path / "run" / "bundle.json").read_text())
+    assert written["schema_version"] == 1
+    assert written["status"] == "INCONCLUSIVE"
+    assert written["error"] == "RuntimeError: comparison crashed"
+    assert written["cases"] == [{"id": "first"}]
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("case_ids", [(), ("missing",), ("a", "missing")])
+def test_select_cases_rejects_empty_or_undeclared_ids(case_ids):
+    with pytest.raises(ValueError, match="at least one declared LOCO case"):
+        select_cases([{"id": "a"}, {"id": "b"}], case_ids, "LOCO")
+
+
+@pytest.mark.tier0
+def test_select_cases_keeps_declared_order():
+    declared = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    assert select_cases(declared, None, "LOCO") == declared
+    assert select_cases(declared, ("c", "a"), "LOCO") == [declared[0], declared[2]]

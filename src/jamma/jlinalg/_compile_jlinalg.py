@@ -19,39 +19,24 @@ The jlinalg extension compiles per-file to enable per-source-group compiler flag
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
-# jamma._build_support ships inside the installed package, so the same
-# import path works in both modes:
-#   1. Dev-mode: ``python -m jamma.jlinalg._compile_jlinalg`` from a source
-#      checkout.
-#   2. Wheel install: runtime ABI-mismatch recompile via
-#      ``jamma.core.recompile.auto_recompile_c_extension`` calls
-#      ``compile_extension()`` from this module.
-from jamma._build_support.compile_and_link import JLINALG_SPEC
+from jamma._build_support.compile_and_link import JLINALG_SPEC, BuildReport
 from jamma._build_support.compile_and_link import compile_extension as _compile
 from jamma._build_support.load_proof import load_proof as _load_proof_for
 
 
-def compile_extension(
-    verbose: bool = False,
-    on_retry: Callable[[str], None] | None = None,
-) -> bool:
+def compile_extension(verbose: bool = False) -> bool:
     """Compile jlinalg C sources into a shared library in the installed package.
 
     Thin shim over ``jamma._build_support.compile_and_link.compile_extension``
     bound to ``JLINALG_SPEC``. See that function for the build behavior.
 
-    Dev-mode entry point. Called by:
-      - ``python -m jamma.jlinalg._compile_jlinalg`` from a source checkout
-      - ``jamma.core.recompile.auto_recompile_c_extension`` on ABI mismatch
+    Dev-mode entry point for ``python -m jamma.jlinalg._compile_jlinalg``.
 
     Args:
-        verbose: Print per-command compile details. When False (default),
-            only errors and a one-line summary are printed.
-        on_retry: Optional callback invoked with a single string argument
-            when the build retries without OpenMP.
+        verbose: Print per-command compile details and the success summary.
+            When False (default), only errors and retry notices are printed.
 
     Returns:
         True if compilation succeeded, False otherwise.
@@ -59,9 +44,7 @@ def compile_extension(
     return _compile(
         JLINALG_SPEC,
         Path(__file__).parents[1],  # the installed jamma/ package directory
-        verbose=verbose,
-        on_retry=on_retry,
-        out=sys.stderr,
+        BuildReport.to_stream(sys.stderr, verbose=verbose),
     )
 
 

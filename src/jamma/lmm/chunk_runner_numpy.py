@@ -24,14 +24,15 @@ import numpy as np
 from loguru import logger
 
 from jamma import jlinalg
-from jamma.core.estimates import estimate_lmm_seconds
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import (
     blas_thread_label,
     blas_threads,
     get_c_extension_thread_count,
 )
+from jamma.estimates import estimate_lmm_seconds
 from jamma.lmm import accel
+from jamma.lmm.assoc_output import ChunkSink
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel
 from jamma.lmm.chunk_pipeline import _drive_pipeline, plan_thread_budget
 from jamma.lmm.chunk_sizing import LmmChunkPlan
@@ -39,15 +40,57 @@ from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes
 from jamma.lmm.impute import impute_missing_inplace
 from jamma.lmm.pab import reset_p_yy_warned
-from jamma.lmm.prepare_common import PreparedLmmRun
-from jamma.lmm.results import (
-    ChunkSink,
-    count_lambda_boundary_hits,
-    log_lambda_boundary_warning,
-)
-from jamma.lmm.schema import RESULT_FIELDS as _RESULT_FIELDS
-from jamma.lmm.schema import ChunkRunStats, LmmConfig
+from jamma.lmm.prepare_common import NullFit, RotatedBasis
+from jamma.lmm.schema import ChunkRunStats, LmmConfig, ModeSpec
 from jamma.lmm.workspace import WorkspaceSpec
+
+# Relative tolerance for detecting lambda convergence at optimization bounds
+LAMBDA_BOUND_TOL = 1e-3
+
+
+def _count_lambda_boundary_hits(
+    mode: ModeSpec,
+    arrays: dict[str, np.ndarray],
+    l_min: float,
+    l_max: float,
+) -> tuple[int, int]:
+    """Count SNPs whose optimised lambdas sit at the lower and upper bound.
+
+    Returns:
+        Tuple of (n_at_lmin, n_at_lmax), summed over the mode's lambda keys.
+    """
+    n_at_lmin = 0
+    n_at_lmax = 0
+    for key in mode.lambda_keys:
+        lambdas = np.asarray(arrays[key])
+        n_at_lmin += int(np.sum(lambdas / l_min < 1 + LAMBDA_BOUND_TOL))
+        n_at_lmax += int(np.sum(lambdas / l_max > 1 - LAMBDA_BOUND_TOL))
+    return n_at_lmin, n_at_lmax
+
+
+def _log_lambda_boundary_warning(
+    n_at_lmin: int,
+    n_at_lmax: int,
+    l_min: float,
+    l_max: float,
+    prefix: str = "",
+) -> None:
+    """Emit a warning if any SNPs converged at lambda bounds.
+
+    Args:
+        n_at_lmin: Count of SNPs at lower bound.
+        n_at_lmax: Count of SNPs at upper bound.
+        l_min: Lower lambda bound.
+        l_max: Upper lambda bound.
+        prefix: Optional prefix for log message (e.g. "LOCO ").
+    """
+    if n_at_lmin > 0 or n_at_lmax > 0:
+        parts = []
+        if n_at_lmin > 0:
+            parts.append(f"{n_at_lmin} SNPs at l_min={l_min:.1e}")
+        if n_at_lmax > 0:
+            parts.append(f"{n_at_lmax} SNPs at l_max={l_max:.1e}")
+        logger.warning(f"{prefix}Lambda bound convergence: {', '.join(parts)}")
 
 
 class LmmChunkRange(NamedTuple):
@@ -137,10 +180,11 @@ class _PhenotypeConsumer:
 
         t_write_start = time.perf_counter()
         chunk_arrays = {
-            key: cr[key][:actual_len] for key in _RESULT_FIELDS[self.inv.lmm_mode]
+            column.array_key: cr[column.array_key][:actual_len]
+            for column in self.inv.mode.stat_columns
         }
-        chunk_lmin, chunk_lmax = count_lambda_boundary_hits(
-            self.inv.lmm_mode, chunk_arrays, self.inv.l_min, self.inv.l_max
+        chunk_lmin, chunk_lmax = _count_lambda_boundary_hits(
+            self.inv.mode, chunk_arrays, self.inv.l_min, self.inv.l_max
         )
         self.n_at_lmin += chunk_lmin
         self.n_at_lmax += chunk_lmax
@@ -155,6 +199,33 @@ class _PhenotypeConsumer:
         self.processed += actual_len
         self.result_write_s += time.perf_counter() - t_write_start
 
+    def finish(self, n_filtered: int, lambda_warning_prefix: str) -> ChunkRunStats:
+        """Check every SNP was written, log diagnostics, and report timing."""
+        if self.processed != n_filtered:
+            raise RuntimeError(
+                "Pre-allocated array size mismatch: wrote "
+                f"{self.processed} results, expected {n_filtered}. "
+                "This is an internal error; please report this issue with "
+                "your dataset dimensions."
+            )
+        for key, n_nan in self.nan_counts.items():
+            logger.warning(
+                f"{n_nan}/{n_filtered} SNPs have NaN {key}; check for "
+                "degenerate genotypes and kinship matrix quality"
+            )
+        _log_lambda_boundary_warning(
+            self.n_at_lmin,
+            self.n_at_lmax,
+            self.inv.l_min,
+            self.inv.l_max,
+            prefix=lambda_warning_prefix,
+        )
+        return ChunkRunStats(
+            processed=self.processed,
+            compute_s=self.compute_s,
+            result_write_s=self.result_write_s,
+        )
+
 
 class GroupedChunkRunStats(NamedTuple):
     """Per-phenotype compute/write timing plus one shared rotation timing."""
@@ -163,14 +234,11 @@ class GroupedChunkRunStats(NamedTuple):
     rotation_s: float
 
 
-@dataclass(frozen=True, slots=True)
-class PhenotypeChunkJob:
-    """Prepared phenotype state and destination for a shared chunk pass."""
+class PhenotypeChunkJob(NamedTuple):
+    """One phenotype's null fit and result destination in a shared chunk pass."""
 
-    prepared: PreparedLmmRun
+    fit: NullFit
     chunk_sink: ChunkSink
-    config: LmmConfig
-    lambda_warning_prefix: str = ""
 
 
 class _ChunkEngine:
@@ -196,7 +264,6 @@ class _ChunkEngine:
             raise ValueError("chunk engine requires at least one phenotype consumer")
         self.consumers = consumers
         self.inv = consumers[0].inv
-        self.kernel = consumers[0].kernel
         self.U = U
         self.filtered_means = filtered_means
         self.raw_chunks = raw_chunks
@@ -271,39 +338,18 @@ class _ChunkEngine:
         for consumer in self.consumers:
             consumer.compute_and_write(prepared, self.omp_threads)
 
-    @property
-    def processed(self) -> int:
-        return self.consumers[0].processed
-
-    @property
-    def compute_s(self) -> float:
-        return self.consumers[0].compute_s
-
-    @property
-    def result_write_s(self) -> float:
-        return self.consumers[0].result_write_s
-
-    @property
-    def nan_counts(self) -> dict[str, int]:
-        return self.consumers[0].nan_counts
-
-    @property
-    def n_at_lmin(self) -> int:
-        return self.consumers[0].n_at_lmin
-
-    @property
-    def n_at_lmax(self) -> int:
-        return self.consumers[0].n_at_lmax
-
 
 def run_lmm_chunk_source_numpy_group(
     *,
     genotypes: PreparedGenotypes,
+    basis: RotatedBasis,
     jobs: tuple[PhenotypeChunkJob, ...],
+    config: LmmConfig,
     dispatch: DispatchPath,
     chunks: LmmChunkPlan,
     workspace: WorkspaceSpec,
     progress_label: str = "LMM association",
+    lambda_warning_prefix: str = "",
 ) -> GroupedChunkRunStats:
     """Rotate each raw genotype chunk once for a bounded phenotype group.
 
@@ -311,8 +357,9 @@ def run_lmm_chunk_source_numpy_group(
     function consumes it with the selected dispatch and chunk geometry
     (``chunks``, already tightened to the filtered SNP count), then owns
     pipeline driving, eigen-rotation, Uab preparation, C/Python compute dispatch,
-    diagnostics, and timing. Batch and LOCO use this path so their chunk compute
-    behavior cannot drift.
+    diagnostics, and timing. Every phenotype shares ``basis`` and ``config``;
+    a job carries only what differs per phenotype. The caller returns before
+    this runs when no SNP passed filtering.
 
     A result field that is all NaN (e.g. a non-PSD kinship matrix, or a phenotype
     made degenerate by collinear covariates) is surfaced via ``logger.warning``
@@ -324,32 +371,14 @@ def run_lmm_chunk_source_numpy_group(
         raise ValueError("at least one phenotype chunk job is required")
     reset_p_yy_warned()
 
-    first_job = jobs[0]
-    prepared = first_job.prepared
-    config = first_job.config
-    n_samples = prepared.n_samples
+    n_samples = basis.n_samples
     n_filtered = genotypes.n_filtered
-    l_min = config.l_min
-    l_max = config.l_max
     show_progress = config.show_progress
 
     if genotypes.analyzed_sample_count != n_samples:
         raise ValueError(
             "prepared genotype sample count does not match prepared LMM run: "
             f"got {genotypes.analyzed_sample_count} and {n_samples}"
-        )
-
-    for job in jobs[1:]:
-        if job.prepared.n_samples != n_samples:
-            raise ValueError("all phenotype jobs must use the same sample count")
-        if job.prepared.U is not prepared.U:
-            raise ValueError("all phenotype jobs must share one eigenvector matrix")
-        if job.config != config:
-            raise ValueError("all phenotype jobs must use one LMM configuration")
-
-    if n_filtered == 0:
-        return GroupedChunkRunStats(
-            tuple(ChunkRunStats() for _job in jobs), rotation_s=0.0
         )
 
     chunk_size = chunks.chunk_size
@@ -375,7 +404,7 @@ def run_lmm_chunk_source_numpy_group(
     logger.info(f"Association threads: rotation={rotation_label} | {compute_label}")
     consumer_list = []
     for job in jobs:
-        invariants = RunInvariants.build(dispatch, job.prepared, job.config, n_filtered)
+        invariants = RunInvariants.build(dispatch, basis, job.fit, config, n_filtered)
         consumer_list.append(
             _PhenotypeConsumer(
                 invariants,
@@ -387,7 +416,7 @@ def run_lmm_chunk_source_numpy_group(
 
     engine = _ChunkEngine(
         consumers=consumers,
-        U=prepared.U,
+        U=basis.U,
         filtered_means=genotypes.imputation_means,
         raw_chunks=genotypes.chunks(chunk_size),
         chunk_size=chunk_size,
@@ -426,73 +455,10 @@ def run_lmm_chunk_source_numpy_group(
                 break
             engine.compute_and_write(prepared_chunk)
 
-    phenotype_stats = []
-    for consumer, job in zip(engine.consumers, jobs, strict=True):
-        if consumer.processed != n_filtered:
-            raise RuntimeError(
-                "Pre-allocated array size mismatch: wrote "
-                f"{consumer.processed} results, expected {n_filtered}. "
-                "This is an internal error; please report this issue with "
-                "your dataset dimensions."
-            )
-        for key, n_nan in consumer.nan_counts.items():
-            logger.warning(
-                f"{n_nan}/{n_filtered} SNPs have NaN {key}; check for "
-                "degenerate genotypes and kinship matrix quality"
-            )
-        log_lambda_boundary_warning(
-            consumer.n_at_lmin,
-            consumer.n_at_lmax,
-            l_min,
-            l_max,
-            prefix=job.lambda_warning_prefix,
-        )
-        phenotype_stats.append(
-            ChunkRunStats(
-                processed=consumer.processed,
-                compute_s=consumer.compute_s,
-                result_write_s=consumer.result_write_s,
-            )
-        )
-
     return GroupedChunkRunStats(
-        phenotypes=tuple(phenotype_stats),
-        rotation_s=rotation_s,
-    )
-
-
-def run_lmm_chunk_source_numpy(
-    *,
-    genotypes: PreparedGenotypes,
-    chunk_sink: ChunkSink,
-    dispatch: DispatchPath,
-    chunks: LmmChunkPlan,
-    workspace: WorkspaceSpec,
-    prepared: PreparedLmmRun,
-    config: LmmConfig,
-    progress_label: str = "LMM association",
-    lambda_warning_prefix: str = "",
-) -> ChunkRunStats:
-    """Run the shared chunk engine for one phenotype."""
-    grouped = run_lmm_chunk_source_numpy_group(
-        genotypes=genotypes,
-        jobs=(
-            PhenotypeChunkJob(
-                prepared=prepared,
-                chunk_sink=chunk_sink,
-                config=config,
-                lambda_warning_prefix=lambda_warning_prefix,
-            ),
+        phenotypes=tuple(
+            consumer.finish(n_filtered, lambda_warning_prefix)
+            for consumer in engine.consumers
         ),
-        dispatch=dispatch,
-        chunks=chunks,
-        workspace=workspace,
-        progress_label=progress_label,
-    )
-    stats = grouped.phenotypes[0]
-    return ChunkRunStats(
-        processed=stats.processed,
-        rotation_s=grouped.rotation_s,
-        compute_s=stats.compute_s,
-        result_write_s=stats.result_write_s,
+        rotation_s=rotation_s,
     )

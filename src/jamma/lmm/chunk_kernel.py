@@ -17,38 +17,31 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, assert_never
+from typing import assert_never
 
 import numpy as np
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy, compute_wald_split_numpy
+from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.dispatch import DispatchPath
-from jamma.lmm.prepare_common import PreparedLmmRun
-from jamma.lmm.schema import LmmConfig, LmmMode
+from jamma.lmm.prepare_common import NullFit, RotatedBasis
+from jamma.lmm.schema import MODE_SPECS, LmmConfig, LmmMode, LmmTest, ModeSpec
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    compute_iab_invariant_scalars_ncvt1,
     compute_uab_invariant_soa,
 )
 from jamma.lmm.workspace import WorkspaceSpec
 
-# What a kernel hands back. The Wald C kernels return the WaldResult
-# TypedDict; every other C kernel and the split paths return a plain
-# dict[str, NDArray], and a TypedDict is not assignable to dict[str, Any].
-# The engine only ever reads keys, so the read-only supertype is both
-# accurate and wide enough for every path.
-KernelResult = Mapping[str, Any]
+KernelResult = Mapping[str, np.ndarray]
 
 
 @dataclass(frozen=True)
 class RunInvariants:
     """Everything a kernel needs that does not vary from chunk to chunk.
 
-    Built once by :meth:`build`, which owns the two values derived from the
-    dispatch path rather than leaving each caller to derive them: the
-    null-model ``w`` column and the invariant Uab columns.
+    Built once by :meth:`build`, which owns the value derived from the
+    dispatch path rather than leaving each caller to derive it: the invariant
+    Uab columns.
     """
 
     dispatch: DispatchPath
@@ -65,54 +58,51 @@ class RunInvariants:
     l_max: float
     n_grid: int
     n_refine: int
-    w: np.ndarray | None
     uab_invariant_soa: np.ndarray | None
 
     @classmethod
     def build(
         cls,
         dispatch: DispatchPath,
-        prepared: PreparedLmmRun,
+        basis: RotatedBasis,
+        fit: NullFit,
         config: LmmConfig,
         n_filtered: int,
     ) -> RunInvariants:
         """Derive the path-dependent members and freeze the rest."""
-        UtW = prepared.UtW
-        n_cvt = prepared.n_cvt
+        UtW = basis.UtW
+        n_cvt = basis.n_cvt
         return cls(
             dispatch=dispatch,
             lmm_mode=config.lmm_mode,
             n_cvt=n_cvt,
-            n_samples=prepared.n_samples,
+            n_samples=basis.n_samples,
             n_filtered=n_filtered,
-            eigenvalues=prepared.eigenvalues,
+            eigenvalues=basis.eigenvalues,
             UtW=UtW,
-            Uty=prepared.Uty,
-            Hi_eval_null=prepared.Hi_eval_null,
-            logl_H0=prepared.logl_H0,
+            Uty=fit.Uty,
+            Hi_eval_null=fit.Hi_eval_null,
+            logl_H0=fit.logl_H0,
             l_min=config.l_min,
             l_max=config.l_max,
             n_grid=config.n_grid,
             n_refine=config.n_refine,
-            w=UtW[:, 0].copy() if dispatch.needs_null_w else None,
             uab_invariant_soa=(
-                compute_uab_invariant_soa(UtW, prepared.Uty, n_cvt)
+                compute_uab_invariant_soa(UtW, fit.Uty, n_cvt)
                 if dispatch.invariant_rows(n_cvt) > 0
                 else None
             ),
         )
 
-    def require_invariant_soa(self) -> np.ndarray:
-        """The invariant Uab columns, which every split path is built with."""
-        if self.uab_invariant_soa is None:
-            raise RuntimeError("split LMM dispatch requires invariant Uab columns")
-        return self.uab_invariant_soa
+    @property
+    def mode(self) -> ModeSpec:
+        """The specification of ``lmm_mode``."""
+        return MODE_SPECS[self.lmm_mode]
 
-    def require_null_w(self) -> np.ndarray:
-        """The null-model ``w`` column, which the fused paths are built with."""
-        if self.w is None:
-            raise RuntimeError("fused dispatch requires the null-model w")
-        return self.w
+    def require_invariant_soa(self) -> np.ndarray:
+        if self.uab_invariant_soa is None:
+            raise RuntimeError("fused LMM dispatch requires invariant Uab columns")
+        return self.uab_invariant_soa
 
 
 @dataclass(frozen=True)
@@ -158,7 +148,7 @@ class Kernel:
 def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
     """Build the one kernel this run's dispatch path selects.
 
-    ``workspace.max_threads`` sizes persistent and transient thread capacity.
+    ``workspace.max_threads`` sizes the workspace's thread capacity.
     The thread count handed to each chunk may be smaller, but cannot exceed the
     capacity priced before allocation.
     """
@@ -173,72 +163,20 @@ def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
         raise ValueError("workspace specification does not match kernel invariants")
     match inv.dispatch:
         case DispatchPath.FUSED:
-            return _ncvt1_kernel(inv, workspace.max_threads)
-        case DispatchPath.FUSED_GENERAL:
-            return _fused_general_kernel(inv, workspace.max_threads)
-        case DispatchPath.NUMPY_WALD:
-            return _numpy_wald_kernel(inv, workspace.max_threads)
+            return _fused_kernel(inv, workspace.max_threads)
         case DispatchPath.NUMPY_FALLBACK:
             return _numpy_kernel(inv, workspace.max_threads)
         case _:
             assert_never(inv.dispatch)
 
 
-# The kernel label for each n_cvt=1 lmm_mode. One C entry point serves every
-# mode, reading the mode off the workspace; the label is what a failure
-# reports, so mode 4 keeps its own.
-_NCVT1_LABEL: dict[int, str] = {
-    1: "Fused Uab dispatch",
-    2: "Fused LRT WS dispatch",
-    3: "Fused Score WS dispatch",
-    4: "Fused mode-4 Uab dispatch",
-}
+def _fused_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
+    """Any n_cvt, any mode: one C workspace built once, one compute per chunk.
 
-
-def _ncvt1_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
-    """n_cvt=1, any mode: one workspace keyed by lmm_mode, one compute.
-
-    The workspace packs w, the lambda grid and the null-model block the mode
-    needs, built once; each chunk hands in utg_t. Scratch is sized per call,
-    so the run-level thread count plays no part here.
+    The workspace packs the lambda grid, the null-model block the mode needs
+    and per-thread scratch for *n_threads*; each chunk hands in utg_t.
     """
-    workspace = accel.require().create_workspace_ncvt1_c(
-        inv.eigenvalues,
-        inv.require_invariant_soa(),
-        inv.require_null_w(),
-        inv.Uty,
-        inv.n_samples,
-        inv.l_min,
-        inv.l_max,
-        inv.n_grid,
-        inv.n_refine,
-        lmm_mode=inv.lmm_mode,
-        **_null_model_kwargs(inv),
-    )
-    compute = accel.require().compute_lmm_chunk_ncvt1_c
-    return Kernel(
-        label=_NCVT1_LABEL[inv.lmm_mode],
-        n_filtered=inv.n_filtered,
-        call=lambda chunk, threads: compute(workspace, chunk, threads),
-        max_threads=max_threads,
-    )
-
-
-_GENERAL_LABEL: dict[int, str] = {
-    1: "Fused general Uab dispatch",
-    2: "Fused general LRT Uab dispatch",
-    3: "Fused general Score Uab dispatch",
-    4: "Fused general mode-4 Uab dispatch",
-}
-
-
-def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
-    """n_cvt>=2, any mode: same shape as n_cvt=1, plus the Pab table.
-
-    The workspace sizes its per-thread scratch from *n_threads* once, so the
-    run-level thread count is part of its construction here.
-    """
-    workspace = accel.require().create_workspace_general_c(
+    workspace = accel.require().create_workspace_c(
         inv.eigenvalues,
         inv.require_invariant_soa(),
         inv.UtW,
@@ -253,43 +191,12 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         lmm_mode=inv.lmm_mode,
         **_null_model_kwargs(inv),
     )
-    compute = accel.require().compute_lmm_chunk_fused_general_c
+    compute = accel.require().compute_lmm_chunk_c
     return Kernel(
-        label=_GENERAL_LABEL[inv.lmm_mode],
+        label=f"Fused -lmm {inv.lmm_mode} dispatch",
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         max_threads=n_threads,
-    )
-
-
-def _numpy_wald_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
-    """n_cvt=1, mode 1, no C extension: the split Wald body in NumPy.
-
-    The Iab scalars are derived once here rather than per chunk, which is what
-    lets each chunk contribute three varying rows instead of the whole table.
-    """
-    invariant = inv.require_invariant_soa()
-    scalars = compute_iab_invariant_scalars_ncvt1(invariant)
-
-    def call(chunk: np.ndarray, threads: int) -> KernelResult:
-        varying = batch_compute_uab_varying_soa_numpy(1, inv.UtW, inv.Uty, chunk)
-        return compute_wald_split_numpy(
-            inv.eigenvalues,
-            varying,
-            invariant,
-            scalars,
-            inv.n_samples,
-            l_min=inv.l_min,
-            l_max=inv.l_max,
-            n_grid=inv.n_grid,
-            n_refine=inv.n_refine,
-        )
-
-    return Kernel(
-        label="NumPy Wald",
-        n_filtered=inv.n_filtered,
-        call=call,
-        max_threads=max_threads,
     )
 
 
@@ -320,15 +227,15 @@ def _numpy_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
     )
 
 
-def _null_model_kwargs(inv: RunInvariants) -> dict[str, Any]:
+def _null_model_kwargs(inv: RunInvariants) -> dict[str, np.ndarray | float]:
     """The null-model inputs a C workspace creator takes for this mode.
 
-    Score (3) needs ``hi_eval_null``, LRT (2) needs ``logl_H0``, mode 4 both,
-    Wald (1) neither. Both creators reject an input their mode does not use.
+    Score needs ``hi_eval_null`` and LRT needs ``logl_H0``. The creator
+    rejects an input its mode does not use.
     """
-    kwargs: dict[str, Any] = {}
-    if inv.lmm_mode in (3, 4):
+    kwargs: dict[str, np.ndarray | float] = {}
+    if LmmTest.SCORE in inv.mode.tests:
         kwargs["hi_eval_null"] = inv.Hi_eval_null
-    if inv.lmm_mode in (2, 4):
+    if LmmTest.LRT in inv.mode.tests:
         kwargs["logl_H0"] = inv.logl_H0
     return kwargs

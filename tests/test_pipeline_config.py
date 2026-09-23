@@ -16,9 +16,15 @@ import pytest
 
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import MIN_N_GRID
-from jamma.pipeline import PipelineConfig, PipelineRunner
-from tests.conftest import preflight
+from jamma.pipeline import (
+    PipelineConfig,
+    PipelineResult,
+    PipelineRunner,
+    requested_backend,
+)
+from jamma.pipeline_config import PhenotypeResult
 from tests.fixture_paths import SYNTHETIC
+from tests.support import preflight
 
 BFILE = SYNTHETIC.bfile
 
@@ -200,11 +206,7 @@ class TestCheckMemory:
         runner = PipelineRunner(config)
         result = preflight(
             runner.config,
-            plan_association(
-                100,
-                500,
-                requested="numpy-streaming",
-            ),
+            plan_association(100, 500, backend="numpy-streaming"),
         )
         assert result is None
 
@@ -217,7 +219,7 @@ class TestCheckMemory:
         all three decide a figure asserted here. At 100 samples the in-place
         DSYEVD peak is the 0.00008 GB matrix plus a (1+6N+2N^2) float64 and
         (3+5N) int64 workspace. The peak phase moves with the dispatch path:
-        the split-product NumPy kernel prices the association pass above the
+        the full-Uab NumPy kernel prices the association pass above the
         statistics pass, where a native workspace prices it below.
         """
         from jamma.core import memory
@@ -231,11 +233,7 @@ class TestCheckMemory:
             check_memory=True,
         )
         runner = PipelineRunner(config)
-        plan = plan_association(
-            100,
-            500,
-            requested="numpy-streaming",
-        )
+        plan = plan_association(100, 500, backend="numpy-streaming")
         result = preflight(runner.config, plan)
 
         assert result is not None
@@ -243,7 +241,7 @@ class TestCheckMemory:
         assert result.required_gb == pytest.approx(0.000248832)
         quote = plan.price(eigen=None)
         assert quote.statistics_gb == pytest.approx(0.00808)
-        assert quote.total_peak_gb == pytest.approx(0.012071936)
+        assert quote.total_peak_gb == pytest.approx(0.013341536)
 
 
 @pytest.mark.tier0
@@ -489,28 +487,26 @@ class TestFlagInteractions:
         d_path = tmp_path / "test.eigenD.txt"
         d_path.write_text("1.0\n2.0\n")
 
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=None,
-            check_memory=False,
-        )
         with pytest.raises(ValueError, match=r"Both -d.*and -u.*must be provided"):
-            PipelineRunner(config).validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                eigenvalue_file=d_path,
+                eigenvector_file=None,
+                check_memory=False,
+            )
 
     def test_validate_u_without_d_raises(self, tmp_path: Path) -> None:
         """Eigenvector file without eigenvalue file raises ValueError."""
         u_path = tmp_path / "test.eigenU.txt"
         u_path.write_text("1.0\t0.0\n0.0\t1.0\n")
 
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=None,
-            eigenvector_file=u_path,
-            check_memory=False,
-        )
         with pytest.raises(ValueError, match=r"Both -d.*and -u.*must be provided"):
-            PipelineRunner(config).validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                eigenvalue_file=None,
+                eigenvector_file=u_path,
+                check_memory=False,
+            )
 
     def test_validate_eigen_with_loco_raises(self, tmp_path: Path) -> None:
         """Eigen files with -loco raises ValueError (use --eigen-dir instead)."""
@@ -519,15 +515,14 @@ class TestFlagInteractions:
         d_path.write_text("1.0\n")
         u_path.write_text("1.0\n")
 
-        config = PipelineConfig(
-            bfile=BFILE,
-            eigenvalue_file=d_path,
-            eigenvector_file=u_path,
-            loco=True,
-            check_memory=False,
-        )
         with pytest.raises(ValueError, match="not supported with -loco"):
-            PipelineRunner(config).validate_inputs()
+            PipelineConfig(
+                bfile=BFILE,
+                eigenvalue_file=d_path,
+                eigenvector_file=u_path,
+                loco=True,
+                check_memory=False,
+            )
 
     def test_validate_eigen_files_not_found_raises(self, tmp_path: Path) -> None:
         """Nonexistent eigenvalue file raises FileNotFoundError."""
@@ -560,3 +555,68 @@ class TestFlagInteractions:
         )
         # Should NOT raise -- kinship is optional with eigen files
         PipelineRunner(config).validate_inputs()
+
+
+def _phenotype(column: int, associations: list, pve: float) -> PhenotypeResult:
+    return PhenotypeResult(
+        column=column,
+        associations=associations,
+        n_snps_tested=len(associations),
+        assoc_path=Path(f"out.pheno{column}.assoc.txt"),
+        pve_estimate=pve,
+        pve_se=pve / 10,
+    )
+
+
+@pytest.mark.tier0
+def test_pipeline_result_aggregates_phenotypes_in_column_order():
+    """Run-level fields concatenate or sum the records; PVE is single-only."""
+    result = PipelineResult(
+        phenotype_results=[_phenotype(1, ["a", "b"], 0.3), _phenotype(2, ["c"], 0.5)],
+        n_samples=10,
+    )
+
+    assert result.associations == ["a", "b", "c"]
+    assert result.n_snps_tested == 3
+    assert result.assoc_paths == [
+        Path("out.pheno1.assoc.txt"),
+        Path("out.pheno2.assoc.txt"),
+    ]
+    assert result.assoc_path == Path("out.pheno2.assoc.txt")
+    assert result.pve_estimate is None
+    assert result.pve_se is None
+
+
+@pytest.mark.tier0
+def test_pipeline_result_reports_the_single_phenotype_pve():
+    result = PipelineResult(
+        phenotype_results=[_phenotype(1, [], 0.3)],
+        n_samples=10,
+    )
+
+    assert result.pve_estimate == 0.3
+    assert result.pve_se == pytest.approx(0.03)
+
+
+@pytest.mark.tier0
+def test_jamma_backend_env_overrides_config_backend(monkeypatch):
+    monkeypatch.setenv("JAMMA_BACKEND", "numpy-streaming")
+
+    assert requested_backend(PipelineConfig(bfile=Path("test"))) == "numpy-streaming"
+
+
+@pytest.mark.tier0
+def test_config_backend_applies_without_env_override(monkeypatch):
+    monkeypatch.delenv("JAMMA_BACKEND", raising=False)
+
+    config = PipelineConfig(bfile=Path("test"), backend="numpy")
+
+    assert requested_backend(config) == "numpy"
+
+
+@pytest.mark.tier0
+def test_unknown_jamma_backend_is_rejected(monkeypatch):
+    monkeypatch.setenv("JAMMA_BACKEND", "gpu")
+
+    with pytest.raises(ValueError, match="JAMMA_BACKEND must be one of"):
+        requested_backend(PipelineConfig(bfile=Path("test")))

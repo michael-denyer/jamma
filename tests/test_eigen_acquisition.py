@@ -5,20 +5,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.core.eigen_plan import plan_eigen_driver
 from jamma.io import read_fam_phenotypes
 from jamma.lmm import loco_eigen
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files
+from jamma.lmm.eigen_plan import plan_eigen_driver
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import require_fixture
 from tests.fakes.eigen_lifetime import (
     LifetimeCheckedEigenReader,
     LifetimeCheckedJlinalg,
 )
 from tests.fakes.jlinalg import use_fake_jlinalg
 from tests.fixture_paths import LOCO
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier0
 
@@ -82,8 +82,8 @@ def test_reserved_dsyevr_plan_prices_the_decomposition_a_dsyevd_plan_cannot():
         256.0,
         has_dsyevd=True,
         has_dsyevr=True,
-        no_vendor=False,
-        inplace_eligible=True,
+        forced_numpy=False,
+        inplace_blocker=None,
         budget_gb=0.02,
     )
     assert dsyevr.driver == "DSYEVR"
@@ -102,8 +102,8 @@ def test_reserved_dsyevr_plan_prices_the_decomposition_a_dsyevd_plan_cannot():
         256.0,
         has_dsyevd=True,
         has_dsyevr=False,
-        no_vendor=False,
-        inplace_eligible=False,
+        forced_numpy=False,
+        inplace_blocker="K is not C-contiguous",
     )
     assert dsyevd.driver == "DSYEVD"
     assert dsyevd.required_gb == pytest.approx(0.032088032)

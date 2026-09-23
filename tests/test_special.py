@@ -1,4 +1,4 @@
-"""Validation tests for jamma.lmm.special pure-stdlib special functions.
+"""Validation tests for the scalar special-function oracles in tests/reference.
 
 Covers:
   - SPEC-01: betainc callable with 3- and 4-arg forms, result in [0,1], edge cases
@@ -23,7 +23,7 @@ scipy_stats = pytest.importorskip(
 sci_betainc = scipy_special.betainc
 sci_chi2 = scipy_stats.chi2
 
-from jamma.lmm.special import betainc, chi2_sf  # noqa: E402
+from tests.reference.special import betainc, chi2_sf  # noqa: E402
 
 
 class TestBetaincInterface:
@@ -69,7 +69,7 @@ class TestBetaincInterface:
         converge for any input. The ArithmeticError is caught internally and
         NaN is returned, so one degenerate SNP cannot end a GWAS run.
         """
-        from jamma.lmm import special
+        from tests.reference import special
 
         monkeypatch.setattr(special, "_CF_MAX_ITER", 0)
 

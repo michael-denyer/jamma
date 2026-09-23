@@ -20,7 +20,7 @@ graph TD
     StreamRunner["lmm/runner_numpy_streaming.py (Streaming)"]
     ChunkRunner["lmm/chunk_runner_numpy.py (Shared chunk engine)"]
     Likelihood["lmm/likelihood.py / pab.py / uab.py / likelihood_numpy.py"]
-    Stats["lmm/stats.py (AssocResult, batch Wald/LRT/Score)"]
+    Stats["lmm/stats.py (batch Wald/LRT/Score)"]
     LOCO["lmm/loco.py (LOCO orchestrator)"]
     jlinalg["jlinalg/ (BLAS/LAPACK dispatch)"]
     Core["core/ (Memory, progress)"]
@@ -55,7 +55,7 @@ A typical LMM association run proceeds as follows:
 
 2. **Data loading** — `PipelineRunner` calls `io/plink.py` to read PLINK metadata and phenotype vectors from the `.fam` file. Optional covariates are loaded from `io/covariate.py`.
 
-3. **Analysis resolution and kinship** — After preserving the public configuration's validation order, `pipeline_plan.py` resolves it into explicit standard/LOCO and provided-eigen/provided-kinship/computed-kinship variants. If a kinship file is provided, `kinship/io.py` reads it. Otherwise `kinship/stream.py` computes the centered (or standardized) kinship matrix `K = (1/p) * X_c @ X_c.T` using `jlinalg.dsyrk` for the symmetric rank-k update; `kinship/loco.py` computes LOCO kinship by subtraction.
+3. **Analysis resolution and kinship** — `PipelineConfig.source()` parses the kinship and eigen fields at construction, and `pipeline_plan.py` resolves the result into explicit standard/LOCO and provided-eigen/provided-kinship/computed-kinship variants. If a kinship file is provided, `kinship/io.py` reads it. Otherwise `kinship/stream.py` computes the centered (or standardized) kinship matrix `K = (1/p) * X_c @ X_c.T` using `jlinalg.dsyrk` for the symmetric rank-k update; `kinship/loco.py` computes LOCO kinship by subtraction.
 
 4. **Eigendecomposition** — Public batch and streaming runners normalize nullable inputs once to `KinshipMatrix` or `EigenPairs` in `lmm/prepare_common.py`. Sample filtering and preparation carry that complete value; grouped phenotypes reuse one `EigenPairs` object. `lmm/eigen.py` eigendecomposes `K` via `jlinalg.eigh`, which dispatches to vendor DSYEVD (faster, O(N²) workspace) or falls back to DSYEVR (O(N) workspace) when memory is insufficient. The result is eigenvalues `D` and eigenvectors `U`.
 
@@ -63,9 +63,9 @@ A typical LMM association run proceeds as follows:
 
 6. **Null model** — The rotated data `U.T @ Y` and covariates are used to optimize the variance component `lambda` via a 50-point grid search followed by golden section refinement (`lmm/likelihood.py` REML path).
 
-7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size, cut to 16 chunks when the budget alone would leave too few to pipeline, the run has at most 10,000 samples, and the BLAS cannot be throttled), `lmm/chunk_kernel.py` (the one dispatch match, which builds each path's persistent C workspace and binds the call that consumes it), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/results.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics through the batched `lmm/likelihood_numpy.py` routines, or through `_lmm_accel` when the C extension is loaded. `lmm/stats.py` holds the `AssocResult` record and the scalar reference implementations the tests check the batch path against; production does not call them. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
+7. **Per-SNP association** — `lmm/chunk_runner_numpy.py` orchestrates the shared chunk loop (missing-value imputation, genotype rotation via `jlinalg.dgemm`, per-chunk compute, and diagnostics) for the batch, streaming, and LOCO paths. Its concerns are split across focused sibling modules: `lmm/chunk_sizing.py` (RAM-budgeted chunk size, cut to 16 chunks when the budget alone would leave too few to pipeline, the run has at most 10,000 samples, and the BLAS cannot be throttled), `lmm/chunk_kernel.py` (the one dispatch match, which builds each path's persistent C workspace and binds the call that consumes it), and `lmm/chunk_pipeline.py` (rotation/compute thread split and the overlapped pipeline). Result writing goes through the sink factories in `lmm/assoc_output.py`. The compute kernels in `lmm/compute_numpy.py` build the Pab projection matrices and compute Wald/LRT/Score statistics through the batched `lmm/likelihood_numpy.py` routines, or through `_lmm_accel` when the C extension is loaded. `lmm/stats.py` holds the batch statistics; the scalar references the tests check them against live in `tests/reference/`, and production does not call them. The `_lmm_accel` C extension accelerates the per-SNP REML/Wald inner loop.
 
-8. **Output** — `AssocResult` records are written to a GEMMA-compatible `.assoc.txt` file via `lmm/io.py:IncrementalAssocWriter`. When `output_path` is set, results stream to disk per chunk to avoid accumulating a large in-memory list.
+8. **Output** — `AssocResult` records are written to a GEMMA-compatible `.assoc.txt` file via `lmm/assoc_output.py:IncrementalAssocWriter`. When `output_path` is set, results stream to disk per chunk to avoid accumulating a large in-memory list.
 
 ## Key Abstractions
 
@@ -81,8 +81,8 @@ A typical LMM association run proceeds as follows:
 | `WorkspaceSpec` | `src/jamma/lmm/workspace.py` | Kernel dimensions, thread capacity, and allocation bounds shared by the planner and workspace creation |
 | `LmmConfig` | `src/jamma/lmm/schema.py` | Frozen configuration dataclass shared by all LMM runners (MAF, lambda bounds, test type, etc.) |
 | `LmmRunResult` | `src/jamma/lmm/schema.py` | Return type for all runners; bundles association list, PVE estimate, and SNP count |
-| `AssocResult` | `src/jamma/lmm/stats.py` | Per-SNP association result dataclass matching GEMMA's output columns |
-| `MODE_SPECS` / `ModeSpec` | `src/jamma/lmm/schema.py` | Single source of truth mapping `lmm_mode` integers to output column definitions, headers, and format strings |
+| `AssocResult` | `src/jamma/lmm/assoc_output.py` | Per-SNP association result dataclass matching GEMMA's output columns |
+| `MODE_SPECS` / `ModeSpec` | `src/jamma/lmm/schema.py` | Single source of truth mapping `lmm_mode` integers to the tests each mode runs (`Test` flags) and its output column names and header |
 | `SnpMeta` | `src/jamma/lmm/schema.py` | SNP metadata as one array per column; writers and result builders slice arrays directly, no per-SNP dicts |
 | `PlinkData` | `src/jamma/io/plink.py` | Container for loaded PLINK binary data (genotypes, sample IDs, SNP IDs, positions, alleles) |
 | `ToleranceConfig` | `src/jamma/validation/tolerances.py` | Configurable tolerance thresholds for GEMMA numerical comparisons, calibrated from formal error propagation |
@@ -101,6 +101,9 @@ src/jamma/
 ├── pipeline_kinship.py     # The -gk path: compute a kinship matrix and write it
 ├── pipeline_samples.py     # The analysed-sample basis shared by -lmm and -gk
 ├── pipeline_memory.py      # The preflight gate: prices the plan per dispatch path and eigen driver
+├── gemma_log.py            # write_gemma_log(): GEMMA-compatible .log.txt for a finished run
+├── estimates.py            # Wall-clock time estimates for GWAS pipeline phases
+├── _native.py              # _load_c_module(): the one runtime C-import seam, auto-recompile-once
 ├── _build_support/         # Canonical compile flags, source lists, and the
 │   │                       # build/load seam: BuildSpec, run_build, find_c_compiler
 │   ├── build_models.py     # BuildSpec values, source manifests, and flag policy
@@ -109,20 +112,17 @@ src/jamma/
 │   ├── find_compiler.py    # C compiler discovery for build-time and runtime recompile
 │   ├── load_proof.py       # Post-link import proof shared by both dev-mode compile shims
 │   └── openmp_detect.py    # OpenMP flag detection for C extension compilation
-├── core/                   # Cross-cutting concerns: memory estimation,
-│   │                       # progress bars, SNP filtering, threading
+├── core/                   # Leaf infrastructure: memory gate, progress bars,
+│   │                       # threading, telemetry; imports no other jamma package
 │   ├── constants.py        # Domain constants (e.g. GEMMA's -9 missing-phenotype code)
-│   ├── estimates.py        # Wall-clock time estimates for GWAS pipeline phases
-│   ├── memory.py           # Cost model: estimators, RAM seam, sufficiency check
-│   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives
-│   ├── memory_snapshot.py  # Process RSS / free-RAM snapshots and cleanup
-│   ├── hardware.py         # Hardware/software context collection for benchmark repro
+│   ├── memory.py           # RAM seam, array sizing, sufficiency check
+│   ├── memory_snapshot.py  # Process RSS / free-RAM snapshots
 │   ├── progress.py         # timed_progress() and progress_iterator() wrappers
-│   ├── recompile.py        # _load_c_module(): the one runtime C-import seam, auto-recompile-once
-│   ├── snp_filter.py       # Shared per-SNP statistics and filtering utilities
-│   ├── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
 │   ├── telemetry.py        # BenchmarkRecord / append_benchmark_record()
 │   └── threading.py        # BLAS thread-count control via threadpoolctl
+├── genotype/               # Genotype QC over streamed PLINK chunks
+│   ├── snp_filter.py       # Per-SNP statistics, MAF/missing/monomorphism/HWE filter masks
+│   └── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
 ├── io/                     # PLINK .bed/.bim/.fam readers and covariate/weight loaders
 │   ├── plink.py            # PlinkData loader and streaming chunk iterator
 │   ├── covariate.py        # GEMMA-format covariate file reader
@@ -131,12 +131,13 @@ src/jamma/
 │   ├── snp_list.py         # GEMMA-format SNP list file I/O (one RS ID per line)
 │   ├── weight.py           # GEMMA-format individual weight file I/O + kinship weighting
 │   └── _parallel_text.py   # Shared multiprocess text I/O helpers for matrix_reader/matrix_writer
-│                          # (re-exports unlink_quietly from utils/atomic_publish.py)
+│                          # (spawn pool, scoped temp dir, MemmapRef)
 ├── kinship/                # Kinship matrix computation and LOCO variants
 │   ├── stream.py           # Streaming centered/standardized kinship (dsyrk), mode-selected
 │   ├── loco.py             # Streaming LOCO kinship via subtraction, batch loop
 │   ├── accumulation.py     # Shared selection, preprocessing, row validation, and symmetric rank-k updates
 │   ├── io.py               # Kinship matrix I/O (GEMMA text format and binary .npy)
+│   ├── memory.py           # estimate_kinship_memory(): streaming kinship memory price
 │   └── missing.py          # Genotype imputation and centring helpers
 ├── jlinalg/                # Vendor BLAS/LAPACK dispatch layer with NumPy fallback
 │   ├── __init__.py         # Backend discovery, reload semantics, and public facade
@@ -149,24 +150,24 @@ src/jamma/
 │   ├── include/            # jlinalg.h: shared C API surface for the _jlinalg extension
 │   └── src/                # C sources for _jlinalg extension (BLAS dispatch, LAPACK)
 ├── lmm/                    # LMM association subsystem
-│   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, AssocResult, SnpMeta
+│   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, SnpMeta
 │   ├── accel.py            # available()/require(): the one loader for _lmm_accel
-│   ├── io.py               # IncrementalAssocWriter and the GEMMA .assoc.txt line format
-│   ├── likelihood.py       # Index tables, scalar REML/MLE, null-model golden section search
+│   ├── assoc_output.py     # AssocResult, IncrementalAssocWriter, build_results and the chunk sinks
+│   ├── likelihood.py       # Null-model scalar REML/MLE and golden section search
 │   ├── pab.py              # Pab indexing, Uab products, and Schur-complement recursion
 │   ├── uab.py              # Uab/Pab/Iab batch builders in full, split and SoA layouts
 │   ├── likelihood_numpy.py # NumPy batch REML/MLE evaluation and lambda optimisation
-│   ├── stats.py            # AssocResult and the batch Wald/LRT/Score statistics
+│   ├── stats.py            # The batch Wald/LRT/Score statistics
 │   ├── eigen.py            # Kinship eigendecomposition via jlinalg.eigh
+│   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives
 │   ├── eigen_cache.py      # Content + parameter cache key for LOCO per-chromosome eigen
-│   ├── eigen_io.py         # Read/write eigenvalue and eigenvector files (.npy / .txt)
+│   ├── eigen_io.py         # Eigen files (.npy / .txt); EigenGeneration members and manifests
 │   ├── impute.py           # In-place mean imputation for genotype chunks
 │   ├── prepare_common.py   # Typed kinship/eigen inputs, filtering, covariates, and null-model preparation
-│   ├── results.py          # AssocResult building and per-chunk result sinks
 │   ├── association_plan.py # plan_association(); ExecutionPlan, ExecutableAssociationPlan
 │   ├── workspace.py        # Kernel allocation contract and native sizing query
 │   ├── genotype_source.py  # SampleBasis, PreparedGenotypes, GenotypeSource protocol
-│   ├── runner_numpy.py     # Shared run body (run_lmm_association), LmmRunSpec, MatrixSource, batch entry
+│   ├── runner_numpy.py     # Shared run body (run_association, run_single), LmmRunSpec, MatrixSource, batch entry
 │   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming entry
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 │   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation
@@ -174,29 +175,30 @@ src/jamma/
 │   ├── chunk_kernel.py     # The one dispatch match: workspace + its call
 │   ├── chunk_pipeline.py   # Rotation/compute thread split + overlapped pipeline driver
 │   ├── loco.py             # LOCO orchestrator: per-chromosome eigen + LMM loop
-│   ├── loco_config.py      # LocoConfig: LOCO-only knobs and artifact naming
+│   ├── loco_config.py      # LocoConfig: LOCO-only knobs and kinship naming
 │   ├── loco_eigen.py       # eigen_pairs_for(): cache-or-compute decision, cache key, manifest, artifact writes
 │   ├── loco_workers.py     # Concurrent eigen solves, BLAS scope ownership and worker memory pricing
 │   ├── compute_numpy.py    # Per-chunk LMM compute kernels and C workspace wrappers
-│   ├── special.py          # Pure-stdlib betainc (Cephes CF) and chi2_sf (erfc)
+│   ├── special.py          # NumPy betainc_batch (Cephes CF) and chi2_sf_batch (erfc)
 │   ├── _compile_accel.py   # Dev-mode/runtime compiler; calls run_build(LMM_ACCEL_SPEC)
 │   ├── _lmm_accel.c        # CPython module init; the only unit calling import_array()
 │   ├── _lmm_accel_ncvt1.c  # Public n_cvt=1 workspace and chunk-compute entry points
 │   ├── _lmm_accel_general.c # Public general-workspace and chunk-compute entry points
 │   ├── _lmm_accel_internal.h # Private declarations shared with module registration
-│   ├── _lmm_support.c/.h   # Shared thread-scratch alloc/free and NumPy C-API glue
+│   ├── _lmm_support.c/.h   # Shared shell: mode-input parse, thread clamp, result dict, NumPy C-API glue
 │   ├── _lmm_stats.c/.h     # Wald/Score/LRT statistics kernels shared by both workspaces
-│   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) workspace creator and fused compute
-│   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 workspace creator and fused compute
+│   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) likelihoods, coarse grid, and refiners
+│   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 likelihoods, coarse grid, and refiners
+│   ├── _lmm_lambda_search.h # The coarse lambda grid build and the one golden-section and Newton driver all refiners call
 │   ├── _lmm_logdet.h       # logdet(H) as a mantissa product with exact exponent; hot-loop inline
-│   └── _lmm_types.h        # Shared workspace/result struct definitions
+│   └── _lmm_types.h        # Plain-C shared types: Pab table, lmm_tests_t mode decode
 │                          #
 │                          # LMM_ACCEL_SOURCES in _build_support/build_models.py is the
 │                          # source list every build entry point reads; do not trust a file
 │                          # list written down anywhere else, including this one.
 ├── utils/                  # Shared utilities (logging setup, chromosome sort key)
 │   ├── atomic_publish.py   # AtomicOutput()/publish_temp_path(): sibling-temp + rename publish
-│   ├── logging.py          # setup_logging() + write_gemma_log(): loguru config, GEMMA .log.txt
+│   ├── logging.py          # setup_logging(): loguru console and JSON file handlers
 │   └── npy_cache.py        # read_array_artifact(): .npy / text / sidecar reader for kinship and eigen files
 └── validation/             # GEMMA comparison utilities and tolerance configuration
     ├── compare.py          # Side-by-side JAMMA vs GEMMA result comparisons
@@ -224,7 +226,7 @@ Two rules govern adding a `.c` file:
 
 A separate trap, guarded by [`tests/test_c_include_order.py`](../tests/test_c_include_order.py): `_lmm_support.h` must reach `<math.h>` before anything else does, because `M_PI` is not C11 and glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets. macOS defines `M_PI` unconditionally, so a local build and the ARM Mac CI job pass while every Linux job fails.
 
-Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery plus explicit compile/link attempt results and retry transitions, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, and `_compile_accel.py`) consume that facade. At runtime, `jamma.core.recompile._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
+Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery plus explicit compile/link attempt results and retry transitions, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, and `_compile_accel.py`) consume that facade. At runtime, `jamma._native._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
 
 ## C Extension Architecture
 
@@ -235,7 +237,7 @@ Two compiled C extensions accelerate the hot paths:
 | `jamma.jlinalg._jlinalg` | `src/jamma/jlinalg/src/` | BLAS dispatch (DGEMM, DSYRK), LAPACK dispatch (DSYEVD, DSYEVR), single-pass per-SNP statistics |
 | `jamma.lmm._lmm_accel` | `src/jamma/lmm/_lmm_*.c` | Per-SNP REML Wald pipeline with OpenMP parallelism over SNP chunks |
 
-Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). The streaming runner is only auto-selected by `plan_association()` when `_lmm_accel` is available; an explicit `--backend numpy-streaming` request is rejected with `ValueError` at the pipeline boundary if the extension is missing.
+Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). Batch-or-streaming selection does not depend on `_lmm_accel`: `plan_association()` picks streaming whenever the batch quote does not fit in memory, and honours an explicit `--backend numpy-streaming` request with or without the extension. The extension decides only the dispatch path each chunk runs.
 
 ## LOCO Mode
 
@@ -247,6 +249,6 @@ JAMMA targets exact output compatibility with GEMMA v0.98.5. Key design choices 
 
 - The `pab.py` recursion follows GEMMA's `CalcPab` using identical index ordering (GEMMA's `GetabIndex` formula with 1-based indices).
 - REML optimization uses a 50-point grid search followed by golden section refinement (`n_refine >= 20` for ~1e-5 tolerance), matching GEMMA's convergence behaviour.
-- `lmm/special.py` provides pure-stdlib `betainc` (Cephes Lentz CF) and `chi2_sf` (erfc) to avoid a `scipy` runtime dependency, which would overwrite ILP64 numpy with LP64 numpy on installation.
+- `lmm/special.py` provides NumPy `betainc_batch` (Cephes Lentz CF) and `chi2_sf_batch` (erfc) to avoid a `scipy` runtime dependency, which would overwrite ILP64 numpy with LP64 numpy on installation.
 - `guard_p_yy` replaces an exactly zero projected residual with `_P_YY_ZERO_REPLACEMENT = 1e-8` before `log`, as GEMMA v0.98.5's `LogRL_f`/`LogL_f` do, and turns a negative one into NaN.
 - Calibrated tolerances are documented in `src/jamma/validation/tolerances.py` and `docs/GEMMA_EQUIVALENCE.md`.

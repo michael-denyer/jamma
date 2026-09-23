@@ -5,30 +5,21 @@ import pytest
 
 from jamma.core import (
     MemorySnapshot,
-    cleanup_memory,
     get_memory_snapshot,
     log_memory_snapshot,
 )
-from jamma.core.eigen_plan import (
-    _dsyevd_peak_gb,
-    array_gb,
-    dsyevr_peak_gb,
-    square_matrix_gb,
-)
-from jamma.core.estimates import _format_duration
 from jamma.core.memory import (
-    eigen_cost,
-    estimate_lmm_memory,
+    array_gb,
     fits,
     headroom_gb,
-    kinship_cost,
-    lmm_cost,
     margin_gb,
     require,
 )
+from jamma.estimates import _format_duration
 from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
 from jamma.lmm.dispatch import DispatchPath
-from tests.builders import BOUNDARY_SIZES
+from jamma.lmm.eigen_plan import _dsyevd_peak_gb, dsyevr_peak_gb
+from tests.builders import association_price_plan
 from tests.fakes.memory import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
@@ -113,107 +104,58 @@ class TestMemorySnapshot:
         assert snap.rss_gb > 0
 
 
-class TestCleanupMemory:
-    """Tests for memory cleanup function."""
-
-    def test_cleanup_memory_returns_snapshot(self):
-        """cleanup_memory should return MemorySnapshot after cleanup."""
-        snap = cleanup_memory(verbose=False)
-
-        assert isinstance(snap, MemorySnapshot)
-        assert snap.rss_gb > 0
-
-    def test_cleanup_memory_verbose_logs(self):
-        """cleanup_memory with verbose=True runs gc and returns valid snapshot."""
-        from unittest.mock import patch
-
-        with patch("gc.collect", wraps=__import__("gc").collect) as mock_gc:
-            snap = cleanup_memory(verbose=True)
-
-        mock_gc.assert_called()
-
-        assert isinstance(snap, MemorySnapshot)
-        assert snap.rss_gb > 0, "RSS should be positive after cleanup"
-        assert snap.available_gb > 0, "Available memory should be positive"
-
-    def test_cleanup_frees_memory_after_allocation(self):
-        """Cleanup completes without error after allocating and deleting arrays.
-
-        RSS-based assertions are non-deterministic under parallel test workers
-        (-n3) because other workers allocate/free memory concurrently. This test
-        verifies that the allocate/delete/gc/cleanup_memory sequence runs without
-        error and returns a valid snapshot -- not that RSS decreased by a
-        specific amount.
-        """
-        import gc
-
-        # Allocate a moderate array
-        big_array = np.zeros((1000, 1000), dtype=np.float64)  # 8MB
-        _ = big_array.sum()  # Touch it
-
-        # Delete and cleanup
-        del big_array
-        gc.collect()
-
-        after = cleanup_memory(verbose=False)
-
-        # Structural assertions: cleanup returned a valid snapshot
-        assert after is not None
-        assert isinstance(after.rss_gb, float)
-        assert after.rss_gb > 0
-
-
-def _batch_non_buffer_gb(n_samples: int, n_snps: int) -> float:
-    """The terms of ``estimate_lmm_memory`` that no chunk buffer contributes to.
-
-    Eigenvectors + full genotypes + eigenvalues + the three rotated vectors.
-    Subtract it from the total to recover the per-buffer batch figure the old
-    ``MemoryBreakdown.lmm_batch_gb`` field exposed.
-    """
-    return (
-        square_matrix_gb(n_samples)
-        + array_gb(n_samples, n_snps)
-        + array_gb(n_samples)
-        + 3 * array_gb(n_samples)
+def _batch_quote_gb(
+    n_samples: int, n_snps: int, chunk_size: int = 20_000, n_cvt: int = 1
+) -> float:
+    """The batch association quote on the NumPy fallback, the largest path."""
+    plan = association_price_plan(
+        "batch",
+        n_samples=n_samples,
+        n_snps=n_snps,
+        chunk_size=chunk_size,
+        n_cvt=n_cvt,
     )
+    return plan.price(eigen=None).association_gb
 
 
-class TestLmmMemoryEstimation:
-    """Tests for estimate_lmm_memory function (LMM-phase only)."""
+class TestAssociationQuote:
+    """The association phase as ``price()`` quotes it."""
 
-    def test_lmm_estimate_prices_eigenvectors_but_no_kinship_or_workspace(self):
-        """The LMM phase holds U and the genotypes, not K and not the workspace."""
+    def test_batch_quote_prices_eigenvectors_but_no_kinship_or_workspace(self):
+        """U, the whole genotype matrix, one rotation buffer, and one Uab/Iab chunk."""
         n_samples, n_snps, batch = 100_000, 10_000, 20_000
-        uab_iab_gb = _fallback_uab_iab_gb(n_samples, batch)
-        total = estimate_lmm_memory(
-            n_samples, n_snps, lmm_batch_size=batch, uab_iab_gb=uab_iab_gb
-        )
-        expected_batch = array_gb(n_samples, batch) + uab_iab_gb
+        total = _batch_quote_gb(n_samples, n_snps, batch)
         assert total == pytest.approx(
-            _batch_non_buffer_gb(n_samples, n_snps) + expected_batch
+            array_gb(n_samples, n_samples)
+            + array_gb(n_samples, n_snps)
+            + array_gb(n_samples, batch)
+            + _fallback_uab_iab_gb(n_samples, batch)
         )
-        assert total < eigen_cost(n_samples)
+        assert total < _dsyevd_peak_gb(n_samples)
 
-    def test_lmm_estimate_100k_under_300gb(self):
-        """At 100k samples with 100 SNPs, LMM should need well under 300GB.
+    def test_batch_quote_100k_under_200gb(self):
+        """At 100k samples with 100 SNPs, LMM should need under 200GB.
 
         This is the exact scenario from the xlarge benchmark bug:
         300.6GB available, but old check demanded 320GB (eigendecomp peak).
         """
-        est = estimate_lmm_memory(
-            100_000, 100, uab_iab_gb=_fallback_uab_iab_gb(100_000, 20_000)
-        )
+        est = _batch_quote_gb(100_000, 100)
         assert est < 200, (
             f"LMM for 100k samples × 100 SNPs should need <200GB, got {est:.1f}GB"
         )
 
-    def test_returns_a_gb_figure(self):
-        """The estimator returns one number, the phase peak in GB."""
-        est = estimate_lmm_memory(
-            1_000, 1_000, uab_iab_gb=_fallback_uab_iab_gb(1_000, 20_000)
+    @pytest.mark.parametrize("mode", ["streaming", "loco"])
+    def test_chunked_quote_is_independent_of_n_snps(self, mode):
+        """Streaming and LOCO hold one genotype chunk, never the whole matrix."""
+        few, many = (
+            association_price_plan(
+                mode, n_samples=10_000, n_snps=n_snps, chunk_size=5_000
+            )
+            .price(eigen=None)
+            .association_gb
+            for n_snps in (10_000, 10_000_000)
         )
-        assert isinstance(est, float)
-        assert est > 0
+        assert few == many
 
 
 class TestMemoryEstimateVsActualAllocation:
@@ -255,75 +197,37 @@ class TestMemoryEstimateVsActualAllocation:
             f"{priced_gb:.6f}GB but actual is {actual_uab_iab_gb:.6f}GB"
         )
 
-    def test_lmm_batch_gb_includes_uab_iab(self):
-        """estimate_lmm_memory.lmm_batch_gb must include Uab/Iab, not just UtG."""
-        n_samples = 10_000
-        batch_size = 5_000
-        n_cvt = 1
-
-        total = estimate_lmm_memory(
-            n_samples,
-            1_000,
-            lmm_batch_size=batch_size,
-            uab_iab_gb=_fallback_uab_iab_gb(n_samples, batch_size, n_cvt),
-        )
-        batch_gb = total - _batch_non_buffer_gb(n_samples, 1_000)
-
-        # UtG alone: n_samples * batch_size * 8
-        utg_only_gb = n_samples * batch_size * 8 / 1e9
-
-        assert batch_gb > utg_only_gb, (
-            f"the batch buffer ({batch_gb:.4f}GB) should exceed "
-            f"UtG-only ({utg_only_gb:.4f}GB) because Uab/Iab must be included"
-        )
-
 
 class TestKinshipDtypeAccounting:
     """Verify memory model accounts for float64 genotype copy in kinship."""
 
-    def test_lmm_genotypes_gb_is_float64(self):
-        """estimate_lmm_memory must use float64 for genotypes."""
+    def test_batch_genotypes_are_priced_as_float64(self):
+        """The batch quote holds the genotype matrix as float64."""
         n_samples = 10_000
         n_snps = 50_000
 
-        uab_iab_gb = _fallback_uab_iab_gb(n_samples, 20_000)
-        growth = estimate_lmm_memory(
-            n_samples, n_snps, uab_iab_gb=uab_iab_gb
-        ) - estimate_lmm_memory(n_samples, 0, uab_iab_gb=uab_iab_gb)
+        growth = _batch_quote_gb(n_samples, n_snps) - _batch_quote_gb(n_samples, 0)
 
         expected_gb = n_samples * n_snps * 8 / 1e9
         assert growth == pytest.approx(expected_gb)
 
-    def test_lmm_batch_gb_grows_with_n_cvt(self):
-        """estimate_lmm_memory.lmm_batch_gb must grow with n_cvt.
+    def test_batch_quote_grows_with_n_cvt(self):
+        """The NumPy-fallback batch quote must grow with n_cvt.
 
         Regression: callers that forget to pass n_cvt silently get the
         default (n_cvt=1) estimate, which underestimates Uab/Iab for
         multi-covariate runs and lets preflight pass before the real
-        allocation OOMs. The estimator itself correctly scales with
-        n_cvt — this test pins that contract so any fix that re-breaks
-        it fails loudly.
+        allocation OOMs.
         """
-        n_samples = 10_000
-        batch_size = 5_000
-
-        non_buffer = _batch_non_buffer_gb(n_samples, 1_000)
-        batch = {
-            n_cvt: estimate_lmm_memory(
-                n_samples,
-                1_000,
-                lmm_batch_size=batch_size,
-                uab_iab_gb=_fallback_uab_iab_gb(n_samples, batch_size, n_cvt),
-            )
-            - non_buffer
-            for n_cvt in (1, 5, 20)
+        quote = {
+            n_cvt: _batch_quote_gb(10_000, 1_000, 5_000, n_cvt) for n_cvt in (1, 5, 20)
         }
 
-        assert batch[5] > batch[1], (
-            f"n_cvt=5 ({batch[5]:.4f}GB) should exceed n_cvt=1 ({batch[1]:.4f}GB)"
+        assert quote[5] > quote[1], (
+            f"n_cvt=5 ({quote[5]:.4f}GB) should exceed n_cvt=1 ({quote[1]:.4f}GB)"
         )
-        assert batch[20] > batch[5], (
-            f"n_cvt=20 ({batch[20]:.4f}GB) should exceed n_cvt=5 ({batch[5]:.4f}GB)"
+        assert quote[20] > quote[5], (
+            f"n_cvt=20 ({quote[20]:.4f}GB) should exceed n_cvt=5 ({quote[5]:.4f}GB)"
         )
 
 
@@ -332,9 +236,7 @@ class TestGateCorrectnessLmmMemory:
 
     def test_lmm_gate_passes_with_ample_memory(self):
         """The gate passes when plenty of memory is available."""
-        required = estimate_lmm_memory(
-            1_000, 1_000, uab_iab_gb=_fallback_uab_iab_gb(1_000, 20_000)
-        )
+        required = _batch_quote_gb(1_000, 1_000)
         assert fits(required, 500.0) is True
 
     def test_lmm_gate_blocks_with_scarce_memory(self):
@@ -342,16 +244,12 @@ class TestGateCorrectnessLmmMemory:
 
         100k samples needs ~80GB of eigenvectors alone.
         """
-        required = estimate_lmm_memory(
-            100_000, 10_000, uab_iab_gb=_fallback_uab_iab_gb(100_000, 20_000)
-        )
+        required = _batch_quote_gb(100_000, 10_000)
         assert fits(required, 1.0) is False
 
     def test_lmm_gate_threshold_boundary(self):
         """The gate accounts for the safety margin (10% capped at 10GB)."""
-        required = estimate_lmm_memory(
-            100, 100, uab_iab_gb=_fallback_uab_iab_gb(100, 20_000)
-        )
+        required = _batch_quote_gb(100, 100)
         needed = required + margin_gb(required)
 
         assert fits(required, needed + 0.001) is True
@@ -406,63 +304,19 @@ class TestFormatDuration:
 
 
 @pytest.mark.tier0
-class TestPhaseCostFunctions:
-    """Table-driven checks over the three phase cost functions.
-
-    Each phase function must reproduce the same peak a hand-rolled formula
-    gives at every size in ``BOUNDARY_SIZES``, the same sizes the jlinalg
-    BLAS tests sweep.
-    """
-
-    @pytest.mark.parametrize("n", BOUNDARY_SIZES)
-    def test_kinship_cost_covers_preprocessing_and_backend_scratch(self, n):
-        """Price raw, selected, and transformed data plus two boolean masks."""
-        kinship_gb = square_matrix_gb(n)
-        chunk_gb = n * 1000 * 8 / 1e9
-        scratch_gb = 1.5
-        assert kinship_cost(kinship_gb, chunk_gb, scratch_gb) == pytest.approx(
-            kinship_gb + 3.25 * chunk_gb + scratch_gb
-        )
-
-    @pytest.mark.parametrize("n", BOUNDARY_SIZES)
-    def test_eigen_cost_defaults_to_dsyevd_peak(self, n):
-        """With no driver-aware figure, eigen_cost is the conservative DSYEVD peak."""
-        assert eigen_cost(n) == pytest.approx(_dsyevd_peak_gb(n))
-
-    @pytest.mark.parametrize("n", BOUNDARY_SIZES)
-    def test_eigen_cost_uses_caller_supplied_peak(self, n):
-        """A caller-supplied peak (e.g. from plan_eigen_driver) wins outright."""
-        driver_peak = dsyevr_peak_gb(n)
-        assert eigen_cost(n, driver_peak) == pytest.approx(driver_peak)
-
-    @pytest.mark.parametrize("n", BOUNDARY_SIZES)
-    def test_lmm_cost_sums_its_five_components(self, n):
-        """lmm_cost = eigenvectors + chunk + rotation + grid REML + Uab/Iab."""
-        eigenvectors_gb = square_matrix_gb(n)
-        lmm_chunk_gb = n * 500 * 8 / 1e9
-        rotation_buffer_gb = n * 500 * 8 / 1e9
-        grid_reml_gb = 50 * 500 * 8 / 1e9
-        uab_iab_gb = 2.5
-        assert lmm_cost(
-            eigenvectors_gb, lmm_chunk_gb, rotation_buffer_gb, grid_reml_gb, uab_iab_gb
-        ) == pytest.approx(
-            eigenvectors_gb
-            + lmm_chunk_gb
-            + rotation_buffer_gb
-            + grid_reml_gb
-            + uab_iab_gb
-        )
+class TestEigenPeakMatchesDocs:
+    """The eigendecomposition peaks the user guide's sample-limit table assumes."""
 
     def test_100k_dsyevd_peak_matches_docs_user_guide(self):
         """docs/USER_GUIDE.md's approximate-sample-limits table assumes this peak.
 
         At n=100k: K (80GB) + U (80GB) + DSYEVD workspace (~160GB) = ~320GB.
         """
-        assert 315 < eigen_cost(100_000) < 325
+        assert 315 < _dsyevd_peak_gb(100_000) < 325
 
     def test_100k_dsyevr_peak_matches_docs_user_guide(self):
         """At n=100k: K (80GB) + U (80GB) + DSYEVR workspace (~0.03GB) = ~160GB."""
-        assert 155 < eigen_cost(100_000, dsyevr_peak_gb(100_000)) < 165
+        assert 155 < dsyevr_peak_gb(100_000) < 165
 
 
 @pytest.mark.tier0

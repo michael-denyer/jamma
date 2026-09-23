@@ -60,7 +60,7 @@ def load_proof(spec: BuildSpec, import_code: str | None = None) -> bool:
         a broken build never reports success silently.
     """
 
-    label = spec.module_name or spec.output_stem
+    label = spec.output_stem
 
     if os.environ.get("JAMMA_SANITIZE", "").strip() not in ("", "0"):
         print(

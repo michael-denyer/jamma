@@ -14,7 +14,6 @@ from typing import Literal
 
 from loguru import logger
 
-from jamma.core.eigen_plan import dsyevr_peak_gb
 from jamma.io.plink import get_plink_metadata
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
@@ -25,6 +24,7 @@ from jamma.kinship import (
 )
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import write_eigen_files
+from jamma.lmm.eigen_plan import dsyevr_peak_gb
 from jamma.pipeline_banner import log_dataset_banner
 from jamma.pipeline_config import KinshipResult, PipelineConfig
 from jamma.pipeline_samples import load_analysed_samples
@@ -137,6 +137,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
         ksnps_indices=ksnps_indices,
         filter_sample_indices=filter_samples,
         mode="centered" if mode == 1 else "standardized",
+        mem_budget=config.mem_budget,
     )
 
     kinship_s = time.perf_counter() - t_kinship
@@ -149,7 +150,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
     eigen_paths: tuple[Path, Path] | None = None
     if config.write_eigen:
         eigenvalues, eigenvectors = eigendecompose_kinship(
-            K, check_memory=config.check_memory
+            K, check_memory=config.check_memory, mem_budget=config.mem_budget
         )
         del K  # K may be overwritten by eigendecomp; prevent accidental reuse
         d_path, u_path = write_eigen_files(

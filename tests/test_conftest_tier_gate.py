@@ -1,8 +1,8 @@
-"""Self-tests for the tier-marker enforcement gate in conftest.py.
+"""Self-tests for the tier-marker gate in ``scripts/check_test_markers.py``.
 
 The gate is a meta-rule: every test *item* in this suite must declare a tier
 marker. If the gate silently fails-open (e.g. a future refactor inverts the
-predicate, swaps the marker check for ``True``, or wraps the raise in
+predicate, swaps the marker check for ``True``, or wraps the report in
 ``contextlib.suppress``), unmarked tests would silently re-enter the default
 CI run.
 
@@ -12,39 +12,34 @@ enclosing class's decorators, and the function's own decorators for every
 marker. A file-granular predecessor of this gate passed a file the moment
 any one test in it carried a marker, so a sibling test with none went
 unnoticed; ``test_one_marked_one_unmarked_function_reports_only_the_unmarked_one``
-and ``test_gate_fires_under_xdist`` below both pin that a mixed file reports
-exactly the gap, not a false pass.
+and ``test_untiered_function_in_tiered_module_fails_naming_the_function``
+below both pin that a mixed file reports exactly the gap, not a false pass.
 
-The gate is implemented as **source-parsing** in ``pytest_configure``
-(not ``pytest_collection_modifyitems``) because xdist forks workers AFTER
-``pytest_configure`` and the controller's items list is empty under
-``-n``. The collection-based design that preceded this one was empirically
-a no-op when ``-n 3`` (the default in pyproject) was active. See
-``test_gate_fires_under_xdist`` for the regression check.
-
-These tests exercise the helper functions directly with synthetic ASTs and
-add one ``pytester`` subprocess test that runs the gate under ``-n 2`` to
-prove the xdist path works.
+The gate is source-parsing, run as a pre-commit and CI lint rather than from
+a pytest hook, so no collection filter or xdist distribution can hide it.
+These tests exercise the helpers directly with synthetic ASTs and run the
+lint end to end against a synthetic tree.
 """
 
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
-
-from tests.conftest import (
-    _enforce_tier_markers,
+from check_test_markers import (
     _file_untiered_functions,
     _module_level_marker_names,
+    _tier_marker_message,
     _untiered_test_functions,
 )
 
-pytestmark = pytest.mark.tier0
+from tests.support import install_lint_script
 
-pytest_plugins = ["pytester"]
+pytestmark = pytest.mark.tier0
 
 
 def _parse(src: str) -> ast.Module:
@@ -280,103 +275,46 @@ class TestEnforceTierMarkersInProcess:
 
         If this fails, a real test file is missing a tier marker — fix the
         file rather than the gate. This is also a smoke test that
-        ``_enforce_tier_markers`` walks ``tests/`` correctly.
+        ``_tier_marker_message`` walks ``tests/`` correctly.
         """
-        _enforce_tier_markers()
+        assert _tier_marker_message(Path(__file__).parent) is None
 
 
-class TestGateUnderXdist:
-    """End-to-end regression: the real gate must fire under ``-n N`` (xdist).
+class TestGateAsLint:
+    """End to end: the lint exits 1 and names the gap on a synthetic tree."""
 
-    The previous collection-based gate silently no-op'd because xdist's
-    controller hook receives an empty ``items`` list. This test imports
-    the *real* ``_enforce_tier_markers`` from ``tests.conftest`` into a
-    pytester sub-session and runs it under ``-n 2`` — so a regression
-    that re-introduces the xdist hole would make this test fail rather
-    than pass against a parallel stub.
-    """
+    _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_test_markers.py"
 
-    # Stub conftest delegating to the real gate. Pytester runs in a
-    # tmpdir without our pyproject, so `tests.conftest` won't import as
-    # a package — instead we point the conftest at the real module file
-    # via importlib.util.
-    _GATE_CONFTEST = textwrap.dedent(
-        f'''
-        """Stub conftest delegating to the real ``_enforce_tier_markers``."""
-        from __future__ import annotations
+    def _run(
+        self, tmp_path: Path, name: str, source: str
+    ) -> subprocess.CompletedProcess[str]:
+        script = install_lint_script(self._SCRIPT, tmp_path / "scripts")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / name).write_text(textwrap.dedent(source))
+        return subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True, check=False
+        )
 
-        import importlib.util
-        from pathlib import Path
-
-        import pytest
-
-        _REAL_CONFTEST = Path({str(Path(__file__).parent / "conftest.py")!r})
-
-
-        def _load_real_conftest():
-            spec = importlib.util.spec_from_file_location(
-                "_jamma_real_conftest", _REAL_CONFTEST
-            )
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod
-
-
-        def pytest_configure(config):
-            # Mirror the real conftest's worker guard.
-            if hasattr(config, "workerinput"):
-                return
-            real = _load_real_conftest()
-            # The real ``_enforce_tier_markers`` walks ``_TESTS_DIR``
-            # (the directory containing the real conftest). For this
-            # self-test we want it to walk the pytester rootpath so the
-            # synthetic test files we just created are what's audited.
-            # Repoint it temporarily.
-            real._TESTS_DIR = Path(str(config.rootpath))
-            real._enforce_tier_markers()
-        '''
-    )
-
-    _INI = textwrap.dedent(
-        """
-        [pytest]
-        markers =
-            tier0: fast
-            tier1: parity
-            tier2: scale
-            slow: independent
-            benchmark: pytest-benchmark
-        """
-    )
-
-    def test_gate_fires_under_xdist(self, pytester: pytest.Pytester) -> None:
-        """Unmarked file must fail the gate even with ``-n 2``."""
-        pytester.makeini(self._INI)
-        pytester.makeconftest(self._GATE_CONFTEST)
-        pytester.makepyfile(
-            test_unmarked="""
+    def test_gate_fires_on_an_unmarked_file(self, tmp_path: Path) -> None:
+        result = self._run(
+            tmp_path,
+            "test_unmarked.py",
+            """
             def test_does_a_thing():
                 assert True
             """,
         )
-        result = pytester.runpytest_subprocess("-n", "2")
-        assert result.ret != 0, (
-            "Gate should fail under -n 2; the previous collection-based "
-            "gate silently passed."
-        )
-        # Either stderr or stdout depending on xdist's plumbing — search both.
-        combined = "\n".join([*result.errlines, *result.outlines])
-        assert "test_unmarked.py" in combined
-        assert "no tier marker" in combined
+        assert result.returncode == 1, result.stderr
+        assert "tests/test_unmarked.py" in result.stderr
+        assert "no tier marker" in result.stderr
 
-    def test_gate_passes_when_marked_under_xdist(
-        self, pytester: pytest.Pytester
-    ) -> None:
-        """Counter-test: a marked file passes under ``-n 2``."""
-        pytester.makeini(self._INI)
-        pytester.makeconftest(self._GATE_CONFTEST)
-        pytester.makepyfile(
-            test_marked="""
+    def test_gate_passes_when_marked(self, tmp_path: Path) -> None:
+        """Counter-test: a marked file passes."""
+        result = self._run(
+            tmp_path,
+            "test_marked.py",
+            """
             import pytest
             pytestmark = pytest.mark.tier0
 
@@ -384,16 +322,12 @@ class TestGateUnderXdist:
             def test_b(): pass
             """,
         )
-        result = pytester.runpytest_subprocess("-n", "2")
-        assert result.ret == 0, (
-            f"Gate should pass on marked file. ret={result.ret}\n"
-            f"stdout={result.outlines!r}\nstderr={result.errlines!r}"
-        )
+        assert result.returncode == 0, result.stderr
 
     def test_untiered_function_in_tiered_module_fails_naming_the_function(
-        self, pytester: pytest.Pytester
+        self, tmp_path: Path
     ) -> None:
-        """A module `pytestmark` does not paper over one function with none.
+        """A marker on one function does not paper over a sibling with none.
 
         Regression for the file-granular predecessor: it passed the moment
         the file had *a* marker anywhere, so a lone ``@pytest.mark.tier0``
@@ -401,10 +335,10 @@ class TestGateUnderXdist:
         siblings) look fully covered. The per-item gate must instead name
         the specific function that carries no marker.
         """
-        pytester.makeini(self._INI)
-        pytester.makeconftest(self._GATE_CONFTEST)
-        pytester.makepyfile(
-            test_mixed="""
+        result = self._run(
+            tmp_path,
+            "test_mixed.py",
+            """
             import pytest
 
             @pytest.mark.tier0
@@ -413,15 +347,6 @@ class TestGateUnderXdist:
             def test_gap(): pass
             """,
         )
-        result = pytester.runpytest_subprocess("-n", "2")
-        assert result.ret != 0, (
-            "Gate should fail: test_gap has no tier marker even though "
-            "test_covered in the same file does."
-        )
-        combined = "\n".join([*result.errlines, *result.outlines])
-        assert "test_mixed.py" in combined
-        assert "test_gap" in combined
-        assert "test_covered" not in combined.replace("test_covered.py", ""), (
-            "Only the untiered function should be named, not its "
-            "correctly-marked sibling."
-        )
+        assert result.returncode == 1, result.stderr
+        assert "tests/test_mixed.py: test_gap" in result.stderr
+        assert "test_covered" not in result.stderr

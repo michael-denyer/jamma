@@ -3,7 +3,6 @@
 This package contains modules for reading and writing various file formats:
 - plink: PLINK binary format (.bed/.bim/.fam) I/O
 - covariate: GEMMA-format covariate file reading
-- output: GEMMA-compatible output file writers
 """
 
 from jamma.io.covariate import read_covariate_file
@@ -14,6 +13,7 @@ from jamma.io.plink import (
     load_plink_binary,
     parse_fam_phenotype_column,
     read_fam_phenotypes,
+    read_genotypes,
     stream_genotype_chunks,
 )
 from jamma.io.snp_list import (
@@ -31,6 +31,7 @@ __all__ = [
     "parse_fam_phenotype_column",
     "read_covariate_file",
     "read_fam_phenotypes",
+    "read_genotypes",
     "read_snp_list_file",
     "read_weight_file",
     "resolve_snp_list_file",

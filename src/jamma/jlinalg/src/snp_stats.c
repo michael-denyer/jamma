@@ -22,6 +22,7 @@
 #include "jlinalg.h"
 
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,26 +122,25 @@ static void snp_stats_chunk_impl(const void *data, npy_intp n_samples, npy_intp 
                                  double *means, npy_intp *miss_counts, double *variances,
                                  int64_t *n_aa, int64_t *n_ab, int64_t *n_bb, int compute_hwe,
                                  int is_f32, int is_fortran) {
+    const snp_stats_task_t whole = {
+        .data = data,
+        .n_samples = n_samples,
+        .sample_stride = is_fortran ? 1 : n_snps_chunk,
+        .snp_stride = is_fortran ? n_samples : 1,
+        .means = means,
+        .miss_counts = miss_counts,
+        .variances = variances,
+        .n_aa = n_aa,
+        .n_ab = n_ab,
+        .n_bb = n_bb,
+        .compute_hwe = compute_hwe,
+        .j_start = 0,
+        .j_end = n_snps_chunk,
+        .is_f32 = is_f32,
+    };
     int n_threads = jlinalg_get_n_threads();
     if (n_snps_chunk <= 256 || n_threads <= 1) {
-        /* Small chunk or single-threaded: run inline */
-        snp_stats_task_t task = {
-            .data = data,
-            .n_samples = n_samples,
-            .sample_stride = is_fortran ? 1 : n_snps_chunk,
-            .snp_stride = is_fortran ? n_samples : 1,
-            .means = means,
-            .miss_counts = miss_counts,
-            .variances = variances,
-            .n_aa = n_aa,
-            .n_ab = n_ab,
-            .n_bb = n_bb,
-            .compute_hwe = compute_hwe,
-            .j_start = 0,
-            .j_end = n_snps_chunk,
-            .is_f32 = is_f32,
-        };
-        snp_stats_range(&task);
+        snp_stats_range(&whole);
         return;
     }
 
@@ -167,23 +167,7 @@ static void snp_stats_chunk_impl(const void *data, npy_intp n_samples, npy_intp 
                 n_threads);
         if (tasks != tasks_stack) free(tasks);
         if (threads != threads_stack) free(threads);
-        snp_stats_task_t task = {
-            .data = data,
-            .n_samples = n_samples,
-            .sample_stride = is_fortran ? 1 : n_snps_chunk,
-            .snp_stride = is_fortran ? n_samples : 1,
-            .means = means,
-            .miss_counts = miss_counts,
-            .variances = variances,
-            .n_aa = n_aa,
-            .n_ab = n_ab,
-            .n_bb = n_bb,
-            .compute_hwe = compute_hwe,
-            .j_start = 0,
-            .j_end = n_snps_chunk,
-            .is_f32 = is_f32,
-        };
-        snp_stats_range(&task);
+        snp_stats_range(&whole);
         return;
     }
 
@@ -194,22 +178,9 @@ static void snp_stats_chunk_impl(const void *data, npy_intp n_samples, npy_intp 
 
     for (int t = 0; t < n_threads; t++) {
         npy_intp chunk = cols_per_thread + (t < remainder ? 1 : 0);
-        tasks[t] = (snp_stats_task_t){
-            .data = data,
-            .n_samples = n_samples,
-            .sample_stride = is_fortran ? 1 : n_snps_chunk,
-            .snp_stride = is_fortran ? n_samples : 1,
-            .means = means,
-            .miss_counts = miss_counts,
-            .variances = variances,
-            .n_aa = n_aa,
-            .n_ab = n_ab,
-            .n_bb = n_bb,
-            .compute_hwe = compute_hwe,
-            .j_start = col,
-            .j_end = col + chunk,
-            .is_f32 = is_f32,
-        };
+        tasks[t] = whole;
+        tasks[t].j_start = col;
+        tasks[t].j_end = col + chunk;
         col += chunk;
     }
 

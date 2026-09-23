@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 /* Bump when function signatures or array layout expectations change. */
-#define ABI_VERSION 21
+#define ABI_VERSION 23
 
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
@@ -29,8 +29,19 @@ static PyObject *_get_aligned_alloc_test_ptr(PyObject *self, PyObject *args)
     return PyLong_FromUnsignedLongLong((unsigned long long)addr);
 }
 
-/* Pure sizing companion to the workspace creators. Array payloads are split
- * by lifetime so Python can price before any workspace allocation occurs. */
+/* Covers PyArray headers, capsules and allocator metadata beside the array
+ * payloads each family layout counts. */
+#define WORKSPACE_OVERHEAD_BYTES ((size_t)1024 * 1024)
+
+static PyObject *workspace_bytes_tuple(workspace_bytes_t b)
+{
+    return Py_BuildValue("(KK)",
+                         (unsigned long long)(b.persistent + WORKSPACE_OVERHEAD_BYTES),
+                         (unsigned long long)b.per_thread);
+}
+
+/* Prices a workspace from the layout its family's creator allocates from,
+ * so Python can gate a run before any allocation. */
 static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
 {
     int n_samples, n_cvt, n_grid, lmm_mode, n_threads;
@@ -38,7 +49,7 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "iiiii", &n_samples, &n_cvt, &n_grid,
                           &lmm_mode, &n_threads)) return NULL;
     if (n_samples < 1 || n_cvt < 1 || n_cvt > MAX_N_CVT || n_grid < 2 ||
-        lmm_mode < 1 || lmm_mode > 4 || n_threads < 1) {
+        !lmm_mode_valid(lmm_mode) || n_threads < 1) {
         PyErr_SetString(PyExc_ValueError, "invalid workspace sizing dimensions");
         return NULL;
     }
@@ -52,61 +63,119 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
         PyErr_SetString(PyExc_OverflowError, "workspace dimensions overflow size_t");
         return NULL;
     }
+    lmm_tests_t tests = lmm_tests(lmm_mode);
+    return workspace_bytes_tuple(n_cvt == 1
+        ? ncvt1_workspace_bytes(n_samples, n_grid, tests)
+        : general_workspace_bytes(n_cvt, n_samples, n_grid, tests));
+}
 
-    size_t persistent = 0, per_thread = 0, transient_per_thread = 0;
-    int output_columns = lmm_mode == 1 ? 5 : lmm_mode == 2 ? 2 :
-                         lmm_mode == 3 ? 3 : 8;
-    if (n_cvt == 1) {
-        /* RunInvariants retains eigenvalues, UtW, Uty, Hi_eval_null, w and
-         * the three invariant Uab rows while the capsule borrows the arrays. */
-        persistent = (size_t)8 * n_samples * sizeof(double);
-        if (lmm_mode != 3) {
-            persistent += (size_t)n_grid * 6 * sizeof(double);
-            persistent += aligned_double_bytes(grid_doubles(n_samples, n_grid));
-        }
-        if (lmm_mode == 3 || lmm_mode == 4)
-            persistent += aligned_double_bytes((size_t)n_samples);
-        if (lmm_mode == 3)
-            persistent += (size_t)2 * aligned_double_bytes((size_t)n_samples);
-        int scratch_arrays = lmm_mode == 1 ? 3 : lmm_mode == 3 ? 0 : 4;
-        transient_per_thread = (size_t)scratch_arrays *
-            (aligned_double_bytes((size_t)n_samples) + sizeof(double *));
-    } else {
-        size_t rows = (size_t)n_cvt + 2;
-        size_t index = ((size_t)n_cvt + 3) * rows / 2;
-        size_t var = rows, inv = index - var;
-        /* Two fixed-size reduction buffers in the fresh likelihood and score
-         * kernels. They coexist on each worker stack, regardless of n_cvt. */
-        transient_per_thread = (size_t)2 * MAX_N_INDEX * sizeof(double);
-        /* Native-owned eigenvalue and UtW-transpose payloads coexist with
-         * RunInvariants' original eigenvalues, UtW, Uty and Hi_eval_null.
-         * The invariant SoA is retained by reference and counted once. */
-        persistent = ((size_t)4 * n_samples +
-                      (size_t)2 * n_cvt * n_samples + inv * n_samples) *
-                     sizeof(double);
-        persistent += aligned_double_bytes(grid_doubles(n_samples, n_grid));
-        persistent += ((size_t)n_grid * (inv + 2) + inv) * sizeof(double);
-        if (lmm_mode == 3 || lmm_mode == 4)
-            persistent += aligned_double_bytes((size_t)n_samples) +
-                          inv * sizeof(double);
-        persistent += pab_table_bytes(n_cvt);
-        per_thread = (general_scratch_doubles(n_samples, (int)rows) +
-                      general_pab_doubles((int)rows, (int)index) + index) *
-                     sizeof(double);
-        if (lmm_mode == 1 || lmm_mode == 4)
-            per_thread += general_pab_doubles((int)rows, (int)index)
-                          * sizeof(double);
-        if (lmm_mode == 2 || lmm_mode == 4)
-            per_thread += general_lrt_thread_doubles(n_samples, (int)index) *
-                          sizeof(double);
+/* Test hook: the bytes a created workspace's layout holds, in
+ * workspace_sizes_c's form, so a test can tie the plan to the allocation. */
+static PyObject *_workspace_bytes_c(PyObject *self, PyObject *capsule)
+{
+    workspace_bytes_t b;
+    (void)self;
+    if (ncvt1_capsule_bytes(capsule, &b) || general_capsule_bytes(capsule, &b))
+        return workspace_bytes_tuple(b);
+    PyErr_SetString(PyExc_TypeError, "expected an lmm workspace capsule");
+    return NULL;
+}
+
+/* Take and validate the arrays both families read. 0, or -1 with PyErr set;
+ * either way the caller releases whatever *in holds. */
+static int take_workspace_arrays(workspace_inputs_t *in, PyObject *eig_obj,
+                                 PyObject *uab_obj, PyObject *utw_obj,
+                                 PyObject *uty_obj, PyObject *hi_obj)
+{
+    int n = in->n_samples;
+    int n_rows = in->n_cvt + 2;
+    int n_inv = (in->n_cvt + 3) * n_rows / 2 - n_rows;
+    in->eigenvalues = take_vector(eig_obj, n, "eigenvalues");
+    if (!in->eigenvalues || validate_eigenvalues(
+            (const double *)PyArray_DATA(in->eigenvalues), n, in->l_max) < 0)
+        return -1;
+    in->uab_inv = take_matrix(uab_obj, n_inv, n, "uab_invariant");
+    if (!in->uab_inv) return -1;
+    in->UtW = take_matrix(utw_obj, n, in->n_cvt, "UtW");
+    if (!in->UtW) return -1;
+    in->Uty = take_vector(uty_obj, n, "Uty");
+    if (!in->Uty) return -1;
+    if (!in->tests.score) return 0;
+    in->hi_eval_null = take_vector(hi_obj, n, "hi_eval_null");
+    if (!in->hi_eval_null) return -1;
+    return validate_hi_eval_null(
+        (const double *)PyArray_DATA(in->hi_eval_null), n);
+}
+
+/* One creator for every covariate count: the n_cvt=1 family when n_cvt is 1,
+ * else the general family. */
+static PyObject *create_workspace_c(PyObject *self, PyObject *args,
+                                    PyObject *kwargs)
+{
+    static const char *kwlist[] = {
+        "eigenvalues", "uab_invariant", "UtW", "Uty",
+        "n_samples", "l_min", "l_max", "n_grid", "n_refine", "n_threads",
+        "n_cvt", "lmm_mode", "hi_eval_null", "logl_H0",
+        NULL
+    };
+    PyObject *eig_obj, *uab_obj, *utw_obj, *uty_obj;
+    PyObject *hi_obj = NULL, *logl_obj = NULL;
+    int lmm_mode = 0;
+    workspace_inputs_t in = {0};
+    (void)self;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwargs, "OOOOiddiiii|$iOO", (char **)kwlist,
+            &eig_obj, &uab_obj, &utw_obj, &uty_obj,
+            &in.n_samples, &in.l_min, &in.l_max, &in.n_grid, &in.n_refine,
+            &in.n_threads, &in.n_cvt, &lmm_mode, &hi_obj, &logl_obj))
+        return NULL;
+    if (parse_mode_inputs(lmm_mode, &hi_obj, logl_obj, &in.tests,
+                          &in.logl_H0) < 0)
+        return NULL;
+    if (validate_batch_params(in.n_samples, in.l_min, in.l_max, in.n_grid,
+                              in.n_refine) < 0)
+        return NULL;
+    if (in.n_cvt < 1 || in.n_cvt > MAX_N_CVT) {
+        PyErr_Format(PyExc_ValueError, "n_cvt must be 1..%d, got %d",
+                     MAX_N_CVT, in.n_cvt);
+        return NULL;
     }
-    /* Covers PyArray headers, capsules and allocator metadata. Native Pab
-     * arrays are counted above. */
-    persistent += 1024 * 1024;
-    return Py_BuildValue("(KKKK)", (unsigned long long)persistent,
-                         (unsigned long long)per_thread,
-                         (unsigned long long)transient_per_thread,
-                         (unsigned long long)output_columns * sizeof(double));
+#ifdef _OPENMP
+    if (in.n_threads < 1) in.n_threads = 1;
+#else
+    in.n_threads = 1;
+#endif
+
+    PyObject *capsule = NULL;
+    if (take_workspace_arrays(&in, eig_obj, uab_obj, utw_obj, uty_obj,
+                              hi_obj) == 0)
+        capsule = in.n_cvt == 1 ? ncvt1_create_workspace(&in)
+                                : general_create_workspace(&in);
+    Py_XDECREF(in.eigenvalues);
+    Py_XDECREF(in.uab_inv);
+    Py_XDECREF(in.UtW);
+    Py_XDECREF(in.Uty);
+    Py_XDECREF(in.hi_eval_null);
+    return capsule;
+}
+
+static PyObject *compute_lmm_chunk_c(PyObject *self, PyObject *args,
+                                     PyObject *kwargs)
+{
+    static const char *kwlist[] = {"workspace", "utg_t", "n_threads", NULL};
+    PyObject *capsule, *utg_t, *result;
+    int n_threads;
+    (void)self;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OOi", (char **)kwlist,
+                                     &capsule, &utg_t, &n_threads))
+        return NULL;
+    if (ncvt1_compute_chunk(capsule, utg_t, n_threads, &result) ||
+        general_compute_chunk(capsule, utg_t, n_threads, &result))
+        return result;
+    PyErr_SetString(PyExc_TypeError, "expected an lmm workspace capsule");
+    return NULL;
 }
 
 /* -------------------------------------------------------------------------
@@ -142,59 +211,61 @@ static PyObject *jamma_sentinel_oob(PyObject *self, PyObject *args)
  * MODULE REGISTRATION — methods[], PyModuleDef, PyInit__lmm_accel
  *
  * Every exported entry point is named here. Implementations live in the
- * n_cvt=1 and general-family translation units; this file owns only module
- * registration and the shared NumPy C-API pointer.
+ * n_cvt=1 and general-family translation units, which also own each
+ * family's workspace layout; this file owns module registration, the
+ * creator's, compute's and sizing query's dispatch between families, and
+ * the shared NumPy C-API pointer.
  * ========================================================================= */
 
 static PyMethodDef methods[] = {
     {
         "workspace_sizes_c", workspace_sizes_c, METH_VARARGS,
-        "Return conservative persistent, per-thread, transient-thread and per-SNP bytes."
+        "Return conservative persistent and per-thread bytes."
     },
     {
-        "create_workspace_ncvt1_c",
-        (PyCFunction)create_workspace_ncvt1_c_py,
+        "_workspace_bytes_c", _workspace_bytes_c, METH_O,
+        "Return a created workspace's layout bytes in workspace_sizes_c's form."
+    },
+    {
+        "create_workspace_c",
+        (PyCFunction)create_workspace_c,
         METH_VARARGS | METH_KEYWORDS,
-        "Create the per-run n_cvt=1 workspace for one lmm_mode.\n"
+        "Create the per-run workspace for any n_cvt and lmm_mode.\n"
         "\n"
-        "Holds w/Uty for on-the-fly Uab computation, the lambda grid and its\n"
-        "invariant dot products, and the null-model block the mode needs.\n"
+        "n_cvt == 1 builds the n_cvt=1 family's workspace, otherwise the\n"
+        "general family's, which constructs its Pab table from n_cvt. Both\n"
+        "hold UtW/Uty for on-the-fly Uab computation, the lambda grid and its\n"
+        "invariant dot products, per-thread scratch for n_threads, and the\n"
+        "null-model block the mode needs.\n"
         "\n"
         "Args:\n"
         "    eigenvalues:   (n_samples,) float64\n"
-        "    uab_invariant: (3, n_samples) float64 — SoA [ww, wy, yy]\n"
-        "    w:             (n_samples,) float64 — UtW[:,0]\n"
-        "    Uty:           (n_samples,) float64 — rotated phenotype\n"
-        "    n_samples:     int\n"
-        "    l_min:         float\n"
-        "    l_max:         float\n"
-        "    n_grid:        int\n"
-        "    n_refine:      int\n"
-        "    lmm_mode:      int, keyword-only — 1 Wald, 2 LRT, 3 Score, 4 all\n"
-        "    hi_eval_null:  (n_samples,) float64 — modes 3 and 4 only\n"
-        "    logl_H0:       float — modes 2 and 4 only\n"
+        "    uab_invariant: (n_inv, n_samples) float64, SoA invariant columns\n"
+        "    UtW:           (n_samples, n_cvt) float64, row-major\n"
+        "    Uty:           (n_samples,) float64, rotated phenotype\n"
+        "    n_samples, l_min, l_max, n_grid, n_refine\n"
+        "    n_threads:     int, thread capacity of every later compute call\n"
+        "    n_cvt:         int, covariates including the intercept\n"
+        "    lmm_mode:      int, keyword-only: 1 Wald, 2 LRT, 3 Score, 4 all\n"
+        "    hi_eval_null:  (n_samples,) float64, modes 3 and 4 only\n"
+        "    logl_H0:       float, modes 2 and 4 only\n"
         "\n"
         "Returns:\n"
-        "    PyCapsule for compute_lmm_chunk_ncvt1_c\n"
+        "    PyCapsule for compute_lmm_chunk_c\n"
     },
     {
-        "compute_lmm_chunk_ncvt1_c",
-        (PyCFunction)compute_lmm_chunk_ncvt1_c_py,
+        "compute_lmm_chunk_c",
+        (PyCFunction)compute_lmm_chunk_c,
         METH_VARARGS | METH_KEYWORDS,
-        "Per-chunk compute from UtG_T for any n_cvt=1 workspace, any lmm_mode.\n"
+        "Per-chunk compute from UtG_T for any workspace.\n"
         "\n"
-        "Computes wx/xx/xy on-the-fly from UtG_T and w/Uty in workspace.\n"
-        "Forms the varying Uab columns from w/Uty rather than taking them\n"
-        "prebuilt; the arithmetic and its order are unchanged.\n"
-        "\n"
-        "Dispatches on the workspace's lmm_mode to the loop that mode was\n"
-        "built for: 1 REML Wald alone, 2 LRT alone, 3 Score alone, 4 all\n"
-        "three in the same pass off the same coarse grid.\n"
+        "Forms the varying Uab columns from UtW/Uty on the fly and runs the\n"
+        "tests the workspace was built for in one pass off one coarse grid.\n"
         "\n"
         "Args:\n"
-        "    workspace:  PyCapsule from create_workspace_ncvt1_c, any lmm_mode\n"
-        "    utg_t:      (n_snps, n_samples) float64 — UtG.T\n"
-        "    n_threads:  int\n"
+        "    workspace:  PyCapsule from create_workspace_c\n"
+        "    utg_t:      (n_snps, n_samples) float64, UtG.T\n"
+        "    n_threads:  int, capped at the workspace's thread capacity\n"
         "\n"
         "Returns:\n"
         "    mode 1: dict with lambdas, logls, betas, ses, pwalds\n"
@@ -202,31 +273,6 @@ static PyMethodDef methods[] = {
         "    mode 3: dict with betas, ses, p_scores\n"
         "    mode 4: mode 1's keys plus p_scores, lambdas_mle, p_lrts\n"
         "    each value (n_snps,) float64\n"
-    },
-    {
-        "create_workspace_general_c",
-        (PyCFunction)create_workspace_general_c_py,
-        METH_VARARGS | METH_KEYWORDS,
-        "Create the per-run general (n_cvt >= 2) workspace for any lmm_mode.\n"
-        "\n"
-        "Constructs the canonical Pab table from n_cvt, and\n"
-        "stores UtW (transposed to column-major), Uty and the varying-column\n"
-        "map for on-the-fly Uab computation from UtG_T. Modes 3 and 4 also\n"
-        "take hi_eval_null; modes 2 and 4 also take logl_H0.\n"
-    },
-    {
-        "compute_lmm_chunk_fused_general_c",
-        (PyCFunction)compute_lmm_chunk_fused_general_c_py,
-        METH_VARARGS | METH_KEYWORDS,
-        "Compute a chunk from UtG_T using a fused general workspace,\n"
-        "any lmm_mode.\n"
-        "\n"
-        "Per-SNP varying dot products computed on-the-fly.\n"
-        "Forms the varying Uab columns from UtW/Uty rather than taking them\n"
-        "prebuilt; the arithmetic and its order are unchanged.\n"
-        "\n"
-        "Mode 1 runs REML Wald alone, 2 LRT alone, 3 Score alone, 4 all three\n"
-        "in the same pass off the same coarse grid.\n"
     },
     {
         "_get_aligned_alloc_test_ptr",

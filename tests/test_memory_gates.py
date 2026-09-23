@@ -7,6 +7,7 @@ actual large allocations.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,15 +15,17 @@ import numpy as np
 import pytest
 
 from jamma.core import memory
-from jamma.core.eigen_plan import array_gb, square_matrix_gb
+from jamma.core.memory import array_gb
+from jamma.kinship.memory import estimate_kinship_memory
 from jamma.lmm import accel
-from jamma.lmm.association_plan import plan_association
+from jamma.lmm.association_plan import ExecutableAssociationPlan, plan_association
 from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
 from jamma.lmm.dispatch import select_dispatch_path
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
-from tests.conftest import preflight
+from tests.builders import empty_workspace
 from tests.fixture_paths import SYNTHETIC
+from tests.support import preflight
 
 pytestmark = pytest.mark.tier0
 
@@ -31,10 +34,7 @@ BFILE = SYNTHETIC.bfile
 
 def _streaming_plan(*, mem_budget: float | None = None):  # type: ignore[no-untyped-def]
     return plan_association(
-        100,
-        500,
-        requested="numpy-streaming",
-        mem_budget=mem_budget,
+        100, 500, config=LmmConfig(mem_budget=mem_budget), backend="numpy-streaming"
     )
 
 
@@ -100,33 +100,54 @@ class TestMemoryGates:
         assert result is None
 
 
-def _expected_uab_iab_gb(args, kwargs, n_cvt: int) -> float:
-    """The Uab/Iab figure a correct preflight passes for this recorded call."""
-    dispatch = select_dispatch_path(
-        n_cvt, 1, accel=accel.available(), log_choices=False
+def _expected_uab_iab_gb(plan: ExecutableAssociationPlan, n_cvt: int) -> float:
+    """The Uab/Iab figure a correct batch quote carries for this plan's chunk."""
+    dispatch = select_dispatch_path(accel=accel.available())
+    per_snp = lmm_extra_bytes_per_snp(plan.n_samples, n_cvt, dispatch)
+    return plan.conservative_chunks.chunk_size * per_snp / 1e9
+
+
+def _priced_uab_iab_gb(plan: ExecutableAssociationPlan) -> float:
+    """The batch quote left once U, genotypes, rotation, and workspace are removed."""
+    n = plan.n_samples
+    chunks = plan.conservative_chunks
+    bare = replace(
+        plan,
+        workspace=empty_workspace(plan.dispatch, n, plan.n_input_samples, plan.n_cvt),
     )
-    per_snp = lmm_extra_bytes_per_snp(args[0], n_cvt, dispatch)
-    return kwargs["lmm_batch_size"] * per_snp / 1e9
+    return bare.price(eigen=None).association_gb - (
+        array_gb(n, n)
+        + array_gb(plan.n_input_samples, plan.n_snps_before_filter)
+        + chunks.n_buffers * array_gb(n, chunks.chunk_size)
+    )
+
+
+def _recording_plan_association(recorded: list[ExecutableAssociationPlan]):  # type: ignore[no-untyped-def]
+    """Wrap the real planner: keep the plan it built, then stop the run there."""
+
+    def record(*args, **kwargs):  # type: ignore[no-untyped-def]
+        recorded.append(plan_association(*args, **kwargs))
+        raise RuntimeError("stop-at-plan-sentinel")
+
+    return record
 
 
 class TestBatchPreflightPricesItsDispatchPath:
-    """Regression: the batch preflight must supply the run's own Uab/Iab figure.
+    """Regression: the batch quote must carry the run's own Uab/Iab figure.
 
     Both batch preflight call sites previously omitted n_cvt, so
     multi-covariate runs passed the preflight on the n_cvt=1 figure and then
     OOMed at real allocation time in compute_numpy._run_inner.
 
-    Dispatch-site assertions are the right test shape here: the preflight's
-    sole job is to delegate to the estimator with correct arguments, so the
-    delegation contract IS the observable behavior (see CLAUDE.md testing
-    guidance on system-boundary assert_called_once_with).
+    ``price()`` reads n_cvt and dispatch from the plan it prices, so each
+    call site's plan is the contract: the tests keep the plan the real
+    planner builds for the call site and check the Uab/Iab its quote carries.
     """
 
     def test_pipeline_batch_preflight_prices_its_dispatch_path(self):
         """PipelineRunner batch branch must price the run's own dispatch path.
 
-        The batch preflight site at pipeline.py:~1035 previously called
-        estimate_lmm_memory(n_valid, n_snps) with no n_cvt, silently
+        The batch preflight site previously priced with no n_cvt, silently
         defaulting to 1 and underestimating multi-covariate runs.
         """
         import numpy as np
@@ -141,15 +162,7 @@ class TestBatchPreflightPricesItsDispatchPath:
 
         import tempfile
 
-        # Sentinel raised by patched estimator. This stops execution at
-        # the preflight site so we never need to mock downstream stages.
-        sentinel = RuntimeError("stop-at-preflight-sentinel")
-
-        captured_calls = []
-
-        def capturing_estimator(*args, **kwargs):
-            captured_calls.append((args, kwargs))
-            raise sentinel
+        plans: list[ExecutableAssociationPlan] = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
             cov_path = Path(tmpdir) / "covariates.txt"
@@ -175,34 +188,24 @@ class TestBatchPreflightPricesItsDispatchPath:
             )
             runner = PipelineRunner(config)
 
-            # Patch where it is used, not where it is defined. The batch
-            # preflight used to import it inside the function, so patching
-            # jamma.core.memory worked by accident of import placement; a
-            # module-level import there would have silently un-patched this.
             with patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                side_effect=capturing_estimator,
+                "jamma.pipeline.plan_association",
+                side_effect=_recording_plan_association(plans),
             ):
-                with pytest.raises(RuntimeError, match="stop-at-preflight-sentinel"):
+                with pytest.raises(RuntimeError, match="stop-at-plan-sentinel"):
                     runner.run()
 
-        # The batch preflight must have been called at least once.
-        assert captured_calls, (
-            "estimate_lmm_memory was not called — batch preflight branch did not run"
+        (plan,) = plans
+        assert plan.summary.mode == "batch"
+        assert plan.n_cvt == 3, "n_cvt from the 3-column covariate file"
+        assert _priced_uab_iab_gb(plan) == pytest.approx(
+            _expected_uab_iab_gb(plan, 3), abs=1e-12
         )
-        for args, kwargs in captured_calls:
-            expected = _expected_uab_iab_gb(args, kwargs, 3)
-            assert kwargs["uab_iab_gb"] == expected, (
-                f"Batch preflight priced uab_iab_gb={kwargs['uab_iab_gb']!r}, "
-                f"expected {expected!r} for n_cvt=3 (from 3-col covariates). "
-                f"Full call: args={args}, kwargs={kwargs}"
-            )
 
     def test_runner_numpy_preflight_prices_its_dispatch_path(self):
         """run_lmm_association_numpy must price the run's own dispatch path.
 
-        The batch runner preflight at runner_numpy.py:~610 previously
-        called estimate_lmm_memory(n_samples, n_snps) with no n_cvt.
+        The batch runner preflight previously priced with no n_cvt.
         """
         import numpy as np
 
@@ -219,22 +222,16 @@ class TestBatchPreflightPricesItsDispatchPath:
         covariates = np.column_stack(
             [np.ones(n_samples)] + [rng.normal(size=n_samples) for _ in range(3)]
         ).astype(np.float64)
-        # snp_info is not touched before the preflight call, so an empty
-        # list is safe — the sentinel estimator raises before any iteration.
+        # snp_info is not touched before planning, so an empty list is
+        # safe: the sentinel raises before any iteration.
         snp_info: list = []
-
-        sentinel = RuntimeError("stop-at-preflight-sentinel")
-        captured_calls = []
-
-        def capturing_estimator(*args, **kwargs):
-            captured_calls.append((args, kwargs))
-            raise sentinel
+        plans: list[ExecutableAssociationPlan] = []
 
         with patch(
-            "jamma.lmm.association_plan.estimate_lmm_memory",
-            side_effect=capturing_estimator,
+            "jamma.lmm.runner_numpy.plan_association",
+            side_effect=_recording_plan_association(plans),
         ):
-            with pytest.raises(RuntimeError, match="stop-at-preflight-sentinel"):
+            with pytest.raises(RuntimeError, match="stop-at-plan-sentinel"):
                 run_lmm_association_numpy(
                     genotypes=genotypes,
                     phenotypes=phenotypes,
@@ -244,16 +241,12 @@ class TestBatchPreflightPricesItsDispatchPath:
                     config=LmmConfig(check_memory=True, show_progress=False),
                 )
 
-        assert captured_calls, (
-            "estimate_lmm_memory was not called — runner_numpy preflight did not run"
+        (plan,) = plans
+        assert plan.summary.mode == "batch"
+        assert plan.n_cvt == expected_n_cvt
+        assert _priced_uab_iab_gb(plan) == pytest.approx(
+            _expected_uab_iab_gb(plan, expected_n_cvt), abs=1e-12
         )
-        for args, kwargs in captured_calls:
-            expected = _expected_uab_iab_gb(args, kwargs, expected_n_cvt)
-            assert kwargs["uab_iab_gb"] == expected, (
-                f"runner_numpy preflight priced uab_iab_gb="
-                f"{kwargs['uab_iab_gb']!r}, expected {expected!r} for "
-                f"n_cvt={expected_n_cvt}. Full call: args={args}, kwargs={kwargs}"
-            )
 
 
 class TestKinshipOnlyPreflight:
@@ -265,16 +258,25 @@ class TestKinshipOnlyPreflight:
     machines with ample room for the kinship phase itself.
     """
 
-    def test_ledger_exposes_kinship_phase_peak(self):
+    def test_quote_exposes_kinship_phase_peak(self):
         """The per-phase kinship peak is reported, not just the workflow max."""
-        from jamma.core.memory import estimate_streaming_memory
+        from jamma.lmm.association_plan import KinshipShape
+        from jamma.lmm.eigen_plan import EigenDriver, EigenDriverPlan, _dsyevd_peak_gb
+        from tests.builders import association_price_plan
 
-        ledger = estimate_streaming_memory(50_000, chunk_size=10_000)
+        plan = replace(
+            association_price_plan(
+                "streaming", n_samples=50_000, n_snps=10_000, chunk_size=10_000
+            ),
+            kinship=KinshipShape(50_000, loaded=False),
+        )
+        eigen = EigenDriverPlan(EigenDriver.DSYEVD, _dsyevd_peak_gb(50_000), "test")
+        quote = plan.price(eigen=eigen)
 
-        assert ledger.kinship_gb < ledger.peak_gb, (
+        assert quote.kinship_gb < quote.total_peak_gb, (
             "eigendecomp phase should dominate the workflow max at this scale"
         )
-        assert ledger.peak_gb == ledger.eigen_gb
+        assert quote.total_peak_gb == quote.eigen_gb
 
     def test_kinship_only_run_not_blocked_by_eigendecomp_budget(self):
         """Memory that fits the kinship phase but not eigendecomp must pass.
@@ -282,11 +284,16 @@ class TestKinshipOnlyPreflight:
         50,000 samples: kinship phase needs ~24 GB, the full workflow max is
         ~80 GB. With 40 GB available a kinship-only run fits and must proceed.
         """
-        from jamma.core.memory import estimate_streaming_memory
         from jamma.kinship.stream import _preflight_kinship_memory
+        from jamma.lmm.eigen_plan import _dsyevd_peak_gb
 
-        ledger = estimate_streaming_memory(50_000, chunk_size=10_000)
-        assert ledger.kinship_gb < 40.0 < ledger.peak_gb, (
+        kinship_gb = estimate_kinship_memory(
+            n_input_samples=50_000,
+            n_output_samples=50_000,
+            n_snps=10_000,
+            chunk_size=10_000,
+        )
+        assert kinship_gb < 40.0 < _dsyevd_peak_gb(50_000), (
             "test fixture no longer straddles the two budgets"
         )
 
@@ -296,6 +303,7 @@ class TestKinshipOnlyPreflight:
                 n_output_samples=50_000,
                 n_snps=10_000,
                 chunk_size=10_000,
+                mem_budget=None,
             )
 
     def test_kinship_only_run_still_blocked_when_kinship_does_not_fit(self):
@@ -309,6 +317,7 @@ class TestKinshipOnlyPreflight:
                     n_output_samples=50_000,
                     n_snps=10_000,
                     chunk_size=10_000,
+                    mem_budget=None,
                 )
 
 
@@ -347,7 +356,7 @@ class TestNumpyFallbackKinshipMemory:
         monkeypatch.setattr(
             jlinalg,
             "_dsyrk_backend",
-            jlinalg._dsyrk_numpy_impl,
+            jlinalg._dsyrk.numpy_impl,
             # allow-patch: forces the dispatch fallback. _dsyrk_backend is
             # resolved from blas_has_dsyrk at import time, so toggling that
             # flag afterwards would not redirect dispatch.
@@ -398,7 +407,6 @@ class TestNumpyFallbackKinshipMemory:
         """
         import importlib
 
-        from jamma.core.memory import estimate_streaming_memory
         from jamma.jlinalg._dsyrk import numpy_impl, scratch_bytes
 
         jlinalg = importlib.import_module("jamma.jlinalg")
@@ -411,19 +419,24 @@ class TestNumpyFallbackKinshipMemory:
             # flag afterwards would not redirect dispatch.
         )
 
-        ledger = estimate_streaming_memory(50_000, chunk_size=10_000)
+        kinship_gb = estimate_kinship_memory(
+            n_input_samples=50_000,
+            n_output_samples=50_000,
+            n_snps=10_000,
+            chunk_size=10_000,
+        )
 
         declared = scratch_bytes(50_000, numpy_impl)
         assert declared > 0
-        assert ledger.kinship_gb == pytest.approx(
-            square_matrix_gb(50_000) + 3.25 * array_gb(50_000, 10_000) + declared / 1e9
+        assert kinship_gb == pytest.approx(
+            array_gb(50_000, 50_000) + 3.25 * array_gb(50_000, 10_000) + declared / 1e9
         )
 
     def test_native_backend_declares_no_scratch(self):
         """The native path accumulates in place, so it budgets nothing extra."""
         from jamma import jlinalg
 
-        if jlinalg._dsyrk_backend is jlinalg._dsyrk_numpy_impl:
+        if jlinalg._dsyrk_backend is jlinalg._dsyrk.numpy_impl:
             pytest.skip("no native dsyrk on this build")
 
         assert jlinalg.dsyrk_scratch_bytes(50_000) == 0

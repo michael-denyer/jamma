@@ -30,7 +30,7 @@ from jamma.pipeline_samples import AnalysedSamples, load_analysed_samples
 from tests.support import preflight
 
 if TYPE_CHECKING:
-    from jamma.io.plink import PlinkMetadata
+    from jamma.genotype.dataset import GenotypeDataset
     from jamma.lmm.assoc_output import AssocResult
 
 pytestmark = pytest.mark.tier0
@@ -376,7 +376,7 @@ class TestAssociateLoco:
         records, timing = runner._associate_loco(
             analysis,
             samples,
-            cast("PlinkMetadata", None),
+            cast("GenotypeDataset", None),
             tmp_path / "out.assoc.txt",
             None,
         )

@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import read_fam_phenotypes
 from jamma.io.plink import get_plink_metadata
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
@@ -106,7 +107,10 @@ def test_loco_reuses_kinship_snp_stats(missing_phenotypes):
     if missing_phenotypes:
         phenotypes[::9] = np.nan
 
-    with patch("jamma.io.plink.open_bed", side_effect=counting_open_bed):
+    with (
+        patch("jamma.genotype.dataset.open_bed", side_effect=counting_open_bed),
+        patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
+    ):
         loco = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,
@@ -151,7 +155,6 @@ def test_loco_run_rejects_plan_wider_than_col_chunk_size():
     """A caller-built plan must respect the LOCO disk-read chunk width."""
     from dataclasses import replace
 
-    from jamma.io.plink import get_plink_metadata
     from jamma.lmm.association_plan import KinshipShape, plan_association
     from jamma.lmm.loco import LocoRun
     from jamma.lmm.loco_eigen import plan_loco_eigen_driver
@@ -164,8 +167,7 @@ def test_loco_run_rejects_plan_wider_than_col_chunk_size():
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
     with pytest.raises(ValueError, match="col_chunk_size"):
         LocoRun(
-            _LOCO_BFILE,
-            get_plink_metadata(_LOCO_BFILE),
+            GenotypeDataset.open_plink(_LOCO_BFILE),
             AnalysedPhenotype.from_inputs(phenotypes, None),
             LmmConfig(check_memory=False, show_progress=False),
             LocoConfig(col_chunk_size=wide.conservative_chunks.chunk_size - 1),
@@ -388,7 +390,7 @@ def test_loco_stream_carries_snp_stats_over_the_filtering_rows():
     meta = get_plink_metadata(_LOCO_BFILE)
     rows = np.arange(0, meta.n_samples, 2)
     stream = compute_loco_kinship_streaming(
-        _LOCO_BFILE,
+        GenotypeDataset.open_plink(_LOCO_BFILE),
         check_memory=False,
         show_progress=False,
         filter_sample_indices=rows,
@@ -416,11 +418,17 @@ def test_loco_stream_materialize_matches_iteration():
     live = {
         chr_name: K.copy()
         for chr_name, K in compute_loco_kinship_streaming(
-            _LOCO_BFILE, check_memory=False, show_progress=False, consumer_gb=0.0
+            GenotypeDataset.open_plink(_LOCO_BFILE),
+            check_memory=False,
+            show_progress=False,
+            consumer_gb=0.0,
         )
     }
     materialized = compute_loco_kinship_streaming(
-        _LOCO_BFILE, check_memory=False, show_progress=False, consumer_gb=0.0
+        GenotypeDataset.open_plink(_LOCO_BFILE),
+        check_memory=False,
+        show_progress=False,
+        consumer_gb=0.0,
     ).materialize()
 
     assert set(materialized) == set(live)
@@ -447,14 +455,14 @@ def test_loco_batch_size_n_chr_matches_batch_size_one_bit_for_bit():
     n_chr = 3  # fixture has 3 chromosomes; keep in sync with the BED file
 
     one_batch = compute_loco_kinship_streaming(
-        _LOCO_BFILE,
+        GenotypeDataset.open_plink(_LOCO_BFILE),
         check_memory=False,
         show_progress=False,
         _max_batch_chrs=n_chr,
         consumer_gb=0.0,
     ).materialize()
     many_batches = compute_loco_kinship_streaming(
-        _LOCO_BFILE,
+        GenotypeDataset.open_plink(_LOCO_BFILE),
         check_memory=False,
         show_progress=False,
         _max_batch_chrs=1,
@@ -483,7 +491,7 @@ def test_loco_kinship_streaming_mem_budget_reaches_the_gate():
 
     with pytest.raises(MemoryError, match="budget"):
         compute_loco_kinship_streaming(
-            _LOCO_BFILE,
+            GenotypeDataset.open_plink(_LOCO_BFILE),
             check_memory=True,
             show_progress=False,
             mem_budget=1e-6,
@@ -510,7 +518,7 @@ def test_loco_numpy_valid_sample_subsetting():
     n_valid = len(valid_indices)
 
     loco_stream = compute_loco_kinship_streaming(
-        _LOCO_BFILE,
+        GenotypeDataset.open_plink(_LOCO_BFILE),
         check_memory=False,
         show_progress=False,
         valid_indices=valid_indices,

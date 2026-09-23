@@ -24,7 +24,6 @@ import gc
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
@@ -32,13 +31,9 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.memory import array_gb
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_filter import validate_snp_indices
 from jamma.genotype.snp_stats import SnpStats
-from jamma.io.plink import (
-    PlinkMetadata,
-    get_plink_metadata,
-    partitions_from_metadata,
-)
 from jamma.kinship.accumulation import accumulate_kinship, validate_valid_indices
 from jamma.kinship.missing import impute_and_center
 from jamma.kinship.stream import (
@@ -282,7 +277,7 @@ def _batch_chromosomes(
 
 
 def compute_loco_kinship_streaming(
-    bed_path: Path,
+    dataset: GenotypeDataset,
     chunk_size: int = 10_000,
     maf_threshold: float = 0.0,
     miss_threshold: float = 1.0,
@@ -295,7 +290,6 @@ def compute_loco_kinship_streaming(
     filter_sample_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
     consumer_gb: float,
-    meta: PlinkMetadata | None = None,
 ) -> LocoKinshipStream:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -310,7 +304,8 @@ def compute_loco_kinship_streaming(
     SNPs. The ValueErrors below surface on the first advance of the stream.
 
     Args:
-        bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
+        dataset: The genotypes, opened once by the caller. Chromosomes come
+            from ``dataset.partitions``.
         chunk_size: Number of SNPs per chunk (default 10,000).
         maf_threshold: Minimum MAF for SNP inclusion (default 0.0 = no filter).
         miss_threshold: Maximum missing rate (default 1.0 = no filter).
@@ -335,8 +330,6 @@ def compute_loco_kinship_streaming(
         consumer_gb: Peak the downstream eigen and association work holds
             while this stream is live. The gate and the batch planner both
             reserve it beside the retained set.
-        meta: PLINK metadata already read from ``bed_path``, or None to read
-            it here.
 
     Returns:
         A consume-once LocoKinshipStream. Iterate it for (chr_name, K_loco) pairs,
@@ -353,27 +346,21 @@ def compute_loco_kinship_streaming(
         MemoryError: If check_memory=True and the retained set (S_full,
             K_loco_buf, one S_chr, the disk buffer) plus ``consumer_gb`` does
             not fit available RAM, or exceeds ``mem_budget``.
-        FileNotFoundError: If the PLINK .bed file does not exist.
         ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
             a single chromosome.
     """
     start_time = time.perf_counter()
 
-    # Get dimensions and chromosome metadata
-    if meta is None:
-        meta = get_plink_metadata(bed_path)
-    n_samples = meta.n_samples
-    n_snps = meta.n_snps
-    chromosomes = meta.chromosome
+    n_samples = dataset.n_samples
+    n_snps = dataset.n_variants
+    chromosomes = dataset.variants.chr
 
     if valid_indices is not None:
         validate_valid_indices(valid_indices, n_samples)
     if filter_sample_indices is not None:
         validate_valid_indices(filter_sample_indices, n_samples)
 
-    # Derive partitions from already-loaded metadata — avoids re-opening BED (LOCO-04)
-    partitions = partitions_from_metadata(meta)
-    unique_chrs = sorted(partitions.keys(), key=chr_sort_key)
+    unique_chrs = sorted(dataset.partitions.keys(), key=chr_sort_key)
 
     n_mat = len(valid_indices) if valid_indices is not None else n_samples
     logger.info("Computing LOCO Kinship (streaming)")
@@ -449,8 +436,7 @@ def compute_loco_kinship_streaming(
     ) -> dict[str, np.ndarray]:
         chr_set = set(chr_subset)
         chunks = filtered_kinship_chunks(
-            bed_path,
-            n_snps=n_snps,
+            dataset,
             chunk_size=chunk_size,
             snp_filter=snp_filter,
             transform=impute_and_center,

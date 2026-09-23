@@ -6,6 +6,7 @@ run on the dense row subset, never the streaming helpers the dataset replaces.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +18,6 @@ from jamma.genotype.dataset import GenotypeBlock, GenotypeDataset, GenotypeEncod
 from jamma.genotype.variants import SnpMeta
 from jamma.io.plink import validate_genotype_values
 from jamma.jlinalg import compute_snp_stats_chunk
-from jamma.lmm.eigen_cache import compute_eigen_cache_key
 from tests.fixture_paths import LOCO, SYNTHETIC
 from tests.support import require_fixture
 
@@ -257,18 +257,18 @@ def test_spent_block_raises(case: _Case):
 
 
 def test_plink_fingerprint_equals_eigen_cache_components(bfile: Path):
-    """PLINK fingerprint() is exactly the eigen cache's file components."""
+    """PLINK fingerprint() is exactly the eigen cache's file components.
+
+    The expected values are built here the way master's eigen cache built
+    them from the bed path, since the cache key now reads fingerprint().
+    """
     dataset = GenotypeDataset.open_plink(bfile)
-    _, components = compute_eigen_cache_key(
-        bfile,
-        maf_threshold=0.0,
-        miss_threshold=1.0,
-        valid_mask=np.ones(dataset.n_samples, dtype=bool),
-    )
+    bed = Path(f"{bfile}.bed")
+    st = bed.stat()
 
     assert dataset.fingerprint() == {
-        "bed_fingerprint": components["bed_fingerprint"],
-        "bim_sha256": components["bim_sha256"],
+        "bed_fingerprint": f"{bed.name}:{st.st_size}:{st.st_mtime_ns}",
+        "bim_sha256": hashlib.sha256(Path(f"{bfile}.bim").read_bytes()).hexdigest(),
     }
 
 

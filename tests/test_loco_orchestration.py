@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from loguru import logger
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import read_fam_phenotypes
 from jamma.io.plink import get_plink_metadata
 from jamma.kinship.loco import (
@@ -197,7 +198,7 @@ class TestChromosomeWithoutKinshipSnps:
         ksnps = np.flatnonzero(meta.chromosome != empty_chr)
 
         matrices = compute_loco_kinship_streaming(
-            LOCO.bfile,
+            GenotypeDataset.open_plink(LOCO.bfile),
             ksnps_indices=ksnps,
             check_memory=False,
             show_progress=False,

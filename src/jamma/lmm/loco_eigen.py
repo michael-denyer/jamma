@@ -21,7 +21,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.threading import get_blas_thread_count
-from jamma.genotype.snp_stats import SnpStats, collect_streamed_snp_stats
+from jamma.genotype.snp_stats import SnpStats
 from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
 from jamma.kinship.loco import LocoRetainedSet, loco_retained_set
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
@@ -134,12 +134,12 @@ def eigen_pairs_for(
     """
     loco, config = run.loco, run.config
     rows = run.analysed_rows
-    all_samples_valid = len(rows) == run.meta.n_samples
+    all_samples_valid = len(rows) == run.dataset.n_samples
 
     cache_write: _EigenCacheWrite | None = None
     if loco.eigen_dir is not None:
         key, components = compute_eigen_cache_key(
-            run.bed_path,
+            run.dataset,
             maf_threshold=config.maf_threshold,
             miss_threshold=config.miss_threshold,
             valid_mask=run.samples.valid_mask,
@@ -166,16 +166,10 @@ def eigen_pairs_for(
                     n_valid=len(rows),
                     show_progress=config.show_progress,
                 )
-                stats = collect_streamed_snp_stats(
-                    run.bed_path,
-                    n_snps=run.meta.n_snps,
-                    n_samples=run.meta.n_samples,
-                    chunk_size=DEFAULT_STATS_CHUNK,
-                    sample_indices=None if all_samples_valid else rows,
-                    validate_genotypes=True,
-                    show_progress=config.show_progress,
-                    progress_label="LOCO: SNP statistics",
-                    dtype=np.float64,
+                stats = run.dataset.stats(
+                    None if all_samples_valid else rows,
+                    block_size=DEFAULT_STATS_CHUNK,
+                    progress="LOCO: SNP statistics" if config.show_progress else None,
                 )
                 if stats.n_unexpected > 0:
                     logger.warning(
@@ -187,7 +181,7 @@ def eigen_pairs_for(
     logger.info(workers.describe())
     kinship_is_analysed = run.execution.resolved_kinship.n_samples == len(rows)
     stream = compute_loco_kinship_streaming(
-        run.bed_path,
+        run.dataset,
         chunk_size=DEFAULT_STATS_CHUNK,
         maf_threshold=config.maf_threshold,
         miss_threshold=config.miss_threshold,
@@ -198,7 +192,6 @@ def eigen_pairs_for(
         filter_sample_indices=None if all_samples_valid else rows,
         mem_budget=config.mem_budget,
         consumer_gb=workers.consumer_gb,
-        meta=run.meta,
     )
     pairs = _computed_eigen_pairs(
         stream,

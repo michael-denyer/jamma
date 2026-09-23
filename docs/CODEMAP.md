@@ -217,9 +217,9 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from disk in one BED read: `_stream_kinship` accumulates one dsyrk per chunk from `filtered_kinship_chunks` | [stream.py:316](../src/jamma/kinship/stream.py#L316) |
-| 3a | `filtered_kinship_chunks()` | The one kinship chunk generator, shared by standard and LOCO kinship: filters each BED chunk with `compute_snp_stats`, applies the transform over all samples, then cuts output rows; one yield per file chunk | [stream.py:150](../src/jamma/kinship/stream.py#L150) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship over `filtered_kinship_chunks`; the first pass records SNP statistics; returns a consume-once `LocoKinshipStream` | [loco.py:284](../src/jamma/kinship/loco.py#L284) |
+| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from a `GenotypeDataset` in one read: `_stream_kinship` accumulates one dsyrk per chunk from `filtered_kinship_chunks` | [stream.py:302](../src/jamma/kinship/stream.py#L302) |
+| 3a | `filtered_kinship_chunks()` | The one kinship chunk generator, shared by standard and LOCO kinship: filters each `GenotypeDataset.blocks()` block with `compute_snp_stats`, applies the transform over all samples, then cuts output rows; one yield per block | [stream.py:145](../src/jamma/kinship/stream.py#L145) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship over `filtered_kinship_chunks`, chromosomes from `dataset.partitions`; the first pass records SNP statistics; returns a consume-once `LocoKinshipStream` | [loco.py:279](../src/jamma/kinship/loco.py#L279) |
 | 3a | `accumulate_kinship()` | The rank-k update both kinship paths call once per chunk | [accumulation.py](../src/jamma/kinship/accumulation.py) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L171) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |
@@ -301,7 +301,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `build_models.py` | Immutable source manifests, compile/link flag policy, and `BuildSpec` values | [build_models.py](../src/jamma/_build_support/build_models.py) |
 | 4Nd | `build_execution.py` | Toolchain detection and atomic compile/link execution | [build_execution.py](../src/jamma/_build_support/build_execution.py) |
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
-| 4Ne | `bed_chunk_source()` | float64 .bed chunk stream over the analysed rows; shared by `BedSource` and the LOCO chromosome source | [runner_numpy_streaming.py:47](../src/jamma/lmm/runner_numpy_streaming.py#L47) |
+| 4Ne | `bed_chunk_source()` | float64 .bed chunk stream over the analysed rows for `BedSource`; the LOCO chromosome source reads the same chunks through `GenotypeDataset.blocks()` | [runner_numpy_streaming.py:47](../src/jamma/lmm/runner_numpy_streaming.py#L47) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, then `bed_chunk_source()` | [runner_numpy_streaming.py:75](../src/jamma/lmm/runner_numpy_streaming.py#L75) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:141](../src/jamma/lmm/runner_numpy_streaming.py#L141) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:59](../src/jamma/lmm/schema.py#L59) |
@@ -309,7 +309,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:315](../src/jamma/lmm/assoc_output.py#L315) |
 | 4Ni | `_count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/chunk_runner_numpy.py:51](../src/jamma/lmm/chunk_runner_numpy.py#L51) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:77](../src/jamma/lmm/loco.py#L77) |
-| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`; the pipeline's entry | [lmm/loco.py:154](../src/jamma/lmm/loco.py#L154) |
+| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`, which carries the opened `GenotypeDataset`; the pipeline's entry | [lmm/loco.py:153](../src/jamma/lmm/loco.py#L153) |
 | 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:117](../src/jamma/lmm/loco_eigen.py#L117) |
 | 4Nj | `solve_eigen_pairs()` | Ordered eigenpairs with `workers` solves in flight under one consumer-thread BLAS scope | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 | 4Nj | `plan_loco_workers()` | Worker cap and complete consumer memory reservation | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
@@ -582,7 +582,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:106](../src/jamma/io/matrix_writer.py#L106) |
-| Kinship compute | [stream.py:316](../src/jamma/kinship/stream.py#L316) |
+| Kinship compute | [stream.py:302](../src/jamma/kinship/stream.py#L302) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood (`reml_log_likelihood()`) | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |
 | Pab projection/indexing | [pab.py](../src/jamma/lmm/pab.py) |

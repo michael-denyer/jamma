@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from jamma.core import memory
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline_config import PipelineConfig
@@ -15,12 +16,18 @@ from tests.support import preflight
 pytestmark = pytest.mark.tier0
 
 
-def _header_only_bed(tmp_path: Path, dataset: FixtureDataset) -> Path:
+def _header_only_bed(tmp_path: Path, dataset: FixtureDataset) -> GenotypeDataset:
+    """Open a copy of ``dataset``, then truncate its .bed to the magic header.
+
+    Opening validates the .bed size, so the file is cut only after the
+    metadata is read: the dataset stays intact and every genotype read fails.
+    """
     bfile = tmp_path / "header_only"
-    for suffix in (".bim", ".fam"):
+    for suffix in (".bed", ".bim", ".fam"):
         shutil.copy(dataset.bfile.with_suffix(suffix), bfile.with_suffix(suffix))
+    opened = GenotypeDataset.open_plink(bfile)
     bfile.with_suffix(".bed").write_bytes(b"\x6c\x1b\x01")
-    return bfile
+    return opened
 
 
 def test_batch_preflight_rejects_unaffordable_eigen_phase(monkeypatch):
@@ -111,18 +118,23 @@ def test_impossible_loco_budget_fails_before_genotype_statistics(tmp_path):
     from tests.fixture_paths import LOCO
     from tests.support import require_fixture
 
-    require_fixture(LOCO.bfile.with_suffix(".bed"), LOCO.bfile.with_suffix(".fam"))
-    bfile = _header_only_bed(tmp_path, LOCO)
+    require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
+    header_only = _header_only_bed(tmp_path, LOCO)
 
     with pytest.raises(MemoryError, match="exceeds budget"):
         compute_loco_kinship_streaming(
-            bfile, mem_budget=1e-8, show_progress=False, consumer_gb=0.0
+            header_only,
+            mem_budget=1e-8,
+            show_progress=False,
+            consumer_gb=0.0,
         )
     with pytest.raises(ValueError, match="Ill-formed BED file"):
         next(
             iter(
                 compute_loco_kinship_streaming(
-                    bfile, show_progress=False, consumer_gb=0.0
+                    header_only,
+                    show_progress=False,
+                    consumer_gb=0.0,
                 )
             )
         )
@@ -155,7 +167,7 @@ def test_loco_rechecks_capacity_when_planning_passes(monkeypatch):
     monkeypatch.setattr(memory, "available_ram_gb", lambda: next(readings))
     with pytest.raises(MemoryError, match="LOCO kinship"):
         stream = compute_loco_kinship_streaming(
-            LOCO.bfile, consumer_gb=0.0, show_progress=False
+            GenotypeDataset.open_plink(LOCO.bfile), consumer_gb=0.0, show_progress=False
         )
         next(iter(stream))
 
@@ -164,13 +176,13 @@ def test_impossible_kinship_budget_fails_before_genotype_read(tmp_path):
     from jamma.kinship import compute_kinship_streaming
     from tests.support import require_fixture
 
-    require_fixture(SYNTHETIC.bim, SYNTHETIC.fam)
-    bfile = _header_only_bed(tmp_path, SYNTHETIC)
+    require_fixture(SYNTHETIC.bed, SYNTHETIC.bim, SYNTHETIC.fam)
+    header_only = _header_only_bed(tmp_path, SYNTHETIC)
 
     with pytest.raises(MemoryError, match="exceeds budget"):
-        compute_kinship_streaming(bfile, mem_budget=1e-8, show_progress=False)
+        compute_kinship_streaming(header_only, mem_budget=1e-8, show_progress=False)
     with pytest.raises(ValueError, match="Ill-formed BED file"):
-        compute_kinship_streaming(bfile, show_progress=False)
+        compute_kinship_streaming(header_only, show_progress=False)
 
 
 def test_gk_budget_gates_kinship_accumulation(tmp_path):

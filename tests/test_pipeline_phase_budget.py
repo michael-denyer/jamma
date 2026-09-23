@@ -119,7 +119,13 @@ def test_impossible_loco_budget_fails_before_genotype_statistics(tmp_path):
             bfile, mem_budget=1e-8, show_progress=False, consumer_gb=0.0
         )
     with pytest.raises(ValueError, match="Ill-formed BED file"):
-        compute_loco_kinship_streaming(bfile, show_progress=False, consumer_gb=0.0)
+        next(
+            iter(
+                compute_loco_kinship_streaming(
+                    bfile, show_progress=False, consumer_gb=0.0
+                )
+            )
+        )
 
 
 def test_precomputed_eigen_streaming_does_not_reserve_decomposition(monkeypatch):
@@ -139,7 +145,7 @@ def test_precomputed_eigen_streaming_does_not_reserve_decomposition(monkeypatch)
     assert preflight(config, plan) is None
 
 
-def test_loco_rechecks_capacity_after_genotype_statistics(monkeypatch):
+def test_loco_rechecks_capacity_when_planning_passes(monkeypatch):
     from jamma.kinship import compute_loco_kinship_streaming
     from tests.conftest import require_fixture
     from tests.fixture_paths import LOCO

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- LOCO kinship no longer runs a separate SNP-statistics pass over the BED.
+  Standard and LOCO kinship now share one chunk generator that filters each
+  chunk as it is read, so a LOCO run reads the genotypes once fewer. The
+  batch planner sizes passes against every chromosome the BIM and `-ksnps`
+  leave SNPs on, and allocates a per-chromosome accumulator only for a
+  chromosome that keeps SNPs after filtering. `LocoKinshipStream.snp_stats`
+  is readable once the first matrix has been yielded, and a filtering error
+  surfaces on the stream's first advance. Kinship matrices and statistics
+  are bit-identical.
 - LOCO association reuses the SNP statistics kinship PASS 1 computed over the
   analysed samples, so a run with missing phenotypes no longer reads every
   chromosome's genotypes a second time. A run on cached eigenpairs computes

@@ -5,6 +5,8 @@ on — real build-environment failures:
   - ``brew --prefix libomp`` timeout (Darwin)
   - ``brew`` absent from PATH (Darwin)
   - numpy ImportError during the libiomp5 probe (Linux)
+  - libiomp5 search order: JAMMA_LIBIOMP5, numpy libs, the intel-openmp
+    distribution, sys.prefix/lib (Linux)
   - ``clang`` probe timeout / OSError (Linux)
 
 These are exactly the paths a regression would silently reintroduce
@@ -15,6 +17,8 @@ clang symlink).
 from __future__ import annotations
 
 import subprocess
+import sys
+import types
 
 import pytest
 
@@ -156,6 +160,121 @@ def test_find_libiomp5_logs_numpy_import_error(monkeypatch):
     assert any("numpy import failed" in msg for msg in logs), (
         f"numpy ImportError must be logged; got {logs!r}"
     )
+
+
+def _install_fake_intel_openmp(tmp_path, monkeypatch):
+    """Lay out intel-openmp as its wheel installs it and put it on sys.path.
+
+    The runtime lands in ``<prefix>/lib`` and RECORD reaches it from
+    site-packages by climbing three levels, alongside the debug helper.
+    Returns the runtime path.
+    """
+    prefix = tmp_path / "dist-prefix"
+    site = prefix / "lib" / "python3.12" / "site-packages"
+    dist_info = site / "intel_openmp-2026.1.2.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: intel-openmp\nVersion: 2026.1.2\n"
+    )
+    (dist_info / "RECORD").write_text(
+        "../../../lib/libiomp5_db.so,,\n"
+        "../../../lib/libiomp5.so,,\n"
+        "intel_openmp-2026.1.2.dist-info/METADATA,,\n"
+        "intel_openmp-2026.1.2.dist-info/RECORD,,\n"
+    )
+    runtime = prefix / "lib" / "libiomp5.so"
+    runtime.write_bytes(b"runtime")
+    (prefix / "lib" / "libiomp5_db.so").write_bytes(b"debug helper")
+    monkeypatch.syspath_prepend(str(site))
+    return runtime
+
+
+def _silent_report():
+    return BuildReport(detail=lambda _: None, warn=lambda _: None)
+
+
+@pytest.fixture
+def isolated_libiomp5_search(tmp_path, monkeypatch):
+    """Empty numpy libs and sys.prefix, JAMMA_LIBIOMP5 unset.
+
+    Returns the fake numpy package dir, so a test can plant a bundled copy.
+    """
+    monkeypatch.delenv("JAMMA_LIBIOMP5", raising=False)
+    np_dir = tmp_path / "numpy"
+    np_dir.mkdir()
+    fake_numpy = types.ModuleType("numpy")
+    fake_numpy.__file__ = str(np_dir / "__init__.py")
+    monkeypatch.setitem(sys.modules, "numpy", fake_numpy)
+    empty_prefix = tmp_path / "empty-prefix"
+    (empty_prefix / "lib").mkdir(parents=True)
+    monkeypatch.setattr(sys, "prefix", str(empty_prefix))
+    return np_dir
+
+
+@pytest.mark.usefixtures("isolated_libiomp5_search")
+def test_find_libiomp5_uses_intel_openmp_distribution(tmp_path, monkeypatch):
+    """numpy-mkl no longer vendors libiomp5; the intel-openmp distribution
+    installs it outside any package dir, and only its RECORD finds it."""
+    runtime = _install_fake_intel_openmp(tmp_path, monkeypatch)
+
+    found = _find_libiomp5(_silent_report())
+
+    assert found == runtime
+
+
+def test_find_libiomp5_prefers_numpy_bundled_over_distribution(
+    tmp_path, monkeypatch, isolated_libiomp5_search
+):
+    """A numpy wheel that still vendors libiomp5 keeps first place."""
+    _install_fake_intel_openmp(tmp_path, monkeypatch)
+    bundled_dir = isolated_libiomp5_search / ".libs"
+    bundled_dir.mkdir()
+    bundled = bundled_dir / "libiomp5-a1b2c3.so"
+    bundled.write_bytes(b"bundled")
+
+    found = _find_libiomp5(_silent_report())
+
+    assert found == bundled
+
+
+@pytest.mark.usefixtures("isolated_libiomp5_search")
+def test_find_libiomp5_falls_back_to_sys_prefix_lib(tmp_path, monkeypatch):
+    """pip build isolation hides the installing env's distributions but keeps
+    its sys.prefix, so <sys.prefix>/lib still finds intel-openmp's copy."""
+    prefix = tmp_path / "build-prefix"
+    (prefix / "lib").mkdir(parents=True)
+    runtime = prefix / "lib" / "libiomp5.so"
+    runtime.write_bytes(b"runtime")
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+
+    found = _find_libiomp5(_silent_report())
+
+    assert found == runtime
+
+
+@pytest.mark.usefixtures("isolated_libiomp5_search")
+def test_find_libiomp5_env_pin_wins(tmp_path, monkeypatch):
+    """JAMMA_LIBIOMP5 overrides every discovered copy."""
+    _install_fake_intel_openmp(tmp_path, monkeypatch)
+    pinned = tmp_path / "pinned" / "libiomp5.so"
+    pinned.parent.mkdir()
+    pinned.write_bytes(b"pinned")
+    monkeypatch.setenv("JAMMA_LIBIOMP5", str(pinned))
+
+    found = _find_libiomp5(_silent_report())
+
+    assert found == pinned
+
+
+@pytest.mark.usefixtures("isolated_libiomp5_search")
+def test_find_libiomp5_env_pin_to_missing_file_raises(tmp_path, monkeypatch):
+    """A wrong pin must fail the build, not fall back to libgomp."""
+    _install_fake_intel_openmp(tmp_path, monkeypatch)
+    missing = tmp_path / "nowhere" / "libiomp5.so"
+    monkeypatch.setenv("JAMMA_LIBIOMP5", str(missing))
+
+    with pytest.raises(FileNotFoundError, match="JAMMA_LIBIOMP5"):
+        _find_libiomp5(_silent_report())
 
 
 # ---------------------------------------------------------------------------

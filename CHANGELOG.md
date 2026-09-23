@@ -196,6 +196,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Linux build links the C extension against Intel OpenMP when it comes from
+  the `intel-openmp` pip distribution, as it does with the current numpy-mkl
+  wheels, instead of falling back to GCC's `libgomp`. The finder now also checks
+  that distribution's installed files and `<sys.prefix>/lib`, which pip's build
+  isolation leaves pointing at the installing environment. A new build-time
+  variable, `JAMMA_LIBIOMP5`, pins the path explicitly; see
+  `docs/CONFIGURATION.md`.
+
 - LOCO eigendecomposition no longer keeps a chromosome's eigenvectors alive
   after association releases them. The worker thread and the submitting loop
   each kept a local reference to the last Future, which holds the

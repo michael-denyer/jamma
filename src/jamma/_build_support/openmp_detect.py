@@ -26,14 +26,18 @@ correctly — no GOMP shim involved.  Falls back to GCC with a warning.
 
 from __future__ import annotations
 
+import importlib.metadata
 import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from .build_models import BuildReport
 
 _LIBIOMP5_SHARED_NAME = re.compile(r"^libiomp5(?:-[0-9a-fA-F]{6,})?\.so(?:\.[0-9]+)*$")
@@ -41,9 +45,14 @@ _LIBIOMP5_SHARED_NAME = re.compile(r"^libiomp5(?:-[0-9a-fA-F]{6,})?\.so(?:\.[0-9
 
 def _libiomp5_candidate(directory: Path) -> Path | None:
     """Return the preferred loadable Intel OpenMP runtime in a directory."""
+    return _preferred_libiomp5(directory.iterdir())
+
+
+def _preferred_libiomp5(paths: Iterable[Path]) -> Path | None:
+    """Return the preferred loadable Intel OpenMP runtime among paths."""
     candidates = [
         path
-        for path in directory.iterdir()
+        for path in paths
         if path.is_file() and _LIBIOMP5_SHARED_NAME.fullmatch(path.name)
     ]
     if not candidates:
@@ -58,6 +67,22 @@ def _libiomp5_candidate(directory: Path) -> Path | None:
         return (2, name)
 
     return min(candidates, key=preference)
+
+
+def _intel_openmp_distribution_libiomp5() -> Path | None:
+    """Return libiomp5 from the ``intel-openmp`` pip distribution, if installed.
+
+    The distribution installs the runtime at ``<prefix>/lib/libiomp5.so``,
+    outside any package directory, so only its file record finds it.
+    """
+    try:
+        files = importlib.metadata.files("intel-openmp")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    if not files:
+        return None
+    # RECORD paths climb out of site-packages (../../../lib/libiomp5.so).
+    return _preferred_libiomp5(Path(os.path.normpath(f.locate())) for f in files)
 
 
 def openmp_disabled_by_env() -> bool:
@@ -168,9 +193,10 @@ def _detect_linux_openmp_flags(
     that libiomp5 handles correctly.
 
     Detection order:
-    1. libiomp5 via numpy's bundled MKL libs → prefer clang, fallback to GCC
-    2. libiomp5 via system paths → prefer clang, fallback to GCC
-    3. libgomp (GNU OpenMP) → standard fallback via -fopenmp
+    1. libiomp5 via ``_find_libiomp5`` (``JAMMA_LIBIOMP5``, numpy's bundled
+       libs, the ``intel-openmp`` distribution, ``sys.prefix/lib``, system
+       paths) → prefer clang, fallback to GCC
+    2. libgomp (GNU OpenMP) → standard fallback via -fopenmp
     """
     libiomp5_path = _find_libiomp5(report)
     if libiomp5_path is not None:
@@ -192,7 +218,25 @@ def _detect_linux_openmp_flags(
 
 
 def _find_libiomp5(report: BuildReport) -> Path | None:
-    """Locate libiomp5.so — first in numpy's bundled libs, then system-wide."""
+    """Locate libiomp5.so for linking the C extensions.
+
+    Search order: the ``JAMMA_LIBIOMP5`` path, numpy's bundled libs, the
+    ``intel-openmp`` distribution's file record, ``sys.prefix/lib``, then
+    system library directories.
+
+    Raises:
+        FileNotFoundError: ``JAMMA_LIBIOMP5`` is set but names no file. An
+            explicit pin that silently fell back to libgomp would rebuild the
+            dual-runtime crash it exists to prevent.
+    """
+    pinned = os.environ.get("JAMMA_LIBIOMP5", "").strip()
+    if pinned:
+        lib = Path(pinned)
+        if not lib.is_file():
+            raise FileNotFoundError(f"JAMMA_LIBIOMP5={pinned} is not a file")
+        report.detail(f"Intel OpenMP found (JAMMA_LIBIOMP5): {lib}")
+        return lib
+
     try:
         import numpy as np
 
@@ -218,6 +262,21 @@ def _find_libiomp5(report: BuildReport) -> Path | None:
             f"libiomp5 probe: numpy import failed ({e}); "
             "falling through to system paths"
         )
+
+    lib = _intel_openmp_distribution_libiomp5()
+    if lib is not None:
+        report.detail(f"Intel OpenMP found (intel-openmp distribution): {lib}")
+        return lib
+
+    # pip build isolation hides the installing environment's distributions
+    # from importlib.metadata but keeps its sys.prefix, where intel-openmp
+    # puts the runtime.
+    prefix_lib = Path(sys.prefix) / "lib"
+    if prefix_lib.is_dir():
+        lib = _libiomp5_candidate(prefix_lib)
+        if lib is not None:
+            report.detail(f"Intel OpenMP found (sys.prefix): {lib}")
+            return lib
 
     # Check well-known system paths for libiomp5
     for search_dir in (Path("/usr/lib"), Path("/usr/lib64"), Path("/usr/local/lib")):

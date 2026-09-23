@@ -20,7 +20,7 @@ direct read in `telemetry.py`: it follows a different truthiness rule (only
 `"1"` opts out) than every `JAMMA_*` toggle's presence-based one, so folding
 it into `Env` would misrepresent it. `JAMMA_SANITIZE` and `JAMMA_SENTINEL_UB`
 (build-time, resolved by `_build_support/build_models.py` through the shared
-build facade), `JAMMA_NO_OPENMP`
+build facade), `JAMMA_NO_OPENMP` and `JAMMA_LIBIOMP5`
 (`_build_support/openmp_detect.py`), and `CC` stay direct reads too — those
 modules run under PEP 517 build isolation, or standalone before the package
 is installed, and cannot import the runtime `jamma` package that `Env` lives
@@ -40,6 +40,7 @@ in without pulling in the full numpy/loguru stack they are built to avoid.
 | `JLINALG_DISPATCH_DEBUG` | *(unset)* | Set to `1` to print jlinalg BLAS dispatch diagnostics (backend detection, ILP64 status, library path) from the `jlinalg` C layer. Debug aid only. |
 | `JAMMA_FORCE_NUMPY_FALLBACK` | *(unset)* | Set to any non-empty value (not `0`) to force the **entire jlinalg layer** onto its NumPy fallback path even when vendor BLAS is loaded. Wider scope than `JLINALG_NO_VENDOR_LAPACK`: also affects `dgemm`, `dsyrk`. Used by the weekly sanitizer workflow and by full numerical-divergence debugging. |
 | `JAMMA_NO_OPENMP` | *(unset)* | Set to any non-empty value (not `0`) to disable OpenMP when compiling the C extension. The extension will be single-threaded. |
+| `JAMMA_LIBIOMP5` | *(unset)* | **Build-time only, Linux.** Absolute path to the `libiomp5.so` the C extension links against, overriding discovery. The build fails if the path is not a file. See [Linking Intel OpenMP](#linking-intel-openmp-linux). |
 | `OMP_NUM_THREADS` | *(system default)* | OpenMP thread count for C extension kernels (`_lmm_accel`, `_jlinalg`). Separate from `JAMMA_BLAS_THREADS`, which controls BLAS only. |
 | `JAMMA_SANITIZE` | *(unset)* | **Build-time only.** Comma-separated sanitizer list (e.g. `address,undefined`) injected into compile and link flags by `_build_support/build_models.py`. Used by `.github/workflows/sanitizers.yml`. See `docs/TESTING.md` §1.10 for local repro. |
 | `JAMMA_SENTINEL_UB` | *(unset)* | **Build-time only.** When set to `1`, the shared build model injects `-DJAMMA_SENTINEL_UB`, which compiles a known heap-OOB into the `_lmm_accel` module-registration unit. Used by the sanitizer workflow's `asan-sentinel-meta-test` job to verify ASAN is actually catching bugs (distinguishes a clean run from an unwired sanitizer). |
@@ -372,6 +373,36 @@ dependency and overwrite the ILP64 build.
 
 macOS does not require this procedure — Apple Accelerate provides ILP64 BLAS
 natively since macOS 13.3 and JAMMA auto-detects it.
+
+### Linking Intel OpenMP (Linux)
+
+MKL runs its threads on Intel OpenMP (`libiomp5`). The C extension must link
+the same runtime; if the build finds no `libiomp5`, it falls back to GCC's
+`libgomp` and the process carries two OpenMP runtimes. The build searches, in
+order:
+
+1. `JAMMA_LIBIOMP5`, when set.
+2. numpy's bundled libraries (`numpy/.libs`, `numpy.libs`, `numpy/_core/.libs`).
+3. The `intel-openmp` distribution's installed files, via
+   `importlib.metadata.files("intel-openmp")`.
+4. `<sys.prefix>/lib`.
+5. `/usr/lib`, `/usr/lib64`, `/usr/local/lib`.
+
+The numpy-mkl Linux wheels do not bundle `libiomp5`; it comes from the
+`intel-openmp` pip distribution at `<sys.prefix>/lib/libiomp5.so`. Under pip's
+default build isolation, step 3 cannot see that distribution, but `sys.prefix`
+is still the environment pip installs into, so step 4 finds it. Install
+`intel-openmp` into the same environment before JAMMA and no extra
+configuration is needed.
+
+Set `JAMMA_LIBIOMP5` when the runtime lives outside the installing environment,
+or when the build frontend isolates with a separate virtual environment
+(`uv pip install`, `python -m build`), which changes `sys.prefix`. On the
+Databricks image, for example:
+
+```bash
+JAMMA_LIBIOMP5=/databricks/python3/lib/libiomp5.so pip install jamma --no-deps
+```
 
 ## Docker Configuration
 

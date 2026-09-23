@@ -206,6 +206,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sizer floors the chunk at 100 SNPs again; a budget that cannot hold the
   floored chunk is refused by the preflight rather than planned narrower.
   Results are unchanged.
+- `jlinalg` now wires vendor `dsyrk`, `dsyevd`, and `dsyevr` from the
+  scipy-openblas64 library that NumPy's Linux wheels bundle. Its exports carry
+  a `scipy_` prefix (`scipy_dsyrk_64_`) that only the `dgemm` name table
+  listed, so on those installs `jlinalg.dsyrk` and `jlinalg.eigh` fell back to
+  NumPy while `blas_backend` reported `OpenBLAS-ILP64`. Linux results move
+  in the last bits: kinship by at most 7.4e-16 and association outputs by at
+  most 1.2e-11, relative to each output's largest magnitude.
 - A SNP whose projected genotype variance is not positive (a constant
   genotype, or one collinear with a covariate) now gets a NaN REML
   log-likelihood and `l_remle` at the lower bound on every path. The

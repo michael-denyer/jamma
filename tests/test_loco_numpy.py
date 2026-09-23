@@ -106,10 +106,7 @@ def test_loco_reuses_kinship_snp_stats(missing_phenotypes):
     if missing_phenotypes:
         phenotypes[::9] = np.nan
 
-    with (
-        patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
-        patch("jamma.lmm.loco.open_bed", side_effect=counting_open_bed),
-    ):
+    with patch("jamma.io.plink.open_bed", side_effect=counting_open_bed):
         loco = run_lmm_loco(
             bed_path=_LOCO_BFILE,
             phenotypes=phenotypes,

@@ -24,22 +24,19 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
-from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-from bed_reader import open_bed
 from loguru import logger
 
 from jamma.core import memory
 from jamma.core.snp_filter import validate_snp_indices
-from jamma.core.snp_stats import SnpFilterSpec, SnpSelection, SnpStats
+from jamma.core.snp_stats import SnpFilterSpec, SnpStats
 from jamma.core.threading import get_loco_worker_count, get_physical_core_count
 from jamma.io.plink import get_plink_metadata, partitions_from_metadata
 from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter
 from jamma.lmm.association_plan import KinshipShape, plan_association
-from jamma.lmm.chunk_runner_numpy import RawLmmChunk
 from jamma.lmm.genotype_source import (
     PreparedGenotypes,
     SampleBasis,
@@ -58,6 +55,7 @@ from jamma.lmm.runner_numpy import (
     LmmRunSpec,
     run_single,
 )
+from jamma.lmm.runner_numpy_streaming import bed_chunk_source
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     MODE_SPECS,
@@ -356,33 +354,10 @@ class _LocoChrSource:
             # (pipeline.py); a direct caller reaching here would silently
             # get unfiltered results.
             raise ValueError("HWE filtering is not supported in LOCO")
-        physical_rows = samples.positions
-
-        def _iter_chunks(
-            selection: SnpSelection, chunk_size: int
-        ) -> Iterator[RawLmmChunk]:
-            selected_columns = selection.indices
-            n_filtered = len(selected_columns)
-            # Keep one BED handle for the stream instead of re-reading BIM
-            # metadata for every chunk.
-            with open_bed(Path(f"{self._bed_path}.bed")) as bed:
-                for chunk_start in range(0, n_filtered, chunk_size):
-                    chunk_end = min(chunk_start + chunk_size, n_filtered)
-                    geno_chunk = bed.read(
-                        index=np.s_[
-                            physical_rows,
-                            selected_columns[chunk_start:chunk_end],
-                        ],
-                        dtype=np.float64,
-                    )
-                    yield RawLmmChunk(
-                        np.ascontiguousarray(geno_chunk), chunk_start, chunk_end
-                    )
-
         return bind_prepared_genotypes(
             snp_meta=self._snp_meta,
             stats=self._stats,
             filters=filters,
             sample_basis=samples,
-            chunk_source=_iter_chunks,
+            chunk_source=bed_chunk_source(self._bed_path, samples),
         )

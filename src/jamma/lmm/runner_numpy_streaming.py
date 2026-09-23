@@ -7,7 +7,7 @@ itself is the shared body in ``runner_numpy``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +43,34 @@ from jamma.lmm.schema import (
     SnpInfoRecord,
     SnpMeta,
 )
+
+
+def bed_chunk_source(
+    bed_path: Path, samples: SampleBasis
+) -> Callable[[SnpSelection, int], Iterator[RawLmmChunk]]:
+    """Stream a selection's .bed columns as float64 chunks over the analysed rows.
+
+    Args:
+        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
+        samples: The analysed rows, as positions among the BED rows.
+
+    Returns:
+        A chunk source for ``bind_prepared_genotypes``.
+    """
+
+    def _iter_chunks(selection: SnpSelection, chunk_size: int) -> Iterator[RawLmmChunk]:
+        for chunk, filt_start, filt_end in stream_genotype_chunks(
+            bed_path,
+            chunk_size=chunk_size,
+            dtype=np.float64,
+            show_progress=False,
+            snp_indices=selection.indices,
+        ):
+            if not samples.is_all_samples:
+                chunk = chunk[samples.positions, :]
+            yield RawLmmChunk(np.ascontiguousarray(chunk), filt_start, filt_end)
+
+    return _iter_chunks
 
 
 class BedSource:
@@ -102,26 +130,12 @@ class BedSource:
             dtype=np.float32,
         )
 
-        def _iter_chunks(
-            selection: SnpSelection, chunk_size: int
-        ) -> Iterator[RawLmmChunk]:
-            for chunk, filt_start, filt_end in stream_genotype_chunks(
-                self._bed_path,
-                chunk_size=chunk_size,
-                dtype=np.float64,
-                show_progress=False,
-                snp_indices=selection.indices,
-            ):
-                if not samples.is_all_samples:
-                    chunk = chunk[samples.positions, :]
-                yield RawLmmChunk(np.ascontiguousarray(chunk), filt_start, filt_end)
-
         return bind_prepared_genotypes(
             snp_meta=self._snp_meta,
             stats=stats,
             filters=filters,
             sample_basis=samples,
-            chunk_source=_iter_chunks,
+            chunk_source=bed_chunk_source(self._bed_path, samples),
         )
 
 

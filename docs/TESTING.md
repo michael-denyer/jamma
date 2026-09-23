@@ -209,7 +209,7 @@ typically on the default `LD_PRELOAD` path.
 export JAMMA_FORCE_NUMPY_FALLBACK=1
 
 # Tell the build helpers to inject sanitizer flags via
-# apply_sanitizer_overrides.
+# resolve_flags.
 export JAMMA_SANITIZE=address,undefined
 
 # Use gcc to match the LD_PRELOAD libasan path (mixing gcc-built .so
@@ -261,7 +261,7 @@ uv run python -m jamma.lmm._compile_accel
 See also: [`.github/workflows/sanitizers.yml`](../.github/workflows/sanitizers.yml),
 [`scripts/asan-suppressions.txt`](../scripts/asan-suppressions.txt),
 [`src/jamma/_build_support/build_models.py`](../src/jamma/_build_support/build_models.py)
-(the `apply_sanitizer_overrides` helper).
+(`resolve_flags`, which reads `JAMMA_SANITIZE`).
 
 ### 1.11 A missing fixture is a bug, not a skip
 

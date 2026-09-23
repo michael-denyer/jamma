@@ -18,6 +18,7 @@ import subprocess
 
 import pytest
 
+from jamma._build_support.build_models import BuildReport
 from jamma._build_support.openmp_detect import (
     _detect_darwin_openmp_flags,
     _find_libiomp5,
@@ -45,7 +46,9 @@ def test_darwin_brew_timeout_returns_empty_and_logs():
     original = mod.subprocess.run
     mod.subprocess.run = _fake_run
     try:
-        cflags, lflags = _detect_darwin_openmp_flags(_print=logs.append)
+        cflags, lflags = _detect_darwin_openmp_flags(
+            BuildReport(detail=logs.append, warn=logs.append)
+        )
     finally:
         mod.subprocess.run = original
 
@@ -69,7 +72,9 @@ def test_darwin_brew_not_found_returns_empty_and_logs():
     original = mod.subprocess.run
     mod.subprocess.run = _fake_run
     try:
-        cflags, lflags = _detect_darwin_openmp_flags(_print=logs.append)
+        cflags, lflags = _detect_darwin_openmp_flags(
+            BuildReport(detail=logs.append, warn=logs.append)
+        )
     finally:
         mod.subprocess.run = original
 
@@ -143,7 +148,7 @@ def test_find_libiomp5_logs_numpy_import_error(monkeypatch):
     # System paths will also be absent in most CI containers; the return
     # value is either a Path or None, both valid — we only care that the
     # numpy-failure log was emitted and the call didn't raise.
-    result = _find_libiomp5(_print=logs.append)
+    result = _find_libiomp5(BuildReport(detail=logs.append, warn=logs.append))
 
     # May be None (no system libiomp5) or a Path (system install present).
     # Both outcomes are valid; the contract is "don't crash".
@@ -182,8 +187,7 @@ def test_openmp_flags_for_libiomp5_clang_timeout_falls_back_to_gcc(
     cflags, lflags, cc_override = _openmp_flags_for_libiomp5(
         cc_cmd="gcc",
         libiomp5_path=libiomp5,
-        _print=logs.append,
-        _warn=warns.append,
+        report=BuildReport(detail=logs.append, warn=warns.append),
     )
 
     assert cc_override == "gcc", "clang probe timeout must fall back to original cc_cmd"
@@ -223,8 +227,7 @@ def test_openmp_flags_for_libiomp5_clang_oserror_falls_back_to_gcc(
     cflags, lflags, cc_override = _openmp_flags_for_libiomp5(
         cc_cmd="gcc",
         libiomp5_path=libiomp5,
-        _print=logs.append,
-        _warn=warns.append,
+        report=BuildReport(detail=logs.append, warn=warns.append),
     )
 
     assert cc_override == "gcc"

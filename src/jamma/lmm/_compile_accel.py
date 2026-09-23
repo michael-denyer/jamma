@@ -18,7 +18,7 @@ Env vars:
         heap-OOB function in ``_lmm_accel.c`` is compiled in. Used exclusively
         by the sanitizer workflow's sentinel-meta-test job to prove ASAN
         actually catches a deliberate bug. The macro is resolved by
-        ``resolve_build_spec`` from ``LMM_ACCEL_SPEC.reads_sentinel_env``;
+        ``resolve_flags`` from ``LMM_ACCEL_SPEC.reads_sentinel_env``;
         wheel builds NEVER set it.
 """
 
@@ -33,7 +33,7 @@ from pathlib import Path
 #   2. Wheel install: runtime ABI-mismatch recompile via
 #      ``jamma.core.recompile.auto_recompile_c_extension`` calls
 #      ``compile_extension()`` from this module.
-from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC
+from jamma._build_support.compile_and_link import LMM_ACCEL_SPEC, BuildReport
 from jamma._build_support.compile_and_link import compile_extension as _compile
 from jamma._build_support.load_proof import load_proof as _load_proof_for
 
@@ -49,8 +49,8 @@ def compile_extension(verbose: bool = False) -> bool:
       - ``jamma.core.recompile.auto_recompile_c_extension`` on ABI mismatch
 
     Args:
-        verbose: Print per-command compile details. When False (default),
-            only errors and a one-line summary are printed.
+        verbose: Print per-command compile details and the success summary.
+            When False (default), only errors and retry notices are printed.
 
     Returns:
         True if compilation succeeded, False otherwise.
@@ -58,8 +58,7 @@ def compile_extension(verbose: bool = False) -> bool:
     return _compile(
         LMM_ACCEL_SPEC,
         Path(__file__).parents[1],  # the installed jamma/ package directory
-        verbose=verbose,
-        out=sys.stdout,
+        BuildReport.to_stream(sys.stdout, verbose=verbose),
     )
 
 

@@ -8,7 +8,9 @@ from scipy.optimize import brentq
 
 from jamma.lmm.likelihood import _golden_section_minimize
 from jamma.lmm.likelihood_numpy import (
-    _batch_reml_at_lambda_numpy,
+    _batch_pab_at_lambda_numpy,
+    _logdet_diag,
+    _reml_logl,
     golden_section_optimize_lambda_numpy,
 )
 from jamma.lmm.pab import compute_Uab
@@ -98,10 +100,7 @@ def test_batch_golden_section_numpy_all_nan_grid():
     This is the all-SNPs-degenerate extreme: guard_p_yy produces NaN for
     every grid point, so safe_logls is all -inf.
     """
-    from jamma.lmm.likelihood_numpy import (
-        _batch_golden_section_bracket_numpy,
-        _compute_reml_const,
-    )
+    from jamma.lmm.likelihood_numpy import _batch_golden_section_bracket_numpy
 
     rng = np.random.default_rng(42)
     n, n_snps = 30, 5
@@ -125,18 +124,18 @@ def test_batch_golden_section_numpy_all_nan_grid():
     # Force the all-NaN scenario by using an artificial grid of NaN logls.
     grid_logls_all_nan = np.full((n_grid, n_snps), np.nan)
 
-    reml_const = _compute_reml_const(n - 1 - 1)
+    logdet_iab = _logdet_diag(Iab_batch)
 
     def compute_batch_fn(log_lams):
-        lams = np.exp(log_lams)
-        return _batch_reml_at_lambda_numpy(
-            1, lams, eigenvalues, Uab_batch, Iab_batch, reml_const
-        )[0]
+        Pab, logdet_h = _batch_pab_at_lambda_numpy(
+            1, np.exp(log_lams), eigenvalues, Uab_batch
+        )
+        return _reml_logl(Pab, logdet_h, logdet_iab, n - 1 - 1)
 
     lambdas_out = np.exp(
         _batch_golden_section_bracket_numpy(
             compute_batch_fn, grid_logls_all_nan, log_lambdas, n_iter=20
-        )
+        )[0]
     )
 
     assert lambdas_out.shape == (n_snps,), (

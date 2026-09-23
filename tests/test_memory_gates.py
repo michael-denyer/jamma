@@ -23,8 +23,8 @@ from jamma.lmm.dispatch import select_dispatch_path
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from tests.builders import empty_workspace
-from tests.conftest import preflight
 from tests.fixture_paths import SYNTHETIC
+from tests.support import preflight
 
 pytestmark = pytest.mark.tier0
 

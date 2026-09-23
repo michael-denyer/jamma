@@ -17,8 +17,8 @@ from jamma.kinship.stream import SnpStatsSink
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.schema import LmmConfig
 from jamma.utils import chr_sort_key
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier0
 

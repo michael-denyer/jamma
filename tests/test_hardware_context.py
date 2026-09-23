@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 
 import pytest
@@ -10,8 +11,8 @@ pytestmark = pytest.mark.tier0
 
 
 @pytest.fixture
-def get_hardware_context(load_script):
-    return load_script("_hardware_context").get_hardware_context
+def get_hardware_context():
+    return importlib.import_module("_hardware_context").get_hardware_context
 
 
 class TestHardwareContext:

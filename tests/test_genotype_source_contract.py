@@ -15,8 +15,8 @@ from jamma.lmm.loco import _LocoChrSource
 from jamma.lmm.runner_numpy import MatrixSource
 from jamma.lmm.runner_numpy_streaming import BedSource
 from jamma.lmm.schema import SnpMeta
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, SYNTHETIC
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier1
 

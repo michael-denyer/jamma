@@ -9,8 +9,8 @@ from jamma.core import memory
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline_config import PipelineConfig
-from tests.conftest import preflight
 from tests.fixture_paths import SYNTHETIC, FixtureDataset
+from tests.support import preflight
 
 pytestmark = pytest.mark.tier0
 
@@ -108,8 +108,8 @@ def test_impossible_loco_budget_fails_before_genotype_statistics(tmp_path):
     same call without a budget surfaces the truncated read.
     """
     from jamma.kinship import compute_loco_kinship_streaming
-    from tests.conftest import require_fixture
     from tests.fixture_paths import LOCO
+    from tests.support import require_fixture
 
     require_fixture(LOCO.bfile.with_suffix(".bed"), LOCO.bfile.with_suffix(".fam"))
     bfile = _header_only_bed(tmp_path, LOCO)
@@ -147,8 +147,8 @@ def test_precomputed_eigen_streaming_does_not_reserve_decomposition(monkeypatch)
 
 def test_loco_rechecks_capacity_when_planning_passes(monkeypatch):
     from jamma.kinship import compute_loco_kinship_streaming
-    from tests.conftest import require_fixture
     from tests.fixture_paths import LOCO
+    from tests.support import require_fixture
 
     require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
     readings = iter((256.0, 0.0))
@@ -162,7 +162,7 @@ def test_loco_rechecks_capacity_when_planning_passes(monkeypatch):
 
 def test_impossible_kinship_budget_fails_before_genotype_read(tmp_path):
     from jamma.kinship import compute_kinship_streaming
-    from tests.conftest import require_fixture
+    from tests.support import require_fixture
 
     require_fixture(SYNTHETIC.bim, SYNTHETIC.fam)
     bfile = _header_only_bed(tmp_path, SYNTHETIC)
@@ -175,7 +175,7 @@ def test_impossible_kinship_budget_fails_before_genotype_read(tmp_path):
 
 def test_gk_budget_gates_kinship_accumulation(tmp_path):
     from jamma.pipeline_kinship import compute_kinship
-    from tests.conftest import require_fixture
+    from tests.support import require_fixture
 
     require_fixture(SYNTHETIC.bed, SYNTHETIC.bim, SYNTHETIC.fam)
     config = PipelineConfig(

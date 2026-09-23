@@ -18,8 +18,8 @@ from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.prepare_common import NullFit, RotatedBasis
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.workspace import WorkspaceSpec
-from tests.conftest import requires_c
 from tests.fakes.blas import fake_blas_controller
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

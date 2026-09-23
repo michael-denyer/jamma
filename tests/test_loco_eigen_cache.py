@@ -27,8 +27,8 @@ from jamma.lmm.eigen_io import EigenGeneration, read_eigen_files, write_eigen_fi
 from jamma.lmm.loco import LocoConfig
 from jamma.lmm.loco_eigen import _cached_eigen_pairs, _validated_eigen_cache
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, MOUSE
+from tests.support import require_fixture
 
 # ---------------------------------------------------------------------------
 # Fixture paths

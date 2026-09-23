@@ -25,7 +25,7 @@ def test_tiny_wald_results_preserve_external_allele_orientation() -> None:
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.schema import LmmConfig, SnpMeta
     from jamma.validation import compare_assoc_results, load_gemma_assoc
-    from tests.conftest import require_fixture
+    from tests.support import require_fixture
 
     fixture = (
         mutations.ROOT

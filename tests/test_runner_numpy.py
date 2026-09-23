@@ -22,12 +22,12 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.conftest import require_fixture, requires_c
 from tests.fixture_paths import (
     MOUSE,
     NUMPY_GEMMA_TOLERANCES,
     SYNTHETIC,
 )
+from tests.support import require_fixture, requires_c
 
 # ---------------------------------------------------------------------------
 # Fixtures

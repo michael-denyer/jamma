@@ -19,9 +19,9 @@ from jamma.lmm.uab import (
     batch_compute_uab_numpy,
     compute_uab_invariant_soa,
 )
-from tests.conftest import require_fixture, requires_c
 from tests.fixture_paths import SYNTHETIC
 from tests.independent_lmm_oracle import dense_reml_score_log_lambda
+from tests.support import require_fixture, requires_c
 
 _L_MIN = 1e-5
 _L_MAX = 1e5

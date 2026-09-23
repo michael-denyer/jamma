@@ -31,8 +31,8 @@ from jamma.lmm.schema import LmmConfig, LmmMode
 from jamma.lmm.workspace import WorkspaceSpec
 from jamma.pipeline_config import PipelineConfig
 from tests.builders import association_price_plan, empty_workspace
-from tests.conftest import preflight, requires_c
 from tests.fakes import use_fake_psutil
+from tests.support import preflight, requires_c
 
 pytestmark = pytest.mark.tier0
 

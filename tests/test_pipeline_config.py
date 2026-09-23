@@ -23,8 +23,8 @@ from jamma.pipeline import (
     requested_backend,
 )
 from jamma.pipeline_config import PhenotypeResult
-from tests.conftest import preflight
 from tests.fixture_paths import SYNTHETIC
+from tests.support import preflight
 
 BFILE = SYNTHETIC.bfile
 

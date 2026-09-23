@@ -17,8 +17,8 @@ from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.schema import LmmConfig
 from jamma.validation.compare import compare_assoc_results, load_gemma_assoc
 from jamma.validation.tolerances import ToleranceConfig
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO
+from tests.support import require_fixture
 
 # Fixture with 3 chromosomes — required for LOCO (needs >1 chromosome to leave one out)
 _LOCO_BFILE = LOCO.bfile

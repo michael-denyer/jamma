@@ -12,13 +12,13 @@ from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import require_fixture
 from tests.fakes.eigen_lifetime import (
     LifetimeCheckedEigenReader,
     LifetimeCheckedJlinalg,
 )
 from tests.fakes.jlinalg import use_fake_jlinalg
 from tests.fixture_paths import LOCO
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier0
 

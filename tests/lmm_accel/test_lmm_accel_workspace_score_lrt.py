@@ -20,8 +20,8 @@ from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
-from tests.conftest import requires_c
 from tests.lmm_accel._helpers import _null_model_ncvt1
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

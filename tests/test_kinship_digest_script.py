@@ -10,8 +10,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.conftest import require_fixture
 from tests.fixture_paths import SYNTHETIC
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier1
 

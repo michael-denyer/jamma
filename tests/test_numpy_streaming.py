@@ -26,8 +26,8 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.conftest import requires_c
 from tests.fixture_paths import SYNTHETIC
+from tests.support import requires_c
 
 # ---------------------------------------------------------------------------
 # Sanitizer-aware tolerances

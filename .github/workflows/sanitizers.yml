@@ -109,7 +109,7 @@ jobs:
           #    Tests asserting "the C extension IS loaded" obviously fail
           #    here — they belong in the regular CI matrix.
           #
-          # Class-2 tests carry skipif markers (tests/conftest.py requires_c,
+          # Class-2 tests carry skipif markers (tests/support.py requires_c,
           # jlinalg HAS_C_EXTENSION) that honour the fallback env, so only
           # class-1 subprocess tests need listing here. A --deselect of a
           # node id that no longer collects is silently ignored, so verify

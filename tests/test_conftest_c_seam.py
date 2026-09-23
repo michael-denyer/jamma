@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from jamma.lmm import accel
-from tests.conftest import requires_c
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -29,11 +29,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 def _plant(path: Path, script: str) -> None:
     """Write a transient ``test_*.py`` under ``tests/`` in one step.
 
-    The tier gate walks ``tests/`` at every session start, including the
-    sub-sessions these tests spawn, and under xdist another worker's gate can
-    read a file this one is still writing. The temporary name does not match
-    the gate's ``test_*.py`` glob and ``os.replace`` publishes the finished
-    file atomically, so a walker sees either nothing or the whole script.
+    ``test_conftest_tier_gate.py`` walks the real ``tests/`` in another xdist
+    worker and can read a file this one is still writing. The temporary name
+    does not match the gate's ``test_*.py`` glob and ``os.replace`` publishes
+    the finished file atomically, so a walker sees either nothing or the whole script.
     """
     part = path.with_name(f".{path.name}.part")
     part.write_text(script)
@@ -107,7 +106,7 @@ def test_requires_c_skips_when_extension_unavailable() -> None:
     """
     script = textwrap.dedent("""
         import pytest
-        from tests.conftest import requires_c
+        from tests.support import requires_c
 
         pytestmark = pytest.mark.tier0
 

@@ -15,8 +15,8 @@ from jamma.kinship import (
     impute_and_center,
     impute_center_and_standardize,
 )
-from tests.conftest import require_fixture, requires_c
 from tests.fixture_paths import MOUSE
+from tests.support import require_fixture, requires_c
 
 pytestmark = pytest.mark.tier0
 

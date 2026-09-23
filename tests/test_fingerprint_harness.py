@@ -14,6 +14,7 @@ off an environment variable, and it rebinds module globals process-wide.
 
 from __future__ import annotations
 
+import importlib
 import os
 import subprocess
 import sys
@@ -143,13 +144,13 @@ def test_the_suite_covers_the_whole_extension(recorded):
 
 
 @pytest.fixture(scope="module")
-def fingerprint(load_script):
-    return load_script("lmm_accel_fingerprint")
+def fingerprint():
+    return importlib.import_module("lmm_accel_fingerprint")
 
 
 @pytest.fixture(scope="module")
-def compare_fingerprints(load_script):
-    return load_script("compare_fingerprints")
+def compare_fingerprints():
+    return importlib.import_module("compare_fingerprints")
 
 
 def _record(fingerprint, fn):

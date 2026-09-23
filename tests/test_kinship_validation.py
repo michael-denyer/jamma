@@ -13,12 +13,12 @@ from jamma.validation import (
     compare_kinship_matrices,
     load_gemma_kinship,
 )
-from tests.conftest import require_fixture
 from tests.fixture_paths import SYNTHETIC
 from tests.reference.kinship import (
     compute_centered_kinship,
     compute_standardized_kinship,
 )
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier1
 

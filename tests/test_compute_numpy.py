@@ -38,9 +38,9 @@ from jamma.lmm.uab import (
     compute_uab_invariant_soa,
 )
 from tests.builders import rotated_lmm_inputs
-from tests.conftest import requires_c
 from tests.fixture_paths import MOUSE
 from tests.independent_lmm_oracle import dense_lmm_log_likelihood
+from tests.support import requires_c
 
 
 @contextlib.contextmanager

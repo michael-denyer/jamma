@@ -10,13 +10,13 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import requires_c
 from tests.lmm_accel._helpers import (
     _fused_general_mode4_workspace,
     _fused_general_workspace,
     _prepare_fused_general_data,
     _run_general_ncvt_c_vs_python,
 )
+from tests.support import requires_c
 
 
 @pytest.mark.tier0

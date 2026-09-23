@@ -3,8 +3,8 @@
 import pytest
 
 from jamma.lmm import accel, compute_numpy
-from tests.conftest import requires_c
 from tests.lmm_accel._helpers import _prepare_fused_general_data
+from tests.support import requires_c
 
 pytestmark = [pytest.mark.tier0, requires_c]
 

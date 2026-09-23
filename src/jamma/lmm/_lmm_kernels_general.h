@@ -38,14 +38,12 @@ void calc_pab_general(
 
 /* One SNP's lambda-search inputs and the caller's scratch. uab_inv and
  * uab_var are the SoA invariant and varying Uab columns, each n_samples long.
- * uab_snp is the same SNP's full Uab in AoS layout (n_samples, n_index),
- * which only the MLE evaluators read. row0 holds at least n_index doubles;
- * pab and dpab hold at least n_rows * n_index, and only the REML Newton
- * polish uses dpab. The lambda optimiser's context. */
+ * row0 holds at least n_index doubles; pab and dpab hold at least
+ * n_rows * n_index, and only the REML Newton polish uses dpab. The lambda
+ * optimiser's context. */
 typedef struct {
     const double *uab_inv;
     const double *uab_var;
-    const double *uab_snp;
     const double *eigenvalues;
     int n_samples;
     const pab_table_t *t;
@@ -54,8 +52,7 @@ typedef struct {
 } general_snp_t;
 
 /* Coarse-grid index of the best REML (or MLE) logl, from the grid's cached
- * Hi_eval, logdet(H) and (REML) invariant sums; -1 when every point is
- * degenerate. */
+ * Hi_eval, logdet(H) and invariant sums; -1 when every point is degenerate. */
 int coarse_grid_reml_general(
     const general_snp_t *snp,
     const double *hi_eval_grid,
@@ -68,6 +65,7 @@ int coarse_grid_mle_general(
     const general_snp_t *snp,
     const double *hi_eval_grid,
     const double *logdet_h_grid,
+    const double *inv_sums_grid,    /* (n_grid, n_inv) */
     int n_grid
 );
 

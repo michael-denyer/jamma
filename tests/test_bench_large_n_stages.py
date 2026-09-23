@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -46,3 +47,18 @@ def test_stage_parser_rejects_duplicate_stage() -> None:
 
     with pytest.raises(Exception, match="must not contain duplicates"):
         benchmark._parse_stages("eigen,eigen")
+
+
+def test_bench_common_leaves_jamma_unimported() -> None:
+    """A/B workers import it before pinning jamma to their own source tree."""
+    script_dir = Path(__file__).resolve().parent.parent / "scripts"
+    probe = "import sys, _bench_common; print('jamma' in sys.modules)"
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=script_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "False"

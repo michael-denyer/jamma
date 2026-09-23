@@ -17,17 +17,15 @@ from typing import TypeVar
 
 import numpy as np
 
-# No jamma import here, directly or through tests.fixture_paths: the A/B
-# workers import this module before pinning jamma to their own source tree.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MOUSE_DIR = REPO_ROOT / "tests" / "fixtures" / "mouse_hs1940"
 MOUSE_PREFIX = MOUSE_DIR / "mouse_hs1940"
 MOUSE_KINSHIP = MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt"
 MOUSE_COVAR_4 = MOUSE_DIR / "covariates_4.txt"
-
-T = TypeVar("T")
 DEFAULT_GEMMA = Path.home() / ".local" / "bin" / "gemma"
 DEFAULT_GEMMA_ACCELERATE = Path.home() / ".local" / "bin" / "gemma-accelerate"
+
+T = TypeVar("T")
 
 
 def fmt_seconds(seconds: float) -> str:
@@ -207,13 +205,7 @@ def verify_associations(
 
 
 def traced_peak(fn: Callable[..., T], *args: object) -> tuple[T, float, int]:
-    """Run ``fn(*args)`` once under tracemalloc.
-
-    Tracemalloc sees NumPy allocations but not native BLAS or C scratch.
-
-    Returns:
-        The result, the elapsed seconds, and the traced peak in bytes.
-    """
+    """Tracemalloc sees NumPy allocations but not native BLAS or C scratch."""
     tracemalloc.start()
     try:
         start = time.perf_counter()
@@ -226,7 +218,6 @@ def traced_peak(fn: Callable[..., T], *args: object) -> tuple[T, float, int]:
 
 
 def balanced_schedule(blocks: int) -> list[list[str]]:
-    """Alternate ABBA and BAAB blocks to balance position across the session."""
     if blocks < 1:
         raise ValueError("blocks must be >= 1")
     return [
@@ -250,13 +241,6 @@ def summarize_ab(
     block_deltas: list[float],
     block_medians: list[float],
 ) -> dict[str, object]:
-    """Summarise a balanced A/B session so drift and sign flips stay visible.
-
-    Args:
-        timings: Seconds per revision label ``"A"`` and ``"B"``.
-        block_deltas: B-vs-A percent change of the medians within each block.
-        block_medians: Median of every measurement in each block, in order.
-    """
     median_a = statistics.median(timings["A"])
     median_b = statistics.median(timings["B"])
     return {

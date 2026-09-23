@@ -50,6 +50,8 @@ import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 
+from _lint_common import repo_root
+
 
 @dataclass(frozen=True)
 class ExtensionSpec:
@@ -59,11 +61,6 @@ class ExtensionSpec:
     so_path: Path
     source_globs: tuple[tuple[Path, str], ...]  # (base_dir, glob_pattern)
     rebuild_command: str
-
-
-def _project_root() -> Path:
-    """Locate the project root by walking up from this script."""
-    return Path(__file__).resolve().parent.parent
 
 
 def _ext_suffix() -> str:
@@ -86,7 +83,7 @@ def _lmm_accel_sources(root: Path) -> tuple[str, ...]:
 
 def _discover_extensions() -> list[ExtensionSpec]:
     """Enumerate the C extensions JAMMA builds."""
-    root = _project_root()
+    root = repo_root()
     ext = _ext_suffix()
     lmm_dir = root / "src/jamma/lmm"
     return [
@@ -192,7 +189,7 @@ def _format_result(r: FreshnessResult) -> str:
     if not r.is_stale:
         return f"  {r.spec.label}: up to date"
     assert r.newest_source is not None
-    src_rel = r.newest_source.relative_to(_project_root())
+    src_rel = r.newest_source.relative_to(repo_root())
     delta_s = r.newest_source_mtime - r.so_mtime
     return (
         f"  {r.spec.label}: STALE — {src_rel} is {delta_s:.0f}s newer than "

@@ -1,12 +1,3 @@
-"""Shared value hashing and the ``--out``/``--diff`` CLI for the digest levers.
-
-``assoc_digest.py`` and ``kinship_digest.py`` import this with a bare
-``import _digest_common``, which resolves because ``python scripts/x.py``
-puts ``scripts/`` on ``sys.path[0]``. The digest workflows stage this file
-beside the head's script in the base checkout, so both sides hash with the
-head's encoder.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -45,7 +36,6 @@ def _feed(h: Any, value: Any) -> None:
 
 
 def digest_values(*values: Any) -> str:
-    """Hash scalars with a type tag each, so ``1``, ``1.0`` and ``"1"`` differ."""
     h = hashlib.sha256()
     for value in values:
         _feed(h, value)
@@ -53,7 +43,6 @@ def digest_values(*values: Any) -> str:
 
 
 def digest_array(arr: np.ndarray) -> str:
-    """Shape-prefixed so a reshape cannot collide with a same-byte-count array."""
     arr = np.ascontiguousarray(arr)
     h = hashlib.sha256()
     h.update(repr(arr.shape).encode())
@@ -128,18 +117,6 @@ def run_cli(
     compute_all: Callable[[], dict[str, str]],
     argv: list[str] | None,
 ) -> int:
-    """Parse ``--out FILE`` or ``--diff A B`` and run it.
-
-    Args:
-        name: Program name printed with the key count.
-        description: Help text, normally the calling script's ``__doc__``.
-        compute_all: Returns ``key -> sha256`` for the current checkout.
-        argv: Arguments, or None for ``sys.argv[1:]``.
-
-    Returns:
-        0 when written or identical, 1 when keys differ, 2 when the two
-        headers disagree on BLAS backend or platform.
-    """
     parser = argparse.ArgumentParser(description=description)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--out", type=Path, metavar="FILE", help="write digests to FILE")

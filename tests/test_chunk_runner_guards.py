@@ -14,7 +14,7 @@ import psutil
 import pytest
 from loguru import logger
 
-from jamma.core.snp_stats import SnpSelection
+from jamma.genotype.snp_stats import SnpSelection
 from jamma.lmm import accel
 from jamma.lmm.chunk_runner_numpy import (
     PhenotypeChunkJob,

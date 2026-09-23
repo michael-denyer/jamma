@@ -15,7 +15,8 @@ import numpy as np
 import pytest
 
 from jamma.core import memory
-from jamma.core.memory import array_gb, estimate_kinship_memory
+from jamma.core.memory import array_gb
+from jamma.kinship.memory import estimate_kinship_memory
 from jamma.lmm import accel
 from jamma.lmm.association_plan import ExecutableAssociationPlan, plan_association
 from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
@@ -259,8 +260,8 @@ class TestKinshipOnlyPreflight:
 
     def test_quote_exposes_kinship_phase_peak(self):
         """The per-phase kinship peak is reported, not just the workflow max."""
-        from jamma.core.eigen_plan import EigenDriver, EigenDriverPlan, _dsyevd_peak_gb
         from jamma.lmm.association_plan import KinshipShape
+        from jamma.lmm.eigen_plan import EigenDriver, EigenDriverPlan, _dsyevd_peak_gb
         from tests.builders import association_price_plan
 
         plan = replace(
@@ -283,8 +284,8 @@ class TestKinshipOnlyPreflight:
         50,000 samples: kinship phase needs ~24 GB, the full workflow max is
         ~80 GB. With 40 GB available a kinship-only run fits and must proceed.
         """
-        from jamma.core.eigen_plan import _dsyevd_peak_gb
         from jamma.kinship.stream import _preflight_kinship_memory
+        from jamma.lmm.eigen_plan import _dsyevd_peak_gb
 
         kinship_gb = estimate_kinship_memory(
             n_input_samples=50_000,

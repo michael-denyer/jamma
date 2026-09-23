@@ -8,8 +8,6 @@ from jamma.core import (
     get_memory_snapshot,
     log_memory_snapshot,
 )
-from jamma.core.eigen_plan import _dsyevd_peak_gb, dsyevr_peak_gb
-from jamma.core.estimates import _format_duration
 from jamma.core.memory import (
     array_gb,
     fits,
@@ -17,8 +15,10 @@ from jamma.core.memory import (
     margin_gb,
     require,
 )
+from jamma.estimates import _format_duration
 from jamma.lmm.chunk_sizing import lmm_extra_bytes_per_snp
 from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm.eigen_plan import _dsyevd_peak_gb, dsyevr_peak_gb
 from tests.builders import association_price_plan
 from tests.fakes.memory import use_fake_psutil
 

@@ -257,7 +257,7 @@ ILP64 uses 64-bit integers and handles arbitrarily large matrices.
 
 ### Eigendecomposition driver selection
 
-`core.eigen_plan.plan_eigen_driver` picks a driver from the available memory
+`lmm.eigen_plan.plan_eigen_driver` picks a driver from the available memory
 and vendor capability flags, in priority order:
 
 1. **DSYEVD** (in-place, vendor LAPACK) — fastest; requires `O(N²)` workspace (~240 GB for 100k samples)

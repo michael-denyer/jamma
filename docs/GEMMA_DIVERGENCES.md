@@ -353,7 +353,7 @@ Uses the **Wigginton exact test** — a permutation-based exact test for Hardy-W
 
 ### JAMMA
 
-Uses a **chi-squared goodness-of-fit test** (df=1) computed via `math.erfc` (stdlib) vectorized over SNPs — no scipy dependency. The chi-squared test compares observed genotype counts to expected counts under HWE. Implementation is in `core/snp_filter.py:compute_hwe_pvalues`.
+Uses a **chi-squared goodness-of-fit test** (df=1) computed via `math.erfc` (stdlib) vectorized over SNPs — no scipy dependency. The chi-squared test compares observed genotype counts to expected counts under HWE. Implementation is in `genotype/snp_filter.py:compute_hwe_pvalues`.
 
 ### Divergence Impact
 

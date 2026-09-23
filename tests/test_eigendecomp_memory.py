@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from jamma.core.eigen_plan import (
+from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.eigen_plan import (
     _dsyevd_inplace_peak_gb,
     _dsyevd_peak_gb,
     _dsyevd_workspace_gb,
@@ -11,7 +12,6 @@ from jamma.core.eigen_plan import (
     dsyevr_peak_gb,
     plan_eigen_driver,
 )
-from jamma.lmm.eigen import eigendecompose_kinship
 from tests.fakes.memory import use_fake_psutil
 
 pytestmark = pytest.mark.tier0
@@ -456,8 +456,8 @@ class TestEigendecomposeKinshipLogsDriverThatRan:
     def test_forced_dsyevr_plan_logs_dsyevr(self, monkeypatch):
         from loguru import logger
 
-        from jamma.core.eigen_plan import EigenDriver, EigenDriverPlan
         from jamma.jlinalg import blas_has_dsyevr
+        from jamma.lmm.eigen_plan import EigenDriver, EigenDriverPlan
 
         if not blas_has_dsyevr:
             pytest.skip("Vendor DSYEVR required to exercise the DSYEVR plan path")

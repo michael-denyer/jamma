@@ -12,8 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
-from jamma.core.snp_filter import validate_snp_indices
-from jamma.core.snp_stats import (
+from jamma.genotype.snp_filter import validate_snp_indices
+from jamma.genotype.snp_stats import (
     SnpFilterSpec,
     SnpSelection,
     collect_streamed_snp_stats,

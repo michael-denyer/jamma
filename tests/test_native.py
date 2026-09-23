@@ -1,4 +1,4 @@
-"""Tests for jamma.core.recompile.auto_recompile_c_extension.
+"""Tests for jamma._native.auto_recompile_c_extension.
 
 Covers the observable outcomes of the runtime recompile shim:
   1. compile_extension raises -> False + warning log + fallback msg
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from jamma.core.recompile import _import_and_validate, auto_recompile_c_extension
+from jamma._native import _import_and_validate, auto_recompile_c_extension
 
 pytestmark = pytest.mark.tier0
 
@@ -80,7 +80,7 @@ def _isolate_lock_files(monkeypatch, tmp_path):
     sys_module_key (e.g. "jamma._fake_ext_success") and writes a
     .lock file into the real src/jamma/ source tree on every run.
     """
-    from jamma.core import recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     monkeypatch.setattr(
         recompile_mod,
@@ -224,7 +224,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
     import threading
     import time
 
-    from jamma.core import recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     # All threads share one lock file — the invariant under test.
     shared_lock = tmp_path / "shared.lock"
@@ -301,7 +301,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
     import threading
     import time
 
-    from jamma.core import recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     shared_lock = tmp_path / "shared.lock"
     monkeypatch.setattr(recompile_mod, "_lock_path_for", lambda key: shared_lock)
@@ -376,7 +376,7 @@ def test_lock_path_for_installed_package_lives_in_package_dir(monkeypatch):
     """
     monkeypatch.undo()  # drop the autouse _lock_path_for patch
 
-    from jamma.core.recompile import _lock_path_for
+    from jamma._native import _lock_path_for
 
     path = _lock_path_for("jamma.core._fake_ext")
 
@@ -404,7 +404,7 @@ def test_lock_path_for_unknown_package_falls_back_to_tempdir(monkeypatch):
 
     import tempfile as _tempfile
 
-    from jamma.core.recompile import _lock_path_for
+    from jamma._native import _lock_path_for
 
     path = _lock_path_for("jamma_nonexistent_pkg_xyz._x")
 
@@ -424,7 +424,7 @@ def test_lock_path_for_toplevel_module_falls_back_to_tempdir(monkeypatch):
 
     import tempfile as _tempfile
 
-    from jamma.core.recompile import _lock_path_for
+    from jamma._native import _lock_path_for
 
     path = _lock_path_for("_toplevel_ext")
 
@@ -441,7 +441,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
     """
     import importlib as importlib_mod
 
-    from jamma.core import recompile as recompile_mod
+    import jamma._native as recompile_mod
 
     monkeypatch.setattr(
         recompile_mod, "_lock_path_for", lambda key: tmp_path / "shared.lock"

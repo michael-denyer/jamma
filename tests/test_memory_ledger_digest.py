@@ -77,7 +77,6 @@ from unittest.mock import patch
 import pytest
 
 from jamma.core import memory
-from jamma.core.eigen_plan import dsyevr_peak_gb, plan_eigen_driver
 from jamma.core.memory import margin_gb
 from jamma.kinship.loco import loco_retained_set, plan_loco_passes
 from jamma.lmm.association_plan import (
@@ -87,6 +86,7 @@ from jamma.lmm.association_plan import (
 )
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
+from jamma.lmm.eigen_plan import dsyevr_peak_gb, plan_eigen_driver
 from jamma.lmm.workspace import WorkspaceSpec
 
 pytestmark = pytest.mark.tier0

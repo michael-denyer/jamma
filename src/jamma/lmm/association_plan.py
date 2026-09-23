@@ -6,9 +6,9 @@ from dataclasses import dataclass, field, replace
 from typing import Literal, get_args
 
 from jamma.core import memory
-from jamma.core.eigen_plan import EigenDriverPlan
-from jamma.core.memory import array_gb, estimate_kinship_memory
+from jamma.core.memory import array_gb
 from jamma.core.threading import get_c_extension_thread_count, is_blas_controllable
+from jamma.kinship.memory import estimate_kinship_memory
 from jamma.lmm import accel
 from jamma.lmm.chunk_sizing import (
     LmmChunkPlan,
@@ -16,6 +16,7 @@ from jamma.lmm.chunk_sizing import (
     lmm_extra_bytes_per_snp,
 )
 from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
+from jamma.lmm.eigen_plan import EigenDriverPlan
 from jamma.lmm.schema import DEFAULT_LMM_CONFIG, LmmConfig
 from jamma.lmm.workspace import WorkspaceSpec
 

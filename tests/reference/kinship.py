@@ -19,7 +19,7 @@ from jamma.core import memory
 from jamma.core.memory import array_gb
 from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import progress_iterator
-from jamma.core.snp_filter import compute_snp_filter_mask, compute_snp_stats
+from jamma.genotype.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.jlinalg import dsyrk
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 
@@ -51,7 +51,7 @@ def _filter_snps(
     """Filter SNPs by MAF, missing rate, and monomorphism.
 
     Monomorphic SNPs (variance == 0) are always filtered to match GEMMA.
-    Delegates to shared utilities in jamma.core.snp_filter.
+    Delegates to shared utilities in jamma.genotype.snp_filter.
 
     Args:
         genotypes: Genotype matrix (n_samples, n_snps), NaN for missing.

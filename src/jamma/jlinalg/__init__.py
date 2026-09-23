@@ -21,7 +21,7 @@ Env vars:
     JLINALG_NO_VENDOR_LAPACK: when truthy, eigh routes to the NumPy fallback
         regardless of the bound backend. Checked per call. eigendecompose_kinship
         and the pre-flight memory estimators read the same var via
-        core.eigen_plan.forced_numpy_fallback so pre-flight and runtime agree.
+        lmm.eigen_plan.forced_numpy_fallback so pre-flight and runtime agree.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ import warnings
 import numpy as np
 
 from jamma._build_support.compile_and_link import JLINALG_SPEC
+from jamma._native import _load_c_module
 from jamma.core.constants import Env, env_flag
-from jamma.core.recompile import _load_c_module
 from jamma.jlinalg import _dgemm as _dgemm_operation
 from jamma.jlinalg import _dsyrk as _dsyrk_operation
 from jamma.jlinalg import _eigh as _eigh_operation

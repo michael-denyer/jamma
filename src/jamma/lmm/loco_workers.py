@@ -10,9 +10,9 @@ from typing import NamedTuple
 import numpy as np
 
 from jamma.core import memory
-from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.core.threading import blas_threads
 from jamma.kinship.loco import LocoRetainedSet
+from jamma.lmm.eigen_plan import EigenDriverPlan
 
 EigenResult = tuple[str, np.ndarray, np.ndarray]
 EigenSolver = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]

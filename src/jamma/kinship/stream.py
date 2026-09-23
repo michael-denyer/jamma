@@ -27,15 +27,14 @@ import numpy as np
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.estimates import estimate_kinship_seconds
-from jamma.core.memory import estimate_kinship_memory
 from jamma.core.progress import progress_iterator
-from jamma.core.snp_filter import (
+from jamma.estimates import estimate_kinship_seconds
+from jamma.genotype.snp_filter import (
     compute_snp_filter_mask,
     compute_snp_stats,
     validate_snp_indices,
 )
-from jamma.core.snp_stats import SnpStats
+from jamma.genotype.snp_stats import SnpStats
 from jamma.io.plink import (
     get_plink_metadata,
     stream_genotype_chunks,
@@ -45,6 +44,7 @@ from jamma.kinship.accumulation import accumulate_kinship
 from jamma.kinship.accumulation import (
     validate_valid_indices as validate_valid_indices,
 )
+from jamma.kinship.memory import estimate_kinship_memory
 from jamma.kinship.missing import impute_and_center, impute_center_and_standardize
 
 KinshipMode = Literal["centered", "standardized"]
@@ -413,7 +413,7 @@ def compute_kinship_streaming(
     logger.info(f"  Chunk size: {chunk_size:,}")
 
     if mode == "centered":
-        from jamma.core.estimates import estimate_kinship_time
+        from jamma.estimates import estimate_kinship_time
 
         logger.info(f"  Estimated time: {estimate_kinship_time(n_out, n_snps)}")
 

@@ -39,7 +39,7 @@ class TestMonomorphismMaskBasis:
 
     @staticmethod
     def _stats_mask(chunk: np.ndarray) -> np.ndarray:
-        from jamma.core.snp_filter import compute_snp_stats
+        from jamma.genotype.snp_filter import compute_snp_stats
 
         _means, _miss, col_vars = compute_snp_stats(chunk)
         return col_vars > 0

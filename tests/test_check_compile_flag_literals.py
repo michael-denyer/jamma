@@ -59,7 +59,7 @@ _STUB_EMPTY_TARGETS: dict[str, str] = {
     "hatch_build.py": "# stub\n",
     "src/jamma/jlinalg/_compile_jlinalg.py": "# stub\n",
     "src/jamma/lmm/_compile_accel.py": "# stub\n",
-    "src/jamma/core/recompile.py": "# stub\n",
+    "src/jamma/_native.py": "# stub\n",
 }
 
 
@@ -207,10 +207,10 @@ def test_missing_target_file_is_reported(tmp_path):
     """If a target is absent entirely, that's a cleanup-went-wrong signal
     and must surface as a violation rather than passing silently."""
     files = dict(_STUB_EMPTY_TARGETS)
-    del files["src/jamma/core/recompile.py"]
+    del files["src/jamma/_native.py"]
     result = _run_with_targets(tmp_path, files)
     assert result.returncode == 1
-    assert "recompile.py" in result.stderr
+    assert "_native.py" in result.stderr
 
 
 # ---------------------------------------------------------------------------

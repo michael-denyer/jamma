@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from jamma.core import memory
-from jamma.core.snp_stats import SnpSelection
+from jamma.genotype.snp_stats import SnpSelection
 from jamma.lmm import association_plan
 from jamma.lmm.association_plan import ExecutableAssociationPlan, ExecutionPlan
 from jamma.lmm.chunk_sizing import LmmChunkPlan

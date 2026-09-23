@@ -101,6 +101,9 @@ src/jamma/
 ├── pipeline_kinship.py     # The -gk path: compute a kinship matrix and write it
 ├── pipeline_samples.py     # The analysed-sample basis shared by -lmm and -gk
 ├── pipeline_memory.py      # The preflight gate: prices the plan per dispatch path and eigen driver
+├── gemma_log.py            # write_gemma_log(): GEMMA-compatible .log.txt for a finished run
+├── estimates.py            # Wall-clock time estimates for GWAS pipeline phases
+├── _native.py              # _load_c_module(): the one runtime C-import seam, auto-recompile-once
 ├── _build_support/         # Canonical compile flags, source lists, and the
 │   │                       # build/load seam: BuildSpec, run_build, find_c_compiler
 │   ├── build_models.py     # BuildSpec values, source manifests, and flag policy
@@ -109,19 +112,17 @@ src/jamma/
 │   ├── find_compiler.py    # C compiler discovery for build-time and runtime recompile
 │   ├── load_proof.py       # Post-link import proof shared by both dev-mode compile shims
 │   └── openmp_detect.py    # OpenMP flag detection for C extension compilation
-├── core/                   # Cross-cutting concerns: memory estimation,
-│   │                       # progress bars, SNP filtering, threading
+├── core/                   # Leaf infrastructure: memory gate, progress bars,
+│   │                       # threading, telemetry; imports no other jamma package
 │   ├── constants.py        # Domain constants (e.g. GEMMA's -9 missing-phenotype code)
-│   ├── estimates.py        # Wall-clock time estimates for GWAS pipeline phases
-│   ├── memory.py           # Cost model: estimators, RAM seam, sufficiency check
-│   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives
+│   ├── memory.py           # RAM seam, array sizing, sufficiency check
 │   ├── memory_snapshot.py  # Process RSS / free-RAM snapshots
 │   ├── progress.py         # timed_progress() and progress_iterator() wrappers
-│   ├── recompile.py        # _load_c_module(): the one runtime C-import seam, auto-recompile-once
-│   ├── snp_filter.py       # Shared per-SNP statistics and filtering utilities
-│   ├── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
 │   ├── telemetry.py        # BenchmarkRecord / append_benchmark_record()
 │   └── threading.py        # BLAS thread-count control via threadpoolctl
+├── genotype/               # Genotype QC over streamed PLINK chunks
+│   ├── snp_filter.py       # Per-SNP statistics, MAF/missing/monomorphism/HWE filter masks
+│   └── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
 ├── io/                     # PLINK .bed/.bim/.fam readers and covariate/weight loaders
 │   ├── plink.py            # PlinkData loader and streaming chunk iterator
 │   ├── covariate.py        # GEMMA-format covariate file reader
@@ -136,6 +137,7 @@ src/jamma/
 │   ├── loco.py             # Streaming LOCO kinship via subtraction, batch loop
 │   ├── accumulation.py     # Shared selection, preprocessing, row validation, and symmetric rank-k updates
 │   ├── io.py               # Kinship matrix I/O (GEMMA text format and binary .npy)
+│   ├── memory.py           # estimate_kinship_memory(): streaming kinship memory price
 │   └── missing.py          # Genotype imputation and centring helpers
 ├── jlinalg/                # Vendor BLAS/LAPACK dispatch layer with NumPy fallback
 │   ├── __init__.py         # Backend discovery, reload semantics, and public facade
@@ -157,6 +159,7 @@ src/jamma/
 │   ├── likelihood_numpy.py # NumPy batch REML/MLE evaluation and lambda optimisation
 │   ├── stats.py            # The batch Wald/LRT/Score statistics
 │   ├── eigen.py            # Kinship eigendecomposition via jlinalg.eigh
+│   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives
 │   ├── eigen_cache.py      # Content + parameter cache key for LOCO per-chromosome eigen
 │   ├── eigen_io.py         # Eigen files (.npy / .txt); EigenGeneration members and manifests
 │   ├── impute.py           # In-place mean imputation for genotype chunks
@@ -195,7 +198,7 @@ src/jamma/
 │                          # list written down anywhere else, including this one.
 ├── utils/                  # Shared utilities (logging setup, chromosome sort key)
 │   ├── atomic_publish.py   # AtomicOutput()/publish_temp_path(): sibling-temp + rename publish
-│   ├── logging.py          # setup_logging() + write_gemma_log(): loguru config, GEMMA .log.txt
+│   ├── logging.py          # setup_logging(): loguru console and JSON file handlers
 │   └── npy_cache.py        # read_array_artifact(): .npy / text / sidecar reader for kinship and eigen files
 └── validation/             # GEMMA comparison utilities and tolerance configuration
     ├── compare.py          # Side-by-side JAMMA vs GEMMA result comparisons
@@ -223,7 +226,7 @@ Two rules govern adding a `.c` file:
 
 A separate trap, guarded by [`tests/test_c_include_order.py`](../tests/test_c_include_order.py): `_lmm_support.h` must reach `<math.h>` before anything else does, because `M_PI` is not C11 and glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets. macOS defines `M_PI` unconditionally, so a local build and the ARM Mac CI job pass while every Linux job fails.
 
-Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery plus explicit compile/link attempt results and retry transitions, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, and `_compile_accel.py`) consume that facade. At runtime, `jamma.core.recompile._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
+Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery plus explicit compile/link attempt results and retry transitions, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, and `_compile_accel.py`) consume that facade. At runtime, `jamma._native._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
 
 ## C Extension Architecture
 

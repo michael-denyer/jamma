@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from jamma.core.snp_stats import SnpFilterSpec, collect_streamed_snp_stats
+from jamma.genotype.snp_stats import SnpFilterSpec, collect_streamed_snp_stats
 from jamma.io import load_plink_binary
 from jamma.io.plink import get_plink_metadata, partitions_from_metadata
 from jamma.lmm.genotype_source import GenotypeSource, PreparedGenotypes, SampleBasis

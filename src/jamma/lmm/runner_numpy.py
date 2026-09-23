@@ -22,8 +22,8 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.memory_snapshot import log_memory_snapshot
-from jamma.core.snp_filter import _SNP_STATS_CHUNK_SIZE
-from jamma.core.snp_stats import (
+from jamma.genotype.snp_filter import _SNP_STATS_CHUNK_SIZE
+from jamma.genotype.snp_stats import (
     SnpFilterSpec,
     SnpSelection,
     collect_snp_stats_from_chunks,

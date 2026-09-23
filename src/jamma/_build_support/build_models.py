@@ -130,7 +130,7 @@ class BuildSpec:
     sources: tuple[str, ...]
     lapack_sources: tuple[str, ...]
     output_stem: str  # "_lmm_accel" / "_jlinalg" — EXT_SUFFIX appended at build
-    # Runtime load identity — used by core.recompile._load_c_module and
+    # Runtime load identity — used by _native._load_c_module and
     # auto_recompile_c_extension when a stale/missing .so must be reimported or
     # rebuilt. Stored rather than derived so tests can inject synthetic keys.
     sys_module_key: str

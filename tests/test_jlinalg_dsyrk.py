@@ -18,10 +18,18 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from jamma.jlinalg import HAS_C_EXTENSION, _dsyrk_numpy, dsyrk
+from jamma.jlinalg import HAS_C_EXTENSION, _dsyrk, dsyrk
 from tests.builders import BOUNDARY_SIZES
 
 pytestmark = pytest.mark.tier0
+
+
+def _dsyrk_numpy(
+    X: np.ndarray, *, out: np.ndarray | None = None, beta: float = 0.0
+) -> np.ndarray:
+    """The public ``dsyrk`` contract with the NumPy backend, whatever is bound."""
+    _dsyrk.validate(X, out, beta)
+    return _dsyrk.numpy_impl(X, out=out, beta=beta)
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +445,7 @@ class TestDsyrkOutput:
 
 
 class TestDsyrkFallback:
-    """Test the NumPy fallback dsyrk (jamma.jlinalg._dsyrk_numpy) directly.
+    """Test the NumPy fallback dsyrk (``_dsyrk_numpy``) directly.
 
     Always exercised, independent of whether the C extension is present.
     """

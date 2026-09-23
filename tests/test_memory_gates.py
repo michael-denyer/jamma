@@ -355,7 +355,7 @@ class TestNumpyFallbackKinshipMemory:
         monkeypatch.setattr(
             jlinalg,
             "_dsyrk_backend",
-            jlinalg._dsyrk_numpy_impl,
+            jlinalg._dsyrk.numpy_impl,
             # allow-patch: forces the dispatch fallback. _dsyrk_backend is
             # resolved from blas_has_dsyrk at import time, so toggling that
             # flag afterwards would not redirect dispatch.
@@ -435,7 +435,7 @@ class TestNumpyFallbackKinshipMemory:
         """The native path accumulates in place, so it budgets nothing extra."""
         from jamma import jlinalg
 
-        if jlinalg._dsyrk_backend is jlinalg._dsyrk_numpy_impl:
+        if jlinalg._dsyrk_backend is jlinalg._dsyrk.numpy_impl:
             pytest.skip("no native dsyrk on this build")
 
         assert jlinalg.dsyrk_scratch_bytes(50_000) == 0

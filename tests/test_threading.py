@@ -229,7 +229,7 @@ class TestThreadControl:
 
     @pytest.mark.skipif(
         not HAS_C_EXTENSION,
-        reason="the NumPy fallback clamps to os.cpu_count; unclamped storage is C-only",
+        reason="the NumPy fallback is unthreaded and always reports 1 thread",
     )
     def test_set_n_threads_accepts_large(self) -> None:
         """set_n_threads(9999) stores the value (no clamping after own-BLAS removal)."""

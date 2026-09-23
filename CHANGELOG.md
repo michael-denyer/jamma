@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Without the jlinalg C extension, `jamma.jlinalg.get_n_threads()` and
+  `set_n_threads()` return 1, because the NumPy SNP-statistics fallback is
+  unthreaded. They used to store a thread count that nothing read.
+  `set_n_threads` still rejects counts below 1.
+- `jamma.jlinalg` drops the private `_dgemm_numpy`, `_dgemm_numpy_impl`,
+  `_dsyrk_numpy`, `_dsyrk_numpy_impl`, and `_eigh_numpy` aliases. The NumPy
+  implementations stay in `jamma.jlinalg._dgemm`, `_dsyrk`, and `_eigh`.
+- `jamma.core.recompile` is the only code that evicts a rebuilt extension from
+  `sys.modules`. `compile_and_link.compile_extension` no longer does it too.
 - `jamma.io.read_genotypes(bfile)` reads the `.bed` genotype matrix on its
   own. The in-memory pipeline uses it instead of `load_plink_binary`, so it no
   longer parses the `.bim` and `.fam` files a second time.

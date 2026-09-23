@@ -6,12 +6,8 @@ from dataclasses import dataclass, field, replace
 from typing import Literal, get_args
 
 from jamma.core import memory
-from jamma.core.eigen_plan import EigenDriverPlan, array_gb, square_matrix_gb
-from jamma.core.memory import (
-    estimate_kinship_memory,
-    estimate_lmm_memory,
-    estimate_streaming_memory,
-)
+from jamma.core.eigen_plan import EigenDriverPlan
+from jamma.core.memory import array_gb, estimate_kinship_memory
 from jamma.core.threading import get_c_extension_thread_count, is_blas_controllable
 from jamma.lmm import accel
 from jamma.lmm.chunk_sizing import (
@@ -178,7 +174,7 @@ class ExecutableAssociationPlan:
     def _kinship_phase_gb(self, kinship: KinshipShape) -> float:
         """Peak while the kinship matrix is read or accumulated."""
         if kinship.loaded:
-            phase_gb = square_matrix_gb(kinship.n_samples)
+            phase_gb = array_gb(kinship.n_samples, kinship.n_samples)
         else:
             phase_gb = estimate_kinship_memory(
                 n_input_samples=self.n_input_samples,
@@ -190,7 +186,8 @@ class ExecutableAssociationPlan:
             # The full matrix and its analysed-sample copy are live together.
             phase_gb = max(
                 phase_gb,
-                square_matrix_gb(kinship.n_samples) + square_matrix_gb(self.n_samples),
+                array_gb(kinship.n_samples, kinship.n_samples)
+                + array_gb(self.n_samples, self.n_samples),
             )
         return phase_gb
 
@@ -199,54 +196,41 @@ class ExecutableAssociationPlan:
 
         The blocks are ``DEFAULT_STATS_CHUNK`` wide over every input sample.
         """
-        return square_matrix_gb(self.n_samples) + array_gb(
+        return array_gb(self.n_samples, self.n_samples) + array_gb(
             self.n_input_samples, DEFAULT_STATS_CHUNK
         )
 
     def _association_phase_gb(self) -> float:
-        """Peak of the association pass at this chunk width and phenotype group."""
+        """Peak of the association pass at this chunk width and phenotype group.
+
+        U, the held genotypes over every input sample, one UtG rotation buffer
+        per engine buffer, one chunk of Uab/Iab, and the kernel workspace.
+        Batch holds the whole genotype matrix; streaming and LOCO hold one
+        raw chunk. Uab/Iab is counted once: ``_ChunkEngine`` builds it in
+        ``compute_and_write`` on the calling thread, one consumer at a time,
+        while the pipelined ``prepare`` only fills the next rotation buffer.
+        """
         chunks = self.conservative_chunks
-        workspace_gb = (
+        n = self.n_samples
+        genotype_cols = (
+            self.n_snps_before_filter
+            if self.summary.mode == "batch"
+            else chunks.chunk_size
+        )
+        uab_iab_bytes = chunks.chunk_size * lmm_extra_bytes_per_snp(
+            n, self.n_cvt, self.dispatch
+        )
+        workspace_bytes = (
             self._group_workspace_bytes()
             + chunks.chunk_size * self.workspace.bytes_per_snp
-        ) / 1e9
-        input_subset_rows = self.n_input_samples - self.n_samples
-        if self.summary.mode == "batch":
-            batch_arrays_gb = estimate_lmm_memory(
-                self.n_samples,
-                self.n_snps_before_filter,
-                lmm_batch_size=chunks.chunk_size,
-                n_buffers=chunks.n_buffers,
-                n_grid=0,
-                uab_iab_gb=(
-                    chunks.chunk_size
-                    * lmm_extra_bytes_per_snp(self.n_samples, self.n_cvt, self.dispatch)
-                    / 1e9
-                ),
-            )
-            return (
-                batch_arrays_gb
-                + array_gb(input_subset_rows, self.n_snps_before_filter)
-                + workspace_gb
-            )
-        # Streaming and LOCO both hold one genotype chunk, never the matrix.
-        ledger = estimate_streaming_memory(
-            self.n_samples,
-            chunk_size=DEFAULT_STATS_CHUNK,
-            n_cvt=self.n_cvt,
-            pipeline_buffers=chunks.n_buffers,
-            compute_chunk_size=chunks.chunk_size,
-            n_grid=0,
-            uab_iab_gb=(
-                chunks.chunk_size
-                * lmm_extra_bytes_per_snp(self.n_samples, self.n_cvt, self.dispatch)
-                / 1e9
-            ),
         )
         return (
-            ledger.lmm_gb
-            + array_gb(input_subset_rows, chunks.chunk_size)
-            + workspace_gb
+            array_gb(n, n)
+            + array_gb(n, genotype_cols)
+            + chunks.n_buffers * array_gb(n, chunks.chunk_size)
+            + uab_iab_bytes / 1e9
+            + array_gb(self.n_input_samples - n, genotype_cols)
+            + workspace_bytes / 1e9
         )
 
 

@@ -1,22 +1,14 @@
-"""Eigendecomposition driver planning and the shared sizing primitives.
+"""Eigendecomposition driver planning: peak formulas and the driver choice.
 
-Below :mod:`jamma.core.memory` in the layering: the cost model imports the
-peak formulas and the margin from here, never the reverse. The margin and
-the GB-per-array helpers live here because both layers apply them.
+Above :mod:`jamma.core.memory` in the layering: it prices with
+``array_gb`` and gates with ``fits`` from there, never the reverse.
 """
 
 from enum import StrEnum
 from typing import NamedTuple
 
 from jamma.core.constants import env_flag
-
-
-def array_gb(*shape: int) -> float:
-    """Memory (GB) for a float64 array of the given shape."""
-    total = 8
-    for dim in shape:
-        total *= dim
-    return total / 1e9
+from jamma.core.memory import array_gb, fits
 
 
 def forced_numpy_fallback() -> bool:
@@ -56,11 +48,6 @@ def _dsyevr_workspace_gb(n: int) -> float:
     return (lwork_bytes + liwork_bytes) / 1e9
 
 
-def square_matrix_gb(n: int) -> float:
-    """Memory (GB) for an n×n float64 matrix."""
-    return n * n * 8 / 1e9
-
-
 def _dsyevd_inplace_peak_gb(n: int) -> float:
     """Peak memory (GB) for in-place DSYEVD eigendecomposition.
 
@@ -70,18 +57,18 @@ def _dsyevd_inplace_peak_gb(n: int) -> float:
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
-    return square_matrix_gb(n) + _dsyevd_workspace_gb(n)
+    return array_gb(n, n) + _dsyevd_workspace_gb(n)
 
 
 def _dsyevd_peak_gb(n: int) -> float:
     """Peak memory (GB) for DSYEVD eigendecomposition (non-inplace).
 
     Peak is: K (scratch) + U (eigenvectors) + DSYEVD workspace. U is the same
-    (n, n) shape as K, so it costs the same ``square_matrix_gb(n)``.
+    (n, n) shape as K, so it costs the same ``array_gb(n, n)``.
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
-    kinship_gb = square_matrix_gb(n)
+    kinship_gb = array_gb(n, n)
     return 2 * kinship_gb + _dsyevd_workspace_gb(n)
 
 
@@ -91,11 +78,11 @@ def dsyevr_peak_gb(n: int) -> float:
     On the Python path, jlinalg_dsyevr_ext writes vendor output directly into
     the caller-owned eigenvector buffer and transposes in place, so peak is:
     K (overwritten as scratch) + U (caller output) + O(N). U is the same
-    (n, n) shape as K, so it costs the same ``square_matrix_gb(n)``.
+    (n, n) shape as K, so it costs the same ``array_gb(n, n)``.
     """
     if n < 0:
         raise ValueError(f"n_samples must be >= 0, got {n}")
-    return 2 * square_matrix_gb(n) + _dsyevr_workspace_gb(n)
+    return 2 * array_gb(n, n) + _dsyevr_workspace_gb(n)
 
 
 class EigenDriver(StrEnum):
@@ -209,8 +196,6 @@ def plan_eigen_driver(
     else:
         driver, required_gb = EigenDriver.DSYEVD, dsyevd_peak
         reason = inplace_blocker
-
-    from jamma.core.memory import fits  # deferred: memory imports the sizes above
 
     if has_dsyevr and (
         not fits(required_gb, available_gb)

@@ -177,6 +177,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `jamma.core.memory.MemoryLedger`, `estimate_lmm_memory`,
+  `estimate_streaming_memory`, `kinship_cost`, `eigen_cost` and `lmm_cost`,
+  and their `jamma.core` re-exports. `ExecutableAssociationPlan.price()`
+  (`plan_association(...).price(eigen=...)`) is the one memory quote, the
+  figure every preflight gates on. `jamma.core.eigen_plan.square_matrix_gb`
+  is gone too; `array_gb` now lives in `jamma.core.memory`, and
+  `array_gb(n, n)` replaces `square_matrix_gb(n)`. The batch association
+  quote drops `4 * n` float64 it carried and streaming never did (3.2 MB at
+  100,000 samples). Streaming and LOCO quotes are unchanged.
 - `jamma.lmm.io` and `jamma.lmm.results` are merged into
   `jamma.lmm.assoc_output`, which owns the `.assoc.txt` row.
   `IncrementalAssocWriter(path, mode)` takes a `ModeSpec` in place of a

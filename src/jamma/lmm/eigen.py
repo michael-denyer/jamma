@@ -24,7 +24,6 @@ from jamma.core.eigen_plan import (
     EigenDriverPlan,
     forced_numpy_fallback,
     plan_eigen_driver,
-    square_matrix_gb,
 )
 from jamma.core.memory_snapshot import log_memory_snapshot
 from jamma.core.progress import timed_progress
@@ -199,7 +198,7 @@ def eigendecompose_kinship_in_scope(
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
         f"Matrix elements: {n_elements:,}, "
-        f"memory: ~{square_matrix_gb(n_samples):.1f} GB"
+        f"memory: ~{memory.array_gb(n_samples, n_samples):.1f} GB"
     )
 
     # Memory pre-flight

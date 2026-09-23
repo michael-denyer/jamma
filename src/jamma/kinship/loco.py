@@ -29,7 +29,7 @@ import numpy as np
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.eigen_plan import array_gb, square_matrix_gb
+from jamma.core.memory import array_gb
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_stats import SnpStatsCache, collect_streamed_snp_stats
 from jamma.io.plink import (
@@ -222,7 +222,7 @@ class LocoRetainedSet(NamedTuple):
 
 def loco_retained_set(n_mat: int, n_samples: int, chunk_size: int) -> LocoRetainedSet:
     """Size the retained set for ``n_mat``-order matrices over ``n_samples`` inputs."""
-    return LocoRetainedSet(square_matrix_gb(n_mat), array_gb(n_samples, chunk_size))
+    return LocoRetainedSet(array_gb(n_mat, n_mat), array_gb(n_samples, chunk_size))
 
 
 class _LocoPassPlan(NamedTuple):

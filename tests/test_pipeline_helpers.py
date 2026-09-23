@@ -119,15 +119,8 @@ class TestMemoryPreflightBatch:
 
         runner = _make_runner(tmp_path, check_memory=False)
         plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
-        called = False
-
-        def fake_estimate(*_args: object, **_kw: object) -> None:
-            nonlocal called
-            called = True
-
-        monkeypatch.setattr(
-            "jamma.lmm.association_plan.estimate_lmm_memory", fake_estimate
-        )
+        # A machine that could not hold the plan: only a skipped gate passes.
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 0.001)
         records: list[str] = []
         handler_id = logger.add(lambda m: records.append(str(m)), level="INFO")
         try:
@@ -135,7 +128,6 @@ class TestMemoryPreflightBatch:
         finally:
             logger.remove(handler_id)
 
-        assert not called, "estimator must not run when check_memory=False"
         assert any("Memory preflight skipped" in r for r in records), (
             f"batch skip must log intent; got {records!r}"
         )
@@ -152,27 +144,22 @@ class TestMemoryPreflightBatch:
         Ordering is load-bearing: a generous budget on a large machine must
         not mask a user-set cap.
         """
-        runner = _make_runner(tmp_path, check_memory=True, mem_budget=8.0)
+        # U alone is 8MB at 1000 samples, so a 1MB budget cannot hold the plan.
+        runner = _make_runner(tmp_path, check_memory=True, mem_budget=0.001)
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 128.0)
-        monkeypatch.setattr(
-            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: 16.0
-        )
         plan = _association_plan(
-            "batch", n_valid=1000, n_snps=100, n_cvt=1, mem_budget=8.0
+            "batch", n_valid=1000, n_snps=100, n_cvt=1, mem_budget=0.001
         )
 
-        with pytest.raises(MemoryError, match=r"exceeds .*budget \(8\.0GB\)"):
+        with pytest.raises(MemoryError, match=r"exceeds .*budget \(0\.001GB\)"):
             preflight(runner.config, plan)
 
     def test_insufficient_memory_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         runner = _make_runner(tmp_path, check_memory=True)
-        monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
-        monkeypatch.setattr(
-            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: 200.0
-        )
         plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
+        monkeypatch.setattr(memory, "available_ram_gb", lambda: 0.001)
 
         with pytest.raises(MemoryError, match=r"Insufficient memory"):
             preflight(runner.config, plan)
@@ -182,9 +169,6 @@ class TestMemoryPreflightBatch:
     ) -> None:
         runner = _make_runner(tmp_path, check_memory=True)
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 128.0)
-        monkeypatch.setattr(
-            "jamma.lmm.association_plan.estimate_lmm_memory", lambda *a, **k: 32.0
-        )
         plan = _association_plan("batch", n_valid=1000, n_snps=100, n_cvt=1)
 
         preflight(runner.config, plan)

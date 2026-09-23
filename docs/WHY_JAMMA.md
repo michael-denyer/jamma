@@ -219,13 +219,14 @@ log_memory_snapshot("kinship:after")
 ### Memory Estimation API
 
 ```python
-from jamma.core.memory import available_ram_gb, estimate_streaming_memory, fits
+from jamma.core.memory import available_ram_gb, fits
+from jamma.lmm.association_plan import plan_association
 
 # Before starting a big job
-ledger = estimate_streaming_memory(n_samples=200_000)
-print(f"Peak: {ledger.peak_gb:.1f}GB")
+quote = plan_association(200_000, 95_000, backend="numpy-streaming").price(eigen=None)
+print(f"Peak: {quote.total_peak_gb:.1f}GB")
 print(f"Available: {available_ram_gb():.1f}GB")
-print(f"Will fit: {fits(ledger.peak_gb, available_ram_gb())}")
+print(f"Will fit: {fits(quote.total_peak_gb, available_ram_gb())}")
 ```
 
 ### Type Safety
@@ -324,11 +325,11 @@ results = run_lmm_association_numpy_streaming(
 )
 
 # Memory estimation before commitment
-from jamma.core.memory import available_ram_gb, estimate_lmm_memory, require
+from jamma.core.memory import available_ram_gb, require
+from jamma.lmm.association_plan import plan_association
 
-# uab_iab_gb: the per-buffer Uab/Iab bytes this run's dispatch path holds.
 require(
-    estimate_lmm_memory(n_samples, n_snps, uab_iab_gb=0.0),
+    plan_association(n_samples, n_snps).price(eigen=None).association_gb,
     available_ram_gb(),
     "LMM",
 )

@@ -265,8 +265,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:325](../src/jamma/lmm/association_plan.py#L325) |
-| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:96](../src/jamma/lmm/association_plan.py#L96) |
+| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:309](../src/jamma/lmm/association_plan.py#L309) |
+| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:92](../src/jamma/lmm/association_plan.py#L92) |
 | 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any source under one `LmmRunSpec` | [runner_numpy.py:321](../src/jamma/lmm/runner_numpy.py#L321) |
 | 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:256](../src/jamma/lmm/runner_numpy.py#L256) |
 | 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:97](../src/jamma/lmm/runner_numpy.py#L97) |
@@ -322,8 +322,8 @@ Configuration, memory management, threading, and logging.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 5c | `MemoryLedger` | Peak memory per streaming phase; the gate reads `available_ram_gb()` once | [memory.py:119](../src/jamma/core/memory.py#L119) |
-| 5c | `estimate_lmm_memory()` | LMM-phase-only memory estimate | [memory.py:137](../src/jamma/core/memory.py#L137) |
+| 5c | `ExecutableAssociationPlan.price()` | The run's memory quote: kinship, eigen, statistics, and association phases and their peak | [association_plan.py:150](../src/jamma/lmm/association_plan.py#L150) |
+| 5c | `require()` | The one memory gate; callers read `available_ram_gb()` once | [memory.py:68](../src/jamma/core/memory.py#L68) |
 | 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:27](../src/jamma/core/memory_snapshot.py#L27) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:20](../src/jamma/utils/logging.py#L20) |
 | 5d | `write_gemma_log()` | GEMMA-compatible `.log.txt` | [logging.py:55](../src/jamma/utils/logging.py#L55) |
@@ -464,7 +464,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     subgraph Preflight["🔧 Pre-flight Check"]
-        EST["estimate_lmm_memory()<br/><small>5c</small>"]
+        EST["price()<br/><small>5c</small>"]
     end
 
     subgraph Peak["📊 Memory Peak"]
@@ -604,7 +604,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO config | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
 | Result writer | [IncrementalAssocWriter](../src/jamma/lmm/assoc_output.py#L70) |
-| Memory estimation | [lmm_cost](../src/jamma/core/memory.py#L245) |
+| Memory estimation | [price](../src/jamma/lmm/association_plan.py#L150) |
 | Threading | [threading.py:55](../src/jamma/core/threading.py#L55) |
 | Hardware context | [_hardware_context.py:33](../scripts/_hardware_context.py#L33) |
 | Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L574) |

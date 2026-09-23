@@ -461,7 +461,7 @@ a structural test. Test the behavior.
 | Anti-pattern | Preferred approach |
 |---|---|
 | `inspect.getsource()` assertions | Assert on warnings, exceptions, return values |
-| `MagicMock()` for data classes (`MemoryLedger`, `ExecutionPlan`, `Path`) | Construct real instances with test values |
+| `MagicMock()` for data classes (`MemoryPlan`, `ExecutionPlan`, `Path`) | Construct real instances with test values |
 | `MagicMock(spec=Path)` to stand in for a path | Use `tmp_path` or `Path("/tmp/x")` |
 | `@patch` on a non-boundary collaborator (`PipelineRunner`, `numpy.linalg.eigh`) | Inject a fake; or test against real values |
 | Mocking numerical functions (eigh, BLAS, likelihood) | Use small synthetic data with known results |

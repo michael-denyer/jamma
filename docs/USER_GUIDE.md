@@ -904,23 +904,16 @@ jamma -lmm 1 ... --no-check-memory
 ### Programmatic Memory Estimation
 
 ```python
-from jamma.core.memory import estimate_lmm_memory, estimate_streaming_memory
-
-# Full pipeline estimate (before starting anything; streaming is the
-# production path, so genotypes are counted per chunk, not in full)
 from jamma.core.memory import available_ram_gb, fits
+from jamma.lmm.association_plan import plan_association
 
-full = estimate_streaming_memory(n_samples=200_000)
-print(f"Full pipeline peak: {full.peak_gb:.1f}GB")
-print(f"Eigendecomp phase: {full.eigen_gb:.1f}GB")
+# The quote the pipeline preflight gates on. plan_association reads the
+# machine once to size its chunks; price() itself is pure.
+plan = plan_association(200_000, 95_000, backend="numpy-streaming")
+quote = plan.price(eigen=None)  # pass an EigenDriverPlan to price the decomposition
+print(f"Association phase: {quote.association_gb:.1f}GB")
 print(f"Available: {available_ram_gb():.1f}GB")
-print(f"Sufficient: {fits(full.peak_gb, available_ram_gb())}")
-
-# LMM-only estimate (after eigendecomp is done, kinship freed). uab_iab_gb is
-# the per-buffer Uab/Iab figure the run's dispatch path holds; the fused C
-# paths form Uab in place and hold none.
-lmm_gb = estimate_lmm_memory(n_samples=200_000, n_snps=95_000, uab_iab_gb=0.0)
-print(f"LMM phase: {lmm_gb:.1f}GB")
+print(f"Sufficient: {fits(quote.total_peak_gb, available_ram_gb())}")
 ```
 
 ## Troubleshooting

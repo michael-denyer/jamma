@@ -3,8 +3,8 @@
 One seam, previously spread over three files. The sizer turns a RAM budget and
 a dispatch path into a SNPs-per-chunk count, and these pin all three of its
 inputs: the per-path column accounting, the _MAX_CHUNK ceiling against the
-n_filtered bound, and the pipeline_buffers guards it shares with the streaming
-memory estimator.
+n_filtered bound, and its pipeline_buffers guards, beside the rotation buffers
+the association quote prices per pipeline buffer.
 """
 
 from __future__ import annotations
@@ -255,55 +255,34 @@ def test_chunk_size_bound_by_ram_budget_below_cap():
 
 
 # ---------------------------------------------------------------------------
-# pipeline_buffers invariants, shared with the streaming memory estimator
+# pipeline_buffers invariants
 # ---------------------------------------------------------------------------
 
 
-class TestStreamingMemoryPipelineBuffers:
-    """Tests for pipeline_buffers parameter in streaming memory estimators."""
+class TestPipelineBuffers:
+    """pipeline_buffers in the association quote and the chunk sizer."""
 
-    def test_streaming_memory_double_buffer_rotation_doubles(self):
-        """The LMM phase gains one more rotation buffer at pipeline_buffers=2."""
-        from jamma.core.eigen_plan import array_gb
-        from jamma.core.memory import estimate_streaming_memory
+    def test_streaming_quote_gains_one_rotation_buffer_per_pipeline_buffer(self):
+        """The association quote gains one more rotation buffer at n_buffers=2."""
+        from jamma.core.memory import array_gb
+        from tests.builders import association_price_plan
 
         n_samples, chunk_size = 1000, 10_000
-        ledger_1 = estimate_streaming_memory(
-            n_samples, chunk_size=chunk_size, pipeline_buffers=1
-        )
-        ledger_2 = estimate_streaming_memory(
-            n_samples, chunk_size=chunk_size, pipeline_buffers=2
+        quote_1, quote_2 = (
+            association_price_plan(
+                "streaming",
+                n_samples=n_samples,
+                n_snps=100_000,
+                chunk_size=chunk_size,
+                n_buffers=n_buffers,
+            ).price(eigen=None)
+            for n_buffers in (1, 2)
         )
 
-        assert ledger_2.lmm_gb - ledger_1.lmm_gb == pytest.approx(
+        assert quote_2.association_gb - quote_1.association_gb == pytest.approx(
             array_gb(n_samples, chunk_size), rel=1e-10
         )
-        assert ledger_2.kinship_gb == ledger_1.kinship_gb
-        assert ledger_2.eigen_gb == ledger_1.eigen_gb
-
-    def test_streaming_memory_default_matches_single_buffer(self):
-        """Omitting pipeline_buffers gives the same ledger as pipeline_buffers=1."""
-        from jamma.core.memory import estimate_streaming_memory
-
-        assert estimate_streaming_memory(1000) == estimate_streaming_memory(
-            1000, pipeline_buffers=1
-        )
-
-    @pytest.mark.parametrize("bad_value", [0, -1, -10])
-    def test_streaming_memory_pipeline_buffers_invalid_raises(self, bad_value):
-        """pipeline_buffers < 1 raises ValueError in memory estimators."""
-        from jamma.core.memory import estimate_streaming_memory
-
-        with pytest.raises(ValueError, match="pipeline_buffers must be >= 1"):
-            estimate_streaming_memory(1000, pipeline_buffers=bad_value)
-
-    @pytest.mark.parametrize("bad_value", [1.0, "2", None])
-    def test_streaming_memory_pipeline_buffers_type_error(self, bad_value):
-        """pipeline_buffers must be int in memory estimators."""
-        from jamma.core.memory import estimate_streaming_memory
-
-        with pytest.raises(TypeError, match="pipeline_buffers must be an int"):
-            estimate_streaming_memory(1000, pipeline_buffers=bad_value)
+        assert quote_2.statistics_gb == quote_1.statistics_gb
 
     @pytest.mark.parametrize("bad_value", [0, -1, -10])
     def test_numpy_chunk_size_pipeline_buffers_invalid_raises(self, bad_value):

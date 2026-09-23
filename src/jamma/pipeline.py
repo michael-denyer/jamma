@@ -379,9 +379,7 @@ class PipelineRunner:
 
         # Select the plan once, with the post-mask sample count and the real
         # n_cvt: masking can reduce n_valid below the PLINK-header n_samples,
-        # and Uab sizing depends on n_cvt. A prior version selected twice
-        # (once here with the pre-mask n_samples, once again after masking),
-        # re-running estimate_lmm_memory both times; this is the single call.
+        # and Uab sizing depends on n_cvt.
         execution = plan_association(
             n_valid,
             n_snps,

@@ -15,7 +15,15 @@ from pathlib import Path
 
 import numpy as np
 
+from jamma.lmm.association_plan import (
+    ExecutableAssociationPlan,
+    ExecutionMode,
+    ExecutionPlan,
+)
+from jamma.lmm.chunk_sizing import LmmChunkPlan
+from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.pab import compute_Uab
+from jamma.lmm.workspace import WorkspaceSpec
 
 # Matrix sizes the jlinalg BLAS tests sweep. The values were chosen around
 # the MR/MC/KC blocking of the own-BLAS kernel deleted at 663a22b; they are
@@ -132,3 +140,44 @@ def write_fam(
         lines.append("\t".join([f"FAM{i:03d}", f"IND{i:03d}", "0", "0", "0", *values]))
     path.write_text("\n".join(lines) + "\n")
     return path
+
+
+def empty_workspace(
+    dispatch: DispatchPath, n_samples: int, n_input_samples: int, n_cvt: int
+) -> WorkspaceSpec:
+    """A kernel workspace that holds no bytes, so a quote reads no C sizer."""
+    return WorkspaceSpec(
+        dispatch, 1, n_samples, n_input_samples, n_cvt, 0, 0, 1, 0, 0, 0, 0
+    )
+
+
+def association_price_plan(
+    mode: ExecutionMode,
+    *,
+    n_samples: int,
+    n_snps: int,
+    chunk_size: int,
+    n_buffers: int = 1,
+    n_cvt: int = 1,
+    dispatch: DispatchPath = DispatchPath.NUMPY_FALLBACK,
+    n_input_samples: int | None = None,
+) -> ExecutableAssociationPlan:
+    """A real association plan with an empty workspace, priced machine-independently.
+
+    ``price(eigen=None).association_gb`` then carries only the U, genotype,
+    rotation-buffer, and Uab/Iab terms, so a test can state them by hand.
+    """
+    n_input = n_samples if n_input_samples is None else n_input_samples
+    return ExecutableAssociationPlan(
+        summary=ExecutionPlan(mode, "test"),
+        dispatch=dispatch,
+        conservative_chunks=LmmChunkPlan(
+            chunk_size, -(-n_snps // chunk_size), n_buffers, n_buffers > 1
+        ),
+        n_samples=n_samples,
+        n_input_samples=n_input,
+        n_snps_before_filter=n_snps,
+        n_cvt=n_cvt,
+        mem_budget_gb=None,
+        workspace=empty_workspace(dispatch, n_samples, n_input, n_cvt),
+    )

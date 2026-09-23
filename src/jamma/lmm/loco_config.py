@@ -42,8 +42,8 @@ class LocoConfig:
         snps_indices: Global indices of SNPs to test. None tests all.
         ksnps_indices: Global indices of SNPs used to build kinship. None
             uses all.
-        col_chunk_size: Widest SNP chunk for association and for the
-            per-chromosome statistics reads. Kinship uses its own chunk width.
+        col_chunk_size: Widest SNP chunk for association. Kinship and SNP
+            statistics use their own chunk width.
         write_eigen: Write per-chromosome eigenvalues and eigenvectors.
         eigen_dir: Directory for eigen files. Required when write_eigen is set.
         legacy_text: Write kinship and eigen files as GEMMA text rather than

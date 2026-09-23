@@ -100,7 +100,6 @@ class BedSource:
             show_progress=self._show_progress,
             progress_label="Computing SNP statistics",
             dtype=np.float32,
-            sample_scope="all_samples" if samples.is_all_samples else "valid_samples",
         )
 
         def _iter_chunks(

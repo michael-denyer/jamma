@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- LOCO association reuses the SNP statistics kinship PASS 1 computed over the
+  analysed samples, so a run with missing phenotypes no longer reads every
+  chromosome's genotypes a second time. A run on cached eigenpairs computes
+  the statistics in one streamed pass before the chromosome loop. Results are
+  unchanged.
 - Score-only runs (`-lmm 3`) with two or more covariates no longer build the
   lambda grid, which only Wald and LRT read: at 100,000 samples and the
   default 50 grid points that is 40 MB less per workspace. The memory quote
@@ -177,6 +182,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `jamma.kinship.SnpStatsCache` and the `sample_scope` field on `SnpStats`.
+  `LocoKinshipStream.snp_stats` is now always a `SnpStats` over the rows the
+  kinship pass filtered on, never `None`.
 - `jamma.core.memory.MemoryLedger`, `estimate_lmm_memory`,
   `estimate_streaming_memory`, `kinship_cost`, `eigen_cost` and `lmm_cost`,
   and their `jamma.core` re-exports. `ExecutableAssociationPlan.price()`

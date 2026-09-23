@@ -34,15 +34,9 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.snp_filter import validate_snp_indices
-from jamma.core.snp_stats import (
-    SnpFilterSpec,
-    SnpSelection,
-    SnpStats,
-    collect_snp_stats_from_chunks,
-)
+from jamma.core.snp_stats import SnpFilterSpec, SnpSelection, SnpStats
 from jamma.core.threading import get_loco_worker_count, get_physical_core_count
 from jamma.io.plink import get_plink_metadata, partitions_from_metadata
-from jamma.kinship import SnpStatsCache
 from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter
 from jamma.lmm.association_plan import KinshipShape, plan_association
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
@@ -80,86 +74,6 @@ __all__ = [
     "run_lmm_loco",
     "run_loco",
 ]
-
-
-def _collect_chr_snp_stats(
-    bed_path: Path,
-    chr_snp_indices: np.ndarray,
-    valid_indices: np.ndarray,
-    col_chunk_size: int,
-) -> SnpStats:
-    """Collect per-SNP statistics for one chromosome via chunked BED reads.
-
-    Shared by LOCO chromosome runners (pass-1 logic).
-
-    Args:
-        bed_path: PLINK file prefix (without extension).
-        chr_snp_indices: Global column indices for this chromosome's SNPs.
-        valid_indices: Row indices of valid (non-missing) samples.
-        col_chunk_size: Number of SNP columns per disk read chunk.
-
-    Returns:
-        SnpStats with arrays of length len(chr_snp_indices). Stats are computed
-        over valid_indices rows, so the denominator is len(valid_indices).
-    """
-    n_chr_snps = len(chr_snp_indices)
-
-    bed_file = Path(f"{bed_path}.bed")
-
-    def _chunks():
-        with open_bed(bed_file) as bed:
-            for chunk_start in range(0, n_chr_snps, col_chunk_size):
-                chunk_end = min(chunk_start + col_chunk_size, n_chr_snps)
-                chunk_col_indices = chr_snp_indices[chunk_start:chunk_end]
-                geno_chunk = bed.read(
-                    index=np.s_[valid_indices, chunk_col_indices],
-                    dtype=np.float64,
-                )
-                yield geno_chunk, chunk_start, chunk_end
-
-    return collect_snp_stats_from_chunks(
-        _chunks(),
-        n_snps=n_chr_snps,
-        n_samples=len(valid_indices),
-        global_indices=chr_snp_indices,
-        validate_genotypes=True,
-        sample_scope="valid_samples",
-    )
-
-
-def _chr_snp_stats_for_loco(
-    snp_stats_cache: SnpStatsCache | None,
-    bed_path: Path,
-    chr_snp_indices: np.ndarray,
-    valid_indices: np.ndarray,
-    *,
-    all_samples_valid: bool,
-    col_chunk_size: int,
-) -> SnpStats:
-    """Return per-chromosome SNP stats on the basis GEMMA uses.
-
-    GEMMA computes each SNP's genotype mean/MAF and imputes missing genotypes over
-    the *analysed* individuals only (``src/lmm.cpp`` ``AnalyzePlink``:
-    ``x_mean /= (ni_test - n_miss)``, then missing genotype ``-> x_mean``). The
-    all-sample statistics cached during kinship PASS 1 therefore match GEMMA only
-    when every sample is analysed; when some phenotypes/covariates are missing the
-    all-sample mean differs from the analysed-sample mean and would bias both the
-    filter/AF and the missing-genotype imputation in PASS 2.
-
-    So reuse the cache only when ``all_samples_valid`` (a free, exact match that
-    avoids a per-chromosome BED re-read); otherwise recompute over
-    ``valid_indices``, which is exactly what the non-cache / eigen-cache path does.
-    """
-    if snp_stats_cache is not None and all_samples_valid:
-        if snp_stats_cache.sample_scope != "all_samples":
-            raise ValueError(
-                "LOCO SNP stats cache must use all-sample statistics; "
-                f"got sample_scope={snp_stats_cache.sample_scope!r}"
-            )
-        return snp_stats_cache.take(chr_snp_indices)
-    return _collect_chr_snp_stats(
-        bed_path, chr_snp_indices, valid_indices, col_chunk_size
-    )
 
 
 def run_lmm_loco(
@@ -344,11 +258,9 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
             chr_result = run_single(
                 _LocoChrSource(
                     run.bed_path,
-                    chr_snp_indices,
+                    source.snp_stats.take(chr_snp_indices),
                     n_samples_total,
                     snp_meta=snp_info,
-                    col_chunk_size=loco.col_chunk_size,
-                    snp_stats_cache=source.snp_stats,
                 ),
                 replace(
                     spec,
@@ -409,35 +321,27 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
 class _LocoChrSource:
     """One chromosome's .bed columns as a GenotypeSource.
 
-    The sample basis indexes BED rows directly. Statistics stay float64 BED
-    reads on the analysed-sample basis GEMMA uses, or reuse the kinship
-    PASS-1 cache when that basis is every BED row.
+    The sample basis indexes BED rows directly. ``stats`` covers exactly
+    this chromosome's SNPs over the analysed rows, the basis GEMMA uses; its
+    global indices name the BED columns.
     """
 
     def __init__(
         self,
         bed_path: Path,
-        chr_snp_indices: np.ndarray,
+        stats: SnpStats,
         n_samples: int,
         *,
         snp_meta: SnpMeta,
-        col_chunk_size: int,
-        snp_stats_cache: SnpStatsCache | None,
     ) -> None:
-        if len(chr_snp_indices) > 0 and (
-            chr_snp_indices[0] < 0 or chr_snp_indices[-1] >= len(snp_meta)
-        ):
-            raise ValueError("chromosome SNP identities fall outside paired SnpMeta")
         self._bed_path = bed_path
-        self._chr_snp_indices = chr_snp_indices
+        self._stats = stats
         self._n_samples = n_samples
         self._snp_meta = snp_meta
-        self._col_chunk_size = col_chunk_size
-        self._snp_stats_cache = snp_stats_cache
 
     @property
     def n_snps(self) -> int:
-        return len(self._chr_snp_indices)
+        return self._stats.n_snps
 
     def prepare(
         self, samples: SampleBasis, filters: SnpFilterSpec
@@ -453,20 +357,6 @@ class _LocoChrSource:
             # get unfiltered results.
             raise ValueError("HWE filtering is not supported in LOCO")
         physical_rows = samples.positions
-        cache = self._snp_stats_cache
-        all_physical_samples = bool(
-            cache is not None
-            and len(physical_rows) == cache.n_samples
-            and np.array_equal(physical_rows, np.arange(cache.n_samples))
-        )
-        stats = _chr_snp_stats_for_loco(
-            self._snp_stats_cache,
-            self._bed_path,
-            self._chr_snp_indices,
-            physical_rows,
-            all_samples_valid=all_physical_samples,
-            col_chunk_size=self._col_chunk_size,
-        )
 
         def _iter_chunks(
             selection: SnpSelection, chunk_size: int
@@ -491,7 +381,7 @@ class _LocoChrSource:
 
         return bind_prepared_genotypes(
             snp_meta=self._snp_meta,
-            stats=stats,
+            stats=self._stats,
             filters=filters,
             sample_basis=samples,
             chunk_source=_iter_chunks,

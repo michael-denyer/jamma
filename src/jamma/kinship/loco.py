@@ -31,7 +31,7 @@ from loguru import logger
 from jamma.core import memory
 from jamma.core.memory import array_gb
 from jamma.core.progress import progress_iterator
-from jamma.core.snp_stats import SnpStatsCache, collect_streamed_snp_stats
+from jamma.core.snp_stats import SnpStats, collect_streamed_snp_stats
 from jamma.io.plink import (
     PlinkMetadata,
     get_plink_metadata,
@@ -60,14 +60,14 @@ class LocoKinshipStream:
     matrix, or you get N references to the same final buffer.
 
     Attributes:
-        snp_stats: PASS-1 all-sample SnpStatsCache for the LOCO association pass to
-            reuse when its sample population matches, or None when SNP filtering
-            uses a sample subset. Output row selection does not change these
-            statistics. Available before iteration, since PASS 1 runs eagerly.
+        snp_stats: PASS-1 statistics over every SNP, on the filtering rows
+            (``filter_sample_indices``, or every BED row). The LOCO association
+            pass reuses them. Output row selection does not change them.
+            Available before iteration, since PASS 1 runs eagerly.
     """
 
     _matrices: Iterator[tuple[str, np.ndarray]]
-    snp_stats: SnpStatsCache | None = None
+    snp_stats: SnpStats
 
     def __iter__(self) -> Iterator[tuple[str, np.ndarray]]:
         return self._matrices
@@ -370,9 +370,8 @@ def compute_loco_kinship_streaming(
         A consume-once LocoKinshipStream. Iterate it for (chr_name, K_loco) pairs,
         where chr_name is the chromosome being excluded and K_loco has shape
         (n_valid, n_valid) when valid_indices is provided, else
-        (n_samples, n_samples). Read ``.snp_stats`` for the PASS-1 all-sample
-        SnpStatsCache, or None when filtering uses a sample subset. Centering
-        always uses all BED samples;
+        (n_samples, n_samples). Read ``.snp_stats`` for the PASS-1 statistics
+        over the filtering rows. Centering always uses all BED samples;
         valid_indices selects matrix rows only. Each yielded matrix aliases a shared
         buffer overwritten on the next advance, so consume it before advancing, or call
         ``.materialize()`` to collect independent copies.
@@ -435,9 +434,6 @@ def compute_loco_kinship_streaming(
         show_progress=show_progress,
         progress_label="LOCO: SNP statistics",
         dtype=np.float32,
-        sample_scope="all_samples"
-        if filter_sample_indices is None
-        else "valid_samples",
     )
 
     if stats.n_unexpected > 0:
@@ -445,21 +441,6 @@ def compute_loco_kinship_streaming(
             f"LOCO kinship genotype validation: {stats.n_unexpected} values outside "
             f"expected range {{0, 1, 2, NaN}}"
         )
-
-    snp_stats_cache = (
-        SnpStatsCache(
-            col_means=stats.col_means,
-            miss_counts=stats.miss_counts,
-            col_vars=stats.col_vars,
-            n_samples=stats.n_samples,
-            n_unexpected=stats.n_unexpected,
-            hwe_counts=stats.hwe_counts,
-            global_indices=stats.global_indices,
-            sample_scope=stats.sample_scope,
-        )
-        if filter_sample_indices is None
-        else None
-    )
 
     snp_selection = select_kinship_snps(
         stats, maf_threshold, miss_threshold, ksnps_indices, n_snps
@@ -473,10 +454,8 @@ def compute_loco_kinship_streaming(
             f"{n_removed:,} removed (MAF/missing/monomorphic)"
         )
 
-    # Build SNP-to-chromosome mapping for filtered SNPs. The PASS-1 stats are no
-    # longer needed: snp_stats_cache (if any) was already built from stats above.
     snp_indices = snp_selection.indices
-    del snp_selection, stats
+    del snp_selection
 
     # Map each filtered SNP index to its chromosome
     chr_for_filtered = chromosomes[snp_indices]
@@ -593,8 +572,4 @@ def compute_loco_kinship_streaming(
                 f"{n_batches} passes over {n_chr_with_snps} chromosomes"
             )
 
-    # snp_stats is None on filtered-sample runs (valid_indices given), where the
-    # all-sample cache would be neither valid nor consumed. The write-path caller
-    # ignores it; the LOCO association pass reads it and re-derives valid-sample
-    # stats itself when it is None.
-    return LocoKinshipStream(_matrices=_generate(), snp_stats=snp_stats_cache)
+    return LocoKinshipStream(_matrices=_generate(), snp_stats=stats)

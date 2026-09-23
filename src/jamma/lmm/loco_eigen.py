@@ -21,12 +21,9 @@ import numpy as np
 from loguru import logger
 
 from jamma.core.eigen_plan import EigenDriverPlan
+from jamma.core.snp_stats import SnpStats, collect_streamed_snp_stats
 from jamma.core.threading import get_blas_thread_count
-from jamma.kinship import (
-    SnpStatsCache,
-    compute_loco_kinship_streaming,
-    write_kinship_matrix,
-)
+from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
 from jamma.kinship.loco import LocoRetainedSet, loco_retained_set
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
 from jamma.lmm.eigen import (
@@ -59,13 +56,13 @@ class EigenPairSource:
     Attributes:
         pairs: One eigenpair per chromosome. Consume in order; each K_loco is
             dropped before the next is pulled.
-        snp_stats: Kinship PASS-1 statistics over all samples, for the
-            per-chromosome association filter. None when the eigenpairs came
-            from the cache, since no kinship pass ran.
+        snp_stats: Statistics for every SNP over the analysed rows, for the
+            per-chromosome association filter. Kinship PASS 1 computes them;
+            with cached eigenpairs one streamed pass does.
     """
 
     pairs: EigenPairs
-    snp_stats: SnpStatsCache | None
+    snp_stats: SnpStats
 
 
 @dataclass(frozen=True)
@@ -163,7 +160,23 @@ def eigen_pairs_for(
                     n_valid=len(rows),
                     show_progress=config.show_progress,
                 )
-                return EigenPairSource(pairs, snp_stats=None)
+                stats = collect_streamed_snp_stats(
+                    run.bed_path,
+                    n_snps=run.meta.n_snps,
+                    n_samples=run.meta.n_samples,
+                    chunk_size=DEFAULT_STATS_CHUNK,
+                    sample_indices=None if all_samples_valid else rows,
+                    validate_genotypes=True,
+                    show_progress=config.show_progress,
+                    progress_label="LOCO: SNP statistics",
+                    dtype=np.float64,
+                )
+                if stats.n_unexpected > 0:
+                    logger.warning(
+                        f"Genotype validation: {stats.n_unexpected} values outside "
+                        "expected range {0, 1, 2, NaN}"
+                    )
+                return EigenPairSource(pairs, snp_stats=stats)
 
     logger.info(workers.describe())
     kinship_is_analysed = run.execution.resolved_kinship.n_samples == len(rows)

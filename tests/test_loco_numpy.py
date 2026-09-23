@@ -8,8 +8,6 @@ Related LOCO test files:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -81,73 +79,13 @@ def test_get_loco_worker_count_env_var(monkeypatch):
 
 
 @pytest.mark.tier1
-def test_loco_numpy_no_per_chromosome_bed_reads():
-    """NumPy LOCO stats cache eliminates per-chromosome BED re-reads.
-
-    Verifies LOCO-01: without the cache, each chromosome needs an extra open_bed
-    call for _collect_chr_snp_stats. With the cache, those calls are skipped.
-
-    Counts: 2 metadata reads (run_lmm_loco + streaming_numpy) + 2 kinship reads
-    (PASS 1 stats + PASS 2 accumulation) + n_chr assoc reads (genotypes per chr).
-    With cache = 4 + n_chr. Without cache = 4 + 2*n_chr (extra stats reads).
-    """
-    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
-
-    from unittest.mock import patch
-
-    import bed_reader
-
-    call_count = 0
-    original_open_bed = bed_reader.open_bed
-
-    def counting_open_bed(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return original_open_bed(*args, **kwargs)
-
-    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
-
-    # Patch at the plink.py import site (stream_genotype_chunks uses it for kinship
-    # PASS 1 and PASS 2, and get_plink_metadata for metadata reads)
-    # and at the loco.py import site (_LocoChrSource uses it directly)
-    with (
-        patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
-        patch("jamma.lmm.loco.open_bed", side_effect=counting_open_bed),
-    ):
-        loco = run_lmm_loco(
-            bed_path=_LOCO_BFILE,
-            phenotypes=phenotypes,
-            config=LmmConfig(check_memory=False, show_progress=False),
-        )
-
-    meta = get_plink_metadata(_LOCO_BFILE)
-    n_chromosomes = len(set(meta.chromosome.tolist()))
-
-    # Expected: 2 metadata reads + 2 kinship reads + n_chr assoc reads
-    # (no per-chromosome stats reads — eliminated by SnpStatsCache)
-    # Without the cache this would be 4 + 2*n_chr
-    expected_with_cache = 4 + n_chromosomes
-    expected_without_cache = 4 + 2 * n_chromosomes
-    assert call_count <= expected_with_cache, (
-        f"Expected at most {expected_with_cache} BED opens "
-        f"(2 metadata + 2 kinship + {n_chromosomes} assoc genotypes), "
-        f"got {call_count}. "
-        f"Without cache would be {expected_without_cache}. "
-        f"Per-chromosome stats BED reads not fully eliminated."
-    )
-    assert loco.n_tested > 0, "Expected SNPs to be tested"
-
-
-@pytest.mark.tier1
-@pytest.mark.xfail(
-    strict=True,
-    reason="missing-phenotype LOCO re-reads each chromosome for SNP statistics",
-)
-def test_loco_missing_phenotype_reuses_kinship_snp_stats():
-    """A missing-phenotype LOCO run opens the BED 3 + n_chr times, not 3 + 2*n_chr.
+@pytest.mark.parametrize("missing_phenotypes", [False, True])
+def test_loco_reuses_kinship_snp_stats(missing_phenotypes):
+    """LOCO opens the BED 3 + n_chr times: metadata, 2 kinship passes, 1 per chr.
 
     Kinship PASS 1 already computes SNP statistics over the analysed rows, so
-    association reads each chromosome's genotypes once and nothing else.
+    association reads each chromosome's genotypes once and nothing else, with
+    or without missing phenotypes.
     """
     require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
@@ -164,7 +102,8 @@ def test_loco_missing_phenotype_reuses_kinship_snp_stats():
         return original_open_bed(*args, **kwargs)
 
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
-    phenotypes[::9] = np.nan
+    if missing_phenotypes:
+        phenotypes[::9] = np.nan
 
     with (
         patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
@@ -407,178 +346,58 @@ def test_loco_numpy_covariates_threaded_and_effective():
     )
 
 
-def _all_sample_cache(bed_path):
-    """Build an all-sample SnpStatsCache over every SNP, like kinship PASS 1."""
-    from bed_reader import open_bed
-
-    from jamma.core.snp_stats import SnpStatsCache, collect_snp_stats_from_chunks
-
-    meta = get_plink_metadata(bed_path)
-    n_total, n_snps = meta.n_samples, meta.n_snps
-    with open_bed(Path(f"{bed_path}.bed")) as bed:
-        geno_all = bed.read(index=np.s_[:, :], dtype=np.float64)
-    stats = collect_snp_stats_from_chunks(
-        [(geno_all, 0, n_snps)],
-        n_snps=n_snps,
-        n_samples=n_total,
-        global_indices=np.arange(n_snps),
-        sample_scope="all_samples",
-    )
-    return SnpStatsCache(
-        col_means=stats.col_means,
-        miss_counts=stats.miss_counts,
-        col_vars=stats.col_vars,
-        n_samples=n_total,
-        n_unexpected=stats.n_unexpected,
-        hwe_counts=stats.hwe_counts,
-        global_indices=stats.global_indices,
-        sample_scope="all_samples",
-    )
-
-
 @pytest.mark.tier1
-def test_chr_snp_stats_for_loco_bypasses_all_sample_cache_when_analyzed_subset():
-    """With a missing phenotype (analyzed != all), LOCO must recompute SNP stats
-    over the analyzed samples and NOT reuse the all-sample kinship-pass cache.
+def test_loco_missing_phenotype_computed_and_cached_eigen_agree(tmp_path):
+    """With missing phenotypes, the computed and cached-eigen LOCO paths agree.
 
-    GEMMA computes each SNP's mean/MAF and imputes over analyzed individuals only,
-    so the all-sample cache is the wrong basis here. Guards both approaches: the
-    cached approach must fall through to the valid-sample recompute, and the
-    non-cache approach must already use it.
+    The computed path reuses kinship PASS-1 statistics; the cached path, with
+    no kinship pass, streams them once. Both must sit on the analysed-sample
+    basis GEMMA uses, so an all-sample basis on either side shows up in af.
     """
     require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
-
-    from jamma.lmm.loco import _chr_snp_stats_for_loco, _collect_chr_snp_stats
-
-    meta = get_plink_metadata(_LOCO_BFILE)
-    n_total = meta.n_samples
-    chrs = np.asarray(meta.chromosome)
-    chr1 = np.where(chrs == chrs[0])[0]  # first chromosome's global SNP indices
-
-    cache = _all_sample_cache(_LOCO_BFILE)
-
-    # Drop 30 samples -> analyzed != all.
-    valid_mask = np.ones(n_total, dtype=bool)
-    valid_mask[:30] = False
-    valid_indices = np.where(valid_mask)[0]
-
-    valid_stats = _collect_chr_snp_stats(_LOCO_BFILE, chr1, valid_indices, 5000)
-    all_sample_chr1 = cache.take(chr1)
-
-    # Cached approach, analyzed != all: must return the valid-sample recompute...
-    got = _chr_snp_stats_for_loco(
-        cache,
-        _LOCO_BFILE,
-        chr1,
-        valid_indices,
-        all_samples_valid=False,
-        col_chunk_size=5000,
-    )
-    np.testing.assert_allclose(got.col_means, valid_stats.col_means)
-    # ...and that must differ from the all-sample cache (the bypass matters).
-    assert np.max(np.abs(got.col_means - all_sample_chr1.col_means)) > 1e-6
-
-    # Cached approach, analyzed == all: reuse the cache (free, exact match).
-    got_all = _chr_snp_stats_for_loco(
-        cache,
-        _LOCO_BFILE,
-        chr1,
-        np.arange(n_total),
-        all_samples_valid=True,
-        col_chunk_size=5000,
-    )
-    np.testing.assert_allclose(got_all.col_means, all_sample_chr1.col_means)
-
-    # Non-cache approach always uses the analyzed samples.
-    got_none = _chr_snp_stats_for_loco(
-        None,
-        _LOCO_BFILE,
-        chr1,
-        valid_indices,
-        all_samples_valid=False,
-        col_chunk_size=5000,
-    )
-    np.testing.assert_allclose(got_none.col_means, valid_stats.col_means)
-
-
-@pytest.mark.tier1
-def test_loco_missing_phenotype_cache_and_noncache_agree():
-    """With missing phenotypes, the cached and non-cache LOCO paths must produce
-    identical association results — both on the analyzed-sample basis (GEMMA's).
-
-    Before the cache was gated to analyzed==all, the cache path used all-sample
-    stats and diverged from the non-cache path; this pins them together so the
-    divergence cannot return in either approach.
-    """
-    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
-
-    from unittest.mock import patch
-
-    import jamma.lmm.loco_eigen as loco_eigen_module
-    from jamma.kinship import LocoKinshipStream, compute_loco_kinship_streaming
 
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
-    pheno = phenotypes.copy()
-    pheno[::9] = np.nan  # drop ~12 samples -> analyzed != all
+    phenotypes[::9] = np.nan
+    config = LmmConfig(check_memory=False, show_progress=False)
 
-    loco_cache = run_lmm_loco(
+    computed = run_lmm_loco(
         bed_path=_LOCO_BFILE,
-        phenotypes=pheno,
-        config=LmmConfig(check_memory=False, show_progress=False),
+        phenotypes=phenotypes,
+        config=config,
+        loco=LocoConfig(write_eigen=True, eigen_dir=tmp_path),
+    )
+    cached = run_lmm_loco(
+        bed_path=_LOCO_BFILE,
+        phenotypes=phenotypes,
+        config=config,
+        loco=LocoConfig(eigen_dir=tmp_path),
     )
 
-    original = compute_loco_kinship_streaming
-
-    def _null_cache(*args, **kwargs):
-        # Force the non-cache path: keep the kinship iterator, drop the cache.
-        stream = original(*args, **kwargs)
-        return LocoKinshipStream(_matrices=iter(stream), snp_stats=None)
-
-    # allow-patch: forwards to the real function, then drops the stats cache it returns
-    with patch.object(
-        loco_eigen_module, "compute_loco_kinship_streaming", side_effect=_null_cache
+    assert computed.n_tested == cached.n_tested > 0
+    for r_computed, r_cached in zip(
+        computed.associations, cached.associations, strict=True
     ):
-        loco_nocache = run_lmm_loco(
-            bed_path=_LOCO_BFILE,
-            phenotypes=pheno,
-            config=LmmConfig(check_memory=False, show_progress=False),
-        )
-
-    assert loco_cache.n_tested == loco_nocache.n_tested > 0
-    for r_cache, r_nocache in zip(
-        loco_cache.associations, loco_nocache.associations, strict=True
-    ):
-        assert r_cache.rs == r_nocache.rs
-        assert r_cache.p_wald is not None
-        assert r_nocache.p_wald is not None
-        # af is the direct fingerprint of the stats basis (all-sample vs analysed);
-        # on a fixture with no missing genotypes it is where the bug shows.
-        np.testing.assert_allclose(r_cache.af, r_nocache.af, rtol=1e-9, atol=1e-12)
-        np.testing.assert_allclose(r_cache.beta, r_nocache.beta, rtol=1e-9, atol=1e-12)
-        np.testing.assert_allclose(r_cache.se, r_nocache.se, rtol=1e-9, atol=1e-12)
-        np.testing.assert_allclose(
-            r_cache.p_wald, r_nocache.p_wald, rtol=1e-9, atol=1e-12
-        )
+        assert r_computed == r_cached
 
 
 @pytest.mark.tier1
-def test_loco_stream_carries_all_sample_snp_stats():
-    """An all-sample LOCO run exposes its PASS-1 cache on stream.snp_stats.
-
-    The typed LocoKinshipStream replaces the old (iterator, cache) tuple. On an
-    all-sample run the cache must be a real SnpStatsCache, readable before any
-    iteration, so the LOCO association pass can reuse it.
-    """
+def test_loco_stream_carries_snp_stats_over_the_filtering_rows():
+    """PASS-1 statistics are readable before iteration, over the filtering rows."""
     require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
-    from jamma.kinship import SnpStatsCache, compute_loco_kinship_streaming
+    from jamma.kinship import compute_loco_kinship_streaming
 
+    meta = get_plink_metadata(_LOCO_BFILE)
+    rows = np.arange(0, meta.n_samples, 2)
     stream = compute_loco_kinship_streaming(
-        _LOCO_BFILE, check_memory=False, show_progress=False, consumer_gb=0.0
+        _LOCO_BFILE,
+        check_memory=False,
+        show_progress=False,
+        filter_sample_indices=rows,
+        consumer_gb=0.0,
     )
-    # Available before iteration (PASS 1 is eager at construction time).
-    assert isinstance(stream.snp_stats, SnpStatsCache)
-    assert stream.snp_stats.sample_scope == "all_samples"
+    assert stream.snp_stats.n_samples == len(rows)
+    assert stream.snp_stats.n_snps == meta.n_snps
 
 
 @pytest.mark.tier1

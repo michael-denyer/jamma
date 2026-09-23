@@ -373,11 +373,76 @@ def test_workspace_adds_the_python_reference_table_to_the_native_query() -> None
     )
 
     assert spec.persistent_bytes - native[0] == 67_910_784
-    assert native[1:] == (
-        spec.per_thread_bytes,
-        spec.transient_per_thread_bytes,
-        spec.bytes_per_snp,
+    assert native[1:] == (spec.per_thread_bytes, spec.transient_per_thread_bytes)
+
+
+@requires_c
+@pytest.mark.parametrize("n_cvt", [1, 2, 3])
+@pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4])
+def test_native_sizing_query_prices_the_layout_the_creator_allocates(
+    n_cvt: int, lmm_mode: int
+) -> None:
+    """The planner's quote and a created workspace come from one layout.
+
+    Mode 3 searches no lambda, so neither family allocates the grid for it;
+    a creator that did would hold more than the quote.
+    """
+    from jamma.lmm import accel
+
+    lib = accel.require()
+    n_samples, n_grid, n_threads = 40, 10, 3
+    rows = n_cvt + 2
+    n_inv = (n_cvt + 3) * rows // 2 - rows
+    rng = np.random.default_rng(0)
+    eigenvalues = np.linspace(0.5, 2.0, n_samples)
+    invariant = rng.uniform(0.1, 1.0, (3 if n_cvt == 1 else n_inv, n_samples))
+    utw = np.ascontiguousarray(rng.standard_normal((n_samples, n_cvt)))
+    uty = rng.standard_normal(n_samples)
+    null_model: dict[str, object] = {}
+    if lmm_mode in (3, 4):
+        null_model["hi_eval_null"] = 1.0 / (eigenvalues + 1.0)
+    if lmm_mode in (2, 4):
+        null_model["logl_H0"] = -50.0
+    bracket = (n_samples, 1e-5, 1e5, n_grid, 5)
+    if n_cvt == 1:
+        workspace = lib.create_workspace_ncvt1_c(
+            eigenvalues,
+            invariant,
+            utw[:, 0].copy(),
+            uty,
+            *bracket,
+            lmm_mode=lmm_mode,
+            **null_model,
+        )
+    else:
+        workspace = lib.create_workspace_general_c(
+            eigenvalues,
+            invariant,
+            utw,
+            uty,
+            *bracket,
+            n_threads,
+            n_cvt,
+            lmm_mode=lmm_mode,
+            **null_model,
+        )
+
+    assert lib._workspace_bytes_c(workspace) == lib.workspace_sizes_c(
+        n_samples, n_cvt, n_grid, lmm_mode, n_threads
     )
+
+
+@requires_c
+@pytest.mark.parametrize("n_cvt", [2, 3])
+def test_general_score_only_workspace_prices_no_lambda_grid(n_cvt: int) -> None:
+    """Mode 3 drops the n_grid x n_samples grid and adds one null vector."""
+    from jamma.lmm import accel
+
+    lib = accel.require()
+    n_samples, n_grid = 100_000, 50
+    score, *_ = lib.workspace_sizes_c(n_samples, n_cvt, n_grid, 3, 1)
+    wald, *_ = lib.workspace_sizes_c(n_samples, n_cvt, n_grid, 1, 1)
+    assert wald - score >= (n_grid - 1) * n_samples * 8
 
 
 @requires_c

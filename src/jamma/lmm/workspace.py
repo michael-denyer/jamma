@@ -98,7 +98,7 @@ class WorkspaceSpec:
 
         from jamma.lmm import accel
 
-        persistent, per_thread, transient, _ = accel.require().workspace_sizes_c(
+        persistent, per_thread, transient = accel.require().workspace_sizes_c(
             n_samples, n_cvt, n_grid, lmm_mode, max_threads
         )
         return cls(

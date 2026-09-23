@@ -62,6 +62,56 @@ typedef struct {
     double *h_null_Uty;  /* (n_samples,) hi_eval_null * Uty */
 } ncvt1_score_t;
 
+/* Element count of every buffer the family allocates; zero for a buffer the
+ * mode does not use. The creator and the test loop allocate from it, and
+ * ncvt1_layout_bytes prices it, so the plan and the allocation cannot drift. */
+typedef struct {
+    size_t retained;        /* RunInvariants' eigenvalues, UtW, Uty,
+                             * Hi_eval_null, w and three invariant Uab rows */
+    size_t grid_points;     /* lambda_grid, logdet_h_grid and grid_inv each */
+    size_t hi_eval_grid;    /* aligned doubles */
+    size_t hi_eval_null;    /* aligned doubles */
+    size_t score_vector;    /* aligned doubles, h_null_w and h_null_Uty each */
+    size_t thread_scratch;  /* aligned doubles, per call, per thread, three */
+} ncvt1_layout_t;
+
+static ncvt1_layout_t ncvt1_layout(int n_samples, int n_grid, lmm_tests_t tests)
+{
+    size_t n = (size_t)n_samples;
+    ncvt1_layout_t l = {0};
+    l.retained = 8 * n;
+    if (tests.reml || tests.lrt) {
+        l.grid_points = (size_t)n_grid;
+        l.hi_eval_grid = n * (size_t)n_grid;
+        l.thread_scratch = n;
+    } else {
+        l.score_vector = n;
+    }
+    if (tests.score) l.hi_eval_null = n;
+    return l;
+}
+
+static workspace_bytes_t ncvt1_layout_bytes(const ncvt1_layout_t *l)
+{
+    workspace_bytes_t b = {0};
+    b.persistent = l->retained * sizeof(double)
+        + l->grid_points * (2 * sizeof(double) + sizeof(grid_invariant_t))
+        + aligned_double_bytes(l->hi_eval_grid)
+        + aligned_double_bytes(l->hi_eval_null)
+        + 2 * aligned_double_bytes(l->score_vector);
+    if (l->thread_scratch)
+        b.transient_per_thread =
+            3 * (aligned_double_bytes(l->thread_scratch) + sizeof(double *));
+    return b;
+}
+
+workspace_bytes_t ncvt1_workspace_bytes(int n_samples, int n_grid,
+                                        lmm_tests_t tests)
+{
+    ncvt1_layout_t l = ncvt1_layout(n_samples, n_grid, tests);
+    return ncvt1_layout_bytes(&l);
+}
+
 typedef struct {
     int n_samples;
     int df;
@@ -78,6 +128,7 @@ typedef struct {
     PyObject *eigenvalues_ref;  /* keeps eigenvalues array alive */
     PyObject *uab_inv_ref;      /* keeps uab_invariant_soa array alive */
     lmm_tests_t tests;
+    ncvt1_layout_t layout;
     /* Sub-blocks: NULL when the owning mode does not use them, so ws->lrt
      * == NULL is the contract rather than a comment. */
     ncvt1_grid_t *grid;
@@ -127,6 +178,15 @@ static void lmm_workspace_destructor(PyObject *cap)
         (lmm_workspace_t *)PyCapsule_GetPointer(cap, NCVT1_CAPSULE));
 }
 
+int ncvt1_capsule_bytes(PyObject *capsule, workspace_bytes_t *out)
+{
+    if (!PyCapsule_IsValid(capsule, NCVT1_CAPSULE)) return 0;
+    lmm_workspace_t *ws =
+        (lmm_workspace_t *)PyCapsule_GetPointer(capsule, NCVT1_CAPSULE);
+    *out = ncvt1_layout_bytes(&ws->layout);
+    return 1;
+}
+
 
 /* =========================================================================
  * FUSED Uab — workspace holds w/Uty, chunk accepts UtG_T directly
@@ -140,15 +200,14 @@ static void lmm_workspace_destructor(PyObject *cap)
 
 /* Fill a calloc'd n_cvt=1 workspace from validated inputs: the scalar
  * constants, the borrowed array pointers (INCREF'd here, released by
- * lmm_workspace_free), the invariant Iab scalar and, unless with_grid is 0,
- * the lambda grid. Score (mode 3) does no lambda search and skips the grid.
+ * lmm_workspace_free), the invariant Iab scalar and the lambda grid when
+ * the layout has one. Score (mode 3) does no lambda search and skips it.
  * 0, or -1 with PyErr set. */
 static int init_ncvt1_workspace(
     lmm_workspace_t *ws,
     PyArrayObject *eigenvalues_arr, PyArrayObject *uab_inv_arr,
     PyArrayObject *w_arr, PyArrayObject *Uty_arr,
-    int n_samples, double l_min, double l_max, int n_grid, int n_refine,
-    int with_grid)
+    int n_samples, double l_min, double l_max, int n_grid, int n_refine)
 {
     ws->n_samples = n_samples;
     ws->df        = n_samples - 2;
@@ -188,16 +247,17 @@ static int init_ncvt1_workspace(
         ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
     }
 
-    if (!with_grid) return 0;
+    const ncvt1_layout_t *layout = &ws->layout;
+    if (!layout->grid_points) return 0;
 
     ncvt1_grid_t *grid = (ncvt1_grid_t *)calloc(1, sizeof(ncvt1_grid_t));
     if (!grid) { PyErr_NoMemory(); return -1; }
 
-    grid->lambda_grid   = (double *)malloc((size_t)n_grid * sizeof(double));
-    grid->hi_eval_grid  = alloc_aligned_doubles(grid_doubles(n_samples, n_grid));
-    grid->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    grid->lambda_grid   = (double *)malloc(layout->grid_points * sizeof(double));
+    grid->hi_eval_grid  = alloc_aligned_doubles(layout->hi_eval_grid);
+    grid->logdet_h_grid = (double *)malloc(layout->grid_points * sizeof(double));
     grid->grid_inv      = (grid_invariant_t *)malloc(
-        (size_t)n_grid * sizeof(grid_invariant_t));
+        layout->grid_points * sizeof(grid_invariant_t));
     if (!grid->lambda_grid || !grid->hi_eval_grid ||
         !grid->logdet_h_grid || !grid->grid_inv) {
         free(grid->lambda_grid);
@@ -230,7 +290,7 @@ static int init_ncvt1_null_hi(lmm_workspace_t *ws, const double *hi_eval_null)
         (ncvt1_null_model_t *)calloc(1, sizeof(ncvt1_null_model_t));
     if (!nm) { PyErr_NoMemory(); return -1; }
 
-    nm->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
+    nm->hi_eval_null = alloc_aligned_doubles(ws->layout.hi_eval_null);
     if (!nm->hi_eval_null) {
         free(nm);
         PyErr_NoMemory();
@@ -278,8 +338,8 @@ static int init_ncvt1_score_vectors(lmm_workspace_t *ws)
     ncvt1_score_t *sc = (ncvt1_score_t *)calloc(1, sizeof(ncvt1_score_t));
     if (!sc) { PyErr_NoMemory(); return -1; }
 
-    sc->h_null_w = alloc_aligned_doubles((size_t)n_samples);
-    sc->h_null_Uty = alloc_aligned_doubles((size_t)n_samples);
+    sc->h_null_w = alloc_aligned_doubles(ws->layout.score_vector);
+    sc->h_null_Uty = alloc_aligned_doubles(ws->layout.score_vector);
     if (!sc->h_null_w || !sc->h_null_Uty) {
         free(sc->h_null_w);
         free(sc->h_null_Uty);
@@ -336,8 +396,6 @@ PyObject *create_workspace_ncvt1_c_py(
     if (parse_mode_inputs(lmm_mode, &hi_eval_null_obj, logl_H0_obj,
                           &tests, &logl_H0) < 0)
         return NULL;
-    int score_only = !tests.reml && !tests.lrt;
-
     if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
         return NULL;
 
@@ -369,16 +427,16 @@ PyObject *create_workspace_ncvt1_c_py(
     ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
     ws->tests = tests;
+    ws->layout = ncvt1_layout(n_samples, n_grid, tests);
     if (init_ncvt1_workspace(ws, eigenvalues_arr, uab_inv_arr, w_arr, Uty_arr,
-                             n_samples, l_min, l_max, n_grid, n_refine,
-                             !score_only) < 0)
+                             n_samples, l_min, l_max, n_grid, n_refine) < 0)
         goto err_ws;
     if (tests.score && init_ncvt1_null_hi(
             ws, (const double *)PyArray_DATA(hi_eval_null_arr)) < 0)
         goto err_ws;
     if (tests.lrt && set_ncvt1_null_logl(ws, logl_H0) < 0)
         goto err_ws;
-    if (score_only && init_ncvt1_score_vectors(ws) < 0)
+    if (ws->layout.score_vector && init_ncvt1_score_vectors(ws) < 0)
         goto err_ws;
 
     capsule = PyCapsule_New(ws, NCVT1_CAPSULE, lmm_workspace_destructor);
@@ -437,9 +495,10 @@ static PyObject *ncvt1_test_loop(
     double reml_const = ws->reml_const;
     double mle_const  = tests.lrt ? ws->lrt->mle_const : 0.0;
 
-    double **scratch_wx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
-    double **scratch_xx = alloc_thread_scratch(actual_threads, (size_t)n_samples);
-    double **scratch_xy = alloc_thread_scratch(actual_threads, (size_t)n_samples);
+    size_t scratch = ws->layout.thread_scratch;
+    double **scratch_wx = alloc_thread_scratch(actual_threads, scratch);
+    double **scratch_xx = alloc_thread_scratch(actual_threads, scratch);
+    double **scratch_xy = alloc_thread_scratch(actual_threads, scratch);
     if (!scratch_wx || !scratch_xx || !scratch_xy) {
         free_thread_scratch(scratch_wx, actual_threads);
         free_thread_scratch(scratch_xx, actual_threads);

@@ -10,7 +10,7 @@ HAS_OPENMP: int
 
 def workspace_sizes_c(
     n_samples: int, n_cvt: int, n_grid: int, lmm_mode: int, n_threads: int
-) -> tuple[int, int, int, int]: ...
+) -> tuple[int, int, int]: ...
 
 # One n_cvt=1 workspace type. The creator's lmm_mode picks which loop
 # compute_lmm_chunk_ncvt1_c runs: 1 Wald, 2 LRT, 3 Score, 4 all three. Under
@@ -65,6 +65,7 @@ def compute_lmm_chunk_fused_general_c(
 ) -> dict[str, npt.NDArray[np.float64]]: ...
 
 # Test-only entry points. Not part of the computational API.
+def _workspace_bytes_c(workspace: object) -> tuple[int, int, int]: ...
 def _get_aligned_alloc_test_ptr(n: int) -> int:
     """Return the address of an ``alloc_aligned_doubles(n)`` buffer.
 

@@ -4,6 +4,7 @@ Validates that write_matrix_parallel produces byte-identical output to
 np.savetxt for all matrix sizes, including the parallel path (>=500 rows).
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -312,6 +313,37 @@ class TestFailureHandling:
 
         remaining = list(tmp_path.glob(".jamma_mwrite_*"))
         assert not remaining, f"Temp dirs not cleaned up after failure: {remaining}"
+
+    @pytest.mark.xfail(
+        strict=True, reason="a failed eager memmap delete leaks the temp dir"
+    )
+    def test_temp_dir_removed_when_eager_memmap_delete_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A transient failure to free the memmap early still removes the temp dir.
+
+        The first unlink of the memmap backing file fails, as it can on a
+        network filesystem. The output must still be written and the temp
+        directory, with the memmap inside it, must not outlive the call.
+        """
+        real_unlink = os.unlink
+        failed: list[str] = []
+
+        def unlink_failing_once(path, *args, **kwargs):
+            if str(path).endswith("matrix.dat") and not failed:
+                failed.append(str(path))
+                raise PermissionError("transient")
+            return real_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "unlink", unlink_failing_once)
+        matrix = np.random.default_rng(42).standard_normal((600, 10))
+        out_path = tmp_path / "output.txt"
+
+        write_matrix_parallel(matrix, out_path, n_workers=2)
+
+        assert failed, "the eager memmap delete never ran"
+        assert out_path.read_bytes() == _savetxt_bytes(matrix, tmp_path / "ref.txt")
+        assert list(tmp_path.glob(".jamma_mwrite_*")) == []
 
 
 class TestAtomicPublication:

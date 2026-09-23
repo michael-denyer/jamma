@@ -196,6 +196,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- LOCO eigendecomposition no longer keeps a chromosome's eigenvectors alive
+  after association releases them. The worker thread and the submitting loop
+  each kept a local reference to the last Future, which holds the
+  eigenvectors, so one extra `n x n` matrix per idle worker stayed live
+  outside what `plan_loco_workers` prices. With the DSYEVR driver, that
+  pushed the peak above the priced figure.
 - The MLE lambda optimizer (`-lmm 2` and `-lmm 4`, native C and NumPy) now
   applies the safeguarded analytic-score Newton refinement REML already had.
   On a flat likelihood, golden section alone stopped where rounding decided

@@ -122,7 +122,8 @@ def solve_eigen_pairs(
                     future.set_result(solve_named(name, K))
                 except BaseException as exc:  # noqa: BLE001 — worker thread routes every failure through its Future; the consumer re-raises it in chromosome order
                     future.set_exception(exc)
-            del K
+            # The settled Future holds U; an idle worker must not keep it alive.
+            del future, K
 
     threads = [
         threading.Thread(target=run, name=f"loco-eigen-{i}", daemon=True)
@@ -138,7 +139,7 @@ def solve_eigen_pairs(
                 future: Future[EigenResult] = Future()
                 pending.append(future)
                 work.put((future, name, K))
-                del K
+                del future, K
                 if len(pending) == workers:
                     yield pending.popleft().result()
             while pending:

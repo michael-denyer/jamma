@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import gc
 import threading
+import time
 import weakref
 from collections.abc import Iterator
 
@@ -146,6 +148,36 @@ def test_reused_stream_buffer_is_copied_and_inputs_stay_bounded(monkeypatch):
     finally:
         pairs.close()
     assert all(ref() is None for ref in inputs_alive)
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_consumer_release_frees_eigenvectors_while_worker_idles(workers):
+    """A worker waiting for its next item must not keep the last result alive.
+
+    ``plan_loco_workers`` prices no eigenvector matrix past the consumer's
+    ``del``. The wait is bounded because the worker drops its Future a moment
+    after the consumer wakes; with no next item queued, a leaked reference
+    would hold U until ``finally`` stops the pool.
+    """
+    rng = np.random.default_rng(41)
+
+    def stream():
+        for name in "1234":
+            A = rng.normal(size=(12, 12))
+            yield name, np.ascontiguousarray(A @ A.T)
+
+    pairs = solve_eigen_pairs(stream(), np.linalg.eigh, workers=workers, n_threads=1)
+    try:
+        for name, values, U in pairs:
+            released = weakref.ref(U)
+            del values, U
+            gc.collect()
+            deadline = time.monotonic() + 5
+            while released() is not None and time.monotonic() < deadline:
+                time.sleep(0.001)
+            assert released() is None, f"chr {name} eigenvectors outlived release"
+    finally:
+        pairs.close()
 
 
 @pytest.mark.parametrize(

@@ -7,16 +7,25 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import statistics
+import subprocess
 import time
+import tracemalloc
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import numpy as np
 
+# No jamma import here, directly or through tests.fixture_paths: the A/B
+# workers import this module before pinning jamma to their own source tree.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MOUSE_DIR = REPO_ROOT / "tests" / "fixtures" / "mouse_hs1940"
 MOUSE_PREFIX = MOUSE_DIR / "mouse_hs1940"
 MOUSE_KINSHIP = MOUSE_DIR / "mouse_hs1940_kinship.cXX.txt"
 MOUSE_COVAR_4 = MOUSE_DIR / "covariates_4.txt"
+
+T = TypeVar("T")
 DEFAULT_GEMMA = Path.home() / ".local" / "bin" / "gemma"
 DEFAULT_GEMMA_ACCELERATE = Path.home() / ".local" / "bin" / "gemma-accelerate"
 
@@ -195,3 +204,75 @@ def verify_associations(
                 f"{column} differs at {int((~close).sum())} SNPs; worst {snps[worst]}: "
                 f"actual={observed[worst]:.6e} reference={expected[worst]:.6e}"
             )
+
+
+def traced_peak(fn: Callable[..., T], *args: object) -> tuple[T, float, int]:
+    """Run ``fn(*args)`` once under tracemalloc.
+
+    Tracemalloc sees NumPy allocations but not native BLAS or C scratch.
+
+    Returns:
+        The result, the elapsed seconds, and the traced peak in bytes.
+    """
+    tracemalloc.start()
+    try:
+        start = time.perf_counter()
+        result = fn(*args)
+        elapsed = time.perf_counter() - start
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return result, elapsed, peak
+
+
+def balanced_schedule(blocks: int) -> list[list[str]]:
+    """Alternate ABBA and BAAB blocks to balance position across the session."""
+    if blocks < 1:
+        raise ValueError("blocks must be >= 1")
+    return [
+        ["A", "B", "B", "A"] if block % 2 == 0 else ["B", "A", "A", "B"]
+        for block in range(blocks)
+    ]
+
+
+def percent_change(after: float, before: float) -> float:
+    return 100.0 * (after / before - 1.0)
+
+
+def git_revision(source_root: Path) -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+
+def summarize_ab(
+    timings: dict[str, list[float]],
+    block_deltas: list[float],
+    block_medians: list[float],
+) -> dict[str, object]:
+    """Summarise a balanced A/B session so drift and sign flips stay visible.
+
+    Args:
+        timings: Seconds per revision label ``"A"`` and ``"B"``.
+        block_deltas: B-vs-A percent change of the medians within each block.
+        block_medians: Median of every measurement in each block, in order.
+    """
+    median_a = statistics.median(timings["A"])
+    median_b = statistics.median(timings["B"])
+    return {
+        "median_a_seconds": median_a,
+        "median_b_seconds": median_b,
+        "b_vs_a_percent": percent_change(median_b, median_a),
+        "paired_block_median_percent": statistics.median(block_deltas),
+        "block_delta_min_percent": min(block_deltas),
+        "block_delta_max_percent": max(block_deltas),
+        "session_drift_percent": percent_change(block_medians[-1], block_medians[0]),
+        "conclusion": (
+            "no_stable_winner"
+            if min(block_deltas) <= 0.0 <= max(block_deltas)
+            else "consistent_direction_requires_replication"
+        ),
+        "a_timings_seconds": timings["A"],
+        "b_timings_seconds": timings["B"],
+        "block_deltas_percent": block_deltas,
+    }

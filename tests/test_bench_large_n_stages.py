@@ -26,7 +26,7 @@ def test_every_second_block_reverses_both_orders() -> None:
     """Do not repeat process allocation bias under one revision label."""
     benchmark = _load_script_module()
 
-    assert benchmark._balanced_schedule(4) == [
+    assert benchmark.balanced_schedule(4) == [
         ["A", "B", "B", "A"],
         ["B", "A", "A", "B"],
         ["A", "B", "B", "A"],

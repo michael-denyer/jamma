@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from _bench_common import balanced_schedule, git_revision, percent_change, summarize_ab
 
 
 def build_inputs(
@@ -148,27 +149,6 @@ class WorkerProcess:
         self.process.wait(timeout=30)
 
 
-def balanced_schedule(blocks: int) -> list[list[str]]:
-    """Alternate ABBA and BAAB blocks to balance position across the session."""
-    if blocks < 1:
-        raise ValueError("blocks must be >= 1")
-    return [
-        ["A", "B", "B", "A"] if block % 2 == 0 else ["B", "A", "A", "B"]
-        for block in range(blocks)
-    ]
-
-
-def _percent_change(after: float, before: float) -> float:
-    return 100.0 * (after / before - 1.0)
-
-
-def _git_revision(source_root: Path) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(source_root), "rev-parse", "HEAD"],
-        text=True,
-    ).strip()
-
-
 def compare(
     a_root: Path,
     b_root: Path,
@@ -186,7 +166,7 @@ def compare(
     timings: dict[str, list[float]] = {"A": [], "B": []}
     digests: dict[str, set[str]] = {"A": set(), "B": set()}
     block_deltas: list[float] = []
-    all_blocks: list[list[float]] = []
+    block_medians: list[float] = []
     try:
         for order in balanced_schedule(blocks):
             block_timings: dict[str, list[float]] = {"A": [], "B": []}
@@ -198,12 +178,12 @@ def compare(
                 chronological.append(elapsed)
                 digests[label].add(digest)
             block_deltas.append(
-                _percent_change(
+                percent_change(
                     statistics.median(block_timings["B"]),
                     statistics.median(block_timings["A"]),
                 )
             )
-            all_blocks.append(chronological)
+            block_medians.append(statistics.median(chronological))
     finally:
         workers["A"].close()
         workers["B"].close()
@@ -211,39 +191,19 @@ def compare(
     if len(digests["A"]) != 1 or digests["A"] != digests["B"]:
         raise RuntimeError(f"output digests differ: A={digests['A']} B={digests['B']}")
 
-    first_block = statistics.median(all_blocks[0])
-    last_block = statistics.median(all_blocks[-1])
-    median_a = statistics.median(timings["A"])
-    median_b = statistics.median(timings["B"])
-    paired_block_median = statistics.median(block_deltas)
-    conclusion = (
-        "no_stable_winner"
-        if min(block_deltas) <= 0.0 <= max(block_deltas)
-        else "consistent_direction_requires_replication"
-    )
     return {
         "a_root": str(a_root),
         "b_root": str(b_root),
-        "a_revision": _git_revision(a_root),
-        "b_revision": _git_revision(b_root),
+        "a_revision": git_revision(a_root),
+        "b_revision": git_revision(b_root),
         "samples": n_samples,
         "snps": n_snps,
         "threads": n_threads,
         "mode": mode,
         "blocks": blocks,
         "measurements_per_revision": len(timings["A"]),
-        "median_a_seconds": median_a,
-        "median_b_seconds": median_b,
-        "b_vs_a_percent": _percent_change(median_b, median_a),
-        "paired_block_median_percent": paired_block_median,
-        "block_delta_min_percent": min(block_deltas),
-        "block_delta_max_percent": max(block_deltas),
-        "session_drift_percent": _percent_change(last_block, first_block),
-        "conclusion": conclusion,
         "output_sha256": next(iter(digests["A"])),
-        "a_timings_seconds": timings["A"],
-        "b_timings_seconds": timings["B"],
-        "block_deltas_percent": block_deltas,
+        **summarize_ab(timings, block_deltas, block_medians),
     }
 
 

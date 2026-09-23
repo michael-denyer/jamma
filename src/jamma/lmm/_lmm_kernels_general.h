@@ -99,7 +99,7 @@ double refine_lambda_mle_general(
  * t:           pab_table_t with logdet_diag_rows/cols
  * pab_scratch: caller-provided buffer of at least n_rows * n_index doubles
  *
- * Returns logdet value, or NAN if any diagonal <= 0.
+ * Returns logdet value, NAN if any diagonal <= 0 (logdet_diag_term).
  * ------------------------------------------------------------------------- */
 static inline double logdet_from_row0(
     const double *row0,
@@ -114,8 +114,7 @@ static inline double logdet_from_row0(
     for (int d = 0; d < n_cvt + 1; d++) {
         double val = pab_scratch[t->logdet_diag_rows[d] * ni
                                  + t->logdet_diag_cols[d]];
-        if (val <= 0.0) return (double)NAN;
-        logdet += log(val);
+        logdet += logdet_diag_term(val);
     }
     return logdet;
 }

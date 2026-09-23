@@ -25,9 +25,7 @@ static inline double reml_finish(
     double reml_const
 )
 {
-    double logdet_pab = 0.0;
-    if (pab[0][0] > 0.0) logdet_pab += log(pab[0][0]);
-    if (pab[1][3] > 0.0) logdet_pab += log(pab[1][3]);
+    double logdet_pab = logdet_diag_term(pab[0][0]) + logdet_diag_term(pab[1][3]);
     double logdet_hiw = logdet_pab - logdet_iab;
 
     double P_yy = replace_zero_p_yy(pab[2][5]);
@@ -71,8 +69,7 @@ static inline double reml_finish_cached_split(
     double reml_const
 )
 {
-    double logdet_pab = ginv->log_s_ww;
-    if (pab[1][3] > 0.0) logdet_pab += log(pab[1][3]);
+    double logdet_pab = ginv->log_s_ww + logdet_diag_term(pab[1][3]);
     double logdet_hiw = logdet_pab - logdet_iab;
 
     double P_yy = replace_zero_p_yy(pab[2][5]);

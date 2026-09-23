@@ -68,14 +68,10 @@ static double reml_finish_general(
     int ni = t->n_index;
     int df = t->df;
 
-    /* logdet_pab from diagonal entries.  A non-positive diagonal means the
-     * projected matrix is not positive-definite — return NaN so the REML
-     * sentinel mechanism correctly flags this as degenerate. */
     double logdet_pab = 0.0;
     for (int d = 0; d < t->n_cvt + 1; d++) {
         double val = pab[t->logdet_diag_rows[d] * ni + t->logdet_diag_cols[d]];
-        if (val <= 0.0) return (double)NAN;
-        logdet_pab += log(val);
+        logdet_pab += logdet_diag_term(val);
     }
     double logdet_hiw = logdet_pab - logdet_iab;
 

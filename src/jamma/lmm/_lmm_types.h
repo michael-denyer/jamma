@@ -43,8 +43,18 @@ static inline double replace_zero_p_yy(double p_yy)
     return p_yy == 0.0 ? P_YY_ZERO_REPLACEMENT : p_yy;
 }
 
-/* REML sentinel: replaces NaN log-likelihood from degenerate P_yy.
- * reml_finish returns NaN when P_yy < 0; the golden section callers
+/* One term of logdet(Pab) or logdet(Iab). A non-positive diagonal entry
+ * (a constant SNP, or one collinear with a covariate) makes the whole REML
+ * likelihood NaN, as GEMMA v0.98.5's LogRL_f does by taking log() of the
+ * entry unguarded. Every family and the NumPy _logdet_diag share this rule. */
+static inline double logdet_diag_term(double d)
+{
+    return d > 0.0 ? log(d) : (double)NAN;
+}
+
+/* REML sentinel: replaces NaN log-likelihood from a degenerate SNP.
+ * reml_finish returns NaN when P_yy < 0 or a Pab/Iab diagonal entry is
+ * non-positive (logdet_diag_term); the golden section callers
  * map NaN -> REML_SENTINEL so the > comparison skips degenerate points
  * without needing an isnan() guard on every iteration.
  * Matches the Python path's np.where(isnan, -inf, logl).
@@ -78,7 +88,7 @@ typedef struct {
     double s_ww;       /* sum of hi * ww */
     double s_wy;       /* sum of hi * wy */
     double s_yy;       /* sum of hi * yy */
-    double log_s_ww;   /* log(s_ww) if > 0, else 0 */
+    double log_s_ww;   /* logdet_diag_term(s_ww) */
 } grid_invariant_t;
 
 typedef struct {

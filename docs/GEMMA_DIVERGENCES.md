@@ -105,7 +105,7 @@ if Px_yy == 0.0:
 
 | Condition | GEMMA | JAMMA |
 |-----------|-------|-------|
-| P_xx = 0 (constant SNP) | beta=NaN, se=inf, p=NaN | beta=NaN, se=NaN, p=NaN |
+| P_xx = 0 (constant SNP) | beta=NaN, se=inf, p=NaN; REML logl NaN (`log(0) - log(0)`) | beta=NaN, se=NaN, p=NaN; REML logl NaN, `l_remle` = l_min |
 | Px_yy = 1e-12 | tau=1e12, se≈0 | tau=1e12, se≈0 |
 
 ### Rationale

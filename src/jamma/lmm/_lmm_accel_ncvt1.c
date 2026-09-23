@@ -116,7 +116,7 @@ typedef struct {
     double beta_a, beta_b, lbeta_ab;
     /* Invariant Iab scalars (lambda-independent) */
     double iab_inv_ww;  /* 1/sum(inv_ww) (or 0) */
-    double iab_log_ww;  /* log(sum(inv_ww)) (or 0) */
+    double iab_log_ww;  /* logdet_diag_term(sum(inv_ww)) */
     /* Borrowed pointers — kept alive via Py_INCREF */
     const double *eigenvalues;
     const double *inv_ww;   /* uab_invariant_soa row 0 */
@@ -238,7 +238,7 @@ static int init_ncvt1_workspace(lmm_workspace_t *ws,
         double s_ww = 0.0;
         for (int i = 0; i < n_samples; i++) s_ww += ws->inv_ww[i];
         ws->iab_inv_ww = (s_ww != 0.0) ? 1.0 / s_ww : 0.0;
-        ws->iab_log_ww = (s_ww > 0.0)  ? log(s_ww)  : 0.0;
+        ws->iab_log_ww = logdet_diag_term(s_ww);
     }
 
     const ncvt1_layout_t *layout = &ws->layout;
@@ -281,7 +281,7 @@ static int init_ncvt1_workspace(lmm_workspace_t *ws,
         const double *sums = inv_sums + (size_t)g * 3;
         grid->grid_inv[g] = (grid_invariant_t){
             .s_ww = sums[0], .s_wy = sums[1], .s_yy = sums[2],
-            .log_s_ww = (sums[0] > 0.0) ? log(sums[0]) : 0.0,
+            .log_s_ww = logdet_diag_term(sums[0]),
         };
     }
     free(inv_sums);
@@ -486,8 +486,7 @@ static PyObject *ncvt1_test_loop(
             }
 
             double iab_p1_xx = iab_s_xx - iab_s_wx * iab_s_wx * ws->iab_inv_ww;
-            logdet_iab = ws->iab_log_ww
-                         + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
+            logdet_iab = ws->iab_log_ww + logdet_diag_term(iab_p1_xx);
         }
 
         const ncvt1_snp_t snp_in = {

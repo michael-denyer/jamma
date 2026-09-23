@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 /* Bump when function signatures or array layout expectations change. */
-#define ABI_VERSION 21
+#define ABI_VERSION 22
 
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
@@ -29,8 +29,20 @@ static PyObject *_get_aligned_alloc_test_ptr(PyObject *self, PyObject *args)
     return PyLong_FromUnsignedLongLong((unsigned long long)addr);
 }
 
-/* Pure sizing companion to the workspace creators. Array payloads are split
- * by lifetime so Python can price before any workspace allocation occurs. */
+/* Covers PyArray headers, capsules and allocator metadata beside the array
+ * payloads each family layout counts. */
+#define WORKSPACE_OVERHEAD_BYTES ((size_t)1024 * 1024)
+
+static PyObject *workspace_bytes_tuple(workspace_bytes_t b)
+{
+    return Py_BuildValue("(KKK)",
+                         (unsigned long long)(b.persistent + WORKSPACE_OVERHEAD_BYTES),
+                         (unsigned long long)b.per_thread,
+                         (unsigned long long)b.transient_per_thread);
+}
+
+/* Prices a workspace from the layout its family's creator allocates from,
+ * so Python can gate a run before any allocation. */
 static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
 {
     int n_samples, n_cvt, n_grid, lmm_mode, n_threads;
@@ -52,62 +64,22 @@ static PyObject *workspace_sizes_c(PyObject *self, PyObject *args)
         PyErr_SetString(PyExc_OverflowError, "workspace dimensions overflow size_t");
         return NULL;
     }
-
     lmm_tests_t tests = lmm_tests(lmm_mode);
-    size_t persistent = 0, per_thread = 0, transient_per_thread = 0;
-    int output_columns = lmm_mode == 1 ? 5 : lmm_mode == 2 ? 2 :
-                         lmm_mode == 3 ? 3 : 8;
-    if (n_cvt == 1) {
-        /* RunInvariants retains eigenvalues, UtW, Uty, Hi_eval_null, w and
-         * the three invariant Uab rows while the capsule borrows the arrays. */
-        persistent = (size_t)8 * n_samples * sizeof(double);
-        if (tests.reml || tests.lrt) {
-            persistent += (size_t)n_grid * 6 * sizeof(double);
-            persistent += aligned_double_bytes(grid_doubles(n_samples, n_grid));
-        }
-        if (tests.score)
-            persistent += aligned_double_bytes((size_t)n_samples);
-        if (!tests.reml && !tests.lrt)
-            persistent += (size_t)2 * aligned_double_bytes((size_t)n_samples);
-        int scratch_arrays = lmm_mode == 1 ? 3 : lmm_mode == 3 ? 0 : 4;
-        transient_per_thread = (size_t)scratch_arrays *
-            (aligned_double_bytes((size_t)n_samples) + sizeof(double *));
-    } else {
-        size_t rows = (size_t)n_cvt + 2;
-        size_t index = ((size_t)n_cvt + 3) * rows / 2;
-        size_t var = rows, inv = index - var;
-        /* Two fixed-size reduction buffers in the fresh likelihood and score
-         * kernels. They coexist on each worker stack, regardless of n_cvt. */
-        transient_per_thread = (size_t)2 * MAX_N_INDEX * sizeof(double);
-        /* Native-owned eigenvalue and UtW-transpose payloads coexist with
-         * RunInvariants' original eigenvalues, UtW, Uty and Hi_eval_null.
-         * The invariant SoA is retained by reference and counted once. */
-        persistent = ((size_t)4 * n_samples +
-                      (size_t)2 * n_cvt * n_samples + inv * n_samples) *
-                     sizeof(double);
-        persistent += aligned_double_bytes(grid_doubles(n_samples, n_grid));
-        persistent += ((size_t)n_grid * (inv + 2) + inv) * sizeof(double);
-        if (tests.score)
-            persistent += aligned_double_bytes((size_t)n_samples) +
-                          inv * sizeof(double);
-        persistent += pab_table_bytes(n_cvt);
-        per_thread = (general_scratch_doubles(n_samples, (int)rows) +
-                      general_pab_doubles((int)rows, (int)index) + index) *
-                     sizeof(double);
-        if (tests.reml)
-            per_thread += general_pab_doubles((int)rows, (int)index)
-                          * sizeof(double);
-        if (tests.lrt)
-            per_thread += general_lrt_thread_doubles(n_samples, (int)index) *
-                          sizeof(double);
-    }
-    /* Covers PyArray headers, capsules and allocator metadata. Native Pab
-     * arrays are counted above. */
-    persistent += 1024 * 1024;
-    return Py_BuildValue("(KKKK)", (unsigned long long)persistent,
-                         (unsigned long long)per_thread,
-                         (unsigned long long)transient_per_thread,
-                         (unsigned long long)output_columns * sizeof(double));
+    return workspace_bytes_tuple(n_cvt == 1
+        ? ncvt1_workspace_bytes(n_samples, n_grid, tests)
+        : general_workspace_bytes(n_cvt, n_samples, n_grid, tests));
+}
+
+/* Test hook: the bytes a created workspace's layout holds, in
+ * workspace_sizes_c's form, so a test can tie the plan to the allocation. */
+static PyObject *_workspace_bytes_c(PyObject *self, PyObject *capsule)
+{
+    workspace_bytes_t b;
+    (void)self;
+    if (ncvt1_capsule_bytes(capsule, &b) || general_capsule_bytes(capsule, &b))
+        return workspace_bytes_tuple(b);
+    PyErr_SetString(PyExc_TypeError, "expected an lmm workspace capsule");
+    return NULL;
 }
 
 /* -------------------------------------------------------------------------
@@ -143,14 +115,19 @@ static PyObject *jamma_sentinel_oob(PyObject *self, PyObject *args)
  * MODULE REGISTRATION — methods[], PyModuleDef, PyInit__lmm_accel
  *
  * Every exported entry point is named here. Implementations live in the
- * n_cvt=1 and general-family translation units; this file owns only module
- * registration and the shared NumPy C-API pointer.
+ * n_cvt=1 and general-family translation units, which also own each
+ * family's workspace layout; this file owns module registration, the sizing
+ * query's dispatch between families, and the shared NumPy C-API pointer.
  * ========================================================================= */
 
 static PyMethodDef methods[] = {
     {
         "workspace_sizes_c", workspace_sizes_c, METH_VARARGS,
-        "Return conservative persistent, per-thread, transient-thread and per-SNP bytes."
+        "Return conservative persistent, per-thread and transient-thread bytes."
+    },
+    {
+        "_workspace_bytes_c", _workspace_bytes_c, METH_O,
+        "Return a created workspace's layout bytes in workspace_sizes_c's form."
     },
     {
         "create_workspace_ncvt1_c",

@@ -25,26 +25,6 @@ size_t aligned_double_bytes(size_t n)
     return (raw + 31) & ~(size_t)31;
 }
 
-size_t grid_doubles(int n_samples, int n_grid)
-{
-    return (size_t)n_samples * n_grid;
-}
-
-size_t general_scratch_doubles(int n_samples, int n_rows)
-{
-    return (size_t)n_rows * n_samples;
-}
-
-size_t general_pab_doubles(int n_rows, int n_index)
-{
-    return (size_t)n_rows * n_index;
-}
-
-size_t general_lrt_thread_doubles(int n_samples, int n_index)
-{
-    return (size_t)n_index * n_samples;
-}
-
 size_t pab_entry_count(int n_rows)
 {
     size_t k = (size_t)n_rows - 1;

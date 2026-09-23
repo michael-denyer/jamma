@@ -38,8 +38,10 @@
 /* -------------------------------------------------------------------------
  * General workspace struct — persistent cross-chunk state for n_cvt >= 1
  * ------------------------------------------------------------------------- */
-/* Coarse-grid block: every general workspace allocates one regardless of
- * mode (unlike the ncvt1 grid, which mode 3 skips), so this is never NULL. */
+#define GENERAL_CAPSULE "lmm_workspace_general"
+
+/* Coarse-grid block: the lambda grid and its invariant dot products.
+ * NULL for mode 3 (Score does no lambda search), non-NULL otherwise. */
 typedef struct {
     double *lambda_grid;    /* (n_grid,) */
     double log_l_min, step; /* bracket endpoints as computed at creation */
@@ -67,6 +69,81 @@ typedef struct {
     double *uab_snp_flat;
 } general_lrt_t;
 
+/* Element count of every double buffer the family allocates; zero for a
+ * buffer the mode does not use. The creator allocates from it and
+ * general_layout_bytes prices it, so the plan and the allocation cannot
+ * drift. The per-thread counts are for one of the creator's threads. */
+typedef struct {
+    int n_cvt;
+    size_t retained;            /* Python-held eigenvalues, UtW, Uty,
+                                 * Hi_eval_null and invariant SoA */
+    size_t eigenvalues;
+    size_t utw_transposed;
+    size_t grid_points;         /* lambda_grid and logdet_h_grid each */
+    size_t hi_eval_grid;        /* aligned */
+    size_t inv_sums_grid;
+    size_t inv_identity_sums;
+    size_t hi_eval_null;        /* aligned */
+    size_t null_inv_sums;
+    size_t scratch, pab, dpab, row0, uab_snp;  /* per thread */
+} general_layout_t;
+
+static general_layout_t general_layout(int n_cvt, int n_samples, int n_grid,
+                                       lmm_tests_t tests)
+{
+    size_t n = (size_t)n_samples;
+    size_t rows = (size_t)n_cvt + 2;
+    size_t index = ((size_t)n_cvt + 3) * rows / 2;
+    size_t inv = index - rows;
+    general_layout_t l = {0};
+    l.n_cvt = n_cvt;
+    l.retained = (3 + (size_t)n_cvt + inv) * n;
+    l.eigenvalues = n;
+    l.utw_transposed = (size_t)n_cvt * n;
+    l.scratch = rows * n;
+    l.pab = rows * index;
+    l.row0 = index;
+    if (tests.reml || tests.lrt) {
+        l.grid_points = (size_t)n_grid;
+        l.hi_eval_grid = n * (size_t)n_grid;
+        l.inv_sums_grid = (size_t)n_grid * inv;
+    }
+    if (tests.reml) {
+        l.inv_identity_sums = inv;
+        l.dpab = rows * index;
+    }
+    if (tests.score) {
+        l.hi_eval_null = n;
+        l.null_inv_sums = inv;
+    }
+    if (tests.lrt) l.uab_snp = index * n;
+    return l;
+}
+
+static workspace_bytes_t general_layout_bytes(const general_layout_t *l)
+{
+    workspace_bytes_t b = {0};
+    b.persistent = (l->retained + l->eigenvalues + l->utw_transposed
+                    + 2 * l->grid_points + l->inv_sums_grid
+                    + l->inv_identity_sums + l->null_inv_sums) * sizeof(double)
+        + aligned_double_bytes(l->hi_eval_grid)
+        + aligned_double_bytes(l->hi_eval_null)
+        + pab_table_bytes(l->n_cvt);
+    b.per_thread = (l->scratch + l->pab + l->dpab + l->row0 + l->uab_snp)
+        * sizeof(double);
+    /* The fresh likelihood and score kernels each hold a MAX_N_INDEX
+     * reduction buffer on the worker stack, whatever n_cvt is. */
+    b.transient_per_thread = (size_t)2 * MAX_N_INDEX * sizeof(double);
+    return b;
+}
+
+workspace_bytes_t general_workspace_bytes(int n_cvt, int n_samples, int n_grid,
+                                          lmm_tests_t tests)
+{
+    general_layout_t l = general_layout(n_cvt, n_samples, n_grid, tests);
+    return general_layout_bytes(&l);
+}
+
 typedef struct {
     /* Fixed params */
     double *eigenvalues;    /* (n_samples,) — owned copy */
@@ -93,9 +170,9 @@ typedef struct {
     int pab_size;               /* n_rows * n_index for this workspace */
     PyObject *Uty_ref;          /* keeps Uty array alive */
     lmm_tests_t tests;
-    /* Sub-blocks: grid is always present; null_model and lrt are NULL when
-     * the owning mode does not use them, so ws->lrt == NULL is the contract
-     * rather than a comment. */
+    general_layout_t layout;
+    /* Sub-blocks: NULL when the owning mode does not use them, so
+     * ws->lrt == NULL is the contract rather than a comment. */
     general_grid_t *grid;
     general_null_model_t *null_model;
     general_lrt_t *lrt;
@@ -135,10 +212,19 @@ static void lmm_workspace_general_free(lmm_workspace_general_t *ws)
     free(ws);
 }
 
+int general_capsule_bytes(PyObject *capsule, workspace_bytes_t *out)
+{
+    if (!PyCapsule_IsValid(capsule, GENERAL_CAPSULE)) return 0;
+    lmm_workspace_general_t *ws = (lmm_workspace_general_t *)
+        PyCapsule_GetPointer(capsule, GENERAL_CAPSULE);
+    *out = general_layout_bytes(&ws->layout);
+    return 1;
+}
+
 static void lmm_workspace_general_destructor(PyObject *cap)
 {
     lmm_workspace_general_free((lmm_workspace_general_t *)
-        PyCapsule_GetPointer(cap, "lmm_workspace_general"));
+        PyCapsule_GetPointer(cap, GENERAL_CAPSULE));
 }
 
 /* =========================================================================
@@ -171,94 +257,14 @@ static inline const double *get_fused_vector(
     return ws->Uty;  /* col_0based == n_cvt + 1 */
 }
 
-/* Fill a calloc'd general workspace whose table build_pab_table already built:
- * eigenvalues, uab_inv, UtW (transposed), Uty, per-thread scratch, the
- * lambda grid and its invariant sums, and the beta/REML constants. 0, or -1
- * with PyErr set; the caller frees ws through lmm_workspace_general_free. */
-static int init_fused_general_workspace(
-    lmm_workspace_general_t *ws,
-    PyArrayObject *eigenvalues_arr,
-    PyArrayObject *uab_inv_arr,
-    PyArrayObject *UtW_arr,
-    PyArrayObject *Uty_arr,
-    int n_samples, double l_min, double l_max,
-    int n_grid, int n_refine, int n_threads)
+/* The lambda grid, its log-determinants and invariant dot products, for the
+ * tests that search lambda. 0, or -1 with PyErr set. */
+static int init_general_grid(
+    lmm_workspace_general_t *ws, double l_min, double l_max, int n_grid,
+    int n_refine)
 {
-    int n_cvt   = ws->table.n_cvt;
-    int n_index = ws->table.n_index;
-    int n_rows  = ws->table.n_rows;
-    int n_inv   = ws->table.n_inv;
-    int n_var   = ws->table.n_var;
-
-    ws->n_samples = n_samples;
-
-    /* Copy eigenvalues (owned) */
-    ws->eigenvalues = (double *)malloc((size_t)n_samples * sizeof(double));
-    if (!ws->eigenvalues) { PyErr_NoMemory(); return -1; }
-    memcpy(ws->eigenvalues, PyArray_DATA(eigenvalues_arr),
-           (size_t)n_samples * sizeof(double));
-
-    Py_INCREF(uab_inv_arr);
-    ws->uab_inv_ref = (PyObject *)uab_inv_arr;
-    ws->uab_inv = (const double *)PyArray_DATA(uab_inv_arr);
-
-    /* Transpose UtW from row-major (n_samples, n_cvt) to column-major
-     * (n_cvt, n_samples) for cache-friendly per-column access. */
-    ws->utw_transposed = (double *)malloc(
-        (size_t)n_cvt * (size_t)n_samples * sizeof(double));
-    if (!ws->utw_transposed) { PyErr_NoMemory(); return -1; }
-    {
-        const double *src = (const double *)PyArray_DATA(UtW_arr);
-        for (int c = 0; c < n_cvt; c++) {
-            double *dst = ws->utw_transposed + (size_t)c * n_samples;
-            for (int i = 0; i < n_samples; i++)
-                dst[i] = src[(size_t)i * n_cvt + c];
-        }
-    }
-
-    /* Borrow Uty pointer */
-    Py_INCREF(Uty_arr);
-    ws->Uty_ref = (PyObject *)Uty_arr;
-    ws->Uty = (const double *)PyArray_DATA(Uty_arr);
-
-    /* Allocate per-thread scratch: n_var * n_samples per thread */
-    int actual_threads = 1;
-#ifdef _OPENMP
-    actual_threads = n_threads;
-    if (actual_threads < 1) actual_threads = 1;
-#endif
-    ws->actual_threads = actual_threads;
-    ws->scratch_flat = (double *)malloc(
-        (size_t)actual_threads * general_scratch_doubles(n_samples, n_var)
-        * sizeof(double));
-    if (!ws->scratch_flat) { PyErr_NoMemory(); return -1; }
-
-    /* Per-thread heap buffers for Pab recursion (avoids stack overflow) */
-    int pab_size = n_rows * n_index;
-    ws->pab_size = pab_size;
-    ws->pab_per_thread = (double *)malloc(
-        (size_t)actual_threads * general_pab_doubles(n_rows, n_index)
-        * sizeof(double));
-    if (!ws->pab_per_thread) { PyErr_NoMemory(); return -1; }
-    if (ws->tests.reml) {
-        ws->dpab_per_thread = (double *)malloc(
-            (size_t)actual_threads * general_pab_doubles(n_rows, n_index)
-            * sizeof(double));
-        if (!ws->dpab_per_thread) { PyErr_NoMemory(); return -1; }
-    }
-    ws->row0_per_thread = (double *)malloc(
-        (size_t)actual_threads * (size_t)n_index * sizeof(double));
-    if (!ws->row0_per_thread) { PyErr_NoMemory(); return -1; }
-
-    /* Compute df, reml_const, beta params */
-    int df = ws->table.df;
-    ws->beta_a = (double)df / 2.0;
-    ws->beta_b = 0.5;
-    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
-                   - lgamma(ws->beta_a + ws->beta_b);
-    ws->reml_const = 0.5 * df * (log((double)df) - log(2.0 * M_PI) - 1.0);
-
-    /* Build lambda grid */
+    int n_samples = ws->n_samples;
+    int n_inv = ws->table.n_inv;
     double log_l_min = log(l_min);
     double log_l_max_v = log(l_max);
     double step = (log_l_max_v - log_l_min) / (double)(n_grid - 1);
@@ -270,11 +276,11 @@ static int init_fused_general_workspace(
     grid->log_l_min = log_l_min;
     grid->step = step;
 
-    grid->lambda_grid = (double *)malloc((size_t)n_grid * sizeof(double));
-    grid->hi_eval_grid = alloc_aligned_doubles(grid_doubles(n_samples, n_grid));
-    grid->logdet_h_grid = (double *)malloc((size_t)n_grid * sizeof(double));
+    grid->lambda_grid = (double *)malloc(ws->layout.grid_points * sizeof(double));
+    grid->hi_eval_grid = alloc_aligned_doubles(ws->layout.hi_eval_grid);
+    grid->logdet_h_grid = (double *)malloc(ws->layout.grid_points * sizeof(double));
     grid->inv_sums_grid = (double *)malloc(
-        (size_t)n_grid * (size_t)n_inv * sizeof(double));
+        ws->layout.inv_sums_grid * sizeof(double));
 
     if (!grid->lambda_grid || !grid->hi_eval_grid ||
         !grid->logdet_h_grid || !grid->inv_sums_grid) {
@@ -309,11 +315,102 @@ static int init_fused_general_workspace(
         }
     }
     ws->grid = grid;
+    return 0;
+}
 
-    /* Precompute invariant identity sums */
-    ws->inv_identity_sums = (double *)malloc((size_t)n_inv * sizeof(double));
+/* Fill a calloc'd general workspace whose table build_pab_table already built:
+ * eigenvalues, uab_inv, UtW (transposed), Uty, per-thread scratch, the
+ * lambda grid and invariant sums the layout asks for, and the beta/REML
+ * constants. 0, or -1 with PyErr set; the caller frees ws through
+ * lmm_workspace_general_free. */
+static int init_fused_general_workspace(
+    lmm_workspace_general_t *ws,
+    PyArrayObject *eigenvalues_arr,
+    PyArrayObject *uab_inv_arr,
+    PyArrayObject *UtW_arr,
+    PyArrayObject *Uty_arr,
+    int n_samples, double l_min, double l_max,
+    int n_grid, int n_refine, int n_threads)
+{
+    int n_cvt   = ws->table.n_cvt;
+    int n_index = ws->table.n_index;
+    int n_rows  = ws->table.n_rows;
+    const general_layout_t *layout = &ws->layout;
+
+    ws->n_samples = n_samples;
+
+    /* Copy eigenvalues (owned) */
+    ws->eigenvalues = (double *)malloc(layout->eigenvalues * sizeof(double));
+    if (!ws->eigenvalues) { PyErr_NoMemory(); return -1; }
+    memcpy(ws->eigenvalues, PyArray_DATA(eigenvalues_arr),
+           (size_t)n_samples * sizeof(double));
+
+    Py_INCREF(uab_inv_arr);
+    ws->uab_inv_ref = (PyObject *)uab_inv_arr;
+    ws->uab_inv = (const double *)PyArray_DATA(uab_inv_arr);
+
+    /* Transpose UtW from row-major (n_samples, n_cvt) to column-major
+     * (n_cvt, n_samples) for cache-friendly per-column access. */
+    ws->utw_transposed = (double *)malloc(
+        layout->utw_transposed * sizeof(double));
+    if (!ws->utw_transposed) { PyErr_NoMemory(); return -1; }
+    {
+        const double *src = (const double *)PyArray_DATA(UtW_arr);
+        for (int c = 0; c < n_cvt; c++) {
+            double *dst = ws->utw_transposed + (size_t)c * n_samples;
+            for (int i = 0; i < n_samples; i++)
+                dst[i] = src[(size_t)i * n_cvt + c];
+        }
+    }
+
+    /* Borrow Uty pointer */
+    Py_INCREF(Uty_arr);
+    ws->Uty_ref = (PyObject *)Uty_arr;
+    ws->Uty = (const double *)PyArray_DATA(Uty_arr);
+
+    /* Allocate per-thread scratch: n_var * n_samples per thread */
+    int actual_threads = 1;
+#ifdef _OPENMP
+    actual_threads = n_threads;
+    if (actual_threads < 1) actual_threads = 1;
+#endif
+    ws->actual_threads = actual_threads;
+    ws->scratch_flat = (double *)malloc(
+        (size_t)actual_threads * layout->scratch * sizeof(double));
+    if (!ws->scratch_flat) { PyErr_NoMemory(); return -1; }
+
+    /* Per-thread heap buffers for Pab recursion (avoids stack overflow) */
+    int pab_size = n_rows * n_index;
+    ws->pab_size = pab_size;
+    ws->pab_per_thread = (double *)malloc(
+        (size_t)actual_threads * layout->pab * sizeof(double));
+    if (!ws->pab_per_thread) { PyErr_NoMemory(); return -1; }
+    if (layout->dpab) {
+        ws->dpab_per_thread = (double *)malloc(
+            (size_t)actual_threads * layout->dpab * sizeof(double));
+        if (!ws->dpab_per_thread) { PyErr_NoMemory(); return -1; }
+    }
+    ws->row0_per_thread = (double *)malloc(
+        (size_t)actual_threads * layout->row0 * sizeof(double));
+    if (!ws->row0_per_thread) { PyErr_NoMemory(); return -1; }
+
+    /* Compute df, reml_const, beta params */
+    int df = ws->table.df;
+    ws->beta_a = (double)df / 2.0;
+    ws->beta_b = 0.5;
+    ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
+                   - lgamma(ws->beta_a + ws->beta_b);
+    ws->reml_const = 0.5 * df * (log((double)df) - log(2.0 * M_PI) - 1.0);
+
+    if (layout->grid_points &&
+        init_general_grid(ws, l_min, l_max, n_grid, n_refine) < 0)
+        return -1;
+
+    if (!layout->inv_identity_sums) return 0;
+    ws->inv_identity_sums = (double *)malloc(
+        layout->inv_identity_sums * sizeof(double));
     if (!ws->inv_identity_sums) { PyErr_NoMemory(); return -1; }
-    for (int c = 0; c < n_inv; c++) {
+    for (int c = 0; c < ws->table.n_inv; c++) {
         double s = 0.0;
         const double *col = ws->uab_inv + (size_t)c * n_samples;
         for (int i = 0; i < n_samples; i++)
@@ -380,6 +477,7 @@ PyObject *create_workspace_general_c_py(
     ws = (lmm_workspace_general_t *)calloc(1, sizeof(lmm_workspace_general_t));
     if (!ws) { PyErr_NoMemory(); goto err_input; }
     ws->tests = tests;
+    ws->layout = general_layout(n_cvt, n_samples, n_grid, tests);
     if (build_pab_table(n_cvt, &ws->table, n_samples) < 0)
         goto err_ws;
 
@@ -412,7 +510,7 @@ PyObject *create_workspace_general_c_py(
             (general_null_model_t *)calloc(1, sizeof(general_null_model_t));
         if (!nm) { PyErr_NoMemory(); goto err_ws; }
 
-        nm->hi_eval_null = alloc_aligned_doubles((size_t)n_samples);
+        nm->hi_eval_null = alloc_aligned_doubles(ws->layout.hi_eval_null);
         if (!nm->hi_eval_null) { free(nm); PyErr_NoMemory(); goto err_ws; }
         memcpy(nm->hi_eval_null,
                (const double *)PyArray_DATA(hi_eval_null_arr),
@@ -420,7 +518,8 @@ PyObject *create_workspace_general_c_py(
 
         /* Precompute null-model invariant sums */
         int n_inv = ws->table.n_inv;
-        nm->null_inv_sums = (double *)malloc((size_t)n_inv * sizeof(double));
+        nm->null_inv_sums = (double *)malloc(
+            ws->layout.null_inv_sums * sizeof(double));
         if (!nm->null_inv_sums) {
             free(nm->hi_eval_null);
             free(nm);
@@ -444,18 +543,15 @@ PyObject *create_workspace_general_c_py(
         lrt->mle_const = 0.5 * (double)n_samples
                          * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
 
-        /* Pre-allocate per-thread LRT buffer (avoids per-SNP malloc in OpenMP loop).
-         * Each thread needs (n_index * n_samples) doubles for row-major uab_snp. */
-        int n_index = ws->table.n_index;
+        /* Pre-allocate per-thread LRT buffer (avoids per-SNP malloc in OpenMP loop). */
         lrt->uab_snp_flat = (double *)malloc(
-            (size_t)ws->actual_threads
-            * general_lrt_thread_doubles(n_samples, n_index) * sizeof(double));
+            (size_t)ws->actual_threads * ws->layout.uab_snp * sizeof(double));
         if (!lrt->uab_snp_flat) { free(lrt); PyErr_NoMemory(); goto err_ws; }
         ws->lrt = lrt;
     }
 
     capsule = PyCapsule_New(
-        ws, "lmm_workspace_general", lmm_workspace_general_destructor);
+        ws, GENERAL_CAPSULE, lmm_workspace_general_destructor);
     if (!capsule) goto err_ws;
 
     Py_DECREF(eigenvalues_arr);
@@ -609,7 +705,7 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
     }
 
     lmm_workspace_general_t *ws = (lmm_workspace_general_t *)
-        PyCapsule_GetPointer(capsule_obj, "lmm_workspace_general");
+        PyCapsule_GetPointer(capsule_obj, GENERAL_CAPSULE);
     if (!ws) return NULL;
 
     const lmm_tests_t tests = ws->tests;

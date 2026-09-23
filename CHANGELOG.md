@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Score-only runs (`-lmm 3`) with two or more covariates no longer build the
+  lambda grid, which only Wald and LRT read: at 100,000 samples and the
+  default 50 grid points that is 40 MB less per workspace. The memory quote
+  now comes from the same per-family layout each native workspace allocates
+  from, so it drops that grid, the REML-only identity sums in `-lmm 2` and
+  `-lmm 3`, and one of four scratch vectors the `n_cvt=1` LRT loop never
+  allocated. Results are unchanged.
 - `jamma.lmm.plan_association` takes an `LmmConfig` as `config=` in place of
   the separate `lmm_mode`, `n_grid`, `n_refine` and `mem_budget` arguments,
   and one `backend=` literal (`"auto"`, `"numpy"`, `"numpy-streaming"` or

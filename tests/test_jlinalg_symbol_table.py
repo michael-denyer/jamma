@@ -7,7 +7,8 @@ type declares. A Fortran name (``dsyrk_64_``) stored in a CBLAS field
 (``cblas_dsyrk_ilp64``) is therefore called with CBLAS enums where the routine
 expects ``char *`` and dereferences the integer 101 as a pointer. MKL
 ``libmkl_rt`` segfaulted this way on every ``jlinalg.dsyrk`` call; Accelerate
-hid it because its CBLAS name sits first in the list.
+hid it because its CBLAS name sits first in the list, and the OpenBLAS CI leg
+because its symbols carry a ``scipy_`` prefix that no name in the list matches.
 """
 
 from __future__ import annotations

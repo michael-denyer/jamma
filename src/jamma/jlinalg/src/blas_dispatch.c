@@ -214,23 +214,19 @@ static int try_resolve_dgemm_candidate(void *handle, const char *lib_path, blas_
 static const char *const cblas_dsyrk_names[] = {
     "cblas_dsyrk$NEWLAPACK$ILP64", /* Accelerate ILP64 */
     NULL};
-/* Fortran dsyrk, called with (uplo, trans, ...) char pointers. MKL exports
- * only this convention under ILP64 names; Apple and scipy-openblas64 expose it
- * alongside a CBLAS one. scipy_cblas_dsyrk64_ stays out of the CBLAS list: its
- * name does not start with "cblas_", so symbol_name_matches_kind would reject it. */
+/* Fortran dsyrk, called with (uplo, trans, ...) char pointers. MKL and
+ * OpenBLAS export only this convention under ILP64 names; Apple exposes it
+ * alongside the CBLAS one. */
 static const char *const dsyrk_names[] = {"dsyrk$NEWLAPACK$ILP64", /* Accelerate ILP64 */
                                           "dsyrk_64_",             /* MKL ILP64 */
-                                          "scipy_dsyrk_64_",       /* scipy-openblas64 */
                                           "dsyrk64_",              /* OpenBLAS ILP64 */
                                           NULL};
 static const char *const dsyevd_names[] = {"dsyevd$NEWLAPACK$ILP64", /* Accelerate ILP64 */
                                            "dsyevd_64_",             /* MKL ILP64 */
-                                           "scipy_dsyevd_64_",       /* scipy-openblas64 */
                                            "dsyevd64_",              /* OpenBLAS ILP64 */
                                            NULL};
 static const char *const dsyevr_names[] = {"dsyevr$NEWLAPACK$ILP64", /* Accelerate ILP64 */
                                            "dsyevr_64_",             /* MKL ILP64 */
-                                           "scipy_dsyevr_64_",       /* scipy-openblas64 */
                                            "dsyevr64_",              /* OpenBLAS ILP64 */
                                            NULL};
 static const char *const lapacke_dsyevd_names[] = {"LAPACKE_dsyevd", NULL};

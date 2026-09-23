@@ -214,9 +214,6 @@ static int init_ncvt1_workspace(
     ws->lbeta_ab = lgamma(ws->beta_a) + lgamma(ws->beta_b)
                    - lgamma(ws->beta_a + ws->beta_b);
 
-    double log_l_min = log(l_min);
-    double log_l_max = log(l_max);
-    double step = (log_l_max - log_l_min) / (double)(n_grid - 1);
     ws->reml_const  = 0.5 * ws->df * (log((double)ws->df)
                        - log(2.0 * M_PI) - 1.0);
 
@@ -251,13 +248,15 @@ static int init_ncvt1_workspace(
     if (!grid) { PyErr_NoMemory(); return -1; }
 
     double *lambda_grid = (double *)malloc(layout->grid_points * sizeof(double));
+    double *inv_sums = (double *)malloc(layout->grid_points * 3 * sizeof(double));
     grid->hi_eval_grid  = alloc_aligned_doubles(layout->hi_eval_grid);
     grid->logdet_h_grid = (double *)malloc(layout->grid_points * sizeof(double));
     grid->grid_inv      = (grid_invariant_t *)malloc(
         layout->grid_points * sizeof(grid_invariant_t));
-    if (!lambda_grid || !grid->hi_eval_grid ||
+    if (!lambda_grid || !inv_sums || !grid->hi_eval_grid ||
         !grid->logdet_h_grid || !grid->grid_inv) {
         free(lambda_grid);
+        free(inv_sums);
         free(grid->hi_eval_grid);
         free(grid->logdet_h_grid);
         free(grid->grid_inv);
@@ -266,15 +265,18 @@ static int init_ncvt1_workspace(
         return -1;
     }
 
-    build_grid_ncvt1(n_grid, n_samples, log_l_min, step,
-                     ws->eigenvalues, ws->inv_ww, ws->inv_wy, ws->inv_yy,
-                     lambda_grid, grid->hi_eval_grid, grid->logdet_h_grid,
-                     grid->grid_inv);
-    grid->search = (lambda_search_t){
-        .lambda_grid = lambda_grid,
-        .log_l_min = log_l_min, .step = step,
-        .n_grid = n_grid, .n_refine = n_refine,
-    };
+    /* uab_inv holds the ww, wy and yy columns contiguously. */
+    build_lambda_grid(&grid->search, l_min, l_max, n_grid, n_refine,
+                      ws->eigenvalues, n_samples, ws->inv_ww, 3, lambda_grid,
+                      grid->hi_eval_grid, grid->logdet_h_grid, inv_sums);
+    for (int g = 0; g < n_grid; g++) {
+        const double *sums = inv_sums + (size_t)g * 3;
+        grid->grid_inv[g] = (grid_invariant_t){
+            .s_ww = sums[0], .s_wy = sums[1], .s_yy = sums[2],
+            .log_s_ww = (sums[0] > 0.0) ? log(sums[0]) : 0.0,
+        };
+    }
+    free(inv_sums);
     ws->grid = grid;
     return 0;
 }
@@ -543,8 +545,9 @@ static PyObject *ncvt1_test_loop(
                                   s_xx, s_xy, nm->s_yy, pab_null);
 
             double score_beta, score_se, score_f;
-            int score_valid = score_from_pab(pab_null, n_samples, df,
-                                              &score_beta, &score_se, &score_f);
+            int score_valid = score_stats(pab_terms_ncvt1(pab_null),
+                                          n_samples, df,
+                                          &score_beta, &score_se, &score_f);
 
             out_p_scores[snp] = f_to_pvalue(
                 score_f, df, score_valid,
@@ -676,7 +679,8 @@ static PyObject *ncvt1_score_loop(
                               s_xx, s_xy, null_s_yy, pab);
 
         double beta, se, f_stat;
-        int is_valid = score_from_pab(pab, n_samples, df, &beta, &se, &f_stat);
+        int is_valid = score_stats(pab_terms_ncvt1(pab), n_samples, df,
+                                   &beta, &se, &f_stat);
 
         out_betas[s] = beta;
         out_ses[s] = se;

@@ -186,7 +186,7 @@ src/jamma/
 │   ├── _lmm_stats.c/.h     # Wald/Score/LRT statistics kernels shared by both workspaces
 │   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) likelihoods, coarse grid, and refiners
 │   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 likelihoods, coarse grid, and refiners
-│   ├── _lmm_lambda_search.h # The one golden-section and Newton lambda driver all refiners call
+│   ├── _lmm_lambda_search.h # The coarse lambda grid build and the one golden-section and Newton driver all refiners call
 │   ├── _lmm_logdet.h       # logdet(H) as a mantissa product with exact exponent; hot-loop inline
 │   └── _lmm_types.h        # Plain-C shared types: Pab table, lmm_tests_t mode decode
 │                          #

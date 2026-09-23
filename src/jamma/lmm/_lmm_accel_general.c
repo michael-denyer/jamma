@@ -5,7 +5,6 @@
 
 #include "_lmm_kernels_general.h"
 #include "_lmm_stats.h"
-#include "_lmm_logdet.h"
 #include <assert.h>
 #include <limits.h>
 #include <math.h>
@@ -261,20 +260,9 @@ static int init_general_grid(
     lmm_workspace_general_t *ws, double l_min, double l_max, int n_grid,
     int n_refine)
 {
-    int n_samples = ws->n_samples;
-    int n_inv = ws->table.n_inv;
-    double log_l_min = log(l_min);
-    double log_l_max_v = log(l_max);
-    double step = (log_l_max_v - log_l_min) / (double)(n_grid - 1);
-
     general_grid_t *grid = (general_grid_t *)calloc(1, sizeof(general_grid_t));
     if (!grid) { PyErr_NoMemory(); return -1; }
     double *lambda_grid = (double *)malloc(ws->layout.grid_points * sizeof(double));
-    grid->search = (lambda_search_t){
-        .lambda_grid = lambda_grid,
-        .log_l_min = log_l_min, .step = step,
-        .n_grid = n_grid, .n_refine = n_refine,
-    };
     grid->hi_eval_grid = alloc_aligned_doubles(ws->layout.hi_eval_grid);
     grid->logdet_h_grid = (double *)malloc(ws->layout.grid_points * sizeof(double));
     grid->inv_sums_grid = (double *)malloc(
@@ -291,27 +279,11 @@ static int init_general_grid(
         return -1;
     }
 
-    for (int g = 0; g < n_grid; g++)
-        lambda_grid[g] = exp(log_l_min + g * step);
-
-    /* Precompute hi_eval_grid, logdet_h_grid, and invariant sums */
-    for (int g = 0; g < n_grid; g++) {
-        double lam = lambda_grid[g];
-        double *hi_row = grid->hi_eval_grid + (size_t)g * n_samples;
-
-        for (int i = 0; i < n_samples; i++)
-            hi_row[i] = 1.0 / (lam * ws->eigenvalues[i] + 1.0);
-        grid->logdet_h_grid[g] = logdet_h_lambda(ws->eigenvalues, n_samples, lam);
-
-        double *inv_sums = grid->inv_sums_grid + (size_t)g * n_inv;
-        for (int c = 0; c < n_inv; c++) {
-            double s = 0.0;
-            const double *col = ws->uab_inv + (size_t)c * n_samples;
-            for (int i = 0; i < n_samples; i++)
-                s += hi_row[i] * col[i];
-            inv_sums[c] = s;
-        }
-    }
+    build_lambda_grid(&grid->search, l_min, l_max, n_grid, n_refine,
+                      ws->eigenvalues, ws->n_samples,
+                      ws->uab_inv, ws->table.n_inv, lambda_grid,
+                      grid->hi_eval_grid, grid->logdet_h_grid,
+                      grid->inv_sums_grid);
     ws->grid = grid;
     return 0;
 }
@@ -591,8 +563,8 @@ static double general_score_block(
     calc_pab_general(row0, t, pab);
 
     double score_f;
-    int score_valid = score_from_pab_general(
-        pab, t, n_samples, beta_out, se_out, &score_f);
+    int score_valid = score_stats(pab_terms_general(pab, t), n_samples, t->df,
+                                  beta_out, se_out, &score_f);
     return f_to_pvalue(score_f, t->df, score_valid,
                        ws->beta_a, ws->beta_b, ws->lbeta_ab);
 }

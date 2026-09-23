@@ -139,15 +139,4 @@ int parse_mode_inputs(int lmm_mode, PyObject **hi_obj, PyObject *logl_obj,
 
 int clamp_threads(int n_threads, int n_snps);
 
-/* ---------------------------------------------------------------------------
- * n_cvt = 1 lambda grid. Fills the caller-allocated lambda_grid (n_grid,),
- * hi_eval_grid (n_grid * n_samples), logdet_h_grid (n_grid,) and the per-grid
- * invariant dot products grid_inv (n_grid,).
- * ------------------------------------------------------------------------- */
-void build_grid_ncvt1(int n_grid, int n_samples, double log_l_min, double step,
-                      const double *eigenvalues, const double *inv_ww,
-                      const double *inv_wy, const double *inv_yy,
-                      double *lambda_grid, double *hi_eval_grid,
-                      double *logdet_h_grid, grid_invariant_t *grid_inv);
-
 #endif /* JAMMA_LMM_SUPPORT_H */

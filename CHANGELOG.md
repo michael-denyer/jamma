@@ -102,6 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- With `JAMMA_FORCE_NUMPY_FALLBACK`, SNP means from float32 genotype chunks
+  are now accumulated in float64, as the C kernel does, instead of rounded to
+  float32. Allele frequencies and missing-genotype imputation under the
+  fallback now match the C path; results with the C kernel are unchanged.
 - The build prints each OpenMP retry notice once. `execute_build` reported a
   failed OpenMP compile or link through both `on_retry` and `verbose_print`,
   so the wheel build and `python -m jamma.lmm._compile_accel`, which point

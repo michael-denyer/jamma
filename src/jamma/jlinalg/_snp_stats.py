@@ -21,7 +21,7 @@ def compute_snp_stats_chunk(
     missing = np.sum(is_nan, axis=0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        mean = np.nanmean(data, axis=0)
+        mean = np.nanmean(data, axis=0, dtype=np.float64)
         variance = np.nanvar(data, axis=0)
     means[:] = np.nan_to_num(mean, nan=0.0)
     miss_counts[:] = missing

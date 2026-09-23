@@ -687,6 +687,52 @@ class TestKinshipSidecarRecovery:
 
         np.testing.assert_array_equal(np.load(npy_path), K)
 
+    def test_text_rewritten_during_parse_leaves_no_stale_sidecar(self, tmp_path):
+        """A sidecar parsed from v1 must not outlive a v2 published mid-parse."""
+        from jamma.utils.npy_cache import read_array_artifact
+
+        K1 = np.array([[1.0, 0.5], [0.5, 1.0]])
+        K2 = 2 * K1
+        txt_path = tmp_path / "result.cXX.txt"
+        write_kinship_matrix(K1, txt_path, legacy_text=True)
+
+        def parse_then_rewrite(path):
+            parsed = np.loadtxt(path)
+            write_kinship_matrix(K2, txt_path, legacy_text=True)
+            return parsed
+
+        first = read_array_artifact(
+            txt_path,
+            what="kinship",
+            parse_text=parse_then_rewrite,
+            check=lambda a, p: a,
+        )
+
+        np.testing.assert_array_equal(first, K1)
+        np.testing.assert_array_equal(read_kinship_matrix(txt_path), K2)
+
+    def test_sidecar_of_a_replaced_text_is_stale_however_late_it_lands(self, tmp_path):
+        """A sidecar carries its source text's mtime, not its own write time.
+
+        A reader can publish a v1 sidecar after v2 replaced the text; the stamp
+        still dates it to v1, so the next read parses v2.
+        """
+        from jamma.utils.npy_cache import write_npy_cache
+
+        K1 = np.array([[1.0, 0.5], [0.5, 1.0]])
+        txt_path = tmp_path / "result.cXX.txt"
+        write_kinship_matrix(K1, txt_path, legacy_text=True)
+        v1_mtime_ns = txt_path.stat().st_mtime_ns
+        os.utime(txt_path, ns=(v1_mtime_ns, v1_mtime_ns - 10**9))
+        write_kinship_matrix(2 * K1, txt_path, legacy_text=True)
+
+        write_npy_cache(
+            K1, txt_path.with_suffix(".npy"), source_mtime_ns=v1_mtime_ns - 10**9
+        )
+
+        assert not npy_cache_valid(txt_path, txt_path.with_suffix(".npy"))
+        np.testing.assert_array_equal(read_kinship_matrix(txt_path), 2 * K1)
+
     def test_text_parse_writes_sidecar(self, tmp_path):
         """Parsing the text leaves a valid .npy sidecar for the next read."""
         K, txt_path = self._write_text_kinship(tmp_path)

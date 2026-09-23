@@ -265,7 +265,9 @@ def _write_array(
     if legacy_text:
         logger.info(f"Writing {what} to {path}")
         save_text(array, path)
-        write_npy_cache(array, _npy_cache_path(path))
+        write_npy_cache(
+            array, _npy_cache_path(path), source_mtime_ns=path.stat().st_mtime_ns
+        )
     else:
         npy_path = path.with_suffix(".npy")
         logger.info(f"Writing {what} to {npy_path}")

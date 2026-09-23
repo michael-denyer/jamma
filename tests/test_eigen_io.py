@@ -599,7 +599,7 @@ class TestNpyCache:
         """load_npy_cache returns np.memmap instance (demand-paged, not eager)."""
         arr = np.array([1.0, 2.0, 3.0])
         npy_path = tmp_path / "test.eigenD.npy"
-        write_npy_cache(arr, npy_path)
+        write_npy_cache(arr, npy_path, source_mtime_ns=0)
 
         result = load_npy_cache(npy_path, mmap_mode="r")
         assert result is not None
@@ -664,7 +664,7 @@ class TestAtomicCacheWrite:
         arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         npy_path = tmp_path / "direct.eigenD.npy"
 
-        write_npy_cache(arr, npy_path)
+        write_npy_cache(arr, npy_path, source_mtime_ns=0)
 
         self._assert_dir_contents(tmp_path, {npy_path})
 
@@ -681,7 +681,7 @@ class TestAtomicCacheWrite:
         # Fail the rename after the temp file has been written, so cleanup is
         # the only thing that can empty the directory.
         with patch.object(Path, "replace", side_effect=OSError("mock")):
-            write_npy_cache(arr, npy_path)
+            write_npy_cache(arr, npy_path, source_mtime_ns=0)
 
         assert not npy_path.exists(), "Target .npy should not exist after failed rename"
         self._assert_dir_contents(tmp_path, set())
@@ -702,7 +702,7 @@ class TestAtomicCacheWrite:
         old_bytes = npy_path.read_bytes()
 
         with patch.object(Path, "replace", side_effect=OSError("mock")):
-            write_npy_cache(np.zeros(500), npy_path)
+            write_npy_cache(np.zeros(500), npy_path, source_mtime_ns=0)
 
         assert npy_path.read_bytes() == old_bytes
         self._assert_dir_contents(tmp_path, {npy_path})

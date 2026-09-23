@@ -587,6 +587,33 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
     assert "exceeds 1.0GB capacity" in budgeted.reason
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="the chunk sizer charges the whole eigenvector matrix against the "
+    "per-chunk budget, so any run above about 70k samples plans 1-SNP chunks",
+)
+def test_plan_association_keeps_wide_chunks_when_u_exceeds_the_chunk_budget(
+    monkeypatch,
+):
+    """The eigenvector matrix is a per-run cost; it must not shrink the chunk.
+
+    At n=100,000 the eigenvector matrix is 80GB, more than the 40GB ceiling
+    of the auto per-chunk budget, on any machine however much RAM it has.
+    Subtracting it from the per-chunk budget left nothing for the chunk, so
+    every SNP became its own chunk and every chunk re-streamed the 80GB
+    matrix through the rotation GEMM: a 100,000 x 50,000 run took 6 hours
+    for the association pass alone. The preflight already prices U once,
+    in ``ExecutableAssociationPlan._association_phase_gb``.
+    """
+    use_fake_psutil(monkeypatch, available=500e9)
+
+    chunks = plan_association(
+        100_000, 50_000, config=LmmConfig(lmm_mode=1), backend="numpy", n_cvt=1
+    ).conservative_chunks
+
+    assert chunks.chunk_size >= 1_000, chunks
+
+
 def test_chunk_plan_honors_mem_budget_bytes():
     """LmmChunkPlan.plan must narrow the chunk when given mem_budget_bytes.
 

@@ -204,6 +204,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variable, `JAMMA_LIBIOMP5`, pins the path explicitly; see
   `docs/CONFIGURATION.md`.
 
+- The runtime rebuild of a missing or stale C extension works again. Since the
+  loader moved to `jamma._native`, it passed the directory above the installed
+  `jamma/` package, so every rebuild failed with "C source files missing" and
+  the run fell back to NumPy. After an ABI mismatch, the loader now rebuilds and
+  asks for a restart instead of retrying: CPython keeps the stale extension
+  loaded for the life of the process, so only a new process can use the rebuild.
 - LOCO eigendecomposition no longer keeps a chromosome's eigenvectors alive
   after association releases them. The worker thread and the submitting loop
   each kept a local reference to the last Future, which holds the

@@ -681,9 +681,11 @@ def test_runner_fused_general_ncvt2_dispatch():
 
 def _synthetic_fixture_run(lmm_mode: Literal[1, 4], with_covariates: bool):
     """A full runner invocation on the committed gemma_synthetic dataset."""
-    from jamma.io import load_plink_binary, read_fam_phenotypes
+    from jamma.genotype.dataset import GenotypeDataset
+    from jamma.io import read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
+    from tests.builders import read_plink_genotypes
     from tests.fixture_paths import SYNTHETIC
     from tests.support import require_fixture
 
@@ -694,26 +696,15 @@ def _synthetic_fixture_run(lmm_mode: Literal[1, 4], with_covariates: bool):
         SYNTHETIC.kinship,
         SYNTHETIC.covariates,
     )
-    plink = load_plink_binary(SYNTHETIC.bfile)
+    genotypes = read_plink_genotypes(SYNTHETIC.bfile)
     kinship = read_kinship_matrix(SYNTHETIC.kinship)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
     covariates = np.loadtxt(SYNTHETIC.covariates) if with_covariates else None
-    snp_info = [
-        {
-            "chr": str(plink.meta.chromosome[i]),
-            "rs": plink.meta.sid[i],
-            "pos": plink.meta.bp_position[i],
-            "a1": plink.meta.allele_1[i],
-            "a0": plink.meta.allele_2[i],
-            "maf": 0.0,
-            "n_miss": 0,
-        }
-        for i in range(plink.meta.n_snps)
-    ]
+    snp_info = GenotypeDataset.open_plink(SYNTHETIC.bfile).variants
 
     def run():
         return run_lmm_association_numpy(
-            genotypes=plink.genotypes,
+            genotypes=genotypes,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
             snp_info=snp_info,

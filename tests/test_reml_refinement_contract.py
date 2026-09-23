@@ -141,10 +141,11 @@ def tiny_reml_peak():
     retain the first 50 phenotypes and SNPs passing MAF 0.3 in those samples.
     The root uses dense projector algebra, without production Pab or score code.
     """
-    from jamma.io.plink import load_plink_binary, read_fam_phenotypes
+    from jamma.io.plink import read_fam_phenotypes
+    from tests.builders import read_plink_genotypes
 
     require_fixture(SYNTHETIC.bed, SYNTHETIC.bim, SYNTHETIC.fam)
-    genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes.astype(np.float64)
+    genotypes = read_plink_genotypes(SYNTHETIC.bfile).astype(np.float64)
     analysed = genotypes[:50]
     frequencies = np.nanmean(analysed, axis=0) / 2.0
     keep = (np.minimum(frequencies, 1.0 - frequencies) >= 0.3) & (

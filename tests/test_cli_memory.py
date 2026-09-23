@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from jamma.io import get_plink_metadata
+from jamma.genotype.dataset import GenotypeDataset
 from tests.fixture_paths import SYNTHETIC
 
 PLINK_PREFIX = SYNTHETIC.bfile
@@ -24,9 +24,9 @@ class TestCliMemoryCheckUnit:
         from jamma.lmm.association_plan import plan_association
 
         # This simulates what CLI does: get dimensions, then estimate
-        meta = get_plink_metadata(PLINK_PREFIX)
+        dataset = GenotypeDataset.open_plink(PLINK_PREFIX)
         est = plan_association(
-            meta.n_samples, meta.n_snps, backend="numpy-streaming"
+            dataset.n_samples, dataset.n_variants, backend="numpy-streaming"
         ).price(eigen=None)
 
         assert est.association_gb > 0
@@ -35,12 +35,12 @@ class TestCliMemoryCheckUnit:
         )
 
     def test_metadata_does_not_load_genotypes(self):
-        """get_plink_metadata should only read dimensions, not genotypes."""
+        """Opening the dataset should only read dimensions, not genotypes."""
         # This should be fast and low-memory
-        meta = get_plink_metadata(PLINK_PREFIX)
+        dataset = GenotypeDataset.open_plink(PLINK_PREFIX)
 
-        assert meta.n_samples == 100
-        assert meta.n_snps == 500
+        assert dataset.n_samples == 100
+        assert dataset.n_variants == 500
 
 
 @pytest.mark.tier1

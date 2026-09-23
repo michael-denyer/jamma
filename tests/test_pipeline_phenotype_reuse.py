@@ -81,17 +81,12 @@ def _run_logged(config: PipelineConfig) -> tuple[PipelineResult, list[str]]:
         logger.remove(sink_id)
 
 
-def _genotype_passes(messages: list[str], *, filtered_only: bool = False) -> int:
-    """Count the ``Reading N SNPs in K chunks`` lines, one per pass over the file.
-
-    ``filtered_only`` keeps just the association pass over the SNPs that
-    survived filtering.
-    """
-    marker = " filtered SNPs in " if filtered_only else " SNPs in "
+def _genotype_passes(messages: list[str]) -> int:
+    """Count the ``Reading N SNPs in K chunks`` lines, one per pass over the file."""
     return sum(
         1
         for message in messages
-        if message.startswith("Reading ") and marker in message
+        if message.startswith("Reading ") and " SNPs in " in message
     )
 
 
@@ -115,12 +110,12 @@ def test_multi_phenotype_reads_genotypes_once_and_preserves_each_result(
     """A two-phenotype run reads the genotype file as often as a one-phenotype run.
 
     The PLINK reader logs one ``Reading N SNPs in K chunks`` line per pass
-    over the file, so the log is where a user sees whether the streaming
-    backend collected SNP statistics and streamed the association chunks
-    once for both phenotypes or once per phenotype. The in-memory backend's
-    statistics pass and the covariate rotation produce no output, so this
-    test does not observe them; it checks their results against isolated
-    single-phenotype runs instead.
+    over the file, so the log is where a user sees whether a run read the
+    file once for both phenotypes or once per phenotype. Streaming reads it
+    three times (kinship, SNP statistics, association); the in-memory backend
+    twice (kinship, then the one load it computes statistics and associations
+    from). The covariate rotation produces no output, so this test checks its
+    results against isolated single-phenotype runs instead.
     """
     bfile, phenotypes, covariate_path = _study(tmp_path)
     if force_fallback:
@@ -138,11 +133,7 @@ def test_multi_phenotype_reads_genotypes_once_and_preserves_each_result(
             lmm_mode,
         )
     )
-    expected_association_passes = 1 if backend == "numpy-streaming" else 0
-    assert (
-        _genotype_passes(combined_log, filtered_only=True)
-        == expected_association_passes
-    )
+    assert _genotype_passes(combined_log) == (3 if backend == "numpy-streaming" else 2)
 
     individual = []
     for index, column in enumerate((1, 2)):

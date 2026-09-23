@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 
 from jamma.genotype.dataset import GenotypeDataset
-from jamma.io import load_plink_binary
 from jamma.kinship import compute_kinship_streaming
 from jamma.validation import (
     compare_kinship_matrices,
     load_gemma_kinship,
 )
+from tests.builders import read_plink_genotypes
 from tests.fixture_paths import SYNTHETIC
 from tests.reference.kinship import (
     compute_centered_kinship,
@@ -27,8 +27,7 @@ pytestmark = pytest.mark.tier1
 @pytest.fixture
 def mouse_genotypes():
     """Load gemma_synthetic genotypes."""
-    plink_data = load_plink_binary(SYNTHETIC.bfile)
-    return plink_data.genotypes
+    return read_plink_genotypes(SYNTHETIC.bfile)
 
 
 @pytest.fixture
@@ -272,7 +271,7 @@ class TestStandardizedKinshipStreaming:
         are bit-identical; the tolerance covers multi-chunk datasets.
         """
         require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
-        genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
+        genotypes = read_plink_genotypes(SYNTHETIC.bfile)
 
         K_stream = compute_kinship_streaming(
             GenotypeDataset.open_plink(SYNTHETIC.bfile),
@@ -290,7 +289,7 @@ class TestStandardizedKinshipStreaming:
     def test_streaming_matches_numpy_reference(self):
         """Streaming -gk 2 matches the per-SNP NumPy oracle at the -gk 2 tolerance."""
         require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
-        genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
+        genotypes = read_plink_genotypes(SYNTHETIC.bfile)
 
         K_stream = compute_kinship_streaming(
             GenotypeDataset.open_plink(SYNTHETIC.bfile),
@@ -306,7 +305,7 @@ class TestStandardizedKinshipStreaming:
     def test_streaming_valid_indices_subsets(self):
         """valid_indices accumulates at n_valid size and matches an in-memory subset."""
         require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
-        genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
+        genotypes = read_plink_genotypes(SYNTHETIC.bfile)
         n_samples = genotypes.shape[0]
         valid = np.arange(0, n_samples - 3)
 

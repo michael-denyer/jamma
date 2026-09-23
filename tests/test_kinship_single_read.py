@@ -14,8 +14,9 @@ import pytest
 
 from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_filter import compute_snp_filter_mask, compute_snp_stats
-from jamma.io import load_plink_binary, plink
+from jamma.io import plink
 from jamma.kinship import compute_kinship_streaming, stream
+from tests.builders import read_plink_genotypes
 from tests.reference.kinship import (
     compute_centered_kinship,
     compute_standardized_kinship,
@@ -80,7 +81,7 @@ def _spy_genotype_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]
 
 
 def _genotypes(bfile: Path) -> np.ndarray:
-    return load_plink_binary(bfile).genotypes.astype(np.float64)
+    return read_plink_genotypes(bfile).astype(np.float64)
 
 
 def _kept_columns(genotypes: np.ndarray, rows: np.ndarray) -> np.ndarray:

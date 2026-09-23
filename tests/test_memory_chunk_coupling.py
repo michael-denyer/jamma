@@ -258,8 +258,8 @@ def _engine_allocation_gb(
 
     Args:
         include_raw_block: Whether to add the raw genotype block
-            (``geno_buf`` / ``BedSource``'s chunk) the chunk source hands
-            ``prepare()``. True for the streaming comparison. False for the
+            (``geno_buf`` / the streaming dataset's block) the chunk source hands
+            ``prepare_genotypes()``. True for the streaming comparison. False for the
             batch comparison, which holds the whole genotype matrix instead.
     """
     utg_bytes = plan.chunk_size * n_samples * 8 * plan.n_buffers

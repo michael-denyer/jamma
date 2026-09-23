@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from jamma.io import load_plink_binary  # noqa: E402
+from jamma.genotype.dataset import GenotypeDataset  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
 from jamma.lmm.assoc_output import AssocResult  # noqa: E402
 from jamma.lmm.runner_numpy import run_lmm_association_numpy  # noqa: E402
@@ -42,6 +42,7 @@ from jamma.validation import (  # noqa: E402
 )
 from jamma.validation.compare import ComparisonResult  # noqa: E402
 from tests import fixture_paths  # noqa: E402
+from tests.builders import read_plink_genotypes  # noqa: E402
 from tests.reference.kinship import compute_centered_kinship  # noqa: E402
 
 # Common runner config knobs, merged with each spec's mode at the call site.
@@ -227,21 +228,6 @@ def _print_scientific_equivalence(
     print(f"    Effect direction agreement: {dir_agree * 100:.1f}%")
 
 
-def _build_snp_info(plink_data):
-    return [
-        {
-            "chr": str(plink_data.meta.chromosome[i]),
-            "rs": plink_data.meta.sid[i],
-            "pos": plink_data.meta.bp_position[i],
-            "a1": plink_data.meta.allele_1[i],
-            "a0": plink_data.meta.allele_2[i],
-            "maf": 0.0,
-            "n_miss": 0,
-        }
-        for i in range(plink_data.meta.n_snps)
-    ]
-
-
 def _load_phenotypes(fam_path: Path) -> np.ndarray:
     """Load phenotypes from column 6 of a .fam file (NaN for missing)."""
     with open(fam_path) as f:
@@ -328,12 +314,11 @@ def run_dataset(
     print(f"{'#' * 70}")
 
     # Load data
-    plink_data = load_plink_binary(config.plink_prefix)
+    genotypes = read_plink_genotypes(config.plink_prefix)
     phenotypes = _load_phenotypes(config.plink_prefix.with_suffix(".fam"))
-    snp_info = _build_snp_info(plink_data)
+    snp_info = GenotypeDataset.open_plink(config.plink_prefix).variants
     ref_kinship = read_kinship_matrix(config.kinship_path)
-    n_samples = plink_data.genotypes.shape[0]
-    n_snps = plink_data.genotypes.shape[1]
+    n_samples, n_snps = genotypes.shape
     print(f"  Samples: {n_samples}, SNPs: {n_snps}")
 
     covariates = None
@@ -349,7 +334,7 @@ def run_dataset(
 
         t0 = time.perf_counter()
         gemma_K = load_gemma_kinship(config.kinship_path)
-        jamma_K = compute_centered_kinship(plink_data.genotypes)
+        jamma_K = compute_centered_kinship(genotypes)
         t_kinship = time.perf_counter() - t0
         timings.append(SectionTiming(f"[{config.name[:8]}] Kinship", t_kinship, n_snps))
 
@@ -377,7 +362,7 @@ def run_dataset(
 
         t0 = time.perf_counter()
         run_result = run_lmm_association_numpy(
-            genotypes=plink_data.genotypes,
+            genotypes=genotypes,
             phenotypes=phenotypes,
             # eigendecompose_kinship consumes its input, reusing the buffer for
             # the eigenvectors, so each section needs its own copy. Sharing one

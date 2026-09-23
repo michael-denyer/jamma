@@ -16,7 +16,6 @@ import numpy as np
 import pytest
 
 from jamma.genotype.dataset import GenotypeDataset
-from jamma.io.plink import get_plink_metadata
 from jamma.lmm.association_plan import KinshipShape
 from jamma.lmm.eigen import center_kinship
 from jamma.lmm.genotype_source import SampleBasis
@@ -100,9 +99,9 @@ def test_gk_loco_reserves_no_eigen_peak(tmp_path: Path) -> None:
     from jamma.kinship.loco import loco_retained_set
     from jamma.lmm.eigen_plan import dsyevr_peak_gb
 
-    meta = get_plink_metadata(LOCO.bfile)
-    retained = loco_retained_set(meta.n_samples, meta.n_samples, 10_000)
-    budget_gb = retained.while_consuming_gb + dsyevr_peak_gb(meta.n_samples) / 2
+    ds = GenotypeDataset.open_plink(LOCO.bfile)
+    retained = loco_retained_set(ds.n_samples, ds.n_samples, 10_000)
+    budget_gb = retained.while_consuming_gb + dsyevr_peak_gb(ds.n_samples) / 2
 
     result = compute_kinship(
         PipelineConfig(
@@ -115,7 +114,7 @@ def test_gk_loco_reserves_no_eigen_peak(tmp_path: Path) -> None:
         1,
     )
 
-    assert len(result.kinship_paths) == len(set(meta.chromosome))
+    assert len(result.kinship_paths) == len(set(ds.variants.chr))
 
 
 def _copy_plink_genotypes(dest: Path) -> Path:

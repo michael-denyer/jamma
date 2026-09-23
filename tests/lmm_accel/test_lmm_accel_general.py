@@ -77,7 +77,8 @@ def test_general_ncvt_gemma_covariate_match():
     NumPy runner (which uses the general C workspace for n_cvt=2 Wald), and
     compares against GEMMA's covariate reference output.
     """
-    from jamma.io import load_plink_binary, read_fam_phenotypes
+    from jamma.genotype.dataset import GenotypeDataset
+    from jamma.io import read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.validation import (
@@ -85,27 +86,17 @@ def test_general_ncvt_gemma_covariate_match():
         compare_assoc_results,
         load_gemma_assoc,
     )
+    from tests.builders import read_plink_genotypes
     from tests.fixture_paths import SYNTHETIC
 
-    plink = load_plink_binary(SYNTHETIC.bfile)
+    genotypes = read_plink_genotypes(SYNTHETIC.bfile)
     kinship = read_kinship_matrix(SYNTHETIC.kinship)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
     covariates = np.loadtxt(SYNTHETIC.covariates)
-    snp_info = [
-        {
-            "chr": str(plink.meta.chromosome[i]),
-            "rs": plink.meta.sid[i],
-            "pos": plink.meta.bp_position[i],
-            "a1": plink.meta.allele_1[i],
-            "a0": plink.meta.allele_2[i],
-            "maf": 0.0,
-            "n_miss": 0,
-        }
-        for i in range(plink.meta.n_snps)
-    ]
+    snp_info = GenotypeDataset.open_plink(SYNTHETIC.bfile).variants
 
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,

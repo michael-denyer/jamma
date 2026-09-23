@@ -84,7 +84,7 @@ A typical LMM association run proceeds as follows:
 | `AssocResult` | `src/jamma/lmm/assoc_output.py` | Per-SNP association result dataclass matching GEMMA's output columns |
 | `MODE_SPECS` / `ModeSpec` | `src/jamma/lmm/schema.py` | Single source of truth mapping `lmm_mode` integers to the tests each mode runs (`Test` flags) and its output column names and header |
 | `SnpMeta` | `src/jamma/genotype/variants.py` | SNP metadata as one array per column; writers and result builders slice arrays directly, no per-SNP dicts |
-| `PlinkData` | `src/jamma/io/plink.py` | Container for loaded PLINK binary data (genotypes, sample IDs, SNP IDs, positions, alleles) |
+| `GenotypeDataset` | `src/jamma/genotype/dataset.py` | Samples x variants behind a reader strategy (PLINK or an in-memory matrix); every genotype consumer streams it with `blocks()`/`stats()`, and batch mode reads it once with `materialize()` |
 | `ToleranceConfig` | `src/jamma/validation/tolerances.py` | Configurable tolerance thresholds for GEMMA numerical comparisons, calibrated from formal error propagation |
 
 ## Directory Structure Rationale
@@ -126,7 +126,7 @@ src/jamma/
 │   ├── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
 │   └── variants.py         # SnpMeta: per-variant chr/rs/pos/alleles
 ├── io/                     # PLINK .bed/.bim/.fam readers and covariate/weight loaders
-│   ├── plink.py            # PlinkData loader and streaming chunk iterator
+│   ├── plink.py            # PlinkReader (.bed strategy), dimension checks, .fam phenotypes
 │   ├── covariate.py        # GEMMA-format covariate file reader
 │   ├── matrix_reader.py    # read_matrix_parallel(): multiprocess large-matrix text reader
 │   ├── matrix_writer.py    # write_matrix_parallel(): multiprocess large-matrix text writer
@@ -168,9 +168,9 @@ src/jamma/
 │   ├── prepare_common.py   # Typed kinship/eigen inputs, filtering, covariates, and null-model preparation
 │   ├── association_plan.py # plan_association(); ExecutionPlan, ExecutableAssociationPlan
 │   ├── workspace.py        # Kernel allocation contract and native sizing query
-│   ├── genotype_source.py  # SampleBasis, PreparedGenotypes, GenotypeSource protocol
-│   ├── runner_numpy.py     # Shared run body (run_association, run_single), LmmRunSpec, MatrixSource, batch entry
-│   ├── runner_numpy_streaming.py  # BedSource (two-pass disk I/O) + streaming entry
+│   ├── genotype_source.py  # SampleBasis, PreparedGenotypes, bind_prepared_genotypes
+│   ├── runner_numpy.py     # prepare_genotypes, shared run body (run_association, run_single), LmmRunSpec, batch entry
+│   ├── runner_numpy_streaming.py  # Streaming entry (two-pass disk I/O over a GenotypeDataset)
 │   ├── chunk_runner_numpy.py  # Shared NumPy chunk loop (orchestrator) for batch/streaming/LOCO
 │   ├── chunk_sizing.py     # RAM-budgeted chunk-size computation
 │   ├── dispatch.py         # DispatchPath: the one C-kernel path decision, from n_cvt/lmm_mode/accel

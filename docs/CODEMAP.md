@@ -188,12 +188,10 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 2a | `PlinkData` | Metadata + genotype container (n_samples x n_snps float32) | [plink.py:87](../src/jamma/io/plink.py#L87) |
-| 2a | `PlinkMetadata` | Frozen dataclass of dimensions + per-SNP/sample arrays | [plink.py:20](../src/jamma/io/plink.py#L20) |
-| 2a | `read_genotypes()` | Full-load genotype matrix from .bed | [plink.py:101](../src/jamma/io/plink.py#L101) |
-| 2a | `load_plink_binary()` | Metadata plus full genotypes as `PlinkData` | [plink.py:119](../src/jamma/io/plink.py#L119) |
-| 2a | `stream_genotype_chunks()` | Windowed reads from .bed (O(n x chunk)) | [plink.py:256](../src/jamma/io/plink.py#L256) |
-| 2a | `get_plink_metadata()` | Dimensions + metadata without loading genotypes | [plink.py:52](../src/jamma/io/plink.py#L52) |
+| 2a | `GenotypeDataset` | Samples x variants behind a reader strategy: metadata at open, `blocks()` and `stats()` stream columns (O(n x chunk)), `partitions`, `fingerprint()` | [genotype/dataset.py:235](../src/jamma/genotype/dataset.py#L235) |
+| 2a | `materialize()` | Batch mode: every variant read once into a float32 in-memory HARD_CALLS dataset | [genotype/dataset.py:309](../src/jamma/genotype/dataset.py#L309) |
+| 2a | `PlinkReader` | bed-reader behind `GenotypeDataset.open_plink`: float64 blocks, float32 for statistics | [plink.py:111](../src/jamma/io/plink.py#L111) |
+| 2a | `validate_plink_dimensions()` | .bed size against .fam and .bim line counts, checked at open | [plink.py:46](../src/jamma/io/plink.py#L46) |
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:21](../src/jamma/io/covariate.py#L21) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L46) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L87) |
@@ -269,14 +267,13 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:302](../src/jamma/lmm/association_plan.py#L302) |
 | 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:93](../src/jamma/lmm/association_plan.py#L93) |
-| 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any source under one `LmmRunSpec` | [runner_numpy.py:319](../src/jamma/lmm/runner_numpy.py#L319) |
-| 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:254](../src/jamma/lmm/runner_numpy.py#L254) |
-| 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:96](../src/jamma/lmm/runner_numpy.py#L96) |
-| 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:110](../src/jamma/lmm/genotype_source.py#L110) |
+| 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any `GenotypeDataset` under one `LmmRunSpec` | [runner_numpy.py:301](../src/jamma/lmm/runner_numpy.py#L301) |
+| 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:236](../src/jamma/lmm/runner_numpy.py#L236) |
+| 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels, statistics block size; `snp_filters` builds its `SnpFilterSpec` | [runner_numpy.py:94](../src/jamma/lmm/runner_numpy.py#L94) |
+| 4Nb | `prepare_genotypes()` | Measures (or, for LOCO, accepts) SNP statistics over the analysed rows, filters them, and binds the dataset's float64 chunk stream | [runner_numpy.py:154](../src/jamma/lmm/runner_numpy.py#L154) |
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:25](../src/jamma/lmm/genotype_source.py#L25) |
 | 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:65](../src/jamma/lmm/genotype_source.py#L65) |
-| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:138](../src/jamma/lmm/runner_numpy.py#L138) |
-| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:415](../src/jamma/lmm/runner_numpy.py#L415) |
+| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over `GenotypeDataset.from_matrix` | [runner_numpy.py:407](../src/jamma/lmm/runner_numpy.py#L407) |
 | 4Nb | `AnalysedPhenotype` | One phenotype and its covariates restricted to the analysed samples, with the valid mask | [prepare_common.py:125](../src/jamma/lmm/prepare_common.py#L125) |
 | 4Nb | `restrict_eigen_input()` | Restrict a kinship to the analysed samples, or check eigenpairs match them | [prepare_common.py:189](../src/jamma/lmm/prepare_common.py#L189) |
 | 4Nb | `RotatedBasis` | Eigenbasis and rotated covariates every phenotype in a group shares | [prepare_common.py:304](../src/jamma/lmm/prepare_common.py#L304) |
@@ -301,15 +298,13 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `build_models.py` | Immutable source manifests, compile/link flag policy, and `BuildSpec` values | [build_models.py](../src/jamma/_build_support/build_models.py) |
 | 4Nd | `build_execution.py` | Toolchain detection and atomic compile/link execution | [build_execution.py](../src/jamma/_build_support/build_execution.py) |
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
-| 4Ne | `bed_chunk_source()` | float64 .bed chunk stream over the analysed rows for `BedSource`; the LOCO chromosome source reads the same chunks through `GenotypeDataset.blocks()` | [runner_numpy_streaming.py:47](../src/jamma/lmm/runner_numpy_streaming.py#L47) |
-| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, then `bed_chunk_source()` | [runner_numpy_streaming.py:75](../src/jamma/lmm/runner_numpy_streaming.py#L75) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:141](../src/jamma/lmm/runner_numpy_streaming.py#L141) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a `GenotypeDataset` streamed from disk | [runner_numpy_streaming.py:34](../src/jamma/lmm/runner_numpy_streaming.py#L34) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:59](../src/jamma/lmm/schema.py#L59) |
 | 4Nh | `ModeSpec` | Per-mode test set and column specification (single source of truth) | [lmm/schema.py:87](../src/jamma/lmm/schema.py#L87) |
 | 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:315](../src/jamma/lmm/assoc_output.py#L315) |
 | 4Ni | `_count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/chunk_runner_numpy.py:51](../src/jamma/lmm/chunk_runner_numpy.py#L51) |
-| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:77](../src/jamma/lmm/loco.py#L77) |
-| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`, which carries the opened `GenotypeDataset`; the pipeline's entry | [lmm/loco.py:153](../src/jamma/lmm/loco.py#L153) |
+| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM over a `GenotypeDataset` | [lmm/loco.py:69](../src/jamma/lmm/loco.py#L69) |
+| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`, which carries the opened `GenotypeDataset`; each chromosome runs `run_single` with that chromosome's statistics from the kinship pass | [lmm/loco.py:145](../src/jamma/lmm/loco.py#L145) |
 | 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:117](../src/jamma/lmm/loco_eigen.py#L117) |
 | 4Nj | `solve_eigen_pairs()` | Ordered eigenpairs with `workers` solves in flight under one consumer-thread BLAS scope | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 | 4Nj | `plan_loco_workers()` | Worker cap and complete consumer memory reservation | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
@@ -372,7 +367,7 @@ sequenceDiagram
     activate CLI
 
     rect rgba(53, 168, 182, 0.75)
-        CLI->>IO: read_genotypes()
+        CLI->>IO: GenotypeDataset.open_plink().materialize()
         activate IO
         IO-->>CLI: genotypes (n x p)
         deactivate IO
@@ -505,7 +500,7 @@ flowchart TD
 
 ## Backend Architecture
 
-`PipelineRunner` always uses the NumPy backend. `plan_association()` chooses batch or streaming mode based on memory availability. In [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py), the mode picks the genotype source, a `MatrixSource` over the loaded matrix or a `BedSource` over the .bed file, and `run_association()` runs the same body over either.
+`PipelineRunner` always uses the NumPy backend. `plan_association()` chooses batch or streaming mode based on memory availability. In [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py), the mode picks the genotype dataset, `dataset.materialize()` in memory or the opened dataset streamed from the .bed file, `prepare_genotypes()` binds either, and `run_association()` runs the same body over both.
 
 ```mermaid
 flowchart TD
@@ -515,8 +510,8 @@ flowchart TD
 
     subgraph NP["⚡ NumPy Backend"]
         direction TB
-        BATCH["MatrixSource<br/><small>4Nb</small>"]
-        STREAM["BedSource<br/><small>4Ne</small>"]
+        BATCH["materialize()<br/><small>2a</small>"]
+        STREAM["GenotypeDataset<br/><small>2a</small>"]
         CN["compute_numpy.py<br/><small>4Nc</small>"]
         LN["likelihood_numpy.py<br/><small>4Na</small>"]
         SP["special.py<br/><small>3i</small>"]
@@ -578,7 +573,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
 | CLI dispatch (`main`) | [cli.py:222](../src/jamma/cli.py#L222) |
-| Load genotypes | [plink.py:101](../src/jamma/io/plink.py#L101) |
+| Load genotypes | [genotype/dataset.py:235](../src/jamma/genotype/dataset.py#L235) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:106](../src/jamma/io/matrix_writer.py#L106) |

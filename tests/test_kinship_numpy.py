@@ -11,9 +11,9 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from jamma.io import load_plink_binary
 from jamma.kinship import impute_and_center, impute_center_and_standardize
 from jamma.validation import compare_kinship_matrices, load_gemma_kinship
+from tests.builders import read_plink_genotypes
 from tests.fixture_paths import SYNTHETIC
 from tests.hypothesis_strategies import genotype_matrix
 from tests.reference.kinship import compute_centered_kinship
@@ -206,8 +206,8 @@ class TestImputationGemmaEquivalence:
     def test_impute_and_center_kinship_matches_gemma(self):
         """Centered kinship from impute_and_center matches GEMMA -gk 1 reference."""
         require_fixture(SYNTHETIC.bed, SYNTHETIC.kinship)
-        plink = load_plink_binary(SYNTHETIC.bfile)
-        X = plink.genotypes.astype(np.float64)
+        genotypes = read_plink_genotypes(SYNTHETIC.bfile)
+        X = genotypes.astype(np.float64)
         X_centered = impute_and_center(X)
         K_jamma = X_centered @ X_centered.T / X_centered.shape[1]
         K_gemma = load_gemma_kinship(SYNTHETIC.kinship)
@@ -222,8 +222,8 @@ class TestImputationGemmaEquivalence:
     def test_impute_center_standardize_produces_valid_standardized_kinship(self):
         """Standardized kinship has correct structural properties."""
         require_fixture(SYNTHETIC.bed)
-        plink = load_plink_binary(SYNTHETIC.bfile)
-        X = plink.genotypes.astype(np.float64)
+        genotypes = read_plink_genotypes(SYNTHETIC.bfile)
+        X = genotypes.astype(np.float64)
         X_std = impute_center_and_standardize(X.copy())
         K_std = X_std @ X_std.T / X_std.shape[1]
         # Shape and symmetry
@@ -233,7 +233,7 @@ class TestImputationGemmaEquivalence:
         # Diagonal positive (each sample has non-zero self-similarity)
         assert np.all(K_std.diagonal() > 0)
         # Standardized kinship differs from centered kinship
-        X2 = plink.genotypes.astype(np.float64)
+        X2 = genotypes.astype(np.float64)
         X_centered = impute_and_center(X2)
         K_centered = X_centered @ X_centered.T / X_centered.shape[1]
         assert not np.allclose(K_std, K_centered, atol=1e-6), (
@@ -243,8 +243,8 @@ class TestImputationGemmaEquivalence:
     def test_impute_and_center_no_nans_remain(self):
         """All NaN values imputed after impute_and_center."""
         require_fixture(SYNTHETIC.bed)
-        plink = load_plink_binary(SYNTHETIC.bfile)
-        X = plink.genotypes.astype(np.float64)
+        genotypes = read_plink_genotypes(SYNTHETIC.bfile)
+        X = genotypes.astype(np.float64)
         # Inject missing values if fixture has none, ensuring imputation is exercised
         if not np.isnan(X).any():
             rng = np.random.default_rng(42)

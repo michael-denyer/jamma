@@ -8,20 +8,18 @@ masks (MAF, missing rate, monomorphism, HWE) live in ``snp_filter``.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 from loguru import logger
 from numpy.typing import DTypeLike
 
-from jamma.core.progress import progress_iterator
 from jamma.genotype.snp_filter import (
     compute_hwe_pvalues,
     compute_snp_filter_mask,
 )
-from jamma.io.plink import stream_genotype_chunks, validate_genotype_values
+from jamma.io.plink import validate_genotype_values
 from jamma.jlinalg import compute_snp_stats_chunk
 
 
@@ -278,64 +276,6 @@ def collect_snp_stats_from_chunks(
         n_unexpected=n_unexpected,
         hwe_counts=hwe_counts,
         global_indices=global_indices,
-    )
-
-
-def collect_streamed_snp_stats(
-    bed_path: Path,
-    *,
-    n_snps: int,
-    n_samples: int,
-    chunk_size: int,
-    sample_indices: np.ndarray | None = None,
-    snp_indices: np.ndarray | None = None,
-    include_hwe: bool = False,
-    validate_genotypes: bool = False,
-    show_progress: bool = True,
-    progress_label: str = "Computing SNP statistics",
-    dtype: type = np.float32,
-) -> SnpStats:
-    """Collect SNP statistics by streaming PLINK BED chunks."""
-    sample_indices = (
-        None if sample_indices is None else np.asarray(sample_indices, dtype=np.intp)
-    )
-    snp_indices = (
-        None if snp_indices is None else np.asarray(snp_indices, dtype=np.intp)
-    )
-    stats_n_snps = n_snps if snp_indices is None else len(snp_indices)
-    stats_n_samples = n_samples if sample_indices is None else len(sample_indices)
-    global_indices = (
-        None
-        if snp_indices is None
-        else np.ascontiguousarray(snp_indices, dtype=np.intp)
-    )
-
-    raw_chunks = stream_genotype_chunks(
-        bed_path,
-        chunk_size=chunk_size,
-        dtype=dtype,
-        show_progress=False,
-        snp_indices=snp_indices,
-    )
-
-    def _chunks():
-        for chunk, start, end in raw_chunks:
-            if sample_indices is not None:
-                chunk = chunk[sample_indices, :]
-            yield chunk, start, end
-
-    chunks: Iterator[tuple[np.ndarray, int, int]] = _chunks()
-    if show_progress:
-        n_chunks = (stats_n_snps + chunk_size - 1) // chunk_size
-        chunks = progress_iterator(chunks, total=n_chunks, desc=progress_label)
-
-    return collect_snp_stats_from_chunks(
-        chunks,
-        n_snps=stats_n_snps,
-        n_samples=stats_n_samples,
-        global_indices=global_indices,
-        include_hwe=include_hwe,
-        validate_genotypes=validate_genotypes,
     )
 
 

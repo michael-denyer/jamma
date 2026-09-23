@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import (
@@ -43,7 +44,10 @@ def test_streaming_rejects_non_finite_phenotype() -> None:
     kinship = read_kinship_matrix(SYNTHETIC.kinship)
     with pytest.raises(ValueError, match="only finite values"):
         run_lmm_association_numpy_streaming(
-            SYNTHETIC.bfile, phenotypes, kinship, config=_QUIET
+            GenotypeDataset.open_plink(SYNTHETIC.bfile),
+            phenotypes,
+            kinship,
+            config=_QUIET,
         )
 
 
@@ -53,4 +57,4 @@ def test_loco_rejects_non_finite_phenotype() -> None:
     phenotypes = read_fam_phenotypes(LOCO.fam)
     phenotypes[3] = np.inf
     with pytest.raises(ValueError, match="only finite values"):
-        run_lmm_loco(LOCO.bfile, phenotypes, config=_QUIET)
+        run_lmm_loco(GenotypeDataset.open_plink(LOCO.bfile), phenotypes, config=_QUIET)

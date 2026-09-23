@@ -314,10 +314,12 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
     Verifies the full path: FUSED dispatch -> a general workspace
     created with lmm_mode=2 -> compute_lmm_chunk_c.
     """
-    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    genotypes, kinship, phenotypes, snp_info, covariates = (
+        synthetic_data_with_covariates
+    )
 
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
@@ -351,10 +353,12 @@ def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
     Verifies the full path: FUSED dispatch -> a general workspace
     created with lmm_mode=3 -> compute_lmm_chunk_c.
     """
-    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    genotypes, kinship, phenotypes, snp_info, covariates = (
+        synthetic_data_with_covariates
+    )
 
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,

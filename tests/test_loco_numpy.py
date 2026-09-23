@@ -13,7 +13,6 @@ import pytest
 
 from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import read_fam_phenotypes
-from jamma.io.plink import get_plink_metadata
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.schema import LmmConfig
 from jamma.validation.compare import compare_assoc_results, load_gemma_assoc
@@ -112,12 +111,14 @@ def test_loco_reuses_kinship_snp_stats(missing_phenotypes):
         patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
     ):
         loco = run_lmm_loco(
-            bed_path=_LOCO_BFILE,
+            dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
             phenotypes=phenotypes,
             config=LmmConfig(check_memory=False, show_progress=False),
         )
 
-    n_chromosomes = len(set(get_plink_metadata(_LOCO_BFILE).chromosome.tolist()))
+    n_chromosomes = len(
+        set(GenotypeDataset.open_plink(_LOCO_BFILE).variants.chr.tolist())
+    )
     assert loco.n_tested > 0
     assert call_count == 2 + n_chromosomes
 
@@ -137,15 +138,15 @@ def test_run_lmm_loco_plans_association_once(monkeypatch):
     monkeypatch.setattr(loco_module, "plan_association", _spy)
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
     result = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         config=LmmConfig(check_memory=False, show_progress=False),
     )
-    meta = get_plink_metadata(_LOCO_BFILE)
+    ds = GenotypeDataset.open_plink(_LOCO_BFILE)
 
     assert result.n_tested > 0
     assert len(calls) == 1, f"expected one plan per run, got {len(calls)}"
-    assert calls[0]["args"][1] == meta.n_snps
+    assert calls[0]["args"][1] == ds.n_variants
     assert calls[0]["backend"] == "loco"
     assert calls[0]["max_chunk_size"] == LocoConfig().col_chunk_size
 
@@ -209,7 +210,7 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
 
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
     loco = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         config=LmmConfig(
             n_grid=7, n_refine=25, check_memory=False, show_progress=False
@@ -239,7 +240,7 @@ def test_loco_numpy_multipass_equivalence():
 
     # Single-pass baseline (default behaviour, all chromosomes fit in memory)
     loco_single = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         config=LmmConfig(check_memory=False, show_progress=False),
     )
@@ -265,7 +266,7 @@ def test_loco_numpy_multipass_equivalence():
         side_effect=patched_fn,
     ):
         loco_multi = run_lmm_loco(
-            bed_path=_LOCO_BFILE,
+            dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
             phenotypes=phenotypes,
             config=LmmConfig(check_memory=False, show_progress=False),
         )
@@ -313,12 +314,12 @@ def test_loco_numpy_covariates_threaded_and_effective():
     covariates = np.column_stack([np.ones(n), rng.standard_normal(n)])
 
     baseline = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         config=LmmConfig(check_memory=False, show_progress=False),
     )
     with_covar = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         covariates=covariates,
         config=LmmConfig(check_memory=False, show_progress=False),
@@ -361,13 +362,13 @@ def test_loco_missing_phenotype_computed_and_cached_eigen_agree(tmp_path):
     config = LmmConfig(check_memory=False, show_progress=False)
 
     computed = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         config=config,
         loco=LocoConfig(write_eigen=True, eigen_dir=tmp_path),
     )
     cached = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         config=config,
         loco=LocoConfig(eigen_dir=tmp_path),
@@ -387,8 +388,8 @@ def test_loco_stream_carries_snp_stats_over_the_filtering_rows():
 
     from jamma.kinship import compute_loco_kinship_streaming
 
-    meta = get_plink_metadata(_LOCO_BFILE)
-    rows = np.arange(0, meta.n_samples, 2)
+    ds = GenotypeDataset.open_plink(_LOCO_BFILE)
+    rows = np.arange(0, ds.n_samples, 2)
     stream = compute_loco_kinship_streaming(
         GenotypeDataset.open_plink(_LOCO_BFILE),
         check_memory=False,
@@ -400,7 +401,7 @@ def test_loco_stream_carries_snp_stats_over_the_filtering_rows():
         stream.snp_stats  # noqa: B018
     next(iter(stream))
     assert stream.snp_stats.n_samples == len(rows)
-    assert stream.snp_stats.n_snps == meta.n_snps
+    assert stream.snp_stats.n_snps == ds.n_variants
 
 
 @pytest.mark.tier1
@@ -510,8 +511,8 @@ def test_loco_numpy_valid_sample_subsetting():
 
     from jamma.kinship import compute_loco_kinship_streaming
 
-    meta = get_plink_metadata(_LOCO_BFILE)
-    n_samples = meta.n_samples
+    ds = GenotypeDataset.open_plink(_LOCO_BFILE)
+    n_samples = ds.n_samples
 
     # Exclude last 5 samples
     valid_indices = np.arange(0, n_samples - 5)
@@ -673,12 +674,12 @@ def test_run_lmm_loco_gate_reserves_the_eigen_consumer():
     from jamma.kinship.loco import loco_retained_set
     from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK
 
-    n_samples = get_plink_metadata(_LOCO_BFILE).n_samples
+    n_samples = GenotypeDataset.open_plink(_LOCO_BFILE).n_samples
     retained = loco_retained_set(n_samples, n_samples, DEFAULT_STATS_CHUNK)
 
     with pytest.raises(MemoryError, match="LOCO working set"):
         run_lmm_loco(
-            bed_path=_LOCO_BFILE,
+            dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
             phenotypes=read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam")),
             config=LmmConfig(
                 mem_budget=retained.while_consuming_gb + 1e-6, show_progress=False
@@ -699,7 +700,7 @@ def test_loco_numpy_show_progress_true():
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
 
     loco = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         config=LmmConfig(lmm_mode=1, show_progress=True, check_memory=False),
     )
@@ -733,7 +734,7 @@ def test_loco_gemma_equivalence():
     tol = ToleranceConfig(lambda_rtol=5e-5)
 
     loco = run_lmm_loco(
-        bed_path=_LOCO_BFILE,
+        dataset=GenotypeDataset.open_plink(_LOCO_BFILE),
         phenotypes=phenotypes,
         config=LmmConfig(check_memory=False, show_progress=False),
     )

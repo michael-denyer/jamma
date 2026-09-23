@@ -13,12 +13,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.variants import SnpMeta
-from jamma.io.plink import (
-    get_plink_metadata,
-    partitions_from_metadata,
-    validate_plink_dimensions,
-)
+from jamma.io.plink import validate_plink_dimensions
 from jamma.lmm.assoc_output import IncrementalAssocWriter
 from jamma.lmm.schema import MODE_SPECS
 from tests.fixture_paths import LOCO, SYNTHETIC
@@ -34,7 +31,7 @@ class TestPlinkIOErrorPaths:
     """Error-path tests for PLINK I/O validation functions.
 
     Tests validate_plink_dimensions (per-extension missing files) and
-    partitions_from_metadata (multi-chromosome handling).
+    GenotypeDataset.partitions (multi-chromosome handling).
 
     Truncated .bed and genotype value tests live in test_plink_validation.py
     to avoid duplication.
@@ -68,7 +65,7 @@ class TestPlinkIOErrorPaths:
     # live in test_plink_validation.py::TestValidateGenotypeValues.
 
     def test_multi_chromosome_partitions(self) -> None:
-        """partitions_from_metadata returns correct multi-chromosome partitions.
+        """GenotypeDataset.partitions returns correct multi-chromosome partitions.
 
         Uses gemma_loco fixture which has chromosomes 1, 2, and 3.
         Verifies the returned dict has >= 3 keys and total SNP count
@@ -76,8 +73,7 @@ class TestPlinkIOErrorPaths:
         """
         require_fixture(LOCO_BFILE.with_suffix(".bed"), LOCO_BFILE.with_suffix(".bim"))
 
-        meta = get_plink_metadata(LOCO_BFILE)
-        partitions = partitions_from_metadata(meta)
+        partitions = GenotypeDataset.open_plink(LOCO_BFILE).partitions
 
         assert len(partitions) >= 3
 

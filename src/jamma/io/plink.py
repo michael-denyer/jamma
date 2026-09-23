@@ -1,162 +1,17 @@
 """PLINK binary format I/O using bed-reader.
 
-This module provides loading of PLINK binary files (.bed/.bim/.fam) which is
-the primary input format for GEMMA analysis.
+``PlinkReader`` is the ``.bed`` strategy behind
+``GenotypeDataset.open_plink``; the rest checks PLINK files and reads ``.fam``
+phenotypes.
 """
 
 import hashlib
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from bed_reader import open_bed
 from loguru import logger
-
-from jamma.core.progress import progress_iterator
-
-
-@dataclass(frozen=True)
-class PlinkMetadata:
-    """PLINK file metadata read without loading genotypes.
-
-    Attributes:
-        n_samples: Number of samples (individuals).
-        n_snps: Number of SNPs (variants).
-        iid: Sample IDs as 2D array with columns [FID, IID].
-        sid: SNP IDs (variant identifiers).
-        chromosome: Chromosome for each SNP.
-        bp_position: Base pair position for each SNP.
-        allele_1: Reference allele for each SNP.
-        allele_2: Alternate allele for each SNP.
-    """
-
-    n_samples: int
-    n_snps: int
-    iid: np.ndarray
-    sid: np.ndarray
-    chromosome: np.ndarray
-    bp_position: np.ndarray
-    allele_1: np.ndarray
-    allele_2: np.ndarray
-
-
-def _bed_path(bfile: Path) -> Path:
-    """Return the ``.bed`` path for a PLINK prefix, raising if it is missing."""
-    bed_path = Path(f"{bfile}.bed")
-    if not bed_path.exists():
-        raise FileNotFoundError(f"PLINK .bed file not found: {bed_path}")
-    return bed_path
-
-
-def get_plink_metadata(bfile: Path) -> PlinkMetadata:
-    """Get PLINK file metadata without loading genotypes.
-
-    Opens the PLINK files to read dimensions and metadata arrays without
-    loading the genotype matrix. Useful for streaming workflows that need
-    to know dimensions before iteration.
-
-    Args:
-        bfile: Path prefix for PLINK files (without .bed/.bim/.fam extension).
-
-    Returns:
-        A PlinkMetadata with dimensions and the per-SNP and per-sample arrays.
-
-    Raises:
-        FileNotFoundError: If the .bed file does not exist.
-
-    Example:
-        >>> meta = get_plink_metadata(Path("tests/fixtures/mouse_hs1940/mouse_hs1940"))
-        >>> print(f"{meta.n_samples} samples, {meta.n_snps} SNPs")
-        1940 samples, 12226 SNPs
-    """
-    with open_bed(_bed_path(bfile)) as bed:
-        return PlinkMetadata(
-            n_samples=int(bed.iid_count),
-            n_snps=int(bed.sid_count),
-            iid=bed.iid,
-            sid=bed.sid,
-            chromosome=bed.chromosome,
-            bp_position=bed.bp_position,
-            allele_1=bed.allele_1,
-            allele_2=bed.allele_2,
-        )
-
-
-@dataclass(frozen=True)
-class PlinkData:
-    """PLINK binary data: metadata plus the loaded genotype matrix.
-
-    Attributes:
-        meta: Sample and SNP metadata (dimensions, IDs, chromosome,
-            position, alleles).
-        genotypes: Genotype matrix with shape (n_samples, n_snps).
-            Values are 0.0 (hom ref), 1.0 (het), 2.0 (hom alt), or NaN (missing).
-    """
-
-    meta: PlinkMetadata
-    genotypes: np.ndarray
-
-
-def read_genotypes(bfile: Path, dtype: type[np.floating] = np.float32) -> np.ndarray:
-    """Read the full genotype matrix from a PLINK ``.bed`` file.
-
-    Args:
-        bfile: Path prefix for PLINK files (without .bed/.bim/.fam extension).
-        dtype: Floating dtype of the returned matrix.
-
-    Returns:
-        Genotypes with shape (n_samples, n_snps): 0.0 (hom ref), 1.0 (het),
-        2.0 (hom alt), or NaN (missing).
-
-    Raises:
-        FileNotFoundError: If the .bed file does not exist.
-    """
-    with open_bed(_bed_path(bfile)) as bed:
-        return bed.read(dtype=dtype)
-
-
-def load_plink_binary(bfile: Path) -> PlinkData:
-    """Load PLINK binary files (.bed/.bim/.fam).
-
-    Args:
-        bfile: Path prefix for PLINK files (without .bed/.bim/.fam extension).
-            For example, if files are data.bed, data.bim, data.fam, pass Path("data").
-
-    Returns:
-        PlinkData container with genotypes and metadata.
-
-    Raises:
-        FileNotFoundError: If the .bed file does not exist.
-
-    Example:
-        >>> data = load_plink_binary(Path("tests/fixtures/mouse_hs1940/mouse_hs1940"))
-        >>> print(f"{data.meta.n_samples} samples, {data.meta.n_snps} SNPs")
-        1940 samples, 12226 SNPs
-    """
-    return PlinkData(meta=get_plink_metadata(bfile), genotypes=read_genotypes(bfile))
-
-
-def partitions_from_metadata(meta: PlinkMetadata) -> dict[str, np.ndarray]:
-    """Derive SNP column indices grouped by chromosome from PLINK metadata.
-
-    Groups SNP indices by chromosome name from already-loaded metadata,
-    avoiding a second BED file open. Chromosome names are preserved exactly
-    as they appear in the BIM file (e.g., '1', 'chr1', 'X'), and keys are
-    ordered by first appearance. Use when get_plink_metadata has already
-    been called.
-
-    Args:
-        meta: Metadata from get_plink_metadata.
-
-    Returns:
-        Dict mapping chromosome name to sorted array of SNP column indices.
-        Keys ordered by first appearance in BIM file.
-    """
-    chromosomes = meta.chromosome
-    _, first_idx = np.unique(chromosomes, return_index=True)
-    unique_chrs = [chromosomes[i] for i in np.sort(first_idx)]
-    return {chr_name: np.where(chromosomes == chr_name)[0] for chr_name in unique_chrs}
 
 
 def _count_lines_fast(path: Path, chunk_size: int = 1024 * 1024) -> int:
@@ -253,99 +108,6 @@ def validate_genotype_values(chunk: np.ndarray) -> int:
     return int(np.count_nonzero(not_nan & ~valid_geno))
 
 
-def stream_genotype_chunks(
-    bed_path: Path,
-    chunk_size: int = 10_000,
-    dtype: type = np.float32,
-    show_progress: bool = True,
-    snp_indices: np.ndarray | None = None,
-) -> Iterator[tuple[np.ndarray, int, int]]:
-    """Stream genotype chunks from disk without full matrix load.
-
-    Opens the PLINK .bed file once and yields genotype chunks via windowed
-    reads. The file handle stays open across all yields, avoiding the overhead
-    of repeated metadata parsing.
-
-    Memory: O(n_samples * chunk_size) per chunk, never O(n_samples * n_snps).
-
-    Args:
-        bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
-        chunk_size: Number of SNPs per chunk (default 10,000).
-        dtype: Output dtype for genotypes (default float32 for memory efficiency).
-        show_progress: Whether to show progress bar (default True).
-        snp_indices: Sorted array of column indices to read. When provided,
-            only these columns are read from the BED file. chunk_size applies
-            to the filtered index space, not the total SNP count. Yields
-            (chunk, global_start_idx, global_end_idx) where indices refer to
-            positions in snp_indices, not BED file columns.
-
-    Yields:
-        Tuple of (genotypes_chunk, start_idx, end_idx):
-        - genotypes_chunk: Array of shape (n_samples, chunk_snps)
-        - start_idx: First SNP index (inclusive)
-        - end_idx: Last SNP index (exclusive)
-        When snp_indices is None, indices are absolute BED column positions.
-        When snp_indices is provided, indices are positions within snp_indices.
-
-    Raises:
-        FileNotFoundError: If the .bed file does not exist.
-
-    Example:
-        >>> chunks = stream_genotype_chunks(Path("data"), chunk_size=5000)
-        >>> for chunk, start, end in chunks:
-        ...     print(f"SNPs {start}-{end}: shape {chunk.shape}")
-        SNPs 0-5000: shape (1940, 5000)
-        SNPs 5000-10000: shape (1940, 5000)
-    """
-    if chunk_size < 1:
-        raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
-
-    with open_bed(_bed_path(bed_path)) as bed:
-        n_samples = bed.iid_count
-
-        if snp_indices is not None:
-            # Filtered mode: validate and read only requested columns
-            if len(snp_indices) > 1 and np.any(np.diff(snp_indices) <= 0):
-                raise ValueError(
-                    "snp_indices must be sorted in strictly ascending order"
-                )
-            if len(snp_indices) > 0 and (
-                snp_indices[0] < 0 or snp_indices[-1] >= bed.sid_count
-            ):
-                raise ValueError(
-                    f"snp_indices out of bounds: range [{snp_indices[0]}, "
-                    f"{snp_indices[-1]}], BED file has {bed.sid_count} SNPs"
-                )
-            n_total = len(snp_indices)
-            label = "filtered SNPs"
-
-            def read_chunk(start: int, end: int) -> np.ndarray:
-                return bed.read(index=(np.s_[:], snp_indices[start:end]), dtype=dtype)
-        else:
-            # Unfiltered mode: read all columns sequentially
-            n_total = int(bed.sid_count)
-            label = "SNPs"
-
-            def read_chunk(start: int, end: int) -> np.ndarray:
-                return bed.read(index=np.s_[:, start:end], dtype=dtype)
-
-        n_chunks = (n_total + chunk_size - 1) // chunk_size
-        logger.info(
-            f"Reading {n_total} {label} in {n_chunks} chunks "
-            f"of {chunk_size} ({n_samples} samples)"
-        )
-
-        iterator = range(0, n_total, chunk_size)
-        if show_progress:
-            iterator = progress_iterator(
-                iterator, total=n_chunks, desc="Reading genotypes"
-            )
-
-        for start in iterator:
-            end = min(start + chunk_size, n_total)
-            yield read_chunk(start, end), start, end
-
-
 class PlinkReader:
     """bed-reader behind ``GenotypeDataset``'s reader strategy."""
 
@@ -359,10 +121,17 @@ class PlinkReader:
         """Yield blocks of ``columns`` from one ``open_bed``, float32 for stats.
 
         A block of consecutive columns is read as a slice, any other block by
-        index; both give the same values.
+        index; both give the same values. Logs one ``Reading N SNPs`` line
+        per pass, the user's record of how often the file was read.
         """
         dtype = np.float32 if stats_only else np.float64
         with open_bed(self._bed) as bed:
+            label = "SNPs" if len(columns) == bed.sid_count else "filtered SNPs"
+            n_blocks = (len(columns) + block_size - 1) // block_size
+            logger.info(
+                f"Reading {len(columns)} {label} in {n_blocks} chunks "
+                f"of {block_size} ({bed.iid_count} samples)"
+            )
             for start in range(0, len(columns), block_size):
                 block = columns[start : start + block_size]
                 first, last = int(block[0]), int(block[-1])

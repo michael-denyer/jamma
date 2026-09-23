@@ -8,12 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TypeAlias
 
 import numpy as np
-
-if TYPE_CHECKING:
-    from jamma.io.plink import PlinkMetadata
 
 SnpInfoRecord: TypeAlias = Mapping[str, str | int | float]
 """Caller-supplied SNP metadata row accepted by ``SnpMeta.from_dicts``.
@@ -59,30 +56,6 @@ class SnpMeta:
 
     def __len__(self) -> int:
         return len(self.rs)
-
-    @classmethod
-    def from_plink_meta(
-        cls, meta: PlinkMetadata, indices: np.ndarray | None = None
-    ) -> SnpMeta:
-        """Build from get_plink_metadata output without copying string data.
-
-        Args:
-            meta: PLINK metadata, one entry per SNP in BED column order.
-            indices: Optional column indices to select, applied to each
-                column array via fancy indexing. None keeps every SNP.
-        """
-        chr_arr = np.asarray(meta.chromosome).astype(str)
-        rs_arr = np.asarray(meta.sid)
-        pos_arr = np.asarray(meta.bp_position, dtype=np.int64)
-        a1_arr = np.asarray(meta.allele_1)
-        a0_arr = np.asarray(meta.allele_2)
-        if indices is not None:
-            chr_arr = chr_arr[indices]
-            rs_arr = rs_arr[indices]
-            pos_arr = pos_arr[indices]
-            a1_arr = a1_arr[indices]
-            a0_arr = a0_arr[indices]
-        return cls(chr=chr_arr, rs=rs_arr, pos=pos_arr, a1=a1_arr, a0=a0_arr)
 
     @classmethod
     def from_dicts(cls, snp_info: Sequence[SnpInfoRecord]) -> SnpMeta:

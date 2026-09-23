@@ -20,12 +20,13 @@ def test_manifest_covers_phase3_categories() -> None:
 
 @pytest.mark.tier1
 def test_tiny_wald_results_preserve_external_allele_orientation() -> None:
-    from jamma.genotype.variants import SnpMeta
-    from jamma.io import load_plink_binary, read_fam_phenotypes
+    from jamma.genotype.dataset import GenotypeDataset
+    from jamma.io import read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.schema import LmmConfig
     from jamma.validation import compare_assoc_results, load_gemma_assoc
+    from tests.builders import read_plink_genotypes
     from tests.support import require_fixture
 
     fixture = (
@@ -41,12 +42,11 @@ def test_tiny_wald_results_preserve_external_allele_orientation() -> None:
         fixture / "kinship.txt",
         reference_path,
     )
-    plink = load_plink_binary(prefix)
     result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=read_plink_genotypes(prefix),
         phenotypes=read_fam_phenotypes(prefix.with_suffix(".fam")),
         kinship=read_kinship_matrix(fixture / "kinship.txt"),
-        snp_info=SnpMeta.from_plink_meta(plink.meta),
+        snp_info=GenotypeDataset.open_plink(prefix).variants,
         config=LmmConfig(
             lmm_mode=1,
             maf_threshold=0.0,

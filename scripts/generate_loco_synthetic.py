@@ -162,17 +162,16 @@ def write_loco_kinship_fixtures(bfile: Path, outdir: Path) -> None:
         bfile: PLINK binary prefix (no extension).
         outdir: Directory receiving the ``.cXX.txt`` and SNP-list files.
     """
-    from jamma.io import load_plink_binary
-    from jamma.io.plink import get_plink_metadata
+    from jamma.genotype.dataset import GenotypeDataset
     from jamma.kinship import write_kinship_matrix
+    from tests.builders import read_plink_genotypes
     from tests.reference.kinship import compute_centered_kinship
 
     outdir.mkdir(parents=True, exist_ok=True)
 
-    pdata = load_plink_binary(bfile)
-    meta = get_plink_metadata(bfile)
-    genotypes = pdata.genotypes
-    chr_labels = meta.chromosome.astype(str)
+    genotypes = read_plink_genotypes(bfile)
+    variants = GenotypeDataset.open_plink(bfile).variants
+    chr_labels = variants.chr
 
     n_full = genotypes.shape[1]
     k_full = compute_centered_kinship(genotypes, check_memory=False)
@@ -193,7 +192,7 @@ def write_loco_kinship_fixtures(bfile: Path, outdir: Path) -> None:
             f"trace={np.trace(k_loco):.4f} -> {kinship_path.name}"
         )
 
-        snp_ids = meta.sid[chr_mask]
+        snp_ids = variants.rs[chr_mask]
         snp_list_path = outdir / f"chr{chrom}_snps.txt"
         snp_list_path.write_text("\n".join(snp_ids) + "\n")
         print(f"  SNP list: {snp_list_path.name} ({len(snp_ids)} SNPs)")

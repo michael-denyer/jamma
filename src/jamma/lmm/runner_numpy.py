@@ -22,12 +22,8 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.memory_snapshot import log_memory_snapshot
-from jamma.genotype.snp_filter import _SNP_STATS_CHUNK_SIZE
-from jamma.genotype.snp_stats import (
-    SnpFilterSpec,
-    SnpSelection,
-    collect_snp_stats_from_chunks,
-)
+from jamma.genotype.dataset import GenotypeDataset
+from jamma.genotype.snp_stats import SnpFilterSpec, SnpSelection, SnpStats
 from jamma.genotype.variants import SnpInfoRecord, SnpMeta
 from jamma.lmm.assoc_output import (
     AssocResult,
@@ -37,6 +33,7 @@ from jamma.lmm.assoc_output import (
     make_writer_sink,
 )
 from jamma.lmm.association_plan import (
+    DEFAULT_STATS_CHUNK,
     ExecutableAssociationPlan,
     plan_association,
 )
@@ -46,7 +43,6 @@ from jamma.lmm.chunk_runner_numpy import (
     run_lmm_chunk_source_numpy_group,
 )
 from jamma.lmm.genotype_source import (
-    GenotypeSource,
     PreparedGenotypes,
     SampleBasis,
     bind_prepared_genotypes,
@@ -79,6 +75,7 @@ class RunLabels:
     label: str
     progress_label: str = "LMM association"
     lambda_warning_prefix: str = ""
+    stats_progress_label: str | None = None
 
 
 BATCH_LABELS = RunLabels(banner="NumPy batch", label="lmm_numpy")
@@ -86,6 +83,7 @@ STREAMING_LABELS = RunLabels(
     banner="NumPy streaming",
     label="lmm_numpy_streaming",
     progress_label="LMM association (streaming)",
+    stats_progress_label="Computing SNP statistics",
 )
 LOCO_LABELS = RunLabels(
     banner="NumPy LOCO", label="lmm_loco", lambda_warning_prefix="LOCO "
@@ -105,6 +103,7 @@ class LmmRunSpec:
         hwe_threshold: HWE p-value threshold; 0.0 disables the filter.
         compute_pve: Whether to run the null-REML PVE estimate.
         labels: The runner's banner and progress-bar wording.
+        stats_block_size: Variants per read in the SNP statistics pass.
     """
 
     config: LmmConfig
@@ -113,6 +112,23 @@ class LmmRunSpec:
     hwe_threshold: float = 0.0
     compute_pve: bool = True
     labels: RunLabels = BATCH_LABELS
+    stats_block_size: int = DEFAULT_STATS_CHUNK
+
+    @property
+    def snp_filters(self) -> SnpFilterSpec:
+        """The MAF, missingness, SNP-list and HWE filters this run applies."""
+        return SnpFilterSpec(
+            maf_threshold=self.config.maf_threshold,
+            miss_threshold=self.config.miss_threshold,
+            restrict_indices=self.snps_indices,
+            hwe_threshold=self.hwe_threshold,
+            restrict_label="SNP list filter",
+        )
+
+    @property
+    def stats_progress(self) -> str | None:
+        """The statistics-pass progress label, or None when progress is off."""
+        return self.labels.stats_progress_label if self.config.show_progress else None
 
 
 AssocDestination = Path | IncrementalAssocWriter | list[AssocResult]
@@ -135,99 +151,65 @@ class GroupedLmmRunResult(NamedTuple):
     rotation_s: float
 
 
-class MatrixSource:
-    """An in-memory genotype matrix as a :class:`GenotypeSource`."""
-
-    def __init__(self, genotypes: np.ndarray, snp_meta: SnpMeta) -> None:
-        if genotypes.ndim != 2:
-            raise ValueError(f"genotypes must be 2-D, got ndim={genotypes.ndim}")
-        if genotypes.shape[1] != len(snp_meta):
-            raise ValueError(
-                "genotype columns must match paired SnpMeta: "
-                f"got {genotypes.shape[1]} columns and {len(snp_meta)} metadata rows"
-            )
-        self._genotypes = genotypes
-        self._snp_meta = snp_meta
-
-    @property
-    def n_snps(self) -> int:
-        return self._genotypes.shape[1]
-
-    def prepare(
-        self, samples: SampleBasis, filters: SnpFilterSpec
-    ) -> PreparedGenotypes:
-        if samples.source_row_count != self._genotypes.shape[0]:
-            raise ValueError(
-                "sample basis row count must match genotype rows: "
-                f"got {samples.source_row_count} and {self._genotypes.shape[0]}"
-            )
-        rows = (
-            self._genotypes
-            if samples.is_all_samples
-            else self._genotypes[samples.positions, :]
-        )
-        n_samples, n_snps = rows.shape
-
-        def _stat_chunks():
-            for start in range(0, n_snps, _SNP_STATS_CHUNK_SIZE):
-                end = min(start + _SNP_STATS_CHUNK_SIZE, n_snps)
-                yield rows[:, start:end], start, end
-
-        stats = collect_snp_stats_from_chunks(
-            _stat_chunks(),
-            n_snps=n_snps,
-            n_samples=n_samples,
-            global_indices=np.arange(n_snps, dtype=np.intp),
-            include_hwe=filters.hwe_threshold > 0,
-        )
-
-        def _iter_chunks(
-            selection: SnpSelection, chunk_size: int
-        ) -> Iterator[RawLmmChunk]:
-            selected_columns = selection.local_indices
-            n_filtered = len(selected_columns)
-            geno_buf = np.empty((rows.shape[0], chunk_size), dtype=np.float64)
-            for chunk_start in range(0, n_filtered, chunk_size):
-                chunk_end = min(chunk_start + chunk_size, n_filtered)
-                actual_len = chunk_end - chunk_start
-                geno_chunk = (
-                    geno_buf
-                    if actual_len == chunk_size
-                    else np.empty((rows.shape[0], actual_len), dtype=np.float64)
-                )
-                geno_chunk[:] = rows[:, selected_columns[chunk_start:chunk_end]]
-                yield RawLmmChunk(geno_chunk, chunk_start, chunk_end)
-
-        return bind_prepared_genotypes(
-            snp_meta=self._snp_meta,
-            stats=stats,
-            filters=filters,
-            sample_basis=samples,
-            chunk_source=_iter_chunks,
-        )
-
-
 def prepare_genotypes(
-    source: GenotypeSource, spec: LmmRunSpec, sample_basis: SampleBasis
+    dataset: GenotypeDataset,
+    samples: SampleBasis,
+    filters: SnpFilterSpec,
+    *,
+    stats: SnpStats | None = None,
+    stats_block_size: int = DEFAULT_STATS_CHUNK,
+    progress: str | None = None,
 ) -> PreparedGenotypes:
-    """Collect and filter phenotype-independent genotype data once."""
-    config = spec.config
-    genotypes = source.prepare(
-        sample_basis,
-        SnpFilterSpec(
-            maf_threshold=config.maf_threshold,
-            miss_threshold=config.miss_threshold,
-            restrict_indices=spec.snps_indices,
-            hwe_threshold=spec.hwe_threshold,
-            restrict_label="SNP list filter",
-        ),
-    )
-    if genotypes.n_unexpected > 0:
+    """Measure (or accept) SNP statistics, filter them, bind the chunk stream.
+
+    Args:
+        dataset: The genotypes; ``samples`` indexes its rows.
+        samples: The analysed rows.
+        filters: MAF, missingness, SNP-list and HWE filters.
+        stats: Statistics already measured over ``samples`` (LOCO measures
+            them in the kinship pass); their ``global_indices`` name the
+            columns this preparation covers. None measures every column.
+        stats_block_size: Variants per read in the statistics pass.
+        progress: Statistics-pass progress-bar label, or None for no bar.
+
+    Returns:
+        The filtered selection and a chunk stream of its float64 dosages over
+        the analysed rows.
+
+    Raises:
+        ValueError: If ``samples`` does not index the dataset's rows.
+    """
+    if samples.source_row_count != dataset.n_samples:
+        raise ValueError(
+            "sample basis row count must match the dataset rows: "
+            f"got {samples.source_row_count} and {dataset.n_samples}"
+        )
+    rows = None if samples.is_all_samples else samples.positions
+    if stats is None:
+        stats = dataset.stats(
+            rows,
+            hwe=filters.hwe_threshold > 0,
+            block_size=stats_block_size,
+            progress=progress,
+        )
+    if stats.n_unexpected > 0:
         logger.warning(
-            f"Genotype validation: {genotypes.n_unexpected} values outside "
+            f"Genotype validation: {stats.n_unexpected} values outside "
             "expected range {0, 1, 2, NaN}"
         )
-    return genotypes
+
+    def _iter_chunks(selection: SnpSelection, chunk_size: int) -> Iterator[RawLmmChunk]:
+        for block in dataset.blocks(chunk_size, columns=selection.indices):
+            chunk = block.dosages(rows)
+            yield RawLmmChunk(np.ascontiguousarray(chunk), block.start, block.end)
+
+    return bind_prepared_genotypes(
+        snp_meta=dataset.variants,
+        stats=stats,
+        filters=filters,
+        sample_basis=samples,
+        chunk_source=_iter_chunks,
+    )
 
 
 def _publish_empty(destination: AssocDestination, mode: ModeSpec) -> LmmRunResult:
@@ -317,11 +299,13 @@ def run_association(
 
 
 def run_single(
-    source: GenotypeSource,
+    dataset: GenotypeDataset,
     spec: LmmRunSpec,
     samples: AnalysedPhenotype,
     eigen_input: EigenInput,
     destination: AssocDestination,
+    *,
+    stats: SnpStats | None = None,
 ) -> LmmRunResult:
     """Run one phenotype as a group of one.
 
@@ -329,12 +313,15 @@ def run_single(
     skipped when every SNP is filtered out.
 
     Args:
-        source: Genotype provider over the rows ``samples.valid_mask`` indexes.
+        dataset: The genotypes whose rows ``samples.valid_mask`` indexes.
         spec: The run's policy.
         samples: The phenotype and covariates over the analysed samples.
         eigen_input: Kinship or eigenpairs over the analysed samples. A kinship
             is consumed by the eigendecomposition.
         destination: Output file, caller-owned writer, or in-memory list.
+        stats: Statistics already measured over the analysed rows, naming the
+            columns to test (LOCO: one chromosome), or None to measure every
+            column.
 
     Returns:
         LmmRunResult whose timing carries the whole genotype rotation time.
@@ -343,7 +330,7 @@ def run_single(
     labels = spec.labels
     show_progress = config.show_progress
     start_time = time.perf_counter()
-    n_snps = source.n_snps
+    n_snps = dataset.n_variants if stats is None else stats.n_snps
 
     if show_progress:
         logger.info(f"Performing LMM Association Test ({labels.banner})")
@@ -354,7 +341,12 @@ def run_single(
 
     t_stats_start = time.perf_counter()
     genotypes = prepare_genotypes(
-        source, spec, SampleBasis.from_mask(samples.valid_mask)
+        dataset,
+        SampleBasis.from_mask(samples.valid_mask),
+        spec.snp_filters,
+        stats=stats,
+        stats_block_size=spec.stats_block_size,
+        progress=spec.stats_progress,
     )
     if show_progress:
         logger.info(f"  Analyzed SNPs: {genotypes.n_filtered:,}")
@@ -494,7 +486,7 @@ def run_lmm_association_numpy(
         snp_info if isinstance(snp_info, SnpMeta) else SnpMeta.from_dicts(snp_info)
     )
     return run_single(
-        MatrixSource(genotypes, snp_meta),
+        GenotypeDataset.from_matrix(genotypes, snp_meta),
         LmmRunSpec(config=config, execution=execution, hwe_threshold=hwe_threshold),
         samples,
         restrict_eigen_input(

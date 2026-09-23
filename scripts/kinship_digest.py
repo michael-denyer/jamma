@@ -49,11 +49,11 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from jamma import jlinalg  # noqa: E402
 from jamma.genotype.dataset import GenotypeDataset  # noqa: E402
-from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship import (  # noqa: E402
     compute_kinship_streaming,
     compute_loco_kinship_streaming,
 )
+from tests.builders import read_plink_genotypes  # noqa: E402
 from tests.fixture_paths import LOCO, MOUSE, SYNTHETIC  # noqa: E402
 from tests.reference.kinship import (  # noqa: E402
     compute_centered_kinship,
@@ -75,19 +75,16 @@ def _valid_indices(n_samples: int) -> np.ndarray:
 
 
 def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
-    data = load_plink_binary(bfile)
+    all_genotypes = read_plink_genotypes(bfile)
     dataset = GenotypeDataset.open_plink(bfile)
-    n_samples = data.meta.n_samples
     digests: dict[str, str] = {}
 
     for sample_label, valid_indices in (
         ("all", None),
-        ("valid", _valid_indices(n_samples)),
+        ("valid", _valid_indices(dataset.n_samples)),
     ):
         genotypes = (
-            data.genotypes
-            if valid_indices is None
-            else data.genotypes[valid_indices, :]
+            all_genotypes if valid_indices is None else all_genotypes[valid_indices, :]
         )
         for filter_label, maf in FILTERS.items():
             key_prefix = f"{fixture}/{sample_label}/{filter_label}"
@@ -125,14 +122,12 @@ def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
 
 
 def _loco_keys(fixture: str, bfile: Path) -> dict[str, str]:
-    data = load_plink_binary(bfile)
     dataset = GenotypeDataset.open_plink(bfile)
-    n_samples = data.meta.n_samples
     digests: dict[str, str] = {}
 
     for sample_label, valid_indices in (
         ("all", None),
-        ("valid", _valid_indices(n_samples)),
+        ("valid", _valid_indices(dataset.n_samples)),
     ):
         for filter_label, maf in FILTERS.items():
             key_prefix = f"{fixture}/{sample_label}/{filter_label}"
@@ -159,8 +154,7 @@ def _loco_keys(fixture: str, bfile: Path) -> dict[str, str]:
 
 
 def _eigen_keys(fixture: str, bfile: Path) -> dict[str, str]:
-    data = load_plink_binary(bfile)
-    k = compute_centered_kinship(data.genotypes.copy(), check_memory=False)
+    k = compute_centered_kinship(read_plink_genotypes(bfile), check_memory=False)
     eigenvalues, eigenvectors, _ = jlinalg.eigh(k)
     return {
         f"{fixture}/eigen/eigenvalues": digest_array(eigenvalues),

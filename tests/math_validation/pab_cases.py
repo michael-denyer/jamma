@@ -21,16 +21,14 @@ def gram_products(w, x, y):
 
 
 def numpy_routes(eigenvalues, w, x, y):
-    from jamma.lmm.compute_numpy import _compute_wald_numpy
+    from jamma.lmm.compute_numpy import compute_wald_numpy
     from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_numpy
     from jamma.lmm.stats import batch_calc_wald_stats_from_pab_numpy
     from jamma.lmm.uab import batch_compute_iab_numpy
 
     uab = gram_products(w, x, y)
     iab = batch_compute_iab_numpy(1, uab)
-    split = _compute_wald_numpy(
-        1, eigenvalues, uab, len(eigenvalues), 1e-5, 1e5, 50, 20
-    )
+    split = compute_wald_numpy(1, eigenvalues, uab, len(eigenvalues), 1e-5, 1e5, 50, 20)
     lam, logl, pab = golden_section_optimize_lambda_numpy(1, eigenvalues, uab, iab)
     beta, se, p = batch_calc_wald_stats_from_pab_numpy(1, pab, len(eigenvalues))
     return split, {

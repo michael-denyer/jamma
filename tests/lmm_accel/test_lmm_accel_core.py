@@ -6,7 +6,7 @@ live in tests/lmm_accel/_helpers.py.
 The kernel under test is the fused n_cvt=1 Wald workspace, which is what
 ``DispatchPath.FUSED`` reaches for lmm_mode 1. This module used to drive
 ``compute_lmm_batch_c``, a batch entry point no dispatch path selects, through
-``_compute_wald_numpy``. That function's inner C ladder is unreachable by
+``compute_wald_numpy``. That function's inner C ladder is unreachable by
 construction: its only production caller is ``compute_lmm_chunk_numpy``, which
 the runner reaches only on ``NUMPY_FALLBACK``, and that path is chosen only when
 the extension is absent.

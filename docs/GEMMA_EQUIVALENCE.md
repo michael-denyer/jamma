@@ -241,7 +241,7 @@ Uses **null model lambda** (computed once, reused for all SNPs).
 ## 8. Likelihood Ratio Test
 
 Both compute the same formula (GEMMA: `CalcLRT`; JAMMA's production path is
-`_batch_lrt_pvalues_numpy` in `lmm/stats.py` and the C kernels, with
+`batch_lrt_pvalues_numpy` in `lmm/stats.py` and the C kernels, with
 `calc_lrt_test` in `tests/reference/stats.py` kept as a scalar reference for
 tests):
 
@@ -358,7 +358,7 @@ uv run python scripts/demonstrate_equivalence.py
 | `CalcLambda` | `golden_section_optimize_lambda_numpy` | lmm/likelihood_numpy.py |
 | `CalcRLWald` | `batch_calc_wald_stats_from_pab_numpy` (production); `calc_wald_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
 | `CalcRLScore` | `batch_calc_score_stats_numpy` (production); `calc_score_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
-| `CalcLRT` | `_batch_lrt_pvalues_numpy` (production); `calc_lrt_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
+| `CalcLRT` | `batch_lrt_pvalues_numpy` (production); `calc_lrt_test` (scalar reference, tests only) | lmm/stats.py; tests/reference/stats.py |
 | `gsl_cdf_fdist_Q` | `f_sf` (via `betainc`, scalar reference, tests only); `_f_to_pvalue` (production) | tests/reference/stats.py; lmm/stats.py |
 | `gsl_cdf_chisq_Q` | `chi2_sf_batch` (erfc, production); `chi2_sf` (scalar reference, tests only) | lmm/special.py; tests/reference/special.py |
 

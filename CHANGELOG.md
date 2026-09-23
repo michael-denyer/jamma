@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The NumPy reference kernels the C accelerator is held to are now public:
+  `jamma.lmm.compute_numpy.compute_wald_numpy`, `compute_lrt_numpy` and
+  `compute_score_numpy`, and `jamma.lmm.stats.batch_lrt_pvalues_numpy`. They
+  were underscore-prefixed although tests import them directly. Results do not
+  change.
 - Without the jlinalg C extension, `jamma.jlinalg.get_n_threads()` and
   `set_n_threads()` return 1, because the NumPy SNP-statistics fallback is
   unthreaded. They used to store a thread count that nothing read.

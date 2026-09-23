@@ -253,10 +253,9 @@ def test_compute_null_model_common_accepts_near_zero_eigenvalues():
     )
 
 
-def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
+def test_numpy_score_chunk_rejects_negative_hi_eval_null():
     """Python fallback Score path rejects non-positive Hi_eval_null."""
-    import jamma.lmm.compute_numpy as compute_numpy
-    from jamma.lmm import accel
+    from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 
     rng = np.random.default_rng(101)
     n_samples, n_snps, n_cvt = 50, 5, 1
@@ -269,21 +268,21 @@ def test_compute_score_numpy_rejects_negative_hi_eval_null(monkeypatch):
     hi_bad = Hi_eval_null.copy()
     hi_bad[2] = -0.5
 
-    # Force Python fallback by hiding C extension
-    monkeypatch.setattr(
-        accel, "_accel", None
-    )  # allow-patch: dropping the extension forces the NumPy path
-
     with pytest.raises(ValueError, match="non-positive"):
-        compute_numpy._compute_score_numpy(
-            n_cvt, eigenvalues, hi_bad, Uab_batch, n_samples
+        compute_lmm_chunk_numpy(
+            3,
+            n_cvt,
+            eigenvalues,
+            Uab_batch,
+            n_samples,
+            Hi_eval_null=hi_bad,
+            logl_H0=0.0,
         )
 
 
-def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
+def test_numpy_score_chunk_rejects_nan_hi_eval_null():
     """Python fallback Score path rejects NaN Hi_eval_null."""
-    import jamma.lmm.compute_numpy as compute_numpy
-    from jamma.lmm import accel
+    from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 
     rng = np.random.default_rng(102)
     n_samples, n_snps, n_cvt = 50, 5, 1
@@ -296,14 +295,15 @@ def test_compute_score_numpy_rejects_nan_hi_eval_null(monkeypatch):
     hi_bad = Hi_eval_null.copy()
     hi_bad[0] = np.nan
 
-    # Force Python fallback by hiding C extension
-    monkeypatch.setattr(
-        accel, "_accel", None
-    )  # allow-patch: dropping the extension forces the NumPy path
-
     with pytest.raises(ValueError, match="non-finite"):
-        compute_numpy._compute_score_numpy(
-            n_cvt, eigenvalues, hi_bad, Uab_batch, n_samples
+        compute_lmm_chunk_numpy(
+            3,
+            n_cvt,
+            eigenvalues,
+            Uab_batch,
+            n_samples,
+            Hi_eval_null=hi_bad,
+            logl_H0=0.0,
         )
 
 

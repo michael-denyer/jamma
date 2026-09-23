@@ -26,9 +26,9 @@ from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import (
-    _compute_lrt_numpy,
-    _compute_score_numpy,
     compute_lmm_chunk_numpy,
+    compute_lrt_numpy,
+    compute_score_numpy,
 )
 from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
@@ -47,7 +47,7 @@ from tests.support import requires_c
 def _numpy_only():
     """Hold the extension out.
 
-    Belt-and-braces: ``_compute_score_numpy``/``_compute_lrt_numpy`` are pure
+    Belt-and-braces: ``compute_score_numpy``/``compute_lrt_numpy`` are pure
     NumPy and never read ``accel``, but this keeps the parity tests provably
     isolated from the C path even if that changes.
     """
@@ -186,7 +186,7 @@ class TestScoreSplitParity:
         d = mouse_data
         # Full-Uab reference, via NumPy
         with _numpy_only():
-            full_result = _compute_score_numpy(
+            full_result = compute_score_numpy(
                 d["n_cvt"],
                 d["eigenvalues"],
                 d["Hi_eval_null"],
@@ -228,7 +228,7 @@ class TestLrtSplitParity:
 
         # Full-Uab reference, via NumPy
         with _numpy_only():
-            full_result = _compute_lrt_numpy(
+            full_result = compute_lrt_numpy(
                 d["n_cvt"],
                 d["eigenvalues"],
                 d["Uab_batch"],
@@ -329,7 +329,7 @@ class TestDegenerateSplitParity:
         """Score-only general workspace produces NaN for constant-genotype SNPs."""
         d = degenerate_data
         with _numpy_only():
-            full_result = _compute_score_numpy(
+            full_result = compute_score_numpy(
                 d["n_cvt"],
                 d["eigenvalues"],
                 d["Hi_eval_null"],
@@ -362,7 +362,7 @@ class TestDegenerateSplitParity:
         n_grid, n_refine = 50, 20
 
         with _numpy_only():
-            full_result = _compute_lrt_numpy(
+            full_result = compute_lrt_numpy(
                 d["n_cvt"],
                 d["eigenvalues"],
                 d["Uab_batch"],
@@ -402,13 +402,13 @@ class TestDegenerateSplitParity:
 
 
 # ---------------------------------------------------------------------------
-# Plan 53-03 Task 2: _compute_wald_numpy dispatch tests
+# Plan 53-03 Task 2: compute_wald_numpy dispatch tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def compute_wald_data():
-    """Synthetic data for _compute_wald_numpy dispatch tests.
+    """Synthetic data for compute_wald_numpy dispatch tests.
 
     Returns:
         (eigenvalues, Uab_batch, n_samples) with n_samples=80, n_snps=30.

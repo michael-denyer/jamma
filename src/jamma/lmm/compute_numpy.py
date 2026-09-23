@@ -1,9 +1,11 @@
 """NumPy mode dispatch for LMM chunk computation.
 
-The full-Uab helpers here (``_compute_wald_numpy`` and its LRT and Score
-siblings) are pure NumPy, reached only through ``compute_lmm_chunk_numpy``,
-which the runner calls only on ``DispatchPath.NUMPY_FALLBACK``. That path is
-selected only when the extension is absent.
+``compute_wald_numpy``, ``compute_lrt_numpy`` and ``compute_score_numpy``
+are the pure-NumPy reference kernels that the C accelerator's results are held
+to, so tests call them directly. In production they are reached only through
+``compute_lmm_chunk_numpy``, which the runner calls only on
+``DispatchPath.NUMPY_FALLBACK``. That path is selected only when the extension
+is absent.
 
 The caller computes ``Uab_batch`` (n_snps, n_samples, n_index) for chunk
 dispatch. Every call is synchronous; results are available when it returns.
@@ -19,16 +21,16 @@ from jamma.lmm.likelihood_numpy import (
 )
 from jamma.lmm.schema import MIN_N_REFINE, LmmMode, LmmTest, get_spec
 from jamma.lmm.stats import (
-    _batch_lrt_pvalues_numpy,
     batch_calc_score_stats_numpy,
     batch_calc_wald_stats_from_pab_numpy,
+    batch_lrt_pvalues_numpy,
 )
 from jamma.lmm.uab import batch_compute_iab_numpy
 
 MAX_C_N_CVT = 100  # Must match MAX_N_CVT in _lmm_types.h
 
 
-def _compute_wald_numpy(
+def compute_wald_numpy(
     n_cvt: int,
     eigenvalues: np.ndarray,
     Uab_batch: np.ndarray,
@@ -82,7 +84,7 @@ def _compute_wald_numpy(
     }
 
 
-def _compute_lrt_numpy(
+def compute_lrt_numpy(
     n_cvt: int,
     eigenvalues: np.ndarray,
     Uab_batch: np.ndarray,
@@ -121,11 +123,11 @@ def _compute_lrt_numpy(
         n_grid=n_grid,
         n_iter=n_refine,
     )
-    p_lrts = _batch_lrt_pvalues_numpy(logls_mle, logl_H0)
+    p_lrts = batch_lrt_pvalues_numpy(logls_mle, logl_H0)
     return {"logls": logls_mle, "lambdas_mle": lambdas_mle, "p_lrts": p_lrts}
 
 
-def _compute_score_numpy(
+def compute_score_numpy(
     n_cvt: int,
     eigenvalues: np.ndarray,
     Hi_eval_null: np.ndarray,
@@ -208,11 +210,11 @@ def compute_lmm_chunk_numpy(
     result: dict[str, np.ndarray] = {}
     if LmmTest.SCORE in tests:
         result.update(
-            _compute_score_numpy(n_cvt, eigenvalues, Hi_eval_null, Uab_batch, n_samples)
+            compute_score_numpy(n_cvt, eigenvalues, Hi_eval_null, Uab_batch, n_samples)
         )
     if LmmTest.WALD in tests:
         result.update(
-            _compute_wald_numpy(
+            compute_wald_numpy(
                 n_cvt,
                 eigenvalues,
                 Uab_batch,
@@ -225,7 +227,7 @@ def compute_lmm_chunk_numpy(
         )
     if LmmTest.LRT in tests:
         result.update(
-            _compute_lrt_numpy(
+            compute_lrt_numpy(
                 n_cvt,
                 eigenvalues,
                 Uab_batch,

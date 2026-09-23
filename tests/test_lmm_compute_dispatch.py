@@ -15,7 +15,7 @@ _EXTENSION_LOADED = object()
 
 @pytest.mark.parametrize(
     "helper",
-    ["_compute_wald_numpy", "_compute_lrt_numpy", "_compute_score_numpy"],
+    ["compute_wald_numpy", "compute_lrt_numpy", "compute_score_numpy"],
 )
 def test_full_uab_helpers_never_touch_the_extension(monkeypatch, helper):
     """The full-Uab helpers are pure NumPy, and must stay that way.
@@ -59,13 +59,13 @@ def test_full_uab_helpers_never_touch_the_extension(monkeypatch, helper):
         Uab_batch[i] = compute_Uab(UtW, Uty, UtG[:, i])
 
     common = (n_cvt, eigenvalues)
-    if helper == "_compute_wald_numpy":
-        compute_numpy._compute_wald_numpy(
+    if helper == "compute_wald_numpy":
+        compute_numpy.compute_wald_numpy(
             *common, Uab_batch, n_samples, 1e-5, 1e5, 50, 20
         )
-    elif helper == "_compute_lrt_numpy":
-        compute_numpy._compute_lrt_numpy(*common, Uab_batch, 1e-5, 1e5, 50, 20, -100.0)
+    elif helper == "compute_lrt_numpy":
+        compute_numpy.compute_lrt_numpy(*common, Uab_batch, 1e-5, 1e5, 50, 20, -100.0)
     else:
-        compute_numpy._compute_score_numpy(
+        compute_numpy.compute_score_numpy(
             *common, 1.0 / (0.5 * eigenvalues + 1.0), Uab_batch, n_samples
         )

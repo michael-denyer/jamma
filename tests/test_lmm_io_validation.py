@@ -292,16 +292,16 @@ class TestDegenerateSNPNaN:
 
 @pytest.mark.tier0
 class TestNegativeLRTClamp:
-    """_batch_lrt_pvalues_numpy must clamp negative LRT stats to 0."""
+    """batch_lrt_pvalues_numpy must clamp negative LRT stats to 0."""
 
     def test_negative_lrt_returns_pvalue_one(self) -> None:
         """When H1 logl < H0 logl, LRT stat is negative → p-value should be 1.0."""
-        from jamma.lmm.stats import _batch_lrt_pvalues_numpy
+        from jamma.lmm.stats import batch_lrt_pvalues_numpy
 
         logl_H0 = -100.0
         # Some H1 logls worse than null (negative LRT stat)
         logls_mle = np.array([-101.0, -105.0, -100.5, -99.0, -98.0])
-        p_lrts = _batch_lrt_pvalues_numpy(logls_mle, logl_H0)
+        p_lrts = batch_lrt_pvalues_numpy(logls_mle, logl_H0)
 
         # First 3 have worse H1 → clamped to 0 → chi2_sf(0) = 1.0
         np.testing.assert_allclose(p_lrts[:3], 1.0)

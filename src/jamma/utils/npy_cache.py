@@ -81,15 +81,20 @@ def write_npy_cache(array: np.ndarray, npy_path: Path) -> None:
 def load_npy_cache(
     npy_path: Path, *, mmap_mode: Literal["r"] | None = None
 ) -> np.ndarray | None:
-    """Load a .npy sidecar, removing it and returning None when it is corrupt.
+    """Load a .npy sidecar, returning None when it cannot be used.
 
     With ``mmap_mode="r"`` the result is a read-only memory map whose pages
-    the OS loads on demand. A truncated or unreadable sidecar is unlinked so
-    the caller re-parses the text and rewrites it.
+    the OS loads on demand. A corrupt sidecar (NumPy raises ValueError for a
+    truncated or malformed file) is unlinked so the caller re-parses the text
+    and rewrites it. A read error is kept: a binary-only write leaves the
+    ``.npy`` as the sole copy, and a permission or I/O error is not corruption.
     """
     try:
         return np.load(npy_path, mmap_mode=mmap_mode)
-    except (OSError, ValueError) as e:
+    except OSError as e:
+        logger.warning(f"Could not read .npy cache {npy_path}, will re-parse text: {e}")
+        return None
+    except ValueError as e:
         logger.warning(f"Corrupt .npy cache {npy_path}, will re-parse text: {e}")
         try:
             npy_path.unlink()

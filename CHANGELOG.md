@@ -196,6 +196,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The MLE lambda optimizer (`-lmm 2` and `-lmm 4`, native C and NumPy) now
+  applies the safeguarded analytic-score Newton refinement REML already had.
+  On a flat likelihood, golden section alone stopped where rounding decided
+  its comparisons, so the reported `l_mle` depended on the CPU: the weighted
+  mode-4 contract's `boundary5` gave `4.729012e-03` to `4.729206e-03` against
+  a stationary point of `4.72909239e-03`, and failed on some Linux CI runners.
+  It now lands on the stationary point regardless of `n_refine`. On
+  `mouse_hs1940` mode 4, `l_mle` changes for 99% of SNPs, by up to `1.9e-5`
+  relative: against dense-solve MLE roots for 200 sampled SNPs, the median
+  error falls from `8.7e-6` to `6.9e-8`, which is the output's print
+  precision. `p_lrt` changes for about 8% of SNPs, by up to `8.9e-6`
+  relative. REML outputs, Wald and Score are bit-identical.
+
 - The association pass no longer collapses to one SNP per chunk on large
   sample counts. Since 8.0.0 the chunk sizer subtracted the whole eigenvector
   matrix from the per-chunk budget, whose auto ceiling is 40 GB, so above

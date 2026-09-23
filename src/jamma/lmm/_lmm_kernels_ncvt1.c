@@ -150,9 +150,16 @@ static double reml_objective_ncvt1(const void *ctx, double lambda)
     return reml_logl_ncvt1_split((const ncvt1_snp_t *)ctx, lambda, NULL);
 }
 
-static double reml_score_loglambda_ncvt1(const void *ctx, double lambda)
+/* Pab terms and their d/d log lambda that the REML and MLE scores share,
+ * from compensated sums. trace is d log det(H) / d log lambda. */
+typedef struct {
+    double trace, s_ww, ds_ww, pxx, dpxx, pyy, dpyy;
+} ncvt1_score_terms_t;
+
+/* Returns 0 when a Schur-complement pivot is not positive. */
+static int score_terms_ncvt1(const ncvt1_snp_t *snp, double lambda,
+                             ncvt1_score_terms_t *out)
 {
-    const ncvt1_snp_t *snp = (const ncvt1_snp_t *)ctx;
     const double * restrict var_wx = snp->var_wx;
     const double * restrict var_xx = snp->var_xx;
     const double * restrict var_xy = snp->var_xy;
@@ -186,7 +193,7 @@ static double reml_score_loglambda_ncvt1(const void *ctx, double lambda)
             ds[j] = next;
         }
     }
-    if (!(s[0] > 0.0)) return NAN;
+    if (!(s[0] > 0.0)) return 0;
     double pxx = s[3] - s[1] * s[1] / s[0];
     double pxy = s[4] - s[1] * s[2] / s[0];
     double pyy1 = s[5] - s[2] * s[2] / s[0];
@@ -196,13 +203,33 @@ static double reml_score_loglambda_ncvt1(const void *ctx, double lambda)
                   + s[1] * s[2] * ds[0] / (s[0] * s[0]);
     double dpyy1 = ds[5] - 2.0 * s[2] * ds[2] / s[0]
                    + s[2] * s[2] * ds[0] / (s[0] * s[0]);
-    if (!(pxx > 0.0)) return NAN;
+    if (!(pxx > 0.0)) return 0;
     double pyy = pyy1 - pxy * pxy / pxx;
     double dpyy = dpyy1 - 2.0 * pxy * dpxy / pxx
                   + pxy * pxy * dpxx / (pxx * pxx);
-    if (!(pyy > 0.0)) return NAN;
-    return -0.5 * trace - 0.5 * ds[0] / s[0] - 0.5 * dpxx / pxx
-           - 0.5 * (n_samples - 2) * dpyy / pyy;
+    if (!(pyy > 0.0)) return 0;
+    *out = (ncvt1_score_terms_t){
+        .trace = trace, .s_ww = s[0], .ds_ww = ds[0],
+        .pxx = pxx, .dpxx = dpxx, .pyy = pyy, .dpyy = dpyy,
+    };
+    return 1;
+}
+
+static double reml_score_loglambda_ncvt1(const void *ctx, double lambda)
+{
+    const ncvt1_snp_t *snp = (const ncvt1_snp_t *)ctx;
+    ncvt1_score_terms_t t;
+    if (!score_terms_ncvt1(snp, lambda, &t)) return NAN;
+    return -0.5 * t.trace - 0.5 * t.ds_ww / t.s_ww - 0.5 * t.dpxx / t.pxx
+           - 0.5 * (snp->n_samples - 2) * t.dpyy / t.pyy;
+}
+
+static double mle_score_loglambda_ncvt1(const void *ctx, double lambda)
+{
+    const ncvt1_snp_t *snp = (const ncvt1_snp_t *)ctx;
+    ncvt1_score_terms_t t;
+    if (!score_terms_ncvt1(snp, lambda, &t)) return NAN;
+    return -0.5 * t.trace - 0.5 * snp->n_samples * t.dpyy / t.pyy;
 }
 
 
@@ -383,7 +410,8 @@ double refine_lambda_mle_ncvt1_split(
     }
 
     double lambda_opt = exp(golden_section_log_lambda(
-        mle_logl_ncvt1_split, NULL, snp, search, best_idx));
+        mle_logl_ncvt1_split, mle_score_loglambda_ncvt1, snp, search,
+        best_idx));
     *logl_out = mle_logl_ncvt1_split(snp, lambda_opt);
 
     return lambda_opt;

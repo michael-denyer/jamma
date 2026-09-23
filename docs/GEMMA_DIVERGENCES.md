@@ -241,8 +241,8 @@ iteration count per SNP; serial execution.
 Uses **grid search (50 log-spaced points) + golden section refinement (20
 iterations)**. All SNPs in a chunk are optimized simultaneously in lockstep
 (same bracket operation per iteration, vectorized across the SNP batch).
-REML then takes up to three safeguarded Newton steps using the analytic score
-for each interior optimum. It stops when the score divided by local curvature
+REML and MLE then take up to three safeguarded Newton steps using their
+analytic score for each interior optimum. It stops when the score divided by local curvature
 estimates a remaining log-lambda correction below 1e-10, or when no safe
 improvement is available. A single step can leave a measurable error on very
 flat peaks despite a tiny score residual. The derivative uses compensated weighted sums and the Schur
@@ -294,6 +294,14 @@ independent 80-digit stationary points. NumPy and native C are checked against
 those points at `5e-6` relative tolerance. The wider
 mathematical validation plan covers additional conditioning and boundary cases.
 `ToleranceConfig.lambda_rtol` remains `2e-5`.
+
+MLE shares the same failure mode. `boundary5` in
+`tests/fixtures/mathematical_weights/mode4-missing-covariates` has MLE
+curvature of about `-6e-5` per (log lambda)², so golden section alone stalled
+about `1.4e-5` short of the stationary point, at a position that one-ulp input
+noise, or a different CPU, moved by up to `4e-5`. `tests/test_mle_refinement_contract.py`
+checks NumPy and native C against dense-solve MLE score roots at `1e-8`
+relative tolerance, including under one-ulp eigenvalue perturbations.
 
 ### Boundary Diagnostic
 

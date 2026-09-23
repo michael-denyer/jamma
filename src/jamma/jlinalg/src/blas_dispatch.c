@@ -114,11 +114,23 @@ static void *resolve_first_symbol(void *handle, const char *const *names, const 
     return NULL;
 }
 
+/* Calling convention of a symbol row. The field at `field_offset` is called
+ * with the signature its typedef declares, so a Fortran name landing in a
+ * CBLAS field (or the reverse) is called with the wrong argument types. */
+typedef enum { SYM_FORTRAN, SYM_CBLAS } blas_sym_kind_t;
+
 typedef struct {
     const char *label;        /* for debug logging */
     const char *const *names; /* candidate symbol names, in try order, NULL-terminated */
     size_t field_offset;      /* offsetof(blas_candidate_t, <pointer field>) */
+    blas_sym_kind_t kind;     /* convention of every name in `names` and of the field */
 } blas_sym_entry_t;
+
+/* CBLAS entry points are the only ones whose name starts with "cblas_". */
+static int symbol_name_matches_kind(const char *name, blas_sym_kind_t kind) {
+    int is_cblas = strncmp(name, "cblas_", 6) == 0;
+    return kind == SYM_CBLAS ? is_cblas : !is_cblas;
+}
 
 static const char *const ilp64_dgemm_names[] = {"dgemm_64_",       /* MKL ILP64 */
                                                 "scipy_dgemm_64_", /* scipy-openblas64 */
@@ -199,9 +211,15 @@ static int try_resolve_dgemm_candidate(void *handle, const char *lib_path, blas_
  * `c->field = (typedef)sym;` used to do.
  * ---------------------------------------------------------------------------
  */
-static const char *const dsyrk_names[] = {"cblas_dsyrk$NEWLAPACK$ILP64", /* Accelerate ILP64 */
-                                          "dsyrk_64_",                   /* MKL ILP64 */
-                                          "dsyrk64_",                    /* OpenBLAS ILP64 */
+static const char *const cblas_dsyrk_names[] = {
+    "cblas_dsyrk$NEWLAPACK$ILP64", /* Accelerate ILP64 */
+    NULL};
+/* Fortran dsyrk, called with (uplo, trans, ...) char pointers. MKL and
+ * OpenBLAS export only this convention under ILP64 names; Apple exposes it
+ * alongside the CBLAS one. */
+static const char *const dsyrk_names[] = {"dsyrk$NEWLAPACK$ILP64", /* Accelerate ILP64 */
+                                          "dsyrk_64_",             /* MKL ILP64 */
+                                          "dsyrk64_",              /* OpenBLAS ILP64 */
                                           NULL};
 static const char *const dsyevd_names[] = {"dsyevd$NEWLAPACK$ILP64", /* Accelerate ILP64 */
                                            "dsyevd_64_",             /* MKL ILP64 */
@@ -211,15 +229,13 @@ static const char *const dsyevr_names[] = {"dsyevr$NEWLAPACK$ILP64", /* Accelera
                                            "dsyevr_64_",             /* MKL ILP64 */
                                            "dsyevr64_",              /* OpenBLAS ILP64 */
                                            NULL};
-/* Apple also exposes a Fortran dsyrk alongside the CBLAS one; resolved as a
- * secondary pointer on the same candidate when the primary (CBLAS) name hits. */
-static const char *const dsyrk_fortran_fallback_names[] = {"dsyrk$NEWLAPACK$ILP64", NULL};
 static const char *const lapacke_dsyevd_names[] = {"LAPACKE_dsyevd", NULL};
 
 static const blas_sym_entry_t SYMS[] = {
-    {"dsyrk", dsyrk_names, offsetof(blas_candidate_t, cblas_dsyrk_ilp64)},
-    {"dsyevd", dsyevd_names, offsetof(blas_candidate_t, dsyevd_ilp64)},
-    {"dsyevr", dsyevr_names, offsetof(blas_candidate_t, dsyevr_ilp64)},
+    {"cblas_dsyrk", cblas_dsyrk_names, offsetof(blas_candidate_t, cblas_dsyrk_ilp64), SYM_CBLAS},
+    {"dsyrk", dsyrk_names, offsetof(blas_candidate_t, dsyrk_ilp64), SYM_FORTRAN},
+    {"dsyevd", dsyevd_names, offsetof(blas_candidate_t, dsyevd_ilp64), SYM_FORTRAN},
+    {"dsyevr", dsyevr_names, offsetof(blas_candidate_t, dsyevr_ilp64), SYM_FORTRAN},
 };
 #define N_SYMS (sizeof(SYMS) / sizeof(SYMS[0]))
 
@@ -230,17 +246,15 @@ static void resolve_syms_table(void *handle, blas_candidate_t *c) {
         const char *matched = NULL;
         void *sym = resolve_first_symbol(handle, entry->names, &matched);
         if (!sym) continue;
+        if (!symbol_name_matches_kind(matched, entry->kind)) {
+            fprintf(stderr,
+                    "jlinalg_dispatch: WARNING: %s resolved %s, whose calling convention does "
+                    "not match its field; left unwired\n",
+                    entry->label, matched);
+            continue;
+        }
         *(void **)((char *)c + entry->field_offset) = sym;
         if (dbg) fprintf(stderr, "jlinalg_dispatch:   resolved %s (%s)\n", matched, entry->label);
-    }
-
-    if (c->cblas_dsyrk_ilp64 && !c->dsyrk_ilp64) {
-        const char *fmatched = NULL;
-        void *fsym = resolve_first_symbol(handle, dsyrk_fortran_fallback_names, &fmatched);
-        if (fsym) {
-            c->dsyrk_ilp64 = (jlinalg_dsyrk_ilp64_fn)fsym;
-            if (dbg) fprintf(stderr, "jlinalg_dispatch:   also resolved %s\n", fmatched);
-        }
     }
     if (!c->lapacke_dsyevd_ilp64) {
         const char *matched = NULL;

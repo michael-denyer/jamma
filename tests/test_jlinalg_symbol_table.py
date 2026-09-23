@@ -44,10 +44,6 @@ def _symbol_table() -> list[tuple[str, str, list[str]]]:
 
 
 @pytest.mark.tier0
-@pytest.mark.xfail(
-    strict=True,
-    reason="dsyrk_names stores Fortran dsyrk_64_ in the CBLAS field; MKL segfaults",
-)
 def test_every_syms_row_matches_its_field_calling_convention():
     for label, field, names in _symbol_table():
         assert names, f"{label}: empty candidate list"

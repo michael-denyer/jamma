@@ -239,9 +239,8 @@ def test_pipeline_builds_association_plan_once(
 
     A prior version called it twice: once before the phenotype/covariate
     masks existed (pricing the pre-mask n_samples), and again after masking
-    to catch a post-filter mode flip. Both calls ran estimate_lmm_memory.
-    Now there is a single call, made after the masks exist so it never needs
-    a second pass.
+    to catch a post-filter mode flip. Now there is a single call, made after
+    the masks exist so it never needs a second pass.
     """
     import jamma.pipeline as pipeline_module
 

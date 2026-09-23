@@ -21,16 +21,18 @@ class TestCliMemoryCheckUnit:
 
     def test_estimate_called_before_load(self):
         """Memory estimate should be computable from metadata alone."""
-        from jamma.core.memory import estimate_streaming_memory
+        from jamma.lmm.association_plan import plan_association
 
         # This simulates what CLI does: get dimensions, then estimate
         meta = get_plink_metadata(PLINK_PREFIX)
-        est = estimate_streaming_memory(
-            n_samples=meta.n_samples,
-        )
+        est = plan_association(
+            meta.n_samples, meta.n_snps, backend="numpy-streaming"
+        ).price(eigen=None)
 
-        assert est.peak_gb >= 0
-        assert est.peak_gb == max(est.kinship_gb, est.eigen_gb, est.lmm_gb)
+        assert est.association_gb > 0
+        assert est.total_peak_gb == max(
+            est.kinship_gb, est.eigen_gb, est.statistics_gb, est.association_gb
+        )
 
     def test_metadata_does_not_load_genotypes(self):
         """get_plink_metadata should only read dimensions, not genotypes."""

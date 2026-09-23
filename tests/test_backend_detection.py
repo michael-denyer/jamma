@@ -207,26 +207,29 @@ class TestExecutionMode:
         """plan_association prices the Uab/Iab batch its dispatch path holds.
 
         n_cvt=4 with the extension loaded selects FUSED_GENERAL, whose C
-        workspace forms Uab in place, so the quote charges no Uab/Iab buffer.
+        workspace forms Uab in place, so the quote charges no Uab/Iab buffer:
+        with the kernel workspace emptied, U, the genotypes, and the rotation
+        buffers are the whole quote.
         """
-        calls = []
+        from dataclasses import replace
 
-        def capturing_estimate(n_samples, n_snps, **kwargs):
-            calls.append(kwargs)
-            return 1.0
+        from jamma.core.memory import array_gb
+        from jamma.lmm.dispatch import DispatchPath
+        from tests.builders import empty_workspace
 
-        with (
-            _pin_ram(AMPLE_GB),
-            patch(
-                "jamma.lmm.association_plan.estimate_lmm_memory",
-                side_effect=capturing_estimate,
-            ),
-        ):
-            _select_mode(1000, 10000, n_cvt=4)
+        n_samples, n_snps = 1000, 10000
+        with _pin_ram(AMPLE_GB):
+            plan = plan_association(n_samples, n_snps, n_cvt=4)
 
-        assert calls, "estimate_lmm_memory was never called"
-        assert all(c["uab_iab_gb"] == 0.0 for c in calls), (
-            f"FUSED_GENERAL must be quoted with no Uab/Iab batch; calls={calls}"
+        assert plan.dispatch is DispatchPath.FUSED_GENERAL
+        chunks = plan.conservative_chunks
+        bare = replace(
+            plan, workspace=empty_workspace(plan.dispatch, n_samples, n_samples, 4)
+        )
+        assert bare.price(eigen=None).association_gb == pytest.approx(
+            array_gb(n_samples, n_samples)
+            + array_gb(n_samples, n_snps)
+            + chunks.n_buffers * array_gb(n_samples, chunks.chunk_size)
         )
 
     def test_no_c_general_falls_to_numpy_batch_for_n_cvt_gt1(self):

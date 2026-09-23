@@ -9,18 +9,16 @@ follows CLAUDE.md: assert observable behavior, not delegation plumbing.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from jamma.core import memory
-from jamma.core.memory import (
-    estimate_lmm_memory,
-    estimate_streaming_memory,
-)
+from jamma.core.memory import array_gb
 from jamma.core.threading import is_blas_controllable
-from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, plan_association
+from jamma.lmm.association_plan import plan_association
 from jamma.lmm.chunk_sizing import (
     LmmChunkPlan,
     chunk_budget_bytes,
@@ -32,6 +30,7 @@ from jamma.lmm.pab import n_index
 from jamma.lmm.schema import LmmConfig, LmmMode
 from jamma.lmm.workspace import WorkspaceSpec
 from jamma.pipeline_config import PipelineConfig
+from tests.builders import association_price_plan, empty_workspace
 from tests.conftest import preflight, requires_c
 from tests.fakes import use_fake_psutil
 
@@ -101,22 +100,6 @@ def test_chunk_size_varies_with_scale():
     assert small != large, "Chunk size should vary with scale"
 
 
-def test_memory_estimate_uses_computed_chunk():
-    """Memory estimates differ when using computed chunk sizes at different scales."""
-    budget = int(2e9)
-    small_chunk = compute_chunk_size_numpy(
-        1_410, 12_000, dispatch=DispatchPath.FUSED, mem_budget_bytes=budget
-    )
-    large_chunk = compute_chunk_size_numpy(
-        100_000, 500_000, dispatch=DispatchPath.FUSED, mem_budget_bytes=budget
-    )
-
-    est_small = estimate_streaming_memory(1410, compute_chunk_size=small_chunk)
-    est_large = estimate_streaming_memory(100_000, compute_chunk_size=large_chunk)
-
-    assert est_small.peak_gb != est_large.peak_gb
-
-
 def test_fallback_uab_iab_price_scales_with_n_cvt():
     """Observable invariant: the fallback's Uab/Iab price grows with n_cvt.
 
@@ -138,17 +121,22 @@ def test_fallback_uab_iab_price_scales_with_n_cvt():
     )
 
 
-def test_estimate_streaming_memory_peak_scales_with_n_cvt():
-    """estimate_streaming_memory's peak output differs for different n_cvt.
+def test_streaming_quote_scales_with_n_cvt():
+    """The streaming association quote grows with n_cvt on the NumPy fallback.
 
     Higher-level observable check of the same invariant: the preflight
     total reported to users must be larger for multi-covariate runs.
     """
-    est_n1 = estimate_streaming_memory(n_samples=2000, n_cvt=1)
-    est_n10 = estimate_streaming_memory(n_samples=2000, n_cvt=10)
-    assert est_n10.peak_gb > est_n1.peak_gb, (
-        f"Peak estimate must grow with n_cvt, got n_cvt=1:{est_n1.peak_gb} "
-        f"n_cvt=10:{est_n10.peak_gb}"
+    quote_n1, quote_n10 = (
+        association_price_plan(
+            "streaming", n_samples=2000, n_snps=100_000, chunk_size=10_000, n_cvt=n_cvt
+        )
+        .price(eigen=None)
+        .association_gb
+        for n_cvt in (1, 10)
+    )
+    assert quote_n10 > quote_n1, (
+        f"Quote must grow with n_cvt, got n_cvt=1:{quote_n1} n_cvt=10:{quote_n10}"
     )
 
 
@@ -271,13 +259,8 @@ def _engine_allocation_gb(
     Args:
         include_raw_block: Whether to add the raw genotype block
             (``geno_buf`` / ``BedSource``'s chunk) the chunk source hands
-            ``prepare()``. True for the streaming comparison, whose
-            LMM-phase chunk term prices it explicitly. False for the
-            batch-gate comparison: ``estimate_lmm_memory`` prices the whole
-            genotype matrix once in its non-buffer terms and never claims to
-            price the per-chunk raw block inside its buffer term, so
-            including it here would fault the batch gate for a term it was
-            never designed to hold.
+            ``prepare()``. True for the streaming comparison. False for the
+            batch comparison, which holds the whole genotype matrix instead.
     """
     utg_bytes = plan.chunk_size * n_samples * 8 * plan.n_buffers
     extra_bytes = 0
@@ -285,7 +268,9 @@ def _engine_allocation_gb(
         idx = n_index(n_cvt)
         uab_batch_bytes = plan.chunk_size * n_samples * idx * 8
         iab_batch_bytes = plan.chunk_size * (n_cvt + 2) * idx * 8
-        extra_bytes = (uab_batch_bytes + iab_batch_bytes) * plan.n_buffers
+        # Once, not per buffer: compute_and_write builds Uab on the calling
+        # thread, one consumer at a time.
+        extra_bytes = uab_batch_bytes + iab_batch_bytes
     raw_block_bytes = 0
     if include_raw_block:
         # The raw genotype block the chunk source hands prepare(): one
@@ -305,17 +290,14 @@ def _priced_streaming_lmm_phase_gb(
     lmm_mode: LmmMode,
     accel: bool,
 ) -> tuple[float, LmmChunkPlan, WorkspaceSpec]:
-    """The streaming preflight's real priced LMM-phase total.
+    """The streaming preflight's real priced association-phase total.
 
-    Calls ``estimate_streaming_memory`` the way ``pipeline_memory.plan_memory``
-    builds it (same ``pipeline_buffers``/``compute_chunk_size``/``uab_iab_gb``
-    from the same ``_compute_chunk``), and reads its own ``lmm_gb``
-    field rather than recomputing the LMM-phase formula here, so a
-    regression in either ``plan_memory`` or ``estimate_streaming_memory``
-    itself is visible. ``_compute_chunk`` derives its dispatch from the
-    real loaded ``jamma.lmm.accel._accel``, so ``accel`` is pinned here to
-    match the case under test rather than whatever extension state this
-    test process happens to have loaded.
+    Plans through the real ``plan_association`` and reads the quote's own
+    ``association_gb`` rather than recomputing the formula here, so a
+    regression in either the planner or ``price()`` is visible. The planner
+    derives its dispatch from the real loaded ``jamma.lmm.accel._accel``, so
+    ``accel`` is pinned here to match the case under test rather than
+    whatever extension state this test process happens to have loaded.
     """
     from jamma.lmm import accel as accel_module
 
@@ -336,70 +318,36 @@ def _priced_streaming_lmm_phase_gb(
     )
 
 
-def _streaming_lmm_phase_non_buffer_terms_gb(
-    n_samples: int, compute_chunk_size: int, n_grid: int = 50
-) -> float:
-    """The streaming LMM phase's terms outside ``_ChunkEngine``'s buffers.
-
-    ``MemoryLedger.lmm_gb`` is eigenvectors + LMM chunk + rotation buffer
-    + grid REML + Uab/Iab; the last three are what
-    ``_engine_allocation_gb`` reproduces from the chunk engine's own buffer
-    shapes. The eigenvectors term (the persistent U matrix) and the grid
-    REML term (the REML grid-search scratch, sized at
-    ``compute_chunk_size`` like the other per-chunk buffers) are real memory
-    the LMM phase holds too, just not part of ``_ChunkEngine``'s buffers, so
-    the byte-exact comparison needs them added back on. Uses the same plain
-    geometric helpers ``estimate_streaming_memory`` itself calls
-    (``square_matrix_gb``, ``array_gb``), not the pricing logic under test.
-    """
-    from jamma.core.eigen_plan import array_gb, square_matrix_gb
-
-    return square_matrix_gb(n_samples) + array_gb(n_grid, compute_chunk_size)
-
-
-def _batch_lmm_phase_non_buffer_terms_gb(n_samples: int, n_snps: int) -> float:
-    """The batch estimate's terms outside the per-buffer chunk allocation.
-
-    ``estimate_lmm_memory`` returns one number: eigenvectors + the full
-    genotype matrix + eigenvalues + the three rotated vectors, plus
-    ``n_buffers`` copies of the UtG/Uab/Iab chunk buffers. Subtracting these
-    fixed terms recovers the buffer figure ``_engine_allocation_gb``
-    reproduces. Uses the plain geometric helpers the estimator itself calls,
-    not the pricing logic under test.
-    """
-    from jamma.core.eigen_plan import array_gb, square_matrix_gb
-
-    return (
-        square_matrix_gb(n_samples)
-        + array_gb(n_samples, n_snps)
-        + 4 * array_gb(n_samples)
-    )
-
-
-def _priced_batch_lmm_phase_gb(
-    n_samples: int, n_snps: int, n_cvt: int, dispatch: DispatchPath
+def _priced_batch_quote_gb(
+    n_samples: int,
+    n_snps: int,
+    n_cvt: int,
+    dispatch: DispatchPath,
+    *,
+    n_buffers: int | None = None,
 ) -> tuple[float, LmmChunkPlan]:
-    """The batch gate's real priced per-buffer total (``estimate_lmm_memory``).
+    """The batch quote ``price()`` gives the chunk ``LmmChunkPlan.plan`` picks.
 
-    Plans the chunk the way ``runner_numpy.run_lmm_association_numpy``'s
-    ``check_memory`` gate does, prices it through the real
-    ``estimate_lmm_memory``, and strips the non-buffer terms so what is left
-    is the chunk allocation the engine makes.
+    The plan carries an empty kernel workspace, so the quote holds U, the
+    genotype matrix, and the chunk buffers alone. ``n_buffers`` overrides the
+    planned buffer count at the same chunk width.
     """
-    chunk_plan = _plan(n_samples, n_snps, n_cvt, dispatch)
-    total_gb = estimate_lmm_memory(
-        n_samples,
-        n_snps,
-        lmm_batch_size=chunk_plan.chunk_size,
-        n_buffers=chunk_plan.n_buffers,
-        uab_iab_gb=(
-            chunk_plan.chunk_size
-            * lmm_extra_bytes_per_snp(n_samples, n_cvt, dispatch)
-            / 1e9
+    chunks = _plan(n_samples, n_snps, n_cvt, dispatch)
+    if n_buffers is not None:
+        chunks = replace(chunks, n_buffers=n_buffers, use_pipeline=n_buffers > 1)
+    plan = replace(
+        association_price_plan(
+            "batch",
+            n_samples=n_samples,
+            n_snps=n_snps,
+            chunk_size=chunks.chunk_size,
+            n_cvt=n_cvt,
+            dispatch=dispatch,
         ),
+        conservative_chunks=chunks,
+        workspace=empty_workspace(dispatch, n_samples, n_samples, n_cvt),
     )
-    buffers_gb = total_gb - _batch_lmm_phase_non_buffer_terms_gb(n_samples, n_snps)
-    return buffers_gb, chunk_plan
+    return plan.price(eigen=None).association_gb, chunks
 
 
 class TestChunkPlanMatchesEngine:
@@ -456,16 +404,15 @@ class TestChunkPlanMatchesEngine:
     def test_streaming_preflight_priced_bytes_match_engine_allocation(
         self, monkeypatch, n_cvt, lmm_mode, accel, dispatch
     ):
-        """estimate_streaming_memory's real lmm_gb equals the engine's
-        real buffer allocation, to the byte, across every dispatch path.
+        """The streaming quote never under-prices the engine's real buffer
+        allocation, across every dispatch path.
 
         Regression for the P6 finding (a per-SNP batch buffer priced at one
-        buffer while the engine allocates n_buffers) and for the
-        coordinator-flagged Gap A (pipeline_buffers hardcoded to 2 in
-        plan_memory's streaming branch regardless of whether the plan
-        actually pipelines). Both would surface here because this drives
-        the real estimate_streaming_memory entry point end to end rather
-        than recomputing its formula.
+        buffer while the engine allocates n_buffers) and for Gap A
+        (pipeline_buffers hardcoded to 2 regardless of whether the plan
+        actually pipelines). Both would surface here because this drives the
+        real planner and ``price()`` end to end rather than recomputing the
+        formula.
         """
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
 
@@ -477,9 +424,7 @@ class TestChunkPlanMatchesEngine:
         )
         allocated_gb = _engine_allocation_gb(
             n_samples, n_cvt, plan, dispatch, include_raw_block=True
-        ) + _streaming_lmm_phase_non_buffer_terms_gb(
-            n_samples, plan.chunk_size, n_grid=0
-        )
+        ) + array_gb(n_samples, n_samples)
         allocated_gb += plan.chunk_size * workspace.bytes_per_snp / 1e9
 
         assert priced_gb >= allocated_gb - 1e-12, (
@@ -490,14 +435,12 @@ class TestChunkPlanMatchesEngine:
     def test_batch_gate_priced_bytes_are_at_least_engine_allocation(
         self, monkeypatch, n_cvt, lmm_mode, accel, dispatch
     ):
-        """estimate_lmm_memory's real buffer term never under-prices the
+        """The batch quote never under-prices U, the genotype matrix, and the
         engine's real buffer allocation, across every dispatch path.
 
-        Regression for the coordinator-flagged Gap B: estimate_lmm_memory
-        had no n_buffers concept, so a pipelined batch run (n_buffers=2)
-        was priced at one buffer's worth. The batch quote may price above
-        the real allocation for terms outside the chunk buffers, but it
-        must never price below it.
+        Regression for Gap B: the batch quote once had no n_buffers concept,
+        so a pipelined batch run (n_buffers=2) was priced at one buffer's
+        worth.
         """
         del accel, lmm_mode  # dispatch alone determines pricing here
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
@@ -505,9 +448,13 @@ class TestChunkPlanMatchesEngine:
         n_samples = 50_000
         n_snps = 500_000
 
-        priced_gb, plan = _priced_batch_lmm_phase_gb(n_samples, n_snps, n_cvt, dispatch)
-        allocated_gb = _engine_allocation_gb(
-            n_samples, n_cvt, plan, dispatch, include_raw_block=False
+        priced_gb, plan = _priced_batch_quote_gb(n_samples, n_snps, n_cvt, dispatch)
+        allocated_gb = (
+            _engine_allocation_gb(
+                n_samples, n_cvt, plan, dispatch, include_raw_block=False
+            )
+            + array_gb(n_samples, n_samples)
+            + array_gb(n_samples, n_snps)
         )
 
         assert priced_gb >= allocated_gb - 1e-9, (
@@ -515,14 +462,13 @@ class TestChunkPlanMatchesEngine:
         )
 
     def test_batch_gate_priced_bytes_scale_with_pipelining(self, monkeypatch):
-        """Direct regression for Gap B: the batch gate's priced total must
-        change when the plan pipelines, not stay pinned to one buffer.
+        """Direct regression for Gap B: the batch quote must change when the
+        plan pipelines, not stay pinned to one buffer.
 
         Forces a pipelining case (n_chunks >= _MIN_PIPELINE_CHUNKS, a
         is_native dispatch) by pinning a small RAM budget so the sizer picks
-        many small chunks, then compares the gate's real
-        estimate_lmm_memory(n_buffers=1) against n_buffers=plan.n_buffers:
-        before the fix these were identical regardless of plan.n_buffers.
+        many small chunks, then compares the quote at one buffer against the
+        plan's two: the second buffer adds exactly one rotation buffer.
         """
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 8.0)
 
@@ -537,35 +483,24 @@ class TestChunkPlanMatchesEngine:
         assert plan.use_pipeline, "this case must pipeline for the regression to bite"
         assert plan.n_buffers == 2
 
-        one_buffer_gb = estimate_lmm_memory(
-            n_samples,
-            n_snps,
-            lmm_batch_size=plan.chunk_size,
-            n_buffers=1,
-            uab_iab_gb=(
-                plan.chunk_size
-                * lmm_extra_bytes_per_snp(n_samples, n_cvt, dispatch)
-                / 1e9
-            ),
-        ) - _batch_lmm_phase_non_buffer_terms_gb(n_samples, n_snps)
-        est_real, _ = _priced_batch_lmm_phase_gb(n_samples, n_snps, n_cvt, dispatch)
+        one_buffer_gb, _ = _priced_batch_quote_gb(
+            n_samples, n_snps, n_cvt, dispatch, n_buffers=1
+        )
+        planned_gb, _ = _priced_batch_quote_gb(n_samples, n_snps, n_cvt, dispatch)
 
-        assert est_real == pytest.approx(2 * one_buffer_gb, rel=1e-9)
+        assert planned_gb - one_buffer_gb == pytest.approx(
+            array_gb(n_samples, plan.chunk_size), rel=1e-9
+        )
 
     def test_plan_memory_priced_bytes_scale_with_non_pipelining(self, monkeypatch):
-        """Direct regression for Gap A, calling plan_memory itself.
+        """Direct regression for Gap A, through the real planner and price().
 
-        pipeline_memory.plan_memory's streaming branch passed
-        pipeline_buffers=2 to estimate_streaming_memory unconditionally,
-        regardless of whether the chunk plan it just computed actually
-        pipelines. NUMPY_FALLBACK never pipelines (plan.n_buffers is always
-        1), so at parameters where the LMM chunk-loop term dominates
-        the workflow peak (small n_samples keeps the O(n^2) eigendecomp and
-        kinship terms negligible beside the Uab/Iab extra), the hardcoded 2
-        must have inflated the peak above what a real n_buffers=1 run
-        needs. Calls plan_memory directly, not a hand-built equivalent, so
-        the hardcoded literal this regression is about is the thing under
-        test.
+        The streaming quote once priced two rotation buffers unconditionally,
+        regardless of whether the chunk plan actually pipelines.
+        NUMPY_FALLBACK never pipelines (plan.n_buffers is always 1), so at
+        parameters where the LMM chunk-loop term dominates the workflow peak
+        (small n_samples keeps the O(n^2) terms negligible beside the Uab/Iab
+        extra), the quote must equal what a real n_buffers=1 run allocates.
         """
         from jamma.lmm import accel
 
@@ -590,133 +525,32 @@ class TestChunkPlanMatchesEngine:
         assert plan.n_buffers == 1
         mem_plan = exec_plan.price(eigen=None)
 
-        # Reference: the same estimate built with pipeline_buffers hardcoded
-        # to 2, the pre-fix behavior, to prove the two would have disagreed.
-        chunk_plan = exec_plan.conservative_chunks
-        uab_iab_gb = (
-            chunk_plan.chunk_size
-            * lmm_extra_bytes_per_snp(n_samples, n_cvt, exec_plan.dispatch)
-            / 1e9
-        )
-        est_hardcoded_two = estimate_streaming_memory(
-            n_samples,
-            chunk_size=DEFAULT_STATS_CHUNK,
-            n_cvt=n_cvt,
-            pipeline_buffers=2,
-            compute_chunk_size=chunk_plan.chunk_size,
-            uab_iab_gb=uab_iab_gb,
-        )
-
-        hardcoded_two_gb = (
-            est_hardcoded_two.peak_gb
-            + (
-                exec_plan.workspace.fixed_bytes
-                + chunk_plan.chunk_size * exec_plan.workspace.bytes_per_snp
-            )
-            / 1e9
-        )
-        assert mem_plan.total_peak_gb < hardcoded_two_gb, (
-            "plan_memory's real total must be below what pipeline_buffers=2 "
-            "would have priced for a plan that does not pipeline"
-        )
         allocated_gb = _engine_allocation_gb(
             n_samples, n_cvt, plan, dispatch, include_raw_block=True
-        ) + _streaming_lmm_phase_non_buffer_terms_gb(
-            n_samples, plan.chunk_size, n_grid=0
-        )
+        ) + array_gb(n_samples, n_samples)
         allocated_gb += (
             exec_plan.workspace.fixed_bytes
             + plan.chunk_size * exec_plan.workspace.bytes_per_snp
         ) / 1e9
         assert mem_plan.total_peak_gb == pytest.approx(allocated_gb, rel=1e-9), (
-            f"plan_memory total {mem_plan.total_peak_gb:.3f}GB != "
+            f"quoted total {mem_plan.total_peak_gb:.3f}GB != "
             f"engine allocation {allocated_gb:.3f}GB"
         )
-
-    @requires_c
-    def test_run_lmm_association_numpy_threads_real_n_buffers(self, monkeypatch):
-        """Call-site regression: run_lmm_association_numpy's check_memory gate
-        must call estimate_lmm_memory with the plan's real n_buffers, not a
-        default that silently reverts to 1.
-
-        estimate_lmm_memory gaining an n_buffers parameter (with a default of
-        1) does not by itself guarantee any caller passes the real value —
-        the parameter could be dropped from a call site in a later edit and
-        every existing test would still pass, because n_buffers=1 is a valid,
-        merely wrong, default. This drives the real
-        run_lmm_association_numpy(check_memory=True) entry point end to end
-        and records the exact kwargs its internal estimate_lmm_memory call
-        carries, rather than asserting on a GB total that a coincidentally
-        matching wrong number could also produce.
-
-        compute_chunk_size_numpy is forced to a constant so a small, fast
-        synthetic dataset can still produce n_chunks >= _MIN_PIPELINE_CHUNKS
-        (the real auto-scaling budget floor is 2GB per chunk, which no
-        unit-test-sized matrix clears without this).
-        """
-        from jamma.lmm import association_plan, runner_numpy
-
-        n_samples = 30
-        n_snps = 400
-        forced_chunk_size = 50  # n_snps / this == 8 == _MIN_PIPELINE_CHUNKS
-
-        monkeypatch.setattr(
-            "jamma.lmm.chunk_sizing.compute_chunk_size_numpy",
-            lambda *args, **kwargs: forced_chunk_size,
-        )
-
-        rng = np.random.default_rng(0)
-        genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
-        phenotypes = rng.standard_normal(n_samples)
-        kinship = np.corrcoef(genotypes) + np.eye(n_samples) * 0.1
-        kinship = (kinship + kinship.T) / 2
-        snp_info = [
-            {"chr": "1", "rs": f"rs{i}", "pos": i, "a1": "A", "a0": "T"}
-            for i in range(n_snps)
-        ]
-
-        recorded_calls: list[dict] = []
-        real_estimate_lmm_memory = association_plan.estimate_lmm_memory
-
-        def _recording_estimate_lmm_memory(*args, **kwargs):
-            recorded_calls.append(kwargs)
-            return real_estimate_lmm_memory(*args, **kwargs)
-
-        monkeypatch.setattr(
-            association_plan, "estimate_lmm_memory", _recording_estimate_lmm_memory
-        )
-
-        result = runner_numpy.run_lmm_association_numpy(
-            genotypes=genotypes,
-            phenotypes=phenotypes,
-            kinship=kinship,
-            snp_info=snp_info,
-            config=LmmConfig(lmm_mode=1, check_memory=True, show_progress=False),
-        )
-
-        assert result.n_tested == n_snps
-        assert recorded_calls
-        assert all(call["n_buffers"] == 2 for call in recorded_calls), (
-            "every selection and preflight quote must use the plan's two live buffers"
-        )
-        assert all(
-            call["lmm_batch_size"] == forced_chunk_size for call in recorded_calls
-        ), "every quote must use the plan's real chunk size"
 
 
 @requires_c
 def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     """plan_association must price the chunk the run will allocate, not 20,000.
 
-    Measured at n=50000, snps=500000 on the FUSED path: ``estimate_lmm_memory``
-    at its ``lmm_batch_size=20_000`` default and one buffer quotes 228.0GB,
+    Measured at n=50000, snps=500000 on the FUSED path: the batch quote at a
+    20,000-SNP chunk and one buffer is 228.0GB,
     while the chunk ``LmmChunkPlan.plan`` really plans (24,940 SNPs over two
     buffers, narrowed to 19,940 here) quotes 236.0GB. A machine with 240GB
     available sits strictly between the two thresholds once the 10GB safety
     margin applies: the stale default says "fits" (batch), the real chunk says
-    "does not fit" (streaming). At trunk, ``runner.py`` called
-    ``estimate_lmm_memory`` without ``lmm_batch_size``/``n_buffers`` and picked
-    batch here; that flips the execution mode a machine near this line gets, in
+    "does not fit" (streaming). At trunk, ``runner.py`` priced the batch
+    phase without the planned chunk width or buffer count and picked batch
+    here; that flips the execution mode a machine near this line gets, in
     the direction that silently under-estimates memory.
     """
     use_fake_psutil(monkeypatch, available=240e9)

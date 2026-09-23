@@ -34,6 +34,15 @@ tie rows moved the ``available`` figure their tie is built from.
 the quote every preflight gates on, which the table did not cover before.
 The 2438 existing rows are unchanged.
 
+``e85356a0``: ``price()`` became the only association quote. The 384
+``streaming`` and 96 ``batch`` rows went with the ledger functions they
+hashed. Of the 6144 ``price`` rows, the 2048 in batch mode moved
+``association_gb`` down by exactly ``4 * n`` float64 (the eigenvalue and
+three rotated-vector terms the old batch formula carried and streaming never
+did), and ``total_peak_gb`` with it where association is the peak. Every
+streaming and LOCO row, every kinship, eigen, and statistics cell, and every
+gate, eigen-driver, and LOCO row is unchanged.
+
 ``c8a00ab6``: the LOCO rows lost two columns,
 ``min_required_gb`` and ``eigendecomp_min_gb``, when ``plan_loco_passes``
 stopped reporting them; the row table was dumped before and after and
@@ -60,40 +69,27 @@ import pytest
 
 from jamma.core import memory
 from jamma.core.eigen_plan import dsyevr_peak_gb, plan_eigen_driver
-from jamma.core.memory import (
-    estimate_lmm_memory,
-    estimate_streaming_memory,
-    margin_gb,
-)
+from jamma.core.memory import margin_gb
 from jamma.kinship.loco import loco_retained_set, plan_loco_passes
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
     ExecutionPlan,
     KinshipShape,
 )
-from jamma.lmm.chunk_sizing import LmmChunkPlan, lmm_extra_bytes_per_snp
+from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.workspace import WorkspaceSpec
 
 pytestmark = pytest.mark.tier0
 
-# Kinship preprocessing pricing moves the 384 streaming rows. The mouse
-# fixture previously traced 487 MB against a 171 MB quote; bounded transforms
-# now trace 415 MB against 520 MB. Eigen, LMM, and LOCO formulas are unchanged.
-EXPECTED_DIGEST = "405a6224634cca7467c051ea3a4fb7b3daa7205ff61a1b6b22a623da860f78b2"
-EXPECTED_ROWS = 8582
+EXPECTED_DIGEST = "e85356a0bdd6a1e0202ec65939a1245e7a72d572785eaedde5074e903469faa0"
+EXPECTED_ROWS = 8102
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
 CHUNK_SIZE = (10_000, 1_000)
 N_CVT = (1, 4)
-PIPELINE_BUFFERS = (1, 2)
-COMPUTE_CHUNK = (None, 765)
-EIGEN_PEAK_GB = (None, 12.5)
-UAB_IAB_GB = (None, 0.7)
 
 N_SNPS = (100, 500_000)
-LMM_BATCH = (20_000, 765)
-N_BUFFERS = (1, 2)
 
 PEAKS_GB = (0.0, 0.5, 9.99, 50.0, 99.999, 100.0, 100.001, 1_000.0)
 AVAILABLE_GB = (0.001, 1.0, 8.0, 40.0, 64.0, 110.0, 1_000.0)
@@ -116,65 +112,6 @@ def _f(x: float) -> str:
 
 def _tie(required_gb: float) -> float:
     return required_gb + margin_gb(required_gb)
-
-
-def _streaming_rows() -> list[list]:
-    rows: list[list] = []
-    for n, chunk, n_cvt, buffers, compute, eigen_peak, uab in itertools.product(
-        N_SAMPLES,
-        CHUNK_SIZE,
-        N_CVT,
-        PIPELINE_BUFFERS,
-        COMPUTE_CHUNK,
-        EIGEN_PEAK_GB,
-        UAB_IAB_GB,
-    ):
-        ledger = estimate_streaming_memory(
-            n,
-            chunk_size=chunk,
-            n_cvt=n_cvt,
-            pipeline_buffers=buffers,
-            compute_chunk_size=compute,
-            eigendecomp_peak_gb=eigen_peak,
-            uab_iab_gb=uab,
-        )
-        rows.append(
-            [
-                "streaming",
-                n,
-                chunk,
-                n_cvt,
-                buffers,
-                compute,
-                eigen_peak,
-                uab,
-                _f(ledger.kinship_gb),
-                _f(ledger.eigen_gb),
-                _f(ledger.lmm_gb),
-                _f(ledger.peak_gb),
-            ]
-        )
-    return rows
-
-
-def _batch_rows() -> list[list]:
-    rows: list[list] = []
-    for n, n_snps, batch, n_cvt, buffers in itertools.product(
-        N_SAMPLES, N_SNPS, LMM_BATCH, N_CVT, N_BUFFERS
-    ):
-        batch_gb = estimate_lmm_memory(
-            n,
-            n_snps,
-            lmm_batch_size=batch,
-            n_buffers=buffers,
-            uab_iab_gb=(
-                batch
-                * lmm_extra_bytes_per_snp(n, n_cvt, DispatchPath.NUMPY_FALLBACK)
-                / 1e9
-            ),
-        )
-        rows.append(["batch", n, n_snps, batch, n_cvt, buffers, _f(batch_gb)])
-    return rows
 
 
 def _price_plan(
@@ -425,8 +362,6 @@ def ledger_table() -> list[list]:
         # redirect dispatch.
     ):
         return [
-            *_streaming_rows(),
-            *_batch_rows(),
             *_price_rows(),
             *_gate_rows(),
             *_eigen_driver_rows(),

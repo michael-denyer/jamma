@@ -50,6 +50,8 @@ from jamma.kinship import (
     write_kinship_matrix,
 )
 from jamma.lmm.association_plan import (
+    VALID_BACKENDS,
+    BackendRequest,
     ExecutionPlan,
     KinshipShape,
     plan_association,
@@ -63,11 +65,8 @@ from jamma.lmm.eigen_io import (
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.lmm.loco import run_lmm_loco_prepared
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
-from jamma.lmm.schema import parse_lmm_mode
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
-    VALID_BACKENDS,
-    BackendRequest,
     KinshipResult,
     PhenotypeResult,
     PipelineConfig,
@@ -96,23 +95,28 @@ __all__ = [
 ]
 
 
-def _parse_backend_override(value: str) -> BackendRequest:
-    """Validate a JAMMA_BACKEND value against the accepted backend requests.
+def requested_backend(config: PipelineConfig) -> BackendRequest:
+    """Resolve the backend request, letting ``JAMMA_BACKEND`` override config.
 
     Args:
-        value: Raw ``JAMMA_BACKEND`` environment variable value.
+        config: Pipeline config carrying the validated ``backend`` field.
 
     Returns:
-        The value, narrowed to a valid backend request.
+        The environment override when set, otherwise ``config.backend``.
 
     Raises:
-        ValueError: If the value is not a recognised backend.
+        ValueError: If ``JAMMA_BACKEND`` is not a recognised backend.
     """
-    if value not in VALID_BACKENDS:
+    env_backend = Env.current().backend_raw
+    if env_backend is None:
+        logger.info(f"Backend request: {config.backend} (config)")
+        return config.backend
+    if env_backend not in VALID_BACKENDS:
         raise ValueError(
-            f"JAMMA_BACKEND must be one of {VALID_BACKENDS}, got {value!r}"
+            f"JAMMA_BACKEND must be one of {VALID_BACKENDS}, got {env_backend!r}"
         )
-    return value
+    logger.info(f"Backend request: {env_backend} (JAMMA_BACKEND)")
+    return env_backend
 
 
 SMALL_SAMPLE_WARNING_THRESHOLD = 50
@@ -338,26 +342,11 @@ class PipelineRunner:
         """
         t_start = time.perf_counter()
 
-        # Resolve env override first: JAMMA_BACKEND takes priority in all paths.
-        # It arrives as an unvalidated string, so check it here rather than
-        # letting an unknown value reach plan_association after the
-        # pipeline has already read PLINK metadata off disk.
-        env_backend = Env.current().backend_raw
-        requested: BackendRequest = (
-            _parse_backend_override(env_backend)
-            if env_backend is not None
-            else self.config.backend
-        )
+        # Before any disk read, so a bad JAMMA_BACKEND fails first.
+        requested = requested_backend(self.config)
         # Read once and pass it down. get_plink_metadata parses the whole .bim
         # (sid, chromosome, bp_position and both allele arrays).
         meta = get_plink_metadata(self.config.bfile)
-
-        if env_backend is not None:
-            logger.info(f"Backend: numpy (from JAMMA_BACKEND={env_backend})")
-        elif self.config.backend != "auto":
-            logger.info("Backend: numpy (explicitly requested)")
-        else:
-            logger.info("Backend: numpy (auto-selected)")
 
         self.validate_inputs()
 
@@ -391,20 +380,16 @@ class PipelineRunner:
         # (once here with the pre-mask n_samples, once again after masking),
         # re-running estimate_lmm_memory both times; this is the single call.
         execution = plan_association(
-            n_samples=n_valid,
-            n_input_samples=n_samples,
-            n_snps=n_snps,
-            requested=requested,
+            n_valid,
+            n_snps,
+            config=self.config.lmm_config(),
+            backend="loco" if self.config.loco else requested,
             n_cvt=samples.n_covariates,
-            lmm_mode=parse_lmm_mode(self.config.lmm_mode),
-            n_grid=self.config.n_grid,
-            n_refine=self.config.n_refine,
+            n_input_samples=n_samples,
             n_phenotypes=len(pheno_columns),
-            mem_budget=self.config.mem_budget,
             max_chunk_size=DEFAULT_LOCO_CONFIG.col_chunk_size
             if self.config.loco
             else None,
-            loco=self.config.loco,
         )
         analysis = resolve_analysis_plan(
             self.config,

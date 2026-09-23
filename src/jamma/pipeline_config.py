@@ -17,11 +17,11 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 
 from jamma.lmm.assoc_output import AssocResult
+from jamma.lmm.association_plan import VALID_BACKENDS, BackendRequest
 from jamma.lmm.schema import (
     DEFAULT_L_MAX,
     DEFAULT_L_MIN,
@@ -33,9 +33,6 @@ from jamma.lmm.schema import (
     LmmConfig,
     parse_lmm_mode,
 )
-
-BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
-VALID_BACKENDS: tuple[BackendRequest, ...] = ("auto", "numpy", "numpy-streaming")
 
 
 @dataclass

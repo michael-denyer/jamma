@@ -162,7 +162,7 @@ def test_run_lmm_loco_plans_association_once(monkeypatch):
     assert result.n_tested > 0
     assert len(calls) == 1, f"expected one plan per run, got {len(calls)}"
     assert calls[0]["args"][1] == meta.n_snps
-    assert calls[0]["loco"] is True
+    assert calls[0]["backend"] == "loco"
     assert calls[0]["max_chunk_size"] == LocoConfig().col_chunk_size
 
 
@@ -172,7 +172,7 @@ def test_run_lmm_loco_rejects_plan_wider_than_col_chunk_size():
     from jamma.lmm.association_plan import plan_association
 
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
-    wide = plan_association(100, 500, requested="numpy", loco=True)
+    wide = plan_association(100, 500, backend="loco")
     with pytest.raises(ValueError, match="col_chunk_size"):
         run_lmm_loco(
             bed_path=_LOCO_BFILE,

@@ -23,7 +23,7 @@ from jamma.core import memory
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.lmm.prepare_common import compute_valid_mask, with_intercept
-from jamma.lmm.schema import LmmRunResult
+from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
 from jamma.pipeline_plan import LocoAnalysisPlan, resolve_analysis_plan
 from jamma.pipeline_samples import AnalysedSamples, load_analysed_samples
@@ -47,9 +47,9 @@ def _association_plan(
     return plan_association(
         n_valid,
         n_snps,
-        requested="numpy-streaming" if mode == "streaming" else "numpy",
+        config=LmmConfig(mem_budget=mem_budget),
+        backend="numpy-streaming" if mode == "streaming" else "numpy",
         n_cvt=n_cvt,
-        mem_budget=mem_budget,
     )
 
 
@@ -379,7 +379,7 @@ class TestAssociateLoco:
         """Run the LOCO branch on the samples run() would build."""
         analysis = resolve_analysis_plan(
             runner.config,
-            execution=plan_association(4, 1, requested="numpy"),
+            execution=plan_association(4, 1, backend="numpy"),
             snps_indices=None,
             ksnps_indices=None,
         )

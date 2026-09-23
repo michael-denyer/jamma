@@ -29,7 +29,7 @@ from jamma.lmm.chunk_sizing import (
 )
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.pab import n_index
-from jamma.lmm.schema import LmmMode
+from jamma.lmm.schema import LmmConfig, LmmMode
 from jamma.lmm.workspace import WorkspaceSpec
 from jamma.pipeline_config import PipelineConfig
 from tests.conftest import preflight, requires_c
@@ -82,9 +82,9 @@ def _streaming_preflight(
     plan = plan_association(
         n_valid,
         n_snps,
-        requested="numpy-streaming",
+        config=LmmConfig(lmm_mode=lmm_mode),
+        backend="numpy-streaming",
         n_cvt=n_cvt,
-        lmm_mode=lmm_mode,
     )
     preflight(config, plan)
 
@@ -178,10 +178,18 @@ def test_preflight_narrows_when_n_cvt_inflates_toward_available(monkeypatch):
     n_snps = 10_000
 
     low = plan_association(
-        n_samples, n_snps, requested="numpy-streaming", n_cvt=1, lmm_mode=2
+        n_samples,
+        n_snps,
+        config=LmmConfig(lmm_mode=2),
+        backend="numpy-streaming",
+        n_cvt=1,
     )
     high = plan_association(
-        n_samples, n_snps, requested="numpy-streaming", n_cvt=90, lmm_mode=2
+        n_samples,
+        n_snps,
+        config=LmmConfig(lmm_mode=2),
+        backend="numpy-streaming",
+        n_cvt=90,
     )
 
     assert high.conservative_chunks.chunk_size < low.conservative_chunks.chunk_size
@@ -316,9 +324,9 @@ def _priced_streaming_lmm_phase_gb(
     execution = plan_association(
         n_samples,
         n_snps,
-        requested="numpy-streaming",
+        config=LmmConfig(lmm_mode=lmm_mode),
+        backend="numpy-streaming",
         n_cvt=n_cvt,
-        lmm_mode=lmm_mode,
     )
     quote = execution.price(eigen=None)
     return (
@@ -422,9 +430,7 @@ class TestChunkPlanMatchesEngine:
         # actually derives for (n_cvt, lmm_mode, accel), or this case is
         # testing an unreachable combination.
         assert (
-            select_dispatch_path(
-                n_cvt, parse_lmm_mode(lmm_mode), accel=accel, log_choices=False
-            )
+            select_dispatch_path(n_cvt, parse_lmm_mode(lmm_mode), accel=accel)
             is dispatch
         )
 
@@ -574,9 +580,9 @@ class TestChunkPlanMatchesEngine:
         exec_plan = plan_association(
             n_samples,
             n_snps,
-            requested="numpy-streaming",
+            config=LmmConfig(lmm_mode=lmm_mode),
+            backend="numpy-streaming",
             n_cvt=n_cvt,
-            lmm_mode=lmm_mode,
         )
         dispatch = DispatchPath.NUMPY_FALLBACK
         plan = exec_plan.conservative_chunks
@@ -649,7 +655,6 @@ class TestChunkPlanMatchesEngine:
         unit-test-sized matrix clears without this).
         """
         from jamma.lmm import association_plan, runner_numpy
-        from jamma.lmm.schema import LmmConfig
 
         n_samples = 30
         n_snps = 400
@@ -716,7 +721,9 @@ def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     """
     use_fake_psutil(monkeypatch, available=240e9)
 
-    plan = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
+    plan = plan_association(
+        50_000, 500_000, config=LmmConfig(lmm_mode=1), n_cvt=1
+    ).summary
 
     assert plan.mode == "streaming", (
         f"expected streaming (the real chunk needs 236.0GB, which does not "
@@ -735,9 +742,11 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
     """
     use_fake_psutil(monkeypatch, available=240e9)
 
-    unbudgeted = plan_association(50_000, 500_000, n_cvt=1, lmm_mode=1).summary
+    unbudgeted = plan_association(
+        50_000, 500_000, config=LmmConfig(lmm_mode=1), n_cvt=1
+    ).summary
     budgeted = plan_association(
-        50_000, 500_000, n_cvt=1, lmm_mode=1, mem_budget=1.0
+        50_000, 500_000, config=LmmConfig(lmm_mode=1, mem_budget=1.0), n_cvt=1
     ).summary
 
     # 236.0GB does not clear the 10GB safety margin against 240GB.
@@ -776,9 +785,9 @@ def test_pipeline_memory_plan_honors_mem_budget(monkeypatch):
     execution = plan_association(
         n_samples,
         n_snps,
-        requested="numpy",
+        config=LmmConfig(mem_budget=mem_budget),
+        backend="numpy",
         n_cvt=n_cvt,
-        mem_budget=mem_budget,
     )
     planned = execution.price(eigen=None)
 
@@ -857,9 +866,9 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     exec_plan = plan_association(
         n_samples,
         n_snps,
-        requested="numpy",
+        config=LmmConfig(mem_budget=mem_budget),
+        backend="numpy",
         n_cvt=n_cvt,
-        mem_budget=mem_budget,
     )
     with pytest.raises(GeometryObserved):
         run_lmm_chunk_source_numpy_group(

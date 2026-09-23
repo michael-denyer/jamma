@@ -15,6 +15,7 @@ from click.core import ParameterSource
 from loguru import logger
 
 import jamma
+from jamma.lmm.association_plan import VALID_BACKENDS
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_MISS
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_kinship import compute_kinship
@@ -186,10 +187,7 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 )
 @click.option(
     "--backend",
-    type=click.Choice(
-        ["auto", "numpy", "numpy-streaming"],
-        case_sensitive=False,
-    ),
+    type=click.Choice(VALID_BACKENDS, case_sensitive=False),
     default="auto",
     help="Compute backend: auto, numpy, or numpy-streaming.",
 )

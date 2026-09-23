@@ -31,10 +31,7 @@ BFILE = SYNTHETIC.bfile
 
 def _streaming_plan(*, mem_budget: float | None = None):  # type: ignore[no-untyped-def]
     return plan_association(
-        100,
-        500,
-        requested="numpy-streaming",
-        mem_budget=mem_budget,
+        100, 500, config=LmmConfig(mem_budget=mem_budget), backend="numpy-streaming"
     )
 
 
@@ -102,9 +99,7 @@ class TestMemoryGates:
 
 def _expected_uab_iab_gb(args, kwargs, n_cvt: int) -> float:
     """The Uab/Iab figure a correct preflight passes for this recorded call."""
-    dispatch = select_dispatch_path(
-        n_cvt, 1, accel=accel.available(), log_choices=False
-    )
+    dispatch = select_dispatch_path(n_cvt, 1, accel=accel.available())
     per_snp = lmm_extra_bytes_per_snp(args[0], n_cvt, dispatch)
     return kwargs["lmm_batch_size"] * per_snp / 1e9
 

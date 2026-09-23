@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `jamma.lmm.plan_association` takes an `LmmConfig` as `config=` in place of
+  the separate `lmm_mode`, `n_grid`, `n_refine` and `mem_budget` arguments,
+  and one `backend=` literal (`"auto"`, `"numpy"`, `"numpy-streaming"` or
+  `"loco"`) in place of `requested=` plus `loco=True`. The
+  `log_dispatch_choices` argument is gone: the dispatch path is always logged
+  at debug level, once.
+- The pipeline logs the backend request and its source as one line,
+  `Backend request: numpy (config)` or `Backend request: numpy-streaming
+  (JAMMA_BACKEND)`, in place of the three `Backend: numpy (...)` variants.
 - `PipelineConfig` rejects an illegal kinship or eigen source at
   construction: `-k` with `-loco`, an unpaired `-d`/`-u`, `-d`/`-u` with
   `-loco`, and `-widv` with `-loco` or with `-d`/`-u`. These used to wait for

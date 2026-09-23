@@ -42,7 +42,7 @@ _PIPELINED_PATHS = {
 
 
 def _select(n_cvt: int, lmm_mode: LmmMode, *, accel: bool = True) -> DispatchPath:
-    return select_dispatch_path(n_cvt, lmm_mode, accel=accel, log_choices=False)
+    return select_dispatch_path(n_cvt, lmm_mode, accel=accel)
 
 
 def test_without_the_extension_only_ncvt1_wald_leaves_the_numpy_fallback():

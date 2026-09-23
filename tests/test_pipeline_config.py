@@ -16,7 +16,12 @@ import pytest
 
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import MIN_N_GRID
-from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
+from jamma.pipeline import (
+    PipelineConfig,
+    PipelineResult,
+    PipelineRunner,
+    requested_backend,
+)
 from jamma.pipeline_config import PhenotypeResult
 from tests.conftest import preflight
 from tests.fixture_paths import SYNTHETIC
@@ -201,11 +206,7 @@ class TestCheckMemory:
         runner = PipelineRunner(config)
         result = preflight(
             runner.config,
-            plan_association(
-                100,
-                500,
-                requested="numpy-streaming",
-            ),
+            plan_association(100, 500, backend="numpy-streaming"),
         )
         assert result is None
 
@@ -232,11 +233,7 @@ class TestCheckMemory:
             check_memory=True,
         )
         runner = PipelineRunner(config)
-        plan = plan_association(
-            100,
-            500,
-            requested="numpy-streaming",
-        )
+        plan = plan_association(100, 500, backend="numpy-streaming")
         result = preflight(runner.config, plan)
 
         assert result is not None
@@ -599,3 +596,27 @@ def test_pipeline_result_reports_the_single_phenotype_pve():
 
     assert result.pve_estimate == 0.3
     assert result.pve_se == pytest.approx(0.03)
+
+
+@pytest.mark.tier0
+def test_jamma_backend_env_overrides_config_backend(monkeypatch):
+    monkeypatch.setenv("JAMMA_BACKEND", "numpy-streaming")
+
+    assert requested_backend(PipelineConfig(bfile=Path("test"))) == "numpy-streaming"
+
+
+@pytest.mark.tier0
+def test_config_backend_applies_without_env_override(monkeypatch):
+    monkeypatch.delenv("JAMMA_BACKEND", raising=False)
+
+    config = PipelineConfig(bfile=Path("test"), backend="numpy")
+
+    assert requested_backend(config) == "numpy"
+
+
+@pytest.mark.tier0
+def test_unknown_jamma_backend_is_rejected(monkeypatch):
+    monkeypatch.setenv("JAMMA_BACKEND", "gpu")
+
+    with pytest.raises(ValueError, match="JAMMA_BACKEND must be one of"):
+        requested_backend(PipelineConfig(bfile=Path("test")))

@@ -257,7 +257,7 @@ def _tiny_invariants(n_cvt: int, lmm_mode: LmmMode, n_samples: int = 8):
         pve_se=None,
     )
     return RunInvariants.build(
-        select_dispatch_path(n_cvt, lmm_mode, accel=True, log_choices=False),
+        select_dispatch_path(n_cvt, lmm_mode, accel=True),
         basis,
         fit,
         LmmConfig(lmm_mode=lmm_mode, n_grid=20, n_refine=20),

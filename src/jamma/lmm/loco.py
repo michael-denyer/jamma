@@ -335,16 +335,11 @@ def run_lmm_loco_prepared(
         execution = plan_association(
             n_valid,
             n_snps_total,
-            requested="numpy",
+            config=config,
+            backend="loco",
             n_cvt=n_cvt,
-            lmm_mode=config.lmm_mode,
             n_input_samples=n_samples_total,
-            n_grid=config.n_grid,
-            n_refine=config.n_refine,
-            mem_budget=config.mem_budget,
             max_chunk_size=loco.col_chunk_size,
-            log_dispatch_choices=True,
-            loco=True,
         )
         execution = replace(
             execution,

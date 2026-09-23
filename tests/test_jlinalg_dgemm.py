@@ -437,10 +437,6 @@ class TestDgemmTranspose:
 @pytest.mark.skipif(
     not HAS_C_EXTENSION, reason="C extension required for throughput test"
 )
-@pytest.mark.xfail(
-    strict=True,
-    reason="gate must fire before its floor is trusted: floor set impossibly high",
-)
 def test_dgemm_throughput() -> None:
     """VALID-07: vendor-dispatched dgemm keeps pace with np.matmul at N=1410.
 
@@ -448,8 +444,8 @@ def test_dgemm_throughput() -> None:
     vendor library through the same thread pool, so the ratio is a routing
     regression gate (an extra copy, a serialised call), not a kernel contest.
     Measured on Accelerate-ILP64 (2026-09-23): idle ratio 0.995 to 1.001, and
-    0.71 to 1.38 with two background BLAS loops mimicking ``-n 3``. The floor
-    sits at 100x to prove the assertion executes.
+    0.71 to 1.38 with two background BLAS loops mimicking ``-n 3``. The 0.5
+    floor clears every sample by 1.4x and still catches a serialised call.
     """
     import time
 
@@ -493,7 +489,7 @@ def test_dgemm_throughput() -> None:
     print(f"np.matmul:        {gflops_numpy:.1f} GF ({best_numpy * 1e3:.1f} ms)")
     print(f"Ratio:            {ratio:.3f} (backend: {blas_backend})")
 
-    assert ratio >= 100.0, (
+    assert ratio >= 0.5, (
         f"jlinalg dgemm fell below the np.matmul throughput floor on "
         f"{blas_backend}: ratio={ratio:.3f}, jlinalg={gflops_jlinalg:.1f} GFLOPS, "
         f"numpy={gflops_numpy:.1f} GFLOPS"

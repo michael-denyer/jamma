@@ -602,10 +602,6 @@ class TestDsyrkThreadSafety:
 @pytest.mark.skipif(
     not HAS_C_EXTENSION, reason="C extension required for throughput test"
 )
-@pytest.mark.xfail(
-    strict=True,
-    reason="gate must fire before its floor is trusted: floor set impossibly high",
-)
 def test_dsyrk_throughput() -> None:
     """VALID-06: vendor-dispatched dsyrk keeps pace with np.matmul(X, X.T).
 
@@ -614,8 +610,8 @@ def test_dsyrk_throughput() -> None:
     to the vendor syrk, so both calls reach the same library and the ratio
     is a routing regression gate, not a kernel contest. Measured on
     Accelerate-ILP64 (2026-09-23): idle ratio 1.00 to 1.22, and 0.86 to 1.37
-    with two background BLAS loops mimicking ``-n 3``. The floor sits at
-    100x to prove the assertion executes.
+    with two background BLAS loops mimicking ``-n 3``. The 0.5 floor clears
+    every sample by 1.4x and still catches a serialised call.
     """
     import time
 
@@ -659,7 +655,7 @@ def test_dsyrk_throughput() -> None:
     print(f"np.matmul(X, X.T):  {gflops_numpy:.1f} GF ({best_numpy * 1e3:.0f} ms)")
     print(f"Ratio:              {ratio:.3f} (backend: {blas_backend})")
 
-    assert ratio >= 100.0, (
+    assert ratio >= 0.5, (
         f"jlinalg dsyrk fell below the np.matmul throughput floor at N={N}, K={K} "
         f"on {blas_backend}: ratio={ratio:.3f}, jlinalg={gflops_jlinalg:.1f} GFLOPS, "
         f"numpy={gflops_numpy:.1f} GFLOPS"

@@ -19,7 +19,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.schema import ModeSpec, SnpMeta
+from jamma.genotype.variants import SnpMeta
+from jamma.lmm.schema import ModeSpec
 from jamma.utils.atomic_publish import AtomicOutput
 
 if TYPE_CHECKING:

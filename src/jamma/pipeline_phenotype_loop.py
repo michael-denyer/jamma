@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from jamma.genotype.variants import SnpMeta
 from jamma.io.plink import PlinkMetadata, read_genotypes
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
 from jamma.lmm.genotype_source import GenotypeSource
@@ -27,7 +28,7 @@ from jamma.lmm.runner_numpy import (
     run_association,
 )
 from jamma.lmm.runner_numpy_streaming import BedSource
-from jamma.lmm.schema import ChunkRunStats, SnpMeta
+from jamma.lmm.schema import ChunkRunStats
 from jamma.pipeline_config import PhenotypeResult, PipelineConfig
 from jamma.pipeline_plan import StandardAnalysisPlan
 from jamma.pipeline_samples import AnalysedSamples

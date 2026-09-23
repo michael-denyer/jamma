@@ -13,8 +13,9 @@ import sys
 import numpy as np
 import pytest
 
+from jamma.genotype.variants import SnpMeta
 from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter, build_results
-from jamma.lmm.schema import MODE_SPECS, LmmConfig, SnpMeta, get_spec
+from jamma.lmm.schema import MODE_SPECS, LmmConfig, get_spec
 
 # ---------------------------------------------------------------------------
 # Shared test data

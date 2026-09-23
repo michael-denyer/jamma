@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.variants import SnpMeta
 from jamma.io.plink import PlinkMetadata, get_plink_metadata
 from jamma.lmm.assoc_output import IncrementalAssocWriter, build_results
 from jamma.lmm.schema import (
@@ -20,7 +21,6 @@ from jamma.lmm.schema import (
     DEFAULT_N_REFINE,
     MIN_N_REFINE,
     MODE_SPECS,
-    SnpMeta,
     get_spec,
 )
 

@@ -4,6 +4,7 @@ This module provides loading of PLINK binary files (.bed/.bim/.fam) which is
 the primary input format for GEMMA analysis.
 """
 
+import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -343,6 +344,42 @@ def stream_genotype_chunks(
         for start in iterator:
             end = min(start + chunk_size, n_total)
             yield read_chunk(start, end), start, end
+
+
+class PlinkReader:
+    """bed-reader behind ``GenotypeDataset``'s reader strategy."""
+
+    def __init__(self, bfile: Path) -> None:
+        self._bed = Path(f"{bfile}.bed")
+        self._bim = Path(f"{bfile}.bim")
+
+    def read(
+        self, columns: np.ndarray, block_size: int, *, stats_only: bool
+    ) -> Iterator[np.ndarray]:
+        """Yield blocks of ``columns`` from one ``open_bed``, float32 for stats.
+
+        A block of consecutive columns is read as a slice, any other block by
+        index; both give the same values.
+        """
+        dtype = np.float32 if stats_only else np.float64
+        with open_bed(self._bed) as bed:
+            for start in range(0, len(columns), block_size):
+                block = columns[start : start + block_size]
+                first, last = int(block[0]), int(block[-1])
+                if last - first + 1 == len(block):
+                    yield bed.read(index=np.s_[:, first : last + 1], dtype=dtype)
+                else:
+                    yield bed.read(index=(np.s_[:], block), dtype=dtype)
+
+    def fingerprint(self) -> dict[str, str]:
+        """Return the LOCO eigen cache's ``bed_fingerprint`` and ``bim_sha256``."""
+        st = self._bed.stat()
+        with open(self._bim, "rb") as fh:
+            bim_sha256 = hashlib.file_digest(fh, "sha256").hexdigest()
+        return {
+            "bed_fingerprint": f"{self._bed.name}:{st.st_size}:{st.st_mtime_ns}",
+            "bim_sha256": bim_sha256,
+        }
 
 
 def parse_fam_phenotype_column(fam_data: np.ndarray, column: int) -> np.ndarray:

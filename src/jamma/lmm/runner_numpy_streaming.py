@@ -18,6 +18,7 @@ from jamma.genotype.snp_stats import (
     SnpSelection,
     collect_streamed_snp_stats,
 )
+from jamma.genotype.variants import SnpInfoRecord, SnpMeta
 from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, plan_association
 from jamma.lmm.chunk_runner_numpy import RawLmmChunk
@@ -40,8 +41,6 @@ from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     LmmConfig,
     LmmRunResult,
-    SnpInfoRecord,
-    SnpMeta,
 )
 
 

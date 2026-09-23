@@ -83,7 +83,7 @@ A typical LMM association run proceeds as follows:
 | `LmmRunResult` | `src/jamma/lmm/schema.py` | Return type for all runners; bundles association list, PVE estimate, and SNP count |
 | `AssocResult` | `src/jamma/lmm/assoc_output.py` | Per-SNP association result dataclass matching GEMMA's output columns |
 | `MODE_SPECS` / `ModeSpec` | `src/jamma/lmm/schema.py` | Single source of truth mapping `lmm_mode` integers to the tests each mode runs (`Test` flags) and its output column names and header |
-| `SnpMeta` | `src/jamma/lmm/schema.py` | SNP metadata as one array per column; writers and result builders slice arrays directly, no per-SNP dicts |
+| `SnpMeta` | `src/jamma/genotype/variants.py` | SNP metadata as one array per column; writers and result builders slice arrays directly, no per-SNP dicts |
 | `PlinkData` | `src/jamma/io/plink.py` | Container for loaded PLINK binary data (genotypes, sample IDs, SNP IDs, positions, alleles) |
 | `ToleranceConfig` | `src/jamma/validation/tolerances.py` | Configurable tolerance thresholds for GEMMA numerical comparisons, calibrated from formal error propagation |
 
@@ -121,8 +121,10 @@ src/jamma/
 │   ├── telemetry.py        # BenchmarkRecord / append_benchmark_record()
 │   └── threading.py        # BLAS thread-count control via threadpoolctl
 ├── genotype/               # Genotype QC over streamed PLINK chunks
+│   ├── dataset.py          # GenotypeDataset: format-neutral samples x variants, streamed in blocks
 │   ├── snp_filter.py       # Per-SNP statistics, MAF/missing/monomorphism/HWE filter masks
-│   └── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
+│   ├── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
+│   └── variants.py         # SnpMeta: per-variant chr/rs/pos/alleles
 ├── io/                     # PLINK .bed/.bim/.fam readers and covariate/weight loaders
 │   ├── plink.py            # PlinkData loader and streaming chunk iterator
 │   ├── covariate.py        # GEMMA-format covariate file reader
@@ -150,7 +152,7 @@ src/jamma/
 │   ├── include/            # jlinalg.h: shared C API surface for the _jlinalg extension
 │   └── src/                # C sources for _jlinalg extension (BLAS dispatch, LAPACK)
 ├── lmm/                    # LMM association subsystem
-│   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult, SnpMeta
+│   ├── schema.py           # MODE_SPECS, LmmConfig, LmmRunResult
 │   ├── accel.py            # available()/require(): the one loader for _lmm_accel
 │   ├── assoc_output.py     # AssocResult, IncrementalAssocWriter, build_results and the chunk sinks
 │   ├── likelihood.py       # Null-model scalar REML/MLE and golden section search

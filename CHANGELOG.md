@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `SnpMeta` and `SnpInfoRecord` moved from `jamma.lmm.schema` to
+  `jamma.genotype.variants`, with no alias at the old path, so genotype
+  readers can build variant metadata without importing the LMM package.
+  Results are unchanged.
 - `jamma.core` now holds only leaf infrastructure and imports no other jamma
   package. Domain modules moved to the packages that own them, with no aliases
   left at the old paths: `jamma.core.snp_stats` and `jamma.core.snp_filter`

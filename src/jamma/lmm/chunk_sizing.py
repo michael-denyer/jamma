@@ -99,13 +99,14 @@ def compute_chunk_size_numpy(
     dispatch: DispatchPath,
     mem_budget_bytes: int,
     pipeline_buffers: int = 1,
-    fixed_bytes: int = 0,
     output_bytes_per_snp: int = 0,
 ) -> int:
     """Compute chunk size from a per-chunk RAM budget (no int32 constraint).
 
     Pure. The budget comes from :func:`chunk_budget_bytes`, so this never reads
-    the machine itself.
+    the machine itself. It covers per-SNP bytes only; per-run allocations such
+    as the eigenvector matrix are priced by ``ExecutableAssociationPlan.price``
+    and gated by the memory preflight, never subtracted here.
 
     Args:
         n_samples: Number of samples.
@@ -127,13 +128,10 @@ def compute_chunk_size_numpy(
     if bytes_per_snp == 0:
         return n_filtered
 
-    variable_budget = max(0, mem_budget_bytes - fixed_bytes)
-    mem_budget = variable_budget // pipeline_buffers
+    mem_budget = mem_budget_bytes // pipeline_buffers
 
     chunk_from_memory = int(mem_budget / bytes_per_snp)
-    if chunk_from_memory < _MIN_CHUNK:
-        return max(1, min(chunk_from_memory, n_filtered))
-    return min(chunk_from_memory, n_filtered, _MAX_CHUNK)
+    return max(_MIN_CHUNK, min(chunk_from_memory, n_filtered, _MAX_CHUNK))
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,7 +167,6 @@ class LmmChunkPlan:
         budget_bytes: int,
         blas_controllable: bool,
         max_chunk_size: int | None = None,
-        fixed_bytes: int = 0,
         output_bytes_per_snp: int = 0,
     ) -> LmmChunkPlan:
         """Decide chunk size, chunk count, and pipelining for one LMM run.
@@ -219,7 +216,6 @@ class LmmChunkPlan:
                 dispatch=dispatch,
                 mem_budget_bytes=budget_bytes,
                 pipeline_buffers=pipeline_buffers,
-                fixed_bytes=fixed_bytes,
                 output_bytes_per_snp=output_bytes_per_snp,
             )
             if overlap_cap is not None:

@@ -587,6 +587,18 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
     assert "exceeds 1.0GB capacity" in budgeted.reason
 
 
+def test_plan_association_keeps_wide_chunks_when_u_exceeds_the_chunk_budget(
+    monkeypatch,
+):
+    use_fake_psutil(monkeypatch, available=500e9)
+
+    chunks = plan_association(
+        100_000, 50_000, config=LmmConfig(lmm_mode=1), backend="numpy", n_cvt=1
+    ).conservative_chunks
+
+    assert chunks.chunk_size >= 1_000, chunks
+
+
 def test_chunk_plan_honors_mem_budget_bytes():
     """LmmChunkPlan.plan must narrow the chunk when given mem_budget_bytes.
 

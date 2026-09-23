@@ -13,6 +13,7 @@ import pytest
 
 from jamma.lmm.chunk_sizing import (
     _MAX_CHUNK,
+    _MIN_CHUNK,
     chunk_budget_bytes,
     compute_chunk_size_numpy,
 )
@@ -61,8 +62,7 @@ def test_compute_chunk_size_zero_bytes():
     assert chunk == 1000, f"Expected 1000, got {chunk}"
 
 
-def test_compute_chunk_size_can_drop_below_throughput_floor_to_fit_budget():
-    """A feasible small chunk wins over allocating the 100-SNP throughput floor."""
+def test_compute_chunk_size_never_plans_below_the_throughput_floor():
     chunk = compute_chunk_size_numpy(
         n_samples=1_000_000,
         n_filtered=200,
@@ -70,7 +70,7 @@ def test_compute_chunk_size_can_drop_below_throughput_floor_to_fit_budget():
         dispatch=DispatchPath.NUMPY_FALLBACK,
         mem_budget_bytes=int(2e9),
     )
-    assert chunk == 3
+    assert chunk == _MIN_CHUNK
 
 
 def test_chunk_size_split_larger_than_full():

@@ -9,12 +9,12 @@ from bed_reader import to_bed
 
 from jamma import jlinalg
 from jamma.core import memory
-from jamma.core.memory import estimate_kinship_memory
 from jamma.kinship import (
     compute_kinship_streaming,
     impute_and_center,
     impute_center_and_standardize,
 )
+from jamma.kinship.memory import estimate_kinship_memory
 from tests.fixture_paths import MOUSE
 from tests.support import require_fixture, requires_c
 

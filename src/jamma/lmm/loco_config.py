@@ -16,9 +16,9 @@ from pathlib import Path
 
 import numpy as np
 
-from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.io.plink import PlinkMetadata
 from jamma.lmm.association_plan import ExecutableAssociationPlan
+from jamma.lmm.eigen_plan import EigenDriverPlan
 from jamma.lmm.prepare_common import AnalysedPhenotype
 from jamma.lmm.schema import LmmConfig
 

@@ -2,7 +2,7 @@
 
 Contract: jamma._build_support holds the canonical compile flags and the
 compile+link driver. It MUST ship inside the installed wheel so that
-jamma.core.recompile.auto_recompile_c_extension (the runtime ABI-mismatch
+jamma._native.auto_recompile_c_extension (the runtime ABI-mismatch
 recompile path end users depend on) can reach the same helpers the wheel
 was built with. A wheel that omits jamma._build_support makes
 auto_recompile_c_extension dead code — every ABI mismatch silently falls
@@ -64,7 +64,7 @@ def test_build_support_ships_in_sdist_and_wheel(tmp_path):
     """jamma._build_support must be present in both distributions.
 
     sdist: hatch_build.py imports it at wheel-build time via sys.path+src.
-    wheel: jamma.core.recompile calls compile_extension() which imports it
+    wheel: jamma._native calls compile_extension() which imports it
     as a regular package. Missing from either distribution is a regression.
     """
     sdist_path, wheel_path = _build(tmp_path)

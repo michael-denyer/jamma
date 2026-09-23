@@ -25,7 +25,7 @@ Target files:
   - hatch_build.py
   - src/jamma/jlinalg/_compile_jlinalg.py
   - src/jamma/lmm/_compile_accel.py
-  - src/jamma/core/recompile.py  (runtime module must stay clean)
+  - src/jamma/_native.py  (runtime module must stay clean)
 
 Flag set (the ones we've actually seen duplicated, plus portability
 footguns like ``-march=native`` that MUST stay dev-only per
@@ -95,7 +95,7 @@ TARGETS: list[str] = [
     "hatch_build.py",
     "src/jamma/jlinalg/_compile_jlinalg.py",
     "src/jamma/lmm/_compile_accel.py",
-    "src/jamma/core/recompile.py",
+    "src/jamma/_native.py",
 ]
 
 # Match a flag literal inside single or double quotes: '-O3' or "-O3".

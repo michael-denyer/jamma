@@ -11,9 +11,9 @@ import pytest
 
 from jamma.core import memory
 from jamma.core import threading as core_threading
-from jamma.core.eigen_plan import plan_eigen_driver
 from jamma.kinship.loco import loco_retained_set
 from jamma.lmm.eigen import center_kinship, eigendecompose_kinship_in_scope
+from jamma.lmm.eigen_plan import plan_eigen_driver
 from jamma.lmm.loco_config import LocoConfig
 from jamma.lmm.loco_eigen import _computed_eigen_pairs
 from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs

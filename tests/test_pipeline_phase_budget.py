@@ -35,7 +35,7 @@ def test_batch_preflight_rejects_unaffordable_eigen_phase(monkeypatch):
 
 
 def test_eigen_driver_selection_respects_user_ceiling():
-    from jamma.core.eigen_plan import plan_eigen_driver
+    from jamma.lmm.eigen_plan import plan_eigen_driver
 
     plan = plan_eigen_driver(
         10_000,
@@ -193,8 +193,8 @@ def test_gk_eigen_budget_gates_eigendecomposition(tmp_path):
     import numpy as np
     from bed_reader import to_bed
 
-    from jamma.core.eigen_plan import dsyevr_peak_gb
-    from jamma.core.memory import estimate_kinship_memory
+    from jamma.kinship.memory import estimate_kinship_memory
+    from jamma.lmm.eigen_plan import dsyevr_peak_gb
     from jamma.pipeline_kinship import compute_kinship
 
     n_samples, n_snps = 2000, 10

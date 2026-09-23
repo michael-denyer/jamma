@@ -15,9 +15,9 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
-from jamma.core.estimates import estimate_lmm_seconds
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import blas_threads, get_physical_core_count
+from jamma.estimates import estimate_lmm_seconds
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `jamma.core` now holds only leaf infrastructure and imports no other jamma
+  package. Domain modules moved to the packages that own them, with no aliases
+  left at the old paths: `jamma.core.snp_stats` and `jamma.core.snp_filter`
+  are now `jamma.genotype.snp_stats` and `jamma.genotype.snp_filter`;
+  `jamma.core.eigen_plan` is `jamma.lmm.eigen_plan`; `jamma.core.recompile` is
+  `jamma._native`; `jamma.core.estimates` is `jamma.estimates`; and
+  `estimate_kinship_memory` moved from `jamma.core.memory` to
+  `jamma.kinship.memory`. `write_gemma_log` moved from `jamma.utils` to
+  `jamma.gemma_log`. Results are unchanged.
 - The NumPy reference kernels the C accelerator is held to are now public:
   `jamma.lmm.compute_numpy.compute_wald_numpy`, `compute_lrt_numpy` and
   `compute_score_numpy`, and `jamma.lmm.stats.batch_lrt_pvalues_numpy`. They
@@ -21,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `jamma.jlinalg` drops the private `_dgemm_numpy`, `_dgemm_numpy_impl`,
   `_dsyrk_numpy`, `_dsyrk_numpy_impl`, and `_eigh_numpy` aliases. The NumPy
   implementations stay in `jamma.jlinalg._dgemm`, `_dsyrk`, and `_eigh`.
-- `jamma.core.recompile` is the only code that evicts a rebuilt extension from
+- `jamma._native` is the only code that evicts a rebuilt extension from
   `sys.modules`. `compile_and_link.compile_extension` no longer does it too.
 - `jamma.io.read_genotypes(bfile)` reads the `.bed` genotype matrix on its
   own. The in-memory pipeline uses it instead of `load_plink_binary`, so it no

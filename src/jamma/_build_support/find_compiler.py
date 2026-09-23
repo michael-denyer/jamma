@@ -3,7 +3,7 @@
 Canonical location for ``find_c_compiler``.
 
 Ships inside the installed package as ``jamma._build_support.find_compiler``
-so runtime ABI-mismatch recompile via ``jamma.core.recompile`` reaches the
+so runtime ABI-mismatch recompile via ``jamma._native`` reaches the
 same discovery logic the wheel was built with — no separate minimal
 fallback exists or should be added.
 """

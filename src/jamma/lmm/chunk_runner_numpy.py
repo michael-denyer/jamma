@@ -24,13 +24,13 @@ import numpy as np
 from loguru import logger
 
 from jamma import jlinalg
-from jamma.core.estimates import estimate_lmm_seconds
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import (
     blas_thread_label,
     blas_threads,
     get_c_extension_thread_count,
 )
+from jamma.estimates import estimate_lmm_seconds
 from jamma.lmm import accel
 from jamma.lmm.assoc_output import ChunkSink
 from jamma.lmm.chunk_kernel import Kernel, RunInvariants, make_kernel

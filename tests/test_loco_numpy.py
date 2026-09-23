@@ -32,7 +32,7 @@ def test_global_index_restriction_matches_boolean_mask():
     _apply_global_index_restriction; this pins its result against the
     O(n_snps)-memory boolean formulation it replaced.
     """
-    from jamma.core.snp_stats import _apply_global_index_restriction
+    from jamma.genotype.snp_stats import _apply_global_index_restriction
 
     n_snps = 10000
     indices = np.sort(
@@ -542,9 +542,9 @@ def test_plan_loco_passes_reserves_the_consumer_the_caller_sized():
 
     Pure sizing math, so we drive it at realistic scale (no genotype data).
     """
-    from jamma.core.eigen_plan import dsyevr_peak_gb
     from jamma.core.memory import headroom_gb
     from jamma.kinship.loco import loco_retained_set, plan_loco_passes
+    from jamma.lmm.eigen_plan import dsyevr_peak_gb
 
     n_samples = 100_000
     n_mat = 70_000  # 30k samples filtered out
@@ -576,8 +576,8 @@ def test_plan_loco_passes_reserves_the_consumer_the_caller_sized():
 @pytest.mark.tier0
 def test_plan_loco_passes_unfiltered_matches_full_size():
     """An unfiltered 100k run at 300 GB is multi-pass with a batch of at least one."""
-    from jamma.core.eigen_plan import dsyevr_peak_gb
     from jamma.kinship.loco import loco_retained_set, plan_loco_passes
+    from jamma.lmm.eigen_plan import dsyevr_peak_gb
 
     plan = plan_loco_passes(
         loco_retained_set(100_000, 100_000, 10_000),

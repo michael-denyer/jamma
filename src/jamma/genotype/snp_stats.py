@@ -1,9 +1,9 @@
-"""Shared streamed SNP statistics and filtering.
+"""Streamed SNP statistics and SNP-list restriction.
 
 This module owns the arrays and denominator metadata produced by streamed
-SNP-statistics passes. Callers still own where genotype chunks come from;
-mean, missingness, variance, HWE, validation counts, and SNP-list filtering
-live here.
+SNP-statistics passes, and the SNP-list restriction applied to them. Callers
+own where genotype chunks come from. The per-chunk statistics and the QC
+masks (MAF, missing rate, monomorphism, HWE) live in ``snp_filter``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from loguru import logger
 from numpy.typing import DTypeLike
 
 from jamma.core.progress import progress_iterator
-from jamma.core.snp_filter import (
+from jamma.genotype.snp_filter import (
     compute_hwe_pvalues,
     compute_snp_filter_mask,
 )
@@ -192,7 +192,7 @@ def _apply_global_index_restriction(
     Range validation does not belong here: this population may be one
     chromosome of a larger file, so an index beyond ``global_indices`` is
     routine, not an error. Callers holding the full SNP count validate with
-    :func:`jamma.core.snp_filter.validate_snp_indices` before reaching this.
+    :func:`jamma.genotype.snp_filter.validate_snp_indices` before reaching this.
     """
     if len(restrict_indices) == 0:
         snp_mask[:] = False

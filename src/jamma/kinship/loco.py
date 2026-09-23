@@ -32,8 +32,8 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.memory import array_gb
-from jamma.core.snp_filter import validate_snp_indices
-from jamma.core.snp_stats import SnpStats
+from jamma.genotype.snp_filter import validate_snp_indices
+from jamma.genotype.snp_stats import SnpStats
 from jamma.io.plink import (
     PlinkMetadata,
     get_plink_metadata,

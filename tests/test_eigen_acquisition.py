@@ -5,11 +5,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.core.eigen_plan import plan_eigen_driver
 from jamma.io import read_fam_phenotypes
 from jamma.lmm import loco_eigen
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import read_eigen_files
+from jamma.lmm.eigen_plan import plan_eigen_driver
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.schema import LmmConfig
 from tests.fakes.eigen_lifetime import (

@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from jamma.core.snp_filter import compute_snp_stats
-from jamma.core.snp_stats import (
+from jamma.genotype.snp_filter import compute_snp_stats
+from jamma.genotype.snp_stats import (
     HweCounts,
     SnpFilterSpec,
     SnpStats,

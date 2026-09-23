@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
-from jamma.core.snp_stats import (
+from jamma.genotype.snp_stats import (
     SnpFilterSpec,
     SnpSelection,
     SnpStats,

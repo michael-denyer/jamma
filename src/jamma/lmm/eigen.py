@@ -20,14 +20,14 @@ from threadpoolctl import threadpool_info
 
 from jamma import jlinalg
 from jamma.core import memory
-from jamma.core.eigen_plan import (
+from jamma.core.memory_snapshot import log_memory_snapshot
+from jamma.core.progress import timed_progress
+from jamma.core.threading import blas_thread_label, blas_threads, get_blas_thread_count
+from jamma.lmm.eigen_plan import (
     EigenDriverPlan,
     forced_numpy_fallback,
     plan_eigen_driver,
 )
-from jamma.core.memory_snapshot import log_memory_snapshot
-from jamma.core.progress import timed_progress
-from jamma.core.threading import blas_thread_label, blas_threads, get_blas_thread_count
 
 # For matrices >= this size, use sampled symmetry check instead of full np.allclose.
 # Full check allocates an n*n temporary; at 100k samples that is ~80GB.
@@ -247,7 +247,7 @@ def eigendecompose_kinship_in_scope(
             f"target={n_threads}t"
         )
 
-    from jamma.core.estimates import (
+    from jamma.estimates import (
         estimate_eigendecomp_seconds,
         estimate_eigendecomp_time,
     )

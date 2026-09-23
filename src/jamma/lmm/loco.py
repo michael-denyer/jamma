@@ -31,9 +31,9 @@ import numpy as np
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.snp_filter import validate_snp_indices
-from jamma.core.snp_stats import SnpFilterSpec, SnpStats
 from jamma.core.threading import get_loco_worker_count, get_physical_core_count
+from jamma.genotype.snp_filter import validate_snp_indices
+from jamma.genotype.snp_stats import SnpFilterSpec, SnpStats
 from jamma.io.plink import get_plink_metadata, partitions_from_metadata
 from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter
 from jamma.lmm.association_plan import KinshipShape, plan_association

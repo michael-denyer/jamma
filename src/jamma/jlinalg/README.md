@@ -91,7 +91,7 @@ isolating numerical differences between vendor LAPACK and NumPy, and
 required by the weekly sanitizer workflow. The narrower
 `JLINALG_NO_VENDOR_LAPACK` only affects eigendecomposition: `jlinalg.eigh`
 checks it per call and routes to the NumPy fallback, and the pre-flight
-memory estimators read the same var (via `core.eigen_plan.forced_numpy_fallback`)
+memory estimators read the same var (via `lmm.eigen_plan.forced_numpy_fallback`)
 so pre-flight and runtime agree. It does not affect the BLAS primitives.
 `JLINALG_NO_VENDOR_DGEMM=1`
 is narrower still: dispatch leaves vendor dgemm unwired, so

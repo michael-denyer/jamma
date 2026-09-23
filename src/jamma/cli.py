@@ -15,11 +15,12 @@ from click.core import ParameterSource
 from loguru import logger
 
 import jamma
+from jamma.gemma_log import write_gemma_log
 from jamma.lmm.association_plan import VALID_BACKENDS
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_MISS
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.pipeline_kinship import compute_kinship
-from jamma.utils import setup_logging, write_gemma_log
+from jamma.utils import setup_logging
 
 # Click parameter name -> PipelineConfig field, for every option whose field
 # compute_kinship, load_analysed_samples and write_gemma_log never read.

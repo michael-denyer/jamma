@@ -27,9 +27,9 @@ from _bench_common import MOUSE_PREFIX, traced_peak
 from loguru import logger
 
 from jamma import jlinalg
-from jamma.core.memory import estimate_kinship_memory
 from jamma.io.plink import get_plink_metadata, parse_fam_phenotype_column
 from jamma.kinship import compute_kinship_streaming
+from jamma.kinship.memory import estimate_kinship_memory
 from jamma.lmm.impute import impute_missing_inplace
 
 

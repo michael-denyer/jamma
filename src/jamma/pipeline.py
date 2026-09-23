@@ -32,7 +32,6 @@ from loguru import logger
 import jamma
 from jamma.core import memory
 from jamma.core.constants import Env
-from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.core.telemetry import BenchmarkRecord, append_benchmark_record
 from jamma.io.plink import (
     PlinkMetadata,
@@ -63,6 +62,7 @@ from jamma.lmm.eigen_io import (
     read_eigen_files,
     write_eigen_files,
 )
+from jamma.lmm.eigen_plan import EigenDriverPlan
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.lmm.loco import LocoRun, run_loco
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG

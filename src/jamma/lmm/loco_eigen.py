@@ -20,9 +20,8 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core.eigen_plan import EigenDriverPlan
-from jamma.core.snp_stats import SnpStats, collect_streamed_snp_stats
 from jamma.core.threading import get_blas_thread_count
+from jamma.genotype.snp_stats import SnpStats, collect_streamed_snp_stats
 from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
 from jamma.kinship.loco import LocoRetainedSet, loco_retained_set
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutableAssociationPlan
@@ -41,6 +40,7 @@ from jamma.lmm.eigen_cache import (
     write_eigen_cache_manifest,
 )
 from jamma.lmm.eigen_io import EigenGeneration, read_eigen_files
+from jamma.lmm.eigen_plan import EigenDriverPlan
 from jamma.lmm.loco_config import LocoConfig, LocoRun
 from jamma.lmm.loco_workers import LocoWorkerPlan, solve_eigen_pairs
 from jamma.lmm.schema import LmmConfig

@@ -249,7 +249,7 @@ jobs:
         run: uv build
 
       # Both archives must ship _build_support/ — without it, the runtime
-      # ABI-mismatch recompile path (jamma.core.recompile) fails on
+      # ABI-mismatch recompile path (jamma._native) fails on
       # end-user machines after a wheel install. This is a structural
       # check; the wheel import step below exercises the runtime path.
       - name: Verify _build_support ships in sdist

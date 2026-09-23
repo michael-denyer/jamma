@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 
 from jamma import jlinalg
-from jamma.core.eigen_plan import (
+from jamma.core.memory import array_gb
+from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevd
+from jamma.lmm.eigen_plan import (
     _dsyevd_inplace_peak_gb,
     _dsyevd_peak_gb,
 )
-from jamma.core.memory import array_gb
-from jamma.jlinalg import HAS_C_EXTENSION, blas_has_dsyevd
 
 pytestmark = pytest.mark.tier0
 

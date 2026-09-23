@@ -196,6 +196,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A kinship or eigen text file read while another run replaced it no longer
+  leaves a sidecar of the old contents that later reads prefer. The `.npy`
+  sidecar now carries the modification time of the text it was built from,
+  not the time it was written, and is not written at all when the text changed
+  during the parse. A binary `.npy` written after the text still takes
+  precedence, as before. On filesystems with one-second timestamps, a rewrite
+  within the same second can still pass as current.
 - The Linux build links the C extension against Intel OpenMP when it comes from
   the `intel-openmp` pip distribution, as it does with the current numpy-mkl
   wheels, instead of falling back to GCC's `libgomp`. The finder now also checks

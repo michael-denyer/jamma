@@ -14,9 +14,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.io._parallel_text import MemmapRef
 from jamma.io.matrix_reader import (
     MatrixReadTask,
-    _cleanup_temp_memmap,
     _scan_chunk_boundaries,
     read_matrix_parallel,
 )
@@ -324,9 +324,8 @@ class TestBoundedMemoryBehavior:
         path = tmp_path / "scan_test.txt"
         np.savetxt(path, matrix, fmt="%.10g", delimiter="\t")
 
-        n_rows, n_cols, chunks = _scan_chunk_boundaries(path, n_workers=2)
+        n_rows, chunks = _scan_chunk_boundaries(path, n_workers=2)
         assert n_rows == 100
-        assert n_cols == 5
         assert len(chunks) >= 1
 
         total_chunk_rows = 0
@@ -404,23 +403,6 @@ class TestMemmapLifecycle:
             f"Found leftover temp dirs after failed parse: {leftover_dirs}"
         )
 
-    def test_cleanup_temp_memmap_nonexistent_paths(self) -> None:
-        """_cleanup_temp_memmap does not raise when files/dirs are already gone."""
-        _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")
-
-    def test_cleanup_temp_memmap_permission_error(self) -> None:
-        """_cleanup_temp_memmap does not raise when os.unlink raises PermissionError.
-
-        Cleanup errors (PermissionError, OSError) are swallowed so that GC
-        finalizers and exception handling paths never themselves raise.
-        """
-        import os
-        from unittest.mock import patch
-
-        with patch.object(os, "unlink", side_effect=PermissionError("denied")):
-            # Must not raise even though os.unlink will fail
-            _cleanup_temp_memmap("/nonexistent/dir", "/nonexistent/dir/matrix.dat")
-
 
 class TestParseChunkRowCountMismatch:
     """Verify _parse_chunk_to_memmap raises on row-count mismatch."""
@@ -443,9 +425,7 @@ class TestParseChunkRowCountMismatch:
         # Pass n_rows=10 but file only has 5 rows — triggers row-count mismatch
         task = MatrixReadTask(
             txt_path=str(txt_path),
-            memmap_path=mm_path,
-            shape=(10, 3),
-            dtype="float64",
+            matrix=MemmapRef(mm_path, (10, 3), "float64"),
             start_byte=0,
             end_byte=file_size,
             start_row=0,
@@ -488,3 +468,11 @@ class TestMultiWorkerCorrectness:
         assert result.shape == (500, 10)
         expected = np.loadtxt(path, dtype=np.float64)
         np.testing.assert_array_equal(result, np.atleast_2d(expected))
+
+
+def test_zero_workers_rejected_like_the_writer(tmp_path: Path) -> None:
+    """n_workers below 1 raises instead of being clamped to one worker."""
+    path = tmp_path / "m.txt"
+    np.savetxt(path, np.ones((600, 3)))
+    with pytest.raises(ValueError, match="n_workers must be >= 1"):
+        read_matrix_parallel(path, n_workers=0)

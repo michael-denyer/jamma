@@ -314,9 +314,6 @@ class TestFailureHandling:
         remaining = list(tmp_path.glob(".jamma_mwrite_*"))
         assert not remaining, f"Temp dirs not cleaned up after failure: {remaining}"
 
-    @pytest.mark.xfail(
-        strict=True, reason="a failed eager memmap delete leaks the temp dir"
-    )
     def test_temp_dir_removed_when_eager_memmap_delete_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

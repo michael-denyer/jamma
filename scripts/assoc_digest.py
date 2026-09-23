@@ -191,7 +191,7 @@ def _pipeline_keys(work: Path) -> dict[str, str]:
 def _api_keys(work: Path) -> dict[str, str]:
     digests: dict[str, str] = {}
     data = load_plink_binary(SYNTHETIC.bfile)
-    kinship = read_kinship_matrix(SYNTHETIC.kinship, data.n_samples)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship, data.meta.n_samples)
     phenotypes = read_fam_phenotypes(SYNTHETIC.bfile.with_suffix(".fam"))
     covariates = np.loadtxt(SYNTHETIC.covariates, dtype=np.float64)
     snp_meta = SnpMeta.from_plink_meta(data.meta)

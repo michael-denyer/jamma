@@ -20,7 +20,6 @@ Mirrors the conventions in matrix_writer.py: spawn context, file-backed memmap,
 top-level picklable functions, temp dir on same filesystem as input.
 """
 
-import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,10 +27,10 @@ import numpy as np
 from loguru import logger
 
 from jamma.io._parallel_text import (
+    MemmapRef,
     default_worker_count,
     run_spawn_pool,
     temp_dir_beside,
-    unlink_quietly,
 )
 
 
@@ -40,9 +39,7 @@ class MatrixReadTask:
     """Picklable message passed to one matrix-parsing worker."""
 
     txt_path: str
-    memmap_path: str
-    shape: tuple[int, int]
-    dtype: str
+    matrix: MemmapRef
     start_byte: int
     end_byte: int
     start_row: int
@@ -64,7 +61,7 @@ def _parse_chunk_to_memmap(task: MatrixReadTask) -> None:
             f.seek(task.start_byte)
             chunk = np.loadtxt(
                 f,
-                dtype=np.dtype(task.dtype),
+                dtype=np.dtype(task.matrix.dtype),
                 delimiter=task.delimiter,
                 max_rows=task.row_count,
             )
@@ -76,12 +73,7 @@ def _parse_chunk_to_memmap(task: MatrixReadTask) -> None:
                 f"File may have been modified during read."
             )
 
-        mm = np.memmap(
-            task.memmap_path,
-            dtype=np.dtype(task.dtype),
-            mode="r+",
-            shape=task.shape,
-        )
+        mm = task.matrix.open("r+")
         mm[task.start_row : task.start_row + chunk.shape[0], :] = chunk
         del mm  # release memmap reference
     except MemoryError:
@@ -125,47 +117,32 @@ def _count_data_lines_between(f, start: int, end: int) -> int:
     return count
 
 
-def _scan_chunk_boundaries(
-    path: Path, n_workers: int, delimiter: str | None = None
-) -> tuple[int, int, list[tuple[int, int, int, int]]]:
-    """Scan a text file to find byte offsets aligned to newline boundaries.
+def _first_data_line(path: Path) -> bytes:
+    """Return the first data line, raising if the file has none."""
+    with open(path, "rb") as f:
+        for line in f:
+            if _is_data_line(line):
+                return line
+    raise ValueError(f"Matrix file has no data rows: {path}")
 
-    Two-pass scan: first pass counts total data rows and detects column count;
-    second pass seeks to approximate boundaries and counts per-chunk rows via
-    bounded line-by-line iteration.
+
+def _scan_chunk_boundaries(
+    path: Path, n_workers: int
+) -> tuple[int, list[tuple[int, int, int, int]]]:
+    """Split a text file into newline-aligned byte ranges and count their rows.
+
+    One pass: seeks to approximate boundaries and counts each chunk's data rows
+    via bounded line-by-line iteration; the counts sum to the total.
 
     Args:
         path: Input text file path.
         n_workers: Number of parallel chunks to create.
-        delimiter: Column separator (None = whitespace).
 
     Returns:
-        Tuple of (n_rows, n_cols, chunks) where each chunk is
+        Tuple of (n_rows, chunks) where each chunk is
         (start_byte, end_byte, start_row, n_rows_in_chunk).
     """
     file_size = path.stat().st_size
-    if file_size == 0:
-        raise ValueError(f"Matrix file is empty: {path}")
-
-    # First pass: find first data line (for column count) and count all data rows.
-    first_line = b""
-    n_rows = 0
-    with open(path, "rb") as f:
-        for raw_line in f:
-            if _is_data_line(raw_line):
-                if not first_line:
-                    first_line = raw_line
-                n_rows += 1
-
-    if n_rows == 0 or not first_line:
-        raise ValueError(f"Matrix file has no data rows: {path}")
-
-    if delimiter is not None:
-        n_cols = len(first_line.split(delimiter.encode()))
-    else:
-        n_cols = len(first_line.split())
-
-    # Compute byte boundaries aligned to newlines
     target_chunk_size = file_size // n_workers
     chunks: list[tuple[int, int, int, int]] = []
     current_row = 0
@@ -173,17 +150,13 @@ def _scan_chunk_boundaries(
     with open(path, "rb") as f:
         chunk_start = 0
         for _i in range(n_workers - 1):
-            # Seek to approximate split point and find next newline
             target = chunk_start + target_chunk_size
             if target >= file_size:
                 break
             f.seek(target)
-            # Read ahead to find newline boundary
             f.readline()  # advance past next newline boundary
             chunk_end = f.tell()
 
-            # Count data rows in this chunk via bounded line iteration
-            # (no large byte buffer allocation)
             rows_in_chunk = _count_data_lines_between(f, chunk_start, chunk_end)
 
             if rows_in_chunk > 0:
@@ -191,25 +164,12 @@ def _scan_chunk_boundaries(
                 current_row += rows_in_chunk
                 chunk_start = chunk_end
 
-        # Final chunk: everything remaining
         if chunk_start < file_size:
-            rows_in_last = n_rows - current_row
+            rows_in_last = _count_data_lines_between(f, chunk_start, file_size)
             chunks.append((chunk_start, file_size, current_row, rows_in_last))
+            current_row += rows_in_last
 
-    return n_rows, n_cols, chunks
-
-
-def _cleanup_temp_memmap(tmp_dir: str, memmap_path: str) -> None:
-    """Clean up the temp memmap file and its parent directory."""
-    unlink_quietly(memmap_path)
-    try:
-        Path(tmp_dir).rmdir()
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        # loguru may be torn down when this runs from a finalizer at shutdown.
-        with contextlib.suppress(Exception):
-            logger.warning(f"Could not remove temp dir {tmp_dir}: {e}")
+    return current_row, chunks
 
 
 def read_matrix_parallel(
@@ -241,21 +201,11 @@ def read_matrix_parallel(
     if file_size == 0:
         raise ValueError(f"Matrix file is empty: {path}")
 
-    # Quick row count to decide parallel vs serial.
-    # Read the first data line to get bytes-per-line, then extrapolate.
-    # Previous 64KB sample approach failed for wide matrices (75k+ columns
-    # produce ~1.5MB lines, so no newline appeared in the sample).
-    # Skip comment lines (starting with '#') to avoid inflated line length.
-    with open(path, "rb") as f:
-        first_line = f.readline()
-        if not first_line:
-            raise ValueError(f"Matrix file is empty: {path}")
-        while first_line.startswith(b"#"):
-            first_line = f.readline()
-            if not first_line:
-                raise ValueError(f"Matrix file contains only comments: {path}")
-        bytes_per_line = len(first_line)
-    n_rows_approx = max(1, file_size // bytes_per_line)
+    # Extrapolate the row count from the first data line's length to decide
+    # parallel vs serial; a fixed-size sample holds no newline once rows are
+    # wide (75k columns is ~1.5 MB per line).
+    first_line = _first_data_line(path)
+    n_rows_approx = max(1, file_size // len(first_line))
 
     if n_rows_approx < min_rows_for_parallel:
         logger.info(f"Reading {path.name} via np.loadtxt (small matrix)")
@@ -263,58 +213,44 @@ def read_matrix_parallel(
 
     if n_workers is None:
         n_workers = default_worker_count()
-    n_workers = max(1, n_workers)
+    if n_workers < 1:
+        raise ValueError(f"n_workers must be >= 1, got {n_workers}")
 
     logger.info(f"Reading {path.name} via parallel parse ({n_workers} workers)")
 
-    n_rows, n_cols, chunks = _scan_chunk_boundaries(path, n_workers, delimiter)
-    shape = (n_rows, n_cols)
+    n_rows, chunks = _scan_chunk_boundaries(path, n_workers)
+    n_cols = len(first_line.split(None if delimiter is None else delimiter.encode()))
 
     logger.debug(f"Matrix dimensions: {n_rows}x{n_cols}, {len(chunks)} chunks")
 
-    tmp_dir = temp_dir_beside(path, prefix=".jamma_mread_")
-    memmap_path = str(Path(tmp_dir) / "matrix.dat")
-
-    try:
-        # Create zero-filled memmap for workers to write into
-        mm = np.memmap(memmap_path, dtype=np.float64, mode="w+", shape=shape)
-        del mm  # release memmap reference; workers reopen in r+ mode
-
-        dtype_str = str(np.dtype(np.float64))
-        chunk_args = [
-            MatrixReadTask(
-                txt_path=str(path),
-                memmap_path=memmap_path,
-                shape=shape,
-                dtype=dtype_str,
-                start_byte=sb,
-                end_byte=eb,
-                start_row=sr,
-                row_count=nr,
-                delimiter=delimiter,
-            )
-            for sb, eb, sr, nr in chunks
-        ]
+    with temp_dir_beside(path, prefix=".jamma_mread_") as tmp_dir:
+        memmap = MemmapRef(str(tmp_dir / "matrix.dat"), (n_rows, n_cols), "float64")
+        memmap.open("w+")  # create the zero-filled file workers reopen r+
 
         run_spawn_pool(
             _parse_chunk_to_memmap,
-            chunk_args,
+            [
+                MatrixReadTask(
+                    txt_path=str(path),
+                    matrix=memmap,
+                    start_byte=sb,
+                    end_byte=eb,
+                    start_row=sr,
+                    row_count=nr,
+                    delimiter=delimiter,
+                )
+                for sb, eb, sr, nr in chunks
+            ],
             error_context=f"reading {path}",
             n_workers=n_workers,
         )
 
-        # Block-by-block copy: dense output is pre-allocated at full size,
-        # but only ~1024 rows of memmap pages are faulted at a time.  For
-        # matrices larger than physical memory this significantly reduces
-        # peak RSS vs np.array(mm) which faults the entire memmap.
-        result = np.empty(shape, dtype=np.float64)
-        mm = np.memmap(memmap_path, dtype=np.float64, mode="r", shape=shape)
-        block_rows = min(1024, shape[0])
-        for start in range(0, shape[0], block_rows):
-            end = min(start + block_rows, shape[0])
-            result[start:end] = mm[start:end]
+        # Block-by-block copy: only ~1024 rows of memmap pages are faulted at
+        # a time, unlike np.array(mm), which faults the entire memmap.
+        result = np.empty(memmap.shape, dtype=np.float64)
+        mm = memmap.open("r")
+        block_rows = min(1024, n_rows)
+        for start in range(0, n_rows, block_rows):
+            result[start : start + block_rows] = mm[start : start + block_rows]
         del mm
-
         return result
-    finally:
-        _cleanup_temp_memmap(tmp_dir, memmap_path)

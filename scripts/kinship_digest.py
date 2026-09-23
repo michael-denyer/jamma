@@ -75,7 +75,7 @@ def _valid_indices(n_samples: int) -> np.ndarray:
 
 def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
     data = load_plink_binary(bfile)
-    n_samples = data.n_samples
+    n_samples = data.meta.n_samples
     digests: dict[str, str] = {}
 
     for sample_label, valid_indices in (
@@ -124,7 +124,7 @@ def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
 
 def _loco_keys(fixture: str, bfile: Path) -> dict[str, str]:
     data = load_plink_binary(bfile)
-    n_samples = data.n_samples
+    n_samples = data.meta.n_samples
     digests: dict[str, str] = {}
 
     for sample_label, valid_indices in (

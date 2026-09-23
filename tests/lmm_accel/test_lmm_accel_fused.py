@@ -710,15 +710,15 @@ def _synthetic_fixture_run(lmm_mode: Literal[1, 4], with_covariates: bool):
     covariates = np.loadtxt(SYNTHETIC.covariates) if with_covariates else None
     snp_info = [
         {
-            "chr": str(plink.chromosome[i]),
-            "rs": plink.sid[i],
-            "pos": plink.bp_position[i],
-            "a1": plink.allele_1[i],
-            "a0": plink.allele_2[i],
+            "chr": str(plink.meta.chromosome[i]),
+            "rs": plink.meta.sid[i],
+            "pos": plink.meta.bp_position[i],
+            "a1": plink.meta.allele_1[i],
+            "a0": plink.meta.allele_2[i],
             "maf": 0.0,
             "n_miss": 0,
         }
-        for i in range(plink.n_snps)
+        for i in range(plink.meta.n_snps)
     ]
 
     def run():

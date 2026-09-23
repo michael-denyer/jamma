@@ -175,9 +175,10 @@ static double reml_logl_general_fresh(const void *ctx, double lambda)
                                snp->reml_const);
 }
 
-static double reml_score_loglambda_general(const void *ctx, double lambda)
+/* Fill snp->pab and snp->dpab (d/d log lambda) at lambda and return
+ * d log det(H) / d log lambda, all from compensated sums. */
+static double score_terms_general(const general_snp_t *snp, double lambda)
 {
-    const general_snp_t *snp = (const general_snp_t *)ctx;
     const pab_table_t *t = snp->t;
     const double *uab_inv = snp->uab_inv;
     const double *uab_var = snp->uab_var;
@@ -242,7 +243,16 @@ static double reml_score_loglambda_general(const void *ctx, double lambda)
                 + aw * bw * dpab[prev + re->index_ww] / (q * q);
         }
     }
-    double score = -0.5 * trace;
+    return trace;
+}
+
+static double reml_score_loglambda_general(const void *ctx, double lambda)
+{
+    const general_snp_t *snp = (const general_snp_t *)ctx;
+    const pab_table_t *t = snp->t;
+    const double *pab = snp->pab, *dpab = snp->dpab;
+    int ni = t->n_index;
+    double score = -0.5 * score_terms_general(snp, lambda);
     for (int d = 0; d < t->n_cvt + 1; d++) {
         int index = t->logdet_diag_rows[d] * ni + t->logdet_diag_cols[d];
         if (!(pab[index] > 0.0)) return NAN;
@@ -342,6 +352,16 @@ static double mle_logl_general(const void *ctx, double lambda)
                               snp->mle_const);
 }
 
+static double mle_score_loglambda_general(const void *ctx, double lambda)
+{
+    const general_snp_t *snp = (const general_snp_t *)ctx;
+    const pab_table_t *t = snp->t;
+    double trace = score_terms_general(snp, lambda);
+    int yy = (t->n_cvt + 1) * t->n_index + t->idx_yy;
+    if (!(snp->pab[yy] > 0.0)) return NAN;
+    return -0.5 * trace - 0.5 * snp->n_samples * snp->dpab[yy] / snp->pab[yy];
+}
+
 static double mle_logl_general_cached(
     const double *inv_sums_cached,
     const double *uab_var,
@@ -402,7 +422,7 @@ double refine_lambda_mle_general(
     }
 
     double lambda_opt = exp(golden_section_log_lambda(
-        mle_logl_general, NULL, snp, search, best_idx));
+        mle_logl_general, mle_score_loglambda_general, snp, search, best_idx));
     *logl_out = mle_logl_general(snp, lambda_opt);
 
     return lambda_opt;

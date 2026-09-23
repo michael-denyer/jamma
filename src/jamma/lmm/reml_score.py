@@ -1,4 +1,4 @@
-"""Stable analytic REML scores and safeguarded refinement of interior optima.
+"""Stable analytic REML and MLE scores and safeguarded refinement of optima.
 
 Differentiate the weighted cross-products directly. Subtracting Pab and PPab
 would lose precision when lambda is small. Compensated reductions retain the
@@ -55,13 +55,13 @@ def _compensated_weighted_sum(weights: np.ndarray, values: np.ndarray) -> np.nda
     return total
 
 
-def _batch_reml_score_log_lambda_numpy(
+def _score_terms(
     n_cvt: int,
     log_lambdas: np.ndarray,
     eigenvalues: np.ndarray,
     Uab_batch: np.ndarray,
-) -> np.ndarray:
-    """Evaluate the analytic REML score with respect to log(lambda)."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return ``(-0.5 * dlogdet(H), Pab, dPab)``, each derivative by log(lambda)."""
     lambdas = np.exp(log_lambdas)
     h = 1.0 / (1.0 + lambdas[:, None] * eigenvalues[None, :])
     dh = -lambdas[:, None] * eigenvalues[None, :] * h * h
@@ -78,6 +78,18 @@ def _batch_reml_score_log_lambda_numpy(
 
     trace_values = (lambdas[:, None] * eigenvalues[None, :] * h)[:, :, None]
     score = -0.5 * _compensated_weighted_sum(np.ones_like(h), trace_values)[:, 0]
+    return score, pab, dpab
+
+
+def _batch_reml_score_log_lambda_numpy(
+    n_cvt: int,
+    log_lambdas: np.ndarray,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+) -> np.ndarray:
+    """Evaluate the analytic REML score with respect to log(lambda)."""
+    score, pab, dpab = _score_terms(n_cvt, log_lambdas, eigenvalues, Uab_batch)
+    table = build_index_table(n_cvt)
     with np.errstate(divide="ignore", invalid="ignore"):
         for row, col in table.logdet_diag_indices:
             score -= 0.5 * dpab[:, row, col] / pab[:, row, col]
@@ -91,6 +103,22 @@ def _batch_reml_score_log_lambda_numpy(
     return score
 
 
+def _batch_mle_score_log_lambda_numpy(
+    n_cvt: int,
+    log_lambdas: np.ndarray,
+    eigenvalues: np.ndarray,
+    Uab_batch: np.ndarray,
+) -> np.ndarray:
+    """Evaluate the analytic MLE score with respect to log(lambda)."""
+    score, pab, dpab = _score_terms(n_cvt, log_lambdas, eigenvalues, Uab_batch)
+    yy = build_index_table(n_cvt).idx_yy
+    with np.errstate(divide="ignore", invalid="ignore"):
+        score -= (
+            0.5 * len(eigenvalues) * (dpab[:, n_cvt + 1, yy] / pab[:, n_cvt + 1, yy])
+        )
+    return score
+
+
 def _refine_reml_optima(
     log_opt: np.ndarray,
     coarse_a: np.ndarray,
@@ -98,7 +126,7 @@ def _refine_reml_optima(
     interior: np.ndarray,
     score_at: Callable[[np.ndarray, np.ndarray], np.ndarray],
 ) -> np.ndarray:
-    """Refine interior peaks until the estimated log-lambda error is small."""
+    """Refine interior REML or MLE peaks until the log-lambda error is small."""
     if not np.any(interior):
         return log_opt
     indices = np.flatnonzero(interior)

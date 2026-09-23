@@ -17,6 +17,7 @@ from tests.math_validation.compare import (
     check_boundary_coverage,
     compare_files,
 )
+from tests.math_validation.evidence import evidence_bundle, select_cases
 from tests.math_validation.fixtures import (
     REFERENCE,
     WALD_HEADER,
@@ -235,3 +236,32 @@ def test_printed_af_rounding_limit_is_decimal_exact(
         path.write_text("\n".join(lines) + "\n")
     result = compare_files(*paths)
     assert result["status"] == status, result
+
+
+@pytest.mark.tier0
+def test_evidence_bundle_is_written_with_the_error_when_a_family_raises(tmp_path):
+    with (
+        pytest.raises(RuntimeError, match="comparison crashed"),
+        evidence_bundle(tmp_path / "run", cases=[]) as bundle,
+    ):
+        bundle["cases"].append({"id": "first"})
+        raise RuntimeError("comparison crashed")
+    written = json.loads((tmp_path / "run" / "bundle.json").read_text())
+    assert written["schema_version"] == 1
+    assert written["status"] == "INCONCLUSIVE"
+    assert written["error"] == "RuntimeError: comparison crashed"
+    assert written["cases"] == [{"id": "first"}]
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("case_ids", [(), ("missing",), ("a", "missing")])
+def test_select_cases_rejects_empty_or_undeclared_ids(case_ids):
+    with pytest.raises(ValueError, match="at least one declared LOCO case"):
+        select_cases([{"id": "a"}, {"id": "b"}], case_ids, "LOCO")
+
+
+@pytest.mark.tier0
+def test_select_cases_keeps_declared_order():
+    declared = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    assert select_cases(declared, None, "LOCO") == declared
+    assert select_cases(declared, ("c", "a"), "LOCO") == [declared[0], declared[2]]

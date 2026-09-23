@@ -105,6 +105,8 @@ uv run python scripts/mathematical_validation.py generate weights --gemma "$HOME
 
 The driver records software versions, actual BLAS/LAPACK identity, compiler,
 source and binary hashes, configuration, raw outputs and field errors.
+Every family writes its `bundle.json` even when the comparison raises, and
+records the exception under `error`.
 The tests write their compared outputs and verdicts to `JAMMA_MATH_EVIDENCE_DIR`
 when set, or to pytest temporary directories. CI uploads those same bundles
 for each platform and the forced NumPy job.

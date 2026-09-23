@@ -6,6 +6,7 @@ import os
 import platform
 import subprocess
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager, redirect_stdout
 from dataclasses import asdict
 from pathlib import Path
@@ -41,6 +42,38 @@ def bundle_status(statuses) -> str:
         if values and all(s == "VERIFIED" for s in values)
         else "NOT VERIFIED"
     )
+
+
+def select_cases(declared: list[dict], case_ids, family: str) -> list[dict]:
+    """Return the declared cases named by ``case_ids``, or all when it is None."""
+    requested = {case["id"] for case in declared} if case_ids is None else set(case_ids)
+    if not requested or requested - {case["id"] for case in declared}:
+        raise ValueError(f"case_ids must name at least one declared {family} case")
+    return [case for case in declared if case["id"] in requested]
+
+
+@contextmanager
+def evidence_bundle(destination: Path, **fields) -> Iterator[dict]:
+    """Yield a schema-1 bundle and write it to ``bundle.json`` on any exit.
+
+    A comparison that raises records the exception under ``error`` before
+    the bundle is written, so a failed run still leaves its evidence behind.
+    """
+    destination.mkdir(parents=True, exist_ok=False)
+    bundle = {
+        "schema_version": 1,
+        "status": "INCONCLUSIVE",
+        "environment": environment(),
+        "invocation": sys.argv,
+        **fields,
+    }
+    try:
+        yield bundle
+    except Exception as exc:
+        bundle["error"] = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        write_json(destination / "bundle.json", bundle)
 
 
 def run_pipeline(source: Path, out: Path, *, output_prefix="jamma", **overrides):

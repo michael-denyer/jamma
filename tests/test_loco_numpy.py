@@ -139,6 +139,49 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
 
 
 @pytest.mark.tier1
+@pytest.mark.xfail(
+    strict=True,
+    reason="missing-phenotype LOCO re-reads each chromosome for SNP statistics",
+)
+def test_loco_missing_phenotype_reuses_kinship_snp_stats():
+    """A missing-phenotype LOCO run opens the BED 3 + n_chr times, not 3 + 2*n_chr.
+
+    Kinship PASS 1 already computes SNP statistics over the analysed rows, so
+    association reads each chromosome's genotypes once and nothing else.
+    """
+    require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
+
+    from unittest.mock import patch
+
+    import bed_reader
+
+    call_count = 0
+    original_open_bed = bed_reader.open_bed
+
+    def counting_open_bed(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return original_open_bed(*args, **kwargs)
+
+    phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
+    phenotypes[::9] = np.nan
+
+    with (
+        patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
+        patch("jamma.lmm.loco.open_bed", side_effect=counting_open_bed),
+    ):
+        loco = run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=phenotypes,
+            config=LmmConfig(check_memory=False, show_progress=False),
+        )
+
+    n_chromosomes = len(set(get_plink_metadata(_LOCO_BFILE).chromosome.tolist()))
+    assert loco.n_tested > 0
+    assert call_count == 3 + n_chromosomes
+
+
+@pytest.mark.tier1
 def test_run_lmm_loco_plans_association_once(monkeypatch):
     """One plan per run, over the SNP total, shared by every chromosome."""
     import jamma.lmm.loco as loco_module

@@ -32,12 +32,13 @@ from __future__ import annotations
 
 import hashlib
 import re
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from _lint_common import repo_root, tracked_files
+
+REPO_ROOT = repo_root()
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 MANIFEST_PATH = FIXTURES_DIR / "MANIFEST.toml"
 REGENERATE_CMD = "python scripts/check_fixture_manifest.py --write"
@@ -57,20 +58,7 @@ def sha256_of(path: Path) -> str:
 
 def tracked_fixtures() -> list[Path]:
     """Return git-tracked files under ``tests/fixtures/`` (excluding the manifest)."""
-    result = subprocess.run(
-        ["git", "ls-files", "tests/fixtures/"],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=REPO_ROOT,
-    )
-    paths: list[Path] = []
-    for line in result.stdout.splitlines():
-        rel = line.strip()
-        if not rel or rel.endswith("MANIFEST.toml"):
-            continue
-        paths.append(REPO_ROOT / rel)
-    return sorted(paths)
+    return [p for p in tracked_files("tests/fixtures/") if p != MANIFEST_PATH]
 
 
 def load_manifest() -> dict[str, dict[str, str]]:

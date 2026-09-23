@@ -179,7 +179,7 @@ def test_lmm_accel_spec_checks_every_build_source_and_the_headers() -> None:
 
     freshness = _load_script_module()
     (spec,) = [e for e in freshness._discover_extensions() if e.label == "_lmm_accel"]
-    lmm_dir = freshness._project_root() / "src/jamma/lmm"
+    lmm_dir = freshness.repo_root() / "src/jamma/lmm"
     patterns = [pattern for base, pattern in spec.source_globs if base == lmm_dir]
     assert patterns == [*LMM_ACCEL_SOURCES, "_lmm_*.h"]
     for name in LMM_ACCEL_SOURCES:

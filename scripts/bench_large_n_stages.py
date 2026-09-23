@@ -38,6 +38,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
+from _bench_common import balanced_schedule, git_revision, percent_change, summarize_ab
 
 _STAGES = ("kinship", "eigen", "rotation", "association")
 
@@ -330,28 +331,9 @@ class _WorkerProcess:
         return self.process.stderr.read().strip() or "no worker error output"
 
 
-def _balanced_schedule(blocks: int) -> list[list[str]]:
-    if blocks < 1:
-        raise ValueError("blocks must be >= 1")
-    return [
-        ["A", "B", "B", "A"] if index % 2 == 0 else ["B", "A", "A", "B"]
-        for index in range(blocks)
-    ]
-
-
 def _worker_start_order(block_index: int) -> tuple[str, str]:
     """Reverse worker creation order with each timing block."""
     return ("A", "B") if block_index % 2 == 0 else ("B", "A")
-
-
-def _percent_change(after: float, before: float) -> float:
-    return 100.0 * (after / before - 1.0)
-
-
-def _revision(source_root: Path) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
-    ).strip()
 
 
 def _summarize_stage(
@@ -394,7 +376,7 @@ def _summarize_stage(
             for worker in workers.values():
                 worker.close()
         deltas.append(
-            _percent_change(
+            percent_change(
                 statistics.median(by_revision["B"]),
                 statistics.median(by_revision["A"]),
             )
@@ -414,27 +396,11 @@ def _summarize_stage(
             "in the last bits on purpose."
         )
 
-    median_a = statistics.median(timings["A"])
-    median_b = statistics.median(timings["B"])
     return {
-        "median_a_seconds": median_a,
-        "median_b_seconds": median_b,
-        "b_vs_a_percent": _percent_change(median_b, median_a),
-        "paired_block_median_percent": statistics.median(deltas),
-        "block_delta_min_percent": min(deltas),
-        "block_delta_max_percent": max(deltas),
-        "session_drift_percent": _percent_change(block_medians[-1], block_medians[0]),
-        "conclusion": (
-            "no_stable_winner"
-            if min(deltas) <= 0.0 <= max(deltas)
-            else "consistent_direction_requires_replication"
-        ),
         "outputs_match": outputs_match,
         "a_output_sha256": next(iter(digests["A"])),
         "b_output_sha256": next(iter(digests["B"])),
-        "a_timings_seconds": timings["A"],
-        "b_timings_seconds": timings["B"],
-        "block_deltas_percent": deltas,
+        **summarize_ab(timings, deltas, block_medians),
     }
 
 
@@ -449,7 +415,7 @@ def compare(
     tolerate_output_mismatch: bool = False,
 ) -> dict[str, object]:
     """Compare every requested stage with balanced, correctness-checked A/B runs."""
-    schedule = _balanced_schedule(blocks)
+    schedule = balanced_schedule(blocks)
     stage_results = {
         stage: _summarize_stage(
             stage,
@@ -467,8 +433,8 @@ def compare(
     return {
         "a_root": str(a_root),
         "b_root": str(b_root),
-        "a_revision": _revision(a_root),
-        "b_revision": _revision(b_root),
+        "a_revision": git_revision(a_root),
+        "b_revision": git_revision(b_root),
         "samples": n_samples,
         "snps": n_snps,
         "threads": n_threads,
@@ -532,7 +498,7 @@ def main() -> None:
         )
         return
 
-    schedule = _balanced_schedule(args.blocks)
+    schedule = balanced_schedule(args.blocks)
     if args.dry_run:
         for stage in args.stages:
             for index, order in enumerate(schedule, start=1):

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `scripts/bench_memory.py` replaces `bench_impute_memory.py`,
+  `bench_snp_stats_layout.py` and `bench_kinship_memory.py` as the
+  subcommands `impute`, `snp-stats` and `kinship`. The digest scripts share
+  one hashing and `--out`/`--diff` module, `scripts/_digest_common.py`, which
+  the digest workflows stage beside the head script. Digest keys and values
+  are unchanged.
 - Without the C extension, the REML and MLE likelihoods each have one
   finisher shared by the grid search and the per-SNP refinement, and the
   identity-weighted log-determinant is computed once per chunk. The REML

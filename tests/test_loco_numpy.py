@@ -81,11 +81,12 @@ def test_get_loco_worker_count_env_var(monkeypatch):
 @pytest.mark.tier1
 @pytest.mark.parametrize("missing_phenotypes", [False, True])
 def test_loco_reuses_kinship_snp_stats(missing_phenotypes):
-    """LOCO opens the BED 3 + n_chr times: metadata, 2 kinship passes, 1 per chr.
+    """LOCO opens the BED 2 + n_chr times: metadata, 1 kinship pass, 1 per chr.
 
-    Kinship PASS 1 already computes SNP statistics over the analysed rows, so
-    association reads each chromosome's genotypes once and nothing else, with
-    or without missing phenotypes.
+    The single kinship pass filters each chunk and records SNP statistics over
+    the analysed rows as it accumulates, so association reads each
+    chromosome's genotypes once and nothing else, with or without missing
+    phenotypes.
     """
     require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
@@ -117,7 +118,7 @@ def test_loco_reuses_kinship_snp_stats(missing_phenotypes):
 
     n_chromosomes = len(set(get_plink_metadata(_LOCO_BFILE).chromosome.tolist()))
     assert loco.n_tested > 0
-    assert call_count == 3 + n_chromosomes
+    assert call_count == 2 + n_chromosomes
 
 
 @pytest.mark.tier1
@@ -382,7 +383,7 @@ def test_loco_missing_phenotype_computed_and_cached_eigen_agree(tmp_path):
 
 @pytest.mark.tier1
 def test_loco_stream_carries_snp_stats_over_the_filtering_rows():
-    """PASS-1 statistics are readable before iteration, over the filtering rows."""
+    """First-pass statistics cover the filtering rows, once the first matrix is out."""
     require_fixture(_LOCO_BFILE.with_suffix(".bed"), _LOCO_BFILE.with_suffix(".fam"))
 
     from jamma.kinship import compute_loco_kinship_streaming
@@ -396,6 +397,9 @@ def test_loco_stream_carries_snp_stats_over_the_filtering_rows():
         filter_sample_indices=rows,
         consumer_gb=0.0,
     )
+    with pytest.raises(RuntimeError, match="first kinship pass"):
+        stream.snp_stats  # noqa: B018
+    next(iter(stream))
     assert stream.snp_stats.n_samples == len(rows)
     assert stream.snp_stats.n_snps == meta.n_snps
 
@@ -516,11 +520,9 @@ def test_loco_numpy_valid_sample_subsetting():
         consumer_gb=0.0,
     )
 
-    # Kinship statistics retain the full population even when output rows differ.
-    assert loco_stream.snp_stats is not None
-    assert loco_stream.snp_stats.n_samples == n_samples
-
     for chr_name, K_loco in loco_stream:
+        # Kinship statistics keep the full population even when output rows differ.
+        assert loco_stream.snp_stats.n_samples == n_samples
         assert K_loco.shape == (n_valid, n_valid), (
             f"K_loco for chr {chr_name} has shape {K_loco.shape}, "
             f"expected ({n_valid}, {n_valid})"

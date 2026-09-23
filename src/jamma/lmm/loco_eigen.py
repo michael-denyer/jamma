@@ -53,16 +53,22 @@ EigenPairs = Generator[tuple[str, np.ndarray, np.ndarray], None, None]
 class EigenPairSource:
     """What ``run_lmm_loco`` iterates, and the SNP statistics that came with it.
 
+    ``snp_stats`` holds statistics for every SNP over the analysed rows, for
+    the per-chromosome association filter. The first kinship pass computes
+    them, so they are readable once ``pairs`` has yielded; with cached
+    eigenpairs one streamed pass computes them up front.
+
     Attributes:
         pairs: One eigenpair per chromosome. Consume in order; each K_loco is
             dropped before the next is pulled.
-        snp_stats: Statistics for every SNP over the analysed rows, for the
-            per-chromosome association filter. Kinship PASS 1 computes them;
-            with cached eigenpairs one streamed pass does.
     """
 
     pairs: EigenPairs
-    snp_stats: SnpStats
+    _snp_stats: Callable[[], SnpStats]
+
+    @property
+    def snp_stats(self) -> SnpStats:
+        return self._snp_stats()
 
 
 @dataclass(frozen=True)
@@ -176,7 +182,7 @@ def eigen_pairs_for(
                         f"Genotype validation: {stats.n_unexpected} values outside "
                         "expected range {0, 1, 2, NaN}"
                     )
-                return EigenPairSource(pairs, snp_stats=stats)
+                return EigenPairSource(pairs, lambda: stats)
 
     logger.info(workers.describe())
     kinship_is_analysed = run.execution.resolved_kinship.n_samples == len(rows)
@@ -204,7 +210,7 @@ def eigen_pairs_for(
         eigen_plan=run.eigen_plan,
         workers=workers.workers,
     )
-    return EigenPairSource(pairs, snp_stats=stream.snp_stats)
+    return EigenPairSource(pairs, lambda: stream.snp_stats)
 
 
 def _validated_eigen_cache(

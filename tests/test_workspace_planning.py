@@ -33,8 +33,6 @@ pytestmark = pytest.mark.tier0
         (DispatchPath.NUMPY_WALD, 3, 3, 0, 10),
         (DispatchPath.FUSED, 1, 0, 0, 3),
         (DispatchPath.FUSED, 3, 0, 0, 10),
-        (DispatchPath.FUSED_GENERAL, 1, 0, 0, 3),
-        (DispatchPath.FUSED_GENERAL, 3, 0, 0, 10),
     ],
 )
 def test_dispatch_path_sizing_facts(
@@ -56,9 +54,7 @@ def test_dispatch_path_sizing_facts(
 
 @requires_c
 def test_general_mode4_prices_known_thread_workspace() -> None:
-    spec = WorkspaceSpec.build(
-        DispatchPath.FUSED_GENERAL, 4, 1_000, 1_000, 100, 50, 20, 18
-    )
+    spec = WorkspaceSpec.build(DispatchPath.FUSED, 4, 1_000, 1_000, 100, 50, 20, 18)
 
     idx = 5_253
     known = (18 * 102 * 1_000 + 18 * 102 * idx + 5_151 * 1_000) * 8
@@ -86,10 +82,8 @@ def test_general_lrt_adds_no_per_thread_sample_buffer(n_cvt: int) -> None:
 
 @requires_c
 def test_workspace_grid_resolution_changes_quote() -> None:
-    low = WorkspaceSpec.build(DispatchPath.FUSED_GENERAL, 1, 2_000, 2_000, 4, 20, 20, 2)
-    high = WorkspaceSpec.build(
-        DispatchPath.FUSED_GENERAL, 1, 2_000, 2_000, 4, 80, 20, 2
-    )
+    low = WorkspaceSpec.build(DispatchPath.FUSED, 1, 2_000, 2_000, 4, 20, 20, 2)
+    high = WorkspaceSpec.build(DispatchPath.FUSED, 1, 2_000, 2_000, 4, 80, 20, 2)
 
     assert high.fixed_bytes > low.fixed_bytes
 
@@ -146,7 +140,6 @@ def test_phenotype_group_is_bounded_by_live_native_workspaces(monkeypatch) -> No
         max_threads=1,
         persistent_bytes=1_000_000_000,
         per_thread_bytes=0,
-        transient_per_thread_bytes=0,
         bytes_per_snp=40,
     )
     plan = ExecutableAssociationPlan(
@@ -188,7 +181,6 @@ def test_phenotype_group_preserves_single_phenotype_chunk_width(monkeypatch) -> 
         max_threads=1,
         persistent_bytes=60_000_000,
         per_thread_bytes=0,
-        transient_per_thread_bytes=0,
         bytes_per_snp=1_000_000,
     )
     plan = ExecutableAssociationPlan(
@@ -386,12 +378,10 @@ def test_workspace_adds_the_python_reference_table_to_the_native_query() -> None
     from jamma.lmm import accel
 
     native = accel.require().workspace_sizes_c(1_000, 100, 50, 4, 18)
-    spec = WorkspaceSpec.build(
-        DispatchPath.FUSED_GENERAL, 4, 1_000, 1_000, 100, 50, 20, 18
-    )
+    spec = WorkspaceSpec.build(DispatchPath.FUSED, 4, 1_000, 1_000, 100, 50, 20, 18)
 
     assert spec.persistent_bytes - native[0] == 67_910_784
-    assert native[1:] == (spec.per_thread_bytes, spec.transient_per_thread_bytes)
+    assert native[1] == spec.per_thread_bytes
 
 
 @requires_c
@@ -422,28 +412,17 @@ def test_native_sizing_query_prices_the_layout_the_creator_allocates(
     if lmm_mode in (2, 4):
         null_model["logl_H0"] = -50.0
     bracket = (n_samples, 1e-5, 1e5, n_grid, 5)
-    if n_cvt == 1:
-        workspace = lib.create_workspace_ncvt1_c(
-            eigenvalues,
-            invariant,
-            utw[:, 0].copy(),
-            uty,
-            *bracket,
-            lmm_mode=lmm_mode,
-            **null_model,
-        )
-    else:
-        workspace = lib.create_workspace_general_c(
-            eigenvalues,
-            invariant,
-            utw,
-            uty,
-            *bracket,
-            n_threads,
-            n_cvt,
-            lmm_mode=lmm_mode,
-            **null_model,
-        )
+    workspace = lib.create_workspace_c(
+        eigenvalues,
+        invariant,
+        utw,
+        uty,
+        *bracket,
+        n_threads,
+        n_cvt,
+        lmm_mode=lmm_mode,
+        **null_model,
+    )
 
     assert lib._workspace_bytes_c(workspace) == lib.workspace_sizes_c(
         n_samples, n_cvt, n_grid, lmm_mode, n_threads
@@ -470,8 +449,8 @@ def test_native_sizing_counts_retained_run_invariants() -> None:
 
     n_samples = 100_000
     ncvt1_persistent, *_ = accel.require().workspace_sizes_c(n_samples, 1, 50, 1, 1)
-    # eigenvalues, UtW, Uty, Hi_eval_null, w, and three invariant Uab rows.
-    assert ncvt1_persistent >= 8 * n_samples * 8
+    # eigenvalues, UtW, Uty, Hi_eval_null, and three invariant Uab rows.
+    assert ncvt1_persistent >= 7 * n_samples * 8
 
     n_cvt = 100
     general_persistent, *_ = accel.require().workspace_sizes_c(
@@ -513,7 +492,7 @@ import tracemalloc
 from jamma.lmm.pab import build_index_table
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.workspace import WorkspaceSpec
-spec = WorkspaceSpec.build(DispatchPath.FUSED_GENERAL, 1, 128, 128, 100, 50, 20, 1)
+spec = WorkspaceSpec.build(DispatchPath.FUSED, 1, 128, 128, 100, 50, 20, 1)
 tracemalloc.start()
 table = build_index_table(100)
 retained, _ = tracemalloc.get_traced_memory()

@@ -38,29 +38,7 @@ def _compute(data, mode: LmmMode, backend: str):
     if not accel.available():
         pytest.skip("C accelerator is unavailable")
     invariant = compute_uab_invariant_soa(data.UtW, data.Uty, n_cvt=data.n_cvt)
-    if data.n_cvt == 1:
-        workspace = accel.require().create_workspace_ncvt1_c(
-            data.eigenvalues,
-            invariant,
-            data.UtW[:, 0],
-            data.Uty,
-            data.n_samples,
-            1e-5,
-            1e5,
-            50,
-            20,
-            lmm_mode=mode,
-            **(
-                {"hi_eval_null": hi_eval_null, "logl_H0": logl_H0}
-                if mode == 4
-                else ({"logl_H0": logl_H0} if mode == 2 else {})
-            ),
-        )
-        return accel.require().compute_lmm_chunk_ncvt1_c(
-            workspace, np.ascontiguousarray(data.UtG.T), 1
-        )
-
-    workspace = accel.require().create_workspace_general_c(
+    workspace = accel.require().create_workspace_c(
         data.eigenvalues,
         invariant,
         data.UtW,
@@ -79,7 +57,7 @@ def _compute(data, mode: LmmMode, backend: str):
             else ({"logl_H0": logl_H0} if mode == 2 else {})
         ),
     )
-    return accel.require().compute_lmm_chunk_fused_general_c(
+    return accel.require().compute_lmm_chunk_c(
         workspace, np.ascontiguousarray(data.UtG.T), 1
     )
 

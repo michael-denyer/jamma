@@ -15,8 +15,8 @@ _EXTENSION_LOADED = object()
 
 
 @pytest.mark.parametrize("n_cvt", [2, 76, compute_numpy.MAX_C_N_CVT])
-def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
-    """Wald routes to the fused general C kernel for every n_cvt up to the limit.
+def test_wald_resolves_to_fused_through_ncvt_limit(monkeypatch, n_cvt):
+    """Wald routes to the fused C kernel for every n_cvt up to the limit.
 
     This used to assert that _compute_wald_numpy took a general C branch. That
     branch could not run: the runner reaches _compute_wald_numpy only on
@@ -26,7 +26,7 @@ def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
     monkeypatch.setattr(accel, "_accel", _EXTENSION_LOADED)
 
     path = select_dispatch_path(n_cvt, 1, accel=accel.available())
-    assert path is DispatchPath.FUSED_GENERAL
+    assert path is DispatchPath.FUSED
 
 
 @pytest.mark.parametrize(

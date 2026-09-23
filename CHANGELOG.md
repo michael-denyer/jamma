@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `_lmm_accel` extension has one workspace creator and one chunk compute
+  for every covariate count, `create_workspace_c` and `compute_lmm_chunk_c`,
+  replacing the separate n_cvt=1 and general entry points (ABI 23). The C
+  side picks the kernel family from `n_cvt`, so `DispatchPath.FUSED_GENERAL`
+  is gone and `DispatchPath.FUSED` covers every covariate count. The n_cvt=1
+  workspace now allocates its per-thread scratch once at creation, as the
+  general one does, and reads the null-model `w` column straight from `UtW`
+  instead of a copy. `workspace_sizes_c` returns persistent and per-thread
+  bytes only, and an n_cvt=1 quote falls by 8 bytes per sample. Results are
+  bit-identical.
 - The likelihood-ratio test with more than one covariate (`-lmm 2` and
   `-lmm 4`) now reads the same per-SNP column layout as the REML search,
   instead of copying each SNP's inputs into a second per-thread buffer of

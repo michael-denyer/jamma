@@ -20,7 +20,7 @@ from jamma.core.recompile import _load_c_module
 if TYPE_CHECKING:
     from types import ModuleType
 
-_EXPECTED_ABI_VERSION = 22  # Must match ABI_VERSION in _lmm_accel.c
+_EXPECTED_ABI_VERSION = 23  # Must match ABI_VERSION in _lmm_accel.c
 
 # Load and validate the C accelerator through the one shared seam in
 # jamma.core.recompile. It honours JAMMA_FORCE_NUMPY_FALLBACK (returns None

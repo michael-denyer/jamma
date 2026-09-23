@@ -39,9 +39,9 @@ def test_runner_mode4_uses_fused_dispatch():
     from jamma.lmm import accel
     from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 
-    for n_cvt, expected in ((1, DispatchPath.FUSED), (2, DispatchPath.FUSED_GENERAL)):
+    for n_cvt in (1, 2):
         path = select_dispatch_path(n_cvt, 4, accel=accel.available())
-        assert path is expected
+        assert path is DispatchPath.FUSED
 
 
 # ---------------------------------------------------------------------------
@@ -367,8 +367,8 @@ def test_runner_pipeline_enabled_for_non_wald_modes(monkeypatch):
 def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
     """LRT (mode 2) with n_cvt=2 uses C general path and matches GEMMA reference.
 
-    Verifies the full path: FUSED_GENERAL dispatch -> a general workspace
-    created with lmm_mode=2 -> compute_lmm_chunk_fused_general_c.
+    Verifies the full path: FUSED dispatch -> a general workspace
+    created with lmm_mode=2 -> compute_lmm_chunk_c.
     """
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
 
@@ -404,8 +404,8 @@ def test_runner_numpy_ncvt2_mode2_c_dispatch(synthetic_data_with_covariates):
 def test_runner_numpy_ncvt2_mode3_c_dispatch(synthetic_data_with_covariates):
     """Score (mode 3) with n_cvt=2 uses C general path and matches GEMMA reference.
 
-    Verifies the full path: FUSED_GENERAL dispatch -> a general workspace
-    created with lmm_mode=3 -> compute_lmm_chunk_fused_general_c.
+    Verifies the full path: FUSED dispatch -> a general workspace
+    created with lmm_mode=3 -> compute_lmm_chunk_c.
     """
     plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
 

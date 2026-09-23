@@ -218,14 +218,14 @@ def test_preflight_accepts_moderate_n_cvt(monkeypatch):
     _streaming_preflight(3048, 88_268, n_cvt=25)
 
 
-# n_cvt=1 selects FUSED for every lmm_mode;
-# n_cvt>=2 selects FUSED_GENERAL for every mode; accel=False always selects
+# With the extension loaded, every n_cvt and lmm_mode selects FUSED;
+# accel=False always selects
 # NUMPY_FALLBACK regardless of n_cvt/lmm_mode. One representative lmm_mode
 # per path, matching select_dispatch_path's own resolution table.
 _DISPATCH_CASES = [
     pytest.param(1, 1, True, DispatchPath.FUSED, id="fused"),
-    pytest.param(2, 1, True, DispatchPath.FUSED_GENERAL, id="fused_general"),
-    pytest.param(2, 2, True, DispatchPath.FUSED_GENERAL, id="fused_general_lrt"),
+    pytest.param(2, 1, True, DispatchPath.FUSED, id="fused_general"),
+    pytest.param(2, 2, True, DispatchPath.FUSED, id="fused_general_lrt"),
     pytest.param(1, 3, True, DispatchPath.FUSED, id="fused_score_ws"),
     pytest.param(1, 2, True, DispatchPath.FUSED, id="fused_lrt_ws"),
     pytest.param(4, 1, False, DispatchPath.NUMPY_FALLBACK, id="numpy_fallback"),
@@ -476,9 +476,9 @@ class TestChunkPlanMatchesEngine:
         n_snps = 500_000
         n_cvt = 2
 
-        # n_cvt >= 2, mode 1 -> FUSED_GENERAL (is_native=True); dispatch is
+        # n_cvt >= 2, mode 1 -> FUSED (is_native=True); dispatch is
         # passed directly below, so no lmm_mode is needed.
-        dispatch = DispatchPath.FUSED_GENERAL
+        dispatch = DispatchPath.FUSED
         plan = _plan(n_samples, n_snps, n_cvt, dispatch)
         assert plan.use_pipeline, "this case must pipeline for the regression to bite"
         assert plan.n_buffers == 2

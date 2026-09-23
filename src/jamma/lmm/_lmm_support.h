@@ -137,6 +137,8 @@ int validate_hi_eval_null(const double *hi, int n_samples);
 int parse_mode_inputs(int lmm_mode, PyObject **hi_obj, PyObject *logl_obj,
                       lmm_tests_t *tests, double *logl_H0);
 
-int clamp_threads(int n_threads, int n_snps);
+/* Threads one chunk runs on: at most one per SNP and at most the
+ * workspace's thread capacity, and at least one. */
+int clamp_threads(int n_threads, int n_snps, int capacity);
 
 #endif /* JAMMA_LMM_SUPPORT_H */

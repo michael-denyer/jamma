@@ -110,19 +110,21 @@ def test_flat_reml_optima_match_independent_high_precision_roots(backend):
         if not accel.available():
             pytest.skip("C accelerator is unavailable")
         invariant = compute_uab_invariant_soa(UtW, Uty, n_cvt=1)
-        workspace = accel.require().create_workspace_ncvt1_c(
+        workspace = accel.require().create_workspace_c(
             eigenvalues,
             invariant,
-            UtW[:, 0],
+            UtW,
             Uty,
             len(eigenvalues),
             1e-5,
             1e5,
             50,
             20,
+            1,
+            1,
             lmm_mode=1,
         )
-        actual = accel.require().compute_lmm_chunk_ncvt1_c(
+        actual = accel.require().compute_lmm_chunk_c(
             workspace, np.ascontiguousarray(UtG.T), 1
         )["lambdas"]
 

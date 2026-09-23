@@ -125,13 +125,7 @@ class ExecutableAssociationPlan:
         if not self.dispatch.is_native:
             kernel_bytes = self.workspace.fixed_bytes
         else:
-            per_kernel = self.workspace.persistent_bytes + (
-                self.workspace.max_threads * self.workspace.per_thread_bytes
-            )
-            shared_transient = (
-                self.workspace.max_threads * self.workspace.transient_per_thread_bytes
-            )
-            kernel_bytes = group_size * per_kernel + shared_transient
+            kernel_bytes = group_size * self.workspace.fixed_bytes
         if group_size == 1:
             return kernel_bytes
 
@@ -142,8 +136,6 @@ class ExecutableAssociationPlan:
         # model are prepared. The null solve also returns Hi_eval. Count all
         # three analysed-sample vectors for every additional live phenotype.
         rows = 3 + self.dispatch.invariant_rows(self.n_cvt)
-        if self.dispatch.needs_null_w:
-            rows += 1
         prepared_bytes = (group_size - 1) * rows * self.n_samples * 8
         return kernel_bytes + prepared_bytes
 

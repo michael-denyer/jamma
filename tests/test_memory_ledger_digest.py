@@ -55,6 +55,15 @@ The eigen rows lost the ``pre_fallback_gb`` column when
 the peak it fell back from; the table was dumped before and after and
 compared cell by cell: 2438 rows, 684 eigen rows each 13 columns before and
 12 after, 0 surviving cells changed, and the 1754 other rows identical.
+
+``6aacdc05``: the n_cvt>=2 dispatch member merged into ``FUSED``, removing
+its 2304 ``price`` rows, and the synthetic workspace folded its 10,000 transient
+bytes into ``per_thread_bytes`` so ``fixed_bytes`` is unchanged. Of the
+surviving 5798 rows, only the 1152 ``fused`` rows at phenotype group 3 moved,
+in ``association_gb`` and ``total_peak_gb`` alone, each by exactly
+``80,000 - 16 * n`` bytes: per-thread scratch is now per kernel, so the two
+extra kernels add ``2 * 4 * 10,000``, and the null ``w`` row, no longer
+retained, drops ``2 * n`` float64. Every other row is identical.
 """
 
 from __future__ import annotations
@@ -82,8 +91,8 @@ from jamma.lmm.workspace import WorkspaceSpec
 
 pytestmark = pytest.mark.tier0
 
-EXPECTED_DIGEST = "e85356a0bdd6a1e0202ec65939a1245e7a72d572785eaedde5074e903469faa0"
-EXPECTED_ROWS = 8102
+EXPECTED_DIGEST = "6aacdc05ea4fe1f57b06403cbe817752fa5448ae443af0e2483a34aab667fca1"
+EXPECTED_ROWS = 5798
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
 CHUNK_SIZE = (10_000, 1_000)
@@ -120,7 +129,7 @@ def _price_plan(
     """A plan with a fixed synthetic workspace, so no row reads the C sizers."""
     n_input = n + extra
     workspace = WorkspaceSpec(
-        dispatch, 1, n, n_input, n_cvt, 50, 20, 4, 1_000_000, 100_000, 10_000, 64
+        dispatch, 1, n, n_input, n_cvt, 50, 20, 4, 1_000_000, 110_000, 64
     )
     return ExecutableAssociationPlan(
         summary=ExecutionPlan(mode, "digest"),

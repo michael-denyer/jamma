@@ -17,7 +17,7 @@ class WorkspaceSpec:
 
     ``persistent_bytes`` includes arrays retained by the Python invariants and
     arrays owned by a native workspace. ``per_thread_bytes`` is multiplied by
-    ``max_threads`` because the general workspace allocates its capacity once.
+    ``max_threads`` because the native workspace allocates its capacity once.
     ``bytes_per_snp`` covers result arrays; rotation and fallback Uab/Iab
     buffers remain part of the chunk geometry where they are allocated. The
     native query derives the owned Pab table storage from its dimensions,
@@ -35,14 +35,11 @@ class WorkspaceSpec:
     max_threads: int
     persistent_bytes: int
     per_thread_bytes: int
-    transient_per_thread_bytes: int
     bytes_per_snp: int
 
     @property
     def fixed_bytes(self) -> int:
-        return self.persistent_bytes + self.max_threads * (
-            self.per_thread_bytes + self.transient_per_thread_bytes
-        )
+        return self.persistent_bytes + self.max_threads * self.per_thread_bytes
 
     @classmethod
     def build(
@@ -92,13 +89,12 @@ class WorkspaceSpec:
                 1,
                 fixed_bytes + reference_bytes,
                 0,
-                0,
                 bytes_per_snp,
             )
 
         from jamma.lmm import accel
 
-        persistent, per_thread, transient = accel.require().workspace_sizes_c(
+        persistent, per_thread = accel.require().workspace_sizes_c(
             n_samples, n_cvt, n_grid, lmm_mode, max_threads
         )
         return cls(
@@ -112,6 +108,5 @@ class WorkspaceSpec:
             max_threads,
             persistent + reference_bytes,
             per_thread,
-            transient,
             output_bytes,
         )

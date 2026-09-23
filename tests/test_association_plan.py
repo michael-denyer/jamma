@@ -53,7 +53,7 @@ def test_plan_is_frozen_and_tightening_returns_a_chunk_plan(
 @pytest.mark.parametrize(
     "dispatch",
     [
-        pytest.param(DispatchPath.FUSED_GENERAL, marks=requires_c),
+        pytest.param(DispatchPath.FUSED, marks=requires_c),
         DispatchPath.NUMPY_FALLBACK,
     ],
 )

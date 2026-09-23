@@ -26,16 +26,14 @@ from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
 
-# R2 removes the 100-SNP floor when it exceeds the variable memory budget.
-# Against 346c3eb6, 1,280 of 7,560 rows change, all at the 1 MB budget;
-# every changed width decreases. The 2 GB and 40 GB rows are unchanged.
-EXPECTED_DIGEST = "1959a9a1959f0614e367034eff7e3256ddd2386ffd2d23a01b71c4922dc2be62"
-EXPECTED_ROWS = 7560
+# The pre-merge table minus the deleted n_cvt>=2 member's rows, which equalled FUSED's.
+EXPECTED_DIGEST = "188301b5bed9e345a2489aa77851bc4896e432acd5e64b0be819bf54c67e77bc"
+EXPECTED_ROWS = 5040
 
 N_SAMPLES = (30, 1_410, 5_000, 10_000, 10_001, 30_000, 100_000)
 N_SNPS = (100, 12_226, 500_000)
 N_CVT = (1, 4)
-DISPATCH = (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL, DispatchPath.NUMPY_FALLBACK)
+DISPATCH = (DispatchPath.FUSED, DispatchPath.NUMPY_FALLBACK)
 BUDGET_BYTES = (int(2e9), int(40e9), int(1e6))
 MAX_CHUNK = (None, 1_000)
 BLAS_CONTROLLABLE = (False, True)

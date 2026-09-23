@@ -310,13 +310,11 @@ class TestErrorMessageDifferentiation:
         )
 
     @requires_c
-    def test_every_path_has_its_own_label(self):
-        """All eight (n_cvt, mode) shapes report a distinct label.
+    def test_every_mode_has_its_own_label(self):
+        """Each lmm_mode reports a distinct label, the same at every n_cvt.
 
-        D2 gave the general workspace's one compute a label per lmm_mode
-        (previously modes 2 and 3 at n_cvt>=2 shared one SoA-split kernel
-        label), so every shape is now distinguishable, including mode 4
-        against Wald within each fused family.
+        One fused workspace serves every n_cvt, so the label names the mode,
+        including mode 4 against Wald and LRT against Score.
         """
         from jamma.lmm.chunk_kernel import make_kernel
 
@@ -327,7 +325,8 @@ class TestErrorMessageDifferentiation:
             for n_cvt in (1, 2)
             for mode in (1, 2, 3, 4)
         }
-        assert len(set(labels.values())) == 8, labels
+        assert len(set(labels.values())) == 4, labels
+        assert all(labels[1, mode] == labels[2, mode] for mode in (1, 2, 3, 4))
         assert labels[1, 4] != labels[1, 1], "mode 4 must not report as Wald"
         assert labels[2, 4] != labels[2, 1], "mode 4 must not report as Wald"
         assert labels[2, 2] != labels[2, 3], "LRT and Score must not share a label"

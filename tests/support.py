@@ -3,7 +3,6 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from jamma.lmm import accel
@@ -89,70 +88,6 @@ def install_lint_script(script: Path, scripts_dir: Path) -> Path:
     destination = scripts_dir / script.name
     shutil.copy2(script, destination)
     return destination
-
-
-def _build_synthetic_covariate_data(
-    n_cvt: int,
-    n_samples: int = 200,
-    n_snps: int = 50,
-    seed: int = 42,
-) -> dict:
-    """Build synthetic rotated data for C extension testing.
-
-    Generates eigenvalues, rotated covariates (UtW), phenotype (Uty),
-    genotypes (UtG), and computes Uab_batch for the given n_cvt.
-
-    Args:
-        n_cvt: Number of covariates.
-        n_samples: Number of samples.
-        n_snps: Number of SNPs.
-        seed: RNG seed for reproducibility.
-
-    Returns:
-        Dict with keys: eigenvalues, UtW, Uty, UtG, Uab_batch,
-        n_samples, n_snps, n_cvt.
-    """
-    from jamma.lmm.pab import compute_Uab
-
-    rng = np.random.default_rng(seed)
-
-    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]  # descending
-    UtW = np.abs(rng.standard_normal((n_samples, n_cvt))) + 0.5
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
-
-    # Compute Uab for each SNP
-    n_index = (n_cvt + 3) * (n_cvt + 2) // 2
-    Uab_batch = np.zeros((n_snps, n_samples, n_index), dtype=np.float64)
-    for i in range(n_snps):
-        Uab_batch[i] = compute_Uab(UtW, Uty, UtG[:, i])
-
-    return {
-        "eigenvalues": eigenvalues,
-        "UtW": UtW,
-        "Uty": Uty,
-        "UtG": UtG,
-        "Uab_batch": Uab_batch,
-        "n_samples": n_samples,
-        "n_snps": n_snps,
-        "n_cvt": n_cvt,
-    }
-
-
-def make_runner_synthetic_data(
-    n_samples: int = 100, n_snps: int = 50, seed: int = 42
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
-    """Create synthetic data for runner-level tests."""
-    rng = np.random.default_rng(seed)
-    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
-    phenotypes = rng.standard_normal(n_samples)
-    kinship = np.corrcoef(genotypes) + np.eye(n_samples) * 0.1
-    kinship = (kinship + kinship.T) / 2
-    snp_info = [
-        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
-        for i in range(n_snps)
-    ]
-    return genotypes, phenotypes, kinship, snp_info
 
 
 def preflight(config, execution):  # type: ignore[no-untyped-def]

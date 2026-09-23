@@ -23,6 +23,7 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.schema import MIN_N_GRID
+from tests.builders import gram_uab_batch
 from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
@@ -71,9 +72,10 @@ def test_c_extension_importable():
         assert callable(fn)
 
 
-def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch):
+def test_c_fallback_when_extension_unavailable(monkeypatch):
     """With no extension loaded, the Python path runs without error."""
-    eigenvalues, Uab_batch, n_samples = synthetic_wald_data
+    eigenvalues, Uab_batch = gram_uab_batch()
+    n_samples = eigenvalues.shape[0]
 
     monkeypatch.setattr(accel, "_accel", None)
 

@@ -17,8 +17,9 @@ from jamma.lmm import (
 )
 from jamma.lmm.loco import run_lmm_loco
 from jamma.lmm.schema import LmmConfig
+from tests.builders import make_runner_synthetic_data
 from tests.fixture_paths import LOCO, SYNTHETIC
-from tests.support import make_runner_synthetic_data, require_fixture
+from tests.support import require_fixture
 
 _QUIET = LmmConfig(check_memory=False, show_progress=False)
 

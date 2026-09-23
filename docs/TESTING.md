@@ -592,11 +592,15 @@ Defined in [`tests/conftest.py`](../tests/conftest.py):
 | `output_dir` | Temporary output directory wrapping `tmp_path` |
 | `asymmetric_plink` | PLINK prefix whose SNPs cross QC thresholds when rows are dropped |
 | `no_c_kernels` | Holds the `_lmm_accel` extension out for one test |
-| `synthetic_covariate_data_ncvt2` | Rotated data with 2 covariates (200 samples, 50 SNPs) |
-| `synthetic_covariate_data_ncvt4` | Rotated data with 4 covariates (200 samples, 50 SNPs) |
 | `synthetic_data` | `gemma_synthetic` PLINK data, kinship, phenotypes and `snp_info` |
 | `synthetic_data_with_covariates` | `synthetic_data` plus the `gemma_covariate` covariates |
 | `math_evidence_dir` | Evidence bundle path for a GEMMA comparison; raises unless the test is `tier1` |
+
+[`tests/lmm_accel/conftest.py`](../tests/lmm_accel/conftest.py) adds
+`synthetic_covariate_data_ncvt2` and `synthetic_covariate_data_ncvt4`, a
+`GeneralCase` over `covariate_lmm_inputs` with 2 or 4 covariates (200
+samples, 50 SNPs). `GeneralCase` in `tests/lmm_accel/_helpers.py` derives
+the Uab layouts and the null model the general kernels read.
 
 If you add a fixture, also add a row here.
 
@@ -604,7 +608,7 @@ Three modules beside `conftest.py` hold what the fixtures do not:
 
 - [`tests/support.py`](../tests/support.py) is the helper library test
   modules import: `require_fixture`, `requires_c`, `preflight`,
-  `install_lint_script` and the synthetic-data builders the fixtures share.
+  and `install_lint_script`.
   `conftest.py` holds only fixtures and hooks.
 
 - [`tests/fixture_paths.py`](../tests/fixture_paths.py) names every
@@ -617,7 +621,12 @@ Three modules beside `conftest.py` hold what the fixtures do not:
   `rotated_lmm_inputs(n_samples, n_snps, n_cvt=1, seed=42)` returns an
   `LmmInputs` (eigenvalues, `UtW`, `Uty`, `UtG`, `uab_batch()`) drawn in
   the order the inline recipe used, so a migrated test sees bit-identical
-  arrays. `write_fam(path, *columns, missing_at=...)` writes a `.fam`.
+  arrays. `covariate_lmm_inputs(n_cvt, ...)` is the general-kernel recipe
+  (descending eigenvalues, `|normal| + 0.5` covariates), `gram_uab_batch()`
+  builds an n_cvt=1 Uab batch from per-SNP vectors, and
+  `make_runner_synthetic_data()` returns unrotated genotypes, phenotypes,
+  kinship and `snp_info` for runner tests. `tests/test_builders.py` pins
+  each recipe's bytes. `write_fam(path, *columns, missing_at=...)` writes a `.fam`.
   Phenotypes are read back with `jamma.io.read_fam_phenotypes`, the same
   parser the pipeline uses.
 

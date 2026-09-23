@@ -10,10 +10,10 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.schema import LmmConfig
+from tests.builders import gram_uab_batch
 from tests.lmm_accel._helpers import (
     _fused_general_mode4_workspace,
     _fused_general_workspace,
-    _prepare_fused_general_data,
     _run_general_ncvt_c_vs_python,
 )
 from tests.support import requires_c
@@ -41,8 +41,8 @@ def test_general_ncvt_reml_wald_ncvt4(
 @requires_c
 def test_general_ncvt_workspace_lifecycle(synthetic_covariate_data_ncvt2):
     """C-GEN-02: Workspace create/compute/destroy cycle works for n_cvt>1."""
-    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
-    utg_t = data["utg_t"]
+    data = synthetic_covariate_data_ncvt2
+    utg_t = data.utg_t
     n_snps = utg_t.shape[0]
 
     ws = _fused_general_workspace(data)
@@ -137,12 +137,12 @@ def test_general_ncvt_all_modes(synthetic_covariate_data_ncvt2, monkeypatch):
     from jamma.lmm.uab import batch_compute_uab_numpy
 
     data = synthetic_covariate_data_ncvt2
-    n_cvt = data["n_cvt"]
-    eigenvalues = data["eigenvalues"]
-    n_samples = data["n_samples"]
-    UtW = data["UtW"]
-    Uty = data["Uty"]
-    UtG = data["UtG"]
+    n_cvt = data.n_cvt
+    eigenvalues = data.inputs.eigenvalues
+    n_samples = data.n_samples
+    UtW = data.inputs.UtW
+    Uty = data.inputs.Uty
+    UtG = data.inputs.UtG
 
     Uab_batch = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
     n_snps = Uab_batch.shape[0]
@@ -208,11 +208,11 @@ def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
     if n_threads < 2:
         pytest.skip("Need >=2 cores for multi-threaded test")
 
-    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
+    data = synthetic_covariate_data_ncvt2
     ws = _fused_general_workspace(data, n_threads)
 
-    r1 = accel.require().compute_lmm_chunk_c(ws, data["utg_t"], 1)
-    rn = accel.require().compute_lmm_chunk_c(ws, data["utg_t"], n_threads)
+    r1 = accel.require().compute_lmm_chunk_c(ws, data.utg_t, 1)
+    rn = accel.require().compute_lmm_chunk_c(ws, data.utg_t, n_threads)
 
     for key in ("lambdas", "logls", "betas", "ses", "pwalds"):
         np.testing.assert_allclose(
@@ -229,12 +229,12 @@ def test_general_ncvt_openmp_deterministic(synthetic_covariate_data_ncvt2):
 @requires_c
 def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
     """C-GEN-06: Constant genotypes produce NaN beta/se/p-value for n_cvt>1."""
-    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
+    data = synthetic_covariate_data_ncvt2
 
     # A constant genotype rotates to an all-zero UtG column, which drives xx to
     # zero and so P_XX to zero. Zeroing the row is how the fused kernel, which
     # builds Uab from UtG itself, is given a degenerate SNP.
-    utg_t = data["utg_t"].copy()
+    utg_t = data.utg_t.copy()
     utg_t[[0, 2]] = 0.0
 
     ws = _fused_general_workspace(data)
@@ -254,12 +254,12 @@ def test_general_ncvt_degenerate_snps(synthetic_covariate_data_ncvt2):
 @pytest.mark.tier0
 @requires_c
 def test_empty_chunk_returns_empty_columns_in_both_families(
-    general_score_lrt_ncvt2, fused_data
+    synthetic_covariate_data_ncvt2, fused_data
 ):
     """An empty chunk yields every mode-4 key with zero rows, whatever n_cvt."""
-    general = _prepare_fused_general_data(general_score_lrt_ncvt2)
+    general = synthetic_covariate_data_ncvt2
     general_ws = _fused_general_mode4_workspace(general)
-    empty_general = np.empty((0, general["n_samples"]))
+    empty_general = np.empty((0, general.n_samples))
     general_out = accel.require().compute_lmm_chunk_c(general_ws, empty_general, 1)
 
     eigenvalues, w, Uty, _, uab_inv_soa, n_samples = fused_data
@@ -307,13 +307,14 @@ def test_general_ncvt_abi_version():
 
 @pytest.mark.tier0
 @requires_c
-def test_existing_ncvt1_regression(synthetic_wald_data):
+def test_existing_ncvt1_regression():
     """C-GEN-08: the n_cvt=1 fused workspace path still works after the general work.
 
     Ensures the general n_cvt additions (ABI bump, extra workspace types) did not
     regress the original n_cvt=1 path.
     """
-    eigenvalues, Uab_batch, n_samples = synthetic_wald_data
+    eigenvalues, Uab_batch = gram_uab_batch()
+    n_samples = eigenvalues.shape[0]
 
     # The fused kernel builds Uab from w and UtG itself, so it is given the
     # invariant SoA plus the raw rotated vectors rather than a prebuilt Uab.

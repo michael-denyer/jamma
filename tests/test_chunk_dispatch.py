@@ -20,8 +20,9 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
+from tests.builders import make_runner_synthetic_data
 from tests.fixture_paths import SYNTHETIC
-from tests.support import make_runner_synthetic_data, requires_c
+from tests.support import requires_c
 
 
 @pytest.mark.tier1

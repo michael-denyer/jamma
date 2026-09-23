@@ -3,7 +3,6 @@
 import pytest
 
 from jamma.lmm import accel, compute_numpy
-from tests.lmm_accel._helpers import _prepare_fused_general_data
 from tests.support import requires_c
 
 pytestmark = [pytest.mark.tier0, requires_c]
@@ -18,14 +17,14 @@ def test_general_workspace_rejects_unsupported_covariate_count(
     The creator reads the covariate count before any array, so a
     two-covariate fixture reaches the guard whatever count it is handed.
     """
-    data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
+    data = synthetic_covariate_data_ncvt2
     with pytest.raises(ValueError, match=rf"n_cvt must be 1\.\.100, got {n_cvt}"):
         accel.require().create_workspace_c(
-            data["eigenvalues"],
-            data["uab_inv_soa"],
-            data["UtW"],
-            data["Uty"],
-            data["n_samples"],
+            data.inputs.eigenvalues,
+            data.uab_inv_soa,
+            data.inputs.UtW,
+            data.inputs.Uty,
+            data.n_samples,
             1e-5,
             1e5,
             50,

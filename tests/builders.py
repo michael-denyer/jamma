@@ -102,23 +102,81 @@ def rotated_lmm_inputs(
     n_cvt: int = 1,
     seed: int = 42,
     eig_range: tuple[float, float] = (0.1, 5.0),
+    intercept: bool = True,
 ) -> LmmInputs:
     """Build synthetic rotated inputs with a seeded generator.
 
     Eigenvalues are drawn uniformly on ``eig_range`` and sorted ascending.
-    ``UtW`` is an intercept column for ``n_cvt == 1`` and standard-normal
-    otherwise. ``Uty`` and ``UtG`` are standard-normal.
+    ``UtW`` is an intercept column for ``n_cvt == 1`` unless ``intercept`` is
+    False, and standard-normal otherwise. ``Uty`` and ``UtG`` are
+    standard-normal.
     """
     rng = np.random.default_rng(seed)
     eigenvalues = np.sort(rng.uniform(*eig_range, n_samples))
     UtW = (
         np.ones((n_samples, 1))
-        if n_cvt == 1
+        if n_cvt == 1 and intercept
         else rng.standard_normal((n_samples, n_cvt))
     )
     Uty = rng.standard_normal(n_samples)
     UtG = rng.standard_normal((n_samples, n_snps))
     return LmmInputs(eigenvalues, UtW, Uty, UtG)
+
+
+def covariate_lmm_inputs(
+    n_cvt: int, n_samples: int = 200, n_snps: int = 50, seed: int = 42
+) -> LmmInputs:
+    """Build the covariate recipe the general (n_cvt >= 2) kernel tests pin.
+
+    Eigenvalues are drawn on (0.1, 2.0) and sorted descending. ``UtW`` is
+    ``|normal| + 0.5`` so no covariate column is near zero.
+    """
+    rng = np.random.default_rng(seed)
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))[::-1]
+    UtW = np.abs(rng.standard_normal((n_samples, n_cvt))) + 0.5
+    Uty = rng.standard_normal(n_samples)
+    UtG = rng.standard_normal((n_samples, n_snps))
+    return LmmInputs(eigenvalues, UtW, Uty, UtG)
+
+
+def gram_uab_batch(
+    n_samples: int = 200, n_snps: int = 50, seed: int = 42
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build ascending eigenvalues and an n_cvt=1 Uab batch from per-SNP vectors.
+
+    Each SNP draws its own positive ``w``, positive ``x`` and normal ``y``, and
+    its six Uab columns are their Gram products, so every Pab recursion is
+    well-conditioned.
+
+    Returns:
+        ``(eigenvalues, Uab_batch)``, shapes (n_samples,) and
+        (n_snps, n_samples, 6).
+    """
+    rng = np.random.default_rng(seed)
+    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
+    Uab_batch = np.zeros((n_snps, n_samples, 6), dtype=np.float64)
+    for i in range(n_snps):
+        w = np.abs(rng.standard_normal(n_samples)) + 1.0
+        x = np.abs(rng.standard_normal(n_samples)) + 0.5
+        y = rng.standard_normal(n_samples)
+        Uab_batch[i] = np.stack([w * w, w * x, w * y, x * x, x * y, y * y], axis=1)
+    return eigenvalues, Uab_batch
+
+
+def make_runner_synthetic_data(
+    n_samples: int = 100, n_snps: int = 50, seed: int = 42
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
+    """Create unrotated genotypes, phenotypes, kinship and SNP info for runner tests."""
+    rng = np.random.default_rng(seed)
+    genotypes = rng.choice([0.0, 1.0, 2.0], size=(n_samples, n_snps))
+    phenotypes = rng.standard_normal(n_samples)
+    kinship = np.corrcoef(genotypes) + np.eye(n_samples) * 0.1
+    kinship = (kinship + kinship.T) / 2
+    snp_info = [
+        {"chr": "1", "rs": f"rs{i}", "pos": i * 1000, "a1": "A", "a0": "T"}
+        for i in range(n_snps)
+    ]
+    return genotypes, phenotypes, kinship, snp_info
 
 
 def write_fam(

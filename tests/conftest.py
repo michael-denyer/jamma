@@ -11,7 +11,6 @@ import pytest
 from bed_reader import to_bed
 
 from tests.fixture_paths import SYNTHETIC
-from tests.support import _build_synthetic_covariate_data
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
@@ -110,26 +109,6 @@ def no_c_kernels(monkeypatch: pytest.MonkeyPatch) -> None:
     from jamma.lmm import accel
 
     monkeypatch.setattr(accel, "_accel", None)
-
-
-@pytest.fixture
-def synthetic_covariate_data_ncvt2() -> dict:
-    """Synthetic data with 2 covariates for C extension testing.
-
-    200 samples, 50 SNPs, 2 covariates. Returns dict with
-    eigenvalues, UtW, Uty, UtG, Uab_batch, n_samples, n_snps, n_cvt.
-    """
-    return _build_synthetic_covariate_data(n_cvt=2, seed=42)
-
-
-@pytest.fixture
-def synthetic_covariate_data_ncvt4() -> dict:
-    """Synthetic data with 4 covariates for C extension testing.
-
-    200 samples, 50 SNPs, 4 covariates. Returns dict with
-    eigenvalues, UtW, Uty, UtG, Uab_batch, n_samples, n_snps, n_cvt.
-    """
-    return _build_synthetic_covariate_data(n_cvt=4, seed=99)
 
 
 @pytest.fixture

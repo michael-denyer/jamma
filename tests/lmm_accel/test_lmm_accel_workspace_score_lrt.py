@@ -26,7 +26,7 @@ from tests.support import requires_c
 pytestmark = pytest.mark.tier0
 
 # General workspace (n_cvt>=2) vs NumPy: peak deviation measured on
-# general_score_lrt_ncvt2 is 9.3e-13 for Score, 3.8e-5 relative for the MLE
+# synthetic_covariate_data_ncvt2 is 9.3e-13 for Score, 3.8e-5 relative for the MLE
 # lambda (an argmin on a flat surface for weak-signal SNPs, same story as
 # _LAMBDA_MLE_RTOL in tests/lmm_accel/_helpers.py) while the p_lrt it feeds
 # still agrees to 1.3e-12.
@@ -488,24 +488,24 @@ class TestNcvt2ScoreOnlyParity:
     """General workspace (n_cvt>=2), lmm_mode=3 (Score only) vs NumPy."""
 
     @requires_c
-    def test_general_score_only_matches_numpy(self, general_score_lrt_ncvt2):
+    def test_general_score_only_matches_numpy(self, synthetic_covariate_data_ncvt2):
         """Score-only general workspace matches the NumPy Score statistics."""
         from tests.lmm_accel._helpers import classify_uab_columns
 
-        data = general_score_lrt_ncvt2
-        n_cvt = data["n_cvt"]
-        n_samples = data["n_samples"]
+        data = synthetic_covariate_data_ncvt2
+        n_cvt = data.n_cvt
+        n_samples = data.n_samples
 
         inv_indices, _var_indices = classify_uab_columns(n_cvt)
-        Uab_batch = data["Uab_batch"]
+        Uab_batch = data.uab_batch
         uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-        utg_t = np.ascontiguousarray(data["UtG"].T)
+        utg_t = np.ascontiguousarray(data.inputs.UtG.T)
 
         ws = accel.require().create_workspace_c(
-            data["eigenvalues"],
+            data.inputs.eigenvalues,
             uab_inv_soa,
-            data["UtW"],
-            data["Uty"],
+            data.inputs.UtW,
+            data.inputs.Uty,
             n_samples,
             1e-5,
             1e5,
@@ -514,14 +514,14 @@ class TestNcvt2ScoreOnlyParity:
             1,
             n_cvt,
             lmm_mode=3,
-            hi_eval_null=data["Hi_eval_null"],
+            hi_eval_null=data.Hi_eval_null,
         )
         result = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
         assert set(result.keys()) == {"betas", "ses", "p_scores"}
 
         reference = _compute_score_numpy(
-            n_cvt, data["eigenvalues"], data["Hi_eval_null"], Uab_batch, n_samples
+            n_cvt, data.inputs.eigenvalues, data.Hi_eval_null, Uab_batch, n_samples
         )
         for key in ("betas", "ses", "p_scores"):
             np.testing.assert_allclose(
@@ -538,24 +538,24 @@ class TestNcvt2LrtOnlyParity:
     """General workspace (n_cvt>=2), lmm_mode=2 (LRT only) vs NumPy."""
 
     @requires_c
-    def test_general_lrt_only_matches_numpy(self, general_score_lrt_ncvt2):
+    def test_general_lrt_only_matches_numpy(self, synthetic_covariate_data_ncvt2):
         """LRT-only general workspace matches the NumPy MLE lambdas and p_lrts."""
         from tests.lmm_accel._helpers import classify_uab_columns
 
-        data = general_score_lrt_ncvt2
-        n_cvt = data["n_cvt"]
-        n_samples = data["n_samples"]
+        data = synthetic_covariate_data_ncvt2
+        n_cvt = data.n_cvt
+        n_samples = data.n_samples
 
         inv_indices, _var_indices = classify_uab_columns(n_cvt)
-        Uab_batch = data["Uab_batch"]
+        Uab_batch = data.uab_batch
         uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
-        utg_t = np.ascontiguousarray(data["UtG"].T)
+        utg_t = np.ascontiguousarray(data.inputs.UtG.T)
 
         ws = accel.require().create_workspace_c(
-            data["eigenvalues"],
+            data.inputs.eigenvalues,
             uab_inv_soa,
-            data["UtW"],
-            data["Uty"],
+            data.inputs.UtW,
+            data.inputs.Uty,
             n_samples,
             1e-5,
             1e5,
@@ -564,7 +564,7 @@ class TestNcvt2LrtOnlyParity:
             1,
             n_cvt,
             lmm_mode=2,
-            logl_H0=data["logl_H0"],
+            logl_H0=data.logl_H0,
         )
         result = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
@@ -572,13 +572,13 @@ class TestNcvt2LrtOnlyParity:
 
         reference = _compute_lrt_numpy(
             n_cvt,
-            data["eigenvalues"],
+            data.inputs.eigenvalues,
             Uab_batch,
             1e-5,
             1e5,
             50,
             20,
-            data["logl_H0"],
+            data.logl_H0,
         )
         np.testing.assert_allclose(
             result["lambdas_mle"],

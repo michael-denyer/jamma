@@ -7,7 +7,9 @@ live in tests/lmm_accel/_helpers.py.
 import numpy as np
 import pytest
 
+from tests.builders import covariate_lmm_inputs
 from tests.lmm_accel._helpers import (
+    GeneralCase,
     _fused_general_wald,
     _run_general_ncvt_c_vs_python,
 )
@@ -40,12 +42,9 @@ def test_general_ncvt_reml_wald_ncvt20():
     100 — works correctly through the full REML+CalcPab+Wald pipeline.
     Uses small matrices (150 samples, 15 SNPs) to keep execution fast.
     """
-    from tests.support import _build_synthetic_covariate_data
-
-    data = _build_synthetic_covariate_data(
-        n_cvt=20, n_samples=150, n_snps=15, seed=2020
+    _run_general_ncvt_c_vs_python(
+        GeneralCase(covariate_lmm_inputs(n_cvt=20, n_samples=150, n_snps=15, seed=2020))
     )
-    _run_general_ncvt_c_vs_python(data)
 
 
 @requires_c
@@ -56,9 +55,6 @@ def test_general_ncvt_reml_wald_ncvt50():
     n_rows=52. Validates that the raised MAX_N_CVT=100 works at a midpoint.
     Uses small matrices (150 samples, 10 SNPs) to keep execution fast.
     """
-    from tests.support import _build_synthetic_covariate_data
-
-    data = _build_synthetic_covariate_data(
-        n_cvt=50, n_samples=150, n_snps=10, seed=5050
+    _run_general_ncvt_c_vs_python(
+        GeneralCase(covariate_lmm_inputs(n_cvt=50, n_samples=150, n_snps=10, seed=5050))
     )
-    _run_general_ncvt_c_vs_python(data)

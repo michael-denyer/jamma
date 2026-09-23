@@ -11,6 +11,7 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
 )
 from jamma.lmm.schema import LmmConfig
+from tests.builders import rotated_lmm_inputs
 from tests.lmm_accel._helpers import assert_fused_matches_reference
 from tests.support import requires_c
 
@@ -18,20 +19,21 @@ pytestmark = pytest.mark.tier0
 
 
 @pytest.fixture
-def _fused_score_lrt_null_model(split_wald_data):
-    """Compute null-model Hi_eval and logl_H0 from split_wald_data.
+def _fused_score_lrt_null_model():
+    """Compute null-model Hi_eval and logl_H0 for the fused_data inputs.
 
-    Unlike score_lrt_data (which derives from synthetic_wald_data),
+    Unlike score_lrt_data (which derives from gram_uab_batch),
     this computes the null model from the same UtW/Uty/eigenvalues
     used by the fused Score/LRT tests.
     """
     from jamma.lmm.uab import batch_compute_uab_numpy
 
-    eigenvalues, UtW, Uty, UtG, n_samples, n_snps = split_wald_data
+    d = rotated_lmm_inputs(200, 50, eig_range=(0.1, 2.0), intercept=False)
+    eigenvalues = d.eigenvalues
 
     # Build null Uab from UtW/Uty (no genotype)
-    full_uab = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-    Uab_null = np.zeros((1, n_samples, 6), dtype=np.float64)
+    full_uab = batch_compute_uab_numpy(1, d.UtW, d.Uty, d.UtG.T)
+    Uab_null = np.zeros((1, d.n_samples, 6), dtype=np.float64)
     Uab_null[0, :, 0] = full_uab[0, :, 0]  # ww (invariant)
     Uab_null[0, :, 2] = full_uab[0, :, 2]  # wy (invariant)
     Uab_null[0, :, 5] = full_uab[0, :, 5]  # yy (invariant)

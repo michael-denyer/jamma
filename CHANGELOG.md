@@ -210,6 +210,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the run fell back to NumPy. After an ABI mismatch, the loader now rebuilds and
   asks for a restart instead of retrying: CPython keeps the stale extension
   loaded for the life of the process, so only a new process can use the rebuild.
+- Reading a kinship or eigen file no longer deletes its `.npy` on a read
+  error. A permission or I/O error was treated as corruption, and a binary-only
+  write leaves the `.npy` as the only copy, so one unreadable read destroyed
+  the matrix. Only a corrupt file (NumPy's `ValueError`) is removed now.
 - LOCO eigendecomposition no longer keeps a chromosome's eigenvectors alive
   after association releases them. The worker thread and the submitting loop
   each kept a local reference to the last Future, which holds the

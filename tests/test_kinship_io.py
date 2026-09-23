@@ -669,6 +669,24 @@ class TestKinshipSidecarRecovery:
         assert K_loaded.flags.writeable
         assert not npy_path.exists() or npy_path.read_bytes() != full[: len(full) // 2]
 
+    def test_unreadable_binary_kinship_is_kept(self, tmp_path):
+        """A read error is not corruption: the only copy must survive it.
+
+        A binary run writes ``X.cXX.npy`` alone, and a text-path read treats
+        it as the sidecar. Deleting it on a permission error loses the matrix.
+        """
+        K = np.array([[1.0, 0.25], [0.25, 1.0]])
+        npy_path = tmp_path / "result.cXX.npy"
+        write_kinship_matrix(K, npy_path)
+        npy_path.chmod(0)
+        try:
+            with pytest.raises(OSError):
+                read_kinship_matrix(tmp_path / "result.cXX.txt")
+        finally:
+            npy_path.chmod(0o644)
+
+        np.testing.assert_array_equal(np.load(npy_path), K)
+
     def test_text_parse_writes_sidecar(self, tmp_path):
         """Parsing the text leaves a valid .npy sidecar for the next read."""
         K, txt_path = self._write_text_kinship(tmp_path)

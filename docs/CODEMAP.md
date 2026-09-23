@@ -266,7 +266,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 |----|-----------|-------------|-----------|
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
+| 4Na | `batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:301](../src/jamma/lmm/association_plan.py#L301) |
 | 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:92](../src/jamma/lmm/association_plan.py#L92) |
 | 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any source under one `LmmRunSpec` | [runner_numpy.py:320](../src/jamma/lmm/runner_numpy.py#L320) |

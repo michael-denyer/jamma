@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import _compute_wald_numpy
+from jamma.lmm.compute_numpy import compute_wald_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.math_validation.dense_oracle import evaluate
 from tests.support import requires_c
@@ -50,9 +50,7 @@ def test_numpy_wald_matches_independent_dense_oracle() -> None:
     eigenvalues, UtW, Uty, UtG = _valid_shared_case()
     n_samples = eigenvalues.size
     uab = batch_compute_uab_numpy(1, UtW[:, None], Uty, UtG.T)
-    numpy_result = _compute_wald_numpy(
-        1, eigenvalues, uab, n_samples, 1e-5, 1e5, 50, 20
-    )
+    numpy_result = compute_wald_numpy(1, eigenvalues, uab, n_samples, 1e-5, 1e5, 50, 20)
     _assert_matches_oracle(numpy_result, eigenvalues, UtW, Uty, UtG)
 
 
@@ -61,9 +59,7 @@ def test_native_wald_matches_numpy_on_valid_shared_inputs() -> None:
     eigenvalues, UtW, Uty, UtG = _valid_shared_case()
     n_samples = eigenvalues.size
     uab = batch_compute_uab_numpy(1, UtW[:, None], Uty, UtG.T)
-    numpy_result = _compute_wald_numpy(
-        1, eigenvalues, uab, n_samples, 1e-5, 1e5, 50, 20
-    )
+    numpy_result = compute_wald_numpy(1, eigenvalues, uab, n_samples, 1e-5, 1e5, 50, 20)
 
     invariant = np.stack((UtW * UtW, UtW * Uty, Uty * Uty))
     workspace = accel.require().create_workspace_c(

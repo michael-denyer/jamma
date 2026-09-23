@@ -176,13 +176,13 @@ def batch_calc_score_stats_numpy(
     return beta, se, p_score
 
 
-def _batch_lrt_pvalues_numpy(
+def batch_lrt_pvalues_numpy(
     logls_mle: np.ndarray,
     logl_H0: float,
 ) -> np.ndarray:
     """Compute LRT p-values for a batch of SNPs.
 
-    Compute LRT p-values for a batch of SNPs.
+    The NumPy reference the C accelerator's LRT p-values are held to.
     LRT statistic = 2 * (logl_H1 - logl_H0), chi2 with df=1.
 
     Args:

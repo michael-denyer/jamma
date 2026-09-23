@@ -9,10 +9,10 @@ from unittest.mock import patch
 import numpy as np
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import _compute_wald_numpy
+from jamma.lmm.compute_numpy import compute_wald_numpy
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
 from jamma.lmm.pab import build_index_table
-from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
+from jamma.lmm.stats import batch_calc_score_stats_numpy, batch_lrt_pvalues_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.builders import LmmInputs
 
@@ -226,7 +226,7 @@ def _numpy_general_lrt(case: GeneralCase) -> dict:
     return {
         "logls": logls_mle,
         "lambdas_mle": lambdas_mle,
-        "p_lrts": _batch_lrt_pvalues_numpy(logls_mle, case.logl_H0),
+        "p_lrts": batch_lrt_pvalues_numpy(logls_mle, case.logl_H0),
     }
 
 
@@ -239,14 +239,14 @@ def _fused_general_wald(case: GeneralCase, n_threads: int = 1) -> dict[str, np.n
 def _numpy_general_wald(case: GeneralCase) -> dict[str, np.ndarray]:
     """Run the NumPy Wald path over *case*, with the extension held out.
 
-    ``_compute_wald_numpy`` consults ``accel._accel`` at call time and
+    ``compute_wald_numpy`` consults ``accel._accel`` at call time and
     takes a C branch when it is set, so the attribute has to be cleared rather
     than the argument changed.
     """
     orig = accel._accel
     try:
         accel._accel = None
-        return _compute_wald_numpy(
+        return compute_wald_numpy(
             case.n_cvt,
             case.inputs.eigenvalues,
             case.uab_batch,
@@ -263,7 +263,7 @@ def _numpy_general_wald(case: GeneralCase) -> dict[str, np.ndarray]:
 def _run_general_ncvt_c_vs_python(case: GeneralCase) -> None:
     """Compare the fused-general C Wald kernel against the NumPy Wald path.
 
-    The C side used to be ``_compute_wald_numpy`` with the extension loaded,
+    The C side used to be ``compute_wald_numpy`` with the extension loaded,
     which took an inner C ladder that no dispatch path reaches: the only
     production caller of that function runs when ``_accel`` is None. Comparing
     it against the same function with ``_accel`` cleared would have gone
@@ -317,7 +317,7 @@ def _numpy_ncvt1_wald(eigenvalues, w, Uty, utg_t, n_samples) -> dict[str, np.nda
     orig = accel._accel
     try:
         accel._accel = None
-        return _compute_wald_numpy(
+        return compute_wald_numpy(
             1,
             eigenvalues,
             _uab_from_fused_inputs(w, Uty, utg_t),
@@ -386,7 +386,7 @@ def _numpy_ncvt1_lrt(eigenvalues, w, Uty, utg_t, logl_H0, n_refine=20) -> dict:
     return {
         "logls": logls_mle,
         "lambdas_mle": lambdas_mle,
-        "p_lrts": _batch_lrt_pvalues_numpy(logls_mle, logl_H0),
+        "p_lrts": batch_lrt_pvalues_numpy(logls_mle, logl_H0),
     }
 
 

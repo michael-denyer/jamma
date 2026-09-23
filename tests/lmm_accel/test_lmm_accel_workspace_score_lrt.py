@@ -16,9 +16,9 @@ import numpy as np
 import pytest
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import _compute_lrt_numpy, _compute_score_numpy
+from jamma.lmm.compute_numpy import compute_lrt_numpy, compute_score_numpy
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
-from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
+from jamma.lmm.stats import batch_calc_score_stats_numpy, batch_lrt_pvalues_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 from tests.lmm_accel._helpers import _null_model_ncvt1
 from tests.support import requires_c
@@ -63,7 +63,7 @@ def _numpy_lrt_reference(w, Uty, utg_t, eigenvalues, logl_H0, n_refine):
     )
     return {
         "lambdas_mle": lambdas_mle,
-        "p_lrts": _batch_lrt_pvalues_numpy(logls_mle, logl_H0),
+        "p_lrts": batch_lrt_pvalues_numpy(logls_mle, logl_H0),
     }
 
 
@@ -520,7 +520,7 @@ class TestNcvt2ScoreOnlyParity:
 
         assert set(result.keys()) == {"betas", "ses", "p_scores"}
 
-        reference = _compute_score_numpy(
+        reference = compute_score_numpy(
             n_cvt, data.inputs.eigenvalues, data.Hi_eval_null, Uab_batch, n_samples
         )
         for key in ("betas", "ses", "p_scores"):
@@ -570,7 +570,7 @@ class TestNcvt2LrtOnlyParity:
 
         assert set(result.keys()) == {"logls", "lambdas_mle", "p_lrts"}
 
-        reference = _compute_lrt_numpy(
+        reference = compute_lrt_numpy(
             n_cvt,
             data.inputs.eigenvalues,
             Uab_batch,

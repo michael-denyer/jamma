@@ -11,7 +11,7 @@ from jamma.lmm.likelihood import compute_null_model_mle
 from jamma.lmm.schema import LmmMode
 from jamma.lmm.uab import batch_compute_uab_numpy, compute_uab_invariant_soa
 from tests.builders import rotated_lmm_inputs
-from tests.independent_lmm_oracle import dense_lmm_log_likelihood
+from tests.math_validation.dense_oracle import evaluate
 
 pytestmark = pytest.mark.tier0
 
@@ -77,27 +77,25 @@ def test_logl_h1_uses_reml_in_mode1_and_mle_in_mode4(backend, n_cvt):
 
     expected_reml = np.array(
         [
-            dense_lmm_log_likelihood(
-                data.eigenvalues,
+            evaluate(
+                np.diag(data.eigenvalues),
                 data.UtW,
-                data.Uty,
                 data.UtG[:, snp],
+                data.Uty,
                 wald["lambdas"][snp],
-                restricted=True,
-            )
+            )["reml"]
             for snp in range(data.n_snps)
         ]
     )
     expected_mle = np.array(
         [
-            dense_lmm_log_likelihood(
-                data.eigenvalues,
+            evaluate(
+                np.diag(data.eigenvalues),
                 data.UtW,
-                data.Uty,
                 data.UtG[:, snp],
+                data.Uty,
                 all_tests["lambdas_mle"][snp],
-                restricted=False,
-            )
+            )["mle"]
             for snp in range(data.n_snps)
         ]
     )
@@ -121,14 +119,13 @@ def test_mode2_reports_the_same_mle_likelihood_as_mode4(backend, n_cvt):
 
     expected = np.array(
         [
-            dense_lmm_log_likelihood(
-                data.eigenvalues,
+            evaluate(
+                np.diag(data.eigenvalues),
                 data.UtW,
-                data.Uty,
                 data.UtG[:, snp],
+                data.Uty,
                 lrt["lambdas_mle"][snp],
-                restricted=False,
-            )
+            )["mle"]
             for snp in range(data.n_snps)
         ]
     )

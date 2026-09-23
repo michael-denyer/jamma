@@ -21,7 +21,7 @@ from jamma.lmm.uab import (
     batch_compute_uab_numpy,
 )
 from tests.builders import rotated_lmm_inputs
-from tests.independent_lmm_oracle import dense_reml_score_log_lambda
+from tests.math_validation.dense_oracle import reml_score_log_lambda
 from tests.reference.likelihood import reml_log_likelihood_alt
 
 pytestmark = pytest.mark.tier0
@@ -322,8 +322,8 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
     logl_batch = logls_batch[0]
 
     def independent_score(log_lambda):
-        return dense_reml_score_log_lambda(
-            eigenvalues, UtW, Uty, Utx, np.exp(log_lambda)
+        return reml_score_log_lambda(
+            np.diag(eigenvalues), UtW, Utx, Uty, np.exp(log_lambda)
         )
 
     root = brentq(

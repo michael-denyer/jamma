@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from scipy.stats import f
 
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import _compute_wald_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
-from tests.independent_lmm_oracle import (
-    dense_lmm_log_likelihood,
-    dense_wald_at_lambda,
-)
+from tests.math_validation.dense_oracle import evaluate
 from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
@@ -35,19 +31,18 @@ def _assert_matches_oracle(
     Uty: np.ndarray,
     UtG: np.ndarray,
 ) -> None:
-    df = eigenvalues.size - 2
+    kinship = np.diag(eigenvalues)
     for snp, lambda_value in enumerate(result["lambdas"]):
-        oracle_logl = dense_lmm_log_likelihood(
-            eigenvalues, UtW, Uty, UtG[:, snp], lambda_value, restricted=True
+        oracle = evaluate(kinship, UtW, UtG[:, snp], Uty, lambda_value)
+        assert result["logls"][snp] == pytest.approx(
+            oracle["reml"], rel=1e-10, abs=1e-12
         )
-        beta, se, f_stat = dense_wald_at_lambda(
-            eigenvalues, UtW, Uty, UtG[:, snp], lambda_value
+        assert result["betas"][snp] == pytest.approx(
+            oracle["beta"], rel=1e-10, abs=1e-12
         )
-        assert result["logls"][snp] == pytest.approx(oracle_logl, rel=1e-10, abs=1e-12)
-        assert result["betas"][snp] == pytest.approx(beta, rel=1e-10, abs=1e-12)
-        assert result["ses"][snp] == pytest.approx(se, rel=1e-10, abs=1e-12)
+        assert result["ses"][snp] == pytest.approx(oracle["se"], rel=1e-10, abs=1e-12)
         assert result["pwalds"][snp] == pytest.approx(
-            f.sf(f_stat, 1, df), rel=1e-10, abs=1e-12
+            oracle["p_wald"], rel=1e-10, abs=1e-12
         )
 
 
@@ -115,10 +110,9 @@ def test_dense_oracle_lambda_zero_matches_closed_form_ols() -> None:
         np.log(n_samples) - np.log(2.0 * np.pi) - 1.0
     ) - 0.5 * n_samples * np.log(residual_ss)
 
-    reml = dense_lmm_log_likelihood(eigenvalues, UtW, Uty, Utg, 0.0, restricted=True)
-    mle = dense_lmm_log_likelihood(eigenvalues, UtW, Uty, Utg, 0.0, restricted=False)
+    oracle = evaluate(np.diag(eigenvalues), UtW, Utg, Uty, 0.0)
 
     # At lambda zero the REML determinant ratio is log|X'X|-log|X'X| = 0.
     assert np.isfinite(logdet_design)
-    assert reml == pytest.approx(expected_reml, rel=1e-12)
-    assert mle == pytest.approx(expected_mle, rel=1e-12)
+    assert oracle["reml"] == pytest.approx(expected_reml, rel=1e-12)
+    assert oracle["mle"] == pytest.approx(expected_mle, rel=1e-12)

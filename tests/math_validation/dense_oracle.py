@@ -75,6 +75,18 @@ def evaluate(kinship, covariates, genotype, phenotype, lam):
     }
 
 
+def reml_score_log_lambda(kinship, covariates, genotype, phenotype, lam):
+    """Return dREML/dlog(lambda) from the dense REML projector at one lambda."""
+    k = np.asarray(kinship, dtype=float)
+    z = np.column_stack((covariates, genotype))
+    y = np.asarray(phenotype, dtype=float)
+    hi = np.linalg.solve(np.eye(len(y)) + lam * k, np.eye(len(y)))
+    projector = hi - hi @ z @ np.linalg.solve(z.T @ hi @ z, z.T @ hi)
+    py = projector @ y
+    df = len(y) - z.shape[1]
+    return float(lam * 0.5 * (df * (py @ k @ py) / (y @ py) - np.trace(projector @ k)))
+
+
 def optimize_null(kinship, covariates, phenotype, *, bounds=(1e-5, 1e5)):
     """Independently optimize the covariate-only MLE on the constrained interval."""
     return _optimize_design(

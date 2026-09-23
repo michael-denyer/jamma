@@ -282,15 +282,15 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `fit_null()` | Rotate one phenotype, solve its null model, and estimate PVE into a `NullFit` | [prepare_common.py:459](../src/jamma/lmm/prepare_common.py#L459) |
 | 4Nb | `run_lmm_chunk_source_numpy_group()` | Shared NumPy chunk-loop orchestrator for batch, streaming, LOCO, and phenotype groups; rotates each chunk once for every phenotype | [chunk_runner_numpy.py:342](../src/jamma/lmm/chunk_runner_numpy.py#L342) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:244](../src/jamma/lmm/chunk_runner_numpy.py#L244) |
-| 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the basis, the null fit, and the config | [chunk_kernel.py:41](../src/jamma/lmm/chunk_kernel.py#L41) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:151](../src/jamma/lmm/chunk_kernel.py#L151) |
+| 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the basis, the null fit, and the config | [chunk_kernel.py:39](../src/jamma/lmm/chunk_kernel.py#L39) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:148](../src/jamma/lmm/chunk_kernel.py#L148) |
 | 4Nb | `_overlapped_chunks()` | Generator yielding each prepared chunk while the next rotates on the executor | [chunk_pipeline.py:98](../src/jamma/lmm/chunk_pipeline.py#L98) |
 | 4Nb | `_drive_pipeline()` | Computes every overlapped chunk under one BLAS limit and one progress iterator | [chunk_pipeline.py:133](../src/jamma/lmm/chunk_pipeline.py#L133) |
 | 4Nb | `compute_chunk_size_numpy()` | Chunk size from a per-chunk budget and the dispatch path's per-SNP bytes; pure | [chunk_sizing.py:94](../src/jamma/lmm/chunk_sizing.py#L94) |
 | 4Nb | `LmmChunkPlan.plan()` | Chunk size, chunk count, and pipelining decision; cuts a native run of at most 10,000 samples to 16 chunks when the budget alone would not pipeline and the BLAS is uncontrollable (Accelerate). Pure: `plan_association` reads RAM and BLAS controllability once and passes them in | [chunk_sizing.py:162](../src/jamma/lmm/chunk_sizing.py#L162) |
 | 4Nb | `LmmChunkPlan.narrow()` | Narrows a conservative plan to the filtered SNP count; width only decreases and pipelining only switches off | [chunk_sizing.py:274](../src/jamma/lmm/chunk_sizing.py#L274) |
 | 4Nb | `available()` / `require()` | The one loader for `_lmm_accel`: import, ABI-validate, auto-recompile once, expose the module or raise | [accel.py](../src/jamma/lmm/accel.py) |
-| 4Nc | `_fused_kernel()` | Build the one C workspace for the run's `n_cvt` and `lmm_mode` and bind its compute | [chunk_kernel.py:178](../src/jamma/lmm/chunk_kernel.py#L178) |
+| 4Nc | `_fused_kernel()` | Build the one C workspace for the run's `n_cvt` and `lmm_mode` and bind its compute | [chunk_kernel.py:173](../src/jamma/lmm/chunk_kernel.py#L173) |
 | 4Nc | `create_workspace_c()` | C extension: the per-run workspace, keyed by `lmm_mode`; `n_cvt` 1 builds the n_cvt=1 family, otherwise the general family | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `compute_lmm_chunk_c()` | C extension: chunked compute with OpenMP for any workspace. n_cvt=1 runs one loop for Wald/LRT/mode 4 and a separate standalone-Score loop; the general family runs one loop for every mode | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:51](../src/jamma/lmm/_lmm_support.c#L51) |

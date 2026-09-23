@@ -53,7 +53,7 @@ def _mode4_workspace(fused_data, n_threads=1):
     other SNP's varying columns, which is a different problem from the one the
     fixture describes.
     """
-    eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+    eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples = fused_data
     Hi_eval_null, logl_H0 = _null_model_ncvt1(eigenvalues, w, Uty)
     ws = accel.require().create_workspace_c(
         eigenvalues,
@@ -174,7 +174,7 @@ def test_wald_workspace_yields_wald_keys_only(fused_data):
     against an lmm_mode=4 workspace gets those plus the Score and LRT three.
     Nothing but the workspace differs between the two calls.
     """
-    eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+    eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples = fused_data
 
     wald_ws = accel.require().create_workspace_c(
         eigenvalues,

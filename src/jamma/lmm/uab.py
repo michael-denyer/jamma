@@ -4,7 +4,7 @@ Uab holds the element-wise products of the rotated vectors (covariates,
 genotype, phenotype) for a chunk of SNPs; Pab is the H-inverse weighted
 projection GEMMA's CalcPab recurses over; Iab is Pab with unit weights. The
 SoA layout separates the columns that vary per SNP from the ones that do
-not, so the C kernels and the n_cvt=1 fallback read stride-1 rows.
+not, so the C kernels read stride-1 rows.
 
 Every walker here iterates the ``PabIndexTable`` from ``build_index_table``,
 the same integers in the same order as the scalar ``calc_pab``.
@@ -38,8 +38,7 @@ def batch_compute_uab_numpy(
         UtW: Rotated covariates (n_samples, n_cvt).
         Uty: Rotated phenotype (n_samples,).
         utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
-            from jlinalg.dgemm(chunk, U, transa="T"), the same layout
-            batch_compute_uab_varying_soa_numpy takes.
+            from jlinalg.dgemm(chunk, U, transa="T").
 
     Returns:
         Uab matrices (n_snps, n_samples, n_index).
@@ -308,63 +307,3 @@ def compute_uab_invariant_soa(
             np.multiply(columns[a], columns[b], out=out[row])
             row += 1
     return out
-
-
-def batch_compute_uab_varying_soa_numpy(
-    n_cvt: int,
-    UtW: np.ndarray,
-    Uty: np.ndarray,
-    utg_t: np.ndarray,
-) -> np.ndarray:
-    """Compute SNP-varying Uab columns in SoA layout (n_snps, n_var, n_samples).
-
-    n_cvt=1 only, with n_var=3 rows [wx, xx, xy]. No production path builds
-    this for n_cvt>1: the native path (``DispatchPath.FUSED``) forms its
-    varying columns on the fly inside the C workspace instead.
-
-    Args:
-        n_cvt: Number of covariates. Must be 1.
-        UtW: Rotated covariates (n_samples, n_cvt).
-        Uty: Rotated phenotype (n_samples,).
-        utg_t: Rotated genotypes (n_snps, n_samples). C-contiguous layout
-            from jlinalg.dgemm(chunk, U, transa="T").
-
-    Returns:
-        Varying array (n_snps, n_var, n_samples) — SoA layout.
-    """
-    if n_cvt != 1:
-        raise ValueError(
-            f"batch_compute_uab_varying_soa_numpy: n_cvt must be 1, got {n_cvt}"
-        )
-    _check_utg_t(utg_t, UtW)
-    n_snps, n_samples = utg_t.shape
-    out = np.empty((n_snps, 3, n_samples), dtype=np.float64)
-
-    w = UtW[:, 0]
-    out[:, 0, :] = w[None, :] * utg_t  # wx row
-    out[:, 1, :] = utg_t * utg_t  # xx row
-    out[:, 2, :] = utg_t * Uty[None, :]  # xy row
-    return out
-
-
-def compute_iab_invariant_scalars_ncvt1(
-    uab_invariant_soa: np.ndarray,
-) -> tuple[float, float, float, float]:
-    """Precompute Iab invariant scalars for n_cvt=1.
-
-    These are the simple sums of the invariant Uab columns (Hi_eval = ones),
-    constant across all chunks and all lambda values. Compute once at run start.
-
-    Args:
-        uab_invariant_soa: (3, n_samples) — rows [ww, wy, yy].
-
-    Returns:
-        (iab_s_ww, iab_s_wy, iab_s_yy, logdet_iab) where:
-        - iab_s_ww/wy/yy: simple sums of invariant columns
-        - logdet_iab: log(iab_s_ww) — the Iab diagonal for REML logdet_hiw
-    """
-    iab_s_ww = float(uab_invariant_soa[0, :].sum())
-    iab_s_wy = float(uab_invariant_soa[1, :].sum())
-    iab_s_yy = float(uab_invariant_soa[2, :].sum())
-    logdet_iab = np.log(iab_s_ww) if iab_s_ww > 0 else 0.0
-    return iab_s_ww, iab_s_wy, iab_s_yy, logdet_iab

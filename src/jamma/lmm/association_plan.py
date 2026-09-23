@@ -336,7 +336,7 @@ def plan_association(
         raise ValueError("n_phenotypes must be >= 1")
     if backend == "loco" and n_phenotypes != 1:
         raise ValueError("LOCO supports one phenotype per execution plan")
-    dispatch = select_dispatch_path(n_cvt, mode, accel=c_ext_available)
+    dispatch = select_dispatch_path(accel=c_ext_available)
     # The machine is read here, once, so the planner and the pricing stay pure.
     available_gb = memory.available_ram_gb()
     max_workspace_threads = get_c_extension_thread_count(

@@ -193,12 +193,6 @@ int ncvt1_capsule_bytes(PyObject *capsule, workspace_bytes_t *out)
 
 /* =========================================================================
  * FUSED Uab — workspace holds w/Uty, chunk accepts UtG_T directly
- *
- * Eliminates the (n_snps, 3, n_samples) uab_varying_soa intermediate
- * allocation by computing wx/xx/xy products on-the-fly from UtG_T columns
- * in thread-local scratch buffers. Same FP operations in the same order
- * as the *_ncvt1_split helpers (golden_section_optimize_lambda_split_ncvt1_numpy)
- * — results are bitwise-identical.
  * ========================================================================= */
 
 /* Fill a calloc'd n_cvt=1 workspace from validated inputs: the scalar

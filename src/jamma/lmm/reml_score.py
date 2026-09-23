@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from jamma.lmm.pab import _NCVT1, build_index_table
+from jamma.lmm.pab import build_index_table
 from jamma.lmm.uab import _fill_pab_recursion
 
 _SCORE_PROBE_DELTA = 1e-3
@@ -148,45 +148,3 @@ def _refine_reml_optima(
             break
 
     return result
-
-
-def _batch_reml_score_log_lambda_split_ncvt1_numpy(
-    log_lambdas: np.ndarray,
-    eigenvalues: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    uab_invariant_soa: np.ndarray,
-) -> np.ndarray:
-    """Analytic log-lambda REML score without materialising combined Uab."""
-    lambdas = np.exp(log_lambdas)
-    h = 1.0 / (1.0 + lambdas[:, None] * eigenvalues[None, :])
-    dh = -lambdas[:, None] * eigenvalues[None, :] * h * h
-    row0 = np.empty((len(lambdas), 6), dtype=np.float64)
-    drow0 = np.empty_like(row0)
-    invariant = np.broadcast_to(
-        uab_invariant_soa.T[None, :, :], (len(lambdas), len(eigenvalues), 3)
-    )
-    varying = np.transpose(uab_varying_soa, (0, 2, 1))
-    row0[:, [_NCVT1.ww, _NCVT1.wy, _NCVT1.yy]] = _compensated_weighted_sum(h, invariant)
-    drow0[:, [_NCVT1.ww, _NCVT1.wy, _NCVT1.yy]] = _compensated_weighted_sum(
-        dh, invariant
-    )
-    row0[:, [_NCVT1.wx, _NCVT1.xx, _NCVT1.xy]] = _compensated_weighted_sum(h, varying)
-    drow0[:, [_NCVT1.wx, _NCVT1.xx, _NCVT1.xy]] = _compensated_weighted_sum(dh, varying)
-    pab = np.zeros((len(lambdas), 3, 6), dtype=np.float64)
-    dpab = np.zeros_like(pab)
-    pab[:, 0, :] = row0
-    dpab[:, 0, :] = drow0
-    table = build_index_table(1)
-    _fill_pab_recursion(pab, table, 1)
-    _differentiate_pab_recursion(pab, dpab, 1)
-    trace_values = (lambdas[:, None] * eigenvalues[None, :] * h)[:, :, None]
-    score = -0.5 * _compensated_weighted_sum(np.ones_like(h), trace_values)[:, 0]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        score -= 0.5 * dpab[:, 0, _NCVT1.ww] / pab[:, 0, _NCVT1.ww]
-        score -= 0.5 * dpab[:, 1, _NCVT1.xx] / pab[:, 1, _NCVT1.xx]
-        score -= (
-            0.5
-            * (len(eigenvalues) - 2)
-            * (dpab[:, 2, _NCVT1.yy] / pab[:, 2, _NCVT1.yy])
-        )
-    return score

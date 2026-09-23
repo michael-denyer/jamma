@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Without the C extension, the Wald statistics of an intercept-only run
+  (`-lmm 1` or `-lmm 4`, no `-c`) now come from the same NumPy REML optimiser
+  as every other mode and covariate count. The separate split-Uab optimiser
+  and the `numpy_wald` dispatch path are removed. Results on `mouse_hs1940`
+  are byte-identical. On that fixture's one 10,768-SNP chunk the fallback's
+  association pass is 12 percent slower for `-lmm 1` and 5 percent slower for
+  `-lmm 4`, because the full Uab doubles the per-SNP memory traffic. At
+  2,000-SNP chunks the general optimiser is 4 to 9 percent faster. For
+  `-lmm 1` the per-SNP chunk quote rises by three `n_samples` rows plus 18 Iab
+  cells, so the planner picks smaller chunks.
 - The `_lmm_accel` extension has one workspace creator and one chunk compute
   for every covariate count, `create_workspace_c` and `compute_lmm_chunk_c`,
   replacing the separate n_cvt=1 and general entry points (ABI 23). The C

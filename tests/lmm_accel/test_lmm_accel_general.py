@@ -262,7 +262,7 @@ def test_empty_chunk_returns_empty_columns_in_both_families(
     empty_general = np.empty((0, general["n_samples"]))
     general_out = accel.require().compute_lmm_chunk_c(general_ws, empty_general, 1)
 
-    eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+    eigenvalues, w, Uty, _, uab_inv_soa, n_samples = fused_data
     ncvt1_ws = accel.require().create_workspace_c(
         eigenvalues,
         uab_inv_soa,

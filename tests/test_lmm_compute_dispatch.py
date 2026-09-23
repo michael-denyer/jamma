@@ -5,28 +5,12 @@ import pytest
 
 import jamma.lmm.compute_numpy as compute_numpy
 from jamma.lmm import accel
-from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 
 pytestmark = pytest.mark.tier0
 
 # Stands in for a loaded extension. Only `is not None` is read on
 # the paths under test, so the object's identity is all that matters.
 _EXTENSION_LOADED = object()
-
-
-@pytest.mark.parametrize("n_cvt", [2, 76, compute_numpy.MAX_C_N_CVT])
-def test_wald_resolves_to_fused_through_ncvt_limit(monkeypatch, n_cvt):
-    """Wald routes to the fused C kernel for every n_cvt up to the limit.
-
-    This used to assert that _compute_wald_numpy took a general C branch. That
-    branch could not run: the runner reaches _compute_wald_numpy only on
-    NUMPY_FALLBACK, which is selected only when the extension is absent. The
-    decision the runner actually makes is this one.
-    """
-    monkeypatch.setattr(accel, "_accel", _EXTENSION_LOADED)
-
-    path = select_dispatch_path(n_cvt, 1, accel=accel.available())
-    assert path is DispatchPath.FUSED
 
 
 @pytest.mark.parametrize(

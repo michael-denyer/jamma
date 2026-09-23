@@ -101,7 +101,7 @@ class TestMemoryGates:
 
 def _expected_uab_iab_gb(plan: ExecutableAssociationPlan, n_cvt: int) -> float:
     """The Uab/Iab figure a correct batch quote carries for this plan's chunk."""
-    dispatch = select_dispatch_path(n_cvt, 1, accel=accel.available())
+    dispatch = select_dispatch_path(accel=accel.available())
     per_snp = lmm_extra_bytes_per_snp(plan.n_samples, n_cvt, dispatch)
     return plan.conservative_chunks.chunk_size * per_snp / 1e9
 

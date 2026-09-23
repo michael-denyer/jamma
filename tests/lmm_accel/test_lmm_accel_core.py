@@ -45,7 +45,7 @@ def _make_workspace(
     the call stays typed; a dict merge widens every value to the union of the
     dict's types and pyrefly rejects the call.
     """
-    fixture_eigenvalues, w, Uty, _, fixture_inv_soa, _, fixture_n = fused_data
+    fixture_eigenvalues, w, Uty, _, fixture_inv_soa, fixture_n = fused_data
     return accel.require().create_workspace_c(
         fixture_eigenvalues if eigenvalues is None else eigenvalues,
         fixture_inv_soa if uab_invariant_soa is None else uab_invariant_soa,
@@ -96,7 +96,7 @@ def test_c_fallback_when_extension_unavailable(synthetic_wald_data, monkeypatch)
 @requires_c
 def test_c_extension_single_snp(fused_data):
     """Minimal case: n_snps=1 works without index errors."""
-    _, _, _, utg_t, _, _, _ = fused_data
+    _, _, _, utg_t, _, _ = fused_data
 
     result = accel.require().compute_lmm_chunk_c(
         _make_workspace(fused_data), utg_t[:1], 1
@@ -110,7 +110,7 @@ def test_c_extension_single_snp(fused_data):
 @requires_c
 def test_c_extension_all_degenerate_snps(fused_data):
     """Every SNP degenerate: the whole output is NaN rather than a crash."""
-    _, _, _, utg_t, _, _, _ = fused_data
+    _, _, _, utg_t, _, _ = fused_data
 
     # A constant genotype rotates to an all-zero UtG column, driving xx and so
     # P_XX to zero. Zeroing every row makes the entire batch degenerate.
@@ -159,7 +159,7 @@ class TestFusedWorkspaceInputValidation:
             _make_workspace(fused_data, uab_invariant_soa=uab_inv_soa.T)
 
     def test_wrong_utg_t_n_samples(self, fused_data):
-        _, _, _, utg_t, _, _, _ = fused_data
+        _, _, _, utg_t, _, _ = fused_data
         ws = _make_workspace(fused_data)
         with pytest.raises(ValueError, match="utg_t"):
             accel.require().compute_lmm_chunk_c(

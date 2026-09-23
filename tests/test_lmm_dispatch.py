@@ -1,72 +1,29 @@
 """Unit tests for jamma.lmm.dispatch.select_dispatch_path.
 
-The selector used to take an eleven-field capability snapshot, so its input
-space was large enough that only a property sweep could cover it. The
-ABI-equality gate admits all of ``methods[]`` or none of it, so the capability
-is one bit and the whole space is small enough to write down. This file states
-the mapping as a table and checks it exhaustively, which pins the actual
-decision rather than the invariants it happens to satisfy.
+The ABI-equality gate admits all of ``methods[]`` or none of it, so the
+capability is one bit and the mapping has two rows. This file writes both down
+and checks every member is reachable.
 """
 
 from __future__ import annotations
 
-from itertools import product
-
 import pytest
 
 from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
-from jamma.lmm.schema import LmmMode
 
 pytestmark = pytest.mark.tier0
-
-_MODES: tuple[LmmMode, ...] = (1, 2, 3, 4)
-_NCVT_1 = (1,)
-_NCVT_MANY = (2, 3, 5, 100, 101)
-
-# The complete mapping when the extension is loaded, by (n_cvt==1?, lmm_mode).
-_EXPECTED = {
-    (True, 1): DispatchPath.FUSED,
-    (True, 4): DispatchPath.FUSED,
-    (True, 3): DispatchPath.FUSED,
-    (True, 2): DispatchPath.FUSED,
-    (False, 1): DispatchPath.FUSED,
-    (False, 4): DispatchPath.FUSED,
-    (False, 3): DispatchPath.FUSED,
-    (False, 2): DispatchPath.FUSED,
-}
 
 _PIPELINED_PATHS = {DispatchPath.FUSED}
 
 
-def _select(n_cvt: int, lmm_mode: LmmMode, *, accel: bool = True) -> DispatchPath:
-    return select_dispatch_path(n_cvt, lmm_mode, accel=accel)
-
-
-def test_without_the_extension_only_ncvt1_wald_leaves_the_numpy_fallback():
-    for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
-        expected = (
-            DispatchPath.NUMPY_WALD
-            if (n_cvt, mode) == (1, 1)
-            else DispatchPath.NUMPY_FALLBACK
-        )
-        assert _select(n_cvt, mode, accel=False) is expected
-
-
-def test_every_input_maps_to_the_documented_path():
-    for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
-        expected = _EXPECTED[(n_cvt == 1, mode)]
-        assert _select(n_cvt, mode) is expected, (
-            f"n_cvt={n_cvt} mode={mode}: expected {expected.name}, "
-            f"got {_select(n_cvt, mode).name}"
-        )
+def test_the_extension_bit_decides_the_path():
+    assert select_dispatch_path(accel=True) is DispatchPath.FUSED
+    assert select_dispatch_path(accel=False) is DispatchPath.NUMPY_FALLBACK
 
 
 def test_every_path_is_reachable():
     """A member no input can select is dead weight, and this is what catches it."""
-    reached = {
-        _select(n_cvt, mode, accel=accel)
-        for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False))
-    }
+    reached = {select_dispatch_path(accel=accel) for accel in (True, False)}
     assert reached == set(DispatchPath), (
         f"unreachable members: {sorted(m.name for m in set(DispatchPath) - reached)}"
     )
@@ -74,12 +31,6 @@ def test_every_path_is_reachable():
 
 def test_path_properties_agree_with_membership():
     """The derived properties must not drift from the members they describe."""
-    for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False)):
-        path = _select(n_cvt, mode, accel=accel)
+    for accel in (True, False):
+        path = select_dispatch_path(accel=accel)
         assert path.is_native == (path in _PIPELINED_PATHS)
-
-
-@pytest.mark.parametrize("bad_mode", [0, 5, -1, 99])
-def test_invalid_mode_raises(bad_mode):
-    with pytest.raises(ValueError, match="lmm_mode must be"):
-        _select(1, bad_mode)

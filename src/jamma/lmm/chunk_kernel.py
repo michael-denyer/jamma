@@ -22,14 +22,12 @@ from typing import assert_never
 import numpy as np
 
 from jamma.lmm import accel
-from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy, compute_wald_split_numpy
+from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.prepare_common import NullFit, RotatedBasis
 from jamma.lmm.schema import MODE_SPECS, LmmConfig, LmmMode, LmmTest, ModeSpec
 from jamma.lmm.uab import (
     batch_compute_uab_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    compute_iab_invariant_scalars_ncvt1,
     compute_uab_invariant_soa,
 )
 from jamma.lmm.workspace import WorkspaceSpec
@@ -102,9 +100,8 @@ class RunInvariants:
         return MODE_SPECS[self.lmm_mode]
 
     def require_invariant_soa(self) -> np.ndarray:
-        """The invariant Uab columns, which every split path is built with."""
         if self.uab_invariant_soa is None:
-            raise RuntimeError("split LMM dispatch requires invariant Uab columns")
+            raise RuntimeError("fused LMM dispatch requires invariant Uab columns")
         return self.uab_invariant_soa
 
 
@@ -167,8 +164,6 @@ def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
     match inv.dispatch:
         case DispatchPath.FUSED:
             return _fused_kernel(inv, workspace.max_threads)
-        case DispatchPath.NUMPY_WALD:
-            return _numpy_wald_kernel(inv, workspace.max_threads)
         case DispatchPath.NUMPY_FALLBACK:
             return _numpy_kernel(inv, workspace.max_threads)
         case _:
@@ -202,37 +197,6 @@ def _fused_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         max_threads=n_threads,
-    )
-
-
-def _numpy_wald_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
-    """n_cvt=1, mode 1, no C extension: the split Wald body in NumPy.
-
-    The Iab scalars are derived once here rather than per chunk, which is what
-    lets each chunk contribute three varying rows instead of the whole table.
-    """
-    invariant = inv.require_invariant_soa()
-    scalars = compute_iab_invariant_scalars_ncvt1(invariant)
-
-    def call(chunk: np.ndarray, threads: int) -> KernelResult:
-        varying = batch_compute_uab_varying_soa_numpy(1, inv.UtW, inv.Uty, chunk)
-        return compute_wald_split_numpy(
-            inv.eigenvalues,
-            varying,
-            invariant,
-            scalars,
-            inv.n_samples,
-            l_min=inv.l_min,
-            l_max=inv.l_max,
-            n_grid=inv.n_grid,
-            n_refine=inv.n_refine,
-        )
-
-    return Kernel(
-        label="NumPy Wald",
-        n_filtered=inv.n_filtered,
-        call=call,
-        max_threads=max_threads,
     )
 
 

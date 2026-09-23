@@ -22,21 +22,13 @@ import pytest
 
 from jamma.lmm import accel
 from jamma.lmm.likelihood_numpy import (
-    _batch_grid_reml_numpy,
-    _batch_reml_at_lambda_numpy,
     golden_section_optimize_lambda_numpy,
-    golden_section_optimize_lambda_split_ncvt1_numpy,
 )
 from jamma.lmm.pab import compute_Uab
-from jamma.lmm.reml_score import (
-    _batch_reml_score_log_lambda_numpy,
-    _batch_reml_score_log_lambda_split_ncvt1_numpy,
-)
+from jamma.lmm.reml_score import _batch_reml_score_log_lambda_numpy
 from jamma.lmm.uab import (
     batch_compute_iab_numpy,
     batch_compute_uab_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    compute_iab_invariant_scalars_ncvt1,
     compute_uab_invariant_soa,
 )
 from tests.builders import rotated_lmm_inputs
@@ -70,18 +62,7 @@ def test_reml_score_matches_independent_dense_projector(n_cvt):
     np.testing.assert_allclose(actual, expected, rtol=2e-12, atol=2e-12)
 
 
-def test_split_reml_score_matches_full_recurrence(split_uab_data):
-    eigenvalues, varying, invariant, full_uab, _iab = split_uab_data
-    log_lambdas = np.linspace(-8.0, 4.0, len(full_uab))
-
-    split = _batch_reml_score_log_lambda_split_ncvt1_numpy(
-        log_lambdas, eigenvalues, varying, invariant
-    )
-    full = _batch_reml_score_log_lambda_numpy(1, log_lambdas, eigenvalues, full_uab)
-    np.testing.assert_allclose(split, full, rtol=2e-12, atol=2e-12)
-
-
-@pytest.mark.parametrize("backend", ["numpy", "split", "native"])
+@pytest.mark.parametrize("backend", ["numpy", "native"])
 def test_flat_reml_optima_match_independent_high_precision_roots(backend):
     """The eight real flat peaks that exposed objective-rounding drift."""
     fixture = np.load(Path(__file__).parent / "fixtures/reml_flat_optima.npz")
@@ -96,15 +77,6 @@ def test_flat_reml_optima_match_independent_high_precision_roots(backend):
     if backend == "numpy":
         actual, _logls, _pab = golden_section_optimize_lambda_numpy(
             1, eigenvalues, Uab, Iab
-        )
-    elif backend == "split":
-        varying = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-        invariant = compute_uab_invariant_soa(UtW, Uty, n_cvt=1)
-        actual, _logls, _pab = golden_section_optimize_lambda_split_ncvt1_numpy(
-            eigenvalues,
-            varying,
-            invariant,
-            *compute_iab_invariant_scalars_ncvt1(invariant),
         )
     else:
         if not accel.available():
@@ -279,31 +251,6 @@ def test_reml_const_precomputed():
         )
 
 
-def test_iab_invariant_scalars():
-    """compute_iab_invariant_scalars_ncvt1 must match manual np.sum exactly."""
-    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
-
-    rng = np.random.default_rng(123)
-    n_samples = 80
-    uab_invariant_soa = rng.standard_normal((3, n_samples))
-    # Ensure rows are all positive-valued for log checks
-    uab_invariant_soa = np.abs(uab_invariant_soa) + 0.1
-
-    iab_s_ww, iab_s_wy, iab_s_yy, logdet_iab = compute_iab_invariant_scalars_ncvt1(
-        uab_invariant_soa
-    )
-
-    expected_s_ww = float(uab_invariant_soa[0, :].sum())
-    expected_s_wy = float(uab_invariant_soa[1, :].sum())
-    expected_s_yy = float(uab_invariant_soa[2, :].sum())
-    expected_logdet = np.log(expected_s_ww)
-
-    np.testing.assert_equal(iab_s_ww, expected_s_ww)
-    np.testing.assert_equal(iab_s_wy, expected_s_wy)
-    np.testing.assert_equal(iab_s_yy, expected_s_yy)
-    np.testing.assert_equal(logdet_iab, expected_logdet)
-
-
 def test_golden_section_eval_count(monkeypatch):
     """The optimizer evaluates REML 2 + n_iter + 1 times (final midpoint eval).
 
@@ -356,271 +303,3 @@ def test_golden_section_accuracy_no_final_eval(synthetic_data):
     )
     # Logls should be finite (no NaN for valid SNPs)
     assert np.all(np.isfinite(logls_opt)), "Some logls are not finite"
-
-
-# ---------------------------------------------------------------------------
-# Split-Uab REML path for grid and refinement (n_cvt=1)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def split_uab_data():
-    """Synthetic dataset for split-Uab tests.
-
-    Returns:
-        (eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch)
-        with n_samples=100, n_snps=50.
-    """
-    d = rotated_lmm_inputs(100, 50, seed=99)
-    eigenvalues, UtW, Uty, UtG = d.eigenvalues, d.UtW, d.Uty, d.UtG
-
-    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty, 1)
-    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-
-    Uab_batch = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-    Iab_batch = batch_compute_iab_numpy(1, Uab_batch)
-
-    return eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch
-
-
-@pytest.fixture
-def split_reml_inputs(split_uab_data):
-    """Precomputed split-REML scalars for n_cvt=1: invariant, varying, and const.
-
-    Runs the chain every split-path test needs before it can call the kernel
-    under test: ``compute_iab_invariant_scalars_ncvt1`` for the invariant
-    scalars, its reciprocal ``iab_inv_s_ww``, ``_compute_iab_varying_ncvt1``
-    for the per-SNP varying scalars, and ``_compute_reml_const`` for the
-    degrees-of-freedom constant.
-
-    Returns:
-        (iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, df)
-    """
-    from jamma.lmm.likelihood_numpy import (
-        _compute_iab_varying_ncvt1,
-        _compute_reml_const,
-    )
-    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
-
-    eigenvalues, uab_varying_soa, uab_invariant_soa, _Uab_batch, _Iab_batch = (
-        split_uab_data
-    )
-    n_samples = eigenvalues.shape[0]
-    df = n_samples - 2  # n_cvt=1
-
-    iab_s_ww, _iab_s_wy, _iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
-        uab_invariant_soa
-    )
-    iab_inv_s_ww = 1.0 / iab_s_ww if iab_s_ww != 0 else 0.0
-    iab_p1_xx, iab_logdet_var = _compute_iab_varying_ncvt1(
-        uab_varying_soa, iab_inv_s_ww
-    )
-    reml_const = _compute_reml_const(df)
-
-    return iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, df
-
-
-def test_grid_reml_split_matches_full(split_uab_data, split_reml_inputs):
-    """_batch_grid_reml_split_ncvt1_numpy must match _batch_grid_reml_numpy."""
-    from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
-
-    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
-        split_uab_data
-    )
-    iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, _df = (
-        split_reml_inputs
-    )
-    n_grid = 20
-    lambdas_grid = np.exp(np.linspace(np.log(1e-5), np.log(1e5), n_grid))
-
-    logls_split = _batch_grid_reml_split_ncvt1_numpy(
-        lambdas_grid,
-        eigenvalues,
-        uab_varying_soa,
-        uab_invariant_soa,
-        iab_logdet,
-        iab_inv_s_ww,
-        iab_p1_xx,
-        iab_logdet_var,
-        reml_const,
-    )
-
-    logls_full = _batch_grid_reml_numpy(
-        1, lambdas_grid, eigenvalues, Uab_batch, Iab_batch
-    )
-
-    np.testing.assert_allclose(
-        logls_split,
-        logls_full,
-        rtol=1e-12,
-        err_msg="_batch_grid_reml_split_ncvt1_numpy mismatch",
-    )
-
-
-def test_refinement_reml_split_matches_full(split_uab_data, split_reml_inputs):
-    """_batch_reml_at_lambda_split_ncvt1_numpy must match full path."""
-    from jamma.lmm.likelihood_numpy import _batch_reml_at_lambda_split_ncvt1_numpy
-
-    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
-        split_uab_data
-    )
-    iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, _df = (
-        split_reml_inputs
-    )
-    n_snps = uab_varying_soa.shape[0]
-
-    # Per-SNP lambda values (different for each SNP)
-    rng = np.random.default_rng(7)
-    lambda_vals = np.exp(rng.uniform(np.log(1e-4), np.log(1e3), n_snps))
-
-    logls_split, _ = _batch_reml_at_lambda_split_ncvt1_numpy(
-        lambda_vals,
-        eigenvalues,
-        uab_varying_soa,
-        uab_invariant_soa,
-        iab_logdet,
-        iab_inv_s_ww,
-        iab_p1_xx,
-        iab_logdet_var,
-        reml_const,
-    )
-
-    logls_full, _ = _batch_reml_at_lambda_numpy(
-        1, lambda_vals, eigenvalues, Uab_batch, Iab_batch, reml_const
-    )
-
-    np.testing.assert_allclose(
-        logls_split,
-        logls_full,
-        rtol=1e-12,
-        err_msg="_batch_reml_at_lambda_split_ncvt1_numpy does not match full path",
-    )
-
-
-def test_split_optimizer_matches_full(split_uab_data):
-    """golden_section_optimize_lambda_split_ncvt1_numpy must match full optimizer."""
-    from jamma.lmm.likelihood_numpy import (
-        golden_section_optimize_lambda_split_ncvt1_numpy,
-    )
-    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
-
-    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
-        split_uab_data
-    )
-
-    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
-        uab_invariant_soa
-    )
-
-    lambdas_split, logls_split, _ = golden_section_optimize_lambda_split_ncvt1_numpy(
-        eigenvalues,
-        uab_varying_soa,
-        uab_invariant_soa,
-        iab_s_ww,
-        iab_s_wy,
-        iab_s_yy,
-        iab_logdet,
-    )
-
-    lambdas_full, logls_full, _ = golden_section_optimize_lambda_numpy(
-        1, eigenvalues, Uab_batch, Iab_batch
-    )
-
-    np.testing.assert_allclose(
-        lambdas_split,
-        lambdas_full,
-        rtol=1e-10,
-        err_msg="Split optimizer lambdas do not match full optimizer",
-    )
-    np.testing.assert_allclose(
-        logls_split,
-        logls_full,
-        rtol=1e-8,
-        err_msg="Split optimizer logls do not match full optimizer",
-    )
-
-
-def test_split_pab_matches_generic_pab(split_uab_data):
-    """Pab from split optimizer must match generic Pab element-by-element."""
-    from jamma.lmm.likelihood_numpy import (
-        golden_section_optimize_lambda_split_ncvt1_numpy,
-    )
-    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
-
-    eigenvalues, uab_varying_soa, uab_invariant_soa, Uab_batch, Iab_batch = (
-        split_uab_data
-    )
-
-    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
-        uab_invariant_soa
-    )
-
-    _, _, Pab_split = golden_section_optimize_lambda_split_ncvt1_numpy(
-        eigenvalues,
-        uab_varying_soa,
-        uab_invariant_soa,
-        iab_s_ww,
-        iab_s_wy,
-        iab_s_yy,
-        iab_logdet,
-    )
-
-    _, _, Pab_generic = golden_section_optimize_lambda_numpy(
-        1, eigenvalues, Uab_batch, Iab_batch
-    )
-
-    assert Pab_split.shape == Pab_generic.shape, (
-        f"Shape mismatch: split={Pab_split.shape} vs generic={Pab_generic.shape}"
-    )
-    np.testing.assert_allclose(
-        Pab_split,
-        Pab_generic,
-        rtol=1e-12,
-        err_msg="Split Pab does not match generic Pab element-by-element",
-    )
-
-
-def test_invariant_computed_once_per_lambda(split_uab_data, split_reml_inputs):
-    """Invariant dot products must be (n_grid,), not (n_grid, n_snps)."""
-    from jamma.lmm.likelihood_numpy import _batch_grid_reml_split_ncvt1_numpy
-
-    # Verify structural property: function produces (n_grid, n_snps) output
-    # while internally computing (n_grid,) invariant sums.
-    eigenvalues, uab_varying_soa, uab_invariant_soa, _Uab_batch, _Iab_batch = (
-        split_uab_data
-    )
-    iab_logdet, iab_inv_s_ww, iab_p1_xx, iab_logdet_var, reml_const, _df = (
-        split_reml_inputs
-    )
-    n_grid = 15
-    n_snps = uab_varying_soa.shape[0]
-
-    lambdas_grid = np.exp(np.linspace(np.log(1e-5), np.log(1e5), n_grid))
-
-    Hi_eval_grid = 1.0 / (lambdas_grid[:, None] * eigenvalues[None, :] + 1.0)
-
-    # s_ww_grid: (n_grid,) @ (n_samples,) -> (n_grid,)
-    s_ww_grid = Hi_eval_grid @ uab_invariant_soa[0]
-    assert s_ww_grid.shape == (n_grid,), (
-        f"s_ww_grid should be (n_grid,)={(n_grid,)}, got {s_ww_grid.shape}"
-    )
-    # Must NOT be (n_grid, n_snps) — that would be the old O(n_grid * n_snps) path
-    assert s_ww_grid.shape != (n_grid, n_snps), (
-        "s_ww_grid shape should NOT be (n_grid, n_snps)"
-    )
-
-    # Also verify the split function itself returns (n_grid, n_snps) output
-    logls = _batch_grid_reml_split_ncvt1_numpy(
-        lambdas_grid,
-        eigenvalues,
-        uab_varying_soa,
-        uab_invariant_soa,
-        iab_logdet,
-        iab_inv_s_ww,
-        iab_p1_xx,
-        iab_logdet_var,
-        reml_const,
-    )
-    assert logls.shape == (n_grid, n_snps), (
-        f"Expected output shape ({n_grid}, {n_snps}), got {logls.shape}"
-    )

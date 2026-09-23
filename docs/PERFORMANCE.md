@@ -233,8 +233,8 @@ The NumPy backend includes an optional multi-source `_lmm_accel` C extension wit
 that replaces the Python loop over SNPs for Wald test computation. The extension uses a
 workspace API (pre-allocated per-thread buffers). The primary path (fused kernel) takes
 utg_t in (n_snps, n_samples) layout directly from DGEMM TRANSA, computing wx/xx/xy
-on-the-fly without a separate SoA Uab buffer. The SoA Uab layout with invariant precompute
-is retained as a fallback when the fused C extension is unavailable. Mean imputation of
+on-the-fly without a separate SoA Uab buffer. Without the C extension, every mode runs the
+generic full-Uab NumPy optimiser. Mean imputation of
 missing genotypes is done in-place on the chunk buffer (no copy), so the per-chunk memory
 footprint equals the rotation output buffer only.
 

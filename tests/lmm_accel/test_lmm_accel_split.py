@@ -158,7 +158,7 @@ def test_fused_workspace_reuse_across_chunks(fused_data):
     This is the runner's pattern: the workspace is built once before the chunk
     loop and fed successive genotype slices.
     """
-    eigenvalues, w, Uty, utg_t, uab_inv_soa, _, n_samples = fused_data
+    eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples = fused_data
 
     ws = accel.require().create_workspace_c(
         eigenvalues,

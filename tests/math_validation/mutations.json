@@ -117,8 +117,8 @@
       "category": "force a lower-bound result against an interior reference",
       "tier": "slow",
       "path": "src/jamma/lmm/likelihood_numpy.py",
-      "find": "        n_cvt, lambdas_grid, eigenvalues, Uab_batch, Iab_batch",
-      "replace": "        n_cvt, np.full_like(lambdas_grid, l_min), eigenvalues, Uab_batch, Iab_batch",
+      "find": "_reml_logl(\n        *_batch_grid_pab_numpy(n_cvt, np.exp(log_lambdas), eigenvalues, Uab_batch),",
+      "replace": "_reml_logl(\n        *_batch_grid_pab_numpy(n_cvt, np.full_like(log_lambdas, l_min), eigenvalues, Uab_batch),",
       "detector": "tests/test_reml_refinement_contract.py::test_tiny_reml_peak_optimizer_matches_independent_root[numpy]",
       "testcase": "test_tiny_reml_peak_optimizer_matches_independent_root"
     }

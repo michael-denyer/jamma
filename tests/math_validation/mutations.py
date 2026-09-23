@@ -172,6 +172,18 @@ def run_mutation(mutation: dict[str, Any], *, timeout: int) -> dict[str, Any]:
         "source": relative.as_posix(),
         "source_sha256_before": before,
     }
+    count = original.read_text().count(mutation["find"])
+    result["patch_match_count"] = count
+    if count != 1:
+        result.update(
+            status="STALE PATCH",
+            reason=(
+                f"patch for {mutation['id']} matched {count} times in "
+                f"{relative.as_posix()}; exact-once required, re-target the manifest"
+            ),
+        )
+        result["source_sha256_after"] = _sha256(original)
+        return result
     if relative.suffix in {".c", ".h"} and not mutation.get("rebuild"):
         result.update(
             status="NOT VERIFIED", reason="C mutation has no isolated rebuild step"
@@ -199,45 +211,36 @@ def run_mutation(mutation: dict[str, Any], *, timeout: int) -> dict[str, Any]:
             )
         else:
             target = copy_root / relative
-            source = target.read_text()
-            count = source.count(mutation["find"])
-            result["patch_match_count"] = count
-            if count != 1:
+            target.write_text(
+                target.read_text().replace(mutation["find"], mutation["replace"], 1)
+            )
+            mutant_xml = copy_root / "mutant.xml"
+            mutant = _pytest(copy_root, mutation["detector"], mutant_xml, timeout)
+            cases = _xml_results(mutant_xml)
+            expected = str(
+                mutation.get("testcase", mutation["detector"].split("::")[-1])
+            )
+            intended = [
+                c
+                for c in cases
+                if expected in c["testcase"]
+                and c["outcome"] == "failure"
+                and _is_assertion_failure(c["detail"])
+            ]
+            errors = [c for c in cases if c["outcome"] == "error"]
+            result.update(
+                actual_rc=mutant["rc"],
+                actual_testcases=cases,
+                actual_detectors=[c["testcase"] for c in intended],
+                failure_excerpt=_excerpt(mutant, cases),
+            )
+            if mutant["rc"] != 0 and intended and not errors:
+                result.update(status="VERIFIED", reason="intended assertion failed")
+            else:
                 result.update(
                     status="INCONCLUSIVE",
-                    reason=f"patch matched {count} times; exact-once required",
+                    reason="mutation did not produce an intended assertion failure",
                 )
-            else:
-                target.write_text(
-                    source.replace(mutation["find"], mutation["replace"], 1)
-                )
-                mutant_xml = copy_root / "mutant.xml"
-                mutant = _pytest(copy_root, mutation["detector"], mutant_xml, timeout)
-                cases = _xml_results(mutant_xml)
-                expected = str(
-                    mutation.get("testcase", mutation["detector"].split("::")[-1])
-                )
-                intended = [
-                    c
-                    for c in cases
-                    if expected in c["testcase"]
-                    and c["outcome"] == "failure"
-                    and _is_assertion_failure(c["detail"])
-                ]
-                errors = [c for c in cases if c["outcome"] == "error"]
-                result.update(
-                    actual_rc=mutant["rc"],
-                    actual_testcases=cases,
-                    actual_detectors=[c["testcase"] for c in intended],
-                    failure_excerpt=_excerpt(mutant, cases),
-                )
-                if mutant["rc"] != 0 and intended and not errors:
-                    result.update(status="VERIFIED", reason="intended assertion failed")
-                else:
-                    result.update(
-                        status="INCONCLUSIVE",
-                        reason="mutation did not produce an intended assertion failure",
-                    )
     result["source_sha256_after"] = _sha256(original)
     if result["source_sha256_after"] != before:
         raise RuntimeError(f"original source changed while running {mutation['id']}")

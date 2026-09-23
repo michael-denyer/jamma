@@ -65,10 +65,10 @@ def _patch_compile_extension(monkeypatch, fn):
 
 
 def _stub_compile(result):
-    """Build a fake ``compile_extension(spec, package_dir, ..., on_retry=...)``
+    """Build a fake ``compile_extension(spec, package_dir, report)``
     that ignores every argument and returns ``result``."""
 
-    def _fake(spec, package_dir, *, on_retry=None):
+    def _fake(spec, package_dir, report):
         return result
 
     return _fake
@@ -99,7 +99,7 @@ def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     """
     sys_key = "jamma._fake_ext_raises"
 
-    def _raises(spec, package_dir, *, on_retry=None):
+    def _raises(spec, package_dir, report):
         raise RuntimeError("fake failure")
 
     _patch_compile_extension(monkeypatch, _raises)
@@ -176,22 +176,19 @@ def test_successful_recompile_with_no_prior_sys_modules_entry(monkeypatch):
     assert result is True
 
 
-def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
-    """The runtime recompile shim must pass a non-None on_retry callback
-    to compile_extension AND invoking it must emit a warning the user
-    can see. Without this, runtime recompile silently falls back to
-    single-threaded with no user-visible signal — the exact gap this
-    test guards.
+def test_build_warnings_reach_the_log_as_warnings(monkeypatch, capsys):
+    """A build warning (an OpenMP retry) reported during runtime recompile
+    must reach the user as a logged warning. Without this, runtime recompile
+    silently falls back to single-threaded with no user-visible signal.
     """
     from loguru import logger as _logger
 
     sys_key = "jamma._fake_ext_retry"
-    captured_retry: list[object] = []
+    calls: list[str] = []
 
-    def _compile(spec, package_dir, *, on_retry=None):
-        captured_retry.append(on_retry)
-        if on_retry is not None:
-            on_retry("OpenMP compilation failed, retrying without OpenMP")
+    def _compile(spec, package_dir, report):
+        calls.append(spec.output_stem)
+        report.warn("OpenMP compilation failed, retrying without OpenMP")
         return True
 
     _patch_compile_extension(monkeypatch, _compile)
@@ -209,15 +206,10 @@ def test_on_retry_callback_is_wired_and_emits_warning(monkeypatch, capsys):
         _logger.remove(sink_id)
 
     assert result is True
-    assert captured_retry, "compile_extension must be called"
-    assert captured_retry[0] is not None, (
-        "auto_recompile_c_extension must pass a non-None on_retry to "
-        "compile_extension so OMP downgrade signals surface"
-    )
+    assert calls == ["_fake_ext_retry"]
     captured = capsys.readouterr()
-    assert "OpenMP compilation failed" in captured.err, (
-        "on_retry invocation must produce a user-visible warning — "
-        "loguru must emit, not silently discard, retry notices"
+    assert captured.err.count("OpenMP compilation failed") == 1, (
+        "a build warning must be logged exactly once at WARNING level"
     )
 
 
@@ -247,7 +239,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
     intervals: list[tuple[int, int]] = []
     intervals_lock = threading.Lock()
 
-    def slow_compile(spec, package_dir, *, on_retry=None):
+    def slow_compile(spec, package_dir, report):
         enter_ns = time.monotonic_ns()
         time.sleep(critical_sleep_s)
         exit_ns = time.monotonic_ns()
@@ -330,7 +322,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
     intervals: list[tuple[int, int]] = []
     intervals_lock = threading.Lock()
 
-    def slow_compile(spec, package_dir, *, on_retry=None):
+    def slow_compile(spec, package_dir, report):
         enter_ns = time.monotonic_ns()
         time.sleep(critical_sleep_s)
         exit_ns = time.monotonic_ns()
@@ -461,7 +453,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
 
     compile_calls = [0]
 
-    def should_not_compile(spec, package_dir, *, on_retry=None):
+    def should_not_compile(spec, package_dir, report):
         compile_calls[0] += 1
         return True
 

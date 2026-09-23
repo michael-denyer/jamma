@@ -107,7 +107,7 @@ def _file_lock(lock_path: Path) -> Iterator[None]:
 def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     """Auto-recompile a C extension when its import or ABI check failed.
 
-    Calls ``compile_extension(spec, ..., on_retry=...)`` directly, evicts the
+    Calls ``compile_extension`` with a ``BuildReport`` that logs, evicts the
     stale module from ``sys.modules``, and returns True on success.
 
     Args:
@@ -118,7 +118,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     """
     from loguru import logger
 
-    from jamma._build_support.compile_and_link import compile_extension
+    from jamma._build_support.compile_and_link import BuildReport, compile_extension
 
     log_name = spec.output_stem
     sys_module_key = spec.sys_module_key
@@ -129,12 +129,12 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
         f"(ABI mismatch or missing). Compiling now..."
     )
 
-    def _on_retry(msg: str) -> None:
-        # Surface OMP downgrade (or other retry notices) as a warning so users
-        # whose runtime recompile silently falls back to single-threaded can see
-        # it. The build-time path in hatch_build.py already warns on OMP
-        # downgrade; this closes the gap for ABI-mismatch recompiles on wheels.
-        logger.warning(f"{log_name} recompile retry: {msg}")
+    # Warnings (compile failures, OpenMP retries) log as warnings so a runtime
+    # recompile that falls back to single-threaded is visible.
+    report = BuildReport(
+        detail=lambda msg: logger.debug(f"{log_name} recompile: {msg}"),
+        warn=lambda msg: logger.warning(f"{log_name} recompile: {msg}"),
+    )
 
     # Serialize concurrent recompiles (pytest-xdist workers, parallel Databricks
     # jobs, multiple notebook kernels). Without this, two workers can race on the
@@ -174,7 +174,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
             success = compile_extension(
                 spec,
                 Path(__file__).parents[1],  # the installed jamma/ package dir
-                on_retry=_on_retry,
+                report,
             )
         except (OSError, subprocess.SubprocessError, RuntimeError) as e:
             # Narrow catch: genuine build-environment failures (missing compiler,

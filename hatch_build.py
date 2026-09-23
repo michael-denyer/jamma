@@ -68,6 +68,8 @@ LMM_ACCEL_SPEC = _cal.LMM_ACCEL_SPEC
 JLINALG_SPEC = _cal.JLINALG_SPEC
 run_build = _cal.run_build
 detect_toolchain = _cal.detect_toolchain
+# A wheel build shows everything on stderr: pip hides it unless the build fails.
+_REPORT = _cal.BuildReport.to_stream(sys.stderr, verbose=True)
 
 
 class CustomBuildHook(BuildHookInterface):
@@ -101,12 +103,8 @@ class CustomBuildHook(BuildHookInterface):
             f'BUILD_DATE = "{date_str}"\n'
         )
 
-        # Detect the toolchain ONCE and reuse it for both specs — a wheel
-        # build used to probe the compiler and re-run OpenMP detection twice.
-        def _err(*a, **kw):
-            print(*a, **{"file": sys.stderr, **kw})
-
-        toolchain = detect_toolchain(verbose_print=_err, error_print=_err)
+        # Detect the toolchain once and reuse it for both specs.
+        toolchain = detect_toolchain(_REPORT)
         if isinstance(toolchain, str):
             print(
                 f"WARNING: {toolchain} (pure-Python fallback).",
@@ -136,21 +134,13 @@ class CustomBuildHook(BuildHookInterface):
                 ``force_include`` entry mapping the compiled ``.so`` into the
                 wheel.
         """
-
-        def _err(*a, **kw):
-            print(*a, **{"file": sys.stderr, **kw})
-
         result = run_build(
             spec,
             Path(self.root) / "src" / "jamma",
             toolchain,
             dev_mode=False,  # portable wheel: honour CFLAGS, never -march=native
-            on_retry=lambda msg: print(msg, file=sys.stderr),
-            verbose_print=_err,
-            error_print=_err,
+            report=_REPORT,
         )
-        if result.skipped:
-            return  # run_build already printed the WARNING + pure-Python note
         if not result.ok:
             print(
                 f"WARNING: {spec.output_stem} compilation failed: {result.error}. "

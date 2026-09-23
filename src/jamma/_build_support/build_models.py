@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, TextIO
 
 # ---------------------------------------------------------------------------
 # Data constants — THE single source of truth. The three entry points
@@ -82,11 +83,14 @@ LAPACK_CFLAGS: tuple[str, ...] = (
 # shared-library link. Both entry points build one; nothing links an executable.
 SHARED_LINK_FLAGS: tuple[str, ...] = ("-shared", "-fPIC")
 
-# Platform-default link flags. Caller still appends omp_link + ldflags.
+# Platform-default link flags, placed before the OpenMP runtime on the link line.
 LINK_FLAGS_BY_PLATFORM: dict[str, tuple[str, ...]] = {
     "Linux": ("-ldl", "-lpthread"),
     "Darwin": ("-undefined", "dynamic_lookup"),
 }
+
+# Libraries every extension links, placed after the OpenMP runtime.
+LINK_LIBS: tuple[str, ...] = ("-lm",)
 
 
 # ---------------------------------------------------------------------------
@@ -202,153 +206,157 @@ JLINALG_SPEC = BuildSpec(
 _SENTINEL_UB_DEFINE = "-DJAMMA_SENTINEL_UB"
 
 
-def _sentinel_env_on(env: dict[str, str] | os._Environ[str]) -> bool:
-    """Truthy check for JAMMA_SENTINEL_UB: "" and "0" are off, anything else on."""
-    return env.get("JAMMA_SENTINEL_UB", "").strip() not in ("", "0")
+def _env_on(env: Mapping[str, str], name: str) -> bool:
+    """Presence-based truthiness: "" and "0" are off, anything else on.
+
+    Mirrors ``jamma.core.constants.env_flag``, which this module cannot import
+    under PEP 517 build isolation.
+    """
+    return env.get(name, "").strip() not in ("", "0")
 
 
-def resolve_build_spec(
+# ---------------------------------------------------------------------------
+# BuildReport, BuildResult — the output channel and outcome of one build
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BuildReport:
+    """Where build output goes.
+
+    ``detail`` receives verbose-only progress (compiler command lines, OpenMP
+    probing). ``warn`` receives what must always be visible: compile
+    failures with their stderr, OpenMP retries, and unsafe OpenMP setups.
+    """
+
+    detail: Callable[[str], None]
+    warn: Callable[[str], None]
+
+    @classmethod
+    def to_stream(cls, stream: TextIO, *, verbose: bool) -> BuildReport:
+        """Print ``warn`` to ``stream``, and ``detail`` too when ``verbose``."""
+
+        def say(message: str) -> None:
+            print(message, file=stream, flush=True)
+
+        return cls(detail=say if verbose else lambda _message: None, warn=say)
+
+
+BuildPhase = Literal["preflight", "build", "ok"]
+
+
+@dataclass(frozen=True)
+class BuildResult:
+    """Result of one build. The builder prints nothing about the outcome.
+
+    ``phase`` says how far the build got: ``"preflight"`` for a guard firing
+    before any source was touched (missing sources), ``"build"`` for a
+    compile, link, or atomic-publish failure, and ``"ok"`` for success.
+    ``error`` is ``""`` on success and names the failing stage otherwise.
+    ``output_path`` is set only when ``phase == "ok"``.
+    """
+
+    phase: BuildPhase
+    error: str = ""
+    output_path: Path | None = None
+    used_openmp: bool = False
+    used_openmp_link: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.phase == "ok"
+
+
+# ---------------------------------------------------------------------------
+# ResolvedFlags — every spec- and environment-dependent flag, resolved once
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResolvedFlags:
+    """The spec- and environment-dependent flags for one build.
+
+    ``base_extra`` is spliced into BASE_CFLAGS before ``-fno-finite-math-only``.
+    ``lapack_extra`` is appended to LAPACK_CFLAGS and is non-empty only for a
+    sanitizer build. ``platform_link`` precedes the OpenMP runtime on the link
+    line and ``link_libs`` follows it.
+    """
+
+    base_extra: tuple[str, ...]
+    lapack_extra: tuple[str, ...]
+    platform_link: tuple[str, ...]
+    link_libs: tuple[str, ...]
+
+
+def resolve_flags(
     spec: BuildSpec,
     *,
     dev_mode: bool,
-    env: dict[str, str] | os._Environ[str] | None = None,
-) -> tuple[str, ...]:
-    """Return the base ``extra_cflags`` for a build, pre-sanitizer.
+    system: str,
+    env: Mapping[str, str],
+) -> ResolvedFlags:
+    """Resolve every flag that depends on the spec, the platform, or ``env``.
 
-    Pure and toolchain-independent: it reads only the spec and the environment,
-    so a test can assert on it with zero mocks.
+    Pure: it reads only its arguments, so a test asserts on it with zero mocks.
 
-    Wheel path (``dev_mode=False``): honour ``CFLAGS`` and nothing else — never
-    ``-march=native`` — so the wheel stays portable. Dev path: the spec's
+    Wheel path (``dev_mode=False``): honour ``CFLAGS`` and nothing else, never
+    ``-march=native``, so the wheel stays portable. Dev path: the spec's
     ``dev_extra_cflags`` (``-march=native`` for the accelerator), then the
-    sentinel macro when the env var is set.
+    sentinel macro when ``JAMMA_SENTINEL_UB`` is set.
+
+    ``JAMMA_SANITIZE`` (comma-separated ``-fsanitize`` values such as
+    ``"address,undefined"``) instruments every source, LAPACK included, and
+    the link. Its trailing ``-O1`` wins over BASE_CFLAGS' ``-O3`` and
+    LAPACK_CFLAGS' ``-O2`` because gcc/clang honour the last ``-O`` flag.
     """
-    resolved_env = os.environ if env is None else env
-    if not dev_mode:
-        return tuple(resolved_env.get("CFLAGS", "").split())
-    extras = list(spec.dev_extra_cflags)
-    if spec.reads_sentinel_env and _sentinel_env_on(resolved_env):
-        extras.append(_SENTINEL_UB_DEFINE)
-    return tuple(extras)
-
-
-# ---------------------------------------------------------------------------
-# apply_sanitizer_overrides — env-var driven sanitizer flag injection seam
-# ---------------------------------------------------------------------------
-
-
-def apply_sanitizer_overrides(
-    extra_cflags: list[str] | None,
-    extra_link_flags: list[str] | None,
-) -> tuple[list[str], list[str], list[str]]:
-    """Augment compile/link flags with sanitizer flags when JAMMA_SANITIZE is set.
-
-    Returns ``(cflags, link_flags, lapack_cflags)``. When ``JAMMA_SANITIZE`` is
-    unset, empty, or ``"0"``, returns the inputs unchanged plus an empty
-    ``lapack_cflags`` — the same presence-based truthiness every other
-    ``JAMMA_*`` toggle uses (``jamma.core.constants.env_flag``, mirrored here
-    as ``_sentinel_env_on`` above because this module cannot import the
-    runtime ``jamma`` package). Reads ``os.environ`` ONCE per call;
-    ``run_build`` is the one production caller (every compile entry point,
-    including runtime recompile via ``core/recompile.py``, routes through
-    it). No caller may duplicate the env-var read — that would defeat the
-    single-source-of-truth invariant for compile flags.
-
-    JAMMA_SANITIZE format: comma-separated ``-fsanitize`` values, e.g.
-    ``"address,undefined"`` or ``"address"`` alone. Trailing ``-O1`` wins
-    over BASE_CFLAGS' ``-O3`` and LAPACK_CFLAGS' ``-O2`` because gcc/clang
-    honour the LAST ``-O`` flag on the command line — so the sanitizer
-    build is debuggable without a separate -O override path.
-    """
-    extra_cflags = list(extra_cflags or [])
-    extra_link_flags = list(extra_link_flags or [])
-    sanitizers = os.environ.get("JAMMA_SANITIZE", "").strip()
-    if sanitizers in ("", "0"):
-        return extra_cflags, extra_link_flags, []
-    san_cflags = [
-        f"-fsanitize={sanitizers}",
-        "-fno-omit-frame-pointer",
-        "-O1",
-    ]
-    san_link = [f"-fsanitize={sanitizers}"]
-    return (
-        [*extra_cflags, *san_cflags],
-        [*extra_link_flags, *san_link],
-        san_cflags.copy(),
+    if dev_mode:
+        base_extra = list(spec.dev_extra_cflags)
+        if spec.reads_sentinel_env and _env_on(env, "JAMMA_SENTINEL_UB"):
+            base_extra.append(_SENTINEL_UB_DEFINE)
+    else:
+        base_extra = env.get("CFLAGS", "").split()
+    san_cflags: tuple[str, ...] = ()
+    san_link: tuple[str, ...] = ()
+    if _env_on(env, "JAMMA_SANITIZE"):
+        sanitizers = env["JAMMA_SANITIZE"].strip()
+        san_cflags = (f"-fsanitize={sanitizers}", "-fno-omit-frame-pointer", "-O1")
+        san_link = (f"-fsanitize={sanitizers}",)
+    return ResolvedFlags(
+        base_extra=(*base_extra, *san_cflags),
+        lapack_extra=san_cflags,
+        platform_link=LINK_FLAGS_BY_PLATFORM.get(system, ()),
+        link_libs=(*LINK_LIBS, *san_link),
     )
 
 
-# ---------------------------------------------------------------------------
-# resolve_cflags_for — pure dispatch function
-# ---------------------------------------------------------------------------
-
-
 def resolve_cflags_for(
-    source_path: Path,
-    lapack_source_set: set[str],
-    include_dirs: list[str],
-    extra_cflags: list[str] | None = None,
-    extra_source_includes: list[str] | None = None,
-    extra_lapack_cflags: list[str] | None = None,
+    flags: ResolvedFlags, include_dirs: Sequence[str], *, lapack: bool
 ) -> list[str]:
-    """Return compile flags for a single source.
-
-    Dispatches BASE_CFLAGS vs LAPACK_CFLAGS based on whether ``str(source_path)``
-    is in ``lapack_source_set``. Appends ``-I<d>`` for each include dir and each
-    extra_source_includes entry.
+    """Return the compile flags for one source.
 
     BASE_CFLAGS ordering: ``[-O3, -ftree-vectorize, -fno-math-errno,
-    -fno-trapping-math, -funroll-loops, *extra_cflags, -fno-finite-math-only,
+    -fno-trapping-math, -funroll-loops, *base_extra, -fno-finite-math-only,
     -Wframe-larger-than=..., -fPIC, -std=c11]``
 
-    The ``extra_cflags`` insertion BEFORE ``-fno-finite-math-only`` is
+    The ``base_extra`` insertion BEFORE ``-fno-finite-math-only`` is
     load-bearing: user CFLAGS may contain ``-Ofast`` (which implies
     ``-ffinite-math-only``), and the trailing explicit ``-fno-finite-math-only``
     must override it so isnan() keeps working. DO NOT change this order.
 
-    LAPACK path: deliberately does NOT splice ``extra_cflags`` — LAPACK sources
-    are strict IEEE 754, and a user-supplied ``-Ofast`` would defeat that split.
-    For the sanitizer use case, a separate ``extra_lapack_cflags``
-    parameter is forwarded by ``compile_jlinalg`` from the
-    ``apply_sanitizer_overrides()`` triple, so ``eigh.c`` is also instrumented
-    when ``JAMMA_SANITIZE`` is set. The trailing ``-O1`` from the sanitizer
-    flags wins over LAPACK_CFLAGS' ``-O2`` (last ``-O`` on the command line
-    wins) without needing a separate override path.
-
-    NOTE on extra_source_includes signature:
-      * Here in ``resolve_cflags_for`` it is ``list[str]`` (paths for THIS one
-        source).
-      * In ``compile_jlinalg`` it is ``dict[str, list[str]]`` keyed by source
-        filename. The dict form lets callers specify per-source includes.
-        ``compile_jlinalg`` looks up each source in the dict and forwards the
-        matching list to ``resolve_cflags_for``.
+    LAPACK sources deliberately do NOT splice ``base_extra``: they are strict
+    IEEE 754, and a user-supplied ``-Ofast`` would defeat that split. They take
+    only ``lapack_extra``, the sanitizer flags, none of which break IEEE 754
+    rounding.
     """
-    extra_cflags = list(extra_cflags or [])
-    extra_source_includes = list(extra_source_includes or [])
-    extra_lapack_cflags = list(extra_lapack_cflags or [])
-    include_flags = [f"-I{d}" for d in include_dirs] + [
-        f"-I{d}" for d in extra_source_includes
-    ]
-
-    if str(source_path) in lapack_source_set:
-        # LAPACK sources: strict IEEE 754. Caller-supplied extra_cflags (e.g.
-        # -Ofast from a user CFLAGS env) would defeat the IEEE 754 split, so
-        # they are deliberately NOT merged here. extra_lapack_cflags IS spliced
-        # — it is reserved for the sanitizer flow where the caller has already
-        # asserted the flags are IEEE-safe (apply_sanitizer_overrides only adds
-        # -fsanitize=..., -fno-omit-frame-pointer, -O1, none of which break
-        # IEEE 754 rounding).
-        return [*LAPACK_CFLAGS, *extra_lapack_cflags, *include_flags]
-
-    # Baseline path: splice extra_cflags BEFORE -fno-finite-math-only so the
-    # trailing explicit flag overrides a user -Ofast. Slice BASE_CFLAGS rather
-    # than re-listing literals — keeps BASE_CFLAGS as the single source of truth
-    # so that adding a flag there (e.g. -fno-plt) doesn't silently drop it on
-    # the extra_cflags path.
+    include_flags = [f"-I{d}" for d in include_dirs]
+    if lapack:
+        return [*LAPACK_CFLAGS, *flags.lapack_extra, *include_flags]
+    # Slice BASE_CFLAGS rather than re-listing literals, so a flag added there
+    # is never dropped on this path.
     splice_idx = BASE_CFLAGS.index("-fno-finite-math-only")
     return [
         *BASE_CFLAGS[:splice_idx],
-        *extra_cflags,
+        *flags.base_extra,
         *BASE_CFLAGS[splice_idx:],
         *include_flags,
     ]

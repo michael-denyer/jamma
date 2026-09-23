@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one hashing and `--out`/`--diff` module, `scripts/_digest_common.py`, which
   the digest workflows stage beside the head script. Digest keys and values
   are unchanged.
+- The native build resolves its compile and link flags once per extension,
+  and every build step reports through one `BuildReport` with a verbose
+  channel and an always-visible warning channel. Compiler command lines are
+  byte-identical to before. A runtime recompile after an ABI mismatch now
+  logs compiler failures and OpenMP retries through the logger instead of
+  printing them to stderr. `python -m jamma.lmm._compile_accel` and
+  `python -m jamma.jlinalg._compile_jlinalg` print the same output as
+  before; a `compile_extension()` call without `verbose=True` no longer
+  prints the success line.
+
 - Without the C extension, the REML and MLE likelihoods each have one
   finisher shared by the grid search and the per-SNP refinement, and the
   identity-weighted log-determinant is computed once per chunk. The REML

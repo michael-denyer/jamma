@@ -180,7 +180,6 @@ class MatrixSource:
             n_samples=n_samples,
             global_indices=np.arange(n_snps, dtype=np.intp),
             include_hwe=filters.hwe_threshold > 0,
-            sample_scope="all_samples" if samples.is_all_samples else "valid_samples",
         )
 
         def _iter_chunks(

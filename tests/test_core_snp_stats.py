@@ -8,7 +8,6 @@ from jamma.core.snp_stats import (
     HweCounts,
     SnpFilterSpec,
     SnpStats,
-    SnpStatsCache,
     collect_snp_stats_from_chunks,
     filter_snp_stats,
 )
@@ -60,17 +59,6 @@ def test_filter_snp_stats_uses_stats_sample_count_as_denominator():
 
     np.testing.assert_array_equal(selection.indices, [0])
     np.testing.assert_array_equal(selection.filtered_miss, [1])
-
-
-def test_snp_stats_cache_requires_all_sample_scope():
-    with pytest.raises(ValueError, match="all-sample statistics"):
-        SnpStatsCache(
-            col_means=np.array([1.0]),
-            miss_counts=np.array([0]),
-            col_vars=np.array([1.0]),
-            n_samples=1,
-            sample_scope="valid_samples",
-        )
 
 
 def test_filter_snp_stats_restricts_subset_by_global_indices():

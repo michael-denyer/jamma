@@ -14,7 +14,6 @@ The in-memory oracle (compute_centered_kinship, compute_standardized_kinship)
 has no production caller; it lives at tests/reference/kinship.py.
 """
 
-from jamma.core.snp_stats import SnpStatsCache
 from jamma.kinship.accumulation import validate_valid_indices
 from jamma.kinship.io import (
     read_kinship_matrix,
@@ -27,7 +26,6 @@ from jamma.kinship.stream import compute_kinship_streaming
 
 __all__ = [
     "LocoKinshipStream",
-    "SnpStatsCache",
     "compute_kinship_streaming",
     "compute_loco_kinship_streaming",
     "impute_and_center",

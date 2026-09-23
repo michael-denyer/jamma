@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from loguru import logger
 
+from jamma.core.snp_stats import SnpStats
 from jamma.io import read_fam_phenotypes
 from jamma.io.plink import get_plink_metadata
 from jamma.kinship.loco import (
@@ -91,7 +92,13 @@ class TestLocoKinshipStreamMaterialize:
                 n_chr_filtered,
                 n_filtered=30,
                 K_loco_buf=K_loco_buf,
-            )
+            ),
+            snp_stats=SnpStats(
+                col_means=np.zeros(1),
+                miss_counts=np.zeros(1, dtype=np.intp),
+                col_vars=np.zeros(1),
+                n_samples=1,
+            ),
         )
         results = stream.materialize()
 

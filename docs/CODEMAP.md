@@ -267,14 +267,14 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:309](../src/jamma/lmm/association_plan.py#L309) |
 | 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:92](../src/jamma/lmm/association_plan.py#L92) |
-| 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any source under one `LmmRunSpec` | [runner_numpy.py:321](../src/jamma/lmm/runner_numpy.py#L321) |
-| 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:256](../src/jamma/lmm/runner_numpy.py#L256) |
+| 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any source under one `LmmRunSpec` | [runner_numpy.py:320](../src/jamma/lmm/runner_numpy.py#L320) |
+| 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:255](../src/jamma/lmm/runner_numpy.py#L255) |
 | 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:97](../src/jamma/lmm/runner_numpy.py#L97) |
 | 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:110](../src/jamma/lmm/genotype_source.py#L110) |
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:25](../src/jamma/lmm/genotype_source.py#L25) |
 | 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:65](../src/jamma/lmm/genotype_source.py#L65) |
 | 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:139](../src/jamma/lmm/runner_numpy.py#L139) |
-| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:417](../src/jamma/lmm/runner_numpy.py#L417) |
+| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:416](../src/jamma/lmm/runner_numpy.py#L416) |
 | 4Nb | `AnalysedPhenotype` | One phenotype and its covariates restricted to the analysed samples, with the valid mask | [prepare_common.py:125](../src/jamma/lmm/prepare_common.py#L125) |
 | 4Nb | `restrict_eigen_input()` | Restrict a kinship to the analysed samples, or check eigenpairs match them | [prepare_common.py:189](../src/jamma/lmm/prepare_common.py#L189) |
 | 4Nb | `RotatedBasis` | Eigenbasis and rotated covariates every phenotype in a group shares | [prepare_common.py:304](../src/jamma/lmm/prepare_common.py#L304) |
@@ -303,14 +303,14 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `build_execution.py` | Toolchain detection and atomic compile/link execution | [build_execution.py](../src/jamma/_build_support/build_execution.py) |
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:48](../src/jamma/lmm/runner_numpy_streaming.py#L48) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:129](../src/jamma/lmm/runner_numpy_streaming.py#L129) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:128](../src/jamma/lmm/runner_numpy_streaming.py#L128) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:62](../src/jamma/lmm/schema.py#L62) |
 | 4Nh | `ModeSpec` | Per-mode test set and column specification (single source of truth) | [lmm/schema.py:90](../src/jamma/lmm/schema.py#L90) |
 | 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:314](../src/jamma/lmm/assoc_output.py#L314) |
 | 4Ni | `_count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/chunk_runner_numpy.py:51](../src/jamma/lmm/chunk_runner_numpy.py#L51) |
-| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:165](../src/jamma/lmm/loco.py#L165) |
-| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`; the pipeline's entry | [lmm/loco.py:242](../src/jamma/lmm/loco.py#L242) |
-| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:114](../src/jamma/lmm/loco_eigen.py#L114) |
+| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:79](../src/jamma/lmm/loco.py#L79) |
+| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`; the pipeline's entry | [lmm/loco.py:156](../src/jamma/lmm/loco.py#L156) |
+| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:111](../src/jamma/lmm/loco_eigen.py#L111) |
 | 4Nj | `solve_eigen_pairs()` | Ordered eigenpairs with `workers` solves in flight under one consumer-thread BLAS scope | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 | 4Nj | `plan_loco_workers()` | Worker cap and complete consumer memory reservation | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 

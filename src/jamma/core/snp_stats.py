@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 from loguru import logger
@@ -24,8 +23,6 @@ from jamma.core.snp_filter import (
 )
 from jamma.io.plink import stream_genotype_chunks, validate_genotype_values
 from jamma.jlinalg import compute_snp_stats_chunk
-
-SampleScope = Literal["all_samples", "valid_samples"]
 
 
 def _readonly_1d(
@@ -66,9 +63,7 @@ class HweCounts:
 class SnpStats:
     """Per-SNP statistics over one explicit sample population.
 
-    ``n_samples`` is the denominator for missingness. Streaming LMM and regular
-    kinship may compute stats over valid samples, while LOCO kinship caches
-    stats over all samples for later association use.
+    ``n_samples`` is the denominator for missingness.
     """
 
     col_means: np.ndarray
@@ -78,7 +73,6 @@ class SnpStats:
     n_unexpected: int = 0
     hwe_counts: HweCounts | None = None
     global_indices: np.ndarray | None = None
-    sample_scope: SampleScope = "all_samples"
 
     def __post_init__(self) -> None:
         col_means = _readonly_1d("col_means", self.col_means, np.float64)
@@ -89,8 +83,6 @@ class SnpStats:
 
         if self.n_samples < 1:
             raise ValueError(f"n_samples must be >= 1, got {self.n_samples}")
-        if self.sample_scope not in ("all_samples", "valid_samples"):
-            raise ValueError(f"unexpected sample_scope: {self.sample_scope!r}")
         if self.hwe_counts is not None:
             _same_shape("hwe_counts", col_means.shape, self.hwe_counts.n_aa)
 
@@ -135,21 +127,7 @@ class SnpStats:
             n_unexpected=0,
             hwe_counts=hwe_counts,
             global_indices=global_indices[positions],
-            sample_scope=self.sample_scope,
         )
-
-
-@dataclass(frozen=True, slots=True)
-class SnpStatsCache(SnpStats):
-    """Global all-sample SNP statistics cache for LOCO association reuse."""
-
-    def __post_init__(self) -> None:
-        SnpStats.__post_init__(self)
-        if self.sample_scope != "all_samples":
-            raise ValueError(
-                "SnpStatsCache must contain all-sample statistics; "
-                f"got sample_scope={self.sample_scope!r}"
-            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,7 +219,6 @@ def collect_snp_stats_from_chunks(
     global_indices: np.ndarray | None = None,
     include_hwe: bool = False,
     validate_genotypes: bool = False,
-    sample_scope: SampleScope = "all_samples",
 ) -> SnpStats:
     """Collect SNP stats from chunks whose start/end are local SNP offsets."""
     col_means = np.zeros(n_snps, dtype=np.float64)
@@ -301,7 +278,6 @@ def collect_snp_stats_from_chunks(
         n_unexpected=n_unexpected,
         hwe_counts=hwe_counts,
         global_indices=global_indices,
-        sample_scope=sample_scope,
     )
 
 
@@ -318,7 +294,6 @@ def collect_streamed_snp_stats(
     show_progress: bool = True,
     progress_label: str = "Computing SNP statistics",
     dtype: type = np.float32,
-    sample_scope: SampleScope = "all_samples",
 ) -> SnpStats:
     """Collect SNP statistics by streaming PLINK BED chunks."""
     sample_indices = (
@@ -361,7 +336,6 @@ def collect_streamed_snp_stats(
         global_indices=global_indices,
         include_hwe=include_hwe,
         validate_genotypes=validate_genotypes,
-        sample_scope=sample_scope,
     )
 
 

@@ -93,15 +93,15 @@ def test_general_ncvt_gemma_covariate_match():
     covariates = np.loadtxt(SYNTHETIC.covariates)
     snp_info = [
         {
-            "chr": str(plink.chromosome[i]),
-            "rs": plink.sid[i],
-            "pos": plink.bp_position[i],
-            "a1": plink.allele_1[i],
-            "a0": plink.allele_2[i],
+            "chr": str(plink.meta.chromosome[i]),
+            "rs": plink.meta.sid[i],
+            "pos": plink.meta.bp_position[i],
+            "a1": plink.meta.allele_1[i],
+            "a0": plink.meta.allele_2[i],
             "maf": 0.0,
             "n_miss": 0,
         }
-        for i in range(plink.n_snps)
+        for i in range(plink.meta.n_snps)
     ]
 
     run_result = run_lmm_association_numpy(

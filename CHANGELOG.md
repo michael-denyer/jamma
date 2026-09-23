@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `jamma.io.read_genotypes(bfile)` reads the `.bed` genotype matrix on its
+  own. The in-memory pipeline uses it instead of `load_plink_binary`, so it no
+  longer parses the `.bim` and `.fam` files a second time.
+  `load_plink_binary` drops its unused `meta` argument, and `PlinkData` drops
+  the eight properties that forwarded to `PlinkData.meta`; read
+  `data.meta.n_samples` and so on.
+- `read_matrix_parallel` raises `ValueError` for `n_workers < 1`, as
+  `write_matrix_parallel` already did, instead of clamping to one worker. It
+  scans the input once rather than twice to find chunk boundaries.
+- The parallel matrix reader and writer remove their `.jamma_mread_*` and
+  `.jamma_mwrite_*` temp directories and everything in them on every exit.
+  A failed early delete of the writer's memmap no longer leaves the directory,
+  with the memmap inside, beside the output.
 - `scripts/bench_memory.py` replaces `bench_impute_memory.py`,
   `bench_snp_stats_layout.py` and `bench_kinship_memory.py` as the
   subcommands `impute`, `snp-stats` and `kinship`. The digest scripts share

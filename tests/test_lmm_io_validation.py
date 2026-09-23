@@ -480,13 +480,13 @@ def test_batch_hwe_matches_streaming_hwe() -> None:
     kinship = compute_centered_kinship(genotypes.copy())
     snp_info = [
         {
-            "chr": str(plink.chromosome[i]),
-            "rs": plink.sid[i],
-            "pos": int(plink.bp_position[i]),
-            "a1": plink.allele_1[i],
-            "a0": plink.allele_2[i],
+            "chr": str(plink.meta.chromosome[i]),
+            "rs": plink.meta.sid[i],
+            "pos": int(plink.meta.bp_position[i]),
+            "a1": plink.meta.allele_1[i],
+            "a0": plink.meta.allele_2[i],
         }
-        for i in range(plink.n_snps)
+        for i in range(plink.meta.n_snps)
     ]
     cfg = LmmConfig(lmm_mode=1, check_memory=False, show_progress=False)
 

@@ -230,15 +230,15 @@ def _print_scientific_equivalence(
 def _build_snp_info(plink_data):
     return [
         {
-            "chr": str(plink_data.chromosome[i]),
-            "rs": plink_data.sid[i],
-            "pos": plink_data.bp_position[i],
-            "a1": plink_data.allele_1[i],
-            "a0": plink_data.allele_2[i],
+            "chr": str(plink_data.meta.chromosome[i]),
+            "rs": plink_data.meta.sid[i],
+            "pos": plink_data.meta.bp_position[i],
+            "a1": plink_data.meta.allele_1[i],
+            "a0": plink_data.meta.allele_2[i],
             "maf": 0.0,
             "n_miss": 0,
         }
-        for i in range(plink_data.n_snps)
+        for i in range(plink_data.meta.n_snps)
     ]
 
 

@@ -188,11 +188,12 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 2a | `PlinkData` | Metadata + genotype container (n_samples x n_snps float32) | [plink.py:83](../src/jamma/io/plink.py#L83) |
+| 2a | `PlinkData` | Metadata + genotype container (n_samples x n_snps float32) | [plink.py:86](../src/jamma/io/plink.py#L86) |
 | 2a | `PlinkMetadata` | Frozen dataclass of dimensions + per-SNP/sample arrays | [plink.py:19](../src/jamma/io/plink.py#L19) |
-| 2a | `load_plink_binary()` | Full-load PLINK .bed/.bim/.fam | [plink.py:137](../src/jamma/io/plink.py#L137) |
-| 2a | `stream_genotype_chunks()` | Windowed reads from .bed (O(n x chunk)) | [plink.py:289](../src/jamma/io/plink.py#L289) |
-| 2a | `get_plink_metadata()` | Dimensions + metadata without loading genotypes | [plink.py:43](../src/jamma/io/plink.py#L43) |
+| 2a | `read_genotypes()` | Full-load genotype matrix from .bed | [plink.py:100](../src/jamma/io/plink.py#L100) |
+| 2a | `load_plink_binary()` | Metadata plus full genotypes as `PlinkData` | [plink.py:118](../src/jamma/io/plink.py#L118) |
+| 2a | `stream_genotype_chunks()` | Windowed reads from .bed (O(n x chunk)) | [plink.py:255](../src/jamma/io/plink.py#L255) |
+| 2a | `get_plink_metadata()` | Dimensions + metadata without loading genotypes | [plink.py:51](../src/jamma/io/plink.py#L51) |
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:21](../src/jamma/io/covariate.py#L21) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L46) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L87) |
@@ -203,7 +204,7 @@ Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-com
 | 2f | `write_eigen_files()` | Write eigendecomposition (`.npy` default; `.txt` + `.npy` sidecar with legacy_text) | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | 2f | `npy_cache_valid()` | Shared `.npy` sibling cache validation (mtime-based) | [utils/npy_cache.py](../src/jamma/utils/npy_cache.py) |
 | 2f | `read_array_artifact()` | One reader for `.npy`, `.txt`, and the `.npy` sidecar (corrupt-sidecar recovery, sidecar write after parse) | [utils/npy_cache.py](../src/jamma/utils/npy_cache.py) |
-| 2g | `write_matrix_parallel()` | Parallel matrix writer using file-backed memmap | [io/matrix_writer.py:113](../src/jamma/io/matrix_writer.py#L113) |
+| 2g | `write_matrix_parallel()` | Parallel matrix writer using file-backed memmap | [io/matrix_writer.py:106](../src/jamma/io/matrix_writer.py#L106) |
 | 2h | `read_matrix_parallel()` | Multi-worker matrix text reader with chunk scanning | [io/matrix_reader.py](../src/jamma/io/matrix_reader.py) |
 | 2i | `read_weight_file()` | Parse per-individual weight file (`-widv` flag) | [io/weight.py:16](../src/jamma/io/weight.py#L16) |
 | 2i | `apply_individual_weights()` | Apply weights to kinship matrix | [io/weight.py:75](../src/jamma/io/weight.py#L75) |
@@ -371,9 +372,9 @@ sequenceDiagram
     activate CLI
 
     rect rgba(53, 168, 182, 0.75)
-        CLI->>IO: load_plink_binary()
+        CLI->>IO: read_genotypes()
         activate IO
-        IO-->>CLI: PlinkData (genotypes, metadata)
+        IO-->>CLI: genotypes (n x p)
         deactivate IO
         CLI->>K: read_kinship_matrix()
         activate K
@@ -577,10 +578,10 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
 | CLI dispatch (`main`) | [cli.py:221](../src/jamma/cli.py#L221) |
-| Load genotypes | [plink.py:137](../src/jamma/io/plink.py#L137) |
+| Load genotypes | [plink.py:100](../src/jamma/io/plink.py#L100) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
-| Matrix writer | [io/matrix_writer.py:113](../src/jamma/io/matrix_writer.py#L113) |
+| Matrix writer | [io/matrix_writer.py:106](../src/jamma/io/matrix_writer.py#L106) |
 | Kinship compute | [stream.py:316](../src/jamma/kinship/stream.py#L316) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood (`reml_log_likelihood()`) | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |

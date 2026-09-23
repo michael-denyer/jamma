@@ -56,11 +56,11 @@ def synthetic_null_model():
     )
 
     plink = load_plink_binary(SYNTHETIC.bfile)
-    kinship = read_kinship_matrix(SYNTHETIC.kinship, n_samples=plink.n_samples)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship, n_samples=plink.meta.n_samples)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
     eigenvalues, U = eigendecompose_kinship(kinship)
 
-    W = np.ones((plink.n_samples, 1))
+    W = np.ones((plink.meta.n_samples, 1))
     UtW = U.T @ W
     Uty = U.T @ phenotypes
     n_cvt = 1
@@ -88,7 +88,7 @@ def mouse_null_model():
     )
 
     plink = load_plink_binary(MOUSE.bfile)
-    kinship = read_kinship_matrix(MOUSE.kinship, n_samples=plink.n_samples)
+    kinship = read_kinship_matrix(MOUSE.kinship, n_samples=plink.meta.n_samples)
     phenotypes = read_fam_phenotypes(MOUSE.fam)
 
     # 530 of the 1940 mouse_hs1940 phenotypes are missing. GEMMA drops those

@@ -130,7 +130,7 @@ src/jamma/
 │   ├── snp_list.py         # GEMMA-format SNP list file I/O (one RS ID per line)
 │   ├── weight.py           # GEMMA-format individual weight file I/O + kinship weighting
 │   └── _parallel_text.py   # Shared multiprocess text I/O helpers for matrix_reader/matrix_writer
-│                          # (re-exports unlink_quietly from utils/atomic_publish.py)
+│                          # (spawn pool, scoped temp dir, MemmapRef)
 ├── kinship/                # Kinship matrix computation and LOCO variants
 │   ├── stream.py           # Streaming centered/standardized kinship (dsyrk), mode-selected
 │   ├── loco.py             # Streaming LOCO kinship via subtraction, batch loop

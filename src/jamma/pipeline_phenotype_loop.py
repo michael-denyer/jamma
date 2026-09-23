@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.io.plink import PlinkMetadata, load_plink_binary
+from jamma.io.plink import PlinkMetadata, read_genotypes
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
 from jamma.lmm.genotype_source import GenotypeSource
 from jamma.lmm.prepare_common import _build_covariate_matrix, rotate_basis
@@ -166,4 +166,4 @@ def _genotype_source(
         f"{runner_name}: loading all genotypes into memory"
         " (for large datasets, use --backend numpy-streaming)"
     )
-    return MatrixSource(load_plink_binary(bfile).genotypes, snp_meta)
+    return MatrixSource(read_genotypes(bfile), snp_meta)

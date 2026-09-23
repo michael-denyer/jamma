@@ -8,8 +8,6 @@
 #define NO_IMPORT_ARRAY
 #include "_lmm_support.h"
 
-#include "_lmm_logdet.h"
-
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -412,35 +410,6 @@ int validate_hi_eval_null(const double *hi, int n_samples)
         }
     }
     return 0;
-}
-
-void build_grid_ncvt1(int n_grid, int n_samples, double log_l_min, double step,
-                      const double *eigenvalues, const double *inv_ww,
-                      const double *inv_wy, const double *inv_yy,
-                      double *lambda_grid, double *hi_eval_grid,
-                      double *logdet_h_grid, grid_invariant_t *grid_inv)
-{
-    for (int g = 0; g < n_grid; g++) {
-        lambda_grid[g] = exp(log_l_min + g * step);
-    }
-    for (int g = 0; g < n_grid; g++) {
-        double lam    = lambda_grid[g];
-        double *hi_row = hi_eval_grid + (size_t)g * n_samples;
-        double sw = 0.0, swy = 0.0, sy = 0.0;
-        for (int i = 0; i < n_samples; i++) {
-            double h = 1.0 / (lam * eigenvalues[i] + 1.0);
-            hi_row[i] = h;
-            sw  += h * inv_ww[i];
-            swy += h * inv_wy[i];
-            sy  += h * inv_yy[i];
-        }
-        logdet_h_grid[g] = logdet_h_lambda(eigenvalues, n_samples, lam);
-
-        grid_inv[g].s_ww    = sw;
-        grid_inv[g].s_wy    = swy;
-        grid_inv[g].s_yy    = sy;
-        grid_inv[g].log_s_ww = (sw > 0.0) ? log(sw) : 0.0;
-    }
 }
 
 int parse_mode_inputs(int lmm_mode, PyObject **hi_obj, PyObject *logl_obj,

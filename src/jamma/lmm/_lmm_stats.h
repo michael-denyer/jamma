@@ -25,6 +25,7 @@
 #define JAMMA_LMM_STATS_H
 
 #include <math.h>
+#include <stddef.h>
 
 #include "_lmm_types.h"
 
@@ -67,48 +68,47 @@ static inline double chi2_sf_c(double x)
 
 
 /* ---------------------------------------------------------------------------
- * n_cvt = 1. Pab is the fixed 3x6 layout.
+ * The four Pab entries both statistics read: P_xx, P_xy and P_yy at level
+ * n_cvt, and the fully projected Px_yy at level n_cvt + 1. Each family reads
+ * them from its own Pab layout; the formulas below see only these.
  * ------------------------------------------------------------------------- */
+typedef struct {
+    double P_xx, P_xy, P_yy, Px_yy;
+} pab_terms_t;
 
-/* Wald: F = (P_yy - Px_yy) / Px_yy * df, beta and se from level 2. */
-int wald_from_pab(
-    const double pab[3][6],
+static inline pab_terms_t pab_terms_ncvt1(const double pab[3][6])
+{
+    return (pab_terms_t){
+        .P_xx = pab[1][3], .P_xy = pab[1][4], .P_yy = pab[1][5],
+        .Px_yy = pab[2][5],
+    };
+}
+
+static inline pab_terms_t pab_terms_general(const double *pab,
+                                            const pab_table_t *t)
+{
+    const double *level = pab + (size_t)t->n_cvt * t->n_index;
+    const double *projected = level + t->n_index;
+    return (pab_terms_t){
+        .P_xx = level[t->idx_xx], .P_xy = level[t->idx_xy],
+        .P_yy = level[t->idx_yy], .Px_yy = projected[t->idx_yy],
+    };
+}
+
+/* Wald: F = (P_yy - Px_yy) / Px_yy * df. */
+int wald_stats(
+    pab_terms_t p,
     int df,
     double *beta_out, double *se_out, double *f_stat_out
 );
 
 /* Score: F = n_samples * P_xy^2 / (P_yy * P_xx), so it uses n_samples rather
- * than df and needs no per-SNP lambda. beta and se still come from level 2. */
-int score_from_pab(
-    const double pab[3][6],
+ * than df and needs no per-SNP lambda. beta and se come from Px_yy as in
+ * Wald. */
+int score_stats(
+    pab_terms_t p,
     int n_samples,
     int df,
-    double *beta_out, double *se_out, double *f_stat_out
-);
-
-/* ---------------------------------------------------------------------------
- * General n_cvt. Pab is flat and indexed through the table.
- * ------------------------------------------------------------------------- */
-
-int score_from_pab_general(
-    const double *pab,
-    const pab_table_t *t,
-    int n_samples,
-    double *beta_out, double *se_out, double *f_stat_out
-);
-
-/* -------------------------------------------------------------------------
- * wald_from_pab_general — Extract Wald stats from general-n_cvt Pab.
- *
- * P_XX = Pab[n_cvt, idx_xx], P_XY = Pab[n_cvt, idx_xy],
- * P_YY = Pab[n_cvt, idx_yy] (pre-genotype-projection),
- * Px_YY = Pab[n_cvt+1, idx_yy] (fully projected).
- * Same Wald formula as existing wald_from_pab.
- * Returns 1 if valid, 0 if degenerate.
- * ------------------------------------------------------------------------- */
-int wald_from_pab_general(
-    const double *pab,
-    const pab_table_t *t,
     double *beta_out, double *se_out, double *f_stat_out
 );
 

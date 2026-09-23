@@ -7,8 +7,6 @@
 
 #include "_lmm_kernels_ncvt1.h"
 
-/* wald_from_pab and score_from_pab live with the other statistic extractors
- * in _lmm_stats.c; the optimizers call them once per SNP on convergence. */
 #include "_lmm_stats.h"
 /* logdet_h_lambda: the logdet(H) term every REML and MLE evaluation needs. */
 #include "_lmm_logdet.h"
@@ -246,7 +244,8 @@ double refine_lambda_ncvt1_split(
      * from without a second n_samples pass. */
     double pab[3][6];
     *logl_out = reml_logl_ncvt1_split(snp, lambda_opt, pab);
-    *is_valid_out = wald_from_pab(pab, df, beta_out, se_out, f_stat_out);
+    *is_valid_out = wald_stats(pab_terms_ncvt1(pab), df,
+                               beta_out, se_out, f_stat_out);
 
     return lambda_opt;
 }

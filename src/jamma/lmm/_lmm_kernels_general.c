@@ -7,8 +7,6 @@
 
 #include "_lmm_kernels_general.h"
 
-/* wald_from_pab_general lives with the other statistic extractors in
- * _lmm_stats.c; the fused-general REML path calls it once per SNP. */
 #include "_lmm_stats.h"
 /* logdet_h_lambda: the logdet(H) term every REML and MLE evaluation needs. */
 #include "_lmm_logdet.h"
@@ -42,7 +40,7 @@ void calc_pab_general(
             const pab_entry_t *re = &t->entries[offset + e];
             double ps_ww = pab[(p - 1) * ni + re->index_ww];
             /* Match n_cvt=1 paths: zero projection when divisor is zero,
-             * so Px_YY < 0 guard in wald_from_pab catches degeneracy. */
+             * so Px_yy < 0 guard in wald_stats catches degeneracy. */
             double inv_ww = (ps_ww != 0.0) ? 1.0 / ps_ww : 0.0;
             pab[p * ni + re->index_ab] =
                 pab[(p - 1) * ni + re->index_ab]
@@ -323,8 +321,8 @@ double refine_lambda_general(
      * effect (the caller's own buffer), so the Wald extraction below reads
      * the same Pab the logl was computed from without a second pass. */
     *logl_out = reml_logl_general_fresh(snp, lambda_opt);
-    *is_valid_out = wald_from_pab_general(
-        snp->pab, snp->t, beta_out, se_out, f_stat_out);
+    *is_valid_out = wald_stats(pab_terms_general(snp->pab, snp->t),
+                               snp->t->df, beta_out, se_out, f_stat_out);
 
     return lambda_opt;
 }

@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -231,6 +232,53 @@ def _find_libiomp5(report: BuildReport) -> Path | None:
     return None
 
 
+# Mirrors the extension sources: omp.h, a parallel region, an omp_* call. A
+# probe without them passes on hosts where the real compile cannot find omp.h
+# or the real link cannot resolve the __kmpc_* entry points.
+_CLANG_PROBE_SOURCE = """\
+#include <omp.h>
+int main(void) {
+    int n = 0;
+#pragma omp parallel reduction(+ : n)
+    n += omp_get_thread_num() >= 0;
+    return n > 0 ? 0 : 1;
+}
+"""
+
+
+def _intel_openmp_include_dir(libiomp5_path: Path) -> Path | None:
+    """Return the directory holding the omp.h shipped beside libiomp5, if any.
+
+    The ``intel-openmp`` wheel installs ``<prefix>/lib/libiomp5.so`` and
+    ``<prefix>/opt/compiler/include/omp.h``. clang only has its own omp.h
+    when ``libomp-dev`` is installed, so without this header clang cannot
+    compile the OpenMP sources. The path is resolved first so a symlink such
+    as ``/usr/local/lib/libiomp5.so`` leads to the wheel's prefix.
+    """
+    include_dir = libiomp5_path.resolve().parent.parent / "opt" / "compiler" / "include"
+    return include_dir if (include_dir / "omp.h").is_file() else None
+
+
+def _clang_probe_commands(
+    clang_path: str,
+    compile_flags: list[str],
+    link_flags: list[str],
+    source: Path,
+) -> tuple[list[str], list[str]]:
+    """Return the compile and link argv for the clang+libiomp5 probe.
+
+    The two steps match ``execute_build``: ``-fopenmp`` only at compile
+    time, then a link that names libiomp5 by path. Passing ``-fopenmp`` to
+    the link would make clang add ``-lomp``, which fails wherever LLVM's
+    libomp is not installed, even though the build never links it.
+    """
+    obj = source.with_suffix(".o")
+    return (
+        [clang_path, *compile_flags, "-c", str(source), "-o", str(obj)],
+        [clang_path, str(obj), "-o", str(source.with_suffix("")), *link_flags],
+    )
+
+
 def _openmp_flags_for_libiomp5(
     cc_cmd: str,
     libiomp5_path: Path,
@@ -252,50 +300,41 @@ def _openmp_flags_for_libiomp5(
     # GOMP_* calls that use libiomp5's buggy compatibility shim.
     clang_path = shutil.which("clang")
     if clang_path is not None:
-        # Minimal test: verify clang accepts -fopenmp and can link against
-        # the specific libiomp5.  We avoid #include <omp.h> because
-        # libomp-dev may not be installed — the actual C sources include
-        # omp.h conditionally and the header is found via -I flags at
-        # compile time, not at detection time.
-        try:
-            result = subprocess.run(
-                [
-                    clang_path,
-                    "-fopenmp",
-                    "-x",
-                    "c",
-                    "-",  # read C source from stdin
-                    "-x",
-                    "none",  # reset — next args auto-detect by ext
-                    "-o",
-                    "/dev/null",
-                    str(libiomp5_path),
-                    f"-Wl,-rpath,{lib_dir}",
-                ],
-                input="int main(){return 0;}\n",
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except (OSError, subprocess.TimeoutExpired) as e:
-            # Broken clang symlink (OSError/FileNotFoundError) or a wedged
-            # compiler (TimeoutExpired) must not crash detection — the whole
-            # point of this probe is to decide whether to use clang. Fall
-            # through to the GCC+libiomp5 path.
-            report.detail(
-                f"clang found but probe failed ({type(e).__name__}: {e}); "
-                "falling back to GCC"
-            )
-        else:
-            if result.returncode == 0:
+        clang_compile = ["-fopenmp"]
+        include_dir = _intel_openmp_include_dir(libiomp5_path)
+        if include_dir is not None:
+            clang_compile.append(f"-I{include_dir}")
+        with tempfile.TemporaryDirectory(prefix="jamma-omp-probe-") as tmp:
+            source = Path(tmp) / "probe.c"
+            source.write_text(_CLANG_PROBE_SOURCE)
+            try:
+                for command in _clang_probe_commands(
+                    clang_path, clang_compile, link_flags, source
+                ):
+                    result = subprocess.run(
+                        command, capture_output=True, text=True, timeout=10
+                    )
+                    if result.returncode != 0:
+                        break
+            except (OSError, subprocess.TimeoutExpired) as e:
+                # Broken clang symlink (OSError/FileNotFoundError) or a wedged
+                # compiler (TimeoutExpired) must not crash detection — the whole
+                # point of this probe is to decide whether to use clang. Fall
+                # through to the GCC+libiomp5 path.
                 report.detail(
-                    f"Using clang ({clang_path}) for libiomp5 compatibility "
-                    f"(avoids GCC GOMP shim assertion failures)"
+                    f"clang found but probe failed ({type(e).__name__}: {e}); "
+                    "falling back to GCC"
                 )
-                return (["-fopenmp"], link_flags, clang_path)
-            report.detail(
-                f"clang found but OpenMP test failed: {result.stderr.strip()}"
-            )
+            else:
+                if result.returncode == 0:
+                    report.detail(
+                        f"Using clang ({clang_path}) for libiomp5 compatibility "
+                        f"(avoids GCC GOMP shim assertion failures)"
+                    )
+                    return (clang_compile, link_flags, clang_path)
+                report.detail(
+                    f"clang found but OpenMP test failed: {result.stderr.strip()}"
+                )
 
     # Fallback to GCC — compile with -fopenmp (generates GOMP_* calls),
     # link against libiomp5 by full path.  This relies on libiomp5's GOMP

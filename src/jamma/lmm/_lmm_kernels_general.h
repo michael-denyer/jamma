@@ -20,6 +20,7 @@
 #define JAMMA_LMM_KERNELS_GENERAL_H
 
 #include "_lmm_types.h"
+#include "_lmm_lambda_search.h"
 
 #include <math.h>
 
@@ -35,54 +36,59 @@ void calc_pab_general(
     double *pab
 );
 
-/* -------------------------------------------------------------------------
- * golden_section_lambda_general — Grid + golden section for general n_cvt.
- *
- * Mirrors the coarse-grid plus refine_lambda_ncvt1_split pair. Grid phase uses
- * precomputed hi_eval + invariant sums; refinement uses fresh evaluation.
- * At optimal lambda, computes full Pab and returns it + Wald stats.
- * ------------------------------------------------------------------------- */
-double golden_section_lambda_general(
-    const double *uab_inv,
-    const double *uab_var,
-    const double *eigenvalues,
-    int n_samples,
-    const double *lambda_grid,
+/* One SNP's lambda-search inputs and the caller's scratch. uab_inv and
+ * uab_var are the SoA invariant and varying Uab columns, each n_samples long.
+ * uab_snp is the same SNP's full Uab in AoS layout (n_samples, n_index),
+ * which only the MLE evaluators read. row0 holds at least n_index doubles;
+ * pab and dpab hold at least n_rows * n_index, and only the REML Newton
+ * polish uses dpab. The lambda optimiser's context. */
+typedef struct {
+    const double *uab_inv;
+    const double *uab_var;
+    const double *uab_snp;
+    const double *eigenvalues;
+    int n_samples;
+    const pab_table_t *t;
+    double logdet_iab, reml_const, mle_const;
+    double *row0, *pab, *dpab;
+} general_snp_t;
+
+/* Coarse-grid index of the best REML (or MLE) logl, from the grid's cached
+ * Hi_eval, logdet(H) and (REML) invariant sums; -1 when every point is
+ * degenerate. */
+int coarse_grid_reml_general(
+    const general_snp_t *snp,
     const double *hi_eval_grid,
     const double *logdet_h_grid,
     const double *inv_sums_grid,    /* (n_grid, n_inv) */
-    double log_l_min, double step,
-    int n_grid, int n_refine,
-    double logdet_iab,
-    double reml_const,
-    const pab_table_t *t,
-    double *logl_out,
-    double *beta_out, double *se_out, double *f_stat_out,
-    int *is_valid_out,
-    double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch,   /* caller-provided, at least n_rows * n_index doubles */
-    double *dpab_scratch   /* same shape, for the interior REML refinement */
+    int n_grid
 );
 
-/* -------------------------------------------------------------------------
- * golden_section_lambda_mle_general — Grid + golden section for MLE (general n_cvt).
- *
- * Returns optimal lambda; writes logl to *logl_out.
- * ------------------------------------------------------------------------- */
-double golden_section_lambda_mle_general(
-    const double *uab_snp,
-    const double *eigenvalues,
-    int n_samples,
-    const double *lambda_grid,
+int coarse_grid_mle_general(
+    const general_snp_t *snp,
     const double *hi_eval_grid,
     const double *logdet_h_grid,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
-    double mle_const,
-    const pab_table_t *t,
+    int n_grid
+);
+
+/* REML lambda from coarse-grid index best_idx (< 0 marks a fully degenerate
+ * SNP). Writes the REML logl and the Wald statistics at the optimum. */
+double refine_lambda_general(
+    const general_snp_t *snp,
+    const lambda_search_t *search,
+    int best_idx,
     double *logl_out,
-    double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
+    double *beta_out, double *se_out, double *f_stat_out,
+    int *is_valid_out
+);
+
+/* MLE lambda from coarse-grid index best_idx. Returns the optimal lambda;
+ * writes the log-likelihood to *logl_out. */
+double refine_lambda_mle_general(
+    const general_snp_t *snp,
+    const lambda_search_t *search,
+    int best_idx,
+    double *logl_out
 );
 
 /* -------------------------------------------------------------------------

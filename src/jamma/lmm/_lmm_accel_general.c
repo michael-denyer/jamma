@@ -43,12 +43,10 @@
 /* Coarse-grid block: the lambda grid and its invariant dot products.
  * NULL for mode 3 (Score does no lambda search), non-NULL otherwise. */
 typedef struct {
-    double *lambda_grid;    /* (n_grid,) */
-    double log_l_min, step; /* bracket endpoints as computed at creation */
+    lambda_search_t search;
     double *hi_eval_grid;   /* (n_grid * n_samples) */
     double *logdet_h_grid;  /* (n_grid,) */
     double *inv_sums_grid;  /* (n_grid * n_inv) — precomputed invariant dot products */
-    int n_grid, n_refine;
 } general_grid_t;
 
 /* Null-model block: modes 3 and 4 carry hi_eval_null and its invariant sums.
@@ -183,7 +181,7 @@ static void lmm_workspace_general_free(lmm_workspace_general_t *ws)
 {
     if (!ws) return;
     if (ws->grid) {
-        free(ws->grid->lambda_grid);
+        free(ws->grid->search.lambda_grid);
         free(ws->grid->hi_eval_grid);
         free(ws->grid->logdet_h_grid);
         free(ws->grid->inv_sums_grid);
@@ -271,20 +269,20 @@ static int init_general_grid(
 
     general_grid_t *grid = (general_grid_t *)calloc(1, sizeof(general_grid_t));
     if (!grid) { PyErr_NoMemory(); return -1; }
-    grid->n_grid = n_grid;
-    grid->n_refine = n_refine;
-    grid->log_l_min = log_l_min;
-    grid->step = step;
-
-    grid->lambda_grid = (double *)malloc(ws->layout.grid_points * sizeof(double));
+    double *lambda_grid = (double *)malloc(ws->layout.grid_points * sizeof(double));
+    grid->search = (lambda_search_t){
+        .lambda_grid = lambda_grid,
+        .log_l_min = log_l_min, .step = step,
+        .n_grid = n_grid, .n_refine = n_refine,
+    };
     grid->hi_eval_grid = alloc_aligned_doubles(ws->layout.hi_eval_grid);
     grid->logdet_h_grid = (double *)malloc(ws->layout.grid_points * sizeof(double));
     grid->inv_sums_grid = (double *)malloc(
         ws->layout.inv_sums_grid * sizeof(double));
 
-    if (!grid->lambda_grid || !grid->hi_eval_grid ||
+    if (!lambda_grid || !grid->hi_eval_grid ||
         !grid->logdet_h_grid || !grid->inv_sums_grid) {
-        free(grid->lambda_grid);
+        free(lambda_grid);
         free(grid->hi_eval_grid);
         free(grid->logdet_h_grid);
         free(grid->inv_sums_grid);
@@ -294,11 +292,11 @@ static int init_general_grid(
     }
 
     for (int g = 0; g < n_grid; g++)
-        grid->lambda_grid[g] = exp(log_l_min + g * step);
+        lambda_grid[g] = exp(log_l_min + g * step);
 
     /* Precompute hi_eval_grid, logdet_h_grid, and invariant sums */
     for (int g = 0; g < n_grid; g++) {
-        double lam = grid->lambda_grid[g];
+        double lam = lambda_grid[g];
         double *hi_row = grid->hi_eval_grid + (size_t)g * n_samples;
 
         for (int i = 0; i < n_samples; i++)
@@ -620,17 +618,20 @@ static double general_reml_block(
 
     double logdet_iab = logdet_from_row0(row0, t, pab);
 
+    const general_snp_t snp = {
+        .uab_inv = ws->uab_inv, .uab_var = scratch,
+        .eigenvalues = ws->eigenvalues, .n_samples = n_samples, .t = t,
+        .logdet_iab = logdet_iab, .reml_const = ws->reml_const,
+        .row0 = row0, .pab = pab, .dpab = dpab,
+    };
+    int best_idx = coarse_grid_reml_general(
+        &snp, grid->hi_eval_grid, grid->logdet_h_grid, grid->inv_sums_grid,
+        grid->search.n_grid);
     double wald_f;
     int wald_valid;
-    double lambda_reml = golden_section_lambda_general(
-        ws->uab_inv, scratch, ws->eigenvalues,
-        n_samples, grid->lambda_grid, grid->hi_eval_grid,
-        grid->logdet_h_grid, grid->inv_sums_grid,
-        grid->log_l_min, grid->step, grid->n_grid, grid->n_refine,
-        logdet_iab, ws->reml_const, t,
-        logl_out, beta_out, se_out, &wald_f, &wald_valid,
-        row0, pab, dpab
-    );
+    double lambda_reml = refine_lambda_general(
+        &snp, &grid->search, best_idx,
+        logl_out, beta_out, se_out, &wald_f, &wald_valid);
     *pwald_out = f_to_pvalue(wald_f, t->df, wald_valid,
                              ws->beta_a, ws->beta_b, ws->lbeta_ab);
     return lambda_reml;
@@ -660,12 +661,16 @@ static double general_lrt_block(
             uab_snp[(size_t)i * n_index + idx] = src[i];
     }
 
-    double lambda_mle = golden_section_lambda_mle_general(
-        uab_snp, ws->eigenvalues, n_samples,
-        grid->lambda_grid, grid->hi_eval_grid, grid->logdet_h_grid,
-        grid->log_l_min, grid->step, grid->n_grid, grid->n_refine,
-        ws->lrt->mle_const, t, logl_H1_out, row0, pab
-    );
+    const general_snp_t snp = {
+        .uab_snp = uab_snp,
+        .eigenvalues = ws->eigenvalues, .n_samples = n_samples, .t = t,
+        .mle_const = ws->lrt->mle_const,
+        .row0 = row0, .pab = pab,
+    };
+    int best_idx = coarse_grid_mle_general(
+        &snp, grid->hi_eval_grid, grid->logdet_h_grid, grid->search.n_grid);
+    double lambda_mle = refine_lambda_mle_general(
+        &snp, &grid->search, best_idx, logl_H1_out);
 
     double lrt_stat = 2.0 * (*logl_H1_out - ws->lrt->logl_H0);
     if (lrt_stat < 0.0) lrt_stat = 0.0;

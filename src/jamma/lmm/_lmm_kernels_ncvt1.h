@@ -2,7 +2,7 @@
  * _lmm_kernels_ncvt1.h — the single-covariate numerical kernels.
  *
  * The fixed 3x6 Pab recursion, the REML and MLE likelihood evaluations, and
- * the coarse-grid / golden-section / refinement lambda optimizers for the
+ * the coarse grid and refiners that drive _lmm_lambda_search.h for the
  * n_cvt = 1 path. Counterparts of the table-driven kernels in
  * _lmm_kernels_general; the two sets are disjoint under transitive closure,
  * which is what makes this a translation-unit boundary rather than a cut
@@ -20,34 +20,29 @@
 #define JAMMA_LMM_KERNELS_NCVT1_H
 
 #include "_lmm_types.h"
+#include "_lmm_lambda_search.h"
 
 #include <math.h>
 
-/* -------------------------------------------------------------------------
- * refine_lambda_ncvt1_split
- *
- * Golden section refinement using a caller-selected split-Uab coarse bracket.
- *
- * SoA layout: var_wx/xx/xy and inv_ww/wy/yy are contiguous (stride-1).
- *
- * The final evaluation fuses REML logl + Wald stats in a single pass,
- * eliminating a redundant n_samples traversal per SNP.
- * ------------------------------------------------------------------------- */
+/* One SNP's refinement inputs: the SoA varying (var_*) and invariant (inv_*)
+ * columns, each n_samples long and stride-1, and the constants every
+ * likelihood evaluation reads. The lambda optimiser's context. */
+typedef struct {
+    const double *var_wx, *var_xx, *var_xy;
+    const double *inv_ww, *inv_wy, *inv_yy;
+    const double *eigenvalues;
+    int n_samples;
+    double logdet_iab, reml_const, mle_const;
+} ncvt1_snp_t;
+
+/* REML lambda from the caller's coarse-grid index best_idx (< 0 marks a fully
+ * degenerate SNP). Writes the REML logl and the Wald statistics at the
+ * optimum. */
 double refine_lambda_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    double logdet_iab,
-    int n_samples,
-    const double *lambda_grid,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
+    const ncvt1_snp_t *snp,
+    const lambda_search_t *search,
     int best_idx,
-    int df, double reml_const,
+    int df,
     double *logl_out,
     double *beta_out, double *se_out, double *f_stat_out,
     int *is_valid_out
@@ -70,26 +65,12 @@ void coarse_grid_ncvt1_split(
     int *best_mle_idx
 );
 
-/* -------------------------------------------------------------------------
- * refine_lambda_mle_ncvt1_split
- *
- * Golden section refinement for MLE using a caller-selected coarse bracket.
- *
- * Returns optimal MLE lambda; writes log-likelihood to *logl_out.
- * ------------------------------------------------------------------------- */
+/* MLE lambda from the caller's coarse-grid index. Returns the optimal
+ * lambda; writes the log-likelihood to *logl_out. */
 double refine_lambda_mle_ncvt1_split(
-    const double * restrict var_wx,
-    const double * restrict var_xx,
-    const double * restrict var_xy,
-    const double * restrict inv_ww,
-    const double * restrict inv_wy,
-    const double * restrict inv_yy,
-    const double * restrict eigenvalues,
-    int n_samples,
-    double log_l_min, double step,
-    int n_grid, int n_refine,
+    const ncvt1_snp_t *snp,
+    const lambda_search_t *search,
     int best_idx,
-    double mle_const,
     double *logl_out
 );
 

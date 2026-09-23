@@ -68,18 +68,13 @@ def _wald_numpy(n_cvt: int) -> dict[str, np.ndarray]:
     )
 
 
-_SKIPS_TERM = pytest.mark.xfail(
-    strict=True, reason="skips the non-positive Pab diagonal, reports a finite logl"
-)
-
-
 @pytest.mark.parametrize(
     ("n_cvt", "wald"),
     [
-        pytest.param(1, _wald_c, id="c-ncvt1", marks=[requires_c, _SKIPS_TERM]),
+        pytest.param(1, _wald_c, id="c-ncvt1", marks=requires_c),
         pytest.param(2, _wald_c, id="c-ncvt2", marks=requires_c),
-        pytest.param(1, _wald_numpy, id="numpy-ncvt1", marks=_SKIPS_TERM),
-        pytest.param(2, _wald_numpy, id="numpy-ncvt2", marks=_SKIPS_TERM),
+        pytest.param(1, _wald_numpy, id="numpy-ncvt1"),
+        pytest.param(2, _wald_numpy, id="numpy-ncvt2"),
     ],
 )
 def test_constant_snp_reml_logl_is_nan(n_cvt, wald):

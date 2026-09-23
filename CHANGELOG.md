@@ -196,6 +196,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A SNP whose projected genotype variance is not positive (a constant
+  genotype, or one collinear with a covariate) now gets a NaN REML
+  log-likelihood and `l_remle` at the lower bound on every path. The
+  `n_cvt=1` C path and the NumPy path used to skip the non-positive Pab
+  diagonal and report a finite likelihood and an optimised lambda, while the
+  general C path returned NaN. One rule, `logdet_diag_term` in
+  `_lmm_types.h` and `_logdet_diag` in `likelihood_numpy.py`, now holds for
+  all three, matching GEMMA's `LogRL_f`, which takes an unguarded `log` of
+  each diagonal entry. beta, se and the p-values were already NaN; results
+  for SNPs with positive projected variance do not change. Such SNPs never
+  pass the polymorphism filter, so `jamma` CLI output on mouse_hs1940 is
+  byte-identical.
 - The `forced-lower-bound` mathematical mutation plants its defect again. Its
   patch targeted the grid-evaluation call that the likelihood finisher
   refactor rewrote, so `scripts/mathematical_mutations.py --all` reported it

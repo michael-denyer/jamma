@@ -53,8 +53,10 @@ def _logl_const(m: int) -> float:
 def _logdet_diag(M: np.ndarray) -> np.ndarray:
     """Sum the logs of the logdet diagonal of Pab-shaped ``M[..., n_cvt+2, n_index]``.
 
-    Non-positive entries (degenerate SNPs) contribute 0.0 instead of a NaN or
-    Inf that would corrupt the batch; the P_yy guard marks those SNPs NaN.
+    A non-positive entry (a constant SNP, or one collinear with a covariate)
+    makes that SNP's sum NaN, the rule ``logdet_diag_term`` in ``_lmm_types.h``
+    applies in the C accelerator and GEMMA's ``LogRL_f`` applies by taking an
+    unguarded ``log``. Other SNPs in the batch are unaffected.
 
     Args:
         M: A Pab or Iab batch with any leading shape.
@@ -67,7 +69,7 @@ def _logdet_diag(M: np.ndarray) -> np.ndarray:
     for row, col in table.logdet_diag_indices:
         d = M[..., row, col]
         with np.errstate(divide="ignore", invalid="ignore"):
-            total += np.where(d > 0, np.log(d), 0.0)
+            total += np.where(d > 0, np.log(d), np.nan)
     return total
 
 
@@ -318,6 +320,9 @@ def golden_section_optimize_lambda_numpy(
             n_cvt, values, eigenvalues, Uab_batch[indices]
         ),
     )
+    # A SNP whose likelihood is NaN at every grid point reports l_min, as the
+    # C refiners do for a fully degenerate SNP.
+    log_opt = np.where(np.all(np.isnan(grid_logls), axis=0), log_lambdas[0], log_opt)
     opt_logls, Pab_final = reml_at(log_opt)
     return np.exp(log_opt), opt_logls, Pab_final
 

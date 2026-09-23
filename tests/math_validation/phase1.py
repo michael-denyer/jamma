@@ -526,17 +526,11 @@ def phase1_evidence(*, backends=("numpy", "native")):
 
 
 def compare_phase1(destination):
-    from tests.math_validation.evidence import environment, write_json
+    from tests.math_validation.evidence import evidence_bundle
 
-    destination.mkdir(parents=True, exist_ok=False)
-    identity = environment()
-    backends = ("numpy",) if identity["forced_numpy"] else ("numpy", "native")
-    result = {
-        "schema_version": 1,
-        "environment": identity,
-        "status": "INCONCLUSIVE",
-        "evidence": phase1_evidence(backends=backends),
-    }
-    result["status"] = result["evidence"]["status"]
-    write_json(destination / "bundle.json", result)
-    return result
+    with evidence_bundle(destination) as bundle:
+        forced_numpy = bundle["environment"]["forced_numpy"]
+        backends = ("numpy",) if forced_numpy else ("numpy", "native")
+        bundle["evidence"] = phase1_evidence(backends=backends)
+        bundle["status"] = bundle["evidence"]["status"]
+    return bundle

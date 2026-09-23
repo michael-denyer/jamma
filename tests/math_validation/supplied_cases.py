@@ -11,25 +11,20 @@ from tests.math_validation.compare import (
     check_boundary_coverage,
     compare_files,
 )
-from tests.math_validation.evidence import bundle_status, environment, write_json
+from tests.math_validation.evidence import bundle_status, evidence_bundle
 from tests.math_validation.fixtures import verify_reference
 from tests.math_validation.oracle_io import write_oracle_assoc
 from tests.math_validation.reference import run_command, snapshot_files
 
 
 def compare(manifest, reference, destination):
-    destination.mkdir(parents=True, exist_ok=False)
-    bundle = {
-        "schema_version": 1,
-        "status": "INCONCLUSIVE",
-        "manifest": manifest,
-        "environment": environment(),
-        "invocation": sys.argv,
-        "cases": [],
-        "untested": manifest["untested"],
-    }
     statuses = []
-    try:
+    with evidence_bundle(
+        destination,
+        manifest=manifest,
+        cases=[],
+        untested=manifest["untested"],
+    ) as bundle:
         for case in manifest["cases"]:
             source, provenance = verify_reference(case, reference)
             target = destination / case["id"]
@@ -150,9 +145,4 @@ def compare(manifest, reference, destination):
                 }
             )
         bundle["status"] = bundle_status(statuses)
-    except Exception as exc:
-        bundle["error"] = f"{type(exc).__name__}: {exc}"
-        raise
-    finally:
-        write_json(destination / "bundle.json", bundle)
     return bundle

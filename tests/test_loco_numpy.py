@@ -619,6 +619,65 @@ def test_plan_loco_passes_literal_batch_size():
     assert plan.required_gb == 18.0
 
 
+@pytest.mark.tier0
+@pytest.mark.parametrize(
+    ("available_gb", "reserved_batch", "unreserved_batch"),
+    [(500.0, 2, 4), (480.0, 1, 3)],
+)
+def test_plan_loco_passes_without_a_consumer_packs_more_chromosomes(
+    available_gb, reserved_batch, unreserved_batch
+):
+    """At 100k samples, dropping the 160 GB DSYEVR reserve adds two chromosomes.
+
+    Each matrix is 80 GB and the disk buffer 8 GB, so the fixed cost is
+    S_full + K_loco_buf + buffer = 168 GB, plus 160.03 GB when the DSYEVR
+    reserve is held. ``headroom_gb`` is ``available - 10`` above 110 GB. At
+    500 GB: ``floor((490 - 328.03) / 80) = 2`` against
+    ``floor((490 - 168) / 80) = 4``. At 480 GB, the reserve leaves one
+    chromosome per pass (22 disk passes) where none leaves three.
+    """
+    from jamma.kinship.loco import loco_retained_set, plan_loco_passes
+    from jamma.lmm.eigen_plan import dsyevr_peak_gb
+
+    retained = loco_retained_set(100_000, 100_000, 10_000)
+
+    def batch(consumer_gb: float) -> int:
+        return plan_loco_passes(
+            retained,
+            consumer_gb,
+            22,
+            available_gb,
+            budget_gb=None,
+            max_batch_chrs=None,
+        ).batch_size
+
+    assert batch(dsyevr_peak_gb(100_000)) == reserved_batch
+    assert batch(0.0) == unreserved_batch
+
+
+@pytest.mark.tier1
+def test_run_lmm_loco_gate_reserves_the_eigen_consumer():
+    """The association path reserves its eigen workers' peak beside the stream.
+
+    A budget just above the stream's retained set passes a gate with no
+    consumer reserve, so the LOCO gate only fires if the consumer is held.
+    """
+    from jamma.kinship.loco import loco_retained_set
+    from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK
+
+    n_samples = get_plink_metadata(_LOCO_BFILE).n_samples
+    retained = loco_retained_set(n_samples, n_samples, DEFAULT_STATS_CHUNK)
+
+    with pytest.raises(MemoryError, match="LOCO working set"):
+        run_lmm_loco(
+            bed_path=_LOCO_BFILE,
+            phenotypes=read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam")),
+            config=LmmConfig(
+                mem_budget=retained.while_consuming_gb + 1e-6, show_progress=False
+            ),
+        )
+
+
 @pytest.mark.tier1
 def test_loco_numpy_show_progress_true():
     """NumPy LOCO with show_progress=True completes without error.

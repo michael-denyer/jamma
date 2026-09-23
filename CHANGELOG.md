@@ -208,7 +208,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error falls from `8.7e-6` to `6.9e-8`, which is the output's print
   precision. `p_lrt` changes for about 8% of SNPs, by up to `8.9e-6`
   relative. REML outputs, Wald and Score are bit-identical.
-
+- `jamma -gk 1 -loco` no longer reserves memory for an eigendecomposition it
+  never runs. The standalone LOCO kinship path only writes each matrix to
+  disk, but its pass planner held back the DSYEVR peak (160 GB at 100,000
+  samples), so a 100,000-sample run on a node with about 480 GB free planned
+  one chromosome per disk pass (22 passes) where three fit. The LOCO
+  association path still reserves its eigen workers' peak. The written
+  matrices are unchanged.
 - The association pass no longer collapses to one SNP per chunk on large
   sample counts. Since 8.0.0 the chunk sizer subtracted the whole eigenvector
   matrix from the per-chunk budget, whose auto ceiling is 40 GB, so above

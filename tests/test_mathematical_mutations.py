@@ -99,24 +99,16 @@ def test_single_mutation_is_isolated_and_detected() -> None:
     assert report["source_sha256_before"] == report["source_sha256_after"] == before
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="forced-lower-bound patch no longer matches likelihood_numpy.py (#429)",
-)
 def test_every_python_patch_matches_its_source_exactly_once() -> None:
     manifest = mutations.load_manifest(mutations.DEFAULT_MANIFEST)
-    stale = {
+    counts = {
         m["id"]: (mutations.ROOT / m["path"]).read_text().count(m["find"])
         for m in manifest["mutations"]
         if m["path"].endswith(".py")
     }
-    assert {k: v for k, v in stale.items() if v != 1} == {}
+    assert {k: v for k, v in counts.items() if v != 1} == {}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="runner folds a non-matching patch into INCONCLUSIVE after a baseline run",
-)
 def test_non_matching_patch_is_a_stale_patch_failure_before_any_pytest_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -196,6 +196,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The `forced-lower-bound` mathematical mutation plants its defect again. Its
+  patch targeted the grid-evaluation call that the likelihood finisher
+  refactor rewrote, so `scripts/mathematical_mutations.py --all` reported it
+  INCONCLUSIVE and the post-merge slow suite failed. The runner now checks
+  every patch against the source before running any test and reports a
+  non-matching one as `STALE PATCH`, naming the mutation and file, and a
+  tier0 test pins each Python patch to exactly one match.
 - `jlinalg.dsyrk` no longer segfaults under MKL ILP64 (`libmkl_rt`, pip `mkl`
   on Linux x86_64). The dispatcher stored the Fortran symbol `dsyrk_64_` in
   the CBLAS slot and called it with CBLAS enums, so MKL dereferenced the

@@ -27,7 +27,6 @@ Env vars:
 from __future__ import annotations
 
 import importlib.util
-import os
 import warnings
 
 import numpy as np
@@ -45,16 +44,9 @@ _EXPECTED_JLINALG_ABI = 19
 _so_exists = importlib.util.find_spec("jamma.jlinalg._jlinalg") is not None
 _force_numpy = Env.current().force_numpy_fallback
 
-# Private aliases retained for backend-specific tests and diagnostics.
-_dgemm_numpy_impl = _dgemm_operation.numpy_impl
-_dgemm_numpy = _dgemm_operation.numpy
-_dsyrk_numpy_impl = _dsyrk_operation.numpy_impl
-_dsyrk_numpy = _dsyrk_operation.numpy
-_eigh_numpy = _eigh_operation.numpy
-
-_dgemm_backend = _dgemm_numpy_impl
-_dsyrk_backend = _dsyrk_numpy_impl
-_eigh_backend = _eigh_numpy
+_dgemm_backend = _dgemm_operation.numpy_impl
+_dsyrk_backend = _dsyrk_operation.numpy_impl
+_eigh_backend = _eigh_operation.numpy
 
 HAS_C_EXTENSION = False
 _module = _load_c_module(JLINALG_SPEC, _EXPECTED_JLINALG_ABI)
@@ -105,19 +97,15 @@ else:
         )
         warnings.warn(message, stacklevel=2)
 
-    _fallback_thread_state = [os.cpu_count() or 1]
-
     def get_n_threads() -> int:
-        """Return the fallback thread count."""
-        return _fallback_thread_state[0]
+        """Return 1: the NumPy SNP-stats fallback is unthreaded."""
+        return 1
 
     def set_n_threads(n: int) -> int:
-        """Set and return the previous fallback thread count."""
+        """Validate ``n`` and return 1; the NumPy fallback is unthreaded."""
         if n < 1:
             raise ValueError("set_n_threads: n must be >= 1")
-        previous = _fallback_thread_state[0]
-        _fallback_thread_state[0] = min(n, os.cpu_count() or 1)
-        return previous
+        return 1
 
 
 def dgemm(
@@ -128,14 +116,16 @@ def dgemm(
     out: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute ``op(A) @ op(B)`` through vendor BLAS or NumPy."""
-    return _dgemm_operation.run(_dgemm_backend, A, B, transa, transb, out)
+    _dgemm_operation.validate(A, B, transa, transb, out)
+    return _dgemm_backend(A, B, transa, transb, out)
 
 
 def dsyrk(
     X: np.ndarray, *, out: np.ndarray | None = None, beta: float = 0.0
 ) -> np.ndarray:
     """Compute ``X @ X.T + beta*out`` through vendor BLAS or NumPy."""
-    return _dsyrk_operation.run(_dsyrk_backend, X, out=out, beta=beta)
+    _dsyrk_operation.validate(X, out, beta)
+    return _dsyrk_backend(X, out=out, beta=beta)
 
 
 def dsyrk_scratch_bytes(n: int) -> int:

@@ -19,10 +19,22 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from jamma.jlinalg import HAS_C_EXTENSION, _dgemm_numpy, dgemm
+from jamma.jlinalg import HAS_C_EXTENSION, _dgemm, dgemm
 from tests.builders import BOUNDARY_SIZES
 
 pytestmark = pytest.mark.tier0
+
+
+def _dgemm_numpy(
+    A: np.ndarray,
+    B: np.ndarray,
+    transa: str = "N",
+    transb: str = "N",
+    out: np.ndarray | None = None,
+) -> np.ndarray:
+    """The public ``dgemm`` contract with the NumPy backend, whatever is bound."""
+    _dgemm.validate(A, B, transa, transb, out)
+    return _dgemm.numpy_impl(A, B, transa, transb, out)
 
 
 def _reference_dgemm(
@@ -612,7 +624,7 @@ class TestDgemmValidation:
 
 
 class TestDgemmFallback:
-    """Test the NumPy fallback dgemm directly (jamma.jlinalg._dgemm_numpy).
+    """Test the NumPy fallback dgemm directly (``_dgemm_numpy``).
 
     Always exercised, independent of whether the C extension is present.
     """

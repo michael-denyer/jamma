@@ -3,7 +3,7 @@
  *
  * Declares blas_dispatch_init(), vendor-dispatch functions (dgemm_ext,
  * dsyrk_ext, dsyevd_ext, dsyevr_ext),
- * eigh driver, SNP statistics, ISA detection, and thread control.
+ * eigh driver, SNP statistics, the compile-time ISA name, and thread control.
  *
  * The C layer is a thin vendor-dispatch shim; all computation is handled
  * by vendor BLAS/LAPACK or NumPy.
@@ -93,14 +93,13 @@ typedef void (*jlinalg_dsyevr_ilp64_fn)(
 
 /* Initialise external BLAS dispatch: discovers system BLAS and pip MKL,
  * then selects the best candidate.
- * Called from jlinalg_init() after ISA detection.
+ * Called from jlinalg_init().
  * Returns 0 always (discovery failure is not fatal -- falls back to numpy). */
 int blas_dispatch_init(void);
 
-/* Returns a string identifying the active dgemm backend:
- *   "MKL-ILP64", "MKL-LP64", "OpenBLAS-ILP64", "OpenBLAS-LP64",
- *   "Accelerate", "Accelerate-ILP64",
- *   "numpy-fallback", "system-BLAS-ILP64", "system-BLAS-LP64"
+/* Returns a string identifying the active dgemm backend. Only an ILP64
+ * backend is ever wired, so this is one of "MKL-ILP64", "OpenBLAS-ILP64",
+ * "Accelerate-ILP64", "system-BLAS-ILP64", or "numpy-fallback".
  * Never returns NULL. */
 const char *blas_backend_name(void);
 

@@ -1,15 +1,11 @@
 """OpenMP detection for C extension compilation.
 
-Canonical location: consumed by hatch_build.py (PEP 517 wheel build
-backend), src/jamma/jlinalg/_compile_jlinalg.py (dev-mode + runtime
-recompile), and src/jamma/lmm/_compile_accel.py (dev-mode + runtime
-recompile). Ships inside the installed package as
+Ships inside the installed package as
 ``jamma._build_support.openmp_detect``. hatch_build.py loads this module
 via ``importlib.util.spec_from_file_location`` under the distinct
-namespace ``jamma_build_support.openmp_detect`` — see the comment block
-at hatch_build.py:28-40 — because the package is not yet installed at
-wheel-build time and a regular import would pull in the full jamma
-runtime (loguru, numpy, ...).
+namespace ``jamma_build_support.openmp_detect`` because the package is
+not yet installed at wheel-build time and a regular import would pull in
+the full jamma runtime (loguru, numpy, ...).
 
 The core problem: MKL-backed numpy bundles Intel OpenMP (libiomp5).  Two
 failure modes exist when compiling C extensions with OpenMP on such systems:

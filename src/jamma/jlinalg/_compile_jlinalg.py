@@ -21,13 +21,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# jamma._build_support ships inside the installed package, so the same
-# import path works in both modes:
-#   1. Dev-mode: ``python -m jamma.jlinalg._compile_jlinalg`` from a source
-#      checkout.
-#   2. Wheel install: runtime ABI-mismatch recompile via
-#      ``jamma.core.recompile.auto_recompile_c_extension`` calls
-#      ``compile_extension()`` from this module.
 from jamma._build_support.compile_and_link import JLINALG_SPEC, BuildReport
 from jamma._build_support.compile_and_link import compile_extension as _compile
 from jamma._build_support.load_proof import load_proof as _load_proof_for
@@ -39,9 +32,7 @@ def compile_extension(verbose: bool = False) -> bool:
     Thin shim over ``jamma._build_support.compile_and_link.compile_extension``
     bound to ``JLINALG_SPEC``. See that function for the build behavior.
 
-    Dev-mode entry point. Called by:
-      - ``python -m jamma.jlinalg._compile_jlinalg`` from a source checkout
-      - ``jamma.core.recompile.auto_recompile_c_extension`` on ABI mismatch
+    Dev-mode entry point for ``python -m jamma.jlinalg._compile_jlinalg``.
 
     Args:
         verbose: Print per-command compile details and the success summary.

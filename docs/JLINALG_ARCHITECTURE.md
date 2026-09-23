@@ -221,10 +221,10 @@ uv run pytest tests/ -x
    translation; put the semantic contract (argument values, shape math) in
    the Python validator in step 4, so a bad call raises identical text
    whether or not the C extension is loaded (`dgemm`/`dsyrk` are the model).
-4. **Add a public Python function** in `__init__.py`: a `_validate_<op>`
-   that raises on a bad call, a `_<op>_numpy_impl` (unchecked NumPy compute),
-   and the public `<op>()` that validates once and dispatches to whichever
-   backend the module bound (`_<op>_backend`).
+4. **Add a Python operation module** `_<op>.py` holding `validate` (raises
+   on a bad call) and `numpy_impl` (unchecked NumPy compute), then the public
+   `<op>()` in `__init__.py` that validates once and calls whichever backend
+   the module bound (`_<op>_backend`).
 5. **Register source files** in `src/jamma/_build_support/build_models.py`
    -- add to `BASELINE_SOURCES` for routines that should compile with the
    default flags, or `LAPACK_SOURCES` for LAPACK routines that need strict

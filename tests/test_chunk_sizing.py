@@ -62,20 +62,7 @@ def test_compute_chunk_size_zero_bytes():
     assert chunk == 1000, f"Expected 1000, got {chunk}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the sizer plans chunks below the throughput floor instead of "
-    "leaving a budget that cannot hold the floor to the preflight",
-)
 def test_compute_chunk_size_never_plans_below_the_throughput_floor():
-    """A budget too tight for 100 SNPs still plans 100.
-
-    Every chunk re-streams the eigenvector matrix through the rotation GEMM,
-    so a chunk narrower than the floor trades memory nobody asked to save
-    for a run that is slower by the same factor. Whether the floored chunk
-    fits is the memory preflight's question, and it refuses the run; the
-    sizer never answers it by planning 1-SNP chunks.
-    """
     chunk = compute_chunk_size_numpy(
         n_samples=1_000_000,
         n_filtered=200,

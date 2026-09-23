@@ -363,7 +363,6 @@ def plan_association(
         ),
         blas_controllable=is_blas_controllable(),
         max_chunk_size=max_chunk_size,
-        fixed_bytes=workspace.fixed_bytes + n_samples * n_samples * 8,
         output_bytes_per_snp=(
             workspace.bytes_per_snp + max(0, n_input_samples - n_samples) * 8
         ),

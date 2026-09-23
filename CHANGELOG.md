@@ -196,6 +196,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The association pass no longer collapses to one SNP per chunk on large
+  sample counts. Since 8.0.0 the chunk sizer subtracted the whole eigenvector
+  matrix from the per-chunk budget, whose auto ceiling is 40 GB, so above
+  about 70,000 samples (80 GB of eigenvectors) nothing was left and every SNP
+  became its own chunk, each re-streaming the matrix through the rotation
+  GEMM: a 100,000 x 50,000 `-lmm 1` run spent 6 hours in the association
+  loop. Per-run allocations are priced once by the memory preflight, and the
+  sizer floors the chunk at 100 SNPs again; a budget that cannot hold the
+  floored chunk is refused by the preflight rather than planned narrower.
+  Results are unchanged.
 - `jlinalg` now wires vendor `dsyrk`, `dsyevd`, and `dsyevr` from the
   scipy-openblas64 library that NumPy's Linux wheels bundle. Its exports carry
   a `scipy_` prefix (`scipy_dsyrk_64_`) that only the `dgemm` name table

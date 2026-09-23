@@ -26,8 +26,7 @@ from jamma.lmm.dispatch import DispatchPath
 
 pytestmark = pytest.mark.tier0
 
-# The pre-merge table minus the deleted n_cvt>=2 member's rows, which equalled FUSED's.
-EXPECTED_DIGEST = "188301b5bed9e345a2489aa77851bc4896e432acd5e64b0be819bf54c67e77bc"
+EXPECTED_DIGEST = "99dfbe9fe376660680842f76a3cb01ece884e9cd715a1b9d797ef8783f92ef47"
 EXPECTED_ROWS = 5040
 
 N_SAMPLES = (30, 1_410, 5_000, 10_000, 10_001, 30_000, 100_000)
@@ -109,9 +108,7 @@ def test_chunk_plan_digest_is_unchanged() -> None:
         # A tight budget splits past the threshold on its own; the pipelined
         # re-size halves the budget across two live buffers.
         (100_000, 500_000, DispatchPath.FUSED, int(2e9), True, (1_250, 400, 2, True)),
-        # A throughput floor must not exceed the budget: 100 * 1410 * 8
-        # is 1,128,000 bytes; 88 SNPs occupy 992,640 bytes and fit 1 MB.
-        (1_410, 100, DispatchPath.FUSED, int(1e6), False, (88, 2, 1, False)),
+        (1_410, 100, DispatchPath.FUSED, int(1e6), False, (100, 1, 1, False)),
     ],
 )
 def test_chunk_plan_spot_rows(n_samples, n_snps, dispatch, budget, blas, expected):

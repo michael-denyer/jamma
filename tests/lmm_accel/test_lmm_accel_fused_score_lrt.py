@@ -11,8 +11,8 @@ from jamma.lmm.likelihood_numpy import (
     golden_section_optimize_lambda_mle_numpy,
 )
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import requires_c
 from tests.lmm_accel._helpers import assert_fused_matches_reference
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

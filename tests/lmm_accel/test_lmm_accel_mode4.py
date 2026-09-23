@@ -23,8 +23,8 @@ import pytest
 
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
-from tests.conftest import requires_c
 from tests.lmm_accel._helpers import _null_model_ncvt1
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

@@ -14,10 +14,10 @@ from hypothesis import strategies as st
 from jamma.io import load_plink_binary
 from jamma.kinship import impute_and_center, impute_center_and_standardize
 from jamma.validation import compare_kinship_matrices, load_gemma_kinship
-from tests.conftest import require_fixture
 from tests.fixture_paths import SYNTHETIC
 from tests.hypothesis_strategies import genotype_matrix
 from tests.reference.kinship import compute_centered_kinship
+from tests.support import require_fixture
 
 
 @pytest.mark.tier0

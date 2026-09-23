@@ -12,8 +12,8 @@ from jamma.lmm.association_plan import KinshipShape
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.validation.compare import load_gemma_assoc
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, SYNTHETIC
+from tests.support import require_fixture
 
 
 @pytest.mark.tier0

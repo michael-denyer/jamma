@@ -26,8 +26,8 @@ from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.loco_eigen import _computed_eigen_pairs
 from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO
+from tests.support import require_fixture
 
 
 @pytest.mark.tier0

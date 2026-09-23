@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import install_lint_script
+from tests.support import install_lint_script
 
 pytestmark = pytest.mark.tier0
 

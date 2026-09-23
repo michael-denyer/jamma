@@ -13,7 +13,6 @@ from jamma.lmm import accel
 from jamma.lmm.schema import LmmConfig
 from jamma.lmm.uab import compute_uab_invariant_soa
 from tests.builders import rotated_lmm_inputs
-from tests.conftest import requires_c
 from tests.lmm_accel._helpers import (
     LAMBDA_MLE_RTOL,
     _fused_general_mode4_workspace,
@@ -28,6 +27,7 @@ from tests.lmm_accel._helpers import (
     assert_fused_matches_reference,
     assert_matches_numpy,
 )
+from tests.support import requires_c
 
 _WALD_KEYS = ("lambdas", "logls", "betas", "ses", "pwalds")
 
@@ -694,8 +694,8 @@ def _synthetic_fixture_run(lmm_mode: Literal[1, 4], with_covariates: bool):
     from jamma.io import load_plink_binary, read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
-    from tests.conftest import require_fixture
     from tests.fixture_paths import SYNTHETIC
+    from tests.support import require_fixture
 
     require_fixture(
         SYNTHETIC.bed,

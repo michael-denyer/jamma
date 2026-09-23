@@ -31,13 +31,13 @@ from jamma.lmm.likelihood import (
 )
 from jamma.lmm.pab import calc_pab, compute_Uab
 from jamma.lmm.prepare_common import compute_and_log_pve, compute_valid_mask
-from tests.conftest import require_fixture
 from tests.fixture_paths import MOUSE, SYNTHETIC
 from tests.reference.likelihood import (
     calc_ppab,
     calc_pppab,
     reml_log_likelihood_dev2,
 )
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier1
 

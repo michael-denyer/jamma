@@ -23,8 +23,8 @@ from jamma.pipeline_config import ProvidedKinship
 from jamma.pipeline_kinship import compute_kinship
 from jamma.pipeline_plan import ComputedKinship, KinshipSource
 from tests.builders import write_fam
-from tests.conftest import require_fixture
 from tests.fixture_paths import FIXTURES, MOUSE, SYNTHETIC
+from tests.support import require_fixture
 
 
 def _load_kinship(

@@ -9,7 +9,6 @@ import pytest
 
 from jamma.validation.tolerances import ToleranceConfig
 from tests.builders import rotated_lmm_inputs
-from tests.conftest import requires_c
 from tests.math_validation.phase1 import (
     MODE1_FIELDS,
     MODE4_ORACLE_FIELDS,
@@ -19,6 +18,7 @@ from tests.math_validation.phase1 import (
     objective_tolerance,
     phase1_evidence,
 )
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

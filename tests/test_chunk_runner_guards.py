@@ -27,7 +27,7 @@ from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
 from jamma.lmm.prepare_common import NullFit, RotatedBasis
 from jamma.lmm.schema import LmmConfig, SnpMeta
 from jamma.lmm.workspace import WorkspaceSpec
-from tests.conftest import requires_c
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

@@ -8,8 +8,8 @@ from unittest.mock import patch
 import pytest
 
 from jamma.lmm.association_plan import ExecutionPlan, plan_association
-from tests.conftest import requires_c
 from tests.fixture_paths import LOCO
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

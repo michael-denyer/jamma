@@ -9,11 +9,11 @@ from scipy.stats import f
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import _compute_wald_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
-from tests.conftest import requires_c
 from tests.independent_lmm_oracle import (
     dense_lmm_log_likelihood,
     dense_wald_at_lambda,
 )
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

@@ -15,7 +15,7 @@ import pytest
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
 from jamma.lmm.schema import MODE_SPECS, LmmConfig, LmmMode
 from jamma.validation import load_gemma_assoc
-from tests.conftest import make_runner_synthetic_data, requires_c
+from tests.support import make_runner_synthetic_data, requires_c
 
 # ---------------------------------------------------------------------------
 # Lambda boundary diagnostic tests (REGR-03)

@@ -9,9 +9,9 @@ from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import requires_c
 from tests.fixture_paths import SYNTHETIC
 from tests.lmm_accel._helpers import assert_fused_matches_reference
+from tests.support import requires_c
 
 
 @pytest.fixture

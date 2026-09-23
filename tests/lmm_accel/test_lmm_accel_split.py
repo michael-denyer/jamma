@@ -16,7 +16,7 @@ import pytest
 
 from jamma.lmm import accel
 from jamma.lmm.schema import LmmConfig
-from tests.conftest import requires_c
+from tests.support import requires_c
 
 
 @pytest.mark.tier1

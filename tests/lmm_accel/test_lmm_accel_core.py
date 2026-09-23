@@ -23,7 +23,7 @@ import pytest
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import compute_lmm_chunk_numpy
 from jamma.lmm.schema import MIN_N_GRID
-from tests.conftest import requires_c
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

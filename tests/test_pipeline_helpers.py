@@ -27,7 +27,7 @@ from jamma.lmm.schema import LmmConfig, LmmRunResult
 from jamma.pipeline import PipelineConfig, PipelineResult, PipelineRunner
 from jamma.pipeline_plan import LocoAnalysisPlan, resolve_analysis_plan
 from jamma.pipeline_samples import AnalysedSamples, load_analysed_samples
-from tests.conftest import preflight
+from tests.support import preflight
 
 if TYPE_CHECKING:
     from jamma.io.plink import PlinkMetadata

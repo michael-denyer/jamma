@@ -19,7 +19,7 @@ from jamma.lmm.prepare_common import rotate_basis
 from jamma.lmm.runner_numpy import LmmRunSpec, PhenotypeRun, run_association
 from jamma.lmm.schema import DEFAULT_LMM_CONFIG, LmmConfig, SnpMeta
 from jamma.lmm.workspace import WorkspaceSpec
-from tests.conftest import requires_c
+from tests.support import requires_c
 
 pytestmark = pytest.mark.tier0
 

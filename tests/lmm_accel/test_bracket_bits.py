@@ -32,12 +32,12 @@ import numpy as np
 import pytest
 
 from jamma.lmm import accel
-from tests.conftest import _build_synthetic_covariate_data, requires_c
 from tests.lmm_accel._helpers import (
     _fused_general_mode4_workspace,
     _make_general_score_lrt_data,
     _prepare_fused_general_data,
 )
+from tests.support import _build_synthetic_covariate_data, requires_c
 
 pytestmark = [pytest.mark.tier0, requires_c]
 

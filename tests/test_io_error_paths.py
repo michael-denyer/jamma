@@ -20,8 +20,8 @@ from jamma.io.plink import (
 )
 from jamma.lmm.assoc_output import IncrementalAssocWriter
 from jamma.lmm.schema import MODE_SPECS, SnpMeta
-from tests.conftest import require_fixture
 from tests.fixture_paths import LOCO, SYNTHETIC
+from tests.support import require_fixture
 
 pytestmark = pytest.mark.tier0
 

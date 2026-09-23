@@ -88,42 +88,24 @@ def _production_results(data, backend) -> dict[int, dict[str, np.ndarray | None]
         optional = {"logl_H0": logl_h0} if mode == 2 else {}
         if mode == 4:
             optional = {"logl_H0": logl_h0, "hi_eval_null": hi_null}
-        if data.n_cvt == 1:
-            workspace = module.create_workspace_ncvt1_c(
-                data.eigenvalues,
-                invariant,
-                data.UtW[:, 0],
-                data.Uty,
-                data.n_samples,
-                L_MIN,
-                L_MAX,
-                50,
-                20,
-                lmm_mode=mode,
-                **optional,
-            )
-            results[mode] = module.compute_lmm_chunk_ncvt1_c(
-                workspace, np.ascontiguousarray(data.UtG.T), 1
-            )
-        else:
-            workspace = module.create_workspace_general_c(
-                data.eigenvalues,
-                invariant,
-                data.UtW,
-                data.Uty,
-                data.n_samples,
-                L_MIN,
-                L_MAX,
-                50,
-                20,
-                1,
-                data.n_cvt,
-                lmm_mode=mode,
-                **optional,
-            )
-            results[mode] = module.compute_lmm_chunk_fused_general_c(
-                workspace, np.ascontiguousarray(data.UtG.T), 1
-            )
+        workspace = module.create_workspace_c(
+            data.eigenvalues,
+            invariant,
+            data.UtW,
+            data.Uty,
+            data.n_samples,
+            L_MIN,
+            L_MAX,
+            50,
+            20,
+            1,
+            data.n_cvt,
+            lmm_mode=mode,
+            **optional,
+        )
+        results[mode] = module.compute_lmm_chunk_c(
+            workspace, np.ascontiguousarray(data.UtG.T), 1
+        )
     return cast(dict[int, dict[str, np.ndarray | None]], results)
 
 

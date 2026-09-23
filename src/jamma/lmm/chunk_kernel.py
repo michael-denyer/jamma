@@ -41,9 +41,9 @@ KernelResult = Mapping[str, np.ndarray]
 class RunInvariants:
     """Everything a kernel needs that does not vary from chunk to chunk.
 
-    Built once by :meth:`build`, which owns the two values derived from the
-    dispatch path rather than leaving each caller to derive them: the
-    null-model ``w`` column and the invariant Uab columns.
+    Built once by :meth:`build`, which owns the value derived from the
+    dispatch path rather than leaving each caller to derive it: the invariant
+    Uab columns.
     """
 
     dispatch: DispatchPath
@@ -60,7 +60,6 @@ class RunInvariants:
     l_max: float
     n_grid: int
     n_refine: int
-    w: np.ndarray | None
     uab_invariant_soa: np.ndarray | None
 
     @classmethod
@@ -90,7 +89,6 @@ class RunInvariants:
             l_max=config.l_max,
             n_grid=config.n_grid,
             n_refine=config.n_refine,
-            w=UtW[:, 0].copy() if dispatch.needs_null_w else None,
             uab_invariant_soa=(
                 compute_uab_invariant_soa(UtW, fit.Uty, n_cvt)
                 if dispatch.invariant_rows(n_cvt) > 0
@@ -108,12 +106,6 @@ class RunInvariants:
         if self.uab_invariant_soa is None:
             raise RuntimeError("split LMM dispatch requires invariant Uab columns")
         return self.uab_invariant_soa
-
-    def require_null_w(self) -> np.ndarray:
-        """The null-model ``w`` column, which the fused paths are built with."""
-        if self.w is None:
-            raise RuntimeError("fused dispatch requires the null-model w")
-        return self.w
 
 
 @dataclass(frozen=True)
@@ -159,7 +151,7 @@ class Kernel:
 def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
     """Build the one kernel this run's dispatch path selects.
 
-    ``workspace.max_threads`` sizes persistent and transient thread capacity.
+    ``workspace.max_threads`` sizes the workspace's thread capacity.
     The thread count handed to each chunk may be smaller, but cannot exceed the
     capacity priced before allocation.
     """
@@ -174,9 +166,7 @@ def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
         raise ValueError("workspace specification does not match kernel invariants")
     match inv.dispatch:
         case DispatchPath.FUSED:
-            return _ncvt1_kernel(inv, workspace.max_threads)
-        case DispatchPath.FUSED_GENERAL:
-            return _fused_general_kernel(inv, workspace.max_threads)
+            return _fused_kernel(inv, workspace.max_threads)
         case DispatchPath.NUMPY_WALD:
             return _numpy_wald_kernel(inv, workspace.max_threads)
         case DispatchPath.NUMPY_FALLBACK:
@@ -185,42 +175,13 @@ def make_kernel(inv: RunInvariants, workspace: WorkspaceSpec) -> Kernel:
             assert_never(inv.dispatch)
 
 
-def _ncvt1_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
-    """n_cvt=1, any mode: one workspace keyed by lmm_mode, one compute.
+def _fused_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
+    """Any n_cvt, any mode: one C workspace built once, one compute per chunk.
 
-    The workspace packs w, the lambda grid and the null-model block the mode
-    needs, built once; each chunk hands in utg_t. Scratch is sized per call,
-    so the run-level thread count plays no part here.
+    The workspace packs the lambda grid, the null-model block the mode needs
+    and per-thread scratch for *n_threads*; each chunk hands in utg_t.
     """
-    workspace = accel.require().create_workspace_ncvt1_c(
-        inv.eigenvalues,
-        inv.require_invariant_soa(),
-        inv.require_null_w(),
-        inv.Uty,
-        inv.n_samples,
-        inv.l_min,
-        inv.l_max,
-        inv.n_grid,
-        inv.n_refine,
-        lmm_mode=inv.lmm_mode,
-        **_null_model_kwargs(inv),
-    )
-    compute = accel.require().compute_lmm_chunk_ncvt1_c
-    return Kernel(
-        label=f"Fused -lmm {inv.lmm_mode} dispatch",
-        n_filtered=inv.n_filtered,
-        call=lambda chunk, threads: compute(workspace, chunk, threads),
-        max_threads=max_threads,
-    )
-
-
-def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
-    """n_cvt>=2, any mode: same shape as n_cvt=1, plus the Pab table.
-
-    The workspace sizes its per-thread scratch from *n_threads* once, so the
-    run-level thread count is part of its construction here.
-    """
-    workspace = accel.require().create_workspace_general_c(
+    workspace = accel.require().create_workspace_c(
         inv.eigenvalues,
         inv.require_invariant_soa(),
         inv.UtW,
@@ -235,9 +196,9 @@ def _fused_general_kernel(inv: RunInvariants, n_threads: int) -> Kernel:
         lmm_mode=inv.lmm_mode,
         **_null_model_kwargs(inv),
     )
-    compute = accel.require().compute_lmm_chunk_fused_general_c
+    compute = accel.require().compute_lmm_chunk_c
     return Kernel(
-        label=f"Fused general -lmm {inv.lmm_mode} dispatch",
+        label=f"Fused -lmm {inv.lmm_mode} dispatch",
         n_filtered=inv.n_filtered,
         call=lambda chunk, threads: compute(workspace, chunk, threads),
         max_threads=n_threads,
@@ -305,8 +266,8 @@ def _numpy_kernel(inv: RunInvariants, max_threads: int) -> Kernel:
 def _null_model_kwargs(inv: RunInvariants) -> dict[str, np.ndarray | float]:
     """The null-model inputs a C workspace creator takes for this mode.
 
-    Score needs ``hi_eval_null`` and LRT needs ``logl_H0``. Both creators
-    reject an input their mode does not use.
+    Score needs ``hi_eval_null`` and LRT needs ``logl_H0``. The creator
+    rejects an input its mode does not use.
     """
     kwargs: dict[str, np.ndarray | float] = {}
     if LmmTest.SCORE in inv.mode.tests:

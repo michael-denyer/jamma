@@ -157,11 +157,9 @@ LMM_ACCEL_SPEC = BuildSpec(
     fallback_label="LMM",
     required_attrs=(
         "HAS_OPENMP",
-        "create_workspace_ncvt1_c",
-        "compute_lmm_chunk_ncvt1_c",
+        "create_workspace_c",
+        "compute_lmm_chunk_c",
         "workspace_sizes_c",
-        "create_workspace_general_c",
-        "compute_lmm_chunk_fused_general_c",
     ),
 )
 

@@ -266,7 +266,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:309](../src/jamma/lmm/association_plan.py#L309) |
+| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:301](../src/jamma/lmm/association_plan.py#L301) |
 | 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:92](../src/jamma/lmm/association_plan.py#L92) |
 | 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any source under one `LmmRunSpec` | [runner_numpy.py:320](../src/jamma/lmm/runner_numpy.py#L320) |
 | 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:255](../src/jamma/lmm/runner_numpy.py#L255) |
@@ -283,19 +283,16 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nb | `run_lmm_chunk_source_numpy_group()` | Shared NumPy chunk-loop orchestrator for batch, streaming, LOCO, and phenotype groups; rotates each chunk once for every phenotype | [chunk_runner_numpy.py:342](../src/jamma/lmm/chunk_runner_numpy.py#L342) |
 | 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:244](../src/jamma/lmm/chunk_runner_numpy.py#L244) |
 | 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the basis, the null fit, and the config | [chunk_kernel.py:41](../src/jamma/lmm/chunk_kernel.py#L41) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:159](../src/jamma/lmm/chunk_kernel.py#L159) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:151](../src/jamma/lmm/chunk_kernel.py#L151) |
 | 4Nb | `_overlapped_chunks()` | Generator yielding each prepared chunk while the next rotates on the executor | [chunk_pipeline.py:98](../src/jamma/lmm/chunk_pipeline.py#L98) |
 | 4Nb | `_drive_pipeline()` | Computes every overlapped chunk under one BLAS limit and one progress iterator | [chunk_pipeline.py:133](../src/jamma/lmm/chunk_pipeline.py#L133) |
 | 4Nb | `compute_chunk_size_numpy()` | Chunk size from a per-chunk budget and the dispatch path's per-SNP bytes; pure | [chunk_sizing.py:94](../src/jamma/lmm/chunk_sizing.py#L94) |
 | 4Nb | `LmmChunkPlan.plan()` | Chunk size, chunk count, and pipelining decision; cuts a native run of at most 10,000 samples to 16 chunks when the budget alone would not pipeline and the BLAS is uncontrollable (Accelerate). Pure: `plan_association` reads RAM and BLAS controllability once and passes them in | [chunk_sizing.py:162](../src/jamma/lmm/chunk_sizing.py#L162) |
 | 4Nb | `LmmChunkPlan.narrow()` | Narrows a conservative plan to the filtered SNP count; width only decreases and pipelining only switches off | [chunk_sizing.py:274](../src/jamma/lmm/chunk_sizing.py#L274) |
 | 4Nb | `available()` / `require()` | The one loader for `_lmm_accel`: import, ABI-validate, auto-recompile once, expose the module or raise | [accel.py](../src/jamma/lmm/accel.py) |
-| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:188](../src/jamma/lmm/chunk_kernel.py#L188) |
-| 4Nc | `create_workspace_ncvt1_c()` | C extension: the per-run n_cvt=1 workspace, keyed by `lmm_mode` | [_lmm_accel_ncvt1.c](../src/jamma/lmm/_lmm_accel_ncvt1.c) |
-| 4Nc | `_fused_general_kernel()` | Build the one general (n_cvt>1) C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:217](../src/jamma/lmm/chunk_kernel.py#L217) |
-| 4Nc | `create_workspace_general_c()` | C extension: the per-run general workspace, keyed by `lmm_mode` | [_lmm_accel_general.c](../src/jamma/lmm/_lmm_accel_general.c) |
-| 4Nd | `compute_lmm_chunk_ncvt1_c()` | C extension: chunked compute for n_cvt=1 with OpenMP, one loop for Wald/LRT/mode 4 and a separate standalone-Score loop | [_lmm_accel_ncvt1.c](../src/jamma/lmm/_lmm_accel_ncvt1.c) |
-| 4Nd | `compute_lmm_chunk_fused_general_c()` | C extension: chunked compute for the general (n_cvt>1) workspace with OpenMP, one entry point serving Wald/LRT/Score/mode-4 by `lmm_mode` | [_lmm_accel_general.c](../src/jamma/lmm/_lmm_accel_general.c) |
+| 4Nc | `_fused_kernel()` | Build the one C workspace for the run's `n_cvt` and `lmm_mode` and bind its compute | [chunk_kernel.py:178](../src/jamma/lmm/chunk_kernel.py#L178) |
+| 4Nc | `create_workspace_c()` | C extension: the per-run workspace, keyed by `lmm_mode`; `n_cvt` 1 builds the n_cvt=1 family, otherwise the general family | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
+| 4Nd | `compute_lmm_chunk_c()` | C extension: chunked compute with OpenMP for any workspace. n_cvt=1 runs one loop for Wald/LRT/mode 4 and a separate standalone-Score loop; the general family runs one loop for every mode | [_lmm_accel.c](../src/jamma/lmm/_lmm_accel.c) |
 | 4Nd | `alloc_thread_scratch()` / `free_thread_scratch()` | C: per-thread scratch buffer alloc/free helpers | [_lmm_support.c:51](../src/jamma/lmm/_lmm_support.c#L51) |
 | 4Nd | `logdet_h_lambda()` | C: logdet(H) as a mantissa product with an exact exponent, shared by every REML/MLE evaluation and both grid precomputes | [_lmm_logdet.h](../src/jamma/lmm/_lmm_logdet.h) |
 | 4Nd | `_compile_accel.py` | Dev-mode / runtime recompile for `_lmm_accel` | [_compile_accel.py](../src/jamma/lmm/_compile_accel.py) |
@@ -324,7 +321,7 @@ Configuration, memory management, threading, and logging.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 5c | `ExecutableAssociationPlan.price()` | The run's memory quote: kinship, eigen, statistics, and association phases and their peak | [association_plan.py:150](../src/jamma/lmm/association_plan.py#L150) |
+| 5c | `ExecutableAssociationPlan.price()` | The run's memory quote: kinship, eigen, statistics, and association phases and their peak | [association_plan.py:142](../src/jamma/lmm/association_plan.py#L142) |
 | 5c | `require()` | The one memory gate; callers read `available_ram_gb()` once | [memory.py:68](../src/jamma/core/memory.py#L68) |
 | 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:27](../src/jamma/core/memory_snapshot.py#L27) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:20](../src/jamma/utils/logging.py#L20) |
@@ -606,7 +603,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO config | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
 | Result writer | [IncrementalAssocWriter](../src/jamma/lmm/assoc_output.py#L70) |
-| Memory estimation | [price](../src/jamma/lmm/association_plan.py#L150) |
+| Memory estimation | [price](../src/jamma/lmm/association_plan.py#L142) |
 | Threading | [threading.py:55](../src/jamma/core/threading.py#L55) |
 | Hardware context | [_hardware_context.py:33](../scripts/_hardware_context.py#L33) |
 | Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L574) |

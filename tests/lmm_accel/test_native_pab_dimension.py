@@ -20,7 +20,7 @@ def test_general_workspace_rejects_unsupported_covariate_count(
     """
     data = _prepare_fused_general_data(synthetic_covariate_data_ncvt2)
     with pytest.raises(ValueError, match=rf"n_cvt must be 1\.\.100, got {n_cvt}"):
-        accel.require().create_workspace_general_c(
+        accel.require().create_workspace_c(
             data["eigenvalues"],
             data["uab_inv_soa"],
             data["UtW"],

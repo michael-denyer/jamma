@@ -29,16 +29,13 @@ _EXPECTED = {
     (True, 4): DispatchPath.FUSED,
     (True, 3): DispatchPath.FUSED,
     (True, 2): DispatchPath.FUSED,
-    (False, 1): DispatchPath.FUSED_GENERAL,
-    (False, 4): DispatchPath.FUSED_GENERAL,
-    (False, 3): DispatchPath.FUSED_GENERAL,
-    (False, 2): DispatchPath.FUSED_GENERAL,
+    (False, 1): DispatchPath.FUSED,
+    (False, 4): DispatchPath.FUSED,
+    (False, 3): DispatchPath.FUSED,
+    (False, 2): DispatchPath.FUSED,
 }
 
-_PIPELINED_PATHS = {
-    DispatchPath.FUSED,
-    DispatchPath.FUSED_GENERAL,
-}
+_PIPELINED_PATHS = {DispatchPath.FUSED}
 
 
 def _select(n_cvt: int, lmm_mode: LmmMode, *, accel: bool = True) -> DispatchPath:
@@ -80,16 +77,6 @@ def test_path_properties_agree_with_membership():
     for n_cvt, mode, accel in product(_NCVT_1 + _NCVT_MANY, _MODES, (True, False)):
         path = _select(n_cvt, mode, accel=accel)
         assert path.is_native == (path in _PIPELINED_PATHS)
-
-
-def test_mode_and_ncvt_gating():
-    """Each C path is wired for particular modes and covariate counts."""
-    for n_cvt, mode in product(_NCVT_1 + _NCVT_MANY, _MODES):
-        path = _select(n_cvt, mode)
-        if path is DispatchPath.FUSED:
-            assert n_cvt == 1
-        if path is DispatchPath.FUSED_GENERAL:
-            assert n_cvt >= 2
 
 
 @pytest.mark.parametrize("bad_mode", [0, 5, -1, 99])

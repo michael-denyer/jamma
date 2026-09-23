@@ -28,30 +28,19 @@ class DispatchPath(Enum):
 
     NUMPY_FALLBACK = "numpy_fallback"  # not split: pure-NumPy full-Uab path
     NUMPY_WALD = "numpy_wald"  # intercept-only Wald, split products
-    FUSED = "fused"  # n_cvt==1 fused Uab, any lmm_mode
-    FUSED_GENERAL = "fused_general"  # n_cvt>=2 fused Uab, any lmm_mode
+    FUSED = "fused"  # C workspace, fused Uab, any n_cvt and lmm_mode
 
     @property
     def is_native(self) -> bool:
-        """True for the C workspace paths, which pipeline, own a C workspace,
-        and consume raw ``utg_t``.
-        """
-        return self in (DispatchPath.FUSED, DispatchPath.FUSED_GENERAL)
-
-    @property
-    def needs_null_w(self) -> bool:
-        """True when the run needs the null-model ``w = UtW[:, 0]`` vector.
-
-        The fused Wald/mode-4 workspace packs it in at construction; the fused
-        Score/LRT kernels take it per call. Both consumers read the same vector,
-        so the chunk runner materialises it once for either.
+        """True for the C workspace path, which pipelines, owns a C workspace,
+        and consumes raw ``utg_t``.
         """
         return self is DispatchPath.FUSED
 
     def varying_rows(self, n_cvt: int) -> int:
         """Rows of ``n_samples`` float64 one SNP materialises beyond ``utg_t``."""
         match self:
-            case DispatchPath.FUSED | DispatchPath.FUSED_GENERAL:
+            case DispatchPath.FUSED:
                 return 0
             case DispatchPath.NUMPY_WALD:
                 return 3
@@ -63,11 +52,7 @@ class DispatchPath(Enum):
     def iab_cells(self, n_cvt: int) -> int:
         """Per-SNP Iab float64 cells held alongside the varying rows."""
         match self:
-            case (
-                DispatchPath.FUSED
-                | DispatchPath.FUSED_GENERAL
-                | DispatchPath.NUMPY_WALD
-            ):
+            case DispatchPath.FUSED | DispatchPath.NUMPY_WALD:
                 return 0
             case DispatchPath.NUMPY_FALLBACK:
                 return (n_cvt + 2) * n_index(n_cvt)
@@ -77,11 +62,7 @@ class DispatchPath(Enum):
     def invariant_rows(self, n_cvt: int) -> int:
         """Rows of ``n_samples`` the run holds once for the invariant Uab columns."""
         match self:
-            case (
-                DispatchPath.FUSED
-                | DispatchPath.FUSED_GENERAL
-                | DispatchPath.NUMPY_WALD
-            ):
+            case DispatchPath.FUSED | DispatchPath.NUMPY_WALD:
                 return n_index(n_cvt) - (n_cvt + 2)
             case DispatchPath.NUMPY_FALLBACK:
                 return 0
@@ -129,18 +110,9 @@ def _resolve_dispatch_path(n_cvt: int, lmm_mode: LmmMode, accel: bool) -> Dispat
             else DispatchPath.NUMPY_FALLBACK
         )
 
-    if n_cvt >= 2:
-        return DispatchPath.FUSED_GENERAL
-
     return DispatchPath.FUSED
 
 
 _PATH_LOG_MESSAGES = {
-    DispatchPath.FUSED: (
-        "Fused Uab path active: utg_t passed directly to C workspace "
-        "(eliminates uab_varying_soa buffer)"
-    ),
-    DispatchPath.FUSED_GENERAL: (
-        "Fused general Uab path active: utg_t passed directly to C workspace"
-    ),
+    DispatchPath.FUSED: "Fused Uab path active: utg_t passed directly to C workspace",
 }

@@ -5,7 +5,7 @@ The runner feeds the general workspace's compute directly rather than
 reconstructing a full Uab per chunk. These check on real data that this does
 not change the statistics.
 
-Run at n_cvt=2, which is where ``DispatchPath.FUSED_GENERAL`` is selected for
+Run at n_cvt=2, which takes the general kernels of ``DispatchPath.FUSED`` for
 every lmm_mode. modes 2 and 3 at n_cvt=1 take the n_cvt=1 fused workspace
 kernels instead (``tests/lmm_accel/test_lmm_accel_workspace_score_lrt.py``).
 
@@ -82,7 +82,7 @@ def mouse_data():
     K = read_kinship_matrix(MOUSE.kinship)
 
     n_samples = genotypes.shape[0]
-    # n_cvt=2, so the general workspace (FUSED_GENERAL) is exercised.
+    # n_cvt=2, so the general kernels of the fused workspace are exercised.
     n_cvt = 2
 
     # Eigendecomposition
@@ -140,7 +140,7 @@ def mouse_data():
 
 def _general_score_only_result(d):
     """The general workspace's lmm_mode=3 (Score only) compute for *d*."""
-    ws = accel.require().create_workspace_general_c(
+    ws = accel.require().create_workspace_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
         d["UtW"],
@@ -155,12 +155,12 @@ def _general_score_only_result(d):
         lmm_mode=3,
         hi_eval_null=d["Hi_eval_null"],
     )
-    return accel.require().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
+    return accel.require().compute_lmm_chunk_c(ws, d["utg_t"], 1)
 
 
 def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
     """The general workspace's lmm_mode=2 (LRT only) compute for *d*."""
-    ws = accel.require().create_workspace_general_c(
+    ws = accel.require().create_workspace_c(
         d["eigenvalues"],
         d["uab_inv_soa"],
         d["UtW"],
@@ -175,7 +175,7 @@ def _general_lrt_only_result(d, l_min=1e-5, l_max=1e5, n_grid=50, n_refine=20):
         lmm_mode=2,
         logl_H0=d["logl_H0"],
     )
-    return accel.require().compute_lmm_chunk_fused_general_c(ws, d["utg_t"], 1)
+    return accel.require().compute_lmm_chunk_c(ws, d["utg_t"], 1)
 
 
 @requires_c
@@ -633,9 +633,9 @@ def test_invariant_columns_constant_across_snps(n_cvt):
 def test_batch_compute_uab_varying_soa_rejects_ncvt_above_one(n_cvt):
     """batch_compute_uab_varying_soa_numpy is n_cvt=1 only.
 
-    No production path builds this for n_cvt>1: the general dispatch path
-    (``DispatchPath.FUSED_GENERAL``) forms its varying columns on the fly
-    inside the C workspace instead.
+    No production path builds this for n_cvt>1: the fused dispatch path
+    (``DispatchPath.FUSED``) forms its varying columns on the fly inside the
+    C workspace instead.
     """
     rng = np.random.default_rng(55)
     n_samples, n_snps = 50, 10

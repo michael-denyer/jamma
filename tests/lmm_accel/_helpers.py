@@ -86,7 +86,7 @@ def assert_fused_matches_reference(
     run: Callable[[], Any],
     *,
     fields: dict[str, float],
-    kernel: str | None = "compute_lmm_chunk_ncvt1_c",
+    kernel: str | None = "compute_lmm_chunk_c",
     min_count: float | None = None,
     atol: float = 0.0,
     label: str = "",
@@ -166,13 +166,13 @@ def _prepare_fused_general_data(data: dict) -> dict:
 def _fused_general_workspace(data: dict, n_threads: int = 1) -> object:
     """Build the live fused-general Wald workspace for *data*.
 
-    This is what ``DispatchPath.FUSED_GENERAL`` reaches for n_cvt>=2 in mode 1.
+    This is what ``DispatchPath.FUSED`` reaches for n_cvt>=2 in mode 1.
     Accepts either a raw _build_synthetic_covariate_data dict or one already
     through _prepare_fused_general_data.
     """
     if "uab_inv_soa" not in data:
         data = _prepare_fused_general_data(data)
-    return accel.require().create_workspace_general_c(
+    return accel.require().create_workspace_c(
         data["eigenvalues"],
         data["uab_inv_soa"],
         data["UtW"],
@@ -196,7 +196,7 @@ def _fused_general_mode4_workspace(data: dict, n_threads: int = 1) -> object:
     """
     if "uab_inv_soa" not in data:
         data = _prepare_fused_general_data(data)
-    return accel.require().create_workspace_general_c(
+    return accel.require().create_workspace_c(
         data["eigenvalues"],
         data["uab_inv_soa"],
         data["UtW"],
@@ -245,9 +245,7 @@ def _fused_general_wald(data: dict, n_threads: int = 1) -> dict[str, np.ndarray]
     if "uab_inv_soa" not in data:
         data = _prepare_fused_general_data(data)
     ws = _fused_general_workspace(data, n_threads)
-    return accel.require().compute_lmm_chunk_fused_general_c(
-        ws, data["utg_t"], n_threads
-    )
+    return accel.require().compute_lmm_chunk_c(ws, data["utg_t"], n_threads)
 
 
 def _numpy_general_wald(data: dict) -> dict[str, np.ndarray]:

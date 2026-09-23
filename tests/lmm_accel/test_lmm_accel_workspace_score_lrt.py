@@ -121,16 +121,18 @@ class TestScoreWorkspaceParity:
             score_ws_data
         )
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             20,
+            1,
+            1,
             lmm_mode=3,
             hi_eval_null=Hi_eval_null,
         )
@@ -144,20 +146,22 @@ class TestScoreWorkspaceParity:
             score_ws_data
         )
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             20,
+            1,
+            1,
             lmm_mode=3,
             hi_eval_null=Hi_eval_null,
         )
-        result = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
         _assert_matches_numpy(
             result,
@@ -173,21 +177,23 @@ class TestScoreWorkspaceParity:
             score_ws_data
         )
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             20,
+            1,
+            1,
             lmm_mode=3,
             hi_eval_null=Hi_eval_null,
         )
 
-        result1 = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
+        result1 = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
         _assert_matches_numpy(
             result1,
             _numpy_score_reference(w, Uty, utg_t, Hi_eval_null, n_samples),
@@ -196,7 +202,7 @@ class TestScoreWorkspaceParity:
 
         rng2 = np.random.default_rng(99999)
         utg_t2 = rng2.standard_normal((15, n_samples))
-        result2 = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t2, 1)
+        result2 = accel.require().compute_lmm_chunk_c(ws, utg_t2, 1)
         _assert_matches_numpy(
             result2,
             _numpy_score_reference(w, Uty, utg_t2, Hi_eval_null, n_samples),
@@ -214,20 +220,22 @@ class TestScoreWorkspaceParity:
         utg_degen = utg_t.copy()
         utg_degen[0, :] = 0.0
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             20,
+            1,
+            1,
             lmm_mode=3,
             hi_eval_null=Hi_eval_null,
         )
-        result = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_degen, 1)
+        result = accel.require().compute_lmm_chunk_c(ws, utg_degen, 1)
 
         assert np.isnan(result["betas"][0]), "degenerate SNP should have NaN beta"
         assert np.isnan(result["ses"][0]), "degenerate SNP should have NaN se"
@@ -244,21 +252,23 @@ class TestScoreWorkspaceParity:
             score_ws_data
         )
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             20,
+            2,
+            1,
             lmm_mode=3,
             hi_eval_null=Hi_eval_null,
         )
-        single = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
-        multi = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 2)
+        single = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
+        multi = accel.require().compute_lmm_chunk_c(ws, utg_t, 2)
 
         for key in ("betas", "ses", "p_scores"):
             np.testing.assert_array_equal(
@@ -304,16 +314,18 @@ class TestLrtWorkspaceParity:
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             5,
+            1,
+            1,
             lmm_mode=2,
             logl_H0=-150.0,
         )
@@ -327,20 +339,22 @@ class TestLrtWorkspaceParity:
 
         logl_H0 = -150.0
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             5,
+            1,
+            1,
             lmm_mode=2,
             logl_H0=logl_H0,
         )
-        result = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
         _assert_matches_numpy(
             result,
@@ -355,21 +369,23 @@ class TestLrtWorkspaceParity:
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
         logl_H0 = -150.0
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             5,
+            1,
+            1,
             lmm_mode=2,
             logl_H0=logl_H0,
         )
 
-        result1 = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
+        result1 = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
         _assert_matches_numpy(
             result1,
             _numpy_lrt_reference(w, Uty, utg_t, eigenvalues, logl_H0, 5),
@@ -378,7 +394,7 @@ class TestLrtWorkspaceParity:
 
         rng2 = np.random.default_rng(88888)
         utg_t2 = rng2.standard_normal((15, n_samples))
-        result2 = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t2, 1)
+        result2 = accel.require().compute_lmm_chunk_c(ws, utg_t2, 1)
         _assert_matches_numpy(
             result2,
             _numpy_lrt_reference(w, Uty, utg_t2, eigenvalues, logl_H0, 5),
@@ -402,20 +418,22 @@ class TestLrtWorkspaceParity:
         # p_lrt value is only interpretable against the model it is testing.
         _, logl_H0 = _null_model_ncvt1(eigenvalues, w, Uty)
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             20,
+            1,
+            1,
             lmm_mode=2,
             logl_H0=logl_H0,
         )
-        result = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_degen, 1)
+        result = accel.require().compute_lmm_chunk_c(ws, utg_degen, 1)
 
         assert result["p_lrts"][0] >= 0.99, (
             f"degenerate SNP p_lrt={result['p_lrts'][0]}, expected near 1"
@@ -430,21 +448,23 @@ class TestLrtWorkspaceParity:
 
         (eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples, n_snps) = lrt_ws_data
 
-        ws = accel.require().create_workspace_ncvt1_c(
+        ws = accel.require().create_workspace_c(
             eigenvalues,
             uab_inv_soa,
-            w,
+            w[:, None],
             Uty,
             n_samples,
             1e-5,
             1e5,
             50,
             5,
+            2,
+            1,
             lmm_mode=2,
             logl_H0=-150.0,
         )
-        single = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 1)
-        multi = accel.require().compute_lmm_chunk_ncvt1_c(ws, utg_t, 2)
+        single = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
+        multi = accel.require().compute_lmm_chunk_c(ws, utg_t, 2)
 
         for key in ("logls", "lambdas_mle", "p_lrts"):
             np.testing.assert_array_equal(
@@ -464,7 +484,7 @@ class TestLrtWorkspaceParity:
 # ---------------------------------------------------------------------------
 
 
-class TestGeneralWorkspaceScoreParity:
+class TestNcvt2ScoreOnlyParity:
     """General workspace (n_cvt>=2), lmm_mode=3 (Score only) vs NumPy."""
 
     @requires_c
@@ -481,7 +501,7 @@ class TestGeneralWorkspaceScoreParity:
         uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
         utg_t = np.ascontiguousarray(data["UtG"].T)
 
-        ws = accel.require().create_workspace_general_c(
+        ws = accel.require().create_workspace_c(
             data["eigenvalues"],
             uab_inv_soa,
             data["UtW"],
@@ -496,7 +516,7 @@ class TestGeneralWorkspaceScoreParity:
             lmm_mode=3,
             hi_eval_null=data["Hi_eval_null"],
         )
-        result = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
         assert set(result.keys()) == {"betas", "ses", "p_scores"}
 
@@ -514,7 +534,7 @@ class TestGeneralWorkspaceScoreParity:
             )
 
 
-class TestGeneralWorkspaceLrtParity:
+class TestNcvt2LrtOnlyParity:
     """General workspace (n_cvt>=2), lmm_mode=2 (LRT only) vs NumPy."""
 
     @requires_c
@@ -531,7 +551,7 @@ class TestGeneralWorkspaceLrtParity:
         uab_inv_soa = np.ascontiguousarray(Uab_batch[0, :, list(inv_indices)])
         utg_t = np.ascontiguousarray(data["UtG"].T)
 
-        ws = accel.require().create_workspace_general_c(
+        ws = accel.require().create_workspace_c(
             data["eigenvalues"],
             uab_inv_soa,
             data["UtW"],
@@ -546,7 +566,7 @@ class TestGeneralWorkspaceLrtParity:
             lmm_mode=2,
             logl_H0=data["logl_H0"],
         )
-        result = accel.require().compute_lmm_chunk_fused_general_c(ws, utg_t, 1)
+        result = accel.require().compute_lmm_chunk_c(ws, utg_t, 1)
 
         assert set(result.keys()) == {"logls", "lambdas_mle", "p_lrts"}
 

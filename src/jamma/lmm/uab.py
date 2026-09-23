@@ -319,8 +319,8 @@ def batch_compute_uab_varying_soa_numpy(
     """Compute SNP-varying Uab columns in SoA layout (n_snps, n_var, n_samples).
 
     n_cvt=1 only, with n_var=3 rows [wx, xx, xy]. No production path builds
-    this for n_cvt>1: the general dispatch path (``DispatchPath.FUSED_GENERAL``)
-    forms its varying columns on the fly inside the C workspace instead.
+    this for n_cvt>1: the native path (``DispatchPath.FUSED``) forms its
+    varying columns on the fly inside the C workspace instead.
 
     Args:
         n_cvt: Number of covariates. Must be 1.

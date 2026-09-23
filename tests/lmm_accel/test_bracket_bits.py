@@ -3,7 +3,7 @@
 D1 found that the split LRT entry (``compute_lrt_split_general_c``, since
 deleted by D2) computed ``log_l_min`` and ``step`` directly from
 ``l_min``/``l_max``, while the general workspace's fused compute
-(``compute_lmm_chunk_fused_general_c``) re-derived the same two scalars from
+(``compute_lmm_chunk_c``) re-derived the same two scalars from
 ``log(lambda_grid[0])`` and ``log(lambda_grid[-1])``, which is
 ``log(exp(log_l_min))`` and can differ from ``log_l_min`` by an ulp. That ulp
 shifted the golden-section bracket endpoints and, on this fixture, 46 of 50
@@ -56,9 +56,9 @@ def test_mode2_workspace_matches_mode4_workspace_bracket():
     n_cvt = data["n_cvt"]
 
     ws4 = _fused_general_mode4_workspace(data, n_threads=1)
-    result4 = accel.require().compute_lmm_chunk_fused_general_c(ws4, data["utg_t"], 1)
+    result4 = accel.require().compute_lmm_chunk_c(ws4, data["utg_t"], 1)
 
-    ws2 = accel.require().create_workspace_general_c(
+    ws2 = accel.require().create_workspace_c(
         data["eigenvalues"],
         data["uab_inv_soa"],
         data["UtW"],
@@ -73,7 +73,7 @@ def test_mode2_workspace_matches_mode4_workspace_bracket():
         lmm_mode=2,
         logl_H0=data["logl_H0"],
     )
-    result2 = accel.require().compute_lmm_chunk_fused_general_c(ws2, data["utg_t"], 1)
+    result2 = accel.require().compute_lmm_chunk_c(ws2, data["utg_t"], 1)
 
     np.testing.assert_array_equal(
         result2["lambdas_mle"],

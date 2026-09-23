@@ -206,7 +206,7 @@ class TestExecutionMode:
     def test_batch_quote_prices_the_selected_dispatch_path(self):
         """plan_association prices the Uab/Iab batch its dispatch path holds.
 
-        n_cvt=4 with the extension loaded selects FUSED_GENERAL, whose C
+        n_cvt=4 with the extension loaded selects FUSED, whose C
         workspace forms Uab in place, so the quote charges no Uab/Iab buffer:
         with the kernel workspace emptied, U, the genotypes, and the rotation
         buffers are the whole quote.
@@ -221,7 +221,7 @@ class TestExecutionMode:
         with _pin_ram(AMPLE_GB):
             plan = plan_association(n_samples, n_snps, n_cvt=4)
 
-        assert plan.dispatch is DispatchPath.FUSED_GENERAL
+        assert plan.dispatch is DispatchPath.FUSED
         chunks = plan.conservative_chunks
         bare = replace(
             plan, workspace=empty_workspace(plan.dispatch, n_samples, n_samples, 4)

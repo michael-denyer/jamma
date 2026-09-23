@@ -10,38 +10,14 @@ HAS_OPENMP: int
 
 def workspace_sizes_c(
     n_samples: int, n_cvt: int, n_grid: int, lmm_mode: int, n_threads: int
-) -> tuple[int, int, int]: ...
+) -> tuple[int, int]: ...
 
-# One n_cvt=1 workspace type. The creator's lmm_mode picks which loop
-# compute_lmm_chunk_ncvt1_c runs: 1 Wald, 2 LRT, 3 Score, 4 all three. Under
+# One workspace type for every n_cvt. The creator's lmm_mode picks which tests
+# compute_lmm_chunk_c runs: 1 Wald, 2 LRT, 3 Score, 4 all three. Under
 # lmm_mode 4 the returned dict carries three extra keys.
-NcvtOneWorkspace = NewType("NcvtOneWorkspace", object)
+Workspace = NewType("Workspace", object)
 
-def create_workspace_ncvt1_c(
-    eigenvalues: npt.NDArray[np.float64],
-    uab_invariant: npt.NDArray[np.float64],
-    w: npt.NDArray[np.float64],
-    Uty: npt.NDArray[np.float64],
-    n_samples: int,
-    l_min: float,
-    l_max: float,
-    n_grid: int,
-    n_refine: int,
-    *,
-    lmm_mode: int,
-    hi_eval_null: npt.NDArray[np.float64] | None = None,
-    logl_H0: float | None = None,
-) -> NcvtOneWorkspace: ...
-def compute_lmm_chunk_ncvt1_c(
-    workspace: NcvtOneWorkspace,
-    utg_t: npt.NDArray[np.float64],
-    n_threads: int,
-) -> dict[str, npt.NDArray[np.float64]]: ...
-
-# One general workspace type, constructing its packed table from n_cvt.
-GeneralWorkspace = NewType("GeneralWorkspace", object)
-
-def create_workspace_general_c(
+def create_workspace_c(
     eigenvalues: npt.NDArray[np.float64],
     uab_invariant: npt.NDArray[np.float64],
     UtW: npt.NDArray[np.float64],
@@ -57,15 +33,15 @@ def create_workspace_general_c(
     lmm_mode: int,
     hi_eval_null: npt.NDArray[np.float64] | None = None,
     logl_H0: float | None = None,
-) -> GeneralWorkspace: ...
-def compute_lmm_chunk_fused_general_c(
-    workspace: GeneralWorkspace,
+) -> Workspace: ...
+def compute_lmm_chunk_c(
+    workspace: Workspace,
     utg_t: npt.NDArray[np.float64],
     n_threads: int,
 ) -> dict[str, npt.NDArray[np.float64]]: ...
 
 # Test-only entry points. Not part of the computational API.
-def _workspace_bytes_c(workspace: object) -> tuple[int, int, int]: ...
+def _workspace_bytes_c(workspace: object) -> tuple[int, int]: ...
 def _get_aligned_alloc_test_ptr(n: int) -> int:
     """Return the address of an ``alloc_aligned_doubles(n)`` buffer.
 

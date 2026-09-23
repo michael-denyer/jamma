@@ -71,19 +71,21 @@ def test_native_wald_matches_numpy_on_valid_shared_inputs() -> None:
     )
 
     invariant = np.stack((UtW * UtW, UtW * Uty, Uty * Uty))
-    workspace = accel.require().create_workspace_ncvt1_c(
+    workspace = accel.require().create_workspace_c(
         eigenvalues,
         invariant,
-        UtW,
+        UtW[:, None],
         Uty,
         n_samples,
         1e-5,
         1e5,
         50,
         20,
+        1,
+        1,
         lmm_mode=1,
     )
-    native_result = accel.require().compute_lmm_chunk_ncvt1_c(
+    native_result = accel.require().compute_lmm_chunk_c(
         workspace, np.ascontiguousarray(UtG.T), 1
     )
 

@@ -64,19 +64,19 @@ typedef struct {
  * ncvt1_layout_bytes prices it, so the plan and the allocation cannot drift. */
 typedef struct {
     size_t retained;        /* RunInvariants' eigenvalues, UtW, Uty,
-                             * Hi_eval_null, w and three invariant Uab rows */
+                             * Hi_eval_null and three invariant Uab rows */
     size_t grid_points;     /* lambda_grid, logdet_h_grid and grid_inv each */
     size_t hi_eval_grid;    /* aligned doubles */
     size_t hi_eval_null;    /* aligned doubles */
     size_t score_vector;    /* aligned doubles, h_null_w and h_null_Uty each */
-    size_t thread_scratch;  /* aligned doubles, per call, per thread, three */
+    size_t thread_scratch;  /* aligned doubles, per creator thread, three */
 } ncvt1_layout_t;
 
 static ncvt1_layout_t ncvt1_layout(int n_samples, int n_grid, lmm_tests_t tests)
 {
     size_t n = (size_t)n_samples;
     ncvt1_layout_t l = {0};
-    l.retained = 8 * n;
+    l.retained = 7 * n;
     if (tests.reml || tests.lrt) {
         l.grid_points = (size_t)n_grid;
         l.hi_eval_grid = n * (size_t)n_grid;
@@ -97,7 +97,7 @@ static workspace_bytes_t ncvt1_layout_bytes(const ncvt1_layout_t *l)
         + aligned_double_bytes(l->hi_eval_null)
         + 2 * aligned_double_bytes(l->score_vector);
     if (l->thread_scratch)
-        b.transient_per_thread =
+        b.per_thread =
             3 * (aligned_double_bytes(l->thread_scratch) + sizeof(double *));
     return b;
 }
@@ -133,10 +133,13 @@ typedef struct {
     ncvt1_lrt_t *lrt;
     ncvt1_score_t *score;
     /* Fused Uab fields -- w and Uty stored for on-the-fly wx/xx/xy computation */
-    const double *w;          /* UtW[:,0] for n_cvt=1 -- (n_samples,) borrowed */
+    const double *w;          /* the (n_samples, 1) UtW's data -- borrowed */
     const double *Uty;        /* rotated phenotype -- (n_samples,) borrowed */
-    PyObject *w_ref;          /* keeps w array alive */
+    PyObject *w_ref;          /* keeps UtW array alive */
     PyObject *Uty_ref;        /* keeps Uty array alive */
+    /* Per-thread wx/xx/xy rows, n_threads of each; NULL for Score alone. */
+    int n_threads;
+    double **scratch_wx, **scratch_xx, **scratch_xy;
 } lmm_workspace_t;
 
 /* Owner of every allocation and array ref in the struct. NULL-safe on
@@ -166,6 +169,9 @@ static void lmm_workspace_free(lmm_workspace_t *ws)
     Py_XDECREF(ws->uab_inv_ref);
     Py_XDECREF(ws->w_ref);
     Py_XDECREF(ws->Uty_ref);
+    free_thread_scratch(ws->scratch_wx, ws->n_threads);
+    free_thread_scratch(ws->scratch_xx, ws->n_threads);
+    free_thread_scratch(ws->scratch_xy, ws->n_threads);
     free(ws);
 }
 
@@ -197,15 +203,15 @@ int ncvt1_capsule_bytes(PyObject *capsule, workspace_bytes_t *out)
 
 /* Fill a calloc'd n_cvt=1 workspace from validated inputs: the scalar
  * constants, the borrowed array pointers (INCREF'd here, released by
- * lmm_workspace_free), the invariant Iab scalar and the lambda grid when
- * the layout has one. Score (mode 3) does no lambda search and skips it.
+ * lmm_workspace_free), the invariant Iab scalar, and the per-thread scratch
+ * and lambda grid when the layout has them. Score (mode 3) does no lambda
+ * search and skips both.
  * 0, or -1 with PyErr set. */
-static int init_ncvt1_workspace(
-    lmm_workspace_t *ws,
-    PyArrayObject *eigenvalues_arr, PyArrayObject *uab_inv_arr,
-    PyArrayObject *w_arr, PyArrayObject *Uty_arr,
-    int n_samples, double l_min, double l_max, int n_grid, int n_refine)
+static int init_ncvt1_workspace(lmm_workspace_t *ws,
+                                const workspace_inputs_t *in)
 {
+    int n_samples = in->n_samples;
+    int n_grid = in->n_grid;
     ws->n_samples = n_samples;
     ws->df        = n_samples - 2;
 
@@ -217,22 +223,22 @@ static int init_ncvt1_workspace(
     ws->reml_const  = 0.5 * ws->df * (log((double)ws->df)
                        - log(2.0 * M_PI) - 1.0);
 
-    Py_INCREF(eigenvalues_arr);
-    Py_INCREF(uab_inv_arr);
-    ws->eigenvalues_ref = (PyObject *)eigenvalues_arr;
-    ws->uab_inv_ref     = (PyObject *)uab_inv_arr;
+    Py_INCREF(in->eigenvalues);
+    Py_INCREF(in->uab_inv);
+    ws->eigenvalues_ref = (PyObject *)in->eigenvalues;
+    ws->uab_inv_ref     = (PyObject *)in->uab_inv;
 
-    ws->eigenvalues = (const double *)PyArray_DATA(eigenvalues_arr);
-    ws->inv_ww = (const double *)PyArray_DATA(uab_inv_arr);
+    ws->eigenvalues = (const double *)PyArray_DATA(in->eigenvalues);
+    ws->inv_ww = (const double *)PyArray_DATA(in->uab_inv);
     ws->inv_wy = ws->inv_ww + (size_t)n_samples;
     ws->inv_yy = ws->inv_ww + (size_t)2 * n_samples;
 
-    Py_INCREF(w_arr);
-    Py_INCREF(Uty_arr);
-    ws->w = (const double *)PyArray_DATA(w_arr);
-    ws->Uty = (const double *)PyArray_DATA(Uty_arr);
-    ws->w_ref = (PyObject *)w_arr;
-    ws->Uty_ref = (PyObject *)Uty_arr;
+    Py_INCREF(in->UtW);
+    Py_INCREF(in->Uty);
+    ws->w = (const double *)PyArray_DATA(in->UtW);
+    ws->Uty = (const double *)PyArray_DATA(in->Uty);
+    ws->w_ref = (PyObject *)in->UtW;
+    ws->Uty_ref = (PyObject *)in->Uty;
 
     {
         double s_ww = 0.0;
@@ -243,6 +249,14 @@ static int init_ncvt1_workspace(
 
     const ncvt1_layout_t *layout = &ws->layout;
     if (!layout->grid_points) return 0;
+
+    ws->scratch_wx = alloc_thread_scratch(ws->n_threads, layout->thread_scratch);
+    ws->scratch_xx = alloc_thread_scratch(ws->n_threads, layout->thread_scratch);
+    ws->scratch_xy = alloc_thread_scratch(ws->n_threads, layout->thread_scratch);
+    if (!ws->scratch_wx || !ws->scratch_xx || !ws->scratch_xy) {
+        PyErr_NoMemory();
+        return -1;
+    }
 
     ncvt1_grid_t *grid = (ncvt1_grid_t *)calloc(1, sizeof(ncvt1_grid_t));
     if (!grid) { PyErr_NoMemory(); return -1; }
@@ -266,7 +280,7 @@ static int init_ncvt1_workspace(
     }
 
     /* uab_inv holds the ww, wy and yy columns contiguously. */
-    build_lambda_grid(&grid->search, l_min, l_max, n_grid, n_refine,
+    build_lambda_grid(&grid->search, in->l_min, in->l_max, n_grid, in->n_refine,
                       ws->eigenvalues, n_samples, ws->inv_ww, 3, lambda_grid,
                       grid->hi_eval_grid, grid->logdet_h_grid, inv_sums);
     for (int g = 0; g < n_grid; g++) {
@@ -356,107 +370,30 @@ static int init_ncvt1_score_vectors(lmm_workspace_t *ws)
     return 0;
 }
 
-/* -------------------------------------------------------------------------
- * create_workspace_ncvt1_c
- *
- * Python signature:
- *   create_workspace_ncvt1_c(
- *       eigenvalues, uab_invariant, w, Uty,
- *       n_samples, l_min, l_max, n_grid, n_refine,
- *       *, lmm_mode, hi_eval_null=None, logl_H0=None,
- *   ) -> PyCapsule
- *
- * lmm_mode picks the null-model inputs: 2 (LRT) needs logl_H0, 3 (Score)
- * needs hi_eval_null, 4 needs both, 1 (Wald) takes neither. An input the
- * mode does not use is rejected rather than ignored.
- * ------------------------------------------------------------------------- */
-PyObject *create_workspace_ncvt1_c_py(
-    PyObject *self, PyObject *args, PyObject *kwargs)
+/* The n_cvt=1 workspace for in->tests. The (n_samples, 1) UtW is the null
+ * model's w column. */
+PyObject *ncvt1_create_workspace(const workspace_inputs_t *in)
 {
-    static const char *kwlist[] = {
-        "eigenvalues", "uab_invariant", "w", "Uty",
-        "n_samples", "l_min", "l_max", "n_grid", "n_refine",
-        "lmm_mode", "hi_eval_null", "logl_H0",
-        NULL
-    };
-
-    PyObject *eigenvalues_obj, *uab_inv_obj, *w_obj, *Uty_obj;
-    PyObject *hi_eval_null_obj = NULL, *logl_H0_obj = NULL;
-    int n_samples, n_grid, n_refine, lmm_mode = 0;
-    double l_min, l_max, logl_H0 = 0.0;
-    lmm_tests_t tests;
-
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOOOiddii|$iOO", (char **)kwlist,
-            &eigenvalues_obj, &uab_inv_obj, &w_obj, &Uty_obj,
-            &n_samples, &l_min, &l_max, &n_grid, &n_refine,
-            &lmm_mode, &hi_eval_null_obj, &logl_H0_obj)) {
-        return NULL;
-    }
-    if (parse_mode_inputs(lmm_mode, &hi_eval_null_obj, logl_H0_obj,
-                          &tests, &logl_H0) < 0)
-        return NULL;
-    if (validate_batch_params(n_samples, l_min, l_max, n_grid, n_refine) < 0)
-        return NULL;
-
-    PyArrayObject *eigenvalues_arr = NULL, *uab_inv_arr = NULL;
-    PyArrayObject *w_arr = NULL, *Uty_arr = NULL;
-    PyArrayObject *hi_eval_null_arr = NULL;
-    lmm_workspace_t *ws = NULL;
-    PyObject *capsule = NULL;
-
-    eigenvalues_arr = take_vector(eigenvalues_obj, n_samples, "eigenvalues");
-    if (!eigenvalues_arr) goto err_input;
-    uab_inv_arr = take_matrix(uab_inv_obj, 3, n_samples, "uab_invariant");
-    if (!uab_inv_arr) goto err_input;
-    w_arr = take_vector(w_obj, n_samples, "w");
-    if (!w_arr) goto err_input;
-    Uty_arr = take_vector(Uty_obj, n_samples, "Uty");
-    if (!Uty_arr) goto err_input;
-    if (tests.score) {
-        hi_eval_null_arr = take_vector(hi_eval_null_obj, n_samples, "hi_eval_null");
-        if (!hi_eval_null_arr) goto err_input;
-    }
-    if (validate_eigenvalues(
-            (const double *)PyArray_DATA(eigenvalues_arr), n_samples, l_max) < 0)
-        goto err_input;
-    if (tests.score && validate_hi_eval_null(
-            (const double *)PyArray_DATA(hi_eval_null_arr), n_samples) < 0)
-        goto err_input;
-
-    ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
-    if (!ws) { PyErr_NoMemory(); goto err_input; }
-    ws->tests = tests;
-    ws->layout = ncvt1_layout(n_samples, n_grid, tests);
-    if (init_ncvt1_workspace(ws, eigenvalues_arr, uab_inv_arr, w_arr, Uty_arr,
-                             n_samples, l_min, l_max, n_grid, n_refine) < 0)
-        goto err_ws;
-    if (tests.score && init_ncvt1_null_hi(
-            ws, (const double *)PyArray_DATA(hi_eval_null_arr)) < 0)
-        goto err_ws;
-    if (tests.lrt && set_ncvt1_null_logl(ws, logl_H0) < 0)
-        goto err_ws;
+    PyObject *capsule;
+    lmm_workspace_t *ws = (lmm_workspace_t *)calloc(1, sizeof(lmm_workspace_t));
+    if (!ws) return PyErr_NoMemory();
+    ws->tests = in->tests;
+    ws->n_threads = in->n_threads;
+    ws->layout = ncvt1_layout(in->n_samples, in->n_grid, in->tests);
+    if (init_ncvt1_workspace(ws, in) < 0)
+        goto err;
+    if (in->tests.score && init_ncvt1_null_hi(
+            ws, (const double *)PyArray_DATA(in->hi_eval_null)) < 0)
+        goto err;
+    if (in->tests.lrt && set_ncvt1_null_logl(ws, in->logl_H0) < 0)
+        goto err;
     if (ws->layout.score_vector && init_ncvt1_score_vectors(ws) < 0)
-        goto err_ws;
+        goto err;
 
     capsule = PyCapsule_New(ws, NCVT1_CAPSULE, lmm_workspace_destructor);
-    if (!capsule) goto err_ws;
-
-    Py_DECREF(eigenvalues_arr);
-    Py_DECREF(uab_inv_arr);
-    Py_DECREF(w_arr);
-    Py_DECREF(Uty_arr);
-    Py_XDECREF(hi_eval_null_arr);
-    return capsule;
-
-err_ws:
+    if (capsule) return capsule;
+err:
     lmm_workspace_free(ws);
-err_input:
-    Py_XDECREF(eigenvalues_arr);
-    Py_XDECREF(uab_inv_arr);
-    Py_XDECREF(w_arr);
-    Py_XDECREF(Uty_arr);
-    Py_XDECREF(hi_eval_null_arr);
     return NULL;
 }
 
@@ -493,18 +430,9 @@ static PyObject *ncvt1_test_loop(
     double reml_const = ws->reml_const;
     double mle_const  = tests.lrt ? ws->lrt->mle_const : 0.0;
 
-    size_t scratch = ws->layout.thread_scratch;
-    double **scratch_wx = alloc_thread_scratch(actual_threads, scratch);
-    double **scratch_xx = alloc_thread_scratch(actual_threads, scratch);
-    double **scratch_xy = alloc_thread_scratch(actual_threads, scratch);
-    if (!scratch_wx || !scratch_xx || !scratch_xy) {
-        free_thread_scratch(scratch_wx, actual_threads);
-        free_thread_scratch(scratch_xx, actual_threads);
-        free_thread_scratch(scratch_xy, actual_threads);
-        decref_lmm_output(&out);
-        PyErr_NoMemory();
-        return NULL;
-    }
+    double **scratch_wx = ws->scratch_wx;
+    double **scratch_xx = ws->scratch_xx;
+    double **scratch_xy = ws->scratch_xy;
 
     Py_BEGIN_ALLOW_THREADS
 
@@ -622,11 +550,8 @@ static PyObject *ncvt1_test_loop(
 
     Py_END_ALLOW_THREADS
 
-    free_thread_scratch(scratch_wx, actual_threads);
-    free_thread_scratch(scratch_xx, actual_threads);
-    free_thread_scratch(scratch_xy, actual_threads);
-
-    return finish_lmm_output(&out, tests, n_snps);
+    PyObject *result = finish_lmm_output(&out, tests, n_snps);
+    return result;
 }
 
 /* Standalone Score sums (h*w)*x; mode 4's Score block sums h*(w*x). The two
@@ -693,48 +618,25 @@ static PyObject *ncvt1_score_loop(
     return result;
 }
 
-/* -------------------------------------------------------------------------
- * compute_lmm_chunk_ncvt1_c
- *
- * Python signature:
- *   compute_lmm_chunk_ncvt1_c(workspace, utg_t, n_threads)
- * Returns:
- *   mode 1: dict with lambdas, logls, betas, ses, pwalds
- *   mode 2: dict with logls, lambdas_mle, p_lrts
- *   mode 3: dict with betas, ses, p_scores
- *   mode 4: mode 1's keys plus p_scores, lambdas_mle, p_lrts
- *   each value (n_snps,) float64.
- * ------------------------------------------------------------------------- */
-PyObject *compute_lmm_chunk_ncvt1_c_py(
-    PyObject *self, PyObject *args, PyObject *kwargs)
+int ncvt1_compute_chunk(PyObject *capsule, PyObject *utg_t_obj, int n_threads,
+                        PyObject **result)
 {
-    static const char *kwlist[] = {"workspace", "utg_t", "n_threads", NULL};
-
-    PyObject *capsule_obj;
-    PyObject *utg_t_obj;
-    int n_threads;
-
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOi", (char **)kwlist,
-            &capsule_obj, &utg_t_obj, &n_threads)) {
-        return NULL;
-    }
-
-    lmm_workspace_t *ws = (lmm_workspace_t *)
-        PyCapsule_GetPointer(capsule_obj, NCVT1_CAPSULE);
-    if (!ws) return NULL;
+    if (!PyCapsule_IsValid(capsule, NCVT1_CAPSULE)) return 0;
+    lmm_workspace_t *ws =
+        (lmm_workspace_t *)PyCapsule_GetPointer(capsule, NCVT1_CAPSULE);
+    *result = NULL;
 
     int n_snps;
     PyArrayObject *utg_t_arr = take_chunk(utg_t_obj, ws->n_samples, &n_snps);
-    if (!utg_t_arr) return NULL;
+    if (!utg_t_arr) return 1;
 
-    int actual_threads = clamp_threads(n_threads, n_snps);
+    int actual_threads = clamp_threads(n_threads, n_snps, ws->n_threads);
     const double *utg_t_data = (const double *)PyArray_DATA(utg_t_arr);
 
-    PyObject *result = ws->score
+    *result = ws->score
         ? ncvt1_score_loop(ws, utg_t_data, n_snps, actual_threads)
         : ncvt1_test_loop(ws, utg_t_data, n_snps, actual_threads);
 
     Py_DECREF(utg_t_arr);
-    return result;
+    return 1;
 }

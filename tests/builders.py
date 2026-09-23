@@ -147,7 +147,7 @@ def empty_workspace(
 ) -> WorkspaceSpec:
     """A kernel workspace that holds no bytes, so a quote reads no C sizer."""
     return WorkspaceSpec(
-        dispatch, 1, n_samples, n_input_samples, n_cvt, 0, 0, 1, 0, 0, 0, 0
+        dispatch, 1, n_samples, n_input_samples, n_cvt, 0, 0, 1, 0, 0, 0
     )
 
 

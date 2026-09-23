@@ -76,7 +76,7 @@ def _run_general_c_at_target(
         eigenvalues * (original_root / target_lambda)
     )
     invariant = compute_uab_invariant_soa(UtW, Uty, n_cvt=2)
-    workspace = accel.require().create_workspace_general_c(
+    workspace = accel.require().create_workspace_c(
         scaled_eigenvalues,
         invariant,
         np.ascontiguousarray(UtW),
@@ -90,7 +90,7 @@ def _run_general_c_at_target(
         2,
         lmm_mode=1,
     )
-    result = accel.require().compute_lmm_chunk_fused_general_c(
+    result = accel.require().compute_lmm_chunk_c(
         workspace, np.ascontiguousarray(Utg[None, :]), 1
     )
     oracle_args = (scaled_eigenvalues, UtW, Uty, Utg)
@@ -242,19 +242,21 @@ def test_tiny_reml_peak_optimizer_matches_independent_root(tiny_reml_peak, backe
             *compute_iab_invariant_scalars_ncvt1(invariant),
         )
     else:
-        workspace = accel.require().create_workspace_ncvt1_c(
+        workspace = accel.require().create_workspace_c(
             eigenvalues,
             invariant,
-            UtW[:, 0],
+            UtW,
             Uty,
             len(Uty),
             _L_MIN,
             _L_MAX,
             50,
             20,
+            1,
+            1,
             lmm_mode=1,
         )
-        actual = accel.require().compute_lmm_chunk_ncvt1_c(workspace, Utg[None, :], 1)[
+        actual = accel.require().compute_lmm_chunk_c(workspace, Utg[None, :], 1)[
             "lambdas"
         ]
     np.testing.assert_allclose(actual[0], np.exp(expected_log), rtol=1e-8, atol=0.0)

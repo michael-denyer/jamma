@@ -443,9 +443,10 @@ int parse_mode_inputs(int lmm_mode, PyObject **hi_obj, PyObject *logl_obj,
     return 0;
 }
 
-int clamp_threads(int n_threads, int n_snps)
+int clamp_threads(int n_threads, int n_snps, int capacity)
 {
     int actual = n_threads;
+    if (actual > capacity) actual = capacity;
     if (actual > n_snps) actual = n_snps;
     if (actual < 1) actual = 1;
     return actual;

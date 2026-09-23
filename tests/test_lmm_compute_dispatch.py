@@ -25,7 +25,7 @@ def test_wald_resolves_to_fused_general_through_ncvt_limit(monkeypatch, n_cvt):
     """
     monkeypatch.setattr(accel, "_accel", _EXTENSION_LOADED)
 
-    path = select_dispatch_path(n_cvt, 1, accel=accel.available(), log_choices=False)
+    path = select_dispatch_path(n_cvt, 1, accel=accel.available())
     assert path is DispatchPath.FUSED_GENERAL
 
 

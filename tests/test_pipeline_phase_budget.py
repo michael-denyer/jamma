@@ -7,6 +7,7 @@ import pytest
 
 from jamma.core import memory
 from jamma.lmm.association_plan import plan_association
+from jamma.lmm.schema import LmmConfig
 from jamma.pipeline_config import PipelineConfig
 from tests.conftest import preflight
 from tests.fixture_paths import SYNTHETIC, FixtureDataset
@@ -25,7 +26,9 @@ def _header_only_bed(tmp_path: Path, dataset: FixtureDataset) -> Path:
 def test_batch_preflight_rejects_unaffordable_eigen_phase(monkeypatch):
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 256.0)
     config = PipelineConfig(bfile=SYNTHETIC.bfile, mem_budget=1.2)
-    plan = plan_association(10_000, 100, requested="numpy", mem_budget=1.2)
+    plan = plan_association(
+        10_000, 100, config=LmmConfig(mem_budget=1.2), backend="numpy"
+    )
     assert plan.price(eigen=None).total_peak_gb < 1.2
     with pytest.raises(MemoryError, match="exceeds"):
         preflight(config, plan)
@@ -68,9 +71,9 @@ def test_saved_full_sample_kinship_is_in_batch_preflight(monkeypatch):
     plan = plan_association(
         100,
         100,
+        config=LmmConfig(mem_budget=0.5),
+        backend="numpy",
         n_input_samples=10_000,
-        requested="numpy",
-        mem_budget=0.5,
     )
     preflight(PipelineConfig(bfile=SYNTHETIC.bfile, mem_budget=0.5), plan)
     with pytest.raises(MemoryError, match="exceeds"):
@@ -129,7 +132,9 @@ def test_precomputed_eigen_streaming_does_not_reserve_decomposition(monkeypatch)
         eigenvalue_file=Path("provided.eigenD.npy"),
         eigenvector_file=Path("provided.eigenU.npy"),
     )
-    plan = plan_association(10_000, 100, requested="numpy-streaming", mem_budget=2.0)
+    plan = plan_association(
+        10_000, 100, config=LmmConfig(mem_budget=2.0), backend="numpy-streaming"
+    )
     assert plan.price(eigen=None).total_peak_gb <= 2.0
     assert preflight(config, plan) is None
 

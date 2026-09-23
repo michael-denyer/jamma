@@ -472,15 +472,11 @@ def run_lmm_association_numpy(
     execution = plan_association(
         n_samples,
         n_snps,
-        n_input_samples=n_input_samples,
-        requested="numpy",
+        config=config,
+        backend="numpy",
         n_cvt=samples.n_cvt,
-        lmm_mode=config.lmm_mode,
-        n_grid=config.n_grid,
-        n_refine=config.n_refine,
-        mem_budget=config.mem_budget,
+        n_input_samples=n_input_samples,
         max_chunk_size=max_chunk_size,
-        log_dispatch_choices=True,
     )
     if config.check_memory and max_chunk_size is None:
         quote = execution.price(eigen=None)

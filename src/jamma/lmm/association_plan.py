@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Literal, get_args
 
 from jamma.core import memory
 from jamma.core.eigen_plan import EigenDriverPlan, array_gb, square_matrix_gb
@@ -20,11 +20,13 @@ from jamma.lmm.chunk_sizing import (
     lmm_extra_bytes_per_snp,
 )
 from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
-from jamma.lmm.schema import LmmMode, parse_lmm_mode
+from jamma.lmm.schema import DEFAULT_LMM_CONFIG, LmmConfig
 from jamma.lmm.workspace import WorkspaceSpec
 
 ExecutionMode = Literal["batch", "streaming", "loco"]
-RequestedBackend = Literal["auto", "numpy", "numpy-streaming"]
+BackendRequest = Literal["auto", "numpy", "numpy-streaming"]
+VALID_BACKENDS: tuple[BackendRequest, ...] = get_args(BackendRequest)
+Backend = BackendRequest | Literal["loco"]
 
 # SNPs per block in the streaming statistics pass when the caller names no
 # chunk size. Pass 1 reads the .bed and accumulates per-SNP counts, so its
@@ -324,17 +326,12 @@ def plan_association(
     n_samples: int,
     n_snps: int,
     *,
-    requested: RequestedBackend = "auto",
+    config: LmmConfig = DEFAULT_LMM_CONFIG,
+    backend: Backend = "auto",
     n_cvt: int = 1,
-    lmm_mode: LmmMode = 1,
     n_input_samples: int | None = None,
-    n_grid: int = 50,
-    n_refine: int = 20,
     n_phenotypes: int = 1,
-    mem_budget: float | None = None,
     max_chunk_size: int | None = None,
-    log_dispatch_choices: bool = False,
-    loco: bool = False,
 ) -> ExecutableAssociationPlan:
     """Select all association policy and conservative geometry once.
 
@@ -342,31 +339,28 @@ def plan_association(
     fallback. Streaming is a storage policy and remains available when the C
     extension is absent.
 
-    ``loco=True`` selects the ``loco`` mode regardless of ``requested``: the
-    LOCO orchestrator runs the NumPy body per chromosome over disk-read
+    ``backend="loco"`` runs the NumPy body per chromosome over disk-read
     chunks, so it is priced like streaming (one chunk plus the
     eigendecomposition), never like batch. ``n_snps`` is then the run total,
     and ``max_chunk_size`` should be the LOCO disk-read chunk width.
     """
-    valid_requests = ("auto", "numpy", "numpy-streaming")
-    if requested not in valid_requests:
+    if backend not in (*VALID_BACKENDS, "loco"):
         raise ValueError(
-            f"Unknown backend {requested!r}. Must be one of {valid_requests}."
+            f"Unknown backend {backend!r}. Must be one of {VALID_BACKENDS} or 'loco'."
         )
 
     c_ext_available = accel.available()
-    mode = parse_lmm_mode(lmm_mode)
+    mode = config.lmm_mode
+    mem_budget = config.mem_budget
     if n_input_samples is None:
         n_input_samples = n_samples
     if n_input_samples < n_samples:
         raise ValueError("n_input_samples must be >= analysed n_samples")
     if n_phenotypes < 1:
         raise ValueError("n_phenotypes must be >= 1")
-    if loco and n_phenotypes != 1:
+    if backend == "loco" and n_phenotypes != 1:
         raise ValueError("LOCO supports one phenotype per execution plan")
-    dispatch = select_dispatch_path(
-        n_cvt, mode, accel=c_ext_available, log_choices=log_dispatch_choices
-    )
+    dispatch = select_dispatch_path(n_cvt, mode, accel=c_ext_available)
     # The machine is read here, once, so the planner and the pricing stay pure.
     available_gb = memory.available_ram_gb()
     max_workspace_threads = get_c_extension_thread_count(
@@ -378,8 +372,8 @@ def plan_association(
         n_samples,
         n_input_samples,
         n_cvt,
-        n_grid,
-        n_refine,
+        config.n_grid,
+        config.n_refine,
         max_workspace_threads,
     )
     chunks = LmmChunkPlan.plan(
@@ -398,11 +392,11 @@ def plan_association(
         ),
     )
 
-    if loco:
+    if backend == "loco":
         summary = ExecutionPlan("loco", "LOCO per-chromosome NumPy runs")
-    elif requested == "numpy-streaming":
+    elif backend == "numpy-streaming":
         summary = ExecutionPlan("streaming", "Explicit numpy-streaming request")
-    elif requested == "numpy":
+    elif backend == "numpy":
         summary = ExecutionPlan("batch", "NumPy backend explicitly requested")
     else:
         summary = ExecutionPlan("batch", "Evaluating NumPy batch capacity")
@@ -418,7 +412,7 @@ def plan_association(
         mem_budget_gb=mem_budget,
         workspace=workspace,
     )
-    if requested == "auto" and not loco:
+    if backend == "auto":
         batch_gb = plan.price(eigen=None).association_gb
         capacity_gb = min(
             available_gb,

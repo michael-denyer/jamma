@@ -168,8 +168,8 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 1a | `main()` | Click command — all flags (`-gk`, `-lmm`, `-bfile`, `-o`, `-outdir`) | [cli.py](../src/jamma/cli.py) |
-| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:337](../src/jamma/cli.py#L337) |
-| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:381](../src/jamma/cli.py#L381) |
+| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:335](../src/jamma/cli.py#L335) |
+| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:379](../src/jamma/cli.py#L379) |
 | 1b | `gwas()` | One-call GWAS pipeline (load -> kinship -> LMM -> results) | [gwas.py:38](../src/jamma/gwas.py#L38) |
 | 1c | `PipelineRunner` | `-lmm` orchestration (validate -> parse -> memory -> kinship -> LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
 | 1c | `resolve_analysis_plan()` | Converts the validated flat public config into explicit standard/LOCO and eigen/kinship variants | [pipeline_plan.py](../src/jamma/pipeline_plan.py) |
@@ -265,8 +265,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:323](../src/jamma/lmm/association_plan.py#L323) |
-| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:94](../src/jamma/lmm/association_plan.py#L94) |
+| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:325](../src/jamma/lmm/association_plan.py#L325) |
+| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:96](../src/jamma/lmm/association_plan.py#L96) |
 | 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any source under one `LmmRunSpec` | [runner_numpy.py:321](../src/jamma/lmm/runner_numpy.py#L321) |
 | 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:256](../src/jamma/lmm/runner_numpy.py#L256) |
 | 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:97](../src/jamma/lmm/runner_numpy.py#L97) |
@@ -577,7 +577,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | `gwas()` API | [gwas.py:38](../src/jamma/gwas.py#L38) |
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
-| CLI dispatch (`main`) | [cli.py:223](../src/jamma/cli.py#L223) |
+| CLI dispatch (`main`) | [cli.py:221](../src/jamma/cli.py#L221) |
 | Load genotypes | [plink.py:137](../src/jamma/io/plink.py#L137) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |

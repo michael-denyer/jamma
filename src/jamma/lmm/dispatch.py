@@ -94,7 +94,6 @@ def select_dispatch_path(
     lmm_mode: LmmMode,
     *,
     accel: bool,
-    log_choices: bool = True,
 ) -> DispatchPath:
     """Derive the single active C kernel path for this run.
 
@@ -109,15 +108,14 @@ def select_dispatch_path(
         lmm_mode: 1=Wald, 2=LRT, 3=Score, 4=All.
         accel: Whether the C extension is loaded. One bit, because the
             ABI-equality gate admits all of ``methods[]`` or none of it.
-        log_choices: If True, emit debug logs describing the chosen path. Off
-            in unit tests to keep output clean.
 
     Returns:
         The single active ``DispatchPath`` for this run.
     """
     path = _resolve_dispatch_path(n_cvt, lmm_mode, accel)
-    if log_choices:
-        _log_dispatch_choice(path, n_cvt, lmm_mode)
+    message = _PATH_LOG_MESSAGES.get(path)
+    if message is not None:
+        logger.debug(f"{message} (n_cvt={n_cvt}, mode={lmm_mode})")
     return path
 
 
@@ -146,18 +144,3 @@ _PATH_LOG_MESSAGES = {
         "Fused general Uab path active: utg_t passed directly to C workspace"
     ),
 }
-
-
-def _log_dispatch_choice(path: DispatchPath, n_cvt: int, lmm_mode: LmmMode) -> None:
-    """Debug-log the chosen path. Pure side-effect."""
-    message = _PATH_LOG_MESSAGES.get(path)
-    if message is not None:
-        logger.debug(f"{message} (n_cvt={n_cvt}, mode={lmm_mode})")
-
-    if lmm_mode != 4:
-        return
-
-    if path is DispatchPath.FUSED_GENERAL:
-        logger.debug("Mode-4 dispatch: fused general Uab kernel (single pass)")
-    elif path is DispatchPath.FUSED:
-        logger.debug("Mode-4 dispatch: fused Uab kernel (single pass)")

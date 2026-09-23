@@ -72,8 +72,8 @@ class TestExecutionMode:
     def test_loco_selects_loco_mode_whatever_was_requested(self):
         """loco=True plans the loco mode and prices one chunk, not the matrix."""
         with _pin_ram(AMPLE_GB):
-            loco = plan_association(*OVERFLOWS_SHAPE, loco=True)
-            batch = plan_association(*OVERFLOWS_SHAPE, requested="numpy")
+            loco = plan_association(*OVERFLOWS_SHAPE, backend="loco")
+            batch = plan_association(*OVERFLOWS_SHAPE, backend="numpy")
         assert loco.summary.mode == "loco"
         assert loco.summary.runner_name == "numpy-loco"
         assert (
@@ -92,7 +92,7 @@ class TestExecutionMode:
     def test_explicit_numpy_returns_numpy_batch(self):
         """explicit 'numpy' -> numpy-batch regardless of memory."""
         with _pin_ram(AMPLE_GB):
-            plan = _select_mode(*OVERFLOWS_SHAPE, requested="numpy")
+            plan = _select_mode(*OVERFLOWS_SHAPE, backend="numpy")
         assert plan.mode == "batch"
 
     def test_explicit_numpy_bypasses_auto(self):
@@ -107,7 +107,7 @@ class TestExecutionMode:
     @requires_c
     def test_explicit_numpy_streaming_returns_numpy_streaming(self):
         """explicit 'numpy-streaming' -> numpy-streaming directly."""
-        plan = _select_mode(100, 1000, requested="numpy-streaming")
+        plan = _select_mode(100, 1000, backend="numpy-streaming")
         assert plan.mode == "streaming"
 
     def test_explicit_numpy_streaming_no_c_ext_selects_streaming(self):
@@ -116,7 +116,7 @@ class TestExecutionMode:
         Streaming is a storage policy and works without the extension.
         """
         with patch("jamma.lmm.accel._accel", None):
-            plan = _select_mode(100, 1000, requested="numpy-streaming")
+            plan = _select_mode(100, 1000, backend="numpy-streaming")
         assert plan.mode == "streaming"
 
     @pytest.mark.tier1
@@ -141,12 +141,12 @@ class TestExecutionMode:
     def test_invalid_requested_backend_raises(self):
         """Unknown requested backend raises ValueError."""
         with pytest.raises(ValueError, match="Unknown backend"):
-            _select_mode(100, 1000, requested="gpu")  # type: ignore[bad-argument-type]
+            _select_mode(100, 1000, backend="gpu")  # type: ignore[bad-argument-type]
 
     def test_jax_requested_raises(self):
         """Requesting 'jax' backend raises ValueError (removed backend)."""
         with pytest.raises(ValueError, match="Unknown backend"):
-            _select_mode(100, 1000, requested="jax")  # type: ignore[bad-argument-type]
+            _select_mode(100, 1000, backend="jax")  # type: ignore[bad-argument-type]
 
     # -- ExecutionPlan invariants --
 

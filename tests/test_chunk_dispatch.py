@@ -40,9 +40,7 @@ def test_runner_mode4_uses_fused_dispatch():
     from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
 
     for n_cvt, expected in ((1, DispatchPath.FUSED), (2, DispatchPath.FUSED_GENERAL)):
-        path = select_dispatch_path(
-            n_cvt, 4, accel=accel.available(), log_choices=False
-        )
+        path = select_dispatch_path(n_cvt, 4, accel=accel.available())
         assert path is expected
 
 

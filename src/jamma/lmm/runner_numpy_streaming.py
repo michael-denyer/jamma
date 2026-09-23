@@ -193,13 +193,10 @@ def run_lmm_association_numpy_streaming(
     execution = plan_association(
         samples.n_samples,
         meta.n_snps,
-        n_input_samples=meta.n_samples,
-        requested="numpy-streaming",
+        config=config,
+        backend="numpy-streaming",
         n_cvt=samples.n_cvt,
-        lmm_mode=config.lmm_mode,
-        n_grid=config.n_grid,
-        n_refine=config.n_refine,
-        mem_budget=config.mem_budget,
+        n_input_samples=meta.n_samples,
         max_chunk_size=chunk_size,
     )
 

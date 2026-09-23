@@ -56,15 +56,11 @@ typedef struct {
     double *null_inv_sums;   /* (n_inv,) precomputed null-model invariant sums, owned */
 } general_null_model_t;
 
-/* LRT block: modes 2 and 4 carry logl_H0, mle_const and the per-thread LRT
- * buffer. NULL unless the mode wants it. */
+/* LRT block: modes 2 and 4 carry logl_H0 and mle_const. NULL unless the mode
+ * wants it. */
 typedef struct {
     double logl_H0;
     double mle_const;
-    /* Pre-allocated per-thread LRT buffer.
-     * (actual_threads * n_index * n_samples) doubles, row-major per SNP.
-     * Avoids per-SNP malloc inside OpenMP loop. */
-    double *uab_snp_flat;
 } general_lrt_t;
 
 /* Element count of every double buffer the family allocates; zero for a
@@ -83,7 +79,7 @@ typedef struct {
     size_t inv_identity_sums;
     size_t hi_eval_null;        /* aligned */
     size_t null_inv_sums;
-    size_t scratch, pab, dpab, row0, uab_snp;  /* per thread */
+    size_t scratch, pab, dpab, row0;  /* per thread */
 } general_layout_t;
 
 static general_layout_t general_layout(int n_cvt, int n_samples, int n_grid,
@@ -114,7 +110,6 @@ static general_layout_t general_layout(int n_cvt, int n_samples, int n_grid,
         l.hi_eval_null = n;
         l.null_inv_sums = inv;
     }
-    if (tests.lrt) l.uab_snp = index * n;
     return l;
 }
 
@@ -127,7 +122,7 @@ static workspace_bytes_t general_layout_bytes(const general_layout_t *l)
         + aligned_double_bytes(l->hi_eval_grid)
         + aligned_double_bytes(l->hi_eval_null)
         + pab_table_bytes(l->n_cvt);
-    b.per_thread = (l->scratch + l->pab + l->dpab + l->row0 + l->uab_snp)
+    b.per_thread = (l->scratch + l->pab + l->dpab + l->row0)
         * sizeof(double);
     /* The fresh likelihood and score kernels each hold a MAX_N_INDEX
      * reduction buffer on the worker stack, whatever n_cvt is. */
@@ -203,10 +198,7 @@ static void lmm_workspace_general_free(lmm_workspace_general_t *ws)
         free(ws->null_model->null_inv_sums);
         free(ws->null_model);
     }
-    if (ws->lrt) {
-        free(ws->lrt->uab_snp_flat);
-        free(ws->lrt);
-    }
+    free(ws->lrt);
     free(ws);
 }
 
@@ -540,11 +532,6 @@ PyObject *create_workspace_general_c_py(
         lrt->logl_H0 = logl_H0;
         lrt->mle_const = 0.5 * (double)n_samples
                          * (log((double)n_samples) - log(2.0 * M_PI) - 1.0);
-
-        /* Pre-allocate per-thread LRT buffer (avoids per-SNP malloc in OpenMP loop). */
-        lrt->uab_snp_flat = (double *)malloc(
-            (size_t)ws->actual_threads * ws->layout.uab_snp * sizeof(double));
-        if (!lrt->uab_snp_flat) { free(lrt); PyErr_NoMemory(); goto err_ws; }
         ws->lrt = lrt;
     }
 
@@ -639,36 +626,20 @@ static double general_reml_block(
 
 static double general_lrt_block(
     const lmm_workspace_general_t *ws, const double *scratch,
-    double *uab_snp, double *row0, double *pab,
+    double *row0, double *pab,
     double *logl_H1_out, double *p_lrt_out)
 {
     const pab_table_t *t = &ws->table;
     const general_grid_t *grid = ws->grid;
-    int n_samples = ws->n_samples;
-    int n_index = t->n_index;
-
-    memset(uab_snp, 0, (size_t)n_index * (size_t)n_samples * sizeof(double));
-    for (int c = 0; c < t->n_inv; c++) {
-        int idx = t->invariant_indices[c];
-        const double *src = ws->uab_inv + (size_t)c * n_samples;
-        for (int i = 0; i < n_samples; i++)
-            uab_snp[(size_t)i * n_index + idx] = src[i];
-    }
-    for (int c = 0; c < t->n_var; c++) {
-        int idx = t->varying_indices[c];
-        const double *src = scratch + (size_t)c * n_samples;
-        for (int i = 0; i < n_samples; i++)
-            uab_snp[(size_t)i * n_index + idx] = src[i];
-    }
-
     const general_snp_t snp = {
-        .uab_snp = uab_snp,
-        .eigenvalues = ws->eigenvalues, .n_samples = n_samples, .t = t,
+        .uab_inv = ws->uab_inv, .uab_var = scratch,
+        .eigenvalues = ws->eigenvalues, .n_samples = ws->n_samples, .t = t,
         .mle_const = ws->lrt->mle_const,
         .row0 = row0, .pab = pab,
     };
     int best_idx = coarse_grid_mle_general(
-        &snp, grid->hi_eval_grid, grid->logdet_h_grid, grid->search.n_grid);
+        &snp, grid->hi_eval_grid, grid->logdet_h_grid, grid->inv_sums_grid,
+        grid->search.n_grid);
     double lambda_mle = refine_lambda_mle_general(
         &snp, &grid->search, best_idx, logl_H1_out);
 
@@ -790,12 +761,10 @@ PyObject *compute_lmm_chunk_fused_general_c_py(
         }
 
         if (tests.lrt) {
-            double *uab_snp = ws->lrt->uab_snp_flat +
-                (size_t)tid * (size_t)n_index * (size_t)n_samples;
             /* GEMMA modes 2 and 4 report the LRT alternative-model MLE
              * likelihood in logl_H1, overwriting mode 4's REML logl. */
             out_lambdas_mle[snp] = general_lrt_block(
-                ws, scratch, uab_snp, my_row0, my_pab,
+                ws, scratch, my_row0, my_pab,
                 &out_logls[snp], &out_p_lrts[snp]);
         }
     }

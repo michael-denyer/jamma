@@ -60,10 +60,28 @@ def test_general_mode4_prices_known_thread_workspace() -> None:
         DispatchPath.FUSED_GENERAL, 4, 1_000, 1_000, 100, 50, 20, 18
     )
 
-    # Review reproduction: these four arrays alone occupy 0.889484064 GB.
     idx = 5_253
-    known = (18 * idx * 1_000 + 18 * 102 * 1_000 + 18 * 102 * idx + 5_151 * 1_000) * 8
+    known = (18 * 102 * 1_000 + 18 * 102 * idx + 5_151 * 1_000) * 8
     assert spec.fixed_bytes >= known
+
+
+@requires_c
+@pytest.mark.parametrize("n_cvt", [2, 5])
+def test_general_lrt_adds_no_per_thread_sample_buffer(n_cvt: int) -> None:
+    """The MLE search reads the SoA Uab columns the REML search already holds.
+
+    Mode 4 runs REML, Score and LRT; mode 1 runs REML alone. Any per-thread
+    difference would be a second copy of the SNP's Uab, n_index * n_samples
+    doubles per thread.
+    """
+    from jamma.lmm import accel
+
+    lib = accel.require()
+    n_samples, n_grid, n_threads = 10_000, 50, 8
+    reml = lib.workspace_sizes_c(n_samples, n_cvt, n_grid, 1, n_threads)
+    reml_score_lrt = lib.workspace_sizes_c(n_samples, n_cvt, n_grid, 4, n_threads)
+
+    assert reml_score_lrt[1] == reml[1]
 
 
 @requires_c

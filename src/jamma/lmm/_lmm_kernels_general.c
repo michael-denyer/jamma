@@ -88,29 +88,18 @@ static double reml_finish_general(
     return reml_const - 0.5 * logdet_h - 0.5 * logdet_hiw - 0.5 * df * log(P_yy);
 }
 
-/* -------------------------------------------------------------------------
- * reml_logl_general_cached — REML using cached grid hi_eval + invariant sums.
- *
- * For cached grid points: invariant sums already computed, just compute
- * varying dot products, reconstruct row0, calc_pab, reml_finish.
- * ------------------------------------------------------------------------- */
-static double reml_logl_general_cached(
+/* Row 0 at a cached grid point: the grid's invariant sums, plus the varying
+ * columns weighted by that point's Hi_eval. */
+static void row0_general_cached(
     const double *inv_sums_cached,
     const double *uab_var,
     const double *hi_eval,
     int n_samples,
-    double logdet_h,
-    double logdet_iab,
-    double reml_const,
     const pab_table_t *t,
-    double *row0,          /* caller-provided, at least n_index doubles */
-    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
+    double *row0
 )
 {
-    int ni = t->n_index;
     int n_var = t->n_var;
-
-    /* Compute varying dot products (reuse tail of row0 as temp) */
     double var_sums[MAX_N_INDEX];
     for (int c = 0; c < n_var; c++) var_sums[c] = 0.0;
 
@@ -120,42 +109,26 @@ static double reml_logl_general_cached(
             var_sums[c] += h * uab_var[c * n_samples + i];
     }
 
-    /* Reconstruct row 0 */
-    for (int i = 0; i < ni; i++) row0[i] = 0.0;
+    for (int i = 0; i < t->n_index; i++) row0[i] = 0.0;
     for (int c = 0; c < t->n_inv; c++)
         row0[t->invariant_indices[c]] = inv_sums_cached[c];
     for (int c = 0; c < n_var; c++)
         row0[t->varying_indices[c]] = var_sums[c];
-
-    /* Full Pab via recursion */
-    calc_pab_general(row0, t, pab_scratch);
-
-    return reml_finish_general(pab_scratch, t, logdet_h, logdet_iab, reml_const);
 }
 
-/* -------------------------------------------------------------------------
- * reml_logl_general_fresh — Full REML evaluation for a specific lambda.
- *
- * Computes hi_eval + all dot products in a single n_samples pass (fused
- * loop), logdet_h in a second pass over the eigenvalues alone (see
- * _lmm_logdet.h), then calc_pab + reml_finish.
- * Used during golden section refinement where lambda is SNP-specific.
- * ------------------------------------------------------------------------- */
-static double reml_logl_general_fresh(const void *ctx, double lambda)
+/* Row 0 at an SNP-specific lambda: one fused pass over the samples sums the
+ * invariant and varying columns into snp->row0. */
+static void row0_general_fresh(const general_snp_t *snp, double lambda)
 {
-    const general_snp_t *snp = (const general_snp_t *)ctx;
     const pab_table_t *t = snp->t;
     const double *uab_inv = snp->uab_inv;
     const double *uab_var = snp->uab_var;
     const double *eigenvalues = snp->eigenvalues;
     int n_samples = snp->n_samples;
-    double *row0 = snp->row0;
-    double *pab_scratch = snp->pab;
-    int ni = t->n_index;
     int n_inv = t->n_inv;
     int n_var = t->n_var;
+    double *row0 = snp->row0;
 
-    double logdet_h = logdet_h_lambda(eigenvalues, n_samples, lambda);
     double inv_sums[MAX_N_INDEX];
     double var_sums[MAX_N_INDEX];
     for (int c = 0; c < n_inv; c++) inv_sums[c] = 0.0;
@@ -170,17 +143,41 @@ static double reml_logl_general_fresh(const void *ctx, double lambda)
             var_sums[c] += h * uab_var[c * n_samples + i];
     }
 
-    /* Reconstruct row 0 */
-    for (int i = 0; i < ni; i++) row0[i] = 0.0;
+    for (int i = 0; i < t->n_index; i++) row0[i] = 0.0;
     for (int c = 0; c < n_inv; c++)
         row0[t->invariant_indices[c]] = inv_sums[c];
     for (int c = 0; c < n_var; c++)
         row0[t->varying_indices[c]] = var_sums[c];
+}
 
-    /* Full Pab via recursion */
+static double reml_logl_general_cached(
+    const double *inv_sums_cached,
+    const double *uab_var,
+    const double *hi_eval,
+    int n_samples,
+    double logdet_h,
+    double logdet_iab,
+    double reml_const,
+    const pab_table_t *t,
+    double *row0,          /* caller-provided, at least n_index doubles */
+    double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
+)
+{
+    row0_general_cached(inv_sums_cached, uab_var, hi_eval, n_samples, t, row0);
     calc_pab_general(row0, t, pab_scratch);
+    return reml_finish_general(pab_scratch, t, logdet_h, logdet_iab, reml_const);
+}
 
-    return reml_finish_general(pab_scratch, t, logdet_h, snp->logdet_iab,
+/* Full REML evaluation at an SNP-specific lambda, for golden-section
+ * refinement. logdet_h is a second pass over the eigenvalues alone (see
+ * _lmm_logdet.h). */
+static double reml_logl_general_fresh(const void *ctx, double lambda)
+{
+    const general_snp_t *snp = (const general_snp_t *)ctx;
+    double logdet_h = logdet_h_lambda(snp->eigenvalues, snp->n_samples, lambda);
+    row0_general_fresh(snp, lambda);
+    calc_pab_general(snp->row0, snp->t, snp->pab);
+    return reml_finish_general(snp->pab, snp->t, logdet_h, snp->logdet_iab,
                                snp->reml_const);
 }
 
@@ -330,82 +327,49 @@ double refine_lambda_general(
 }
 
 
-/* -------------------------------------------------------------------------
- * mle_logl_general — MLE log-likelihood for one SNP at one lambda (general n_cvt).
- *
- * MLE formula: -0.5 * n * log(P_yy_full) - 0.5 * logdet_h + mle_const
- * where P_yy_full is at level n_cvt+1 (fully projected).
- *
- * Uses full Uab row (n_samples * n_index) in AoS layout.
- * ------------------------------------------------------------------------- */
+/* MLE logl from a fully projected Pab:
+ * mle_const - 0.5 * logdet_h - 0.5 * n * log(P_yy), with P_yy at level n_cvt+1. */
+static double mle_finish_general(
+    const double *pab, const pab_table_t *t, int n_samples,
+    double logdet_h, double mle_const)
+{
+    double P_yy = replace_zero_p_yy(pab[(t->n_cvt + 1) * t->n_index + t->idx_yy]);
+    if (P_yy < 0.0) return (double)NAN;
+    return mle_const - 0.5 * logdet_h - 0.5 * (double)n_samples * log(P_yy);
+}
+
 static double mle_logl_general(const void *ctx, double lambda)
 {
     const general_snp_t *snp = (const general_snp_t *)ctx;
-    const pab_table_t *t = snp->t;
-    const double *uab_snp = snp->uab_snp;
-    const double *eigenvalues = snp->eigenvalues;
-    int n_samples = snp->n_samples;
-    double *row0 = snp->row0;
-    double *pab_scratch = snp->pab;
-    int ni = t->n_index;
-
-    double logdet_h = logdet_h_lambda(eigenvalues, n_samples, lambda);
-    for (int c = 0; c < ni; c++) row0[c] = 0.0;
-
-    for (int i = 0; i < n_samples; i++) {
-        double v = lambda * eigenvalues[i] + 1.0;
-        double h = 1.0 / v;
-        for (int c = 0; c < ni; c++)
-            row0[c] += h * uab_snp[i * ni + c];
-    }
-
-    calc_pab_general(row0, t, pab_scratch);
-
-    /* P_yy_full at level n_cvt+1 (fully projected) */
-    int nc = t->n_cvt;
-    double P_yy = replace_zero_p_yy(pab_scratch[(nc + 1) * ni + t->idx_yy]);
-    if (P_yy < 0.0) return (double)NAN;
-
-    return snp->mle_const - 0.5 * logdet_h - 0.5 * (double)n_samples * log(P_yy);
+    double logdet_h = logdet_h_lambda(snp->eigenvalues, snp->n_samples, lambda);
+    row0_general_fresh(snp, lambda);
+    calc_pab_general(snp->row0, snp->t, snp->pab);
+    return mle_finish_general(snp->pab, snp->t, snp->n_samples, logdet_h,
+                              snp->mle_const);
 }
 
-/* -------------------------------------------------------------------------
- * mle_logl_general_cached — MLE using cached hi_eval for coarse grid search.
- * ------------------------------------------------------------------------- */
 static double mle_logl_general_cached(
-    const double *uab_snp,
-    const double *cached_hi_eval,
-    double cached_logdet_h,
+    const double *inv_sums_cached,
+    const double *uab_var,
+    const double *hi_eval,
     int n_samples,
+    double logdet_h,
     double mle_const,
     const pab_table_t *t,
     double *row0,          /* caller-provided, at least n_index doubles */
     double *pab_scratch    /* caller-provided, at least n_rows * n_index doubles */
 )
 {
-    int ni = t->n_index;
-
-    for (int c = 0; c < ni; c++) row0[c] = 0.0;
-
-    for (int i = 0; i < n_samples; i++) {
-        double h = cached_hi_eval[i];
-        for (int c = 0; c < ni; c++)
-            row0[c] += h * uab_snp[i * ni + c];
-    }
-
+    row0_general_cached(inv_sums_cached, uab_var, hi_eval, n_samples, t, row0);
     calc_pab_general(row0, t, pab_scratch);
-
-    int nc = t->n_cvt;
-    double P_yy = replace_zero_p_yy(pab_scratch[(nc + 1) * ni + t->idx_yy]);
-    if (P_yy < 0.0) return (double)NAN;
-
-    return mle_const - 0.5 * cached_logdet_h - 0.5 * (double)n_samples * log(P_yy);
+    return mle_finish_general(pab_scratch, t, n_samples, logdet_h, mle_const);
 }
 
 int coarse_grid_mle_general(
     const general_snp_t *snp,
     const double *hi_eval_grid,
     const double *logdet_h_grid,
+    const double *inv_sums_grid,
     int n_grid
 )
 {
@@ -413,10 +377,13 @@ int coarse_grid_mle_general(
     int best_idx = -1;
     for (int g = 0; g < n_grid; g++) {
         double logl = mle_logl_general_cached(
-            snp->uab_snp,
+            inv_sums_grid + (size_t)g * snp->t->n_inv,
+            snp->uab_var,
             hi_eval_grid + (size_t)g * snp->n_samples,
+            snp->n_samples,
             logdet_h_grid[g],
-            snp->n_samples, snp->mle_const, snp->t,
+            snp->mle_const,
+            snp->t,
             snp->row0, snp->pab
         );
         if (isnan(logl)) logl = REML_SENTINEL;

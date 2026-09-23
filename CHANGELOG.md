@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The likelihood-ratio test with more than one covariate (`-lmm 2` and
+  `-lmm 4`) now reads the same per-SNP column layout as the REML search,
+  instead of copying each SNP's inputs into a second per-thread buffer of
+  `n_index * n_samples` doubles. That buffer took 22.4 MB per thread at
+  100,000 samples and 5 covariates, and the memory planner no longer prices
+  it. The MLE coarse grid also reuses the grid's cached invariant sums.
+  Results are bit-identical.
 - LOCO kinship no longer runs a separate SNP-statistics pass over the BED.
   Standard and LOCO kinship now share one chunk generator that filters each
   chunk as it is read, so a LOCO run reads the genotypes once fewer. The

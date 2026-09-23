@@ -20,7 +20,7 @@ from jamma.lmm.uab import (
     compute_uab_invariant_soa,
 )
 from tests.fixture_paths import SYNTHETIC
-from tests.independent_lmm_oracle import dense_reml_score_log_lambda
+from tests.math_validation.dense_oracle import reml_score_log_lambda
 from tests.support import require_fixture, requires_c
 
 _L_MIN = 1e-5
@@ -35,13 +35,14 @@ def _general_case_with_stationary_point():
     eigenvalues = np.exp(np.linspace(np.log(0.08), np.log(6.0), n_samples))
     UtW = np.column_stack((np.ones(n_samples), rng.standard_normal(n_samples)))
     Uty = rng.standard_normal(n_samples)
+    kinship = np.diag(eigenvalues)
     log_grid = np.linspace(np.log(1e-3), np.log(1e3), 241)
 
     for _ in range(32):
         Utg = rng.standard_normal(n_samples)
         scores = np.array(
             [
-                dense_reml_score_log_lambda(eigenvalues, UtW, Uty, Utg, np.exp(point))
+                reml_score_log_lambda(kinship, UtW, Utg, Uty, np.exp(point))
                 for point in log_grid
             ]
         )
@@ -49,8 +50,8 @@ def _general_case_with_stationary_point():
         if crossings.size:
             index = int(crossings[0])
             root = brentq(
-                lambda point, genotype=Utg: dense_reml_score_log_lambda(
-                    eigenvalues, UtW, Uty, genotype, np.exp(point)
+                lambda point, genotype=Utg: reml_score_log_lambda(
+                    kinship, UtW, genotype, Uty, np.exp(point)
                 ),
                 log_grid[index],
                 log_grid[index + 1],
@@ -87,7 +88,7 @@ def _run_general_c_at_target(
     result = accel.require().compute_lmm_chunk_c(
         workspace, np.ascontiguousarray(Utg[None, :]), 1
     )
-    oracle_args = (scaled_eigenvalues, UtW, Uty, Utg)
+    oracle_args = (np.diag(scaled_eigenvalues), UtW, Utg, Uty)
     return float(result["lambdas"][0]), oracle_args
 
 
@@ -96,7 +97,7 @@ def _run_general_c_at_target(
 def test_general_c_refinement_reaches_independent_stationary_root():
     actual, oracle_args = _run_general_c_at_target(0.7)
     expected_log = brentq(
-        lambda point: dense_reml_score_log_lambda(*oracle_args, np.exp(point)),
+        lambda point: reml_score_log_lambda(*oracle_args, np.exp(point)),
         np.log(0.4),
         np.log(1.0),
         xtol=1e-13,
@@ -109,10 +110,10 @@ def test_general_c_refinement_reaches_independent_stationary_root():
 def test_general_c_refines_peak_close_to_lower_bound():
     target = 1.2 * _L_MIN
     actual, oracle_args = _run_general_c_at_target(target)
-    assert dense_reml_score_log_lambda(*oracle_args, _L_MIN) > 0.0
-    assert dense_reml_score_log_lambda(*oracle_args, 1.5 * _L_MIN) < 0.0
+    assert reml_score_log_lambda(*oracle_args, _L_MIN) > 0.0
+    assert reml_score_log_lambda(*oracle_args, 1.5 * _L_MIN) < 0.0
     expected_log = brentq(
-        lambda point: dense_reml_score_log_lambda(*oracle_args, np.exp(point)),
+        lambda point: reml_score_log_lambda(*oracle_args, np.exp(point)),
         np.log(_L_MIN),
         np.log(1.5 * _L_MIN),
         xtol=1e-13,
@@ -125,8 +126,8 @@ def test_general_c_refines_peak_close_to_lower_bound():
 @requires_c
 def test_general_c_preserves_monotone_lower_boundary():
     actual, oracle_args = _run_general_c_at_target(0.1 * _L_MIN)
-    assert dense_reml_score_log_lambda(*oracle_args, _L_MIN) < 0.0
-    assert dense_reml_score_log_lambda(*oracle_args, _L_MAX) < 0.0
+    assert reml_score_log_lambda(*oracle_args, _L_MIN) < 0.0
+    assert reml_score_log_lambda(*oracle_args, _L_MAX) < 0.0
     # Twenty golden iterations leave at most about 1.6e-5 relative midpoint
     # error in the one-grid-step boundary bracket.
     np.testing.assert_allclose(actual, _L_MIN, rtol=2e-5, atol=0.0)
@@ -164,8 +165,11 @@ def tiny_reml_peak():
     genotype = np.where(np.isnan(genotype), np.nanmean(genotype), genotype)
     Utg = np.ascontiguousarray(eigenvectors.T @ genotype)
     oracle_args = eigenvalues, UtW, Uty, Utg
+    rotated_kinship = np.diag(eigenvalues)
     expected_log = brentq(
-        lambda point: dense_reml_score_log_lambda(*oracle_args, np.exp(point)),
+        lambda point: reml_score_log_lambda(
+            rotated_kinship, UtW, Utg, Uty, np.exp(point)
+        ),
         np.log(8e-5),
         np.log(1.4e-4),
         xtol=1e-13,

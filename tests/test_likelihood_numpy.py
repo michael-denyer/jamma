@@ -32,7 +32,7 @@ from jamma.lmm.uab import (
     compute_uab_invariant_soa,
 )
 from tests.builders import rotated_lmm_inputs
-from tests.independent_lmm_oracle import dense_reml_score_log_lambda
+from tests.math_validation.dense_oracle import reml_score_log_lambda
 
 pytestmark = pytest.mark.tier0
 
@@ -55,7 +55,7 @@ def test_reml_score_matches_independent_dense_projector(n_cvt):
     )
     expected = np.array(
         [
-            dense_reml_score_log_lambda(eigenvalues, UtW, Uty, UtG[:, i], lambdas[i])
+            reml_score_log_lambda(np.diag(eigenvalues), UtW, UtG[:, i], Uty, lambdas[i])
             for i in range(3)
         ]
     )

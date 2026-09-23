@@ -39,7 +39,7 @@ from jamma.lmm.uab import (
 )
 from tests.builders import rotated_lmm_inputs
 from tests.fixture_paths import MOUSE
-from tests.independent_lmm_oracle import dense_lmm_log_likelihood
+from tests.math_validation.dense_oracle import evaluate
 from tests.support import requires_c
 
 
@@ -573,27 +573,17 @@ def test_compute_lmm_chunk_numpy_all_modes(chunk_dispatch_data, monkeypatch):
 
     expected_reml = np.array(
         [
-            dense_lmm_log_likelihood(
-                eigenvalues,
-                UtW,
-                Uty,
-                UtG[:, snp],
-                result1["lambdas"][snp],
-                restricted=True,
-            )
+            evaluate(
+                np.diag(eigenvalues), UtW, UtG[:, snp], Uty, result1["lambdas"][snp]
+            )["reml"]
             for snp in range(UtG.shape[1])
         ]
     )
     expected_mle = np.array(
         [
-            dense_lmm_log_likelihood(
-                eigenvalues,
-                UtW,
-                Uty,
-                UtG[:, snp],
-                result4["lambdas_mle"][snp],
-                restricted=False,
-            )
+            evaluate(
+                np.diag(eigenvalues), UtW, UtG[:, snp], Uty, result4["lambdas_mle"][snp]
+            )["mle"]
             for snp in range(UtG.shape[1])
         ]
     )

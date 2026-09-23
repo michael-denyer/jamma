@@ -192,8 +192,9 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
     hard-coded defaults regardless of PipelineConfig.n_grid/n_refine.
 
     Asserting only n_tested > 0 would pass even if the values were dropped (a
-    no-op body still tests SNPs). Instead, spy on run_lmm_chunk_source_numpy —
-    the boundary where n_grid/n_refine are consumed, captured pre-clamp — and
+    no-op body still tests SNPs). Instead, spy on
+    run_lmm_chunk_source_numpy_group — the boundary where n_grid/n_refine are
+    consumed, captured pre-clamp — and
     assert the configured non-default values actually arrive there. LOCO
     reaches that boundary through the shared run body in runner_numpy.
     """
@@ -201,7 +202,7 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
 
     import jamma.lmm.runner_numpy as runner_mod
 
-    real_chunk_runner = runner_mod.run_lmm_chunk_source_numpy
+    real_chunk_runner = runner_mod.run_lmm_chunk_source_numpy_group
     captured: list[dict[str, int]] = []
 
     def spy(*args, **kwargs):
@@ -211,7 +212,7 @@ def test_run_lmm_loco_forwards_grid_params(monkeypatch):
         )
         return real_chunk_runner(*args, **kwargs)
 
-    monkeypatch.setattr(runner_mod, "run_lmm_chunk_source_numpy", spy)
+    monkeypatch.setattr(runner_mod, "run_lmm_chunk_source_numpy_group", spy)
 
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
     loco = run_lmm_loco(

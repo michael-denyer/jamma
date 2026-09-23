@@ -27,14 +27,14 @@ from jamma.lmm.genotype_source import (
     bind_prepared_genotypes,
 )
 from jamma.lmm.prepare_common import (
-    compute_valid_mask,
+    AnalysedPhenotype,
     parse_eigen_input,
-    with_intercept,
+    restrict_eigen_input,
 )
 from jamma.lmm.runner_numpy import (
     STREAMING_LABELS,
     LmmRunSpec,
-    run_lmm_association,
+    run_single,
 )
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
@@ -189,16 +189,13 @@ def run_lmm_association_numpy_streaming(
 
     meta = get_plink_metadata(bed_path)
     validate_snp_indices(snps_indices, meta.n_snps)
-    valid_mask = compute_valid_mask(phenotypes, covariates)
-    covariates = with_intercept(covariates, valid_mask)
-    n_cvt = covariates.shape[1] if covariates is not None else 1
-    n_analyzed = int(np.count_nonzero(valid_mask))
+    samples = AnalysedPhenotype.from_inputs(phenotypes, covariates)
     execution = plan_association(
-        n_analyzed,
+        samples.n_samples,
         meta.n_snps,
         n_input_samples=meta.n_samples,
         requested="numpy-streaming",
-        n_cvt=n_cvt,
+        n_cvt=samples.n_cvt,
         lmm_mode=config.lmm_mode,
         n_grid=config.n_grid,
         n_refine=config.n_refine,
@@ -223,7 +220,7 @@ def run_lmm_association_numpy_streaming(
         validate_genotypes=validate_genotypes,
         show_progress=config.show_progress,
     )
-    return run_lmm_association(
+    return run_single(
         source,
         LmmRunSpec(
             config=config,
@@ -232,8 +229,9 @@ def run_lmm_association_numpy_streaming(
             hwe_threshold=hwe_threshold,
             labels=STREAMING_LABELS,
         ),
-        phenotypes=phenotypes,
-        eigen_input=parse_eigen_input(kinship, eigenvalues, eigenvectors),
-        covariates=covariates,
-        output_path=output_path,
+        samples,
+        restrict_eigen_input(
+            parse_eigen_input(kinship, eigenvalues, eigenvectors), samples.valid_mask
+        ),
+        output_path if output_path is not None else [],
     )

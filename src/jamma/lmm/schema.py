@@ -40,8 +40,10 @@ def parse_lmm_mode(value: int) -> LmmMode:
 class ChunkRunStats:
     """What the chunk runner did and how long each stage took.
 
-    Returned by ``run_lmm_chunk_source_numpy`` and carried unchanged on
-    ``LmmRunResult.timing``. Zero everywhere when no SNP passed filtering.
+    Returned once per phenotype by ``run_lmm_chunk_source_numpy_group``, which
+    reports the shared rotation time separately; ``run_single`` folds it into
+    ``rotation_s`` on ``LmmRunResult.timing``. Zero everywhere when no SNP
+    passed filtering.
 
     Attributes:
         processed: SNPs the chunk loop handed to the result sink.

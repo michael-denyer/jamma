@@ -16,15 +16,15 @@ from loguru import logger
 from jamma.io.plink import PlinkMetadata, load_plink_binary
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
 from jamma.lmm.genotype_source import GenotypeSource
-from jamma.lmm.prepare_common import prepare_rotated_covariates
+from jamma.lmm.prepare_common import _build_covariate_matrix, rotate_basis
 from jamma.lmm.runner_numpy import (
     BATCH_LABELS,
     STREAMING_LABELS,
     LmmRunSpec,
     MatrixSource,
-    PreparedPhenotypeSpec,
+    PhenotypeRun,
     prepare_genotypes,
-    run_lmm_association_group_prepared,
+    run_association,
 )
 from jamma.lmm.runner_numpy_streaming import BedSource
 from jamma.lmm.schema import ChunkRunStats, SnpMeta
@@ -76,20 +76,16 @@ def run_phenotype_loop(
     # Prepared chunks retain their analyzed rows. Release the original batch
     # matrix when sample filtering replaced it with a smaller allocation.
     del source
-    if genotypes.n_unexpected > 0:
-        logger.warning(
-            f"Genotype validation: {genotypes.n_unexpected} values outside "
-            "expected range {0, 1, 2, NaN}"
-        )
     if genotypes.n_filtered == 0:
         logger.warning("All SNPs were filtered out. No association tests will run.")
     covariates = samples.covariates
     filtered_covariates = (
         covariates[samples.valid_mask, :] if covariates is not None else None
     )
-    prepared_covariates = prepare_rotated_covariates(
-        eigenvectors, filtered_covariates, genotypes.analyzed_sample_count
+    W, _n_cvt = _build_covariate_matrix(
+        filtered_covariates, genotypes.analyzed_sample_count
     )
+    basis = rotate_basis(eigenvalues, eigenvectors, W)
 
     prefix = config.output_prefix
 
@@ -108,17 +104,10 @@ def run_phenotype_loop(
                 if is_multi
                 else assoc_path
             )
-            group_specs.append(PreparedPhenotypeSpec(phenotypes_col, col_path))
+            group_specs.append(PhenotypeRun(phenotypes_col, col_path))
             group_paths.append(col_path)
 
-        grouped = run_lmm_association_group_prepared(
-            genotypes,
-            spec,
-            tuple(group_specs),
-            eigenvalues=eigenvalues,
-            eigenvectors=eigenvectors,
-            prepared_covariates=prepared_covariates,
-        )
+        grouped = run_association(genotypes, spec, basis, group_specs)
         shared_rotation_s += grouped.rotation_s
         rotation_shares = [grouped.rotation_s / len(grouped.results)] * len(
             grouped.results

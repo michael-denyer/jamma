@@ -267,27 +267,31 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `_batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:323](../src/jamma/lmm/association_plan.py#L323) |
 | 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:94](../src/jamma/lmm/association_plan.py#L94) |
-| 4Nb | `run_lmm_association()` | The shared run body: stats, filter (MAF, missingness, HWE, `-snps`), prepare, chunk loop, result routing, over any source under one `LmmRunSpec` | [runner_numpy.py:206](../src/jamma/lmm/runner_numpy.py#L206) |
-| 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:96](../src/jamma/lmm/runner_numpy.py#L96) |
+| 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any source under one `LmmRunSpec` | [runner_numpy.py:321](../src/jamma/lmm/runner_numpy.py#L321) |
+| 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:256](../src/jamma/lmm/runner_numpy.py#L256) |
+| 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE threshold, PVE choice, labels | [runner_numpy.py:97](../src/jamma/lmm/runner_numpy.py#L97) |
 | 4Nb | `GenotypeSource` | Protocol that binds a sample basis, SNP filtering, metadata, and aligned chunks | [genotype_source.py:110](../src/jamma/lmm/genotype_source.py#L110) |
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:25](../src/jamma/lmm/genotype_source.py#L25) |
 | 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:65](../src/jamma/lmm/genotype_source.py#L65) |
-| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:133](../src/jamma/lmm/runner_numpy.py#L133) |
-| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:506](../src/jamma/lmm/runner_numpy.py#L506) |
-| 4Nb | `PreparedLmmRun` | Validated numerical state shared by every chunk-run caller | [prepare_common.py:429](../src/jamma/lmm/prepare_common.py#L429) |
-| 4Nb | `run_lmm_chunk_source_numpy()` | Shared NumPy chunk-loop orchestrator for batch, streaming, and LOCO paths | [chunk_runner_numpy.py:508](../src/jamma/lmm/chunk_runner_numpy.py#L508) |
-| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:220](../src/jamma/lmm/chunk_runner_numpy.py#L220) |
-| 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the prepared run and the config | [chunk_kernel.py:41](../src/jamma/lmm/chunk_kernel.py#L41) |
-| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:158](../src/jamma/lmm/chunk_kernel.py#L158) |
+| 4Nb | `MatrixSource` | In-memory genotype matrix as a source | [runner_numpy.py:139](../src/jamma/lmm/runner_numpy.py#L139) |
+| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over a MatrixSource | [runner_numpy.py:417](../src/jamma/lmm/runner_numpy.py#L417) |
+| 4Nb | `AnalysedPhenotype` | One phenotype and its covariates restricted to the analysed samples, with the valid mask | [prepare_common.py:125](../src/jamma/lmm/prepare_common.py#L125) |
+| 4Nb | `restrict_eigen_input()` | Restrict a kinship to the analysed samples, or check eigenpairs match them | [prepare_common.py:189](../src/jamma/lmm/prepare_common.py#L189) |
+| 4Nb | `RotatedBasis` | Eigenbasis and rotated covariates every phenotype in a group shares | [prepare_common.py:304](../src/jamma/lmm/prepare_common.py#L304) |
+| 4Nb | `fit_null()` | Rotate one phenotype, solve its null model, and estimate PVE into a `NullFit` | [prepare_common.py:459](../src/jamma/lmm/prepare_common.py#L459) |
+| 4Nb | `run_lmm_chunk_source_numpy_group()` | Shared NumPy chunk-loop orchestrator for batch, streaming, LOCO, and phenotype groups; rotates each chunk once for every phenotype | [chunk_runner_numpy.py:342](../src/jamma/lmm/chunk_runner_numpy.py#L342) |
+| 4Nb | `_ChunkEngine` | Chunk buffers, live thread split, and loop counters | [chunk_runner_numpy.py:244](../src/jamma/lmm/chunk_runner_numpy.py#L244) |
+| 4Nb | `RunInvariants` | Per-run state a kernel needs, built once from the basis, the null fit, and the config | [chunk_kernel.py:41](../src/jamma/lmm/chunk_kernel.py#L41) |
+| 4Nb | `make_kernel()` | The one dispatch match: builds each path's workspace and binds its call | [chunk_kernel.py:159](../src/jamma/lmm/chunk_kernel.py#L159) |
 | 4Nb | `_overlapped_chunks()` | Generator yielding each prepared chunk while the next rotates on the executor | [chunk_pipeline.py:98](../src/jamma/lmm/chunk_pipeline.py#L98) |
 | 4Nb | `_drive_pipeline()` | Computes every overlapped chunk under one BLAS limit and one progress iterator | [chunk_pipeline.py:133](../src/jamma/lmm/chunk_pipeline.py#L133) |
 | 4Nb | `compute_chunk_size_numpy()` | Chunk size from a per-chunk budget and the dispatch path's per-SNP bytes; pure | [chunk_sizing.py:94](../src/jamma/lmm/chunk_sizing.py#L94) |
 | 4Nb | `LmmChunkPlan.plan()` | Chunk size, chunk count, and pipelining decision; cuts a native run of at most 10,000 samples to 16 chunks when the budget alone would not pipeline and the BLAS is uncontrollable (Accelerate). Pure: `plan_association` reads RAM and BLAS controllability once and passes them in | [chunk_sizing.py:162](../src/jamma/lmm/chunk_sizing.py#L162) |
 | 4Nb | `LmmChunkPlan.narrow()` | Narrows a conservative plan to the filtered SNP count; width only decreases and pipelining only switches off | [chunk_sizing.py:274](../src/jamma/lmm/chunk_sizing.py#L274) |
 | 4Nb | `available()` / `require()` | The one loader for `_lmm_accel`: import, ABI-validate, auto-recompile once, expose the module or raise | [accel.py](../src/jamma/lmm/accel.py) |
-| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:187](../src/jamma/lmm/chunk_kernel.py#L187) |
+| 4Nc | `_ncvt1_kernel()` | Build the one n_cvt=1 C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:188](../src/jamma/lmm/chunk_kernel.py#L188) |
 | 4Nc | `create_workspace_ncvt1_c()` | C extension: the per-run n_cvt=1 workspace, keyed by `lmm_mode` | [_lmm_accel_ncvt1.c](../src/jamma/lmm/_lmm_accel_ncvt1.c) |
-| 4Nc | `_fused_general_kernel()` | Build the one general (n_cvt>1) C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:216](../src/jamma/lmm/chunk_kernel.py#L216) |
+| 4Nc | `_fused_general_kernel()` | Build the one general (n_cvt>1) C workspace for the run's `lmm_mode` and bind its compute | [chunk_kernel.py:217](../src/jamma/lmm/chunk_kernel.py#L217) |
 | 4Nc | `create_workspace_general_c()` | C extension: the per-run general workspace, keyed by `lmm_mode` | [_lmm_accel_general.c](../src/jamma/lmm/_lmm_accel_general.c) |
 | 4Nd | `compute_lmm_chunk_ncvt1_c()` | C extension: chunked compute for n_cvt=1 with OpenMP, one loop for Wald/LRT/mode 4 and a separate standalone-Score loop | [_lmm_accel_ncvt1.c](../src/jamma/lmm/_lmm_accel_ncvt1.c) |
 | 4Nd | `compute_lmm_chunk_fused_general_c()` | C extension: chunked compute for the general (n_cvt>1) workspace with OpenMP, one entry point serving Wald/LRT/Score/mode-4 by `lmm_mode` | [_lmm_accel_general.c](../src/jamma/lmm/_lmm_accel_general.c) |
@@ -300,12 +304,12 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
 | 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:48](../src/jamma/lmm/runner_numpy_streaming.py#L48) |
 | 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:129](../src/jamma/lmm/runner_numpy_streaming.py#L129) |
-| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:60](../src/jamma/lmm/schema.py#L60) |
-| 4Nh | `ModeSpec` | Per-mode test set and column specification (single source of truth) | [lmm/schema.py:88](../src/jamma/lmm/schema.py#L88) |
+| 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:62](../src/jamma/lmm/schema.py#L62) |
+| 4Nh | `ModeSpec` | Per-mode test set and column specification (single source of truth) | [lmm/schema.py:90](../src/jamma/lmm/schema.py#L90) |
 | 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:314](../src/jamma/lmm/assoc_output.py#L314) |
 | 4Ni | `_count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/chunk_runner_numpy.py:51](../src/jamma/lmm/chunk_runner_numpy.py#L51) |
-| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:169](../src/jamma/lmm/loco.py#L169) |
-| 4Nj | `run_lmm_loco_prepared()` | The LOCO body over already-resolved samples; the pipeline's entry | [lmm/loco.py:242](../src/jamma/lmm/loco.py#L242) |
+| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:179](../src/jamma/lmm/loco.py#L179) |
+| 4Nj | `run_lmm_loco_prepared()` | The LOCO body over already-resolved samples; the pipeline's entry | [lmm/loco.py:252](../src/jamma/lmm/loco.py#L252) |
 | 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:113](../src/jamma/lmm/loco_eigen.py#L113) |
 | 4Nj | `solve_eigen_pairs()` | Ordered eigenpairs with `workers` solves in flight under one consumer-thread BLAS scope | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 | 4Nj | `plan_loco_workers()` | Worker cap and complete consumer memory reservation | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
@@ -501,7 +505,7 @@ flowchart TD
 
 ## Backend Architecture
 
-`PipelineRunner` always uses the NumPy backend. `plan_association()` chooses batch or streaming mode based on memory availability. In [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py), the mode picks the genotype source, a `MatrixSource` over the loaded matrix or a `BedSource` over the .bed file, and `run_lmm_association()` runs the same body over either.
+`PipelineRunner` always uses the NumPy backend. `plan_association()` chooses batch or streaming mode based on memory availability. In [pipeline_phenotype_loop.py](../src/jamma/pipeline_phenotype_loop.py), the mode picks the genotype source, a `MatrixSource` over the loaded matrix or a `BedSource` over the .bed file, and `run_association()` runs the same body over either.
 
 ```mermaid
 flowchart TD
@@ -586,7 +590,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Lambda optimization | [likelihood_numpy.py](../src/jamma/lmm/likelihood_numpy.py) |
 | Wald/Score/LRT tests | [stats.py](../src/jamma/lmm/stats.py) |
 | SNP filters (HWE) | [core/snp_filter.py](../src/jamma/core/snp_filter.py) |
-| Output schema (`StatColumn`) | [lmm/schema.py:60](../src/jamma/lmm/schema.py#L60) |
+| Output schema (`StatColumn`) | [lmm/schema.py:62](../src/jamma/lmm/schema.py#L62) |
 | NumPy batch runner | [runner_numpy.py](../src/jamma/lmm/runner_numpy.py) |
 | NumPy streaming runner | [runner_numpy_streaming.py](../src/jamma/lmm/runner_numpy_streaming.py) |
 | Shared NumPy chunk-loop orchestrator | [chunk_runner_numpy.py](../src/jamma/lmm/chunk_runner_numpy.py) |

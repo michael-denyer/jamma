@@ -15,12 +15,8 @@ from jamma.lmm.association_plan import ExecutableAssociationPlan, ExecutionPlan
 from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
-from jamma.lmm.prepare_common import PreparedCovariates
-from jamma.lmm.runner_numpy import (
-    LmmRunSpec,
-    PreparedPhenotypeSpec,
-    run_lmm_association_group_prepared,
-)
+from jamma.lmm.prepare_common import rotate_basis
+from jamma.lmm.runner_numpy import LmmRunSpec, PhenotypeRun, run_association
 from jamma.lmm.schema import DEFAULT_LMM_CONFIG, SnpMeta
 from jamma.lmm.workspace import WorkspaceSpec
 from tests.conftest import requires_c
@@ -252,19 +248,16 @@ def test_grouped_runner_rejects_more_jobs_than_priced(monkeypatch, tmp_path) -> 
         chunk_factory=lambda _size: iter(()),
     )
     runs = tuple(
-        PreparedPhenotypeSpec(np.arange(4, dtype=float), Path(tmp_path / f"{i}.txt"))
+        PhenotypeRun(np.arange(4, dtype=float), Path(tmp_path / f"{i}.txt"))
         for i in range(2)
     )
-    covariates = PreparedCovariates(np.ones((4, 1)), 1, np.ones((4, 1)))
 
     with pytest.raises(ValueError, match=r"exceeds.*priced capacity"):
-        run_lmm_association_group_prepared(
+        run_association(
             genotypes,
             LmmRunSpec(config=DEFAULT_LMM_CONFIG, execution=execution),
+            rotate_basis(np.ones(4), np.eye(4), np.ones((4, 1))),
             runs,
-            eigenvalues=np.ones(4),
-            eigenvectors=np.eye(4),
-            prepared_covariates=covariates,
         )
 
 

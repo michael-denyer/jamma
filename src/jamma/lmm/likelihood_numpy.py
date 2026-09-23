@@ -20,6 +20,7 @@ import numpy as np
 
 from jamma.lmm.pab import build_index_table, guard_p_yy
 from jamma.lmm.reml_score import (
+    _batch_mle_score_log_lambda_numpy,
     _batch_reml_score_log_lambda_numpy,
     _refine_reml_optima,
 )
@@ -372,7 +373,16 @@ def golden_section_optimize_lambda_mle_numpy(
         )
 
     # Stage 2: Golden section refinement, then one evaluation at the optimum.
-    log_opt = _batch_golden_section_bracket_numpy(
+    log_opt, coarse_a, coarse_b, interior = _batch_golden_section_bracket_numpy(
         mle_at, grid_logls, log_lambdas, n_iter
-    )[0]
+    )
+    log_opt = _refine_reml_optima(
+        log_opt,
+        coarse_a,
+        coarse_b,
+        interior,
+        lambda values, indices: _batch_mle_score_log_lambda_numpy(
+            n_cvt, values, eigenvalues, Uab_batch[indices]
+        ),
+    )
     return np.exp(log_opt), mle_at(log_opt)

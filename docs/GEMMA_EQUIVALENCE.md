@@ -164,7 +164,7 @@ beta/SE differences.
 
 | | GEMMA | JAMMA |
 |-|-------|-------|
-| Method | Brent (GSL) | 50-point grid + 20 golden steps; analytic-score refinement for interior REML peaks |
+| Method | Brent (GSL) | 50-point grid + 20 golden steps; analytic-score refinement for interior REML and MLE peaks |
 | Bounds | [1e-5, 1e5] | [1e-5, 1e5] |
 | Comparison tolerance | | `ToleranceConfig.lambda_rtol=2e-5` |
 
@@ -178,7 +178,9 @@ The REML optimizer now differentiates weighted cross-products directly, uses
 compensated reductions, and applies the Schur-complement chain rule. One
 Newton step is accepted only with negative curvature, a candidate inside the
 original coarse bracket, and a smaller absolute score. This remains vectorized
-across SNPs in NumPy. MLE retains its existing golden-section optimizer.
+across SNPs in NumPy. The MLE optimizer applies the same refinement to its
+own score, which drops the REML `log|W'H^-1W|` terms and scales the `P_yy`
+term by `n` instead of the residual degrees of freedom.
 
 The eight committed reference roots are independently reproducible with
 `scripts/verify_reml_precision_oracle.py`. Tests compare NumPy and native C at

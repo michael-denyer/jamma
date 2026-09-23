@@ -39,7 +39,7 @@ void calc_pab_general(
 /* One SNP's lambda-search inputs and the caller's scratch. uab_inv and
  * uab_var are the SoA invariant and varying Uab columns, each n_samples long.
  * row0 holds at least n_index doubles; pab and dpab hold at least
- * n_rows * n_index, and only the REML Newton polish uses dpab. The lambda
+ * n_rows * n_index, and only the Newton polish uses dpab. The lambda
  * optimiser's context. */
 typedef struct {
     const double *uab_inv;

@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.io.plink import get_plink_metadata
 from jamma.lmm.association_plan import KinshipShape
 from jamma.lmm.eigen import center_kinship
 from jamma.lmm.genotype_source import SampleBasis
@@ -23,7 +24,7 @@ from jamma.pipeline_config import ProvidedKinship
 from jamma.pipeline_kinship import compute_kinship
 from jamma.pipeline_plan import ComputedKinship, KinshipSource
 from tests.builders import write_fam
-from tests.fixture_paths import FIXTURES, MOUSE, SYNTHETIC
+from tests.fixture_paths import FIXTURES, LOCO, MOUSE, SYNTHETIC
 from tests.support import require_fixture
 
 
@@ -82,6 +83,34 @@ def test_loco_with_standardized_mode_is_rejected() -> None:
 def test_missing_bed_is_reported_once_the_guards_pass() -> None:
     with pytest.raises(FileNotFoundError, match=r"\.bed file not found"):
         compute_kinship(PipelineConfig(bfile=MISSING), 1)
+
+
+@pytest.mark.tier1
+def test_gk_loco_reserves_no_eigen_peak(tmp_path: Path) -> None:
+    """-gk -loco only writes matrices, so its budget covers the stream alone.
+
+    The budget sits between the stream's retained set and the retained set
+    plus a DSYEVR reserve: it passes only when no eigen peak is reserved.
+    """
+    from jamma.kinship.loco import loco_retained_set
+    from jamma.lmm.eigen_plan import dsyevr_peak_gb
+
+    meta = get_plink_metadata(LOCO.bfile)
+    retained = loco_retained_set(meta.n_samples, meta.n_samples, 10_000)
+    budget_gb = retained.while_consuming_gb + dsyevr_peak_gb(meta.n_samples) / 2
+
+    result = compute_kinship(
+        PipelineConfig(
+            bfile=LOCO.bfile,
+            loco=True,
+            mem_budget=budget_gb,
+            output_dir=tmp_path,
+            show_progress=False,
+        ),
+        1,
+    )
+
+    assert len(result.kinship_paths) == len(set(meta.chromosome))
 
 
 def _copy_plink_genotypes(dest: Path) -> Path:

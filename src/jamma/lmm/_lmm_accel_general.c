@@ -101,10 +101,10 @@ static general_layout_t general_layout(int n_cvt, int n_samples, int n_grid,
         l.hi_eval_grid = n * (size_t)n_grid;
         l.inv_sums_grid = (size_t)n_grid * inv;
     }
-    if (tests.reml) {
+    if (tests.reml)
         l.inv_identity_sums = inv;
+    if (tests.reml || tests.lrt)
         l.dpab = rows * index;
-    }
     if (tests.score) {
         l.hi_eval_null = n;
         l.null_inv_sums = inv;
@@ -156,7 +156,7 @@ typedef struct {
     int actual_threads;         /* for scratch deallocation sizing */
     /* Per-thread heap buffers for Pab recursion (replaces stack arrays) */
     double *pab_per_thread;     /* (actual_threads * pab_size) owned */
-    double *dpab_per_thread;    /* same shape, REML score derivative */
+    double *dpab_per_thread;    /* same shape, REML and MLE score derivative */
     double *row0_per_thread;    /* (actual_threads * n_index) owned */
     int pab_size;               /* n_rows * n_index for this workspace */
     PyObject *Uty_ref;          /* keeps Uty array alive */
@@ -509,7 +509,7 @@ static double general_reml_block(
 
 static double general_lrt_block(
     const lmm_workspace_general_t *ws, const double *scratch,
-    double *row0, double *pab,
+    double *row0, double *pab, double *dpab,
     double *logl_H1_out, double *p_lrt_out)
 {
     const pab_table_t *t = &ws->table;
@@ -518,7 +518,7 @@ static double general_lrt_block(
         .uab_inv = ws->uab_inv, .uab_var = scratch,
         .eigenvalues = ws->eigenvalues, .n_samples = ws->n_samples, .t = t,
         .mle_const = ws->lrt->mle_const,
-        .row0 = row0, .pab = pab,
+        .row0 = row0, .pab = pab, .dpab = dpab,
     };
     int best_idx = coarse_grid_mle_general(
         &snp, grid->hi_eval_grid, grid->logdet_h_grid, grid->inv_sums_grid,
@@ -619,7 +619,7 @@ int general_compute_chunk(PyObject *capsule, PyObject *utg_t_obj,
             /* GEMMA modes 2 and 4 report the LRT alternative-model MLE
              * likelihood in logl_H1, overwriting mode 4's REML logl. */
             out_lambdas_mle[snp] = general_lrt_block(
-                ws, scratch, my_row0, my_pab,
+                ws, scratch, my_row0, my_pab, my_dpab,
                 &out_logls[snp], &out_p_lrts[snp]);
         }
     }

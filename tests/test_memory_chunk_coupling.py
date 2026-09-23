@@ -367,20 +367,15 @@ class TestChunkPlanMatchesEngine:
         directly here reproduces the engine's own sizing decision.
         """
         from jamma.lmm.dispatch import select_dispatch_path
-        from jamma.lmm.schema import parse_lmm_mode
 
         monkeypatch.setattr(memory, "available_ram_gb", lambda: 64.0)
 
         n_samples = 50_000
         n_filtered = 500_000
 
-        # The parametrized dispatch must be what select_dispatch_path
-        # actually derives for (n_cvt, lmm_mode, accel), or this case is
-        # testing an unreachable combination.
-        assert (
-            select_dispatch_path(n_cvt, parse_lmm_mode(lmm_mode), accel=accel)
-            is dispatch
-        )
+        # The parametrized dispatch must be what select_dispatch_path derives
+        # for accel, or this case is testing an unreachable combination.
+        assert select_dispatch_path(accel=accel) is dispatch
 
         plan = _plan(n_samples, n_filtered, n_cvt, dispatch)
 

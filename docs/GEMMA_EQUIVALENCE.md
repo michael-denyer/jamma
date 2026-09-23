@@ -181,8 +181,8 @@ original coarse bracket, and a smaller absolute score. This remains vectorized
 across SNPs in NumPy. MLE retains its existing golden-section optimizer.
 
 The eight committed reference roots are independently reproducible with
-`scripts/verify_reml_precision_oracle.py`. Tests compare generic NumPy, split
-NumPy, and native C at `5e-6` relative tolerance. These cases establish a
+`scripts/verify_reml_precision_oracle.py`. Tests compare NumPy and native C at
+`5e-6` relative tolerance. These cases establish a
 regression contract, not a universal error bound for arbitrarily ill-conditioned
 inputs. Neither the production tolerance nor the existing real-data test
 tolerances were widened.

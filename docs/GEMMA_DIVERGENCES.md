@@ -290,8 +290,8 @@ those errors.
 
 The analytic-score refinement recovers information lost in the objective
 comparison. `tests/fixtures/reml_flat_optima.npz` stores the eight cases and
-independent 80-digit stationary points. Generic NumPy, split NumPy, and native
-C are checked against those points at `5e-6` relative tolerance. The wider
+independent 80-digit stationary points. NumPy and native C are checked against
+those points at `5e-6` relative tolerance. The wider
 mathematical validation plan covers additional conditioning and boundary cases.
 `ToleranceConfig.lambda_rtol` remains `2e-5`.
 

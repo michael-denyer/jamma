@@ -10,7 +10,7 @@ import numpy as np
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import _compute_wald_numpy
 from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_mle_numpy
-from jamma.lmm.pab import _NCVT1, build_index_table
+from jamma.lmm.pab import build_index_table
 from jamma.lmm.stats import _batch_lrt_pvalues_numpy, batch_calc_score_stats_numpy
 from jamma.lmm.uab import batch_compute_uab_numpy
 
@@ -35,51 +35,6 @@ def classify_uab_columns(n_cvt: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
         else:
             invariant.append(linear_idx)
     return tuple(invariant), tuple(varying)
-
-
-def reconstruct_uab_from_soa(
-    uab_invariant_soa: np.ndarray,
-    uab_varying_soa: np.ndarray,
-    n_cvt: int,
-) -> np.ndarray:
-    """Rebuild the full Uab matrix from its split SoA components.
-
-    For n_cvt=1, combine invariant columns [ww, wy, yy] with per-SNP varying
-    columns [wx, xx, xy] into the standard layout (n_snps, n_samples, 6). For
-    n_cvt>1, place each column at the linear index ``classify_uab_columns``
-    assigns it, broadcasting the invariant columns across SNPs.
-
-    Args:
-        uab_invariant_soa: Shape (n_inv, n_samples), one row per invariant column.
-        uab_varying_soa: Shape (n_snps, n_var, n_samples), one axis-1 row per
-            varying column.
-        n_cvt: Number of covariates.
-
-    Returns:
-        Full Uab array (n_snps, n_samples, n_index) matching
-        ``batch_compute_uab_numpy`` layout.
-    """
-    n_snps, _, n_samples = uab_varying_soa.shape
-
-    if n_cvt == 1:
-        Uab = np.empty((n_snps, n_samples, 6), dtype=np.float64)
-        Uab[:, :, _NCVT1.ww] = uab_invariant_soa[0]
-        Uab[:, :, _NCVT1.wy] = uab_invariant_soa[1]
-        Uab[:, :, _NCVT1.yy] = uab_invariant_soa[2]
-        Uab[:, :, _NCVT1.wx] = uab_varying_soa[:, 0, :]
-        Uab[:, :, _NCVT1.xx] = uab_varying_soa[:, 1, :]
-        Uab[:, :, _NCVT1.xy] = uab_varying_soa[:, 2, :]
-        return Uab
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-    Uab = np.empty(
-        (n_snps, n_samples, build_index_table(n_cvt).n_index), dtype=np.float64
-    )
-    for row_i, col_idx in enumerate(inv_indices):
-        Uab[:, :, col_idx] = uab_invariant_soa[row_i]
-    for row_i, col_idx in enumerate(var_indices):
-        Uab[:, :, col_idx] = uab_varying_soa[:, row_i, :]
-    return Uab
 
 
 def assert_fused_matches_reference(

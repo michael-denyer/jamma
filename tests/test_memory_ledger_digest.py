@@ -91,8 +91,8 @@ from jamma.lmm.workspace import WorkspaceSpec
 
 pytestmark = pytest.mark.tier0
 
-EXPECTED_DIGEST = "6aacdc05ea4fe1f57b06403cbe817752fa5448ae443af0e2483a34aab667fca1"
-EXPECTED_ROWS = 5798
+EXPECTED_DIGEST = "53b7584a3bea58b5bef9aae939d668655ee716c9d20aba3d43c22f55cfbcbde6"
+EXPECTED_ROWS = 5030
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
 CHUNK_SIZE = (10_000, 1_000)

@@ -9,20 +9,14 @@ import pytest
 from scipy.optimize import brentq
 
 from jamma.lmm import accel
-from jamma.lmm.likelihood_numpy import (
-    golden_section_optimize_lambda_numpy,
-    golden_section_optimize_lambda_split_ncvt1_numpy,
-)
+from jamma.lmm.likelihood_numpy import golden_section_optimize_lambda_numpy
 from jamma.lmm.reml_score import (
     _batch_reml_score_log_lambda_numpy,
-    _batch_reml_score_log_lambda_split_ncvt1_numpy,
     _refine_reml_optima,
 )
 from jamma.lmm.uab import (
     batch_compute_iab_numpy,
     batch_compute_uab_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    compute_iab_invariant_scalars_ncvt1,
     compute_uab_invariant_soa,
 )
 from tests.conftest import require_fixture, requires_c
@@ -180,10 +174,7 @@ def tiny_reml_peak():
 
 
 @pytest.mark.tier0
-@pytest.mark.parametrize("backend", ["numpy", "split"])
-def test_refinement_converges_after_resolvable_first_step_residual(
-    tiny_reml_peak, backend
-):
+def test_refinement_converges_after_resolvable_first_step_residual(tiny_reml_peak):
     """One Newton step leaves ~7e-6 relative error at this actual tiny peak.
 
     Fix the initial relative displacement so the regression is independent of
@@ -191,22 +182,10 @@ def test_refinement_converges_after_resolvable_first_step_residual(
     """
     oracle_args, expected_log = tiny_reml_peak
     eigenvalues, UtW, Uty, Utg = oracle_args
-    if backend == "numpy":
-        uab = batch_compute_uab_numpy(1, UtW, Uty, Utg[None, :])
+    uab = batch_compute_uab_numpy(1, UtW, Uty, Utg[None, :])
 
-        def score_at(points, indices):
-            return _batch_reml_score_log_lambda_numpy(
-                1, points, eigenvalues, uab[indices]
-            )
-
-    else:
-        varying = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, Utg[None, :])
-        invariant = compute_uab_invariant_soa(UtW, Uty, n_cvt=1)
-
-        def score_at(points, indices):
-            return _batch_reml_score_log_lambda_split_ncvt1_numpy(
-                points, eigenvalues, varying[indices], invariant
-            )
+    def score_at(points, indices):
+        return _batch_reml_score_log_lambda_numpy(1, points, eigenvalues, uab[indices])
 
     actual = _refine_reml_optima(
         np.array([expected_log + np.log1p(0.0022)]),
@@ -221,30 +200,19 @@ def test_refinement_converges_after_resolvable_first_step_residual(
 
 
 @pytest.mark.tier0
-@pytest.mark.parametrize(
-    "backend", ["numpy", "split", pytest.param("native", marks=requires_c)]
-)
+@pytest.mark.parametrize("backend", ["numpy", pytest.param("native", marks=requires_c)])
 def test_tiny_reml_peak_optimizer_matches_independent_root(tiny_reml_peak, backend):
     oracle_args, expected_log = tiny_reml_peak
     eigenvalues, UtW, Uty, Utg = oracle_args
-    invariant = compute_uab_invariant_soa(UtW, Uty, n_cvt=1)
     if backend == "numpy":
         uab = batch_compute_uab_numpy(1, UtW, Uty, Utg[None, :])
         actual, _, _ = golden_section_optimize_lambda_numpy(
             1, eigenvalues, uab, batch_compute_iab_numpy(1, uab)
         )
-    elif backend == "split":
-        varying = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, Utg[None, :])
-        actual, _, _ = golden_section_optimize_lambda_split_ncvt1_numpy(
-            eigenvalues,
-            varying,
-            invariant,
-            *compute_iab_invariant_scalars_ncvt1(invariant),
-        )
     else:
         workspace = accel.require().create_workspace_c(
             eigenvalues,
-            invariant,
+            compute_uab_invariant_soa(UtW, Uty, n_cvt=1),
             UtW,
             Uty,
             len(Uty),

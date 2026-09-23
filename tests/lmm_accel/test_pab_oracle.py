@@ -95,35 +95,6 @@ def test_native_wald_matches_numpy_on_valid_shared_inputs() -> None:
         )
 
 
-def test_old_benchmark_construction_violates_split_shared_invariants() -> None:
-    """Keep the original failure's invalid input contract explicit."""
-    rng = np.random.default_rng(42)
-    n_samples, n_snps = 20, 3
-    w = np.abs(rng.standard_normal((n_snps, n_samples))) + 1.0
-    x = np.abs(rng.standard_normal((n_snps, n_samples))) + 0.5
-    y = rng.standard_normal((n_snps, n_samples))
-    uab = np.stack((w * w, w * x, w * y, x * x, x * y, y * y), axis=2)
-
-    # The split API has one covariate and phenotype for the whole chunk. The
-    # old benchmark generated new ones per SNP, so its invariant columns are
-    # observably different and cannot represent one association run.
-    assert not np.array_equal(uab[0, :, 0], uab[1, :, 0])
-    assert not np.array_equal(uab[0, :, 2], uab[1, :, 2])
-    assert not np.array_equal(uab[0, :, 5], uab[1, :, 5])
-
-    eigenvalues = np.sort(rng.uniform(0.1, 2.0, n_samples))
-    split = _compute_wald_numpy(1, eigenvalues, uab, n_samples, 1e-5, 1e5, 50, 20)
-    dense_betas = np.array(
-        [
-            dense_wald_at_lambda(
-                eigenvalues, w[snp], y[snp], x[snp], split["lambdas"][snp]
-            )[0]
-            for snp in range(n_snps)
-        ]
-    )
-    assert np.max(np.abs(split["betas"] - dense_betas)) > 1e-3
-
-
 def test_dense_oracle_lambda_zero_matches_closed_form_ols() -> None:
     rng = np.random.default_rng(7)
     n_samples = 24

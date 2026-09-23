@@ -20,39 +20,13 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
-from tests.builders import rotated_lmm_inputs
 from tests.conftest import make_runner_synthetic_data, requires_c
 from tests.fixture_paths import SYNTHETIC
 
 
-@requires_c
-@pytest.mark.tier0
-def test_runner_mode4_uses_fused_dispatch():
-    """Mode 4 takes the fused path at n_cvt=1 and the fused general path at n_cvt>=2.
-
-    This used to wrap _compose_mode4_from_split and assert it was never called.
-    That helper has gone, and so has the standalone split dispatcher and its
-    kernel-construction mode guard that replaced it as this test's second half:
-    D2 gave the general workspace's one compute every lmm_mode, so there is no
-    longer a split path for mode 4 to be refused by.
-    """
-    from jamma.lmm import accel
-    from jamma.lmm.dispatch import DispatchPath, select_dispatch_path
-
-    for n_cvt in (1, 2):
-        path = select_dispatch_path(n_cvt, 4, accel=accel.available())
-        assert path is DispatchPath.FUSED
-
-
-# ---------------------------------------------------------------------------
-# Split-Uab all modes and reconstruct_uab_from_soa tests (RUN-01)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.tier1
 @pytest.mark.parametrize("lmm_mode", [1, 2, 3, 4], ids=["Wald", "LRT", "Score", "All"])
-def test_split_uab_all_modes(lmm_mode):
-    """All LMM modes produce valid results with split-Uab layout (RUN-01)."""
+def test_all_lmm_modes_end_to_end(lmm_mode):
     rng = np.random.default_rng(42)
     n_samples, n_snps = 100, 50
 
@@ -100,37 +74,6 @@ def test_split_uab_all_modes(lmm_mode):
             assert hasattr(r, "p_score"), f"Score result missing p_score: {r}"
             assert r.p_score is not None
             assert np.isfinite(r.p_score), f"Score p not finite: {r}"
-
-
-@pytest.mark.tier1
-def test_reconstruct_uab_from_soa_matches_direct():
-    """reconstruct_uab_from_soa matches batch_compute_uab_numpy exactly (RUN-01)."""
-    from jamma.lmm.uab import (
-        batch_compute_uab_numpy,
-        batch_compute_uab_varying_soa_numpy,
-        compute_uab_invariant_soa,
-    )
-    from tests.lmm_accel._helpers import reconstruct_uab_from_soa
-
-    inputs = rotated_lmm_inputs(n_samples=50, n_snps=20, n_cvt=1, seed=42)
-    UtW, Uty, UtG = inputs.UtW, inputs.Uty, inputs.UtG
-
-    # Direct full Uab construction
-    Uab_direct = batch_compute_uab_numpy(n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T)
-
-    # Split construction + reconstruction
-    invariant = compute_uab_invariant_soa(UtW, Uty, 1)
-    varying = batch_compute_uab_varying_soa_numpy(
-        n_cvt=1, UtW=UtW, Uty=Uty, utg_t=UtG.T
-    )
-    Uab_reconstructed = reconstruct_uab_from_soa(invariant, varying, 1)
-
-    np.testing.assert_allclose(
-        Uab_reconstructed,
-        Uab_direct,
-        atol=1e-14,
-        err_msg="Reconstructed Uab does not match direct construction",
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -17,8 +17,6 @@ from jamma.lmm.uab import (
     _batch_compute_pab_varying_numpy,
     batch_compute_iab_numpy,
     batch_compute_uab_numpy,
-    batch_compute_uab_varying_soa_numpy,
-    compute_uab_invariant_soa,
 )
 from tests.builders import rotated_lmm_inputs
 from tests.independent_lmm_oracle import dense_reml_score_log_lambda
@@ -241,90 +239,6 @@ def test_batch_numpy_degenerate_snps_wald_nan(pattern):
 
 
 # ---------------------------------------------------------------------------
-# Degenerate SNP tests — Python fallback (split ncvt1 path)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("pattern", ["all_zero", "mixed"])
-def test_split_ncvt1_fallback_degenerate_snps_wald_nan(pattern):
-    """Split ncvt1 Python fallback path: degenerate SNPs produce NaN Wald stats.
-
-    golden_section_optimize_lambda_split_ncvt1_numpy is the Python fallback
-    when the C extension is unavailable.  When UtG is all-zero (constant
-    genotype), the varying columns [wx, xx, xy] are zero for every SNP.
-    The optimizer returns lambdas near l_min; downstream Wald stats must
-    produce NaN for every SNP because P_XX = 0.  ``pattern="mixed"``
-    additionally checks that valid SNPs (columns 1, 3) produce finite stats
-    in the same batch.
-    """
-    from jamma.lmm.likelihood_numpy import (
-        golden_section_optimize_lambda_split_ncvt1_numpy,
-    )
-    from jamma.lmm.uab import compute_iab_invariant_scalars_ncvt1
-    from tests.lmm_accel._helpers import reconstruct_uab_from_soa
-
-    rng = np.random.default_rng(17)
-    n, n_snps = 30, 5
-    l_min = 1e-5
-
-    eigenvalues = np.sort(rng.uniform(0.1, 5.0, n))
-    UtW = np.ones((n, 1))
-    Uty = rng.standard_normal(n)
-    UtG, degenerate_idxs, valid_idxs = _degenerate_snp_inputs(rng, n, n_snps, pattern)
-
-    uab_invariant_soa = compute_uab_invariant_soa(UtW, Uty, 1)
-    uab_varying_soa = batch_compute_uab_varying_soa_numpy(1, UtW, Uty, UtG.T)
-    iab_s_ww, iab_s_wy, iab_s_yy, iab_logdet = compute_iab_invariant_scalars_ncvt1(
-        uab_invariant_soa
-    )
-
-    lambdas, logls, _ = golden_section_optimize_lambda_split_ncvt1_numpy(
-        eigenvalues,
-        uab_varying_soa,
-        uab_invariant_soa,
-        iab_s_ww,
-        iab_s_wy,
-        iab_s_yy,
-        iab_logdet,
-        l_min=l_min,
-    )
-
-    assert lambdas.shape == (n_snps,), f"Expected ({n_snps},), got {lambdas.shape}"
-
-    if pattern == "all_zero":
-        np.testing.assert_allclose(
-            lambdas,
-            l_min,
-            rtol=1e-4,
-            err_msg="Split ncvt1 all-degenerate SNPs should return l_min lambda",
-        )
-
-    # Reconstruct full Uab for Wald stats
-    Uab_batch = reconstruct_uab_from_soa(uab_invariant_soa, uab_varying_soa, 1)
-    betas, ses, pwalds = _wald_stats_from_lambdas(1, lambdas, eigenvalues, Uab_batch, n)
-
-    assert np.all(np.isnan(betas[degenerate_idxs])), (
-        f"Degenerate betas should be NaN, got {betas[degenerate_idxs]}"
-    )
-    assert np.all(np.isnan(ses[degenerate_idxs])), (
-        f"Degenerate ses should be NaN, got {ses[degenerate_idxs]}"
-    )
-    assert np.all(np.isnan(pwalds[degenerate_idxs])), (
-        f"Degenerate p_walds should be NaN, got {pwalds[degenerate_idxs]}"
-    )
-    if valid_idxs:
-        assert np.all(np.isfinite(betas[valid_idxs])), (
-            f"Valid betas should be finite, got {betas[valid_idxs]}"
-        )
-        assert np.all(np.isfinite(ses[valid_idxs])), (
-            f"Valid ses should be finite, got {ses[valid_idxs]}"
-        )
-        assert np.all(np.isfinite(pwalds[valid_idxs])), (
-            f"Valid p_walds should be finite, got {pwalds[valid_idxs]}"
-        )
-
-
-# ---------------------------------------------------------------------------
 # Scalar-vs-batch REML optimizer parity tests
 # ---------------------------------------------------------------------------
 
@@ -429,82 +343,4 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
             f"Scalar logl {logl_scalar:.6e} vs batch logl {logl_batch:.6e} "
             "disagree beyond rtol=1e-10"
         ),
-    )
-
-
-# ---------------------------------------------------------------------------
-# reconstruct_uab_from_soa generalization for n_cvt > 1
-# ---------------------------------------------------------------------------
-
-
-def test_reconstruct_uab_from_soa_ncvt1_fast_path():
-    """reconstruct_uab_from_soa's n_cvt=1 fast path rebuilds the six-column Uab."""
-    from tests.lmm_accel._helpers import reconstruct_uab_from_soa
-
-    rng = np.random.default_rng(42)
-    n_samples, n_snps = 50, 8
-    UtW = np.ones((n_samples, 1))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
-
-    Uab_ref = batch_compute_uab_numpy(1, UtW, Uty, UtG.T)
-
-    # Build SoA for n_cvt=1
-    inv_soa = np.stack([Uab_ref[0, :, 0], Uab_ref[0, :, 2], Uab_ref[0, :, 5]])  # (3, n)
-    var_soa = np.stack(
-        [Uab_ref[:, :, 1], Uab_ref[:, :, 3], Uab_ref[:, :, 4]], axis=1
-    )  # (n_snps, 3, n)
-
-    Uab_recon = reconstruct_uab_from_soa(inv_soa, var_soa, 1)
-    np.testing.assert_allclose(
-        Uab_recon,
-        Uab_ref,
-        rtol=1e-14,
-        atol=0,
-        err_msg="reconstruct_uab_from_soa backward compat (no n_cvt) failed",
-    )
-
-
-@pytest.mark.parametrize(
-    ("n_cvt", "seed", "n_samples", "n_snps"),
-    [(2, 7, 40, 6), (4, 13, 30, 5)],
-)
-def test_reconstruct_uab_from_soa_multi_cvt(n_cvt, seed, n_samples, n_snps):
-    """reconstruct_uab_from_soa round-trips via classify_uab_columns for n_cvt > 1."""
-    from tests.lmm_accel._helpers import (
-        classify_uab_columns,
-        reconstruct_uab_from_soa,
-    )
-
-    rng = np.random.default_rng(seed)
-    UtW = rng.standard_normal((n_samples, n_cvt))
-    Uty = rng.standard_normal(n_samples)
-    UtG = rng.standard_normal((n_samples, n_snps))
-
-    # Full reference Uab
-    Uab_ref = batch_compute_uab_numpy(n_cvt, UtW, Uty, UtG.T)
-
-    inv_indices, var_indices = classify_uab_columns(n_cvt)
-
-    # Build invariant SoA from first SNP's Uab (all SNPs share invariant columns)
-    inv_list = list(inv_indices)
-    uab_invariant_soa = np.ascontiguousarray(
-        Uab_ref[0, :, inv_list]
-    )  # (n_inv, n_samples)
-
-    # Build varying SoA
-    uab_varying_soa = np.ascontiguousarray(
-        Uab_ref[:, :, list(var_indices)].transpose(0, 2, 1)
-    )  # (n_snps, n_var, n_samples)
-
-    # Reconstruct should match Uab_ref
-    Uab_recon = reconstruct_uab_from_soa(
-        uab_invariant_soa, uab_varying_soa, n_cvt=n_cvt
-    )
-    np.testing.assert_allclose(
-        Uab_recon,
-        Uab_ref,
-        rtol=1e-14,
-        atol=0,
-        err_msg=f"reconstruct_uab_from_soa failed to round-trip for n_cvt={n_cvt}",
     )

@@ -38,7 +38,7 @@ def _ncvt1_workspace(fused_data, n_threads=1, **kwargs):
     Every mode shares one creator, so the mode and its extra inputs are the
     only thing a caller varies.
     """
-    eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+    eigenvalues, w, Uty, _, uab_inv_soa, n_samples = fused_data
     return accel.require().create_workspace_c(
         eigenvalues,
         uab_inv_soa,
@@ -178,7 +178,7 @@ class TestFusedParity:
         """
         from jamma.lmm import accel
 
-        eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples = fused_data
 
         ws_fused = _ncvt1_workspace(fused_data, lmm_mode=1)
         result = accel.require().compute_lmm_chunk_c(ws_fused, utg_t, 1)
@@ -197,7 +197,7 @@ class TestFusedParity:
         """
         from jamma.lmm import accel
 
-        _, _, _, utg_t, _, _, _ = fused_data
+        _, _, _, utg_t, _, _ = fused_data
 
         ws_fused = _ncvt1_workspace(fused_data, n_threads=4, lmm_mode=1)
         single = accel.require().compute_lmm_chunk_c(ws_fused, utg_t, 1)
@@ -223,7 +223,7 @@ class TestFusedParity:
         """Fused mode-4 matches the NumPy Wald, Score and LRT statistics."""
         from jamma.lmm import accel
 
-        eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples = fused_data
         _, _, _, Hi_eval_null, logl_H0 = score_lrt_data
 
         ws_fused = _ncvt1_workspace(
@@ -244,7 +244,7 @@ class TestFusedParity:
         """Fused compute raises ValueError for wrong UtG_T shape."""
         from jamma.lmm import accel
 
-        _, _, _, utg_t, _, _, _ = fused_data
+        _, _, _, utg_t, _, _ = fused_data
 
         ws = _ncvt1_workspace(fused_data, lmm_mode=1)
 
@@ -260,7 +260,7 @@ class TestFusedParity:
 
         from jamma.lmm import accel
 
-        eigenvalues, w, Uty, _, uab_inv_soa, _, n_samples = fused_data
+        eigenvalues, w, Uty, _, uab_inv_soa, n_samples = fused_data
 
         # Make copies that we can track
         UtW_tracked = w[:, None].copy()
@@ -298,7 +298,7 @@ class TestFusedParity:
         """Fused Wald handles degenerate (constant) SNPs: NaN beta/se/pwald."""
         from jamma.lmm import accel
 
-        _, _, _, utg_t, _, _, _ = fused_data
+        _, _, _, utg_t, _, _ = fused_data
 
         # Make first SNP degenerate: constant genotype -> all zeros after rotation
         utg_t_degen = utg_t.copy()
@@ -328,7 +328,7 @@ class TestFusedParity:
         """
         from jamma.lmm import accel
 
-        eigenvalues, w, Uty, utg_t, uab_inv_soa, uab_var_soa, n_samples = fused_data
+        eigenvalues, w, Uty, utg_t, uab_inv_soa, n_samples = fused_data
         Hi_eval_null = 1.0 / (0.5 * eigenvalues + 1.0)
 
         score_ws = _ncvt1_workspace(fused_data, lmm_mode=3, hi_eval_null=Hi_eval_null)

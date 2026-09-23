@@ -137,21 +137,14 @@ def _computed_pairs(*, workers: int, solve):
     eigen_plan = plan_eigen_driver_for_machine(
         8, 100, budget_gb=None, inplace_blocker=None
     )
-    chr_names = list(_ORDER_BY_CHR)
     return _computed_eigen_pairs(
         _synthetic_stream(),
-        chr_names,
-        valid_mask=np.ones(8, dtype=bool),
-        n_valid=8,
-        pre_subset=False,
-        all_samples_valid=True,
-        partitions={c: np.arange(5) for c in chr_names},
-        check_memory=False,
-        show_progress=False,
+        {c: np.arange(5) for c in _ORDER_BY_CHR},
+        subset_rows=None,
+        config=LmmConfig(check_memory=False, show_progress=False),
         loco=LocoConfig(),
         cache_write=None,
         eigen_plan=eigen_plan,
-        mem_budget=None,
         workers=workers,
         solve=solve,
     )

@@ -44,11 +44,12 @@ from jamma.lmm.eigen_cache import (
     write_eigen_cache_manifest,
 )
 from jamma.lmm.eigen_io import EigenGeneration, read_eigen_files
-from jamma.lmm.loco_config import LocoConfig
+from jamma.lmm.loco_config import LocoConfig, LocoRun
 from jamma.lmm.loco_workers import LocoWorkerPlan, solve_eigen_pairs
+from jamma.lmm.schema import LmmConfig
 
 EigenPairs = Generator[tuple[str, np.ndarray, np.ndarray], None, None]
-"""``(chr_name, eigenvalues, U)`` per chromosome, in ``chr_names`` order."""
+"""``(chr_name, eigenvalues, U)`` per chromosome, in the run's chromosome order."""
 
 
 @dataclass(frozen=True)
@@ -111,19 +112,7 @@ def loco_retained_set_for(execution: ExecutableAssociationPlan) -> LocoRetainedS
 
 
 def eigen_pairs_for(
-    bed_path: Path,
-    chr_names: list[str],
-    *,
-    loco: LocoConfig,
-    maf_threshold: float,
-    miss_threshold: float,
-    valid_mask: np.ndarray,
-    partitions: dict[str, np.ndarray],
-    check_memory: bool,
-    show_progress: bool,
-    eigen_plan: EigenDriverPlan,
-    workers: LocoWorkerPlan,
-    mem_budget: float | None = None,
+    run: LocoRun, chromosomes: dict[str, np.ndarray], workers: LocoWorkerPlan
 ) -> EigenPairSource:
     """Choose the eigenpair source for one LOCO run.
 
@@ -133,33 +122,24 @@ def eigen_pairs_for(
     and, once every chromosome has been consumed, the manifest are written.
 
     Args:
-        bed_path: PLINK file prefix (without extension).
-        chr_names: Chromosomes in the order the run iterates them.
-        loco: Artifact locations and naming, -ksnps restriction, chunk width.
-        maf_threshold: Minimum MAF for the kinship SNP filter and cache key.
-        miss_threshold: Maximum missing rate, same two uses.
-        valid_mask: Boolean (n_samples_total,) analysed-sample mask.
-        partitions: chr_name -> global SNP indices, for progress output.
-        check_memory: Passed to the kinship streamer and eigendecomposition.
-        show_progress: Whether to log per-chromosome progress.
-        eigen_plan: The driver every chromosome's decomposition runs, from
-            ``plan_loco_eigen_driver``.
+        run: The resolved run.
+        chromosomes: chr_name -> global SNP indices, in the order the run
+            iterates them. The indices only feed progress output.
         workers: How many chromosomes decompose at once, from
             ``plan_loco_workers``; its ``consumer_gb`` is what the kinship
             streamer reserves for the eigen consumer.
-        mem_budget: User-set ceiling in GB, or None for no ceiling. Reaches the
-            kinship streamer's veto and each decomposition's gate.
     """
-    n_valid = int(np.sum(valid_mask))
-    all_samples_valid = n_valid == len(valid_mask)
+    loco, config = run.loco, run.config
+    rows = run.analysed_rows
+    all_samples_valid = len(rows) == run.meta.n_samples
 
     cache_write: _EigenCacheWrite | None = None
     if loco.eigen_dir is not None:
         key, components = compute_eigen_cache_key(
-            bed_path,
-            maf_threshold=maf_threshold,
-            miss_threshold=miss_threshold,
-            valid_mask=valid_mask,
+            run.bed_path,
+            maf_threshold=config.maf_threshold,
+            miss_threshold=config.miss_threshold,
+            valid_mask=run.samples.valid_mask,
             ksnps_indices=loco.ksnps_indices,
         )
         if loco.write_eigen:
@@ -168,7 +148,7 @@ def eigen_pairs_for(
             )
         else:
             cache = _validated_eigen_cache(
-                loco, chr_names, key, eigen_dir=loco.eigen_dir
+                loco, list(chromosomes), key, eigen_dir=loco.eigen_dir
             )
             if cache is not None:
                 logger.info("LOCO workers: 0 (cached eigenpairs)")
@@ -179,48 +159,36 @@ def eigen_pairs_for(
                     )
                 pairs = _cached_eigen_pairs(
                     cache,
-                    chr_names,
-                    n_valid=n_valid,
-                    partitions=partitions,
-                    show_progress=show_progress,
+                    chromosomes,
+                    n_valid=len(rows),
+                    show_progress=config.show_progress,
                 )
                 return EigenPairSource(pairs, snp_stats=None)
 
     logger.info(workers.describe())
-    # Without a kinship file to save, accumulate at n_valid x n_valid rather
-    # than materialising n_samples^2 for a post-hoc subset.
-    kinship_valid_indices = (
-        None
-        if all_samples_valid or loco.kinship_output_dir is not None
-        else np.where(valid_mask)[0]
-    )
+    kinship_is_analysed = run.execution.resolved_kinship.n_samples == len(rows)
     stream = compute_loco_kinship_streaming(
-        bed_path,
+        run.bed_path,
         chunk_size=DEFAULT_STATS_CHUNK,
-        maf_threshold=maf_threshold,
-        miss_threshold=miss_threshold,
-        check_memory=check_memory,
-        show_progress=show_progress,
+        maf_threshold=config.maf_threshold,
+        miss_threshold=config.miss_threshold,
+        check_memory=config.check_memory,
+        show_progress=config.show_progress,
         ksnps_indices=loco.ksnps_indices,
-        valid_indices=kinship_valid_indices,
-        filter_sample_indices=None if all_samples_valid else np.where(valid_mask)[0],
-        mem_budget=mem_budget,
+        valid_indices=None if all_samples_valid or not kinship_is_analysed else rows,
+        filter_sample_indices=None if all_samples_valid else rows,
+        mem_budget=config.mem_budget,
         consumer_gb=workers.consumer_gb,
+        meta=run.meta,
     )
     pairs = _computed_eigen_pairs(
         stream,
-        chr_names,
-        valid_mask=valid_mask,
-        n_valid=n_valid,
-        pre_subset=kinship_valid_indices is not None,
-        all_samples_valid=all_samples_valid,
-        partitions=partitions,
-        check_memory=check_memory,
-        show_progress=show_progress,
+        chromosomes,
+        subset_rows=None if kinship_is_analysed else rows,
+        config=config,
         loco=loco,
         cache_write=cache_write,
-        eigen_plan=eigen_plan,
-        mem_budget=mem_budget,
+        eigen_plan=run.eigen_plan,
         workers=workers.workers,
     )
     return EigenPairSource(pairs, snp_stats=stream.snp_stats)
@@ -305,10 +273,9 @@ def _write_loco_eigen(
 
 def _cached_eigen_pairs(
     eigen_cache: dict[str, tuple[Path, Path]],
-    chr_names: list[str],
+    chromosomes: dict[str, np.ndarray],
     *,
     n_valid: int,
-    partitions: dict[str, np.ndarray],
     show_progress: bool,
 ) -> EigenPairs:
     """Yield per-chromosome eigenpairs read from a complete eigen cache.
@@ -316,12 +283,12 @@ def _cached_eigen_pairs(
     No kinship is computed on this path: the cache was written by an earlier
     run and validated by the caller before the loop starts.
     """
-    for chr_idx, chr_name in enumerate(chr_names):
+    for chr_idx, (chr_name, snp_indices) in enumerate(chromosomes.items()):
         d_path, u_path = eigen_cache[chr_name]
         if show_progress:
             logger.info(
-                f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chr_names)}), "
-                f"{len(partitions[chr_name])} SNPs, loading cached eigen..."
+                f"LOCO: chromosome {chr_name} ({chr_idx + 1}/{len(chromosomes)}), "
+                f"{len(snp_indices)} SNPs, loading cached eigen..."
             )
         try:
             eigenvalues, U = read_eigen_files(d_path, u_path, n_samples=n_valid)
@@ -332,47 +299,30 @@ def _cached_eigen_pairs(
 
 
 def _analysed_subset(
-    K_loco: np.ndarray,
-    *,
-    valid_mask: np.ndarray,
-    n_valid: int,
-    pre_subset: bool,
-    all_samples_valid: bool,
-    copy: bool,
+    K_loco: np.ndarray, subset_rows: np.ndarray | None, *, copy: bool
 ) -> np.ndarray:
     """K_loco over the analysed samples, owned by the caller when ``copy`` is set.
 
-    The stream's buffer is returned as-is when it already has the analysed
-    shape and the caller consumes it before the next pull; ``copy`` makes an
-    owned array of it instead, for a worker that outlives that pull. The
-    np.ix_ subset is a fresh array either way.
+    ``subset_rows`` is None when the stream already accumulated over the
+    analysed samples. Its buffer is then returned as-is when the caller
+    consumes it before the next pull; ``copy`` makes an owned array of it
+    instead, for a worker that outlives that pull. The np.ix_ subset is a
+    fresh array either way.
     """
-    if pre_subset:
-        if K_loco.shape != (n_valid, n_valid):
-            raise RuntimeError(
-                f"Expected K_loco shape ({n_valid}, {n_valid}) from early "
-                f"subsetting, got {K_loco.shape}"
-            )
-    elif not all_samples_valid:
-        return K_loco[np.ix_(valid_mask, valid_mask)]
+    if subset_rows is not None:
+        return K_loco[np.ix_(subset_rows, subset_rows)]
     return K_loco.copy() if copy else K_loco
 
 
 def _computed_eigen_pairs(
     loco_iter: Iterable[tuple[str, np.ndarray]],
-    chr_names: list[str],
+    chromosomes: dict[str, np.ndarray],
     *,
-    valid_mask: np.ndarray,
-    n_valid: int,
-    pre_subset: bool,
-    all_samples_valid: bool,
-    partitions: dict[str, np.ndarray],
-    check_memory: bool,
-    show_progress: bool,
+    subset_rows: np.ndarray | None,
+    config: LmmConfig,
     loco: LocoConfig,
     cache_write: _EigenCacheWrite | None,
     eigen_plan: EigenDriverPlan,
-    mem_budget: float | None,
     workers: int = 1,
     solve: Callable[
         ..., tuple[np.ndarray, np.ndarray]
@@ -380,7 +330,8 @@ def _computed_eigen_pairs(
 ) -> EigenPairs:
     """Yield per-chromosome eigenpairs by eigendecomposing streamed LOCO kinship.
 
-    Each K_loco is optionally saved, subset to the analysed samples and
+    Each K_loco is optionally saved, subset to ``subset_rows`` unless the
+    streamer already accumulated over the analysed samples, and
     eigendecomposed. Cache artifacts are written as the consumer advances.
 
     Concurrent workers receive owned copies of the stream's reusable buffer
@@ -391,10 +342,8 @@ def _computed_eigen_pairs(
     With ``cache_write``, every pair is written under one fresh generation.
     The manifest is replaced only after the consumer drains every chromosome,
     so interruption leaves the prior generation committed and readable.
-
-    ``pre_subset`` records that the kinship streamer already accumulated at
-    n_valid x n_valid, which lets the subset step skip a post-hoc np.ix_ copy.
     """
+    show_progress = config.show_progress
     members: dict[str, tuple[Path, Path]] = {}
     if cache_write is not None:
         eigen_dir = cache_write.generation.directory
@@ -411,8 +360,8 @@ def _computed_eigen_pairs(
         center_kinship(K)
         return solve(
             K,
-            check_memory=check_memory,
-            mem_budget=mem_budget,
+            check_memory=config.check_memory,
+            mem_budget=config.mem_budget,
             eigen_plan=eigen_plan,
             show_progress=show_progress and workers == 1,
             n_threads=n_threads,
@@ -424,8 +373,8 @@ def _computed_eigen_pairs(
             chr_idx += 1  # noqa: SIM113 -- enumerate retains the preceding matrix
             if show_progress:
                 logger.info(
-                    f"LOCO: chromosome {chr_name} ({chr_idx}/{len(chr_names)}), "
-                    f"{len(partitions[chr_name])} SNPs, eigendecomposing..."
+                    f"LOCO: chromosome {chr_name} ({chr_idx}/{len(chromosomes)}), "
+                    f"{len(chromosomes[chr_name])} SNPs, eigendecomposing..."
                 )
             if loco.kinship_output_dir is not None:
                 _save_loco_kinship(
@@ -435,14 +384,7 @@ def _computed_eigen_pairs(
             # after a non-inplace solver returns a separate eigenvector array.
             yield (
                 chr_name,
-                _analysed_subset(
-                    K_loco,
-                    valid_mask=valid_mask,
-                    n_valid=n_valid,
-                    pre_subset=pre_subset,
-                    all_samples_valid=all_samples_valid,
-                    copy=workers > 1,
-                ),
+                _analysed_subset(K_loco, subset_rows, copy=workers > 1),
             )
             del K_loco
 

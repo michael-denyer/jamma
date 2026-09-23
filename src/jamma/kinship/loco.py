@@ -33,6 +33,7 @@ from jamma.core.eigen_plan import array_gb, square_matrix_gb
 from jamma.core.progress import progress_iterator
 from jamma.core.snp_stats import SnpStatsCache, collect_streamed_snp_stats
 from jamma.io.plink import (
+    PlinkMetadata,
     get_plink_metadata,
     partitions_from_metadata,
     stream_genotype_chunks,
@@ -324,6 +325,7 @@ def compute_loco_kinship_streaming(
     filter_sample_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
     consumer_gb: float,
+    meta: PlinkMetadata | None = None,
 ) -> LocoKinshipStream:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -361,6 +363,8 @@ def compute_loco_kinship_streaming(
         consumer_gb: Peak the downstream eigen and association work holds
             while this stream is live. The gate and the batch planner both
             reserve it beside the retained set.
+        meta: PLINK metadata already read from ``bed_path``, or None to read
+            it here.
 
     Returns:
         A consume-once LocoKinshipStream. Iterate it for (chr_name, K_loco) pairs,
@@ -384,7 +388,8 @@ def compute_loco_kinship_streaming(
     start_time = time.perf_counter()
 
     # Get dimensions and chromosome metadata
-    meta = get_plink_metadata(bed_path)
+    if meta is None:
+        meta = get_plink_metadata(bed_path)
     n_samples = meta.n_samples
     n_snps = meta.n_snps
     chromosomes = meta.chromosome

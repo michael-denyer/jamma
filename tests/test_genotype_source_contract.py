@@ -106,19 +106,17 @@ def source_case(request: pytest.FixtureRequest) -> _SourceCase:
     partitions = partitions_from_metadata(plink.meta)
     chromosome_indices = next(iter(partitions.values()))
     selected = chromosome_indices[np.array([3, 10, 21], dtype=np.intp)]
-    source_rows = np.array([1, 4, 8, 10, 15, 22, 31, 47, 63, 88], dtype=np.intp)
-    local_positions = np.array([0, 2, 3, 6, 8], dtype=np.intp)
-    physical_rows = source_rows[local_positions]
+    physical_rows = np.array([1, 8, 10, 31, 63], dtype=np.intp)
     return _SourceCase(
         source=_LocoChrSource(
             LOCO.bfile,
             chromosome_indices,
-            source_rows,
+            plink.n_samples,
             snp_meta=SnpMeta.from_plink_meta(plink.meta),
             col_chunk_size=17,
             snp_stats_cache=None,
         ),
-        samples=_sample_basis(len(source_rows), local_positions),
+        samples=_sample_basis(plink.n_samples, physical_rows),
         filters=SnpFilterSpec(
             maf_threshold=0.0,
             miss_threshold=1.0,
@@ -284,7 +282,7 @@ def test_loco_source_reuses_cache_only_for_the_full_physical_sample_basis() -> N
     source = _LocoChrSource(
         LOCO.bfile,
         chromosome_indices,
-        np.arange(plink.n_samples, dtype=np.intp),
+        plink.n_samples,
         snp_meta=SnpMeta.from_plink_meta(plink.meta),
         col_chunk_size=17,
         snp_stats_cache=cache,

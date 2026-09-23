@@ -30,6 +30,7 @@ import numpy as np
 from loguru import logger
 
 import jamma
+from jamma.core import memory
 from jamma.core.constants import Env
 from jamma.core.eigen_plan import EigenDriverPlan
 from jamma.core.telemetry import BenchmarkRecord, append_benchmark_record
@@ -63,8 +64,10 @@ from jamma.lmm.eigen_io import (
     write_eigen_files,
 )
 from jamma.lmm.genotype_source import SampleBasis
-from jamma.lmm.loco import run_lmm_loco_prepared
+from jamma.lmm.loco import LocoRun, run_loco
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
+from jamma.lmm.loco_eigen import plan_loco_eigen_driver
+from jamma.lmm.prepare_common import AnalysedPhenotype
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
     KinshipResult,
@@ -475,18 +478,21 @@ class PipelineRunner:
         """
         column = self.config.phenotype_columns[0]
         t_loco = time.perf_counter()
-        loco = run_lmm_loco_prepared(
+        execution = analysis.execution
+        run = LocoRun(
             self.config.bfile,
             meta,
-            samples.phenotypes[column],
-            samples.covariates,
-            samples.valid_mask,
-            config=analysis.lmm,
-            loco=analysis.loco,
-            output_path=assoc_path,
-            execution=analysis.execution,
-            eigen_plan=eigen_plan,
+            AnalysedPhenotype.from_mask(
+                samples.phenotypes[column], samples.covariates, samples.valid_mask
+            ),
+            analysis.lmm,
+            analysis.loco,
+            execution,
+            eigen_plan
+            if eigen_plan is not None
+            else plan_loco_eigen_driver(execution, memory.available_ram_gb()),
         )
+        loco = run_loco(run, assoc_path)
         phenotype = PhenotypeResult(
             column=column,
             associations=loco.associations,

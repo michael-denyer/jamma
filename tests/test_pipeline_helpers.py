@@ -364,9 +364,7 @@ class TestAssociateLoco:
     ) -> PipelineRunner:
         """Construct a runner and stub out the LOCO orchestrator."""
         runner = _make_runner(tmp_path, loco=True)
-        monkeypatch.setattr(
-            pipeline_mod, "run_lmm_loco_prepared", lambda *_a, **_kw: loco_result
-        )
+        monkeypatch.setattr(pipeline_mod, "run_loco", lambda *_a, **_kw: loco_result)
         return runner
 
     @staticmethod
@@ -462,8 +460,8 @@ class TestAssociateLoco:
         captured: dict[str, object] = {}
         phenos = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
-        def _capturing_loco(*_args, **kwargs):  # type: ignore[no-untyped-def]
-            captured.update(kwargs)
+        def _capturing_loco(run, _output_path):  # type: ignore[no-untyped-def]
+            captured["config"] = run.config
             return LmmRunResult(associations=[], n_tested=0)
 
         # Every knob off its default, so a projection that dropped one shows up.
@@ -480,7 +478,7 @@ class TestAssociateLoco:
             n_refine=23,
             loco=True,
         )
-        monkeypatch.setattr(pipeline_mod, "run_lmm_loco_prepared", _capturing_loco)
+        monkeypatch.setattr(pipeline_mod, "run_loco", _capturing_loco)
 
         self._call(runner, tmp_path, phenos, None)
 
@@ -497,7 +495,7 @@ class TestAssociateLoco:
         def _raising_loco(*_args, **_kw):
             raise RuntimeError("sentinel: LOCO failed")
 
-        monkeypatch.setattr(pipeline_mod, "run_lmm_loco_prepared", _raising_loco)
+        monkeypatch.setattr(pipeline_mod, "run_loco", _raising_loco)
 
         with pytest.raises(RuntimeError, match="sentinel: LOCO failed"):
             self._call(runner, tmp_path, phenos, None)

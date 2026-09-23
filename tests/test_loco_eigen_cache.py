@@ -235,9 +235,8 @@ class TestValidatedEigenCache:
         pairs = list(
             _cached_eigen_pairs(
                 selected,
-                ["1", "2"],
+                {"1": np.array([0]), "2": np.array([1])},
                 n_valid=2,
-                partitions={"1": np.array([0]), "2": np.array([1])},
                 show_progress=False,
             )
         )

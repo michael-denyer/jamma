@@ -17,6 +17,7 @@ from jamma.lmm.eigen import center_kinship, eigendecompose_kinship_in_scope
 from jamma.lmm.loco_config import LocoConfig
 from jamma.lmm.loco_eigen import _computed_eigen_pairs
 from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs
+from jamma.lmm.schema import LmmConfig
 from tests.fakes.blas import fake_blas_controller
 
 pytestmark = pytest.mark.tier0
@@ -125,18 +126,12 @@ def test_reused_stream_buffer_is_copied_and_inputs_stay_bounded(monkeypatch):
     )
     pairs = _computed_eigen_pairs(
         stream(),
-        names,
-        valid_mask=np.ones(16, dtype=bool),
-        n_valid=16,
-        pre_subset=True,
-        all_samples_valid=True,
-        partitions={name: np.arange(1) for name in names},
-        check_memory=False,
-        show_progress=False,
+        {name: np.arange(1) for name in names},
+        subset_rows=None,
+        config=LmmConfig(check_memory=False, show_progress=False),
         loco=LocoConfig(),
         cache_write=None,
         eigen_plan=plan,
-        mem_budget=None,
         workers=3,
         solve=solve,
     )

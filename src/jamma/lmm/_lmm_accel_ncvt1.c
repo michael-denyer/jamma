@@ -32,10 +32,7 @@
 /* Coarse-grid block: the lambda grid and its per-grid precomputed data.
  * NULL for mode 3 (Score does no lambda search), non-NULL otherwise. */
 typedef struct {
-    int n_grid;
-    int n_refine;
-    double log_l_min, step;   /* bracket endpoints as computed at creation */
-    double *lambda_grid;      /* (n_grid,) */
+    lambda_search_t search;
     double *hi_eval_grid;     /* (n_grid * n_samples) */
     double *logdet_h_grid;    /* (n_grid,) */
     grid_invariant_t *grid_inv;  /* (n_grid,) */
@@ -149,7 +146,7 @@ static void lmm_workspace_free(lmm_workspace_t *ws)
 {
     if (!ws) return;
     if (ws->grid) {
-        free(ws->grid->lambda_grid);
+        free(ws->grid->search.lambda_grid);
         free(ws->grid->hi_eval_grid);
         free(ws->grid->logdet_h_grid);
         free(ws->grid->grid_inv);
@@ -253,14 +250,14 @@ static int init_ncvt1_workspace(
     ncvt1_grid_t *grid = (ncvt1_grid_t *)calloc(1, sizeof(ncvt1_grid_t));
     if (!grid) { PyErr_NoMemory(); return -1; }
 
-    grid->lambda_grid   = (double *)malloc(layout->grid_points * sizeof(double));
+    double *lambda_grid = (double *)malloc(layout->grid_points * sizeof(double));
     grid->hi_eval_grid  = alloc_aligned_doubles(layout->hi_eval_grid);
     grid->logdet_h_grid = (double *)malloc(layout->grid_points * sizeof(double));
     grid->grid_inv      = (grid_invariant_t *)malloc(
         layout->grid_points * sizeof(grid_invariant_t));
-    if (!grid->lambda_grid || !grid->hi_eval_grid ||
+    if (!lambda_grid || !grid->hi_eval_grid ||
         !grid->logdet_h_grid || !grid->grid_inv) {
-        free(grid->lambda_grid);
+        free(lambda_grid);
         free(grid->hi_eval_grid);
         free(grid->logdet_h_grid);
         free(grid->grid_inv);
@@ -271,12 +268,13 @@ static int init_ncvt1_workspace(
 
     build_grid_ncvt1(n_grid, n_samples, log_l_min, step,
                      ws->eigenvalues, ws->inv_ww, ws->inv_wy, ws->inv_yy,
-                     grid->lambda_grid, grid->hi_eval_grid, grid->logdet_h_grid,
+                     lambda_grid, grid->hi_eval_grid, grid->logdet_h_grid,
                      grid->grid_inv);
-    grid->n_grid = n_grid;
-    grid->n_refine = n_refine;
-    grid->log_l_min = log_l_min;
-    grid->step = step;
+    grid->search = (lambda_search_t){
+        .lambda_grid = lambda_grid,
+        .log_l_min = log_l_min, .step = step,
+        .n_grid = n_grid, .n_refine = n_refine,
+    };
     ws->grid = grid;
     return 0;
 }
@@ -489,8 +487,6 @@ static PyObject *ncvt1_test_loop(
     double *out_p_lrts      = tests.lrt ? (double *)PyArray_DATA(out.p_lrts) : NULL;
 
     const ncvt1_grid_t *grid = ws->grid;
-    int n_grid    = grid->n_grid;
-    int n_refine  = grid->n_refine;
     int df        = ws->df;
     double reml_const = ws->reml_const;
     double mle_const  = tests.lrt ? ws->lrt->mle_const : 0.0;
@@ -569,10 +565,18 @@ static PyObject *ncvt1_test_loop(
                          + ((iab_p1_xx > 0.0) ? log(iab_p1_xx) : 0.0);
         }
 
+        const ncvt1_snp_t snp_in = {
+            .var_wx = vwx, .var_xx = vxx, .var_xy = vxy,
+            .inv_ww = inv_ww, .inv_wy = inv_wy, .inv_yy = inv_yy,
+            .eigenvalues = ws->eigenvalues, .n_samples = n_samples,
+            .logdet_iab = logdet_iab,
+            .reml_const = reml_const, .mle_const = mle_const,
+        };
         int best_reml_idx, best_mle_idx;
         coarse_grid_ncvt1_split(
             vwx, vxx, vxy, n_samples,
-            grid->hi_eval_grid, grid->logdet_h_grid, grid->grid_inv, n_grid,
+            grid->hi_eval_grid, grid->logdet_h_grid, grid->grid_inv,
+            grid->search.n_grid,
             logdet_iab, df, reml_const, mle_const,
             tests.reml ? &best_reml_idx : NULL,
             tests.lrt ? &best_mle_idx : NULL
@@ -583,12 +587,8 @@ static PyObject *ncvt1_test_loop(
             double logl_reml, wald_beta, wald_se, wald_f;
             int wald_valid;
             double lambda_reml = refine_lambda_ncvt1_split(
-                vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
-                ws->eigenvalues, logdet_iab,
-                n_samples, grid->lambda_grid, grid->log_l_min, grid->step,
-                n_grid, n_refine, best_reml_idx,
-                df, reml_const, &logl_reml, &wald_beta, &wald_se, &wald_f,
-                &wald_valid
+                &snp_in, &grid->search, best_reml_idx, df,
+                &logl_reml, &wald_beta, &wald_se, &wald_f, &wald_valid
             );
 
             out_lambdas[snp] = lambda_reml;
@@ -603,10 +603,7 @@ static PyObject *ncvt1_test_loop(
         if (tests.lrt) {
             double logl_H1;
             double lambda_mle = refine_lambda_mle_ncvt1_split(
-                vwx, vxx, vxy, inv_ww, inv_wy, inv_yy,
-                ws->eigenvalues, n_samples,
-                grid->log_l_min, grid->step, n_grid, n_refine,
-                best_mle_idx, mle_const, &logl_H1
+                &snp_in, &grid->search, best_mle_idx, &logl_H1
             );
 
             out_lambdas_mle[snp] = lambda_mle;

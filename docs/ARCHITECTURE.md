@@ -184,8 +184,9 @@ src/jamma/
 │   ├── _lmm_accel_internal.h # Private declarations shared with module registration
 │   ├── _lmm_support.c/.h   # Shared shell: mode-input parse, thread clamp, result dict, NumPy C-API glue
 │   ├── _lmm_stats.c/.h     # Wald/Score/LRT statistics kernels shared by both workspaces
-│   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) workspace creator and fused compute
-│   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 workspace creator and fused compute
+│   ├── _lmm_kernels_general.c/.h  # General (n_cvt>1) likelihoods, coarse grid, and refiners
+│   ├── _lmm_kernels_ncvt1.c/.h    # n_cvt=1 likelihoods, coarse grid, and refiners
+│   ├── _lmm_lambda_search.h # The one golden-section and Newton lambda driver all refiners call
 │   ├── _lmm_logdet.h       # logdet(H) as a mantissa product with exact exponent; hot-loop inline
 │   └── _lmm_types.h        # Plain-C shared types: Pab table, lmm_tests_t mode decode
 │                          #

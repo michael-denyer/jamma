@@ -2,13 +2,18 @@
 
 Each case calls the raw ``_jlinalg`` entry point with arguments that fail one
 check, asserts the exception, and then repeats the call to show the reused
-arguments' refcounts do not drift. A missed release on an error branch grows
-a refcount monotonically, and a double release crashes the interpreter.
+array arguments' refcounts do not drift and no allocation the call made
+survives it. A missed release of a borrowed argument grows its refcount
+monotonically, a missed release of a temporary (the WRITEBACKIFCOPY copy that
+``inplace=True`` rejects) leaves a block behind on every call, and a double
+release crashes the interpreter.
 """
 
 from __future__ import annotations
 
+import gc
 import sys
+import tracemalloc
 from collections.abc import Callable
 
 import numpy as np
@@ -92,22 +97,63 @@ EIGH_REJECTIONS = {
 
 
 def _refcounts(args: tuple, kwargs: dict) -> tuple[int, ...]:
-    return tuple(sys.getrefcount(v) for v in (*args, *kwargs.values()))
+    """Refcounts of the array-like arguments only.
+
+    ``True`` and the other interpreter singletons are skipped: every thread in
+    the process moves their count, and CPython 3.12+ makes them immortal.
+    """
+    return tuple(
+        sys.getrefcount(v)
+        for v in (*args, *kwargs.values())
+        if isinstance(v, (np.ndarray, list))
+    )
+
+
+def _invoke(fn: Callable, args: tuple, kwargs: dict) -> object:
+    return fn(*args, **kwargs)
+
+
+_INVOKE_LINE = _invoke.__code__.co_firstlineno + 1
+
+
+def _surviving_blocks(before: tracemalloc.Snapshot, after: tracemalloc.Snapshot) -> int:
+    """Allocations made under ``_invoke`` that the native call never freed."""
+    only_invoke = [tracemalloc.Filter(True, __file__, lineno=_INVOKE_LINE)]
+    diffs = after.filter_traces(only_invoke).compare_to(
+        before.filter_traces(only_invoke), "lineno"
+    )
+    return sum(diff.count_diff for diff in diffs)
+
+
+def _assert_repeated_calls_do_not_drift(
+    call: Callable[[], object], args: tuple, kwargs: dict
+) -> None:
+    for _ in range(3):
+        call()
+    before = _refcounts(args, kwargs)
+    tracemalloc.start()
+    try:
+        baseline = tracemalloc.take_snapshot()
+        for _ in range(50):
+            call()
+        gc.collect()
+        after = tracemalloc.take_snapshot()
+    finally:
+        tracemalloc.stop()
+    assert _refcounts(args, kwargs) == before, (
+        "error path leaked or over-released a reference"
+    )
+    assert _surviving_blocks(baseline, after) == 0, "call leaked a temporary"
 
 
 def _assert_rejects_without_leak(
     fn: Callable, args: tuple, kwargs: dict, exc: type[Exception], match: str
 ) -> None:
-    for _ in range(3):
+    def call() -> None:
         with pytest.raises(exc, match=match):
-            fn(*args, **kwargs)
-    before = _refcounts(args, kwargs)
-    for _ in range(50):
-        with pytest.raises(exc, match=match):
-            fn(*args, **kwargs)
-    assert _refcounts(args, kwargs) == before, (
-        "error path leaked or over-released a reference"
-    )
+            _invoke(fn, args, kwargs)
+
+    _assert_repeated_calls_do_not_drift(call, args, kwargs)
 
 
 @pytest.mark.parametrize("case", DGEMM_REJECTIONS.values(), ids=DGEMM_REJECTIONS.keys())
@@ -155,9 +201,4 @@ def test_success_path_refcounts_are_stable(name: str) -> None:
     }
     args, kwargs = calls[name]
     fn = getattr(mod, name)
-    for _ in range(3):
-        fn(*args, **kwargs)
-    before = _refcounts(args, kwargs)
-    for _ in range(50):
-        fn(*args, **kwargs)
-    assert _refcounts(args, kwargs) == before
+    _assert_repeated_calls_do_not_drift(lambda: _invoke(fn, args, kwargs), args, kwargs)

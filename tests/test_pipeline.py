@@ -358,13 +358,13 @@ def test_pipeline_loco_prices_and_threads_one_plan(tmp_path: Path, monkeypatch):
     from jamma.core import memory
 
     seen: dict = {}
-    real_run_lmm_loco = jamma.pipeline.run_lmm_loco_prepared
+    real_run_loco = jamma.pipeline.run_loco
 
-    def _spy(*args, **kwargs):
-        seen["execution"] = kwargs["execution"]
-        return real_run_lmm_loco(*args, **kwargs)
+    def _spy(run, output_path):  # type: ignore[no-untyped-def]
+        seen["execution"] = run.execution
+        return real_run_loco(run, output_path)
 
-    monkeypatch.setattr(jamma.pipeline, "run_lmm_loco_prepared", _spy)
+    monkeypatch.setattr(jamma.pipeline, "run_loco", _spy)
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 1000.0)
     quotes: list[str] = []
     handle = logger.add(quotes.append, format="{message}", level="INFO")

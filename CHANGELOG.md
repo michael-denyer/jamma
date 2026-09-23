@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The pipeline logs the backend request and its source as one line,
   `Backend request: numpy (config)` or `Backend request: numpy-streaming
   (JAMMA_BACKEND)`, in place of the three `Backend: numpy (...)` variants.
+- `run_lmm_loco` no longer takes `execution` or `eigen_plan`. A caller with
+  its own plan builds a `LocoRun` and calls `run_loco(run, output_path)`
+  instead; `LocoRun` rejects a plan wider than `loco.col_chunk_size` or
+  without a resolved kinship shape at construction. A pipeline LOCO run now
+  resolves its samples, plan and kinship shape once, and reads the `.bim`
+  once instead of twice.
 - `PipelineConfig` rejects an illegal kinship or eigen source at
   construction: `-k` with `-loco`, an unpaired `-d`/`-u`, `-d`/`-u` with
   `-loco`, and `-widv` with `-loco` or with `-d`/`-u`. These used to wait for

@@ -109,7 +109,7 @@ def test_loco_numpy_no_per_chromosome_bed_reads():
 
     # Patch at the plink.py import site (stream_genotype_chunks uses it for kinship
     # PASS 1 and PASS 2, and get_plink_metadata for metadata reads)
-    # and at the loco.py import site (_run_lmm_for_chromosome_numpy uses it directly)
+    # and at the loco.py import site (_LocoChrSource uses it directly)
     with (
         patch("jamma.io.plink.open_bed", side_effect=counting_open_bed),
         patch("jamma.lmm.loco.open_bed", side_effect=counting_open_bed),
@@ -167,19 +167,30 @@ def test_run_lmm_loco_plans_association_once(monkeypatch):
 
 
 @pytest.mark.tier0
-def test_run_lmm_loco_rejects_plan_wider_than_col_chunk_size():
+def test_loco_run_rejects_plan_wider_than_col_chunk_size():
     """A caller-built plan must respect the LOCO disk-read chunk width."""
-    from jamma.lmm.association_plan import plan_association
+    from dataclasses import replace
 
+    from jamma.io.plink import get_plink_metadata
+    from jamma.lmm.association_plan import KinshipShape, plan_association
+    from jamma.lmm.loco import LocoRun
+    from jamma.lmm.loco_eigen import plan_loco_eigen_driver
+    from jamma.lmm.prepare_common import AnalysedPhenotype
+
+    wide = replace(
+        plan_association(100, 500, backend="loco"),
+        kinship=KinshipShape.resolve(100, 100, loaded=False, saved=False),
+    )
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
-    wide = plan_association(100, 500, backend="loco")
     with pytest.raises(ValueError, match="col_chunk_size"):
-        run_lmm_loco(
-            bed_path=_LOCO_BFILE,
-            phenotypes=phenotypes,
-            config=LmmConfig(check_memory=False, show_progress=False),
-            loco=LocoConfig(col_chunk_size=wide.conservative_chunks.chunk_size - 1),
-            execution=wide,
+        LocoRun(
+            _LOCO_BFILE,
+            get_plink_metadata(_LOCO_BFILE),
+            AnalysedPhenotype.from_inputs(phenotypes, None),
+            LmmConfig(check_memory=False, show_progress=False),
+            LocoConfig(col_chunk_size=wide.conservative_chunks.chunk_size - 1),
+            wide,
+            plan_loco_eigen_driver(wide, 100.0),
         )
 
 

@@ -16,6 +16,12 @@ from pathlib import Path
 
 import numpy as np
 
+from jamma.core.eigen_plan import EigenDriverPlan
+from jamma.io.plink import PlinkMetadata
+from jamma.lmm.association_plan import ExecutableAssociationPlan
+from jamma.lmm.prepare_common import AnalysedPhenotype
+from jamma.lmm.schema import LmmConfig
+
 
 @dataclass(frozen=True)
 class LocoConfig:
@@ -91,3 +97,46 @@ DEFAULT_LOCO_CONFIG = LocoConfig()
 
 LocoConfig is frozen, so one instance is safe to share.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class LocoRun:
+    """One LOCO run, resolved once and read by every stage below it.
+
+    Attributes:
+        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
+        meta: PLINK metadata read from ``bed_path``.
+        samples: The phenotype and covariates over the analysed samples; its
+            ``valid_mask`` indexes the BED rows.
+        config: Numerical settings shared with every other runner.
+        loco: LOCO-only settings.
+        execution: The association plan, with its kinship shape resolved.
+        eigen_plan: The driver every chromosome's eigendecomposition runs.
+
+    Raises:
+        ValueError: If ``execution`` resolves no kinship shape, or plans chunks
+            wider than ``loco.col_chunk_size``.
+    """
+
+    bed_path: Path
+    meta: PlinkMetadata
+    samples: AnalysedPhenotype
+    config: LmmConfig
+    loco: LocoConfig
+    execution: ExecutableAssociationPlan
+    eigen_plan: EigenDriverPlan
+
+    def __post_init__(self) -> None:
+        if self.execution.kinship is None:
+            raise ValueError("LOCO needs a plan with its kinship shape resolved")
+        chunk_size = self.execution.conservative_chunks.chunk_size
+        if chunk_size > self.loco.col_chunk_size:
+            raise ValueError(
+                f"execution plans {chunk_size}-SNP chunks but "
+                f"loco.col_chunk_size is {self.loco.col_chunk_size}"
+            )
+
+    @property
+    def analysed_rows(self) -> np.ndarray:
+        """BED row indices of the analysed samples."""
+        return np.flatnonzero(self.samples.valid_mask)

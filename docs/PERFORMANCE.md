@@ -1,23 +1,24 @@
 # Performance Summary
 
-## Aligned process benchmarks, 2026-09-14
+## Aligned process benchmarks, 2026-09-23
 
-Measured 2026-09-14 on mouse_hs1940: 1,940 samples and 12,226 SNPs,
+Measured 2026-09-23 on mouse_hs1940: 1,940 samples and 12,226 SNPs,
 with 1,410 samples and 10,768 SNPs retained for association. Apple M5 Pro,
-18 physical cores, macOS 26.6.2, Python 3.12.13, NumPy 2.5.1,
-JAMMA 8.0.4 with the native C extension and Accelerate-ILP64,
+18 physical cores, macOS 27.0, Python 3.14.6, NumPy 2.5.1,
+JAMMA 8.1.0 with the native C extension and Accelerate-ILP64,
 and GEMMA 0.98.5 in OpenBLAS and Accelerate builds. The runtime source is
-revision `7b63772a`. The machine was otherwise idle (load average 2.0 on 18
-cores at start). This is the local development installation, not a fresh
-portable-wheel installation.
+revision `0677ac9e`. Other work shared the machine. The load average was
+3.2 on 18 cores at the start and 8.9 at the end of the LOCO run. This is the
+local development installation, not a fresh portable-wheel installation.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.0s | 1.2s | 800ms | 747ms | — | 1.1x | 1.4x | 1.6x |
-| LMM Wald (`-lmm 1`) | 6.9s | 4.2s | 5.2s | 514ms | 558ms | 10.1x | 13.5x | 8.2x |
-| LMM All (`-lmm 4`) | 12.7s | 7.5s | 7.5s | 537ms | 569ms | 14.0x | 23.7x | 14.0x |
-| Full GWAS Wald (compute kinship + association) | 7.9s | 5.5s | 5.5s | 714ms | 760ms | 7.6x | 11.1x | 7.6x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 26.5s | 12.6s | 16.6s | 1.0s | 1.1s | 15.8x | 25.3x | 12.1x |
+| Kinship (`-gk 1`) | 1.0s | 1.2s | 803ms | 749ms | — | 1.1x | 1.4x | 1.6x |
+| Kinship (`-gk 1`, default `.npy`) | — | — | 496ms | 440ms | — | 1.1x | — | — |
+| LMM Wald (`-lmm 1`) | 7.2s | 4.2s | 6.1s | 531ms | 579ms | 11.6x | 13.6x | 7.9x |
+| LMM All (`-lmm 4`) | 13.4s | 7.5s | 8.4s | 567ms | 592ms | 14.7x | 23.7x | 13.2x |
+| Full GWAS Wald (compute kinship + association) | 8.3s | 5.4s | 6.3s | 679ms | 713ms | 9.3x | 12.2x | 7.9x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 12.1s | 17.0s | 1.1s | 1.1s | 15.5x | 24.8x | 11.1x |
 
 Best of three fresh-process runs per operation and backend, run sequentially
 with backend order rotated between repetitions. This measures a warm filesystem
@@ -26,8 +27,7 @@ input loading, computation and final output writing. There is no untimed JAMMA
 warmup or preloaded genotype/kinship array. Ratios use unrounded times and the
 faster of the JAMMA C batch and streaming backends for each operation.
 The C speedup column includes startup and dispatch differences. Standalone
-kinship does not use the LMM accelerator; enabling C was slower for that
-operation in this measurement.
+kinship does not use the LMM accelerator.
 
 The required work determines which I/O belongs in each row:
 
@@ -35,8 +35,7 @@ The required work determines which I/O belongs in each row:
   `--legacy-text` because a saved matrix is the requested result. A second
   JAMMA-only row times the shipped default, which writes the binary `.npy`
   matrix instead. GEMMA has no binary output, so that row has no counterpart
-  and its GEMMA cells stay blank. The tables above predate the row; it is
-  published with the next idle-machine run.
+  and its GEMMA cells stay blank.
 - **Association:** both read the same precomputed text kinship, PLINK and optional
   covariate files, then write association results. Kinship computation is excluded
   for both; eigendecomposition is included for both.
@@ -56,9 +55,9 @@ complement list for kinship. See [GEMMA's implementation](https://github.com/gen
 
 | Backend | LOCO Wald | vs fastest GEMMA |
 |---------|-----------|------------------|
-| GEMMA (OpenBLAS) | 35.4s | 1.0x |
-| GEMMA (Accelerate) | 34.0s | 1.0x |
-| JAMMA NumPy+C | 3.3s | 10.4x |
+| GEMMA (OpenBLAS) | 37.5s | 0.9x |
+| GEMMA (Accelerate) | 34.2s | 1.0x |
+| JAMMA NumPy+C | 3.4s | 10.1x |
 
 The scripts reject missing/duplicate SNPs, mismatched tested SNP sets or alleles,
 and effect/standard-error/p-value differences outside the existing numerical
@@ -89,25 +88,27 @@ extension and auto-detect GEMMA at `~/.local/bin/gemma` and
 commands. Temporary output paths in those commands are removed after validation;
 the scripts recreate equivalent directories on each invocation.
 
-[Raw repetitions and input/build hashes](benchmarks/2026-09-14-aligned.json)
-record all 81 measurements; the superseded provisional run is kept in
+[Raw repetitions and input/build hashes](benchmarks/2026-09-23-aligned.json)
+record all 87 measurements. The superseded runs are in
+[2026-09-14-aligned.json](benchmarks/2026-09-14-aligned.json) and
 [2026-09-09-aligned.json](benchmarks/2026-09-09-aligned.json). The checked-in report retains timings
 and provenance; `--json` additionally saves the exact commands with local paths.
 
 ### Observed variation
 
 Minimum-to-maximum ranges across the three repetitions, not confidence
-intervals. The ratios above compare minima. Every range is within 5% of its
-minimum.
+intervals. The ratios above compare minima. The widest JAMMA range, for
+kinship, is 17% of its minimum. The GEMMA (OpenBLAS) LOCO range, which the
+table omits, is 21%.
 
 | Operation | GEMMA Accelerate range (s) | JAMMA C batch range (s) |
 |-----------|---------------------------|-------------------------|
-| Kinship | 1.193–1.221 | 0.747–0.759 |
-| Wald association | 4.230–4.261 | 0.514–0.522 |
-| All-tests association | 7.536–7.568 | 0.537–0.539 |
-| Full GWAS Wald | 5.459–5.492 | 0.714–0.722 |
-| Wald + four covariates | 12.636–12.702 | 1.046–1.067 |
-| LOCO Wald | 34.018–34.149 | 3.284–3.329 |
+| Kinship | 1.175–1.195 | 0.749–0.875 |
+| Wald association | 4.177–4.250 | 0.531–0.571 |
+| All-tests association | 7.499–7.629 | 0.567–0.574 |
+| Full GWAS Wald | 5.380–5.455 | 0.679–0.697 |
+| Wald + four covariates | 12.136–12.742 | 1.096–1.137 |
+| LOCO Wald | 34.204–35.301 | 3.380–3.558 |
 
 The earlier small-scale comparisons used different timing boundaries. Their
 GEMMA ratios and LOCO comparisons are withdrawn; JAMMA version measurements

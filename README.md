@@ -1,186 +1,209 @@
-<p align="center">
-  <a href="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml"><img src="https://github.com/michael-denyer/jamma/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://pypi.org/project/jamma/"><img src="https://img.shields.io/pypi/v/jamma.svg?color=orange" alt="PyPI"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11+-3776AB.svg?logo=python&logoColor=white" alt="Python 3.11+"></a>
-  <a href="https://numpy.org/"><img src="https://img.shields.io/badge/NumPy-2.4.6+-013243.svg?logo=numpy&logoColor=white" alt="NumPy"></a>
-  <a href="https://hypothesis.readthedocs.io/"><img src="https://img.shields.io/badge/tested%20with-Hypothesis-BD1C2B.svg" alt="Hypothesis"></a>
-  <a href="https://doi.org/10.5281/zenodo.22666119"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.22666119.svg" alt="DOI"></a>
-  <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-green.svg" alt="License: GPL-3.0"></a>
-  <a href="https://buymeacoffee.com/codenyer"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
-</p>
+# JAMMA
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/michael-denyer/jamma/master/logos/JAMMA_Large_Logo_v2.png" alt="JAMMA" width="500">
+  <img src="https://raw.githubusercontent.com/michael-denyer/jamma/master/logos/JAMMA_Large_Logo_v2.png" alt="JAMMA logo" width="500">
 </p>
 
-**JAMMA** (Highly-Accelerated Multi-method Mixed-Model Association) -- a modern Python and C reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA) for large-scale GWAS.
+[![CI](https://github.com/michael-denyer/jamma/actions/workflows/ci.yml/badge.svg)](https://github.com/michael-denyer/jamma/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/jamma.svg)](https://pypi.org/project/jamma/)
+[![Python](https://img.shields.io/badge/python-3.11+-3776AB.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green.svg)](LICENSE.md)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22666119.svg)](https://doi.org/10.5281/zenodo.22666119)
 
-- **Drop-in GEMMA replacement**: Same CLI flags, same file formats, same results. Change one word in your pipeline.
-- **Numerical equivalence**: Validated against GEMMA -- 100% significance agreement, 100% effect direction agreement
-- **Fast**: Native C kernels accelerate association testing. See the [measured backend comparison](#performance) for timings against NumPy and GEMMA 0.98.5.
-- **Memory-safe**: Pre-flight memory checks prevent OOM crashes before allocation
-- **Cross-platform**: Runs on Linux, macOS, and Windows with NumPy and vendor BLAS
-- **Optimized for Intel**: Best performance on Intel CPUs with MKL BLAS. Runs well on Apple Silicon (Accelerate BLAS). Other architectures (AMD, ARM Linux) work correctly but with less BLAS optimization
-- **Pure Python + C extensions (OpenMP SIMD)**: NumPy stack with vendor BLAS dispatch (MKL-ILP64, Accelerate-ILP64) via jlinalg C layer for eigendecomposition and OpenMP-parallel Wald tests
-- **Large-scale ready**: Optional [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) wheels (numpy 2.4.6+) for >46k sample eigendecomposition
+**JAMMA** stands for Highly-Accelerated Multi-method Mixed-Model Association.
+It is a Python and C reimplementation of [GEMMA](https://github.com/genetics-statistics/GEMMA)
+for genome-wide association studies (GWAS), using linear mixed models to account
+for relatedness between samples.
+
+JAMMA reads PLINK binary data and supports GEMMA's core univariate LMM commands.
+Native C kernels accelerate association testing, while memory checks and chunked
+processing help fit analyses to available RAM. Use it from the command line or
+through a single Python function.
+
+[Install](#installation) · [First run](#quick-start) · [Python API](#python-api) ·
+[Performance](#performance) · [Documentation](#documentation)
 
 ## Installation
 
-### macOS (13.3+)
+Requires Python 3.11+ and NumPy 2.4.6+. PLINK itself is not required to read
+`.bed`, `.bim`, and `.fam` files.
+
+### macOS 13.3+ or smaller Linux and Windows analyses
 
 ```bash
-pip install jamma
+python -m pip install jamma
+jamma --help
 ```
 
-That's it. macOS Accelerate BLAS handles large matrices natively (Accelerate-ILP64).
+On macOS 13.3+, JAMMA can use Accelerate's native 64-bit BLAS integer interface
+on Apple Silicon and Intel Macs. On Linux and Windows, the standard NumPy build
+is suitable for smaller datasets; use the installation below for analyses above
+roughly 46,000 samples.
 
-### Windows (10+), Windows Server (2016+) and Linux (Intel/AMD)
+### Large analyses on Linux and Windows x86_64
 
-Install [numpy-mkl](https://github.com/michael-denyer/numpy-mkl) first -- standard numpy uses 32-bit BLAS integers which overflow at ~46k samples. Pre-built ILP64 wheels are available for Python 3.11-3.14:
+Large eigendecompositions need **ILP64**, a BLAS interface with 64-bit integers.
+The usual 32-bit interface can overflow around 46,000 samples. Install the
+runtime dependencies first, then [NumPy with MKL ILP64](https://github.com/michael-denyer/numpy-mkl),
+then JAMMA:
 
 ```bash
-pip install psutil loguru threadpoolctl click progressbar2 bed-reader
-pip install numpy \
-  --index-url https://michael-denyer.github.io/numpy-mkl \
-  --force-reinstall --upgrade
-pip install jamma --no-deps
+python -m pip install psutil loguru threadpoolctl click progressbar2 bed-reader
+python -m pip install numpy --index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
+python -m pip install jamma --no-deps
 ```
 
-**From Git (latest development version):**
+`--no-deps` preserves the chosen NumPy build during JAMMA installation. Installing
+other packages later can replace it, so check the backend before a large run.
+See the [installation and backend verification guide](docs/USER_GUIDE.md#linux--windows)
+for details, and [Deployment](docs/DEPLOYMENT.md) for Docker setup.
+
+## Quick start
+
+### Run with your data
+
+For a PLINK dataset named `data/study.bed`, `data/study.bim`, and
+`data/study.fam`, pass the prefix `data/study`. The default phenotype is column 6
+of the `.fam` file.
 
 ```bash
-pip install psutil loguru threadpoolctl click progressbar2 bed-reader
-pip install numpy \
-  --index-url https://michael-denyer.github.io/numpy-mkl \
-  --force-reinstall --upgrade
-pip install git+https://github.com/michael-denyer/jamma.git --no-deps
+# Compute centered kinship and save it for reuse.
+jamma -gk 1 -bfile data/study -o kinship -outdir output
+
+# Run a Wald association test using that kinship.
+jamma -lmm 1 -bfile data/study -k output/kinship.cXX.npy -o results -outdir output
 ```
 
-> **Why `--no-deps`?** JAMMA depends on `numpy>=2.4.6`, so a normal `pip install jamma` will pull in standard numpy and overwrite the ILP64 build. `--no-deps` prevents this; you install the runtime dependencies manually instead.
+The commands create:
 
-See the [User Guide](docs/USER_GUIDE.md#linux--windows) for ILP64 verification steps.
+| File | Contents |
+|------|----------|
+| `output/kinship.cXX.npy` | Centered kinship matrix in NumPy binary format |
+| `output/results.assoc.txt` | Association results, including effect estimates and Wald p-values |
+| `output/results.log.txt` | Run log |
 
-### Platform Support
+An association command needs a kinship source: `-k`, the saved eigen files
+`-d` and `-u`, or `-loco`, which computes kinship internally. Kinship and eigen
+files default to binary `.npy`; add `--legacy-text` when you need GEMMA text
+output. Existing text kinship files work as `-k` input.
 
-| Platform | BLAS | ILP64 | Notes |
-|----------|------|-------|-------|
-| Linux x86_64 | MKL (optimal) | numpy-mkl | Best performance |
-| ARM Linux | OpenBLAS | -- | Works correctly |
-| ARM Mac (M1+) | Accelerate | native | Excellent performance |
-| Intel Mac (macOS 13.3+) | Accelerate | native | Full support |
-| Windows x86_64 (10+) | MKL (optimal) | numpy-mkl | Best performance |
-| Windows Server x86_64 (2016+) | MKL (optimal) | numpy-mkl | Best performance |
+### Try the included example
 
-See the [User Guide](docs/USER_GUIDE.md#platform-support) for BLAS backend details.
-
-## Quick Start
+After installing JAMMA, clone the repository to obtain the synthetic dataset:
 
 ```bash
-# Compute kinship matrix (centered relatedness)
-jamma -gk 1 -bfile data/my_study -o output
-# Output: output/output.cXX.npy (binary, fast)
-# Add --legacy-text for GEMMA-compatible text format
-
-# Run LMM association (Wald test)
-jamma -lmm 1 -bfile data/my_study -k output/output.cXX.npy -o results
-
-# Multiple phenotypes (eigendecomp computed once, reused)
-jamma -lmm 1 -bfile data/my_study -k output/output.cXX.npy -n "1 2 3" -o results
+git clone https://github.com/michael-denyer/jamma.git
+cd jamma
+jamma -gk 1 -bfile tests/fixtures/gemma_synthetic/test -o kinship -outdir output/example
+jamma -lmm 1 -bfile tests/fixtures/gemma_synthetic/test -k output/example/kinship.cXX.npy -o results -outdir output/example
 ```
 
-Output files:
+Open `output/example/results.assoc.txt` to inspect the results. The fixture is
+included in the repository; installing the package alone does not provide it.
 
-- `output.cXX.npy` -- Kinship matrix (binary NumPy format; `.cXX.txt` with `--legacy-text`)
-- `results.assoc.txt` -- Association results (chr, rs, ps, n_miss, allele1, allele0, af, beta, se, logl_H1, l_remle, p_wald)
-- `results.log.txt` -- Run log
+## Supported analyses
 
-The reader auto-detects format, so existing `.cXX.txt` files still work as `-k` input.
+| Analysis | Option |
+|----------|--------|
+| Centered or standardized kinship | `-gk 1` or `-gk 2` |
+| Wald, likelihood ratio, or Score test | `-lmm 1`, `-lmm 2`, or `-lmm 3` |
+| All three association tests | `-lmm 4` |
+| Leave-one-chromosome-out analysis (LOCO) | `-loco` |
+| Covariates, including categorical columns | `-c`, `-cat` |
+| Multiple phenotypes with eigendecomposition reuse | `-n "1 2 3"` |
+| SNP subsets and quality filters | `-snps`, `-ksnps`, `-maf`, `-miss`, `-hwe` |
+| Saved eigendecomposition and LOCO caches | `-eigen`, `-d`, `-u`, `--eigen-dir` |
 
-## GEMMA CLI Parity
+For example, run all tests with covariates, or compute a separate kinship for
+each chromosome's LOCO analysis:
 
-JAMMA supports GEMMA's core GWAS flags (`-gk`, `-lmm`, `-bfile`, `-k`, `-c`, `-o`, `-n`, `-loco`, `-snps`, `-hwe`) with identical names and semantics. Existing GEMMA commands work by changing `gemma` to `jamma`:
+```bash
+jamma -lmm 4 -bfile data/study -k output/kinship.cXX.npy -c covars.txt -o adjusted
+jamma -lmm 1 -bfile data/study -loco -o loco
+```
 
-| GEMMA | JAMMA |
-|-------|-------|
-| `gemma -gk 1 -bfile study -o out` | `jamma -gk 1 -bfile study -o out` |
-| `gemma -lmm 1 -bfile study -k kinship.cXX.txt -o results` | `jamma -lmm 1 -bfile study -k kinship.cXX.txt -o results` |
-| `gemma -lmm 4 -bfile study -k k.txt -c covars.txt -o results` | `jamma -lmm 4 -bfile study -k k.txt -c covars.txt -o results` |
+See the [User Guide](docs/USER_GUIDE.md) for input formats and examples, and
+[Configuration](docs/CONFIGURATION.md) for every flag and default.
 
-- Reads and writes GEMMA `.assoc.txt` and `.cXX.txt` formats
-- Accepts PLINK binary `.bed/.bim/.fam` files (same as GEMMA)
-- Output columns match GEMMA (mode-dependent -- see [User Guide](docs/USER_GUIDE.md#output-format))
-- Also supports binary `.npy` format for kinship (faster I/O); use `--legacy-text` for GEMMA text format
+## GEMMA CLI parity
+
+For supported univariate LMM workflows, replace `gemma` with `jamma` while
+keeping the core flags and PLINK inputs. Association output uses GEMMA's
+mode-dependent `.assoc.txt` format.
+
+Compatibility has limits. JAMMA does not implement multivariate LMM, BSLMM,
+plain linear regression, or BIMBAM input. Binary kinship output is the default,
+and floating-point results are compared within documented tolerances rather
+than required to match bit for bit.
+
+Read the [numerical equivalence analysis](docs/GEMMA_EQUIVALENCE.md),
+[validation coverage and remaining scope](docs/MATHEMATICAL_VALIDATION.md), and
+[known differences from GEMMA](docs/GEMMA_DIVERGENCES.md) when migrating a pipeline.
 
 ## Python API
 
-The `gwas()` function handles the full pipeline -- data loading, kinship computation, eigendecomposition, and LMM association -- in a single call. You don't need to compute a kinship matrix separately unless you want to reuse it across runs.
+`gwas()` loads the data, computes or reads kinship, runs the association tests,
+and writes results:
 
 ```python
 from jamma import gwas
 
-# Simplest usage: computes kinship internally, no separate kinship step needed
-result = gwas("data/my_study")
-print(f"Tested {result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
-
-# Or supply a pre-computed kinship matrix to skip recomputation
-result = gwas("data/my_study", kinship_file="data/kinship.cXX.npy")
-
-# Compute kinship from scratch and save it for reuse
-result = gwas("data/my_study", save_kinship=True, output_dir="output")
-
-# With covariates and LRT test
-result = gwas("data/my_study", kinship_file="k.txt", covariate_file="covars.txt", lmm_mode=2)
-
-# LOCO analysis (leave-one-chromosome-out)
-result = gwas("data/my_study", loco=True)
-
-# LOCO with eigen caching: writes a per-chromosome eigen cache to output_dir
-result = gwas("data/my_study", loco=True, write_eigen=True, output_dir="output")
-# Reusing a LOCO eigen cache on a later run is CLI-only — the cache is a set of
-# per-chromosome files keyed by directory, so point --eigen-dir at the same dir:
-#   jamma -lmm 1 -bfile data/my_study -loco --eigen-dir output -o result
-
-# Several phenotypes against one eigendecomposition (the CLI's -n "1 2 3")
-result = gwas("data/my_study", phenotype_columns=[1, 2, 3])
-
-# SNP filtering
-result = gwas("data/my_study", kinship_file="k.txt", snps_file="snps.txt", hwe=0.001)
+result = gwas("data/study", output_dir="output", output_prefix="results")
+print(f"Tested {result.n_snps_tested} SNPs in {result.timing.total_s:.1f}s")
+print(result.assoc_path)  # output/results.assoc.txt
 ```
 
-See the [User Guide](docs/USER_GUIDE.md#low-level-api) for the low-level component API (kinship, eigendecomposition, LMM runners).
+Supply `kinship_file="output/kinship.cXX.npy"` to reuse a matrix, `lmm_mode=4`
+to run all tests, or `loco=True` for LOCO. Use `phenotype_columns=[1, 2, 3]` to
+share one eigendecomposition across phenotypes; this is separate from a
+multivariate LMM.
 
-## Memory Safety
+Results stream to disk. `result.associations` is empty for this pipeline;
+`result.assoc_path` identifies the output, and `result.assoc_paths` lists the
+files for multiple phenotypes. See the [Python API guide](docs/USER_GUIDE.md#python-api)
+for more examples and lower-level components.
 
-Unlike GEMMA, JAMMA includes pre-flight memory checks that prevent out-of-memory crashes:
+## Memory safety
 
-- Pre-flight checks before large allocations (eigendecomposition, genotype loading)
-- RSS memory logging at workflow boundaries
-- Incremental result writing (no memory accumulation)
-- Safe chunk size defaults with hard caps
+JAMMA checks memory before major allocations, chooses batch or streaming
+execution, and writes association results incrementally. These checks reduce
+allocation failures; they cannot guarantee that the operating system will never
+run out of memory.
 
-GEMMA will silently OOM and get killed by the OS. JAMMA fails fast with clear error messages. See the [User Guide](docs/USER_GUIDE.md#memory-safety) for the programmatic memory estimation API.
+Streaming reduces genotype memory, but kinship and eigenvectors still require
+dense matrices whose storage grows with the square of the sample count.
+ILP64 removes the BLAS integer limit; it does not remove the RAM requirement.
+At 100,000 samples, the documented eigendecomposition estimates are roughly
+240 GB with DSYEVD or 160 GB with the lower-workspace DSYEVR path. The
+estimator adds a safety margin (10%, capped at 10 GB) for the process's own
+memory: a 100,000-sample Wald run measured 250 GB peak resident memory on
+2026-09-23.
+
+See [memory planning](docs/USER_GUIDE.md#memory-safety) before scaling up.
 
 ## Performance
 
 JAMMA on mouse_hs1940 (1,940 samples x 12,226 SNPs; 1,410 samples and 10,768
 SNPs retained for association), Apple M5 Pro (18 cores), Accelerate-ILP64,
-GEMMA 0.98.5, measured 2026-09-14 on an idle machine. Every row times a fresh
-process from PLINK input to written output, best of three with backend order
-rotated. Association rows read the same precomputed kinship file in both tools.
+GEMMA 0.98.5, measured 2026-09-23 at revision `0677ac9e`. Other work shared
+the machine, with a load average between 3.2 and 8.9 on 18 cores. Every row
+times a fresh process from PLINK input to written output, best of three with
+backend order rotated. Association rows read the same precomputed kinship file
+in both tools.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 804ms | 737ms | — | 1.1x | 1.4x | 1.7x |
-| LMM Wald (`-lmm 1`) | 7.1s | 4.3s | 5.4s | 548ms | 605ms | 9.8x | 13.0x | 7.8x |
-| LMM All (`-lmm 4`) | 13.0s | 7.6s | 7.7s | 567ms | 620ms | 13.7x | 23.0x | 13.4x |
-| Full GWAS Wald (compute kinship + association) | 8.2s | 5.5s | 5.6s | 715ms | 772ms | 7.9x | 11.4x | 7.6x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.0s | 12.6s | 16.4s | 1.1s | 1.1s | 15.1x | 24.8x | 11.6x |
+| Kinship (`-gk 1`) | 1.0s | 1.2s | 803ms | 749ms | n/a | 1.1x | 1.4x | 1.6x |
+| LMM Wald (`-lmm 1`) | 7.2s | 4.2s | 6.1s | 531ms | 579ms | 11.6x | 13.6x | 7.9x |
+| LMM All (`-lmm 4`) | 13.4s | 7.5s | 8.4s | 567ms | 592ms | 14.7x | 23.7x | 13.2x |
+| Full GWAS Wald (compute kinship + association) | 8.3s | 5.4s | 6.3s | 679ms | 713ms | 9.3x | 12.2x | 7.9x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 12.1s | 17.0s | 1.1s | 1.1s | 15.5x | 24.8x | 11.1x |
 
 | Backend | LOCO Wald | vs fastest GEMMA |
 |---------|-----------|------------------|
-| GEMMA (OpenBLAS) | 35.4s | 1.0x |
-| GEMMA (Accelerate) | 34.0s | 1.0x |
-| JAMMA NumPy+C | 3.3s | 10.4x |
+| GEMMA (OpenBLAS) | 37.5s | 0.9x |
+| GEMMA (Accelerate) | 34.2s | 1.0x |
+| JAMMA NumPy+C | 3.4s | 10.1x |
 
 LOCO computes each chromosome's excluded kinship and tests each SNP once in both
 tools. Every repetition's output was checked against the first within the
@@ -189,45 +212,16 @@ validation tolerances before any time was recorded.
 See [Performance](docs/PERFORMANCE.md) for the protocol, raw repetitions,
 run-to-run ranges and the large-scale (125k) results.
 
-## Supported Features
-
-### Current
-
-- [x] Kinship matrix computation -- centered (`-gk 1`) and standardized (`-gk 2`)
-- [x] Univariate LMM Wald test (`-lmm 1`)
-- [x] Likelihood ratio test (`-lmm 2`)
-- [x] Score test (`-lmm 3`)
-- [x] All tests mode (`-lmm 4`)
-- [x] LOCO kinship -- leave-one-chromosome-out analysis (`-loco`)
-- [x] Binary `.npy` I/O -- default for kinship and eigen files; `--legacy-text` for GEMMA text format
-- [x] Multi-phenotype support -- `-n "1 2 3"` with single eigendecomposition reuse
-- [x] Eigendecomposition reuse -- manual via `-d`/`-u`/`-eigen`, automatic in multi-phenotype mode
-- [x] LOCO eigen caching -- `--eigen-dir` saves/loads per-chromosome eigen files across runs
-- [x] Phenotype column selection (`-n`)
-- [x] SNP subset selection for association and kinship (`-snps`/`-ksnps`)
-- [x] HWE QC filtering (`-hwe`)
-- [x] Pre-computed kinship input (`-k`)
-- [x] Covariate support (`-c`)
-- [x] PLINK binary format (`.bed/.bim/.fam`) with input dimension validation
-- [x] Large-scale streaming I/O (>100k samples via [numpy-mkl ILP64](https://github.com/michael-denyer/numpy-mkl) -- numpy 2.4.6+)
-- [x] Lambda optimization bounds (`-lmin`/`-lmax`)
-- [x] Individual weights for kinship (`-widv`)
-- [x] Categorical covariates with one-hot encoding (`-cat`)
-- [x] Pre-flight memory checks (fail-fast before OOM)
-- [x] RSS memory logging at workflow boundaries
-- [x] Incremental result writing
-- [x] In-place mean imputation for missing genotypes (per-chunk, zero-copy)
-- [x] Early sample filtering -- kinship accumulated at filtered size when phenotype missingness is present
-- [x] jlinalg C layer: vendor BLAS dispatch for eigendecomposition (DSYEVD default, DSYEVR O(n) workspace fallback under memory pressure), DSYRK, DGEMM
-- [x] Optional C extension: OpenMP-parallel Wald tests (auto-fallback to pure Python)
-
-### Planned
-
-- [ ] Multivariate LMM (mvLMM)
-
 ## Architecture
 
-JAMMA uses NumPy for data loading and kinship. Eigendecomposition uses `jlinalg.eigh` which dispatches to vendor DSYEVD (default) or DSYEVR (O(n) workspace, under memory pressure) via the jlinalg C layer. LMM association uses a NumPy backend with an optional C extension for OpenMP-parallel Wald/Score/LRT tests. Mode is auto-selected based on available memory: batch runner when genotypes fit in RAM, streaming runner (two-pass disk I/O) for large datasets.
+The pipeline loads PLINK data, computes or reads kinship, decomposes the kinship
+matrix, and tests SNPs in batches. The `jlinalg` layer dispatches linear algebra
+to vendor ILP64 BLAS/LAPACK, with a NumPy fallback. The association C extension
+provides OpenMP-parallel kernels. Batch and streaming execution both run with or
+without that extension.
+
+<details>
+<summary>View the pipeline diagram</summary>
 
 ```mermaid
 ---
@@ -250,7 +244,7 @@ flowchart TD
     end
 
     subgraph CORE["CORE COMPUTATION"]
-        KIN["Kinship<br/>(DGEMM, chunked)"]
+        KIN["Kinship<br/>(DSYRK, chunked)"]
         EIG["Eigendecomposition<br/>(jlinalg.eigh → DSYEVD/DSYEVR)"]
         KIN --> EIG
     end
@@ -261,7 +255,7 @@ flowchart TD
         NPS["Streaming Runner<br/>(two-pass disk I/O)"]
         CEXT{"C extension?"}
         C["C Extension<br/>OpenMP + SIMD"]
-        PY["Pure Python<br/>fallback"]
+        PY["NumPy<br/>fallback"]
         MEM -->|fits| NP
         MEM -->|large| NPS
         NP --> CEXT
@@ -299,47 +293,52 @@ flowchart TD
     style RES fill:#2ecc71,stroke:#27ae60,color:#1a1a2e
 ```
 
-Core algorithms ([likelihood.py](src/jamma/lmm/likelihood.py), [pab.py](src/jamma/lmm/pab.py), [prepare_common.py](src/jamma/lmm/prepare_common.py)) are shared between batch and streaming runners. See [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) for the C vendor BLAS dispatch layer.
+</details>
 
-See [Code Map](docs/CODEMAP.md) for the full architecture diagram with source links.
+See [Architecture](docs/ARCHITECTURE.md) for component responsibilities and
+[Code Map](docs/CODEMAP.md) for source navigation.
 
 ## Documentation
 
-### Start here
+| I want to... | Read |
+|--------------|------|
+| Install JAMMA or troubleshoot setup | [Getting Started](docs/GETTING-STARTED.md) |
+| Choose inputs, tests, and output formats | [User Guide](docs/USER_GUIDE.md) |
+| Look up a flag or environment variable | [Configuration](docs/CONFIGURATION.md) |
+| Understand a statistical or computing term | [Glossary](docs/GLOSSARY.md) |
+| Reproduce benchmarks or plan a large run | [Performance](docs/PERFORMANCE.md) |
+| Assess numerical agreement with GEMMA | [Equivalence](docs/GEMMA_EQUIVALENCE.md) and [validation matrix](docs/MATHEMATICAL_VALIDATION.md) |
+| Build, test, or deploy JAMMA | [Development](docs/DEVELOPMENT.md), [Testing](docs/TESTING.md), and [Deployment](docs/DEPLOYMENT.md) |
+| See release history | [Changelog](CHANGELOG.md) |
 
-- [Getting Started](docs/GETTING-STARTED.md) -- Install, first run, common setup problems
-- [Why JAMMA?](docs/WHY_JAMMA.md) -- Key differentiators from GEMMA
-- [User Guide](docs/USER_GUIDE.md) -- Installation, usage examples, CLI reference
-- [Configuration](docs/CONFIGURATION.md) -- Every CLI flag, environment variable, and tool setting
-- [Glossary](docs/GLOSSARY.md) -- Terms and abbreviations (ILP64, REML, LOCO, BLAS, etc.)
+## Contributing
 
-### Internals
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, test conventions,
+and pull request guidance. A development checkout uses `uv` and `prek`:
 
-- [Architecture](docs/ARCHITECTURE.md) -- Components, data flow, key abstractions
-- [Code Map](docs/CODEMAP.md) -- Architecture diagrams and source navigation
-- [Performance](docs/PERFORMANCE.md) -- Bottleneck analysis, scale validation, configuration guide
-- [jlinalg Architecture](docs/JLINALG_ARCHITECTURE.md) -- C vendor BLAS dispatch layer design
-- [jlinalg Algorithms](docs/JLINALG_ALGORITHMS.md) -- Vendor DSYEVD algorithm notes
+```bash
+git clone https://github.com/michael-denyer/jamma.git
+cd jamma
+uv sync
+uv run python -m jamma.lmm._compile_accel
+uv run python -m jamma.jlinalg._compile_jlinalg
+prek install
+uv run pytest tests/ -x
+prek run --all-files
+```
 
-### GEMMA parity
+Report bugs through [GitHub issues](https://github.com/michael-denyer/jamma/issues).
+Include the command, JAMMA version, platform, BLAS backend, and relevant log
+output so the problem can be reproduced.
 
-- [Equivalence Proof](docs/GEMMA_EQUIVALENCE.md) -- Mathematical proofs and empirical validation against GEMMA
-- [Numerical Equivalence Bound](docs/GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md) -- End-to-end FP error bound vs GEMMA
-- [GEMMA Divergences](docs/GEMMA_DIVERGENCES.md) -- Known differences from GEMMA
+## Citation and acknowledgments
 
-### Contributing and operations
+Use the [archived JAMMA release and citation metadata](https://doi.org/10.5281/zenodo.22666119)
+when citing the software. JAMMA builds on the methods and file conventions of
+[GEMMA](https://github.com/genetics-statistics/GEMMA).
 
-- [Contributing](CONTRIBUTING.md) -- Development setup, testing, and PR guidelines
-- [Development](docs/DEVELOPMENT.md) -- Build commands, code style, local gates
-- [Testing](docs/TESTING.md) -- Tiers, mocking policy, suite map, sanitizer repro
-- [Deployment](docs/DEPLOYMENT.md) -- Docker image, PyPI publishing, release pipeline
-- [Changelog](CHANGELOG.md) -- Version history
-
-## Requirements
-
-- Python 3.11+
-- NumPy 2.4.6+
+To support development, [buy the maintainer a coffee](https://buymeacoffee.com/codenyer).
 
 ## License
 
-[GPL-3.0](LICENSE.md) (same as GEMMA).
+JAMMA is licensed under [GPL-3.0-or-later](LICENSE.md).

@@ -1,0 +1,559 @@
+{
+  "date": "2026-09-23",
+  "runtime_revision": "0677ac9e805c8d83fe0bbbc5f20cc2f139219283",
+  "jamma_version": "8.1.0",
+  "python": "3.14.6",
+  "numpy": "2.5.1",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M5 Pro, 18 physical cores",
+  "jamma_blas": "Accelerate-ILP64",
+  "gemma_version": "0.98.5",
+  "statistic": "minimum of three sequential fresh-process runs, rotating backend order",
+  "reproduce": [
+    "uv run python scripts/bench_all_backends.py --runs 3 --json /tmp/jamma-backends.json",
+    "uv run python scripts/bench_loco.py --runs 3 --json /tmp/jamma-loco.json"
+  ],
+  "input_sha256": {
+    "tests/fixtures/mouse_hs1940/covariates_4.txt": "82e4b5e9eed786d858ae17ea3e65db621fdf3b09b7aa3082fbcf3c0de49adbaa",
+    "tests/fixtures/mouse_hs1940/mouse_hs1940.bed": "82ae9049806a896b12547fe892a85465949005bca8f7e855fdb2b0ea558936d2",
+    "tests/fixtures/mouse_hs1940/mouse_hs1940.bim": "86d28fb5bda51b33972366218f5ad834de937ce55e444fb1a682e77e3adc9cf1",
+    "tests/fixtures/mouse_hs1940/mouse_hs1940.fam": "8b23d60fd5f25a004b3725f6f0c66001b3ddc8a58aca07525b005529b0e1f54c",
+    "tests/fixtures/mouse_hs1940/mouse_hs1940_kinship.cXX.txt": "1aeb66f8aa5465943870320fbccbae9c764ea546ddeb2ad43e9d971ead819a91"
+  },
+  "binary_sha256": {
+    "gemma": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
+    "gemma-accelerate": "25cc94573ea507fd794ed95e24213ca3547ba5593f9a3894029a2053af836004"
+  },
+  "native_extension_sha256": {
+    "src/jamma/jlinalg/_jlinalg.cpython-314-darwin.so": "79c2e6ed040a1fb5de8944b7a4ce01b91ee30daa8eb8f3a32a00c5e696ad6cc6",
+    "src/jamma/lmm/_lmm_accel.cpython-314-darwin.so": "bde2b266f73f3fd64b6e8e363cf312e50106570c0b43cdfa127e2c32d8c41ef6"
+  },
+  "regular": [
+    {
+      "operation": "kinship",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 1.0907789999619126
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 1.1746910000219941
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 0.8624656249303371
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 0.7509752920595929
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 1.1946478330064565
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 0.8250575419515371
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 0.875047417008318
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 1.1995645420392975
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 0.8030889169313014
+    },
+    {
+      "operation": "kinship",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 0.7488366670440882
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 1.0294865419855341
+    },
+    {
+      "operation": "kinship",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 1.1844379999674857
+    },
+    {
+      "operation": "kinship_npy",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 0.49571829196065664
+    },
+    {
+      "operation": "kinship_npy",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 0.443887708010152
+    },
+    {
+      "operation": "kinship_npy",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 0.4997057910077274
+    },
+    {
+      "operation": "kinship_npy",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 0.44025220803450793
+    },
+    {
+      "operation": "kinship_npy",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 0.5433537909993902
+    },
+    {
+      "operation": "kinship_npy",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 0.4547287500463426
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 7.280923958052881
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 4.177156332996674
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 6.356464791926555
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 0.5705436250427738
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_streaming",
+      "repetition": 1,
+      "seconds": 0.6152715000789613
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 4.208848249982111
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 6.146349042071961
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 0.5314737079897895
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_streaming",
+      "repetition": 2,
+      "seconds": 0.6493532080203295
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 7.238461666973308
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 6.1947071249596775
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 0.5562211669748649
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "numpy_streaming",
+      "repetition": 3,
+      "seconds": 0.5789489999879152
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 7.227302875020541
+    },
+    {
+      "operation": "lmm_wald",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 4.250337667064741
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 13.423713374999352
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 7.511845582979731
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 8.354491250007413
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 0.5673753339797258
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_streaming",
+      "repetition": 1,
+      "seconds": 0.5952884999569505
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 7.499486624961719
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 8.410073457984254
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 0.5744717919733375
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_streaming",
+      "repetition": 2,
+      "seconds": 0.6162514999741688
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 13.484684833092615
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 8.468892459059134
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 0.5698841670528054
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "numpy_streaming",
+      "repetition": 3,
+      "seconds": 0.591962083010003
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 13.469206915935501
+    },
+    {
+      "operation": "lmm_all",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 7.628541165962815
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 8.378599375020713
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 5.379601292079315
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 6.391792375012301
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 0.6950261250603944
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_streaming",
+      "repetition": 1,
+      "seconds": 0.7350792499491945
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 5.407282750005834
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 7.063302457914688
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 0.6972370840376243
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_streaming",
+      "repetition": 2,
+      "seconds": 0.734082999988459
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 8.320365292020142
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 6.3117329579545185
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 0.679331166902557
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "numpy_streaming",
+      "repetition": 3,
+      "seconds": 0.713161375024356
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 8.290594000020064
+    },
+    {
+      "operation": "gwas_wald",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 5.4546665829839185
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma",
+      "repetition": 1,
+      "seconds": 27.433258875040337
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma_accel",
+      "repetition": 1,
+      "seconds": 12.741773084038869
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_pure",
+      "repetition": 1,
+      "seconds": 17.030677082948387
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy",
+      "repetition": 1,
+      "seconds": 1.0956345830345526
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_streaming",
+      "repetition": 1,
+      "seconds": 1.136552416952327
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma_accel",
+      "repetition": 2,
+      "seconds": 12.136228375020437
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_pure",
+      "repetition": 2,
+      "seconds": 17.296634125057608
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy",
+      "repetition": 2,
+      "seconds": 1.1032507920172065
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_streaming",
+      "repetition": 2,
+      "seconds": 1.1261556670069695
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma",
+      "repetition": 2,
+      "seconds": 27.181972999940626
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_pure",
+      "repetition": 3,
+      "seconds": 17.189930416992866
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy",
+      "repetition": 3,
+      "seconds": 1.13676991709508
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "numpy_streaming",
+      "repetition": 3,
+      "seconds": 1.1305084170307964
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma",
+      "repetition": 3,
+      "seconds": 27.637153332936577
+    },
+    {
+      "operation": "lmm_wald_c4",
+      "backend": "gemma_accel",
+      "repetition": 3,
+      "seconds": 12.44386037508957
+    }
+  ],
+  "loco": [
+    {
+      "backend": "GEMMA (OpenBLAS)",
+      "repetition": 1,
+      "seconds": 45.432556582964025,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (Accelerate)",
+      "repetition": 1,
+      "seconds": 35.300657125073485,
+      "snps": 10768
+    },
+    {
+      "backend": "JAMMA NumPy+C",
+      "repetition": 1,
+      "seconds": 3.3867282499559224,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (Accelerate)",
+      "repetition": 2,
+      "seconds": 35.15190937498119,
+      "snps": 10768
+    },
+    {
+      "backend": "JAMMA NumPy+C",
+      "repetition": 2,
+      "seconds": 3.5584118749247864,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (OpenBLAS)",
+      "repetition": 2,
+      "seconds": 37.52003895805683,
+      "snps": 10768
+    },
+    {
+      "backend": "JAMMA NumPy+C",
+      "repetition": 3,
+      "seconds": 3.3795575000112876,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (OpenBLAS)",
+      "repetition": 3,
+      "seconds": 39.096387417055666,
+      "snps": 10768
+    },
+    {
+      "backend": "GEMMA (Accelerate)",
+      "repetition": 3,
+      "seconds": 34.20445104094688,
+      "snps": 10768
+    }
+  ],
+  "timing_status": "load average 3.16 on 18 cores at start, 8.89 at the end of the LOCO run; other sessions shared the machine",
+  "supersedes": "benchmarks/2026-09-14-aligned.json (runtime revision 7b63772a)"
+}

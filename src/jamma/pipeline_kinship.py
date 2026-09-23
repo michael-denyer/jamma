@@ -24,7 +24,6 @@ from jamma.kinship import (
 )
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.eigen_io import write_eigen_files
-from jamma.lmm.eigen_plan import dsyevr_peak_gb
 from jamma.pipeline_banner import log_dataset_banner
 from jamma.pipeline_config import KinshipResult, PipelineConfig
 from jamma.pipeline_samples import load_analysed_samples
@@ -100,7 +99,8 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             ksnps_indices=ksnps_indices,
             filter_sample_indices=filter_samples,
             mem_budget=config.mem_budget,
-            consumer_gb=dsyevr_peak_gb(n_samples),
+            # Each matrix is only written to disk; no eigendecomposition runs.
+            consumer_gb=0.0,
         )
         written_paths = write_loco_kinship_matrices(
             loco_stream,

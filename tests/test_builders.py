@@ -64,15 +64,22 @@ def _sha256(array: np.ndarray) -> str:
     return hashlib.sha256(array.tobytes()).hexdigest()[:32]
 
 
+def _sorted_uniform(seed: int) -> np.ndarray:
+    return np.sort(np.random.default_rng(seed).uniform(0.1, 2.0, 200))
+
+
 # Digests of the ad-hoc constructions these builders replaced, taken at
 # d867e2d3: _build_synthetic_covariate_data and the lmm_accel split_wald_data
 # and synthetic_wald_data fixtures. Seeded tests read these arrays, so a
 # builder that drifts by one bit fails here before it moves a tolerance test.
+# The eigenvalues are left out: rng.uniform rounds its scale-and-shift
+# differently on arm64 and x86, so they are checked against the replaced
+# recipe's first draw instead.
 _INPUT_PINS = [
     pytest.param(
         lambda: covariate_lmm_inputs(n_cvt=2, seed=42),
+        _sorted_uniform(42)[::-1],
         {
-            "eigenvalues": "0c0028094c2dcc691a2f9c5f0e2d8c7e",
             "UtW": "a687661e66ab5c62f8e46fb8794669df",
             "Uty": "9fd56376eeb7fd4c49f550322f9c4e37",
             "UtG": "d71f0d9e42973293c6186d07990cc991",
@@ -81,8 +88,8 @@ _INPUT_PINS = [
     ),
     pytest.param(
         lambda: covariate_lmm_inputs(n_cvt=4, seed=99),
+        _sorted_uniform(99)[::-1],
         {
-            "eigenvalues": "34420fd6e0263ab1165560fd5f03f73c",
             "UtW": "ebdc2f076b5c9de76a5a7e6100ae4c3a",
             "Uty": "eed43517f40182f008fb1b673a493ff1",
             "UtG": "443b7705d3323765f4f1674feabeb328",
@@ -91,8 +98,8 @@ _INPUT_PINS = [
     ),
     pytest.param(
         lambda: rotated_lmm_inputs(200, 50, eig_range=(0.1, 2.0), intercept=False),
+        _sorted_uniform(42),
         {
-            "eigenvalues": "2eda09241ce0452255950f629a038e92",
             "UtW": "61c54a0602bcbd562d0f70024708275f",
             "Uty": "8921c9425356085ede38930444928283",
             "UtG": "552133c65030a80c9f7f26e4d6e72255",
@@ -103,14 +110,15 @@ _INPUT_PINS = [
 
 
 class TestBuilderBytePins:
-    @pytest.mark.parametrize(("build", "digests"), _INPUT_PINS)
-    def test_lmm_inputs_match_the_replaced_recipe(self, build, digests):
+    @pytest.mark.parametrize(("build", "eigenvalues", "digests"), _INPUT_PINS)
+    def test_lmm_inputs_match_the_replaced_recipe(self, build, eigenvalues, digests):
         inputs = build()
+        np.testing.assert_array_equal(inputs.eigenvalues, eigenvalues)
         assert {k: _sha256(getattr(inputs, k)) for k in digests} == digests
 
     def test_gram_uab_batch_matches_the_replaced_fixture(self):
         eigenvalues, uab_batch = gram_uab_batch()
-        assert _sha256(eigenvalues) == "2eda09241ce0452255950f629a038e92"
+        np.testing.assert_array_equal(eigenvalues, _sorted_uniform(42))
         assert _sha256(uab_batch) == "b9a0bf4c0c0b01b7c2f88fcebc22c493"
 
     def test_covariate_uab_batch_matches_the_replaced_recipe(self):

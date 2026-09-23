@@ -183,15 +183,10 @@ jobs:
           uv run python -c "
           import os
           from jamma.jlinalg import blas_backend, blas_is_ilp64, HAS_C_EXTENSION
-          from jamma.jlinalg import blas_has_dgemm, blas_has_dsyrk, blas_has_dsyevd, blas_has_dsyevr
           assert HAS_C_EXTENSION, 'C extension failed to load — aborting CI'
           print(f'HAS_C_EXTENSION={HAS_C_EXTENSION}')
           print(f'blas_backend={blas_backend}')
           print(f'blas_is_ilp64={blas_is_ilp64}')
-          print(f'blas_has_dgemm={blas_has_dgemm}')
-          print(f'blas_has_dsyrk={blas_has_dsyrk}')
-          print(f'blas_has_dsyevd={blas_has_dsyevd}')
-          print(f'blas_has_dsyevr={blas_has_dsyevr}')
           expected = os.environ['EXPECTED_BLAS_BACKEND']
           assert blas_backend == expected, (
               f'blas_backend={blas_backend!r} but this leg expects '

@@ -238,16 +238,50 @@ def test_mle_scalar_degenerate_s_ww_zero():
 
 
 def test_reml_const_precomputed():
-    """_compute_reml_const(df) must match inline computation bit-exactly."""
-    from jamma.lmm.likelihood_numpy import _compute_reml_const
+    """_logl_const(df) must match inline computation bit-exactly."""
+    from jamma.lmm.likelihood_numpy import _logl_const
 
     for df in [10, 48, 100, 1000, 50000]:
-        result = _compute_reml_const(df)
+        result = _logl_const(df)
         inline = 0.5 * df * (np.log(df) - np.log(2.0 * np.pi) - 1.0)
         np.testing.assert_equal(
             result,
             inline,
-            err_msg=f"_compute_reml_const({df}) does not match inline for df={df}",
+            err_msg=f"_logl_const({df}) does not match inline for df={df}",
+        )
+
+
+@pytest.mark.parametrize("n_cvt", [1, 2])
+def test_grid_and_per_snp_finishers_agree(n_cvt):
+    """REML and MLE at a grid lambda match the per-SNP evaluation there.
+
+    Both batch shapes go through one finisher per likelihood; only the Pab
+    row-0 contraction differs (tensordot vs einsum), so agreement is to
+    round-off, not bits.
+    """
+    import jamma.lmm.likelihood_numpy as ln
+
+    n_samples, n_snps = 60, 7
+    d = rotated_lmm_inputs(n_samples, n_snps, seed=3, n_cvt=n_cvt)
+    Uab = batch_compute_uab_numpy(n_cvt, d.UtW, d.Uty, d.UtG.T)
+    logdet_iab = ln._logdet_diag(batch_compute_iab_numpy(n_cvt, Uab))
+    df = n_samples - n_cvt - 1
+    grid = np.array([1e-3, 0.7, 40.0])
+
+    grid_pab = ln._batch_grid_pab_numpy(n_cvt, grid, d.eigenvalues, Uab)
+    grid_reml = ln._reml_logl(*grid_pab, logdet_iab, df)
+    grid_mle = ln._mle_logl(*grid_pab, n_samples)
+    assert grid_reml.shape == grid_mle.shape == (len(grid), n_snps)
+
+    for g, lam in enumerate(grid):
+        snp_pab = ln._batch_pab_at_lambda_numpy(
+            n_cvt, np.full(n_snps, lam), d.eigenvalues, Uab
+        )
+        np.testing.assert_allclose(
+            ln._reml_logl(*snp_pab, logdet_iab, df), grid_reml[g], rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            ln._mle_logl(*snp_pab, n_samples), grid_mle[g], rtol=1e-12
         )
 
 
@@ -275,9 +309,10 @@ def test_golden_section_eval_count(monkeypatch):
         1, eigenvalues, Uab_batch, Iab_batch, n_grid=10, n_iter=5
     )
 
-    reml_const = ln._compute_reml_const(n_samples - 2)
-    at_lambda, _ = ln._batch_reml_at_lambda_numpy(
-        1, lambdas, eigenvalues, Uab_batch, Iab_batch, reml_const=reml_const
+    at_lambda = ln._reml_logl(
+        *ln._batch_pab_at_lambda_numpy(1, lambdas, eigenvalues, Uab_batch),
+        ln._logdet_diag(Iab_batch),
+        n_samples - 2,
     )
     np.testing.assert_array_equal(
         logls,

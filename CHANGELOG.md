@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Without the C extension, the REML and MLE likelihoods each have one
+  finisher shared by the grid search and the per-SNP refinement, and the
+  identity-weighted log-determinant is computed once per chunk. The REML
+  `logl_H1` that the Python API returns for `-lmm 1` can move by one ulp
+  (at most 2.1e-16 relative, 11 of 500 SNPs on `gemma_synthetic`); lambdas,
+  every p-value, and the `.assoc.txt` bytes on `mouse_hs1940` are unchanged.
 - Without the C extension, the Wald statistics of an intercept-only run
   (`-lmm 1` or `-lmm 4`, no `-c`) now come from the same NumPy REML optimiser
   as every other mode and covariate count. The separate split-Uab optimiser

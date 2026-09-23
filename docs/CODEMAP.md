@@ -303,14 +303,15 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Nd | `build_models.py` | Immutable source manifests, compile/link flag policy, and `BuildSpec` values | [build_models.py](../src/jamma/_build_support/build_models.py) |
 | 4Nd | `build_execution.py` | Toolchain detection and atomic compile/link execution | [build_execution.py](../src/jamma/_build_support/build_execution.py) |
 | 4Nd | `compile_and_link.py` | Composition root and compatibility facade used by wheel and dev builds | [compile_and_link.py](../src/jamma/_build_support/compile_and_link.py) |
-| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, float64 chunk stream | [runner_numpy_streaming.py:48](../src/jamma/lmm/runner_numpy_streaming.py#L48) |
-| 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:128](../src/jamma/lmm/runner_numpy_streaming.py#L128) |
+| 4Ne | `bed_chunk_source()` | float64 .bed chunk stream over the analysed rows; shared by `BedSource` and the LOCO chromosome source | [runner_numpy_streaming.py:48](../src/jamma/lmm/runner_numpy_streaming.py#L48) |
+| 4Ne | `BedSource` | PLINK .bed as a source: float32 stats pass, then `bed_chunk_source()` | [runner_numpy_streaming.py:76](../src/jamma/lmm/runner_numpy_streaming.py#L76) |
+| 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:142](../src/jamma/lmm/runner_numpy_streaming.py#L142) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:62](../src/jamma/lmm/schema.py#L62) |
 | 4Nh | `ModeSpec` | Per-mode test set and column specification (single source of truth) | [lmm/schema.py:90](../src/jamma/lmm/schema.py#L90) |
 | 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:314](../src/jamma/lmm/assoc_output.py#L314) |
 | 4Ni | `_count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/chunk_runner_numpy.py:51](../src/jamma/lmm/chunk_runner_numpy.py#L51) |
-| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:79](../src/jamma/lmm/loco.py#L79) |
-| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`; the pipeline's entry | [lmm/loco.py:156](../src/jamma/lmm/loco.py#L156) |
+| 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:77](../src/jamma/lmm/loco.py#L77) |
+| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`; the pipeline's entry | [lmm/loco.py:154](../src/jamma/lmm/loco.py#L154) |
 | 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:117](../src/jamma/lmm/loco_eigen.py#L117) |
 | 4Nj | `solve_eigen_pairs()` | Ordered eigenpairs with `workers` solves in flight under one consumer-thread BLAS scope | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 | 4Nj | `plan_loco_workers()` | Worker cap and complete consumer memory reservation | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |

@@ -54,10 +54,8 @@ def _recompile(*, output_stem, sys_module_key, label):
 def _patch_compile_extension(monkeypatch, fn):
     """Patch the ``compile_extension`` the shim calls.
 
-    ``auto_recompile_c_extension`` imports it lazily
-    (``from jamma._build_support.compile_and_link import compile_extension``)
-    inside the function body, so patching the attribute on the source module
-    is what the lazy import picks up.
+    ``auto_recompile_c_extension`` looks it up on the ``compile_and_link``
+    module at call time, so patching the module attribute redirects it.
     """
     import jamma._build_support.compile_and_link as compile_and_link_mod
 

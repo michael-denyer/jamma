@@ -11,8 +11,8 @@ each own a copy of that import/ABI/recompile/retry machine; now they call this.
 serialises concurrent callers on a file lock, evicts the stale ``sys.modules``
 entry, and returns True on success. ``compile_extension`` ships inside the
 wheel, so ABI-mismatch recompile succeeds on wheel installs as it does from a
-source checkout. It evicts only the extension module itself, never the parent
-package, so nothing here re-enters its own import machinery: the #181
+source checkout. The eviction covers only the extension module, never the
+parent package, so nothing here re-enters its own import machinery: the #181
 self-deadlock (flock is per open-file-description, so a re-entrant second
 acquisition on the same thread blocks forever) cannot recur because there is
 no re-import of the parent package to trigger it.
@@ -37,10 +37,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
+from jamma._build_support import compile_and_link
+from jamma._build_support.build_models import BuildReport, BuildSpec
+from jamma.core.constants import Env
+
 if TYPE_CHECKING:
     from types import ModuleType
-
-    from jamma._build_support.build_models import BuildSpec
 
 
 def _lock_path_for(sys_module_key: str) -> Path:
@@ -78,8 +82,6 @@ def _file_lock(lock_path: Path) -> Iterator[None]:
     matches how pip/uv handle their own lockfiles and avoids a TOCTOU between
     unlink and re-lock by a sibling process.
     """
-    from loguru import logger
-
     fd = None
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +110,8 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     """Auto-recompile a C extension when its import or ABI check failed.
 
     Calls ``compile_extension`` with a ``BuildReport`` that logs, evicts the
-    stale module from ``sys.modules``, and returns True on success.
+    stale extension module (never its parent package) from ``sys.modules``,
+    and returns True on success.
 
     Args:
         spec: The ``BuildSpec`` for the target.
@@ -116,10 +119,6 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
     Returns:
         True if recompilation succeeded; False otherwise.
     """
-    from loguru import logger
-
-    from jamma._build_support.compile_and_link import BuildReport, compile_extension
-
     log_name = spec.output_stem
     sys_module_key = spec.sys_module_key
     label = spec.fallback_label
@@ -171,7 +170,7 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
                 )
 
         try:
-            success = compile_extension(
+            success = compile_and_link.compile_extension(
                 spec,
                 Path(__file__).parents[1],  # the installed jamma/ package dir
                 report,
@@ -212,8 +211,6 @@ def _import_and_validate(spec: BuildSpec, expected_abi: int) -> ModuleType | Non
     otherwise ABI-matched build means a corrupt build, so it is treated the same
     as an import failure and drives a rebuild in the caller.
     """
-    from loguru import logger
-
     try:
         mod = importlib.import_module(spec.sys_module_key)
     except ImportError as e:
@@ -271,8 +268,6 @@ def _load_c_module(spec: BuildSpec, expected_abi: int) -> ModuleType | None:
     Returns:
         The validated extension module, or None to use the pure-Python fallback.
     """
-    from jamma.core.constants import Env
-
     if Env.current().force_numpy_fallback:
         return None
 

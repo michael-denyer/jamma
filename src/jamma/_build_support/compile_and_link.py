@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys
 import sysconfig
 import tempfile
 from pathlib import Path
@@ -87,9 +86,8 @@ def run_build(
 def compile_extension(spec: BuildSpec, package_dir: Path, report: BuildReport) -> bool:
     """Detect the toolchain and drive ``run_build`` for one ``BuildSpec``.
 
-    Evicts only ``spec.sys_module_key`` from ``sys.modules`` on success,
-    never the parent package: re-executing the parent is what caused the #181
-    self-deadlock. Proving the new ``.so`` loads is left to the caller.
+    Proving the new ``.so`` loads, and evicting any stale module from
+    ``sys.modules``, is left to the caller.
 
     Failures go to ``report.warn`` and the success summary to
     ``report.detail``.
@@ -103,8 +101,6 @@ def compile_extension(spec: BuildSpec, package_dir: Path, report: BuildReport) -
     if not result.ok:
         report.warn(f"ERROR: {spec.output_stem} compilation failed: {result.error}")
         return False
-
-    sys.modules.pop(spec.sys_module_key, None)
 
     omp_status = "OpenMP" if result.used_openmp else "single-threaded"
     report.detail(f"{spec.output_stem} compiled: {result.output_path} ({omp_status})")

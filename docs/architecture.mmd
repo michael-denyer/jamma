@@ -18,7 +18,7 @@ flowchart TD
     end
 
     subgraph CORE["CORE COMPUTATION"]
-        KIN["Kinship<br/>(DGEMM, chunked)"]
+        KIN["Kinship<br/>(DSYRK, chunked)"]
         EIG["Eigendecomposition<br/>(jlinalg.eigh → DSYEVD/DSYEVR)"]
         KIN --> EIG
     end
@@ -29,7 +29,7 @@ flowchart TD
         NPS["Streaming Runner<br/>(two-pass disk I/O)"]
         CEXT{"C extension?"}
         C["C Extension<br/>OpenMP + SIMD"]
-        PY["Pure Python<br/>fallback"]
+        PY["NumPy<br/>fallback"]
         MEM -->|fits| NP
         MEM -->|large| NPS
         NP --> CEXT

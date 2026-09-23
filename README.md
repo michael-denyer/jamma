@@ -174,7 +174,10 @@ Streaming reduces genotype memory, but kinship and eigenvectors still require
 dense matrices whose storage grows with the square of the sample count.
 ILP64 removes the BLAS integer limit; it does not remove the RAM requirement.
 At 100,000 samples, the documented eigendecomposition estimates are roughly
-240 GB with DSYEVD or 160 GB with the lower-workspace DSYEVR path.
+240 GB with DSYEVD or 160 GB with the lower-workspace DSYEVR path. The
+estimator adds a safety margin (10%, capped at 10 GB) for the process's own
+memory: a 100,000-sample Wald run measured 250 GB peak resident memory on
+2026-09-23.
 
 See [memory planning](docs/USER_GUIDE.md#memory-safety) before scaling up.
 
@@ -241,7 +244,7 @@ flowchart TD
     end
 
     subgraph CORE["CORE COMPUTATION"]
-        KIN["Kinship<br/>(DGEMM, chunked)"]
+        KIN["Kinship<br/>(DSYRK, chunked)"]
         EIG["Eigendecomposition<br/>(jlinalg.eigh → DSYEVD/DSYEVR)"]
         KIN --> EIG
     end
@@ -252,7 +255,7 @@ flowchart TD
         NPS["Streaming Runner<br/>(two-pass disk I/O)"]
         CEXT{"C extension?"}
         C["C Extension<br/>OpenMP + SIMD"]
-        PY["Pure Python<br/>fallback"]
+        PY["NumPy<br/>fallback"]
         MEM -->|fits| NP
         MEM -->|large| NPS
         NP --> CEXT

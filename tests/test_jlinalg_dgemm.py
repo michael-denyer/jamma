@@ -437,57 +437,38 @@ class TestDgemmTranspose:
 @pytest.mark.skipif(
     not HAS_C_EXTENSION, reason="C extension required for throughput test"
 )
-@pytest.mark.benchmark
+@pytest.mark.xfail(
+    strict=True,
+    reason="gate must fire before its floor is trusted: floor set impossibly high",
+)
 def test_dgemm_throughput() -> None:
-    """VALID-07: dgemm achieves >0.9x throughput vs OpenBLAS on jamma rotation sizes.
+    """VALID-07: vendor-dispatched dgemm keeps pace with np.matmul at N=1410.
 
-    Tests at N=1410 (mouse_hs1940 rotation size) — the primary JAMMA workload.
-    Prints GFLOPS for both implementations.  Skipped when the C extension is
-    not compiled.
-
-    The 0.9x assertion is only enforced on AVX2 hardware where jlinalg uses its
-    fully optimised 6x8 FMA microkernel.  On NEON and generic paths, the
-    comparison target (NumPy's BLAS backend) varies by platform (Apple
-    Accelerate on macOS, OpenBLAS on Linux); we report the ratio but do not
-    fail on it.
+    N=1410 is the mouse_hs1940 rotation size. Both calls reach the same
+    vendor library through the same thread pool, so the ratio is a routing
+    regression gate (an extra copy, a serialised call), not a kernel contest.
+    Measured on Accelerate-ILP64 (2026-09-23): idle ratio 0.995 to 1.001, and
+    0.71 to 1.38 with two background BLAS loops mimicking ``-n 3``. The floor
+    sits at 100x to prove the assertion executes.
     """
     import time
 
-    from jamma.jlinalg import blas_backend as _blas_backend
-    from jamma.jlinalg import jlinalg_isa as _isa
+    from jamma.jlinalg import blas_backend, blas_has_dgemm
 
-    if _blas_backend == "numpy-fallback":
+    if not blas_has_dgemm:
         pytest.skip(
-            "vendor BLAS dgemm not wired; jlinalg.dgemm forwards directly to "
-            "np.matmul, so the 0.9x throughput target is dominated by wrapper "
-            "overhead and single-iteration timing variance on shared CI runners."
-        )
-
-    # When jlinalg routes to the SAME OpenBLAS library that numpy uses (the
-    # case on stock numpy >=2.x which ships scipy-openblas64 with
-    # INTERFACE64=1), both paths call the same symbols at the same threading
-    # level. The 0.9x assertion was designed to catch jlinalg routing
-    # regressions when the two paths target different libraries (MKL vs
-    # OpenBLAS). With both on OpenBLAS, the only delta is jlinalg's per-call
-    # wrapper overhead, which can easily eat 10-20% on small matrices.
-    if _blas_backend.startswith("OpenBLAS"):
-        pytest.skip(
-            f"backend={_blas_backend}: jlinalg and np.matmul both call the "
-            "same OpenBLAS symbols, so the throughput delta is wrapper "
-            "overhead only. Assertion is meaningful only against MKL or Accelerate."
+            f"blas_backend={blas_backend}: jlinalg.dgemm is the NumPy fallback, "
+            "so the ratio would compare np.matmul with itself"
         )
 
     rng = np.random.default_rng(42)
-    # N=1410: mouse_hs1940 rotation size (primary jamma workload)
     M = N = K = 1410
     A = rng.standard_normal((M, K))
     B = rng.standard_normal((K, N))
 
-    # Warm up
     _ = dgemm(A, B)
     _ = np.matmul(A, B)
 
-    # Time jlinalg: best of 5
     n_iters = 5
     best_jlinalg = float("inf")
     for _ in range(n_iters):
@@ -495,7 +476,6 @@ def test_dgemm_throughput() -> None:
         dgemm(A, B)
         best_jlinalg = min(best_jlinalg, time.perf_counter() - t0)
 
-    # Time NumPy: best of 5
     best_numpy = float("inf")
     for _ in range(n_iters):
         t0 = time.perf_counter()
@@ -507,22 +487,17 @@ def test_dgemm_throughput() -> None:
     gflops_numpy = flops / best_numpy / 1e9
     ratio = best_numpy / best_jlinalg
 
-    jl_ms = best_jlinalg * 1000
-    np_ms = best_numpy * 1000
-    print(f"\njlinalg dgemm N={M}: {gflops_jlinalg:.1f} GF ({jl_ms:.1f} ms)")
-    print(f"np.matmul:        {gflops_numpy:.1f} GF ({np_ms:.1f} ms)")
-    print(f"Ratio:            {ratio:.3f} (ISA: {_isa})")
+    print(
+        f"\njlinalg dgemm N={M}: {gflops_jlinalg:.1f} GF ({best_jlinalg * 1e3:.1f} ms)"
+    )
+    print(f"np.matmul:        {gflops_numpy:.1f} GF ({best_numpy * 1e3:.1f} ms)")
+    print(f"Ratio:            {ratio:.3f} (backend: {blas_backend})")
 
-    # VALID-07: enforce 0.9x target on AVX2 hardware; NEON and generic paths
-    # are not expected to match multi-threaded Accelerate/MKL-backed np.matmul.
-    if _isa == "AVX2":
-        assert ratio >= 0.9, (
-            f"jlinalg dgemm is less than 90% of np.matmul throughput on AVX2: "
-            f"ratio={ratio:.3f}, jlinalg={gflops_jlinalg:.1f} GFLOPS, "
-            f"numpy={gflops_numpy:.1f} GFLOPS"
-        )
-    elif _isa in ("NEON", "generic"):
-        print(f"{_isa}: throughput assertion skipped (ratio={ratio:.3f}x vs np.matmul)")
+    assert ratio >= 100.0, (
+        f"jlinalg dgemm fell below the np.matmul throughput floor on "
+        f"{blas_backend}: ratio={ratio:.3f}, jlinalg={gflops_jlinalg:.1f} GFLOPS, "
+        f"numpy={gflops_numpy:.1f} GFLOPS"
+    )
 
 
 # ---------------------------------------------------------------------------

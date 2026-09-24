@@ -46,4 +46,8 @@ int ncvt1_compute_chunk(PyObject *capsule, PyObject *utg_t, int n_threads,
 int general_compute_chunk(PyObject *capsule, PyObject *utg_t, int n_threads,
                           PyObject **result);
 
+/* BGEN layout-2 probability decoding (_lmm_accel_bgen.c). */
+PyObject *decode_bgen_probabilities_c(PyObject *self, PyObject *args,
+                                      PyObject *kwargs);
+
 #endif /* JAMMA_LMM_ACCEL_INTERNAL_H */

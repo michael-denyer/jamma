@@ -40,6 +40,7 @@ LMM_ACCEL_SOURCES: tuple[str, ...] = (
     "_lmm_stats.c",
     "_lmm_kernels_general.c",
     "_lmm_kernels_ncvt1.c",
+    "_lmm_accel_bgen.c",
 )
 
 # LAPACK sources require strict IEEE 754 (-O2 -fno-fast-math) — no unrolling,
@@ -143,6 +144,8 @@ class BuildSpec:
     # import failure and rebuilds. ABI equality is the real completeness check;
     # this is the belt-and-braces list the caller used to import by name.
     required_attrs: tuple[str, ...] = ()
+    # Libraries this target links beyond LINK_LIBS (the BGEN decoder's zlib).
+    link_libs: tuple[str, ...] = ()
 
 
 # -march=native is dev-mode only and portable wheels must not carry it; it
@@ -164,7 +167,9 @@ LMM_ACCEL_SPEC = BuildSpec(
         "create_workspace_c",
         "compute_lmm_chunk_c",
         "workspace_sizes_c",
+        "decode_bgen_probabilities_c",
     ),
+    link_libs=("-lz",),
 )
 
 JLINALG_SPEC = BuildSpec(
@@ -325,7 +330,7 @@ def resolve_flags(
         base_extra=(*base_extra, *san_cflags),
         lapack_extra=san_cflags,
         platform_link=LINK_FLAGS_BY_PLATFORM.get(system, ()),
-        link_libs=(*LINK_LIBS, *san_link),
+        link_libs=(*LINK_LIBS, *spec.link_libs, *san_link),
     )
 
 

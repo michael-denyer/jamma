@@ -184,14 +184,17 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 
 ### [2] I/O Layer
 
-Reads PLINK binary genotypes, covariates, and kinship matrices. Writes GEMMA-compatible output.
+Reads PLINK binary and BGEN v1.2 genotypes, covariates, and kinship matrices. Writes GEMMA-compatible output.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 2a | `GenotypeDataset` | Samples x variants behind a reader strategy: metadata at open, `blocks()` and `stats()` stream columns (O(n x chunk)), `partitions`, `fingerprint()` | [genotype/dataset.py:235](../src/jamma/genotype/dataset.py#L235) |
-| 2a | `materialize()` | Batch mode: every variant read once into a float32 in-memory HARD_CALLS dataset | [genotype/dataset.py:309](../src/jamma/genotype/dataset.py#L309) |
+| 2a | `GenotypeDataset` | Samples x variants behind a reader strategy: metadata at open, `blocks()` and `stats()` stream columns (O(n x chunk)), `partitions`, `fingerprint()` | [genotype/dataset.py:244](../src/jamma/genotype/dataset.py#L244) |
+| 2a | `materialize()` | Batch mode: every variant read once into a float32 in-memory HARD_CALLS dataset | [genotype/dataset.py:359](../src/jamma/genotype/dataset.py#L359) |
 | 2a | `PlinkReader` | bed-reader behind `GenotypeDataset.open_plink`: float64 blocks, float32 for statistics | [plink.py:111](../src/jamma/io/plink.py#L111) |
 | 2a | `validate_plink_dimensions()` | .bed size against .fam and .bim line counts, checked at open | [plink.py:46](../src/jamma/io/plink.py#L46) |
+| 2a | `open_bgen()` | BGEN v1.2 layout 2 as a PROBABILITIES dataset: variants from the `.bgi`, samples from the `.sample`, header counts and sample IDs cross-checked at open | [genotype/dataset.py:293](../src/jamma/genotype/dataset.py#L293) |
+| 2a | `BgenReader` | Reads variant blocks by `.bgi` offset, inflates zstd in Python, decodes in C; yields `ProbabilityBlock`s (float64 first-allele dosages plus the quantised q11/q12 and missing mask) | [io/bgen.py:261](../src/jamma/io/bgen.py#L261) |
+| 2a | `decode_bgen_probabilities_c` | C: zlib inflate and B-bit unpack (B 1..16) per variant, OpenMP across variants, GIL released | [_lmm_accel_bgen.c](../src/jamma/lmm/_lmm_accel_bgen.c) |
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:21](../src/jamma/io/covariate.py#L21) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L46) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L87) |
@@ -573,7 +576,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
 | CLI dispatch (`main`) | [cli.py:222](../src/jamma/cli.py#L222) |
-| Load genotypes | [genotype/dataset.py:235](../src/jamma/genotype/dataset.py#L235) |
+| Load genotypes | [genotype/dataset.py:244](../src/jamma/genotype/dataset.py#L244) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:106](../src/jamma/io/matrix_writer.py#L106) |

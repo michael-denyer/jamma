@@ -21,8 +21,10 @@ import numpy as np
 from bed_reader import open_bed
 
 from jamma.core.progress import progress_iterator
+from jamma.core.threading import get_physical_core_count
 from jamma.genotype.snp_stats import SnpStats, collect_snp_stats_from_chunks
 from jamma.genotype.variants import SnpMeta
+from jamma.io.bgen import ProbabilityBlock, open_bgen_reader
 from jamma.io.plink import PlinkReader, validate_plink_dimensions
 
 DEFAULT_BLOCK = 10_000
@@ -92,7 +94,7 @@ class GenotypeBlock:
         end: Exclusive end, in the same coordinate as ``start``.
     """
 
-    __slots__ = ("_encoding", "_values", "columns", "end", "start")
+    __slots__ = ("_encoding", "_probabilities", "_values", "columns", "end", "start")
 
     def __init__(
         self,
@@ -101,12 +103,16 @@ class GenotypeBlock:
         end: int,
         values: np.ndarray,
         encoding: GenotypeEncoding,
+        *,
+        probabilities: ProbabilityBlock | None = None,
     ) -> None:
         self.columns = columns
         self.start = start
         self.end = end
         self._values: np.ndarray | None = values
         self._encoding = encoding
+        # The quantised probabilities behind a PROBABILITIES block's dosages.
+        self._probabilities = probabilities
 
     def _live_values(self) -> np.ndarray:
         if self._values is None:
@@ -160,6 +166,7 @@ class GenotypeBlock:
         """
         values = self._live_values()
         self._values = None
+        self._probabilities = None
         if rows is columns is None:
             return values
         if rows is None:
@@ -200,12 +207,14 @@ class _GenotypeReader(Protocol):
 
     def read(
         self, columns: np.ndarray, block_size: int, *, stats_only: bool
-    ) -> Iterator[np.ndarray]:
+    ) -> Iterator[np.ndarray | ProbabilityBlock]:
         """Yield ``(n_samples, k)`` blocks for consecutive runs of ``columns``.
 
         A block read with ``stats_only=False`` is float64 and owned by the
         caller. ``stats_only=True`` lets a reader return a cheaper dtype or a
-        view, since only statistics are computed from it.
+        view, since only statistics are computed from it. A PROBABILITIES
+        reader yields ``ProbabilityBlock``s, whose float64 ``dosages`` are
+        the values.
         """
         ...
 
@@ -278,6 +287,47 @@ class GenotypeDataset:
             )
         return GenotypeDataset(
             PlinkReader(prefix), GenotypeEncoding.HARD_CALLS, samples, variants
+        )
+
+    @staticmethod
+    def open_bgen(
+        bgen: Path, sample: Path, bgi: Path, *, decode_threads: int | None = None
+    ) -> GenotypeDataset:
+        """Open a BGEN v1.2 file, reading metadata only.
+
+        Variants come from the bgenix ``.bgi`` in file order, samples from the
+        ``.sample`` (ID_1 is the FID, ID_2 the IID). Only layout 2, biallelic,
+        unphased diploid data with a bit depth of 1 to 16 decodes.
+
+        Args:
+            bgen: The ``.bgen`` file.
+            sample: Its ``.sample`` file.
+            bgi: Its bgenix ``.bgi`` index.
+            decode_threads: OpenMP threads for decoding, or None for every
+                physical core.
+
+        Returns:
+            A PROBABILITIES dataset whose counted allele ``a1`` is the first
+            BGEN allele: dosage = 2*P(11) + P(12).
+
+        Raises:
+            FileNotFoundError: If any of the three files is missing.
+            BgenFormatError: On a layout other than 2, a multi-allelic
+                variant, or header, ``.bgi`` and ``.sample`` counts or sample
+                IDs that disagree.
+            ImportError: If the file is zstd-compressed and no zstd module
+                imports (install ``jamma[zstd]`` below Python 3.14).
+            RuntimeError: If the ``_lmm_accel`` C extension is unavailable.
+        """
+        threads = decode_threads or get_physical_core_count()
+        reader, fid, iid, variants = open_bgen_reader(
+            bgen, sample, bgi, n_threads=threads
+        )
+        return GenotypeDataset(
+            reader,
+            GenotypeEncoding.PROBABILITIES,
+            SampleTable(fid=fid, iid=iid),
+            variants,
         )
 
     @staticmethod
@@ -370,7 +420,10 @@ class GenotypeDataset:
         """Cache-key components that change when the genotype content can.
 
         PLINK returns ``bed_fingerprint`` (name:size:mtime_ns) and
-        ``bim_sha256``, the eigen cache's existing components.
+        ``bim_sha256``, the eigen cache's existing components. BGEN returns
+        ``bgen_fingerprint`` (name:size:mtime_ns), ``sample_sha256`` and
+        ``variants_sha256``, a hash of the parsed variant table and block
+        offsets rather than of the ``.bgi`` bytes.
 
         Raises:
             ValueError: For an in-memory dataset, which has no file identity.
@@ -404,8 +457,12 @@ class GenotypeDataset:
         stats_only: bool,
         progress: str | None,
         eta_seconds: float | None = None,
-    ) -> Iterator[tuple[int, int, np.ndarray]]:
-        """Yield ``(start, end, values)`` per reader block, in requested space."""
+    ) -> Iterator[tuple[int, int, np.ndarray, ProbabilityBlock | None]]:
+        """Yield ``(start, end, values, probabilities)`` per reader block.
+
+        ``start``/``end`` are in requested column space; ``probabilities`` is
+        the quantised block behind ``values`` for a PROBABILITIES reader.
+        """
         n_cols = len(cols)
         raw = self._reader.read(cols, block_size, stats_only=stats_only)
         if progress is not None:
@@ -416,8 +473,12 @@ class GenotypeDataset:
                 initial_eta_seconds=eta_seconds,
             )
         starts = range(0, n_cols, block_size)
-        for start, values in zip(starts, raw, strict=True):
-            yield start, min(start + block_size, n_cols), values
+        for start, block in zip(starts, raw, strict=True):
+            end = min(start + block_size, n_cols)
+            if isinstance(block, ProbabilityBlock):
+                yield start, end, block.dosages, block
+            else:
+                yield start, end, block, None
 
     def blocks(
         self,
@@ -448,8 +509,15 @@ class GenotypeDataset:
             progress=progress,
             eta_seconds=eta_seconds,
         )
-        for start, end, values in spans:
-            yield GenotypeBlock(cols[start:end], start, end, values, self.encoding)
+        for start, end, values, probabilities in spans:
+            yield GenotypeBlock(
+                cols[start:end],
+                start,
+                end,
+                values,
+                self.encoding,
+                probabilities=probabilities,
+            )
 
     def stats(
         self,
@@ -482,7 +550,7 @@ class GenotypeDataset:
         spans = self._read_spans(cols, block_size, stats_only=True, progress=progress)
         chunks = (
             (values if rows is None else values[rows, :], start, end)
-            for start, end, values in spans
+            for start, end, values, _ in spans
         )
         return _collect_stats(
             chunks,

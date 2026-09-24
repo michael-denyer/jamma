@@ -15,15 +15,19 @@ from jamma._build_support.build_execution import Toolchain, execute_build
 from jamma._build_support.build_models import (
     BASE_CFLAGS,
     BASELINE_SOURCES,
+    JLINALG_SPEC,
     LAPACK_CFLAGS,
     LAPACK_SOURCES,
     LINK_FLAGS_BY_PLATFORM,
+    LINK_LIBS,
     LMM_ACCEL_SOURCES,
+    LMM_ACCEL_SPEC,
     BuildReport,
     BuildResult,
     BuildSpec,
     ResolvedFlags,
     resolve_cflags_for,
+    resolve_flags,
 )
 from jamma._build_support.compile_and_link import compile_extension, run_build
 
@@ -93,7 +97,16 @@ def test_lmm_accel_sources_exact():
         "_lmm_stats.c",
         "_lmm_kernels_general.c",
         "_lmm_kernels_ncvt1.c",
+        "_lmm_accel_bgen.c",
     )
+
+
+def test_only_the_accelerator_links_zlib():
+    """The BGEN decoder's zlib is linked into _lmm_accel and nothing else."""
+    accel = resolve_flags(LMM_ACCEL_SPEC, dev_mode=False, system="Linux", env={})
+    jlinalg = resolve_flags(JLINALG_SPEC, dev_mode=False, system="Linux", env={})
+    assert accel.link_libs == (*LINK_LIBS, "-lz")
+    assert jlinalg.link_libs == LINK_LIBS
 
 
 def test_link_flags_linux():

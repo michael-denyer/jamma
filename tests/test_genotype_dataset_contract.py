@@ -1,7 +1,9 @@
-"""Contract tests for ``GenotypeDataset`` over its matrix and PLINK readers.
+"""Contract tests for ``GenotypeDataset`` over its matrix, PLINK and BGEN readers.
 
 The oracle is bed-reader read directly and the jlinalg SNP-statistics kernel
 run on the dense row subset, never the streaming helpers the dataset replaces.
+The BGEN case encodes the same PLINK fileset as one-hot probabilities, so the
+bed-reader oracle holds for it too.
 """
 
 from __future__ import annotations
@@ -23,8 +25,9 @@ from jamma.genotype.dataset import (
 from jamma.genotype.variants import SnpMeta
 from jamma.io.plink import validate_genotype_values
 from jamma.jlinalg import compute_snp_stats_chunk
+from tests.bgen_files import one_hot_bgen_from_plink
 from tests.fixture_paths import LOCO, SYNTHETIC
-from tests.support import require_fixture
+from tests.support import require_fixture, requires_c
 
 pytestmark = pytest.mark.tier0
 
@@ -71,11 +74,15 @@ def bfile(request: pytest.FixtureRequest) -> Path:
     return request.getfixturevalue("asymmetric_plink")
 
 
-@pytest.fixture(params=("matrix", "plink"))
-def case(request: pytest.FixtureRequest, bfile: Path) -> _Case:
+@pytest.fixture(params=("matrix", "plink", pytest.param("bgen", marks=requires_c)))
+def case(request: pytest.FixtureRequest, bfile: Path, tmp_path: Path) -> _Case:
     dense64, dense32, chromosome = _bed_oracle(bfile)
     if request.param == "matrix":
         dataset = GenotypeDataset.from_matrix(dense64.copy(), _variants(bfile))
+        return _Case(dataset, bfile, dense64, dense64, chromosome)
+    if request.param == "bgen":
+        files = one_hot_bgen_from_plink(bfile, tmp_path / "onehot.bgen")
+        dataset = GenotypeDataset.open_bgen(files.bgen, files.sample, files.bgi)
         return _Case(dataset, bfile, dense64, dense64, chromosome)
     dataset = GenotypeDataset.open_plink(bfile)
     return _Case(dataset, bfile, dense64, dense32, chromosome)
@@ -106,17 +113,27 @@ def _kernel_stats(dense: np.ndarray) -> tuple[np.ndarray, ...]:
     return means, miss, variances, n_aa, n_ab, n_bb
 
 
-def _assert_stats_equal(stats, dense: np.ndarray, columns: np.ndarray) -> None:
+def _assert_stats_equal(
+    stats, dense: np.ndarray, columns: np.ndarray, *, hwe: bool = True
+) -> None:
+    """Match the kernel; HWE counts and hard-call validation only when ``hwe``.
+
+    ``hwe`` is False for a PROBABILITIES dataset, which has neither.
+    """
     means, miss, variances, n_aa, n_ab, n_bb = _kernel_stats(dense)
     np.testing.assert_array_equal(stats.col_means, means, strict=True)
     np.testing.assert_array_equal(stats.miss_counts, miss, strict=True)
     np.testing.assert_array_equal(stats.col_vars, variances, strict=True)
-    assert stats.hwe_counts is not None
-    np.testing.assert_array_equal(stats.hwe_counts.n_aa, n_aa, strict=True)
-    np.testing.assert_array_equal(stats.hwe_counts.n_ab, n_ab, strict=True)
-    np.testing.assert_array_equal(stats.hwe_counts.n_bb, n_bb, strict=True)
+    if hwe:
+        assert stats.hwe_counts is not None
+        np.testing.assert_array_equal(stats.hwe_counts.n_aa, n_aa, strict=True)
+        np.testing.assert_array_equal(stats.hwe_counts.n_ab, n_ab, strict=True)
+        np.testing.assert_array_equal(stats.hwe_counts.n_bb, n_bb, strict=True)
+        assert stats.n_unexpected == validate_genotype_values(dense)
+    else:
+        assert stats.hwe_counts is None
+        assert stats.n_unexpected == 0
     assert stats.n_samples == dense.shape[0]
-    assert stats.n_unexpected == validate_genotype_values(dense)
     np.testing.assert_array_equal(stats.global_indices, columns)
 
 
@@ -173,14 +190,16 @@ def test_dosages_narrow_rows_and_columns(case: _Case):
 
 @pytest.mark.parametrize("columns_case", ["unfiltered", "scattered"])
 def test_block_stats_equal_kernel_on_row_subset(case: _Case, columns_case: str):
-    """block.stats(rows, hwe=True) equals the kernel on the dense subset."""
+    """block.stats(rows, hwe=...) equals the kernel on the dense subset."""
     rows = _rows(case.dataset.n_samples)
     columns = _column_cases(case.dataset.n_variants)[columns_case]
+    hwe = case.dataset.encoding.supports_hwe
     for block in case.dataset.blocks(13, columns=columns):
         dense = case.dense64[np.ix_(rows, block.columns)]
-        _assert_stats_equal(block.stats(rows, hwe=True), dense, block.columns)
-        full = block.stats(hwe=True)
-        _assert_stats_equal(full, case.dense64[:, block.columns], block.columns)
+        _assert_stats_equal(block.stats(rows, hwe=hwe), dense, block.columns, hwe=hwe)
+        full = block.stats(hwe=hwe)
+        dense = case.dense64[:, block.columns]
+        _assert_stats_equal(full, dense, block.columns, hwe=hwe)
 
 
 @pytest.mark.parametrize("columns_case", ["unfiltered", "contiguous", "scattered"])
@@ -190,11 +209,12 @@ def test_dataset_stats_equal_kernel_on_row_subset(case: _Case, columns_case: str
     n = case.dataset.n_variants
     columns = _column_cases(n)[columns_case]
     expected_cols = np.arange(n) if columns is None else columns
+    hwe = case.dataset.encoding.supports_hwe
 
-    stats = case.dataset.stats(rows, columns=columns, hwe=True, block_size=7)
+    stats = case.dataset.stats(rows, columns=columns, hwe=hwe, block_size=7)
 
     dense = case.stats_input[np.ix_(rows, expected_cols)]
-    _assert_stats_equal(stats, dense, expected_cols)
+    _assert_stats_equal(stats, dense, expected_cols, hwe=hwe)
 
 
 def test_stats_count_values_outside_hard_calls():

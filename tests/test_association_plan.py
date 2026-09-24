@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
     ExecutionPlan,
@@ -42,6 +43,7 @@ def test_plan_is_frozen_and_tightening_returns_a_chunk_plan(
         n_cvt=1,
         mem_budget_gb=None,
         workspace=_workspace(dispatch, 1),
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     tightened = plan.conservative_chunks.narrow(500)
 
@@ -72,6 +74,7 @@ def test_tightening_only_decreases_width_and_preserves_policy(
         n_cvt=2,
         mem_budget_gb=8.0,
         workspace=_workspace(dispatch, 2),
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
     tightened = plan.conservative_chunks.narrow(250)

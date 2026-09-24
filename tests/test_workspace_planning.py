@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from jamma.core import memory
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.genotype.snp_stats import SnpSelection
 from jamma.genotype.variants import SnpMeta
 from jamma.lmm import association_plan
@@ -113,10 +114,18 @@ def test_fallback_custom_grid_reduces_chunk_width(monkeypatch) -> None:
     monkeypatch.setattr(association_plan, "is_blas_controllable", lambda: True)
 
     low = association_plan.plan_association(
-        2_000, 100_000, config=LmmConfig(n_grid=20), n_cvt=8
+        2_000,
+        100_000,
+        config=LmmConfig(n_grid=20),
+        n_cvt=8,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     high = association_plan.plan_association(
-        2_000, 100_000, config=LmmConfig(n_grid=200), n_cvt=8
+        2_000,
+        100_000,
+        config=LmmConfig(n_grid=200),
+        n_cvt=8,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
     assert high.conservative_chunks.chunk_size < low.conservative_chunks.chunk_size
@@ -150,6 +159,7 @@ def test_phenotype_group_is_bounded_by_live_native_workspaces(monkeypatch) -> No
         n_cvt=1,
         mem_budget_gb=None,
         workspace=workspace,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
     grouped = association_plan._select_phenotype_group(
@@ -191,6 +201,7 @@ def test_phenotype_group_preserves_single_phenotype_chunk_width(monkeypatch) -> 
         n_cvt=1,
         mem_budget_gb=None,
         workspace=workspace,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     group_two = replace(plan, phenotype_group_size=2)
     group_three = replace(plan, phenotype_group_size=3)
@@ -222,10 +233,20 @@ def test_fallback_group_reuses_sequential_compute_scratch(monkeypatch) -> None:
     monkeypatch.setattr(association_plan, "is_blas_controllable", lambda: True)
 
     single = association_plan.plan_association(
-        1_000, 10_000, config=LmmConfig(lmm_mode=4), n_cvt=4, n_phenotypes=1
+        1_000,
+        10_000,
+        config=LmmConfig(lmm_mode=4),
+        n_cvt=4,
+        n_phenotypes=1,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     grouped = association_plan.plan_association(
-        1_000, 10_000, config=LmmConfig(lmm_mode=4), n_cvt=4, n_phenotypes=3
+        1_000,
+        10_000,
+        config=LmmConfig(lmm_mode=4),
+        n_cvt=4,
+        n_phenotypes=3,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
     assert grouped.phenotype_group_size == 3
@@ -240,7 +261,9 @@ def test_grouped_runner_rejects_more_jobs_than_priced(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(association_plan.accel, "available", lambda: False)
     monkeypatch.setattr(association_plan.memory, "available_ram_gb", lambda: 4.0)
     monkeypatch.setattr(association_plan, "is_blas_controllable", lambda: True)
-    execution = association_plan.plan_association(4, 1, n_phenotypes=1)
+    execution = association_plan.plan_association(
+        4, 1, n_phenotypes=1, genotype_encoding=GenotypeEncoding.HARD_CALLS
+    )
     empty_int = np.array([], dtype=np.intp)
     empty_float = np.array([], dtype=np.float64)
     empty_str = np.array([], dtype=str)
@@ -279,7 +302,11 @@ def test_auto_uses_user_budget_and_allows_streaming_fallback(monkeypatch) -> Non
     monkeypatch.setattr(association_plan, "is_blas_controllable", lambda: True)
 
     plan = association_plan.plan_association(
-        50_000, 500_000, config=LmmConfig(mem_budget=4.0), backend="auto"
+        50_000,
+        500_000,
+        config=LmmConfig(mem_budget=4.0),
+        backend="auto",
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
     assert plan.summary.mode == "streaming"
@@ -294,7 +321,11 @@ def test_streaming_chunk_converges_on_full_quote_under_physical_ram(
     monkeypatch.setattr(association_plan, "is_blas_controllable", lambda: True)
 
     plan = association_plan.plan_association(
-        2_000, 1_000_000, config=LmmConfig(mem_budget=1_000.0), n_cvt=4
+        2_000,
+        1_000_000,
+        config=LmmConfig(mem_budget=1_000.0),
+        n_cvt=4,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     quote = plan.price(eigen=None)
 
@@ -338,6 +369,7 @@ def test_streaming_chunk_converges_on_user_budget_below_ram(monkeypatch) -> None
         config=LmmConfig(mem_budget=3.0),
         backend="numpy-streaming",
         n_cvt=4,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     quote = plan.price(eigen=None)
 
@@ -357,7 +389,11 @@ def test_workspace_thread_capacity_is_explicit(monkeypatch) -> None:
     )
 
     plan = association_plan.plan_association(
-        1_000, 2_000, config=LmmConfig(lmm_mode=4), n_cvt=3
+        1_000,
+        2_000,
+        config=LmmConfig(lmm_mode=4),
+        n_cvt=3,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
     assert plan.workspace.max_threads == 7

@@ -16,6 +16,7 @@ from jamma.kinship import (
     impute_center_and_standardize,
 )
 from jamma.kinship.memory import estimate_kinship_memory
+from tests.bgen_files import one_hot_bgen_from_plink
 from tests.fixture_paths import MOUSE
 from tests.support import require_fixture, requires_c
 
@@ -119,12 +120,18 @@ def test_standardizing_preserves_input_and_numeric_dtype(dtype, readonly):
 
 @pytest.mark.parametrize("mode", ["centered", "standardized"])
 @pytest.mark.parametrize("subset", [False, True])
-def test_kinship_quote_covers_preprocessing(tmp_path, mode, subset):
+@pytest.mark.parametrize("kind", ["plink", pytest.param("bgen", marks=requires_c)])
+def test_kinship_quote_covers_preprocessing(tmp_path, mode, subset, kind):
     rng = np.random.default_rng(108)
     values = rng.integers(0, 3, (800, 1000)).astype(np.float64)
     values[::11, ::5] = np.nan
     bfile = tmp_path / "memory"
     to_bed(bfile.with_suffix(".bed"), values)
+    if kind == "plink":
+        dataset = GenotypeDataset.open_plink(bfile)
+    else:
+        b = one_hot_bgen_from_plink(bfile, tmp_path / "memory.bgen")
+        dataset = GenotypeDataset.open_bgen(b.bgen, b.sample, b.bgi)
     selected = np.arange(0, len(values), 2) if subset else None
     quote = estimate_kinship_memory(
         n_input_samples=len(values),
@@ -136,7 +143,7 @@ def test_kinship_quote_covers_preprocessing(tmp_path, mode, subset):
     tracemalloc.start()
     try:
         result = compute_kinship_streaming(
-            GenotypeDataset.open_plink(bfile),
+            dataset,
             chunk_size=values.shape[1],
             mode=mode,
             check_memory=False,

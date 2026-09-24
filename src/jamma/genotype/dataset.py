@@ -20,6 +20,7 @@ from typing import Protocol, final
 import numpy as np
 from bed_reader import open_bed
 
+from jamma.core.memory import array_gb
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import get_physical_core_count
 from jamma.genotype.info import info_from_quantised, info_from_sums
@@ -43,11 +44,20 @@ class GenotypeEncoding(enum.Enum):
     HARD_CALLS = "hard_calls"
     PROBABILITIES = "probabilities"
 
-    def read_workspace_bytes(self, n_samples: int, n_variants: int) -> int:
-        """Reader buffers beyond one float64 dosage block."""
-        if self is GenotypeEncoding.PROBABILITIES:
-            return bgen_read_workspace_bytes(n_samples, n_variants)
-        return 0
+    def block_overhead_gb(self, n_input: int, n_selected: int, width: int) -> float:
+        """Peak GB beyond one float64 block while it is read and handed over.
+
+        A PROBABILITIES read holds its decode buffers beside the dosages. A
+        consumer that cuts the block to ``n_selected`` rows, or makes it
+        C-contiguous, copies it after ``dosages`` has released those buffers,
+        so the two never coexist.
+        """
+        workspace = (
+            bgen_read_workspace_bytes(n_input, width) / 1e9
+            if self is GenotypeEncoding.PROBABILITIES
+            else 0.0
+        )
+        return max(workspace, array_gb(n_selected, width))
 
     @property
     def supports_hwe(self) -> bool:
@@ -555,7 +565,6 @@ class GenotypeDataset:
                 )
             del block
             yield result
-            del result
             start = end
         if start != n_cols:
             raise ValueError("reader yielded too few blocks")
@@ -640,7 +649,6 @@ class GenotypeDataset:
                 if info is not None:
                     info[block.start : block.end] = block.info(rows)
                 yield block.dosages(rows), block.start, block.end
-                del block
 
         return _collect_stats(
             chunks(),

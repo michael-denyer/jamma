@@ -122,11 +122,15 @@ class TestAssociationQuote:
     """The association phase as ``price()`` quotes it."""
 
     def test_batch_quote_prices_eigenvectors_but_no_kinship_or_workspace(self):
-        """U, the whole genotype matrix, one rotation buffer, and one Uab/Iab chunk."""
+        """U, the genotype matrix, the read's copy, a rotation buffer, and Uab/Iab.
+
+        The read copies at most the file's 10,000 SNPs, whatever the chunk width.
+        """
         n_samples, n_snps, batch = 100_000, 10_000, 20_000
         total = _batch_quote_gb(n_samples, n_snps, batch)
         assert total == pytest.approx(
             array_gb(n_samples, n_samples)
+            + array_gb(n_samples, n_snps)
             + array_gb(n_samples, n_snps)
             + array_gb(n_samples, batch)
             + _fallback_uab_iab_gb(n_samples, batch)
@@ -206,9 +210,13 @@ class TestKinshipDtypeAccounting:
         n_samples = 10_000
         n_snps = 50_000
 
-        growth = _batch_quote_gb(n_samples, n_snps) - _batch_quote_gb(n_samples, 0)
+        # Both files are wider than the 20,000-SNP chunk, so the chunk read's
+        # copy is the same size and only the held matrix grows.
+        growth = _batch_quote_gb(n_samples, n_snps) - _batch_quote_gb(
+            n_samples, n_snps // 2
+        )
 
-        expected_gb = n_samples * n_snps * 8 / 1e9
+        expected_gb = n_samples * (n_snps // 2) * 8 / 1e9
         assert growth == pytest.approx(expected_gb)
 
     def test_batch_quote_grows_with_n_cvt(self):

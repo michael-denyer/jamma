@@ -9,6 +9,7 @@ bed-reader oracle holds for it too.
 from __future__ import annotations
 
 import hashlib
+import tracemalloc
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -279,6 +280,34 @@ def test_spent_block_raises(case: _Case):
         block.stats()
     with pytest.raises(RuntimeError, match="spent"):
         block.dosages()
+
+
+def _numbered_variants(m: int) -> SnpMeta:
+    return SnpMeta(
+        np.full(m, "1"),
+        np.arange(m).astype(str),
+        np.arange(m),
+        np.full(m, "A"),
+        np.full(m, "G"),
+    )
+
+
+@pytest.mark.parametrize("progress", [None, "Reading genotypes"])
+def test_a_spent_block_retains_nothing_behind_its_dosages(progress):
+    """Neither the stream nor its progress bar keeps the read block alive."""
+    n, m = 1000, 500
+    dataset = GenotypeDataset.from_matrix(
+        np.ones((n, m), dtype=np.float32), _numbered_variants(m)
+    )
+    tracemalloc.start()
+    try:
+        blocks = dataset.blocks(m, progress=progress)
+        values = next(blocks).dosages(np.arange(0, n, 2))
+        retained = tracemalloc.get_traced_memory()[0]
+        del blocks
+    finally:
+        tracemalloc.stop()
+    assert retained < values.nbytes + 100_000
 
 
 def test_plink_fingerprint_equals_eigen_cache_components(bfile: Path):

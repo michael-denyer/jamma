@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import MIN_N_GRID
 from jamma.pipeline import (
@@ -206,7 +207,12 @@ class TestCheckMemory:
         runner = PipelineRunner(config)
         result = preflight(
             runner.config,
-            plan_association(100, 500, backend="numpy-streaming"),
+            plan_association(
+                100,
+                500,
+                backend="numpy-streaming",
+                genotype_encoding=GenotypeEncoding.HARD_CALLS,
+            ),
         )
         assert result is None
 
@@ -233,15 +239,22 @@ class TestCheckMemory:
             check_memory=True,
         )
         runner = PipelineRunner(config)
-        plan = plan_association(100, 500, backend="numpy-streaming")
+        plan = plan_association(
+            100,
+            500,
+            backend="numpy-streaming",
+            genotype_encoding=GenotypeEncoding.HARD_CALLS,
+        )
         result = preflight(runner.config, plan)
 
         assert result is not None
         assert result.driver == "DSYEVD-inplace"
         assert result.required_gb == pytest.approx(0.000248832)
         quote = plan.price(eigen=None)
-        assert quote.statistics_gb == pytest.approx(0.00808)
-        assert quote.total_peak_gb == pytest.approx(0.013341536)
+        # U plus the NumPy statistics working set over the file's 500 SNPs,
+        # 0.00008 + 3.25 * 0.0004: a short file never reads a full block.
+        assert quote.statistics_gb == pytest.approx(0.00138)
+        assert quote.total_peak_gb == pytest.approx(0.013741536)
 
 
 @pytest.mark.tier0

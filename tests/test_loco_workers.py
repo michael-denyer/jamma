@@ -33,10 +33,10 @@ from tests.support import require_fixture
 
 @pytest.mark.tier0
 def test_worker_budget_charges_each_owned_input_once():
-    from jamma.kinship.loco import loco_retained_set
+    from jamma.kinship.loco import LocoRetainedSet
     from jamma.lmm.eigen_plan import plan_eigen_driver
 
-    retained = loco_retained_set(10_000, 10_000, 10_000)
+    retained = LocoRetainedSet(matrix_gb=0.8, chunk_buffer_gb=0.8)
     eigen = plan_eigen_driver(
         10_000,
         100,
@@ -89,10 +89,10 @@ def test_worker_plan_respects_memory_and_execution_caps(
     association,
     expected,
 ):
-    from jamma.kinship.loco import loco_retained_set
+    from jamma.kinship.loco import LocoRetainedSet
     from jamma.lmm.eigen_plan import plan_eigen_driver
 
-    retained = loco_retained_set(10_000, 10_000, 10_000)
+    retained = LocoRetainedSet(matrix_gb=0.8, chunk_buffer_gb=0.8)
     eigen = plan_eigen_driver(
         10_000,
         100,

@@ -106,7 +106,6 @@ def run_lmm_association_numpy_streaming(
             snps_indices=snps_indices,
             hwe_threshold=hwe_threshold,
             labels=STREAMING_LABELS,
-            stats_block_size=DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
         ),
         samples,
         restrict_eigen_input(

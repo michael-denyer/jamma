@@ -18,6 +18,15 @@ def array_gb(*shape: int) -> float:
     return total / 1e9
 
 
+def block_working_set_gb(n_rows: int, n_cols: int) -> float:
+    """Three float64 blocks and two bool masks of shape ``(n_rows, n_cols)``.
+
+    Kinship preprocessing and the NumPy SNP statistics kernel each peak here:
+    their input, two same-shape float temporaries, and two missingness masks.
+    """
+    return (3 + 2 / 8) * array_gb(n_rows, n_cols)
+
+
 def available_ram_gb() -> float:
     """Available system RAM in GB, the one read every memory decision uses.
 

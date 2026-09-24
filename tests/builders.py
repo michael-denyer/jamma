@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 from bed_reader import open_bed
 
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
     ExecutionMode,
@@ -250,4 +251,5 @@ def association_price_plan(
         n_cvt=n_cvt,
         mem_budget_gb=None,
         workspace=empty_workspace(dispatch, n_samples, n_input, n_cvt),
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )

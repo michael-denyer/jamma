@@ -100,7 +100,11 @@ def test_gk_loco_reserves_no_eigen_peak(tmp_path: Path) -> None:
     from jamma.lmm.eigen_plan import dsyevr_peak_gb
 
     ds = GenotypeDataset.open_plink(LOCO.bfile)
-    retained = loco_retained_set(ds.n_samples, ds.n_samples, 10_000)
+    retained = loco_retained_set(
+        ds.n_samples,
+        ds.n_samples,
+        10_000,
+    )
     budget_gb = retained.while_consuming_gb + dsyevr_peak_gb(ds.n_samples) / 2
 
     result = compute_kinship(

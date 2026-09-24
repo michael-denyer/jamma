@@ -13,7 +13,7 @@ that builds and publishes release artifacts.
 
 ### Docker
 
-The `Dockerfile` uses a pinned Python 3.11 Bookworm build stage and a pinned
+The `Dockerfile` uses a pinned Python 3.12 Bookworm build stage and a pinned
 slim-Bookworm runtime stage. The builder installs MKL-backed ILP64 NumPy and
 compiles both native extensions from the current checkout; only `/usr/local`
 is copied into the non-root runtime image. MKL is x86_64-only — always build

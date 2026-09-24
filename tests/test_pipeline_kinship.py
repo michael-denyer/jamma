@@ -51,7 +51,7 @@ def _load_kinship(
         kinship,
         SampleBasis(positions, n_samples),
         weights,
-        GenotypeDataset.open_plink(runner.config.bfile),
+        runner.config.genotypes().open(),
     )
 
 

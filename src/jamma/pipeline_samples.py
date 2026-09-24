@@ -2,8 +2,9 @@
 
 GEMMA's ``ProcessCvtPhen`` builds one ``indicator_idv`` from the selected
 phenotype columns and the covariate file, and every later stage measures over
-it. ``load_analysed_samples`` is that step: it reads the ``.fam`` once, loads
-and validates the covariates once, and returns the rows both programs analyse.
+it. ``load_analysed_samples`` is that step: it reads the ``-p`` file (or the
+``.fam``) once, loads and validates the covariates once, and returns the rows
+both programs analyse.
 """
 
 from __future__ import annotations
@@ -14,10 +15,11 @@ import numpy as np
 from loguru import logger
 
 from jamma.io.covariate import encode_categorical_covariates, read_covariate_file
+from jamma.io.phenotype import phenotype_file_column, read_phenotype_table
 from jamma.io.plink import parse_fam_phenotype_column
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.lmm.prepare_common import compute_valid_mask, with_intercept
-from jamma.pipeline_config import PipelineConfig
+from jamma.pipeline_config import PipelineConfig, PlinkInput
 
 __all__ = ["AnalysedSamples", "load_analysed_samples", "load_covariates"]
 
@@ -70,7 +72,7 @@ def load_covariates(config: PipelineConfig, n_samples: int) -> np.ndarray | None
     if covariates.shape[0] != n_samples:
         raise ValueError(
             f"Covariate file has {covariates.shape[0]} rows "
-            f"but PLINK data has {n_samples} samples. "
+            f"but the genotype data has {n_samples} samples. "
             f"Covariate rows must match sample count exactly."
         )
 
@@ -86,44 +88,69 @@ def load_covariates(config: PipelineConfig, n_samples: int) -> np.ndarray | None
     return covariates
 
 
+def _phenotype_columns(config: PipelineConfig, n_samples: int) -> dict[int, np.ndarray]:
+    """Read every configured phenotype column from ``-p``, or else the ``.fam``.
+
+    Raises:
+        ValueError: If the file cannot be read, lacks a column, or a ``-p``
+            file's row count differs from ``n_samples``.
+    """
+    columns = config.phenotype_columns
+    if config.phenotype_file is not None:
+        path = config.phenotype_file
+        table = read_phenotype_table(path)
+        if table.shape[0] != n_samples:
+            raise ValueError(
+                f"Phenotype file {path} has {table.shape[0]} rows "
+                f"but the genotype data has {n_samples} samples. "
+                f"Phenotype rows must match sample count exactly."
+            )
+        for col in columns:
+            logger.info(f"Using phenotype column {col} of {path}")
+        return {col: phenotype_file_column(table, col) for col in columns}
+
+    genotypes = config.genotypes()
+    if not isinstance(genotypes, PlinkInput):
+        raise ValueError(f"{genotypes.flag} requires -p (phenotype file)")
+    fam_path = f"{genotypes.prefix}.fam"
+    try:
+        fam_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
+    except (ValueError, OSError) as e:
+        raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
+    for col in columns:
+        logger.info(f"Using phenotype column {col} (file column {col + 5})")
+    return {col: parse_fam_phenotype_column(fam_data, col) for col in columns}
+
+
 def load_analysed_samples(config: PipelineConfig, n_samples: int) -> AnalysedSamples:
     """Read the phenotype columns and covariates, and intersect their masks.
 
-    Reads the ``.fam`` once, parses each configured phenotype column, and
-    intersects the per-column valid masks so every stage measures over the
-    sample set common to all of them. The covariates come back carrying an
-    intercept when no column is constant over that intersection, so
-    ``covariates.shape[1]`` is the n_cvt every later stage uses.
+    Reads the ``-p`` file, or without one the ``.fam``, once, parses each
+    configured phenotype column, and intersects the per-column valid masks so
+    every stage measures over the sample set common to all of them. The
+    covariates come back carrying an intercept when no column is constant
+    over that intersection, so ``covariates.shape[1]`` is the n_cvt every
+    later stage uses.
 
     Args:
-        config: Pipeline configuration. Reads ``bfile``, ``phenotype_columns``,
-            ``covariate_file``, and ``cat_columns``.
-        n_samples: Sample count from the PLINK metadata, used to validate the
-            covariate row count.
+        config: Pipeline configuration. Reads the genotype input,
+            ``phenotype_file``, ``phenotype_columns``, ``covariate_file``,
+            and ``cat_columns``.
+        n_samples: Sample count of the genotype dataset, used to validate the
+            phenotype and covariate row counts.
 
     Returns:
         The phenotype columns, the loaded covariates, and the analysed basis.
 
     Raises:
-        ValueError: If the covariate row count is wrong, if the ``.fam`` file
-            cannot be read, or if no sample is valid across all phenotype
-            columns (per-column counts appear in the message for diagnosis).
+        ValueError: If the phenotype or covariate row count is wrong, if the
+            phenotype file cannot be read, or if no sample is valid across
+            all phenotype columns (per-column counts appear in the message
+            for diagnosis).
     """
     covariates = load_covariates(config, n_samples)
-
-    fam_path = f"{config.bfile}.fam"
-    try:
-        fam_data = np.loadtxt(fam_path, dtype=str, ndmin=2)
-    except (ValueError, OSError) as e:
-        raise ValueError(f"Failed to read .fam file {fam_path}: {e}") from e
-
-    phenotypes: dict[int, np.ndarray] = {}
-    masks: list[np.ndarray] = []
-    for col in config.phenotype_columns:
-        logger.info(f"Using phenotype column {col} (file column {col + 5})")
-        pheno = parse_fam_phenotype_column(fam_data, col)
-        phenotypes[col] = pheno
-        masks.append(compute_valid_mask(pheno, covariates))
+    phenotypes = _phenotype_columns(config, n_samples)
+    masks = [compute_valid_mask(pheno, covariates) for pheno in phenotypes.values()]
 
     valid_mask = np.all(masks, axis=0)
     n_valid = int(np.sum(valid_mask))

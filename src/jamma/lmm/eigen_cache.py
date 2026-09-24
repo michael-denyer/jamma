@@ -4,9 +4,12 @@ A manifest file written alongside eigen files records a SHA-256 digest of
 all inputs that determine the eigendecomposition (file identity, filter
 thresholds, sample mask, SNP restriction).  On the next run the digest is
 recomputed and compared; a mismatch forces a full recompute rather than
-silently reusing stale eigen files. The genotype `.bed` is fingerprinted by
-size + mtime while the `.bim` is fingerprinted by content hash, since a
-re-annotated `.bim` can change the LOCO partition without changing `.bed`.
+silently reusing stale eigen files. The file components are whatever
+``GenotypeDataset.fingerprint()`` returns for the format. For PLINK the `.bed`
+is fingerprinted by size + mtime while the `.bim` is fingerprinted by content
+hash, since a re-annotated `.bim` can change the LOCO partition without
+changing `.bed`. For BGEN the `.bgen` is fingerprinted by size + mtime and the
+`.sample` and parsed variant table by content hash.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import TypedDict
 
 import numpy as np
 from loguru import logger
@@ -34,25 +37,19 @@ from jamma.lmm.eigen_io import (
 EIGEN_CACHE_SCHEMA_VERSION: int = 3
 
 
-class EigenCacheComponents(TypedDict):
-    """Canonical, JSON-serialisable payload hashed into the cache key.
+EigenCacheComponents = dict[str, str | int | float]
+"""Canonical, JSON-serialisable payload hashed into the cache key.
 
-    All values are plain JSON scalars: a TypedDict gives static shape
-    checking without the runtime cost or rigidity of a dataclass. JSON
-    decode yields a plain dict at runtime, so consumers that read this back
-    off disk must still guard field access defensively.
-    """
-
-    schema_version: int
-    bed_fingerprint: str
-    bim_sha256: str
-    maf_threshold: float
-    miss_threshold: float
-    valid_mask_sha256: str
-    ksnps: str
-    # Present only when an INFO filter is on, so a key without one stays
-    # byte-identical to the key written before INFO existed.
-    info_threshold: NotRequired[float]
+Always ``schema_version``, ``maf_threshold``, ``miss_threshold``,
+``valid_mask_sha256`` and ``ksnps``, plus ``info_threshold`` when an INFO
+filter is on, so a key without one stays byte-identical to the key written
+before INFO existed. The file identity is whatever the dataset's
+``fingerprint()`` returns: ``bed_fingerprint`` and ``bim_sha256`` for PLINK,
+so a PLINK key stays byte-identical to the key written before BGEN existed,
+and ``bgen_fingerprint``, ``sample_sha256`` and ``variants_sha256`` for BGEN.
+The key set depends on the format, which is why this is a plain dict rather
+than a TypedDict.
+"""
 
 
 class EigenCacheManifest(TypedDict):
@@ -78,7 +75,9 @@ def _build_components(
 
     Args:
         dataset: The genotypes; ``dataset.fingerprint()`` supplies the file
-            components (for PLINK, ``bed_fingerprint`` and ``bim_sha256``).
+            components (for PLINK, ``bed_fingerprint`` and ``bim_sha256``;
+            for BGEN, ``bgen_fingerprint``, ``sample_sha256`` and
+            ``variants_sha256``).
         maf_threshold: Minimum MAF used for SNP filtering.
         miss_threshold: Maximum missing rate used for SNP filtering.
         valid_mask: Boolean array of shape (n_samples_total,); True = included.
@@ -102,8 +101,7 @@ def _build_components(
 
     components: EigenCacheComponents = {
         "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
-        "bed_fingerprint": fingerprint["bed_fingerprint"],
-        "bim_sha256": fingerprint["bim_sha256"],
+        **fingerprint,
         "maf_threshold": maf_threshold,
         "miss_threshold": miss_threshold,
         "valid_mask_sha256": valid_mask_sha256,

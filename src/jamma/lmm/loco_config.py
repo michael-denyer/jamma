@@ -48,6 +48,8 @@ class LocoConfig:
         eigen_dir: Directory for eigen files. Required when write_eigen is set.
         legacy_text: Write kinship and eigen files as GEMMA text rather than
             .npy.
+        info_threshold: Minimum imputation INFO over the analysed samples,
+            for kinship and association SNPs alike. 0.0 disables the filter.
     """
 
     kinship_output_dir: Path | None = None
@@ -58,6 +60,7 @@ class LocoConfig:
     write_eigen: bool = False
     eigen_dir: Path | None = None
     legacy_text: bool = False
+    info_threshold: float = 0.0
 
     def __post_init__(self) -> None:
         # Checked here rather than partway through the run: the caller learns

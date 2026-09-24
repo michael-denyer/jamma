@@ -155,13 +155,40 @@ flowchart TD
 
 ## Input Data Format
 
-JAMMA uses PLINK binary format (`.bed`, `.bim`, `.fam` files):
+JAMMA reads PLINK binary format (`.bed`, `.bim`, `.fam` files), passed as the
+prefix with `-bfile`:
 
 ```text
 my_study.bed   # Binary genotype data
 my_study.bim   # SNP information
 my_study.fam   # Sample information
 ```
+
+It also reads BGEN v1.2 genotype probabilities with `-bgen`. Pass exactly one
+of `-bfile` and `-bgen`.
+
+```text
+imputed.bgen       # Layout 2, biallelic, unphased diploid, bit depth 1 to 16
+imputed.sample     # Oxford sample file; ID_1 is the FID, ID_2 the IID
+imputed.bgen.bgi   # bgenix index: bgenix -g imputed.bgen -index
+```
+
+`-sample` and `-bgi` name the other two files when they are not at these
+default paths. zlib, zstd and uncompressed files decode; zstd needs the `zstd`
+extra below Python 3.14 (`python -m pip install "jamma[zstd]"`).
+
+The dosage counts the first allele of each variant: 2·P(11) + P(12). That
+allele is `allele1` in `.assoc.txt`, and `af` is its mean dosage over the
+analysed samples divided by 2. Chromosome X is treated as autosomal.
+
+BGEN input has these limits:
+
+- `-info` filters SNPs on imputation INFO (see [SNP Filtering](#snp-filtering)).
+- `-hwe` is rejected, because fractional dosages fall in no HWE genotype class.
+- `--backend numpy` is rejected, because the batch runner holds hard calls in
+  memory. BGEN input always streams, and `auto` chooses streaming.
+- A BGEN file carries no phenotypes, so `-p` is required (see
+  [Phenotype Selection](#phenotype-selection)).
 
 ## Commands
 
@@ -414,7 +441,28 @@ not available on the batch backend.
 See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for differences from GEMMA's
 Wigginton exact test.
 
+**INFO filtering (BGEN only):** `-info 0.8` keeps SNPs whose imputation INFO is
+at least 0.8, for kinship and association SNPs alike. INFO is GCTA's `--info`
+(the IMPUTE2 information measure), recomputed from the stored probabilities
+over the analysed samples, so it changes when phenotype or covariate
+missingness changes the sample set. `-info` with `-bfile` is rejected: hard
+calls always have INFO 1.
+
+```bash
+jamma -lmm 1 -bgen data/imputed.bgen -p pheno.txt -loco -maf 0.01 -info 0.8
+```
+
 ## Phenotype Selection
+
+Phenotypes come from a GEMMA `-p` file, or without one from the `.fam`. A `-p`
+file is whitespace-separated with no header and one row per sample, in the
+genotype file's sample order (`.fam` or `.sample`); rows are matched by
+position, not by ID. `NA` and `-9` mark a missing value. A row count that
+differs from the genotype sample count is an error. BGEN input requires `-p`.
+
+```bash
+jamma -lmm 1 -bfile data/my_study -p pheno.txt -n 2 -k kinship.cXX.npy
+```
 
 For .fam files with multiple phenotype columns, select which to use:
 
@@ -429,8 +477,9 @@ jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy -n "1 2 3"
 jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy -n "1,2,3"
 ```
 
-The `-n` flag uses 1-based indexing matching GEMMA: `-n 1` selects column 6
-(standard phenotype), `-n 2` selects column 7, etc.
+The `-n` flag uses 1-based indexing matching GEMMA: `-n 1` selects column 1 of
+a `-p` file, or column 6 of the `.fam` (the standard phenotype); `-n 2`
+selects the next column, and so on.
 
 **Multi-phenotype mode** computes eigendecomposition once and reuses it across all
 phenotypes. Each phenotype produces a separate output file with `.phenoN.` suffix
@@ -495,6 +544,15 @@ result = gwas(
     kinship_file="k.txt",
     snps_file="snps.txt",
     hwe=0.001,
+)
+
+# BGEN probabilities with a -p phenotype file and an INFO filter
+# (sample= and bgi= default to imputed.sample and imputed.bgen.bgi)
+result = gwas(
+    bgen="data/imputed.bgen",
+    phenotype_file="pheno.txt",
+    info=0.8,
+    loco=True,
 )
 ```
 

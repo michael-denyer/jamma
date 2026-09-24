@@ -87,6 +87,35 @@ An association command needs a kinship source: `-k`, the saved eigen files
 files default to binary `.npy`; add `--legacy-text` when you need GEMMA text
 output. Existing text kinship files work as `-k` input.
 
+### BGEN imputed dosages
+
+JAMMA reads BGEN v1.2 files (layout 2, biallelic, unphased diploid, bit depth
+1 to 16) with their `.sample` file and a bgenix `.bgi` index
+(`bgenix -g data/imputed.bgen -index`). A BGEN file carries no phenotypes, so
+pass them with `-p`: a whitespace-separated file with no header and one row per
+sample in `.sample` order, where `NA` and `-9` mark a missing value. `-n`
+selects the column, starting at 1.
+
+```bash
+jamma -gk 1 -bgen data/imputed.bgen -p pheno.txt -info 0.8 -o kinship -outdir output
+jamma -lmm 1 -bgen data/imputed.bgen -p pheno.txt -info 0.8 -k output/kinship.cXX.npy -o results -outdir output
+```
+
+- `-sample` defaults to the `.bgen` path with `.sample` in place of `.bgen`, and
+  `-bgi` defaults to the `.bgen` path plus `.bgi`.
+- The counted allele is the first allele of each variant, so the dosage is
+  2·P(11) + P(12). `allele1` and `af` in `.assoc.txt` refer to that allele.
+- `-info` keeps SNPs whose imputation INFO is at least the threshold, for
+  kinship and association alike. INFO is GCTA's `--info`, recomputed over the
+  analysed samples rather than read from an imputation summary. It applies
+  only to BGEN input.
+- `-hwe` is rejected with `-bgen`, because fractional dosages fall in no HWE
+  genotype class. `--backend numpy` is rejected too: the batch runner holds
+  hard calls in memory, so BGEN input always streams.
+- zstd-compressed files need the `zstd` extra below Python 3.14:
+  `python -m pip install "jamma[zstd]"`.
+- `-p` also works with `-bfile`, in place of the `.fam` phenotype columns.
+
 ### Try the included example
 
 After installing JAMMA, clone the repository to obtain the synthetic dataset:
@@ -105,13 +134,14 @@ included in the repository; installing the package alone does not provide it.
 
 | Analysis | Option |
 |----------|--------|
+| PLINK or BGEN genotypes, phenotype file | `-bfile`, `-bgen`, `-p` |
 | Centered or standardized kinship | `-gk 1` or `-gk 2` |
 | Wald, likelihood ratio, or Score test | `-lmm 1`, `-lmm 2`, or `-lmm 3` |
 | All three association tests | `-lmm 4` |
 | Leave-one-chromosome-out analysis (LOCO) | `-loco` |
 | Covariates, including categorical columns | `-c`, `-cat` |
 | Multiple phenotypes with eigendecomposition reuse | `-n "1 2 3"` |
-| SNP subsets and quality filters | `-snps`, `-ksnps`, `-maf`, `-miss`, `-hwe` |
+| SNP subsets and quality filters | `-snps`, `-ksnps`, `-maf`, `-miss`, `-hwe`, `-info` |
 | Saved eigendecomposition and LOCO caches | `-eigen`, `-d`, `-u`, `--eigen-dir` |
 
 For example, run all tests with covariates, or compute a separate kinship for
@@ -154,7 +184,9 @@ print(result.assoc_path)  # output/results.assoc.txt
 ```
 
 Supply `kinship_file="output/kinship.cXX.npy"` to reuse a matrix, `lmm_mode=4`
-to run all tests, or `loco=True` for LOCO. Use `phenotype_columns=[1, 2, 3]` to
+to run all tests, or `loco=True` for LOCO. For BGEN input, pass
+`gwas(bgen="data/imputed.bgen", phenotype_file="pheno.txt", info=0.8)` in
+place of the PLINK prefix. Use `phenotype_columns=[1, 2, 3]` to
 share one eigendecomposition across phenotypes; this is separate from a
 multivariate LMM.
 

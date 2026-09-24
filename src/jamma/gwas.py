@@ -36,8 +36,13 @@ def _opt_path(value: str | Path | None) -> Path | None:
 
 
 def gwas(
-    bfile: str | Path,
+    bfile: str | Path | None = None,
     *,
+    bgen: str | Path | None = None,
+    sample: str | Path | None = None,
+    bgi: str | Path | None = None,
+    phenotype_file: str | Path | None = None,
+    info: float = 0.0,
     kinship_file: str | Path | None = None,
     covariate_file: str | Path | None = None,
     lmm_mode: int = 1,
@@ -74,16 +79,19 @@ def gwas(
     association testing, and result writing. Equivalent to the CLI
     ``jamma -lmm`` command but as a Python function.
 
-    Each keyword is the ``PipelineConfig`` field of the same name, except
-    ``hwe``, which is ``hwe_threshold``. ``PipelineConfig`` documents every
-    field, and ``tests/test_gwas_api.py`` pins that the two sets match.
+    Pass exactly one genotype input: ``bfile``, or ``bgen`` with
+    ``phenotype_file`` (``sample`` and ``bgi`` default from the ``.bgen``
+    path). Each keyword is the ``PipelineConfig`` field of the same name,
+    except ``hwe``, which is ``hwe_threshold``, and ``info``, which is
+    ``info_threshold``. ``PipelineConfig`` documents every field, and
+    ``tests/test_gwas_api.py`` pins that the two sets match.
 
     Returns:
         PipelineResult with association results, sample/SNP counts, output
         paths, timing, and the PVE estimate.
 
     Raises:
-        FileNotFoundError: If PLINK files (.bed, .bim, .fam) do not exist.
+        FileNotFoundError: If a genotype file does not exist.
         ValueError: If the keywords combine illegally, no valid phenotypes
             are found, or the covariate row count mismatches the sample count.
         MemoryError: If check_memory=True and insufficient memory available.
@@ -94,7 +102,12 @@ def gwas(
         >>> print(f"{result.n_snps_tested} SNPs, {result.timing.total_s:.1f}s")
     """
     config = PipelineConfig(
-        bfile=Path(bfile),
+        bfile=_opt_path(bfile),
+        bgen=_opt_path(bgen),
+        sample=_opt_path(sample),
+        bgi=_opt_path(bgi),
+        phenotype_file=_opt_path(phenotype_file),
+        info_threshold=info,
         kinship_file=_opt_path(kinship_file),
         covariate_file=_opt_path(covariate_file),
         lmm_mode=lmm_mode,

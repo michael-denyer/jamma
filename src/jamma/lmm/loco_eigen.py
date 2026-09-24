@@ -144,6 +144,7 @@ def eigen_pairs_for(
             miss_threshold=config.miss_threshold,
             valid_mask=run.samples.valid_mask,
             ksnps_indices=loco.ksnps_indices,
+            info_threshold=loco.info_threshold,
         )
         if loco.write_eigen:
             cache_write = _EigenCacheWrite(
@@ -192,6 +193,7 @@ def eigen_pairs_for(
         filter_sample_indices=None if all_samples_valid else rows,
         mem_budget=config.mem_budget,
         consumer_gb=workers.consumer_gb,
+        info_threshold=loco.info_threshold,
     )
     pairs = _computed_eigen_pairs(
         stream,

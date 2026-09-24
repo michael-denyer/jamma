@@ -14,7 +14,6 @@ from typing import Literal
 
 from loguru import logger
 
-from jamma.genotype.dataset import GenotypeDataset
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
@@ -52,8 +51,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
     Raises:
         ValueError: If ``mode`` is not 1 or 2, or if ``config.loco`` is
             combined with ``mode == 2`` or with ``config.write_eigen``.
-        FileNotFoundError: If a PLINK ``.bed``, ``.bim`` or ``.fam`` file does
-            not exist.
+        FileNotFoundError: If a genotype file does not exist.
     """
     if mode not in (1, 2):
         raise ValueError(f"invalid kinship mode {mode}. Use -gk 1 or -gk 2.")
@@ -69,7 +67,8 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
         )
 
-    dataset = GenotypeDataset.open_plink(config.bfile)
+    genotypes = config.genotypes()
+    dataset = genotypes.open()
     n_samples = dataset.n_samples
     n_snps = dataset.n_variants
 
@@ -92,7 +91,8 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
     t_kinship = time.perf_counter()
 
     if config.loco:
-        logger.info(f"Computing LOCO kinship matrices from {config.bfile}")
+        genotype_file = genotypes.files()[0][0]
+        logger.info(f"Computing LOCO kinship matrices from {genotype_file}")
         loco_stream = compute_loco_kinship_streaming(
             dataset,
             maf_threshold=config.maf,
@@ -104,6 +104,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             mem_budget=config.mem_budget,
             # Each matrix is only written to disk; no eigendecomposition runs.
             consumer_gb=0.0,
+            info_threshold=config.info_threshold,
         )
         written_paths = write_loco_kinship_matrices(
             loco_stream,
@@ -141,6 +142,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
         filter_sample_indices=filter_samples,
         mode="centered" if mode == 1 else "standardized",
         mem_budget=config.mem_budget,
+        info_threshold=config.info_threshold,
     )
 
     kinship_s = time.perf_counter() - t_kinship

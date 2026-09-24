@@ -73,11 +73,12 @@ def test_gwas_keywords_are_exactly_the_pipeline_config_fields() -> None:
     """Every PipelineConfig knob is a gwas() keyword, and nothing else is.
 
     The API mirrors the config by hand, so a field added to one and not the
-    other is the drift this pins. ``hwe`` is the one renamed keyword (it is
-    GEMMA's flag name; the field says what it thresholds).
+    other is the drift this pins. ``hwe`` and ``info`` are the renamed
+    keywords (they are the CLI flag names; the fields say what they
+    threshold).
     """
     params = set(inspect.signature(gwas).parameters)
-    params = (params - {"hwe"}) | {"hwe_threshold"}
+    params = (params - {"hwe", "info"}) | {"hwe_threshold", "info_threshold"}
     fields = {f.name for f in dataclasses.fields(PipelineConfig)}
     assert params == fields
 

@@ -75,12 +75,16 @@ never emits telemetry.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `-bfile` | path | *(required)* | PLINK binary file prefix (`.bed`/`.bim`/`.fam` without extension) |
+| `-bfile` | path | — | PLINK binary file prefix (`.bed`/`.bim`/`.fam` without extension). Exactly one of `-bfile` and `-bgen` is required. |
+| `-bgen` | path | — | BGEN v1.2 file of genotype probabilities. Requires `-p`; rejects `-hwe` and `--backend numpy`. |
+| `-sample` | path | the `-bgen` path with suffix `.sample` | Oxford `.sample` file for `-bgen` |
+| `-bgi` | path | `<bgen>.bgi` | bgenix index for `-bgen` |
+| `-p` | path | — | Phenotype file: whitespace-delimited, no header, one row per sample in genotype order, `NA` and `-9` missing. Without it, phenotypes come from the `.fam`. |
 | `-gk` | int | — | Kinship mode: `1` = centered, `2` = standardized. Mutually exclusive with `-lmm`. |
 | `-lmm` | int | — | LMM association mode: `1` = Wald, `2` = LRT, `3` = Score, `4` = All. Mutually exclusive with `-gk`. |
 | `-k` | path | — | Pre-computed kinship matrix file. Required for `-lmm` unless using `-loco` or pre-computed eigen files. |
 | `-c` | path | — | Covariate file (whitespace-delimited, no header) |
-| `-n` | str | `1` | Phenotype column(s) in `.fam` file, 1-based. Single value or space/comma-separated list: `-n 1` or `-n '1 2 3'` or `-n '1,2,3'`. |
+| `-n` | str | `1` | Phenotype column(s) in the `-p` file, or else the `.fam` file, 1-based. Single value or space/comma-separated list: `-n 1` or `-n '1 2 3'` or `-n '1,2,3'`. |
 
 ### SNP filtering
 
@@ -88,7 +92,8 @@ never emits telemetry.
 |---|---|---|---|
 | `-maf` | float | `0.01` | Minor allele frequency threshold. Applies to `-gk` and `-lmm` alike, as in GEMMA. |
 | `-miss` | float | `0.05` | Missing rate threshold. Applies to `-gk` and `-lmm` alike. |
-| `-hwe` | float | `0.0` | HWE p-value threshold (0 = no filtering). Requires `numpy-streaming` backend. |
+| `-hwe` | float | `0.0` | HWE p-value threshold (0 = no filtering). Requires `numpy-streaming` backend. Rejected with `-bgen`. |
+| `-info` | float | `0.0` | Minimum imputation INFO (GCTA `--info` over the analysed samples; 0 = no filtering). Applies to `-gk` and `-lmm` alike. Rejected with `-bfile`. |
 | `-snps` | path | — | SNP list file for association testing |
 | `-ksnps` | path | — | SNP list file for kinship computation |
 

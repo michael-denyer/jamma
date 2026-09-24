@@ -89,6 +89,7 @@ def resolve_analysis_plan(
                 write_eigen=config.write_eigen,
                 eigen_dir=source.eigen_dir,
                 legacy_text=config.legacy_text,
+                info_threshold=config.info_threshold,
             ),
         )
 

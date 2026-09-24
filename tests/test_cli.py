@@ -20,6 +20,11 @@ pytestmark = pytest.mark.tier0
     "flag",
     [
         "-bfile",
+        "-bgen",
+        "-sample",
+        "-bgi",
+        "-p",
+        "-info",
         "-gk",
         "-lmm",
         "-k",

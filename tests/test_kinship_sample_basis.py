@@ -170,7 +170,9 @@ def test_gk_rejects_covariate_file_with_wrong_row_count(asymmetric_plink, tmp_pa
     cov_path = tmp_path / "cov.txt"
     cov_path.write_text("\n".join(["1 0.5"] * 79) + "\n")
 
-    with pytest.raises(ValueError, match="79 rows but PLINK data has 80 samples"):
+    with pytest.raises(
+        ValueError, match="79 rows but the genotype data has 80 samples"
+    ):
         compute_kinship(
             _gk_config(asymmetric_plink, tmp_path, covariate_file=cov_path), 1
         )

@@ -209,6 +209,7 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
         config=replace(config, show_progress=False),
         execution=execution,
         snps_indices=loco.snps_indices,
+        info_threshold=loco.info_threshold,
         labels=LOCO_LABELS,
     )
 

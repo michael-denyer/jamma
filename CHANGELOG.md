@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- BGEN input from the CLI and `gwas()`. `-bgen FILE` reads a BGEN v1.2 file,
+  with `-sample` (default: the `.bgen` path with suffix `.sample`) and `-bgi`
+  (default: `<bgen>.bgi`); exactly one of `-bfile` and `-bgen` is required.
+  `-p FILE` reads a GEMMA phenotype file (whitespace-separated, no header, one
+  row per sample in genotype order, `NA` and `-9` missing) with either input,
+  and `-n` selects its column; BGEN input requires it, and a row count that
+  differs from the genotype sample count is an error. `-info FLOAT` filters
+  kinship and association SNPs on INFO over the analysed samples, and enters
+  the LOCO eigen cache key when it is on. `-hwe` and `--backend numpy` are
+  rejected with `-bgen`, and `-info` with `-bfile`; `auto` runs BGEN on the
+  streaming backend. `gwas()` takes `bgen=`, `sample=`, `bgi=`,
+  `phenotype_file=` and `info=`, and its PLINK prefix is now optional.
+  `PipelineConfig` gains the matching fields, and `PipelineConfig.genotypes()`
+  parses them into a `PlinkInput` or `BgenInput`. BGEN LOCO eigen caches key
+  on the BGEN file identity; PLINK keys are byte-identical.
 - `GenotypeDataset.open_bgen(bgen, sample, bgi)` reads BGEN v1.2 layout-2
   files (biallelic, unphased diploid, bit depth 1 to 16; zlib, zstd or
   uncompressed) through the dataset API. The counted allele is the first
@@ -17,8 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header, index and sample counts, and any embedded sample IDs, are checked
   against each other at open. The decoder is C in the `_lmm_accel` extension
   (which now links the system zlib), parallel across variants. zstd files
-  need the new `jamma[zstd]` extra below Python 3.14. The CLI does not read
-  BGEN yet.
+  need the new `jamma[zstd]` extra below Python 3.14.
 - An imputation INFO filter for BGEN input. `SnpStats.info` holds each SNP's
   INFO, GCTA's `--info` (the IMPUTE2 information measure) over the
   non-missing analysed samples, computed from the stored integer
@@ -30,8 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   off) that keeps SNPs with INFO >= the threshold, for kinship and
   association SNPs alike; a threshold on genotypes without INFO raises
   `ValueError`. The LOCO eigen cache key includes the threshold only when it
-  is on, so existing PLINK keys are unchanged. The CLI and `PipelineConfig`
-  do not expose it yet.
+  is on, so existing PLINK keys are unchanged.
 
 ### Changed
 
@@ -45,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows other than the block was read with still recomputes from the stored
   quantised values. `decode_bgen_probabilities_c` takes optional
   `info_rows` and `info_sums` arguments (`_lmm_accel` ABI 25).
+- `PipelineRunner.validate_inputs` checks only that the input files exist;
+  opening the dataset checks the PLINK `.bed` size, which was previously
+  checked and logged twice. The covariate row-count error now says "genotype
+  data" instead of "PLINK data". `EigenCacheComponents` is a plain dict,
+  since its file-identity keys depend on the genotype format.
 - `run_lmm_association_numpy_streaming` and `run_lmm_loco` take a
   `GenotypeDataset` (`GenotypeDataset.open_plink(prefix)`) instead of a PLINK
   prefix. The streaming runner loses its `snp_info` parameter, since the

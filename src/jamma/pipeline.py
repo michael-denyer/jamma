@@ -34,7 +34,6 @@ from jamma.core import memory
 from jamma.core.constants import Env
 from jamma.core.telemetry import BenchmarkRecord, append_benchmark_record
 from jamma.genotype.dataset import GenotypeDataset
-from jamma.io.plink import validate_plink_dimensions
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.io.weight import (
     apply_individual_weights,
@@ -209,19 +208,17 @@ class PipelineRunner:
         from the config alone, including how the kinship and eigen fields
         combine, is already guaranteed by PipelineConfig.__post_init__.
 
-        Raises:
-            FileNotFoundError: If PLINK files (.bed, .bim, .fam) are missing,
-                or if an input file the config names is missing.
-            ValueError: If the .bed size disagrees with the .fam and .bim.
-        """
-        bfile = self.config.bfile
-        for ext in (".bed", ".bim", ".fam"):
-            p = Path(f"{bfile}{ext}")
-            if not p.exists():
-                raise FileNotFoundError(f"PLINK {ext} file not found: {p}")
+        Opening the dataset checks the genotype files' dimensions; this
+        checks only that every named file exists.
 
-        # Validate .bed file size matches .fam/.bim dimensions (VALID-01)
-        validate_plink_dimensions(bfile)
+        Raises:
+            FileNotFoundError: If a genotype file (PLINK .bed, .bim, .fam, or
+                BGEN .bgen, .sample, .bgi) is missing, or if an input file
+                the config names is missing.
+        """
+        for path, label in self.config.genotypes().files():
+            if not path.exists():
+                raise FileNotFoundError(f"{label} not found: {path}")
 
         # Every option that names an input file gets the same check, so they
         # share one. The order is part of the contract: a config naming two
@@ -231,6 +228,7 @@ class PipelineRunner:
             (self.config.eigenvalue_file, "Eigenvalue file"),
             (self.config.eigenvector_file, "Eigenvector file"),
             (self.config.kinship_file, "Kinship matrix file"),
+            (self.config.phenotype_file, "Phenotype file"),
             (self.config.covariate_file, "Covariate file"),
             (self.config.snps_file, "SNP list file"),
             (self.config.ksnps_file, "Kinship SNP list file"),
@@ -301,6 +299,7 @@ class PipelineRunner:
                 ksnps_indices=source.ksnps_indices,
                 valid_indices=None if full else valid_indices,
                 filter_sample_indices=valid_indices,
+                info_threshold=self.config.info_threshold,
             )
 
         if self.config.save_kinship:
@@ -346,9 +345,23 @@ class PipelineRunner:
 
         # Before any disk read, so a bad JAMMA_BACKEND fails first.
         requested = requested_backend(self.config)
-        # Open once and pass it down. Opening parses the whole .bim (rs,
-        # chromosome, position and both allele arrays) and the .fam.
-        dataset = GenotypeDataset.open_plink(self.config.bfile)
+        # Open once and pass it down. Opening reads all variant and sample
+        # metadata (for PLINK the whole .bim and the .fam) and checks the
+        # genotype file's dimensions.
+        dataset = self.config.genotypes().open()
+        if not self.config.loco and not dataset.encoding.supports_materialize:
+            # The batch runner materializes the matrix, which this encoding
+            # refuses, so only streaming can run it.
+            flag = self.config.genotypes().flag
+            if requested == "numpy":
+                raise ValueError(
+                    f"JAMMA_BACKEND=numpy is not supported with {flag}: the "
+                    "batch runner loads hard calls into memory. Use "
+                    "numpy-streaming or auto."
+                )
+            if requested == "auto":
+                logger.info(f"Backend request: numpy-streaming ({flag} input)")
+                requested = "numpy-streaming"
 
         self.validate_inputs()
 

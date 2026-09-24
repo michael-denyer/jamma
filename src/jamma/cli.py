@@ -1,8 +1,8 @@
 """JAMMA command-line interface.
 
 This module provides a Click-based CLI matching GEMMA's flat flag interface,
-including -bfile, -gk, -lmm, -k, -o, -outdir flags for data loading,
-mode selection, and output configuration.
+including -bfile, -bgen, -p, -gk, -lmm, -k, -o, -outdir flags for data
+loading, mode selection, and output configuration.
 """
 
 import sys
@@ -70,8 +70,35 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 @click.option(
     "-bfile",
     type=click.Path(path_type=Path),
-    required=True,
-    help="PLINK binary file prefix",
+    default=None,
+    help="PLINK binary file prefix. Exactly one of -bfile or -bgen is required.",
+)
+@click.option(
+    "-bgen",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="BGEN v1.2 file of genotype probabilities. Needs -p.",
+)
+@click.option(
+    "-sample",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Oxford .sample file for -bgen (default: the -bgen path as .sample)",
+)
+@click.option(
+    "-bgi",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="bgenix index for -bgen (default: <bgen>.bgi)",
+)
+@click.option(
+    "-p",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Phenotype file (whitespace-delimited, no header, one row per "
+        "sample in genotype order; NA and -9 are missing)"
+    ),
 )
 @click.option(
     "-gk",
@@ -106,6 +133,15 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 )
 @click.option("-miss", type=float, default=DEFAULT_MISS, help="Missing rate threshold")
 @click.option(
+    "-info",
+    type=float,
+    default=0.0,
+    help=(
+        "Minimum imputation INFO (GCTA --info over the analysed samples); "
+        "-bgen only. JAMMA-specific."
+    ),
+)
+@click.option(
     "-loco",
     is_flag=True,
     default=False,
@@ -129,7 +165,7 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     type=str,
     default="1",
     help=(
-        "Phenotype column(s) in .fam file, 1-based. "
+        "Phenotype column(s) in the -p file, or else the .fam file, 1-based. "
         "Single value or space/comma-separated: "
         "-n 1 or -n '1 2 3' or -n '1,2,3'"
     ),
@@ -221,6 +257,10 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
 )
 def main(
     bfile,
+    bgen,
+    sample,
+    bgi,
+    p,
     gk,
     lmm,
     k,
@@ -229,6 +269,7 @@ def main(
     outdir,
     maf,
     miss,
+    info,
     loco,
     eigen,
     eigen_dir,
@@ -270,6 +311,11 @@ def main(
 
     config_kwargs: dict[str, Any] = {
         "bfile": bfile,
+        "bgen": bgen,
+        "sample": sample,
+        "bgi": bgi,
+        "phenotype_file": p,
+        "info_threshold": info,
         "kinship_file": k,
         "covariate_file": c,
         "lmm_mode": 1 if lmm is None else lmm,

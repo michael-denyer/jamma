@@ -39,6 +39,10 @@ class BgenFormatError(ValueError):
     """A BGEN, ``.bgi`` or ``.sample`` file this reader cannot or will not read."""
 
 
+class BgenDependencyError(ImportError):
+    """This installation lacks a module a BGEN file needs: zstd or ``_lmm_accel``."""
+
+
 def _zstd_module() -> ModuleType | None:
     """``compression.zstd`` (3.14+), else ``backports.zstd``, else None."""
     for name in ("compression.zstd", "backports.zstd"):
@@ -52,7 +56,7 @@ def _zstd_module() -> ModuleType | None:
 def _require_zstd() -> Callable[[bytes], bytes]:
     module = _zstd_module()
     if module is None:
-        raise ImportError(
+        raise BgenDependencyError(
             "this BGEN file is zstd-compressed, which needs the zstd module: "
             "install jamma[zstd] (backports.zstd) on Python < 3.14"
         )
@@ -505,8 +509,8 @@ def open_bgen_reader(
     Raises:
         FileNotFoundError: If any of the three files is missing.
         BgenFormatError: On any unsupported format or count mismatch.
-        ImportError: If the file is zstd-compressed and no zstd module imports.
-        RuntimeError: If the ``_lmm_accel`` C extension is unavailable.
+        BgenDependencyError: If the file is zstd-compressed and no zstd
+            module imports, or the ``_lmm_accel`` C extension is unavailable.
     """
     from jamma.lmm import accel  # jamma.lmm imports this package
 
@@ -514,7 +518,7 @@ def open_bgen_reader(
         if not path.exists():
             raise FileNotFoundError(f"BGEN {kind} file not found: {path}")
     if not accel.available():
-        raise RuntimeError(
+        raise BgenDependencyError(
             "reading BGEN needs the _lmm_accel C extension, which is not "
             "available. Recompile: python -m jamma.lmm._compile_accel"
         )
@@ -566,6 +570,7 @@ def _fill_empty_rsids(bgen: Path, index: BgenIndex) -> BgenIndex:
 
 
 __all__ = [
+    "BgenDependencyError",
     "BgenFormatError",
     "BgenHeader",
     "BgenIndex",

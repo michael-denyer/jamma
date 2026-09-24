@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A zstd-compressed BGEN without the zstd module, or any BGEN without the
+  `_lmm_accel` C extension, now ends a CLI run with a one-line `Error:` and
+  exit code 1 instead of a traceback. Both raise the new
+  `BgenDependencyError`, an `ImportError`; the C-extension case was a
+  `RuntimeError`.
 - The BGEN decoder accumulates the exact INFO sums while it decodes, over the
   rows `GenotypeDataset.stats` is given or the new `info_rows` argument of
   `GenotypeDataset.blocks` names, so INFO no longer costs a second pass over

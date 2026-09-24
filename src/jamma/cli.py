@@ -16,6 +16,7 @@ from loguru import logger
 
 import jamma
 from jamma.gemma_log import write_gemma_log
+from jamma.io.bgen import BgenDependencyError
 from jamma.lmm.association_plan import VALID_BACKENDS
 from jamma.lmm.schema import DEFAULT_L_MAX, DEFAULT_L_MIN, DEFAULT_MAF, DEFAULT_MISS
 from jamma.pipeline import PipelineConfig, PipelineRunner
@@ -387,7 +388,13 @@ def _run_gk(config: PipelineConfig, mode: Literal[1, 2]) -> None:
 
     try:
         result = compute_kinship(config, mode)
-    except (FileNotFoundError, ValueError, MemoryError, OSError) as e:
+    except (
+        FileNotFoundError,
+        ValueError,
+        MemoryError,
+        OSError,
+        BgenDependencyError,
+    ) as e:
         logger.debug("Kinship computation failed with traceback:", exc_info=True)
         _cli_error(str(e))
 
@@ -429,7 +436,13 @@ def _run_lmm(config: PipelineConfig) -> None:
         if config.check_memory:
             click.echo("Checking memory requirements...")
         result = PipelineRunner(config).run()
-    except (FileNotFoundError, ValueError, MemoryError, OSError) as e:
+    except (
+        FileNotFoundError,
+        ValueError,
+        MemoryError,
+        OSError,
+        BgenDependencyError,
+    ) as e:
         logger.debug("Pipeline failed with traceback:", exc_info=True)
         _cli_error(str(e))
 

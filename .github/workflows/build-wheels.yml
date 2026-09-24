@@ -34,8 +34,8 @@ jobs:
           CIBW_ENVIRONMENT_MACOS: 'MACOSX_DEPLOYMENT_TARGET=14.0'
           # Linux: x86_64 only
           CIBW_ARCHS_LINUX: "x86_64"
-          # Install libgomp in manylinux_2_28 container (AlmaLinux 8, dnf)
-          CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
+          # Install libgomp and zlib headers (BGEN decoder links -lz) in manylinux_2_28 (AlmaLinux 8, dnf)
+          CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp zlib-devel"
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
           # Smoke test: import + numerical sanity (catches ABI mismatches)
@@ -80,7 +80,7 @@ jobs:
           # AVX2 optimization flags via CFLAGS (picked up by hatch_build.py)
           CIBW_ENVIRONMENT_LINUX: 'CFLAGS="-march=x86-64-v3 -mavx2"'
           # Install libgomp in manylinux container (AlmaLinux 8, dnf)
-          CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp"
+          CIBW_BEFORE_BUILD_LINUX: "dnf install -y libgomp zlib-devel"
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"
           # Same smoke tests as baseline wheels
           CIBW_TEST_COMMAND: >-

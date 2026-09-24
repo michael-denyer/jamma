@@ -211,6 +211,33 @@ def test_non_dictionary_and_exception_records_keep_their_identity(fingerprint):
     assert result == "raise:ValueError"
 
 
+def test_in_place_entry_point_records_what_it_wrote(fingerprint):
+    """A None-returning kernel is keyed by its inputs and judged by its outputs."""
+
+    def write(value):
+        def kernel(out):
+            out[0] = value
+
+        return kernel
+
+    _, first = _record(fingerprint, write(1.0))
+    _, same = _record(fingerprint, write(1.0))
+    _, drifted = _record(fingerprint, write(np.nextafter(1.0, 2.0)))
+
+    assert first == same
+    (first_name, first_args, first_result) = first[0].split("\t")
+    (name, args, result) = drifted[0].split("\t")
+    assert (
+        (name, args)
+        == (first_name, first_args)
+        == (
+            "probe",
+            fingerprint._digest((np.array([1.0]),), {}),
+        )
+    )
+    assert result != first_result
+
+
 def test_digest_preserves_dtype_shape_signed_zero_and_nan_payload_bits(fingerprint):
     assert fingerprint._digest(np.array([1.0], dtype=np.float64)) != (
         fingerprint._digest(np.array([1.0], dtype=np.float32))

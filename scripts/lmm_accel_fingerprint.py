@@ -11,7 +11,9 @@ recorder, lets the existing ``tests/lmm_accel/`` suite drive them with the
 inputs the maintainers already care about, and writes one sorted line per
 distinct result. Dictionary returns are recorded as one ``(function.field,
 args digest, field digest)`` triple per exact field; other returns keep one
-``(function, args digest, result digest)`` triple. This keeps existing fields
+``(function, args digest, result digest)`` triple; an entry point returning
+None writes into its argument arrays, so its result digest covers the
+arguments after the call. This keeps existing fields
 directly comparable when an API adds or removes a field. Two runs across a
 refactor that differ by one bit in a shared field produce different files.
 
@@ -125,6 +127,10 @@ def _wrap(name: str, fn: Any) -> Any:
         if isinstance(result, dict):
             for field, value in result.items():
                 _records.add(f"{name}.{field}\t{args_digest}\t{_digest(value)}")
+        elif result is None:
+            # An in-place entry point's result is what it wrote into its
+            # argument arrays, so digest the arguments again after the call.
+            _records.add(f"{name}\t{args_digest}\t{_digest(args, kwargs)}")
         else:
             _records.add(f"{name}\t{args_digest}\t{_digest(result)}")
         return result

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `GenotypeDataset.open_bgen(bgen, sample, bgi)` reads BGEN v1.2 layout-2
+  files (biallelic, unphased diploid, bit depth 1 to 16; zlib, zstd or
+  uncompressed) through the dataset API. The counted allele is the first
+  allele, so the dosage is 2·P(11) + P(12). Variant metadata and block offsets
+  come from the bgenix `.bgi` index and samples from the `.sample` file; the
+  header, index and sample counts, and any embedded sample IDs, are checked
+  against each other at open. The decoder is C in the `_lmm_accel` extension
+  (which now links the system zlib), parallel across variants. zstd files
+  need the new `jamma[zstd]` extra below Python 3.14. The CLI does not read
+  BGEN yet.
+
 ### Changed
 
 - `run_lmm_association_numpy_streaming` and `run_lmm_loco` take a

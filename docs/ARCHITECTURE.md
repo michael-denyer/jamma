@@ -84,7 +84,7 @@ A typical LMM association run proceeds as follows:
 | `AssocResult` | `src/jamma/lmm/assoc_output.py` | Per-SNP association result dataclass matching GEMMA's output columns |
 | `MODE_SPECS` / `ModeSpec` | `src/jamma/lmm/schema.py` | Single source of truth mapping `lmm_mode` integers to the tests each mode runs (`Test` flags) and its output column names and header |
 | `SnpMeta` | `src/jamma/genotype/variants.py` | SNP metadata as one array per column; writers and result builders slice arrays directly, no per-SNP dicts |
-| `GenotypeDataset` | `src/jamma/genotype/dataset.py` | Samples x variants behind a reader strategy (PLINK or an in-memory matrix); every genotype consumer streams it with `blocks()`/`stats()`, and batch mode reads it once with `materialize()` |
+| `GenotypeDataset` | `src/jamma/genotype/dataset.py` | Samples x variants behind a reader strategy (PLINK, BGEN or an in-memory matrix); every genotype consumer streams it with `blocks()`/`stats()`, and batch mode reads it once with `materialize()` |
 | `ToleranceConfig` | `src/jamma/validation/tolerances.py` | Configurable tolerance thresholds for GEMMA numerical comparisons, calibrated from formal error propagation |
 
 ## Directory Structure Rationale
@@ -125,8 +125,9 @@ src/jamma/
 │   ├── snp_filter.py       # Per-SNP statistics, MAF/missing/monomorphism/HWE filter masks
 │   ├── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
 │   └── variants.py         # SnpMeta: per-variant chr/rs/pos/alleles
-├── io/                     # PLINK .bed/.bim/.fam readers and covariate/weight loaders
+├── io/                     # PLINK and BGEN genotype readers, covariate/weight loaders
 │   ├── plink.py            # PlinkReader (.bed strategy), dimension checks, .fam phenotypes
+│   ├── bgen.py             # BgenReader (.bgen strategy), header/.bgi/.sample parsing
 │   ├── covariate.py        # GEMMA-format covariate file reader
 │   ├── matrix_reader.py    # read_matrix_parallel(): multiprocess large-matrix text reader
 │   ├── matrix_writer.py    # write_matrix_parallel(): multiprocess large-matrix text writer
@@ -186,6 +187,7 @@ src/jamma/
 │   ├── _lmm_accel.c        # CPython module init; the only unit calling import_array()
 │   ├── _lmm_accel_ncvt1.c  # Public n_cvt=1 workspace and chunk-compute entry points
 │   ├── _lmm_accel_general.c # Public general-workspace and chunk-compute entry points
+│   ├── _lmm_accel_bgen.c   # BGEN layout-2 probability decoder (zlib inflate, B-bit unpack)
 │   ├── _lmm_accel_internal.h # Private declarations shared with module registration
 │   ├── _lmm_support.c/.h   # Shared shell: mode-input parse, thread clamp, result dict, NumPy C-API glue
 │   ├── _lmm_stats.c/.h     # Wald/Score/LRT statistics kernels shared by both workspaces

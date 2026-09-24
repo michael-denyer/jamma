@@ -80,7 +80,11 @@ dev = [
     "slipcover>=1.0.17",
     "hatchling>=1.29.0",
     "mpmath==1.4.1",
+    "bgen>=1.10.3",
+    "backports-zstd>=1.7.0 ; python_full_version < '3.14'",
 ]
+# Reads zstd-compressed BGEN files; Python 3.14+ has compression.zstd built in.
+zstd = ["backports-zstd>=1.7.0 ; python_full_version < '3.14'"]
 
 [project.scripts]
 jamma = "jamma.cli:main"
@@ -291,4 +295,6 @@ dev = [
     # substitutions, readme-renderer is the exact renderer Warehouse uses.
     "hatch-fancy-pypi-readme>=25.1.0",
     "readme-renderer[md]>=46.0",
+    "bgen>=1.10.3",
+    "backports-zstd>=1.7.0 ; python_full_version < '3.14'",
 ]

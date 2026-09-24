@@ -56,18 +56,18 @@ def test_sanitizer_off_values_add_nothing(value):
     flags = _wheel_flags(env)
     assert flags.base_extra == ("-DUSER",)
     assert flags.lapack_extra == ()
-    assert flags.link_libs == LINK_LIBS
+    assert flags.link_libs == (*LINK_LIBS, "-lz")
 
 
 def test_address_undefined_appends_sanitizer_flags():
     """address,undefined: base and LAPACK cflags get -fsanitize=...,
     -fno-omit-frame-pointer, -O1 after any user flags; the link gets the same
-    -fsanitize=... after -lm.
+    -fsanitize=... after -lm and the target's own -lz.
     """
     flags = _wheel_flags({"CFLAGS": "-DUSER", "JAMMA_SANITIZE": "address,undefined"})
     assert flags.base_extra == ("-DUSER", *_SAN_CFLAGS)
     assert flags.lapack_extra == _SAN_CFLAGS
-    assert flags.link_libs == ("-lm", "-fsanitize=address,undefined")
+    assert flags.link_libs == ("-lm", "-lz", "-fsanitize=address,undefined")
 
 
 def test_address_only():
@@ -78,7 +78,7 @@ def test_address_only():
         "-fno-omit-frame-pointer",
         "-O1",
     )
-    assert flags.link_libs == ("-lm", "-fsanitize=address")
+    assert flags.link_libs == ("-lm", "-lz", "-fsanitize=address")
 
 
 def test_sanitizer_follows_dev_flags_and_sentinel():

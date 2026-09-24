@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 /* Bump when function signatures or array layout expectations change. */
-#define ABI_VERSION 23
+#define ABI_VERSION 24
 
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
@@ -273,6 +273,33 @@ static PyMethodDef methods[] = {
         "    mode 3: dict with betas, ses, p_scores\n"
         "    mode 4: mode 1's keys plus p_scores, lambdas_mle, p_lrts\n"
         "    each value (n_snps,) float64\n"
+    },
+    {
+        "decode_bgen_probabilities_c",
+        (PyCFunction)decode_bgen_probabilities_c,
+        METH_VARARGS | METH_KEYWORDS,
+        "Decode a batch of BGEN v1.2 layout-2 variants, one column each.\n"
+        "\n"
+        "Unphased, diploid, biallelic, bit depth 1..16. Exact integer INFO\n"
+        "sums need the quantised values in 16 bits, so B > 16 is rejected.\n"
+        "Runs OpenMP-parallel across variants with the GIL released.\n"
+        "\n"
+        "Args:\n"
+        "    buffers:   sequence of k bytes-like, one variant's probability\n"
+        "               data each: raw, or zlib-compressed\n"
+        "    uncompressed_lengths: None for raw buffers, else int64 (k,)\n"
+        "               inflated length D of each zlib buffer\n"
+        "    n_samples: int, the header's N\n"
+        "    dosages:   out (n_samples, k) float64, F-order: (2*q11 + q12) /\n"
+        "               (2**B - 1), the first allele's dosage; NaN if missing\n"
+        "    q11, q12:  out (n_samples, k) uint16, F-order: stored P(11) and\n"
+        "               P(12); 0 for a missing sample\n"
+        "    missing:   out (n_samples, k) bool, F-order\n"
+        "    bit_depth: out (k,) uint8, each variant's B\n"
+        "    n_threads: int, capped at k\n"
+        "\n"
+        "Returns:\n"
+        "    None, or (position, reason) for the first variant that failed\n"
     },
     {
         "_get_aligned_alloc_test_ptr",

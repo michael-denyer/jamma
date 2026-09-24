@@ -79,7 +79,7 @@ p_wald = gsl_cdf_fdist_Q((P_yy - Px_yy) * tau, 1.0, df);
 
 **Behavior**: No guards. Division by zero produces `inf` or `NaN` depending on numerator.
 
-### JAMMA (`batch_calc_wald_stats_from_pab_numpy` in stats.py, shown here in the equivalent scalar form from `stats.calc_wald_test`)
+### JAMMA (`batch_calc_wald_stats_from_pab_numpy` in stats.py, shown here in scalar form)
 
 ```python
 if P_xx <= 0.0:
@@ -185,7 +185,7 @@ if (n_total == 0 || n_aa == n_total || n_bb == n_total) {
 
 **Behavior**: Count genotype classes (AA, AB, BB) and flag as monomorphic if only one class exists.
 
-### JAMMA (kinship/stream.py)
+### JAMMA (genotype/snp_filter.py)
 
 ```python
 # Variance-based detection
@@ -392,14 +392,12 @@ Uses **streaming subtraction**: computes the full kinship matrix K once, then de
 | Aspect | GEMMA | JAMMA |
 |--------|-------|-------|
 | Math | Same formula | Same formula |
-| Memory | O(n_chr × n²) | O(n²) |
-| I/O | One pass per chromosome | Two passes total (full K + per-chr subtraction) |
+| Memory | O(n_chr × n²) | O(n²) per per-chromosome accumulator, batched to fit available RAM |
+| I/O | One pass per chromosome | One pass when every per-chromosome accumulator fits alongside S_full, else one pass per chromosome batch |
 
 ### Rationale
 
-The streaming approach produces mathematically identical LOCO kinship matrices while using constant memory (one K_loco at a time). This is critical for large-sample GWAS where materializing 22 copies of an n×n matrix is infeasible.
-
-The streaming approach produces mathematically identical LOCO kinship matrices while requiring only constant memory (one K_loco buffer at a time).
+The streaming approach produces mathematically identical LOCO kinship matrices while holding only as many per-chromosome accumulators as fit in memory alongside S_full. This is critical for large-sample GWAS where materializing 22 copies of an n×n matrix is infeasible.
 
 ---
 
@@ -530,10 +528,10 @@ code path but ignored on the LOCO path, so `-loco --legacy-text -eigen`
 silently produced binary `.npy` artifacts instead of the GEMMA-compatible
 `.cXX.txt` / `.eigenD.txt` / `.eigenU.txt` files the user asked for.
 
-**Fixed.** `run_lmm_loco()` now accepts a `legacy_text` parameter and threads it
+**Fixed.** `LocoConfig.legacy_text` carries the flag to `run_lmm_loco()`, which threads it
 through the kinship save (filename suffix + `write_kinship_matrix`) and the
 per-chromosome eigen write (`EigenGeneration.write_member`); the cache reader
-follows whichever format its manifest names. `PipelineRunner._associate_loco` forwards
+follows whichever format its manifest names. `resolve_analysis_plan()` sets it from
 `config.legacy_text`, so `-loco --legacy-text` now writes GEMMA text artifacts
 on the LOCO path identically to the standard path. As with the non-LOCO path,
 text mode writes the `.txt` files plus `.npy` sidecars for fast reload.
@@ -555,11 +553,23 @@ with either `-bfile` or `-bgen`; BGEN input requires it.
 - The dosage counts the first BGEN allele, 2·P(11) + P(12), as GCTA and GEMMA's
   BIMBAM column 2 do. REGENIE and plink2 count the second allele, which flips
   `allele1`, `af` and the sign of `beta`.
+- Dosages are computed in float64 from the stored B-bit integers,
+  (2·q11 + q12) / (2^B − 1), and are never rounded or cast to float32. The
+  float32 batch runner is therefore refused (`--backend numpy` without
+  `-loco`); BGEN input always streams.
+- A sample flagged missing in a variant's ploidy byte has no dosage for that
+  variant. It counts toward `-miss` and is imputed with the variant's mean, as
+  GEMMA treats a BIMBAM `NA`. That flag is the only source of missingness.
+- Only layout 2 is read. A multi-allelic or phased variant, a bit depth above
+  16, or a sample whose ploidy is not 2 stops the run with an error naming the
+  variant; nothing is skipped. Uncompressed, zlib and zstd data all decode.
 - INFO is GCTA's `--info`, recomputed over the analysed samples from the stored
   integer probabilities. It is not read from an imputation summary, so a
-  different sample set gives a different INFO. The filter keeps SNPs with
-  INFO >= the threshold, for kinship and association SNPs alike, and the LOCO
-  eigen cache key includes the threshold when it is on.
+  different sample set gives a different INFO. It is not clamped, so it can be
+  negative, and a monomorphic or all-missing variant gets 1, as in GCTA. The
+  filter keeps SNPs with INFO >= the threshold, for kinship and association
+  SNPs alike, and the LOCO eigen cache key includes the threshold when it is
+  on.
 - Chromosome X is treated as autosomal: no male dosage adjustment is made.
 - `-hwe` is rejected with `-bgen`, because fractional dosages fall in no HWE
   genotype class. `-info` is rejected with `-bfile`, because hard calls always
@@ -569,7 +579,10 @@ with either `-bfile` or `-bgen`; BGEN input requires it.
 
 None for PLINK input. For BGEN, GEMMA runs on BIMBAM files holding the same
 decoded dosages. `tests/test_bgen_gemma_parity.py` holds `-gk 1` and
-`-lmm 1`-`4` on such a pair to the default `ToleranceConfig`.
+`-lmm 1`-`4` on such a pair, with fractional dosages and missing samples, to
+the default `ToleranceConfig`. A BIMBAM export that rounds the dosages gives
+GEMMA different inputs, so a comparison against it also measures that
+rounding.
 
 ---
 
@@ -592,7 +605,7 @@ decoded dosages. `tests/test_bgen_gemma_parity.py` holds `-gk 1` and
 | Default file format | Text (`.cXX.txt`, `.eigenD.txt`) | Binary `.npy` (`--legacy-text` for text) | GEMMA files read natively |
 | Early sample filtering | Kinship always n × n | Kinship at n_valid × n_valid when save_kinship=False | Memory saving only; values identical |
 | LOCO + `--legacy-text` | N/A (GEMMA has no LOCO) | Honored on LOCO path — writes `.cXX.txt` / `.eigenD.txt` / `.eigenU.txt` (see §13) | Parity with standard path |
-| BGEN input, `-info` | Not supported | JAMMA additions; counted allele is the first BGEN allele, chrX autosomal (see §14) | New input only |
+| BGEN input, `-info` | Not supported | JAMMA additions; counted allele is the first BGEN allele, float64 dosages, INFO recomputed over the analysed samples, chrX autosomal (see §14) | New input only |
 
 ---
 

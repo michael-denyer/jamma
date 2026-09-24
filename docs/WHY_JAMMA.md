@@ -36,11 +36,7 @@ JAMMA checks memory requirements BEFORE allocation:
 
 ```bash
 $ jamma -bfile large_study -gk 1
-MemoryError: Eigendecomposition requires 640.0 GB but only 512.0 GB available.
-  Kinship matrix: 640.0 GB (n=200000 samples)
-  Eigendecomp workspace: ~2x kinship
-
-Suggestion: Use a larger instance or streaming mode.
+Error: Insufficient memory for kinship accumulation (peak: 372.0GB). Need 372.0GB (+10.0GB margin = 382.0GB), but only 256.0GB available. Use --no-check-memory to override, or use a machine with more RAM.
 ```
 
 **Key features:**
@@ -164,15 +160,9 @@ ERROR: error! number of columns in the kinship matrix
 ### JAMMA Errors
 
 ```text
-ValueError: Covariate file row 15, column 3: cannot parse 'NA' as numeric
-  Hint: Use 'NA' (case-sensitive) for missing values
+Error: Covariate file row 15, column 3: cannot parse 'n/a' as numeric (use 'NA' for missing)
 
-MemoryError: LMM association requires 45.2 GB but only 32.0 GB available.
-  Eigendecomp: 25.0 GB (already loaded)
-  Genotype chunks: 12.0 GB (chunk_size=50000)
-  Result buffer: 8.2 GB
-
-  Suggestion: Reduce chunk_size to 25000 or use streaming mode.
+Error: Estimated memory (45.2GB) for numpy-streaming exceeds budget (32.0GB). Use --no-check-memory to override.
 ```
 
 Every error includes:
@@ -221,10 +211,14 @@ log_memory_snapshot("kinship:after")
 
 ```python
 from jamma.core.memory import available_ram_gb, fits
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import plan_association
 
 # Before starting a big job
-quote = plan_association(200_000, 95_000, backend="numpy-streaming").price(eigen=None)
+quote = plan_association(
+    200_000, 95_000, backend="numpy-streaming",
+    genotype_encoding=GenotypeEncoding.HARD_CALLS,
+).price(eigen=None)
 print(f"Peak: {quote.total_peak_gb:.1f}GB")
 print(f"Available: {available_ram_gb():.1f}GB")
 print(f"Will fit: {fits(quote.total_peak_gb, available_ram_gb())}")
@@ -260,12 +254,15 @@ JAMMA applies contemporary software engineering practices that GEMMA (written in
 def run_lmm_association_numpy(
     genotypes: np.ndarray,
     phenotypes: np.ndarray,
-    kinship: np.ndarray,
-    snp_info: list[dict],
-    *,
-    maf_threshold: float = 0.01,
-    miss_threshold: float = 0.05,
-    lmm_mode: int = 1,  # 1=Wald, 2=LRT, 3=Score, 4=All
+    kinship: np.ndarray | None,
+    snp_info: Sequence[SnpInfoRecord] | SnpMeta,
+    covariates: np.ndarray | None = None,
+    eigenvalues: np.ndarray | None = None,
+    eigenvectors: np.ndarray | None = None,
+    config: LmmConfig = DEFAULT_LMM_CONFIG,  # lmm_mode, maf/miss thresholds
+    output_path: Path | None = None,
+    hwe_threshold: float = 0.0,
+    max_chunk_size: int | None = None,
 ) -> LmmRunResult: ...
 
 # Dataclasses for structured returns
@@ -278,9 +275,9 @@ class AssocResult:
     allele1: str
     allele0: str
     af: float
-    beta: float
-    se: float
-    logl_H1: float | None = None   # Wald/All
+    beta: float = float("nan")
+    se: float = float("nan")
+    logl_H1: float | None = None   # Wald/LRT/All
     l_remle: float | None = None    # Wald/All
     p_wald: float | None = None     # Wald/All
     p_score: float | None = None    # Score/All
@@ -291,7 +288,7 @@ class AssocResult:
 ### Testing Philosophy
 
 - **Property-based tests**: Hypothesis generates edge cases automatically
-- **Tier system**: Fast unit tests (CI) vs slow validation tests (nightly)
+- **Tier system**: Fast unit tests (every PR) vs slow validation tests (after merge to master)
 - **GEMMA fixtures**: Automated comparison against reference implementation
 - **Randomized test order**: Catches hidden test dependencies
 
@@ -327,10 +324,13 @@ results = run_lmm_association_numpy_streaming(
 
 # Memory estimation before commitment
 from jamma.core.memory import available_ram_gb, require
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import plan_association
 
 require(
-    plan_association(n_samples, n_snps).price(eigen=None).association_gb,
+    plan_association(
+        n_samples, n_snps, genotype_encoding=GenotypeEncoding.HARD_CALLS
+    ).price(eigen=None).association_gb,
     available_ram_gb(),
     "LMM",
 )

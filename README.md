@@ -111,8 +111,8 @@ jamma -lmm 1 -bgen data/imputed.bgen -p pheno.txt -info 0.8 -k output/kinship.cX
   analysed samples rather than read from an imputation summary. It applies
   only to BGEN input.
 - `-hwe` is rejected with `-bgen`, because fractional dosages fall in no HWE
-  genotype class. `--backend numpy` is rejected too: the batch runner holds
-  hard calls in memory, so BGEN input always streams.
+  genotype class. `--backend numpy` without `-loco` is rejected too: the batch
+  runner holds hard calls in memory, so BGEN input always streams.
 - zstd-compressed files need the `zstd` extra below Python 3.14:
   `python -m pip install "jamma[zstd]"`.
 - `-p` also works with `-bfile`, in place of the `.fam` phenotype columns.

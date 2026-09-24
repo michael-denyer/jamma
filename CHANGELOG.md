@@ -282,6 +282,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Documentation matches the code at `ecbbfd7d`. `GEMMA_DIVERGENCES.md` §14
+  now covers BGEN dosage precision, missing samples, supported layouts and
+  INFO edge cases. `--backend numpy` is documented as rejected with `-bgen`
+  only without `-loco`. The mouse_hs1940 table in `GEMMA_EQUIVALENCE.md` is
+  re-measured: `logl_H1` matches GEMMA at its printed precision, replacing the
+  stale ~1.35e-3. Docker `-o` examples, compile entry points, the CI matrix,
+  error messages and API snippets are corrected.
 - A stale BGEN index fails before decoding. When the `.bgi` chromosome,
   rsid, position or allele order differs from the variant block, the error
   names the field and both values, so the index's labels are never attached

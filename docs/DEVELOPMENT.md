@@ -133,13 +133,13 @@ refactor: extract _yield_loco_matrices helper
    - **Test plan**: How to verify the changes
 
 4. CI runs the following checks automatically (`.github/workflows/ci.yml`):
-   - **lint** job: `uv lock --check`, `ruff check --no-fix`, `ruff format --check`, `uv run pyrefly check`, then `prek run --all-files` on Python 3.12 (Ubuntu)
-   - **test** job: pytest on Linux (3.11, 3.12), ARM macOS (3.12), and Linux with MKL ILP64 numpy
+   - **lint** job: `uv sync --locked`, `ruff check --no-fix`, `ruff format --check`, `uv run pyrefly check`, then `prek run --all-files` on Python 3.12 (Ubuntu)
+   - **test** job: pytest on Linux (3.11, 3.12, 3.13, 3.14), ARM macOS (3.12), and Linux with MKL ILP64 numpy
    - **package-smoke** job: builds the sdist and wheel, asserts both ship `_build_support/`, then installs the wheel in a clean venv and imports it
    - **coverage** job: slipcover with `--fail-under 80` (single-threaded, tier0/tier1 only), plus per-subsystem floors from `scripts/check_subsystem_coverage.py`
    - **link-check** job: lychee in `--offline` mode over every `.md`
 
-5. Other workflows gate a PR without ever running locally:
+5. Other workflows catch what a local run never exercises. Only `fingerprint.yml`, `codeql.yml`, and `security.yml` among them run on a PR:
 
    | Workflow | What it catches |
    |----------|-----------------|
@@ -194,7 +194,7 @@ PyPI publishing uses GitHub trusted publishing (no API tokens needed locally).
 1. Bump `version` in `pyproject.toml`
 2. Run `uv lock` and commit the updated `uv.lock`
 3. Update `CHANGELOG.md` (move Unreleased items to the new version section)
-4. Commit and push to `master`
+4. Commit on a branch, open a PR, and merge it once CI is green; the ruleset rejects direct pushes to `master`
 5. Create a GitHub release: `gh release create v<X.Y.Z> --title "v<X.Y.Z>" --notes "..."`
 6. The `.github/workflows/build-wheels.yml` workflow builds wheels for Linux x86_64 and macOS arm64 (CPython 3.11–3.14) and uploads them to PyPI automatically on release
 

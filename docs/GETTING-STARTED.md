@@ -137,17 +137,18 @@ other packages before ILP64 numpy, and always use `pip install jamma --no-deps`.
 
 ### C extensions not compiled (development installs)
 
-After cloning from source, both C extensions must be compiled. `uv sync` does
-not build them:
+JAMMA rebuilds a missing or stale C extension once on first import. To build
+all three explicitly after cloning from source:
 
 ```bash
 uv sync
 uv run python -m jamma.lmm._compile_accel
 uv run python -m jamma.jlinalg._compile_jlinalg
+uv run python -m jamma.io._compile_matrix_text
 ```
 
 JAMMA falls back to pure Python without them. On mouse_hs1940 that fallback runs
-LMM roughly 5x to 7x slower, and the streaming runner is unavailable entirely.
+LMM roughly 11x to 19x slower (README performance table). Batch and streaming runners both still work.
 
 ### Missing environment variables
 

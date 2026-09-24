@@ -43,6 +43,7 @@ GEMMA. This document is split into three parts:
 uv sync
 uv run python -m jamma.lmm._compile_accel
 uv run python -m jamma.jlinalg._compile_jlinalg
+uv run python -m jamma.io._compile_matrix_text
 ```
 
 `tests/conftest.py` warns at session start if any C extension is stale
@@ -176,7 +177,7 @@ computation.
 | Workflow | Trigger | Test command |
 |----------|---------|-------------|
 | `ci.yml` → `lint` | push/PR | `prek run --all-files` |
-| `ci.yml` → `test` (Linux 3.11/3.12, ARM Mac 3.12, Linux MKL ILP64) | push/PR | `pytest -m "not tier2 and not slow and not benchmark" -v -n 3` |
+| `ci.yml` → `test` (Linux 3.11/3.12/3.13/3.14, ARM Mac 3.12, Linux MKL ILP64) | push/PR | `pytest -m "not tier2 and not slow and not benchmark" -v -n 3` |
 | `ci.yml` → `coverage` | push/PR | `slipcover --fail-under 80 -m pytest ... -n0` plus per-subsystem floors via `scripts/check_subsystem_coverage.py` (lmm 80%, jlinalg 18%, kinship 50%, io 80%) |
 | `ci.yml` → `package-smoke` | push/PR | `uv build`, then assert sdist and wheel both ship `_build_support/` and the wheel imports in a clean venv |
 | `ci.yml` → `link-check` | push/PR | lychee `--offline` over every `.md`, sharing `lychee.toml` with the pre-commit hook |
@@ -439,7 +440,7 @@ catch. The carve-out is:
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
 | The shared LMM chunk runner passes a transpose flag to jlinalg's dgemm rather than a transposed array (`test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm`, [`tests/test_numpy_streaming.py:55`](../tests/test_numpy_streaming.py#L55)) | jlinalg copies a non-contiguous input, so a transposed `U` costs an O(n^2) copy per chunk. That changes speed, not results |
-| Compile-flag literals not in three forbidden entry points ([`scripts/check_compile_flag_literals.py`](../scripts/check_compile_flag_literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
+| Compile-flag literals not in the four compile entry points or `_native.py` ([`scripts/check_compile_flag_literals.py`](../scripts/check_compile_flag_literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
 | Every `_lmm_accel*.c` unit reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 
 **Rules for adding a new structural source test:**

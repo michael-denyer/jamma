@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 from bed_reader import open_bed
 
+import jamma
 from jamma.genotype.dataset import (
     GenotypeBlock,
     GenotypeDataset,
@@ -299,11 +300,15 @@ def test_a_spent_block_retains_nothing_behind_its_dosages(progress):
     dataset = GenotypeDataset.from_matrix(
         np.ones((n, m), dtype=np.float32), _numbered_variants(m)
     )
+    # Count only live buffers jamma allocated: progressbar imports its bar
+    # module on first use, which lands here when no earlier test drew a bar.
+    jamma_source = tracemalloc.Filter(True, str(Path(jamma.__file__).parent / "*"))
     tracemalloc.start()
     try:
         blocks = dataset.blocks(m, progress=progress)
         values = next(blocks).dosages(np.arange(0, n, 2))
-        retained = tracemalloc.get_traced_memory()[0]
+        snapshot = tracemalloc.take_snapshot().filter_traces([jamma_source])
+        retained = sum(trace.size for trace in snapshot.traces)
         del blocks
     finally:
         tracemalloc.stop()

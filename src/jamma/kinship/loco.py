@@ -290,6 +290,7 @@ def compute_loco_kinship_streaming(
     filter_sample_indices: np.ndarray | None = None,
     _max_batch_chrs: int | None = None,
     consumer_gb: float,
+    info_threshold: float = 0.0,
 ) -> LocoKinshipStream:
     """Compute LOCO kinship matrices from disk-streamed genotypes.
 
@@ -330,6 +331,9 @@ def compute_loco_kinship_streaming(
         consumer_gb: Peak the downstream eigen and association work holds
             while this stream is live. The gate and the batch planner both
             reserve it beside the retained set.
+        info_threshold: Minimum imputation INFO over the filtering rows,
+            kept at INFO >= threshold (default 0.0 = no filter). The
+            first-pass statistics carry every SNP's INFO either way.
 
     Returns:
         A consume-once LocoKinshipStream. Iterate it for (chr_name, K_loco) pairs,
@@ -346,8 +350,9 @@ def compute_loco_kinship_streaming(
         MemoryError: If check_memory=True and the retained set (S_full,
             K_loco_buf, one S_chr, the disk buffer) plus ``consumer_gb`` does
             not fit available RAM, or exceeds ``mem_budget``.
-        ValueError: If no SNPs pass filtering, or if all filtered SNPs are on
-            a single chromosome.
+        ValueError: If no SNPs pass filtering, if all filtered SNPs are on
+            a single chromosome, or if ``info_threshold`` > 0 on genotypes
+            without INFO.
     """
     start_time = time.perf_counter()
 
@@ -390,6 +395,7 @@ def compute_loco_kinship_streaming(
         miss_threshold,
         ksnps_restriction(ksnps_indices, n_snps),
         filter_sample_indices,
+        info_threshold,
     )
     candidates = (
         chromosomes

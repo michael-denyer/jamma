@@ -122,8 +122,9 @@ src/jamma/
 │   └── threading.py        # BLAS thread-count control via threadpoolctl
 ├── genotype/               # Genotype QC over streamed PLINK chunks
 │   ├── dataset.py          # GenotypeDataset: format-neutral samples x variants, streamed in blocks
+│   ├── info.py             # info_from_quantised(): GCTA --info (IMPUTE2 INFO) from quantised BGEN probabilities
 │   ├── snp_filter.py       # Per-SNP statistics, MAF/missing/monomorphism/HWE filter masks
-│   ├── snp_stats.py        # Streamed SNP statistics arrays and denominator metadata
+│   ├── snp_stats.py        # Streamed SNP statistics (with INFO), SnpFilterSpec incl. the INFO threshold
 │   └── variants.py         # SnpMeta: per-variant chr/rs/pos/alleles
 ├── io/                     # PLINK and BGEN genotype readers, covariate/weight loaders
 │   ├── plink.py            # PlinkReader (.bed strategy), dimension checks, .fam phenotypes

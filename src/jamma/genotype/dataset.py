@@ -22,6 +22,7 @@ from bed_reader import open_bed
 
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import get_physical_core_count
+from jamma.genotype.info import info_from_quantised
 from jamma.genotype.snp_stats import SnpStats, collect_snp_stats_from_chunks
 from jamma.genotype.variants import SnpMeta
 from jamma.io.bgen import ProbabilityBlock, open_bgen_reader
@@ -83,7 +84,8 @@ class SampleTable:
 class GenotypeBlock:
     """A run of requested variants over all dataset rows, read once.
 
-    Call ``stats`` any number of times, then ``dosages`` at most once.
+    Call ``stats`` and ``info`` any number of times, then ``dosages`` at
+    most once.
     ``dosages`` may hand over the block's own buffer, so the block is spent
     afterwards and every further call raises.
 
@@ -129,9 +131,10 @@ class GenotypeBlock:
             hwe: Also count HWE genotype classes.
 
         Returns:
-            Statistics with ``global_indices`` equal to ``columns``.
-            ``n_unexpected`` counts values outside {0, 1, 2, NaN} when the
-            encoding validates hard calls, else 0.
+            Statistics with ``global_indices`` equal to ``columns`` and
+            ``info`` from ``info(rows)``. ``n_unexpected`` counts values
+            outside {0, 1, 2, NaN} when the encoding validates hard calls,
+            else 0.
 
         Raises:
             ValueError: If ``hwe`` is requested for an encoding without HWE
@@ -146,6 +149,29 @@ class GenotypeBlock:
             columns=self.columns,
             encoding=self._encoding,
             hwe=hwe,
+            info=self.info(rows) if self._encoding.supports_info else None,
+        )
+
+    def info(self, rows: np.ndarray | None = None) -> np.ndarray:
+        """Per-variant imputation INFO over ``rows`` (all rows when None).
+
+        Hard calls give exactly 1.0. Probabilities give GCTA's ``--info``
+        from the quantised values over the non-missing samples of ``rows``
+        (see ``info_from_quantised``).
+
+        Raises:
+            RuntimeError: If the block is spent.
+        """
+        values = self._live_values()
+        probabilities = self._probabilities
+        if probabilities is None:
+            return np.ones(values.shape[1], dtype=np.float64)
+        return info_from_quantised(
+            probabilities.q11,
+            probabilities.q12,
+            probabilities.missing,
+            probabilities.bit_depth,
+            rows,
         )
 
     def dosages(
@@ -184,6 +210,7 @@ def _collect_stats(
     columns: np.ndarray,
     encoding: GenotypeEncoding,
     hwe: bool,
+    info: np.ndarray | None,
 ) -> SnpStats:
     if hwe and not encoding.supports_hwe:
         raise ValueError(f"HWE counts are undefined for {encoding.value} genotypes")
@@ -194,6 +221,7 @@ def _collect_stats(
         global_indices=columns,
         include_hwe=hwe,
         validate_genotypes=encoding.validates_hard_calls,
+        info=info,
     )
 
 
@@ -539,8 +567,9 @@ class GenotypeDataset:
             progress: Progress-bar label, or None for no bar.
 
         Returns:
-            Statistics in requested column order; ``n_unexpected`` is summed
-            over blocks for the caller to report.
+            Statistics in requested column order, with INFO as
+            ``GenotypeBlock.info`` gives it; ``n_unexpected`` is summed over
+            blocks for the caller to report.
 
         Raises:
             ValueError: As ``blocks``, or if ``hwe`` is requested for an
@@ -548,15 +577,26 @@ class GenotypeDataset:
         """
         cols = self._resolve_columns(columns, block_size)
         spans = self._read_spans(cols, block_size, stats_only=True, progress=progress)
-        chunks = (
-            (values if rows is None else values[rows, :], start, end)
-            for start, end, values, _ in spans
-        )
+        info = np.ones(len(cols)) if self.encoding.supports_info else None
+
+        def chunks() -> Iterator[tuple[np.ndarray, int, int]]:
+            for start, end, values, probabilities in spans:
+                if info is not None and probabilities is not None:
+                    info[start:end] = info_from_quantised(
+                        probabilities.q11,
+                        probabilities.q12,
+                        probabilities.missing,
+                        probabilities.bit_depth,
+                        rows,
+                    )
+                yield values if rows is None else values[rows, :], start, end
+
         return _collect_stats(
-            chunks,
+            chunks(),
             n_snps=len(cols),
             n_samples=self.n_samples if rows is None else len(rows),
             columns=cols,
             encoding=self.encoding,
             hwe=hwe,
+            info=info,
         )

@@ -313,7 +313,9 @@ class TestLoadAnalysedSamples:
             pheno_cols=[["1.0", "2.0", "3.0", "4.0"]],
             covariate_rows=["1 0.5", "1 1.5", "1 2.5"],
         )
-        with pytest.raises(ValueError, match="3 rows but PLINK data has 4 samples"):
+        with pytest.raises(
+            ValueError, match="3 rows but the genotype data has 4 samples"
+        ):
             load_analysed_samples(config, n_samples=4)
 
     def test_intercept_appended_when_no_column_is_constant(

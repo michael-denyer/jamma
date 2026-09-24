@@ -13,6 +13,8 @@ import numpy as np
 from bed_reader import open_bed
 from loguru import logger
 
+from jamma.io.phenotype import phenotype_values
+
 
 def _count_lines_fast(path: Path, chunk_size: int = 1024 * 1024) -> int:
     """Count logical lines in a file using binary byte counting.
@@ -176,12 +178,7 @@ def parse_fam_phenotype_column(fam_data: np.ndarray, column: int) -> np.ndarray:
             f"in .fam file ({n_pheno_cols} phenotype column"
             f"{'s' if n_pheno_cols != 1 else ''} available)"
         )
-    values = fam_data[:, col_index].copy()
-    missing = np.isin(values, ["-9", "NA"])
-    values[missing] = "0"
-    phenotypes = values.astype(np.float64)
-    phenotypes[missing] = np.nan
-    return phenotypes
+    return phenotype_values(fam_data[:, col_index])
 
 
 def read_fam_phenotypes(fam_path: Path, column: int = 1) -> np.ndarray:

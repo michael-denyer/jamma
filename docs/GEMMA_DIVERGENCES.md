@@ -538,6 +538,38 @@ follows whichever format its manifest names. `PipelineRunner._associate_loco` fo
 on the LOCO path identically to the standard path. As with the non-LOCO path,
 text mode writes the `.txt` files plus `.npy` sidecars for fast reload.
 
+## 14. BGEN Input and the INFO Filter
+
+### GEMMA
+
+GEMMA reads PLINK binary files (`-bfile`) and BIMBAM text files (`-g`, with
+phenotypes from `-p`). It does not read BGEN and has no imputation-quality
+filter.
+
+### JAMMA
+
+JAMMA adds BGEN v1.2 input (`-bgen`, `-sample`, `-bgi`) and an INFO filter
+(`-info`). Neither exists in GEMMA. It also reads GEMMA's `-p` phenotype file,
+with either `-bfile` or `-bgen`; BGEN input requires it.
+
+- The dosage counts the first BGEN allele, 2·P(11) + P(12), as GCTA and GEMMA's
+  BIMBAM column 2 do. REGENIE and plink2 count the second allele, which flips
+  `allele1`, `af` and the sign of `beta`.
+- INFO is GCTA's `--info`, recomputed over the analysed samples from the stored
+  integer probabilities. It is not read from an imputation summary, so a
+  different sample set gives a different INFO. The filter keeps SNPs with
+  INFO >= the threshold, for kinship and association SNPs alike, and the LOCO
+  eigen cache key includes the threshold when it is on.
+- Chromosome X is treated as autosomal: no male dosage adjustment is made.
+- `-hwe` is rejected with `-bgen`, because fractional dosages fall in no HWE
+  genotype class. `-info` is rejected with `-bfile`, because hard calls always
+  have INFO 1.
+
+### Divergence Impact
+
+None for PLINK input. For BGEN, run GEMMA on BIMBAM
+files holding the same decoded dosages to compare.
+
 ---
 
 ## Summary Table
@@ -559,6 +591,7 @@ text mode writes the `.txt` files plus `.npy` sidecars for fast reload.
 | Default file format | Text (`.cXX.txt`, `.eigenD.txt`) | Binary `.npy` (`--legacy-text` for text) | GEMMA files read natively |
 | Early sample filtering | Kinship always n × n | Kinship at n_valid × n_valid when save_kinship=False | Memory saving only; values identical |
 | LOCO + `--legacy-text` | N/A (GEMMA has no LOCO) | Honored on LOCO path — writes `.cXX.txt` / `.eigenD.txt` / `.eigenU.txt` (see §13) | Parity with standard path |
+| BGEN input, `-info` | Not supported | JAMMA additions; counted allele is the first BGEN allele, chrX autosomal (see §14) | New input only |
 
 ---
 
@@ -579,7 +612,7 @@ represent niche use cases.
 | Debug/legacy flags | `-debug`, `-legacy`, `-strict`, `-issue` | Internal GEMMA development flags, not user-facing functionality. |
 | BSLMM MCMC parameters | `-w`, `-s`, `-seed`, `-rpace`, `-wpace`, `-hmin/max`, `-rmin/max`, `-pmin/max`, `-smin/max` | Only relevant if BSLMM were implemented. |
 | Pace output | `-pace` | JAMMA uses progress bars with ETA instead. |
-| BIMBAM format input | `-g`, `-p`, `-a` | JAMMA uses PLINK binary format exclusively. BIMBAM is a legacy text format (~10-50x larger than PLINK binary) with no QC tooling. Convert with `plink --import-dosage file.mean.genotype --fam file.fam --make-bed --out output`. |
+| BIMBAM genotype input | `-g`, `-a` | JAMMA reads PLINK binary and BGEN genotypes. BIMBAM is a legacy text format (~10-50x larger than PLINK binary) with no QC tooling. Convert with `plink --import-dosage file.mean.genotype --fam file.fam --make-bed --out output`. GEMMA's `-p` phenotype file is supported. |
 
 ---
 

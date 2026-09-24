@@ -66,6 +66,7 @@ def run_phenotype_loop(
         execution=analysis.execution,
         snps_indices=analysis.snps_indices,
         hwe_threshold=config.hwe_threshold,
+        info_threshold=config.info_threshold,
         labels=_LABELS[plan.mode],
     )
     genotypes = prepare_genotypes(

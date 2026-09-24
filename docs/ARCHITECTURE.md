@@ -53,7 +53,7 @@ A typical LMM association run proceeds as follows:
 
 1. **Entry point** — The user invokes `jamma -bfile data/study -k kinship.cXX.txt -lmm 1` (CLI) or calls `gwas("data/study", kinship_file="kinship.cXX.txt")` (Python API). Both paths instantiate a `PipelineConfig` and hand it to `PipelineRunner`.
 
-2. **Data loading** — `PipelineRunner` calls `io/plink.py` to read PLINK metadata and phenotype vectors from the `.fam` file. Optional covariates are loaded from `io/covariate.py`.
+2. **Data loading** — `PipelineConfig.genotypes()` parses the input into a `PlinkInput` or `BgenInput`, and `PipelineRunner` opens it once as a `GenotypeDataset` (metadata only). Phenotype vectors come from the `-p` file (`io/phenotype.py`) or, for PLINK without one, the `.fam` (`io/plink.py`). Optional covariates are loaded from `io/covariate.py`.
 
 3. **Analysis resolution and kinship** — `PipelineConfig.source()` parses the kinship and eigen fields at construction, and `pipeline_plan.py` resolves the result into explicit standard/LOCO and provided-eigen/provided-kinship/computed-kinship variants. If a kinship file is provided, `kinship/io.py` reads it. Otherwise `kinship/stream.py` streams the `GenotypeDataset` the pipeline opened once and computes the centered (or standardized) kinship matrix `K = (1/p) * X_c @ X_c.T` using `jlinalg.dsyrk` for the symmetric rank-k update; `kinship/loco.py` computes LOCO kinship by subtraction.
 
@@ -130,6 +130,7 @@ src/jamma/
 │   ├── plink.py            # PlinkReader (.bed strategy), dimension checks, .fam phenotypes
 │   ├── bgen.py             # BgenReader (.bgen strategy), header/.bgi/.sample parsing
 │   ├── covariate.py        # GEMMA-format covariate file reader
+│   ├── phenotype.py        # GEMMA -p phenotype file reader, NA/-9 missing parsing
 │   ├── matrix_reader.py    # read_matrix_parallel(): multiprocess large-matrix text reader
 │   ├── matrix_writer.py    # write_matrix_parallel(): multiprocess large-matrix text writer
 │   ├── snp_list.py         # GEMMA-format SNP list file I/O (one RS ID per line)

@@ -54,6 +54,11 @@ class GenotypeEncoding(enum.Enum):
         return self is GenotypeEncoding.PROBABILITIES
 
     @property
+    def supports_materialize(self) -> bool:
+        """True when float32 holds every value exactly, so ``materialize`` may."""
+        return self is GenotypeEncoding.HARD_CALLS
+
+    @property
     def validates_hard_calls(self) -> bool:
         """True when statistics count values outside {0, 1, 2, NaN}."""
         return self is GenotypeEncoding.HARD_CALLS
@@ -422,7 +427,7 @@ class GenotypeDataset:
             ValueError: If the encoding is not HARD_CALLS, whose dosages
                 float32 would round.
         """
-        if self._encoding is not GenotypeEncoding.HARD_CALLS:
+        if not self._encoding.supports_materialize:
             raise ValueError(
                 f"only hard-call datasets can be materialized, "
                 f"got {self._encoding.value}"

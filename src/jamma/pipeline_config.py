@@ -17,9 +17,11 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 
+from jamma.genotype.dataset import GenotypeDataset, GenotypeEncoding
 from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.association_plan import VALID_BACKENDS, BackendRequest
 from jamma.lmm.schema import (
@@ -83,11 +85,75 @@ AnalysisSource = ProvidedEigen | ProvidedKinship | GenotypeKinship | LocoKinship
 
 
 @dataclass(frozen=True, slots=True)
+class PlinkInput:
+    """A PLINK ``.bed``/``.bim``/``.fam`` fileset (``-bfile``)."""
+
+    flag: ClassVar[str] = "-bfile"
+    encoding: ClassVar[GenotypeEncoding] = GenotypeEncoding.HARD_CALLS
+    has_phenotypes: ClassVar[bool] = True
+
+    prefix: Path
+
+    def files(self) -> tuple[tuple[Path, str], ...]:
+        """Every file the input names, each with its not-found label."""
+        return tuple(
+            (Path(f"{self.prefix}{ext}"), f"PLINK {ext} file")
+            for ext in (".bed", ".bim", ".fam")
+        )
+
+    def open(self) -> GenotypeDataset:
+        """Open the fileset, reading metadata only."""
+        return GenotypeDataset.open_plink(self.prefix)
+
+
+@dataclass(frozen=True, slots=True)
+class BgenInput:
+    """A BGEN v1.2 file with its ``.sample`` and bgenix ``.bgi`` (``-bgen``)."""
+
+    flag: ClassVar[str] = "-bgen"
+    encoding: ClassVar[GenotypeEncoding] = GenotypeEncoding.PROBABILITIES
+    has_phenotypes: ClassVar[bool] = False
+
+    bgen: Path
+    sample: Path
+    bgi: Path
+
+    def files(self) -> tuple[tuple[Path, str], ...]:
+        """Every file the input names, each with its not-found label."""
+        return (
+            (self.bgen, "BGEN .bgen file"),
+            (self.sample, "BGEN .sample file"),
+            (self.bgi, "BGEN .bgi file"),
+        )
+
+    def open(self) -> GenotypeDataset:
+        """Open the file, reading metadata only."""
+        return GenotypeDataset.open_bgen(self.bgen, self.sample, self.bgi)
+
+
+GenotypeInput = PlinkInput | BgenInput
+
+
+@dataclass(frozen=True, slots=True)
 class PipelineConfig:
     """Configuration for a GWAS pipeline run.
 
+    Exactly one genotype input is set: ``bfile``, or ``bgen`` with its
+    optional ``sample`` and ``bgi``. ``genotypes()`` parses them.
+
     Attributes:
         bfile: PLINK binary file prefix (without .bed/.bim/.fam).
+        bgen: BGEN v1.2 file.
+        sample: Oxford ``.sample`` for ``bgen``, or None for the ``.bgen``
+            path with its suffix replaced by ``.sample``.
+        bgi: bgenix index for ``bgen``, or None for ``<bgen>.bgi``.
+        phenotype_file: GEMMA ``-p`` phenotype file: whitespace-separated,
+            no header, one row per dataset sample in dataset order, ``NA``
+            and ``-9`` missing. None reads phenotypes from the ``.fam``,
+            which only PLINK input has.
+        info_threshold: Minimum imputation INFO (GCTA ``--info``, recomputed
+            over the analysed samples) for association and kinship SNPs.
+            0.0 disables the filter. Needs genotype probabilities.
         kinship_file: Pre-computed kinship matrix file, or None to compute.
         covariate_file: GEMMA-format covariate file, or None for intercept-only.
         lmm_mode: LMM test type: 1=Wald, 2=LRT, 3=Score, 4=All.
@@ -140,14 +206,15 @@ class PipelineConfig:
             (.cXX.txt / .eigenD.txt / .eigenU.txt) instead of binary .npy.
             Default False writes binary for performance at scale.
         phenotype_columns: 1-based phenotype column indices, in the order they
-            are tested. 1 selects column 6 of .fam (the standard phenotype), 2
-            selects column 7, and so on, matching GEMMA's -n flag. Defaults to
-            [1]. Must name at least one column, every index >= 1 and distinct.
+            are tested. 1 selects column 1 of ``phenotype_file``, or column 6
+            of .fam (the standard phenotype) without one, and so on, matching
+            GEMMA's -n flag. Defaults to [1]. Must name at least one column,
+            every index >= 1 and distinct.
             With more than one column the eigendecomposition is computed once
             and reused; more than one is rejected in loco mode.
     """
 
-    bfile: Path
+    bfile: Path | None = None
     kinship_file: Path | None = None
     covariate_file: Path | None = None
     lmm_mode: int = 1
@@ -177,6 +244,11 @@ class PipelineConfig:
     legacy_text: bool = False
     phenotype_columns: Sequence[int] = (1,)
     no_telemetry: bool = False
+    bgen: Path | None = None
+    sample: Path | None = None
+    bgi: Path | None = None
+    phenotype_file: Path | None = None
+    info_threshold: float = 0.0
 
     def __post_init__(self) -> None:
         if self.cat_columns is not None:
@@ -235,6 +307,9 @@ class PipelineConfig:
                 "-hwe is not yet supported with -loco mode. "
                 "Apply HWE filtering as a pre-processing step."
             )
+        if not self.info_threshold >= 0:
+            raise ValueError(f"info_threshold must be >= 0, got {self.info_threshold}")
+        self._check_genotype_input()
         if self.cat_columns is not None:
             if self.covariate_file is None:
                 raise ValueError("-cat requires -c (covariate file)")
@@ -256,6 +331,58 @@ class PipelineConfig:
         if self.loco and self.write_eigen and self.eigen_dir is None:
             object.__setattr__(self, "eigen_dir", self.output_dir)
         self.source()
+
+    def _check_genotype_input(self) -> None:
+        """Reject options the genotype input's encoding cannot honour."""
+        genotypes = self.genotypes()
+        flag, encoding = genotypes.flag, genotypes.encoding
+        held = encoding.name.lower().replace("_", " ")
+        if self.hwe_threshold > 0 and not encoding.supports_hwe:
+            raise ValueError(
+                f"-hwe is not supported with {flag}: HWE genotype classes "
+                f"need hard calls, and {flag} holds {held}"
+            )
+        if self.info_threshold > 0 and not encoding.supports_info:
+            raise ValueError(
+                f"-info is not supported with {flag}: INFO needs genotype "
+                f"probabilities, and {flag} holds {held}"
+            )
+        batch = self.backend == "numpy" and not self.loco
+        if batch and not encoding.supports_materialize:
+            raise ValueError(
+                f"--backend numpy is not supported with {flag}: the batch "
+                f"runner loads hard calls into memory, and {flag} holds {held}. "
+                "Use --backend numpy-streaming or auto."
+            )
+        if self.phenotype_file is None and not genotypes.has_phenotypes:
+            raise ValueError(
+                f"{flag} requires -p (phenotype file): {flag} input carries "
+                "no phenotypes"
+            )
+
+    def genotypes(self) -> GenotypeInput:
+        """Parse the genotype fields into the one input they name.
+
+        Returns:
+            The PLINK fileset, or the BGEN file with its ``.sample`` and
+            ``.bgi`` paths defaulted from the ``.bgen`` path.
+
+        Raises:
+            ValueError: If neither or both of ``bfile`` and ``bgen`` are set,
+                or ``sample``/``bgi`` are set without ``bgen``.
+        """
+        bfile, bgen = self.bfile, self.bgen
+        if bfile is not None and bgen is None:
+            if self.sample is not None or self.bgi is not None:
+                raise ValueError("-sample and -bgi apply only to -bgen input")
+            return PlinkInput(bfile)
+        if bgen is not None and bfile is None:
+            return BgenInput(
+                bgen,
+                self.sample if self.sample is not None else bgen.with_suffix(".sample"),
+                self.bgi if self.bgi is not None else Path(f"{bgen}.bgi"),
+            )
+        raise ValueError("Exactly one of -bfile or -bgen is required")
 
     @property
     def log_path(self) -> Path:

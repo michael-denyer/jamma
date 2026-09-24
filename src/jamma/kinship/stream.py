@@ -200,7 +200,7 @@ def filtered_kinship_chunks(
             f"an INFO threshold needs genotype probabilities; "
             f"{dataset.encoding.value} genotypes have no INFO"
         )
-    # INFO costs a pass over the quantised block; skip it when nothing reads it.
+    # The decoder sums INFO over filter_rows; skip the division when unread.
     want_info = has_info and (snp_filter.info_threshold > 0 or stats_sink is not None)
     filter_rows = snp_filter.filter_rows
     n_filter_samples = 0
@@ -211,6 +211,7 @@ def filtered_kinship_chunks(
         chunk_size,
         progress=desc if show_progress else None,
         eta_seconds=initial_eta_seconds,
+        info_rows=filter_rows,
     )
     for block in blocks:
         file_start, file_end = block.start, block.end

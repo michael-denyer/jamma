@@ -116,9 +116,16 @@ class PlinkReader:
         self._bim = Path(f"{bfile}.bim")
 
     def read(
-        self, columns: np.ndarray, block_size: int, *, stats_only: bool
+        self,
+        columns: np.ndarray,
+        block_size: int,
+        *,
+        stats_only: bool,
+        info_rows: np.ndarray | None = None,
     ) -> Iterator[np.ndarray]:
         """Yield blocks of ``columns`` from one ``open_bed``, float32 for stats.
+
+        ``info_rows`` is ignored: hard calls carry no INFO.
 
         A block of consecutive columns is read as a slice, any other block by
         index; both give the same values. Logs one ``Reading N SNPs`` line

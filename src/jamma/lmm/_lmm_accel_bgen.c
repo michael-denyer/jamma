@@ -10,6 +10,11 @@
  * byte per sample, Phased (u8), B (u8), then 2 values per unphased diploid
  * biallelic sample, P(11) then P(12), each B bits, packed little-endian from
  * the least significant bit of the first byte. Value x means x / (2^B - 1).
+ *
+ * While decoding, each variant also accumulates GCTA's exact integer INFO
+ * sums over the non-missing samples of an optional row mask (see
+ * jamma.genotype.info): E = sum(2*q11 + q12), E2 = sum((2*q11 + q12)^2),
+ * F = sum(4*q11 + q12) and the count N. The float division stays in Python.
  */
 
 #define NO_IMPORT_ARRAY
@@ -98,11 +103,16 @@ static inline uint32_t load_bits(const uint8_t *data, size_t n_bytes,
  * Missing samples (ploidy byte bit 7) get dosage NaN, q11 = q12 = 0 and
  * missing = 1 whatever their stored values. Every sample, missing or not,
  * must have ploidy 2: the stored value count depends on ploidy, so a fixed
- * two-values-per-sample stride is only valid when every ploidy is 2. */
+ * two-values-per-sample stride is only valid when every ploidy is 2.
+ *
+ * `info_sums` receives E, E2, F, N over the non-missing samples whose `keep`
+ * entry is 1 (every sample when `keep` is NULL). e <= 2*(2^16 - 1), so E2
+ * fits int64 for up to 5.3e8 samples. */
 static bgen_status_t decode_variant(const uint8_t *raw, size_t len, uint32_t n,
                                     double *dosage, uint16_t *q11,
                                     uint16_t *q12, npy_bool *missing,
-                                    uint8_t *bit_depth)
+                                    uint8_t *bit_depth, const npy_bool *keep,
+                                    int64_t *info_sums)
 {
     if (len < (size_t)10 + n) return BGEN_TRUNCATED;
     if (load_le32(raw) != n) return BGEN_N_MISMATCH;
@@ -126,6 +136,7 @@ static bgen_status_t decode_variant(const uint8_t *raw, size_t len, uint32_t n,
     const uint32_t mask = (1u << bits) - 1u;
     const double scale = (double)mask;
     *bit_depth = bits;
+    int64_t e_sum = 0, e2_sum = 0, f_sum = 0, n_kept = 0;
 
     for (uint32_t i = 0; i < n; i++) {
         uint32_t a, b;
@@ -152,7 +163,17 @@ static bgen_status_t decode_variant(const uint8_t *raw, size_t len, uint32_t n,
         q12[i] = (uint16_t)b;
         missing[i] = 0;
         dosage[i] = (double)(2 * a + b) / scale;
+        const int64_t w = keep == NULL ? 1 : (int64_t)keep[i];
+        const int64_t e = 2 * (int64_t)a + (int64_t)b;
+        e_sum += w * e;
+        e2_sum += w * e * e;
+        f_sum += w * (e + 2 * (int64_t)a);
+        n_kept += w;
     }
+    info_sums[0] = e_sum;
+    info_sums[1] = e2_sum;
+    info_sums[2] = f_sum;
+    info_sums[3] = n_kept;
     return BGEN_OK;
 }
 
@@ -177,18 +198,20 @@ PyObject *decode_bgen_probabilities_c(PyObject *self, PyObject *args,
 {
     static char *kwlist[] = {"buffers", "uncompressed_lengths", "n_samples",
                              "dosages", "q11", "q12", "missing", "bit_depth",
-                             "n_threads", NULL};
+                             "n_threads", "info_rows", "info_sums", NULL};
     PyObject *buffers_obj, *lengths_obj;
+    PyObject *info_rows_obj = Py_None, *info_sums_obj = Py_None;
     Py_ssize_t n_samples_arg;
     PyArrayObject *dosages, *q11, *q12, *missing, *bit_depth;
     int n_threads;
     (void)self;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "OOnO!O!O!O!O!i", kwlist, &buffers_obj, &lengths_obj,
-            &n_samples_arg, &PyArray_Type, &dosages, &PyArray_Type, &q11,
-            &PyArray_Type, &q12, &PyArray_Type, &missing, &PyArray_Type,
-            &bit_depth, &n_threads)) {
+            args, kwargs, "OOnO!O!O!O!O!i|OO", kwlist, &buffers_obj,
+            &lengths_obj, &n_samples_arg, &PyArray_Type, &dosages,
+            &PyArray_Type, &q11, &PyArray_Type, &q12, &PyArray_Type, &missing,
+            &PyArray_Type, &bit_depth, &n_threads, &info_rows_obj,
+            &info_sums_obj)) {
         return NULL;
     }
     if (n_samples_arg < 1 || (unsigned long long)n_samples_arg > UINT32_MAX) {
@@ -208,6 +231,7 @@ PyObject *decode_bgen_probabilities_c(PyObject *self, PyObject *args,
     int n_scratch = 0;
     bgen_status_t *status = NULL;
     PyArrayObject *lengths = NULL;
+    int64_t *info_scratch = NULL;
 
     if (check_out_array(dosages, "dosages", NPY_FLOAT64, 2, n, k) < 0 ||
         check_out_array(q11, "q11", NPY_UINT16, 2, n, k) < 0 ||
@@ -215,6 +239,44 @@ PyObject *decode_bgen_probabilities_c(PyObject *self, PyObject *args,
         check_out_array(missing, "missing", NPY_BOOL, 2, n, k) < 0 ||
         check_out_array(bit_depth, "bit_depth", NPY_UINT8, 1, k, 0) < 0) {
         goto done;
+    }
+
+    /* info_rows: None for every sample, else a contiguous bool (n_samples,)
+     * mask. info_sums: None to discard the sums, else a writeable
+     * C-contiguous int64 (k, 4) array receiving E, E2, F, N per variant. */
+    const npy_bool *keep = NULL;
+    if (info_rows_obj != Py_None) {
+        PyArrayObject *rows = (PyArrayObject *)info_rows_obj;
+        if (!PyArray_Check(info_rows_obj) || PyArray_TYPE(rows) != NPY_BOOL ||
+            PyArray_NDIM(rows) != 1 || PyArray_DIM(rows, 0) != n ||
+            !PyArray_IS_C_CONTIGUOUS(rows)) {
+            PyErr_SetString(PyExc_ValueError,
+                            "info_rows must be None or a contiguous bool "
+                            "(n_samples,) array");
+            goto done;
+        }
+        keep = (const npy_bool *)PyArray_DATA(rows);
+    }
+    int64_t *sums_base;
+    if (info_sums_obj != Py_None) {
+        PyArrayObject *sums = (PyArrayObject *)info_sums_obj;
+        if (!PyArray_Check(info_sums_obj) || PyArray_TYPE(sums) != NPY_INT64 ||
+            PyArray_NDIM(sums) != 2 || PyArray_DIM(sums, 0) != k ||
+            PyArray_DIM(sums, 1) != 4 || !PyArray_IS_C_CONTIGUOUS(sums) ||
+            !PyArray_ISWRITEABLE(sums)) {
+            PyErr_SetString(PyExc_ValueError,
+                            "info_sums must be None or a writeable C-ordered "
+                            "int64 (k, 4) array");
+            goto done;
+        }
+        sums_base = (int64_t *)PyArray_DATA(sums);
+    } else {
+        info_scratch = (int64_t *)malloc((k > 0 ? (size_t)k : 1) * 4 * sizeof(int64_t));
+        if (info_scratch == NULL) {
+            PyErr_NoMemory();
+            goto done;
+        }
+        sums_base = info_scratch;
     }
 
     /* None: every buffer is raw probability data. Otherwise an int64 (k,)
@@ -306,7 +368,7 @@ PyObject *decode_bgen_probabilities_c(PyObject *self, PyObject *args,
         const size_t col = (size_t)j * n;
         status[j] = decode_variant(raw, len, n, dos_base + col, q11_base + col,
                                    q12_base + col, miss_base + col,
-                                   bits_base + j);
+                                   bits_base + j, keep, sums_base + 4 * j);
     }
     Py_END_ALLOW_THREADS
 
@@ -329,6 +391,7 @@ done:
     for (Py_ssize_t j = 0; j < n_views; j++) PyBuffer_Release(&views[j]);
     free(views);
     free(status);
+    free(info_scratch);
     Py_XDECREF(lengths);
     Py_DECREF(buffers);
     return result;

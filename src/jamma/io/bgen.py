@@ -249,6 +249,11 @@ class ProbabilityBlock:
         q12: uint16 stored P(12) numerator; 0 for a missing sample.
         missing: bool, the ploidy byte's missingness bit.
         bit_depth: uint8 (k,) bit depth B of each variant.
+        info_sums: int64 ``(k, 4)`` exact INFO sums the decoder accumulated
+            over the non-missing samples of ``info_rows``: sum(2*q11 + q12),
+            sum((2*q11 + q12)**2), sum(4*q11 + q12) and the sample count.
+        info_rows: The sample rows ``info_sums`` covers, or None for every
+            row.
     """
 
     dosages: np.ndarray
@@ -256,6 +261,8 @@ class ProbabilityBlock:
     q12: np.ndarray
     missing: np.ndarray
     bit_depth: np.ndarray
+    info_sums: np.ndarray
+    info_rows: np.ndarray | None
 
 
 class BgenReader:
@@ -287,9 +294,18 @@ class BgenReader:
         )
 
     def read(
-        self, columns: np.ndarray, block_size: int, *, stats_only: bool
+        self,
+        columns: np.ndarray,
+        block_size: int,
+        *,
+        stats_only: bool,
+        info_rows: np.ndarray | None = None,
     ) -> Iterator[ProbabilityBlock]:
         """Yield decoded blocks of ``columns``; ``stats_only`` changes nothing.
+
+        Each block's ``info_sums`` covers ``info_rows`` (every row when None).
+        A row listed twice is summed once; the block's ``info_rows`` then
+        names the distinct rows, so it never claims to cover the duplicates.
 
         Raises:
             BgenFormatError: If a variant block disagrees with the ``.bgi``
@@ -300,6 +316,12 @@ class BgenReader:
 
         decode = accel.require().decode_bgen_probabilities_c
         n = self._header.n_samples
+        keep = None
+        if info_rows is not None:
+            keep = np.zeros(n, dtype=np.bool_)
+            keep[info_rows] = True
+            if np.count_nonzero(keep) != len(info_rows):
+                info_rows = np.flatnonzero(keep)
         fd = os.open(self._bgen, os.O_RDONLY)
         try:
             for start in range(0, len(columns), block_size):
@@ -311,10 +333,12 @@ class BgenReader:
                     q12=np.empty((n, k), dtype=np.uint16, order="F"),
                     missing=np.empty((n, k), dtype=np.bool_, order="F"),
                     bit_depth=np.empty(k, dtype=np.uint8),
+                    info_sums=np.empty((k, 4), dtype=np.int64),
+                    info_rows=info_rows,
                 )
                 for lo in range(0, k, _DECODE_BATCH):
                     hi = min(lo + _DECODE_BATCH, k)
-                    self._decode_batch(fd, decode, block[lo:hi], out, lo, hi)
+                    self._decode_batch(fd, decode, block[lo:hi], out, lo, hi, keep)
                 yield out
         finally:
             os.close(fd)
@@ -327,6 +351,7 @@ class BgenReader:
         out: ProbabilityBlock,
         lo: int,
         hi: int,
+        keep: np.ndarray | None,
     ) -> None:
         payloads, lengths = [], []
         for column, blob in zip(columns, self._read_blocks(fd, columns), strict=True):
@@ -355,6 +380,8 @@ class BgenReader:
             out.missing[:, lo:hi],
             out.bit_depth[lo:hi],
             self._n_threads,
+            info_rows=keep,
+            info_sums=out.info_sums[lo:hi],
         )
         if failure is not None:
             position, reason = failure

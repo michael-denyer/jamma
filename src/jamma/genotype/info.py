@@ -59,14 +59,38 @@ def info_from_quantised(
     del e
     # GCTA's fij_sum accumulates 2*P11; its bracket adds it to the dosage sum.
     fij_sum = 2 * (q11 * present).sum(axis=0, dtype=np.int64)
+    return info_from_sums(dosage_sum, dosage2_sum, dosage_sum + fij_sum, n, bit_depth)
 
+
+def info_from_sums(
+    dosage_sum: np.ndarray,
+    dosage2_sum: np.ndarray,
+    dosage_fij_sum: np.ndarray,
+    n: np.ndarray,
+    bit_depth: np.ndarray,
+) -> np.ndarray:
+    """Return each variant's INFO from its exact integer sums.
+
+    The one place INFO's floating point happens, for the NumPy sums of
+    ``info_from_quantised`` and the C decoder's alike.
+
+    Args:
+        dosage_sum: int64 ``(k,)`` E = sum(2*q11 + q12).
+        dosage2_sum: int64 ``(k,)`` E2 = sum((2*q11 + q12)**2).
+        dosage_fij_sum: int64 ``(k,)`` F = sum(4*q11 + q12).
+        n: ``(k,)`` count of non-missing samples summed.
+        bit_depth: ``(k,)`` bit depth B of each variant, 1 to 16.
+
+    Returns:
+        float64 ``(k,)`` INFO, as ``info_from_quantised`` documents it.
+    """
     # Floating point from here follows Geno.cpp exactly, operation by operation.
     mask = ((1 << bit_depth.astype(np.int64)) - 1).astype(np.float64)
     valid_n = n.astype(np.float64)
     with np.errstate(divide="ignore", invalid="ignore"):
         af = dosage_sum.astype(np.float64) / mask / (2 * n).astype(np.float64)
         std = 2.0 * af * (1.0 - af)
-        dos2_fij_sum = (dosage_sum + fij_sum).astype(np.float64) / mask - (
+        dos2_fij_sum = dosage_fij_sum.astype(np.float64) / mask - (
             dosage2_sum.astype(np.float64) / (mask * mask)
         )
         info = 1.0 - dos2_fij_sum / (std * valid_n)

@@ -413,7 +413,7 @@ def test_materialize_keeps_values_identity_and_float32_stats(bfile: Path):
 class _UnreadableReader:
     """A reader that fails the test if anything reads from it."""
 
-    def read(self, columns, block_size, *, stats_only):
+    def read(self, columns, block_size, *, stats_only, info_rows=None):
         raise AssertionError("materialize() must refuse before reading")
 
     def fingerprint(self) -> dict[str, str]:

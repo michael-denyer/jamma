@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The BGEN decoder accumulates the exact INFO sums while it decodes, over the
+  rows `GenotypeDataset.stats` is given or the new `info_rows` argument of
+  `GenotypeDataset.blocks` names, so INFO no longer costs a second pass over
+  the quantised probabilities. On 100k samples x 250 variants (8-bit zlib, 18
+  threads) `dataset.stats` fell from 75 to 33 ms per block over all rows and
+  from 155 to 73 ms over 90k rows; the kinship pass with an INFO threshold
+  fell the same. INFO values are unchanged bit for bit, and `block.info` for
+  rows other than the block was read with still recomputes from the stored
+  quantised values. `decode_bgen_probabilities_c` takes optional
+  `info_rows` and `info_sums` arguments (`_lmm_accel` ABI 25).
 - `run_lmm_association_numpy_streaming` and `run_lmm_loco` take a
   `GenotypeDataset` (`GenotypeDataset.open_plink(prefix)`) instead of a PLINK
   prefix. The streaming runner loses its `snp_info` parameter, since the

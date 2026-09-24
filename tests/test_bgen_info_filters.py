@@ -114,13 +114,20 @@ def test_dataset_stats_info_equals_oracle(tmp_path: Path, bit_depth: int):
             dataset.stats(rows, columns=columns, block_size=3).info,
             expected[columns],
         )
+    repeated = np.array([7, 2, 7, 150, 2, 9])
+    np.testing.assert_array_equal(
+        dataset.stats(repeated, block_size=10).info, _oracle_info(files, repeated)
+    )
 
 
-def test_block_info_and_stats_agree_with_oracle(tmp_path: Path):
+@pytest.mark.parametrize("decode_rows", ["same", "none", "other"])
+def test_block_info_and_stats_agree_with_oracle(tmp_path: Path, decode_rows: str):
+    """INFO is exact from the decoder's sums and from the quantised fallback."""
     files = _write(tmp_path)
     rows = _rows()
+    info_rows = {"same": rows.copy(), "none": None, "other": rows[1:]}[decode_rows]
     expected = _oracle_info(files, rows)
-    for block in _open(files).blocks(10):
+    for block in _open(files).blocks(10, info_rows=info_rows):
         np.testing.assert_array_equal(block.info(rows), expected[block.columns])
         np.testing.assert_array_equal(block.stats(rows).info, expected[block.columns])
         block.dosages()

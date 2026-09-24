@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- GEMMA parity on BGEN input. `tests/fixtures/bgen_parity` holds a BGEN built
+  from GEMMA's mouse_hs1940 example (160 samples, 1,508 chromosome 1-2
+  variants, fractional dosages and missing samples on a share of them) and
+  GEMMA 0.98.5's `-gk 1` and `-lmm 1`-`4` outputs on a BIMBAM copy of the
+  decoded dosages. `scripts/generate_bgen_parity_inputs.py` builds the inputs,
+  and `generate_gemma_fixtures.sh` regenerates the GEMMA outputs byte for
+  byte.
 - BGEN input from the CLI and `gwas()`. `-bgen FILE` reads a BGEN v1.2 file,
   with `-sample` (default: the `.bgen` path with suffix `.sample`) and `-bgi`
   (default: `<bgen>.bgi`); exactly one of `-bfile` and `-bgen` is required.

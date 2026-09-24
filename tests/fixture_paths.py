@@ -114,6 +114,59 @@ LOCO_SNPS = FIXTURES / "gemma_loco" / "test_snps.txt"
 
 KINSHIP_DIR = FIXTURES / "kinship"
 
+
+@dataclass(frozen=True)
+class BgenParityDataset:
+    """A BGEN file and GEMMA's outputs on BIMBAM holding its decoded dosages.
+
+    Attributes:
+        bgen: The ``.bgen``; ``.bgen.bgi`` and ``.sample`` sit beside it.
+        phenotypes: GEMMA ``-p`` phenotype file, one row per sample.
+        kinship: GEMMA ``-gk 1`` centred kinship over the BIMBAM copy.
+        assoc: GEMMA ``.assoc.txt`` outputs keyed by run (``wald``, ``lrt``,
+            ``score``, ``all``).
+    """
+
+    bgen: Path
+    phenotypes: Path
+    kinship: Path
+    assoc: Mapping[str, Path]
+
+    @property
+    def sample(self) -> Path:
+        return self.bgen.with_suffix(".sample")
+
+    @property
+    def bgi(self) -> Path:
+        return Path(f"{self.bgen}.bgi")
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        """Every committed file a parity run reads."""
+        return (
+            self.bgen,
+            self.sample,
+            self.bgi,
+            self.phenotypes,
+            self.kinship,
+            *self.assoc.values(),
+        )
+
+
+_BGEN = FIXTURES / "bgen_parity"
+
+# Built by scripts/generate_bgen_parity_inputs.py from GEMMA's mouse_hs1940
+# example; GEMMA ran on mouse_bgen.geno.txt.gz, the BIMBAM copy.
+BGEN_PARITY = BgenParityDataset(
+    bgen=_BGEN / "mouse_bgen.bgen",
+    phenotypes=_BGEN / "mouse_bgen.pheno.txt",
+    kinship=_BGEN / "mouse_bgen_kinship.cXX.txt",
+    assoc={
+        run: _BGEN / f"mouse_bgen_{run}.assoc.txt"
+        for run in ("wald", "lrt", "score", "all")
+    },
+)
+
 # NumPy backend versus GEMMA on mouse_hs1940, with the analysed kinship centred
 # as GEMMA does. Fields are held to the documented ToleranceConfig defaults
 # except two mouse-scale relaxations: pvalue_rtol covers p_score at n=1410 (the

@@ -100,12 +100,16 @@ class KinshipSnpFilter(NamedTuple):
         restriction: Boolean mask over every BED SNP from -ksnps, or None.
         filter_rows: Samples the statistics are measured over, or None for
             every BED sample.
+        info_threshold: Minimum imputation INFO for inclusion, kept at
+            INFO >= threshold; 0.0 disables it. Only genotype probabilities
+            carry INFO.
     """
 
     maf_threshold: float
     miss_threshold: float
     restriction: np.ndarray | None
     filter_rows: np.ndarray | None
+    info_threshold: float = 0.0
 
 
 def ksnps_restriction(
@@ -130,6 +134,7 @@ class SnpStatsSink:
     col_means: np.ndarray
     miss_counts: np.ndarray
     col_vars: np.ndarray
+    info: np.ndarray
     n_unexpected: int = 0
     stats: SnpStats | None = None
 
@@ -139,6 +144,7 @@ class SnpStatsSink:
             np.zeros(n_snps, dtype=np.float64),
             np.zeros(n_snps, dtype=np.intp),
             np.zeros(n_snps, dtype=np.float64),
+            np.ones(n_snps, dtype=np.float64),
         )
 
 
@@ -159,7 +165,8 @@ def filtered_kinship_chunks(
 
     Every dataset block holds whole SNP columns, so GEMMA's MAF, missing-rate and
     monomorphism filter is decided per chunk from ``compute_snp_stats`` over
-    the filter rows, then intersected with the -ksnps restriction. The
+    the filter rows, then intersected with the -ksnps restriction and the INFO
+    filter (from the block's probabilities, before its dosages are taken). The
     surviving columns are transformed over all samples (centering for -gk 1,
     standardizing for -gk 2) and only then cut to ``output_rows``, so means
     and imputation do not depend on which rows a caller keeps. One yield per
@@ -184,11 +191,21 @@ def filtered_kinship_chunks(
         and their ascending global variant indices.
 
     Raises:
-        ValueError: On exhaustion, if no SNP passed filtering.
+        ValueError: If the filter sets an INFO threshold and the dataset's
+            encoding has no INFO; on exhaustion, if no SNP passed filtering.
     """
+    has_info = dataset.encoding.supports_info
+    if snp_filter.info_threshold > 0 and not has_info:
+        raise ValueError(
+            f"an INFO threshold needs genotype probabilities; "
+            f"{dataset.encoding.value} genotypes have no INFO"
+        )
+    # INFO costs a pass over the quantised block; skip it when nothing reads it.
+    want_info = has_info and (snp_filter.info_threshold > 0 or stats_sink is not None)
     filter_rows = snp_filter.filter_rows
     n_filter_samples = 0
     n_kept = 0
+    n_info_removed = 0
 
     blocks = dataset.blocks(
         chunk_size,
@@ -197,6 +214,7 @@ def filtered_kinship_chunks(
     )
     for block in blocks:
         file_start, file_end = block.start, block.end
+        info = block.info(filter_rows) if want_info else None
         chunk = block.dosages()
         filter_chunk = chunk if filter_rows is None else chunk[filter_rows, :]
         n_filter_samples = filter_chunk.shape[0]
@@ -205,7 +223,10 @@ def filtered_kinship_chunks(
             stats_sink.col_means[file_start:file_end] = col_means
             stats_sink.miss_counts[file_start:file_end] = miss_counts
             stats_sink.col_vars[file_start:file_end] = col_vars
-            stats_sink.n_unexpected += validate_genotype_values(filter_chunk)
+            if info is not None:
+                stats_sink.info[file_start:file_end] = info
+            if dataset.encoding.validates_hard_calls:
+                stats_sink.n_unexpected += validate_genotype_values(filter_chunk)
         del filter_chunk
         keep, _afs, _mafs = compute_snp_filter_mask(
             col_means,
@@ -217,6 +238,10 @@ def filtered_kinship_chunks(
         )
         if snp_filter.restriction is not None:
             keep &= snp_filter.restriction[file_start:file_end]
+        if info is not None and snp_filter.info_threshold > 0:
+            info_pass = info >= snp_filter.info_threshold
+            n_info_removed += int(np.count_nonzero(keep & ~info_pass))
+            keep &= info_pass
         local = np.flatnonzero(keep)
         if len(local) == 0:
             continue
@@ -232,6 +257,11 @@ def filtered_kinship_chunks(
         yield X, global_idx
         del X
 
+    if snp_filter.info_threshold > 0 and wanted is None:
+        logger.info(
+            f"Kinship INFO filter: {n_info_removed} SNPs removed "
+            f"(INFO < {snp_filter.info_threshold})"
+        )
     if n_kept == 0:
         raise ValueError(
             f"No SNPs passed filtering (maf>={snp_filter.maf_threshold}, "
@@ -245,6 +275,7 @@ def filtered_kinship_chunks(
             col_vars=stats_sink.col_vars,
             n_samples=n_filter_samples,
             n_unexpected=stats_sink.n_unexpected,
+            info=stats_sink.info,
         )
 
 
@@ -312,6 +343,7 @@ def compute_kinship_streaming(
     *,
     filter_sample_indices: np.ndarray | None = None,
     mem_budget: float | None = None,
+    info_threshold: float = 0.0,
 ) -> np.ndarray:
     """Compute kinship matrix from disk-streamed genotypes (GEMMA -gk 1 or -gk 2).
 
@@ -350,6 +382,8 @@ def compute_kinship_streaming(
             filtering. Independent of output rows; the LMM pipeline supplies its
             analysed samples even when saving a full matrix, matching GEMMA.
         mem_budget: User-set ceiling in GB, or None for no ceiling.
+        info_threshold: Minimum imputation INFO over the filter samples,
+            kept at INFO >= threshold (default 0.0 = no filter).
 
     Returns:
         Kinship matrix (n_out, n_out) where n_out = len(valid_indices) or n_samples.
@@ -358,7 +392,8 @@ def compute_kinship_streaming(
     Raises:
         MemoryError: If check_memory=True and the kinship phase does not fit
             available memory, or exceeds ``mem_budget``.
-        ValueError: If no SNPs pass filtering, or mode is not recognized.
+        ValueError: If no SNPs pass filtering, mode is not recognized, or
+            ``info_threshold`` > 0 on genotypes without INFO.
 
     Example:
         >>> from pathlib import Path
@@ -419,6 +454,7 @@ def compute_kinship_streaming(
             miss_threshold,
             ksnps_restriction(ksnps_indices, n_snps),
             filter_sample_indices,
+            info_threshold,
         ),
         show_progress=show_progress,
         valid_indices=valid_indices,

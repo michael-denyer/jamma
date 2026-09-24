@@ -77,6 +77,7 @@ def _compute_key(
     miss_threshold: float = 0.05,
     valid_mask: np.ndarray | None = None,
     ksnps_indices: np.ndarray | None = None,
+    info_threshold: float = 0.0,
 ) -> str:
     """Call compute_eigen_cache_key with per-test overrides over fixed defaults.
 
@@ -92,6 +93,7 @@ def _compute_key(
         miss_threshold=miss_threshold,
         valid_mask=valid_mask,
         ksnps_indices=ksnps_indices,
+        info_threshold=info_threshold,
     )
     return key
 
@@ -172,6 +174,33 @@ class TestEigenCacheKey:
         assert k_none != k_a
         assert k_none != k_b
         assert k_a != k_b
+
+    def test_info_threshold_changes_key_only_when_on(self, tmp_path: Path) -> None:
+        """INFO off leaves the pre-INFO key; any threshold > 0 changes it."""
+        from jamma.lmm.eigen_cache import compute_eigen_cache_key
+
+        prefix = tmp_path / "data"
+        _write_dummy_plink(prefix)
+        k_default = _compute_key(prefix)
+        assert _compute_key(prefix, info_threshold=0.0) == k_default
+        k_a = _compute_key(prefix, info_threshold=0.3)
+        k_b = _compute_key(prefix, info_threshold=0.8)
+        assert len({k_default, k_a, k_b}) == 3
+        _key, off = compute_eigen_cache_key(
+            GenotypeDataset.open_plink(prefix),
+            maf_threshold=0.01,
+            miss_threshold=0.05,
+            valid_mask=np.ones(20, dtype=bool),
+        )
+        _key, on = compute_eigen_cache_key(
+            GenotypeDataset.open_plink(prefix),
+            maf_threshold=0.01,
+            miss_threshold=0.05,
+            valid_mask=np.ones(20, dtype=bool),
+            info_threshold=0.3,
+        )
+        assert "info_threshold" not in off
+        assert on.get("info_threshold") == 0.3
 
     def test_returns_canonical_components(self, tmp_path: Path) -> None:
         """Second return value is the exact hashed payload (for the manifest)."""

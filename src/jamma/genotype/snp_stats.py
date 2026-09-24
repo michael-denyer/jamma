@@ -61,7 +61,9 @@ class HweCounts:
 class SnpStats:
     """Per-SNP statistics over one explicit sample population.
 
-    ``n_samples`` is the denominator for missingness.
+    ``n_samples`` is the denominator for missingness. ``info`` is the
+    imputation INFO score per SNP; None means 1.0 for every SNP, the value
+    of hard-call genotypes, whose dosage variance given the data is zero.
     """
 
     col_means: np.ndarray
@@ -71,6 +73,7 @@ class SnpStats:
     n_unexpected: int = 0
     hwe_counts: HweCounts | None = None
     global_indices: np.ndarray | None = None
+    info: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         col_means = _readonly_1d("col_means", self.col_means, np.float64)
@@ -93,10 +96,17 @@ class SnpStats:
             _same_shape("global_indices", col_means.shape, global_indices)
 
         global_indices.flags.writeable = False
+        if self.info is None:
+            info = np.ones(col_means.shape[0], dtype=np.float64)
+            info.flags.writeable = False
+        else:
+            info = _readonly_1d("info", self.info, np.float64)
+            _same_shape("info", col_means.shape, info)
         object.__setattr__(self, "col_means", col_means)
         object.__setattr__(self, "miss_counts", miss_counts)
         object.__setattr__(self, "col_vars", col_vars)
         object.__setattr__(self, "global_indices", global_indices)
+        object.__setattr__(self, "info", info)
 
     @property
     def n_snps(self) -> int:
@@ -109,7 +119,9 @@ class SnpStats:
         """
         positions = np.asarray(local_indices, dtype=np.intp)
         global_indices = self.global_indices
+        info = self.info
         assert global_indices is not None
+        assert info is not None
         hwe_counts = None
         if self.hwe_counts is not None:
             hwe_counts = HweCounts(
@@ -125,22 +137,30 @@ class SnpStats:
             n_unexpected=0,
             hwe_counts=hwe_counts,
             global_indices=global_indices[positions],
+            info=info[positions],
         )
 
 
 @dataclass(frozen=True, slots=True)
 class SnpFilterSpec:
-    """SNP filter parameters applied to a ``SnpStats`` population."""
+    """SNP filter parameters applied to a ``SnpStats`` population.
+
+    ``info_threshold`` keeps SNPs with INFO >= the threshold, GCTA's
+    inclusive ``--info``; 0.0 disables the filter.
+    """
 
     maf_threshold: float
     miss_threshold: float
     restrict_indices: np.ndarray | None = None
     hwe_threshold: float = 0.0
     restrict_label: str = "SNP list"
+    info_threshold: float = 0.0
 
     def __post_init__(self) -> None:
         if self.hwe_threshold < 0:
             raise ValueError("hwe_threshold must be >= 0")
+        if self.info_threshold < 0:
+            raise ValueError("info_threshold must be >= 0")
         if self.restrict_indices is not None:
             indices = _readonly_1d("restrict_indices", self.restrict_indices, np.intp)
             if len(indices) > 1 and np.any(np.diff(indices) <= 0):
@@ -217,8 +237,13 @@ def collect_snp_stats_from_chunks(
     global_indices: np.ndarray | None = None,
     include_hwe: bool = False,
     validate_genotypes: bool = False,
+    info: np.ndarray | None = None,
 ) -> SnpStats:
-    """Collect SNP stats from chunks whose start/end are local SNP offsets."""
+    """Collect SNP stats from chunks whose start/end are local SNP offsets.
+
+    ``info`` is passed to ``SnpStats`` once every chunk is consumed, so a
+    chunk generator may fill it as it yields.
+    """
     col_means = np.zeros(n_snps, dtype=np.float64)
     miss_counts = np.zeros(n_snps, dtype=np.intp)
     col_vars = np.zeros(n_snps, dtype=np.float64)
@@ -276,13 +301,16 @@ def collect_snp_stats_from_chunks(
         n_unexpected=n_unexpected,
         hwe_counts=hwe_counts,
         global_indices=global_indices,
+        info=info,
     )
 
 
 def filter_snp_stats(stats: SnpStats, spec: SnpFilterSpec) -> SnpSelection:
-    """Apply MAF, missingness, monomorphism, SNP-list, and HWE filters."""
+    """Apply MAF, missingness, monomorphism, SNP-list, INFO and HWE filters."""
     global_indices = stats.global_indices
+    info = stats.info
     assert global_indices is not None
+    assert info is not None
     snp_mask, allele_freqs, _mafs = compute_snp_filter_mask(
         stats.col_means,
         stats.miss_counts,
@@ -295,6 +323,14 @@ def filter_snp_stats(stats: SnpStats, spec: SnpFilterSpec) -> SnpSelection:
     if spec.restrict_indices is not None:
         _apply_global_index_restriction(
             snp_mask, global_indices, spec.restrict_indices, spec.restrict_label
+        )
+
+    if spec.info_threshold > 0:
+        info_pass = info >= spec.info_threshold
+        n_info_removed = int(np.sum(~info_pass & snp_mask))
+        snp_mask &= info_pass
+        logger.info(
+            f"INFO filter: {n_info_removed} SNPs removed (INFO < {spec.info_threshold})"
         )
 
     n_hwe_removed = 0

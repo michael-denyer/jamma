@@ -19,6 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (which now links the system zlib), parallel across variants. zstd files
   need the new `jamma[zstd]` extra below Python 3.14. The CLI does not read
   BGEN yet.
+- An imputation INFO filter for BGEN input. `SnpStats.info` holds each SNP's
+  INFO, GCTA's `--info` (the IMPUTE2 information measure) over the
+  non-missing analysed samples, computed from the stored integer
+  probabilities in exact integer sums, so it equals GCTA's value bit for bit.
+  It is not clamped and can be negative; a monomorphic or all-missing SNP
+  gets 1. Hard-call genotypes (PLINK) have INFO 1. `SnpFilterSpec`,
+  `KinshipSnpFilter`, `LmmRunSpec`, `compute_kinship_streaming` and
+  `compute_loco_kinship_streaming` take an `info_threshold` (default 0.0,
+  off) that keeps SNPs with INFO >= the threshold, for kinship and
+  association SNPs alike; a threshold on genotypes without INFO raises
+  `ValueError`. The LOCO eigen cache key includes the threshold only when it
+  is on, so existing PLINK keys are unchanged. The CLI and `PipelineConfig`
+  do not expose it yet.
 
 ### Changed
 

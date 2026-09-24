@@ -15,7 +15,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 import numpy as np
 from loguru import logger
@@ -50,6 +50,9 @@ class EigenCacheComponents(TypedDict):
     miss_threshold: float
     valid_mask_sha256: str
     ksnps: str
+    # Present only when an INFO filter is on, so a key without one stays
+    # byte-identical to the key written before INFO existed.
+    info_threshold: NotRequired[float]
 
 
 class EigenCacheManifest(TypedDict):
@@ -69,6 +72,7 @@ def _build_components(
     miss_threshold: float,
     valid_mask: np.ndarray,
     ksnps_indices: np.ndarray | None,
+    info_threshold: float,
 ) -> EigenCacheComponents:
     """Assemble the canonical dict of cache-key components.
 
@@ -79,6 +83,8 @@ def _build_components(
         miss_threshold: Maximum missing rate used for SNP filtering.
         valid_mask: Boolean array of shape (n_samples_total,); True = included.
         ksnps_indices: Column indices for -ksnps restriction, or None.
+        info_threshold: Minimum INFO used for SNP filtering; included only
+            when > 0.
 
     Returns:
         Dict ready for JSON serialisation as the key payload.
@@ -94,7 +100,7 @@ def _build_components(
         arr = np.sort(np.unique(np.asarray(ksnps_indices, dtype=np.int64)))
         ksnps_val = hashlib.sha256(arr.tobytes()).hexdigest()
 
-    return {
+    components: EigenCacheComponents = {
         "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
         "bed_fingerprint": fingerprint["bed_fingerprint"],
         "bim_sha256": fingerprint["bim_sha256"],
@@ -103,6 +109,9 @@ def _build_components(
         "valid_mask_sha256": valid_mask_sha256,
         "ksnps": ksnps_val,
     }
+    if info_threshold > 0:
+        components["info_threshold"] = info_threshold
+    return components
 
 
 def compute_eigen_cache_key(
@@ -112,6 +121,7 @@ def compute_eigen_cache_key(
     miss_threshold: float,
     valid_mask: np.ndarray,
     ksnps_indices: np.ndarray | None = None,
+    info_threshold: float = 0.0,
 ) -> tuple[str, EigenCacheComponents]:
     """Compute a SHA-256 cache key over all eigendecomposition determinants.
 
@@ -125,6 +135,8 @@ def compute_eigen_cache_key(
         ksnps_indices: Column indices for -ksnps restriction, or None.
             The SNP set is the determinant, so indices are sorted + de-duped
             before hashing.
+        info_threshold: Minimum INFO used for SNP filtering. 0.0 (off)
+            leaves it out of the components, so the key is unchanged.
 
     Returns:
         Tuple of (key, components). key is the hex SHA-256 digest. components is
@@ -137,6 +149,7 @@ def compute_eigen_cache_key(
         miss_threshold=miss_threshold,
         valid_mask=valid_mask,
         ksnps_indices=ksnps_indices,
+        info_threshold=info_threshold,
     )
     canonical = json.dumps(components, sort_keys=True, separators=(",", ":"))
     key = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

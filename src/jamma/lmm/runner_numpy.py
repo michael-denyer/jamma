@@ -101,6 +101,7 @@ class LmmRunSpec:
             None. Joins the MAF, missingness and HWE filters in the body,
             so every source applies the restriction at the same layer.
         hwe_threshold: HWE p-value threshold; 0.0 disables the filter.
+        info_threshold: Minimum imputation INFO; 0.0 disables the filter.
         compute_pve: Whether to run the null-REML PVE estimate.
         labels: The runner's banner and progress-bar wording.
         stats_block_size: Variants per read in the SNP statistics pass.
@@ -110,19 +111,21 @@ class LmmRunSpec:
     execution: ExecutableAssociationPlan
     snps_indices: np.ndarray | None = None
     hwe_threshold: float = 0.0
+    info_threshold: float = 0.0
     compute_pve: bool = True
     labels: RunLabels = BATCH_LABELS
     stats_block_size: int = DEFAULT_STATS_CHUNK
 
     @property
     def snp_filters(self) -> SnpFilterSpec:
-        """The MAF, missingness, SNP-list and HWE filters this run applies."""
+        """The MAF, missingness, SNP-list, INFO and HWE filters this run applies."""
         return SnpFilterSpec(
             maf_threshold=self.config.maf_threshold,
             miss_threshold=self.config.miss_threshold,
             restrict_indices=self.snps_indices,
             hwe_threshold=self.hwe_threshold,
             restrict_label="SNP list filter",
+            info_threshold=self.info_threshold,
         )
 
     @property
@@ -165,7 +168,7 @@ def prepare_genotypes(
     Args:
         dataset: The genotypes; ``samples`` indexes its rows.
         samples: The analysed rows.
-        filters: MAF, missingness, SNP-list and HWE filters.
+        filters: MAF, missingness, SNP-list, INFO and HWE filters.
         stats: Statistics already measured over ``samples`` (LOCO measures
             them in the kinship pass); their ``global_indices`` name the
             columns this preparation covers. None measures every column.
@@ -177,12 +180,18 @@ def prepare_genotypes(
         the analysed rows.
 
     Raises:
-        ValueError: If ``samples`` does not index the dataset's rows.
+        ValueError: If ``samples`` does not index the dataset's rows, or
+            ``filters`` sets an INFO threshold on genotypes without INFO.
     """
     if samples.source_row_count != dataset.n_samples:
         raise ValueError(
             "sample basis row count must match the dataset rows: "
             f"got {samples.source_row_count} and {dataset.n_samples}"
+        )
+    if filters.info_threshold > 0 and not dataset.encoding.supports_info:
+        raise ValueError(
+            f"an INFO threshold needs genotype probabilities; "
+            f"{dataset.encoding.value} genotypes have no INFO"
         )
     rows = None if samples.is_all_samples else samples.positions
     if stats is None:

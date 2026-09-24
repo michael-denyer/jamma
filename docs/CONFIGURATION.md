@@ -38,7 +38,7 @@ in without pulling in the full numpy/loguru stack they are built to avoid.
 | `JLINALG_NO_VENDOR_DSYRK` | *(unset)* | Same truthy rule. Leaves vendor `dsyrk` unwired, so `blas_has_dsyrk` reports `0` and the public `dsyrk` binds NumPy, with `dgemm` and DSYEVD/DSYEVR untouched. Test seam for the unwired-`dsyrk` contract of the raw `_jlinalg` module; used by `tests/test_jlinalg_dispatch.py::TestUnwiredRoutinesRaise`. |
 | `JLINALG_NO_VENDOR_DSYEVR` | *(unset)* | Same truthy rule. Leaves vendor DSYEVR unwired, so `blas_has_dsyevr` reports `0` while DSYEVD stays wired and `driver="auto"` still runs DSYEVD. Test seam for the `eigh(K, driver="dsyevr")` contract when DSYEVR is missing; used by the same test class. |
 | `JLINALG_DISPATCH_DEBUG` | *(unset)* | Set to `1` to print jlinalg BLAS dispatch diagnostics (backend detection, ILP64 status, library path) from the `jlinalg` C layer. Debug aid only. |
-| `JAMMA_FORCE_NUMPY_FALLBACK` | *(unset)* | Set to any non-empty value (not `0`) to force the **entire jlinalg layer** onto its NumPy fallback path even when vendor BLAS is loaded. Wider scope than `JLINALG_NO_VENDOR_LAPACK`: also affects `dgemm`, `dsyrk`. Used by the weekly sanitizer workflow and by full numerical-divergence debugging. |
+| `JAMMA_FORCE_NUMPY_FALLBACK` | *(unset)* | Set to any non-empty value (not `0`) to force the **entire jlinalg layer** onto its NumPy fallback path even when vendor BLAS is loaded. Wider scope than `JLINALG_NO_VENDOR_LAPACK`: also affects `dgemm`, `dsyrk`, and holds the `_lmm_accel` extension out, so `-bgen` input fails while it is set. Used by the weekly sanitizer workflow and by full numerical-divergence debugging. |
 | `JAMMA_NO_OPENMP` | *(unset)* | Set to any non-empty value (not `0`) to disable OpenMP when compiling the C extension. The extension will be single-threaded. |
 | `JAMMA_LIBIOMP5` | *(unset)* | **Build-time only, Linux.** Absolute path to the `libiomp5.so` the C extension links against, overriding discovery. The build fails if the path is not a file. See [Linking Intel OpenMP](#linking-intel-openmp-linux). |
 | `OMP_NUM_THREADS` | *(system default)* | OpenMP thread count for C extension kernels (`_lmm_accel`, `_jlinalg`). Separate from `JAMMA_BLAS_THREADS`, which controls BLAS only. |
@@ -92,7 +92,7 @@ never emits telemetry.
 |---|---|---|---|
 | `-maf` | float | `0.01` | Minor allele frequency threshold. Applies to `-gk` and `-lmm` alike, as in GEMMA. |
 | `-miss` | float | `0.05` | Missing rate threshold. Applies to `-gk` and `-lmm` alike. |
-| `-hwe` | float | `0.0` | HWE p-value threshold (0 = no filtering). Requires `numpy-streaming` backend. Rejected with `-bgen`. |
+| `-hwe` | float | `0.0` | HWE p-value threshold (0 = no filtering). Rejected with `-loco` and with `-bgen`. |
 | `-info` | float | `0.0` | Minimum imputation INFO (GCTA `--info` over the analysed samples; 0 = no filtering). Applies to `-gk` and `-lmm` alike. Rejected with `-bfile`. |
 | `-snps` | path | — | SNP list file for association testing |
 | `-ksnps` | path | — | SNP list file for kinship computation |
@@ -371,6 +371,7 @@ pip install numpy \
 
 # 3. Install JAMMA without deps to preserve the ILP64 numpy
 pip install jamma --no-deps
+# zstd-compressed BGEN on Python < 3.14 also needs: pip install 'backports-zstd>=1.7.0'
 ```
 
 Omitting `--no-deps` on the final step will pull standard numpy as a transitive

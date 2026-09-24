@@ -15,7 +15,7 @@ It is a Python and C reimplementation of [GEMMA](https://github.com/genetics-sta
 for genome-wide association studies (GWAS), using linear mixed models to account
 for relatedness between samples.
 
-JAMMA reads PLINK binary data and supports GEMMA's core univariate LMM commands.
+JAMMA reads PLINK binary or BGEN v1.2 data and supports GEMMA's core univariate LMM commands.
 Native C kernels accelerate association testing, while memory checks and chunked
 processing help fit analyses to available RAM. Use it from the command line or
 through a single Python function.
@@ -51,6 +51,7 @@ then JAMMA:
 python -m pip install psutil loguru threadpoolctl click progressbar2 bed-reader
 python -m pip install numpy --index-url https://michael-denyer.github.io/numpy-mkl --force-reinstall --upgrade
 python -m pip install jamma --no-deps
+# zstd-compressed BGEN on Python < 3.14 also needs: pip install 'backports-zstd>=1.7.0'
 ```
 
 `--no-deps` preserves the chosen NumPy build during JAMMA installation. Installing
@@ -246,11 +247,11 @@ run-to-run ranges and the large-scale (125k) results.
 
 ## Architecture
 
-The pipeline loads PLINK data, computes or reads kinship, decomposes the kinship
+The pipeline loads PLINK or BGEN data, computes or reads kinship, decomposes the kinship
 matrix, and tests SNPs in batches. The `jlinalg` layer dispatches linear algebra
 to vendor ILP64 BLAS/LAPACK, with a NumPy fallback. The association C extension
 provides OpenMP-parallel kernels. Batch and streaming execution both run with or
-without that extension.
+without that extension; BGEN input needs it, since the decoder is C.
 
 <details>
 <summary>View the pipeline diagram</summary>
@@ -272,7 +273,7 @@ flowchart TD
     end
 
     subgraph IO["DATA LOADING"]
-        LOAD["Load PLINK +<br/>Phenotypes"]
+        LOAD["Load PLINK or BGEN +<br/>Phenotypes"]
     end
 
     subgraph CORE["CORE COMPUTATION"]

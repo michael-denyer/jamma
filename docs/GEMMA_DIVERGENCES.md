@@ -526,7 +526,7 @@ the `save_kinship=False` path. This is a memory optimization, not a numerical ch
 ## 13. LOCO `--legacy-text` Support (Resolved)
 
 This was previously a divergence: `--legacy-text` was honored on the standard
-code path but ignored on the LOCO path, so `--loco --legacy-text --write-eigen`
+code path but ignored on the LOCO path, so `-loco --legacy-text -eigen`
 silently produced binary `.npy` artifacts instead of the GEMMA-compatible
 `.cXX.txt` / `.eigenD.txt` / `.eigenU.txt` files the user asked for.
 
@@ -534,7 +534,7 @@ silently produced binary `.npy` artifacts instead of the GEMMA-compatible
 through the kinship save (filename suffix + `write_kinship_matrix`) and the
 per-chromosome eigen write (`EigenGeneration.write_member`); the cache reader
 follows whichever format its manifest names. `PipelineRunner._associate_loco` forwards
-`config.legacy_text`, so `--loco --legacy-text` now writes GEMMA text artifacts
+`config.legacy_text`, so `-loco --legacy-text` now writes GEMMA text artifacts
 on the LOCO path identically to the standard path. As with the non-LOCO path,
 text mode writes the `.txt` files plus `.npy` sidecars for fast reload.
 

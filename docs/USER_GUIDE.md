@@ -26,6 +26,7 @@ pip install numpy \
   --index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install jamma --no-deps
+# zstd-compressed BGEN on Python < 3.14 also needs: pip install 'backports-zstd>=1.7.0'
 ```
 
 **From Git (latest development version):**
@@ -83,7 +84,7 @@ Priority: `JAMMA_BACKEND` env var > `--backend` flag > auto-detect (C+NumPy if C
 flowchart TD
     subgraph INPUT["INPUT"]
         direction LR
-        BED[".bed/.bim/.fam"]
+        BED[".bed/.bim/.fam<br/>or .bgen/.bgi/.sample"]
         COV["Covariates"]
         KIN_IN["Kinship (optional)"]
     end
@@ -202,10 +203,13 @@ jamma -gk 1 -bfile data/my_study -o kinship -outdir output
 
 **Options:**
 
-- `-bfile PATH` — PLINK binary file prefix (required)
+- `-bfile PATH` — PLINK binary file prefix; exactly one of `-bfile` and `-bgen` is required
+- `-bgen PATH` — BGEN v1.2 file, with `-sample PATH` and `-bgi PATH` defaulting beside it; requires `-p`
+- `-p PATH` — GEMMA phenotype file (one row per sample, `NA`/`-9` missing); without it, phenotypes come from the `.fam`
+- `-info FLOAT` — Minimum INFO over the analysed samples, `-bgen` only (default: 0.0, disabled)
 - `-gk MODE` — Kinship type: 1 = centered, 2 = standardized
 - `-ksnps PATH` — SNP list file to restrict kinship computation (one RS ID per line)
-- `-n INT` — Phenotype column in .fam file (1-based, default: 1). As in GEMMA, the matrix spans every sample, and the SNP filters are measured over the samples with this phenotype present
+- `-n INT` — Phenotype column in the `-p` file, or else the `.fam` file (1-based, default: 1). As in GEMMA, the matrix spans every sample, and the SNP filters are measured over the samples with this phenotype present
 - `-maf FLOAT` — MAF threshold (default: 0.01)
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
 - `--legacy-text` — Write kinship files in GEMMA text format (`.cXX.txt`) instead of binary `.npy`
@@ -265,7 +269,9 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.npy \
 
 **Options:**
 
-- `-bfile PATH` — PLINK binary file prefix (required)
+- `-bfile PATH` — PLINK binary file prefix; exactly one of `-bfile` and `-bgen` is required
+- `-bgen PATH` — BGEN v1.2 file, with `-sample PATH` and `-bgi PATH` defaulting beside it; requires `-p`
+- `-p PATH` — GEMMA phenotype file (one row per sample, `NA`/`-9` missing); without it, phenotypes come from the `.fam`
 - `-k PATH` — Kinship matrix file (required unless `-loco` or `-d`/`-u` are used)
 - `-lmm MODE` — Test type: 1 = Wald (default), 2 = LRT, 3 = Score, 4 = All
 - `-c PATH` — Covariate file (GEMMA format: whitespace-delimited, first column should be intercept)
@@ -273,17 +279,18 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.npy \
 - `-d PATH` — Pre-computed eigenvalue file (`.eigenD.npy` or `.eigenD.txt`)
 - `-u PATH` — Pre-computed eigenvector file (`.eigenU.npy` or `.eigenU.txt`)
 - `-eigen` — Write eigendecomposition files (`.eigenD.npy`, `.eigenU.npy`; text with `--legacy-text`)
-- `-n INT|"INT INT ..."` — Phenotype column(s) in .fam file (1-based, default: 1). Multiple columns can be space- or comma-separated (e.g., `-n "1 2 3"` or `-n "1,2,3"`)
+- `-n INT|"INT INT ..."` — Phenotype column(s) in the `-p` file, or else the `.fam` file (1-based, default: 1). Multiple columns can be space- or comma-separated (e.g., `-n "1 2 3"` or `-n "1,2,3"`)
 - `-snps PATH` — SNP list file to restrict association testing (one RS ID per line)
 - `-ksnps PATH` — SNP list file to restrict kinship computation (one RS ID per line)
-- `-hwe FLOAT` — HWE p-value threshold; exclude SNPs below this value (default: 0.0, disabled)
+- `-hwe FLOAT` — HWE p-value threshold; exclude SNPs below this value (default: 0.0, disabled; not with `-loco` or `-bgen`)
+- `-info FLOAT` — Minimum INFO over the analysed samples, `-bgen` only (default: 0.0, disabled)
 - `-lmin FLOAT` — Minimum lambda for optimization (default: 1e-5)
 - `-lmax FLOAT` — Maximum lambda for optimization (default: 1e5)
 - `-widv PATH` — Individual residual weights for kinship and observation scaling (one weight per line)
 - `-cat INT [INT ...]` — Covariate column indices to one-hot encode as categorical (1-based)
 - `-maf FLOAT` — MAF threshold (default: 0.01)
 - `-miss FLOAT` — Missing rate threshold (default: 0.05)
-- `--mem-budget GB` — Memory budget in GB (default: available - 10%)
+- `--mem-budget GB` — Memory ceiling in GB (default: none; the preflight checks against available RAM)
 - `--no-check-memory` — Disable pre-flight memory checks
 - `--legacy-text` — Write kinship and eigen files in GEMMA text format instead of binary `.npy`
 - `--backend auto|numpy|numpy-streaming` — Force compute backend (default: auto)
@@ -436,8 +443,8 @@ jamma -lmm 1 -bfile data/my_study -k kinship.cXX.npy \
 
 **HWE filtering:** JAMMA uses a chi-squared goodness-of-fit test (df=1) via pure NumPy.
 SNPs with p-value below the threshold are excluded from association testing.
-HWE filtering is supported on the streaming backend (`numpy-streaming`) only; it is
-not available on the batch backend.
+HWE filtering works on the batch and streaming backends. It is rejected with
+`-loco`, and with `-bgen`, whose fractional dosages fall in no genotype class.
 See [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md) for differences from GEMMA's
 Wigginton exact test.
 
@@ -612,7 +619,7 @@ supported, but then the caller owns centring: eigendecompose
 `center_kinship(K)`, not the raw `K`, or the non-REML results (LRT, Score, PVE)
 will be wrong.
 
-The NumPy backend supports Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) is supported on the streaming backend only (`numpy-streaming`).
+The NumPy backend supports Wald, LRT, Score, all-tests modes, and LOCO. HWE filtering (`-hwe`) works on both backends, but not with `-loco` or `-bgen`.
 
 ## Large-Scale Eigendecomposition (>46k samples)
 
@@ -747,7 +754,7 @@ typical Databricks / HPC environment for large-scale GWAS:
 ### General Tips
 
 1. **Use the C extension** for best performance — it is auto-compiled on first use and provides OpenMP-parallelized SNP processing
-2. **Streaming mode** (`numpy-streaming`) works on all platforms and supports arbitrarily large datasets with full pipeline support (LOCO, multi-phenotype, HWE filtering)
+2. **Streaming mode** (`numpy-streaming`) works on all platforms and supports arbitrarily large datasets with full pipeline support (LOCO, multi-phenotype)
 3. **Batch processing**: JAMMA automatically batches kinship computation
 4. **Memory**: For very large datasets, the streaming backend (`numpy-streaming`) is auto-selected when batch mode won't fit in memory
 

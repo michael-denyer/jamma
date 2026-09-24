@@ -228,8 +228,8 @@ uv run pytest tests/ -x
 5. **Register source files** in `src/jamma/_build_support/build_models.py`
    -- add to `BASELINE_SOURCES` for routines that should compile with the
    default flags, or `LAPACK_SOURCES` for LAPACK routines that need strict
-   IEEE 754. The three compile entry points (`hatch_build.py`,
-   `_compile_jlinalg.py`, `_compile_accel.py`) all import from
+   IEEE 754. The four compile entry points (`hatch_build.py`,
+   `_compile_jlinalg.py`, `_compile_accel.py`, `_compile_matrix_text.py`) all import from
    `_build_support` and stay in sync automatically.
 6. **Write tests** in a new `tests/test_jlinalg_<op>.py`, alongside the existing
    `test_jlinalg_dgemm.py` and `test_jlinalg_dsyrk.py`
@@ -253,7 +253,7 @@ The pre-commit hook `scripts/check_compile_flag_literals.py` bans bare
 `_build_support/`. The dev-mode `-march=native` flag lives in
 `LMM_ACCEL_SPEC.dev_extra_cflags` in `build_models.py`, applied only on
 the dev rebuild path so it can never reach the portable wheel build. A second hook
-(`scripts/verify_compile_invocations_match.py`) enforces that the three
+(`scripts/verify_compile_invocations_match.py`) enforces that the four
 compile entry points all import from `_build_support` rather than
 duplicating flag/source lists.
 

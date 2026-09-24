@@ -76,7 +76,7 @@ A typical LMM association run proceeds as follows:
 | `StandardAnalysisPlan` / `LocoAnalysisPlan` | `src/jamma/pipeline_plan.py` | Private validated variants that make kinship/eigen and standard/LOCO states explicit |
 | `AnalysedSamples` | `src/jamma/pipeline_samples.py` | The phenotype columns, validated covariates, and `SampleBasis` that `-lmm` and `-gk` both analyse over |
 | `gwas()` | `src/jamma/gwas.py` | Public Python API for single-call GWAS; builds a `PipelineConfig` and returns `PipelineRunner`'s `PipelineResult` |
-| `ExecutionPlan` | `src/jamma/lmm/association_plan.py` | Frozen two-field summary of the selected mode (`batch` or `streaming`) with a human-readable reason |
+| `ExecutionPlan` | `src/jamma/lmm/association_plan.py` | Frozen two-field summary of the selected mode (`batch`, `streaming`, or `loco`) with a human-readable reason |
 | `ExecutableAssociationPlan` | `src/jamma/lmm/association_plan.py` | Frozen full plan from `plan_association()`: mode summary, dispatch path, conservative chunk geometry, and memory pricing |
 | `WorkspaceSpec` | `src/jamma/lmm/workspace.py` | Kernel dimensions, thread capacity, and allocation bounds shared by the planner and workspace creation |
 | `LmmConfig` | `src/jamma/lmm/schema.py` | Frozen configuration dataclass shared by all LMM runners (MAF, lambda bounds, test type, etc.) |
@@ -236,18 +236,19 @@ Two rules govern adding a `.c` file:
 
 A separate trap, guarded by [`tests/test_c_include_order.py`](../tests/test_c_include_order.py): `_lmm_support.h` must reach `<math.h>` before anything else does, because `M_PI` is not C11 and glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets. macOS defines `M_PI` unconditionally, so a local build and the ARM Mac CI job pass while every Linux job fails.
 
-Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery plus explicit compile/link attempt results and retry transitions, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All three compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, and `_compile_accel.py`) consume that facade. At runtime, `jamma._native._load_c_module(spec, expected_abi)` is the one seam both C-extension callers (`jamma.lmm.compute_numpy` and `jamma.jlinalg`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
+Native build support is split by responsibility: `_build_support/build_models.py` owns immutable source manifests and flag policy, `build_execution.py` owns toolchain discovery plus explicit compile/link attempt results and retry transitions, and `compile_and_link.py` composes them behind the stable `run_build` / `compile_extension` facade. All four compile entry points (`hatch_build.py`, `_compile_jlinalg.py`, `_compile_accel.py`, and `_compile_matrix_text.py`) consume that facade. At runtime, `jamma._native._load_c_module(spec, expected_abi)` is the one seam the native-extension callers (`jamma.lmm.accel`, `jamma.jlinalg`, and `jamma.io._native_matrix_writer`) use to import, ABI-validate, and rebuild-once via the same spec. LAPACK sources use strict IEEE 754 flags (`-O2 -fno-fast-math`) to prevent fast-math optimisations from perturbing eigendecomposition results; a pre-commit lint (`scripts/check_compile_flag_literals.py`) rejects bare flag literals outside `_build_support/`.
 
 ## C Extension Architecture
 
-Two compiled C extensions accelerate the hot paths:
+Three compiled extensions accelerate the hot paths:
 
 | Extension | Source | Purpose |
 |---|---|---|
 | `jamma.jlinalg._jlinalg` | `src/jamma/jlinalg/src/` | BLAS dispatch (DGEMM, DSYRK), LAPACK dispatch (DSYEVD, DSYEVR), single-pass per-SNP statistics |
 | `jamma.lmm._lmm_accel` | `src/jamma/lmm/_lmm_*.c` | Per-SNP REML Wald pipeline with OpenMP parallelism over SNP chunks |
+| `jamma.io._matrix_text` | `src/jamma/io/_matrix_text.cpp` | C++17 `%.10g` text formatting for kinship and eigen matrix exports |
 
-Both extensions gracefully degrade to NumPy fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). Batch-or-streaming selection does not depend on `_lmm_accel`: `plan_association()` picks streaming whenever the batch quote does not fit in memory, and honours an explicit `--backend numpy-streaming` request with or without the extension. The extension decides only the dispatch path each chunk runs.
+All three extensions gracefully degrade to NumPy or pure-Python fallbacks if compilation fails or if the ABI version mismatches (each extension checks its own `ABI_VERSION` at import). Batch-or-streaming selection does not depend on `_lmm_accel`: `plan_association()` picks streaming whenever the batch quote does not fit in memory, and honours an explicit `--backend numpy-streaming` request with or without the extension. The extension decides only the dispatch path each chunk runs.
 
 ## LOCO Mode
 

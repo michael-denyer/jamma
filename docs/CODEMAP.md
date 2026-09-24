@@ -168,8 +168,8 @@ Two user-facing entry points: the `gwas()` API for programmatic use and the CLI 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
 | 1a | `main()` | Click command — all flags (`-gk`, `-lmm`, `-bfile`, `-o`, `-outdir`) | [cli.py](../src/jamma/cli.py) |
-| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:382](../src/jamma/cli.py#L383) |
-| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:426](../src/jamma/cli.py#L433) |
+| 1a | `_run_gk()` | Kinship CLI shell (`-gk 1/2`); delegates compute/write to `compute_kinship()` | [cli.py:383](../src/jamma/cli.py#L383) |
+| 1a | `_run_lmm()` | LMM association (`-lmm 1/2/3/4`) | [cli.py:433](../src/jamma/cli.py#L433) |
 | 1b | `gwas()` | One-call GWAS pipeline (load -> kinship -> LMM -> results) | [gwas.py:38](../src/jamma/gwas.py#L38) |
 | 1c | `PipelineRunner` | `-lmm` orchestration (validate -> parse -> memory -> kinship -> LMM); passes `valid_indices` for early sample filtering when `save_kinship=False` | [pipeline.py](../src/jamma/pipeline.py) |
 | 1c | `resolve_analysis_plan()` | Converts the validated flat public config into explicit standard/LOCO and eigen/kinship variants | [pipeline_plan.py](../src/jamma/pipeline_plan.py) |
@@ -197,8 +197,8 @@ Reads PLINK binary and BGEN v1.2 genotypes, covariates, and kinship matrices. Wr
 | 2a | `decode_bgen_probabilities_c` | C: zlib inflate and B-bit unpack (B 1..16) per variant, accumulating the exact INFO sums over a row mask in the same loop; OpenMP across variants, GIL released | [_lmm_accel_bgen.c](../src/jamma/lmm/_lmm_accel_bgen.c) |
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:21](../src/jamma/io/covariate.py#L21) |
 | 2b | `read_phenotype_table()` | GEMMA `-p` phenotype file; `phenotype_file_column()` selects a column, `NA`/`-9` missing | [io/phenotype.py](../src/jamma/io/phenotype.py) |
-| 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L46) |
-| 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L87) |
+| 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:46](../src/jamma/kinship/io.py#L46) |
+| 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:87](../src/jamma/kinship/io.py#L87) |
 | 2d | `IncrementalAssocWriter` | Per-SNP disk writer (no memory accumulation) | [lmm/assoc_output.py:71](../src/jamma/lmm/assoc_output.py#L71) |
 | 2e | `read_snp_list_file()` | Parse SNP list file (one RS ID per line) | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | 2e | `resolve_snp_list_to_indices()` | Map SNP IDs to dataset indices | [io/snp_list.py](../src/jamma/io/snp_list.py) |
@@ -223,7 +223,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3a | `filtered_kinship_chunks()` | The one kinship chunk generator, shared by standard and LOCO kinship: filters each `GenotypeDataset.blocks()` block with `compute_snp_stats` and, for probabilities, the block's INFO (taken before its dosages), applies the transform over all samples, then cuts output rows; one yield per block | [stream.py:151](../src/jamma/kinship/stream.py#L151) |
 | 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship over `filtered_kinship_chunks`, chromosomes from `dataset.partitions`; the first pass records SNP statistics, INFO included; returns a consume-once `LocoKinshipStream` | [loco.py:287](../src/jamma/kinship/loco.py#L287) |
 | 3a | `accumulate_kinship()` | The rank-k update both kinship paths call once per chunk | [accumulation.py](../src/jamma/kinship/accumulation.py) |
-| 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L171) |
+| 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:171](../tests/reference/kinship.py#L171) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |
 | 3b | `impute_and_center()` | NaN -> mean, then center (in-place for NumPy arrays) | [missing.py:21](../src/jamma/kinship/missing.py#L21) |
 | 3b | `impute_missing_inplace()` | In-place NaN -> col-mean for genotype chunks (used by all runners) | [lmm/impute.py:6](../src/jamma/lmm/impute.py#L6) |
@@ -332,8 +332,8 @@ Configuration, memory management, threading, and logging.
 | 5e | `blas_threads()` | Context manager for BLAS thread control | [threading.py:180](../src/jamma/core/threading.py#L180) |
 | 5f | `get_hardware_context()` | CPU, BLAS, platform info for benchmarks | [_hardware_context.py:33](../scripts/_hardware_context.py#L33) |
 | 5g | `progress_iterator()` | Progress bar wrapper for iterables | [progress.py:94](../src/jamma/core/progress.py#L94) |
-| 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:149](../src/jamma/estimates.py#L144) |
-| 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:185](../src/jamma/estimates.py#L180) |
+| 5h | `estimate_kinship_time()` | Wall-clock time estimate for kinship phase | [estimates.py:144](../src/jamma/estimates.py#L144) |
+| 5h | `estimate_eigendecomp_time()` | Wall-clock time estimate for eigendecomposition | [estimates.py:180](../src/jamma/estimates.py#L180) |
 | 5i | `PHENOTYPE_MISSING` | Missing phenotype sentinel (-9.0) | [constants.py:10](../src/jamma/core/constants.py#L10) |
 
 ---
@@ -344,8 +344,8 @@ Tolerance-based comparison infrastructure for GEMMA parity testing.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:55](../src/jamma/validation/tolerances.py#L54) |
-| 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:23](../src/jamma/validation/compare.py#L22) |
+| 6a | `ToleranceConfig` | Per-field tolerance dataclass (strict/default/relaxed) | [tolerances.py:54](../src/jamma/validation/tolerances.py#L54) |
+| 6b | `ComparisonResult` | Pass/fail with max diffs and worst location | [compare.py:22](../src/jamma/validation/compare.py#L22) |
 | 6b | `AssocComparisonResult` | One comparison per column the mode carries, plus `af` | [compare.py:382](../src/jamma/validation/compare.py#L382) |
 | 6b | `compare_assoc_results()` | Full association comparison across test types | [compare.py:574](../src/jamma/validation/compare.py#L574) |
 | 6b | `compare_kinship_matrices()` | Symmetric matrix comparison | [compare.py:163](../src/jamma/validation/compare.py#L163) |
@@ -577,7 +577,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | `gwas()` API | [gwas.py:38](../src/jamma/gwas.py#L38) |
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
-| CLI dispatch (`main`) | [cli.py:258](../src/jamma/cli.py#L259) |
+| CLI dispatch (`main`) | [cli.py:259](../src/jamma/cli.py#L259) |
 | Load genotypes | [GenotypeDataset](../src/jamma/genotype/dataset.py#L327) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |

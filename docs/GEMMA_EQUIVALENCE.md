@@ -20,7 +20,7 @@ bugs), see [GEMMA_DIVERGENCES.md](GEMMA_DIVERGENCES.md).
 | Kinship K | Yes | FP accumulation in BLAS | O(p * eps_mach) | 4.66e-10 |
 | Eigenvalues | Yes | LAPACK backward error | O(n * eps_mach) | ~1e-13 |
 | REML log-likelihood | Yes | FP accumulation in Pab | O(n * eps_mach) | 3.23e-7 |
-| MLE logl_H1 | Yes | MLE optimization / accumulation | Conditioning dependent | See correction below |
+| MLE logl_H1 | Yes | MLE optimization / accumulation | Conditioning dependent | 0 at GEMMA's 7 printed digits (mouse_hs1940) |
 | Lambda (REML) | Yes | Optimization / score conditioning | Conditioning dependent | See section 5 |
 | Beta (effect) | Yes | Lambda propagation / Pab | O(eps * sensitivity) | 7.0e-5 |
 | SE | Yes | Lambda propagation / sqrt | O(eps * sensitivity) | ~2e-6 |
@@ -265,16 +265,26 @@ the largest tolerance.
 
 ### Small Scale: mouse_hs1940 (1,940 samples x 12,226 SNPs)
 
+Measured at `ecbbfd7d` with the NumPy+C backend (`jamma -lmm 4` and `jamma -gk 1 --legacy-text`)
+against `tests/fixtures/mouse_hs1940/mouse_hs1940_all.assoc.txt` and
+`mouse_hs1940_kinship.cXX.txt`; 10,768 SNPs pass the default filters. Relative
+differences are against GEMMA's printed values, which carry 7 significant
+digits. The REML logl row is not in `.assoc.txt` and was not re-measured. The
+NumPy-only backend, without the C accelerator, reaches ~2.4e-5 on `l_mle` and
+~1.1e-4 on `p_score` (`NUMPY_GEMMA_TOLERANCES` in `tests/fixture_paths.py`).
+
 | Metric | Value |
 |--------|-------|
-| Kinship max relative diff | 8.1e-9 |
-| Lambda max relative diff (REML) | 9.58e-6 |
-| Beta max relative diff | 3.70e-3 |
-| p_wald max relative diff | 4.41e-5 |
-| p_score max relative diff | ~1e-4 |
-| p_lrt max relative diff | ~1.56e-3 |
+| Kinship max relative diff (entries with \|K\| > 1e-3) | 8.3e-10 |
+| Lambda max relative diff (REML) | 8.18e-6 |
+| Lambda max relative diff (MLE) | 8.41e-6 |
+| Beta max relative diff | 1.78e-5 |
+| SE max relative diff | 1.48e-6 |
+| p_wald max relative diff | 6.25e-5 |
+| p_score max relative diff | 3.04e-5 |
+| p_lrt max relative diff | 1.80e-6 |
 | REML logl max relative diff | 3.23e-7 |
-| MLE logl_H1 max relative diff | ~1.35e-3 |
+| MLE logl_H1 max relative diff | 0 (identical at 7 printed digits) |
 | P-value rank correlation (Spearman) | 1.000000 |
 | Significance agreement (all thresholds) | 100% |
 | Effect direction agreement | 100% |

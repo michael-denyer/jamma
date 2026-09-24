@@ -186,10 +186,17 @@ BGEN input has these limits:
 
 - `-info` filters SNPs on imputation INFO (see [SNP Filtering](#snp-filtering)).
 - `-hwe` is rejected, because fractional dosages fall in no HWE genotype class.
-- `--backend numpy` is rejected, because the batch runner holds hard calls in
-  memory. BGEN input always streams, and `auto` chooses streaming.
+- `--backend numpy` without `-loco` is rejected, because the batch runner holds
+  hard calls in memory. BGEN input always streams, and `auto` chooses streaming.
 - A BGEN file carries no phenotypes, so `-p` is required (see
   [Phenotype Selection](#phenotype-selection)).
+- The `.sample` row count must match the BGEN header, and when the BGEN file
+  embeds sample IDs they must equal the `.sample` `ID_2` column in order.
+  The `.bgi` must index as many variants as the header declares.
+- Each variant read is checked against its `.bgi` entry: chromosome, position,
+  rsid, allele order and block size. A stale index stops the run with an error
+  naming the variant and the first field that differs; rebuild it with
+  `bgenix -g imputed.bgen -index`.
 
 ## Commands
 
@@ -274,7 +281,7 @@ jamma -lmm 1 -bfile data/my_study -k output/kinship.cXX.npy \
 - `-p PATH` — GEMMA phenotype file (one row per sample, `NA`/`-9` missing); without it, phenotypes come from the `.fam`
 - `-k PATH` — Kinship matrix file (required unless `-loco` or `-d`/`-u` are used)
 - `-lmm MODE` — Test type: 1 = Wald (default), 2 = LRT, 3 = Score, 4 = All
-- `-c PATH` — Covariate file (GEMMA format: whitespace-delimited, first column should be intercept)
+- `-c PATH` — Covariate file (GEMMA format: whitespace-delimited; a constant column is the intercept, and a column of 1s is appended when none is constant)
 - `-loco` — Enable leave-one-chromosome-out analysis (mutually exclusive with `-k`)
 - `-d PATH` — Pre-computed eigenvalue file (`.eigenD.npy` or `.eigenD.txt`)
 - `-u PATH` — Pre-computed eigenvector file (`.eigenU.npy` or `.eigenU.txt`)
@@ -517,7 +524,7 @@ from jamma import gwas
 
 # With pre-computed kinship
 result = gwas("data/my_study", kinship_file="data/kinship.cXX.txt")
-print(f"Tested {result.n_snps_tested} SNPs in {result.timing['total_s']:.1f}s")
+print(f"Tested {result.n_snps_tested} SNPs in {result.timing.total_s:.1f}s")
 
 # Compute kinship from scratch, save it for reuse
 result = gwas("data/my_study", save_kinship=True, output_dir="output")
@@ -871,7 +878,7 @@ JAMMA results match GEMMA within validated tolerances:
 - P-values (LRT): < 5e-3 relative difference (MLE subtraction amplification)
 - Beta coefficients: < 1e-2 relative difference (lambda propagation)
 - Log-likelihood (REML): < 1e-6 relative difference
-- Log-likelihood (MLE/logl_H1): < 5e-3 relative difference on real data
+- Log-likelihood (MLE/logl_H1): < 1e-6 relative difference
 - Significance calls: 100% agreement at all thresholds
 - Effect directions and SNP rankings: identical
 
@@ -881,9 +888,8 @@ GEMMA uses Brent's method for lambda optimization; JAMMA uses grid search follow
 golden section refinement. Both converge to within 1e-5 of the true optimum for
 strong-signal SNPs. However, weak-signal SNPs — where the optimization landscape is
 flat and lambda converges near the lower bound (1e-5) — can produce slightly different
-optima between the two methods. This propagates to per-SNP MLE log-likelihood (logl_H1)
-with up to ~0.14% relative difference on real datasets (observed on mouse_hs1940 at
-SNP index 596 of 10768). The quantities that drive scientific conclusions (p-values,
+optima between the two methods. On mouse_hs1940 the MLE lambda (`l_mle`) differs
+by up to ~8.4e-6 relative with the C accelerator and ~2.4e-5 with the NumPy-only backend. The quantities that drive scientific conclusions (p-values,
 effect directions, significance rankings) are unaffected.
 
 See [GEMMA_EQUIVALENCE.md](GEMMA_EQUIVALENCE.md) for empirical validation and formal error
@@ -953,8 +959,7 @@ jamma -lmm 1 -bfile data/large_study -k kinship.cXX.txt --mem-budget 64
 If the estimate exceeds available memory, you'll get a clear error:
 
 ```text
-MemoryError: LMM requires ~128.5GB but only 64.0GB available
-  Breakdown: kinship=74.5GB, eigendecomp=37.0GB, association=17.0GB
+Error: Estimated memory (128.5GB) for numpy-streaming exceeds budget (64.0GB). Use --no-check-memory to override.
 ```
 
 ### Controlling Memory Behavior
@@ -971,11 +976,15 @@ jamma -lmm 1 ... --no-check-memory
 
 ```python
 from jamma.core.memory import available_ram_gb, fits
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import plan_association
 
 # The quote the pipeline preflight gates on. plan_association reads the
 # machine once to size its chunks; price() itself is pure.
-plan = plan_association(200_000, 95_000, backend="numpy-streaming")
+plan = plan_association(
+    200_000, 95_000, backend="numpy-streaming",
+    genotype_encoding=GenotypeEncoding.HARD_CALLS,
+)
 quote = plan.price(eigen=None)  # pass an EigenDriverPlan to price the decomposition
 print(f"Association phase: {quote.association_gb:.1f}GB")
 print(f"Available: {available_ram_gb():.1f}GB")
@@ -988,7 +997,7 @@ print(f"Sufficient: {fits(quote.total_peak_gb, available_ram_gb())}")
 
 JAMMA runs a pre-flight memory check before kinship and eigendecomposition. The
 check estimates peak memory (dominated by eigendecomposition: K + U + workspace)
-and applies a 10% safety margin based on empirical benchmarks. When vendor DSYEVR
+and applies a 10% safety margin, capped at 10 GB. When vendor DSYEVR
 is available (via jlinalg BLAS dispatch), JAMMA automatically falls back from DSYEVD
 (faster, O(N^2) workspace) to DSYEVR (slower, O(N) workspace) when DSYEVD won't
 fit — this can increase the maximum sample count by ~40% for a given machine size.

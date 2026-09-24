@@ -76,7 +76,7 @@ never emits telemetry.
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `-bfile` | path | — | PLINK binary file prefix (`.bed`/`.bim`/`.fam` without extension). Exactly one of `-bfile` and `-bgen` is required. |
-| `-bgen` | path | — | BGEN v1.2 file of genotype probabilities. Requires `-p`; rejects `-hwe` and `--backend numpy`. |
+| `-bgen` | path | — | BGEN v1.2 file of genotype probabilities. Requires `-p`; rejects `-hwe`, and `--backend numpy` without `-loco`. |
 | `-sample` | path | the `-bgen` path with suffix `.sample` | Oxford `.sample` file for `-bgen` |
 | `-bgi` | path | `<bgen>.bgi` | bgenix index for `-bgen` |
 | `-p` | path | — | Phenotype file: whitespace-delimited, no header, one row per sample in genotype order, `NA` and `-9` missing. Without it, phenotypes come from the `.fam`. |
@@ -183,7 +183,7 @@ settings, and tool configuration.
 ```toml
 [project]
 name = "jamma"
-version = "7.2.0"
+version = "8.1.0"
 requires-python = ">=3.11"
 ```
 
@@ -290,13 +290,13 @@ Set `JLINALG_NO_VENDOR_LAPACK=1` to force the NumPy fallback for debugging.
 
 ```bash
 jamma --version
-# prints: JAMMA version 7.2.0 (...)
+# prints: JAMMA version 8.1.0 (...)
 #         Backend: numpy
 ```
 
 ```python
 from jamma.jlinalg import blas_backend, blas_is_ilp64
-print(blas_backend)    # e.g. "mkl-ilp64", "openblas-ilp64", "numpy-fallback"
+print(blas_backend)    # e.g. "MKL-ILP64", "OpenBLAS-ILP64", "Accelerate-ILP64", "numpy-fallback"
 print(blas_is_ilp64)   # 1 if ILP64, 0 if not
 ```
 
@@ -412,7 +412,7 @@ JAMMA_LIBIOMP5=/databricks/python3/lib/libiomp5.so pip install jamma --no-deps
 
 ## Docker Configuration
 
-The provided `Dockerfile` uses a pinned Python 3.11 Bookworm builder and a
+The provided `Dockerfile` uses a pinned Python 3.12 Bookworm builder and a
 pinned slim-Bookworm runtime with ILP64 NumPy (MKL). The builder compiles this
 checkout's native extensions before `/usr/local` is copied into the non-root
 runtime image. MKL is x86_64-only — always build and run with
@@ -425,12 +425,12 @@ docker build --platform linux/amd64 -t jamma .
 # Kinship computation
 docker run --platform linux/amd64 \
   -v $(pwd)/data:/data \
-  jamma -gk 1 -bfile /data/study -o /data/output
+  jamma -gk 1 -bfile /data/study -o kinship -outdir /data/output
 
 # LMM association
 docker run --platform linux/amd64 \
   -v $(pwd)/data:/data \
-  jamma -lmm 1 -bfile /data/study -k /data/k.cXX.txt -o /data/output
+  jamma -lmm 1 -bfile /data/study -k /data/output/kinship.cXX.npy -o results -outdir /data/output
 ```
 
 The Docker build installs dependencies in this order to preserve ILP64 NumPy:

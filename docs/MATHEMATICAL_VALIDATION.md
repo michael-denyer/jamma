@@ -116,7 +116,9 @@ production mutations.
 
 ## Remaining scope
 
-The declared matrix does not cover standardized internal kinship, HWE and
+The declared matrix does not cover BGEN input (see
+[`test_bgen_gemma_parity.py`](../tests/test_bgen_gemma_parity.py) for its GEMMA
+parity), standardized internal kinship, HWE and
 SNP-list interactions, empty LOCO partitions, changed-input cache invalidation
 against fresh external output, all chunk widths, every in-memory output route,
 or rank-deficient negative cases through the complete external pipeline. Existing focused regression tests cover

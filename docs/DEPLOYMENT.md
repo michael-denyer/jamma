@@ -15,7 +15,7 @@ that builds and publishes release artifacts.
 
 The `Dockerfile` uses a pinned Python 3.12 Bookworm build stage and a pinned
 slim-Bookworm runtime stage. The builder installs MKL-backed ILP64 NumPy and
-compiles both native extensions from the current checkout; only `/usr/local`
+compiles its native extensions from the current checkout; only `/usr/local`
 is copied into the non-root runtime image. MKL is x86_64-only — always build
 and run with `--platform linux/amd64`.
 
@@ -59,11 +59,11 @@ Dockerfile, `docker/`, `pyproject.toml`, or `uv.lock`.
 ```bash
 # Kinship matrix computation
 docker run --platform linux/amd64 -v $(pwd)/data:/data jamma \
-  -gk 1 -bfile /data/study -o /data/output
+  -gk 1 -bfile /data/study -o kinship -outdir /data/output
 
 # LMM association analysis (Wald test)
 docker run --platform linux/amd64 -v $(pwd)/data:/data jamma \
-  -lmm 1 -bfile /data/study -k /data/k.cXX.txt -o /data/output
+  -lmm 1 -bfile /data/study -k /data/output/kinship.cXX.npy -o results -outdir /data/output
 ```
 
 Mount your data directory to `/data` and use `/data/...` paths inside the container.
@@ -115,7 +115,7 @@ Runs on `ubuntu-latest` and `macos-latest`.
 | macOS arch | arm64 only (`MACOSX_DEPLOYMENT_TARGET=14.0`) |
 | Wheel repair (Linux) | `auditwheel repair` |
 | Wheel repair (macOS) | `delocate-wheel` |
-| Smoke tests | `smoke_test_c_extension.py`, `smoke_test_eigen_extension.py`, `smoke_test_jlinalg.py` |
+| Smoke tests | `smoke_test_c_extension.py`, `smoke_test_eigen_extension.py`, `smoke_test_jlinalg.py`, `smoke_test_matrix_text.py` |
 
 ### AVX2-optimised wheels (`build_avx2_wheels` job)
 
@@ -142,9 +142,10 @@ the deployment.
 
 1. Bump `version` in `pyproject.toml`.
 2. Run `uv lock` and stage `uv.lock` alongside `pyproject.toml`. The lock file does
-   not update itself, and CI's `uv lock --check` step fails on a stale one.
+   not update itself, and CI's `uv sync --locked` step fails on a stale one.
 3. Update `CHANGELOG.md`, moving Unreleased items into a new version section.
-4. Commit, push to `master`, and confirm CI is green:
+4. Commit on a branch and merge it through a pull request (the `master` ruleset
+   rejects direct pushes), then confirm CI is green on `master`:
 
    ```bash
    gh run list --branch master --limit 3

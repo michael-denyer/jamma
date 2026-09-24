@@ -93,10 +93,8 @@ class ToleranceConfig:
             Tightest tolerance - direct matrix computation.
         logl_rtol: Relative tolerance for log-likelihood values.
             For REML logl (null model): max observed 3.2e-7, very stable.
-            For per-SNP MLE logl_H1: max observed ~1.35e-3 on mouse_hs1940
-            due to golden section vs Brent optimizer divergence on weak-signal
-            SNPs with flat optimization landscapes. Override with wider tolerance
-            in dataset-specific ToleranceConfig when comparing logl_H1.
+            Per-SNP MLE logl_H1 matches GEMMA at its 7 printed digits on
+            mouse_hs1940.
         lambda_rtol: Relative tolerance for lambda (variance ratio).
             Max observed: 1.2e-5 from Brent convergence differences.
         lambda_boundary: Bounds used by both optimizers and the relative margin
@@ -135,9 +133,8 @@ class ToleranceConfig:
     p_lrt_rtol: float = 5e-3
     # Kinship: direct matrix computation, tightest tolerance
     kinship_rtol: float = 1e-8
-    # Log-likelihood: REML logl max observed 3.2e-7. Per-SNP MLE logl_H1 can be
-    # wider (~1.35e-3 on mouse_hs1940) due to optimizer divergence on weak-signal
-    # SNPs. Override in dataset-specific configs when comparing logl_H1.
+    # Log-likelihood: REML logl max observed 3.2e-7. Per-SNP MLE logl_H1 matches
+    # GEMMA at its 7 printed digits on mouse_hs1940.
     logl_rtol: float = 1e-6
     # Lambda: Brent optimization convergence. Max observed: 1.2e-5
     lambda_rtol: float = DEFAULT_LAMBDA_RTOL

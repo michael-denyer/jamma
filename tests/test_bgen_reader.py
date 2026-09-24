@@ -19,7 +19,7 @@ from bed_reader import open_bed
 from loguru import logger
 
 from jamma.genotype.dataset import GenotypeDataset, GenotypeEncoding
-from jamma.io.bgen import BgenFormatError, open_bgen_reader
+from jamma.io.bgen import BgenDependencyError, BgenFormatError, open_bgen_reader
 from tests.bgen_files import (
     BgenFiles,
     one_hot_bgen_from_plink,
@@ -352,13 +352,13 @@ def test_zstd_without_module_fails_at_open(tmp_path: Path, monkeypatch):
     monkeypatch.setitem(sys.modules, "compression.zstd", None)
     monkeypatch.setitem(sys.modules, "backports.zstd", None)
 
-    with pytest.raises(ImportError, match=r"jamma\[zstd\]"):
+    with pytest.raises(BgenDependencyError, match=r"jamma\[zstd\]"):
         _open(files)
 
 
 def test_open_without_c_extension_raises(tmp_path: Path, no_c_kernels):
     files = write_bgen(tmp_path / "noc.bgen", _probs())
-    with pytest.raises(RuntimeError, match="_lmm_accel C extension"):
+    with pytest.raises(BgenDependencyError, match="_lmm_accel C extension"):
         _open(files)
 
 

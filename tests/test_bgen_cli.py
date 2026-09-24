@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -281,6 +282,52 @@ def test_sample_and_bgi_default_from_the_bgen_path(
     assert f"BGEN .sample file not found: {bgen_files.sample}" in result.output
 
     _invoke([*args, "-sample", str(sample), "-bgi", str(bgi)])
+
+
+@pytest.fixture
+def no_zstd(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing zstd module is an environment state, emulated in sys.modules."""
+    monkeypatch.setitem(sys.modules, "compression.zstd", None)
+    monkeypatch.setitem(sys.modules, "backports.zstd", None)
+
+
+@pytest.mark.parametrize(
+    ("environment", "compression", "message"),
+    [
+        ("no_zstd", "zstd", "install jamma[zstd]"),
+        ("no_c_kernels", "zlib", "needs the _lmm_accel C extension"),
+    ],
+)
+@pytest.mark.parametrize("command", ["-gk", "-lmm"])
+def test_unreadable_environment_is_a_one_line_error(
+    pheno: Path,
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+    environment: str,
+    compression: str,
+    message: str,
+    command: str,
+):
+    """A missing zstd module or C extension exits 1 with a message, not a traceback."""
+    rng = np.random.default_rng(3)
+    files = write_bgen(
+        tmp_path / "env.bgen",
+        random_probabilities(rng, N_VARIANTS, N_SAMPLES, missing_rate=0.0),
+        compression=compression,
+    )
+    args = [*_bgen_args(files, pheno), "-outdir", str(tmp_path)]
+    if command == "-lmm":
+        _invoke(["-gk", "1", *args, "-o", "k"])
+        args += ["-lmm", "1", "-k", str(tmp_path / "k.cXX.npy")]
+    else:
+        args += ["-gk", "1"]
+    request.getfixturevalue(environment)
+
+    result = runner.invoke(main, args)
+
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert result.exit_code == 1
+    assert message in result.output
 
 
 # --------------------------------------------------------------------------

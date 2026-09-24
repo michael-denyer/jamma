@@ -375,9 +375,9 @@ class GenotypeDataset:
             BgenFormatError: On a layout other than 2, a multi-allelic
                 variant, or header, ``.bgi`` and ``.sample`` counts or sample
                 IDs that disagree.
-            ImportError: If the file is zstd-compressed and no zstd module
-                imports (install ``jamma[zstd]`` below Python 3.14).
-            RuntimeError: If the ``_lmm_accel`` C extension is unavailable.
+            BgenDependencyError: If the file is zstd-compressed and no zstd
+                module imports (install ``jamma[zstd]`` below Python 3.14),
+                or the ``_lmm_accel`` C extension is unavailable.
         """
         threads = decode_threads or get_physical_core_count()
         reader, fid, iid, variants = open_bgen_reader(

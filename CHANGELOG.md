@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tests/test_lean_proven_identities.py` checks the production code against
+  each identity proved in Lean in
+  [jamma-lean](https://github.com/michael-denyer/jamma-lean), and
+  `GEMMA_EQUIVALENCE.md` links the proofs.
+
 - GEMMA parity on BGEN input. `tests/fixtures/bgen_parity` holds a BGEN built
   from GEMMA's mouse_hs1940 example (160 samples, 1,508 chromosome 1-2
   variants, fractional dosages and missing samples on a share of them) and
@@ -282,6 +287,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `GEMMA_EQUIVALENCE.md` §4 states the REML formula JAMMA computes, including
+  the `log|Z'Z|` term. §3 says which quantities are invariant to eigenvector
+  sign flips (Pab and `log|H|`, not `U'y`). §5 and the optimizer docstrings
+  say up to three Newton steps, not one, and that the accept rule bounds the
+  result by the coarse grid bracket. `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` §3
+  gives the lambda tolerance as relative, since the optimizer works in log
+  lambda.
 - Documentation matches the code at `ecbbfd7d`. `GEMMA_DIVERGENCES.md` §14
   now covers BGEN dosage precision, missing samples, supported layouts and
   INFO edge cases. `--backend numpy` is documented as rejected with `-bgen`

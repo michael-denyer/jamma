@@ -272,8 +272,8 @@ def golden_section_optimize_lambda_numpy(
     Optimize REML lambda using grid search + golden section refinement with
     NumPy broadcasting over the SNP batch.
 
-    Uses 20 golden-section iterations, then refines interior peaks with one
-    safeguarded analytic-score Newton step.
+    Uses 20 golden-section iterations, then refines interior peaks with up to
+    three safeguarded analytic-score Newton steps.
 
     Args:
         n_cvt: Number of covariates.
@@ -349,8 +349,10 @@ def golden_section_optimize_lambda_mle_numpy(
         l_min: Minimum lambda.
         l_max: Maximum lambda.
         n_grid: Coarse grid points.
-        n_iter: Golden section iterations (should be >= 20 for 1e-5 tolerance;
-            runner-level code enforces the minimum).
+        n_iter: Golden section iterations (should be >= 20; runner-level code
+            enforces the minimum). Twenty place the golden-section estimate
+            within about 3.1e-5 of the optimum in log lambda; the score
+            refinement supplies the rest of the interior accuracy.
 
     Returns:
         (optimal_lambdas, optimal_logls_mle) both shape (n_snps,).

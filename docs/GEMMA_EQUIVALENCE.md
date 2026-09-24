@@ -36,6 +36,16 @@ these output contracts.
 Spearman rho 1.000000, significance agreement 100% at all thresholds,
 effect direction agreement 100%. See [Empirical Results](#empirical-results).
 
+## Machine-checked proofs
+
+The exact-arithmetic formulas in sections 2 to 8 are proved in Lean 4 in
+[jamma-lean](https://github.com/michael-denyer/jamma-lean), whose README maps each claim here to its theorem. The
+proofs cover the kinship, rotation, logdet, Pab, REML, Wald, Score and LRT
+identities, and the rounding-error bounds for kinship entries and Pab row 0 in
+any summation order. The F and chi-squared CDFs and LAPACK accuracy are not
+covered. [`tests/test_lean_proven_identities.py`](../tests/test_lean_proven_identities.py)
+checks the production code against each proved identity.
+
 ---
 
 ## 1. Model Specification
@@ -107,9 +117,11 @@ Both decompose `K = U * D * U'` where `D = diag(d_1, ..., d_n)`.
 Both call the same LAPACK routines. JAMMA defaults to DSYEVD (faster, O(N²)
 workspace) and falls back to DSYEVR (slower, O(N) workspace) when DSYEVD won't
 fit in memory. Both drivers produce equivalent results within LAPACK backward
-error bounds. Eigenvectors may differ by sign (unique only up to sign), but all
-downstream computation uses `U'y`, `U'W`, `U'x` which are invariant to
-consistent sign flips.
+error bounds. Eigenvectors may differ by sign (unique only up to sign). A sign
+flip negates the matching component of `U'y`, `U'W` and `U'x`, but every Pab
+entry and `log|H|` stay the same. The same holds for any orthogonal
+eigenbasis, including a different basis within a repeated eigenvalue, because
+Pab row 0 equals `a'H^-1 b` whichever eigenbasis produced it.
 
 **Bound**: LAPACK backward error `O(n * eps_mach * ||K||)`, giving eigenvalue
 accuracy of `O(10^-13)`.
@@ -125,8 +137,13 @@ ILP64 for large matrices (>46k x 46k). See
 Both compute (GEMMA: `LogRL_f`; JAMMA: the batched `likelihood_numpy` routines per SNP, with the scalar `reml_log_likelihood_alt` in `tests/reference/likelihood.py` as their reference):
 
 ```text
-l_REML(lambda) = c - 1/2 log|H| - 1/2 log|W'H^-1 W| - 1/2(n-c-1) log(P_yy)
+l_REML(lambda) = c - 1/2 log|H| - 1/2 (log|Z'H^-1 Z| - log|Z'Z|) - 1/2 df log(P_yy)
 ```
+
+where `Z = [W, x]` holds the covariates and the genotype, and
+`df = n - c - 1`. The `log|Z'Z|` term is the `Iab` diagonal JAMMA subtracts in
+`_reml_logl`; with it, the expression is exactly the profiled likelihood of the
+error contrasts.
 
 In the eigenspace: `H_i = lambda*d_i + 1`, so `log|H| = sum log(lambda*d_i + 1)`.
 
@@ -175,9 +192,11 @@ independent 80-digit dense REML calculation. Increasing the iteration count
 alone did not recover their stationary points.
 
 The REML optimizer now differentiates weighted cross-products directly, uses
-compensated reductions, and applies the Schur-complement chain rule. One
-Newton step is accepted only with negative curvature, a candidate inside the
-original coarse bracket, and a smaller absolute score. This remains vectorized
+compensated reductions, and applies the Schur-complement chain rule. Up to
+three Newton steps follow. Each is accepted only with negative curvature, a
+candidate inside the original coarse bracket, and a smaller absolute score.
+Those conditions keep the result inside the coarse grid bracket, not inside the
+final golden-section bracket. This remains vectorized
 across SNPs in NumPy. The MLE optimizer applies the same refinement to its
 own score, which drops the REML `log|W'H^-1W|` terms and scales the `P_yy`
 term by `n` instead of the residual degrees of freedom.
@@ -336,6 +355,7 @@ versus mixed OpenBLAS/MKL at 85k.
 | `tests/test_numpy_streaming.py::TestNumpyStreamingGemmaParity` (tier1) | Streaming runner vs GEMMA (all modes + covariates) |
 | `tests/lmm_accel/` (tier0/tier1/tier2) | C extension Wald+covariate vs GEMMA |
 | `tests/test_bgen_gemma_parity.py` (tier1) | BGEN kinship and all LMM modes vs GEMMA on BIMBAM holding the same dosages |
+| `tests/test_lean_proven_identities.py` (tier0) | Production code against each identity proved in jamma-lean |
 
 Run kinship validation:
 

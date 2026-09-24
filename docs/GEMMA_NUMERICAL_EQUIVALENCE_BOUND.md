@@ -119,6 +119,11 @@ Summing across rows yields the Frobenius bound:
 
 with `C_K` capturing batching and symmetric accumulation effects.
 
+The per-entry bound is proved for every summation order, so it covers blocked
+`dsyrk` and 10,000-SNP batching: `|fl(K_ij) − K_ij| ≤ γ_(p+1) · (1/p) Σ_k |x_ik x_jk|`,
+at most `1.111e-10 · (1/p) Σ_k |x_ik x_jk|` for `p ≤ 10^6` with unit roundoff
+`u = 2^-53` (`FpSumTree.fkin_err_float64` in [jamma-lean](https://github.com/michael-denyer/jamma-lean)).
+
 ### 2. Eigendecomposition
 
 LAPACK symmetric eigensolvers are backward stable, so the computed
@@ -148,7 +153,8 @@ or tolerance `τ_opt`, then:
 
 where `L_λ` depends on the Lipschitz constants of `∂ℓ/∂λ` with respect to its
 matrix arguments. This captures both algorithmic tolerance and propagated
-numerical perturbations.
+numerical perturbations. JAMMA's optimizer works in `log λ`, so its `τ_opt` is
+a relative bound on `λ`: `|λ̂/λ* − 1| ≤ e^τ − 1`.
 
 The evaluation error of `ℓ` itself is not listed separately because it is
 `O(n ε)` on `log|H|` and on the weighted sums, far below `τ_opt`. The C

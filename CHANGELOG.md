@@ -290,7 +290,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GEMMA_EQUIVALENCE.md` §8 no longer says the chi-squared CDF is linear near
   `LRT = 0`; its slope is unbounded there, which amplifies small LRT
   differences. `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` assumption 7 says why the
-  Lipschitz range must exclude a zero statistic.
+  Lipschitz range must exclude a zero statistic, and §2 shows that eigenvector
+  error, which depends on the eigengap, does not reach Pab row 0 or `log|H|`.
 
 - `GEMMA_EQUIVALENCE.md` §4 states the REML formula JAMMA computes, including
   the `log|Z'Z|` term. §3 says which quantities are invariant to eigenvector

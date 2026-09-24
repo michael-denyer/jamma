@@ -169,7 +169,7 @@ def write_loco_kinship_matrices(
     Example:
         >>> from jamma.kinship import compute_loco_kinship_streaming
         >>> loco_iter = compute_loco_kinship_streaming(
-        ...     Path("data/study"), consumer_gb=0.0
+        ...     GenotypeDataset.open_plink(Path("data/study")), consumer_gb=0.0
         ... )
         >>> paths = write_loco_kinship_matrices(loco_iter, Path("output"))
         >>> len(paths)  # One file per chromosome

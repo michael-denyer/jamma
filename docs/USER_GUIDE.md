@@ -521,10 +521,11 @@ For more control, use the component functions directly:
 ```python
 from pathlib import Path
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.kinship import compute_kinship_streaming
 
 # Compute kinship directly from the PLINK binary files (no full load into RAM)
-K = compute_kinship_streaming(Path("data/my_study"))
+K = compute_kinship_streaming(GenotypeDataset.open_plink(Path("data/my_study")))
 ```
 
 #### LMM Association

@@ -20,26 +20,21 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal, NamedTuple
 
 import numpy as np
 from loguru import logger
 
 from jamma.core import memory
-from jamma.core.progress import progress_iterator
 from jamma.estimates import estimate_kinship_seconds
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_filter import (
     compute_snp_filter_mask,
     compute_snp_stats,
     validate_snp_indices,
 )
 from jamma.genotype.snp_stats import SnpStats
-from jamma.io.plink import (
-    get_plink_metadata,
-    stream_genotype_chunks,
-    validate_genotype_values,
-)
+from jamma.io.plink import validate_genotype_values
 from jamma.kinship.accumulation import accumulate_kinship
 from jamma.kinship.accumulation import (
     validate_valid_indices as validate_valid_indices,
@@ -148,9 +143,8 @@ class SnpStatsSink:
 
 
 def filtered_kinship_chunks(
-    bed_path: Path,
+    dataset: GenotypeDataset,
     *,
-    n_snps: int,
     chunk_size: int,
     snp_filter: KinshipSnpFilter,
     transform: Callable[[np.ndarray], np.ndarray],
@@ -161,9 +155,9 @@ def filtered_kinship_chunks(
     stats_sink: SnpStatsSink | None = None,
     wanted: Callable[[np.ndarray], bool] | None = None,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-    """Read the BED once, yielding each chunk's kinship columns ready to accumulate.
+    """Read the genotypes once, yielding each chunk's kinship columns to accumulate.
 
-    Every BED chunk holds whole SNP columns, so GEMMA's MAF, missing-rate and
+    Every dataset block holds whole SNP columns, so GEMMA's MAF, missing-rate and
     monomorphism filter is decided per chunk from ``compute_snp_stats`` over
     the filter rows, then intersected with the -ksnps restriction. The
     surviving columns are transformed over all samples (centering for -gk 1,
@@ -173,8 +167,7 @@ def filtered_kinship_chunks(
     column grouping of the BED chunks.
 
     Args:
-        bed_path: PLINK file prefix.
-        n_snps: Total SNP count.
+        dataset: The genotypes, read in full-width float64 blocks.
         chunk_size: SNPs per disk read.
         snp_filter: The kinship SNP filter.
         transform: Per-chunk preprocessing over all samples.
@@ -188,7 +181,7 @@ def filtered_kinship_chunks(
 
     Yields:
         ``(X, global_idx)``: float64 ``(n_out, n_kept)`` preprocessed columns
-        and their ascending global BED indices.
+        and their ascending global variant indices.
 
     Raises:
         ValueError: On exhaustion, if no SNP passed filtering.
@@ -197,18 +190,14 @@ def filtered_kinship_chunks(
     n_filter_samples = 0
     n_kept = 0
 
-    chunk_iter = stream_genotype_chunks(
-        bed_path, chunk_size=chunk_size, dtype=np.float64, show_progress=False
+    blocks = dataset.blocks(
+        chunk_size,
+        progress=desc if show_progress else None,
+        eta_seconds=initial_eta_seconds,
     )
-    if show_progress:
-        chunk_iter = progress_iterator(
-            chunk_iter,
-            total=(n_snps + chunk_size - 1) // chunk_size,
-            desc=desc,
-            initial_eta_seconds=initial_eta_seconds,
-        )
-
-    for chunk, file_start, file_end in chunk_iter:
+    for block in blocks:
+        file_start, file_end = block.start, block.end
+        chunk = block.dosages()
         filter_chunk = chunk if filter_rows is None else chunk[filter_rows, :]
         n_filter_samples = filter_chunk.shape[0]
         col_means, miss_counts, col_vars = compute_snp_stats(filter_chunk)
@@ -247,7 +236,7 @@ def filtered_kinship_chunks(
         raise ValueError(
             f"No SNPs passed filtering (maf>={snp_filter.maf_threshold}, "
             f"miss<={snp_filter.miss_threshold}, polymorphic). "
-            f"Original SNP count: {n_snps}"
+            f"Original SNP count: {dataset.n_variants}"
         )
     if stats_sink is not None:
         stats_sink.stats = SnpStats(
@@ -260,9 +249,8 @@ def filtered_kinship_chunks(
 
 
 def _stream_kinship(
-    bed_path: Path,
+    dataset: GenotypeDataset,
     *,
-    n_snps: int,
     n_out: int,
     chunk_size: int,
     snp_filter: KinshipSnpFilter,
@@ -271,11 +259,10 @@ def _stream_kinship(
     transform: Callable[[np.ndarray], np.ndarray],
     desc: str,
 ) -> tuple[np.ndarray, int]:
-    """Accumulate K from one read of the BED; return it with the filtered SNP count.
+    """Accumulate K from one genotype read; return it with the filtered SNP count.
 
     Args:
-        bed_path: PLINK file prefix.
-        n_snps: Total SNP count.
+        dataset: The genotypes.
         n_out: Kinship matrix dimension (len(valid_indices) or n_samples).
         chunk_size: SNPs per disk read.
         snp_filter: The kinship SNP filter.
@@ -295,15 +282,14 @@ def _stream_kinship(
     K = np.zeros((n_out, n_out), dtype=np.float64)
     n_filtered = 0
     for X, global_idx in filtered_kinship_chunks(
-        bed_path,
-        n_snps=n_snps,
+        dataset,
         chunk_size=chunk_size,
         snp_filter=snp_filter,
         transform=transform,
         output_rows=valid_indices,
         show_progress=show_progress,
         desc=desc,
-        initial_eta_seconds=estimate_kinship_seconds(n_out, n_snps),
+        initial_eta_seconds=estimate_kinship_seconds(n_out, dataset.n_variants),
     ):
         accumulate_kinship(K, X)
         n_filtered += len(global_idx)
@@ -314,7 +300,7 @@ def _stream_kinship(
 
 
 def compute_kinship_streaming(
-    bed_path: Path,
+    dataset: GenotypeDataset,
     chunk_size: int = 10_000,
     maf_threshold: float = 0.0,
     miss_threshold: float = 1.0,
@@ -348,7 +334,7 @@ def compute_kinship_streaming(
     of a full-population computation without allocating the full matrix.
 
     Args:
-        bed_path: Path prefix for PLINK files (without .bed/.bim/.fam extension).
+        dataset: The genotypes, opened once by the caller.
         chunk_size: Number of SNPs per chunk (default 10,000).
         maf_threshold: Minimum MAF for SNP inclusion (default 0.0 = no filter).
         miss_threshold: Maximum missing rate (default 1.0 = no filter).
@@ -372,12 +358,12 @@ def compute_kinship_streaming(
     Raises:
         MemoryError: If check_memory=True and the kinship phase does not fit
             available memory, or exceeds ``mem_budget``.
-        FileNotFoundError: If the PLINK .bed file does not exist.
         ValueError: If no SNPs pass filtering, or mode is not recognized.
 
     Example:
         >>> from pathlib import Path
-        >>> K = compute_kinship_streaming(Path("data/my_study"), maf_threshold=0.01)
+        >>> dataset = GenotypeDataset.open_plink(Path("data/my_study"))
+        >>> K = compute_kinship_streaming(dataset, maf_threshold=0.01)
         >>> K.shape
         (1940, 1940)
     """
@@ -388,10 +374,8 @@ def compute_kinship_streaming(
 
     start_time = time.perf_counter()
 
-    # Get dimensions without loading genotypes
-    meta = get_plink_metadata(bed_path)
-    n_samples = meta.n_samples
-    n_snps = meta.n_snps
+    n_samples = dataset.n_samples
+    n_snps = dataset.n_variants
 
     if valid_indices is not None:
         validate_valid_indices(valid_indices, n_samples)
@@ -427,8 +411,7 @@ def compute_kinship_streaming(
         )
 
     K, n_filtered = _stream_kinship(
-        bed_path,
-        n_snps=n_snps,
+        dataset,
         n_out=n_out,
         chunk_size=chunk_size,
         snp_filter=KinshipSnpFilter(

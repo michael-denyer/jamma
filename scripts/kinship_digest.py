@@ -48,6 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from jamma import jlinalg  # noqa: E402
+from jamma.genotype.dataset import GenotypeDataset  # noqa: E402
 from jamma.io import load_plink_binary  # noqa: E402
 from jamma.kinship import (  # noqa: E402
     compute_kinship_streaming,
@@ -75,6 +76,7 @@ def _valid_indices(n_samples: int) -> np.ndarray:
 
 def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
     data = load_plink_binary(bfile)
+    dataset = GenotypeDataset.open_plink(bfile)
     n_samples = data.meta.n_samples
     digests: dict[str, str] = {}
 
@@ -101,7 +103,7 @@ def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
             digests[f"{key_prefix}/gk2/inmemory"] = digest_array(k_gk2_mem)
 
             k_gk1_stream = compute_kinship_streaming(
-                bfile,
+                dataset,
                 maf_threshold=maf,
                 check_memory=False,
                 show_progress=False,
@@ -110,7 +112,7 @@ def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
             digests[f"{key_prefix}/gk1/streaming"] = digest_array(k_gk1_stream)
 
             k_gk2_stream = compute_kinship_streaming(
-                bfile,
+                dataset,
                 maf_threshold=maf,
                 check_memory=False,
                 show_progress=False,
@@ -124,6 +126,7 @@ def _kinship_keys(fixture: str, bfile: Path) -> dict[str, str]:
 
 def _loco_keys(fixture: str, bfile: Path) -> dict[str, str]:
     data = load_plink_binary(bfile)
+    dataset = GenotypeDataset.open_plink(bfile)
     n_samples = data.meta.n_samples
     digests: dict[str, str] = {}
 
@@ -139,7 +142,7 @@ def _loco_keys(fixture: str, bfile: Path) -> dict[str, str]:
                 ("loco-multi", 1),
             ):
                 stream = compute_loco_kinship_streaming(
-                    bfile,
+                    dataset,
                     maf_threshold=maf,
                     check_memory=False,
                     show_progress=False,

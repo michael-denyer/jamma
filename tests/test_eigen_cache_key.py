@@ -12,7 +12,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from bed_reader import to_bed
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.lmm.eigen_cache import EIGEN_CACHE_SCHEMA_VERSION, EigenCacheComponents
 from jamma.lmm.eigen_io import EigenGeneration
 
@@ -47,23 +49,25 @@ def _dummy_generation(
 def _write_dummy_plink(
     prefix: Path,
     *,
-    bed_size: int = 64,
-    bim_lines: list[str] | None = None,
-    bed_fill: int = 0,
+    n_samples: int = 20,
+    chromosomes: tuple[str, ...] = ("1", "1", "2"),
 ) -> None:
-    """Write minimal .bed/.bim files at ``prefix`` for cache-key unit tests.
+    """Write a small valid PLINK fileset at ``prefix`` for cache-key unit tests.
 
-    The cache-key function only stats .bed (name + size + mtime) and hashes
-    .bim content, so these need not be valid PLINK binaries.
+    The key stats the .bed (name + size + mtime) and hashes the .bim, so a
+    different ``n_samples`` changes only the .bed and a different
+    ``chromosomes`` changes only the .bim.
     """
-    if bim_lines is None:
-        bim_lines = [
-            "1\trs1\t0\t100\tA\tG",
-            "1\trs2\t0\t200\tC\tT",
-            "2\trs3\t0\t300\tA\tT",
-        ]
-    prefix.with_suffix(".bed").write_bytes(bytes([bed_fill]) * bed_size)
-    prefix.with_suffix(".bim").write_text("\n".join(bim_lines) + "\n")
+    n_snps = len(chromosomes)
+    to_bed(
+        prefix.with_suffix(".bed"),
+        np.zeros((n_samples, n_snps), dtype=np.float32),
+        properties={
+            "chromosome": list(chromosomes),
+            "sid": [f"rs{i + 1}" for i in range(n_snps)],
+            "bp_position": [100 * (i + 1) for i in range(n_snps)],
+        },
+    )
 
 
 def _compute_key(
@@ -83,7 +87,7 @@ def _compute_key(
     if valid_mask is None:
         valid_mask = np.ones(20, dtype=bool)
     key, _components = compute_eigen_cache_key(
-        prefix,
+        GenotypeDataset.open_plink(prefix),
         maf_threshold=maf_threshold,
         miss_threshold=miss_threshold,
         valid_mask=valid_mask,
@@ -145,22 +149,17 @@ class TestEigenCacheKey:
         prefix = tmp_path / "data"
         _write_dummy_plink(prefix)
         k1 = _compute_key(prefix)
-        _write_dummy_plink(
-            prefix,
-            bim_lines=[
-                "1\trs1\t0\t100\tA\tG",
-                "1\trs2\t0\t200\tC\tT",
-                "3\trs3\t0\t300\tA\tT",  # chr 2 -> 3
-            ],
-        )
+        _write_dummy_plink(prefix, chromosomes=("1", "1", "3"))  # chr 2 -> 3
         assert k1 != _compute_key(prefix)
 
     def test_key_changes_when_bed_content_changes(self, tmp_path: Path) -> None:
         """A different .bed (here: different size) -> different key."""
         prefix = tmp_path / "data"
-        _write_dummy_plink(prefix, bed_size=64)
+        _write_dummy_plink(prefix, n_samples=20)
         k1 = _compute_key(prefix)
-        _write_dummy_plink(prefix, bed_size=128)
+        bim = prefix.with_suffix(".bim").read_bytes()
+        _write_dummy_plink(prefix, n_samples=24)
+        assert prefix.with_suffix(".bim").read_bytes() == bim
         assert k1 != _compute_key(prefix)
 
     def test_key_changes_when_ksnps_changes(self, tmp_path: Path) -> None:
@@ -184,7 +183,7 @@ class TestEigenCacheKey:
         prefix = tmp_path / "data"
         _write_dummy_plink(prefix)
         key, components = compute_eigen_cache_key(
-            prefix,
+            GenotypeDataset.open_plink(prefix),
             maf_threshold=0.01,
             miss_threshold=0.05,
             valid_mask=np.ones(20, dtype=bool),

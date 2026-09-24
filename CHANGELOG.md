@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `compute_kinship_streaming` and `compute_loco_kinship_streaming` take a
+  `GenotypeDataset` (`GenotypeDataset.open_plink(prefix)`) instead of a PLINK
+  prefix, and `compute_loco_kinship_streaming` loses its `meta` parameter.
+  `compute_eigen_cache_key` takes the dataset too and reads its file identity
+  from `dataset.fingerprint()`; PLINK cache keys are byte-identical, so
+  existing LOCO eigen caches still hit. `LocoRun` carries the dataset in place
+  of `bed_path` and `meta`. The pipeline and `-gk` open the genotypes once,
+  so `-gk` now also checks the `.bed` size against the `.fam` and `.bim`.
+  Results are unchanged.
 - `SnpMeta` and `SnpInfoRecord` moved from `jamma.lmm.schema` to
   `jamma.genotype.variants`, with no alias at the old path, so genotype
   readers can build variant metadata without importing the LMM package.

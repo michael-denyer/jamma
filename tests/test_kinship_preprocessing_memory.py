@@ -9,6 +9,7 @@ from bed_reader import to_bed
 
 from jamma import jlinalg
 from jamma.core import memory
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.kinship import (
     compute_kinship_streaming,
     impute_and_center,
@@ -33,7 +34,7 @@ def test_standalone_gate_prices_actual_kinship_dimensions(
     selected = np.arange(0, len(values), 2) if subset else None
     compute = partial(
         compute_kinship_streaming,
-        bfile,
+        GenotypeDataset.open_plink(bfile),
         mode=mode,
         valid_indices=selected,
         filter_sample_indices=selected,
@@ -135,7 +136,7 @@ def test_kinship_quote_covers_preprocessing(tmp_path, mode, subset):
     tracemalloc.start()
     try:
         result = compute_kinship_streaming(
-            bfile,
+            GenotypeDataset.open_plink(bfile),
             chunk_size=values.shape[1],
             mode=mode,
             check_memory=False,

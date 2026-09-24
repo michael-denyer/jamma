@@ -6,19 +6,25 @@ Validates:
 - write_eigen=True without eigen_dir raises ValueError
 - Dimension mismatch on cached read raises ValueError
 - Cached LOCO run produces identical results to non-cached run
+- The PLINK cache key is pinned, so caches written before the dataset
+  migration still hit
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import read_fam_phenotypes
 from jamma.lmm.eigen_cache import (
     EIGEN_CACHE_SCHEMA_VERSION,
     EigenCacheComponents,
+    compute_eigen_cache_key,
     read_eigen_cache_manifest,
     resolve_eigen_cache,
     write_eigen_cache_manifest,
@@ -509,6 +515,52 @@ class TestLocoEigenCacheValidation:
         u_path = tmp_path / "result.loco.chr1.eigenU.npy"
         with pytest.raises(ValueError, match="have 10 samples but pipeline expects 20"):
             read_eigen_files(d_path, u_path, n_samples=20)
+
+
+@pytest.mark.tier0
+class TestPlinkEigenCacheKeyPin:
+    """The PLINK key is byte-identical to the one master computed from a path.
+
+    The literals were computed by master's ``compute_eigen_cache_key(bfile,
+    ...)`` on the same copy. A changed literal means every eigen cache users
+    already have on disk silently stops hitting.
+    """
+
+    MTIME_NS = 1_700_000_000_123_456_789
+
+    @pytest.mark.parametrize(
+        ("ksnps_step", "expected"),
+        [
+            (None, "868f241d18fc713d9f40e9eed2436ff65845c563fdb68dc5928e60a796d0f1b6"),
+            (3, "d8f5cb36477051c266de89b4790d7673af381cd3d85857ce18bcbbe6593481f9"),
+        ],
+    )
+    def test_key_matches_master_literal(
+        self, tmp_path: Path, ksnps_step: int | None, expected: str
+    ) -> None:
+        require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
+        prefix = tmp_path / LOCO.bfile.name
+        for ext in (".bed", ".bim", ".fam"):
+            shutil.copy(LOCO.bfile.with_suffix(ext), prefix.with_suffix(ext))
+        os.utime(prefix.with_suffix(".bed"), ns=(self.MTIME_NS, self.MTIME_NS))
+        dataset = GenotypeDataset.open_plink(prefix)
+        valid_mask = np.ones(dataset.n_samples, dtype=bool)
+        valid_mask[::7] = False
+
+        key, components = compute_eigen_cache_key(
+            dataset,
+            maf_threshold=0.01,
+            miss_threshold=0.05,
+            valid_mask=valid_mask,
+            ksnps_indices=None
+            if ksnps_step is None
+            else np.arange(0, dataset.n_variants, ksnps_step),
+        )
+
+        assert components["bed_fingerprint"] == (
+            f"{LOCO.bfile.name}.bed:12503:{self.MTIME_NS}"
+        )
+        assert key == expected
 
 
 @pytest.mark.tier0

@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from loguru import logger
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.kinship import compute_kinship_streaming, compute_loco_kinship_streaming
 from jamma.lmm.association_plan import KinshipShape
 from jamma.lmm.genotype_source import SampleBasis
@@ -29,7 +30,7 @@ def test_early_rows_equal_full_kinship_slice(
     valid = np.arange(40)
     compute = partial(
         compute_kinship_streaming,
-        asymmetric_plink,
+        GenotypeDataset.open_plink(asymmetric_plink),
         mode=mode,
         filter_sample_indices=valid if filter_subset else None,
         chunk_size=chunk_size,
@@ -59,7 +60,7 @@ def test_early_rows_equal_full_loco_slices(
     valid = np.arange(40)
     compute = partial(
         compute_loco_kinship_streaming,
-        asymmetric_plink,
+        GenotypeDataset.open_plink(asymmetric_plink),
         chunk_size=7,
         maf_threshold=maf,
         miss_threshold=miss,
@@ -117,7 +118,7 @@ def test_gk_filters_snps_on_phenotyped_samples(asymmetric_plink, tmp_path, loco)
 
     if loco:
         expected = compute_loco_kinship_streaming(
-            asymmetric_plink,
+            GenotypeDataset.open_plink(asymmetric_plink),
             maf_threshold=0.3,
             miss_threshold=0.1,
             check_memory=False,
@@ -132,7 +133,7 @@ def test_gk_filters_snps_on_phenotyped_samples(asymmetric_plink, tmp_path, loco)
             np.testing.assert_allclose(actual, K, rtol=1e-12, atol=1e-14)
     else:
         expected = compute_kinship_streaming(
-            asymmetric_plink,
+            GenotypeDataset.open_plink(asymmetric_plink),
             maf_threshold=0.3,
             miss_threshold=0.1,
             check_memory=False,
@@ -215,7 +216,7 @@ def test_gk_covariate_nan_rows_narrow_the_filter_basis(asymmetric_plink, tmp_pat
     )
 
     expected = compute_kinship_streaming(
-        asymmetric_plink,
+        GenotypeDataset.open_plink(asymmetric_plink),
         maf_threshold=0.3,
         miss_threshold=0.1,
         check_memory=False,
@@ -227,7 +228,7 @@ def test_gk_covariate_nan_rows_narrow_the_filter_basis(asymmetric_plink, tmp_pat
 
     # The covariate mask must actually move the filter basis, or this proves nothing.
     unfiltered = compute_kinship_streaming(
-        asymmetric_plink,
+        GenotypeDataset.open_plink(asymmetric_plink),
         maf_threshold=0.3,
         miss_threshold=0.1,
         check_memory=False,
@@ -423,6 +424,7 @@ def test_pipeline_kinship_uses_gemma_filter_and_centring_populations(
         KinshipShape.resolve(len(valid), 80, loaded=False, saved=save),
         SampleBasis(valid, 80),
         selected_weights,
+        GenotypeDataset.open_plink(asymmetric_plink),
     )
     np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
 

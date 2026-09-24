@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -32,12 +33,12 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.threading import get_loco_worker_count, get_physical_core_count
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_filter import validate_snp_indices
-from jamma.genotype.snp_stats import SnpFilterSpec, SnpStats
-from jamma.genotype.variants import SnpMeta
-from jamma.io.plink import get_plink_metadata, partitions_from_metadata
+from jamma.genotype.snp_stats import SnpFilterSpec, SnpSelection, SnpStats
 from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter
 from jamma.lmm.association_plan import KinshipShape, plan_association
+from jamma.lmm.chunk_runner_numpy import RawLmmChunk
 from jamma.lmm.genotype_source import (
     PreparedGenotypes,
     SampleBasis,
@@ -56,7 +57,6 @@ from jamma.lmm.runner_numpy import (
     LmmRunSpec,
     run_single,
 )
-from jamma.lmm.runner_numpy_streaming import bed_chunk_source
 from jamma.lmm.schema import (
     DEFAULT_LMM_CONFIG,
     MODE_SPECS,
@@ -119,29 +119,28 @@ def run_lmm_loco(
             without eigen_dir are rejected earlier, when LmmConfig and
             LocoConfig are constructed.
     """
-    meta = get_plink_metadata(bed_path)
+    dataset = GenotypeDataset.open_plink(bed_path)
     samples = AnalysedPhenotype.from_inputs(phenotypes, covariates)
     execution = plan_association(
         samples.n_samples,
-        meta.n_snps,
+        dataset.n_variants,
         config=config,
         backend="loco",
         n_cvt=samples.n_cvt,
-        n_input_samples=meta.n_samples,
+        n_input_samples=dataset.n_samples,
         max_chunk_size=loco.col_chunk_size,
     )
     execution = replace(
         execution,
         kinship=KinshipShape.resolve(
             samples.n_samples,
-            meta.n_samples,
+            dataset.n_samples,
             loaded=False,
             saved=loco.kinship_output_dir is not None,
         ),
     )
     run = LocoRun(
-        bed_path,
-        meta,
+        dataset,
         samples,
         config,
         loco,
@@ -166,16 +165,16 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
     Raises:
         ValueError: If fewer than two chromosomes are present.
     """
-    config, loco, meta = run.config, run.loco, run.meta
+    config, loco, dataset = run.config, run.loco, run.dataset
     show_progress = config.show_progress
     start_time = time.perf_counter()
 
-    n_samples_total = meta.n_samples
-    n_snps_total = meta.n_snps
+    n_samples_total = dataset.n_samples
+    n_snps_total = dataset.n_variants
 
     validate_snp_indices(loco.snps_indices, n_snps_total)
 
-    partitions = partitions_from_metadata(meta)
+    partitions = dataset.partitions
     chromosomes = {
         chr_name: partitions[chr_name]
         for chr_name in sorted(partitions, key=chr_sort_key)
@@ -201,7 +200,6 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
             f"({n_filtered_samples} filtered)"
         )
 
-    snp_info = SnpMeta.from_plink_meta(meta)
     execution = run.execution
     workers = plan_loco_workers(
         get_loco_worker_count(),
@@ -254,12 +252,7 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
             )
 
             chr_result = run_single(
-                _LocoChrSource(
-                    run.bed_path,
-                    source.snp_stats.take(chr_snp_indices),
-                    n_samples_total,
-                    snp_meta=snp_info,
-                ),
+                _LocoChrSource(dataset, source.snp_stats.take(chr_snp_indices)),
                 replace(
                     spec,
                     compute_pve=first_chr_pve is None,
@@ -317,25 +310,16 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
 
 
 class _LocoChrSource:
-    """One chromosome's .bed columns as a GenotypeSource.
+    """One chromosome's dataset columns as a GenotypeSource.
 
-    The sample basis indexes BED rows directly. ``stats`` covers exactly
+    The sample basis indexes dataset rows directly. ``stats`` covers exactly
     this chromosome's SNPs over the analysed rows, the basis GEMMA uses; its
-    global indices name the BED columns.
+    global indices name the dataset columns.
     """
 
-    def __init__(
-        self,
-        bed_path: Path,
-        stats: SnpStats,
-        n_samples: int,
-        *,
-        snp_meta: SnpMeta,
-    ) -> None:
-        self._bed_path = bed_path
+    def __init__(self, dataset: GenotypeDataset, stats: SnpStats) -> None:
+        self._dataset = dataset
         self._stats = stats
-        self._n_samples = n_samples
-        self._snp_meta = snp_meta
 
     @property
     def n_snps(self) -> int:
@@ -344,10 +328,10 @@ class _LocoChrSource:
     def prepare(
         self, samples: SampleBasis, filters: SnpFilterSpec
     ) -> PreparedGenotypes:
-        if samples.source_row_count != self._n_samples:
+        if samples.source_row_count != self._dataset.n_samples:
             raise ValueError(
-                "sample basis row count must match the BED rows: "
-                f"got {samples.source_row_count} and {self._n_samples}"
+                "sample basis row count must match the dataset rows: "
+                f"got {samples.source_row_count} and {self._dataset.n_samples}"
             )
         if filters.hwe_threshold > 0:
             # PipelineRunner rejects -hwe with -loco before this runs
@@ -355,9 +339,27 @@ class _LocoChrSource:
             # get unfiltered results.
             raise ValueError("HWE filtering is not supported in LOCO")
         return bind_prepared_genotypes(
-            snp_meta=self._snp_meta,
+            snp_meta=self._dataset.variants,
             stats=self._stats,
             filters=filters,
             sample_basis=samples,
-            chunk_source=bed_chunk_source(self._bed_path, samples),
+            chunk_source=_dataset_chunk_source(self._dataset, samples),
         )
+
+
+def _dataset_chunk_source(
+    dataset: GenotypeDataset, samples: SampleBasis
+) -> Callable[[SnpSelection, int], Iterator[RawLmmChunk]]:
+    """Stream a selection's columns as float64 chunks over the analysed rows.
+
+    The dataset counterpart of ``bed_chunk_source``: the same blocks, row
+    filter and contiguous copy, read through ``GenotypeDataset.blocks``.
+    """
+    rows = None if samples.is_all_samples else samples.positions
+
+    def _iter_chunks(selection: SnpSelection, chunk_size: int) -> Iterator[RawLmmChunk]:
+        for block in dataset.blocks(chunk_size, columns=selection.indices):
+            chunk = block.dosages(rows)
+            yield RawLmmChunk(np.ascontiguousarray(chunk), block.start, block.end)
+
+    return _iter_chunks

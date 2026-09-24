@@ -287,6 +287,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The mutation runner's repository copy no longer fails on a test file
+  another worker is planting or removing.** `tests/math_validation/mutations.py`
+  skips `test_planted_*` and `*.part` when copying `tests/`. The
+  `tests/test_planted_*.py` files that `tests/test_conftest_c_seam.py` writes
+  could be listed and then deleted before `copytree` reached them, failing
+  `test_single_mutation_is_isolated_and_detected` with `[Errno 2] No such file
+  or directory` (master run 36030355261).
 - `GEMMA_EQUIVALENCE.md` §8 no longer says the chi-squared CDF is linear near
   `LRT = 0`; its slope is unbounded there, which amplifies small LRT
   differences. `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` assumption 7 says why the

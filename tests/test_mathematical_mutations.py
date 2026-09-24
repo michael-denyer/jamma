@@ -100,6 +100,30 @@ def test_single_mutation_is_isolated_and_detected() -> None:
     assert report["source_sha256_before"] == report["source_sha256_after"] == before
 
 
+def test_repo_copy_survives_a_planted_test_file_vanishing(tmp_path: Path) -> None:
+    """A file another xdist worker plants and deletes must not break the copy.
+
+    ``test_conftest_c_seam.py`` publishes ``tests/test_planted_*.py`` through a
+    ``.test_planted_*.py.part`` temp file and deletes it afterwards. When
+    ``copytree`` lists the entry and it is gone before the copy, the copy fails
+    with ENOENT. A dangling symlink is that state held still: the directory
+    lists the name, and opening it raises the same ``No such file or
+    directory``.
+    """
+    root = tmp_path / "repo"
+    for name in ("src", "tests", "scripts"):
+        (root / name).mkdir(parents=True)
+    kept = root / "tests" / "test_kept.py"
+    kept.write_text("def test_kept(): pass\n")
+    for name in ("test_planted_gone.py", ".test_planted_gone.py.part"):
+        (root / "tests" / name).symlink_to(tmp_path / "deleted" / name)
+
+    destination = tmp_path / "copy"
+    mutations._copy_tree(destination, root=root)
+
+    assert sorted(p.name for p in (destination / "tests").iterdir()) == ["test_kept.py"]
+
+
 def test_every_python_patch_matches_its_source_exactly_once() -> None:
     manifest = mutations.load_manifest(mutations.DEFAULT_MANIFEST)
     counts = {

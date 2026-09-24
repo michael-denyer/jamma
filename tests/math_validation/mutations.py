@@ -58,13 +58,18 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return raw
 
 
-def _copy_tree(destination: Path) -> None:
+def _copy_tree(destination: Path, root: Path = ROOT) -> None:
     for name in ("src", "tests", "scripts"):
         shutil.copytree(
-            ROOT / name,
+            root / name,
             destination / name,
             symlinks=False,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            # test_conftest_c_seam.py plants and deletes test_planted_*.py
+            # (via a *.part temp) under tests/ from other xdist workers; a
+            # file listed and then removed mid-copy fails the whole copy.
+            ignore=shutil.ignore_patterns(
+                "__pycache__", "*.pyc", "test_planted_*", "*.part"
+            ),
         )
 
 

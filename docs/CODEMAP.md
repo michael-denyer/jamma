@@ -557,7 +557,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | All tests (`-lmm 4`) | Yes |
 | C extension acceleration | Yes (n_cvt=1, auto-fallback) |
 | LOCO (`-loco`) | Yes |
-| HWE filtering (`-hwe`) | Yes (streaming only) |
+| HWE filtering (`-hwe`) | Yes (batch and streaming; not with `-loco` or `-bgen`) |
 | Disk streaming | Yes (runner_numpy_streaming.py) |
 
 ### File Naming Convention

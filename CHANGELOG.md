@@ -122,12 +122,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementations stay in `jamma.jlinalg._dgemm`, `_dsyrk`, and `_eigh`.
 - `jamma._native` is the only code that evicts a rebuilt extension from
   `sys.modules`. `compile_and_link.compile_extension` no longer does it too.
-- `jamma.io.read_genotypes(bfile)` reads the `.bed` genotype matrix on its
-  own. The in-memory pipeline uses it instead of `load_plink_binary`, so it no
-  longer parses the `.bim` and `.fam` files a second time.
-  `load_plink_binary` drops its unused `meta` argument, and `PlinkData` drops
-  the eight properties that forwarded to `PlinkData.meta`; read
-  `data.meta.n_samples` and so on.
 - `read_matrix_parallel` raises `ValueError` for `n_workers < 1`, as
   `write_matrix_parallel` already did, instead of clamping to one worker. It
   scans the input once rather than twice to find chunk boundaries.
@@ -235,9 +229,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `n_snps_tested`, `assoc_path`, `assoc_paths`, `pve_estimate` and `pve_se`
   are now read-only properties derived from `phenotype_results`, so reading
   them is unchanged but passing them to the constructor is an error.
-- `jamma.lmm.loco.run_lmm_loco_prepared` runs LOCO over samples the caller
-  has already resolved. The pipeline enters there with its analysed samples,
-  so a `--loco` run no longer parses the `.bim` a second time for it.
 - `AssocComparisonResult` holds one comparison per column the mode carries,
   plus `af`, in `columns`; read one with `comparison["l_remle"]`. A column the
   mode does not carry is absent instead of a vacuous pass, a SNP count

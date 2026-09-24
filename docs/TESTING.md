@@ -659,6 +659,7 @@ Run with `uv run pytest tests/test_hypothesis.py -x`.
 | **jlinalg (BLAS dispatch)** | `test_jlinalg_dgemm.py`, `test_jlinalg_dgemm_runtime.py`, `test_jlinalg_dsyrk.py`, `test_jlinalg_eigh.py`, `test_jlinalg_eigh_vendor.py`, `test_jlinalg_dispatch.py`, `test_jlinalg_build.py`, `test_eigh_inplace.py` | DGEMM/DSYRK/eigh contracts; DGEMM extension and thread runtime; LP64 vs ILP64 dispatch; vendor BLAS/LAPACK dispatch correctness; build artefact sanity |
 | **LOCO** | `test_loco_numpy.py`, `test_loco_eigen_cache.py`, `test_eigen_cache_key.py`, `test_loco_orchestration.py` | Leave-one-chromosome-out orchestration; per-chromosome eigen cache; cache-key derivation and manifest validation |
 | **I/O** | `test_io.py`, `test_io_error_paths.py`, `test_error_paths.py`, `test_eigen_io.py`, `test_eigen_io_roundtrip.py`, `test_matrix_reader.py`, `test_matrix_writer.py`, `test_incremental_writer.py`, `test_kinship_io.py`, `test_snp_list.py`, `test_plink_validation.py` | PLINK reader; eigenvector cache I/O and property round trips; incremental .assoc.txt writer; SNP filters; error and rollback paths |
+| **BGEN and phenotypes** | `test_bgen_reader.py`, `lmm_accel/test_bgen_decode.py`, `test_info.py`, `test_bgen_info_filters.py`, `test_bgen_cli.py`, `test_bgen_gemma_parity.py`, `test_genotype_dataset_contract.py`, `test_lmm_phenotype_validation.py`, `test_pipeline_phenotype_reuse.py` | BGEN reader and C decoder against the NumPy oracle; GCTA INFO oracle and filters; `-bgen`/`-p`/`-info` through the CLI and `gwas()`; GEMMA parity on the same dosages; the `GenotypeDataset` contract across formats; phenotype validation and reuse |
 | **Memory & gates** | `test_memory.py`, `test_memory_gates.py`, `test_memory_chunk_coupling.py`, `test_eigendecomp_memory.py`, `test_safety_gates.py` | Memory estimation; OOM gates. `compute_chunk_size_numpy` sizing and its pipeline-buffer pricing moved to `test_chunk_sizing.py` under LMM runners |
 | **CLI / API** | `test_cli.py`, `test_cli_memory.py`, `test_gwas_api.py` | Click entry point; `-lmm` flag handling; programmatic GWAS API |
 | **Backend / hardware** | `test_backend_detection.py`, `test_hardware_context.py`, `test_threading.py`, `test_jlinalg_dispatch.py`, `test_force_numpy_fallback.py` | Backend autodetection; physical core count; threading limits; the `JAMMA_FORCE_NUMPY_FALLBACK` escape hatch |
@@ -726,7 +727,7 @@ reader can re-run it against the current tree.
 ### 3.5 Fixture manifest
 
 [`tests/fixtures/MANIFEST.toml`](../tests/fixtures/MANIFEST.toml) tracks the
-SHA-256 of every git-tracked fixture (55 entries). The manifest is enforced
+SHA-256 of every git-tracked fixture. The manifest is enforced
 by two gates:
 
 1. **Pre-commit hook** (fast):

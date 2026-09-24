@@ -2,7 +2,7 @@
 
 ## System Overview
 
-JAMMA (Highly-Accelerated Multi-method Mixed-Model Association) is a Python reimplementation of GEMMA for large-scale genome-wide association studies (GWAS). It accepts PLINK binary input (.bed/.bim/.fam), computes a kinship matrix (or accepts a pre-computed one), performs eigendecomposition of the kinship matrix, and runs linear mixed model (LMM) association tests to produce per-SNP association statistics. The primary architectural style is a layered pipeline: a Click-based CLI and a `gwas()` Python API both delegate to a shared `PipelineRunner`, which orchestrates I/O, memory estimation, eigendecomposition, and dispatch to the appropriate compute runner.
+JAMMA (Highly-Accelerated Multi-method Mixed-Model Association) is a Python reimplementation of GEMMA for large-scale genome-wide association studies (GWAS). It accepts PLINK binary input (.bed/.bim/.fam) or BGEN v1.2 dosages (.bgen/.bgi/.sample), computes a kinship matrix (or accepts a pre-computed one), performs eigendecomposition of the kinship matrix, and runs linear mixed model (LMM) association tests to produce per-SNP association statistics. The primary architectural style is a layered pipeline: a Click-based CLI and a `gwas()` Python API both delegate to a shared `PipelineRunner`, which orchestrates I/O, memory estimation, eigendecomposition, and dispatch to the appropriate compute runner.
 
 ## Component Diagram
 
@@ -12,7 +12,7 @@ graph TD
     API["gwas.py (Python API)"]
     Pipeline["pipeline.py (PipelineRunner)"]
     AnalysisPlan["pipeline_plan.py (Validated analysis variants)"]
-    IO["io/ (PLINK I/O)"]
+    IO["io/ (PLINK, BGEN and phenotype I/O)"]
     Kinship["kinship/ (Kinship computation)"]
     Eigen["lmm/eigen.py (Eigendecomposition)"]
     Planner["lmm/association_plan.py (Policy)"]
@@ -120,7 +120,7 @@ src/jamma/
 │   ├── progress.py         # timed_progress() and progress_iterator() wrappers
 │   ├── telemetry.py        # BenchmarkRecord / append_benchmark_record()
 │   └── threading.py        # BLAS thread-count control via threadpoolctl
-├── genotype/               # Genotype QC over streamed PLINK chunks
+├── genotype/               # GenotypeDataset and QC over streamed PLINK or BGEN blocks
 │   ├── dataset.py          # GenotypeDataset: format-neutral samples x variants, streamed in blocks
 │   ├── info.py             # info_from_sums() / info_from_quantised(): GCTA --info (IMPUTE2 INFO) from BGEN probability sums
 │   ├── snp_filter.py       # Per-SNP statistics, MAF/missing/monomorphism/HWE filter masks
@@ -162,6 +162,7 @@ src/jamma/
 │   ├── pab.py              # Pab indexing, Uab products, and Schur-complement recursion
 │   ├── uab.py              # Uab/Pab/Iab batch builders in full, split and SoA layouts
 │   ├── likelihood_numpy.py # NumPy batch REML/MLE evaluation and lambda optimisation
+│   ├── reml_score.py       # Analytic REML/MLE scores and safeguarded refinement of optima
 │   ├── stats.py            # The batch Wald/LRT/Score statistics
 │   ├── eigen.py            # Kinship eigendecomposition via jlinalg.eigh
 │   ├── eigen_plan.py       # Eigen driver planning + shared sizing primitives

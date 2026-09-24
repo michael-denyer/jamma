@@ -96,6 +96,7 @@ pip install numpy \
   --index-url https://michael-denyer.github.io/numpy-mkl \
   --force-reinstall --upgrade
 pip install jamma --no-deps
+# zstd-compressed BGEN on Python < 3.14 also needs: pip install 'backports-zstd>=1.7.0'
 ```
 
 ## Build Pipeline

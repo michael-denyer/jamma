@@ -1,0 +1,37 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 4.2.1
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.31  - OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP vortexm4 MAX_THREADS=56
+##   arch           = vortexm4
+##   threads        = 18
+##   parallel type  = openmp
+##
+## Command Line Input = gemma -g tests/fixtures/bgen_parity/mouse_bgen.geno.txt.gz -p tests/fixtures/bgen_parity/mouse_bgen.pheno.txt -a tests/fixtures/bgen_parity/mouse_bgen.anno.txt -k tests/fixtures/bgen_parity/mouse_bgen_kinship.cXX.txt -lmm 1 -o mouse_bgen_wald -outdir tests/fixtures/bgen_parity 
+##
+## Date = Thu Sep 24 02:36:19 2026
+##
+## Summary Statistics:
+## number of total individuals = 160
+## number of analyzed individuals = 94
+## number of covariates = 1
+## number of phenotypes = 1
+## number of total SNPs/var = 1508
+## number of analyzed SNPs/var = 1483
+## REMLE log-likelihood in the null model = -127.752
+## MLE log-likelihood in the null model = -128.252
+## pve estimate in the null model = 0.628733
+## se(pve) in the null model = 0.171356
+## vg estimate in the null model = 2.29723
+## ve estimate in the null model = 0.445919
+## beta estimate in the null model =   0.150777
+## se(beta) =   0.0688754
+##
+## Computation Time:
+## total computation time = 0.00437323 min 
+## computation time break down: 
+##      time on eigen-decomposition = 0.000141633 min 
+##      time on calculating UtX = 0.00263498 min 
+##      time on optimization = 0.00107298 min 
+##

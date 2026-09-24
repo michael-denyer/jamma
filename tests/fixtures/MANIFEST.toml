@@ -7,6 +7,64 @@
 # To intentionally update: regenerate fixtures, run the --write
 # command above, commit MANIFEST.toml together with the new files.
 
+[file."tests/fixtures/bgen_parity/mouse_bgen.anno.txt"]
+sha256 = "8470275a1f6f6ccbf852274ba91004bc5d562ca91221db581dcdbbc2bf0c711e"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen.bgen"]
+sha256 = "87f365107f9931b864f7a411c2ffa46c6f7fead502a42b623598f3af12c58c68"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen.bgen.bgi"]
+sha256 = "c55b217e7ee501113717174829ee0c5c634a685ecf1c8311823d6d52f71ee0b7"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen.geno.txt.gz"]
+sha256 = "a0664b08b65c2822a07f256f0f62485a2e68073b5543c44db1c54ec4239a8835"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen.pheno.txt"]
+sha256 = "1c806d1b857958275f2046fc48f545a0d24a792fac0bb6f43fbbda51dcdef3d6"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen.sample"]
+sha256 = "9f4bd5ab5a3fb260d959c7df431f73612840e3ce371630adbf0bc355008a1d5b"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_all.assoc.txt"]
+sha256 = "b3253ad1a9edcc47d1eeb1ccf69e57885bd8db50b1055bbd728e0d4c9444cc86"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_all.log.txt"]
+sha256 = "1b7218d45228a693ddee15468788a0574714b7ca933378bc433ead52b1b2cbb7"
+gemma_version = "0.98.5"
+generation_cmd = "gemma -g tests/fixtures/bgen_parity/mouse_bgen.geno.txt.gz -p tests/fixtures/bgen_parity/mouse_bgen.pheno.txt -a tests/fixtures/bgen_parity/mouse_bgen.anno.txt -k tests/fixtures/bgen_parity/mouse_bgen_kinship.cXX.txt -lmm 4 -o mouse_bgen_all -outdir tests/fixtures/bgen_parity"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_kinship.cXX.txt"]
+sha256 = "5d10662e7548d13af55e53710779ca008e8b1192119f6f61b3806b1ece2a343f"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_kinship.log.txt"]
+sha256 = "301062fe4c1dabee169f0de9e54a7c4509d85a9a288c1355ec56cdef045791b5"
+gemma_version = "0.98.5"
+generation_cmd = "gemma -g tests/fixtures/bgen_parity/mouse_bgen.geno.txt.gz -p tests/fixtures/bgen_parity/mouse_bgen.pheno.txt -a tests/fixtures/bgen_parity/mouse_bgen.anno.txt -gk 1 -o mouse_bgen_kinship -outdir tests/fixtures/bgen_parity"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_lrt.assoc.txt"]
+sha256 = "6dd8787376205d6b8e2cee252e2d62b2dc5af47983a0716be42e1513263c994e"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_lrt.log.txt"]
+sha256 = "48198181a3dc7223eccb90f85abc8109a087cfce36b3c0bbb977b85d1e54b74d"
+gemma_version = "0.98.5"
+generation_cmd = "gemma -g tests/fixtures/bgen_parity/mouse_bgen.geno.txt.gz -p tests/fixtures/bgen_parity/mouse_bgen.pheno.txt -a tests/fixtures/bgen_parity/mouse_bgen.anno.txt -k tests/fixtures/bgen_parity/mouse_bgen_kinship.cXX.txt -lmm 2 -o mouse_bgen_lrt -outdir tests/fixtures/bgen_parity"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_score.assoc.txt"]
+sha256 = "e83430d3939dd7b0b15fc64a07bdc32900fa3511c3de27dd9d44f048396ff6f2"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_score.log.txt"]
+sha256 = "cc486ee6df3a40a201567a89a97a16a9a7e86b2ed7683151663bdc456034ad31"
+gemma_version = "0.98.5"
+generation_cmd = "gemma -g tests/fixtures/bgen_parity/mouse_bgen.geno.txt.gz -p tests/fixtures/bgen_parity/mouse_bgen.pheno.txt -a tests/fixtures/bgen_parity/mouse_bgen.anno.txt -k tests/fixtures/bgen_parity/mouse_bgen_kinship.cXX.txt -lmm 3 -o mouse_bgen_score -outdir tests/fixtures/bgen_parity"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_wald.assoc.txt"]
+sha256 = "3ebd2949982beca2d2452a04c1fbd2c416849a8f7c10351d519825d064fb3be7"
+
+[file."tests/fixtures/bgen_parity/mouse_bgen_wald.log.txt"]
+sha256 = "a410db9f4e7e72aa70c516fc6b64261b979f889438e716eded7a5ea953ccf927"
+gemma_version = "0.98.5"
+generation_cmd = "gemma -g tests/fixtures/bgen_parity/mouse_bgen.geno.txt.gz -p tests/fixtures/bgen_parity/mouse_bgen.pheno.txt -a tests/fixtures/bgen_parity/mouse_bgen.anno.txt -k tests/fixtures/bgen_parity/mouse_bgen_kinship.cXX.txt -lmm 1 -o mouse_bgen_wald -outdir tests/fixtures/bgen_parity"
+
 [file."tests/fixtures/gemma_all_tests/gemma_all.assoc.txt"]
 sha256 = "135d8123deed053c4f0cef0d065777dca1e0b1dd804d3ffc9a2d058311b63429"
 

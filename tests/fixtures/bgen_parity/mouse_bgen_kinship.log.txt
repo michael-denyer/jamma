@@ -1,0 +1,27 @@
+##
+## GEMMA Version    = 0.98.5 (2021-08-25)
+## Build profile    = /gnu/store/8rvid272yb53bgascf5c468z0jhsyflj-profile
+## GCC version      = 4.2.1
+## GSL Version      = 2.8
+## OpenBlas         = OpenBLAS 0.3.31  - OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY USE_OPENMP vortexm4 MAX_THREADS=56
+##   arch           = vortexm4
+##   threads        = 18
+##   parallel type  = openmp
+##
+## Command Line Input = gemma -g tests/fixtures/bgen_parity/mouse_bgen.geno.txt.gz -p tests/fixtures/bgen_parity/mouse_bgen.pheno.txt -a tests/fixtures/bgen_parity/mouse_bgen.anno.txt -gk 1 -o mouse_bgen_kinship -outdir tests/fixtures/bgen_parity 
+##
+## Date = Thu Sep 24 02:36:19 2026
+##
+## Summary Statistics:
+## number of total individuals = 160
+## number of analyzed individuals = 94
+## number of covariates = 1
+## number of phenotypes = 1
+## number of total SNPs/var = 1508
+## number of analyzed SNPs/var = 1483
+##
+## Computation Time:
+## total computation time = 0.00180362 min 
+## computation time break down: 
+##      time on calculating relatedness matrix = 0.00152925 min 
+##

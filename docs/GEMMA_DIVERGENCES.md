@@ -567,8 +567,9 @@ with either `-bfile` or `-bgen`; BGEN input requires it.
 
 ### Divergence Impact
 
-None for PLINK input. For BGEN, run GEMMA on BIMBAM
-files holding the same decoded dosages to compare.
+None for PLINK input. For BGEN, GEMMA runs on BIMBAM files holding the same
+decoded dosages. `tests/test_bgen_gemma_parity.py` holds `-gk 1` and
+`-lmm 1`-`4` on such a pair to the default `ToleranceConfig`.
 
 ---
 

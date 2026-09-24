@@ -2,7 +2,8 @@
 
 ``bgen.BgenWriter`` (a dev-only dependency) writes the ``.bgen`` and its
 bgenix-schema ``.bgi`` together; the Oxford ``.sample`` is written here by
-hand. Nothing BGEN-shaped is committed under ``tests/fixtures/``.
+hand. The one committed BGEN, ``tests/fixtures/bgen_parity``, is the GEMMA
+parity fixture that ``scripts/generate_bgen_parity_inputs.py`` builds.
 """
 
 from __future__ import annotations

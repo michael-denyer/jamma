@@ -325,6 +325,7 @@ versus mixed OpenBLAS/MKL at 85k.
 | `tests/test_runner_numpy.py` (tier0/tier1/tier2) | Wald/Score/LRT vs GEMMA (synthetic + mouse_hs1940) |
 | `tests/test_numpy_streaming.py::TestNumpyStreamingGemmaParity` (tier1) | Streaming runner vs GEMMA (all modes + covariates) |
 | `tests/lmm_accel/` (tier0/tier1/tier2) | C extension Wald+covariate vs GEMMA |
+| `tests/test_bgen_gemma_parity.py` (tier1) | BGEN kinship and all LMM modes vs GEMMA on BIMBAM holding the same dosages |
 
 Run kinship validation:
 

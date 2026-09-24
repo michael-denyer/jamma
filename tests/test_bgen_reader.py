@@ -423,13 +423,52 @@ def test_rejects_bit_depth_above_16(tmp_path: Path, bit_depth: int):
         _first_block(dataset)
 
 
-def test_rejects_stale_index(tmp_path: Path):
-    """A .bgi whose position disagrees with the variant block fails, naming it."""
+@pytest.mark.parametrize(
+    ("assignment", "message"),
+    [
+        ("position = 99", r"rs1 \(1:99\) .*position 2 in the \.bgen, 99 in"),
+        ("chromosome = '2'", r"rs1 \(2:2\) .*chromosome '1' in the \.bgen, '2' in"),
+        ("rsid = 'rsX'", r"rsX \(1:2\) .*rsid 'rs1' in the \.bgen, 'rsX' in"),
+        (
+            "allele1 = allele2, allele2 = allele1",
+            r"rs1 \(1:2\) .*alleles \('A', 'G'\) in the \.bgen, \('G', 'A'\) in",
+        ),
+    ],
+)
+def test_rejects_stale_index(tmp_path: Path, assignment: str, message: str):
+    """A .bgi field that disagrees with the variant block fails, naming both values."""
     files = write_bgen(tmp_path / "stale.bgen", _probs())
-    _sql(files.bgi, "UPDATE Variant SET position = 99 WHERE rsid = 'rs1'")
+    _sql(files.bgi, f"UPDATE Variant SET {assignment} WHERE rsid = 'rs1'")
     dataset = _open(files)
 
-    with pytest.raises(BgenFormatError, match=r"rs1.*index is stale"):
+    with pytest.raises(BgenFormatError, match=message + r".*index is stale"):
+        _first_block(dataset)
+
+
+def test_empty_rsid_reads_under_its_variant_id(tmp_path: Path):
+    """An empty rsid, reported as the variant id, still matches its block."""
+    files = write_bgen(
+        tmp_path / "norsid.bgen", _probs(), rsids=["", "rs1"], varids=["chr1:1", "v1"]
+    )
+    dataset = _open(files)
+
+    assert list(dataset.variants.rs) == ["chr1:1", "rs1"]
+    _first_block(dataset)
+
+
+def test_rejects_non_utf8_identifier(tmp_path: Path):
+    files = write_bgen(tmp_path / "latin1.bgen", _probs(1))
+    data = bytearray(files.bgen.read_bytes())
+    (start,) = (
+        sqlite3.connect(files.bgi)
+        .execute("SELECT file_start_position FROM Variant")
+        .fetchone()
+    )
+    data[start + 2] = 0xFF  # first byte of the variant id
+    files.bgen.write_bytes(bytes(data))
+    dataset = _open(files)
+
+    with pytest.raises(BgenFormatError, match=r"rs0.*not UTF-8"):
         _first_block(dataset)
 
 

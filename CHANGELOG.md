@@ -277,6 +277,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A stale BGEN index fails before decoding. When the `.bgi` chromosome,
+  rsid, position or allele order differs from the variant block, the error
+  names the field and both values, so the index's labels are never attached
+  to another variant's dosages. An identifier or allele that is not UTF-8 is
+  reported as such, not as a header overrun.
+
 - The Docker image loads one Intel OpenMP runtime. It moves to Python 3.12
   because numpy-mkl publishes no rebuilt cp311 wheel, and the old cp311 wheel
   bundles a second `libiomp5` that can crash at exit. `mkl-service` moves to

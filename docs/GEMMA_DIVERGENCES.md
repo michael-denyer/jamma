@@ -303,8 +303,8 @@ noise, or a different CPU, moved by up to `4e-5`. `tests/test_mle_refinement_con
 checks NumPy and native C against dense-solve MLE score roots at `1e-8`
 relative tolerance, including under one-ulp eigenvalue perturbations.
 
-Newton candidates are bounded by the coarse grid bracket, not by the final
-golden-section bracket, because rounded comparisons can leave the true maximum
+The accept rule bounds Newton candidates by the coarse grid bracket, not by
+the final golden-section bracket, because rounded comparisons can leave the true maximum
 outside the golden-section bracket. In `reml_flat_optima.npz` it lies outside
 for 5 of the 8 peaks on the native path, by up to `1.1e-3` in log lambda.
 Bounding candidates by the golden-section bracket raises the worst relative

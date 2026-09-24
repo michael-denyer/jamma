@@ -3,6 +3,7 @@
 from loguru import logger
 
 from jamma.core.memory import array_gb
+from jamma.genotype.dataset import GenotypeEncoding
 
 
 def _dsyrk_scratch_gb(n_samples: int) -> float:
@@ -27,7 +28,12 @@ def _dsyrk_scratch_gb(n_samples: int) -> float:
 
 
 def estimate_kinship_memory(
-    *, n_input_samples: int, n_output_samples: int, n_snps: int, chunk_size: int
+    *,
+    n_input_samples: int,
+    n_output_samples: int,
+    n_snps: int,
+    chunk_size: int,
+    genotype_encoding: GenotypeEncoding = GenotypeEncoding.HARD_CALLS,
 ) -> float:
     """Price streaming kinship in GB from its input and output dimensions.
 
@@ -42,5 +48,9 @@ def estimate_kinship_memory(
     return (
         array_gb(n_output_samples, n_output_samples)
         + (3 + 2 / 8) * chunk_gb
+        + genotype_encoding.read_workspace_bytes(
+            n_input_samples, min(chunk_size, n_snps)
+        )
+        / 1e9
         + _dsyrk_scratch_gb(n_output_samples)
     )

@@ -8,6 +8,7 @@ from typing import Literal, get_args
 from jamma.core import memory
 from jamma.core.memory import array_gb
 from jamma.core.threading import get_c_extension_thread_count, is_blas_controllable
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.kinship.memory import estimate_kinship_memory
 from jamma.lmm import accel
 from jamma.lmm.chunk_sizing import (
@@ -108,6 +109,8 @@ class ExecutableAssociationPlan:
     workspace: WorkspaceSpec
     phenotype_group_size: int = 1
     kinship: KinshipShape | None = None
+    genotype_encoding: GenotypeEncoding = GenotypeEncoding.HARD_CALLS
+    stats_block_size: int = DEFAULT_STATS_CHUNK
 
     def __post_init__(self) -> None:
         if self.phenotype_group_size < 1:
@@ -174,6 +177,7 @@ class ExecutableAssociationPlan:
                 n_output_samples=kinship.n_samples,
                 n_snps=self.n_snps_before_filter,
                 chunk_size=DEFAULT_STATS_CHUNK,
+                genotype_encoding=self.genotype_encoding,
             )
         if kinship.n_samples != self.n_samples:
             # The full matrix and its analysed-sample copy are live together.
@@ -187,11 +191,26 @@ class ExecutableAssociationPlan:
     def _statistics_phase_gb(self) -> float:
         """Peak of streaming pass 1, which reads SNP statistics with U live.
 
-        The blocks are ``DEFAULT_STATS_CHUNK`` wide over every input sample.
+        The blocks are ``stats_block_size`` wide over every input sample.
         """
-        return array_gb(self.n_samples, self.n_samples) + array_gb(
-            self.n_input_samples, DEFAULT_STATS_CHUNK
-        )
+        width = self.stats_block_size
+        block_gb = array_gb(self.n_input_samples, width)
+        if self.genotype_encoding is GenotypeEncoding.PROBABILITIES:
+            width = min(width, self.n_snps_before_filter)
+            decoded = array_gb(self.n_input_samples, width)
+            workspace = (
+                self.genotype_encoding.read_workspace_bytes(self.n_input_samples, width)
+                / 1e9
+            )
+            # Decoding, row selection and statistics run sequentially. The
+            # NumPy statistics fallback can hold three float64 blocks and
+            # two masks; price it even when the native statistics kernel is
+            # available, so disabling jlinalg cannot invalidate the quote.
+            selected = array_gb(self.n_samples, width)
+            block_gb = max(
+                decoded + workspace, decoded + selected, (3 + 2 / 8) * selected
+            )
+        return array_gb(self.n_samples, self.n_samples) + block_gb
 
     def _association_phase_gb(self) -> float:
         """Peak of the association pass at this chunk width and phenotype group.
@@ -217,8 +236,20 @@ class ExecutableAssociationPlan:
             self._group_workspace_bytes()
             + chunks.chunk_size * self.workspace.bytes_per_snp
         )
+        reader_extra = 0.0
+        if self.genotype_encoding is GenotypeEncoding.PROBABILITIES:
+            reader_extra = max(
+                self.genotype_encoding.read_workspace_bytes(
+                    self.n_input_samples, chunks.chunk_size
+                )
+                / 1e9,
+                # A C-order analysed-row copy can coexist briefly with the
+                # full Fortran-order decoded matrix, before ownership moves.
+                array_gb(n, chunks.chunk_size),
+            )
         return (
-            array_gb(n, n)
+            reader_extra
+            + array_gb(n, n)
             + array_gb(n, genotype_cols)
             + chunks.n_buffers * array_gb(n, chunks.chunk_size)
             + uab_iab_bytes / 1e9
@@ -309,12 +340,18 @@ def plan_association(
     n_input_samples: int | None = None,
     n_phenotypes: int = 1,
     max_chunk_size: int | None = None,
+    genotype_encoding: GenotypeEncoding = GenotypeEncoding.HARD_CALLS,
+    stats_block_size: int = DEFAULT_STATS_CHUNK,
 ) -> ExecutableAssociationPlan:
     """Select all association policy and conservative geometry once.
 
     Plans every public backend with either native compute or the real NumPy
     fallback. Streaming is a storage policy and remains available when the C
     extension is absent.
+
+    ``genotype_encoding`` prices the reader's live buffers, including BGEN
+    probabilities and decompression. ``stats_block_size`` must be the width
+    used by the statistics pass; association narrowing does not change it.
 
     ``backend="loco"`` runs the NumPy body per chromosome over disk-read
     chunks, so it is priced like streaming (one chunk plus the
@@ -387,6 +424,8 @@ def plan_association(
         n_cvt=n_cvt,
         mem_budget_gb=mem_budget,
         workspace=workspace,
+        genotype_encoding=genotype_encoding,
+        stats_block_size=stats_block_size,
     )
     if backend == "auto":
         batch_gb = plan.price(eigen=None).association_gb

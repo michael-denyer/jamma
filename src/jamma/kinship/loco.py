@@ -31,7 +31,7 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.memory import array_gb
-from jamma.genotype.dataset import GenotypeDataset
+from jamma.genotype.dataset import GenotypeDataset, GenotypeEncoding
 from jamma.genotype.snp_filter import validate_snp_indices
 from jamma.genotype.snp_stats import SnpStats
 from jamma.kinship.accumulation import accumulate_kinship, validate_valid_indices
@@ -185,9 +185,22 @@ class LocoRetainedSet(NamedTuple):
         return 3 * self.matrix_gb + self.chunk_buffer_gb
 
 
-def loco_retained_set(n_mat: int, n_samples: int, chunk_size: int) -> LocoRetainedSet:
+def loco_retained_set(
+    n_mat: int,
+    n_samples: int,
+    chunk_size: int,
+    *,
+    genotype_encoding: GenotypeEncoding = GenotypeEncoding.HARD_CALLS,
+) -> LocoRetainedSet:
     """Size the retained set for ``n_mat``-order matrices over ``n_samples`` inputs."""
-    return LocoRetainedSet(array_gb(n_mat, n_mat), array_gb(n_samples, chunk_size))
+    block_gb = array_gb(n_samples, chunk_size)
+    if genotype_encoding is GenotypeEncoding.PROBABILITIES:
+        # Reserve both probability decoding and the transform/selection
+        # buffers while choosing chromosome batches and eigen workers.
+        block_gb = (3 + 2 / 8) * block_gb + genotype_encoding.read_workspace_bytes(
+            n_samples, chunk_size
+        ) / 1e9
+    return LocoRetainedSet(array_gb(n_mat, n_mat), block_gb)
 
 
 class _LocoPassPlan(NamedTuple):
@@ -377,7 +390,9 @@ def compute_loco_kinship_streaming(
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")
 
-    retained = loco_retained_set(n_mat, n_samples, chunk_size)
+    retained = loco_retained_set(
+        n_mat, n_samples, chunk_size, genotype_encoding=dataset.encoding
+    )
     if check_memory:
         memory.require(
             retained.while_consuming_gb + consumer_gb,

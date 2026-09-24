@@ -188,12 +188,12 @@ Reads PLINK binary and BGEN v1.2 genotypes, covariates, and kinship matrices. Wr
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 2a | `GenotypeDataset` | Samples x variants behind a reader strategy: metadata at open, `blocks()` and `stats()` stream columns (O(n x chunk)), `partitions`, `fingerprint()` | [genotype/dataset.py:304](../src/jamma/genotype/dataset.py#L304) |
-| 2a | `materialize()` | Batch mode: every variant read once into a float32 in-memory HARD_CALLS dataset | [genotype/dataset.py:419](../src/jamma/genotype/dataset.py#L419) |
+| 2a | `GenotypeDataset` | Samples x variants behind a reader strategy: metadata at open, `blocks()` and `stats()` stream columns (O(n x chunk)), `partitions`, `fingerprint()` | [genotype/dataset.py:317](../src/jamma/genotype/dataset.py#L317) |
+| 2a | `materialize()` | Batch mode: every variant read once into a float32 in-memory HARD_CALLS dataset | [genotype/dataset.py:432](../src/jamma/genotype/dataset.py#L432) |
 | 2a | `PlinkReader` | bed-reader behind `GenotypeDataset.open_plink`: float64 blocks, float32 for statistics | [plink.py:113](../src/jamma/io/plink.py#L113) |
 | 2a | `validate_plink_dimensions()` | .bed size against .fam and .bim line counts, checked at open | [plink.py:48](../src/jamma/io/plink.py#L48) |
-| 2a | `open_bgen()` | BGEN v1.2 layout 2 as a PROBABILITIES dataset: variants from the `.bgi`, samples from the `.sample`, header counts and sample IDs cross-checked at open | [genotype/dataset.py:353](../src/jamma/genotype/dataset.py#L353) |
-| 2a | `BgenReader` | Reads variant blocks by `.bgi` offset, inflates zstd in Python, decodes in C; yields `ProbabilityBlock`s (float64 first-allele dosages, the quantised q11/q12 and missing mask, and INFO sums over the requested `info_rows`) | [io/bgen.py:268](../src/jamma/io/bgen.py#L272) |
+| 2a | `open_bgen()` | BGEN v1.2 layout 2 as a PROBABILITIES dataset: variants from the `.bgi`, samples from the `.sample`, header counts and sample IDs cross-checked at open | [genotype/dataset.py:366](../src/jamma/genotype/dataset.py#L366) |
+| 2a | `BgenReader` | Reads variant blocks by `.bgi` offset, inflates zstd in Python, decodes in C; yields `ProbabilityBlock`s (float64 first-allele dosages, the quantised q11/q12 and missing mask, and INFO sums over the requested `info_rows`) | [io/bgen.py:286](../src/jamma/io/bgen.py#L286) |
 | 2a | `decode_bgen_probabilities_c` | C: zlib inflate and B-bit unpack (B 1..16) per variant, accumulating the exact INFO sums over a row mask in the same loop; OpenMP across variants, GIL released | [_lmm_accel_bgen.c](../src/jamma/lmm/_lmm_accel_bgen.c) |
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:21](../src/jamma/io/covariate.py#L21) |
 | 2b | `read_phenotype_table()` | GEMMA `-p` phenotype file; `phenotype_file_column()` selects a column, `NA`/`-9` missing | [io/phenotype.py](../src/jamma/io/phenotype.py) |
@@ -219,9 +219,9 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from a `GenotypeDataset` in one read: `_stream_kinship` accumulates one dsyrk per chunk from `filtered_kinship_chunks` | [stream.py:334](../src/jamma/kinship/stream.py#L334) |
-| 3a | `filtered_kinship_chunks()` | The one kinship chunk generator, shared by standard and LOCO kinship: filters each `GenotypeDataset.blocks()` block with `compute_snp_stats` and, for probabilities, the block's INFO (taken before its dosages), applies the transform over all samples, then cuts output rows; one yield per block | [stream.py:151](../src/jamma/kinship/stream.py#L151) |
-| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship over `filtered_kinship_chunks`, chromosomes from `dataset.partitions`; the first pass records SNP statistics, INFO included; returns a consume-once `LocoKinshipStream` | [loco.py:279](../src/jamma/kinship/loco.py#L279) |
+| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from a `GenotypeDataset` in one read: `_stream_kinship` accumulates one dsyrk per chunk from `filtered_kinship_chunks` | [stream.py:336](../src/jamma/kinship/stream.py#L336) |
+| 3a | `filtered_kinship_chunks()` | The one kinship chunk generator, shared by standard and LOCO kinship: filters each `GenotypeDataset.blocks()` block with `compute_snp_stats` and, for probabilities, the block's INFO (taken before its dosages), applies the transform over all samples, then cuts output rows; one yield per block | [stream.py:153](../src/jamma/kinship/stream.py#L153) |
+| 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship over `filtered_kinship_chunks`, chromosomes from `dataset.partitions`; the first pass records SNP statistics, INFO included; returns a consume-once `LocoKinshipStream` | [loco.py:292](../src/jamma/kinship/loco.py#L292) |
 | 3a | `accumulate_kinship()` | The rank-k update both kinship paths call once per chunk | [accumulation.py](../src/jamma/kinship/accumulation.py) |
 | 3a | `compute_centered_kinship()` (in-memory oracle, no production caller) | K = (1/p) x Xc x Xc' in batches of 10k SNPs | [kinship.py:170](../tests/reference/kinship.py#L171) |
 | 3a | `_filter_snps()` (in-memory oracle, no production caller) | MAF, missing rate, monomorphism filters | [kinship.py:46](../tests/reference/kinship.py#L46) |
@@ -270,15 +270,15 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Na | `batch_calc_wald_stats_from_pab_numpy()` | Vectorized Wald: beta, SE, p_wald from a precomputed Pab batch | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_calc_score_stats_numpy()` | Vectorized Score: null lambda -> p_score | [stats.py](../src/jamma/lmm/stats.py) |
 | 4Na | `batch_lrt_pvalues_numpy()` | Vectorized LRT: MLE optimize -> p_lrt | [stats.py](../src/jamma/lmm/stats.py) |
-| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:302](../src/jamma/lmm/association_plan.py#L302) |
-| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:93](../src/jamma/lmm/association_plan.py#L93) |
-| 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any `GenotypeDataset` under one `LmmRunSpec` | [runner_numpy.py:310](../src/jamma/lmm/runner_numpy.py#L310) |
-| 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:245](../src/jamma/lmm/runner_numpy.py#L245) |
+| 4Nb | `plan_association()` | Select mode, dispatch, memory geometry, and price once for an association run | [association_plan.py:333](../src/jamma/lmm/association_plan.py#L333) |
+| 4Nb | `ExecutableAssociationPlan` | Immutable pre-filter policy; its `conservative_chunks` plan is narrowed once after filtering | [association_plan.py:94](../src/jamma/lmm/association_plan.py#L94) |
+| 4Nb | `run_single()` | One phenotype as a group of one: stats, filter (MAF, missingness, HWE, `-snps`), eigendecomposition, then `run_association`, over any `GenotypeDataset` under one `LmmRunSpec` | [runner_numpy.py:311](../src/jamma/lmm/runner_numpy.py#L311) |
+| 4Nb | `run_association()` | The shared run body: null fit per phenotype, chunk loop, and result routing for a bounded phenotype group over one `RotatedBasis` | [runner_numpy.py:246](../src/jamma/lmm/runner_numpy.py#L246) |
 | 4Nb | `LmmRunSpec` | One run's policy: config, execution plan, SNP restriction, HWE and INFO thresholds, PVE choice, labels, statistics block size; `snp_filters` builds its `SnpFilterSpec` | [runner_numpy.py:94](../src/jamma/lmm/runner_numpy.py#L94) |
 | 4Nb | `prepare_genotypes()` | Measures (or, for LOCO, accepts) SNP statistics over the analysed rows, filters them, and binds the dataset's float64 chunk stream | [runner_numpy.py:157](../src/jamma/lmm/runner_numpy.py#L157) |
 | 4Nb | `SampleBasis` | Immutable mapping from analyzed rows to source-local rows | [genotype_source.py:25](../src/jamma/lmm/genotype_source.py#L25) |
 | 4Nb | `PreparedGenotypes` | Bound SNP selection, statistics, metadata, and chunk factory | [genotype_source.py:65](../src/jamma/lmm/genotype_source.py#L65) |
-| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over `GenotypeDataset.from_matrix` | [runner_numpy.py:416](../src/jamma/lmm/runner_numpy.py#L416) |
+| 4Nb | `run_lmm_association_numpy()` | Public batch entry: plans, gates memory, then the shared body over `GenotypeDataset.from_matrix` | [runner_numpy.py:417](../src/jamma/lmm/runner_numpy.py#L417) |
 | 4Nb | `AnalysedPhenotype` | One phenotype and its covariates restricted to the analysed samples, with the valid mask | [prepare_common.py:125](../src/jamma/lmm/prepare_common.py#L125) |
 | 4Nb | `restrict_eigen_input()` | Restrict a kinship to the analysed samples, or check eigenpairs match them | [prepare_common.py:189](../src/jamma/lmm/prepare_common.py#L189) |
 | 4Nb | `RotatedBasis` | Eigenbasis and rotated covariates every phenotype in a group shares | [prepare_common.py:304](../src/jamma/lmm/prepare_common.py#L304) |
@@ -309,8 +309,8 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:365](../src/jamma/lmm/assoc_output.py#L365) |
 | 4Ni | `_count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/chunk_runner_numpy.py:51](../src/jamma/lmm/chunk_runner_numpy.py#L51) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM over a `GenotypeDataset` | [lmm/loco.py:69](../src/jamma/lmm/loco.py#L69) |
-| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`, which carries the opened `GenotypeDataset`; each chromosome runs `run_single` with that chromosome's statistics from the kinship pass | [lmm/loco.py:145](../src/jamma/lmm/loco.py#L145) |
-| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:117](../src/jamma/lmm/loco_eigen.py#L117) |
+| 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`, which carries the opened `GenotypeDataset`; each chromosome runs `run_single` with that chromosome's statistics from the kinship pass | [lmm/loco.py:146](../src/jamma/lmm/loco.py#L146) |
+| 4Nj | `eigen_pairs_for()` | Chooses cached vs computed eigenpairs once; owns the cache key, manifest and artifact writes | [lmm/loco_eigen.py:118](../src/jamma/lmm/loco_eigen.py#L118) |
 | 4Nj | `solve_eigen_pairs()` | Ordered eigenpairs with `workers` solves in flight under one consumer-thread BLAS scope | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 | 4Nj | `plan_loco_workers()` | Worker cap and complete consumer memory reservation | [lmm/loco_workers.py](../src/jamma/lmm/loco_workers.py) |
 
@@ -322,7 +322,7 @@ Configuration, memory management, threading, and logging.
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 5c | `ExecutableAssociationPlan.price()` | The run's memory quote: kinship, eigen, statistics, and association phases and their peak | [association_plan.py:143](../src/jamma/lmm/association_plan.py#L143) |
+| 5c | `ExecutableAssociationPlan.price()` | The run's memory quote: kinship, eigen, statistics, and association phases and their peak | [association_plan.py:146](../src/jamma/lmm/association_plan.py#L146) |
 | 5c | `require()` | The one memory gate; callers read `available_ram_gb()` once | [memory.py:67](../src/jamma/core/memory.py#L67) |
 | 5c | `get_memory_snapshot()` | Current RSS, VMS, available | [memory_snapshot.py:27](../src/jamma/core/memory_snapshot.py#L27) |
 | 5d | `setup_logging()` | Loguru console + optional file | [logging.py:9](../src/jamma/utils/logging.py#L9) |
@@ -578,11 +578,11 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
 | CLI dispatch (`main`) | [cli.py:258](../src/jamma/cli.py#L259) |
-| Load genotypes | [genotype/dataset.py:299](../src/jamma/genotype/dataset.py#L299) |
+| Load genotypes | [GenotypeDataset](../src/jamma/genotype/dataset.py#L317) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:94](../src/jamma/io/matrix_writer.py#L94) |
-| Kinship compute | [stream.py:334](../src/jamma/kinship/stream.py#L334) |
+| Kinship compute | [stream.py:336](../src/jamma/kinship/stream.py#L336) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood (`reml_log_likelihood()`) | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |
 | Pab projection/indexing | [pab.py](../src/jamma/lmm/pab.py) |
@@ -604,7 +604,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | LOCO config | [lmm/loco_config.py](../src/jamma/lmm/loco_config.py) |
 | LOCO eigenpair sources | [lmm/loco_eigen.py](../src/jamma/lmm/loco_eigen.py) |
 | Result writer | [IncrementalAssocWriter](../src/jamma/lmm/assoc_output.py#L71) |
-| Memory estimation | [price](../src/jamma/lmm/association_plan.py#L143) |
+| Memory estimation | [price](../src/jamma/lmm/association_plan.py#L146) |
 | Threading | [threading.py:55](../src/jamma/core/threading.py#L55) |
 | Hardware context | [_hardware_context.py:33](../scripts/_hardware_context.py#L33) |
 | Validation comparison | [compare_assoc_results](../src/jamma/validation/compare.py#L574) |

@@ -95,6 +95,8 @@ def run_lmm_association_numpy_streaming(
         n_cvt=samples.n_cvt,
         n_input_samples=dataset.n_samples,
         max_chunk_size=chunk_size,
+        genotype_encoding=dataset.encoding,
+        stats_block_size=DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
     )
     return run_single(
         dataset,

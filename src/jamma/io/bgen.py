@@ -32,6 +32,20 @@ from jamma.genotype.variants import SnpMeta
 # zstd, inflated) bytes held beside a block to this many variants.
 _DECODE_BATCH = 256
 
+
+def bgen_read_workspace_bytes(n_samples: int, n_variants: int) -> int:
+    """Bytes beyond float64 dosages while decoding one block.
+
+    Two uint16 probability arrays and a bool missing mask use five bytes
+    per cell. Reserve two layout-2 payloads (10 + 9N bytes each) per batched
+    variant for compressed and inflated data. Per-variant bit depths and
+    four int64 INFO sums add 33 bytes.
+    """
+    return (5 * n_samples + 33) * n_variants + 2 * (10 + 9 * n_samples) * min(
+        n_variants, _DECODE_BATCH
+    )
+
+
 _COMPRESSION = {0: "none", 1: "zlib", 2: "zstd"}
 
 
@@ -330,22 +344,34 @@ class BgenReader:
         try:
             for start in range(0, len(columns), block_size):
                 block = columns[start : start + block_size]
-                k = len(block)
-                out = ProbabilityBlock(
-                    dosages=np.empty((n, k), dtype=np.float64, order="F"),
-                    q11=np.empty((n, k), dtype=np.uint16, order="F"),
-                    q12=np.empty((n, k), dtype=np.uint16, order="F"),
-                    missing=np.empty((n, k), dtype=np.bool_, order="F"),
-                    bit_depth=np.empty(k, dtype=np.uint8),
-                    info_sums=np.empty((k, 4), dtype=np.int64),
-                    info_rows=info_rows,
-                )
-                for lo in range(0, k, _DECODE_BATCH):
-                    hi = min(lo + _DECODE_BATCH, k)
-                    self._decode_batch(fd, decode, block[lo:hi], out, lo, hi, keep)
-                yield out
+                yield self._read_block(fd, decode, block, keep, info_rows)
         finally:
             os.close(fd)
+
+    def _read_block(
+        self,
+        fd: int,
+        decode: Callable[..., tuple[int, str] | None],
+        columns: np.ndarray,
+        keep: np.ndarray | None,
+        info_rows: np.ndarray | None,
+    ) -> ProbabilityBlock:
+        # Return from a normal call: a suspended reader must not keep this
+        # block alive after its consumer takes or releases the dosages.
+        n, k = self._header.n_samples, len(columns)
+        out = ProbabilityBlock(
+            dosages=np.empty((n, k), dtype=np.float64, order="F"),
+            q11=np.empty((n, k), dtype=np.uint16, order="F"),
+            q12=np.empty((n, k), dtype=np.uint16, order="F"),
+            missing=np.empty((n, k), dtype=np.bool_, order="F"),
+            bit_depth=np.empty(k, dtype=np.uint8),
+            info_sums=np.empty((k, 4), dtype=np.int64),
+            info_rows=info_rows,
+        )
+        for lo in range(0, k, _DECODE_BATCH):
+            hi = min(lo + _DECODE_BATCH, k)
+            self._decode_batch(fd, decode, columns[lo:hi], out, lo, hi, keep)
+        return out
 
     def _decode_batch(
         self,
@@ -414,28 +440,40 @@ class BgenReader:
     def _payload(self, column: int, blob: memoryview) -> tuple[memoryview, int]:
         """Split a variant data block into its probability data and length D.
 
-        Checks the block's position and allele count against the ``.bgi``
-        and its length C against the indexed block size, so a stale index
+        Checks variant identity, ordered alleles and position against the
+        ``.bgi``, and length C against the indexed block size, so a stale index
         fails here instead of decoding the wrong bytes.
         """
         p = 0
         try:
+            identifiers = []
             for _ in range(3):  # variant id, rsid, chromosome
                 (length,) = struct.unpack_from("<H", blob, p)
+                identifiers.append(bytes(blob[p + 2 : p + 2 + length]).decode())
                 p += 2 + length
             pos, n_alleles = struct.unpack_from("<IH", blob, p)
             p += 6
+            alleles = []
             for _ in range(n_alleles):
                 (length,) = struct.unpack_from("<I", blob, p)
+                alleles.append(bytes(blob[p + 4 : p + 4 + length]).decode())
                 p += 4 + length
             (c,) = struct.unpack_from("<I", blob, p)
             p += 4
-        except struct.error:
+        except (struct.error, UnicodeDecodeError):
             raise BgenFormatError(
                 f"{self._bgen}: variant {self._describe(column)} header overruns "
                 "its .bgi size_in_bytes; the index is stale"
             ) from None
-        if pos != self._index.variants.pos[column] or n_alleles != 2:
+        variant_id, rsid, chromosome = identifiers
+        indexed = self._index.variants
+        if (
+            pos != indexed.pos[column]
+            or n_alleles != 2
+            or chromosome != indexed.chr[column]
+            or (rsid or variant_id) != indexed.rs[column]
+            or alleles != [indexed.a1[column], indexed.a0[column]]
+        ):
             raise BgenFormatError(
                 f"{self._bgen}: variant {self._describe(column)} does not match "
                 f"its .bgi entry (position {pos}, {n_alleles} alleles); the "

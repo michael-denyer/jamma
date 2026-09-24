@@ -209,8 +209,9 @@ def prepare_genotypes(
 
     def _iter_chunks(selection: SnpSelection, chunk_size: int) -> Iterator[RawLmmChunk]:
         for block in dataset.blocks(chunk_size, columns=selection.indices):
-            chunk = block.dosages(rows)
-            yield RawLmmChunk(np.ascontiguousarray(chunk), block.start, block.end)
+            chunk = np.ascontiguousarray(block.dosages(rows))
+            yield RawLmmChunk(chunk, block.start, block.end)
+            del chunk
 
     return bind_prepared_genotypes(
         snp_meta=dataset.variants,

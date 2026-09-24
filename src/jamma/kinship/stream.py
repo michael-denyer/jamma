@@ -27,7 +27,7 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.estimates import estimate_kinship_seconds
-from jamma.genotype.dataset import GenotypeDataset
+from jamma.genotype.dataset import GenotypeDataset, GenotypeEncoding
 from jamma.genotype.snp_filter import (
     compute_snp_filter_mask,
     compute_snp_stats,
@@ -57,6 +57,7 @@ def _preflight_kinship_memory(
     n_snps: int,
     chunk_size: int,
     mem_budget: float | None,
+    genotype_encoding: GenotypeEncoding = GenotypeEncoding.HARD_CALLS,
 ) -> None:
     """Gate a kinship computation on the memory that phase actually needs.
 
@@ -82,6 +83,7 @@ def _preflight_kinship_memory(
         n_output_samples=n_output_samples,
         n_snps=n_snps,
         chunk_size=chunk_size,
+        genotype_encoding=genotype_encoding,
     )
     memory.require(
         kinship_gb,
@@ -444,6 +446,7 @@ def compute_kinship_streaming(
             n_snps=n_snps,
             chunk_size=chunk_size,
             mem_budget=mem_budget,
+            genotype_encoding=dataset.encoding,
         )
 
     K, n_filtered = _stream_kinship(

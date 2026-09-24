@@ -111,6 +111,7 @@ def loco_retained_set_for(execution: ExecutableAssociationPlan) -> LocoRetainedS
         execution.resolved_kinship.n_samples,
         execution.n_input_samples,
         DEFAULT_STATS_CHUNK,
+        genotype_encoding=execution.genotype_encoding,
     )
 
 

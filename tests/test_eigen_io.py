@@ -145,6 +145,52 @@ class TestRoundTripPrecision:
         np.testing.assert_array_equal(loaded_d, eigenvalues)
         np.testing.assert_array_equal(loaded_u, eigenvectors)
 
+    def test_members_are_durable_before_the_manifest_commits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both members and their directory entries reach disk before the commit.
+
+        The manifest is fsynced so a power cut cannot lose it; without the same
+        for the members it can survive while they come back empty.
+        """
+        import os
+        import sys
+
+        def fd_path(fd: int) -> str:
+            if sys.platform == "darwin":
+                import fcntl
+
+                raw = fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024)
+                return os.path.realpath(raw.rstrip(b"\0").decode())
+            return os.path.realpath(Path(f"/proc/self/fd/{fd}").readlink())
+
+        events: list[tuple[str, str]] = []
+        real_fsync, real_replace = os.fsync, os.replace
+
+        def fsync(fd: int) -> None:
+            events.append(("fsync", fd_path(fd)))
+            real_fsync(fd)
+
+        def replace(src, dst) -> None:
+            events.append(("replace", os.path.realpath(dst)))
+            real_replace(src, dst)
+
+        monkeypatch.setattr(os, "fsync", fsync)
+        monkeypatch.setattr(os, "replace", replace)
+
+        d_path, u_path = write_eigen_files(
+            np.ones(3), np.eye(3), tmp_path, prefix="durable"
+        )
+
+        manifest = os.path.realpath(tmp_path / "durable.eigen_manifest.json")
+        commit = events.index(("replace", manifest))
+        synced_before_commit = {path for op, path in events[:commit] if op == "fsync"}
+        assert {
+            os.path.realpath(d_path),
+            os.path.realpath(u_path),
+            os.path.realpath(tmp_path),
+        } <= synced_before_commit
+
     def test_failed_pair_rewrite_preserves_committed_generation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

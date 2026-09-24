@@ -212,9 +212,27 @@ def resolve_eigen_cache(
         resolved = generation.resolve(records, source)
     except ValueError:
         return None
-    if not all(path.is_file() for pair in resolved.values() for path in pair):
+    if not all(_member_complete(path) for pair in resolved.values() for path in pair):
         return None
     return {chromosome: resolved[chromosome] for chromosome in chr_names}
+
+
+def _member_complete(path: Path) -> bool:
+    """Whether a committed member is present and, for .npy, whole.
+
+    Mapping a .npy checks its header and that the file holds every byte the
+    header promises, without reading the data. A member cut short by a crash
+    fails here, so the cache is recomputed instead of failing on first read.
+    """
+    if not path.is_file():
+        return False
+    if path.suffix != ".npy":
+        return path.stat().st_size > 0
+    try:
+        np.load(path, mmap_mode="r")
+    except (OSError, ValueError, EOFError):
+        return False
+    return True
 
 
 def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict[str, object] | None:

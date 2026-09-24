@@ -298,6 +298,33 @@ class TestEigenCacheManifest:
         assert resolved is not None
         assert resolved["1"][0].name == names["1"]["eigenD"]
 
+    @pytest.mark.parametrize("keep_bytes", [0, 100])
+    def test_loco_manifest_rejects_a_truncated_member(
+        self, tmp_path: Path, keep_bytes: int
+    ) -> None:
+        """A member cut short by a crash is a cache miss, not a committed pair.
+
+        Without this the run accepts the cache and fails on the first read.
+        """
+        from jamma.lmm.eigen_cache import resolve_eigen_cache
+
+        generation = "abc123"
+        stem = f"study.generation.{generation}.loco.chr1"
+        d_path = tmp_path / f"{stem}.eigenD.npy"
+        u_path = tmp_path / f"{stem}.eigenU.npy"
+        np.save(d_path, np.ones(4))
+        np.save(u_path, np.eye(4))
+        u_path.write_bytes(u_path.read_bytes()[:keep_bytes])
+        manifest = {
+            "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
+            "cache_key": "KEY",
+            "components": _dummy_components(),
+            "generation": generation,
+            "artifacts": {"1": {"eigenD": d_path.name, "eigenU": u_path.name}},
+        }
+
+        assert resolve_eigen_cache(manifest, tmp_path, "study", ["1"]) is None
+
     def test_loco_manifest_rejects_member_outside_generation(
         self, tmp_path: Path
     ) -> None:

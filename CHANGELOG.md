@@ -200,6 +200,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Eigen cache members are flushed to disk, and their directory with them,
+  before the manifest that names them is committed. The manifest was already
+  fsynced, so after a power cut it could survive while its members came back
+  empty. A LOCO eigen cache whose `.npy` member is empty or cut short now
+  counts as incomplete and is recomputed, instead of failing on first read.
 - A kinship or eigen text file read while another run replaced it no longer
   leaves a sidecar of the old contents that later reads prefer. The `.npy`
   sidecar now carries the modification time of the text it was built from,

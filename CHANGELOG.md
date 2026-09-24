@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `GEMMA_DIVERGENCES.md` §6 cites the jamma-lean proof that the accepted
+  Newton step contracts toward the root on a well-conditioned smooth peak
+  (`accepts_of_wellCond`, `newtonLoop_contracts`).
+
 - `GEMMA_DIVERGENCES.md` §6 explains why lambda refinement is bounded by the
   coarse grid bracket rather than the golden-section bracket, states the
   worst-case bound from jamma-lean, and records measured lambda error by

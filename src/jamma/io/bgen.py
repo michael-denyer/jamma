@@ -418,6 +418,16 @@ class BgenReader:
         if self._header.compression == 0:
             return blob[p:], c
         (inflated,) = struct.unpack_from("<I", blob, p)
+        # BGEN's largest bit depth, 32, bounds the data at 10 + N + 2*N*32/8
+        # bytes; a larger declared length is corrupt and would size the C
+        # scratch buffers. Depths 17..32 still reach the decoder's own error.
+        max_inflated = 10 + 9 * self._header.n_samples
+        if inflated > max_inflated:
+            raise BgenFormatError(
+                f"{self._bgen}: variant {self._describe(column)} declares "
+                f"{inflated} uncompressed bytes, more than the {max_inflated} a "
+                "biallelic diploid variant can hold at any BGEN bit depth"
+            )
         return blob[p + 4 :], inflated
 
     def _describe(self, column: int) -> str:

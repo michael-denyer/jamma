@@ -382,6 +382,32 @@ def test_rejects_corrupt_zlib_data(tmp_path: Path):
         _first_block(dataset)
 
 
+def test_rejects_oversized_declared_length(tmp_path: Path):
+    """A declared uncompressed length past 10 + 5N fails before any allocation."""
+    files = write_bgen(tmp_path / "huge.bgen", _probs(1))
+    data = bytearray(files.bgen.read_bytes())
+    (start,) = (
+        sqlite3.connect(files.bgi)
+        .execute("SELECT file_start_position FROM Variant")
+        .fetchone()
+    )
+    p = start
+    for _ in range(3):  # variant id, rsid, chromosome
+        (n,) = struct.unpack_from("<H", data, p)
+        p += 2 + n
+    (n_alleles,) = struct.unpack_from("<H", data, p + 4)
+    p += 6
+    for _ in range(n_alleles):
+        (n,) = struct.unpack_from("<I", data, p)
+        p += 4 + n
+    struct.pack_into("<I", data, p + 4, 0xFFFFFFFF)  # D, after C
+    files.bgen.write_bytes(bytes(data))
+    dataset = _open(files)
+
+    with pytest.raises(BgenFormatError, match=r"rs0.*declares 4294967295"):
+        _first_block(dataset)
+
+
 def test_header_rejects_bad_magic(tmp_path: Path):
     files = write_bgen(tmp_path / "magic.bgen", _probs())
     data = bytearray(files.bgen.read_bytes())

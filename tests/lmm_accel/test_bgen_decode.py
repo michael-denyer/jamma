@@ -79,6 +79,39 @@ def test_decode_matches_oracle_at_every_bit_depth(zlib_input: bool, n_threads: i
         assert bit_depth[j] == e_bits
 
 
+@pytest.mark.parametrize("zlib_input", [False, True])
+@pytest.mark.parametrize("n_threads", [1, 4])
+@pytest.mark.parametrize("masked", [False, True])
+def test_decode_info_sums_match_numpy(zlib_input: bool, n_threads: int, masked: bool):
+    """E, E2, F, N over the non-missing kept rows, exact at every bit depth."""
+    from jamma.lmm import accel
+
+    rng = np.random.default_rng(13)
+    raw = [_variant(rng, bits) for bits in range(1, 17)]
+    buffers = [zlib.compress(r) for r in raw] if zlib_input else raw
+    lengths = np.array([len(r) for r in raw], dtype=np.int64) if zlib_input else None
+    keep = rng.random(N) < 0.6 if masked else None
+    sums = np.zeros((len(raw), 4), dtype=np.int64)
+
+    failure = accel.require().decode_bgen_probabilities_c(
+        buffers,
+        lengths,
+        N,
+        *_outputs(len(raw)),
+        n_threads,
+        info_rows=keep,
+        info_sums=sums,
+    )
+
+    assert failure is None
+    for j, block in enumerate(raw):
+        _, q11, q12, missing, _ = decode_probabilities(block, N)
+        w = ~missing if keep is None else ~missing & keep
+        e = 2 * q11.astype(np.int64) + q12
+        expected = [e @ w, (e * e) @ w, (e + 2 * q11.astype(np.int64)) @ w, w.sum()]
+        np.testing.assert_array_equal(sums[j], expected, err_msg=f"variant {j}")
+
+
 @pytest.mark.parametrize(
     ("bad", "reason"),
     [
@@ -149,4 +182,25 @@ def test_decode_rejects_c_ordered_outputs():
             missing,
             bit_depth,
             1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("info_rows", "info_sums", "match"),
+    [
+        (np.ones(N - 1, dtype=bool), None, "info_rows must be None"),
+        (np.ones(N, dtype=np.uint8), None, "info_rows must be None"),
+        (None, np.zeros((2, 3), dtype=np.int64), "info_sums must be None"),
+        (None, np.zeros((2, 4), dtype=np.int32), "info_sums must be None"),
+        (None, np.zeros((4, 2), dtype=np.int64).T, "info_sums must be None"),
+    ],
+)
+def test_decode_rejects_bad_info_arguments(info_rows, info_sums, match: str):
+    from jamma.lmm import accel
+
+    rng = np.random.default_rng(17)
+    raw = [_variant(rng, 8) for _ in range(2)]
+    with pytest.raises(ValueError, match=match):
+        accel.require().decode_bgen_probabilities_c(
+            raw, None, N, *_outputs(2), 1, info_rows=info_rows, info_sums=info_sums
         )

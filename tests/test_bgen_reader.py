@@ -117,6 +117,68 @@ def test_decoder_equals_reference_exactly(
                 )
 
 
+def _numpy_info_sums(ref, rows: np.ndarray | None) -> np.ndarray:
+    """``(m, 4)`` E, E2, F, N over the non-missing ``rows``, in NumPy int64."""
+    q11, q12, missing = ref.q11, ref.q12, ref.missing
+    if rows is not None:
+        q11, q12, missing = q11[rows], q12[rows], missing[rows]
+    present = ~missing
+    e = (2 * q11.astype(np.int64) + q12) * present
+    f = (4 * q11.astype(np.int64) + q12) * present
+    return np.column_stack(
+        [e.sum(0), (e * e).sum(0), f.sum(0), present.sum(0).astype(np.int64)]
+    )
+
+
+@pytest.mark.parametrize("compression", [None, "zlib", "zstd"])
+@pytest.mark.parametrize("bit_depth", [1, 3, 8, 10, 16])
+def test_decoder_info_sums_equal_numpy_sums(
+    tmp_path: Path, bit_depth: int, compression: str | None
+):
+    """The decoder's fused INFO sums equal NumPy's over any row subset."""
+    files = _random_bgen(tmp_path, bit_depth, compression)
+    ref = decode_file(files.bgen)
+    rng = np.random.default_rng(bit_depth)
+    subsets = {
+        "all": None,
+        "half": np.sort(rng.choice(N_SAMPLES, N_SAMPLES // 2, replace=False)),
+        "unsorted": rng.permutation(N_SAMPLES)[:150],
+        "one": np.array([5]),
+        "empty": np.array([], dtype=np.intp),
+    }
+    cols = _column_cases(N_VARIANTS)["scattered"]
+    assert cols is not None
+    for threads in (1, 4):
+        reader, *_ = open_bgen_reader(
+            files.bgen, files.sample, files.bgi, n_threads=threads
+        )
+        for name, rows in subsets.items():
+            blocks = list(reader.read(cols, 5, stats_only=True, info_rows=rows))
+            got = np.concatenate([b.info_sums for b in blocks])
+            label = f"threads={threads} rows={name}"
+            np.testing.assert_array_equal(
+                got, _numpy_info_sums(ref, rows)[cols], err_msg=label, strict=True
+            )
+            assert all(b.info_rows is rows for b in blocks), label
+
+
+def test_duplicate_info_rows_are_summed_once(tmp_path: Path):
+    """The block names the distinct rows its sums cover, not the duplicates."""
+    files = _random_bgen(tmp_path, 8, "zlib")
+    ref = decode_file(files.bgen)
+    reader, *_ = open_bgen_reader(files.bgen, files.sample, files.bgi, n_threads=2)
+    rows = np.array([9, 3, 9, 40])
+
+    (block,) = reader.read(
+        np.arange(N_VARIANTS), N_VARIANTS, stats_only=True, info_rows=rows
+    )
+
+    np.testing.assert_array_equal(block.info_rows, [3, 9, 40])
+    np.testing.assert_array_equal(
+        block.info_sums, _numpy_info_sums(ref, np.array([3, 9, 40]))
+    )
+
+
 def test_dataset_blocks_are_the_decoded_dosages(tmp_path: Path):
     """open_bgen's blocks carry the decoder's float64 dosages, NaN for missing."""
     files = _random_bgen(tmp_path, 8, "zlib", seed=4)

@@ -188,13 +188,13 @@ Reads PLINK binary and BGEN v1.2 genotypes, covariates, and kinship matrices. Wr
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 2a | `GenotypeDataset` | Samples x variants behind a reader strategy: metadata at open, `blocks()` and `stats()` stream columns (O(n x chunk)), `partitions`, `fingerprint()` | [genotype/dataset.py:272](../src/jamma/genotype/dataset.py#L272) |
-| 2a | `materialize()` | Batch mode: every variant read once into a float32 in-memory HARD_CALLS dataset | [genotype/dataset.py:387](../src/jamma/genotype/dataset.py#L387) |
+| 2a | `GenotypeDataset` | Samples x variants behind a reader strategy: metadata at open, `blocks()` and `stats()` stream columns (O(n x chunk)), `partitions`, `fingerprint()` | [genotype/dataset.py:299](../src/jamma/genotype/dataset.py#L299) |
+| 2a | `materialize()` | Batch mode: every variant read once into a float32 in-memory HARD_CALLS dataset | [genotype/dataset.py:414](../src/jamma/genotype/dataset.py#L414) |
 | 2a | `PlinkReader` | bed-reader behind `GenotypeDataset.open_plink`: float64 blocks, float32 for statistics | [plink.py:111](../src/jamma/io/plink.py#L111) |
 | 2a | `validate_plink_dimensions()` | .bed size against .fam and .bim line counts, checked at open | [plink.py:46](../src/jamma/io/plink.py#L46) |
-| 2a | `open_bgen()` | BGEN v1.2 layout 2 as a PROBABILITIES dataset: variants from the `.bgi`, samples from the `.sample`, header counts and sample IDs cross-checked at open | [genotype/dataset.py:321](../src/jamma/genotype/dataset.py#L321) |
-| 2a | `BgenReader` | Reads variant blocks by `.bgi` offset, inflates zstd in Python, decodes in C; yields `ProbabilityBlock`s (float64 first-allele dosages plus the quantised q11/q12 and missing mask) | [io/bgen.py:261](../src/jamma/io/bgen.py#L261) |
-| 2a | `decode_bgen_probabilities_c` | C: zlib inflate and B-bit unpack (B 1..16) per variant, OpenMP across variants, GIL released | [_lmm_accel_bgen.c](../src/jamma/lmm/_lmm_accel_bgen.c) |
+| 2a | `open_bgen()` | BGEN v1.2 layout 2 as a PROBABILITIES dataset: variants from the `.bgi`, samples from the `.sample`, header counts and sample IDs cross-checked at open | [genotype/dataset.py:348](../src/jamma/genotype/dataset.py#L348) |
+| 2a | `BgenReader` | Reads variant blocks by `.bgi` offset, inflates zstd in Python, decodes in C; yields `ProbabilityBlock`s (float64 first-allele dosages, the quantised q11/q12 and missing mask, and INFO sums over the requested `info_rows`) | [io/bgen.py:268](../src/jamma/io/bgen.py#L268) |
+| 2a | `decode_bgen_probabilities_c` | C: zlib inflate and B-bit unpack (B 1..16) per variant, accumulating the exact INFO sums over a row mask in the same loop; OpenMP across variants, GIL released | [_lmm_accel_bgen.c](../src/jamma/lmm/_lmm_accel_bgen.c) |
 | 2b | `read_covariate_file()` | Whitespace-delimited covariate matrix | [covariate.py:21](../src/jamma/io/covariate.py#L21) |
 | 2c | `read_kinship_matrix()` | Load kinship (auto-detects `.npy` or `.txt`; prefers `.npy` sibling) | [kinship/io.py:45](../src/jamma/kinship/io.py#L46) |
 | 2c | `write_kinship_matrix()` | Write `.cXX.npy` (default) or `.cXX.txt` (legacy_text=True) | [kinship/io.py:97](../src/jamma/kinship/io.py#L87) |
@@ -218,7 +218,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 
 | ID | Component | Description | File:Line |
 |----|-----------|-------------|-----------|
-| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from a `GenotypeDataset` in one read: `_stream_kinship` accumulates one dsyrk per chunk from `filtered_kinship_chunks` | [stream.py:333](../src/jamma/kinship/stream.py#L333) |
+| 3a | `compute_kinship_streaming()` | -gk 1/-gk 2 from a `GenotypeDataset` in one read: `_stream_kinship` accumulates one dsyrk per chunk from `filtered_kinship_chunks` | [stream.py:334](../src/jamma/kinship/stream.py#L334) |
 | 3a | `filtered_kinship_chunks()` | The one kinship chunk generator, shared by standard and LOCO kinship: filters each `GenotypeDataset.blocks()` block with `compute_snp_stats` and, for probabilities, the block's INFO (taken before its dosages), applies the transform over all samples, then cuts output rows; one yield per block | [stream.py:151](../src/jamma/kinship/stream.py#L151) |
 | 3a | `compute_loco_kinship_streaming()` | Streaming per-chromosome LOCO kinship over `filtered_kinship_chunks`, chromosomes from `dataset.partitions`; the first pass records SNP statistics, INFO included; returns a consume-once `LocoKinshipStream` | [loco.py:279](../src/jamma/kinship/loco.py#L279) |
 | 3a | `accumulate_kinship()` | The rank-k update both kinship paths call once per chunk | [accumulation.py](../src/jamma/kinship/accumulation.py) |
@@ -248,7 +248,7 @@ GEMMA algorithm reimplementation: kinship -> eigendecomp -> REML -> test statist
 | 3f | `calc_lrt_test()` | Scalar reference for the batch path; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
 | 3f | `f_sf()` | F-distribution survival via Cephes betainc; tests only | [tests/reference/stats.py](../tests/reference/stats.py) |
 | 3g | `compute_hwe_pvalues()` | Chi-squared HWE test via pure NumPy | [genotype/snp_filter.py](../src/jamma/genotype/snp_filter.py) |
-| 3g | `info_from_quantised()` | GCTA `--info` per variant from quantised q11/q12 over the non-missing requested rows: exact int64 sums, GCTA's floating-point order; `SnpFilterSpec.info_threshold` keeps INFO >= t | [genotype/info.py:23](../src/jamma/genotype/info.py#L23) |
+| 3g | `info_from_quantised()` | GCTA `--info` per variant from quantised q11/q12 over the non-missing requested rows: exact int64 sums, then `info_from_sums()` (GCTA's floating-point order, shared with the decoder's sums); the fallback when a block's INFO is asked for other rows than it was read with; `SnpFilterSpec.info_threshold` keeps INFO >= t | [genotype/info.py:23](../src/jamma/genotype/info.py#L23) |
 | 3g | `validate_snp_indices()` | Boundary range check for -snps restriction indices | [genotype/snp_filter.py](../src/jamma/genotype/snp_filter.py) |
 | 3h | `_build_covariate_matrix()` | Pure-NumPy covariate setup | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
 | 3h | `parse_eigen_input()` | Converts public nullable arguments once to `KinshipMatrix` or complete `EigenPairs`; supplied eigenpairs take precedence | [prepare_common.py](../src/jamma/lmm/prepare_common.py) |
@@ -577,11 +577,11 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | PipelineRunner (`-lmm`) | [pipeline.py](../src/jamma/pipeline.py) |
 | Kinship computation (`-gk`) | [pipeline_kinship.py](../src/jamma/pipeline_kinship.py) |
 | CLI dispatch (`main`) | [cli.py:222](../src/jamma/cli.py#L222) |
-| Load genotypes | [genotype/dataset.py:272](../src/jamma/genotype/dataset.py#L272) |
+| Load genotypes | [genotype/dataset.py:299](../src/jamma/genotype/dataset.py#L299) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | Matrix writer | [io/matrix_writer.py:106](../src/jamma/io/matrix_writer.py#L106) |
-| Kinship compute | [stream.py:333](../src/jamma/kinship/stream.py#L333) |
+| Kinship compute | [stream.py:334](../src/jamma/kinship/stream.py#L334) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood (`reml_log_likelihood()`) | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |
 | Pab projection/indexing | [pab.py](../src/jamma/lmm/pab.py) |

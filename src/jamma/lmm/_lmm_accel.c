@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 /* Bump when function signatures or array layout expectations change. */
-#define ABI_VERSION 24
+#define ABI_VERSION 25
 
 /* -------------------------------------------------------------------------
  * _get_aligned_alloc_test_ptr
@@ -297,6 +297,11 @@ static PyMethodDef methods[] = {
         "    missing:   out (n_samples, k) bool, F-order\n"
         "    bit_depth: out (k,) uint8, each variant's B\n"
         "    n_threads: int, capped at k\n"
+        "    info_rows: None for every sample, else bool (n_samples,): the\n"
+        "               samples the INFO sums cover\n"
+        "    info_sums: None, or out int64 (k, 4) C-order: per variant, over\n"
+        "               the non-missing info_rows samples, sum(2*q11 + q12),\n"
+        "               sum((2*q11 + q12)**2), sum(4*q11 + q12) and the count\n"
         "\n"
         "Returns:\n"
         "    None, or (position, reason) for the first variant that failed\n"

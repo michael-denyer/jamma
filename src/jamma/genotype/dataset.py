@@ -22,7 +22,7 @@ from bed_reader import open_bed
 
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import get_physical_core_count
-from jamma.genotype.info import info_from_quantised
+from jamma.genotype.info import info_from_quantised, info_from_sums
 from jamma.genotype.snp_stats import SnpStats, collect_snp_stats_from_chunks
 from jamma.genotype.variants import SnpMeta
 from jamma.io.bgen import ProbabilityBlock, open_bgen_reader
@@ -156,8 +156,9 @@ class GenotypeBlock:
         """Per-variant imputation INFO over ``rows`` (all rows when None).
 
         Hard calls give exactly 1.0. Probabilities give GCTA's ``--info``
-        from the quantised values over the non-missing samples of ``rows``
-        (see ``info_from_quantised``).
+        over the non-missing samples of ``rows``: from the decoder's sums
+        when ``rows`` are the ``info_rows`` the block was read with, else
+        recomputed from the quantised values (see ``info_from_quantised``).
 
         Raises:
             RuntimeError: If the block is spent.
@@ -166,13 +167,7 @@ class GenotypeBlock:
         probabilities = self._probabilities
         if probabilities is None:
             return np.ones(values.shape[1], dtype=np.float64)
-        return info_from_quantised(
-            probabilities.q11,
-            probabilities.q12,
-            probabilities.missing,
-            probabilities.bit_depth,
-            rows,
-        )
+        return _probability_info(probabilities, rows)
 
     def dosages(
         self, rows: np.ndarray | None = None, columns: np.ndarray | None = None
@@ -200,6 +195,27 @@ class GenotypeBlock:
         if columns is None:
             return values[rows, :]
         return values[np.ix_(rows, columns)]
+
+
+def _probability_info(
+    probabilities: ProbabilityBlock, rows: np.ndarray | None
+) -> np.ndarray:
+    """INFO over ``rows``, from the decoder's sums when they cover ``rows``."""
+    covered = probabilities.info_rows
+    if rows is covered or (
+        rows is not None and covered is not None and np.array_equal(rows, covered)
+    ):
+        sums = probabilities.info_sums
+        return info_from_sums(
+            sums[:, 0], sums[:, 1], sums[:, 2], sums[:, 3], probabilities.bit_depth
+        )
+    return info_from_quantised(
+        probabilities.q11,
+        probabilities.q12,
+        probabilities.missing,
+        probabilities.bit_depth,
+        rows,
+    )
 
 
 def _collect_stats(
@@ -234,7 +250,12 @@ class _GenotypeReader(Protocol):
     """
 
     def read(
-        self, columns: np.ndarray, block_size: int, *, stats_only: bool
+        self,
+        columns: np.ndarray,
+        block_size: int,
+        *,
+        stats_only: bool,
+        info_rows: np.ndarray | None = None,
     ) -> Iterator[np.ndarray | ProbabilityBlock]:
         """Yield ``(n_samples, k)`` blocks for consecutive runs of ``columns``.
 
@@ -242,7 +263,8 @@ class _GenotypeReader(Protocol):
         caller. ``stats_only=True`` lets a reader return a cheaper dtype or a
         view, since only statistics are computed from it. A PROBABILITIES
         reader yields ``ProbabilityBlock``s, whose float64 ``dosages`` are
-        the values.
+        the values and whose INFO sums cover ``info_rows`` (every row when
+        None); other readers ignore ``info_rows``.
         """
         ...
 
@@ -258,7 +280,12 @@ class _MatrixReader:
         self._genotypes = genotypes
 
     def read(
-        self, columns: np.ndarray, block_size: int, *, stats_only: bool
+        self,
+        columns: np.ndarray,
+        block_size: int,
+        *,
+        stats_only: bool,
+        info_rows: np.ndarray | None = None,
     ) -> Iterator[np.ndarray]:
         for start in range(0, len(columns), block_size):
             block = self._genotypes[:, columns[start : start + block_size]]
@@ -485,14 +512,18 @@ class GenotypeDataset:
         stats_only: bool,
         progress: str | None,
         eta_seconds: float | None = None,
+        info_rows: np.ndarray | None = None,
     ) -> Iterator[tuple[int, int, np.ndarray, ProbabilityBlock | None]]:
         """Yield ``(start, end, values, probabilities)`` per reader block.
 
         ``start``/``end`` are in requested column space; ``probabilities`` is
-        the quantised block behind ``values`` for a PROBABILITIES reader.
+        the quantised block behind ``values`` for a PROBABILITIES reader,
+        with INFO sums over ``info_rows``.
         """
         n_cols = len(cols)
-        raw = self._reader.read(cols, block_size, stats_only=stats_only)
+        raw = self._reader.read(
+            cols, block_size, stats_only=stats_only, info_rows=info_rows
+        )
         if progress is not None:
             raw = progress_iterator(
                 raw,
@@ -515,6 +546,7 @@ class GenotypeDataset:
         columns: np.ndarray | None = None,
         progress: str | None = None,
         eta_seconds: float | None = None,
+        info_rows: np.ndarray | None = None,
     ) -> Iterator[GenotypeBlock]:
         """Stream requested variants in ascending blocks over all rows.
 
@@ -524,6 +556,10 @@ class GenotypeDataset:
                 variant.
             progress: Progress-bar label, or None for no bar.
             eta_seconds: Progress-bar ETA before the first block.
+            info_rows: The rows ``block.info`` will be asked for, or None for
+                every row. A PROBABILITIES reader sums INFO over them while
+                decoding; ``info`` over other rows rereads the quantised
+                values.
 
         Raises:
             ValueError: If ``block_size`` < 1 or ``columns`` is not strictly
@@ -536,6 +572,7 @@ class GenotypeDataset:
             stats_only=False,
             progress=progress,
             eta_seconds=eta_seconds,
+            info_rows=info_rows,
         )
         for start, end, values, probabilities in spans:
             yield GenotypeBlock(
@@ -576,19 +613,15 @@ class GenotypeDataset:
                 encoding without HWE classes.
         """
         cols = self._resolve_columns(columns, block_size)
-        spans = self._read_spans(cols, block_size, stats_only=True, progress=progress)
+        spans = self._read_spans(
+            cols, block_size, stats_only=True, progress=progress, info_rows=rows
+        )
         info = np.ones(len(cols)) if self.encoding.supports_info else None
 
         def chunks() -> Iterator[tuple[np.ndarray, int, int]]:
             for start, end, values, probabilities in spans:
                 if info is not None and probabilities is not None:
-                    info[start:end] = info_from_quantised(
-                        probabilities.q11,
-                        probabilities.q12,
-                        probabilities.missing,
-                        probabilities.bit_depth,
-                        rows,
-                    )
+                    info[start:end] = _probability_info(probabilities, rows)
                 yield values if rows is None else values[rows, :], start, end
 
         return _collect_stats(

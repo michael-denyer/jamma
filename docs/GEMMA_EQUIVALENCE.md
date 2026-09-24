@@ -42,8 +42,10 @@ The exact-arithmetic formulas in sections 2 to 8 are proved in Lean 4 in
 [jamma-lean](https://github.com/michael-denyer/jamma-lean), whose README maps each claim here to its theorem. The
 proofs cover the kinship, rotation, logdet, Pab, REML, Wald, Score and LRT
 identities, and the rounding-error bounds for kinship entries and Pab row 0 in
-any summation order. The F and chi-squared CDFs and LAPACK accuracy are not
-covered. [`tests/test_lean_proven_identities.py`](../tests/test_lean_proven_identities.py)
+any summation order. They also prove that `betainc(df/2, 1/2, df/(df+F))` is
+the F(1, df) upper tail and that `erfc(sqrt(x/2))` is the chi-squared(1) upper
+tail. The numerical accuracy of the `betainc` and `erfc` implementations and
+of LAPACK is not covered. [`tests/test_lean_proven_identities.py`](../tests/test_lean_proven_identities.py)
 checks the production code against each proved identity.
 
 ---
@@ -273,8 +275,10 @@ p_lrt = Pr(chi2_1 > LRT)
 
 The LRT statistic subtracts two large log-likelihoods. Small MLE lambda
 differences compound: `d(LRT) = 2 * |d_l_H1 - d_l_H0|`. Near LRT ~ 0
-(weak signals) the CDF is linear so `d_p ~ d(LRT)`. This is why p_lrt has
-the largest tolerance.
+(weak signals) the chi-squared(1) tail is steepest: its slope is
+`exp(-LRT/2) / sqrt(2*pi*LRT)`, which is unbounded at 0, so a small LRT
+difference moves p_lrt by more than the difference itself. This is why p_lrt
+has the largest tolerance.
 
 **Observed**: max relative p-value difference = 1.56e-3.
 

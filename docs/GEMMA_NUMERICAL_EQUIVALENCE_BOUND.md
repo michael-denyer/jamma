@@ -61,11 +61,16 @@ We write `ΔX = X_JAMMA − X_GEMMA` for differences in outputs.
    backward stable in the standard IEEE-754 model.
 4. **Well-conditioned eigenspace**: `K` is PSD and the eigenvalue gaps are
    nonzero (or small) so eigenvectors are not arbitrarily ill-conditioned.
+   Pab row 0 and `log|H|` do not need this: they depend on the decomposition
+   only through `H = λK + I`, so only the backward error reaches them (see §2).
 5. **REML concavity**: the REML log-likelihood is strictly concave in `log λ`
    over the search interval, with curvature bounded below by `m > 0`.
 6. **Bounded test inputs**: `P_xx > 0`, `Px_yy > 0`, and denominators in test
    statistics are bounded away from zero.
 7. **CDF stability**: the F/χ² CDFs used are Lipschitz in the relevant range.
+   The qualifier is necessary: both tails have unbounded slope at 0, so no
+   single constant works near a zero statistic. On `[F₀, ∞)` with `F₀ > 0` the
+   F(1, df) tail is Lipschitz with constant equal to its density at `F₀`.
 
 If any assumption fails, equivalence can still hold, but the stated bound may
 not be meaningful. See `docs/GEMMA_DIVERGENCES.md` for known edge-case behavior.
@@ -140,6 +145,22 @@ Eigenvector error depends on spectral gaps:
 ```
 
 This is the standard Davis–Kahan type perturbation bound.
+
+The eigenvector error does not reach Pab row 0 or `log|H|`. Both depend on
+`(Û, D̂)` only through `λ Û D̂ Ûᵀ + I = λ(K + E) + I`, whichever orthogonal
+eigenbasis LAPACK returns. Because `H ⪰ I`, with `δ = λ‖E‖₂ < 1`:
+
+```text
+|Pab_row0(K+E) − Pab_row0(K)| ≤ δ/(1−δ) · ‖a‖₂ ‖b‖₂
+|log|H(K+E)| − log|H(K)||     ≤ n · (−log(1−δ))
+```
+
+No eigengap enters. `EigenPerturbation.pab_row0_perturb` and
+`logdet_rotated_perturb` in
+[jamma-lean](https://github.com/michael-denyer/jamma-lean) prove this in exact
+arithmetic, taking LAPACK's backward stability (`‖E‖₂ ≤ C_E ε ‖K‖₂`) as given
+and `Û` as orthogonal. Higher Pab levels add the pivot amplification of the
+recursion.
 
 ### 3. REML optimization
 

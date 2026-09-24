@@ -6,6 +6,7 @@ lives in ``build_models`` and compiler execution in ``build_execution``.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 import sysconfig
@@ -16,6 +17,7 @@ from .build_execution import Toolchain, detect_toolchain, execute_build
 from .build_models import (
     JLINALG_SPEC,
     LMM_ACCEL_SPEC,
+    MATRIX_TEXT_SPEC,
     BuildReport,
     BuildResult,
     BuildSpec,
@@ -27,6 +29,7 @@ from .build_models import (
 __all__ = (
     "JLINALG_SPEC",
     "LMM_ACCEL_SPEC",
+    "MATRIX_TEXT_SPEC",
     "BuildReport",
     "BuildResult",
     "BuildSpec",
@@ -73,6 +76,8 @@ def run_build(
     flags = resolve_flags(
         spec, dev_mode=dev_mode, system=toolchain.system, env=os.environ
     )
+    if not spec.uses_openmp:
+        toolchain = dataclasses.replace(toolchain, omp_compile=(), omp_link=())
 
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"{spec.output_stem.lstrip('_')}_build_"))
     try:
@@ -92,7 +97,9 @@ def compile_extension(spec: BuildSpec, package_dir: Path, report: BuildReport) -
     Failures go to ``report.warn`` and the success summary to
     ``report.detail``.
     """
-    toolchain = detect_toolchain(report)
+    toolchain = detect_toolchain(
+        report, language=spec.language, uses_openmp=spec.uses_openmp
+    )
     if isinstance(toolchain, str):
         report.warn(f"ERROR: {spec.output_stem} compilation failed: {toolchain}")
         return False
@@ -102,6 +109,6 @@ def compile_extension(spec: BuildSpec, package_dir: Path, report: BuildReport) -
         report.warn(f"ERROR: {spec.output_stem} compilation failed: {result.error}")
         return False
 
-    omp_status = "OpenMP" if result.used_openmp else "single-threaded"
+    omp_status = "OpenMP" if result.used_openmp else "without OpenMP"
     report.detail(f"{spec.output_stem} compiled: {result.output_path} ({omp_status})")
     return True

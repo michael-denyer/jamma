@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Static analysis over both C trees: src/jamma/jlinalg/src and src/jamma/lmm.
+# Static analysis over native C and C++ sources.
 #
 # NPY_INTP_FMT is a NumPy macro. cppcheck cannot resolve it without the NumPy
 # headers, and undefined it reports unknownMacro and stops analysing the LMM
@@ -14,6 +14,7 @@ set -euo pipefail
 
 exec cppcheck \
     --std=c11 \
+    --std=c++17 \
     --suppress=missingIncludeSystem \
     --enable=warning \
     --error-exitcode=1 \

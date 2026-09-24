@@ -206,7 +206,7 @@ Reads PLINK binary and BGEN v1.2 genotypes, covariates, and kinship matrices. Wr
 | 2f | `write_eigen_files()` | Write eigendecomposition (`.npy` default; `.txt` + `.npy` sidecar with legacy_text) | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
 | 2f | `npy_cache_valid()` | Shared `.npy` sibling cache validation (mtime-based) | [utils/npy_cache.py](../src/jamma/utils/npy_cache.py) |
 | 2f | `read_array_artifact()` | One reader for `.npy`, `.txt`, and the `.npy` sidecar (corrupt-sidecar recovery, sidecar write after parse) | [utils/npy_cache.py](../src/jamma/utils/npy_cache.py) |
-| 2g | `write_matrix_parallel()` | Parallel matrix writer using file-backed memmap | [io/matrix_writer.py:106](../src/jamma/io/matrix_writer.py#L106) |
+| 2g | `write_matrix_parallel()` | Bounded native text formatting; process fallback for custom formats | [io/matrix_writer.py:94](../src/jamma/io/matrix_writer.py#L94) |
 | 2h | `read_matrix_parallel()` | Multi-worker matrix text reader with chunk scanning | [io/matrix_reader.py](../src/jamma/io/matrix_reader.py) |
 | 2i | `read_weight_file()` | Parse per-individual weight file (`-widv` flag) | [io/weight.py:16](../src/jamma/io/weight.py#L16) |
 | 2i | `apply_individual_weights()` | Apply weights to kinship matrix | [io/weight.py:75](../src/jamma/io/weight.py#L75) |
@@ -581,7 +581,7 @@ Priority order: `JAMMA_BACKEND` env var -> `--backend` CLI flag -> auto (batch i
 | Load genotypes | [genotype/dataset.py:299](../src/jamma/genotype/dataset.py#L299) |
 | SNP list I/O | [io/snp_list.py](../src/jamma/io/snp_list.py) |
 | Eigen I/O | [lmm/eigen_io.py](../src/jamma/lmm/eigen_io.py) |
-| Matrix writer | [io/matrix_writer.py:106](../src/jamma/io/matrix_writer.py#L106) |
+| Matrix writer | [io/matrix_writer.py:94](../src/jamma/io/matrix_writer.py#L94) |
 | Kinship compute | [stream.py:334](../src/jamma/kinship/stream.py#L334) |
 | Eigendecomposition | [eigen.py](../src/jamma/lmm/eigen.py) |
 | REML likelihood (`reml_log_likelihood()`) | [likelihood.py:103](../src/jamma/lmm/likelihood.py#L103) |

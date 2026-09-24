@@ -70,11 +70,22 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
         blank — an explicit-but-empty ``$CC`` is a caller error, not an
         unset one, so this does not fall through to auto-detection.
     """
+    return _find_compiler("CC", ("cc", "clang", "gcc"))
+
+
+def find_cxx_compiler() -> tuple[str, list[str]] | None:
+    """Find C++ using explicit CXX, Python sysconfig, then common compilers."""
+    return _find_compiler("CXX", ("c++", "clang++", "g++"))
+
+
+def _find_compiler(
+    variable: str, fallbacks: tuple[str, ...]
+) -> tuple[str, list[str]] | None:
     # $CC is explicit — honour it or fail, don't silently substitute.
-    cc_env = os.environ.get("CC")
+    cc_env = os.environ.get(variable)
     if cc_env is not None and not cc_env.strip():
         print(
-            f"$CC is set but empty/whitespace-only ({cc_env!r}); "
+            f"${variable} is set but empty/whitespace-only ({cc_env!r}); "
             "returning None rather than silently auto-detecting.",
             file=sys.stderr,
         )
@@ -85,7 +96,7 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
         if _probe_compiler(cmd):
             return cmd, extra
         print(
-            f"$CC is set to '{cc_env}' but verification failed — "
+            f"${variable} is set to '{cc_env}' but verification failed — "
             "not falling through to other compilers.",
             file=sys.stderr,
         )
@@ -104,11 +115,11 @@ def find_c_compiler() -> tuple[str, list[str]] | None:
             seen_cmds.add(cmd)
             candidates.append(candidate)
 
-    cc_sysconfig = sysconfig.get_config_var("CC")
+    cc_sysconfig = sysconfig.get_config_var(variable)
     if cc_sysconfig:
         _add(cc_sysconfig)
 
-    for fallback in ("cc", "clang", "gcc"):
+    for fallback in fallbacks:
         _add(fallback)
 
     for candidate in candidates:

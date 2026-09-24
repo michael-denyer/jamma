@@ -187,13 +187,13 @@ def test_lmm_accel_spec_checks_every_build_source_and_the_headers() -> None:
 
 
 def test_discover_extensions_returns_known_targets() -> None:
-    """Smoke test: the shipped discovery returns exactly the two real
+    """Smoke test: the shipped discovery returns the real
     extensions JAMMA builds. Guards against an accidental rename or
     deletion that would silently skip a drift check in production."""
     freshness = _load_script_module()
     exts = freshness._discover_extensions()
     labels = {e.label for e in exts}
-    assert labels == {"_lmm_accel", "_jlinalg"}
+    assert labels == {"_lmm_accel", "_jlinalg", "_matrix_text"}
 
 
 def test_check_extension_degrades_to_not_stale_on_oserror(

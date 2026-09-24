@@ -1,5 +1,78 @@
 # Performance Summary
 
+## Matrix text output, 2026-09-14
+
+The default `%.10g`/tab writer uses C++17 conversion with ordered Python
+threads. It retains `np.savetxt` for small inputs and the process writer for
+custom formats or unavailable native support.
+
+This speeds explicit text exports. The normal pipeline retains computed
+kinship in memory unless `save_kinship` is requested; saved matrices default
+to binary `.npy`.
+
+Measured on the 18-core Apple M5 Pro described below, with macOS 26.6.2,
+Python 3.12.13 and NumPy 2.5.1, at revision `cca9799d`. Medians of five interleaved runs, using 18 workers for both paths:
+
+| Matrix | Process writer | Native writer | Speedup |
+|--------|----------------|---------------|---------|
+| Mouse, 1,940 × 1,940 | 320ms | 13.6ms | 23.5x |
+| 5,000 × 5,000 | 577ms | 65.9ms | 8.8x |
+| 2,000 × 100,000 | 2.35s | 499ms | 4.7x |
+
+The complete fresh-process mouse `-gk 1 --legacy-text` command fell from
+773ms to 469ms, a 39% reduction. Every timed matrix matched `np.savetxt`
+byte-for-byte; CLI outputs also had identical SHA256 digests. Validation runs
+outside the timer. Timings include file creation, close, and atomic replacement,
+with filesystem caching enabled and no fsync. The wide case gives the process
+writer enough rows to occupy every worker.
+
+Each thread formats at most 65,536 values per block, or one whole row when
+wider. At most two output buffers per worker are in flight, each reserving
+32 bytes per value. Layout or dtype conversion also happens per block. The
+native path needs only the atomic output temporary file; it creates no matrix
+memmap or intermediate text chunks.
+
+Both libc++ on macOS and libstdc++ on Linux passed the 603,803-value precision
+corpus, including random binary64 patterns, decimal ties, notation boundaries,
+NaNs, infinities, and signed zero. Installed macOS 14-targeted and manylinux
+wheels passed. Linux ASan/UBSan checks and a real SIGINT also passed. Linux
+correctness was tested under x86_64 emulation; these performance measurements
+are macOS results, not Databricks or a full 100,000-square matrix measurement.
+
+```bash
+uv run python scripts/bench_matrix_text.py --cases mouse square wide --cli --repetitions 5 --json /tmp/text-bench.json
+uv run python scripts/smoke_test_matrix_text.py
+```
+
+[Raw repetitions, hashes, and environment](benchmarks/2026-09-14-native-text.json).
+
+## Aligned process benchmarks, 2026-09-24
+
+The same protocol as the 2026-09-23 run below, repeated after the native
+matrix text writer (see "Matrix text output"). Python 3.12.13, NumPy 2.5.1,
+JAMMA 8.1.0, Accelerate-ILP64 with 18 threads, GEMMA 0.98.5 in OpenBLAS and
+Accelerate builds. Other work shared the machine: the one-minute load average
+was 10.2 at the start and 5.2 at the end, against 3.2 to 8.9 on 2026-09-23.
+Every backend's kinship matrix and association output matched the first
+backend's within the validation tolerances.
+
+| Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
+|-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 900ms | 454ms | — | 2.0x | 2.5x | 2.7x |
+| Kinship (`-gk 1`, default `.npy`) | — | — | 526ms | 453ms | — | 1.2x | — | — |
+| LMM Wald (`-lmm 1`) | 8.4s | 4.1s | 8.1s | 643ms | 663ms | 12.6x | 13.0x | 6.4x |
+| LMM All (`-lmm 4`) | 16.4s | 7.7s | 14.3s | 799ms | 722ms | 17.9x | 22.8x | 10.7x |
+| Full GWAS Wald (compute kinship + association) | 8.9s | 5.5s | 8.3s | 735ms | 869ms | 11.3x | 12.1x | 7.5x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.6s | 11.7s | 16.6s | 1.1s | 1.1s | 14.9x | 24.9x | 10.6x |
+
+The text kinship row fell from 749 ms to 454 ms and now matches the binary
+`.npy` row (453 ms), so the text export no longer costs extra time. The other
+rows moved by the run-to-run spread under the heavier load. This change does
+not touch association code, and every row checked its output against the first
+backend. Raw repetitions:
+[2026-09-24-aligned.json](benchmarks/2026-09-24-aligned.json). No LOCO rerun
+was made; the LOCO results below stand.
+
 ## Aligned process benchmarks, 2026-09-23
 
 Measured 2026-09-23 on mouse_hs1940: 1,940 samples and 12,226 SNPs,

@@ -88,6 +88,12 @@ def _discover_extensions() -> list[ExtensionSpec]:
     lmm_dir = root / "src/jamma/lmm"
     return [
         ExtensionSpec(
+            label="_matrix_text",
+            so_path=root / f"src/jamma/io/_matrix_text{ext}",
+            source_globs=((root / "src/jamma/io", "_matrix_text.cpp"),),
+            rebuild_command="uv run python -m jamma.io._compile_matrix_text",
+        ),
+        ExtensionSpec(
             label="_lmm_accel",
             so_path=root / f"src/jamma/lmm/_lmm_accel{ext}",
             source_globs=(

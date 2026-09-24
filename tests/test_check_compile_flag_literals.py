@@ -53,13 +53,14 @@ def _run_with_targets(
     )
 
 
-# All four targets must exist or the script reports missing-file violations,
+# All targets must exist or the script reports missing-file violations,
 # so each test stubs every TARGETS entry.
 _STUB_EMPTY_TARGETS: dict[str, str] = {
     "hatch_build.py": "# stub\n",
     "src/jamma/jlinalg/_compile_jlinalg.py": "# stub\n",
     "src/jamma/lmm/_compile_accel.py": "# stub\n",
     "src/jamma/_native.py": "# stub\n",
+    "src/jamma/io/_compile_matrix_text.py": "# stub\n",
 }
 
 

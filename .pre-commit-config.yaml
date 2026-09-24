@@ -21,8 +21,8 @@ repos:
     rev: v19.1.7
     hooks:
       - id: clang-format
-        types_or: [c]
-        files: ^src/jamma/jlinalg/src/
+        types_or: [c, c++]
+        files: ^src/jamma/(jlinalg/src|io)/
   # GitHub Actions workflow linter. Catches missing pipefail / shell mode,
   # bad expression syntax, deprecated action versions, and ${{}} injection
   # patterns. Phase 116.1's verification cycle would have lost ~6 cycles
@@ -165,8 +165,8 @@ repos:
         name: cppcheck
         entry: scripts/run-cppcheck.sh
         language: script
-        types: [c]
-        files: ^src/jamma/(jlinalg/src|lmm)/
+        types_or: [c, c++]
+        files: ^src/jamma/(jlinalg/src|lmm|io)/
   - repo: local
     hooks:
       - id: uv-lock-sync
@@ -255,13 +255,13 @@ repos:
         name: ban compile-flag literals outside jamma._build_support
         entry: scripts/check_compile_flag_literals.py
         language: system
-        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|core/recompile)\.py|src/jamma/_build_support/)
+        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|io/_compile_matrix_text)\.py|src/jamma/_native\.py|src/jamma/_build_support/)
         pass_filenames: false
       - id: verify-compile-invocations-match
         name: verify compile entry points route through jamma._build_support
         entry: scripts/verify_compile_invocations_match.py
         language: system
-        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel)\.py|src/jamma/_build_support/)
+        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|io/_compile_matrix_text)\.py|src/jamma/_build_support/)
         pass_filenames: false
       # Static type checker. Runs whole-project (not per-file), so
       # pass_filenames must stay false. The project is at zero pyrefly

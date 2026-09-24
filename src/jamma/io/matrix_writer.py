@@ -1,21 +1,8 @@
-"""Parallel matrix text writer for large matrices.
+"""Atomic matrix text output with bounded parallel formatting.
 
-Provides write_matrix_parallel() which uses multiprocessing to format matrix
-rows across CPU cores. At 100k x 100k (10B floats), np.savetxt is single-threaded
-and takes ~30 minutes. Parallel formatting reduces this to ~2-4 minutes.
-
-Uses file-backed numpy.memmap for worker IPC instead of shared memory to avoid
-SIGBUS crashes when Docker's /dev/shm is capped at 64 MB (cpython#114390).
-
-Workers write formatted text to per-chunk temp files, returning only the file
-path through the IPC pipe. This keeps memory usage bounded regardless of worker
-count.
-
-Temp files are created adjacent to the output file (same filesystem) to avoid
-filling /tmp on systems where it's a small tmpfs (e.g. Databricks). Chunks are
-deleted eagerly during concatenation to minimize peak disk usage.
-
-Output is byte-identical to np.savetxt for all matrix sizes.
+Default %.10g/tab output uses a native C++ formatter and ordered Python
+threads. Custom formats and installations without the extension use the
+process writer below, with file-backed IPC and temporary chunks beside output.
 """
 
 from __future__ import annotations
@@ -27,6 +14,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
+from jamma.io._native_matrix_writer import native_formatter, write_native_matrix
 from jamma.io._parallel_text import (
     MemmapRef,
     default_worker_count,
@@ -113,13 +101,11 @@ def write_matrix_parallel(
 ) -> None:
     """Write a 2D matrix to a text file, optionally using parallel formatting.
 
-    For matrices with fewer than min_rows_for_parallel rows, falls back to
-    np.savetxt. For larger matrices, distributes row formatting across
-    multiple processes for significant speedup.
-
-    Temp files (memmap + chunks) are placed on the same filesystem as the
-    output to avoid filling /tmp. Chunks are deleted eagerly during
-    concatenation to minimize peak disk usage.
+    Small matrices use np.savetxt. Larger default-format real matrices use
+    GIL-free native formatting with bounded buffers, Python threads, and one
+    ordered file writer. The matrix must not be mutated during the call.
+    Custom formats or unavailable native support use processes and temporary
+    files beside the output.
 
     Output is byte-identical to np.savetxt(path, matrix, fmt=fmt, delimiter=delimiter).
 
@@ -128,7 +114,8 @@ def write_matrix_parallel(
         path: Output file path.
         fmt: Format string for each element (default "%.10g").
         delimiter: Column separator (default tab).
-        n_workers: Number of worker processes (default: min(cpu_count, 32)).
+        n_workers: Formatting workers, threads for native output and processes
+            otherwise (default: physical CPU count capped at 32).
         min_rows_for_parallel: Row threshold for parallel path (default 500).
     """
     path = Path(path)
@@ -136,7 +123,7 @@ def write_matrix_parallel(
 
     n_rows, n_cols = matrix.shape
 
-    if n_rows < min_rows_for_parallel:
+    if n_rows < min_rows_for_parallel or matrix.size == 0:
         logger.info(f"Writing {n_rows}x{n_cols} matrix to {path.resolve()}")
         # Publish atomically: np.savetxt truncates its target on open, so an
         # interrupted or failed write would otherwise destroy a pre-existing
@@ -153,6 +140,12 @@ def write_matrix_parallel(
     logger.info(
         f"Writing {n_rows}x{n_cols} matrix to {path.resolve()} ({n_workers} workers)"
     )
+
+    if fmt == "%.10g" and delimiter == "\t" and matrix.dtype.kind in "fiub":
+        formatter = native_formatter()
+        if formatter is not None:
+            write_native_matrix(matrix, path, n_workers, formatter)
+            return
 
     # Ensure contiguous float64 for memmap compatibility
     matrix = np.ascontiguousarray(matrix, dtype=np.float64)

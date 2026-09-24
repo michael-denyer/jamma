@@ -33,6 +33,7 @@ ENTRY_POINTS = [
     REPO_ROOT / "hatch_build.py",
     REPO_ROOT / "src/jamma/jlinalg/_compile_jlinalg.py",
     REPO_ROOT / "src/jamma/lmm/_compile_accel.py",
+    REPO_ROOT / "src/jamma/io/_compile_matrix_text.py",
 ]
 
 

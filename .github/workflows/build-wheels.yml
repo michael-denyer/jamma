@@ -42,7 +42,8 @@ jobs:
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&
             python {project}/scripts/smoke_test_eigen_extension.py &&
-            python {project}/scripts/smoke_test_jlinalg.py
+            python {project}/scripts/smoke_test_jlinalg.py &&
+            python {project}/scripts/smoke_test_matrix_text.py
           # Install test deps (numpy required for import)
           CIBW_TEST_REQUIRES: "numpy"
 
@@ -86,7 +87,8 @@ jobs:
           CIBW_TEST_COMMAND: >-
             python {project}/scripts/smoke_test_c_extension.py &&
             python {project}/scripts/smoke_test_eigen_extension.py &&
-            python {project}/scripts/smoke_test_jlinalg.py
+            python {project}/scripts/smoke_test_jlinalg.py &&
+            python {project}/scripts/smoke_test_matrix_text.py
           CIBW_TEST_REQUIRES: "numpy"
 
       - name: Verify AVX2 instructions in wheels

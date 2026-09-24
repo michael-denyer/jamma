@@ -15,7 +15,7 @@ from jamma.genotype.snp_stats import (
     SnpStats,
     filter_snp_stats,
 )
-from jamma.lmm.schema import SnpMeta
+from jamma.genotype.variants import SnpMeta
 
 if TYPE_CHECKING:
     from jamma.lmm.chunk_runner_numpy import RawLmmChunk

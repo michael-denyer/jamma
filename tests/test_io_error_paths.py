@@ -13,13 +13,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.variants import SnpMeta
 from jamma.io.plink import (
     get_plink_metadata,
     partitions_from_metadata,
     validate_plink_dimensions,
 )
 from jamma.lmm.assoc_output import IncrementalAssocWriter
-from jamma.lmm.schema import MODE_SPECS, SnpMeta
+from jamma.lmm.schema import MODE_SPECS
 from tests.fixture_paths import LOCO, SYNTHETIC
 from tests.support import require_fixture
 

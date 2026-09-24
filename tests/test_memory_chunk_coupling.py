@@ -647,6 +647,7 @@ def test_pipeline_memory_plan_honors_mem_budget(monkeypatch):
 def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     """The final chunk engine requests the width allowed by mem_budget."""
     from jamma.genotype.snp_stats import SnpSelection
+    from jamma.genotype.variants import SnpMeta
     from jamma.lmm import accel
     from jamma.lmm.chunk_runner_numpy import (
         PhenotypeChunkJob,
@@ -654,7 +655,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
     )
     from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
     from jamma.lmm.prepare_common import NullFit, RotatedBasis
-    from jamma.lmm.schema import LmmConfig, SnpMeta
+    from jamma.lmm.schema import LmmConfig
 
     monkeypatch.setattr(accel, "_accel", None)
     n_samples, n_snps, n_cvt = 30, 200, 1

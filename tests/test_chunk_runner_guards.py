@@ -15,6 +15,7 @@ import pytest
 from loguru import logger
 
 from jamma.genotype.snp_stats import SnpSelection
+from jamma.genotype.variants import SnpMeta
 from jamma.lmm import accel
 from jamma.lmm.chunk_runner_numpy import (
     PhenotypeChunkJob,
@@ -25,7 +26,7 @@ from jamma.lmm.chunk_sizing import LmmChunkPlan
 from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
 from jamma.lmm.prepare_common import NullFit, RotatedBasis
-from jamma.lmm.schema import LmmConfig, SnpMeta
+from jamma.lmm.schema import LmmConfig
 from jamma.lmm.workspace import WorkspaceSpec
 from tests.support import requires_c
 

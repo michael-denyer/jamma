@@ -28,6 +28,7 @@ from jamma.genotype.snp_stats import (
     SnpSelection,
     collect_snp_stats_from_chunks,
 )
+from jamma.genotype.variants import SnpInfoRecord, SnpMeta
 from jamma.lmm.assoc_output import (
     AssocResult,
     ChunkSink,
@@ -67,8 +68,6 @@ from jamma.lmm.schema import (
     LmmConfig,
     LmmRunResult,
     ModeSpec,
-    SnpInfoRecord,
-    SnpMeta,
 )
 
 

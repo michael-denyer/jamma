@@ -12,8 +12,9 @@ import numpy as np
 import pytest
 from loguru import logger
 
+from jamma.genotype.variants import SnpMeta
 from jamma.lmm.assoc_output import IncrementalAssocWriter
-from jamma.lmm.schema import MODE_SPECS, SnpMeta
+from jamma.lmm.schema import MODE_SPECS
 
 pytestmark = pytest.mark.tier0
 

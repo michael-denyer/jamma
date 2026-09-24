@@ -311,7 +311,8 @@ Bounding candidates by the golden-section bracket raises the worst relative
 lambda error on those peaks from `1.8e-11` to `1.1e-3`.
 
 The accept rule is not a convergence proof. For a concave objective whose
-score has a kink at the peak, one accepted step can move from `0.005` to
+score slope changes by orders of magnitude within the probe spacing near the
+peak, one accepted step can move from `0.005` to
 `0.495` away from the maximum (jamma-lean `refine_can_leave_golden_bracket`),
 so the worst-case bound is the coarse bracket width, about `0.94` in log
 lambda. Quadratic peaks converge (`newtonLoop_affine`). REML scores are smooth,
@@ -326,9 +327,11 @@ and on 2026-09-24 data at `8c534ed6` the error tracks peak curvature instead:
 The synthetic sweep covers unrelated and sibship kinship, h² of 0.05, 0.3 and
 0.7, and 2,000 SNPs per configuration; errors are against a bisection root of
 the analytic score. Every error above `1e-8` is on a peak with |curvature| at or
-below `1e-7`. There the score is at its floating-point floor and the three
-Newton steps oscillate about the root; a larger step budget or a secant-slope
-stopping rule does not reduce the error. The eight reference peaks come from a
+below `1e-7`. These peaks are ill-conditioned, and the refinement is not at
+fault. The error is about the score's floating-point floor divided by |curvature|, `1e-11` to
+`1e-14` over `1e-7` or less, and the three Newton steps oscillate within it.
+No rule that evaluates the score in double precision gets below that floor, and
+a larger step budget or a secant-slope stopping rule does not reduce the error. The eight reference peaks come from a
 50-sample dataset and sit in this regime. On the failing peaks the Wald p-value
 at JAMMA's lambda differs from the p-value at the root by at most `6.7e-9`
 relative, against `pvalue_rtol` of `1e-4`.

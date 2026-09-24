@@ -1,5 +1,51 @@
 # Performance Summary
 
+## Matrix text output, 2026-09-14
+
+The default `%.10g`/tab writer uses C++17 conversion with ordered Python
+threads. It retains `np.savetxt` for small inputs and the process writer for
+custom formats or unavailable native support.
+
+This speeds explicit text exports. The normal pipeline retains computed
+kinship in memory unless `save_kinship` is requested; saved matrices default
+to binary `.npy`.
+
+Measured on the 18-core Apple M5 Pro described below, with macOS 26.6.2,
+Python 3.12.13 and NumPy 2.5.1, at revision `cca9799d`. Medians of five interleaved runs, using 18 workers for both paths:
+
+| Matrix | Process writer | Native writer | Speedup |
+|--------|----------------|---------------|---------|
+| Mouse, 1,940 × 1,940 | 320ms | 13.6ms | 23.5x |
+| 5,000 × 5,000 | 577ms | 65.9ms | 8.8x |
+| 2,000 × 100,000 | 2.35s | 499ms | 4.7x |
+
+The complete fresh-process mouse `-gk 1 --legacy-text` command fell from
+773ms to 469ms, a 39% reduction. Every timed matrix matched `np.savetxt`
+byte-for-byte; CLI outputs also had identical SHA256 digests. Validation runs
+outside the timer. Timings include file creation, close, and atomic replacement,
+with filesystem caching enabled and no fsync. The wide case gives the process
+writer enough rows to occupy every worker.
+
+Each thread formats at most 65,536 values per block, or one whole row when
+wider. At most two output buffers per worker are in flight, each reserving
+32 bytes per value. Layout or dtype conversion also happens per block. The
+native path needs only the atomic output temporary file; it creates no matrix
+memmap or intermediate text chunks.
+
+Both libc++ on macOS and libstdc++ on Linux passed the 603,803-value precision
+corpus, including random binary64 patterns, decimal ties, notation boundaries,
+NaNs, infinities, and signed zero. Installed macOS 14-targeted and manylinux
+wheels passed. Linux ASan/UBSan checks and a real SIGINT also passed. Linux
+correctness was tested under x86_64 emulation; these performance measurements
+are macOS results, not Databricks or a full 100,000-square matrix measurement.
+
+```bash
+uv run python scripts/bench_matrix_text.py --cases mouse square wide --cli --repetitions 5 --json /tmp/text-bench.json
+uv run python scripts/smoke_test_matrix_text.py
+```
+
+[Raw repetitions, hashes, and environment](benchmarks/2026-09-14-native-text.json).
+
 ## Aligned process benchmarks, 2026-09-23
 
 Measured 2026-09-23 on mouse_hs1940: 1,940 samples and 12,226 SNPs,

@@ -255,7 +255,7 @@ repos:
         name: ban compile-flag literals outside jamma._build_support
         entry: scripts/check_compile_flag_literals.py
         language: system
-        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|io/_compile_matrix_text|core/recompile)\.py|src/jamma/_build_support/)
+        files: ^(hatch_build\.py|src/jamma/(jlinalg/_compile_jlinalg|lmm/_compile_accel|io/_compile_matrix_text)\.py|src/jamma/_native\.py|src/jamma/_build_support/)
         pass_filenames: false
       - id: verify-compile-invocations-match
         name: verify compile entry points route through jamma._build_support

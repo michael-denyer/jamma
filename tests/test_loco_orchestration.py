@@ -8,7 +8,6 @@ from loguru import logger
 
 from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import read_fam_phenotypes
-from jamma.io.plink import get_plink_metadata
 from jamma.kinship.loco import (
     LocoKinshipStream,
     _yield_loco_matrices,
@@ -174,7 +173,7 @@ def _loco_run(**loco_fields):
     sink = logger.add(messages.append, level="INFO", format="{message}")
     try:
         result = run_lmm_loco(
-            LOCO.bfile,
+            GenotypeDataset.open_plink(LOCO.bfile),
             read_fam_phenotypes(LOCO.fam),
             config=LmmConfig(check_memory=False, show_progress=False),
             loco=LocoConfig(**loco_fields),
@@ -194,8 +193,8 @@ class TestChromosomeWithoutKinshipSnps:
         self, empty_chr, max_batch_chrs
     ):
         require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
-        meta = get_plink_metadata(LOCO.bfile)
-        ksnps = np.flatnonzero(meta.chromosome != empty_chr)
+        ds = GenotypeDataset.open_plink(LOCO.bfile)
+        ksnps = np.flatnonzero(ds.variants.chr != empty_chr)
 
         matrices = compute_loco_kinship_streaming(
             GenotypeDataset.open_plink(LOCO.bfile),
@@ -208,7 +207,7 @@ class TestChromosomeWithoutKinshipSnps:
 
         assert list(matrices) == ["1", "2", "3"]
         p = len(ksnps)
-        p_c = {c: int(np.sum(meta.chromosome[ksnps] == c)) for c in matrices}
+        p_c = {c: int(np.sum(ds.variants.chr[ksnps] == c)) for c in matrices}
         s_full_minus_s_c = {
             c: matrices[c] * (p - p_c[c]) for c in matrices if c != empty_chr
         }
@@ -220,13 +219,13 @@ class TestChromosomeWithoutKinshipSnps:
 
     def test_run_lmm_loco_tests_in_chromosome_order_with_pve_from_chr_1(self):
         require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
-        meta = get_plink_metadata(LOCO.bfile)
-        ksnps = np.flatnonzero(meta.chromosome != "1")
+        ds = GenotypeDataset.open_plink(LOCO.bfile)
+        ksnps = np.flatnonzero(ds.variants.chr != "1")
 
         result, pve_lines = _loco_run(ksnps_indices=ksnps)
         chr_1_only, _ = _loco_run(
             ksnps_indices=ksnps,
-            snps_indices=np.flatnonzero(meta.chromosome == "1"),
+            snps_indices=np.flatnonzero(ds.variants.chr == "1"),
         )
 
         assert list(dict.fromkeys(r.chr for r in result.associations)) == [
@@ -239,10 +238,10 @@ class TestChromosomeWithoutKinshipSnps:
 
     def test_pve_log_names_the_first_tested_chromosome(self):
         require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
-        meta = get_plink_metadata(LOCO.bfile)
+        ds = GenotypeDataset.open_plink(LOCO.bfile)
 
         result, pve_lines = _loco_run(
-            snps_indices=np.flatnonzero(meta.chromosome != "1")
+            snps_indices=np.flatnonzero(ds.variants.chr != "1")
         )
 
         assert list(dict.fromkeys(r.chr for r in result.associations)) == ["2", "3"]

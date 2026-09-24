@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.variants import SnpMeta
-from jamma.io.plink import PlinkMetadata, get_plink_metadata
 from jamma.lmm.assoc_output import IncrementalAssocWriter, build_results
 from jamma.lmm.schema import (
     DEFAULT_L_MAX,
@@ -309,51 +309,6 @@ def test_snp_meta_from_dicts_missing_key_raises() -> None:
         SnpMeta.from_dicts([{"chr": "1", "rs": "rs100", "a1": "A", "a0": "G"}])
 
 
-def test_snp_meta_from_plink_meta_sliced_matches_from_dicts() -> None:
-    """from_plink_meta sliced by an index array equals the old dict path.
-
-    The pipeline used to build a list of per-SNP dicts for the indices it
-    kept, then parse that list back into SnpMeta via from_dicts. Fancy
-    indexing on from_plink_meta's arrays must produce identical columns.
-    """
-    from tests.fixture_paths import SYNTHETIC
-
-    meta = get_plink_metadata(SYNTHETIC.bfile)
-    indices = np.array([0, 2, 5, meta.n_snps - 1])
-
-    sliced = SnpMeta.from_plink_meta(meta, indices)
-
-    old_path = SnpMeta.from_dicts(
-        [
-            {
-                "chr": str(meta.chromosome[i]),
-                "rs": meta.sid[i],
-                "pos": int(meta.bp_position[i]),
-                "a1": meta.allele_1[i],
-                "a0": meta.allele_2[i],
-            }
-            for i in indices
-        ]
-    )
-
-    np.testing.assert_array_equal(sliced.chr, old_path.chr)
-    np.testing.assert_array_equal(sliced.rs, old_path.rs)
-    np.testing.assert_array_equal(sliced.pos, old_path.pos)
-    np.testing.assert_array_equal(sliced.a1, old_path.a1)
-    np.testing.assert_array_equal(sliced.a0, old_path.a0)
-
-
-def test_snp_meta_from_plink_meta_no_indices_keeps_every_snp() -> None:
-    """from_plink_meta with indices=None returns every SNP, unfiltered."""
-    from tests.fixture_paths import SYNTHETIC
-
-    meta = get_plink_metadata(SYNTHETIC.bfile)
-
-    full = SnpMeta.from_plink_meta(meta)
-
-    assert len(full) == meta.n_snps
-
-
 def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:
     """write_arrays_batch accumulates count correctly across multiple calls."""
 
@@ -381,19 +336,10 @@ def test_write_arrays_batch_multi_batch_count(tmp_path: Path) -> None:
 
 
 def test_write_arrays_batch_with_plink_meta(tmp_path: Path) -> None:
-    """write_arrays_batch works with SnpMeta built from PLINK metadata."""
+    """write_arrays_batch works with SnpMeta read from PLINK metadata."""
+    from tests.fixture_paths import SYNTHETIC
 
-    meta = PlinkMetadata(
-        n_samples=4,
-        n_snps=3,
-        iid=np.array([["F1", "I1"], ["F2", "I2"], ["F3", "I3"], ["F4", "I4"]]),
-        sid=np.array(["rs100", "rs200", "rs300"]),
-        chromosome=np.array(["1", "2", "3"]),
-        bp_position=np.array([1000, 2000, 3000]),
-        allele_1=np.array(["A", "T", "C"]),
-        allele_2=np.array(["G", "C", "A"]),
-    )
-    snp_info = SnpMeta.from_plink_meta(meta)
+    snp_info = GenotypeDataset.open_plink(SYNTHETIC.bfile).variants
 
     rng = np.random.default_rng(55)
     n = 3
@@ -411,9 +357,9 @@ def test_write_arrays_batch_with_plink_meta(tmp_path: Path) -> None:
     assert len(lines) == 4  # header + 3 data rows
     # Verify SNP metadata came through correctly
     first_data = lines[1].split("\t")
-    assert first_data[0] == "1"  # chr
-    assert first_data[1] == "rs100"  # rs
-    assert first_data[2] == "1000"  # pos
+    assert first_data[0] == snp_info.chr[0]
+    assert first_data[1] == snp_info.rs[0]
+    assert first_data[2] == str(snp_info.pos[0])
 
 
 class TestEnvFlag:

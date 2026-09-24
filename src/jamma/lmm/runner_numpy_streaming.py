@@ -1,32 +1,19 @@
 """Disk-streaming NumPy LMM association runner.
 
-``BedSource`` streams a PLINK .bed twice (float32 statistics pass, float64
-association pass) without ever allocating the full genotype matrix; the run
-itself is the shared body in ``runner_numpy``.
+Streams a ``GenotypeDataset`` twice (statistics pass, float64 association
+pass) without ever allocating the full genotype matrix; the run itself is the
+shared body in ``runner_numpy``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
 import numpy as np
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_filter import validate_snp_indices
-from jamma.genotype.snp_stats import (
-    SnpFilterSpec,
-    SnpSelection,
-    collect_streamed_snp_stats,
-)
-from jamma.genotype.variants import SnpInfoRecord, SnpMeta
-from jamma.io.plink import get_plink_metadata, stream_genotype_chunks
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, plan_association
-from jamma.lmm.chunk_runner_numpy import RawLmmChunk
-from jamma.lmm.genotype_source import (
-    PreparedGenotypes,
-    SampleBasis,
-    bind_prepared_genotypes,
-)
 from jamma.lmm.prepare_common import (
     AnalysedPhenotype,
     parse_eigen_input,
@@ -44,105 +31,10 @@ from jamma.lmm.schema import (
 )
 
 
-def bed_chunk_source(
-    bed_path: Path, samples: SampleBasis
-) -> Callable[[SnpSelection, int], Iterator[RawLmmChunk]]:
-    """Stream a selection's .bed columns as float64 chunks over the analysed rows.
-
-    Args:
-        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
-        samples: The analysed rows, as positions among the BED rows.
-
-    Returns:
-        A chunk source for ``bind_prepared_genotypes``.
-    """
-
-    def _iter_chunks(selection: SnpSelection, chunk_size: int) -> Iterator[RawLmmChunk]:
-        for chunk, filt_start, filt_end in stream_genotype_chunks(
-            bed_path,
-            chunk_size=chunk_size,
-            dtype=np.float64,
-            show_progress=False,
-            snp_indices=selection.indices,
-        ):
-            if not samples.is_all_samples:
-                chunk = chunk[samples.positions, :]
-            yield RawLmmChunk(np.ascontiguousarray(chunk), filt_start, filt_end)
-
-    return _iter_chunks
-
-
-class BedSource:
-    """A PLINK .bed file as a genotype source.
-
-    The statistics pass reads float32 blocks (lightweight, counts only); the
-    association pass streams float64 chunks and row-filters each one, since
-    the file cannot be row-filtered up front the way a matrix can.
-    """
-
-    def __init__(
-        self,
-        bed_path: Path,
-        *,
-        snp_meta: SnpMeta,
-        n_samples: int,
-        n_snps: int,
-        stats_chunk_size: int,
-        validate_genotypes: bool,
-        show_progress: bool,
-    ) -> None:
-        if len(snp_meta) != n_snps:
-            raise ValueError(
-                "BED SNP count must match paired SnpMeta: "
-                f"got {n_snps} SNPs and {len(snp_meta)} metadata rows"
-            )
-        self._bed_path = bed_path
-        self._snp_meta = snp_meta
-        self._n_samples = n_samples
-        self._n_snps = n_snps
-        self._stats_chunk_size = stats_chunk_size
-        self._validate_genotypes = validate_genotypes
-        self._show_progress = show_progress
-
-    @property
-    def n_snps(self) -> int:
-        return self._n_snps
-
-    def prepare(
-        self, samples: SampleBasis, filters: SnpFilterSpec
-    ) -> PreparedGenotypes:
-        if samples.source_row_count != self._n_samples:
-            raise ValueError(
-                "sample basis row count must match BED rows: "
-                f"got {samples.source_row_count} and {self._n_samples}"
-            )
-        stats = collect_streamed_snp_stats(
-            self._bed_path,
-            n_snps=self._n_snps,
-            n_samples=self._n_samples,
-            chunk_size=self._stats_chunk_size,
-            sample_indices=None if samples.is_all_samples else samples.positions,
-            include_hwe=filters.hwe_threshold > 0,
-            validate_genotypes=self._validate_genotypes,
-            show_progress=self._show_progress,
-            progress_label="Computing SNP statistics",
-            dtype=np.float32,
-        )
-
-        return bind_prepared_genotypes(
-            snp_meta=self._snp_meta,
-            stats=stats,
-            filters=filters,
-            sample_basis=samples,
-            chunk_source=bed_chunk_source(self._bed_path, samples),
-        )
-
-
 def run_lmm_association_numpy_streaming(
-    bed_path: Path,
+    dataset: GenotypeDataset,
     phenotypes: np.ndarray,
     kinship: np.ndarray | None = None,
-    snp_info: Sequence[SnpInfoRecord] | SnpMeta | None = None,
     covariates: np.ndarray | None = None,
     eigenvalues: np.ndarray | None = None,
     eigenvectors: np.ndarray | None = None,
@@ -150,7 +42,6 @@ def run_lmm_association_numpy_streaming(
     output_path: Path | None = None,
     snps_indices: np.ndarray | None = None,
     hwe_threshold: float = 0.0,
-    validate_genotypes: bool = True,
     config: LmmConfig = DEFAULT_LMM_CONFIG,
 ) -> LmmRunResult:
     """Run LMM association tests by streaming genotypes from disk.
@@ -160,15 +51,14 @@ def run_lmm_association_numpy_streaming(
     genotype matrix.
 
     Args:
-        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
+        dataset: The genotypes, streamed from their file; for a PLINK
+            prefix pass ``GenotypeDataset.open_plink(prefix)``.
         phenotypes: Phenotype vector (n_samples,).
         kinship: Kinship matrix (n_samples, n_samples), or None when
             pre-computed eigenvalues and eigenvectors are provided. Consumed:
             centred in place, then overwritten by the eigendecomposition
             (zeroed on the NumPy fallback). Must be writeable; pass
             kinship.copy() to keep the original matrix.
-        snp_info: SnpMeta, a list of SNP metadata dicts, or None to build
-            from PLINK.
         covariates: Covariate matrix (n_samples, n_cvt) or None for
             intercept-only.
         eigenvalues: Pre-computed eigenvalues (sorted ascending) or None.
@@ -183,8 +73,6 @@ def run_lmm_association_numpy_streaming(
             or None.
         hwe_threshold: HWE p-value threshold; SNPs with p < threshold are
             removed. 0.0 disables HWE filtering (default).
-        validate_genotypes: Check for unexpected genotype values during
-            pass 1.
         config: LmmConfig with thresholds, lambda bounds, test type,
             memory check and progress settings.
 
@@ -194,49 +82,29 @@ def run_lmm_association_numpy_streaming(
         SNPs that passed filtering and were tested, and the run's timing
         breakdown.
     """
-    # Checked here, not in the shared body, because even the metadata read
-    # touches disk: a bad value must fail before any file I/O.
     if chunk_size is not None and chunk_size < 1:
         raise ValueError(f"chunk_size must be >= 1 or None, got {chunk_size}")
 
-    meta = get_plink_metadata(bed_path)
-    validate_snp_indices(snps_indices, meta.n_snps)
+    validate_snp_indices(snps_indices, dataset.n_variants)
     samples = AnalysedPhenotype.from_inputs(phenotypes, covariates)
     execution = plan_association(
         samples.n_samples,
-        meta.n_snps,
+        dataset.n_variants,
         config=config,
         backend="numpy-streaming",
         n_cvt=samples.n_cvt,
-        n_input_samples=meta.n_samples,
+        n_input_samples=dataset.n_samples,
         max_chunk_size=chunk_size,
     )
-
-    # Caller-supplied SnpMeta or list, or the PLINK metadata parsed once.
-    if snp_info is None:
-        snp_meta = SnpMeta.from_plink_meta(meta)
-    elif isinstance(snp_info, SnpMeta):
-        snp_meta = snp_info
-    else:
-        snp_meta = SnpMeta.from_dicts(snp_info)
-
-    source = BedSource(
-        bed_path,
-        snp_meta=snp_meta,
-        n_samples=meta.n_samples,
-        n_snps=meta.n_snps,
-        stats_chunk_size=DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
-        validate_genotypes=validate_genotypes,
-        show_progress=config.show_progress,
-    )
     return run_single(
-        source,
+        dataset,
         LmmRunSpec(
             config=config,
             execution=execution,
             snps_indices=snps_indices,
             hwe_threshold=hwe_threshold,
             labels=STREAMING_LABELS,
+            stats_block_size=DEFAULT_STATS_CHUNK if chunk_size is None else chunk_size,
         ),
         samples,
         restrict_eigen_input(

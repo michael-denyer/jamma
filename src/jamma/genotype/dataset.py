@@ -306,6 +306,33 @@ class GenotypeDataset:
             variants,
         )
 
+    def materialize(self) -> GenotypeDataset:
+        """Read every variant into memory once, as a float32 HARD_CALLS dataset.
+
+        float32 holds 0, 1, 2 and NaN exactly and halves the float64
+        footprint. Samples, variants and encoding carry over unchanged; the
+        result has no file fingerprint.
+
+        Raises:
+            ValueError: If the encoding is not HARD_CALLS, whose dosages
+                float32 would round.
+        """
+        if self._encoding is not GenotypeEncoding.HARD_CALLS:
+            raise ValueError(
+                f"only hard-call datasets can be materialized, "
+                f"got {self._encoding.value}"
+            )
+        cols = np.arange(self.n_variants, dtype=np.intp)
+        blocks = list(self._reader.read(cols, max(self.n_variants, 1), stats_only=True))
+        genotypes = (
+            np.asarray(blocks[0], dtype=np.float32)
+            if blocks
+            else np.empty((self.n_samples, 0), dtype=np.float32)
+        )
+        return GenotypeDataset(
+            _MatrixReader(genotypes), self._encoding, self._samples, self._variants
+        )
+
     @property
     def samples(self) -> SampleTable:
         return self._samples

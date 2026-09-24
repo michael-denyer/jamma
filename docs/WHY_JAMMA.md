@@ -76,7 +76,7 @@ kinship = compute_kinship_streaming(dataset, chunk_size=10000)
 
 # LMM also streams - only kinship (n^2) kept in memory
 results = run_lmm_association_numpy_streaming(
-    "large_study", phenotypes, kinship, chunk_size=5000
+    dataset, phenotypes, kinship, chunk_size=5000
 )
 ```
 
@@ -321,8 +321,8 @@ Every long-running operation can be monitored:
 ```python
 # Progress logging (streaming runners)
 results = run_lmm_association_numpy_streaming(
-    bed_path, phenotypes, kinship,
-    show_progress=True,  # Progress bar + RSS logging
+    dataset, phenotypes, kinship,
+    config=LmmConfig(show_progress=True),  # Progress bar + RSS logging
 )
 
 # Memory estimation before commitment

@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from jamma.core.threading import get_physical_core_count
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import read_fam_phenotypes
 from jamma.lmm import loco_workers
 from jamma.lmm.assoc_output import AssocResult
@@ -267,7 +268,7 @@ def test_keyboard_interrupt_propagates_before_the_in_flight_solve_finishes():
 def _loco_run(workers: int, monkeypatch):
     monkeypatch.setenv("JAMMA_LOCO_WORKERS", str(workers))
     return run_lmm_loco(
-        bed_path=LOCO.bfile,
+        dataset=GenotypeDataset.open_plink(LOCO.bfile),
         phenotypes=read_fam_phenotypes(LOCO.fam),
         config=LmmConfig(check_memory=False, show_progress=False),
     )

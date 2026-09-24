@@ -13,6 +13,7 @@ from jamma.lmm.association_plan import KinshipShape
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from jamma.validation.compare import load_gemma_assoc
+from tests.builders import read_plink_genotypes
 from tests.fixture_paths import LOCO, SYNTHETIC
 from tests.support import require_fixture
 
@@ -377,10 +378,9 @@ def test_pipeline_kinship_uses_gemma_filter_and_centring_populations(
     """GEMMA filters on analysed samples, then centres over the full population."""
     import warnings
 
-    from jamma.io import load_plink_binary
     from jamma.pipeline_plan import ComputedKinship
 
-    genotypes = load_plink_binary(asymmetric_plink).genotypes.astype(np.float64)
+    genotypes = read_plink_genotypes(asymmetric_plink).astype(np.float64)
     valid = np.arange(40)
     analysed = genotypes[valid]
     with warnings.catch_warnings():

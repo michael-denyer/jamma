@@ -118,20 +118,21 @@ def synthetic_data_with_covariates(synthetic_data):
     The covariates.txt file already includes the intercept column (first column
     is all 1.0), matching GEMMA's internal representation when -c is used.
     """
-    plink, kinship, phenotypes, snp_info = synthetic_data
+    genotypes, kinship, phenotypes, snp_info = synthetic_data
     covariates = np.loadtxt(SYNTHETIC.covariates)
-    return plink, kinship, phenotypes, snp_info, covariates
+    return genotypes, kinship, phenotypes, snp_info, covariates
 
 
 @pytest.fixture
 def synthetic_data():
-    """Load gemma_synthetic PLINK data, kinship, phenotypes, and snp_info."""
-    from jamma.genotype.variants import SnpMeta
-    from jamma.io import load_plink_binary, read_fam_phenotypes
+    """Load gemma_synthetic float32 genotypes, kinship, phenotypes, and SnpMeta."""
+    from jamma.genotype.dataset import GenotypeDataset
+    from jamma.io import read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
+    from tests.builders import read_plink_genotypes
 
-    plink = load_plink_binary(SYNTHETIC.bfile)
+    genotypes = read_plink_genotypes(SYNTHETIC.bfile)
     kinship = read_kinship_matrix(SYNTHETIC.kinship)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
-    snp_info = SnpMeta.from_plink_meta(plink.meta)
-    return plink, kinship, phenotypes, snp_info
+    snp_info = GenotypeDataset.open_plink(SYNTHETIC.bfile).variants
+    return genotypes, kinship, phenotypes, snp_info

@@ -24,7 +24,6 @@ from __future__ import annotations
 import contextlib
 import gc
 import time
-from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -35,15 +34,8 @@ from jamma.core import memory
 from jamma.core.threading import get_loco_worker_count, get_physical_core_count
 from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_filter import validate_snp_indices
-from jamma.genotype.snp_stats import SnpFilterSpec, SnpSelection, SnpStats
 from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter
 from jamma.lmm.association_plan import KinshipShape, plan_association
-from jamma.lmm.chunk_runner_numpy import RawLmmChunk
-from jamma.lmm.genotype_source import (
-    PreparedGenotypes,
-    SampleBasis,
-    bind_prepared_genotypes,
-)
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig, LocoRun
 from jamma.lmm.loco_eigen import (
     eigen_pairs_for,
@@ -75,7 +67,7 @@ __all__ = [
 
 
 def run_lmm_loco(
-    bed_path: Path,
+    dataset: GenotypeDataset,
     phenotypes: np.ndarray,
     covariates: np.ndarray | None = None,
     config: LmmConfig = DEFAULT_LMM_CONFIG,
@@ -98,7 +90,8 @@ def run_lmm_loco(
     are skipped entirely — eigen pairs are loaded from disk.
 
     Args:
-        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
+        dataset: The genotypes; for a PLINK prefix pass
+            ``GenotypeDataset.open_plink(prefix)``.
         phenotypes: Phenotype vector (n_samples_total,) with NaN for missing.
         covariates: Covariate matrix (n_samples_total, n_cvt) or None.
         config: Numerical settings shared with every other runner — MAF and
@@ -119,7 +112,6 @@ def run_lmm_loco(
             without eigen_dir are rejected earlier, when LmmConfig and
             LocoConfig are constructed.
     """
-    dataset = GenotypeDataset.open_plink(bed_path)
     samples = AnalysedPhenotype.from_inputs(phenotypes, covariates)
     execution = plan_association(
         samples.n_samples,
@@ -252,7 +244,7 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
             )
 
             chr_result = run_single(
-                _LocoChrSource(dataset, source.snp_stats.take(chr_snp_indices)),
+                dataset,
                 replace(
                     spec,
                     compute_pve=first_chr_pve is None,
@@ -264,6 +256,7 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
                 run.samples,
                 EigenPairs(eigenvalues_np, U),
                 all_results if writer is None else writer,
+                stats=source.snp_stats.take(chr_snp_indices),
             )
             chr_pve, chr_pve_se = chr_result.pve, chr_result.pve_se
 
@@ -307,59 +300,3 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
             pve=first_chr_pve,
             pve_se=first_chr_pve_se,
         )
-
-
-class _LocoChrSource:
-    """One chromosome's dataset columns as a GenotypeSource.
-
-    The sample basis indexes dataset rows directly. ``stats`` covers exactly
-    this chromosome's SNPs over the analysed rows, the basis GEMMA uses; its
-    global indices name the dataset columns.
-    """
-
-    def __init__(self, dataset: GenotypeDataset, stats: SnpStats) -> None:
-        self._dataset = dataset
-        self._stats = stats
-
-    @property
-    def n_snps(self) -> int:
-        return self._stats.n_snps
-
-    def prepare(
-        self, samples: SampleBasis, filters: SnpFilterSpec
-    ) -> PreparedGenotypes:
-        if samples.source_row_count != self._dataset.n_samples:
-            raise ValueError(
-                "sample basis row count must match the dataset rows: "
-                f"got {samples.source_row_count} and {self._dataset.n_samples}"
-            )
-        if filters.hwe_threshold > 0:
-            # PipelineRunner rejects -hwe with -loco before this runs
-            # (pipeline.py); a direct caller reaching here would silently
-            # get unfiltered results.
-            raise ValueError("HWE filtering is not supported in LOCO")
-        return bind_prepared_genotypes(
-            snp_meta=self._dataset.variants,
-            stats=self._stats,
-            filters=filters,
-            sample_basis=samples,
-            chunk_source=_dataset_chunk_source(self._dataset, samples),
-        )
-
-
-def _dataset_chunk_source(
-    dataset: GenotypeDataset, samples: SampleBasis
-) -> Callable[[SnpSelection, int], Iterator[RawLmmChunk]]:
-    """Stream a selection's columns as float64 chunks over the analysed rows.
-
-    The dataset counterpart of ``bed_chunk_source``: the same blocks, row
-    filter and contiguous copy, read through ``GenotypeDataset.blocks``.
-    """
-    rows = None if samples.is_all_samples else samples.positions
-
-    def _iter_chunks(selection: SnpSelection, chunk_size: int) -> Iterator[RawLmmChunk]:
-        for block in dataset.blocks(chunk_size, columns=selection.indices):
-            chunk = block.dosages(rows)
-            yield RawLmmChunk(np.ascontiguousarray(chunk), block.start, block.end)
-
-    return _iter_chunks

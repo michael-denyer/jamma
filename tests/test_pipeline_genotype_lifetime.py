@@ -1,14 +1,11 @@
-"""Prepared batch genotypes own only the rows needed by the phenotype loop."""
-
-from dataclasses import replace
-from weakref import ref
+"""The batch pipeline reads genotypes from disk once for every phenotype."""
 
 import numpy as np
 import pytest
 from bed_reader import to_bed
 
-import jamma.pipeline_phenotype_loop as phenotype_loop
-from jamma.lmm import runner_numpy
+import jamma.io.plink as plink_io
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.pipeline import PipelineConfig, PipelineRunner
 from tests.builders import write_fam
 
@@ -16,7 +13,9 @@ pytestmark = pytest.mark.tier0
 
 
 @pytest.mark.parametrize("subset", [False, True])
-def test_pipeline_releases_replaced_batch_matrix(tmp_path, monkeypatch, subset):
+def test_pipeline_batch_reads_bed_once_before_association(
+    tmp_path, monkeypatch, subset
+):
     rng = np.random.default_rng(190)
     bfile = tmp_path / "study"
     values = rng.integers(0, 3, (100, 300)).astype(np.float64)
@@ -26,22 +25,24 @@ def test_pipeline_releases_replaced_batch_matrix(tmp_path, monkeypatch, subset):
     if subset:
         phenotypes[:, [1, 4]] = np.nan
     write_fam(bfile.with_suffix(".fam"), *phenotypes.tolist())
-    observations = []
+    bed_opens = []
+    reads_at_materialize = []
+    real_open_bed = plink_io.open_bed
+    real_materialize = GenotypeDataset.materialize
 
-    class ObservedMatrixSource(runner_numpy.MatrixSource):
-        def prepare(self, samples, filters):
-            original = ref(self._genotypes)
-            prepared = super().prepare(samples, filters)
-            chunks = prepared.chunk_factory
+    def counting_open_bed(*args, **kwargs):
+        bed_opens.append(args[0])
+        return real_open_bed(*args, **kwargs)
 
-            def observe_chunks(chunk_size):
-                observations.append(original() is not None)
-                yield from chunks(chunk_size)
+    def observed_materialize(self):
+        materialized = real_materialize(self)
+        reads_at_materialize.append(len(bed_opens))
+        return materialized
 
-            return replace(prepared, chunk_factory=observe_chunks)
-
-    # allow-patch: observe lifetime while delegating all reads and computation.
-    monkeypatch.setattr(phenotype_loop, "MatrixSource", ObservedMatrixSource)
+    # allow-patch: count genotype reads while delegating to bed-reader.
+    monkeypatch.setattr(plink_io, "open_bed", counting_open_bed)
+    # allow-patch: observe the batch load while delegating to the real method.
+    monkeypatch.setattr(GenotypeDataset, "materialize", observed_materialize)
     result = PipelineRunner(
         PipelineConfig(
             bfile=bfile,
@@ -54,8 +55,10 @@ def test_pipeline_releases_replaced_batch_matrix(tmp_path, monkeypatch, subset):
         )
     ).run()
 
-    assert observations
-    assert all(alive == (not subset) for alive in observations)
+    # One in-memory load shared by both phenotypes; statistics and every
+    # association chunk then read memory, never the .bed again.
+    assert len(reads_at_materialize) == 1
+    assert len(bed_opens) == reads_at_materialize[0]
     assert result.n_snps_tested > 0
     assert len(result.phenotype_results) == 2
     assert all(item.assoc_path.stat().st_size > 0 for item in result.phenotype_results)

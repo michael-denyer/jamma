@@ -650,15 +650,15 @@ class TestMultiPhenotypeMaskIntersection:
 @pytest.mark.tier1
 def test_pipeline_numpy_with_snps_file(sample_plink_data: Path, tmp_path: Path) -> None:
     """T8: Pipeline NumPy backend works with -snps file filtering."""
-    from jamma.io.plink import get_plink_metadata
+    from jamma.genotype.dataset import GenotypeDataset
 
-    meta = get_plink_metadata(sample_plink_data)
-    total_snps = meta.n_snps
+    dataset = GenotypeDataset.open_plink(sample_plink_data)
+    total_snps = dataset.n_variants
 
     # Restrict to first 30 SNPs
     n_restrict = 30
     snps_path = tmp_path / "snps.txt"
-    snps_path.write_text("\n".join(meta.sid[:n_restrict]) + "\n")
+    snps_path.write_text("\n".join(dataset.variants.rs[:n_restrict]) + "\n")
 
     kinship_file = sample_plink_data.parent / "gemma_kinship.cXX.txt"
     out = tmp_path / "output_snps"

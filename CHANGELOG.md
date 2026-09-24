@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `run_lmm_association_numpy_streaming` and `run_lmm_loco` take a
+  `GenotypeDataset` (`GenotypeDataset.open_plink(prefix)`) instead of a PLINK
+  prefix. The streaming runner loses its `snp_info` parameter, since the
+  dataset carries the variant metadata, and its `validate_genotypes`
+  parameter, since hard-call validation now follows the dataset's encoding.
+  One function, `prepare_genotypes(dataset, samples, filters, *, stats=None)`,
+  prepares genotypes for every run, and batch mode reads the dataset into
+  memory with the new `GenotypeDataset.materialize()`. `run_lmm_association_numpy`
+  keeps its signature; its in-memory matrix is now also checked for values
+  outside {0, 1, 2, NaN}, and a count of them is logged, as the `.bed`
+  paths already did. Results are unchanged.
 - `compute_kinship_streaming` and `compute_loco_kinship_streaming` take a
   `GenotypeDataset` (`GenotypeDataset.open_plink(prefix)`) instead of a PLINK
   prefix, and `compute_loco_kinship_streaming` loses its `meta` parameter.
@@ -402,6 +413,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The PLINK-only genotype API, now that every consumer reads a
+  `GenotypeDataset`: `PlinkMetadata`, `get_plink_metadata`, `PlinkData`,
+  `read_genotypes`, `load_plink_binary`, `partitions_from_metadata` and
+  `stream_genotype_chunks` from `jamma.io.plink` (and their `jamma.io`
+  re-exports); `jamma.genotype.snp_stats.collect_streamed_snp_stats`;
+  `SnpMeta.from_plink_meta`; and the `GenotypeSource` protocol with its
+  `MatrixSource`, `BedSource` and `bed_chunk_source` implementations. Use
+  `GenotypeDataset.open_plink(prefix)` for metadata (`variants`, `samples`,
+  `partitions`), `blocks()` and `stats()` for streaming, and `materialize()`
+  for an in-memory copy.
 - `jamma.kinship.SnpStatsCache` and the `sample_scope` field on `SnpStats`.
   `LocoKinshipStream.snp_stats` is now always a `SnpStats` over the rows the
   kinship pass filtered on, never `None`.

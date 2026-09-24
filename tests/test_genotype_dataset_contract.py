@@ -14,7 +14,12 @@ import numpy as np
 import pytest
 from bed_reader import open_bed
 
-from jamma.genotype.dataset import GenotypeBlock, GenotypeDataset, GenotypeEncoding
+from jamma.genotype.dataset import (
+    GenotypeBlock,
+    GenotypeDataset,
+    GenotypeEncoding,
+    SampleTable,
+)
 from jamma.genotype.variants import SnpMeta
 from jamma.io.plink import validate_genotype_values
 from jamma.jlinalg import compute_snp_stats_chunk
@@ -361,3 +366,55 @@ def test_probability_block_rejects_hwe_and_skips_validation():
     with pytest.raises(ValueError, match="HWE"):
         block.stats(hwe=True)
     assert block.stats().n_unexpected == 0
+
+
+def test_materialize_keeps_values_identity_and_float32_stats(bfile: Path):
+    """materialize() reads once into memory; blocks and stats are unchanged."""
+    dense64, dense32, _ = _bed_oracle(bfile)
+    opened = GenotypeDataset.open_plink(bfile)
+
+    dataset = opened.materialize()
+
+    assert dataset.encoding is GenotypeEncoding.HARD_CALLS
+    assert dataset.samples is opened.samples
+    assert dataset.variants is opened.variants
+    (block,) = dataset.blocks(dataset.n_variants)
+    np.testing.assert_array_equal(block.dosages(), dense64, strict=True)
+    rows = _rows(dataset.n_samples)
+    _assert_stats_equal(
+        dataset.stats(rows, hwe=True, block_size=7),
+        dense32[rows, :],
+        np.arange(dataset.n_variants),
+    )
+    with pytest.raises(ValueError, match="no file fingerprint"):
+        dataset.fingerprint()
+
+
+class _UnreadableReader:
+    """A reader that fails the test if anything reads from it."""
+
+    def read(self, columns, block_size, *, stats_only):
+        raise AssertionError("materialize() must refuse before reading")
+
+    def fingerprint(self) -> dict[str, str]:
+        raise AssertionError("not called")
+
+
+def test_materialize_rejects_probabilities():
+    """float32 would round fractional dosages, so only hard calls materialize."""
+    ids = np.array(["s0", "s1"])
+    dataset = GenotypeDataset(
+        _UnreadableReader(),
+        GenotypeEncoding.PROBABILITIES,
+        SampleTable(fid=ids, iid=ids),
+        SnpMeta(
+            chr=np.array(["1"]),
+            rs=np.array(["a"]),
+            pos=np.array([1], dtype=np.int64),
+            a1=np.array(["A"]),
+            a0=np.array(["G"]),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="only hard-call datasets"):
+        dataset.materialize()

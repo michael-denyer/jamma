@@ -14,20 +14,16 @@ import numpy as np
 from loguru import logger
 
 from jamma.genotype.dataset import GenotypeDataset
-from jamma.io.plink import read_genotypes
-from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
-from jamma.lmm.genotype_source import GenotypeSource
+from jamma.lmm.association_plan import ExecutionMode
 from jamma.lmm.prepare_common import _build_covariate_matrix, rotate_basis
 from jamma.lmm.runner_numpy import (
     BATCH_LABELS,
     STREAMING_LABELS,
     LmmRunSpec,
-    MatrixSource,
     PhenotypeRun,
     prepare_genotypes,
     run_association,
 )
-from jamma.lmm.runner_numpy_streaming import BedSource
 from jamma.lmm.schema import ChunkRunStats
 from jamma.pipeline_config import PhenotypeResult, PipelineConfig
 from jamma.pipeline_plan import StandardAnalysisPlan
@@ -65,9 +61,6 @@ def run_phenotype_loop(
 
     phenotype_results: list[PhenotypeResult] = []
 
-    source = _genotype_source(
-        plan.mode, plan.runner_name, config.bfile, dataset, analysis
-    )
     spec = LmmRunSpec(
         config=analysis.lmm,
         execution=analysis.execution,
@@ -75,10 +68,12 @@ def run_phenotype_loop(
         hwe_threshold=config.hwe_threshold,
         labels=_LABELS[plan.mode],
     )
-    genotypes = prepare_genotypes(source, spec, samples.basis)
-    # Prepared chunks retain their analyzed rows. Release the original batch
-    # matrix when sample filtering replaced it with a smaller allocation.
-    del source
+    genotypes = prepare_genotypes(
+        _genotype_dataset(plan.mode, plan.runner_name, dataset),
+        samples.basis,
+        spec.snp_filters,
+        progress=spec.stats_progress,
+    )
     if genotypes.n_filtered == 0:
         logger.warning("All SNPs were filtered out. No association tests will run.")
     covariates = samples.covariates
@@ -145,28 +140,14 @@ def run_phenotype_loop(
 _LABELS = {"batch": BATCH_LABELS, "streaming": STREAMING_LABELS}
 
 
-def _genotype_source(
-    mode: ExecutionMode,
-    runner_name: str,
-    bfile: Path,
-    dataset: GenotypeDataset,
-    analysis: StandardAnalysisPlan,
-) -> GenotypeSource:
-    """Build the one genotype source every phenotype in this run reads from."""
-    snp_meta = dataset.variants
+def _genotype_dataset(
+    mode: ExecutionMode, runner_name: str, dataset: GenotypeDataset
+) -> GenotypeDataset:
+    """Return the one dataset every phenotype in this run reads from."""
     if mode == "streaming":
-        return BedSource(
-            bfile,
-            snp_meta=snp_meta,
-            n_samples=dataset.n_samples,
-            n_snps=dataset.n_variants,
-            stats_chunk_size=DEFAULT_STATS_CHUNK,
-            validate_genotypes=True,
-            show_progress=analysis.lmm.show_progress,
-        )
-
+        return dataset
     logger.info(
         f"{runner_name}: loading all genotypes into memory"
         " (for large datasets, use --backend numpy-streaming)"
     )
-    return MatrixSource(read_genotypes(bfile), snp_meta)
+    return dataset.materialize()

@@ -21,7 +21,8 @@ interchangeable.
 import numpy as np
 import pytest
 
-from jamma.io import load_plink_binary, read_fam_phenotypes
+from jamma.genotype.dataset import GenotypeDataset
+from jamma.io import read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.eigen import eigendecompose_kinship
 from jamma.lmm.likelihood import (
@@ -55,12 +56,12 @@ def synthetic_null_model():
         SYNTHETIC.kinship,
     )
 
-    plink = load_plink_binary(SYNTHETIC.bfile)
-    kinship = read_kinship_matrix(SYNTHETIC.kinship, n_samples=plink.meta.n_samples)
+    n_samples = GenotypeDataset.open_plink(SYNTHETIC.bfile).n_samples
+    kinship = read_kinship_matrix(SYNTHETIC.kinship, n_samples=n_samples)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
     eigenvalues, U = eigendecompose_kinship(kinship)
 
-    W = np.ones((plink.meta.n_samples, 1))
+    W = np.ones((n_samples, 1))
     UtW = U.T @ W
     Uty = U.T @ phenotypes
     n_cvt = 1
@@ -87,8 +88,8 @@ def mouse_null_model():
         MOUSE.kinship,
     )
 
-    plink = load_plink_binary(MOUSE.bfile)
-    kinship = read_kinship_matrix(MOUSE.kinship, n_samples=plink.meta.n_samples)
+    n_samples = GenotypeDataset.open_plink(MOUSE.bfile).n_samples
+    kinship = read_kinship_matrix(MOUSE.kinship, n_samples=n_samples)
     phenotypes = read_fam_phenotypes(MOUSE.fam)
 
     # 530 of the 1940 mouse_hs1940 phenotypes are missing. GEMMA drops those

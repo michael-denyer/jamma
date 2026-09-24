@@ -262,21 +262,20 @@ class TestLocoWriteEigen:
 
     def test_write_eigen_produces_correct_per_chr_files(self, tmp_path: Path) -> None:
         """write_eigen=True writes eigenD/eigenU per chromosome with correct dims."""
-        from jamma.io.plink import get_plink_metadata, partitions_from_metadata
         from jamma.lmm.loco import run_lmm_loco
         from jamma.lmm.prepare_common import compute_valid_mask
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
         phenotypes = read_fam_phenotypes(fam_path)
-        meta = get_plink_metadata(MOUSE_HS1940_BFILE)
-        partitions = partitions_from_metadata(meta)
+        ds = GenotypeDataset.open_plink(MOUSE_HS1940_BFILE)
+        partitions = ds.partitions
         unique_chrs = sorted(partitions.keys())
 
         valid_mask = compute_valid_mask(phenotypes, None)
         n_valid = int(np.sum(valid_mask))
 
         result = run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
+            dataset=GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
             phenotypes=phenotypes,
             output_path=tmp_path / "result.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
@@ -336,7 +335,7 @@ class TestLocoEigenCacheIntegration:
         # Run 1: compute + write eigen
         out1 = tmp_path / "run1.assoc.txt"
         run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
+            dataset=GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
             phenotypes=phenotypes,
             output_path=out1,
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
@@ -354,7 +353,7 @@ class TestLocoEigenCacheIntegration:
         )
         try:
             run_lmm_loco(
-                bed_path=MOUSE_HS1940_BFILE,
+                dataset=GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
                 phenotypes=phenotypes,
                 output_path=out2,
                 config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
@@ -433,7 +432,7 @@ class TestLocoEigenCacheFallback:
         empty_dir.mkdir()
 
         result = run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
+            dataset=GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
             phenotypes=phenotypes,
             output_path=tmp_path / "result.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
@@ -443,20 +442,19 @@ class TestLocoEigenCacheFallback:
 
     def test_partial_cache_falls_back_to_compute(self, tmp_path: Path) -> None:
         """Partial cache (some chrs missing) falls back to full compute."""
-        from jamma.io.plink import get_plink_metadata, partitions_from_metadata
         from jamma.lmm.loco import run_lmm_loco
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
         phenotypes = read_fam_phenotypes(fam_path)
-        meta = get_plink_metadata(MOUSE_HS1940_BFILE)
-        partitions = partitions_from_metadata(meta)
+        ds = GenotypeDataset.open_plink(MOUSE_HS1940_BFILE)
+        partitions = ds.partitions
         unique_chrs = sorted(partitions.keys())
 
         # First run: write all eigen files
         eigen_dir = tmp_path / "partial_eigen"
         eigen_dir.mkdir()
         run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
+            dataset=GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
             phenotypes=phenotypes,
             output_path=tmp_path / "full.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
@@ -471,7 +469,7 @@ class TestLocoEigenCacheFallback:
 
         # Run with partial cache: should fall back to full compute
         result = run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
+            dataset=GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
             phenotypes=phenotypes,
             output_path=tmp_path / "partial.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
@@ -659,7 +657,6 @@ class TestGwasLocoWriteEigen:
     ) -> None:
         """No eigen_dir given: per-chr eigen files land in output_dir."""
         from jamma import gwas
-        from jamma.io.plink import get_plink_metadata, partitions_from_metadata
 
         out_dir = tmp_path / "out"
         result = gwas(
@@ -672,8 +669,8 @@ class TestGwasLocoWriteEigen:
         )
         assert result.n_snps_tested > 0
 
-        meta = get_plink_metadata(MOUSE_HS1940_BFILE)
-        unique_chrs = sorted(partitions_from_metadata(meta).keys())
+        ds = GenotypeDataset.open_plink(MOUSE_HS1940_BFILE)
+        unique_chrs = sorted(ds.partitions.keys())
         for ch in unique_chrs:
             assert list(out_dir.glob(f"result.generation.*.loco.chr{ch}.eigenD.npy")), (
                 f"Missing eigenD for chr {ch} in output_dir"
@@ -695,16 +692,15 @@ class TestLocoLegacyText:
         self, tmp_path: Path
     ) -> None:
         """legacy_text=True writes .txt eigen and kinship files."""
-        from jamma.io.plink import get_plink_metadata, partitions_from_metadata
         from jamma.lmm.loco import run_lmm_loco
 
         fam_path = MOUSE_HS1940_BFILE.with_suffix(".fam")
         phenotypes = read_fam_phenotypes(fam_path)
-        meta = get_plink_metadata(MOUSE_HS1940_BFILE)
-        unique_chrs = sorted(partitions_from_metadata(meta).keys())
+        ds = GenotypeDataset.open_plink(MOUSE_HS1940_BFILE)
+        unique_chrs = sorted(ds.partitions.keys())
 
         run_lmm_loco(
-            bed_path=MOUSE_HS1940_BFILE,
+            dataset=GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
             phenotypes=phenotypes,
             output_path=tmp_path / "result.assoc.txt",
             config=LmmConfig(lmm_mode=1, check_memory=False, show_progress=False),
@@ -748,7 +744,7 @@ class TestLocoEigenCacheStaleDetection:
         eigen_dir.mkdir()
 
         common = {
-            "bed_path": MOUSE_HS1940_BFILE,
+            "dataset": GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
             "phenotypes": phenotypes,
         }
 
@@ -820,7 +816,7 @@ class TestLocoEigenCacheStaleDetection:
         eigen_dir.mkdir()
 
         common = {
-            "bed_path": MOUSE_HS1940_BFILE,
+            "dataset": GenotypeDataset.open_plink(MOUSE_HS1940_BFILE),
             "phenotypes": phenotypes,
         }
 
@@ -890,7 +886,7 @@ def test_cached_loco_reports_no_eigen_workers(tmp_path, monkeypatch):
     config = LmmConfig(check_memory=False, show_progress=False)
     phenotypes = read_fam_phenotypes(LOCO.fam)
     run_lmm_loco(
-        LOCO.bfile,
+        GenotypeDataset.open_plink(LOCO.bfile),
         phenotypes,
         config=config,
         loco=LocoConfig(write_eigen=True, eigen_dir=tmp_path),
@@ -899,7 +895,7 @@ def test_cached_loco_reports_no_eigen_workers(tmp_path, monkeypatch):
     sink = logger.add(messages.append, level="INFO", format="{message}")
     try:
         result = run_lmm_loco(
-            LOCO.bfile,
+            GenotypeDataset.open_plink(LOCO.bfile),
             phenotypes,
             config=config,
             loco=LocoConfig(eigen_dir=tmp_path),
@@ -934,7 +930,7 @@ def test_write_eigen_with_workers_matches_sequential(
     def write(workers: int, eigen_dir: Path) -> dict:
         monkeypatch.setenv("JAMMA_LOCO_WORKERS", str(workers))
         run_lmm_loco(
-            bed_path=LOCO.bfile,
+            dataset=GenotypeDataset.open_plink(LOCO.bfile),
             phenotypes=phenotypes,
             config=LmmConfig(check_memory=False, show_progress=False),
             loco=LocoConfig(write_eigen=True, eigen_dir=eigen_dir, prefix="loco"),

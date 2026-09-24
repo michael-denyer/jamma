@@ -464,9 +464,11 @@ def test_batch_hwe_matches_streaming_hwe() -> None:
     through the same filter_snp_stats call. If batch silently ignored the
     threshold, its count would match the unfiltered run and this fails.
     """
-    from jamma.io import load_plink_binary, read_fam_phenotypes
+    from jamma.genotype.dataset import GenotypeDataset
+    from jamma.io import read_fam_phenotypes
     from jamma.lmm.runner_numpy import run_lmm_association_numpy
     from jamma.lmm.runner_numpy_streaming import run_lmm_association_numpy_streaming
+    from tests.builders import read_plink_genotypes
     from tests.fixture_paths import LOCO
     from tests.reference.kinship import compute_centered_kinship
     from tests.support import require_fixture
@@ -475,20 +477,11 @@ def test_batch_hwe_matches_streaming_hwe() -> None:
     require_fixture(
         bed.with_suffix(".bed"), bed.with_suffix(".bim"), bed.with_suffix(".fam")
     )
-    plink = load_plink_binary(bed)
+    dataset = GenotypeDataset.open_plink(bed)
     phen = read_fam_phenotypes(bed.with_suffix(".fam"))
-    genotypes = plink.genotypes.astype(np.float64)
+    genotypes = read_plink_genotypes(bed).astype(np.float64)
     kinship = compute_centered_kinship(genotypes.copy())
-    snp_info = [
-        {
-            "chr": str(plink.meta.chromosome[i]),
-            "rs": plink.meta.sid[i],
-            "pos": int(plink.meta.bp_position[i]),
-            "a1": plink.meta.allele_1[i],
-            "a0": plink.meta.allele_2[i],
-        }
-        for i in range(plink.meta.n_snps)
-    ]
+    snp_info = dataset.variants
     cfg = LmmConfig(lmm_mode=1, check_memory=False, show_progress=False)
 
     unfiltered = run_lmm_association_numpy(
@@ -508,7 +501,7 @@ def test_batch_hwe_matches_streaming_hwe() -> None:
         hwe_threshold=hwe_threshold,
     )
     stream = run_lmm_association_numpy_streaming(
-        bed_path=bed,
+        dataset=dataset,
         phenotypes=phen,
         kinship=kinship.copy(),
         chunk_size=60,

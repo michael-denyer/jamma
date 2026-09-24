@@ -13,8 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from jamma.genotype.variants import SnpMeta
-from jamma.io import load_plink_binary, read_fam_phenotypes
+from jamma.genotype.dataset import GenotypeDataset
+from jamma.io import read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
@@ -27,6 +27,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
+from tests.builders import read_plink_genotypes
 from tests.fixture_paths import SYNTHETIC
 from tests.support import requires_c
 
@@ -119,7 +120,9 @@ def test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm():
 
 @pytest.mark.tier0
 @pytest.mark.parametrize("bad", [0, -1])
-def test_streaming_rejects_a_chunk_size_below_one_before_reading_the_bed(bad, tmp_path):
+def test_streaming_rejects_a_chunk_size_below_one_before_reading_the_bed(
+    bad, monkeypatch
+):
     """A bad chunk_size must fail before pass 1, not after it.
 
     None means "not specified"; zero does not. Deriving the statistics-pass
@@ -128,9 +131,15 @@ def test_streaming_rejects_a_chunk_size_below_one_before_reading_the_bed(bad, tm
     chunk runner, which on a large dataset is minutes of I/O before the
     complaint.
     """
+    dataset = GenotypeDataset.open_plink(SYNTHETIC.bfile)
+
+    def _no_bed_read(*_args, **_kwargs):
+        raise AssertionError("the .bed was opened before chunk_size was checked")
+
+    monkeypatch.setattr("jamma.io.plink.open_bed", _no_bed_read)
     with pytest.raises(ValueError, match="chunk_size must be >= 1 or None"):
         run_lmm_association_numpy_streaming(
-            bed_path=tmp_path / "does-not-exist",
+            dataset=dataset,
             phenotypes=np.zeros(4),
             kinship=np.eye(4),
             chunk_size=bad,
@@ -140,11 +149,11 @@ def test_streaming_rejects_a_chunk_size_below_one_before_reading_the_bed(bad, tm
 
 @pytest.fixture
 def synthetic_data():
-    """Load gemma_synthetic PLINK data, kinship, phenotypes."""
-    plink = load_plink_binary(SYNTHETIC.bfile)
+    """Open gemma_synthetic PLINK dataset; load kinship, phenotypes."""
+    dataset = GenotypeDataset.open_plink(SYNTHETIC.bfile)
     kinship = read_kinship_matrix(SYNTHETIC.kinship)
     phenotypes = read_fam_phenotypes(SYNTHETIC.fam)
-    return plink, kinship, phenotypes
+    return dataset, kinship, phenotypes
 
 
 @pytest.fixture
@@ -153,11 +162,11 @@ def synthetic_eigen(synthetic_data):
 
     Avoids redundant O(n^3) eigendecomposition across tests.
     """
-    plink, kinship, phenotypes = synthetic_data
+    dataset, kinship, phenotypes = synthetic_data
     valid_mask = ~np.isnan(phenotypes)
     kinship_filtered = kinship[np.ix_(valid_mask, valid_mask)]
     eigenvalues, eigenvectors = np.linalg.eigh(kinship_filtered)
-    return plink, kinship, phenotypes, eigenvalues, eigenvectors
+    return dataset, kinship, phenotypes, eigenvalues, eigenvectors
 
 
 @pytest.fixture
@@ -171,12 +180,12 @@ def synthetic_data_with_covariates(synthetic_data):
     the kinship in-place overwrite (DSYEVD-inplace) between sequential runner
     calls.
     """
-    plink, kinship, phenotypes = synthetic_data
+    dataset, kinship, phenotypes = synthetic_data
     covariates = np.loadtxt(SYNTHETIC.covariates)
     valid_mask = ~np.isnan(phenotypes)
     kinship_filtered = kinship[np.ix_(valid_mask, valid_mask)]
     eigenvalues, eigenvectors = np.linalg.eigh(kinship_filtered)
-    return plink, phenotypes, covariates, eigenvalues, eigenvectors
+    return dataset, phenotypes, covariates, eigenvalues, eigenvectors
 
 
 # ---------------------------------------------------------------------------
@@ -198,9 +207,9 @@ class TestNumpyStreamingGemmaParity:
     @pytest.mark.parametrize("lmm_mode,reference_path", _SYNTHETIC_MODE_REFS)
     def test_streaming_matches_gemma(self, synthetic_data, lmm_mode, reference_path):
         """Streaming runner matches GEMMA reference on synthetic data."""
-        plink, kinship, phenotypes = synthetic_data
+        dataset, kinship, phenotypes = synthetic_data
         run_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(
@@ -232,15 +241,14 @@ class TestBatchEquivalence:
 
     def test_mode1_fp_identical(self, synthetic_eigen):
         """Wald results match between batch and streaming within BLAS tolerance."""
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Batch run
-        snp_info = SnpMeta.from_plink_meta(plink.meta)
         batch_result = run_lmm_association_numpy(
-            genotypes=plink.genotypes,
+            genotypes=read_plink_genotypes(SYNTHETIC.bfile),
             phenotypes=phenotypes,
             kinship=None,
-            snp_info=snp_info,
+            snp_info=dataset.variants,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -249,7 +257,7 @@ class TestBatchEquivalence:
 
         # Streaming run
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -277,14 +285,12 @@ class TestBatchEquivalence:
     @requires_c
     def test_mode4_fp_identical(self, synthetic_eigen):
         """Mode-4 results match between batch and streaming within BLAS tolerance."""
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
-
-        snp_info = SnpMeta.from_plink_meta(plink.meta)
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
         batch_result = run_lmm_association_numpy(
-            genotypes=plink.genotypes,
+            genotypes=read_plink_genotypes(SYNTHETIC.bfile),
             phenotypes=phenotypes,
             kinship=None,
-            snp_info=snp_info,
+            snp_info=dataset.variants,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
             config=LmmConfig(lmm_mode=4, show_progress=False, check_memory=False),
@@ -292,7 +298,7 @@ class TestBatchEquivalence:
         batch_assoc = batch_result.associations
 
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -327,17 +333,16 @@ class TestStreamingCovariates:
 
     def test_streaming_covar_matches_batch_wald(self, synthetic_data_with_covariates):
         """Streaming + covariates matches batch + covariates (Wald mode)."""
-        plink, phenotypes, covariates, eigenvalues, eigenvectors = (
+        dataset, phenotypes, covariates, eigenvalues, eigenvectors = (
             synthetic_data_with_covariates
         )
 
         # Batch run (pre-computed eigen for identical path)
-        snp_info = SnpMeta.from_plink_meta(plink.meta)
         batch_result = run_lmm_association_numpy(
-            genotypes=plink.genotypes,
+            genotypes=read_plink_genotypes(SYNTHETIC.bfile),
             phenotypes=phenotypes,
             kinship=None,
-            snp_info=snp_info,
+            snp_info=dataset.variants,
             covariates=covariates,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
@@ -347,7 +352,7 @@ class TestStreamingCovariates:
 
         # Streaming run
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             covariates=covariates,
@@ -375,11 +380,11 @@ class TestStreamingCovariates:
 
     def test_streaming_covar_matches_gemma_wald(self, synthetic_data):
         """Streaming + covariates matches GEMMA reference (Wald mode)."""
-        plink, kinship, phenotypes = synthetic_data
+        dataset, kinship, phenotypes = synthetic_data
         covariates = np.loadtxt(SYNTHETIC.covariates)
 
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=kinship.copy(),
             covariates=covariates,
@@ -399,13 +404,13 @@ class TestStreamingCovariates:
 
     def test_streaming_covar_multi_chunk(self, synthetic_data_with_covariates):
         """Chunk size independence with covariates."""
-        plink, phenotypes, covariates, eigenvalues, eigenvectors = (
+        dataset, phenotypes, covariates, eigenvalues, eigenvectors = (
             synthetic_data_with_covariates
         )
 
         # Many small chunks
         small_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             covariates=covariates,
@@ -417,7 +422,7 @@ class TestStreamingCovariates:
 
         # Single chunk
         big_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             covariates=covariates,
@@ -453,11 +458,11 @@ class TestStreamingMechanics:
 
     def test_output_path_writes_to_disk(self, tmp_path, synthetic_data):
         """With output_path, results go to disk and associations is empty."""
-        plink, kinship, phenotypes = synthetic_data
+        dataset, kinship, phenotypes = synthetic_data
         out_file = tmp_path / "streaming_out.assoc.txt"
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -481,10 +486,10 @@ class TestStreamingMechanics:
 
     def test_no_output_path_accumulates_in_memory(self, synthetic_data):
         """Without output_path, results accumulate in memory."""
-        plink, kinship, phenotypes = synthetic_data
+        dataset, kinship, phenotypes = synthetic_data
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -497,10 +502,10 @@ class TestStreamingMechanics:
 
     def test_result_carries_timing_breakdown(self, synthetic_data):
         """The returned result carries the run's timing breakdown."""
-        plink, kinship, phenotypes = synthetic_data
+        dataset, kinship, phenotypes = synthetic_data
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -515,10 +520,10 @@ class TestStreamingMechanics:
 
     def test_pve_populated(self, synthetic_data):
         """PVE should be populated in the result."""
-        plink, kinship, phenotypes = synthetic_data
+        dataset, kinship, phenotypes = synthetic_data
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=kinship,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
@@ -544,21 +549,19 @@ class TestChunkingEdgeCases:
 
     def test_single_chunk(self, synthetic_eigen):
         """chunk_size larger than total SNPs (single chunk) matches batch."""
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
-
-        snp_info = SnpMeta.from_plink_meta(plink.meta)
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
         batch_result = run_lmm_association_numpy(
-            genotypes=plink.genotypes,
+            genotypes=read_plink_genotypes(SYNTHETIC.bfile),
             phenotypes=phenotypes,
             kinship=None,
-            snp_info=snp_info,
+            snp_info=dataset.variants,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
 
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -573,21 +576,19 @@ class TestChunkingEdgeCases:
 
     def test_small_chunks(self, synthetic_eigen):
         """chunk_size=50 (many small chunks) matches batch."""
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
-
-        snp_info = SnpMeta.from_plink_meta(plink.meta)
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
         batch_result = run_lmm_association_numpy(
-            genotypes=plink.genotypes,
+            genotypes=read_plink_genotypes(SYNTHETIC.bfile),
             phenotypes=phenotypes,
             kinship=None,
-            snp_info=snp_info,
+            snp_info=dataset.variants,
             eigenvalues=eigenvalues,
             eigenvectors=eigenvectors,
             config=LmmConfig(lmm_mode=1, show_progress=False, check_memory=False),
         )
 
         stream_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -602,12 +603,12 @@ class TestChunkingEdgeCases:
 
     def test_empty_after_filter(self, synthetic_data):
         """All SNPs filtered out returns empty result."""
-        plink, kinship, phenotypes = synthetic_data
+        dataset, kinship, phenotypes = synthetic_data
 
         # An empty -snps restriction leaves nothing to test. MAF cannot express
         # this: it is min(af, 1-af) and so never exceeds 0.5.
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=kinship,
             snps_indices=np.array([], dtype=np.int64),
@@ -634,14 +635,14 @@ class TestStreamingPipeline:
 
         from loguru import logger as _logger
 
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Capture DEBUG log output
         log_buffer = io.StringIO()
         sink_id = _logger.add(log_buffer, level="DEBUG", format="{message}")
         try:
             result = run_lmm_association_numpy_streaming(
-                bed_path=SYNTHETIC.bfile,
+                dataset=dataset,
                 phenotypes=phenotypes,
                 kinship=None,
                 eigenvalues=eigenvalues,
@@ -660,11 +661,11 @@ class TestStreamingPipeline:
 
     def test_streaming_pipeline_parity(self, synthetic_eigen):
         """Pipeline (chunk_size=1) matches sequential (chunk_size=100_000)."""
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Sequential: single chunk (no pipeline)
         seq_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -675,7 +676,7 @@ class TestStreamingPipeline:
 
         # Pipeline: many chunks
         pipe_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -703,10 +704,10 @@ class TestStreamingPipeline:
 
     def test_streaming_auto_chunk_sizing(self, synthetic_eigen):
         """Auto chunk sizing runs without error (default chunk_size=10_000)."""
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -719,12 +720,12 @@ class TestStreamingPipeline:
 
     def test_streaming_pipeline_output_path_parity(self, tmp_path, synthetic_eigen):
         """Pipeline with output_path produces same disk results as sequential."""
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Sequential: single chunk -> disk
         seq_file = tmp_path / "seq.assoc.txt"
         seq_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -737,7 +738,7 @@ class TestStreamingPipeline:
         # Pipeline: many chunks -> disk
         pipe_file = tmp_path / "pipe.assoc.txt"
         pipe_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -768,11 +769,11 @@ class TestStreamingPipeline:
 
     def test_streaming_pipeline_mode4_parity(self, synthetic_eigen):
         """Pipeline (chunk_size=1) with lmm_mode=4 matches sequential."""
-        plink, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
+        dataset, _kinship, phenotypes, eigenvalues, eigenvectors = synthetic_eigen
 
         # Sequential: single chunk
         seq_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,
@@ -783,7 +784,7 @@ class TestStreamingPipeline:
 
         # Pipeline: many chunks
         pipe_result = run_lmm_association_numpy_streaming(
-            bed_path=SYNTHETIC.bfile,
+            dataset=dataset,
             phenotypes=phenotypes,
             kinship=None,
             eigenvalues=eigenvalues,

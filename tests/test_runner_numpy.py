@@ -12,8 +12,8 @@ from dataclasses import asdict
 import numpy as np
 import pytest
 
-from jamma.genotype.variants import SnpMeta
-from jamma.io import load_plink_binary, read_fam_phenotypes
+from jamma.genotype.dataset import GenotypeDataset
+from jamma.io import read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
@@ -23,6 +23,7 @@ from jamma.validation import (
     compare_assoc_results,
     load_gemma_assoc,
 )
+from tests.builders import read_plink_genotypes
 from tests.fixture_paths import (
     MOUSE,
     NUMPY_GEMMA_TOLERANCES,
@@ -38,11 +39,11 @@ from tests.support import require_fixture, requires_c
 @pytest.fixture
 def mouse_hs1940_data():
     """Load mouse_hs1940 PLINK data, kinship, phenotypes, and snp_info."""
-    plink = load_plink_binary(MOUSE.bfile)
+    genotypes = read_plink_genotypes(MOUSE.bfile)
     kinship = read_kinship_matrix(MOUSE.kinship)
     phenotypes = read_fam_phenotypes(MOUSE.fam)
-    snp_info = SnpMeta.from_plink_meta(plink.meta)
-    return plink, kinship, phenotypes, snp_info
+    snp_info = GenotypeDataset.open_plink(MOUSE.bfile).variants
+    return genotypes, kinship, phenotypes, snp_info
 
 
 @pytest.fixture
@@ -52,9 +53,9 @@ def mouse_hs1940_data_with_covariates(mouse_hs1940_data):
     The covariates.txt file has no constant column, so the runner appends the
     intercept the same way GEMMA's CheckCvt does with -c.
     """
-    plink, kinship, phenotypes, snp_info = mouse_hs1940_data
+    genotypes, kinship, phenotypes, snp_info = mouse_hs1940_data
     covariates = np.loadtxt(MOUSE.covariates)
-    return plink, kinship, phenotypes, snp_info, covariates
+    return genotypes, kinship, phenotypes, snp_info, covariates
 
 
 # ---------------------------------------------------------------------------
@@ -67,9 +68,9 @@ def test_numpy_runner_returns_list_of_assoc_result(synthetic_data):
     """Type check: NumPy runner returns LmmRunResult with AssocResult items."""
     from jamma.lmm.schema import LmmConfig, LmmRunResult
 
-    plink, kinship, phenotypes, snp_info = synthetic_data
+    genotypes, kinship, phenotypes, snp_info = synthetic_data
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
@@ -96,13 +97,13 @@ def test_public_runner_supplied_eigenpairs_take_precedence(synthetic_data):
     """Supplying kinship alongside eigenpairs produces the eigenpair result."""
     from jamma.lmm.eigen import eigendecompose_kinship
 
-    plink, kinship, phenotypes, snp_info = synthetic_data
+    genotypes, kinship, phenotypes, snp_info = synthetic_data
     eigenvalues, eigenvectors = eigendecompose_kinship(
         kinship.copy(), check_memory=False
     )
     config = LmmConfig(lmm_mode=1, check_memory=False, show_progress=False)
     common = {
-        "genotypes": plink.genotypes,
+        "genotypes": genotypes,
         "phenotypes": phenotypes,
         "snp_info": snp_info,
         "eigenvalues": eigenvalues,
@@ -122,11 +123,11 @@ def test_public_runner_supplied_eigenpairs_take_precedence(synthetic_data):
 @pytest.mark.tier0
 def test_numpy_runner_empty_after_filter(synthetic_data):
     """Edge case: returns LmmRunResult with empty associations."""
-    plink, kinship, phenotypes, snp_info = synthetic_data
+    genotypes, kinship, phenotypes, snp_info = synthetic_data
     # Constant genotypes are non-polymorphic, so the variance filter drops every
     # SNP whatever the thresholds are. A MAF threshold cannot express this: MAF
     # is min(af, 1-af) and so never exceeds 0.5.
-    constant_genotypes = np.full_like(plink.genotypes, 2.0)
+    constant_genotypes = np.full_like(genotypes, 2.0)
     run_result = run_lmm_association_numpy(
         genotypes=constant_genotypes,
         phenotypes=phenotypes,
@@ -156,9 +157,9 @@ _SYNTHETIC_MODE_REFS = [
 @pytest.mark.parametrize("lmm_mode,reference_path", _SYNTHETIC_MODE_REFS)
 def test_numpy_runner_synthetic(synthetic_data, lmm_mode, reference_path):
     """NumPy runner matches GEMMA reference on gemma_synthetic for each mode."""
-    plink, kinship, phenotypes, snp_info = synthetic_data
+    genotypes, kinship, phenotypes, snp_info = synthetic_data
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
@@ -185,9 +186,9 @@ _MOUSE_HS1940_MODE_REFS = [
 @pytest.mark.parametrize("lmm_mode,reference_path", _MOUSE_HS1940_MODE_REFS)
 def test_numpy_runner_mouse_hs1940(mouse_hs1940_data, lmm_mode, reference_path):
     """NumPy runner matches GEMMA on mouse_hs1940 for each mode."""
-    plink, kinship, phenotypes, snp_info = mouse_hs1940_data
+    genotypes, kinship, phenotypes, snp_info = mouse_hs1940_data
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
@@ -219,9 +220,11 @@ def test_numpy_runner_covar_synthetic(
     synthetic_data_with_covariates, lmm_mode, reference_path
 ):
     """NumPy runner with covariates matches GEMMA reference on synthetic data."""
-    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    genotypes, kinship, phenotypes, snp_info, covariates = (
+        synthetic_data_with_covariates
+    )
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
@@ -247,13 +250,15 @@ def test_numpy_runner_nan_covariate_row_equals_explicit_drop(
     only, so a NaN row must neither crash the run nor hide the intercept
     column that the remaining rows carry.
     """
-    plink, kinship, phenotypes, snp_info, covariates = synthetic_data_with_covariates
+    genotypes, kinship, phenotypes, snp_info, covariates = (
+        synthetic_data_with_covariates
+    )
     cov = covariates.copy()
     cov[5, :] = np.nan
     config = LmmConfig(lmm_mode=1, show_progress=False)
 
     masked = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship.copy(),
         snp_info=snp_info,
@@ -264,7 +269,7 @@ def test_numpy_runner_nan_covariate_row_equals_explicit_drop(
     keep = np.ones(len(phenotypes), dtype=bool)
     keep[5] = False
     explicit = run_lmm_association_numpy(
-        genotypes=plink.genotypes[keep],
+        genotypes=genotypes[keep],
         phenotypes=phenotypes[keep],
         kinship=kinship[np.ix_(keep, keep)].copy(),
         snp_info=snp_info,
@@ -301,9 +306,11 @@ def test_numpy_runner_covar_mouse_hs1940(
     mouse_hs1940_data_with_covariates, lmm_mode, reference_path
 ):
     """NumPy runner with covariates matches GEMMA on mouse_hs1940."""
-    plink, kinship, phenotypes, snp_info, covariates = mouse_hs1940_data_with_covariates
+    genotypes, kinship, phenotypes, snp_info, covariates = (
+        mouse_hs1940_data_with_covariates
+    )
     run_result = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship,
         snp_info=snp_info,
@@ -338,10 +345,10 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
         MOUSE.kinship,
     )
 
-    plink = load_plink_binary(MOUSE.bfile)
+    genotypes = read_plink_genotypes(MOUSE.bfile)
     kinship = read_kinship_matrix(MOUSE.kinship)
     phenotypes = read_fam_phenotypes(MOUSE.fam)
-    snp_info = SnpMeta.from_plink_meta(plink.meta)
+    snp_info = GenotypeDataset.open_plink(MOUSE.bfile).variants
 
     # Filter to valid (non-NaN) samples then pre-compute eigendecomp once
     # on the filtered kinship — passed to both runs so the only variable is
@@ -351,7 +358,7 @@ def test_numpy_multi_chunk_pvalue_equivalence(monkeypatch):
     eigenvalues, eigenvectors = np.linalg.eigh(kinship_filtered)
 
     common_kwargs = {
-        "genotypes": plink.genotypes,
+        "genotypes": genotypes,
         "phenotypes": phenotypes,
         "kinship": None,  # pre-computed eigen supplied; skip internal eigh
         "snp_info": snp_info,
@@ -593,18 +600,18 @@ def test_numpy_runner_centres_supplied_kinship(synthetic_data):
     """
     from jamma.lmm.schema import LmmConfig
 
-    plink, kinship, phenotypes, snp_info = synthetic_data
+    genotypes, kinship, phenotypes, snp_info = synthetic_data
     config = LmmConfig(lmm_mode=4, show_progress=False)
 
     base = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship.copy(),
         snp_info=snp_info,
         config=config,
     ).associations
     shifted = run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes,
         kinship=kinship + 1.0,
         snp_info=snp_info,
@@ -621,9 +628,9 @@ def test_numpy_runner_centres_supplied_kinship(synthetic_data):
 
 
 def _run_mode4(synthetic_data, scale: float):
-    plink, kinship, phenotypes, snp_info = synthetic_data
+    genotypes, kinship, phenotypes, snp_info = synthetic_data
     return run_lmm_association_numpy(
-        genotypes=plink.genotypes,
+        genotypes=genotypes,
         phenotypes=phenotypes * scale,
         kinship=kinship.copy(),
         snp_info=snp_info,

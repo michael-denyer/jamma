@@ -438,7 +438,7 @@ catch. The carve-out is:
 
 | Allowed structural test | Why behavior tests can't replace it |
 |---|---|
-| The shared LMM chunk runner passes a transpose flag to jlinalg's dgemm rather than a transposed array (`test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm`, [`tests/test_numpy_streaming.py:54`](../tests/test_numpy_streaming.py#L54)) | jlinalg copies a non-contiguous input, so a transposed `U` costs an O(n^2) copy per chunk. That changes speed, not results |
+| The shared LMM chunk runner passes a transpose flag to jlinalg's dgemm rather than a transposed array (`test_shared_lmm_chunk_runner_avoids_transposed_u_copy_in_jlinalg_dgemm`, [`tests/test_numpy_streaming.py:55`](../tests/test_numpy_streaming.py#L55)) | jlinalg copies a non-contiguous input, so a transposed `U` costs an O(n^2) copy per chunk. That changes speed, not results |
 | Compile-flag literals not in three forbidden entry points ([`scripts/check_compile_flag_literals.py`](../scripts/check_compile_flag_literals.py)) | Drift between `hatch_build.py` and runtime recompile produces ABI mismatch at runtime |
 | Every `_lmm_accel*.c` unit reaches `Python.h` before any header that pulls in `<math.h>` ([`tests/test_c_include_order.py`](../tests/test_c_include_order.py)) | `M_PI` is not C11. glibc defines it only under `_XOPEN_SOURCE`, which `Python.h` sets; macOS defines it unconditionally. Get the order wrong and the local build and ARM Mac CI pass while every Linux job fails to compile |
 
@@ -616,7 +616,7 @@ Three modules beside `conftest.py` hold what the fixtures do not:
   `FixtureDataset`s with `.bfile`, `.bed`, `.bim`, `.fam`, `.kinship`,
   `.covariates` and `.ref("covar_lrt")` for the recorded GEMMA outputs;
   `NUMPY_GEMMA_TOLERANCES` lives there too. Do not derive a `fixtures`
-  root in a test file. Build `snp_info` with `SnpMeta.from_plink_meta(plink.meta)`.
+  root in a test file. Build `snp_info` with `GenotypeDataset.open_plink(bfile).variants`.
 - [`tests/builders.py`](../tests/builders.py) builds synthetic inputs.
   `rotated_lmm_inputs(n_samples, n_snps, n_cvt=1, seed=42)` returns an
   `LmmInputs` (eigenvalues, `UtW`, `Uty`, `UtG`, `uab_batch()`) drawn in
@@ -627,6 +627,8 @@ Three modules beside `conftest.py` hold what the fixtures do not:
   `make_runner_synthetic_data()` returns unrotated genotypes, phenotypes,
   kinship and `snp_info` for runner tests. `tests/test_builders.py` pins
   each recipe's bytes. `write_fam(path, *columns, missing_at=...)` writes a `.fam`.
+  `read_plink_genotypes(bfile)` reads a whole `.bed` as float32 through
+  bed-reader directly, the oracle for any test that needs the dense matrix.
   Phenotypes are read back with `jamma.io.read_fam_phenotypes`, the same
   parser the pipeline uses.
 

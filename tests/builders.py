@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from bed_reader import open_bed
 
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
@@ -177,6 +178,17 @@ def make_runner_synthetic_data(
         for i in range(n_snps)
     ]
     return genotypes, phenotypes, kinship, snp_info
+
+
+def read_plink_genotypes(bfile: Path) -> np.ndarray:
+    """Read a whole ``.bed`` as float32 ``(n_samples, n_snps)``, NaN for missing.
+
+    bed-reader's own read, so it is an oracle independent of
+    ``GenotypeDataset``; float32 matches the batch pipeline's in-memory
+    matrix.
+    """
+    with open_bed(Path(f"{bfile}.bed")) as bed:
+        return bed.read(dtype=np.float32)
 
 
 def write_fam(

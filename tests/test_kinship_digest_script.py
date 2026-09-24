@@ -68,14 +68,14 @@ def test_a_perturbed_matrix_names_a_gemma_synthetic_key(
     assert digest_module.main(["--out", str(baseline)]) == 0
     capsys.readouterr()
 
-    real_loader = digest_module.load_plink_binary
+    real_loader = digest_module.read_plink_genotypes
 
     def _perturbed_loader(bfile):
-        data = real_loader(bfile)
-        data.genotypes[0, 0] = (data.genotypes[0, 0] + 1.0) % 3.0
-        return data
+        genotypes = real_loader(bfile)
+        genotypes[0, 0] = (genotypes[0, 0] + 1.0) % 3.0
+        return genotypes
 
-    monkeypatch.setattr(digest_module, "load_plink_binary", _perturbed_loader)
+    monkeypatch.setattr(digest_module, "read_plink_genotypes", _perturbed_loader)
 
     perturbed = tmp_path / "perturbed.json"
     assert digest_module.main(["--out", str(perturbed)]) == 0

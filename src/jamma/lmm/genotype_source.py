@@ -1,11 +1,11 @@
-"""Prepared genotype coordinates shared by NumPy LMM sources."""
+"""Prepared genotype coordinates shared by every NumPy LMM run."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -105,17 +105,6 @@ class PreparedGenotypes:
         if chunk_size < 1:
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         return self.chunk_factory(chunk_size)
-
-
-class GenotypeSource(Protocol):
-    """A source that binds its storage coordinates in one preparation step."""
-
-    @property
-    def n_snps(self) -> int: ...
-
-    def prepare(
-        self, samples: SampleBasis, filters: SnpFilterSpec
-    ) -> PreparedGenotypes: ...
 
 
 def bind_prepared_genotypes(

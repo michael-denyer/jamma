@@ -22,7 +22,6 @@ import contextlib
 import numpy as np
 import pytest
 
-from jamma.io import load_plink_binary
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm import accel
 from jamma.lmm.compute_numpy import (
@@ -37,7 +36,7 @@ from jamma.lmm.uab import (
     batch_compute_uab_numpy,
     compute_uab_invariant_soa,
 )
-from tests.builders import rotated_lmm_inputs
+from tests.builders import read_plink_genotypes, rotated_lmm_inputs
 from tests.fixture_paths import MOUSE
 from tests.math_validation.dense_oracle import evaluate
 from tests.support import requires_c
@@ -76,8 +75,7 @@ def mouse_data():
     MLE null model (finite logl_H0). The mouse_hs1940 column-1 phenotype
     produces a degenerate MLE landscape (NaN logl_H0 at boundary lambda).
     """
-    plink_data = load_plink_binary(MOUSE.bfile)
-    genotypes = plink_data.genotypes
+    genotypes = read_plink_genotypes(MOUSE.bfile)
     K = read_kinship_matrix(MOUSE.kinship)
 
     n_samples = genotypes.shape[0]
@@ -267,8 +265,7 @@ def degenerate_data(mouse_data):
     n_samples = d["n_samples"]
 
     # Load the original rotated genotypes for the first 10 well-conditioned SNPs
-    plink_data = load_plink_binary(MOUSE.bfile)
-    genotypes = plink_data.genotypes
+    genotypes = read_plink_genotypes(MOUSE.bfile)
     K = read_kinship_matrix(MOUSE.kinship)
     eigenvalues, U = np.linalg.eigh(K)
 

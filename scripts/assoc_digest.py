@@ -46,12 +46,9 @@ from loguru import logger
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from jamma.genotype.variants import SnpMeta  # noqa: E402
-from jamma.io import load_plink_binary  # noqa: E402
-from jamma.io.plink import get_plink_metadata, read_fam_phenotypes  # noqa: E402
+from jamma.genotype.dataset import GenotypeDataset  # noqa: E402
+from jamma.io.plink import read_fam_phenotypes  # noqa: E402
 from jamma.kinship.io import read_kinship_matrix  # noqa: E402
-
-# The base side runs this head copy, so import only names both sides export.
 from jamma.lmm import (  # noqa: E402
     AssocResult,
     LmmConfig,
@@ -60,6 +57,7 @@ from jamma.lmm import (  # noqa: E402
 )
 from jamma.pipeline import PipelineRunner  # noqa: E402
 from jamma.pipeline_config import PipelineConfig  # noqa: E402
+from tests.builders import read_plink_genotypes  # noqa: E402
 from tests.fixture_paths import LOCO, SYNTHETIC  # noqa: E402
 
 BACKENDS = ("numpy", "numpy-streaming")
@@ -96,10 +94,10 @@ def digest_results(results: list[AssocResult], n_tested: int, pve, pve_se) -> st
 
 
 def _every_third_snp_file(bfile: Path, dest: Path) -> tuple[Path, np.ndarray]:
-    meta = get_plink_metadata(bfile)
-    indices = np.arange(0, meta.n_snps, 3, dtype=np.intp)
+    rs = GenotypeDataset.open_plink(bfile).variants.rs
+    indices = np.arange(0, len(rs), 3, dtype=np.intp)
     path = dest / "snps.txt"
-    path.write_text("".join(f"{meta.sid[i]}\n" for i in indices))
+    path.write_text("".join(f"{rs[i]}\n" for i in indices))
     return path, indices
 
 
@@ -190,11 +188,11 @@ def _pipeline_keys(work: Path) -> dict[str, str]:
 
 def _api_keys(work: Path) -> dict[str, str]:
     digests: dict[str, str] = {}
-    data = load_plink_binary(SYNTHETIC.bfile)
-    kinship = read_kinship_matrix(SYNTHETIC.kinship, data.meta.n_samples)
+    dataset = GenotypeDataset.open_plink(SYNTHETIC.bfile)
+    genotypes = read_plink_genotypes(SYNTHETIC.bfile)
+    kinship = read_kinship_matrix(SYNTHETIC.kinship, dataset.n_samples)
     phenotypes = read_fam_phenotypes(SYNTHETIC.bfile.with_suffix(".fam"))
     covariates = np.loadtxt(SYNTHETIC.covariates, dtype=np.float64)
-    snp_meta = SnpMeta.from_plink_meta(data.meta)
     _, snps_indices = _every_third_snp_file(SYNTHETIC.bfile, work / "api")
 
     for mode in MODES:
@@ -202,10 +200,10 @@ def _api_keys(work: Path) -> dict[str, str]:
         for covar_label, covar in (("nocovar", None), ("covar", covariates)):
             for chunk_label, max_chunk in (("onechunk", None), ("chunk64", 64)):
                 run = run_lmm_association_numpy(
-                    data.genotypes,
+                    genotypes,
                     phenotypes,
                     kinship.copy(),
-                    snp_meta,
+                    dataset.variants,
                     covariates=covar,
                     config=config,
                     max_chunk_size=max_chunk,
@@ -216,7 +214,7 @@ def _api_keys(work: Path) -> dict[str, str]:
         for snps_label, snps in (("allsnps", None), ("snps3", snps_indices)):
             for chunk_label, chunk in (("default", None), ("chunk64", 64)):
                 run = run_lmm_association_numpy_streaming(
-                    SYNTHETIC.bfile,
+                    dataset,
                     phenotypes,
                     kinship.copy(),
                     chunk_size=chunk,

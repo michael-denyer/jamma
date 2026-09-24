@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import read_fam_phenotypes
 from jamma.lmm import loco_eigen
 from jamma.lmm.eigen import eigendecompose_kinship
@@ -27,7 +28,7 @@ def _run_loco(eigen_dir: Path | None = None, *, write_eigen: bool = False):
     """Run the real consumer, including its references between chromosomes."""
     require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
     return run_lmm_loco(
-        LOCO.bfile,
+        GenotypeDataset.open_plink(LOCO.bfile),
         read_fam_phenotypes(LOCO.fam),
         config=LmmConfig(check_memory=False, show_progress=False),
         loco=LocoConfig(eigen_dir=eigen_dir, write_eigen=write_eigen),

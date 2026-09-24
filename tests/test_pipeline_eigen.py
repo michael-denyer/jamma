@@ -39,10 +39,10 @@ class TestLMMEquivalence:
             )
         ).run()
 
-        from jamma.io.plink import get_plink_metadata
+        from jamma.genotype.dataset import GenotypeDataset
 
-        metadata = get_plink_metadata(MOUSE_BFILE)
-        kinship = read_kinship_matrix(MOUSE_KINSHIP_FILE, n_samples=metadata.n_samples)
+        n_samples = GenotypeDataset.open_plink(MOUSE_BFILE).n_samples
+        kinship = read_kinship_matrix(MOUSE_KINSHIP_FILE, n_samples=n_samples)
         phenotype = read_fam_phenotypes(MOUSE.fam)
         valid_mask = ~np.isnan(phenotype) & (phenotype != -9.0)
         eigenvalues, eigenvectors = eigendecompose_kinship(

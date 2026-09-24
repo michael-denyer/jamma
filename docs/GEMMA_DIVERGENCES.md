@@ -303,6 +303,36 @@ noise, or a different CPU, moved by up to `4e-5`. `tests/test_mle_refinement_con
 checks NumPy and native C against dense-solve MLE score roots at `1e-8`
 relative tolerance, including under one-ulp eigenvalue perturbations.
 
+Newton candidates are bounded by the coarse grid bracket, not by the final
+golden-section bracket, because rounded comparisons can leave the true maximum
+outside the golden-section bracket. In `reml_flat_optima.npz` it lies outside
+for 5 of the 8 peaks on the native path, by up to `1.1e-3` in log lambda.
+Bounding candidates by the golden-section bracket raises the worst relative
+lambda error on those peaks from `1.8e-11` to `1.1e-3`.
+
+The accept rule is not a convergence proof. For a concave objective whose
+score has a kink at the peak, one accepted step can move from `0.005` to
+`0.495` away from the maximum (jamma-lean `refine_can_leave_golden_bracket`),
+so the worst-case bound is the coarse bracket width, about `0.94` in log
+lambda. Quadratic peaks converge (`newtonLoop_affine`). REML scores are smooth,
+and on 2026-09-24 data at `8c534ed6` the error tracks peak curvature instead:
+
+| Data | Interior SNPs | Relative lambda error above `1e-8` | Smallest \|curvature\| per (log lambda)² |
+|------|---------------|-------------------------------------|-------------------------------------------|
+| Synthetic, n = 30 to 100 | 35,133 | 9 NumPy, 13 native; worst `4.1e-4` | `4e-9` |
+| Synthetic, n = 300 to 3,000 | 64,000 | 0 | `3e-2` |
+| mouse_hs1940, with and without covariates | 21,536 | 0 | `48` |
+
+The synthetic sweep covers unrelated and sibship kinship, h² of 0.05, 0.3 and
+0.7, and 2,000 SNPs per configuration; errors are against a bisection root of
+the analytic score. Every error above `1e-8` is on a peak with |curvature| at or
+below `1e-7`. There the score is at its floating-point floor and the three
+Newton steps oscillate about the root; a larger step budget or a secant-slope
+stopping rule does not reduce the error. The eight reference peaks come from a
+50-sample dataset and sit in this regime. On the failing peaks the Wald p-value
+at JAMMA's lambda differs from the p-value at the root by at most `6.7e-9`
+relative, against `pvalue_rtol` of `1e-4`.
+
 ### Boundary Diagnostic
 
 When the grid search maximum falls at the first or last grid point, the bracket

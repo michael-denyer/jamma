@@ -220,6 +220,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The build now uses clang with Intel OpenMP (libiomp5) on hosts that have
+  clang but no LLVM `libomp-dev`, as in images that install clang with
+  `--no-install-recommends`. The clang probe passed `-fopenmp` at link time,
+  so clang added `-lomp` and the link failed. The build then fell back to GCC,
+  whose `GOMP_*` calls go through libiomp5's compatibility shim and can hit
+  `OMP: Error #13`. The probe now compiles with `-fopenmp` and links libiomp5
+  by path, as the real build does. It also adds `-I` for the `omp.h` that the
+  `intel-openmp` wheel installs next to libiomp5, because clang has no `omp.h`
+  of its own without `libomp-dev`.
 - Eigen cache members are flushed to disk, and their directory with them,
   before the manifest that names them is committed. The manifest was already
   fsynced, so after a power cut it could survive while its members came back

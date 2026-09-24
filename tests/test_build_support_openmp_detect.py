@@ -8,6 +8,7 @@ on — real build-environment failures:
   - libiomp5 search order: JAMMA_LIBIOMP5, numpy libs, the intel-openmp
     distribution, sys.prefix/lib (Linux)
   - ``clang`` probe timeout / OSError (Linux)
+  - ``clang`` probe shape: no ``-lomp`` at link, omp.h from intel-openmp
 
 These are exactly the paths a regression would silently reintroduce
 (hard hang, silent libgomp fallback on ILP64 boxes, crash on broken
@@ -24,8 +25,10 @@ import pytest
 
 from jamma._build_support.build_models import BuildReport
 from jamma._build_support.openmp_detect import (
+    _clang_probe_commands,
     _detect_darwin_openmp_flags,
     _find_libiomp5,
+    _intel_openmp_include_dir,
     _libiomp5_candidate,
     _openmp_flags_for_libiomp5,
 )
@@ -353,4 +356,126 @@ def test_openmp_flags_for_libiomp5_clang_oserror_falls_back_to_gcc(
     assert cflags == ["-fopenmp"]
     assert any(str(libiomp5) in flag for flag in lflags)
     assert any("probe failed" in msg for msg in logs)
+    assert any("GOMP compatibility" in msg for msg in warns)
+
+
+def _intel_openmp_prefix(tmp_path):
+    """Lay out the intel-openmp wheel's lib/ and opt/compiler/include/."""
+    prefix = tmp_path / "venv"
+    (prefix / "lib").mkdir(parents=True)
+    libiomp5 = prefix / "lib" / "libiomp5.so"
+    libiomp5.write_bytes(b"")
+    include_dir = prefix / "opt" / "compiler" / "include"
+    include_dir.mkdir(parents=True)
+    (include_dir / "omp.h").write_text("")
+    return libiomp5, include_dir
+
+
+def test_clang_probe_link_command_omits_fopenmp(tmp_path):
+    """clang's -fopenmp at link time adds -lomp, which fails without libomp-dev.
+
+    The probe links libiomp5 by path, as the real build does.
+    """
+    link_flags = ["/opt/venv/lib/libiomp5.so", "-Wl,-rpath,/opt/venv/lib"]
+
+    compile_cmd, link_cmd = _clang_probe_commands(
+        "/usr/bin/clang", ["-fopenmp", "-I/inc"], link_flags, tmp_path / "probe.c"
+    )
+
+    assert compile_cmd == [
+        "/usr/bin/clang",
+        "-fopenmp",
+        "-I/inc",
+        "-c",
+        str(tmp_path / "probe.c"),
+        "-o",
+        str(tmp_path / "probe.o"),
+    ]
+    assert link_cmd == [
+        "/usr/bin/clang",
+        str(tmp_path / "probe.o"),
+        "-o",
+        str(tmp_path / "probe"),
+        *link_flags,
+    ]
+
+
+def test_intel_openmp_include_dir_follows_symlinked_runtime(tmp_path):
+    """A /usr/local/lib symlink to the wheel's libiomp5 finds the wheel's omp.h."""
+    libiomp5, include_dir = _intel_openmp_prefix(tmp_path)
+    link = tmp_path / "usr-local-lib" / "libiomp5.so"
+    link.parent.mkdir()
+    link.symlink_to(libiomp5)
+
+    assert _intel_openmp_include_dir(link) == include_dir.resolve()
+    assert _intel_openmp_include_dir(tmp_path / "libiomp5.so") is None
+
+
+def _fake_clang_without_libomp(commands):
+    """Emulate clang on a host with no libomp-dev and no clang omp.h."""
+
+    def _run(command, **_kwargs):
+        commands.append(command)
+        if "-c" not in command:
+            if "-fopenmp" in command:
+                return subprocess.CompletedProcess(
+                    command, 1, "", "ld: cannot find -lomp"
+                )
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if not any(flag.startswith("-I") for flag in command):
+            return subprocess.CompletedProcess(
+                command, 1, "", "fatal error: 'omp.h' file not found"
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    return _run
+
+
+def test_openmp_flags_for_libiomp5_uses_clang_without_libomp(monkeypatch, tmp_path):
+    """With intel-openmp's libiomp5 and omp.h, clang is chosen, no libomp needed."""
+    import jamma._build_support.openmp_detect as mod
+
+    libiomp5, include_dir = _intel_openmp_prefix(tmp_path)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/clang")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_clang_without_libomp(commands))
+    warns: list[str] = []
+
+    cflags, lflags, cc_override = _openmp_flags_for_libiomp5(
+        cc_cmd="gcc",
+        libiomp5_path=libiomp5,
+        report=BuildReport(detail=lambda _msg: None, warn=warns.append),
+    )
+
+    assert cc_override == "/usr/bin/clang"
+    assert cflags == ["-fopenmp", f"-I{include_dir.resolve()}"]
+    assert lflags == [str(libiomp5), f"-Wl,-rpath,{libiomp5.parent}"]
+    assert len(commands) == 2
+    assert warns == []
+
+
+def test_openmp_flags_for_libiomp5_without_omp_h_falls_back_to_gcc(
+    monkeypatch, tmp_path
+):
+    """No omp.h for clang means the real compile would fail, so use GCC."""
+    import jamma._build_support.openmp_detect as mod
+
+    libiomp5 = tmp_path / "libiomp5.so"
+    libiomp5.write_bytes(b"")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/clang")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_clang_without_libomp(commands))
+    logs: list[str] = []
+    warns: list[str] = []
+
+    cflags, _lflags, cc_override = _openmp_flags_for_libiomp5(
+        cc_cmd="gcc",
+        libiomp5_path=libiomp5,
+        report=BuildReport(detail=logs.append, warn=warns.append),
+    )
+
+    assert cc_override == "gcc"
+    assert cflags == ["-fopenmp"]
+    assert len(commands) == 1, "a failed compile must skip the link step"
+    assert any("'omp.h' file not found" in msg for msg in logs)
     assert any("GOMP compatibility" in msg for msg in warns)

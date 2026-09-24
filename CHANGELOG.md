@@ -214,6 +214,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fsynced, so after a power cut it could survive while its members came back
   empty. A LOCO eigen cache whose `.npy` member is empty or cut short now
   counts as incomplete and is recomputed, instead of failing on first read.
+- `IncrementalAssocWriter` no longer publishes an incomplete `.assoc.txt`, or
+  finishes silently without publishing, when a caller catches a write error and
+  carries on. Once a write, flush, `tell()` or rollback fails, later
+  `write_arrays_batch` calls raise a `RuntimeError` naming that failure, and a
+  clean exit raises instead of publishing, so the previous output stays in
+  place. An interrupt or out-of-memory error during a write cuts the retained
+  `.partial` back to its last complete row, so the logged result count matches
+  the rows on disk. When an earlier failure already discarded the output, the
+  interrupt warning says no partial output was retained instead of naming a
+  deleted temp file. Runs that raise no error publish the same bytes as before.
 - A kinship or eigen text file read while another run replaced it no longer
   leaves a sidecar of the old contents that later reads prefer. The `.npy`
   sidecar now carries the modification time of the text it was built from,

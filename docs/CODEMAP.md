@@ -306,7 +306,7 @@ Pure-NumPy LMM implementation. Works on all platforms (Intel Mac, Windows, Linux
 | 4Ne | `run_lmm_association_numpy_streaming()` | Public streaming entry: plans, validates `-snps`, then the shared body over a BedSource | [runner_numpy_streaming.py:141](../src/jamma/lmm/runner_numpy_streaming.py#L141) |
 | 4Nh | `StatColumn` | Frozen dataclass for output column definitions | [lmm/schema.py:59](../src/jamma/lmm/schema.py#L59) |
 | 4Nh | `ModeSpec` | Per-mode test set and column specification (single source of truth) | [lmm/schema.py:87](../src/jamma/lmm/schema.py#L87) |
-| 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:315](../src/jamma/lmm/assoc_output.py#L315) |
+| 4Ni | `build_results()` | Table-driven result building from numpy arrays | [lmm/assoc_output.py:365](../src/jamma/lmm/assoc_output.py#L365) |
 | 4Ni | `_count_lambda_boundary_hits()` | Diagnostic: count SNPs at lambda bounds | [lmm/chunk_runner_numpy.py:51](../src/jamma/lmm/chunk_runner_numpy.py#L51) |
 | 4Nj | `run_lmm_loco()` | LOCO: per-chromosome kinship -> eigen -> LMM | [lmm/loco.py:77](../src/jamma/lmm/loco.py#L77) |
 | 4Nj | `run_loco()` | The LOCO body over a resolved `LocoRun`, which carries the opened `GenotypeDataset`; the pipeline's entry | [lmm/loco.py:153](../src/jamma/lmm/loco.py#L153) |

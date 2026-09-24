@@ -218,19 +218,21 @@ See [memory planning](docs/USER_GUIDE.md#memory-safety) before scaling up.
 
 JAMMA on mouse_hs1940 (1,940 samples x 12,226 SNPs; 1,410 samples and 10,768
 SNPs retained for association), Apple M5 Pro (18 cores), Accelerate-ILP64,
-GEMMA 0.98.5, measured 2026-09-23 at revision `0677ac9e`. Other work shared
-the machine, with a load average between 3.2 and 8.9 on 18 cores. Every row
-times a fresh process from PLINK input to written output, best of three with
-backend order rotated. Association rows read the same precomputed kinship file
-in both tools.
+GEMMA 0.98.5, measured 2026-09-24 with the native matrix text writer. Other
+work shared the machine, with a load average between 5.2 and 10.2 on 18 cores.
+Every row times a fresh process from PLINK input to written output, best of
+three with backend order rotated. Association rows read the same precomputed
+kinship file in both tools.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.0s | 1.2s | 803ms | 749ms | n/a | 1.1x | 1.4x | 1.6x |
-| LMM Wald (`-lmm 1`) | 7.2s | 4.2s | 6.1s | 531ms | 579ms | 11.6x | 13.6x | 7.9x |
-| LMM All (`-lmm 4`) | 13.4s | 7.5s | 8.4s | 567ms | 592ms | 14.7x | 23.7x | 13.2x |
-| Full GWAS Wald (compute kinship + association) | 8.3s | 5.4s | 6.3s | 679ms | 713ms | 9.3x | 12.2x | 7.9x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.2s | 12.1s | 17.0s | 1.1s | 1.1s | 15.5x | 24.8x | 11.1x |
+| Kinship (`-gk 1`) | 1.1s | 1.2s | 900ms | 454ms | n/a | 2.0x | 2.5x | 2.7x |
+| LMM Wald (`-lmm 1`) | 8.4s | 4.1s | 8.1s | 643ms | 663ms | 12.6x | 13.0x | 6.4x |
+| LMM All (`-lmm 4`) | 16.4s | 7.7s | 14.3s | 799ms | 722ms | 17.9x | 22.8x | 10.7x |
+| Full GWAS Wald (compute kinship + association) | 8.9s | 5.5s | 8.3s | 735ms | 869ms | 11.3x | 12.1x | 7.5x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 27.6s | 11.7s | 16.6s | 1.1s | 1.1s | 14.9x | 24.9x | 10.6x |
+
+The LOCO table is from the 2026-09-23 run at revision `0677ac9e`:
 
 | Backend | LOCO Wald | vs fastest GEMMA |
 |---------|-----------|------------------|

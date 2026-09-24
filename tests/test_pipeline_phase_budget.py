@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from jamma.core import memory
-from jamma.genotype.dataset import GenotypeDataset
+from jamma.genotype.dataset import GenotypeDataset, GenotypeEncoding
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline_config import PipelineConfig
@@ -34,7 +34,11 @@ def test_batch_preflight_rejects_unaffordable_eigen_phase(monkeypatch):
     monkeypatch.setattr(memory, "available_ram_gb", lambda: 256.0)
     config = PipelineConfig(bfile=SYNTHETIC.bfile, mem_budget=1.2)
     plan = plan_association(
-        10_000, 100, config=LmmConfig(mem_budget=1.2), backend="numpy"
+        10_000,
+        100,
+        config=LmmConfig(mem_budget=1.2),
+        backend="numpy",
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     assert plan.price(eigen=None).total_peak_gb < 1.2
     with pytest.raises(MemoryError, match="exceeds"):
@@ -81,6 +85,7 @@ def test_saved_full_sample_kinship_is_in_batch_preflight(monkeypatch):
         config=LmmConfig(mem_budget=0.5),
         backend="numpy",
         n_input_samples=10_000,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     preflight(PipelineConfig(bfile=SYNTHETIC.bfile, mem_budget=0.5), plan)
     with pytest.raises(MemoryError, match="exceeds"):
@@ -88,10 +93,10 @@ def test_saved_full_sample_kinship_is_in_batch_preflight(monkeypatch):
 
 
 def test_loco_batch_selection_fits_user_budget():
-    from jamma.kinship.loco import loco_retained_set, plan_loco_passes
+    from jamma.kinship.loco import LocoRetainedSet, plan_loco_passes
 
     plan = plan_loco_passes(
-        loco_retained_set(10_000, 10_000, 10_000),
+        LocoRetainedSet(matrix_gb=0.8, chunk_buffer_gb=0.8),
         2.5,
         22,
         256.0,
@@ -151,7 +156,11 @@ def test_precomputed_eigen_streaming_does_not_reserve_decomposition(monkeypatch)
         eigenvector_file=Path("provided.eigenU.npy"),
     )
     plan = plan_association(
-        10_000, 100, config=LmmConfig(mem_budget=2.0), backend="numpy-streaming"
+        10_000,
+        100,
+        config=LmmConfig(mem_budget=2.0),
+        backend="numpy-streaming",
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     assert plan.price(eigen=None).total_peak_gb <= 2.0
     assert preflight(config, plan) is None

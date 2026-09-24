@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `plan_association` and `ExecutableAssociationPlan` take a required
+  `genotype_encoding`, so a caller cannot price BGEN as hard calls by
+  omission. The plan's `stats_block_size` is the only statistics-pass width;
+  `LmmRunSpec.stats_block_size` is gone.
+
 - A zstd-compressed BGEN without the zstd module, or any BGEN without the
   `_lmm_accel` C extension, now ends a CLI run with a one-line `Error:` and
   exit code 1 instead of a traceback. Both raise the new
@@ -276,6 +281,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values, and `ABI_VERSION` are unchanged.
 
 ### Fixed
+
+- A stale BGEN index fails before decoding. When the `.bgi` chromosome,
+  rsid, position or allele order differs from the variant block, the error
+  names the field and both values, so the index's labels are never attached
+  to another variant's dosages. An identifier or allele that is not UTF-8 is
+  reported as such, not as a header overrun.
+
+- Memory quotes price every genotype read with one model, for PLINK and BGEN
+  alike: the decoded float64 block plus the larger of the BGEN decode buffers
+  and the consumer's copy of the block over the analysed rows. LOCO kinship
+  reserves the kinship chunk's working set of three float64 blocks and two
+  masks, not one block: tracemalloc measured a PLINK LOCO pass at 34.80 MB
+  against a 21.76 MB quote. The streaming statistics pass reserves the NumPy
+  statistics kernel's working set, and both it and the association pass
+  reserve the read over `min(chunk, n_snps)` columns. PLINK quotes rise as
+  well as BGEN ones; `tests/test_memory_ledger_digest.py` records every moved
+  row.
+
+- A genotype block stream frees each block before it reads the next, with
+  row selection or a progress bar, so a chunk stream holds one chunk at a
+  time.
 
 - The Docker image loads one Intel OpenMP runtime. It moves to Python 3.12
   because numpy-mkl publishes no rebuilt cp311 wheel, and the old cp311 wheel

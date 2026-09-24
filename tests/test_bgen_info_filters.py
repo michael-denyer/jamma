@@ -290,6 +290,7 @@ def test_end_to_end_kinship_and_association_apply_info(tmp_path: Path):
         backend="numpy",
         n_cvt=samples.n_cvt,
         n_input_samples=N_SAMPLES,
+        genotype_encoding=dataset.encoding,
     )
     results: list = []
     run_single(

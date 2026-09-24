@@ -169,7 +169,7 @@ def eigen_pairs_for(
                 )
                 stats = run.dataset.stats(
                     None if all_samples_valid else rows,
-                    block_size=DEFAULT_STATS_CHUNK,
+                    block_size=run.execution.stats_block_size,
                     progress="LOCO: SNP statistics" if config.show_progress else None,
                 )
                 if stats.n_unexpected > 0:

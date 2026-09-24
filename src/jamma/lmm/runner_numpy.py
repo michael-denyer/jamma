@@ -22,7 +22,7 @@ from loguru import logger
 
 from jamma.core import memory
 from jamma.core.memory_snapshot import log_memory_snapshot
-from jamma.genotype.dataset import GenotypeDataset
+from jamma.genotype.dataset import GenotypeDataset, GenotypeEncoding
 from jamma.genotype.snp_stats import SnpFilterSpec, SnpSelection, SnpStats
 from jamma.genotype.variants import SnpInfoRecord, SnpMeta
 from jamma.lmm.assoc_output import (
@@ -104,7 +104,6 @@ class LmmRunSpec:
         info_threshold: Minimum imputation INFO; 0.0 disables the filter.
         compute_pve: Whether to run the null-REML PVE estimate.
         labels: The runner's banner and progress-bar wording.
-        stats_block_size: Variants per read in the SNP statistics pass.
     """
 
     config: LmmConfig
@@ -114,7 +113,6 @@ class LmmRunSpec:
     info_threshold: float = 0.0
     compute_pve: bool = True
     labels: RunLabels = BATCH_LABELS
-    stats_block_size: int = DEFAULT_STATS_CHUNK
 
     @property
     def snp_filters(self) -> SnpFilterSpec:
@@ -209,8 +207,9 @@ def prepare_genotypes(
 
     def _iter_chunks(selection: SnpSelection, chunk_size: int) -> Iterator[RawLmmChunk]:
         for block in dataset.blocks(chunk_size, columns=selection.indices):
-            chunk = block.dosages(rows)
-            yield RawLmmChunk(np.ascontiguousarray(chunk), block.start, block.end)
+            yield RawLmmChunk(
+                np.ascontiguousarray(block.dosages(rows)), block.start, block.end
+            )
 
     return bind_prepared_genotypes(
         snp_meta=dataset.variants,
@@ -354,7 +353,7 @@ def run_single(
         SampleBasis.from_mask(samples.valid_mask),
         spec.snp_filters,
         stats=stats,
-        stats_block_size=spec.stats_block_size,
+        stats_block_size=spec.execution.stats_block_size,
         progress=spec.stats_progress,
     )
     if show_progress:
@@ -476,6 +475,7 @@ def run_lmm_association_numpy(
         n_cvt=samples.n_cvt,
         n_input_samples=n_input_samples,
         max_chunk_size=max_chunk_size,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     if config.check_memory and max_chunk_size is None:
         quote = execution.price(eigen=None)

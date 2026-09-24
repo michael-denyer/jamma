@@ -20,12 +20,13 @@ from typing import Protocol, final
 import numpy as np
 from bed_reader import open_bed
 
+from jamma.core.memory import array_gb
 from jamma.core.progress import progress_iterator
 from jamma.core.threading import get_physical_core_count
 from jamma.genotype.info import info_from_quantised, info_from_sums
 from jamma.genotype.snp_stats import SnpStats, collect_snp_stats_from_chunks
 from jamma.genotype.variants import SnpMeta
-from jamma.io.bgen import ProbabilityBlock, open_bgen_reader
+from jamma.io.bgen import ProbabilityBlock, bgen_read_workspace_bytes, open_bgen_reader
 from jamma.io.plink import PlinkReader, validate_plink_dimensions
 
 DEFAULT_BLOCK = 10_000
@@ -42,6 +43,21 @@ class GenotypeEncoding(enum.Enum):
 
     HARD_CALLS = "hard_calls"
     PROBABILITIES = "probabilities"
+
+    def block_overhead_gb(self, n_input: int, n_selected: int, width: int) -> float:
+        """Peak GB beyond one float64 block while it is read and handed over.
+
+        A PROBABILITIES read holds its decode buffers beside the dosages. A
+        consumer that cuts the block to ``n_selected`` rows, or makes it
+        C-contiguous, copies it after ``dosages`` has released those buffers,
+        so the two never coexist.
+        """
+        workspace = (
+            bgen_read_workspace_bytes(n_input, width) / 1e9
+            if self is GenotypeEncoding.PROBABILITIES
+            else 0.0
+        )
+        return max(workspace, array_gb(n_selected, width))
 
     @property
     def supports_hwe(self) -> bool:
@@ -293,8 +309,15 @@ class _MatrixReader:
         info_rows: np.ndarray | None = None,
     ) -> Iterator[np.ndarray]:
         for start in range(0, len(columns), block_size):
-            block = self._genotypes[:, columns[start : start + block_size]]
-            yield block if stats_only else np.asarray(block, dtype=np.float64)
+            selected = columns[start : start + block_size]
+            if stats_only:
+                yield self._genotypes[:, selected]
+            else:
+                # Make the owned C-order output directly; no float32 gather
+                # or Fortran-order conversion stays live across the yield.
+                yield np.array(
+                    self._genotypes[:, selected], dtype=np.float64, order="C"
+                )
 
     def fingerprint(self) -> dict[str, str]:
         raise ValueError("an in-memory genotype matrix has no file fingerprint")
@@ -509,40 +532,42 @@ class GenotypeDataset:
             )
         return cols
 
-    def _read_spans(
+    def _blocks(
         self,
         cols: np.ndarray,
         block_size: int,
         *,
         stats_only: bool,
-        progress: str | None,
-        eta_seconds: float | None = None,
         info_rows: np.ndarray | None = None,
-    ) -> Iterator[tuple[int, int, np.ndarray, ProbabilityBlock | None]]:
-        """Yield ``(start, end, values, probabilities)`` per reader block.
-
-        ``start``/``end`` are in requested column space; ``probabilities`` is
-        the quantised block behind ``values`` for a PROBABILITIES reader,
-        with INFO sums over ``info_rows``.
-        """
+    ) -> Iterator[GenotypeBlock]:
+        """Transfer each read to its consume-once block, without retaining arrays."""
         n_cols = len(cols)
         raw = self._reader.read(
             cols, block_size, stats_only=stats_only, info_rows=info_rows
         )
-        if progress is not None:
-            raw = progress_iterator(
-                raw,
-                total=(n_cols + block_size - 1) // block_size,
-                desc=progress,
-                initial_eta_seconds=eta_seconds,
-            )
-        starts = range(0, n_cols, block_size)
-        for start, block in zip(starts, raw, strict=True):
+        start = 0
+        for block in raw:
+            if start >= n_cols:
+                raise ValueError("reader yielded too many blocks")
             end = min(start + block_size, n_cols)
             if isinstance(block, ProbabilityBlock):
-                yield start, end, block.dosages, block
+                result = GenotypeBlock(
+                    cols[start:end],
+                    start,
+                    end,
+                    block.dosages,
+                    self.encoding,
+                    probabilities=block,
+                )
             else:
-                yield start, end, block, None
+                result = GenotypeBlock(
+                    cols[start:end], start, end, block, self.encoding
+                )
+            del block
+            yield result
+            start = end
+        if start != n_cols:
+            raise ValueError("reader yielded too few blocks")
 
     def blocks(
         self,
@@ -571,23 +596,17 @@ class GenotypeDataset:
                 increasing and in bounds.
         """
         cols = self._resolve_columns(columns, block_size)
-        spans = self._read_spans(
-            cols,
-            block_size,
-            stats_only=False,
-            progress=progress,
-            eta_seconds=eta_seconds,
-            info_rows=info_rows,
-        )
-        for start, end, values, probabilities in spans:
-            yield GenotypeBlock(
-                cols[start:end],
-                start,
-                end,
-                values,
-                self.encoding,
-                probabilities=probabilities,
+        blocks = self._blocks(cols, block_size, stats_only=False, info_rows=info_rows)
+        if progress is not None:
+            # Wrap consume-once blocks, so the progress iterator's reference
+            # cannot keep the original arrays alive after dosages() is taken.
+            blocks = progress_iterator(
+                blocks,
+                total=(len(cols) + block_size - 1) // block_size,
+                desc=progress,
+                initial_eta_seconds=eta_seconds,
             )
+        yield from blocks
 
     def stats(
         self,
@@ -618,16 +637,18 @@ class GenotypeDataset:
                 encoding without HWE classes.
         """
         cols = self._resolve_columns(columns, block_size)
-        spans = self._read_spans(
-            cols, block_size, stats_only=True, progress=progress, info_rows=rows
-        )
+        blocks = self._blocks(cols, block_size, stats_only=True, info_rows=rows)
+        if progress is not None:
+            blocks = progress_iterator(
+                blocks, total=(len(cols) + block_size - 1) // block_size, desc=progress
+            )
         info = np.ones(len(cols)) if self.encoding.supports_info else None
 
         def chunks() -> Iterator[tuple[np.ndarray, int, int]]:
-            for start, end, values, probabilities in spans:
-                if info is not None and probabilities is not None:
-                    info[start:end] = _probability_info(probabilities, rows)
-                yield values if rows is None else values[rows, :], start, end
+            for block in blocks:
+                if info is not None:
+                    info[block.start : block.end] = block.info(rows)
+                yield block.dosages(rows), block.start, block.end
 
         return _collect_stats(
             chunks(),

@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from jamma.genotype.dataset import GenotypeDataset
+from jamma.genotype.dataset import GenotypeDataset, GenotypeEncoding
 from jamma.io import read_fam_phenotypes
 from jamma.lmm.loco import LocoConfig, run_lmm_loco
 from jamma.lmm.schema import LmmConfig
@@ -162,7 +162,9 @@ def test_loco_run_rejects_plan_wider_than_col_chunk_size():
     from jamma.lmm.prepare_common import AnalysedPhenotype
 
     wide = replace(
-        plan_association(100, 500, backend="loco"),
+        plan_association(
+            100, 500, backend="loco", genotype_encoding=GenotypeEncoding.HARD_CALLS
+        ),
         kinship=KinshipShape.resolve(100, 100, loaded=False, saved=False),
     )
     phenotypes = read_fam_phenotypes(_LOCO_BFILE.with_suffix(".fam"))
@@ -574,7 +576,8 @@ def test_plan_loco_passes_reserves_the_consumer_the_caller_sized():
 
     # Re-derive the batch size from the same public peak estimator.
     matrix_gb = n_mat**2 * 8 / 1e9
-    chunk_buffer_gb = n_samples * chunk_size * 8 / 1e9
+    # One kinship chunk's working set: three float64 blocks and two masks.
+    chunk_buffer_gb = (3 + 2 / 8) * n_samples * chunk_size * 8 / 1e9
     budget = headroom_gb(available_gb) - 2 * matrix_gb - chunk_buffer_gb
     expected_batch = max(1, int((budget - dsyevr_peak_gb(n_mat)) / matrix_gb))
 
@@ -631,18 +634,19 @@ def test_plan_loco_passes_literal_batch_size():
 @pytest.mark.tier0
 @pytest.mark.parametrize(
     ("available_gb", "reserved_batch", "unreserved_batch"),
-    [(500.0, 2, 4), (480.0, 1, 3)],
+    [(580.0, 2, 4), (480.0, 1, 3)],
 )
 def test_plan_loco_passes_without_a_consumer_packs_more_chromosomes(
     available_gb, reserved_batch, unreserved_batch
 ):
     """At 100k samples, dropping the 160 GB DSYEVR reserve adds two chromosomes.
 
-    Each matrix is 80 GB and the disk buffer 8 GB, so the fixed cost is
-    S_full + K_loco_buf + buffer = 168 GB, plus 160.03 GB when the DSYEVR
+    Each matrix is 80 GB and one kinship chunk's working set 26 GB (three
+    8 GB float64 blocks and two masks), so the fixed cost is
+    S_full + K_loco_buf + chunk = 186 GB, plus 160.03 GB when the DSYEVR
     reserve is held. ``headroom_gb`` is ``available - 10`` above 110 GB. At
-    500 GB: ``floor((490 - 328.03) / 80) = 2`` against
-    ``floor((490 - 168) / 80) = 4``. At 480 GB, the reserve leaves one
+    580 GB: ``floor((570 - 346.03) / 80) = 2`` against
+    ``floor((570 - 186) / 80) = 4``. At 480 GB, the reserve leaves one
     chromosome per pass (22 disk passes) where none leaves three.
     """
     from jamma.kinship.loco import loco_retained_set, plan_loco_passes
@@ -675,7 +679,11 @@ def test_run_lmm_loco_gate_reserves_the_eigen_consumer():
     from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK
 
     n_samples = GenotypeDataset.open_plink(_LOCO_BFILE).n_samples
-    retained = loco_retained_set(n_samples, n_samples, DEFAULT_STATS_CHUNK)
+    retained = loco_retained_set(
+        n_samples,
+        n_samples,
+        DEFAULT_STATS_CHUNK,
+    )
 
     with pytest.raises(MemoryError, match="LOCO working set"):
         run_lmm_loco(

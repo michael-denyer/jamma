@@ -16,6 +16,7 @@ import pytest
 
 from jamma.core import memory
 from jamma.core.memory import array_gb
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.kinship.memory import estimate_kinship_memory
 from jamma.lmm import accel
 from jamma.lmm.association_plan import ExecutableAssociationPlan, plan_association
@@ -34,7 +35,11 @@ BFILE = SYNTHETIC.bfile
 
 def _streaming_plan(*, mem_budget: float | None = None):  # type: ignore[no-untyped-def]
     return plan_association(
-        100, 500, config=LmmConfig(mem_budget=mem_budget), backend="numpy-streaming"
+        100,
+        500,
+        config=LmmConfig(mem_budget=mem_budget),
+        backend="numpy-streaming",
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
 
@@ -108,16 +113,19 @@ def _expected_uab_iab_gb(plan: ExecutableAssociationPlan, n_cvt: int) -> float:
 
 
 def _priced_uab_iab_gb(plan: ExecutableAssociationPlan) -> float:
-    """The batch quote left once U, genotypes, rotation, and workspace are removed."""
+    """The batch quote left once U, genotypes, the chunk read, rotation, and
+    workspace are removed."""
     n = plan.n_samples
     chunks = plan.conservative_chunks
     bare = replace(
         plan,
         workspace=empty_workspace(plan.dispatch, n, plan.n_input_samples, plan.n_cvt),
     )
+    read_width = min(chunks.chunk_size, plan.n_snps_before_filter)
     return bare.price(eigen=None).association_gb - (
         array_gb(n, n)
         + array_gb(plan.n_input_samples, plan.n_snps_before_filter)
+        + plan.genotype_encoding.block_overhead_gb(plan.n_input_samples, n, read_width)
         + chunks.n_buffers * array_gb(n, chunks.chunk_size)
     )
 

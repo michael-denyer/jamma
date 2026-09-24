@@ -22,6 +22,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
+from typing import NamedTuple
 
 import numpy as np
 from loguru import logger
@@ -31,6 +32,20 @@ from jamma.genotype.variants import SnpMeta
 # Variants decoded per C call. Bounds the transient compressed (and, for
 # zstd, inflated) bytes held beside a block to this many variants.
 _DECODE_BATCH = 256
+
+
+def bgen_read_workspace_bytes(n_samples: int, n_variants: int) -> int:
+    """Bytes beyond float64 dosages while decoding one block.
+
+    Two uint16 probability arrays and a bool missing mask use five bytes
+    per cell. Reserve two layout-2 payloads (10 + 9N bytes each) per batched
+    variant for compressed and inflated data. Per-variant bit depths and
+    four int64 INFO sums add 33 bytes.
+    """
+    return (5 * n_samples + 33) * n_variants + 2 * (10 + 9 * n_samples) * min(
+        n_variants, _DECODE_BATCH
+    )
+
 
 _COMPRESSION = {0: "none", 1: "zlib", 2: "zstd"}
 
@@ -236,8 +251,56 @@ def read_bgi(path: Path) -> BgenIndex:
 
 
 def _variant_id_at(fd: int, offset: int) -> str:
+    # The variant id is the first field, so filling an rsid never reads the
+    # rest of the variant block.
     (length,) = struct.unpack("<H", os.pread(fd, 2, offset))
     return os.pread(fd, length, offset + 2).decode()
+
+
+class _VariantHeader(NamedTuple):
+    """A layout-2 variant's identifying fields, up to its data length C.
+
+    Attributes:
+        rsid: The rsid, possibly empty.
+        alleles: The alleles in file order.
+        end: Offset of the length C just after the last allele.
+    """
+
+    variant_id: str
+    rsid: str
+    chromosome: str
+    position: int
+    alleles: tuple[str, ...]
+    end: int
+
+    @property
+    def display_rsid(self) -> str:
+        """The rsid ``open_bgen_reader`` reports: the variant id when empty."""
+        return self.rsid or self.variant_id
+
+
+def _parse_variant_header(blob: memoryview) -> _VariantHeader:
+    """Parse the identifying fields at the start of a variant data block.
+
+    Raises:
+        struct.error: If a field runs past the end of ``blob``.
+        UnicodeDecodeError: If an identifier or allele is not UTF-8.
+    """
+    p = 0
+    identifiers = []
+    for _ in range(3):  # variant id, rsid, chromosome
+        (length,) = struct.unpack_from("<H", blob, p)
+        identifiers.append(bytes(blob[p + 2 : p + 2 + length]).decode())
+        p += 2 + length
+    position, n_alleles = struct.unpack_from("<IH", blob, p)
+    p += 6
+    alleles = []
+    for _ in range(n_alleles):
+        (length,) = struct.unpack_from("<I", blob, p)
+        alleles.append(bytes(blob[p + 4 : p + 4 + length]).decode())
+        p += 4 + length
+    variant_id, rsid, chromosome = identifiers
+    return _VariantHeader(variant_id, rsid, chromosome, position, tuple(alleles), p)
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,22 +393,34 @@ class BgenReader:
         try:
             for start in range(0, len(columns), block_size):
                 block = columns[start : start + block_size]
-                k = len(block)
-                out = ProbabilityBlock(
-                    dosages=np.empty((n, k), dtype=np.float64, order="F"),
-                    q11=np.empty((n, k), dtype=np.uint16, order="F"),
-                    q12=np.empty((n, k), dtype=np.uint16, order="F"),
-                    missing=np.empty((n, k), dtype=np.bool_, order="F"),
-                    bit_depth=np.empty(k, dtype=np.uint8),
-                    info_sums=np.empty((k, 4), dtype=np.int64),
-                    info_rows=info_rows,
-                )
-                for lo in range(0, k, _DECODE_BATCH):
-                    hi = min(lo + _DECODE_BATCH, k)
-                    self._decode_batch(fd, decode, block[lo:hi], out, lo, hi, keep)
-                yield out
+                yield self._read_block(fd, decode, block, keep, info_rows)
         finally:
             os.close(fd)
+
+    def _read_block(
+        self,
+        fd: int,
+        decode: Callable[..., tuple[int, str] | None],
+        columns: np.ndarray,
+        keep: np.ndarray | None,
+        info_rows: np.ndarray | None,
+    ) -> ProbabilityBlock:
+        # Return from a normal call: a suspended reader must not keep this
+        # block alive after its consumer takes or releases the dosages.
+        n, k = self._header.n_samples, len(columns)
+        out = ProbabilityBlock(
+            dosages=np.empty((n, k), dtype=np.float64, order="F"),
+            q11=np.empty((n, k), dtype=np.uint16, order="F"),
+            q12=np.empty((n, k), dtype=np.uint16, order="F"),
+            missing=np.empty((n, k), dtype=np.bool_, order="F"),
+            bit_depth=np.empty(k, dtype=np.uint8),
+            info_sums=np.empty((k, 4), dtype=np.int64),
+            info_rows=info_rows,
+        )
+        for lo in range(0, k, _DECODE_BATCH):
+            hi = min(lo + _DECODE_BATCH, k)
+            self._decode_batch(fd, decode, columns[lo:hi], out, lo, hi, keep)
+        return out
 
     def _decode_batch(
         self,
@@ -414,33 +489,39 @@ class BgenReader:
     def _payload(self, column: int, blob: memoryview) -> tuple[memoryview, int]:
         """Split a variant data block into its probability data and length D.
 
-        Checks the block's position and allele count against the ``.bgi``
-        and its length C against the indexed block size, so a stale index
-        fails here instead of decoding the wrong bytes.
+        Checks chromosome, position, rsid and ordered alleles against the
+        ``.bgi``, and length C against the indexed block size, so a stale index
+        fails here, naming the first field that differs, instead of decoding
+        the wrong bytes.
         """
-        p = 0
         try:
-            for _ in range(3):  # variant id, rsid, chromosome
-                (length,) = struct.unpack_from("<H", blob, p)
-                p += 2 + length
-            pos, n_alleles = struct.unpack_from("<IH", blob, p)
-            p += 6
-            for _ in range(n_alleles):
-                (length,) = struct.unpack_from("<I", blob, p)
-                p += 4 + length
-            (c,) = struct.unpack_from("<I", blob, p)
-            p += 4
+            header = _parse_variant_header(blob)
+            (c,) = struct.unpack_from("<I", blob, header.end)
         except struct.error:
             raise BgenFormatError(
                 f"{self._bgen}: variant {self._describe(column)} header overruns "
                 "its .bgi size_in_bytes; the index is stale"
             ) from None
-        if pos != self._index.variants.pos[column] or n_alleles != 2:
+        except UnicodeDecodeError:
             raise BgenFormatError(
-                f"{self._bgen}: variant {self._describe(column)} does not match "
-                f"its .bgi entry (position {pos}, {n_alleles} alleles); the "
-                "index is stale"
-            )
+                f"{self._bgen}: variant {self._describe(column)} header holds "
+                "an identifier or allele that is not UTF-8; the file is corrupt "
+                "or the index is stale"
+            ) from None
+        v = self._index.variants
+        for name, in_bgen, in_bgi in (
+            ("chromosome", header.chromosome, str(v.chr[column])),
+            ("position", header.position, int(v.pos[column])),
+            ("rsid", header.display_rsid, str(v.rs[column])),
+            ("alleles", header.alleles, (str(v.a1[column]), str(v.a0[column]))),
+        ):
+            if in_bgen != in_bgi:
+                raise BgenFormatError(
+                    f"{self._bgen}: variant {self._describe(column)} does not "
+                    f"match its .bgi: {name} {in_bgen!r} in the .bgen, "
+                    f"{in_bgi!r} in the .bgi; the index is stale"
+                )
+        p = header.end + 4
         if p + c != len(blob):
             raise BgenFormatError(
                 f"{self._bgen}: variant {self._describe(column)} block length "

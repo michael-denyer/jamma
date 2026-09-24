@@ -18,6 +18,7 @@ import pytest
 from jamma.core import memory
 from jamma.core.memory import array_gb
 from jamma.core.threading import is_blas_controllable
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.chunk_sizing import (
     LmmChunkPlan,
@@ -84,6 +85,7 @@ def _streaming_preflight(
         config=LmmConfig(lmm_mode=lmm_mode),
         backend="numpy-streaming",
         n_cvt=n_cvt,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     preflight(config, plan)
 
@@ -171,6 +173,7 @@ def test_preflight_narrows_when_n_cvt_inflates_toward_available(monkeypatch):
         config=LmmConfig(lmm_mode=2),
         backend="numpy-streaming",
         n_cvt=1,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     high = plan_association(
         n_samples,
@@ -178,6 +181,7 @@ def test_preflight_narrows_when_n_cvt_inflates_toward_available(monkeypatch):
         config=LmmConfig(lmm_mode=2),
         backend="numpy-streaming",
         n_cvt=90,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
     assert high.conservative_chunks.chunk_size < low.conservative_chunks.chunk_size
@@ -309,6 +313,7 @@ def _priced_streaming_lmm_phase_gb(
         config=LmmConfig(lmm_mode=lmm_mode),
         backend="numpy-streaming",
         n_cvt=n_cvt,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     quote = execution.price(eigen=None)
     return (
@@ -513,6 +518,7 @@ class TestChunkPlanMatchesEngine:
             config=LmmConfig(lmm_mode=lmm_mode),
             backend="numpy-streaming",
             n_cvt=n_cvt,
+            genotype_encoding=GenotypeEncoding.HARD_CALLS,
         )
         dispatch = DispatchPath.NUMPY_FALLBACK
         plan = exec_plan.conservative_chunks
@@ -527,6 +533,10 @@ class TestChunkPlanMatchesEngine:
             exec_plan.workspace.fixed_bytes
             + plan.chunk_size * exec_plan.workspace.bytes_per_snp
         ) / 1e9
+        # The quote also reserves the chunk read's C-order copy. A run that
+        # does not pipeline reads between computes, so it never holds that
+        # copy beside Uab/Iab; the quote exceeds its live set by exactly it.
+        allocated_gb += array_gb(n_samples, min(plan.chunk_size, n_snps))
         assert mem_plan.total_peak_gb == pytest.approx(allocated_gb, rel=1e-9), (
             f"quoted total {mem_plan.total_peak_gb:.3f}GB != "
             f"engine allocation {allocated_gb:.3f}GB"
@@ -551,7 +561,11 @@ def test_plan_association_sizes_against_the_real_chunk(monkeypatch):
     use_fake_psutil(monkeypatch, available=240e9)
 
     plan = plan_association(
-        50_000, 500_000, config=LmmConfig(lmm_mode=1), n_cvt=1
+        50_000,
+        500_000,
+        config=LmmConfig(lmm_mode=1),
+        n_cvt=1,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     ).summary
 
     assert plan.mode == "streaming", (
@@ -572,10 +586,18 @@ def test_plan_association_mem_budget_narrows_the_chunk(monkeypatch):
     use_fake_psutil(monkeypatch, available=240e9)
 
     unbudgeted = plan_association(
-        50_000, 500_000, config=LmmConfig(lmm_mode=1), n_cvt=1
+        50_000,
+        500_000,
+        config=LmmConfig(lmm_mode=1),
+        n_cvt=1,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     ).summary
     budgeted = plan_association(
-        50_000, 500_000, config=LmmConfig(lmm_mode=1, mem_budget=1.0), n_cvt=1
+        50_000,
+        500_000,
+        config=LmmConfig(lmm_mode=1, mem_budget=1.0),
+        n_cvt=1,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     ).summary
 
     # 236.0GB does not clear the 10GB safety margin against 240GB.
@@ -593,7 +615,12 @@ def test_plan_association_keeps_wide_chunks_when_u_exceeds_the_chunk_budget(
     use_fake_psutil(monkeypatch, available=500e9)
 
     chunks = plan_association(
-        100_000, 50_000, config=LmmConfig(lmm_mode=1), backend="numpy", n_cvt=1
+        100_000,
+        50_000,
+        config=LmmConfig(lmm_mode=1),
+        backend="numpy",
+        n_cvt=1,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     ).conservative_chunks
 
     assert chunks.chunk_size >= 1_000, chunks
@@ -629,6 +656,7 @@ def test_pipeline_memory_plan_honors_mem_budget(monkeypatch):
         config=LmmConfig(mem_budget=mem_budget),
         backend="numpy",
         n_cvt=n_cvt,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     planned = execution.price(eigen=None)
 
@@ -711,6 +739,7 @@ def test_chunk_engine_requests_budget_aware_geometry(monkeypatch):
         config=LmmConfig(mem_budget=mem_budget),
         backend="numpy",
         n_cvt=n_cvt,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
     with pytest.raises(GeometryObserved):
         run_lmm_chunk_source_numpy_group(

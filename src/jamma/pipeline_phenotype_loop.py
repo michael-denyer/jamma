@@ -73,6 +73,7 @@ def run_phenotype_loop(
         _genotype_dataset(plan.mode, plan.runner_name, dataset),
         samples.basis,
         spec.snp_filters,
+        stats_block_size=analysis.execution.stats_block_size,
         progress=spec.stats_progress,
     )
     if genotypes.n_filtered == 0:

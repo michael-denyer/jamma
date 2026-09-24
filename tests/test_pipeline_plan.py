@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import KinshipShape, plan_association
 from jamma.lmm.schema import LmmConfig
 from jamma.pipeline_config import PipelineConfig, ProvidedEigen, ProvidedKinship
@@ -21,7 +22,12 @@ pytestmark = pytest.mark.tier0
 
 def _execution():  # type: ignore[no-untyped-def]
     return plan_association(
-        10, 20, config=LmmConfig(lmm_mode=1), backend="numpy", n_cvt=1
+        10,
+        20,
+        config=LmmConfig(lmm_mode=1),
+        backend="numpy",
+        n_cvt=1,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
 
@@ -98,7 +104,13 @@ def test_loco_plan_owns_lmm_and_loco_configuration(tmp_path: Path) -> None:
 
 
 def _subset_execution():  # type: ignore[no-untyped-def]
-    return plan_association(10, 20, backend="numpy", n_input_samples=12)
+    return plan_association(
+        10,
+        20,
+        backend="numpy",
+        n_input_samples=12,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
+    )
 
 
 def test_provided_eigen_materialises_no_kinship(tmp_path: Path) -> None:

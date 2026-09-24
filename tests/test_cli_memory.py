@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from jamma.genotype.dataset import GenotypeDataset
+from jamma.genotype.dataset import GenotypeDataset, GenotypeEncoding
 from tests.fixture_paths import SYNTHETIC
 
 PLINK_PREFIX = SYNTHETIC.bfile
@@ -26,7 +26,10 @@ class TestCliMemoryCheckUnit:
         # This simulates what CLI does: get dimensions, then estimate
         dataset = GenotypeDataset.open_plink(PLINK_PREFIX)
         est = plan_association(
-            dataset.n_samples, dataset.n_variants, backend="numpy-streaming"
+            dataset.n_samples,
+            dataset.n_variants,
+            backend="numpy-streaming",
+            genotype_encoding=GenotypeEncoding.HARD_CALLS,
         ).price(eigen=None)
 
         assert est.association_gb > 0

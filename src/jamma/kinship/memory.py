@@ -2,7 +2,7 @@
 
 from loguru import logger
 
-from jamma.core.memory import array_gb
+from jamma.core.memory import array_gb, block_working_set_gb
 
 
 def _dsyrk_scratch_gb(n_samples: int) -> float:
@@ -26,21 +26,34 @@ def _dsyrk_scratch_gb(n_samples: int) -> float:
     return dsyrk_scratch_bytes(n_samples) / 1e9
 
 
+def kinship_chunk_gb(n_input_samples: int, width: int) -> float:
+    """Peak GB of one kinship chunk of ``width`` variants over every input row.
+
+    Preprocessing holds three float64 blocks, for decoded data, selected
+    columns, and either transform output or the contiguous input copy made
+    by dsyrk, plus two boolean masks. The standardized transform preserves
+    its input, so it can hold all three float blocks while reducing means.
+    The read before it is smaller for every encoding: a BGEN block at the
+    decoder's 16-bit ceiling holds at most 23 bytes per cell with its decode
+    buffers, under the working set's 26.
+    """
+    return block_working_set_gb(n_input_samples, width)
+
+
 def estimate_kinship_memory(
-    *, n_input_samples: int, n_output_samples: int, n_snps: int, chunk_size: int
+    *,
+    n_input_samples: int,
+    n_output_samples: int,
+    n_snps: int,
+    chunk_size: int,
 ) -> float:
     """Price streaming kinship in GB from its input and output dimensions.
 
     Preprocessing uses all input rows; the accumulator and backend scratch
     use output rows. A short file never allocates the full requested block.
-    Three float64 blocks cover decoded data, selected columns, and either
-    transform output or the contiguous input copy made by dsyrk. Two boolean
-    blocks cover preprocessing masks. The standardized transform preserves
-    its input, so it can hold all three float blocks while reducing means.
     """
-    chunk_gb = array_gb(n_input_samples, min(chunk_size, n_snps))
     return (
         array_gb(n_output_samples, n_output_samples)
-        + (3 + 2 / 8) * chunk_gb
+        + kinship_chunk_gb(n_input_samples, min(chunk_size, n_snps))
         + _dsyrk_scratch_gb(n_output_samples)
     )

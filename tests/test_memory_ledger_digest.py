@@ -64,6 +64,22 @@ in ``association_gb`` and ``total_peak_gb`` alone, each by exactly
 ``80,000 - 16 * n`` bytes: per-thread scratch is now per kernel, so the two
 extra kernels add ``2 * 4 * 10,000``, and the null ``w`` row, no longer
 retained, drops ``2 * n`` float64. Every other row is identical.
+
+``01d40e01``: genotype reads are priced by one per-block model for every
+encoding, after tracemalloc showed hard-call phases above their quote (PLINK
+LOCO kinship 34.80 MB against 21.76 MB; the NumPy statistics kernel 1.38
+input blocks against 1.00; a chunk read at the decoded block plus its
+C-order analysed-row copy, 2.00 blocks with every row kept). 4098 of the
+5030 rows moved, and each moved cell equals its new term exactly. The 1026
+LOCO rows moved ``single_pass_gb`` by ``2.25`` chunk blocks, the kinship
+working set replacing the one-block disk buffer; seven rows at 8 GB or less
+moved ``batch_size`` and two flipped ``single_pass``. All 3072 ``price``
+rows moved ``association_gb`` by one analysed-row chunk copy,
+``8 * n * min(chunk, n_snps)`` bytes, and 2264 moved ``total_peak_gb`` with
+it. The 1024 streaming rows also moved ``statistics_gb`` to U plus the
+larger of the read (the decoded block and its analysed-row copy) and the
+statistics working set, over ``min(10_000, n_snps)`` columns. No kinship,
+eigen, gate, or eigen-driver row moved.
 """
 
 from __future__ import annotations
@@ -78,6 +94,7 @@ import pytest
 
 from jamma.core import memory
 from jamma.core.memory import margin_gb
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.kinship.loco import loco_retained_set, plan_loco_passes
 from jamma.lmm.association_plan import (
     ExecutableAssociationPlan,
@@ -91,7 +108,7 @@ from jamma.lmm.workspace import WorkspaceSpec
 
 pytestmark = pytest.mark.tier0
 
-EXPECTED_DIGEST = "53b7584a3bea58b5bef9aae939d668655ee716c9d20aba3d43c22f55cfbcbde6"
+EXPECTED_DIGEST = "01d40e01b014e9336c2c63bbc041d0df378f8b1d422d77608e762e72fee48386"
 EXPECTED_ROWS = 5030
 
 N_SAMPLES = (30, 1_410, 5_000, 10_001, 50_000, 200_000)
@@ -149,6 +166,7 @@ def _price_plan(
             if kinship is None
             else KinshipShape.resolve(n, n_input, loaded=kinship[0], saved=kinship[1])
         ),
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
 

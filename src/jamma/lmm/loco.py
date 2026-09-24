@@ -121,6 +121,7 @@ def run_lmm_loco(
         n_cvt=samples.n_cvt,
         n_input_samples=dataset.n_samples,
         max_chunk_size=loco.col_chunk_size,
+        genotype_encoding=dataset.encoding,
     )
     execution = replace(
         execution,

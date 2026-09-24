@@ -6,6 +6,7 @@ import sys
 
 import pytest
 
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.pipeline_banner import format_pipeline_banner
 
 pytestmark = pytest.mark.tier0
@@ -143,7 +144,14 @@ class TestLogPipelineBanner:
 
         sink_id = _logger.add(sys.stderr, level="INFO")
         try:
-            log_pipeline_banner(plan_association(1_000, 10_000, n_cvt=3).summary)
+            log_pipeline_banner(
+                plan_association(
+                    1_000,
+                    10_000,
+                    n_cvt=3,
+                    genotype_encoding=GenotypeEncoding.HARD_CALLS,
+                ).summary
+            )
         finally:
             _logger.remove(sink_id)
 

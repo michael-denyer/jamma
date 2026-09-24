@@ -402,6 +402,7 @@ class PipelineRunner:
             backend="loco" if self.config.loco else requested,
             n_cvt=samples.n_covariates,
             n_input_samples=n_samples,
+            genotype_encoding=dataset.encoding,
             n_phenotypes=len(pheno_columns),
             max_chunk_size=DEFAULT_LOCO_CONFIG.col_chunk_size
             if self.config.loco

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import ExecutionPlan, plan_association
 from tests.fixture_paths import LOCO
 from tests.support import requires_c
@@ -16,7 +17,9 @@ pytestmark = pytest.mark.tier0
 
 def _select_mode(*args, **kwargs) -> ExecutionPlan:
     """Plan and keep only the selected-mode summary, as the pipeline does."""
-    return plan_association(*args, **kwargs).summary
+    return plan_association(
+        *args, genotype_encoding=GenotypeEncoding.HARD_CALLS, **kwargs
+    ).summary
 
 
 def test_import_jamma_succeeds():
@@ -72,8 +75,16 @@ class TestExecutionMode:
     def test_loco_selects_loco_mode_whatever_was_requested(self):
         """loco=True plans the loco mode and prices one chunk, not the matrix."""
         with _pin_ram(AMPLE_GB):
-            loco = plan_association(*OVERFLOWS_SHAPE, backend="loco")
-            batch = plan_association(*OVERFLOWS_SHAPE, backend="numpy")
+            loco = plan_association(
+                *OVERFLOWS_SHAPE,
+                backend="loco",
+                genotype_encoding=GenotypeEncoding.HARD_CALLS,
+            )
+            batch = plan_association(
+                *OVERFLOWS_SHAPE,
+                backend="numpy",
+                genotype_encoding=GenotypeEncoding.HARD_CALLS,
+            )
         assert loco.summary.mode == "loco"
         assert loco.summary.runner_name == "numpy-loco"
         assert (
@@ -219,7 +230,12 @@ class TestExecutionMode:
 
         n_samples, n_snps = 1000, 10000
         with _pin_ram(AMPLE_GB):
-            plan = plan_association(n_samples, n_snps, n_cvt=4)
+            plan = plan_association(
+                n_samples,
+                n_snps,
+                n_cvt=4,
+                genotype_encoding=GenotypeEncoding.HARD_CALLS,
+            )
 
         assert plan.dispatch is DispatchPath.FUSED
         chunks = plan.conservative_chunks
@@ -229,6 +245,7 @@ class TestExecutionMode:
         assert bare.price(eigen=None).association_gb == pytest.approx(
             array_gb(n_samples, n_samples)
             + array_gb(n_samples, n_snps)
+            + array_gb(n_samples, min(chunks.chunk_size, n_snps))  # the read's copy
             + chunks.n_buffers * array_gb(n_samples, chunks.chunk_size)
         )
 

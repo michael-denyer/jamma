@@ -13,7 +13,7 @@ import pytest
 
 from jamma.core import memory
 from jamma.core import threading as core_threading
-from jamma.kinship.loco import loco_retained_set
+from jamma.kinship.loco import LocoRetainedSet
 from jamma.lmm.eigen import center_kinship, eigendecompose_kinship_in_scope
 from jamma.lmm.eigen_plan import plan_eigen_driver
 from jamma.lmm.loco_config import LocoConfig
@@ -201,7 +201,7 @@ def test_worker_accounting_charges_each_in_flight_driver_peak_once(
     for the copy. At 1,000 samples that is 0.008 GB plus workspace per driver;
     the retained set is 0.032 GB, so every driver fits three workers in 4.3 GB.
     """
-    retained = loco_retained_set(10_000, 10_000, 10_000)
+    retained = LocoRetainedSet(matrix_gb=0.8, chunk_buffer_gb=0.8)
     eigen = plan_eigen_driver(
         1000,
         100,
@@ -225,7 +225,7 @@ def test_worker_accounting_charges_each_in_flight_driver_peak_once(
 
 
 def test_worker_plan_preserves_strict_ram_tie_and_inclusive_user_budget():
-    retained = loco_retained_set(1000, 1000, 1000)
+    retained = LocoRetainedSet(matrix_gb=0.008, chunk_buffer_gb=0.008)
     eigen = plan_eigen_driver(
         1000,
         100,

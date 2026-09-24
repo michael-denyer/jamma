@@ -20,6 +20,7 @@ import pytest
 
 import jamma.pipeline as pipeline_mod
 from jamma.core import memory
+from jamma.genotype.dataset import GenotypeEncoding
 from jamma.lmm.association_plan import plan_association
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.lmm.prepare_common import compute_valid_mask, with_intercept
@@ -50,6 +51,7 @@ def _association_plan(
         config=LmmConfig(mem_budget=mem_budget),
         backend="numpy-streaming" if mode == "streaming" else "numpy",
         n_cvt=n_cvt,
+        genotype_encoding=GenotypeEncoding.HARD_CALLS,
     )
 
 
@@ -363,7 +365,9 @@ class TestAssociateLoco:
         """Run the LOCO branch on the samples run() would build."""
         analysis = resolve_analysis_plan(
             runner.config,
-            execution=plan_association(4, 1, backend="numpy"),
+            execution=plan_association(
+                4, 1, backend="numpy", genotype_encoding=GenotypeEncoding.HARD_CALLS
+            ),
             snps_indices=None,
             ksnps_indices=None,
         )

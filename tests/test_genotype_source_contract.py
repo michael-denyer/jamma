@@ -7,6 +7,7 @@ one chromosome's columns. The oracle is bed-reader read directly.
 
 from __future__ import annotations
 
+import tracemalloc
 from dataclasses import dataclass
 
 import numpy as np
@@ -327,3 +328,36 @@ def test_supplied_statistics_without_hwe_counts_refuse_an_hwe_filter() -> None:
             SnpFilterSpec(maf_threshold=0.0, miss_threshold=1.0, hwe_threshold=1e-6),
             stats=stats,
         )
+
+
+@pytest.mark.parametrize("subset", [False, True])
+def test_chunk_stream_holds_nothing_between_chunks(subset: bool) -> None:
+    """A consumed chunk is freed before the next is read, rows cut or not."""
+    n, m = 1000, 500
+    matrix = np.random.default_rng(13).integers(0, 3, (n, m)).astype(np.float32)
+    variants = SnpMeta(
+        np.full(m, "1"),
+        np.arange(m).astype(str),
+        np.arange(m),
+        np.full(m, "A"),
+        np.full(m, "G"),
+    )
+    positions = np.arange(0, n, 2) if subset else np.arange(n)
+    prepared = prepare_genotypes(
+        GenotypeDataset.from_matrix(matrix, variants),
+        SampleBasis(positions, n),
+        SnpFilterSpec(0.0, 1.0),
+    )
+    tracemalloc.start()
+    try:
+        chunks = prepared.chunks(m // 2)
+        first = next(chunks)
+        first_nbytes = first.genotypes.nbytes
+        del first
+        between = tracemalloc.get_traced_memory()[0]
+        second = next(chunks)
+    finally:
+        tracemalloc.stop()
+    assert between < first_nbytes // 10
+    np.testing.assert_array_equal(second.genotypes, matrix[positions, m // 2 :])
+    assert second.genotypes.flags.c_contiguous

@@ -287,6 +287,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `GEMMA_EQUIVALENCE.md` §8 no longer says the chi-squared CDF is linear near
+  `LRT = 0`; its slope is unbounded there, which amplifies small LRT
+  differences. `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` assumption 7 says why the
+  Lipschitz range must exclude a zero statistic.
+
 - `GEMMA_EQUIVALENCE.md` §4 states the REML formula JAMMA computes, including
   the `log|Z'Z|` term. §3 says which quantities are invariant to eigenvector
   sign flips (Pab and `log|H|`, not `U'y`). §5 and the optimizer docstrings

@@ -66,6 +66,9 @@ We write `ΔX = X_JAMMA − X_GEMMA` for differences in outputs.
 6. **Bounded test inputs**: `P_xx > 0`, `Px_yy > 0`, and denominators in test
    statistics are bounded away from zero.
 7. **CDF stability**: the F/χ² CDFs used are Lipschitz in the relevant range.
+   The qualifier is necessary: both tails have unbounded slope at 0, so no
+   single constant works near a zero statistic. On `[F₀, ∞)` with `F₀ > 0` the
+   F(1, df) tail is Lipschitz with constant equal to its density at `F₀`.
 
 If any assumption fails, equivalence can still hold, but the stated bound may
 not be meaningful. See `docs/GEMMA_DIVERGENCES.md` for known edge-case behavior.

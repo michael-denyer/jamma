@@ -233,6 +233,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Docker image loads one Intel OpenMP runtime. It moves to Python 3.12
+  because numpy-mkl publishes no rebuilt cp311 wheel, and the old cp311 wheel
+  bundles a second `libiomp5` that can crash at exit. `mkl-service` moves to
+  2.8.0, matching the fixed wheels, and a build step fails when a process maps
+  more than one OpenMP runtime.
+
 - The build now uses clang with Intel OpenMP (libiomp5) on hosts that have
   clang but no LLVM `libomp-dev`, as in images that install clang with
   `--no-install-recommends`. The clang probe passed `-fopenmp` at link time,

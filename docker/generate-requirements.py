@@ -12,7 +12,7 @@ directly, so they are declared here and checked by hand against the index.
 
 `uv export` emits a universal resolution: Windows-only packages carry markers,
 and `numpy` forks across the 3.11/3.12 boundary. The image is linux/amd64 on
-CPython 3.11, and its `numpy` comes from the ILP64 index rather than PyPI, so
+CPython 3.12, and its `numpy` comes from the ILP64 index rather than PyPI, so
 both get filtered out here.
 """
 
@@ -33,8 +33,8 @@ TARGET = ROOT / "docker" / "requirements-container.txt"
 MKL_PINS = (
     "mkl==2026.1.0",
     "onemkl-license==2026.1.0",
-    "intel-openmp==2026.1.1",
-    "intel-cmplr-lib-ur==2026.1.1",
+    "intel-openmp==2026.1.2",
+    "intel-cmplr-lib-ur==2026.1.2",
     "umf==1.1.0",
     "tbb==2023.1.0",
     "tcmlib==1.5.0",
@@ -57,7 +57,7 @@ HEADER = """\
 
 
 def runtime_pins_from_lock() -> list[str]:
-    """Return the linux/CPython-3.11 runtime pins recorded in uv.lock."""
+    """Return the linux/CPython-3.12 runtime pins recorded in uv.lock."""
     exported = subprocess.run(
         [
             "uv",

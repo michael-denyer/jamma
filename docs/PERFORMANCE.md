@@ -48,30 +48,43 @@ uv run python scripts/smoke_test_matrix_text.py
 
 ## Aligned process benchmarks, 2026-09-24
 
-The same protocol as the 2026-09-23 run below, repeated after the native
-matrix text writer (see "Matrix text output"). Python 3.12.13, NumPy 2.5.1,
-JAMMA 8.1.0, Accelerate-ILP64 with 18 threads, GEMMA 0.98.5 in OpenBLAS and
-Accelerate builds. Other work shared the machine: the one-minute load average
-was 10.2 at the start and 5.2 at the end, against 3.2 to 8.9 on 2026-09-23.
+The same protocol as the 2026-09-23 run below, at revision `bea53eec`, which
+adds the native matrix text writer (see "Matrix text output"). Python 3.12.13,
+NumPy 2.5.1, JAMMA 8.1.0, Accelerate-ILP64 with 18 threads, GEMMA 0.98.5 in
+OpenBLAS and Accelerate builds. The one-minute load average stayed between 1.1
+and 2.8 on 18 cores across both scripts, against 3.2 to 8.9 on 2026-09-23.
 Every backend's kinship matrix and association output matched the first
 backend's within the validation tolerances.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 900ms | 454ms | — | 2.0x | 2.5x | 2.7x |
-| Kinship (`-gk 1`, default `.npy`) | — | — | 526ms | 453ms | — | 1.2x | — | — |
-| LMM Wald (`-lmm 1`) | 8.4s | 4.1s | 8.1s | 643ms | 663ms | 12.6x | 13.0x | 6.4x |
-| LMM All (`-lmm 4`) | 16.4s | 7.7s | 14.3s | 799ms | 722ms | 17.9x | 22.8x | 10.7x |
-| Full GWAS Wald (compute kinship + association) | 8.9s | 5.5s | 8.3s | 735ms | 869ms | 11.3x | 12.1x | 7.5x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.6s | 11.7s | 16.6s | 1.1s | 1.1s | 14.9x | 24.9x | 10.6x |
+| Kinship (`-gk 1`) | 981ms | 1.2s | 765ms | 407ms | — | 1.9x | 2.4x | 2.8x |
+| Kinship (`-gk 1`, default `.npy`) | — | — | 464ms | 391ms | — | 1.2x | — | — |
+| LMM Wald (`-lmm 1`) | 6.9s | 4.2s | 5.9s | 520ms | 547ms | 11.4x | 13.2x | 8.1x |
+| LMM All (`-lmm 4`) | 12.7s | 7.5s | 11.0s | 577ms | 571ms | 19.1x | 22.3x | 13.1x |
+| Full GWAS Wald (compute kinship + association) | 7.9s | 5.4s | 6.1s | 652ms | 692ms | 9.4x | 12.1x | 8.3x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 26.1s | 12.4s | 15.1s | 1.1s | 1.1s | 14.2x | 24.6x | 11.7x |
 
-The text kinship row fell from 749 ms to 454 ms and now matches the binary
-`.npy` row (453 ms), so the text export no longer costs extra time. The other
-rows moved by the run-to-run spread under the heavier load. This change does
-not touch association code, and every row checked its output against the first
-backend. Raw repetitions:
-[2026-09-24-aligned.json](benchmarks/2026-09-24-aligned.json). No LOCO rerun
-was made; the LOCO results below stand.
+| Backend | LOCO Wald | vs fastest GEMMA |
+|---------|-----------|------------------|
+| GEMMA (OpenBLAS) | 34.4s | 1.0x |
+| GEMMA (Accelerate) | 33.3s | 1.0x |
+| JAMMA NumPy+C | 3.2s | 10.6x |
+
+| Operation | GEMMA Accelerate range (s) | JAMMA C batch range (s) |
+|-----------|---------------------------|-------------------------|
+| Kinship | 1.157–1.202 | 0.407–0.427 |
+| Wald association | 4.226–4.257 | 0.520–0.536 |
+| All-tests association | 7.489–7.528 | 0.577–0.578 |
+| Full GWAS Wald | 5.380–5.453 | 0.652–0.657 |
+| Wald + four covariates | 12.399–12.476 | 1.059–1.142 |
+| LOCO Wald | 33.281–33.423 | 3.152–3.157 |
+
+The text kinship row fell from 749 ms to 407 ms, within 16 ms of the binary
+`.npy` row (391 ms), so the text export no longer costs meaningful time. The
+other JAMMA rows are within about 5% of 2026-09-23. LOCO Wald improved from
+3.4 s to 3.2 s. Raw repetitions for both scripts:
+[2026-09-24-aligned.json](benchmarks/2026-09-24-aligned.json).
 
 ## Aligned process benchmarks, 2026-09-23
 

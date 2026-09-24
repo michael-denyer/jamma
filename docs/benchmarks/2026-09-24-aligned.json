@@ -1,483 +1,544 @@
 {
  "date": "2026-09-24",
- "revision": "1749b483",
- "base": "origin/master e1720e51 + PR #377 rebased",
+ "revision": "bea53eec",
  "machine": "Apple M5 Pro, 18 physical cores, macOS 27.0",
+ "python": "3.12.13",
+ "numpy": "2.5.1",
  "blas": "Accelerate-ILP64 (18 threads)",
- "load_average": {
-  "start_1min": 10.21,
-  "end_1min": 5.15,
-  "end_5min": 10.45
+ "gemma": "0.98.5",
+ "load_average_1min": {
+  "start": 2.19,
+  "after_backends": 1.83,
+  "after_loco": 2.81
  },
- "command": "uv run python scripts/bench_all_backends.py --runs 3 --json <path>",
- "records": [
+ "commands": [
+  "uv run python scripts/bench_all_backends.py --runs 3 --json <path>",
+  "uv run python scripts/bench_loco.py --runs 3 --json <path>"
+ ],
+ "backends": [
   {
    "operation": "kinship",
    "backend": "gemma",
    "repetition": 1,
-   "seconds": 1.1465835840208456
+   "seconds": 1.0468295000027865
   },
   {
    "operation": "kinship",
    "backend": "gemma_accel",
    "repetition": 1,
-   "seconds": 1.2264194170711562
+   "seconds": 1.2018309999257326
   },
   {
    "operation": "kinship",
    "backend": "numpy_pure",
    "repetition": 1,
-   "seconds": 0.9702409169403836
+   "seconds": 0.9011172919999808
   },
   {
    "operation": "kinship",
    "backend": "numpy",
    "repetition": 1,
-   "seconds": 0.5136662910226732
+   "seconds": 0.4268923749914393
   },
   {
    "operation": "kinship",
    "backend": "gemma_accel",
    "repetition": 2,
-   "seconds": 1.2139118749182671
+   "seconds": 1.1729581250110641
   },
   {
    "operation": "kinship",
    "backend": "numpy_pure",
    "repetition": 2,
-   "seconds": 0.8997330840211362
+   "seconds": 0.7718191250460222
   },
   {
    "operation": "kinship",
    "backend": "numpy",
    "repetition": 2,
-   "seconds": 0.49463629198726267
+   "seconds": 0.42091887502465397
   },
   {
    "operation": "kinship",
    "backend": "gemma",
    "repetition": 2,
-   "seconds": 1.1626610830426216
+   "seconds": 1.0018222089856863
   },
   {
    "operation": "kinship",
    "backend": "numpy_pure",
    "repetition": 3,
-   "seconds": 0.9273281249916181
+   "seconds": 0.7650141660124063
   },
   {
    "operation": "kinship",
    "backend": "numpy",
    "repetition": 3,
-   "seconds": 0.45379841595422477
+   "seconds": 0.4066952500725165
   },
   {
    "operation": "kinship",
    "backend": "gemma",
    "repetition": 3,
-   "seconds": 1.113400041940622
+   "seconds": 0.980567334103398
   },
   {
    "operation": "kinship",
    "backend": "gemma_accel",
    "repetition": 3,
-   "seconds": 1.2309855420608073
+   "seconds": 1.1566411249805242
   },
   {
    "operation": "kinship_npy",
    "backend": "numpy_pure",
    "repetition": 1,
-   "seconds": 0.5365328750340268
+   "seconds": 0.47086287499405444
   },
   {
    "operation": "kinship_npy",
    "backend": "numpy",
    "repetition": 1,
-   "seconds": 0.45314908400177956
+   "seconds": 0.4064142919378355
   },
   {
    "operation": "kinship_npy",
    "backend": "numpy_pure",
    "repetition": 2,
-   "seconds": 0.5259401249932125
+   "seconds": 0.4712607079418376
   },
   {
    "operation": "kinship_npy",
    "backend": "numpy",
    "repetition": 2,
-   "seconds": 0.539711874909699
+   "seconds": 0.3905147920595482
   },
   {
    "operation": "kinship_npy",
    "backend": "numpy_pure",
    "repetition": 3,
-   "seconds": 0.913760875002481
+   "seconds": 0.4642310000490397
   },
   {
    "operation": "kinship_npy",
    "backend": "numpy",
    "repetition": 3,
-   "seconds": 0.6770154170226306
+   "seconds": 0.3915276250336319
   },
   {
    "operation": "lmm_wald",
    "backend": "gemma",
    "repetition": 1,
-   "seconds": 10.97929375001695
+   "seconds": 6.892017540987581
   },
   {
    "operation": "lmm_wald",
    "backend": "gemma_accel",
    "repetition": 1,
-   "seconds": 4.213179083075374
+   "seconds": 4.2567561669275165
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy_pure",
    "repetition": 1,
-   "seconds": 10.513033917057328
+   "seconds": 6.122048208024353
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy",
    "repetition": 1,
-   "seconds": 0.689825874986127
+   "seconds": 0.531852874904871
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy_streaming",
    "repetition": 1,
-   "seconds": 0.7684239579830319
+   "seconds": 0.5540343329776078
   },
   {
    "operation": "lmm_wald",
    "backend": "gemma_accel",
    "repetition": 2,
-   "seconds": 4.096928042010404
+   "seconds": 4.226117167039774
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy_pure",
    "repetition": 2,
-   "seconds": 8.09299854200799
+   "seconds": 5.924125874997117
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy",
    "repetition": 2,
-   "seconds": 0.643036084016785
+   "seconds": 0.5199671249138191
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy_streaming",
    "repetition": 2,
-   "seconds": 0.6631117080105469
+   "seconds": 0.5535834579495713
   },
   {
    "operation": "lmm_wald",
    "backend": "gemma",
    "repetition": 2,
-   "seconds": 8.359979250002652
+   "seconds": 6.940983958076686
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy_pure",
    "repetition": 3,
-   "seconds": 10.816341124940664
+   "seconds": 5.930450957966968
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy",
    "repetition": 3,
-   "seconds": 1.1843400839716196
+   "seconds": 0.5359298749826849
   },
   {
    "operation": "lmm_wald",
    "backend": "numpy_streaming",
    "repetition": 3,
-   "seconds": 0.7748315840726718
+   "seconds": 0.5468107500346377
   },
   {
    "operation": "lmm_wald",
    "backend": "gemma",
    "repetition": 3,
-   "seconds": 9.56019250000827
+   "seconds": 6.877445082995109
   },
   {
    "operation": "lmm_wald",
    "backend": "gemma_accel",
    "repetition": 3,
-   "seconds": 4.360173749970272
+   "seconds": 4.2263126249890774
   },
   {
    "operation": "lmm_all",
    "backend": "gemma",
    "repetition": 1,
-   "seconds": 16.423413875047117
+   "seconds": 12.715701417066157
   },
   {
    "operation": "lmm_all",
    "backend": "gemma_accel",
    "repetition": 1,
-   "seconds": 12.129047541995533
+   "seconds": 7.497415167046711
   },
   {
    "operation": "lmm_all",
    "backend": "numpy_pure",
    "repetition": 1,
-   "seconds": 16.355322833987884
+   "seconds": 10.99505537492223
   },
   {
    "operation": "lmm_all",
    "backend": "numpy",
    "repetition": 1,
-   "seconds": 0.8102822080254555
+   "seconds": 0.5772182090440765
   },
   {
    "operation": "lmm_all",
    "backend": "numpy_streaming",
    "repetition": 1,
-   "seconds": 0.7864778330549598
+   "seconds": 0.5761676669353619
   },
   {
    "operation": "lmm_all",
    "backend": "gemma_accel",
    "repetition": 2,
-   "seconds": 8.361907875048928
+   "seconds": 7.488896124996245
   },
   {
    "operation": "lmm_all",
    "backend": "numpy_pure",
    "repetition": 2,
-   "seconds": 14.545514125027694
+   "seconds": 10.995107291033491
   },
   {
    "operation": "lmm_all",
    "backend": "numpy",
    "repetition": 2,
-   "seconds": 0.8919504579389468
+   "seconds": 0.5766804580343887
   },
   {
    "operation": "lmm_all",
    "backend": "numpy_streaming",
    "repetition": 2,
-   "seconds": 0.7901880829595029
+   "seconds": 0.5708279170794412
   },
   {
    "operation": "lmm_all",
    "backend": "gemma",
    "repetition": 2,
-   "seconds": 17.07911900000181
+   "seconds": 12.748210957972333
   },
   {
    "operation": "lmm_all",
    "backend": "numpy_pure",
    "repetition": 3,
-   "seconds": 14.295553665957414
+   "seconds": 11.02891254099086
   },
   {
    "operation": "lmm_all",
    "backend": "numpy",
    "repetition": 3,
-   "seconds": 0.7989582079462707
+   "seconds": 0.5778260841034353
   },
   {
    "operation": "lmm_all",
    "backend": "numpy_streaming",
    "repetition": 3,
-   "seconds": 0.7215512080583721
+   "seconds": 0.5789204580942169
   },
   {
    "operation": "lmm_all",
    "backend": "gemma",
    "repetition": 3,
-   "seconds": 16.47318966698367
+   "seconds": 12.768949208082631
   },
   {
    "operation": "lmm_all",
    "backend": "gemma_accel",
    "repetition": 3,
-   "seconds": 7.744847750058398
+   "seconds": 7.528049874934368
   },
   {
    "operation": "gwas_wald",
    "backend": "gemma",
    "repetition": 1,
-   "seconds": 10.726588292047381
+   "seconds": 7.872396375052631
   },
   {
    "operation": "gwas_wald",
    "backend": "gemma_accel",
    "repetition": 1,
-   "seconds": 8.243903458002023
+   "seconds": 5.386235709069297
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy_pure",
    "repetition": 1,
-   "seconds": 8.268187833018601
+   "seconds": 6.140413291985169
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy",
    "repetition": 1,
-   "seconds": 0.9707070000004023
+   "seconds": 0.6571312500163913
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy_streaming",
    "repetition": 1,
-   "seconds": 0.976764791063033
+   "seconds": 0.6950114170322195
   },
   {
    "operation": "gwas_wald",
    "backend": "gemma_accel",
    "repetition": 2,
-   "seconds": 6.424463666975498
+   "seconds": 5.380331041058525
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy_pure",
    "repetition": 2,
-   "seconds": 8.829153125057928
+   "seconds": 6.121453666011803
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy",
    "repetition": 2,
-   "seconds": 0.7348444579401985
+   "seconds": 0.6521269159857184
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy_streaming",
    "repetition": 2,
-   "seconds": 0.8693791250698268
+   "seconds": 0.6924565420486033
   },
   {
    "operation": "gwas_wald",
    "backend": "gemma",
    "repetition": 2,
-   "seconds": 8.91098249994684
+   "seconds": 7.915125250001438
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy_pure",
    "repetition": 3,
-   "seconds": 11.036520667024888
+   "seconds": 6.1185467089526355
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy",
    "repetition": 3,
-   "seconds": 0.8539934169966727
+   "seconds": 0.6543057919479907
   },
   {
    "operation": "gwas_wald",
    "backend": "numpy_streaming",
    "repetition": 3,
-   "seconds": 0.907903959043324
+   "seconds": 0.6994712089654058
   },
   {
    "operation": "gwas_wald",
    "backend": "gemma",
    "repetition": 3,
-   "seconds": 9.750853084027767
+   "seconds": 7.913502334035002
   },
   {
    "operation": "gwas_wald",
    "backend": "gemma_accel",
    "repetition": 3,
-   "seconds": 5.547560540959239
+   "seconds": 5.452662791940384
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "gemma",
    "repetition": 1,
-   "seconds": 29.087011832976714
+   "seconds": 26.067326582968235
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "gemma_accel",
    "repetition": 1,
-   "seconds": 11.836357624968514
+   "seconds": 12.39940304204356
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy_pure",
    "repetition": 1,
-   "seconds": 17.439590541063808
+   "seconds": 15.062223457964137
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy",
    "repetition": 1,
-   "seconds": 1.1561490000458434
+   "seconds": 1.1391091250116006
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy_streaming",
    "repetition": 1,
-   "seconds": 1.1365767089882866
+   "seconds": 1.0661866669543087
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "gemma_accel",
    "repetition": 2,
-   "seconds": 11.957169500063173
+   "seconds": 12.46141070802696
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy_pure",
    "repetition": 2,
-   "seconds": 19.72386937495321
+   "seconds": 15.212234750040807
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy",
    "repetition": 2,
-   "seconds": 1.1477358329575509
+   "seconds": 1.0589223749702796
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy_streaming",
    "repetition": 2,
-   "seconds": 1.1546775420429185
+   "seconds": 1.0686327919829637
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "gemma",
    "repetition": 2,
-   "seconds": 27.58671854203567
+   "seconds": 26.538703582948074
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy_pure",
    "repetition": 3,
-   "seconds": 16.610728540923446
+   "seconds": 15.339028583955951
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy",
    "repetition": 3,
-   "seconds": 1.1120332919526845
+   "seconds": 1.1421299159992486
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "numpy_streaming",
    "repetition": 3,
-   "seconds": 1.1067672919016331
+   "seconds": 1.0781627499964088
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "gemma",
    "repetition": 3,
-   "seconds": 27.748655500006862
+   "seconds": 26.650744041078724
   },
   {
    "operation": "lmm_wald_c4",
    "backend": "gemma_accel",
    "repetition": 3,
-   "seconds": 11.748855749960057
+   "seconds": 12.476461334037594
+  }
+ ],
+ "loco": [
+  {
+   "backend": "GEMMA (OpenBLAS)",
+   "repetition": 1,
+   "seconds": 34.54713025002275,
+   "snps": 10768
+  },
+  {
+   "backend": "GEMMA (Accelerate)",
+   "repetition": 1,
+   "seconds": 33.42335950001143,
+   "snps": 10768
+  },
+  {
+   "backend": "JAMMA NumPy+C",
+   "repetition": 1,
+   "seconds": 3.1517081250203773,
+   "snps": 10768
+  },
+  {
+   "backend": "GEMMA (Accelerate)",
+   "repetition": 2,
+   "seconds": 33.281215625000186,
+   "snps": 10768
+  },
+  {
+   "backend": "JAMMA NumPy+C",
+   "repetition": 2,
+   "seconds": 3.1520955830346793,
+   "snps": 10768
+  },
+  {
+   "backend": "GEMMA (OpenBLAS)",
+   "repetition": 2,
+   "seconds": 34.406976375030354,
+   "snps": 10768
+  },
+  {
+   "backend": "JAMMA NumPy+C",
+   "repetition": 3,
+   "seconds": 3.1574800830567256,
+   "snps": 10768
+  },
+  {
+   "backend": "GEMMA (OpenBLAS)",
+   "repetition": 3,
+   "seconds": 34.85220512491651,
+   "snps": 10768
+  },
+  {
+   "backend": "GEMMA (Accelerate)",
+   "repetition": 3,
+   "seconds": 33.31007166602649,
+   "snps": 10768
   }
  ]
 }

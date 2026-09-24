@@ -218,27 +218,24 @@ See [memory planning](docs/USER_GUIDE.md#memory-safety) before scaling up.
 
 JAMMA on mouse_hs1940 (1,940 samples x 12,226 SNPs; 1,410 samples and 10,768
 SNPs retained for association), Apple M5 Pro (18 cores), Accelerate-ILP64,
-GEMMA 0.98.5, measured 2026-09-24 with the native matrix text writer. Other
-work shared the machine, with a load average between 5.2 and 10.2 on 18 cores.
-Every row times a fresh process from PLINK input to written output, best of
-three with backend order rotated. Association rows read the same precomputed
-kinship file in both tools.
+GEMMA 0.98.5, measured 2026-09-24 at revision `bea53eec` with a load average
+between 1.1 and 2.8 on 18 cores. Every row times a fresh process from PLINK
+input to written output, best of three with backend order rotated. Association
+rows read the same precomputed kinship file in both tools.
 
 | Operation | GEMMA (OpenBLAS) | GEMMA (Accelerate) | JAMMA NumPy | JAMMA NumPy+C | JAMMA NumPy+C (stream) | C speedup | vs GEMMA (OB) | vs GEMMA (Accel) |
 |-----------|-----------------|-------------------|-------------|--------------|------------------------|-----------|---------------|------------------|
-| Kinship (`-gk 1`) | 1.1s | 1.2s | 900ms | 454ms | n/a | 2.0x | 2.5x | 2.7x |
-| LMM Wald (`-lmm 1`) | 8.4s | 4.1s | 8.1s | 643ms | 663ms | 12.6x | 13.0x | 6.4x |
-| LMM All (`-lmm 4`) | 16.4s | 7.7s | 14.3s | 799ms | 722ms | 17.9x | 22.8x | 10.7x |
-| Full GWAS Wald (compute kinship + association) | 8.9s | 5.5s | 8.3s | 735ms | 869ms | 11.3x | 12.1x | 7.5x |
-| LMM Wald+4cov (`-lmm 1 -c`) | 27.6s | 11.7s | 16.6s | 1.1s | 1.1s | 14.9x | 24.9x | 10.6x |
-
-The LOCO table is from the 2026-09-23 run at revision `0677ac9e`:
+| Kinship (`-gk 1`) | 981ms | 1.2s | 765ms | 407ms | n/a | 1.9x | 2.4x | 2.8x |
+| LMM Wald (`-lmm 1`) | 6.9s | 4.2s | 5.9s | 520ms | 547ms | 11.4x | 13.2x | 8.1x |
+| LMM All (`-lmm 4`) | 12.7s | 7.5s | 11.0s | 577ms | 571ms | 19.1x | 22.3x | 13.1x |
+| Full GWAS Wald (compute kinship + association) | 7.9s | 5.4s | 6.1s | 652ms | 692ms | 9.4x | 12.1x | 8.3x |
+| LMM Wald+4cov (`-lmm 1 -c`) | 26.1s | 12.4s | 15.1s | 1.1s | 1.1s | 14.2x | 24.6x | 11.7x |
 
 | Backend | LOCO Wald | vs fastest GEMMA |
 |---------|-----------|------------------|
-| GEMMA (OpenBLAS) | 37.5s | 0.9x |
-| GEMMA (Accelerate) | 34.2s | 1.0x |
-| JAMMA NumPy+C | 3.4s | 10.1x |
+| GEMMA (OpenBLAS) | 34.4s | 1.0x |
+| GEMMA (Accelerate) | 33.3s | 1.0x |
+| JAMMA NumPy+C | 3.2s | 10.6x |
 
 LOCO computes each chromosome's excluded kinship and tests each SNP once in both
 tools. Every repetition's output was checked against the first within the

@@ -4,6 +4,7 @@
 text legacy, .npy sidecar cache" contract that kinship and eigen files share.
 """
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -37,8 +38,11 @@ def save_npy_atomic(array: np.ndarray, npy_path: Path) -> None:
 def npy_cache_valid(txt_path: Path, npy_path: Path) -> bool:
     """Check if .npy cache exists and is at least as new as the text file.
 
-    If the text file doesn't exist, any non-empty .npy cache is considered
-    valid (binary-only write scenario).
+    ``write_npy_cache`` stamps a sidecar with the mtime of the text it was
+    built from, so a sidecar of an older text is older than the current one.
+    A binary .npy written after the text is newer, and wins. If the text file
+    doesn't exist, any non-empty .npy cache is considered valid (binary-only
+    write scenario).
 
     Args:
         txt_path: Path to the text file (may not exist).
@@ -55,8 +59,7 @@ def npy_cache_valid(txt_path: Path, npy_path: Path) -> bool:
             return False
         if not txt_path.exists():
             return True
-        txt_mtime = txt_path.stat().st_mtime
-        return npy_stat.st_mtime >= txt_mtime
+        return npy_stat.st_mtime_ns >= txt_path.stat().st_mtime_ns
     except OSError as e:
         logger.warning(
             f"Could not stat .npy cache {npy_path}, falling back to text: {e}"
@@ -64,16 +67,22 @@ def npy_cache_valid(txt_path: Path, npy_path: Path) -> bool:
         return False
 
 
-def write_npy_cache(array: np.ndarray, npy_path: Path) -> None:
-    """Write the .npy sidecar, swallowing filesystem errors.
+def write_npy_cache(array: np.ndarray, npy_path: Path, *, source_mtime_ns: int) -> None:
+    """Write the .npy sidecar stamped with its text's mtime, swallowing OS errors.
+
+    ``source_mtime_ns`` is the text's ``st_mtime_ns`` when ``array`` was read
+    or written, so a sidecar of a text that has since been replaced is older
+    than the text and ``npy_cache_valid`` rejects it. The stamp goes on the
+    temp before the rename, so no reader sees an unstamped sidecar.
 
     The sidecar is a read accelerator, not the artifact, so a read-only
     filesystem or a full disk must not abort a caller whose real output
-    already landed. That tolerance is the only thing this adds over
-    ``save_npy_atomic``.
+    already landed.
     """
     try:
-        save_npy_atomic(array, npy_path)
+        with AtomicOutput(npy_path, suffix=".npy") as tmp_path:
+            np.save(tmp_path, array)
+            os.utime(tmp_path, ns=(source_mtime_ns, source_mtime_ns))
     except OSError as e:
         logger.warning(f"Could not write .npy cache {npy_path}: {e}")
 
@@ -81,15 +90,20 @@ def write_npy_cache(array: np.ndarray, npy_path: Path) -> None:
 def load_npy_cache(
     npy_path: Path, *, mmap_mode: Literal["r"] | None = None
 ) -> np.ndarray | None:
-    """Load a .npy sidecar, removing it and returning None when it is corrupt.
+    """Load a .npy sidecar, returning None when it cannot be used.
 
     With ``mmap_mode="r"`` the result is a read-only memory map whose pages
-    the OS loads on demand. A truncated or unreadable sidecar is unlinked so
-    the caller re-parses the text and rewrites it.
+    the OS loads on demand. A corrupt sidecar (NumPy raises ValueError for a
+    truncated or malformed file) is unlinked so the caller re-parses the text
+    and rewrites it. A read error is kept: a binary-only write leaves the
+    ``.npy`` as the sole copy, and a permission or I/O error is not corruption.
     """
     try:
         return np.load(npy_path, mmap_mode=mmap_mode)
-    except (OSError, ValueError) as e:
+    except OSError as e:
+        logger.warning(f"Could not read .npy cache {npy_path}, will re-parse text: {e}")
+        return None
+    except ValueError as e:
         logger.warning(f"Corrupt .npy cache {npy_path}, will re-parse text: {e}")
         try:
             npy_path.unlink()
@@ -110,9 +124,10 @@ def read_array_artifact(
 
     A .npy path loads directly. A text path loads its sidecar when the sidecar
     is at least as new as the text and not corrupt, else parses the text and
-    writes the sidecar for next time. ``check`` runs on every branch before
-    the array is returned or cached, so a sidecar never holds an array the
-    caller would reject; it may return a promoted view of its input.
+    writes the sidecar for next time, unless the text changed during the
+    parse. ``check`` runs on every branch before the array is returned or
+    cached, so a sidecar never holds an array the caller would reject; it may
+    return a promoted view of its input.
     ``mmap_mode`` applies to direct binary and sidecar loads.
 
     Raises:
@@ -132,6 +147,7 @@ def read_array_artifact(
             return check(data, npy_path)
 
     logger.info(f"Reading {what} from {path}")
+    source_mtime_ns = path.stat().st_mtime_ns
     try:
         data = parse_text(path)
     except ValueError as e:
@@ -139,5 +155,8 @@ def read_array_artifact(
     if data.size == 0:
         raise ValueError(f"{what.capitalize()} file is empty: {path}")
     data = check(data, path)
-    write_npy_cache(data, npy_path)
+    if path.stat().st_mtime_ns == source_mtime_ns:
+        write_npy_cache(data, npy_path, source_mtime_ns=source_mtime_ns)
+    else:
+        logger.warning(f"{path} changed while it was read; not caching it")
     return data

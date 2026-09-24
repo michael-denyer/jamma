@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from jamma.io.plink import PlinkMetadata
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.lmm.association_plan import ExecutableAssociationPlan
 from jamma.lmm.eigen_plan import EigenDriverPlan
 from jamma.lmm.prepare_common import AnalysedPhenotype
@@ -104,10 +104,10 @@ class LocoRun:
     """One LOCO run, resolved once and read by every stage below it.
 
     Attributes:
-        bed_path: PLINK file prefix (without .bed/.bim/.fam extension).
-        meta: PLINK metadata read from ``bed_path``.
+        dataset: The genotypes, opened once; its rows are the ones
+            ``samples.valid_mask`` indexes.
         samples: The phenotype and covariates over the analysed samples; its
-            ``valid_mask`` indexes the BED rows.
+            ``valid_mask`` indexes the dataset rows.
         config: Numerical settings shared with every other runner.
         loco: LOCO-only settings.
         execution: The association plan, with its kinship shape resolved.
@@ -118,8 +118,7 @@ class LocoRun:
             wider than ``loco.col_chunk_size``.
     """
 
-    bed_path: Path
-    meta: PlinkMetadata
+    dataset: GenotypeDataset
     samples: AnalysedPhenotype
     config: LmmConfig
     loco: LocoConfig
@@ -138,5 +137,5 @@ class LocoRun:
 
     @property
     def analysed_rows(self) -> np.ndarray:
-        """BED row indices of the analysed samples."""
+        """Dataset row indices of the analysed samples."""
         return np.flatnonzero(self.samples.valid_mask)

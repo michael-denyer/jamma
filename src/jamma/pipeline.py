@@ -33,11 +33,8 @@ import jamma
 from jamma.core import memory
 from jamma.core.constants import Env
 from jamma.core.telemetry import BenchmarkRecord, append_benchmark_record
-from jamma.io.plink import (
-    PlinkMetadata,
-    get_plink_metadata,
-    validate_plink_dimensions,
-)
+from jamma.genotype.dataset import GenotypeDataset
+from jamma.io.plink import validate_plink_dimensions
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.io.weight import (
     apply_individual_weights,
@@ -258,6 +255,7 @@ class PipelineRunner:
         kinship: KinshipShape,
         basis: SampleBasis,
         weights: np.ndarray | None,
+        dataset: GenotypeDataset,
     ) -> np.ndarray:
         """Load or compute the kinship matrix over the valid samples.
 
@@ -280,6 +278,7 @@ class PipelineRunner:
             kinship: The matrix order the plan resolved, full or analysed.
             basis: The analysed samples within the PLINK sample order.
             weights: Weights already selected into analyzed-sample order, or None.
+            dataset: The genotypes a ``ComputedKinship`` source streams.
 
         Returns:
             Kinship matrix of shape (n_valid, n_valid) over ``basis``.
@@ -294,7 +293,7 @@ class PipelineRunner:
         else:
             logger.info("Computing kinship from genotypes")
             K = compute_kinship_streaming(
-                self.config.bfile,
+                dataset,
                 maf_threshold=self.config.maf,
                 miss_threshold=self.config.miss,
                 check_memory=False,
@@ -328,7 +327,7 @@ class PipelineRunner:
         """Execute the full GWAS pipeline.
 
         Pipeline steps:
-        1. Resolve the backend request and read PLINK metadata
+        1. Resolve the backend request and open the genotype dataset
         2. Validate inputs
         3. Resolve SNP list files, prepare the output directory
         4. Load covariates, then every phenotype column (one .fam read) and
@@ -347,18 +346,21 @@ class PipelineRunner:
 
         # Before any disk read, so a bad JAMMA_BACKEND fails first.
         requested = requested_backend(self.config)
-        # Read once and pass it down. get_plink_metadata parses the whole .bim
-        # (sid, chromosome, bp_position and both allele arrays).
-        meta = get_plink_metadata(self.config.bfile)
+        # Open once and pass it down. Opening parses the whole .bim (rs,
+        # chromosome, position and both allele arrays) and the .fam.
+        dataset = GenotypeDataset.open_plink(self.config.bfile)
 
         self.validate_inputs()
 
-        n_samples = meta.n_samples
-        n_snps = meta.n_snps
+        n_samples = dataset.n_samples
+        n_snps = dataset.n_variants
 
-        snps_indices = resolve_snp_list_file(self.config.snps_file, meta.sid, "-snps")
+        variant_ids = dataset.variants.rs
+        snps_indices = resolve_snp_list_file(
+            self.config.snps_file, variant_ids, "-snps"
+        )
         ksnps_indices = resolve_snp_list_file(
-            self.config.ksnps_file, meta.sid, "-ksnps"
+            self.config.ksnps_file, variant_ids, "-ksnps"
         )
 
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -406,11 +408,11 @@ class PipelineRunner:
         match analysis:
             case LocoAnalysisPlan():
                 phenotype_results, timing = self._associate_loco(
-                    analysis, samples, meta, assoc_path, eigen_plan
+                    analysis, samples, dataset, assoc_path, eigen_plan
                 )
             case StandardAnalysisPlan():
                 phenotype_results, timing = self._associate_standard(
-                    analysis, samples, meta, assoc_path, eigen_plan, t_start
+                    analysis, samples, dataset, assoc_path, eigen_plan, t_start
                 )
 
         timing.total_s = time.perf_counter() - t_start
@@ -432,14 +434,14 @@ class PipelineRunner:
         self,
         analysis: StandardAnalysisPlan,
         samples: AnalysedSamples,
-        meta: PlinkMetadata,
+        dataset: GenotypeDataset,
         assoc_path: Path,
         eigen_plan: EigenDriverPlan | None,
         t_start: float,
     ) -> tuple[list[PhenotypeResult], PipelineTiming]:
         """Decompose the kinship once and run every phenotype over it."""
         eigenvalues, eigenvectors, kinship_s = self._acquire_eigendecomposition(
-            analysis, samples, eigen_plan=eigen_plan
+            analysis, samples, dataset, eigen_plan=eigen_plan
         )
         load_s = time.perf_counter() - t_start
 
@@ -451,7 +453,7 @@ class PipelineRunner:
             eigenvalues,
             eigenvectors,
             assoc_path,
-            meta,
+            dataset,
         )
         return phenotype_results, PipelineTiming(
             kinship_s=kinship_s,
@@ -464,7 +466,7 @@ class PipelineRunner:
         self,
         analysis: LocoAnalysisPlan,
         samples: AnalysedSamples,
-        meta: PlinkMetadata,
+        dataset: GenotypeDataset,
         assoc_path: Path,
         eigen_plan: EigenDriverPlan | None,
     ) -> tuple[list[PhenotypeResult], PipelineTiming]:
@@ -478,8 +480,7 @@ class PipelineRunner:
         t_loco = time.perf_counter()
         execution = analysis.execution
         run = LocoRun(
-            self.config.bfile,
-            meta,
+            dataset,
             AnalysedPhenotype.from_mask(
                 samples.phenotypes[column], samples.covariates, samples.valid_mask
             ),
@@ -505,6 +506,7 @@ class PipelineRunner:
         self,
         analysis: StandardAnalysisPlan,
         samples: AnalysedSamples,
+        dataset: GenotypeDataset,
         *,
         eigen_plan: EigenDriverPlan | None = None,
     ) -> tuple[np.ndarray, np.ndarray, float]:
@@ -554,6 +556,7 @@ class PipelineRunner:
                 analysis.execution.resolved_kinship,
                 samples.basis,
                 weights,
+                dataset,
             )
             eigenvalues, eigenvectors = eigendecompose_kinship(
                 K,

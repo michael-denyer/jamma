@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `compute_kinship_streaming` and `compute_loco_kinship_streaming` take a
+  `GenotypeDataset` (`GenotypeDataset.open_plink(prefix)`) instead of a PLINK
+  prefix, and `compute_loco_kinship_streaming` loses its `meta` parameter.
+  `compute_eigen_cache_key` takes the dataset too and reads its file identity
+  from `dataset.fingerprint()`; PLINK cache keys are byte-identical, so
+  existing LOCO eigen caches still hit. `LocoRun` carries the dataset in place
+  of `bed_path` and `meta`. The pipeline and `-gk` open the genotypes once,
+  so `-gk` now also checks the `.bed` size against the `.fam` and `.bim`.
+  Results are unchanged.
+- `SnpMeta` and `SnpInfoRecord` moved from `jamma.lmm.schema` to
+  `jamma.genotype.variants`, with no alias at the old path, so genotype
+  readers can build variant metadata without importing the LMM package.
+  Results are unchanged.
 - `jamma.core` now holds only leaf infrastructure and imports no other jamma
   package. Domain modules moved to the packages that own them, with no aliases
   left at the old paths: `jamma.core.snp_stats` and `jamma.core.snp_filter`
@@ -205,6 +218,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by path, as the real build does. It also adds `-I` for the `omp.h` that the
   `intel-openmp` wheel installs next to libiomp5, because clang has no `omp.h`
   of its own without `libomp-dev`.
+- Eigen cache members are flushed to disk, and their directory with them,
+  before the manifest that names them is committed. The manifest was already
+  fsynced, so after a power cut it could survive while its members came back
+  empty. A LOCO eigen cache whose `.npy` member is empty or cut short now
+  counts as incomplete and is recomputed, instead of failing on first read.
+- `IncrementalAssocWriter` no longer publishes an incomplete `.assoc.txt`, or
+  finishes silently without publishing, when a caller catches a write error and
+  carries on. Once a write, flush, `tell()` or rollback fails, later
+  `write_arrays_batch` calls raise a `RuntimeError` naming that failure, and a
+  clean exit raises instead of publishing, so the previous output stays in
+  place. An interrupt or out-of-memory error during a write cuts the retained
+  `.partial` back to its last complete row, so the logged result count matches
+  the rows on disk. When an earlier failure already discarded the output, the
+  interrupt warning says no partial output was retained instead of naming a
+  deleted temp file. Runs that raise no error publish the same bytes as before.
+- A kinship or eigen text file read while another run replaced it no longer
+  leaves a sidecar of the old contents that later reads prefer. The `.npy`
+  sidecar now carries the modification time of the text it was built from,
+  not the time it was written, and is not written at all when the text changed
+  during the parse. A binary `.npy` written after the text still takes
+  precedence, as before. On filesystems with one-second timestamps, a rewrite
+  within the same second can still pass as current.
 - The Linux build links the C extension against Intel OpenMP when it comes from
   the `intel-openmp` pip distribution, as it does with the current numpy-mkl
   wheels, instead of falling back to GCC's `libgomp`. The finder now also checks
@@ -213,6 +248,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variable, `JAMMA_LIBIOMP5`, pins the path explicitly; see
   `docs/CONFIGURATION.md`.
 
+- The runtime rebuild of a missing or stale C extension works again. Since the
+  loader moved to `jamma._native`, it passed the directory above the installed
+  `jamma/` package, so every rebuild failed with "C source files missing" and
+  the run fell back to NumPy. After an ABI mismatch, the loader now rebuilds and
+  asks for a restart instead of retrying: CPython keeps the stale extension
+  loaded for the life of the process, so only a new process can use the rebuild.
+- Reading a kinship or eigen file no longer deletes its `.npy` on a read
+  error. A permission or I/O error was treated as corruption, and a binary-only
+  write leaves the `.npy` as the only copy, so one unreadable read destroyed
+  the matrix. Only a corrupt file (NumPy's `ValueError`) is removed now.
 - LOCO eigendecomposition no longer keeps a chromosome's eigenvectors alive
   after association releases them. The worker thread and the submitting loop
   each kept a local reference to the last Future, which holds the

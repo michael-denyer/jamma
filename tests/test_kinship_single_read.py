@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_filter import compute_snp_filter_mask, compute_snp_stats
 from jamma.io import load_plink_binary, plink
 from jamma.kinship import compute_kinship_streaming, stream
@@ -112,7 +113,7 @@ def test_subset_filtered_kinship_reads_the_bed_once(
     reads = _spy_genotype_reads(monkeypatch)
 
     K = compute_kinship_streaming(
-        asymmetric_plink,
+        GenotypeDataset.open_plink(asymmetric_plink),
         maf_threshold=MAF,
         miss_threshold=MISS,
         check_memory=False,
@@ -136,7 +137,7 @@ def test_ksnps_restriction_is_applied_inside_the_single_read(
     reads = _spy_genotype_reads(monkeypatch)
 
     K = compute_kinship_streaming(
-        asymmetric_plink,
+        GenotypeDataset.open_plink(asymmetric_plink),
         maf_threshold=MAF,
         miss_threshold=MISS,
         check_memory=False,
@@ -153,7 +154,7 @@ def test_ksnps_restriction_is_applied_inside_the_single_read(
 def test_out_of_range_ksnps_index_is_rejected(asymmetric_plink):
     with pytest.raises(ValueError, match=r"-ksnps index 61 out of range for 61 SNPs"):
         compute_kinship_streaming(
-            asymmetric_plink,
+            GenotypeDataset.open_plink(asymmetric_plink),
             ksnps_indices=np.array([0, 61]),
             check_memory=False,
             show_progress=False,
@@ -174,7 +175,7 @@ def test_streaming_kinship_returns_its_accumulator(
     monkeypatch.setattr(stream, "accumulate_kinship", recording)
 
     K = compute_kinship_streaming(
-        asymmetric_plink,
+        GenotypeDataset.open_plink(asymmetric_plink),
         maf_threshold=MAF if filtered else 0.0,
         miss_threshold=MISS if filtered else 1.0,
         filter_sample_indices=FILTER_ROWS if filtered else None,
@@ -188,5 +189,8 @@ def test_streaming_kinship_returns_its_accumulator(
 def test_no_surviving_snp_raises_with_the_filter_in_the_message(asymmetric_plink):
     with pytest.raises(ValueError, match=r"No SNPs passed filtering \(maf>=0.6"):
         compute_kinship_streaming(
-            asymmetric_plink, maf_threshold=0.6, check_memory=False, show_progress=False
+            GenotypeDataset.open_plink(asymmetric_plink),
+            maf_threshold=0.6,
+            check_memory=False,
+            show_progress=False,
         )

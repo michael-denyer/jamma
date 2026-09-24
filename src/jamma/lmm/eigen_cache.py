@@ -20,6 +20,7 @@ from typing import TypedDict
 import numpy as np
 from loguru import logger
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.lmm.eigen_io import (
     EigenGeneration,
     Partition,
@@ -61,17 +62,8 @@ class EigenCacheManifest(TypedDict):
     artifacts: dict[str, dict[str, str]]
 
 
-def _sha256_file(path: Path) -> str:
-    """Return hex SHA-256 of a file's bytes, read in 1 MiB chunks."""
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def _build_components(
-    bed_path: Path,
+    dataset: GenotypeDataset,
     *,
     maf_threshold: float,
     miss_threshold: float,
@@ -81,8 +73,8 @@ def _build_components(
     """Assemble the canonical dict of cache-key components.
 
     Args:
-        bed_path: PLINK prefix (without extension); .bed and .bim are derived
-            by appending the appropriate suffix.
+        dataset: The genotypes; ``dataset.fingerprint()`` supplies the file
+            components (for PLINK, ``bed_fingerprint`` and ``bim_sha256``).
         maf_threshold: Minimum MAF used for SNP filtering.
         miss_threshold: Maximum missing rate used for SNP filtering.
         valid_mask: Boolean array of shape (n_samples_total,); True = included.
@@ -91,12 +83,7 @@ def _build_components(
     Returns:
         Dict ready for JSON serialisation as the key payload.
     """
-    bed_file = Path(str(bed_path) + ".bed")
-    bim_file = Path(str(bed_path) + ".bim")
-
-    st = bed_file.stat()
-    bed_fingerprint = f"{bed_file.name}:{st.st_size}:{st.st_mtime_ns}"
-    bim_sha256 = _sha256_file(bim_file)
+    fingerprint = dataset.fingerprint()
 
     mask_bytes = np.ascontiguousarray(valid_mask, dtype=bool).tobytes()
     valid_mask_sha256 = hashlib.sha256(mask_bytes).hexdigest()
@@ -109,8 +96,8 @@ def _build_components(
 
     return {
         "schema_version": EIGEN_CACHE_SCHEMA_VERSION,
-        "bed_fingerprint": bed_fingerprint,
-        "bim_sha256": bim_sha256,
+        "bed_fingerprint": fingerprint["bed_fingerprint"],
+        "bim_sha256": fingerprint["bim_sha256"],
         "maf_threshold": maf_threshold,
         "miss_threshold": miss_threshold,
         "valid_mask_sha256": valid_mask_sha256,
@@ -119,7 +106,7 @@ def _build_components(
 
 
 def compute_eigen_cache_key(
-    bed_path: Path,
+    dataset: GenotypeDataset,
     *,
     maf_threshold: float,
     miss_threshold: float,
@@ -129,7 +116,7 @@ def compute_eigen_cache_key(
     """Compute a SHA-256 cache key over all eigendecomposition determinants.
 
     Args:
-        bed_path: PLINK prefix (without extension).
+        dataset: The genotypes whose file identity the key covers.
         maf_threshold: Minimum MAF used for SNP filtering.
         miss_threshold: Maximum missing rate used for SNP filtering.
         valid_mask: Boolean array of shape (n_samples_total,); True = included.
@@ -145,7 +132,7 @@ def compute_eigen_cache_key(
         persist it in the manifest and diff it against a future mismatch.
     """
     components = _build_components(
-        bed_path,
+        dataset,
         maf_threshold=maf_threshold,
         miss_threshold=miss_threshold,
         valid_mask=valid_mask,
@@ -225,9 +212,27 @@ def resolve_eigen_cache(
         resolved = generation.resolve(records, source)
     except ValueError:
         return None
-    if not all(path.is_file() for pair in resolved.values() for path in pair):
+    if not all(_member_complete(path) for pair in resolved.values() for path in pair):
         return None
     return {chromosome: resolved[chromosome] for chromosome in chr_names}
+
+
+def _member_complete(path: Path) -> bool:
+    """Whether a committed member is present and, for .npy, whole.
+
+    Mapping a .npy checks its header and that the file holds every byte the
+    header promises, without reading the data. A member cut short by a crash
+    fails here, so the cache is recomputed instead of failing on first read.
+    """
+    if not path.is_file():
+        return False
+    if path.suffix != ".npy":
+        return path.stat().st_size > 0
+    try:
+        np.load(path, mmap_mode="r")
+    except (OSError, ValueError, EOFError):
+        return False
+    return True
 
 
 def read_eigen_cache_manifest(eigen_dir: Path, prefix: str) -> dict[str, object] | None:

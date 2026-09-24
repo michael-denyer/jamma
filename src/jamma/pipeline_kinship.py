@@ -14,7 +14,7 @@ from typing import Literal
 
 from loguru import logger
 
-from jamma.io.plink import get_plink_metadata
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
@@ -52,7 +52,8 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
     Raises:
         ValueError: If ``mode`` is not 1 or 2, or if ``config.loco`` is
             combined with ``mode == 2`` or with ``config.write_eigen``.
-        FileNotFoundError: If the PLINK ``.bed`` file does not exist.
+        FileNotFoundError: If a PLINK ``.bed``, ``.bim`` or ``.fam`` file does
+            not exist.
     """
     if mode not in (1, 2):
         raise ValueError(f"invalid kinship mode {mode}. Use -gk 1 or -gk 2.")
@@ -68,9 +69,9 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             "Use 'jamma -gk 2 -bfile X' without -loco for standardized kinship."
         )
 
-    meta = get_plink_metadata(config.bfile)
-    n_samples = meta.n_samples
-    n_snps = meta.n_snps
+    dataset = GenotypeDataset.open_plink(config.bfile)
+    n_samples = dataset.n_samples
+    n_snps = dataset.n_variants
 
     # As GEMMA: the matrix spans every sample, the SNP filters are measured
     # over the analysed ones.
@@ -84,14 +85,16 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
         n_phenotypes=len(config.phenotype_columns),
     )
 
-    ksnps_indices = resolve_snp_list_file(config.ksnps_file, meta.sid, "-ksnps")
+    ksnps_indices = resolve_snp_list_file(
+        config.ksnps_file, dataset.variants.rs, "-ksnps"
+    )
 
     t_kinship = time.perf_counter()
 
     if config.loco:
         logger.info(f"Computing LOCO kinship matrices from {config.bfile}")
         loco_stream = compute_loco_kinship_streaming(
-            config.bfile,
+            dataset,
             maf_threshold=config.maf,
             miss_threshold=config.miss,
             check_memory=config.check_memory,
@@ -129,7 +132,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
     else:
         logger.info("Computing standardized kinship matrix (streaming)")
     K = compute_kinship_streaming(
-        config.bfile,
+        dataset,
         maf_threshold=config.maf,
         miss_threshold=config.miss,
         check_memory=config.check_memory,

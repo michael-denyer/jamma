@@ -27,7 +27,8 @@ from _bench_common import MOUSE_PREFIX, traced_peak
 from loguru import logger
 
 from jamma import jlinalg
-from jamma.io.plink import get_plink_metadata, parse_fam_phenotype_column
+from jamma.genotype.dataset import GenotypeDataset
+from jamma.io.plink import parse_fam_phenotype_column
 from jamma.kinship import compute_kinship_streaming
 from jamma.kinship.memory import estimate_kinship_memory
 from jamma.lmm.impute import impute_missing_inplace
@@ -109,20 +110,20 @@ def measure_snp_stats(n_samples: int, n_snps: int, threads: int) -> list[dict]:
 
 def measure_kinship(bfile: Path, chunk_size: int) -> dict[str, str | int | float]:
     logger.remove()
-    meta = get_plink_metadata(bfile)
+    dataset = GenotypeDataset.open_plink(bfile)
     fam = np.loadtxt(Path(f"{bfile}.fam"), dtype=str, ndmin=2)
     phenotype = parse_fam_phenotype_column(fam, 1)
     indices = np.flatnonzero(np.isfinite(phenotype))
-    selected = None if len(indices) == meta.n_samples else indices
+    selected = None if len(indices) == dataset.n_samples else indices
     quote = estimate_kinship_memory(
-        n_input_samples=meta.n_samples,
+        n_input_samples=dataset.n_samples,
         n_output_samples=len(indices),
-        n_snps=meta.n_snps,
+        n_snps=dataset.n_variants,
         chunk_size=chunk_size,
     )
     matrix, elapsed, peak = traced_peak(
         lambda: compute_kinship_streaming(
-            bfile,
+            dataset,
             chunk_size=chunk_size,
             maf_threshold=0.01,
             miss_threshold=0.05,
@@ -134,9 +135,9 @@ def measure_kinship(bfile: Path, chunk_size: int) -> dict[str, str | int | float
     )
     return {
         "backend": jlinalg.blas_backend,
-        "n_input_samples": meta.n_samples,
+        "n_input_samples": dataset.n_samples,
         "n_analyzed_samples": matrix.shape[0],
-        "n_snps": meta.n_snps,
+        "n_snps": dataset.n_variants,
         "chunk_size": chunk_size,
         "elapsed_s": elapsed,
         "traced_peak_bytes": peak,

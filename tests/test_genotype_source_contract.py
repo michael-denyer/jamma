@@ -7,14 +7,15 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_stats import SnpFilterSpec, collect_streamed_snp_stats
+from jamma.genotype.variants import SnpMeta
 from jamma.io import load_plink_binary
 from jamma.io.plink import get_plink_metadata, partitions_from_metadata
 from jamma.lmm.genotype_source import GenotypeSource, PreparedGenotypes, SampleBasis
 from jamma.lmm.loco import _LocoChrSource
 from jamma.lmm.runner_numpy import MatrixSource
 from jamma.lmm.runner_numpy_streaming import BedSource
-from jamma.lmm.schema import SnpMeta
 from tests.fixture_paths import LOCO, SYNTHETIC
 from tests.support import require_fixture
 
@@ -105,7 +106,7 @@ def source_case(request: pytest.FixtureRequest) -> _SourceCase:
     physical_rows = np.array([1, 8, 10, 31, 63], dtype=np.intp)
     return _SourceCase(
         source=_LocoChrSource(
-            LOCO.bfile,
+            GenotypeDataset.open_plink(LOCO.bfile),
             collect_streamed_snp_stats(
                 LOCO.bfile,
                 n_snps=plink.meta.n_snps,
@@ -115,8 +116,6 @@ def source_case(request: pytest.FixtureRequest) -> _SourceCase:
                 snp_indices=chromosome_indices,
                 show_progress=False,
             ),
-            plink.meta.n_samples,
-            snp_meta=SnpMeta.from_plink_meta(plink.meta),
         ),
         samples=_sample_basis(plink.meta.n_samples, physical_rows),
         filters=SnpFilterSpec(

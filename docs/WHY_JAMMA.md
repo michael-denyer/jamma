@@ -71,7 +71,8 @@ JAMMA streams data from disk, never materializing the full matrix:
 
 ```python
 # Kinship computed in chunks - never loads full genotype matrix
-kinship = compute_kinship_streaming("large_study", chunk_size=10000)
+dataset = GenotypeDataset.open_plink(Path("large_study"))
+kinship = compute_kinship_streaming(dataset, chunk_size=10000)
 
 # LMM also streams - only kinship (n^2) kept in memory
 results = run_lmm_association_numpy_streaming(
@@ -212,7 +213,7 @@ The goal is a **drop-in replacement**: same CLI, same output format, same scient
 from jamma.core.memory_snapshot import log_memory_snapshot
 
 log_memory_snapshot("kinship:before")  # Logs RSS + free RAM
-kinship = compute_kinship_streaming(bfile)
+kinship = compute_kinship_streaming(GenotypeDataset.open_plink(bfile))
 log_memory_snapshot("kinship:after")
 ```
 

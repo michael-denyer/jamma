@@ -34,6 +34,7 @@ class AtomicOutput:
 
     ``retain`` transfers the temp to a recovery artifact. If its rename fails,
     the original temp survives context exit at the path returned to the caller.
+    After ``discard`` it keeps nothing and returns None.
     """
 
     def __init__(self, path: Path, *, suffix: str = "") -> None:
@@ -44,8 +45,14 @@ class AtomicOutput:
     def __enter__(self) -> Path:
         return self.temp_path
 
-    def retain(self, recovery_path: Path) -> Path:
-        """Keep the output, returning its actual path even when rename fails."""
+    def retain(self, recovery_path: Path) -> Path | None:
+        """Keep the output, returning its actual path even when rename fails.
+
+        Returns None when the temp was already discarded, so there is nothing
+        left to keep.
+        """
+        if self._finished:
+            return None
         self._finished = True
         try:
             return self.temp_path.replace(recovery_path)

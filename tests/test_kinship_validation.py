@@ -7,6 +7,7 @@ that match the expected output format and properties.
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io import load_plink_binary
 from jamma.kinship import compute_kinship_streaming
 from jamma.validation import (
@@ -274,7 +275,7 @@ class TestStandardizedKinshipStreaming:
         genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
 
         K_stream = compute_kinship_streaming(
-            SYNTHETIC.bfile,
+            GenotypeDataset.open_plink(SYNTHETIC.bfile),
             check_memory=False,
             show_progress=False,
             mode="standardized",
@@ -292,7 +293,7 @@ class TestStandardizedKinshipStreaming:
         genotypes = load_plink_binary(SYNTHETIC.bfile).genotypes
 
         K_stream = compute_kinship_streaming(
-            SYNTHETIC.bfile,
+            GenotypeDataset.open_plink(SYNTHETIC.bfile),
             check_memory=False,
             show_progress=False,
             mode="standardized",
@@ -310,7 +311,7 @@ class TestStandardizedKinshipStreaming:
         valid = np.arange(0, n_samples - 3)
 
         K_stream = compute_kinship_streaming(
-            SYNTHETIC.bfile,
+            GenotypeDataset.open_plink(SYNTHETIC.bfile),
             check_memory=False,
             show_progress=False,
             valid_indices=valid,
@@ -330,7 +331,7 @@ class TestStandardizedKinshipStreaming:
         """Streaming -gk 2 honors the MAF filter and stays symmetric and finite."""
         require_fixture(SYNTHETIC.bed, SYNTHETIC.fam)
         K = compute_kinship_streaming(
-            SYNTHETIC.bfile,
+            GenotypeDataset.open_plink(SYNTHETIC.bfile),
             maf_threshold=0.05,
             check_memory=False,
             show_progress=False,

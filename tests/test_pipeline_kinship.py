@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from jamma.genotype.dataset import GenotypeDataset
 from jamma.io.plink import get_plink_metadata
 from jamma.lmm.association_plan import KinshipShape
 from jamma.lmm.eigen import center_kinship
@@ -47,7 +48,11 @@ def _load_kinship(
     )
     positions = np.arange(n_samples) if valid_indices is None else valid_indices
     return runner._load_kinship_from_source(
-        source, kinship, SampleBasis(positions, n_samples), weights
+        source,
+        kinship,
+        SampleBasis(positions, n_samples),
+        weights,
+        GenotypeDataset.open_plink(runner.config.bfile),
     )
 
 
@@ -191,14 +196,16 @@ def test_lmm_kinship_applies_config_maf_miss() -> None:
     K_load = _load_kinship(PipelineRunner(config), 1940)
 
     K_filtered = compute_kinship_streaming(
-        _MOUSE_BFILE,
+        GenotypeDataset.open_plink(_MOUSE_BFILE),
         maf_threshold=0.01,
         miss_threshold=0.05,
         check_memory=False,
         show_progress=False,
     )
     K_unfiltered = compute_kinship_streaming(
-        _MOUSE_BFILE, check_memory=False, show_progress=False
+        GenotypeDataset.open_plink(_MOUSE_BFILE),
+        check_memory=False,
+        show_progress=False,
     )
 
     # The filter must actually change the kinship, or the test proves nothing.
@@ -308,7 +315,7 @@ class TestEarlySampleFiltering:
         )
 
         K_ref = compute_kinship_streaming(
-            bfile,
+            GenotypeDataset.open_plink(bfile),
             maf_threshold=config.maf,
             miss_threshold=config.miss,
             check_memory=False,
@@ -394,7 +401,7 @@ class TestEarlySampleFiltering:
         write_fam(tmp_path / "test.fam", [1.0 + i * 0.1 for i in range(_N_SAMPLES)])
 
         K_full = compute_kinship_streaming(
-            bfile, check_memory=False, show_progress=False
+            GenotypeDataset.open_plink(bfile), check_memory=False, show_progress=False
         )
         kinship_file = tmp_path / "kinship.cXX.txt"
         np.savetxt(kinship_file, K_full)

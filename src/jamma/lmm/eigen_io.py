@@ -265,7 +265,9 @@ def _write_array(
     if legacy_text:
         logger.info(f"Writing {what} to {path}")
         save_text(array, path)
-        write_npy_cache(array, _npy_cache_path(path))
+        write_npy_cache(
+            array, _npy_cache_path(path), source_mtime_ns=path.stat().st_mtime_ns
+        )
     else:
         npy_path = path.with_suffix(".npy")
         logger.info(f"Writing {what} to {npy_path}")
@@ -363,6 +365,9 @@ class EigenGeneration:
         )
         _write_eigenvalues(eigenvalues, eigenD_path, legacy_text=legacy_text)
         _write_eigenvectors(eigenvectors, eigenU_path, legacy_text=legacy_text)
+        # A manifest may name these members only once their data is on disk.
+        _fsync_path(eigenD_path)
+        _fsync_path(eigenU_path)
         return eigenD_path, eigenU_path
 
     def resolve(
@@ -412,12 +417,26 @@ def load_manifest(path: Path) -> dict[str, object]:
     return manifest
 
 
+def _fsync_path(path: Path) -> None:
+    """Flush a file's data, or a directory's entries, to stable storage."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def publish_manifest(path: Path, text: str) -> None:
     """Commit a generation by durably replacing its manifest with ``text``.
 
-    The members it names must already exist. The fsync makes the commit survive
-    a power cut; the manifest is a few hundred bytes, so it costs nothing.
+    The members it names must already exist, their data flushed by
+    ``EigenGeneration.write_member``. Flushing the directory first makes their
+    renames durable before the manifest can name them, and the manifest's own
+    fsync makes the commit survive a power cut; it is a few hundred bytes, so
+    it costs nothing.
     """
+    if os.name != "nt":  # Windows cannot open a directory to fsync it
+        _fsync_path(path.parent)
     with AtomicOutput(path) as temporary, open(temporary, "w", encoding="utf-8") as fh:
         fh.write(text)
         fh.flush()

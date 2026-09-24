@@ -10,6 +10,7 @@ import pytest
 
 from jamma.core import memory
 from jamma.genotype.snp_stats import SnpSelection
+from jamma.genotype.variants import SnpMeta
 from jamma.lmm import association_plan
 from jamma.lmm.association_plan import ExecutableAssociationPlan, ExecutionPlan
 from jamma.lmm.chunk_sizing import LmmChunkPlan
@@ -17,7 +18,7 @@ from jamma.lmm.dispatch import DispatchPath
 from jamma.lmm.genotype_source import PreparedGenotypes, SampleBasis
 from jamma.lmm.prepare_common import rotate_basis
 from jamma.lmm.runner_numpy import LmmRunSpec, PhenotypeRun, run_association
-from jamma.lmm.schema import DEFAULT_LMM_CONFIG, LmmConfig, SnpMeta
+from jamma.lmm.schema import DEFAULT_LMM_CONFIG, LmmConfig
 from jamma.lmm.workspace import WorkspaceSpec
 from tests.support import requires_c
 

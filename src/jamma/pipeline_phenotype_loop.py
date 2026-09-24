@@ -13,7 +13,8 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.io.plink import PlinkMetadata, read_genotypes
+from jamma.genotype.dataset import GenotypeDataset
+from jamma.io.plink import read_genotypes
 from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK, ExecutionMode
 from jamma.lmm.genotype_source import GenotypeSource
 from jamma.lmm.prepare_common import _build_covariate_matrix, rotate_basis
@@ -27,7 +28,7 @@ from jamma.lmm.runner_numpy import (
     run_association,
 )
 from jamma.lmm.runner_numpy_streaming import BedSource
-from jamma.lmm.schema import ChunkRunStats, SnpMeta
+from jamma.lmm.schema import ChunkRunStats
 from jamma.pipeline_config import PhenotypeResult, PipelineConfig
 from jamma.pipeline_plan import StandardAnalysisPlan
 from jamma.pipeline_samples import AnalysedSamples
@@ -42,14 +43,14 @@ def run_phenotype_loop(
     eigenvalues: np.ndarray,
     eigenvectors: np.ndarray,
     assoc_path: Path,
-    meta: PlinkMetadata,
+    dataset: GenotypeDataset,
 ) -> tuple[list[PhenotypeResult], float]:
     """Run the per-phenotype LMM loop over the analysed samples.
 
     Builds one genotype source for the plan's mode, then iterates the
     configured phenotype columns, masking each to the shared valid-sample
     intersection and running the shared LMM body over one prepared genotype
-    selection. ``meta`` is the pipeline's already-parsed PLINK metadata, so
+    selection. ``dataset`` is the pipeline's already-opened genotypes, so
     the streaming source never re-reads the .bim per phenotype. The ``-snps``
     restriction reaches the body as ``snps_indices`` in both modes, where it
     joins the MAF, missingness and HWE filters.
@@ -64,7 +65,9 @@ def run_phenotype_loop(
 
     phenotype_results: list[PhenotypeResult] = []
 
-    source = _genotype_source(plan.mode, plan.runner_name, config.bfile, meta, analysis)
+    source = _genotype_source(
+        plan.mode, plan.runner_name, config.bfile, dataset, analysis
+    )
     spec = LmmRunSpec(
         config=analysis.lmm,
         execution=analysis.execution,
@@ -146,17 +149,17 @@ def _genotype_source(
     mode: ExecutionMode,
     runner_name: str,
     bfile: Path,
-    meta: PlinkMetadata,
+    dataset: GenotypeDataset,
     analysis: StandardAnalysisPlan,
 ) -> GenotypeSource:
     """Build the one genotype source every phenotype in this run reads from."""
-    snp_meta = SnpMeta.from_plink_meta(meta)
+    snp_meta = dataset.variants
     if mode == "streaming":
         return BedSource(
             bfile,
             snp_meta=snp_meta,
-            n_samples=meta.n_samples,
-            n_snps=meta.n_snps,
+            n_samples=dataset.n_samples,
+            n_snps=dataset.n_variants,
             stats_chunk_size=DEFAULT_STATS_CHUNK,
             validate_genotypes=True,
             show_progress=analysis.lmm.show_progress,

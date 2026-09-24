@@ -19,7 +19,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from loguru import logger
 
-from jamma.lmm.schema import ModeSpec, SnpMeta
+from jamma.genotype.variants import SnpMeta
+from jamma.lmm.schema import ModeSpec
 from jamma.utils.atomic_publish import AtomicOutput
 
 if TYPE_CHECKING:
@@ -78,7 +79,12 @@ class IncrementalAssocWriter:
     Results go to the sibling temp file ``AtomicOutput`` owns and are
     published onto ``path`` only when the context exits cleanly. An ordinary
     exception discards them. An interrupt or an out-of-memory keeps what was
-    written at ``partial_path``, beside the destination.
+    written at ``partial_path``, beside the destination, cut back to the last
+    complete row.
+
+    Any failure while writing poisons the writer: later writes raise, and a
+    clean exit raises instead of publishing, so a caller that swallows the
+    error cannot publish a file missing a batch.
 
     Example:
         with IncrementalAssocWriter(Path("output.assoc.txt"), mode) as writer:
@@ -99,6 +105,8 @@ class IncrementalAssocWriter:
         self.mode = mode
         self._file = None
         self._count = 0
+        self._failure: BaseException | None = None
+        self._batch_start: int | None = None
 
     def __enter__(self) -> IncrementalAssocWriter:
         """Open the temp file and write the header."""
@@ -147,7 +155,7 @@ class IncrementalAssocWriter:
 
         # Outside the try: a tell() failure must surface as the OSError itself,
         # not as an unbound `pos` in the rollback below.
-        pos = handle.tell()
+        pos = self._batch_start = handle.tell()
 
         last_error: OSError | None = None
         for attempt in range(1 + len(_RETRY_BACKOFF)):
@@ -212,10 +220,16 @@ class IncrementalAssocWriter:
             arrays: Stat arrays keyed by array_key names, same length.
 
         Raises:
-            RuntimeError: If writer is not opened as context manager.
+            RuntimeError: If writer is not opened as context manager, or an
+                earlier write failed.
             ValueError: If arrays keys are missing or lengths disagree.
             OSError: After exhausting retries on write failure.
         """
+        if self._failure is not None:
+            raise RuntimeError(
+                f"Writer for {self.path} failed earlier and accepts no more "
+                f"results: {self._failure!r}"
+            ) from self._failure
         if self._file is None:
             raise RuntimeError("Writer not opened. Use as context manager.")
         n = len(snp_indices)
@@ -269,13 +283,46 @@ class IncrementalAssocWriter:
             stats = "\t".join(f"{float(arr[j]):.6e}" for arr in col_arrays)
             lines.append(f"{prefix}\t{stats}")
 
-        self._write_buf("\n".join(lines) + "\n", n)
+        self._batch_start = None
+        count_before = self._count
+        try:
+            self._write_buf("\n".join(lines) + "\n", n)
+        except BaseException as error:
+            self._failure = error
+            if not isinstance(error, OSError) and self._roll_back_batch():
+                # The batch may have been counted before the interrupt landed.
+                self._count = count_before
+            raise
+
+    def _roll_back_batch(self) -> bool:
+        """Cut the file back to the batch start after an interrupted write.
+
+        Best-effort: an OSError here leaves the half row in place, and the
+        interrupt that brought us here still propagates.
+
+        Returns:
+            True if the file now ends at the batch start.
+        """
+        if self._file is None or self._batch_start is None:
+            return False
+        try:
+            self._file.seek(self._batch_start)
+            self._file.truncate()
+        except OSError as e:
+            logger.warning(f"Could not cut {self._temp_path} back to its last row: {e}")
+            return False
+        return True
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Publish on success, discard on error, retain a partial on interrupt."""
         if exc_type is None:
-            if self._file is None:
-                return  # _write_buf hit an error the caller swallowed
+            if self._failure is not None or self._file is None:
+                self._close_file()
+                self._publish.discard()
+                raise RuntimeError(
+                    f"{self.path} not published: a write failed earlier "
+                    f"({self._failure!r})"
+                ) from self._failure
             try:
                 self._file.close()  # close() flushes, so a bad flush raises here
                 self._file = None
@@ -289,9 +336,13 @@ class IncrementalAssocWriter:
         self._close_file()
         if not issubclass(exc_type, Exception) or issubclass(exc_type, MemoryError):
             retained_path = self._publish.retain(self.partial_path)
-            logger.warning(
-                f"{exc_type.__name__} after {self._count} results written; "
+            where = (
                 f"partial output retained at {retained_path}"
+                if retained_path is not None
+                else "no partial output retained"
+            )
+            logger.warning(
+                f"{exc_type.__name__} after {self._count} results written; {where}"
             )
         else:
             logger.warning(

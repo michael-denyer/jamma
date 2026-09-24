@@ -12,11 +12,12 @@ from dataclasses import asdict
 import numpy as np
 import pytest
 
+from jamma.genotype.variants import SnpMeta
 from jamma.io import load_plink_binary, read_fam_phenotypes
 from jamma.kinship.io import read_kinship_matrix
 from jamma.lmm.assoc_output import AssocResult
 from jamma.lmm.runner_numpy import run_lmm_association_numpy
-from jamma.lmm.schema import LmmConfig, SnpMeta
+from jamma.lmm.schema import LmmConfig
 from jamma.validation import (
     ToleranceConfig,
     compare_assoc_results,

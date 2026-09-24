@@ -126,9 +126,9 @@ def synthetic_data_with_covariates(synthetic_data):
 @pytest.fixture
 def synthetic_data():
     """Load gemma_synthetic PLINK data, kinship, phenotypes, and snp_info."""
+    from jamma.genotype.variants import SnpMeta
     from jamma.io import load_plink_binary, read_fam_phenotypes
     from jamma.kinship.io import read_kinship_matrix
-    from jamma.lmm.schema import SnpMeta
 
     plink = load_plink_binary(SYNTHETIC.bfile)
     kinship = read_kinship_matrix(SYNTHETIC.kinship)

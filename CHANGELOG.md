@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.0] - 2026-09-25
+
 ### Added
 
 - `GEMMA_DIVERGENCES.md` §6 cites the jamma-lean proof that the accepted

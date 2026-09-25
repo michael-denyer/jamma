@@ -183,7 +183,7 @@ settings, and tool configuration.
 ```toml
 [project]
 name = "jamma"
-version = "8.1.0"
+version = "8.2.0"
 requires-python = ">=3.11"
 ```
 
@@ -290,7 +290,7 @@ Set `JLINALG_NO_VENDOR_LAPACK=1` to force the NumPy fallback for debugging.
 
 ```bash
 jamma --version
-# prints: JAMMA version 8.1.0 (...)
+# prints: JAMMA version 8.2.0 (...)
 #         Backend: numpy
 ```
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tests/lmm_accel/test_bgen_decode_properties.py` is a Hypothesis property
+  test for the C BGEN layout-2 decoder. It generates truncated, padded,
+  garbage and zlib-mislabelled blocks, and blocks with one header field just
+  out of range, and requires the decoder to reject exactly what the NumPy
+  oracle rejects and to match it bit for bit on everything else.
+
 ## [8.2.0] - 2026-09-25
 
 ### Added

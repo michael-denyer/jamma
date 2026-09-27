@@ -646,6 +646,14 @@ def test_kinship_symmetry(n_samples): ...
 
 Run with `uv run pytest tests/test_hypothesis.py -x`.
 
+[`tests/lmm_accel/test_bgen_decode_properties.py`](../tests/lmm_accel/test_bgen_decode_properties.py)
+feeds the C BGEN decoder corrupted and hostile probability blocks. The decoder
+must reject exactly the variants the NumPy oracle in `tests/reference/bgen.py`
+rejects, and match it bit for bit on the rest. The strategies put each header
+field one step outside its accepted range, so a loosened bounds check fails the
+test. An out-of-bounds read that leaves the values unchanged is caught by the
+sanitizer workflow instead, which runs `tests/lmm_accel` under ASan.
+
 ---
 
 ## 3. Suite Map and Current State

@@ -151,7 +151,7 @@ the deployment.
    gh run list --branch master --limit 3
    ```
 
-5. Create a GitHub release:
+5. Create a GitHub release from `master`:
 
    ```bash
    gh release create v<X.Y.Z> --title "v<X.Y.Z>" --notes "..."

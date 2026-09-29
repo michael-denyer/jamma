@@ -43,9 +43,10 @@ The exact-arithmetic formulas in sections 2 to 8 are proved in Lean 4 in
 proofs cover the kinship, rotation, logdet, Pab, REML, Wald, Score and LRT
 identities, and the rounding-error bounds for kinship entries and Pab row 0 in
 any summation order. They also prove that `betainc(df/2, 1/2, df/(df+F))` is
-the F(1, df) upper tail and that `erfc(sqrt(x/2))` is the chi-squared(1) upper
-tail. The numerical accuracy of the `betainc` and `erfc` implementations and
-of LAPACK is not covered. [`tests/test_lean_proven_identities.py`](../tests/test_lean_proven_identities.py)
+the F(1, df) upper tail (`PValues.fTail_eq_incBeta`) and that
+`erfc(sqrt(x/2))` is the chi-squared(1) upper tail
+(`PValues.chiSq1_tail_eq_erfc`). The numerical accuracy of the `betainc` and
+`erfc` implementations and of LAPACK is not covered. [`tests/test_lean_proven_identities.py`](../tests/test_lean_proven_identities.py)
 checks the production code against each proved identity.
 
 ---

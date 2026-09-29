@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.3.0] - 2026-09-29
+
 ### Added
 
 - `tests/lmm_accel/test_bgen_decode_properties.py` is a Hypothesis property
@@ -14,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   garbage and zlib-mislabelled blocks, and blocks with one header field just
   out of range, and requires the decoder to reject exactly what the NumPy
   oracle rejects and to match it bit for bit on everything else.
+
+### Changed
+
+- Dependency and CI-action bumps (Dependabot): `google/osv-scanner-action`
+  2.5.1 → 2.6.0, `docker/build-push-action` 7.3.0 → 7.4.0,
+  `docker/setup-qemu-action` 4.3.0 → 4.4.0, `docker/setup-buildx-action`
+  4.3.0 → 4.4.1, build backend `hatchling` 1.32.0 → 1.32.3, dev dependency
+  `pyrefly` 1.3.0 → 1.3.1, and the container's `threadpoolctl` 3.6.0 → 3.7.0.
+  No source or numerical-result change.
 
 ## [8.2.0] - 2026-09-25
 

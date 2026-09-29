@@ -7,20 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- `GEMMA_EQUIVALENCE.md` and assumption 7 of
-  `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` name the jamma-lean theorems behind
-  their p-value claims. `GEMMA_DIVERGENCES.md` §6 counts the SNPs whose lambda
-  error exceeds `lambda_rtol`: 3 NumPy and 2 native, all at n = 30 to 100.
-
-### Fixed
-
-- The BGEN decoder property test now catches a dropped `B >= 1` check. It set
-  the bit depth to 0 but kept the data bytes, so the size check rejected the
-  block first and a decoder without the check still passed.
-
-## [8.3.0] - 2026-09-29
+## [8.2.1] - 2026-09-29
 
 ### Added
 
@@ -32,12 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `GEMMA_EQUIVALENCE.md` and assumption 7 of
+  `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` name the jamma-lean theorems behind
+  their p-value claims. `GEMMA_DIVERGENCES.md` §6 counts the SNPs whose lambda
+  error exceeds `lambda_rtol`: 3 NumPy and 2 native, all at n = 30 to 100.
+
 - Dependency and CI-action bumps (Dependabot): `google/osv-scanner-action`
   2.5.1 → 2.6.0, `docker/build-push-action` 7.3.0 → 7.4.0,
   `docker/setup-qemu-action` 4.3.0 → 4.4.0, `docker/setup-buildx-action`
   4.3.0 → 4.4.1, build backend `hatchling` 1.32.0 → 1.32.3, dev dependency
   `pyrefly` 1.3.0 → 1.3.1, and the container's `threadpoolctl` 3.6.0 → 3.7.0.
   No source or numerical-result change.
+
+### Fixed
+
+- The BGEN decoder property test now catches a dropped `B >= 1` check. It set
+  the bit depth to 0 but kept the data bytes, so the size check rejected the
+  block first and a decoder without the check still passed.
 
 ## [8.2.0] - 2026-09-25
 

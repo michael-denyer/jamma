@@ -69,8 +69,11 @@ We write `ΔX = X_JAMMA − X_GEMMA` for differences in outputs.
    statistics are bounded away from zero.
 7. **CDF stability**: the F/χ² CDFs used are Lipschitz in the relevant range.
    The qualifier is necessary: both tails have unbounded slope at 0, so no
-   single constant works near a zero statistic. On `[F₀, ∞)` with `F₀ > 0` the
-   F(1, df) tail is Lipschitz with constant equal to its density at `F₀`.
+   single constant works near a zero statistic (`PValues.fTail_not_lipschitzOn`,
+   `erfc_sqrt_half_not_lipschitzOn`). On `[F₀, ∞)` with `F₀ > 0` the F(1, df)
+   tail is Lipschitz with constant equal to its density at `F₀`
+   (`fTail_lipschitzOn`). All three are proved in
+   [jamma-lean](https://github.com/michael-denyer/jamma-lean).
 
 If any assumption fails, equivalence can still hold, but the stated bound may
 not be meaningful. See `docs/GEMMA_DIVERGENCES.md` for known edge-case behavior.

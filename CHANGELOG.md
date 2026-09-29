@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `GEMMA_EQUIVALENCE.md` and assumption 7 of
+  `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` name the jamma-lean theorems behind
+  their p-value claims. `GEMMA_DIVERGENCES.md` §6 counts the SNPs whose lambda
+  error exceeds `lambda_rtol`: 3 NumPy and 2 native, all at n = 30 to 100.
+
 ## [8.3.0] - 2026-09-29
 
 ### Added

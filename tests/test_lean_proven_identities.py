@@ -1,6 +1,6 @@
-"""Numerical checks of the LMM identities proved over the reals in jamma-lean.
+"""Numerical checks of the LMM identities proved over the reals in jamma-lean-proofs.
 
-The jamma-lean repository proves, in Lean 4 with Mathlib, the exact-arithmetic
+The jamma-lean-proofs repository proves, in Lean 4 with Mathlib, the exact-arithmetic
 identities behind the LMM formulas. A proof over the reals says the formula is
 right. It does not say the code implements that formula, or that the float64
 evaluation stays near it. These tests run the real JAMMA code on random,

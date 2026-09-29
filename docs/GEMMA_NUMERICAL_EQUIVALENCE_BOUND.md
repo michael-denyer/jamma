@@ -73,7 +73,7 @@ We write `ΔX = X_JAMMA − X_GEMMA` for differences in outputs.
    `erfc_sqrt_half_not_lipschitzOn`). On `[F₀, ∞)` with `F₀ > 0` the F(1, df)
    tail is Lipschitz with constant equal to its density at `F₀`
    (`fTail_lipschitzOn`). All three are proved in
-   [jamma-lean](https://github.com/michael-denyer/jamma-lean).
+   [jamma-lean-proofs](https://github.com/michael-denyer/jamma-lean-proofs).
 
 If any assumption fails, equivalence can still hold, but the stated bound may
 not be meaningful. See `docs/GEMMA_DIVERGENCES.md` for known edge-case behavior.
@@ -130,7 +130,7 @@ with `C_K` capturing batching and symmetric accumulation effects.
 The per-entry bound is proved for every summation order, so it covers blocked
 `dsyrk` and 10,000-SNP batching: `|fl(K_ij) − K_ij| ≤ γ_(p+1) · (1/p) Σ_k |x_ik x_jk|`,
 at most `1.111e-10 · (1/p) Σ_k |x_ik x_jk|` for `p ≤ 10^6` with unit roundoff
-`u = 2^-53` (`FpSumTree.fkin_err_float64` in [jamma-lean](https://github.com/michael-denyer/jamma-lean)).
+`u = 2^-53` (`FpSumTree.fkin_err_float64` in [jamma-lean-proofs](https://github.com/michael-denyer/jamma-lean-proofs)).
 
 ### 2. Eigendecomposition
 
@@ -160,7 +160,7 @@ eigenbasis LAPACK returns. Because `H ⪰ I`, with `δ = λ‖E‖₂ < 1`:
 
 No eigengap enters. `EigenPerturbation.pab_row0_perturb` and
 `logdet_rotated_perturb` in
-[jamma-lean](https://github.com/michael-denyer/jamma-lean) prove this in exact
+[jamma-lean-proofs](https://github.com/michael-denyer/jamma-lean-proofs) prove this in exact
 arithmetic, taking LAPACK's backward stability (`‖E‖₂ ≤ C_E ε ‖K‖₂`) as given
 and `Û` as orthogonal. Higher Pab levels add the pivot amplification of the
 recursion.

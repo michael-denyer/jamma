@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `GEMMA_EQUIVALENCE.md` and assumption 7 of
-  `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` name the jamma-lean theorems behind
+  `GEMMA_NUMERICAL_EQUIVALENCE_BOUND.md` name the jamma-lean-proofs theorems behind
   their p-value claims. `GEMMA_DIVERGENCES.md` §6 counts the SNPs whose lambda
   error exceeds `lambda_rtol`: 3 NumPy and 2 native, all at n = 30 to 100.
 
@@ -41,18 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `GEMMA_DIVERGENCES.md` §6 cites the jamma-lean proof that the accepted
+- `GEMMA_DIVERGENCES.md` §6 cites the jamma-lean-proofs proof that the accepted
   Newton step contracts toward the root on a well-conditioned smooth peak
   (`accepts_of_wellCond`, `newtonLoop_contracts`).
 
 - `GEMMA_DIVERGENCES.md` §6 explains why lambda refinement is bounded by the
   coarse grid bracket rather than the golden-section bracket, states the
-  worst-case bound from jamma-lean, and records measured lambda error by
+  worst-case bound from jamma-lean-proofs, and records measured lambda error by
   sample size and peak curvature, with its effect on Wald p-values.
 
 - `tests/test_lean_proven_identities.py` checks the production code against
   each identity proved in Lean in
-  [jamma-lean](https://github.com/michael-denyer/jamma-lean), and
+  [jamma-lean-proofs](https://github.com/michael-denyer/jamma-lean-proofs), and
   `GEMMA_EQUIVALENCE.md` links the proofs.
 
 - GEMMA parity on BGEN input. `tests/fixtures/bgen_parity` holds a BGEN built

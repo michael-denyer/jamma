@@ -39,7 +39,7 @@ effect direction agreement 100%. See [Empirical Results](#empirical-results).
 ## Machine-checked proofs
 
 The exact-arithmetic formulas in sections 2 to 8 are proved in Lean 4 in
-[jamma-lean](https://github.com/michael-denyer/jamma-lean), whose README maps each claim here to its theorem. The
+[jamma-lean-proofs](https://github.com/michael-denyer/jamma-lean-proofs), whose README maps each claim here to its theorem. The
 proofs cover the kinship, rotation, logdet, Pab, REML, Wald, Score and LRT
 identities, and the rounding-error bounds for kinship entries and Pab row 0 in
 any summation order. They also prove that `betainc(df/2, 1/2, df/(df+F))` is
@@ -360,7 +360,7 @@ versus mixed OpenBLAS/MKL at 85k.
 | `tests/test_numpy_streaming.py::TestNumpyStreamingGemmaParity` (tier1) | Streaming runner vs GEMMA (all modes + covariates) |
 | `tests/lmm_accel/` (tier0/tier1/tier2) | C extension Wald+covariate vs GEMMA |
 | `tests/test_bgen_gemma_parity.py` (tier1) | BGEN kinship and all LMM modes vs GEMMA on BIMBAM holding the same dosages |
-| `tests/test_lean_proven_identities.py` (tier0) | Production code against each identity proved in jamma-lean |
+| `tests/test_lean_proven_identities.py` (tier0) | Production code against each identity proved in jamma-lean-proofs |
 
 Run kinship validation:
 

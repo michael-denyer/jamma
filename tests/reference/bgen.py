@@ -5,7 +5,9 @@ literal to the spec and deliberately independent of production: it walks the
 ``.bgen`` front to back from the header offset, never reading the ``.bgi``,
 and unpacks B-bit values with ``np.unpackbits`` rather than byte arithmetic.
 It returns the arrays ``ProbabilityBlock`` holds, for every variant in file
-order, and raises ``ValueError`` wherever the C decoder reports a failure.
+order, and raises ``ValueError`` wherever the C decoder reports a failure,
+except that a block shorter than its header raises ``struct.error`` or
+``IndexError``.
 """
 
 from __future__ import annotations

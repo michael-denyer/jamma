@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The BGEN decoder property test now catches a dropped `B >= 1` check. It set
+  the bit depth to 0 but kept the data bytes, so the size check rejected the
+  block first and a decoder without the check still passed.
+
 ## [8.3.0] - 2026-09-29
 
 ### Added

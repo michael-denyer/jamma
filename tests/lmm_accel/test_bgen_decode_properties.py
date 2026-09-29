@@ -84,8 +84,13 @@ def _one_field_off(draw, block: bytes, n: int) -> bytes:
             ]
         )
     )
+    value = draw(st.sampled_from(values))
     out = bytearray(block)
-    struct.pack_into(fmt, out, offset, draw(st.sampled_from(values)))
+    struct.pack_into(fmt, out, offset, value)
+    if offset == 9 + n and value == 0:
+        # B = 0 packs no data. Without the trim the size check rejects the
+        # block, so a dropped B >= 1 check would go unseen.
+        del out[10 + n :]
     return bytes(out)
 
 

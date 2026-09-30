@@ -313,13 +313,13 @@ lambda error on those peaks from `1.8e-11` to `1.1e-3`.
 The accept rule is not a convergence proof. For a concave objective whose
 score slope changes by orders of magnitude within the probe spacing near the
 peak, one accepted step can move from `0.005` to
-`0.495` away from the maximum (jamma-lean `refine_can_leave_golden_bracket`),
+`0.495` away from the maximum (jamma-lean-proofs `refine_can_leave_golden_bracket`),
 so the worst-case bound is the coarse bracket width, about `0.94` in log
 lambda. Quadratic peaks converge (`newtonLoop_affine`). On a smooth peak the
 accepted step provably contracts toward the root when `L·M·(δ + e) < m²`,
 where the score slope lies in `[-L, -m]` near the root and is `M`-Lipschitz,
 `δ` is the probe offset and `e` the distance to the root: the candidate lands
-within `M(δ + e)/m · e` of the root and the accept rule admits it (jamma-lean
+within `M(δ + e)/m · e` of the root and the accept rule admits it (jamma-lean-proofs
 `accepts_of_wellCond`, `newtonLoop_contracts`). The counterexample violates
 that condition (`ceScore_not_wellCond`). The proof is in exact arithmetic, so
 it does not cover score rounding. REML scores are smooth,

@@ -10,12 +10,12 @@ machinery is isolated from chunk sizing and kernel dispatch.
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
 from jamma.core.progress import progress_iterator
+from jamma.core.thread_pool import JoiningThreadPoolExecutor
 from jamma.core.threading import blas_threads, get_physical_core_count
 from jamma.estimates import estimate_lmm_seconds
 
@@ -97,7 +97,7 @@ def plan_thread_budget(
 
 def _overlapped_chunks(
     engine: _ChunkEngine,
-    executor: ThreadPoolExecutor,
+    executor: JoiningThreadPoolExecutor,
     rotation_s: list[float],
 ) -> Iterator[_PreparedLmmChunk]:
     """Yield each prepared chunk while the next one rotates in the background.
@@ -167,7 +167,10 @@ def _drive_pipeline(
         accumulated by the engine itself.
     """
     rotation_s = [0.0]
-    with blas_threads(rotation_threads), ThreadPoolExecutor(max_workers=1) as executor:
+    with (
+        blas_threads(rotation_threads),
+        JoiningThreadPoolExecutor(max_workers=1) as executor,
+    ):
         chunks: Iterator[_PreparedLmmChunk] = _overlapped_chunks(
             engine, executor, rotation_s
         )

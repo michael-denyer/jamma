@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from functools import cache
 from pathlib import Path
 
@@ -12,6 +12,7 @@ import numpy as np
 
 from jamma._build_support.build_models import MATRIX_TEXT_SPEC
 from jamma._native import _load_c_module
+from jamma.core.thread_pool import JoiningThreadPoolExecutor
 from jamma.utils.atomic_publish import AtomicOutput
 
 _VALUES_PER_BLOCK = 65_536
@@ -62,7 +63,9 @@ def write_native_matrix(
             return
 
         pending: deque[tuple[Future[int], bytearray]] = deque()
-        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="matrix-text")
+        pool = JoiningThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="matrix-text"
+        )
         try:
             for _ in range(2 * workers):
                 start = next(starts, None)

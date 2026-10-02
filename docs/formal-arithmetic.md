@@ -40,6 +40,13 @@ both a bounded property failure and a rejected proof or explicit boundary
 guard. The real source has none of these mutations, so no arithmetic fix is
 proposed.
 
+The runner first requires both untouched projects to pass the checker. Each
+mutation names its bounded property guard; detection requires Lean's
+evaluated-false diagnostic for that expression at its current source location.
+An unrelated checker, import or syntax error fails the run. Checks have a
+60-second timeout. The CLI regressions in `tests/test_lean_mutations.py` use
+an external checker fake, so they run in ordinary CI without a Lean installation.
+
 | Mutation | Concrete counterexample | Detecting property |
 |---|---|---|
 | Add buffer count to modulo result | counter=0, buffers=1 produces slot 1 | Slot bound |

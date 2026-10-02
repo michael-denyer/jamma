@@ -6,8 +6,8 @@ authors:
   - family-names: Denyer
     given-names: Michael
     orcid: https://orcid.org/0000-0001-9667-5683
-version: 8.0.2
-date-released: 2026-09-09
+version: 8.2.2
+date-released: 2026-10-02
 license: GPL-3.0-or-later
 doi: 10.5281/zenodo.22666119
 identifiers:

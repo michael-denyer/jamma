@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CITATION.cff` names release 8.2.2 instead of 8.0.2, and the release
   checklists in `docs/DEVELOPMENT.md` and `docs/DEPLOYMENT.md` include updating
   it.
+- The README pipeline diagram and `docs/architecture.png` show the `-loco`
+  path: per-chromosome kinship, eigendecomposition and association.
 
 ## [8.2.2] - 2026-10-02
 

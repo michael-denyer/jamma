@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.3] - 2026-10-02
+
 ### Changed
 
 - The formal models follow the agent-formal-verify 0.2 layout. The two Lean

@@ -126,10 +126,6 @@ jobs:
             --deselect tests/test_numpy_streaming.py::TestStreamingPipeline::test_streaming_pipeline_activates \
             --deselect tests/test_safety_gates.py::TestJlinalgABIValidation::test_abi_mismatch_triggers_production_guard_at_runtime \
             --deselect tests/test_safety_gates.py::TestLOCOIteratorRuntimeError::test_loco_module_imports_cleanly_under_optimisation \
-            --deselect tests/test_snp_stats.py::TestSnpStatsC::test_c_extension_loaded \
-            --deselect tests/test_snp_stats.py::TestSnpStatsC::test_dtype_parity \
-            --deselect tests/test_snp_stats.py::TestSnpStatsC::test_float32_parity \
-            --deselect tests/test_snp_stats.py::TestSnpStatsC::test_rectangular_chunk \
             2>&1 | tee sanitizer-run.log
 
       - name: Run native C paths under ASAN/UBSAN

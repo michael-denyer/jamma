@@ -25,7 +25,12 @@ def compute_snp_stats_chunk(
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         mean = np.nanmean(data, axis=0, dtype=np.float64)
-        variance = np.nanvar(data, axis=0)
+        # np.nanvar holds the deviations in the input dtype whatever dtype= says,
+        # so float32 genotypes would not get the C kernel's double accumulation.
+        squares = np.subtract(data, mean, dtype=np.float64)
+        np.copyto(squares, 0.0, where=is_nan)
+        np.square(squares, out=squares)
+        variance = squares.sum(axis=0) / (data.shape[0] - missing)
     means[:] = np.nan_to_num(mean, nan=0.0)
     miss_counts[:] = missing
     variances[:] = np.nan_to_num(variance, nan=0.0)

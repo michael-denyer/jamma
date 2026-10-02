@@ -32,9 +32,9 @@ The reduced partial-start counterexample has these code events:
 3. The next `Thread.start()` raises; the generator exits before cleanup.
 4. The live worker has no producer left to enqueue its sentinel.
 
-TLC detects this with `SetupClean` in four explored states. The scope-entry
-variant starts three workers before scope entry fails, and is detected in
-21 states. The partial-start path requires at least two workers and is
+The two setup mutations in `tla/LocoWorkers.mutations` restore this order,
+and TLC rejects both with `SetupClean`. The scope-entry variant starts three
+workers before scope entry fails. The partial-start path requires at least two workers and is
 reachable with supported concurrent LOCO settings. Scope-entry failure is
 also reachable with the default one worker. Neither needs a reduced queue
 size or a numerical solver failure.
@@ -100,92 +100,4 @@ KeyboardInterrupt abandonment is a separate terminal state, so normal-close
 leak claims do not apply to it. Floating-point and eigendecomposition results
 are abstract successful outcomes. The model does not check numerical accuracy.
 
-## Final matrix
-
-All 15 runs pass, with 20,118 distinct states summed across runs. Separate runs
-can contain equivalent states; the sum is a workload count, not one state graph.
-`caller` permits early close, stop-after-yield and KeyboardInterrupt. Nonempty
-failure runs allow solve and producer failure at every item independently.
-
-| Label | Distinct states | Verdict |
-| --- | ---: | --- |
-| workers=1 items=0 drain | 12 | PASS |
-| workers=1 items=1 drain | 26 | PASS |
-| workers=1 items=3 caller | 218 | PASS |
-| workers=1 items=5 drain | 152 | PASS |
-| workers=2 items=0 caller | 31 | PASS |
-| workers=2 items=1 drain | 92 | PASS |
-| workers=2 items=3 caller | 1,178 | PASS |
-| workers=2 items=5 drain | 856 | PASS |
-| workers=3 items=0 drain | 42 | PASS |
-| workers=3 items=1 caller | 398 | PASS |
-| workers=3 items=3 drain | 2,318 | PASS |
-| workers=3 items=5 caller | 14,744 | PASS |
-| workers=2 partial-start-failure | 10 | PASS |
-| workers=3 scope-entry-failure | 5 | PASS |
-| workers=2 first-start-failure | 6 | PASS |
-
-## Mutation checks
-
-Each mutation ran separately on a temporary copy, with only the named property
-checked so an earlier invariant could not hide its sensitivity. All 15 were
-rejected. The repository matrix sets `Mutation="none"` and
-`SetupCleanup=TRUE`. Diagnostic branches represent individual hypothetical
-source changes; they are inactive during the final check.
-
-Unless overridden below, mutation configurations use two workers, three items,
-`FailAt={1,2,3}`, no producer failures, `Drain=TRUE`, no interruption and no
-setup failure. Failure-state counts were read from TLC's full logs; the matrix
-helper's reduced failure output omits them.
-
-| Mutation | Property that rejects it | Distinct states | Verdict |
-| --- | --- | ---: | --- |
-| Drop ownership during dequeue, `orphan` | TypeOK | 18 | FAIL as expected |
-| Take a job without removing it, `duplicate-job` | Ownership | 18 | FAIL as expected |
-| Resolve pending Futures as a stack, `lifo` | DeliveryOrder | 95 | FAIL as expected |
-| Yield a failed Future, `ignore-error` | NoDeliveryAfterFailure | 91 | FAIL as expected |
-| Yield a failed Future, `ignore-error` | ErrorOrder | 91 | FAIL as expected |
-| Allow one extra outstanding job, `oversubmit` | WindowBound | 25 | FAIL as expected |
-| Retain a settled Future at close, `retain-future` | ClosedClean | 228 | FAIL as expected |
-| Restore original startup ordering, SetupFailure=1, SetupCleanup=FALSE | SetupClean | 4 | FAIL as expected |
-| Restore BLAS before joining, `early-restore` | ScopeCoversSolve | 122 | FAIL as expected |
-| Remove settlement wakeup, `no-future-wake` | CallsReturn | 451 | FAIL as expected |
-| Omit shutdown sentinels, `no-sentinels` | CloseReturns | 383 | FAIL as expected |
-| Omit shutdown sentinels, `no-sentinels` | DrainEnds | 383 | FAIL as expected |
-| Report end before pending Futures drain, `early-end`, FailAt={} | EndOrder | 140 | FAIL as expected |
-| Remove enqueue wakeup, `no-queue-wake`, FailAt={} | CallsReturn | 259 | FAIL as expected |
-| Restore original scope ordering, Workers=3, Items=0, SetupFailure=2, SetupCleanup=FALSE | SetupClean | 21 | FAIL as expected |
-
-## Recheck
-
-The helpers remain in the installed skill. From the repository root:
-
-```sh
-mkdir -p /tmp/loco-jvm
-JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/tmp/loco-jvm \
-JAVA=/opt/homebrew/opt/openjdk@21/bin/java TLC_WORKERS=2 \
-bash /Users/mdenyer/.codex/plugins/cache/agent-formal-verify/agent-formal-verify/0.1.11/skills/formal-verify/scripts/tlc-matrix.sh \
-/Users/mdenyer/VSCode/jamma/tla/LocoWorkers.matrix
-
-uv run pytest tests/test_loco_worker_startup.py tests/test_loco_workers.py tests/test_loco_worker_resources.py -q
-```
-
-The diagnostic mutation command was:
-
-```sh
-JAVA=/tmp/loco-java-capture TLC_WORKERS=2 \
-bash /Users/mdenyer/.codex/plugins/cache/agent-formal-verify/agent-formal-verify/0.1.11/skills/formal-verify/scripts/tlc-matrix.sh \
-/tmp/loco-mutations/LocoWorkers.matrix
-```
-
-That wrapper forwarded arguments to the same Java binary and retained the full
-TLC logs and configurations. The temporary mutation matrix and capture wrapper
-are session diagnostics. To repeat a mutation, copy the model to a temporary
-directory, select the constants/property from the table in a one-run matrix,
-and run the same matrix helper. Keep the repository matrix unmutated.
-
-TLC needs a local RMI listener. The restricted sandbox initially denied it;
-these checks ran with approved local execution. Concurrent TLC processes can
-extract their bundled standard modules to the same OS temporary directory;
-the final matrix uses an isolated Java temporary directory to prevent partial
-module reads. No model CI job was added.
+The commands that recheck this model are in [TESTING.md](TESTING.md#4-formal-models). The deliberate bugs its checks must catch are listed in `tla/LocoWorkers.mutations`.

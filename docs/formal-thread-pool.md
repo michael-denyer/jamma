@@ -2,7 +2,7 @@
 
 | Target | Threads and shared variables | Wait and wake contract | Terminal state and resources | Verdict |
 | --- | --- | --- | --- | --- |
-| `JoiningThreadPoolExecutor`, `src/jamma/core/thread_pool.py:21-92` | One submit/shutdown caller; one, two or three executor workers. `_completion` mutex, `_outstanding` dictionary mapping unique tokens to pending/running, executor queue and worker PCs. Token absence means settled. The model's new/settled distinction is ghost history. | Shutdown checks the dictionary under Condition, enters an explicit wait PC and releases the lock. A settlement notifies all waiters. Spurious wakeups and SIGINT can also leave wait; shutdown reacquires and checks again. | Closed scope. Each callable's arguments stay borrowed until its finally settlement; pending cancellations must prevent a wrapper borrowing after its token disappears. | 36/36 configurations pass, 13–262,483 states each. Directed mutations detect each checked property. |
+| `JoiningThreadPoolExecutor`, `src/jamma/core/thread_pool.py:21-92` | One submit/shutdown caller; one, two or three executor workers. `_completion` mutex, `_outstanding` dictionary mapping unique tokens to pending/running, executor queue and worker PCs. Token absence means settled. The model's new/settled distinction is ghost history. | Shutdown checks the dictionary under Condition, enters an explicit wait PC and releases the lock. A settlement notifies all waiters. Spurious wakeups and SIGINT can also leave wait; shutdown reacquires and checks again. | Closed scope. Each callable's arguments stay borrowed until its finally settlement; pending cancellations must prevent a wrapper borrowing after its token disappears. | Every configuration passes. |
 
 ## Source correspondence
 
@@ -33,11 +33,7 @@ all borrowed callables have completed. The model records one interrupt; finite
 repeated interruptions have the same retry transition. Infinite interruptions
 are outside its termination assumption.
 
-## Commands and counts
-
-```sh
-JAVA=/opt/homebrew/opt/openjdk@21/bin/java TLC_WORKERS=2 bash /Users/mdenyer/.codex/plugins/cache/agent-formal-verify/agent-formal-verify/0.1.11/skills/formal-verify/scripts/tlc-matrix.sh /Users/mdenyer/VSCode/jamma/tla/JoiningThreadPool.matrix
-```
+## Checked cases
 
 `submit-error` permits success or failure at every item. Failures can occur
 between registration/enqueue and return, before or after a worker claims or
@@ -45,76 +41,13 @@ starts its wrapper. `cancel` exercises shutdown's pending-token barrier and
 library Future cancellation. Every configuration permits early close, spurious
 wakeups and interrupted shutdown.
 
-| Run label | Distinct states | Verdict |
-| --- | ---: | --- |
-| workers=1 items=0 mode=normal | 13 | PASS |
-| workers=1 items=0 mode=cancel | 17 | PASS |
-| workers=1 items=0 mode=submit-error | 13 | PASS |
-| workers=1 items=1 mode=normal | 97 | PASS |
-| workers=1 items=1 mode=cancel | 123 | PASS |
-| workers=1 items=1 mode=submit-error | 183 | PASS |
-| workers=1 items=3 mode=normal | 499 | PASS |
-| workers=1 items=3 mode=cancel | 677 | PASS |
-| workers=1 items=3 mode=submit-error | 955 | PASS |
-| workers=1 items=5 mode=normal | 1213 | PASS |
-| workers=1 items=5 mode=cancel | 1687 | PASS |
-| workers=1 items=5 mode=submit-error | 2303 | PASS |
-| workers=2 items=0 mode=normal | 13 | PASS |
-| workers=2 items=0 mode=cancel | 17 | PASS |
-| workers=2 items=0 mode=submit-error | 13 | PASS |
-| workers=2 items=1 mode=normal | 153 | PASS |
-| workers=2 items=1 mode=cancel | 199 | PASS |
-| workers=2 items=1 mode=submit-error | 297 | PASS |
-| workers=2 items=3 mode=normal | 3207 | PASS |
-| workers=2 items=3 mode=cancel | 4043 | PASS |
-| workers=2 items=3 mode=submit-error | 6159 | PASS |
-| workers=2 items=5 mode=normal | 14253 | PASS |
-| workers=2 items=5 mode=cancel | 18527 | PASS |
-| workers=2 items=5 mode=submit-error | 26973 | PASS |
-| workers=3 items=0 mode=normal | 13 | PASS |
-| workers=3 items=0 mode=cancel | 17 | PASS |
-| workers=3 items=0 mode=submit-error | 13 | PASS |
-| workers=3 items=1 mode=normal | 209 | PASS |
-| workers=3 items=1 mode=cancel | 275 | PASS |
-| workers=3 items=1 mode=submit-error | 411 | PASS |
-| workers=3 items=3 mode=normal | 14119 | PASS |
-| workers=3 items=3 mode=cancel | 17039 | PASS |
-| workers=3 items=3 mode=submit-error | 27235 | PASS |
-| workers=3 items=5 mode=normal | 138233 | PASS |
-| workers=3 items=5 mode=cancel | 170927 | PASS |
-| workers=3 items=5 mode=submit-error | 262483 | PASS |
-
 The checked invariants are `TypeOK`, `TokensExact`, `Ownership`,
 `BorrowedRunning`, `NoBorrowAfterRelease` and `NoLeak`. Liveness checks require
 blocking shutdown to return, and require whole-drive termination when the caller
 eventually closes. The token dictionary must exactly describe the pending and
 running jobs, with at most one worker borrowing each job.
 
-## Mutation sensitivity and fairness
-
-Mutations ran on copies under `/tmp/thread-pool-mutations`, one change per copy.
-Each mutation below failed the specified property.
-
-| Mutation | Detecting property |
-| --- | --- |
-| no-notify | BlockingReturns |
-| omit-pending-cancellation-barrier | BlockingReturns |
-| if-wait | NoLeak |
-| cancel-token-remains | TokensExact |
-| clear-all-tokens | TokensExact |
-| cancel-running | BorrowedRunning |
-| ignore-cancelled-wrapper | TokensExact |
-| counter-bound | TypeOK |
-| keep-queue-item | Ownership |
-| borrow-cancelled-after-release | NoBorrowAfterRelease |
-| never-return | NoCloseTerminates |
-
-`no-notify` strands the shutdown thread in its explicit wait PC after the final
-callable settles; the failure is liveness, not deadlock. `if-wait` lets a
-spurious wakeup return without reacquiring and checking. `cancel-running`
-models treating a submit failure as permission to remove a token that a worker
-already owns. `ignore-cancelled-wrapper` models running an enqueued wrapper
-whose submit failed and whose pending token was removed.
+## Fairness
 
 A diagnostic `weak-mutex-starvation` copy changed strong acquisition fairness to
 weak fairness. TLC emitted a pure starvation cycle: the main thread repeatedly
@@ -153,4 +86,6 @@ thread-start failure is represented by the cancellation path. The proof assumes
 shutdown's cleanup allocations succeed; a MemoryError in the dictionary
 comprehension is not handled by the KeyboardInterrupt retry and is outside this
 proof. Similar catastrophic failures during exception construction, Condition
-machinery, and interpreter teardown are not claimed safe. No CI job was added.
+machinery, and interpreter teardown are not claimed safe.
+
+The commands that recheck this model are in [TESTING.md](TESTING.md#4-formal-models). The deliberate bugs its checks must catch are listed in `tla/JoiningThreadPool.mutations`.

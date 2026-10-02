@@ -7,6 +7,8 @@ The shipped overlapped pipeline uses two slots. This proves arithmetic only;
 TLA+ separately checks that the foreground relinquishes a slot before reuse.
 -/
 
+namespace ChunkSlots
+
 def slot (counter buffers : Nat) : Nat := counter % buffers
 
 def Valid (counter buffers : Nat) : Prop :=
@@ -41,3 +43,5 @@ theorem consecutive_slots_distinct (counter buffers : Nat) (h : 2 ≤ buffers) :
 
 theorem valid_slot (counter buffers : Nat) (h : 0 < buffers) : Valid counter buffers :=
   ⟨slot_in_bounds counter buffers h, consecutive_slots_distinct counter buffers⟩
+
+end ChunkSlots

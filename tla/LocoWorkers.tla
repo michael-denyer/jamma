@@ -20,16 +20,16 @@
    unless the consumer intentionally abandons workers on KeyboardInterrupt.
    No user mutex is held during an allocation or exit. Internal SimpleQueue
    and Future allocation failure is not modelled. Setup failures at start
-   (:137) and scope entry (:134) are modelled. SetupCleanup=FALSE preserves
-   the original cleanup gap; TRUE models cleanup covering those phases.
+   (:137) and scope entry (:134) are modelled, with cleanup covering both
+   phases. LocoWorkers.mutations lists the bugs the properties detect,
+   including the setup order whose failures escaped cleanup.
 
    Fairness covers internal consumer and worker steps only. Drain=TRUE also
    requires a caller to keep pulling; otherwise idle callers may stop forever
    or close from any idle point. Close before first next starts no workers.
    Sentinels are item 0 and are enqueued after all submitted jobs. *)
 EXTENDS Integers, Sequences, FiniteSets, TLC
-CONSTANTS Workers, Items, FailAt, InputFailAt, SetupFailure, SetupCleanup,
-          Drain, Interrupt, Mutation
+CONSTANTS Workers, Items, FailAt, InputFailAt, SetupFailure, Drain, Interrupt
 W == 1..Workers
 I == 1..Items
 WorkerOwner(w) == "worker" \o ToString(w)
@@ -37,119 +37,98 @@ Owners == {"unproduced", "queue", "future", "caller", "free"}
           \cup {WorkerOwner(w): w \in W}
 VARIABLES cpc, wpc, held, started, jobs, pending, submitted, current,
           owner, outcome, delivered, error, ended, scope
-vars == <<cpc, wpc, held, started, jobs, pending, submitted, current,
-          owner, outcome, delivered, error, ended, scope>>
+workers == <<wpc, held>>
+items == <<jobs, owner, outcome>>
+window == <<pending, submitted, current>>
+results == <<delivered, error, ended>>
+vars == <<cpc, started, scope, workers, items, window, results>>
+\* The consumer's phase after each setup step, and where a setup failure goes.
+Setup == [first |-> "scope", afterScope |-> "starting", afterStart |-> "pull", onError |-> "closing"]
 Wake(ws) == [w \in W |-> IF ws[w] = "wait" THEN "ready" ELSE ws[w]]
+WorkersDone == \A w \in 1..started: wpc[w] = "done"
+StartFails == (SetupFailure = 1 /\ started = 1) \/ (SetupFailure = 3 /\ started = 0)
+\* The awaited Future holds a result the consumer may yield.
+Yields == outcome[current] = "ok"
 Init == /\ cpc = "idle" /\ wpc = [w \in W |-> "new"]
         /\ held = [w \in W |-> 0] /\ started = 0
         /\ jobs = <<>> /\ pending = <<>> /\ submitted = 0 /\ current = 0
         /\ owner = [i \in I |-> "unproduced"]
         /\ outcome = [i \in I |-> "none"]
         /\ delivered = <<>> /\ error = -1 /\ ended = FALSE /\ scope = FALSE
-StartCall == /\ cpc = "idle" /\ cpc' = IF SetupCleanup THEN "scope" ELSE "starting"
-             /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                  current, owner, outcome, delivered, error, ended, scope>>
-CloseUnstarted == /\ cpc = "idle" /\ ~Drain /\ cpc' = "closed"
-                  /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                       current, owner, outcome, delivered, error, ended, scope>>
-StartWorker == /\ cpc = "starting" /\ started < Workers
-               /\ ~(SetupFailure = 1 /\ started = 1)
-               /\ ~(SetupFailure = 3 /\ started = 0)
+\* The consumer moves to `to` and nothing else changes.
+Goto(to) == cpc' = to /\ UNCHANGED <<started, scope, workers, items, window, results>>
+\* The consumer records a failure before any item and moves to `to`.
+Fail(to) == /\ cpc' = to /\ error' = 0
+            /\ UNCHANGED <<started, scope, workers, items, window, delivered, ended>>
+StartCall == cpc = "idle" /\ Goto(Setup.first)
+CloseUnstarted == cpc = "idle" /\ ~Drain /\ Goto("closed")
+StartWorker == /\ cpc = "starting" /\ started < Workers /\ ~StartFails
                /\ started' = started + 1
                /\ wpc' = [wpc EXCEPT ![started + 1] = "ready"]
-               /\ UNCHANGED <<cpc, held, jobs, pending, submitted, current,
-                                owner, outcome, delivered, error, ended, scope>>
-SetupError == /\ ((cpc = "starting" /\ SetupFailure = 1 /\ started = 1)
-                  \/ (cpc = "starting" /\ SetupFailure = 3 /\ started = 0)
-                  \/ (cpc = "scope" /\ SetupFailure = 2))
-              /\ cpc' = IF SetupCleanup THEN "closing" ELSE "escaped"
-              /\ error' = 0
-              /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                               current, owner, outcome, delivered, ended, scope>>
-FinishStart == /\ cpc = "starting" /\ started = Workers /\ cpc' = IF SetupCleanup THEN "pull" ELSE "scope"
-               /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                      current, owner, outcome, delivered, error, ended, scope>>
+               /\ UNCHANGED <<cpc, scope, held, items, window, results>>
+SetupError == /\ (cpc = "starting" /\ StartFails) \/ (cpc = "scope" /\ SetupFailure = 2)
+              /\ Fail(Setup.onError)
+FinishStart == cpc = "starting" /\ started = Workers /\ Goto(Setup.afterStart)
 EnterScope == /\ cpc = "scope" /\ SetupFailure # 2
-              /\ cpc' = (IF SetupCleanup THEN "starting" ELSE "pull") /\ scope' = TRUE
-              /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                           current, owner, outcome, delivered, error, ended>>
-InputFailure == /\ cpc = "pull" /\ submitted + 1 \in InputFailAt
-                /\ cpc' = "closing" /\ error' = 0
-                /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                       current, owner, outcome, delivered, ended, scope>>
+              /\ cpc' = Setup.afterScope /\ scope' = TRUE
+              /\ UNCHANGED <<started, workers, items, window, results>>
+InputFailure == cpc = "pull" /\ submitted + 1 \in InputFailAt /\ Fail("closing")
 Submit == /\ cpc = "pull" /\ submitted < Items
           /\ submitted' = submitted + 1
           /\ owner' = [owner EXCEPT ![submitted + 1] = "queue"]
           /\ outcome' = [outcome EXCEPT ![submitted + 1] = "queued"]
           /\ jobs' = Append(jobs, submitted + 1)
           /\ pending' = Append(pending, submitted + 1)
-          /\ wpc' = IF Mutation = "no-queue-wake" THEN wpc ELSE Wake(wpc)
-          /\ cpc' = IF Len(pending') = (IF Mutation = "oversubmit" THEN Workers + 1 ELSE Workers) THEN "pop" ELSE "pull"
-          /\ UNCHANGED <<held, started, current, delivered, error, ended, scope>>
+          /\ wpc' = Wake(wpc)
+          /\ cpc' = IF Len(pending') = Workers THEN "pop" ELSE "pull"
+          /\ UNCHANGED <<held, started, current, results, scope>>
 EndInput == /\ cpc = "pull" /\ submitted = Items
             /\ cpc' = IF Len(pending) > 0 THEN "pop" ELSE "closing"
-            /\ ended' = (Len(pending) = 0 \/ Mutation = "early-end")
-            /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                           current, owner, outcome, delivered, error, scope>>
+            /\ ended' = (Len(pending) = 0)
+            /\ UNCHANGED <<started, scope, workers, items, window, delivered, error>>
 Pop == /\ cpc = "pop" /\ Len(pending) > 0 /\ cpc' = "await"
-       /\ current' = IF Mutation = "lifo" THEN pending[Len(pending)] ELSE Head(pending)
-       /\ pending' = IF Mutation = "lifo" THEN SubSeq(pending, 1, Len(pending)-1)
-                     ELSE Tail(pending)
-       /\ UNCHANGED <<wpc, held, started, jobs, submitted, owner, outcome,
-                      delivered, error, ended, scope>>
+       /\ current' = Head(pending) /\ pending' = Tail(pending)
+       /\ UNCHANGED <<started, scope, workers, items, submitted, results>>
 Await == /\ cpc = "await"
-         /\ cpc' = CASE (outcome[current] = "ok" \/ (Mutation = "ignore-error" /\ outcome[current] = "err")) -> "yield"
+         /\ cpc' = CASE Yields -> "yield"
                         [] outcome[current] = "err" -> "closing"
                         [] OTHER -> "wait"
-         /\ delivered' = IF outcome[current] = "ok" \/ (Mutation = "ignore-error" /\ outcome[current] = "err") THEN Append(delivered, current)
-                          ELSE delivered
-         /\ owner' = IF outcome[current] = "ok" \/ (Mutation = "ignore-error" /\ outcome[current] = "err")
-                     THEN [owner EXCEPT ![current] = "caller"] ELSE owner
+         /\ delivered' = IF Yields THEN Append(delivered, current) ELSE delivered
+         /\ owner' = IF Yields THEN [owner EXCEPT ![current] = "caller"] ELSE owner
          /\ error' = IF outcome[current] = "err" THEN current ELSE error
-         /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                         current, outcome, ended, scope>>
+         /\ UNCHANGED <<started, scope, workers, jobs, outcome, window, ended>>
 Resume == /\ cpc = "yield" /\ cpc' = "pull" /\ current' = 0
-          /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted, owner,
-                          outcome, delivered, error, ended, scope>>
-Close == /\ cpc = "yield" /\ ~Drain /\ cpc' = "closing"
-         /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted, current,
-                         owner, outcome, delivered, error, ended, scope>>
-Interrupted == /\ Interrupt /\ cpc \in {"pull", "await", "wait", "pop"}
-               /\ cpc' = "abandoning"
-               /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted,
-                      current, owner, outcome, delivered, error, ended, scope>>
+          /\ UNCHANGED <<started, scope, workers, items, pending, submitted, results>>
+Close == cpc = "yield" /\ ~Drain /\ Goto("closing")
+Interrupted == Interrupt /\ cpc \in {"pull", "await", "wait", "pop"} /\ Goto("abandoning")
 Cleanup == /\ cpc \in {"closing", "abandoning"}
            /\ cpc' = IF cpc = "abandoning" THEN "abandoned" ELSE "joining"
-           /\ jobs' = IF Mutation = "no-sentinels" THEN jobs
-                       ELSE jobs \o [k \in 1..Workers |-> 0]
-           /\ wpc' = IF Mutation = "no-queue-wake" THEN wpc ELSE Wake(wpc)
+           /\ jobs' = jobs \o [k \in 1..Workers |-> 0]
+           /\ wpc' = Wake(wpc)
            /\ outcome' = [i \in I |-> IF outcome[i] = "queued" THEN "cancelled"
                                      ELSE outcome[i]]
-           /\ scope' = IF cpc = "abandoning" \/ Mutation = "early-restore" THEN FALSE ELSE scope
-           /\ UNCHANGED <<held, started, pending, submitted, current,
-                            owner, delivered, error, ended>>
-Joined == /\ cpc = "joining" /\ \A w \in 1..started: wpc[w] = "done"
+           /\ scope' = IF cpc = "abandoning" THEN FALSE ELSE scope
+           /\ UNCHANGED <<held, started, owner, window, results>>
+Joined == /\ cpc = "joining" /\ WorkersDone
           /\ cpc' = "closed" /\ scope' = FALSE /\ pending' = <<>>
-          /\ owner' = [i \in I |-> IF owner[i] \in {"future", "queue"} /\ Mutation # "retain-future"
-                                      THEN "free" ELSE owner[i]]
-          /\ UNCHANGED <<wpc, held, started, jobs, submitted, current,
-                           outcome, delivered, error, ended>>
+          /\ owner' = [i \in I |-> IF owner[i] \in {"future", "queue"} THEN "free" ELSE owner[i]]
+          /\ UNCHANGED <<started, workers, jobs, outcome, submitted, current, results>>
 WorkerGet(w) ==
     /\ wpc[w] = "ready"
     /\ IF Len(jobs) = 0
        THEN /\ wpc' = [wpc EXCEPT ![w] = "wait"]
-            /\ UNCHANGED <<jobs, held, owner, outcome>>
-       ELSE /\ jobs' = IF Mutation = "duplicate-job" THEN jobs ELSE Tail(jobs)
-            /\ held' = [held EXCEPT ![w] = Head(jobs)]
-            /\ wpc' = [wpc EXCEPT ![w] = IF Head(jobs) = 0 THEN "done"
-                             ELSE IF outcome[Head(jobs)] = "cancelled" THEN "discard"
+            /\ UNCHANGED <<held, items>>
+       ELSE LET j == Head(jobs) IN
+            /\ jobs' = Tail(jobs)
+            /\ held' = [held EXCEPT ![w] = j]
+            /\ wpc' = [wpc EXCEPT ![w] = IF j = 0 THEN "done"
+                             ELSE IF outcome[j] = "cancelled" THEN "discard"
                                   ELSE "solve"]
-            /\ owner' = IF Head(jobs) = 0 THEN owner
-                         ELSE [owner EXCEPT ![Head(jobs)] = IF Mutation = "orphan" THEN "orphan" ELSE WorkerOwner(w)]
-            /\ outcome' = IF Head(jobs) = 0 \/ outcome[Head(jobs)] = "cancelled"
-                           THEN outcome ELSE [outcome EXCEPT ![Head(jobs)] = "running"]
-    /\ UNCHANGED <<cpc, started, pending, submitted, current,
-                     delivered, error, ended, scope>>
+            /\ owner' = IF j = 0 THEN owner
+                         ELSE [owner EXCEPT ![j] = WorkerOwner(w)]
+            /\ outcome' = IF j = 0 \/ outcome[j] = "cancelled"
+                           THEN outcome ELSE [outcome EXCEPT ![j] = "running"]
+    /\ UNCHANGED <<cpc, started, scope, window, results>>
 WorkerFinish(w) ==
     /\ wpc[w] \in {"solve", "discard"}
     /\ \E result \in {"ok", "err"}:
@@ -159,18 +138,13 @@ WorkerFinish(w) ==
     /\ owner' = [owner EXCEPT ![held[w]] =
                               IF wpc[w] = "discard" THEN "free" ELSE "future"]
     /\ wpc' = [wpc EXCEPT ![w] = "ready"] /\ held' = [held EXCEPT ![w] = 0]
-    /\ cpc' = IF cpc = "wait" /\ current = held[w] /\ Mutation # "no-future-wake"
-               THEN "await" ELSE cpc
-    /\ UNCHANGED <<started, jobs, pending, submitted, current,
-                     delivered, error, ended, scope>>
+    /\ cpc' = IF cpc = "wait" /\ current = held[w] THEN "await" ELSE cpc
+    /\ UNCHANGED <<started, scope, jobs, window, results>>
 Spurious ==
-    \/ /\ cpc = "wait" /\ cpc' = "await"
-       /\ UNCHANGED <<wpc, held, started, jobs, pending, submitted, current,
-                       owner, outcome, delivered, error, ended, scope>>
+    \/ cpc = "wait" /\ Goto("await")
     \/ /\ \E w \in W: /\ wpc[w] = "wait"
                          /\ wpc' = [wpc EXCEPT ![w] = "ready"]
-       /\ UNCHANGED <<cpc, held, started, jobs, pending, submitted, current,
-                       owner, outcome, delivered, error, ended, scope>>
+       /\ UNCHANGED <<cpc, started, scope, held, items, window, results>>
 Internal == StartWorker \/ SetupError \/ FinishStart \/ EnterScope \/ InputFailure
             \/ Submit \/ EndInput \/ Pop \/ Await \/ Cleanup \/ Joined
 Next == StartCall \/ CloseUnstarted \/ Internal \/ Resume \/ Close \/ Interrupted
@@ -199,7 +173,7 @@ NoDeliveryAfterFailure == \A k \in 1..Len(delivered): outcome[delivered[k]] = "o
 ErrorOrder == error > 0 => Len(delivered) = error - 1
 WindowBound == Cardinality({i \in I: owner[i] \in {"queue", "future"}
                                 \/ (\E w \in W: owner[i] = WorkerOwner(w))}) <= Workers
-ClosedClean == cpc = "closed" => /\ \A w \in 1..started: wpc[w] = "done"
+ClosedClean == cpc = "closed" => /\ WorkersDone
                                     /\ \A i \in I: owner[i] \in {"unproduced", "caller", "free"}
                                     /\ ~scope
 SetupClean == cpc = "escaped" => started = 0

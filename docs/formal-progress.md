@@ -27,14 +27,16 @@ There were two paths to an incorrect 100% display:
 
 The first counterexample maps to a consumer timeout at line 200, a polling
 stdout failure at line 205, the break at line 207 and premature full update
-at line 210, while the worker remains inside `fn()` at line 188. TLC rejects
-this original behavior in 18 explored states.
+at line 210, while the worker remains inside `fn()` at line 188. The mutation
+"full update without checking that the worker finished" in
+`tla/TimedProgress.mutations` restores this behavior, and TLC rejects it.
 
 For a failing worker, the trace is worker failure at line 188, publication in
 `exception` at line 190, notification at line 192, consumer wake at line 200,
 skipped explicit success update at line 208, then implicit full redraw from
-line 216. TLC rejects it in 34 states. Consumer KeyboardInterrupt takes the
-same unclean-finish path at lines 211-216 and is rejected in 17 states. All
+line 216. Consumer KeyboardInterrupt takes the same unclean-finish path at
+lines 211-216. The two "finish redraws 100%" mutations restore that finish,
+and TLC rejects both. All
 three paths are reachable with the shipped single worker and normal 100-tick
 bar. No special queue capacity or unsupported caller is needed.
 
@@ -99,79 +101,4 @@ supported stdout contract. That exceptional join-bypass path is an explicit
 limitation of this model. Thread-start/result-box allocator failures and
 asynchronous interrupts during library internals are also outside it.
 
-## Final matrix
-
-All eight fixed runs pass, with 319 distinct states summed across runs. The
-sum is checked workload, not a single graph. Each run explores all worker
-publication/notification/exit interleavings with consumer timeouts and polling.
-
-| Label | Distinct states | Verdict |
-| --- | ---: | --- |
-| empty-value | 37 | PASS |
-| result | 37 | PASS |
-| exception | 42 | PASS |
-| base-exception | 42 | PASS |
-| stdout-error-result | 34 | PASS |
-| stdout-error-exception | 29 | PASS |
-| interrupt-result | 59 | PASS |
-| interrupt-error | 39 | PASS |
-
-## Mutation sensitivity
-
-Each mutation ran on an isolated temporary copy with only its named property
-checked. All nine runs failed as expected, covering every checked property.
-The repository matrix uses `Fixed=TRUE Mutation="none"`; diagnostic mutation
-branches are inactive. Failure state counts came from retained full TLC logs,
-because the matrix helper's reduced failure output omits those counts.
-
-Unless overridden below, runs use nonempty successful output, no stdout
-failure, no interruption, fixed behavior and no mutation.
-
-| Mutation or original behavior | Constants | Property | Distinct states | Verdict |
-| --- | --- | --- | ---: | --- |
-| Original error finish | Outcome="error", Fixed=FALSE | HonestCompletion | 34 | FAIL as expected |
-| Original polling stdout break | OutputFailure="poll", Fixed=FALSE | HonestCompletion | 18 | FAIL as expected |
-| Original consumer cancellation | AllowInterrupt=TRUE, Fixed=FALSE | HonestCompletion | 17 | FAIL as expected |
-| Timer advances to 100 before callable completion | Mutation="uncapped" | HonestCompletion | 12 | FAIL as expected |
-| Omit normal join | Mutation="no-join" | JoinedBeforeReport | 38 | FAIL as expected |
-| Catch only Exception | Outcome="base", Mutation="drop-base-catch" | OutcomeDelivered | 42 | FAIL as expected |
-| Retain output in mutable box | Mutation="retain-box" | Ownership | 37 | FAIL as expected |
-| Lose recorded output ownership | Mutation="orphan" | TypeOK | 9 | FAIL as expected |
-| Omit done.set | Mutation="no-notify" | Terminates | 30 | FAIL as expected |
-
-Removing the BaseException catch still executes the source's `finally` and
-sets the Event. The consumer then lacks both result and error and would reach
-`result[0]`, raising an unrelated IndexError; the model's outcome-routing
-property detects this. Removing the notification leaves the consumer timing
-out and polling forever despite a terminated worker, producing a liveness
-counterexample.
-
-## Recheck
-
-From the repository root, with an isolated Java temporary directory:
-
-```sh
-mkdir -p /tmp/jamma-progress-jvm
-JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/tmp/jamma-progress-jvm \
-JAVA=/opt/homebrew/opt/openjdk@21/bin/java TLC_WORKERS=2 \
-bash /Users/mdenyer/.codex/plugins/cache/agent-formal-verify/agent-formal-verify/0.1.11/skills/formal-verify/scripts/tlc-matrix.sh \
-/Users/mdenyer/VSCode/jamma/tla/TimedProgress.matrix
-
-uv run pytest tests/test_timed_progress_completion.py tests/test_progress.py -q
-```
-
-The isolated mutation command was:
-
-```sh
-JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/tmp/progress-mut-jvm \
-JAVA=/tmp/progress-java-capture TLC_WORKERS=2 \
-bash /Users/mdenyer/.codex/plugins/cache/agent-formal-verify/agent-formal-verify/0.1.11/skills/formal-verify/scripts/tlc-matrix.sh \
-/tmp/progress-mutations/TimedProgress.matrix
-```
-
-The wrapper forwarded to the same Java binary and retained complete logs and
-configuration files for counts. To reproduce a mutation, copy the model to a
-temporary directory, write a one-run matrix with the table's constants and
-named property, and use the installed matrix helper. Keep the repository
-matrix unmutated. TLC's local RMI listener required approved execution outside
-the restrictive socket sandbox. No CI job was added.
+The commands that recheck this model are in [TESTING.md](TESTING.md#4-formal-models). The deliberate bugs its checks must catch are listed in `tla/TimedProgress.mutations`.

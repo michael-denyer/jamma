@@ -3,3 +3,4 @@ defaultTargets = ["Model"]
 
 [[lean_lib]]
 name = "Model"
+globs = ["Model.+"]

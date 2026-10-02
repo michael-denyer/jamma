@@ -1,0 +1,11 @@
+# Mutations for mutate.py. Each one swaps a piece of ChunkSlots.lean for a
+# plausible bug. The text after `- ` must occur exactly once in the model;
+# `+ ` lines replace it. mutate.py reports the declarations that fail on each.
+
+mutation slot overflow
+- def slot (counter buffers : Nat) : Nat := counter % buffers
++ def slot (counter buffers : Nat) : Nat := counter % buffers + buffers
+
+mutation reuse consecutive slot
+- def slot (counter buffers : Nat) : Nat := counter % buffers
++ def slot (counter buffers : Nat) : Nat := (counter / 2) % buffers

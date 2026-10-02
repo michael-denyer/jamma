@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The formal models follow the agent-formal-verify 0.2 layout. The two Lean
+  models share one Lake project in `lean/`, and each model's deliberate bugs
+  live in a `.mutations` file beside it instead of in constants and branches
+  inside the model. `docs/TESTING.md` §4 has one row per model and the
+  commands to rerun them. `lean/check_mutations.py` and
+  `docs/formal-verification.md` are removed.
+
 ## [8.2.2] - 2026-10-02
 
 ### Added

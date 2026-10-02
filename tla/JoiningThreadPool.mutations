@@ -1,0 +1,72 @@
+# Mutations for mutate.py. Each one swaps a piece of JoiningThreadPool.tla for
+# a plausible bug and names the one property that must fail on it. The text
+# after `- ` must occur exactly once in the spec; `+ ` lines replace it. An
+# optional `only <label-substring>` line limits the matrix runs. Every property
+# the matrix checks needs a mutation.
+
+mutation settling a callable does not notify the waiting shutdown
+detects BlockingReturns
+only workers=2 items=3 mode=normal
+- /\ main' = Wake(main)
++ /\ main' = main
+
+mutation shutdown cancels queued futures without removing their tokens
+detects BlockingReturns
+only workers=2 items=3 mode=cancel
+-                       /\ outstanding' = {j \in outstanding : state[j] = "running"}
+-                       /\ state' = [j \in J |-> IF state[j] = "pending" THEN "settled" ELSE state[j]]
++                       /\ UNCHANGED tokens
+
+mutation a wakeup returns from the wait without rechecking the tokens
+detects NoLeak
+only workers=2 items=3 mode=normal
+- SpuriousWake == main = "wait" /\ MainGoes("drain-lock")
++ SpuriousWake == main = "wait" /\ MainGoes("join")
+
+mutation a failed submit leaves its token in place
+detects TokensExact
+only workers=2 items=3 mode=submit-error
+- /\ outstanding' = outstanding \ {cancelJob}
++ /\ outstanding' = outstanding
+
+mutation shutdown clears the tokens of running callables too
+detects TokensExact
+only workers=2 items=3 mode=cancel
+- /\ outstanding' = {j \in outstanding : state[j] = "running"}
++ /\ outstanding' = {}
+
+mutation a failed submit removes a token that a worker already owns
+detects BorrowedRunning
+only workers=2 items=3 mode=submit-error
+- /\ IF state[cancelJob] = "pending"
++ /\ IF TRUE
+
+mutation a worker runs a wrapper whose token was removed
+detects TokensExact
+only workers=2 items=3 mode=submit-error
+- /\ IF state[job[w]] = "settled"
++ /\ IF FALSE
+
+mutation the job counter advances by two
+detects TypeOK
+only workers=2 items=1 mode=normal
+- nextJob' = nextJob + 1
++ nextJob' = nextJob + 2
+
+mutation a worker takes a job without removing it from the queue
+detects Ownership
+only workers=2 items=3 mode=normal
+- /\ queue' = Tail(queue)
++ /\ queue' = queue
+
+mutation a worker borrows a cancelled job's arguments after shutdown returned
+detects NoBorrowAfterRelease
+only workers=2 items=3 mode=cancel
+- /\ IF state[job[w]] = "settled"
++ /\ IF FALSE
+
+mutation join never returns
+detects NoCloseTerminates
+only workers=2 items=3 mode=normal
+- Join == /\ main = "join" /\ main' = "closed"
++ Join == /\ main = "join" /\ main' = "join"

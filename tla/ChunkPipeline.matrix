@@ -1,22 +1,22 @@
 spec ChunkPipeline.tla
 check INVARIANTS TypeOK Ownership Partition Order NoDuplicate ErrorOrder BlasLifetime NoLeak
 check PROPERTIES NoOutputAfterTerminal BlockingReturns CloseTerminates UnwindTerminates NoCloseReachesEnd
-run slots=2 items=0 failure=none workers=1 | Slots=2 Items=0 FailAt={} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=0 failure=prepare-all workers=1 | Slots=2 Items=0 FailAt={} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=0 failure=compute-all workers=1 | Slots=2 Items=0 FailAt={} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=0 failure=both-all workers=1 | Slots=2 Items=0 FailAt={} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=1 failure=none workers=1 | Slots=2 Items=1 FailAt={} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=1 failure=prepare-all workers=1 | Slots=2 Items=1 FailAt={1} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=1 failure=compute-all workers=1 | Slots=2 Items=1 FailAt={} ComputeFailAt={1} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=1 failure=both-all workers=1 | Slots=2 Items=1 FailAt={1} ComputeFailAt={1} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=3 failure=none workers=1 | Slots=2 Items=3 FailAt={} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=3 failure=prepare-all workers=1 | Slots=2 Items=3 FailAt={1,2,3} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=3 failure=compute-all workers=1 | Slots=2 Items=3 FailAt={} ComputeFailAt={1,2,3} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=3 failure=both-all workers=1 | Slots=2 Items=3 FailAt={1,2,3} ComputeFailAt={1,2,3} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=5 failure=none workers=1 | Slots=2 Items=5 FailAt={} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=5 failure=prepare-all workers=1 | Slots=2 Items=5 FailAt={1,2,3,4,5} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=5 failure=compute-all workers=1 | Slots=2 Items=5 FailAt={} ComputeFailAt={1,2,3,4,5} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=5 failure=both-all workers=1 | Slots=2 Items=5 FailAt={1,2,3,4,5} ComputeFailAt={1,2,3,4,5} InterruptJoin=FALSE CompletionBarrier=TRUE
+run slots=2 items=0 failure=none workers=1 | Slots=2 Items=0 FailAt={} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=0 failure=prepare-all workers=1 | Slots=2 Items=0 FailAt={} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=0 failure=compute-all workers=1 | Slots=2 Items=0 FailAt={} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=0 failure=both-all workers=1 | Slots=2 Items=0 FailAt={} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=1 failure=none workers=1 | Slots=2 Items=1 FailAt={} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=1 failure=prepare-all workers=1 | Slots=2 Items=1 FailAt={1} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=1 failure=compute-all workers=1 | Slots=2 Items=1 FailAt={} ComputeFailAt={1} InterruptJoin=FALSE
+run slots=2 items=1 failure=both-all workers=1 | Slots=2 Items=1 FailAt={1} ComputeFailAt={1} InterruptJoin=FALSE
+run slots=2 items=3 failure=none workers=1 | Slots=2 Items=3 FailAt={} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=3 failure=prepare-all workers=1 | Slots=2 Items=3 FailAt={1,2,3} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=3 failure=compute-all workers=1 | Slots=2 Items=3 FailAt={} ComputeFailAt={1,2,3} InterruptJoin=FALSE
+run slots=2 items=3 failure=both-all workers=1 | Slots=2 Items=3 FailAt={1,2,3} ComputeFailAt={1,2,3} InterruptJoin=FALSE
+run slots=2 items=5 failure=none workers=1 | Slots=2 Items=5 FailAt={} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=5 failure=prepare-all workers=1 | Slots=2 Items=5 FailAt={1,2,3,4,5} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=5 failure=compute-all workers=1 | Slots=2 Items=5 FailAt={} ComputeFailAt={1,2,3,4,5} InterruptJoin=FALSE
+run slots=2 items=5 failure=both-all workers=1 | Slots=2 Items=5 FailAt={1,2,3,4,5} ComputeFailAt={1,2,3,4,5} InterruptJoin=FALSE
 # Expected failing boundary: policy prohibits this pipeline configuration.
-run slots=1 items=3 unsafe-boundary workers=1 | Slots=1 Items=3 FailAt={} ComputeFailAt={} InterruptJoin=FALSE CompletionBarrier=TRUE
-run slots=2 items=3 interrupted-join workers=1 | Slots=2 Items=3 FailAt={} ComputeFailAt={1} InterruptJoin=TRUE CompletionBarrier=TRUE
+run slots=1 items=3 unsafe-boundary workers=1 | Slots=1 Items=3 FailAt={} ComputeFailAt={} InterruptJoin=FALSE
+run slots=2 items=3 interrupted-join workers=1 | Slots=2 Items=3 FailAt={} ComputeFailAt={1} InterruptJoin=TRUE

@@ -1,0 +1,59 @@
+# Mutations for mutate.py. Each one swaps a piece of TimedProgress.tla for a
+# plausible bug and names the one property that must fail on it. The text
+# after `- ` must occur exactly once in the spec; `+ ` lines replace it. An
+# optional `only <label-substring>` line limits the matrix runs. Every property
+# the matrix checks needs a mutation.
+
+# The two halves of timed_progress before its fix.
+mutation full update without checking that the worker finished
+detects HonestCompletion
+only stdout-error
+- /\ Complete(Successful, Succeeded)
++ /\ Complete(box \notin {"error", "base"}, Succeeded)
+
+mutation finish redraws 100% on every exit
+detects HonestCompletion
+only exception
+- /\ Complete(Successful /\ ~cancelled, Succeeded /\ ~cancelled)
++ /\ Complete(TRUE, Succeeded /\ ~cancelled)
+
+mutation finish redraws 100% after the caller cancels
+detects HonestCompletion
+only interrupt-result
+- /\ Complete(Successful /\ ~cancelled, Succeeded /\ ~cancelled)
++ /\ Complete(TRUE, Succeeded /\ ~cancelled)
+
+mutation polling draws 100% instead of capping at 99%
+detects HonestCompletion
+-         /\ display' = IF OutputFailure = "poll" THEN display ELSE 99
+-         /\ UNCHANGED <<falseCompletion, outcome, worker, shared>>
++         /\ Complete(OutputFailure # "poll", Succeeded)
++         /\ UNCHANGED <<outcome, worker, shared>>
+
+mutation BaseException escapes the worker without being published
+detects OutcomeDelivered
+only base-exception
+-            /\ box' = Outcome
+-            /\ owner' = "box"
++            /\ box' = IF Outcome = "base" THEN "none" ELSE Outcome
++            /\ owner' = IF Outcome = "base" THEN "free" ELSE "box"
+
+mutation published result has no owner
+detects TypeOK
+- /\ owner' = "box"
++ /\ owner' = "orphan"
+
+mutation worker never sets the done event
+detects Terminates
+- /\ done' = TRUE
++ /\ done' = FALSE
+
+mutation consumer reports without joining the worker
+detects JoinedBeforeReport
+- Join == /\ pc = "join" /\ workerExited
++ Join == /\ pc = "join"
+
+mutation caller never takes the result out of the box
+detects Ownership
+- /\ owner' = "caller"
++ /\ owner' = owner

@@ -1,0 +1,89 @@
+# Mutations for mutate.py. Each one swaps a piece of ChunkPipeline.tla for a
+# plausible bug and names the one property that must fail on it. The text
+# after `- ` must occur exactly once in the spec; `+ ` lines replace it. An
+# optional `only <label-substring>` line limits the matrix runs. Every property
+# the matrix checks needs a mutation.
+#
+# Every mutation is limited to two-buffer runs. The one-buffer run fails
+# Ownership without any mutation, so it would count as a detection of anything.
+
+mutation chunk counter skips an item
+detects TypeOK
+only slots=2 items=1 failure=none
+- nextItem' = nextItem + 1
++ nextItem' = nextItem + 2
+
+mutation every chunk uses the first rotation buffer
+detects Ownership
+only slots=2 items=3 failure=none
+- Slot(i) == ((i - 1) % Slots) + 1
++ Slot(i) == 1
+
+mutation chunk dropped on a compute error is not recorded as discarded
+detects Partition
+only slots=2 items=3 failure=compute-all
+- /\ discarded' = discarded \cup {current}
++ /\ discarded' = discarded
+
+mutation compute reads the other rotation buffer
+detects Order
+only slots=2 items=3 failure=none
+- output' = Append(output, contents[Slot(current)])
++ output' = Append(output, contents[Slot(current + 1)])
+
+mutation compute writes its chunk twice
+detects NoDuplicate
+only slots=2 items=3 failure=none
+- output' = Append(output, contents[Slot(current)])
++ output' = Append(output, contents[Slot(current)]) \o <<contents[Slot(current)]>>
+
+mutation background error reported before the current chunk is computed
+detects ErrorOrder
+only slots=2 items=3 failure=prepare-all
+- Await == /\ fg = "await" /\ bg \in Settled
++ Await == /\ fg \in {"await", "idle"} /\ bg \in Settled
+
+mutation join leaves the buffer leases in place
+detects NoLeak
+only slots=2 items=3 failure=none
+- /\ owner' = [s \in 1..Slots |-> "free"]
++ /\ UNCHANGED owner
+
+# The executor before it had a completion barrier.
+mutation interrupted join returns while the worker still rotates
+detects BlasLifetime
+only interrupted-join
+- report = "compute-error" /\ bg = "rotate"
+-                    /\ fg' = "join"
++ report = "compute-error" /\ bg = "rotate"
++                    /\ fg' = "restore"
+
+mutation later chunks are computed after a compute error
+detects NoOutputAfterTerminal
+only slots=2 items=3 failure=compute-all
+- THEN /\ report' = "compute-error" /\ fg' = "error"
++ THEN /\ report' = "compute-error" /\ fg' = "await"
+
+mutation join retries for ever after the worker has finished
+detects BlockingReturns
+only slots=2 items=3 failure=none
+- /\ current' = 0 /\ future' = 0 /\ bg' = "off" /\ fg' = "restore"
++ /\ current' = 0 /\ future' = 0 /\ bg' = "off" /\ fg' = "join"
+
+mutation restoring the BLAS limits never completes close
+detects CloseTerminates
+only slots=2 items=3 failure=none
+- Restore == /\ fg = "restore" /\ fg' = "closed"
++ Restore == /\ fg = "restore" /\ fg' = "restore"
+
+mutation an ended or failed pipeline is never unwound
+detects UnwindTerminates
+only slots=2 items=3 failure=none
+- AutoUnwind == /\ fg \in {"ended", "error"} /\ fg' = "join"
++ AutoUnwind == /\ fg \in {"ended", "error"} /\ fg' = fg
+
+mutation a pipeline that reaches the end of its input is never unwound
+detects NoCloseReachesEnd
+only slots=2 items=3 failure=none
+- AutoUnwind == /\ fg \in {"ended", "error"} /\ fg' = "join"
++ AutoUnwind == /\ fg \in {"error"} /\ fg' = "join"

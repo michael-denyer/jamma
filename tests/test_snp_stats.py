@@ -267,3 +267,31 @@ def test_numpy_fallback_means_float32_input_in_double():
         return means
 
     np.testing.assert_array_equal(means_of(data.astype(np.float32)), means_of(data))
+
+
+def test_numpy_fallback_is_independent_of_memory_order():
+    """The fallback matches the C kernel: equal values give equal statistics.
+
+    NumPy sums a C-ordered and a Fortran-ordered array in different orders, so
+    the matrix and PLINK readers would otherwise disagree in the last bits.
+    """
+    from jamma.jlinalg._snp_stats import compute_snp_stats_chunk as fallback
+
+    rng = np.random.default_rng(7)
+    data = rng.integers(0, 3, size=(1001, 6)).astype(np.float64)
+    data[::13, 2] = np.nan
+
+    def stats_of(chunk):
+        means, variances = np.empty(6), np.empty(6)
+        fallback(chunk, means, np.empty(6, dtype=np.intp), variances)
+        return means, variances
+
+    layouts = {
+        "C": data,
+        "strided": np.repeat(data, 2, axis=1)[:, ::2],
+    }
+    expected = stats_of(np.asfortranarray(data))
+    for name, chunk in layouts.items():
+        means, variances = stats_of(chunk)
+        np.testing.assert_array_equal(means, expected[0], err_msg=name)
+        np.testing.assert_array_equal(variances, expected[1], err_msg=name)

@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The README pipeline diagram and `docs/architecture.png` show the `-loco`
   path: per-chromosome kinship, eigendecomposition and association.
 
+### Fixed
+
+- The NumPy SNP-statistics fallback gives the same means and variances for the
+  same genotypes whatever their memory order. A C-ordered matrix and a
+  Fortran-ordered PLINK read used to differ by about 1e-15 in the variance.
+  The native kernel was already order-independent.
+- The weekly sanitizer run passes again (#492). The stale-ABI rebuild test no
+  longer inherits `JAMMA_FORCE_NUMPY_FALLBACK`, and the GEMMA equivalence
+  report is skipped when the AddressSanitizer runtime is loaded, where it no
+  longer fits its 300 s timeout.
+
 ## [8.2.2] - 2026-10-02
 
 ### Added

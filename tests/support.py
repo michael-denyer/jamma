@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import shutil
 from pathlib import Path
 
@@ -25,6 +26,23 @@ _LINT_COMMON = _REPO_ROOT / "scripts" / "_lint_common.py"
 # it out for the span of one test.
 requires_c = pytest.mark.skipif(
     not accel.available(), reason="C extension _lmm_accel not available"
+)
+
+
+def sanitizer_runtime_loaded() -> bool:
+    """Report whether the AddressSanitizer runtime is loaded in this process.
+
+    Asks the process for the runtime's own entry point rather than reading the
+    build environment, so it answers for however the runtime got there.
+    """
+    return hasattr(ctypes.CDLL(None), "__asan_init")
+
+
+# Child processes inherit the preloaded runtime and run several times slower
+# under it, even when they load no instrumented code.
+skip_under_sanitizer = pytest.mark.skipif(
+    sanitizer_runtime_loaded(),
+    reason="AddressSanitizer runtime loaded: the subprocess outruns its timeout",
 )
 
 

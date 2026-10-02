@@ -193,10 +193,11 @@ PyPI publishing uses GitHub trusted publishing (no API tokens needed locally).
 
 1. Bump `version` in `pyproject.toml`
 2. Run `uv lock` and commit the updated `uv.lock`
-3. Update `CHANGELOG.md` (move Unreleased items to the new version section), and set `version` and `date-released` in `CITATION.cff` to the new release
+3. Update `CHANGELOG.md` (move Unreleased items to the new version section), set `version` and `date-released` in `CITATION.cff` to the new release, and set `version` in `docs/biotools.json`. `tests/test_release_metadata.py` fails while either file names another version
 4. Commit on a branch, open a PR, and merge it once CI is green; the ruleset rejects direct pushes to `master`
 5. Create a GitHub release: `gh release create v<X.Y.Z> --title "v<X.Y.Z>" --notes "..."`
 6. The `.github/workflows/build-wheels.yml` workflow builds wheels for Linux x86_64 and macOS arm64 (CPython 3.11–3.14) and uploads them to PyPI automatically on release
+7. After the PyPI upload, the same workflow calls `.github/workflows/biotools.yml`, which sends `docs/biotools.json` to [bio.tools](https://bio.tools/jamma) with `scripts/update_biotools.py`. The script needs the `BIOTOOLS_TOKEN` repository secret. To update the entry between releases, run `gh workflow run biotools.yml`; it builds and publishes no wheels
 
 AVX2-optimised wheels are also built and attached to the GitHub release as assets (not uploaded to PyPI — they share platform tags with baseline wheels and would conflict).
 

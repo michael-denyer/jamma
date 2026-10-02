@@ -1,0 +1,28 @@
+name: Update bio.tools entry
+
+# build-wheels.yml calls this after the PyPI upload on a release. Dispatch it
+# by hand to send docs/biotools.json without building or publishing wheels.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      BIOTOOLS_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: Send docs/biotools.json to bio.tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          persist-credentials: false
+
+      - name: Update the bio.tools entry
+        env:
+          BIOTOOLS_TOKEN: ${{ secrets.BIOTOOLS_TOKEN }}
+        run: python3 scripts/update_biotools.py

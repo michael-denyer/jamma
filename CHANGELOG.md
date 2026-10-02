@@ -9,8 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.3] - 2026-10-02
 
+### Added
+
+- A release updates the [bio.tools](https://bio.tools/jamma) entry.
+  `build-wheels.yml` calls the new `biotools.yml` workflow after the PyPI
+  upload, which sends `docs/biotools.json` with `scripts/update_biotools.py`
+  and the `BIOTOOLS_TOKEN` secret. `biotools.yml` also runs on
+  `workflow_dispatch`, without building wheels.
+  `tests/test_release_metadata.py` fails while `CITATION.cff` or
+  `docs/biotools.json` names a version other than the one in `pyproject.toml`.
+
 ### Changed
 
+- `docs/biotools.json` names release 8.2.3 instead of 8.0.4, lists BGEN v1.2
+  input, and its example command reads the default `.npy` kinship file.
 - The formal models follow the agent-formal-verify 0.2 layout. The two Lean
   models share one Lake project in `lean/`, and each model's deliberate bugs
   live in a `.mutations` file beside it instead of in constants and branches

@@ -1,11 +1,11 @@
 spec TimedProgress.tla
 check INVARIANTS TypeOK HonestCompletion JoinedBeforeReport OutcomeDelivered Ownership
 check PROPERTIES Terminates
-run empty-value | Outcome="empty" OutputFailure="none" AllowInterrupt=FALSE Fixed=TRUE Mutation="none"
-run result | Outcome="value" OutputFailure="none" AllowInterrupt=FALSE Fixed=TRUE Mutation="none"
-run exception | Outcome="error" OutputFailure="none" AllowInterrupt=FALSE Fixed=TRUE Mutation="none"
-run base-exception | Outcome="base" OutputFailure="none" AllowInterrupt=FALSE Fixed=TRUE Mutation="none"
-run stdout-error-result | Outcome="value" OutputFailure="poll" AllowInterrupt=FALSE Fixed=TRUE Mutation="none"
-run stdout-error-exception | Outcome="error" OutputFailure="poll" AllowInterrupt=FALSE Fixed=TRUE Mutation="none"
-run interrupt-result | Outcome="value" OutputFailure="none" AllowInterrupt=TRUE Fixed=TRUE Mutation="none"
-run interrupt-error | Outcome="base" OutputFailure="poll" AllowInterrupt=TRUE Fixed=TRUE Mutation="none"
+run empty-value | Outcome="empty" OutputFailure="none" AllowInterrupt=FALSE
+run result | Outcome="value" OutputFailure="none" AllowInterrupt=FALSE
+run exception | Outcome="error" OutputFailure="none" AllowInterrupt=FALSE
+run base-exception | Outcome="base" OutputFailure="none" AllowInterrupt=FALSE
+run stdout-error-result | Outcome="value" OutputFailure="poll" AllowInterrupt=FALSE
+run stdout-error-exception | Outcome="error" OutputFailure="poll" AllowInterrupt=FALSE
+run interrupt-result | Outcome="value" OutputFailure="none" AllowInterrupt=TRUE
+run interrupt-error | Outcome="base" OutputFailure="poll" AllowInterrupt=TRUE

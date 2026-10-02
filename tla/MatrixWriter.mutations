@@ -1,0 +1,84 @@
+# Mutations for mutate.py. Each one swaps a piece of MatrixWriter.tla for a
+# plausible bug and names the one property that must fail on it. The text
+# after `- ` must occur exactly once in the spec; `+ ` lines replace it. An
+# optional `only <label-substring>` line limits the matrix runs. Every property
+# the matrix checks needs a mutation.
+
+mutation pop pending futures as a stack
+detects DeliveryOrder
+only w=2 s=2 n=3 fail=none
+- /\ current' = Head(pending) /\ pending' = Tail(pending)
++ /\ current' = pending[Len(pending)] /\ pending' = SubSeq(pending, 1, Len(pending) - 1)
+
+mutation give every block the first buffer
+detects Ownership
+only w=2 s=2 n=3 fail=none
+- LET b == CHOOSE b \in FreeBuffers : TRUE IN
++ LET b == 1 IN
+
+mutation write a block without waiting for its formatter
+detects Ownership
+only w=2 s=2 n=3 fail=none
+- Result == /\ pc = "wait" /\ state[current] \in {"done","failed"}
++ Result == /\ pc = "wait"
+
+mutation keep a pending entry after handing it to the foreground
+detects Ownership
+only w=2 s=2 n=3 fail=none
+- /\ pending' = Tail(pending) /\ pc' = "wait"
++ /\ pending' = pending /\ pc' = "wait"
+
+mutation publish the file despite an error
+detects PublishComplete
+only w=2 s=2 n=3 fail=all
+- /\ published' = (error = "none")
++ /\ published' = TRUE
+
+mutation return from an interrupted shutdown before the workers drain
+detects JoinedAtReturn
+only w=2 s=2 n=3 fail=none
+-              /\ pc' = "join" /\ error' = "interrupt"
++              /\ pc' = "close" /\ error' = "interrupt"
+
+mutation take futures in any order instead of submission order
+detects ErrorOrder
+only later-failure
+- /\ current' = Head(pending) /\ pending' = Tail(pending)
++ /\ \E i \in 1..Len(pending) : current' = pending[i] /\ pending' = SubSeq(pending, 1, i - 1) \o SubSeq(pending, i + 1, Len(pending))
+
+mutation advance the next block index by two
+detects TypeOK
+only w=2 s=2 n=3 fail=none
+- nextItem' = nextItem + 1
++ nextItem' = nextItem + 2
+
+mutation write the block after reporting its formatting failure
+detects NoDeliveryAfterError
+only w=2 s=2 n=3 fail=all
+- /\ pc' = IF failed THEN "shutdown" ELSE "write"
++ /\ pc' = "write"
+
+mutation keep pending references after shutdown
+detects NoLeakAtReturn
+only w=2 s=2 n=3 fail=all
+- /\ pending' = <<>> /\ current' = 0
++ /\ pending' = pending /\ current' = 0
+
+# A formatter that never completes must fail each liveness property.
+mutation formatter never completes, so the writer never returns
+detects Terminates
+only w=2 s=2 n=3 fail=none
+- Finish(w) == /\ worker[w] # 0
++ Finish(w) == /\ FALSE
+
+mutation formatter never completes, so the wait for its result never returns
+detects ResultReturns
+only w=2 s=2 n=3 fail=none
+- Finish(w) == /\ worker[w] # 0
++ Finish(w) == /\ FALSE
+
+mutation formatter never completes, so shutdown never returns
+detects CloseReturns
+only w=2 s=2 n=3 fail=none
+- Finish(w) == /\ worker[w] # 0
++ Finish(w) == /\ FALSE

@@ -1,0 +1,97 @@
+# Mutations for mutate.py. Each one swaps a piece of LocoWorkers.tla for a
+# plausible bug and names the one property that must fail on it. The text
+# after `- ` must occur exactly once in the spec; `+ ` lines replace it. An
+# optional `only <label-substring>` line limits the matrix runs. Every property
+# the matrix checks needs a mutation.
+
+mutation a dequeued job is given an unknown owner
+detects TypeOK
+only workers=2 items=3 caller
+- ELSE [owner EXCEPT ![j] = WorkerOwner(w)]
++ ELSE [owner EXCEPT ![j] = "orphan"]
+
+mutation a worker takes a job without removing it from the queue
+detects Ownership
+only workers=2 items=3 caller
+- /\ jobs' = Tail(jobs)
++ /\ jobs' = jobs
+
+mutation pending Futures are resolved as a stack
+detects DeliveryOrder
+only workers=2 items=3 caller
+- /\ current' = Head(pending) /\ pending' = Tail(pending)
++ /\ current' = pending[Len(pending)] /\ pending' = SubSeq(pending, 1, Len(pending) - 1)
+
+mutation a failed Future is yielded as a result
+detects NoDeliveryAfterFailure
+only workers=2 items=3 caller
+- Yields == outcome[current] = "ok"
++ Yields == outcome[current] \in {"ok", "err"}
+
+mutation a failed Future is yielded before its error is raised
+detects ErrorOrder
+only workers=2 items=3 caller
+- Yields == outcome[current] = "ok"
++ Yields == outcome[current] \in {"ok", "err"}
+
+mutation one job more than the worker count is outstanding
+detects WindowBound
+only workers=2 items=3 caller
+- /\ cpc' = IF Len(pending') = Workers THEN "pop" ELSE "pull"
++ /\ cpc' = IF Len(pending') = Workers + 1 THEN "pop" ELSE "pull"
+
+mutation close keeps a settled Future
+detects ClosedClean
+only workers=2 items=3 caller
+- /\ owner' = [i \in I |-> IF owner[i] \in {"future", "queue"} THEN "free" ELSE owner[i]]
++ /\ owner' = owner
+
+# solve_eigen_pairs before its fix: workers started before the BLAS scope was
+# entered, and a failure in either setup phase escaped cleanup.
+mutation a failed worker start leaves the started workers running
+detects SetupClean
+only partial-start-failure
+- Setup == [first |-> "scope", afterScope |-> "starting", afterStart |-> "pull", onError |-> "closing"]
++ Setup == [first |-> "starting", afterScope |-> "pull", afterStart |-> "scope", onError |-> "escaped"]
+
+mutation a failed scope entry leaves every worker running
+detects SetupClean
+only scope-entry-failure
+- Setup == [first |-> "scope", afterScope |-> "starting", afterStart |-> "pull", onError |-> "closing"]
++ Setup == [first |-> "starting", afterScope |-> "pull", afterStart |-> "scope", onError |-> "escaped"]
+
+mutation cleanup restores the BLAS limits before joining the workers
+detects ScopeCoversSolve
+only workers=2 items=3 caller
+- /\ scope' = IF cpc = "abandoning" THEN FALSE ELSE scope
++ /\ scope' = FALSE
+
+mutation settling a Future does not wake the waiting consumer
+detects CallsReturn
+only workers=2 items=3 caller
+- /\ cpc' = IF cpc = "wait" /\ current = held[w] THEN "await" ELSE cpc
++ /\ cpc' = cpc
+
+mutation an enqueue does not wake the waiting workers
+detects CallsReturn
+only workers=1 items=1 drain
+- Wake(ws) == [w \in W |-> IF ws[w] = "wait" THEN "ready" ELSE ws[w]]
++ Wake(ws) == ws
+
+mutation shutdown sends no sentinels, so close never returns
+detects CloseReturns
+only workers=2 items=3 caller
+- /\ jobs' = jobs \o [k \in 1..Workers |-> 0]
++ /\ jobs' = jobs
+
+mutation shutdown sends no sentinels, so a full drain never finishes
+detects DrainEnds
+only workers=2 items=1 drain
+- /\ jobs' = jobs \o [k \in 1..Workers |-> 0]
++ /\ jobs' = jobs
+
+mutation the end of input is reported while Futures are still pending
+detects EndOrder
+only workers=2 items=1 drain
+- /\ ended' = (Len(pending) = 0)
++ /\ ended' = TRUE

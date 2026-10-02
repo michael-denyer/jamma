@@ -32,32 +32,44 @@
    library failures are abstracted by SubmitFailures. Interpreter/OS death,
    catastrophic allocation failure in exception cleanup, mutex ordering below
    Condition, and arbitrary concurrent submitters are outside this instance.
+   JoiningThreadPool.mutations lists the bugs the properties detect.
 *)
 EXTENDS Naturals, FiniteSets, Sequences
 CONSTANTS Items, Workers, SubmitFailures, CancelQueued
 VARIABLES main, lock, nextJob, outstanding, state, queue, submitted, wpc, job,
           interrupted, released, cancelJob
-vars == <<main, lock, nextJob, outstanding, state, queue, submitted, wpc, job,
-          interrupted, released, cancelJob>>
+tokens == <<outstanding, state>>
+workers == <<wpc, job>>
+caller == <<nextJob, submitted, cancelJob>>
+flags == <<interrupted, released>>
+vars == <<main, lock, tokens, queue, workers, caller, flags>>
 W == 1..Workers
 J == 1..Items
 Live == {j \in J : state[j] \in {"pending", "running"}}
-Borrowed == {job[w] : w \in {v \in W : wpc[v] \in {"run", "settle-lock", "settle"}}}
+Running == {w \in W : wpc[w] \in {"run", "settle-lock", "settle"}}
+Borrowed == {job[w] : w \in Running}
 Wake(pc) == IF pc = "wait" THEN "drain-lock" ELSE pc
 Init == /\ main = "idle" /\ lock = 0 /\ nextJob = 1 /\ outstanding = {}
         /\ state = [j \in J |-> "new"] /\ queue = <<>> /\ submitted = {}
         /\ wpc = [w \in W |-> "idle"] /\ job = [w \in W |-> 0]
         /\ interrupted = FALSE /\ released = FALSE /\ cancelJob = 0
-SubmitAcquire == /\ main = "idle" /\ nextJob <= Items /\ lock = 0
-                 /\ lock' = 1 /\ main' = "increment"
-                 /\ UNCHANGED <<nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
+\* The main thread takes the Condition's mutex and moves to `to`.
+MainAcquire(to) == /\ lock = 0 /\ lock' = 1 /\ main' = to
+                   /\ UNCHANGED <<tokens, queue, workers, caller, flags>>
+\* The main thread moves to `to` without touching shared state.
+MainGoes(to) == main' = to /\ UNCHANGED <<lock, tokens, queue, workers, caller, flags>>
+\* Worker w takes the Condition's mutex and moves to `to`.
+WorkerAcquire(w, to) == /\ lock = 0 /\ lock' = w + 1
+                        /\ wpc' = [wpc EXCEPT ![w] = to]
+                        /\ UNCHANGED <<main, tokens, queue, job, caller, flags>>
+SubmitAcquire == main = "idle" /\ nextJob <= Items /\ MainAcquire("increment")
 Increment == /\ main = "increment" /\ lock = 1
              /\ state' = [state EXCEPT ![nextJob] = "pending"] /\ outstanding' = outstanding \cup {nextJob}
              /\ submitted' = submitted \cup {nextJob} /\ main' = "enqueue" /\ lock' = 0
-             /\ UNCHANGED <<nextJob, queue, wpc, job, interrupted, released, cancelJob>>
+             /\ UNCHANGED <<nextJob, cancelJob, queue, workers, flags>>
 Enqueue == /\ main = "enqueue" /\ queue' = Append(queue, nextJob)
            /\ main' = "submit-result"
-           /\ UNCHANGED <<lock, nextJob, outstanding, state, submitted, wpc, job, interrupted, released, cancelJob>>
+           /\ UNCHANGED <<lock, tokens, workers, caller, flags>>
 SubmitResult == \E fail \in BOOLEAN :
                 /\ main = "submit-result"
                 /\ IF fail /\ nextJob \in SubmitFailures
@@ -65,68 +77,55 @@ SubmitResult == \E fail \in BOOLEAN :
                            /\ UNCHANGED nextJob
                       ELSE /\ nextJob' = nextJob + 1 /\ main' = "idle"
                            /\ UNCHANGED cancelJob
-                /\ UNCHANGED <<lock, outstanding, state, queue, submitted, wpc, job, interrupted, released>>
-CancelAcquire == /\ main = "cancel-lock" /\ lock = 0 /\ lock' = 1 /\ main' = "cancel"
-                 /\ UNCHANGED <<nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
+                /\ UNCHANGED <<lock, tokens, queue, workers, submitted, flags>>
+CancelAcquire == main = "cancel-lock" /\ MainAcquire("cancel")
 CancelPending == /\ main = "cancel" /\ lock = 1
                  /\ IF state[cancelJob] = "pending"
                        THEN /\ state' = [state EXCEPT ![cancelJob] = "settled"] /\ outstanding' = outstanding \ {cancelJob}
-                       ELSE /\ UNCHANGED <<state, outstanding>>
+                       ELSE /\ UNCHANGED tokens
                  /\ main' = "shutdown" /\ lock' = 0 /\ cancelJob' = 0
-                 /\ UNCHANGED <<nextJob, queue, submitted, wpc, job, interrupted, released>>
-Close == /\ main = "idle" /\ main' = "shutdown"
-         /\ UNCHANGED <<lock, nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
-BeginShutdown == /\ main = "shutdown" /\ main' = "cancel-queued"
-                 /\ UNCHANGED <<lock, nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
-CancelQueuedAcquire == /\ main = "cancel-queued" /\ CancelQueued /\ lock = 0
-                       /\ lock' = 1 /\ main' = "cancel-queued-settle"
-                       /\ UNCHANGED <<nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
+                 /\ UNCHANGED <<nextJob, submitted, queue, workers, flags>>
+Close == main = "idle" /\ MainGoes("shutdown")
+BeginShutdown == main = "shutdown" /\ MainGoes("cancel-queued")
+CancelQueuedAcquire == main = "cancel-queued" /\ CancelQueued /\ MainAcquire("cancel-queued-settle")
 CancelQueuedSettle == /\ main = "cancel-queued-settle" /\ lock = 1
                       /\ outstanding' = {j \in outstanding : state[j] = "running"}
                       /\ state' = [j \in J |-> IF state[j] = "pending" THEN "settled" ELSE state[j]]
                       /\ main' = "cancel-library" /\ lock' = 0
-                      /\ UNCHANGED <<nextJob, queue, submitted, wpc, job, interrupted, released, cancelJob>>
+                      /\ UNCHANGED <<queue, workers, caller, flags>>
 CancelLibrary == /\ main = "cancel-library" /\ queue' = <<>> /\ main' = "drain-lock"
-                 /\ UNCHANGED <<lock, nextJob, outstanding, state, submitted, wpc, job, interrupted, released, cancelJob>>
-DrainBegin == /\ main = "cancel-queued" /\ ~CancelQueued
-              /\ main' = "drain-lock"
-              /\ UNCHANGED <<lock, nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
-DrainAcquire == /\ main = "drain-lock" /\ lock = 0 /\ lock' = 1 /\ main' = "check"
-                /\ UNCHANGED <<nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
+                 /\ UNCHANGED <<lock, tokens, workers, caller, flags>>
+DrainBegin == main = "cancel-queued" /\ ~CancelQueued /\ MainGoes("drain-lock")
+DrainAcquire == main = "drain-lock" /\ MainAcquire("check")
 Check == /\ main = "check" /\ lock = 1 /\ lock' = 0
          /\ main' = IF outstanding = {} THEN "join" ELSE "wait"
-         /\ UNCHANGED <<nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
-SpuriousWake == /\ main = "wait" /\ main' = "drain-lock"
-                /\ UNCHANGED <<lock, nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, released, cancelJob>>
+         /\ UNCHANGED <<tokens, queue, workers, caller, flags>>
+SpuriousWake == main = "wait" /\ MainGoes("drain-lock")
 Interrupt == /\ main \in {"wait", "check", "join", "cancel-library"} /\ ~interrupted
              /\ main' = "shutdown" /\ interrupted' = TRUE /\ lock' = IF lock = 1 THEN 0 ELSE lock
-             /\ UNCHANGED <<nextJob, outstanding, state, queue, submitted, wpc, job, released, cancelJob>>
+             /\ UNCHANGED <<tokens, queue, workers, caller, released>>
 Join == /\ main = "join" /\ main' = "closed" /\ released' = TRUE
-        /\ UNCHANGED <<lock, nextJob, outstanding, state, queue, submitted, wpc, job, interrupted, cancelJob>>
+        /\ UNCHANGED <<lock, tokens, queue, workers, caller, interrupted>>
 Take(w) == /\ wpc[w] = "idle" /\ Len(queue) > 0
            /\ job' = [job EXCEPT ![w] = Head(queue)] /\ queue' = Tail(queue)
            /\ wpc' = [wpc EXCEPT ![w] = "run-lock"]
-           /\ UNCHANGED <<main, lock, nextJob, outstanding, state, submitted, interrupted, released, cancelJob>>
-RunAcquire(w) == /\ wpc[w] = "run-lock" /\ lock = 0 /\ lock' = w + 1
-                 /\ wpc' = [wpc EXCEPT ![w] = "start"]
-                 /\ UNCHANGED <<main, nextJob, outstanding, state, queue, submitted, job, interrupted, released, cancelJob>>
+           /\ UNCHANGED <<main, lock, tokens, caller, flags>>
+RunAcquire(w) == wpc[w] = "run-lock" /\ WorkerAcquire(w, "start")
 StartRun(w) == /\ wpc[w] = "start" /\ lock = w + 1 /\ lock' = 0
                /\ IF state[job[w]] = "settled"
                      THEN /\ wpc' = [wpc EXCEPT ![w] = "idle"] /\ job' = [job EXCEPT ![w] = 0]
                           /\ UNCHANGED state
                      ELSE /\ state' = [state EXCEPT ![job[w]] = "running"]
                           /\ wpc' = [wpc EXCEPT ![w] = "run"] /\ UNCHANGED job
-               /\ UNCHANGED <<main, nextJob, outstanding, queue, submitted, interrupted, released, cancelJob>>
+               /\ UNCHANGED <<main, outstanding, queue, caller, flags>>
 Run(w) == /\ wpc[w] = "run" /\ wpc' = [wpc EXCEPT ![w] = "settle-lock"]
-          /\ UNCHANGED <<main, lock, nextJob, outstanding, state, queue, submitted, job, interrupted, released, cancelJob>>
-SettleAcquire(w) == /\ wpc[w] = "settle-lock" /\ lock = 0 /\ lock' = w + 1
-                    /\ wpc' = [wpc EXCEPT ![w] = "settle"]
-                    /\ UNCHANGED <<main, nextJob, outstanding, state, queue, submitted, job, interrupted, released, cancelJob>>
+          /\ UNCHANGED <<main, lock, tokens, queue, job, caller, flags>>
+SettleAcquire(w) == wpc[w] = "settle-lock" /\ WorkerAcquire(w, "settle")
 Settle(w) == /\ wpc[w] = "settle" /\ lock = w + 1 /\ lock' = 0
              /\ state' = [state EXCEPT ![job[w]] = "settled"] /\ outstanding' = outstanding \ {job[w]}
              /\ wpc' = [wpc EXCEPT ![w] = "idle"] /\ job' = [job EXCEPT ![w] = 0]
              /\ main' = Wake(main)
-             /\ UNCHANGED <<nextJob, queue, submitted, interrupted, released, cancelJob>>
+             /\ UNCHANGED <<queue, caller, flags>>
 Pause == UNCHANGED vars
 Next == SubmitAcquire \/ Increment \/ Enqueue \/ SubmitResult \/ CancelAcquire \/ CancelPending \/
         Close \/ BeginShutdown \/ CancelQueuedAcquire \/ CancelQueuedSettle \/ CancelLibrary \/ DrainBegin \/
@@ -150,7 +149,7 @@ TypeOK == /\ main \in {"idle", "increment", "enqueue", "submit-result", "cancel-
           /\ job \in [W -> 0..Items] /\ interrupted \in BOOLEAN /\ released \in BOOLEAN
           /\ cancelJob \in 0..Items
 TokensExact == outstanding = Live
-Ownership == Cardinality(Borrowed) = Cardinality({w \in W : wpc[w] \in {"run", "settle-lock", "settle"}})
+Ownership == Cardinality(Borrowed) = Cardinality(Running)
 BorrowedRunning == \A j \in Borrowed : state[j] = "running"
 NoBorrowAfterRelease == released => Borrowed = {}
 NoLeak == main = "closed" => outstanding = {}

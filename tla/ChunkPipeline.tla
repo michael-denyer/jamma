@@ -26,50 +26,54 @@
    Finiteness of raw iteration, rotation, compute and sink calls is assumed.
    Buffer ownership here is logical lifetime; actual arrays are GC-managed and
    belong to the engine beyond executor close. NoFreeLeak means no live lease.
+   ChunkPipeline.mutations lists the bugs the properties detect.
 *)
 EXTENDS Naturals, Sequences, FiniteSets
-CONSTANTS Slots, Items, FailAt, ComputeFailAt, InterruptJoin, CompletionBarrier
+CONSTANTS Slots, Items, FailAt, ComputeFailAt, InterruptJoin
 ASSUME Slots >= 1 /\ Items >= 0
 VARIABLES fg, bg, nextItem, current, future, building, owner, contents,
           allocated, output, discarded, report, closeCalled, blasHeld
-vars == <<fg, bg, nextItem, current, future, building, owner, contents,
-          allocated, output, discarded, report, closeCalled, blasHeld>>
+leases == <<current, future, building, owner>>
+source == <<nextItem, contents, allocated>>
+results == <<output, discarded, report>>
+data == <<leases, source, results>>
+lifecycle == <<closeCalled, blasHeld>>
+vars == <<fg, bg, data, lifecycle>>
 Slot(i) == ((i - 1) % Slots) + 1
 OutputSet == {output[k] : k \in 1..Len(output)}
 Held == ({current, future, building} \ {0})
+Settled == {"ready", "error", "end"}
+Blocked == fg \in {"initial", "compute", "await", "join"}
 Init == /\ fg = "new" /\ bg = "off" /\ nextItem = 1
         /\ current = 0 /\ future = 0 /\ building = 0
         /\ owner = [s \in 1..Slots |-> "free"]
         /\ contents = [s \in 1..Slots |-> 0]
         /\ allocated = {} /\ output = <<>> /\ discarded = {}
         /\ report = "none" /\ closeCalled = FALSE /\ blasHeld = TRUE
+\* Read the next item into its slot and lease that slot to `role`.
+Lease(role) == /\ nextItem' = nextItem + 1
+               /\ owner' = [owner EXCEPT ![Slot(nextItem)] = role]
+               /\ contents' = [contents EXCEPT ![Slot(nextItem)] = nextItem]
+               /\ allocated' = allocated \cup {nextItem}
 Start == /\ fg = "new" /\ fg' = "initial"
-         /\ UNCHANGED <<bg, nextItem, current, future, building, owner,
-                        contents, allocated, output, discarded, report,
-                        closeCalled, blasHeld>>
+         /\ UNCHANGED <<bg, data, lifecycle>>
 Initial == \E failChoice \in BOOLEAN :
            /\ fg = "initial"
            /\ IF nextItem > Items
                  THEN /\ fg' = "ended" /\ report' = "end"
-                      /\ UNCHANGED <<nextItem, current, owner, contents, allocated>>
+                      /\ UNCHANGED <<current, owner, source>>
                  ELSE IF failChoice /\ nextItem \in FailAt
                       THEN /\ fg' = "error" /\ report' = "prepare-error"
-                           /\ UNCHANGED <<nextItem, current, owner, contents, allocated>>
+                           /\ UNCHANGED <<current, owner, source>>
                       ELSE /\ fg' = "submit" /\ current' = nextItem
-                           /\ nextItem' = nextItem + 1
-                           /\ owner' = [owner EXCEPT ![Slot(nextItem)] = "current"]
-                           /\ contents' = [contents EXCEPT ![Slot(nextItem)] = nextItem]
-                           /\ allocated' = allocated \cup {nextItem}
+                           /\ Lease("current")
                            /\ UNCHANGED report
-           /\ UNCHANGED <<bg, future, building, output, discarded,
-                          closeCalled, blasHeld>>
+           /\ UNCHANGED <<bg, future, building, output, discarded, lifecycle>>
 Submit == /\ fg = "submit" /\ bg = "off"
           /\ bg' = "queued" /\ fg' = "idle"
-          /\ UNCHANGED <<nextItem, current, future, building, owner, contents,
-                         allocated, output, discarded, report, closeCalled, blasHeld>>
+          /\ UNCHANGED <<data, lifecycle>>
 Request == /\ fg = "idle" /\ fg' = "compute"
-           /\ UNCHANGED <<bg, nextItem, current, future, building, owner, contents,
-                          allocated, output, discarded, report, closeCalled, blasHeld>>
+           /\ UNCHANGED <<bg, data, lifecycle>>
 Compute == \E failChoice \in BOOLEAN :
            /\ fg = "compute"
            /\ IF failChoice /\ current \in ComputeFailAt
@@ -80,17 +84,13 @@ Compute == \E failChoice \in BOOLEAN :
                       /\ fg' = "await" /\ UNCHANGED <<report, discarded>>
            /\ owner' = [owner EXCEPT ![Slot(current)] = "free"]
            /\ current' = 0
-           /\ UNCHANGED <<bg, nextItem, future, building, contents, allocated,
-                          closeCalled, blasHeld>>
+           /\ UNCHANGED <<bg, future, building, source, lifecycle>>
 BeginPrepare == /\ bg = "queued"
                 /\ IF nextItem > Items
-                      THEN /\ bg' = "end" /\ UNCHANGED <<building, nextItem, owner, contents, allocated>>
-                      ELSE /\ building' = nextItem /\ nextItem' = nextItem + 1
-                           /\ bg' = "rotate"
-                           /\ owner' = [owner EXCEPT ![Slot(nextItem)] = "background"]
-                           /\ contents' = [contents EXCEPT ![Slot(nextItem)] = nextItem]
-                           /\ allocated' = allocated \cup {nextItem}
-                /\ UNCHANGED <<fg, current, future, output, discarded, report, closeCalled, blasHeld>>
+                      THEN /\ bg' = "end" /\ UNCHANGED <<building, owner, source>>
+                      ELSE /\ building' = nextItem /\ bg' = "rotate"
+                           /\ Lease("background")
+                /\ UNCHANGED <<fg, current, future, results, lifecycle>>
 FinishPrepare == \E failChoice \in BOOLEAN :
                  /\ bg = "rotate"
                  /\ IF failChoice /\ building \in FailAt
@@ -101,9 +101,8 @@ FinishPrepare == \E failChoice \in BOOLEAN :
                             /\ owner' = [owner EXCEPT ![Slot(building)] = "future"]
                             /\ UNCHANGED discarded
                  /\ building' = 0
-                 /\ UNCHANGED <<fg, nextItem, current, contents, allocated, output,
-                                report, closeCalled, blasHeld>>
-Await == /\ fg = "await" /\ bg \in {"ready", "error", "end"}
+                 /\ UNCHANGED <<fg, current, source, output, report, lifecycle>>
+Await == /\ fg = "await" /\ bg \in Settled
          /\ IF bg = "ready"
                THEN /\ current' = future /\ future' = 0 /\ fg' = "submit"
                     /\ owner' = [owner EXCEPT ![Slot(future)] = "current"]
@@ -113,31 +112,24 @@ Await == /\ fg = "await" /\ bg \in {"ready", "error", "end"}
                     /\ report' = IF bg = "error" THEN "prepare-error" ELSE "end"
                     /\ UNCHANGED owner
          /\ bg' = "off"
-         /\ UNCHANGED <<nextItem, building, contents, allocated, output, discarded,
-                        closeCalled, blasHeld>>
+         /\ UNCHANGED <<building, source, output, discarded, lifecycle>>
 Close == /\ fg \in {"new", "idle", "ended", "error"}
          /\ fg' = "join" /\ closeCalled' = TRUE
-         /\ UNCHANGED <<bg, nextItem, current, future, building, owner, contents,
-                        allocated, output, discarded, report, blasHeld>>
+         /\ UNCHANGED <<bg, data, blasHeld>>
 AutoUnwind == /\ fg \in {"ended", "error"} /\ fg' = "join"
-              /\ UNCHANGED <<bg, nextItem, current, future, building, owner, contents,
-                             allocated, output, discarded, report, closeCalled, blasHeld>>
-Join == /\ fg = "join" /\ bg \in {"off", "ready", "error", "end"}
+              /\ UNCHANGED <<bg, data, lifecycle>>
+Join == /\ fg = "join" /\ bg \in Settled \cup {"off"}
         /\ discarded' = discarded \cup ({current, future} \ {0})
         /\ current' = 0 /\ future' = 0 /\ bg' = "off" /\ fg' = "restore"
         /\ owner' = [s \in 1..Slots |-> "free"]
-        /\ UNCHANGED <<nextItem, building, contents, allocated, output, report,
-                       closeCalled, blasHeld>>
-(* CompletionBarrier=TRUE is the current helper. FALSE reproduces the old
-   ThreadPoolExecutor: SIGINT during __exit__ unwinds its outer BLAS context
-   while a worker remains active. Barrier retries wait for callable completion. *)
+        /\ UNCHANGED <<building, source, output, report, lifecycle>>
+(* SIGINT during the executor's __exit__. The completion barrier retries the
+   join, so the foreground stays there until the worker's callable completes. *)
 InterruptedJoin == /\ InterruptJoin /\ fg = "join" /\ report = "compute-error" /\ bg = "rotate"
-                   /\ fg' = IF CompletionBarrier THEN "join" ELSE "restore"
-                   /\ UNCHANGED <<bg, nextItem, current, future, building, owner, contents,
-                                  allocated, output, discarded, report, closeCalled, blasHeld>>
+                   /\ fg' = "join"
+                   /\ UNCHANGED <<bg, data, lifecycle>>
 Restore == /\ fg = "restore" /\ fg' = "closed" /\ blasHeld' = FALSE
-           /\ UNCHANGED <<bg, nextItem, current, future, building, owner, contents,
-                          allocated, output, discarded, report, closeCalled>>
+           /\ UNCHANGED <<bg, data, closeCalled>>
 Done == fg = "closed" /\ UNCHANGED vars
 Next == Start \/ Initial \/ Submit \/ Request \/ Compute \/ BeginPrepare \/
         FinishPrepare \/ Await \/ Close \/ AutoUnwind \/ Join \/ InterruptedJoin \/ Restore \/ Done
@@ -168,7 +160,7 @@ ErrorOrder == report = "prepare-error" => Len(output) = IF nextItem = 1 THEN 0 E
 NoLeak == fg = "closed" => /\ Held = {} /\ \A s \in 1..Slots : owner[s] = "free"
 BlasLifetime == ~blasHeld => /\ bg = "off" /\ building = 0 /\ fg = "closed"
 NoOutputAfterTerminal == [][(report # "none" => output' = output)]_vars
-BlockingReturns == [](fg \in {"initial", "compute", "await", "join"} => <>(fg \notin {"initial", "compute", "await", "join"}))
+BlockingReturns == [](Blocked => <>(~Blocked))
 CloseTerminates == [](closeCalled => <>(fg = "closed"))
 UnwindTerminates == [](report # "none" => <>(fg = "closed"))
 NoCloseReachesEnd == (([](~closeCalled) /\ WF_vars(Request)) => <>(fg = "closed"))

@@ -1,0 +1,35 @@
+# Mutations for mutate.py. Each one swaps a piece of SpawnPool.tla for a
+# plausible bug and names the one property that must fail on it. The text
+# after `- ` must occur exactly once in the spec; `+ ` lines replace it. An
+# optional `only <label-substring>` line limits the matrix runs. Every property
+# the matrix checks needs a mutation.
+
+# The calling code before it polled the worker processes.
+mutation parent never polls for a dead worker
+detects Closed
+only items=1
+- Poll == (\E w \in W : worker[w] = "dead") /\ Abort
++ Poll == FALSE /\ Abort
+
+mutation worker keeps its job after handing it over
+detects Own
+-     /\ job' = [job EXCEPT ![w] = 0]
+-     /\ worker' = [worker EXCEPT ![w] = state]
++     /\ job' = job
++     /\ worker' = [worker EXCEPT ![w] = state]
+
+mutation finished worker enters an unknown state
+detects TypeOK
+- Finish(w) == Leave(w, "ok", "idle")
++ Finish(w) == Leave(w, "ok", "broken")
+
+mutation parent records the last item instead of the next one
+detects Order
+- delivered' = Append(delivered, i)
++ delivered' = Append(delivered, Items)
+
+mutation parent closes without waiting for its workers
+detects NoLeak
+- Join == /\ pc = "join"
+-         /\ \A w \in W : worker[w] = "closed"
++ Join == /\ pc = "join"

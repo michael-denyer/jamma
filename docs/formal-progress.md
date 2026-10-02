@@ -1,0 +1,177 @@
+# Timed progress verification
+
+The target was selected by reading `src/jamma/core/progress.py` in full,
+`tests/test_progress.py`, `tests/fakes/progress.py`, and its eigendecomposition
+caller at `src/jamma/lmm/eigen.py:269-275` before modelling. The model includes
+the real progressbar2 `finish` behavior, which the original recording fake
+omitted.
+
+| Target | Threads and shared state | Waits and wakeups | Terminal states and resources | Verdict |
+| --- | --- | --- | --- | --- |
+| `timed_progress`, `core/progress.py:138-226` | One consumer and one daemon worker; result/error boxes, Event, progress display | Consumer `done.wait` has a positive timeout; worker publishes then calls `done.set`; normal join polls for worker exit | Normal result/error reports follow join; consumer KeyboardInterrupt abandons joins; output ownership moves from worker to box to caller | False completion confirmed and fixed; 8 runs pass |
+
+## Confirmed false completion
+
+There were two paths to an incorrect 100% display:
+
+- A polling `bar.update` raised `OSError` at lines 205-207. The consumer left
+  the Event-wait loop and called `bar.update(100)` at lines 208-210 before the
+  still-running worker returned. It eventually joined, so the returned
+  numerical value was unaffected.
+- The unconditional `bar.finish()` at line 216 implicitly forced a full
+  redraw on worker errors and consumer cancellation. The real library's
+  `ProgressBar.finish(dirty=False)` invokes `update(max_value, force=True)`;
+  its `dirty=True` option preserves the current percentage. The shared fake
+  only marked itself finished, so the existing no-100-on-error test missed
+  the implicit redraw.
+
+The first counterexample maps to a consumer timeout at line 200, a polling
+stdout failure at line 205, the break at line 207 and premature full update
+at line 210, while the worker remains inside `fn()` at line 188. TLC rejects
+this original behavior in 18 explored states.
+
+For a failing worker, the trace is worker failure at line 188, publication in
+`exception` at line 190, notification at line 192, consumer wake at line 200,
+skipped explicit success update at line 208, then implicit full redraw from
+line 216. TLC rejects it in 34 states. Consumer KeyboardInterrupt takes the
+same unclean-finish path at lines 211-216 and is rejected in 17 states. All
+three paths are reachable with the shipped single worker and normal 100-tick
+bar. No special queue capacity or unsupported caller is needed.
+
+`tests/test_timed_progress_completion.py` uses the real ProgressBar, with a
+subclass that records its updates. Before the fix, all five initial
+regressions failed. RuntimeError, MemoryError, SystemExit and KeyboardInterrupt
+raised by the worker each recorded `[0, 100]`. A deterministic transient
+stdout failure, with the worker blocked on an Event, recorded two premature
+100 updates, one explicit and one from `finish`.
+
+The fix gates explicit 100% on `done.is_set()` and absence of worker error at
+line 208. It calls `finish(dirty=cancelled or not done.is_set() or
+bool(exception))` at line 216, so failed, interrupted or unfinished work
+preserves its current percentage. Normal join and worker error propagation
+remain intact. The fake's `finish` now accepts the real `dirty` argument.
+
+A sixth real-library regression raises KeyboardInterrupt on the consumer's
+polling update. It proves that interruption returns while the worker is still
+alive and the bar has not rendered 100%; teardown releases and joins the
+worker. After the fix, this regression file and the existing progress tests
+reported **21 passed**. The root agent also checked the progress/fake suite.
+Ruff and targeted pyrefly passed for the regression file.
+
+## Model and properties
+
+`tla/TimedProgress.tla` has separate worker phases for executing `fn`,
+publishing the result/error box, setting the Event and exiting the thread.
+The consumer has Event-wait, timeout-poll, final-update, finish, join and
+report phases. Empty output, nonempty output, Exception and BaseException are
+separate abstract outcomes. This preserves the distinction between callable
+completion, notification and actual worker exit.
+
+The library Event and Thread operations are atomic contracts. A wait returns
+through timeout or notification and rereads the Event predicate. Spurious
+wakes have no fairness. Worker and consumer internal actions have weak
+fairness; interrupt choices do not. Normal execution assumes a terminating
+callable and positive finite polling/join intervals. There is one worker in
+the shipped protocol, so a 1/2/3-worker or slot matrix would change its API
+rather than check a boundary.
+
+The six checked properties are `TypeOK`, `HonestCompletion`,
+`JoinedBeforeReport`, `OutcomeDelivered`, `Ownership` and `Terminates`.
+They check state domains, truthful completion rendering, normal reports
+following worker exit, correct success/error routing, output ownership
+transfer and eventual report/cancellation. Consumer cancellation permits a
+live daemon worker intentionally. Output/errors retain their source ownership
+until publication, then belong to the box and finally to the caller.
+
+The model does not prove that LAPACK returns, floating-point accuracy, Python
+allocator success or library memory ordering. Output is an abstract value,
+and caller-held arrays/exception tracebacks are allowed. No application
+mutex surrounds callable execution, result/error list allocation or an exit;
+Event and Thread implementation locks are outside the calling-code model.
+Thread startup failure before polling is excluded because no already-started
+worker is left by the source's single-thread startup.
+
+The finish path assumes rendering succeeds or raises the supported OSError.
+An arbitrary non-OSError exception from a custom widget or output stream can
+escape finish before the source's join loop. No separate issue was claimed
+without demonstrating such an exception from the configured widgets and
+supported stdout contract. That exceptional join-bypass path is an explicit
+limitation of this model. Thread-start/result-box allocator failures and
+asynchronous interrupts during library internals are also outside it.
+
+## Final matrix
+
+All eight fixed runs pass, with 319 distinct states summed across runs. The
+sum is checked workload, not a single graph. Each run explores all worker
+publication/notification/exit interleavings with consumer timeouts and polling.
+
+| Label | Distinct states | Verdict |
+| --- | ---: | --- |
+| empty-value | 37 | PASS |
+| result | 37 | PASS |
+| exception | 42 | PASS |
+| base-exception | 42 | PASS |
+| stdout-error-result | 34 | PASS |
+| stdout-error-exception | 29 | PASS |
+| interrupt-result | 59 | PASS |
+| interrupt-error | 39 | PASS |
+
+## Mutation sensitivity
+
+Each mutation ran on an isolated temporary copy with only its named property
+checked. All nine runs failed as expected, covering every checked property.
+The repository matrix uses `Fixed=TRUE Mutation="none"`; diagnostic mutation
+branches are inactive. Failure state counts came from retained full TLC logs,
+because the matrix helper's reduced failure output omits those counts.
+
+Unless overridden below, runs use nonempty successful output, no stdout
+failure, no interruption, fixed behavior and no mutation.
+
+| Mutation or original behavior | Constants | Property | Distinct states | Verdict |
+| --- | --- | --- | ---: | --- |
+| Original error finish | Outcome="error", Fixed=FALSE | HonestCompletion | 34 | FAIL as expected |
+| Original polling stdout break | OutputFailure="poll", Fixed=FALSE | HonestCompletion | 18 | FAIL as expected |
+| Original consumer cancellation | AllowInterrupt=TRUE, Fixed=FALSE | HonestCompletion | 17 | FAIL as expected |
+| Timer advances to 100 before callable completion | Mutation="uncapped" | HonestCompletion | 12 | FAIL as expected |
+| Omit normal join | Mutation="no-join" | JoinedBeforeReport | 38 | FAIL as expected |
+| Catch only Exception | Outcome="base", Mutation="drop-base-catch" | OutcomeDelivered | 42 | FAIL as expected |
+| Retain output in mutable box | Mutation="retain-box" | Ownership | 37 | FAIL as expected |
+| Lose recorded output ownership | Mutation="orphan" | TypeOK | 9 | FAIL as expected |
+| Omit done.set | Mutation="no-notify" | Terminates | 30 | FAIL as expected |
+
+Removing the BaseException catch still executes the source's `finally` and
+sets the Event. The consumer then lacks both result and error and would reach
+`result[0]`, raising an unrelated IndexError; the model's outcome-routing
+property detects this. Removing the notification leaves the consumer timing
+out and polling forever despite a terminated worker, producing a liveness
+counterexample.
+
+## Recheck
+
+From the repository root, with an isolated Java temporary directory:
+
+```sh
+mkdir -p /tmp/jamma-progress-jvm
+JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/tmp/jamma-progress-jvm \
+JAVA=/opt/homebrew/opt/openjdk@21/bin/java TLC_WORKERS=2 \
+bash /Users/mdenyer/.codex/plugins/cache/agent-formal-verify/agent-formal-verify/0.1.11/skills/formal-verify/scripts/tlc-matrix.sh \
+/Users/mdenyer/VSCode/jamma/tla/TimedProgress.matrix
+
+uv run pytest tests/test_timed_progress_completion.py tests/test_progress.py -q
+```
+
+The isolated mutation command was:
+
+```sh
+JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/tmp/progress-mut-jvm \
+JAVA=/tmp/progress-java-capture TLC_WORKERS=2 \
+bash /Users/mdenyer/.codex/plugins/cache/agent-formal-verify/agent-formal-verify/0.1.11/skills/formal-verify/scripts/tlc-matrix.sh \
+/tmp/progress-mutations/TimedProgress.matrix
+```
+
+The wrapper forwarded to the same Java binary and retained complete logs and
+configuration files for counts. To reproduce a mutation, copy the model to a
+temporary directory, write a one-run matrix with the table's constants and
+named property, and use the installed matrix helper. Keep the repository
+matrix unmutated. TLC's local RMI listener required approved execution outside
+the restrictive socket sandbox. No CI job was added.

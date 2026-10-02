@@ -281,6 +281,15 @@ flowchart TD
         KIN --> EIG
     end
 
+    LOCOQ{"-loco?"}
+
+    subgraph LOCO["PER-CHROMOSOME LOCO"]
+        LKIN["Kinship without<br/>that chromosome"]
+        LEIG["Eigendecomposition<br/>(JAMMA_LOCO_WORKERS at once)"]
+        LRUN["LOCO Runner<br/>(SNPs on that chromosome)"]
+        LKIN --> LEIG --> LRUN
+    end
+
     subgraph ASSOC["ASSOCIATION TESTING"]
         MEM{"Memory<br/>budget?"}
         NP["Batch Runner<br/>(genotypes in RAM)"]
@@ -298,8 +307,11 @@ flowchart TD
 
     RES["AssocResult<br/>(.assoc.txt)"]
 
-    PIPE --> LOAD --> CORE
+    PIPE --> LOAD --> LOCOQ
+    LOCOQ -->|no| CORE
+    LOCOQ -->|yes| LOCO
     EIG --> ASSOC
+    LRUN --> CEXT
     C --> RES
     PY --> RES
 
@@ -307,6 +319,7 @@ flowchart TD
     style IO fill:#0f3460,stroke:#53a8b6,color:#eee,stroke-width:2px
     style CORE fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
     style ASSOC fill:#0f3460,stroke:#e94560,color:#eee,stroke-width:2px
+    style LOCO fill:#0f3460,stroke:#f5b461,color:#eee,stroke-width:2px
 
     style CLI fill:#53a8b6,stroke:#3d8a96,color:#1a1a2e
     style PIPE fill:#53a8b6,stroke:#3d8a96,color:#1a1a2e
@@ -314,6 +327,11 @@ flowchart TD
 
     style KIN fill:#f5b461,stroke:#d4943f,color:#1a1a2e
     style EIG fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+
+    style LOCOQ fill:#e94560,stroke:#c73550,color:#fff
+    style LKIN fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style LEIG fill:#f5b461,stroke:#d4943f,color:#1a1a2e
+    style LRUN fill:#7b68ae,stroke:#5a4d8a,color:#fff
 
     style MEM fill:#e94560,stroke:#c73550,color:#fff
     style NP fill:#7b68ae,stroke:#5a4d8a,color:#fff

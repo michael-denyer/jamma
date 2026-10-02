@@ -13,6 +13,7 @@ whole report takes about 8s, and a guard that only fires in test-slow.yml is
 most of the way back to a guard nobody runs.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ import numpy as np
 import pytest
 
 from tests.fixture_paths import NUMPY_GEMMA_TOLERANCES
+from tests.support import sanitizer_runtime_loaded, skip_under_sanitizer
 
 pytestmark = pytest.mark.tier1
 
@@ -35,6 +37,9 @@ SCRIPT = ROOT / "scripts/demonstrate_equivalence.py"
 # weekly flaky-detect runs (#159), each a timeout rather than a tolerance failure.
 # justified: subprocess BLAS oversubscription under xdist, not slow test code (#159)
 @pytest.mark.timeout(300)
+# With the NumPy fallback forced, the report took 276 s of the 300 s under the
+# sanitizer before the MLE score polish (#447) added half as much again (#492).
+@skip_under_sanitizer
 def test_equivalence_report_passes_all_tolerances():
     result = subprocess.run(
         [sys.executable, str(SCRIPT)],
@@ -59,6 +64,13 @@ def test_equivalence_report_passes_all_tolerances():
         )
 
     assert "VERDICT: ALL FIELDS PASS TOLERANCES" in result.stdout
+
+
+@pytest.mark.tier0
+def test_sanitizer_probe_agrees_with_the_preloaded_runtime():
+    """The skip above fires under the sanitizer workflow and nowhere else."""
+    preloaded = "libasan" in os.environ.get("LD_PRELOAD", "")
+    assert sanitizer_runtime_loaded() == preloaded
 
 
 def _load_script():

@@ -6,6 +6,8 @@ Rows and block sizes use Nat because callers reject negative dimensions.
 The native formatter's byte bound is an assumption, not proved here.
 -/
 
+namespace MatrixBlocks
+
 def block_rows (values columns : Nat) : Nat := max 1 (values / columns)
 def next_start (rows block start : Nat) : Nat := min rows (start + block)
 def slice_rows (rows block start : Nat) : Nat := min block (rows - start)
@@ -77,7 +79,6 @@ theorem buffers_bounded (rows block requested : Nat) :
 #guard workers 0 65536 3 = 0
 #guard workers 65537 65536 3 = 2
 
-
 def badWorkerCounts : List (Nat × Nat × Nat) :=
   (List.range 21).flatMap fun rows =>
     (List.range 21).flatMap fun block =>
@@ -87,3 +88,5 @@ def badWorkerCounts : List (Nat × Nat × Nat) :=
         then some (rows, block, requested) else none
 #eval badWorkerCounts
 #guard badWorkerCounts.isEmpty
+
+end MatrixBlocks

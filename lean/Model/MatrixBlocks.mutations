@@ -1,0 +1,23 @@
+# Mutations for mutate.py. Each one swaps a piece of MatrixBlocks.lean for a
+# plausible bug. The text after `- ` must occur exactly once in the model;
+# `+ ` lines replace it. mutate.py reports the declarations that fail on each.
+
+mutation zero block rows
+- max 1 (values / columns)
++ values / columns
+
+mutation uncapped workers
+- min requested ((rows + block - 1) / block)
++ max requested ((rows + block - 1) / block)
+
+mutation floor instead of ceiling
+- min requested ((rows + block - 1) / block)
++ min requested (rows / block)
+
+mutation missing advance
+- min rows (start + block)
++ min rows (start + block - 1)
+
+mutation undersized capacity
+- min rows block * columns * bytes
++ (min rows block - 1) * columns * bytes

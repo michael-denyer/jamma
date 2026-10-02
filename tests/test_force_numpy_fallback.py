@@ -157,6 +157,41 @@ def test_pop_and_reimport_restores_the_import_time_binding(
     assert sys.modules["jamma.jlinalg"] is fresh
 
 
+@pytest.fixture
+def forced_fallback_session(monkeypatch):
+    """Stand in for a session started with the gate engaged, as sanitizers.yml is.
+
+    Fails at teardown if a later fixture left ``jamma.jlinalg`` in any other
+    state. Order this before ``reload_jlinalg_after_test`` so it tears down
+    after it.
+    """
+    session_value = os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK")
+    monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
+    _reload_jlinalg()
+    yield
+    backend = sys.modules["jamma.jlinalg"].blas_backend
+    if session_value is None:
+        monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
+    else:
+        monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", session_value)
+    _reload_jlinalg()
+    assert backend == "numpy-fallback-forced", (
+        "teardown reloaded jlinalg under an env the session never had"
+    )
+
+
+def test_teardown_reloads_under_the_session_env(
+    forced_fallback_session, monkeypatch, reload_jlinalg_after_test
+):
+    """A test that clears the gate must not leave it cleared for later tests.
+
+    Under ``sanitizers.yml`` every later call-time import of ``jamma.jlinalg``
+    otherwise sees the extension the workflow set the env var to keep out.
+    """
+    monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK")
+    assert _reload_jlinalg().blas_backend != "numpy-fallback-forced"
+
+
 def test_force_numpy_fallback_functions_callable(
     monkeypatch, reload_jlinalg_after_test
 ):

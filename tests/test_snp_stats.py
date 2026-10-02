@@ -267,3 +267,21 @@ def test_numpy_fallback_means_float32_input_in_double():
         return means
 
     np.testing.assert_array_equal(means_of(data.astype(np.float32)), means_of(data))
+
+
+def test_numpy_fallback_variances_float32_input_in_double():
+    """The fallback matches the C kernel: float32 genotypes give float64 variances."""
+    from jamma.jlinalg._snp_stats import compute_snp_stats_chunk as fallback
+
+    rng = np.random.default_rng(7)
+    data = rng.integers(0, 3, size=(1001, 6)).astype(np.float64)
+    data[::13, 2] = np.nan
+
+    def variances_of(chunk):
+        variances = np.empty(6)
+        fallback(chunk, np.empty(6), np.empty(6, dtype=np.intp), variances)
+        return variances
+
+    np.testing.assert_array_equal(
+        variances_of(data.astype(np.float32)), variances_of(data)
+    )

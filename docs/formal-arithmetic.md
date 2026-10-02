@@ -2,17 +2,12 @@
 
 | Target | Source and integer domain | Property | Verdict |
 |---|---|---|---|
-| Chunk buffer slot | `chunk_runner_numpy.py:304-305`, Python unbounded nonnegative counter and positive buffer count | Modulo slot is in bounds; adjacent counters use different slots when buffers >= 2 | PASS, 7 declarations audited |
-| Matrix blocks | `_native_matrix_writer.py:48-52`, Python unbounded rows >= 0, columns > 0 and requested workers > 0 | Positive row block, contiguous clipped slices, strictly decreasing remainder, byte capacity bound, worker and buffer caps | PASS, 17 declarations audited |
+| Chunk buffer slot | `chunk_runner_numpy.py:304-305`, Python unbounded nonnegative counter and positive buffer count | Modulo slot is in bounds; adjacent counters use different slots when buffers >= 2 | Proved |
+| Matrix blocks | `_native_matrix_writer.py:48-52`, Python unbounded rows >= 0, columns > 0 and requested workers > 0 | Positive row block, contiguous clipped slices, strictly decreasing remainder, byte capacity bound, worker and buffer caps | Proved |
 
-## Checker results and assumptions
+## Assumptions
 
-```text
-PASS /Users/mdenyer/VSCode/jamma/lean/ChunkSlots: no sorry, no extra axioms, 7 declarations audited
-PASS /Users/mdenyer/VSCode/jamma/lean/MatrixBlocks: no sorry, no extra axioms, 17 declarations audited
-```
-
-Both projects pin Lean 4.34.1 and have no external packages. Every declaration
+The Lake project in `lean/` pins Lean 4.34.1 and has no external packages. Every declaration
 was audited; there are no admitted proofs or additional axioms. Natural numbers
 match the nonnegative Python inputs under the stated domain. Python arithmetic
 has no fixed-width overflow. These proofs make no statement about the C
@@ -35,17 +30,10 @@ on the two chunk buffers and the writer's `2*workers` bytearrays.
 
 ## Mutation sensitivity
 
-Every mutation runs in an isolated project copy. All seven mutations cause
-both a bounded property failure and a rejected proof or explicit boundary
-guard. The real source has none of these mutations, so no arithmetic fix is
-proposed.
-
-The runner first requires both untouched projects to pass the checker. Each
-mutation names its bounded property guard; detection requires Lean's
-evaluated-false diagnostic for that expression at its current source location.
-An unrelated checker, import or syntax error fails the run. Checks have a
-60-second timeout. The CLI regressions in `tests/test_lean_mutations.py` use
-an external checker fake, so they run in ordinary CI without a Lean installation.
+The seven mutations in `lean/Model/ChunkSlots.mutations` and
+`lean/Model/MatrixBlocks.mutations` each fail a bounded search and a theorem.
+The real source has none of these mutations, so no arithmetic fix is proposed.
+The inputs that expose each one are:
 
 | Mutation | Concrete counterexample | Detecting property |
 |---|---|---|
@@ -62,18 +50,4 @@ The executor/chunk/writer test group passed 66 tests. Proof models are
 transcriptions, so the source references and caller assumptions must be
 maintained when those functions change.
 
-## Commands
-
-From the repository root:
-
-```sh
-VERIFY_SKILL=/Users/mdenyer/.codex/plugins/cache/agent-formal-verify/agent-formal-verify/0.1.11/skills/formal-verify
-bash "$VERIFY_SKILL/scripts/setup.sh" lean "$PWD/lean/ChunkSlots"
-bash "$VERIFY_SKILL/scripts/setup.sh" lean "$PWD/lean/MatrixBlocks"
-bash "$VERIFY_SKILL/scripts/lean-check.sh" "$PWD/lean/ChunkSlots"
-bash "$VERIFY_SKILL/scripts/lean-check.sh" "$PWD/lean/MatrixBlocks"
-python lean/check_mutations.py "$VERIFY_SKILL/scripts/lean-check.sh"
-```
-
-No CI job was added. Keep existing sanitizer and numerical validation coverage;
-these integer proofs do not replace either.
+The commands that recheck these models are in [TESTING.md](TESTING.md#4-formal-models).

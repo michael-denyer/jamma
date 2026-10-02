@@ -52,7 +52,7 @@ only w=2 s=2 n=3 fail=none
 - nextItem' = nextItem + 1
 + nextItem' = nextItem + 2
 
-mutation write the block after reporting its formatting failure
+mutation move on to the write step after reporting a formatting failure
 detects NoDeliveryAfterError
 only w=2 s=2 n=3 fail=all
 - /\ pc' = IF failed THEN "shutdown" ELSE "write"

@@ -14,7 +14,7 @@ mutation floor instead of ceiling
 - min requested ((rows + block - 1) / block)
 + min requested (rows / block)
 
-mutation missing advance
+mutation advance one row short
 - min rows (start + block)
 + min rows (start + block - 1)
 

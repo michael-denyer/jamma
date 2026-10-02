@@ -1,7 +1,7 @@
 # Testing
 
 JAMMA's pytest suite balances CI speed against tight numerical parity with
-GEMMA. This document is split into three parts:
+GEMMA. This document is split into four parts:
 
 1. **[Running tests](#1-running-tests)** — setup, commands, CI workflows.
 2. **[Test design rules](#2-test-design-rules)** — philosophy, mocking
@@ -9,6 +9,9 @@ GEMMA. This document is split into three parts:
 3. **[Suite map and current state](#3-suite-map-and-current-state)** —
    what each subsystem's tests cover, plus a list of tests to improve or
    fold.
+4. **[Formal models](#4-formal-models)** — what the TLA+ and Lean models
+   check about the thread protocols and buffer arithmetic, and how to rerun
+   them.
 
 > **Source of truth.** The marker list, default `addopts`, and timeout live
 > in [`pyproject.toml`](../pyproject.toml) under
@@ -266,24 +269,6 @@ See also: [`.github/workflows/sanitizers.yml`](../.github/workflows/sanitizers.y
 [`src/jamma/_build_support/build_models.py`](../src/jamma/_build_support/build_models.py)
 (`resolve_flags`, which reads `JAMMA_SANITIZE`).
 
-#### Thread-pool resource lifetime verification
-
-The chunk and native matrix writer models check ordered results, buffer leases
-and cleanup before restoring BLAS limits or returning borrowed matrices. The
-shared `JoiningThreadPoolExecutor` model checks its Condition wait, notification,
-cancellation and interrupted shutdown. Matrices cover 0, 1, 3 and 5 items,
-1, 2 and 3 helper/writer workers, and the chunk pipeline's shipped two buffers.
-The chunk matrix retains an expected failure at one buffer; use its `slots=2`
-filter for production configurations.
-
-Reports contain exact commands, state counts, mutation results and assumptions:
-[chunk pipeline](formal-chunk.md), [matrix writer](formal-writer.md),
-[shared executor](formal-thread-pool.md) and [integer arithmetic](formal-arithmetic.md).
-The Lean projects in `lean/ChunkSlots` and `lean/MatrixBlocks` prove modulo,
-slice/capacity and worker bounds. `lean/check_mutations.py` checks their
-sensitivity using isolated copies. Existing sanitizer and numerical tests remain
-necessary. No formal-verification CI job was added.
-
 ### 1.11 A missing fixture is a bug, not a skip
 
 Everything under `tests/fixtures/` is committed and hash-verified by the
@@ -422,15 +407,6 @@ boundaries. Everywhere else, write a fake.
 If your patch target is not on this list, you are mocking the wrong
 layer. Either justify the addition in PR review or write a fake.
 
-#### Spawn-pool failure verification
-
-`tla/SpawnPool.tla` checks ordered result draining, disjoint task ownership and
-termination before temporary-file cleanup. The matrix covers 0, 1, 3 and 5 tasks
-and 1, 2 and 3 processes, including an abrupt exit at any task. See
-[the spawn-pool report](formal-spawn.md) for source mappings, state counts,
-mutation results, commands and assumptions. The real-process regressions are
-in `tests/test_spawn_pool_exit.py`.
-
 ### 2.3 Fakes over mocks
 
 For non-boundary collaborators, write a fake class implementing the real
@@ -457,15 +433,6 @@ psutil's result types. Each fake's self-tests are
 in [`tests/fakes/test_fakes.py`](../tests/fakes/test_fakes.py); accessing
 an undeclared attribute raises `AttributeError` (the contract that
 distinguishes a fake from `MagicMock`).
-
-#### Timed progress protocol verification
-
-`tla/TimedProgress.tla` checks truthful completion display, worker result/error
-handover and joining before normal return. Its eight configurations include
-worker BaseException, stdout failure and consumer interruption. See
-[the progress report](formal-progress.md) for per-run state counts, mutations,
-source mappings and checker commands. The real progressbar regressions are in
-`tests/test_timed_progress_completion.py`.
 
 ### 2.4 Structural source tests (narrow exception)
 
@@ -810,11 +777,100 @@ code, independently brackets each maximum, and checks negative curvature and
 score convergence. `mpmath` is a development dependency only. The regular tests
 use the stored roots without requiring high-precision arithmetic on every run.
 
-### LOCO worker protocol verification
+---
 
-`tla/LocoWorkers.tla` checks ordered eigenpair delivery, error routing, resource
-ownership and startup/close cleanup. The matrix covers 0, 1, 3 and 5 items and
-1, 2 and 3 workers, including partial thread-start failure. See
-[the LOCO verification report](formal-loco.md) for assumptions, exact checker
-commands, per-run state counts and mutation results. The deterministic startup
-regressions are in `tests/test_loco_worker_startup.py`.
+## 4. Formal models
+
+Six TLA+ models in `tla/` describe hand-written thread and process protocols.
+Two Lean models in `lean/Model/` describe the integer arithmetic those
+protocols depend on. Each model is a hand-written description of the code, not
+the code. Its header comment names the source lines it follows and the
+assumptions it makes. The tests named below exercise the same failures on the
+real code.
+
+### 4.1 What the results mean
+
+- **TLC passes.** TLC, the TLA+ model checker, tried every ordering of the
+  modelled steps at the listed small sizes and found none that breaks the
+  property. The state total it prints is the size of that search, not a count
+  of real runs.
+- **Lean passes.** Lean proved the property for every input, under the listed
+  assumptions. A bounded search beside each proof also tries every input up to
+  the bound given in the table.
+- **Mutations detected.** Each `<Name>.mutations` file lists deliberate bugs.
+  The mutation runner plants each one in a copy of the model. A TLA+ mutation
+  names the property that must fail; a Lean mutation must fail a bounded
+  search or a theorem. This shows the checks can fail.
+- An invariant is a property that holds in every reachable state. A liveness
+  property says that something eventually happens. Fairness assumes that a
+  thread which can run does run. An axiom is a statement taken without proof,
+  and `sorry` marks an unfinished proof; the Lean checker rejects both.
+
+### 4.2 Models
+
+| Model | What it checks about the code | Sizes checked | Result | Tests on the real code | Report |
+| --- | --- | --- | --- | --- | --- |
+| `tla/ChunkPipeline` | The overlapped chunk pipeline (`lmm/chunk_pipeline.py`, `lmm/chunk_runner_numpy.py`) computes chunks in input order, each once. A rotation buffer never holds two live chunks. A background error is reported only after every earlier chunk, and nothing is written after an error. Close and error unwinding finish, and the BLAS limits are restored only after the background rotation has ended. | Two buffers, as shipped; 0, 1, 3 and 5 chunks; prepare and compute failures at every chunk; an interrupt during the executor join. One further run uses one buffer. | Every two-buffer run passes. The one-buffer run breaks buffer ownership, as expected: `LmmChunkPlan` gives a pipeline two buffers, so the shipped code cannot reach it. 13 mutations detected. | `tests/test_chunk_pipeline_interrupt.py` | [chunk pipeline](formal-chunk.md) |
+| `tla/JoiningThreadPool` | `JoiningThreadPoolExecutor` (`core/thread_pool.py`) returns from shutdown only after every running callable has finished, including after a failed submit, cancelled queued work or an interrupt. No callable borrows its arguments after shutdown has returned. | 1, 2 and 3 workers; 0, 1, 3 and 5 callables; normal shutdown, cancelling shutdown, and submit failure at every callable. | Every run passes. 11 mutations detected. | `tests/test_joined_pool_submit_failure.py` | [joining executor](formal-thread-pool.md) |
+| `tla/LocoWorkers` | `solve_eigen_pairs` (`lmm/loco_workers.py`) yields eigenpairs in chromosome order and raises a solve error only after every earlier result. At most one job per worker is outstanding. A normal close joins every started worker, frees the matrices the pool holds and keeps the BLAS limits until the solves finish. A failed thread start or BLAS entry leaves no worker running. Every pull and close returns. | Each pairing of 1, 2 and 3 workers with 0, 1, 3 and 5 chromosomes, in one of two caller modes: a caller that keeps pulling, or one that may stop, close or interrupt. Solve and input failures can occur at every item, except in the one-worker, one-chromosome run, which has none. Three setup-failure runs with no chromosomes. | Every run passes. 15 mutations detected. | `tests/test_loco_worker_startup.py` | [LOCO workers](formal-loco.md) |
+| `tla/MatrixWriter` | The native matrix writer (`io/_native_matrix_writer.py`) writes blocks in order. Each buffer serves one block at a time. A formatting failure is reported for the first failing block and nothing is written after it. The file is published only when every block was written without error. The writer returns only after every formatter has finished, even when shutdown is interrupted. | 1, 2 and 3 workers; 1, 2 and the shipped `2 * workers` buffers; 0, 1, 3 and 5 blocks; no failure, failure at every block, and one later failure. | Every run passes. 13 mutations detected. | `tests/test_native_matrix_writer_interrupt.py` | [matrix writer](formal-writer.md) |
+| `tla/SpawnPool` | The spawn pool for matrix text I/O (`io/_parallel_text.py`) consumes results in task order. When a worker process exits, the parent stops waiting for the lost result, then terminates and joins the pool before the temporary files are removed. | 1, 2 and 3 processes; 0, 1, 3 and 5 tasks; a task error or a worker exit at every task. | Every run passes. 5 mutations detected. | `tests/test_spawn_pool_exit.py` | [spawn pool](formal-spawn.md) |
+| `tla/TimedProgress` | `timed_progress` (`core/progress.py`) never shows 100% before the work has finished successfully. The worker's result or exception, including a `BaseException`, reaches the caller. A normal return follows the worker thread's exit, and the call returns or is cancelled. | An empty result, a result, an `Exception` and a `BaseException`; a stdout failure while polling; a caller interrupt. | Every run passes. 9 mutations detected. | `tests/test_timed_progress_completion.py` | [timed progress](formal-progress.md) |
+| `lean/Model/ChunkSlots` | The buffer index `counter % buffers` (`lmm/chunk_runner_numpy.py`) is in range, and consecutive chunks use different buffers when there are at least two. | Proved for every non-negative counter and positive buffer count. The bounded search covers counters 0 to 20 and 1 to 8 buffers. | Proved. 2 mutations detected. | | [arithmetic](formal-arithmetic.md) |
+| `lean/Model/MatrixBlocks` | The native writer's block arithmetic (`io/_native_matrix_writer.py`) gives every block at least one row, covers each row once without passing the end, terminates, fits each block in its buffer, and never uses more than the requested number of workers, or fewer than one when there is at least one row. | Proved for every non-negative row count and positive column and worker count. Assumes 32 bytes hold one formatted value. The bounded searches cover rows and block sizes 0 to 19, column counts up to 65,537, and 0 to 4 requested workers. | Proved. 5 mutations detected. | | [arithmetic](formal-arithmetic.md) |
+
+The per-thread writes to disjoint SNP column ranges in
+`jlinalg/src/snp_stats.c` have no protocol to model. The sanitizer runs in
+[§1.10](#110-running-under-sanitizers-local-repro-of-ci) cover them.
+
+### 4.3 What a pass leaves open
+
+TLC checked only the sizes in the table. The models treat library queues,
+Futures, Events, executors and process pools as atomic operations. They do not
+check memory ordering below those operations, CPython or operating-system
+internals, floating-point results, or recovery from an allocation failure
+during cleanup. Every liveness result assumes that tasks eventually finish and
+that interrupts are finite. `JoiningThreadPool` also assumes that a worker
+waiting for the Condition's mutex eventually gets it; its safety properties do
+not depend on that. The Lean proofs use unbounded non-negative integers, which
+match Python's. The buffer-capacity proof assumes 32 bytes per formatted value
+and does not prove the native formatter. The sanitizer, race and numerical
+tests remain necessary.
+
+### 4.4 Rechecking
+
+No CI job runs the models. The helper scripts belong to the `formal-verify`
+skill of [agent-formal-verify](https://github.com/michael-denyer/agent-formal-verify);
+`<skill-dir>` stands for the directory of that installed skill. Run from the
+repository root. Set `JAVA` to a JDK's `java` binary when `java` on `PATH` has
+no runtime.
+
+```sh
+bash <skill-dir>/scripts/setup.sh tla
+bash <skill-dir>/scripts/setup.sh lean "$PWD/lean"
+for name in ChunkPipeline JoiningThreadPool LocoWorkers MatrixWriter SpawnPool TimedProgress; do
+  bash <skill-dir>/scripts/tlc-matrix.sh "$PWD/tla/$name.matrix"
+  python3 <skill-dir>/scripts/mutate.py "$PWD/tla/$name.mutations"
+done
+bash <skill-dir>/scripts/lean-check.sh "$PWD/lean"
+python3 <skill-dir>/scripts/mutate.py "$PWD/lean/Model/ChunkSlots.mutations"
+python3 <skill-dir>/scripts/mutate.py "$PWD/lean/Model/MatrixBlocks.mutations"
+```
+
+Each matrix run ends with a `SUMMARY` line, the Lean checker with a `PASS`
+line, and each mutation run with a `SUMMARY` line that must report every
+mutation detected.
+
+| Command | Last line |
+| --- | --- |
+| `tlc-matrix.sh` on `ChunkPipeline.matrix` | `SUMMARY 17 of 18 runs passed, 1158 distinct states in total`; the failing run is the one-buffer run, so the command exits 1 |
+| `tlc-matrix.sh` on `JoiningThreadPool.matrix` | `SUMMARY 36 of 36 runs passed, 712608 distinct states in total` |
+| `tlc-matrix.sh` on `LocoWorkers.matrix` | `SUMMARY 15 of 15 runs passed, 20088 distinct states in total` |
+| `tlc-matrix.sh` on `MatrixWriter.matrix` | `SUMMARY 57 of 57 runs passed, 53473 distinct states in total` |
+| `tlc-matrix.sh` on `SpawnPool.matrix` | `SUMMARY 12 of 12 runs passed, 59367 distinct states in total` |
+| `tlc-matrix.sh` on `TimedProgress.matrix` | `SUMMARY 8 of 8 runs passed, 319 distinct states in total` |
+| `lean-check.sh` on `lean` | `PASS <path>/lean: 24 declarations checked, no unfinished proof (sorry), no added axiom` |
+
+To run only the two-buffer chunk runs, which all pass, add the label filter
+`slots=2` after the matrix path. Give concurrent TLC runs separate temporary
+directories with `JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=<directory>`.

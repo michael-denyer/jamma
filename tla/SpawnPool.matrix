@@ -1,0 +1,15 @@
+spec SpawnPool.tla
+check INVARIANTS TypeOK Own Order NoLeak
+check PROPERTIES Closed
+run workers=1 items=0 fail=all | Items=0 Workers=1 FailAt={} DetectDeath=TRUE Mutation="none"
+run workers=1 items=1 fail=all | Items=1 Workers=1 FailAt={1} DetectDeath=TRUE Mutation="none"
+run workers=1 items=3 fail=all | Items=3 Workers=1 FailAt={1,2,3} DetectDeath=TRUE Mutation="none"
+run workers=1 items=5 fail=all | Items=5 Workers=1 FailAt={1,2,3,4,5} DetectDeath=TRUE Mutation="none"
+run workers=2 items=0 fail=all | Items=0 Workers=2 FailAt={} DetectDeath=TRUE Mutation="none"
+run workers=2 items=1 fail=all | Items=1 Workers=2 FailAt={1} DetectDeath=TRUE Mutation="none"
+run workers=2 items=3 fail=all | Items=3 Workers=2 FailAt={1,2,3} DetectDeath=TRUE Mutation="none"
+run workers=2 items=5 fail=all | Items=5 Workers=2 FailAt={1,2,3,4,5} DetectDeath=TRUE Mutation="none"
+run workers=3 items=0 fail=all | Items=0 Workers=3 FailAt={} DetectDeath=TRUE Mutation="none"
+run workers=3 items=1 fail=all | Items=1 Workers=3 FailAt={1} DetectDeath=TRUE Mutation="none"
+run workers=3 items=3 fail=all | Items=3 Workers=3 FailAt={1,2,3} DetectDeath=TRUE Mutation="none"
+run workers=3 items=5 fail=all | Items=5 Workers=3 FailAt={1,2,3,4,5} DetectDeath=TRUE Mutation="none"

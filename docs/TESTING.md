@@ -773,3 +773,12 @@ uses dense two-column GLS and mpmath differentiation, imports no JAMMA numerical
 code, independently brackets each maximum, and checks negative curvature and
 score convergence. `mpmath` is a development dependency only. The regular tests
 use the stored roots without requiring high-precision arithmetic on every run.
+
+### Spawn-pool failure verification
+
+`tla/SpawnPool.tla` checks ordered result draining, disjoint task ownership and
+termination before temporary-file cleanup. The matrix covers 0, 1, 3 and 5 tasks
+and 1, 2 and 3 processes, including an abrupt exit at any task. See
+[the spawn-pool report](formal-spawn.md) for source mappings, state counts,
+mutation results, commands and assumptions. The real-process regressions are
+in `tests/test_spawn_pool_exit.py`.

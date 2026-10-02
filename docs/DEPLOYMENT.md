@@ -143,8 +143,10 @@ the deployment.
 1. Bump `version` in `pyproject.toml`.
 2. Run `uv lock` and stage `uv.lock` alongside `pyproject.toml`. The lock file does
    not update itself, and CI's `uv sync --locked` step fails on a stale one.
-3. Update `CHANGELOG.md`, moving Unreleased items into a new version section, and
-   set `version` and `date-released` in `CITATION.cff` to the new release.
+3. Update `CHANGELOG.md`, moving Unreleased items into a new version section, set
+   `version` and `date-released` in `CITATION.cff` to the new release, and set
+   `version` in `docs/biotools.json`. `tests/test_release_metadata.py` fails while
+   either file names another version.
 4. Commit on a branch and merge it through a pull request (the `master` ruleset
    rejects direct pushes), then confirm CI is green on `master`:
 
@@ -163,6 +165,12 @@ the deployment.
 
 6. The `build-wheels.yml` workflow fires automatically on that event and
    uploads to PyPI. `publish.yml` is TestPyPI-only, on `workflow_dispatch`.
+
+7. After the PyPI upload, `build-wheels.yml` calls `biotools.yml`, which sends
+   `docs/biotools.json` to [bio.tools](https://bio.tools/jamma) with
+   `scripts/update_biotools.py`. The script needs the `BIOTOOLS_TOKEN` repository
+   secret. To update the entry between releases, run
+   `gh workflow run biotools.yml`; it builds and publishes no wheels.
 
 ## Environment Setup
 

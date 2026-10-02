@@ -212,3 +212,15 @@ jobs:
           subject-path: 'dist/*'
 
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1
+
+  # The registry entry is docs/biotools.json; tests/test_release_metadata.py
+  # keeps its version equal to the package's. Skipped with upload_pypi on
+  # workflow_dispatch, where biotools.yml is dispatched on its own instead.
+  update_biotools:
+    name: Update bio.tools entry
+    needs: [upload_pypi]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/biotools.yml
+    secrets:
+      BIOTOOLS_TOKEN: ${{ secrets.BIOTOOLS_TOKEN }}

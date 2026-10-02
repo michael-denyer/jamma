@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.2] - 2026-10-02
+
+### Added
+
+- TLA+ models and Lean arithmetic proofs for worker startup, executor cleanup,
+  chunk and matrix buffer ownership, process-pool failures, and timed progress.
+  Deterministic regressions cover the corresponding runtime failures.
+
+### Changed
+
+- Proof references point to the renamed `jamma-lean-proofs` repository.
+
+### Fixed
+
+- LOCO worker startup now runs inside its cleanup scope, so partial thread-start
+  failures stop workers already started and BLAS-entry failures start none.
+- Parallel matrix text I/O detects exited process-pool workers and reports an
+  error instead of hanging on a lost result.
+- Native matrix formatting and background chunk rotation finish borrowed work
+  before interrupted executor cleanup returns or restores BLAS limits.
+- Timed progress no longer displays 100% after worker failures, consumer
+  interruption, or stdout failure while work is unfinished.
+- Lean mutation validation requires passing untouched projects and rejection
+  of each mutation's designated property guard. Unrelated checker errors no
+  longer count as detected mutations.
+
 ## [8.2.1] - 2026-09-29
 
 ### Added

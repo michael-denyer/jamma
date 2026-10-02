@@ -773,3 +773,21 @@ uses dense two-column GLS and mpmath differentiation, imports no JAMMA numerical
 code, independently brackets each maximum, and checks negative curvature and
 score convergence. `mpmath` is a development dependency only. The regular tests
 use the stored roots without requiring high-precision arithmetic on every run.
+
+### Thread-pool resource lifetime verification
+
+The chunk and native matrix writer models check ordered results, buffer leases
+and cleanup before restoring BLAS limits or returning borrowed matrices. The
+shared `JoiningThreadPoolExecutor` model checks its Condition wait, notification,
+cancellation and interrupted shutdown. Matrices cover 0, 1, 3 and 5 items,
+1, 2 and 3 helper/writer workers, and the chunk pipeline's shipped two buffers.
+The chunk matrix retains an expected failure at one buffer; use its `slots=2`
+filter for production configurations.
+
+Reports contain exact commands, state counts, mutation results and assumptions:
+[chunk pipeline](formal-chunk.md), [matrix writer](formal-writer.md),
+[shared executor](formal-thread-pool.md) and [integer arithmetic](formal-arithmetic.md).
+The Lean projects in `lean/ChunkSlots` and `lean/MatrixBlocks` prove modulo,
+slice/capacity and worker bounds. `lean/check_mutations.py` checks their
+sensitivity using isolated copies. Existing sanitizer and numerical tests remain
+necessary. No formal-verification CI job was added.

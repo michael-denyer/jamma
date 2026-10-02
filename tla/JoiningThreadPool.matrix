@@ -1,0 +1,39 @@
+spec JoiningThreadPool.tla
+check INVARIANTS TypeOK TokensExact Ownership BorrowedRunning NoBorrowAfterRelease NoLeak
+check PROPERTIES BlockingReturns NoCloseTerminates
+run workers=1 items=0 mode=normal | Items=0 Workers=1 SubmitFailures={} CancelQueued=FALSE
+run workers=1 items=0 mode=cancel | Items=0 Workers=1 SubmitFailures={} CancelQueued=TRUE
+run workers=1 items=0 mode=submit-error | Items=0 Workers=1 SubmitFailures={} CancelQueued=FALSE
+run workers=1 items=1 mode=normal | Items=1 Workers=1 SubmitFailures={} CancelQueued=FALSE
+run workers=1 items=1 mode=cancel | Items=1 Workers=1 SubmitFailures={} CancelQueued=TRUE
+run workers=1 items=1 mode=submit-error | Items=1 Workers=1 SubmitFailures={1} CancelQueued=FALSE
+run workers=1 items=3 mode=normal | Items=3 Workers=1 SubmitFailures={} CancelQueued=FALSE
+run workers=1 items=3 mode=cancel | Items=3 Workers=1 SubmitFailures={} CancelQueued=TRUE
+run workers=1 items=3 mode=submit-error | Items=3 Workers=1 SubmitFailures={1,2,3} CancelQueued=FALSE
+run workers=1 items=5 mode=normal | Items=5 Workers=1 SubmitFailures={} CancelQueued=FALSE
+run workers=1 items=5 mode=cancel | Items=5 Workers=1 SubmitFailures={} CancelQueued=TRUE
+run workers=1 items=5 mode=submit-error | Items=5 Workers=1 SubmitFailures={1,2,3,4,5} CancelQueued=FALSE
+run workers=2 items=0 mode=normal | Items=0 Workers=2 SubmitFailures={} CancelQueued=FALSE
+run workers=2 items=0 mode=cancel | Items=0 Workers=2 SubmitFailures={} CancelQueued=TRUE
+run workers=2 items=0 mode=submit-error | Items=0 Workers=2 SubmitFailures={} CancelQueued=FALSE
+run workers=2 items=1 mode=normal | Items=1 Workers=2 SubmitFailures={} CancelQueued=FALSE
+run workers=2 items=1 mode=cancel | Items=1 Workers=2 SubmitFailures={} CancelQueued=TRUE
+run workers=2 items=1 mode=submit-error | Items=1 Workers=2 SubmitFailures={1} CancelQueued=FALSE
+run workers=2 items=3 mode=normal | Items=3 Workers=2 SubmitFailures={} CancelQueued=FALSE
+run workers=2 items=3 mode=cancel | Items=3 Workers=2 SubmitFailures={} CancelQueued=TRUE
+run workers=2 items=3 mode=submit-error | Items=3 Workers=2 SubmitFailures={1,2,3} CancelQueued=FALSE
+run workers=2 items=5 mode=normal | Items=5 Workers=2 SubmitFailures={} CancelQueued=FALSE
+run workers=2 items=5 mode=cancel | Items=5 Workers=2 SubmitFailures={} CancelQueued=TRUE
+run workers=2 items=5 mode=submit-error | Items=5 Workers=2 SubmitFailures={1,2,3,4,5} CancelQueued=FALSE
+run workers=3 items=0 mode=normal | Items=0 Workers=3 SubmitFailures={} CancelQueued=FALSE
+run workers=3 items=0 mode=cancel | Items=0 Workers=3 SubmitFailures={} CancelQueued=TRUE
+run workers=3 items=0 mode=submit-error | Items=0 Workers=3 SubmitFailures={} CancelQueued=FALSE
+run workers=3 items=1 mode=normal | Items=1 Workers=3 SubmitFailures={} CancelQueued=FALSE
+run workers=3 items=1 mode=cancel | Items=1 Workers=3 SubmitFailures={} CancelQueued=TRUE
+run workers=3 items=1 mode=submit-error | Items=1 Workers=3 SubmitFailures={1} CancelQueued=FALSE
+run workers=3 items=3 mode=normal | Items=3 Workers=3 SubmitFailures={} CancelQueued=FALSE
+run workers=3 items=3 mode=cancel | Items=3 Workers=3 SubmitFailures={} CancelQueued=TRUE
+run workers=3 items=3 mode=submit-error | Items=3 Workers=3 SubmitFailures={1,2,3} CancelQueued=FALSE
+run workers=3 items=5 mode=normal | Items=5 Workers=3 SubmitFailures={} CancelQueued=FALSE
+run workers=3 items=5 mode=cancel | Items=5 Workers=3 SubmitFailures={} CancelQueued=TRUE
+run workers=3 items=5 mode=submit-error | Items=5 Workers=3 SubmitFailures={1,2,3,4,5} CancelQueued=FALSE

@@ -57,9 +57,9 @@ def jlinalg_identity_guard():
 
 @pytest.fixture
 def reload_jlinalg_after_test(monkeypatch):
-    """Reload jlinalg with the env in its current state, and again at teardown
-    with JAMMA_FORCE_NUMPY_FALLBACK explicitly cleared, so the post-test module
-    state doesn't leak into other tests in the same process.
+    """Reload jlinalg at teardown with JAMMA_FORCE_NUMPY_FALLBACK as the test
+    found it, so the post-test module state doesn't leak into other tests in
+    the same process. A session that set the variable gets the fallback back.
 
     Teardown puts the original module object back into ``sys.modules`` and
     onto the ``jamma`` package before reloading it in place, so a test that
@@ -71,8 +71,12 @@ def reload_jlinalg_after_test(monkeypatch):
     import jamma
 
     original = importlib.import_module("jamma.jlinalg")
+    found = os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK")
     yield
-    monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
+    if found is None:
+        monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
+    else:
+        monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", found)
     sys.modules["jamma.jlinalg"] = original
     vars(jamma)["jlinalg"] = original
     importlib.reload(original)
@@ -165,15 +169,15 @@ def forced_fallback_session(monkeypatch):
     state. Order this before ``reload_jlinalg_after_test`` so it tears down
     after it.
     """
-    session_value = os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK")
+    real = os.environ.get("JAMMA_FORCE_NUMPY_FALLBACK")
     monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", "1")
     _reload_jlinalg()
     yield
     backend = sys.modules["jamma.jlinalg"].blas_backend
-    if session_value is None:
+    if real is None:
         monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
     else:
-        monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", session_value)
+        monkeypatch.setenv("JAMMA_FORCE_NUMPY_FALLBACK", real)
     _reload_jlinalg()
     assert backend == "numpy-fallback-forced", (
         "teardown reloaded jlinalg under an env the session never had"

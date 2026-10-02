@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The README pipeline diagram and `docs/architecture.png` show the `-loco`
   path: per-chromosome kinship, eigendecomposition and association.
 
+### Fixed
+
+- The NumPy SNP-statistics fallback computes variances in double precision for
+  float32 genotypes, as the native kernel does and as the fallback's means
+  already did. Float32 variances used to differ from the float64 result by up
+  to 2e-5 relative at 1,940 samples. Runs that load the native kernel are
+  unchanged, and so are float64 inputs. The fallback's temporary memory for a
+  float32 chunk rises from 1.75 to 2.75 times the chunk.
+- The test suite no longer leaves `jamma.jlinalg` loaded with the native
+  extension in a session that set `JAMMA_FORCE_NUMPY_FALLBACK`. In the weekly
+  sanitizer run every test after `tests/test_force_numpy_fallback.py` saw the
+  extension at call time, which hid a failing `test_abi_version`. The four
+  `tests/test_snp_stats.py` deselections in `sanitizers.yml` are gone.
+
 ## [8.2.2] - 2026-10-02
 
 ### Added

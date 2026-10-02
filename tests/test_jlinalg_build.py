@@ -82,6 +82,7 @@ def test_all_exports_present():
     assert not missing, f"Missing exports: {missing}"
 
 
+@pytest.mark.skipif(not HAS_C_EXTENSION, reason="reports the compiled extension")
 def test_abi_version():
     """ABI_VERSION is 19 after plumbing eigh's driver parameter through."""
     from jamma.jlinalg import ABI_VERSION

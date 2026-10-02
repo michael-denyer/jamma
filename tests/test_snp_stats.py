@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from jamma.jlinalg import HAS_C_EXTENSION, compute_snp_stats_chunk
+from jamma.jlinalg import HAS_C_EXTENSION, blas_backend, compute_snp_stats_chunk
 
 pytestmark = pytest.mark.tier0
 
@@ -133,6 +133,12 @@ class TestSnpStatsC:
         assert nbb is None
         assert means.shape == (4,)
 
+    # Gated on the forced fallback alone: an extension that failed to build
+    # must still fail here rather than skip.
+    @pytest.mark.skipif(
+        blas_backend == "numpy-fallback-forced",
+        reason="JAMMA_FORCE_NUMPY_FALLBACK keeps the extension out by design",
+    )
     def test_c_extension_loaded(self):
         """Verify C extension is available (not fallback)."""
         assert HAS_C_EXTENSION, "C extension not loaded; tests need compiled _jlinalg"

@@ -129,12 +129,12 @@ def solve_eigen_pairs(
         threading.Thread(target=run, name=f"loco-eigen-{i}", daemon=True)
         for i in range(workers)
     ]
-    for thread in threads:
-        thread.start()
     pending: deque[Future[EigenResult]] = deque()
     interrupted = False
     with blas_threads(n_threads):
         try:
+            for thread in threads:
+                thread.start()
             for name, K in inputs:
                 future: Future[EigenResult] = Future()
                 pending.append(future)
@@ -154,4 +154,5 @@ def solve_eigen_pairs(
                 work.put(None)
             if not interrupted:
                 for thread in threads:
-                    thread.join()
+                    if thread.ident is not None:
+                        thread.join()

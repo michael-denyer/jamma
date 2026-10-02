@@ -255,6 +255,7 @@ uv run python -m jamma.lmm._compile_accel
 | `AddressSanitizer: heap-buffer-overflow` in `_lmm_accel.c:NNN` or `_jlinalg/<file>.c:NNN` | Real bug in JAMMA C code | Fix the bug — file/line and stack trace point at the offending site |
 | `LeakSanitizer: detected memory leaks` with frames in `_PyImport_LoadDynamic`, `PyType_Ready`, `PyArray_API`, `OPENSSL_init_crypto`, etc. | Expected interpreter / NumPy / OpenSSL init noise | Verify the symbol is covered in `scripts/asan-suppressions.txt`; if not, add it with an upstream-issue citation per the file's header. NEVER add a `leak:jamma_*` suppression — that defeats the workflow. |
 | `runtime error: signed integer overflow` (UBSAN) | Real bug — usually arithmetic on int sizes/strides | Fix or add an explicit cast with a comment explaining the safety argument |
+| pytest failures with no `AddressSanitizer:` or `runtime error:` line in the log | A test fails under the NumPy fallback, not a memory bug | Reproduce without ASAN: `JAMMA_FORCE_NUMPY_FALLBACK=1 uv run pytest <node id> -n 0`. Fix the fallback or the test. A test whose subprocess cannot fit its timeout under the runtime takes `skip_under_sanitizer` from `tests/support.py` |
 | Workflow exits 0 with no `AddressSanitizer:` lines anywhere in the asan-ubsan log | Either (a) clean run (good) or (b) ASAN not actually wired (BAD) | The `asan-sentinel-meta-test` job exists exactly to distinguish these cases — if it's also green, ASAN is wired and the asan-ubsan green is real |
 
 > **Note:** The broad sanitizer pass uses `JAMMA_FORCE_NUMPY_FALLBACK=1`, so
@@ -611,8 +612,8 @@ If you add a fixture, also add a row here.
 Three modules beside `conftest.py` hold what the fixtures do not:
 
 - [`tests/support.py`](../tests/support.py) is the helper library test
-  modules import: `require_fixture`, `requires_c`, `preflight`,
-  and `install_lint_script`.
+  modules import: `require_fixture`, `requires_c`, `skip_under_sanitizer`,
+  `preflight`, and `install_lint_script`.
   `conftest.py` holds only fixtures and hooks.
 
 - [`tests/fixture_paths.py`](../tests/fixture_paths.py) names every

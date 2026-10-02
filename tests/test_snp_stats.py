@@ -287,11 +287,10 @@ def test_numpy_fallback_is_independent_of_memory_order():
         return means, variances
 
     layouts = {
-        "C": np.ascontiguousarray(data),
-        "F": np.asfortranarray(data),
-        "strided": np.ascontiguousarray(np.repeat(data, 2, axis=1))[:, ::2],
+        "C": data,
+        "strided": np.repeat(data, 2, axis=1)[:, ::2],
     }
-    expected = stats_of(layouts["F"])
+    expected = stats_of(np.asfortranarray(data))
     for name, chunk in layouts.items():
         means, variances = stats_of(chunk)
         np.testing.assert_array_equal(means, expected[0], err_msg=name)

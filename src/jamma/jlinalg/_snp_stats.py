@@ -17,6 +17,9 @@ def compute_snp_stats_chunk(
     n_bb: np.ndarray | None = None,
 ) -> None:
     """Compute per-SNP statistics into preallocated output arrays."""
+    # NumPy's summation order follows memory order, so reduce every chunk in
+    # one layout: equal values then give equal statistics, as in the C kernel.
+    data = np.asfortranarray(data)
     is_nan = np.isnan(data)
     missing = np.sum(is_nan, axis=0)
     with warnings.catch_warnings():

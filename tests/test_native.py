@@ -664,6 +664,8 @@ def test_rebuild_after_stale_abi_load_falls_back_and_asks_for_restart(
         def exec_module(self, module):
             pass
 
+    # The forced fallback returns before the import this test drives.
+    monkeypatch.delenv("JAMMA_FORCE_NUMPY_FALLBACK", raising=False)
     monkeypatch.setattr(sys, "meta_path", [_ExtensionCache(), *sys.meta_path])
     monkeypatch.delitem(sys.modules, sys_key, raising=False)
     builds: list[str] = []

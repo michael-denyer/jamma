@@ -65,7 +65,7 @@ class FakeProgressBar:
         if self.on_update is not None:
             self.on_update(value)
 
-    def finish(self) -> None:
+    def finish(self, dirty: bool = False) -> None:
         if self.finished:
             raise AssertionError("FakeProgressBar.finish() called twice")
         self.finished = True

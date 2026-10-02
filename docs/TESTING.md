@@ -431,6 +431,15 @@ in [`tests/fakes/test_fakes.py`](../tests/fakes/test_fakes.py); accessing
 an undeclared attribute raises `AttributeError` (the contract that
 distinguishes a fake from `MagicMock`).
 
+#### Timed progress protocol verification
+
+`tla/TimedProgress.tla` checks truthful completion display, worker result/error
+handover and joining before normal return. Its eight configurations include
+worker BaseException, stdout failure and consumer interruption. See
+[the progress report](formal-progress.md) for per-run state counts, mutations,
+source mappings and checker commands. The real progressbar regressions are in
+`tests/test_timed_progress_completion.py`.
+
 ### 2.4 Structural source tests (narrow exception)
 
 Most "read source code and grep" tests are anti-patterns, but a few are

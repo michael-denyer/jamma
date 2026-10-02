@@ -205,7 +205,7 @@ def timed_progress(
                 bar.update(pct)
             except OSError:
                 break  # stdout gone; stop updating but still wait for fn
-        if not exception:
+        if done.is_set() and not exception:
             with contextlib.suppress(OSError):
                 bar.update(n_ticks)
     except KeyboardInterrupt:
@@ -213,7 +213,7 @@ def timed_progress(
         raise
     finally:
         with contextlib.suppress(OSError):
-            bar.finish()
+            bar.finish(dirty=cancelled or not done.is_set() or bool(exception))
         # Join with timeout so KeyboardInterrupt is deliverable between
         # iterations.  On cancellation the worker is a daemon thread and
         # will be killed when the process exits — don't block.

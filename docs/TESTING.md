@@ -773,3 +773,12 @@ uses dense two-column GLS and mpmath differentiation, imports no JAMMA numerical
 code, independently brackets each maximum, and checks negative curvature and
 score convergence. `mpmath` is a development dependency only. The regular tests
 use the stored roots without requiring high-precision arithmetic on every run.
+
+### LOCO worker protocol verification
+
+`tla/LocoWorkers.tla` checks ordered eigenpair delivery, error routing, resource
+ownership and startup/close cleanup. The matrix covers 0, 1, 3 and 5 items and
+1, 2 and 3 workers, including partial thread-start failure. See
+[the LOCO verification report](formal-loco.md) for assumptions, exact checker
+commands, per-run state counts and mutation results. The deterministic startup
+regressions are in `tests/test_loco_worker_startup.py`.

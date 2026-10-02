@@ -1,0 +1,18 @@
+spec LocoWorkers.tla
+check INVARIANTS TypeOK Ownership DeliveryOrder EndOrder NoDeliveryAfterFailure ErrorOrder WindowBound ClosedClean SetupClean ScopeCoversSolve
+check PROPERTIES CallsReturn CloseReturns DrainEnds
+run workers=1 items=0 drain | Workers=1 Items=0 FailAt={} InputFailAt={} SetupFailure=0 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=1 items=1 drain | Workers=1 Items=1 FailAt={} InputFailAt={} SetupFailure=0 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=1 items=3 caller | Workers=1 Items=3 FailAt={1,2,3} InputFailAt={1,2,3} SetupFailure=0 SetupCleanup=TRUE Drain=FALSE Interrupt=TRUE Mutation="none"
+run workers=1 items=5 drain | Workers=1 Items=5 FailAt={1,2,3,4,5} InputFailAt={1,2,3,4,5} SetupFailure=0 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=2 items=0 caller | Workers=2 Items=0 FailAt={} InputFailAt={} SetupFailure=0 SetupCleanup=TRUE Drain=FALSE Interrupt=TRUE Mutation="none"
+run workers=2 items=1 drain | Workers=2 Items=1 FailAt={1} InputFailAt={1} SetupFailure=0 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=2 items=3 caller | Workers=2 Items=3 FailAt={1,2,3} InputFailAt={1,2,3} SetupFailure=0 SetupCleanup=TRUE Drain=FALSE Interrupt=TRUE Mutation="none"
+run workers=2 items=5 drain | Workers=2 Items=5 FailAt={1,2,3,4,5} InputFailAt={1,2,3,4,5} SetupFailure=0 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=3 items=0 drain | Workers=3 Items=0 FailAt={} InputFailAt={} SetupFailure=0 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=3 items=1 caller | Workers=3 Items=1 FailAt={1} InputFailAt={1} SetupFailure=0 SetupCleanup=TRUE Drain=FALSE Interrupt=TRUE Mutation="none"
+run workers=3 items=3 drain | Workers=3 Items=3 FailAt={1,2,3} InputFailAt={1,2,3} SetupFailure=0 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=3 items=5 caller | Workers=3 Items=5 FailAt={1,2,3,4,5} InputFailAt={1,2,3,4,5} SetupFailure=0 SetupCleanup=TRUE Drain=FALSE Interrupt=TRUE Mutation="none"
+run workers=2 partial-start-failure | Workers=2 Items=0 FailAt={} InputFailAt={} SetupFailure=1 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=3 scope-entry-failure | Workers=3 Items=0 FailAt={} InputFailAt={} SetupFailure=2 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"
+run workers=2 first-start-failure | Workers=2 Items=0 FailAt={} InputFailAt={} SetupFailure=3 SetupCleanup=TRUE Drain=TRUE Interrupt=FALSE Mutation="none"

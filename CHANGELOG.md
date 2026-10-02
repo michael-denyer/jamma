@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside the model. `docs/TESTING.md` §4 has one row per model and the
   commands to rerun them. `lean/check_mutations.py` and
   `docs/formal-verification.md` are removed.
+- `CITATION.cff` names release 8.2.2 instead of 8.0.2, and the release
+  checklists in `docs/DEVELOPMENT.md` and `docs/DEPLOYMENT.md` include updating
+  it.
 
 ## [8.2.2] - 2026-10-02
 

@@ -193,7 +193,7 @@ PyPI publishing uses GitHub trusted publishing (no API tokens needed locally).
 
 1. Bump `version` in `pyproject.toml`
 2. Run `uv lock` and commit the updated `uv.lock`
-3. Update `CHANGELOG.md` (move Unreleased items to the new version section)
+3. Update `CHANGELOG.md` (move Unreleased items to the new version section), and set `version` and `date-released` in `CITATION.cff` to the new release
 4. Commit on a branch, open a PR, and merge it once CI is green; the ruleset rejects direct pushes to `master`
 5. Create a GitHub release: `gh release create v<X.Y.Z> --title "v<X.Y.Z>" --notes "..."`
 6. The `.github/workflows/build-wheels.yml` workflow builds wheels for Linux x86_64 and macOS arm64 (CPython 3.11–3.14) and uploads them to PyPI automatically on release

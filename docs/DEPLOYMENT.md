@@ -143,7 +143,8 @@ the deployment.
 1. Bump `version` in `pyproject.toml`.
 2. Run `uv lock` and stage `uv.lock` alongside `pyproject.toml`. The lock file does
    not update itself, and CI's `uv sync --locked` step fails on a stale one.
-3. Update `CHANGELOG.md`, moving Unreleased items into a new version section.
+3. Update `CHANGELOG.md`, moving Unreleased items into a new version section, and
+   set `version` and `date-released` in `CITATION.cff` to the new release.
 4. Commit on a branch and merge it through a pull request (the `master` ruleset
    rejects direct pushes), then confirm CI is green on `master`:
 

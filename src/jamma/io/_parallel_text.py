@@ -116,9 +116,26 @@ def run_spawn_pool(
     """
     ctx = mp.get_context("spawn")
     with ctx.Pool(processes=n_workers) as pool:
+        # Pool replaces an exited worker without settling the task it lost.
+        # Retain the original process handles so replacement cannot hide that
+        # failure. Pool exposes no public worker-health API; _pool is used only
+        # here, while exitcode and the timed iterator are public interfaces.
+        processes = tuple(pool._pool)  # type: ignore[missing-attribute]
         try:
-            for _ in pool.imap(worker_fn, args):
-                pass
+            results = pool.imap(worker_fn, args)
+            while True:
+                for process in processes:
+                    if process.exitcode is not None:
+                        raise RuntimeError(
+                            f"Pool worker {process.name} exited unexpectedly "
+                            f"(exitcode={process.exitcode}) {error_context}"
+                        )
+                try:
+                    results.next(timeout=0.1)
+                except mp.TimeoutError:
+                    continue
+                except StopIteration:
+                    break
         except BaseException as e:
             pool.terminate()
             pool.join()

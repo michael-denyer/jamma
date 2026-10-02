@@ -404,6 +404,15 @@ boundaries. Everywhere else, write a fake.
 If your patch target is not on this list, you are mocking the wrong
 layer. Either justify the addition in PR review or write a fake.
 
+#### Spawn-pool failure verification
+
+`tla/SpawnPool.tla` checks ordered result draining, disjoint task ownership and
+termination before temporary-file cleanup. The matrix covers 0, 1, 3 and 5 tasks
+and 1, 2 and 3 processes, including an abrupt exit at any task. See
+[the spawn-pool report](formal-spawn.md) for source mappings, state counts,
+mutation results, commands and assumptions. The real-process regressions are
+in `tests/test_spawn_pool_exit.py`.
+
 ### 2.3 Fakes over mocks
 
 For non-boundary collaborators, write a fake class implementing the real

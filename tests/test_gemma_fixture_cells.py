@@ -48,7 +48,7 @@ def test_python_generated_reference_is_not_a_cell(tmp_path: Path) -> None:
     cells = _load_cells().cells_from_manifest(manifest)
 
     assert cells == [
-        "x|tests/fixtures/gemma_x|x|-bfile %ROOT%/data/x -lmm 1 -outdir %OUTDIR% -o x"
+        "x|tests/fixtures/gemma_x|x|.|-bfile %ROOT%/data/x -lmm 1 -outdir %OUTDIR% -o x"
     ]
 
 

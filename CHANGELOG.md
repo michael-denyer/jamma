@@ -26,11 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `scripts/generate_gemma_fixtures.sh` run with a local GEMMA binary records
-  the same command as a docker run. It starts the binary as `gemma` and passes
-  paths relative to the data root, so the `Command Line Input` line of each
-  log, and the `generation_cmd` that `scripts/check_fixture_manifest.py --write`
-  copies from it, name neither the binary's directory nor the checkout.
+- `scripts/generate_gemma_fixtures.sh` run with a local GEMMA binary records a
+  command with no host path, as a docker run does. It starts the binary as
+  `gemma` and passes paths relative to the data root, so the
+  `Command Line Input` line of each log, and the `generation_cmd` that
+  `scripts/check_fixture_manifest.py --write` copies from it, name neither the
+  binary's directory nor the checkout. A docker run records the same command
+  with a `/data/` prefix on each path.
   Before, a local regeneration wrote both absolute paths, and
   `scripts/_gemma_fixture_cells.py` then dropped the fixture from the
   generator's cell table without an error.

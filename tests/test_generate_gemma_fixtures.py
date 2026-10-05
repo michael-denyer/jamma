@@ -19,9 +19,9 @@ import fnmatch
 import os
 import shlex
 import subprocess
-import sys
 from pathlib import Path
 
+import _gemma_fixture_cells as cells
 import pytest
 
 pytestmark = pytest.mark.tier0
@@ -47,22 +47,10 @@ int main(int argc, char **argv) {
 """
 
 
-def _load_cells():
-    """Import the cell-table script from ``scripts/``, which is not a package."""
-    sys.path.insert(0, str(_SCRIPT_DIR))
-    try:
-        import _gemma_fixture_cells
-    finally:
-        if sys.path and sys.path[0] == str(_SCRIPT_DIR):
-            sys.path.pop(0)
-    return _gemma_fixture_cells
-
-
 def _commands_run_locally(tmp_path: Path) -> list[str]:
     """Run the generator's local runner and return each command GEMMA saw."""
     source = tmp_path / "argv_recorder.c"
     source.write_text(_ARGV_RECORDER_C)
-    # Not named gemma: a real binary is often gemma-0.98.5-linux-static-AMD64.
     binary = tmp_path / "gemma-0.98.5-stand-in"
     subprocess.run(["cc", "-o", str(binary), str(source)], check=True)
 
@@ -90,7 +78,6 @@ def _commands_run_locally(tmp_path: Path) -> list[str]:
 
 
 def test_local_run_maps_back_to_the_rows_that_produced_it(tmp_path: Path) -> None:
-    cells = _load_cells()
     rows = [
         row
         for row in cells.cells_from_manifest(_MANIFEST)
@@ -98,8 +85,11 @@ def test_local_run_maps_back_to_the_rows_that_produced_it(tmp_path: Path) -> Non
     ]
     assert len(rows) == 6, f"{_ONLY!r} no longer selects the six expected rows: {rows}"
 
+    commands = _commands_run_locally(tmp_path)
+    assert len(commands) == len(rows), commands
+
     by_prefix = {}
-    for command in _commands_run_locally(tmp_path):
+    for command in commands:
         tokens = shlex.split(command)
         by_prefix[tokens[tokens.index("-o") + 1]] = command
 

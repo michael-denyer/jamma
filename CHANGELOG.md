@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/fixtures/MANIFEST.toml` that cover those files. No numerical output
   changed.
 
+### Fixed
+
+- `scripts/generate_gemma_fixtures.sh` run with a local GEMMA binary records
+  the same command as a docker run. It starts the binary as `gemma` and passes
+  paths relative to the data root, so the `Command Line Input` line of each
+  log, and the `generation_cmd` that `scripts/check_fixture_manifest.py --write`
+  copies from it, name neither the binary's directory nor the checkout.
+  Before, a local regeneration wrote both absolute paths, and
+  `scripts/_gemma_fixture_cells.py` then dropped the fixture from the
+  generator's cell table without an error.
+  `tests/test_generate_gemma_fixtures.py` runs the script against a stand-in
+  binary and fails if a recorded command no longer maps back to its row.
+
 ## [8.2.3] - 2026-10-02
 
 ### Added

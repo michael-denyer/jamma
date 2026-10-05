@@ -63,7 +63,8 @@ done
 # Columns, pipe-separated:
 #   name | outdir (relative to the root) | prefix | GEMMA args
 #
-# %ROOT% expands to the data root: the repository when running locally, /data
+# %ROOT%/ expands to the prefix GEMMA needs to reach the data root: empty for a
+# local run, which starts GEMMA in that root so paths stay relative, and /data/
 # inside the container. %OUTDIR% expands to the row's output directory under
 # that root. A row whose args carry no -outdir leaves GEMMA writing to ./output.
 #
@@ -115,14 +116,14 @@ fi
 
 if [ -n "$GEMMA_BIN" ]; then
     RUNNER="local"
-    DATA_ROOT="$OUT_ROOT"
+    DATA_PREFIX=""
 elif command -v docker &> /dev/null && docker image inspect "$GEMMA_IMAGE" &> /dev/null; then
     RUNNER="docker"
-    DATA_ROOT="/data"
+    DATA_PREFIX="/data/"
 elif [ "$DRY_RUN" = true ]; then
     RUNNER="local"
     GEMMA_BIN="gemma"
-    DATA_ROOT="$OUT_ROOT"
+    DATA_PREFIX=""
 else
     echo "Error: no GEMMA available." >&2
     echo "" >&2
@@ -138,11 +139,17 @@ fi
 
 # --platform linux/amd64 is required because GEMMA ships x86-only builds. It is
 # harmless on an x86 host and mandatory on Apple silicon.
+#
+# GEMMA copies argv[0] and its arguments into the log's "Command Line Input"
+# line, check_fixture_manifest.py --write copies that line into generation_cmd,
+# and _gemma_fixture_cells.py builds the cell table from generation_cmd. So the
+# local binary runs as `gemma` whatever its path, and the line names no host
+# directory. exec replaces the caller: call run_gemma in a subshell.
 run_gemma() {
     if [ "$RUNNER" = "docker" ]; then
         docker run --rm --platform linux/amd64 -v "$OUT_ROOT:/data" "$GEMMA_IMAGE" gemma "$@"
     else
-        "$GEMMA_BIN" "$@"
+        exec -a gemma "$GEMMA_BIN" "$@"
     fi
 }
 
@@ -173,15 +180,15 @@ while IFS='|' read -r name outdir prefix args; do
     abs_outdir="$OUT_ROOT/$outdir"
     mkdir -p "$abs_outdir"
 
-    expanded="${args//%ROOT%/$DATA_ROOT}"
-    expanded="${expanded//%OUTDIR%/$DATA_ROOT/$outdir}"
+    expanded="${args//%ROOT%\//$DATA_PREFIX}"
+    expanded="${expanded//%OUTDIR%/$DATA_PREFIX$outdir}"
     read -r -a cell_args <<< "$expanded"
 
     if [ "$DRY_RUN" = true ]; then
         if [ "$RUNNER" = "docker" ]; then
             echo "+ docker run --rm --platform linux/amd64 -v $OUT_ROOT:/data $GEMMA_IMAGE gemma ${cell_args[*]}"
         else
-            echo "+ $GEMMA_BIN ${cell_args[*]}"
+            echo "+ (cd $OUT_ROOT && exec -a gemma $GEMMA_BIN ${cell_args[*]})"
         fi
         continue
     fi

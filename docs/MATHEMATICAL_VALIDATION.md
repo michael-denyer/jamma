@@ -103,6 +103,11 @@ uv run python scripts/mathematical_validation.py generate loco --gemma "$HOME/.l
 uv run python scripts/mathematical_validation.py generate weights --gemma "$HOME/.local/bin/gemma" --output /tmp/new-weight-reference
 ```
 
+`generate` runs GEMMA under the name `gemma`, whatever path `--gemma` gives.
+Each `provenance.json` and each GEMMA log names the binary as `gemma`, and
+`provenance.json` identifies it by SHA-256 and gives the working directory
+as `.`, so a reference names no directory on the machine that generated it.
+
 The driver records software versions, actual BLAS/LAPACK identity, compiler,
 source and binary hashes, configuration, raw outputs and field errors.
 Every family writes its `bundle.json` even when the comparison raises, and

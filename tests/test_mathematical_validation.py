@@ -26,6 +26,7 @@ from tests.math_validation.fixtures import (
     verify_reference,
 )
 from tests.math_validation.oracle_io import write_oracle_assoc
+from tests.math_validation.reference import run_gemma
 from tests.math_validation.supplied_cases import compare
 
 
@@ -265,3 +266,14 @@ def test_select_cases_keeps_declared_order():
     declared = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
     assert select_cases(declared, None, "LOCO") == declared
     assert select_cases(declared, ("c", "a"), "LOCO") == [declared[0], declared[2]]
+
+
+@pytest.mark.tier0
+def test_run_gemma_keeps_host_paths_out_of_the_process_and_the_record(tmp_path):
+    """GEMMA writes argv[0] into its log, so the child must see the bare name."""
+    probe = ["-c", 'printf %s "$0"']
+
+    command = run_gemma(Path("/bin/sh"), probe, tmp_path, "probe")
+
+    assert (tmp_path / "probe.stdout.txt").read_text() == "gemma"
+    assert command == {"argv": ["gemma", *probe], "cwd": ".", "exit_code": 0}

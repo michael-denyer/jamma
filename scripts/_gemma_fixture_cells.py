@@ -25,6 +25,10 @@ Excluded, and left to the shell script's own logic:
     generic pipeline, only through generate_loco_synthetic.py), so there is
     nothing here to loop over; the shell script keeps a hand-written loop for
     those three.
+  - The references under tests/fixtures/mathematical_*. Their
+    `generation_cmd` does start with `gemma `, but
+    scripts/mathematical_validation.py generates them from inputs it writes
+    itself, so the shell script must not regenerate them.
 
 Usage:
   python3 scripts/_gemma_fixture_cells.py [manifest_path]
@@ -38,6 +42,7 @@ import tomllib
 from pathlib import Path
 
 _EXCLUDED_SOURCE_MARKERS = ("/data/legacy", "/data/input")
+_PYTHON_GENERATED_PREFIXES = ("tests/fixtures/mathematical_",)
 
 
 def cells_from_manifest(manifest_path: Path) -> list[str]:
@@ -56,6 +61,8 @@ def cells_from_manifest(manifest_path: Path) -> list[str]:
 
     lines = []
     for fixture_path in sorted(manifest["file"]):
+        if fixture_path.startswith(_PYTHON_GENERATED_PREFIXES):
+            continue
         entry = manifest["file"][fixture_path]
         cmd = entry.get("generation_cmd")
         if not cmd or not cmd.startswith("gemma "):

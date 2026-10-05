@@ -8,7 +8,7 @@
 ##   threads        = 18
 ##   parallel type  = openmp
 ##
-## Command Line Input = ~/.local/bin/gemma -bfile tiny -k kinship.txt -lmm 4 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma 
+## Command Line Input = gemma -bfile tiny -k kinship.txt -lmm 4 -maf 0 -miss 1 -c covariates.txt -outdir . -o gemma 
 ##
 ## Date = Sat Sep  5 14:00:13 2026
 ##

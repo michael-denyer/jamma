@@ -19,10 +19,11 @@ from tests.math_validation.fixtures import (
     EXTERNAL_HEADERS,
 )
 from tests.math_validation.reference import (
+    GEMMA_COMMAND,
     copy_reference,
     digest,
     gemma_binary,
-    run_command,
+    run_gemma,
     snapshot_files,
     validate_manifest,
     verify_reference_dir,
@@ -125,9 +126,9 @@ def generate_external(destination: Path, gemma: Path | str) -> None:
         for chromosome in ("1", "2", "3"):
             kinship_name = f"gemma_k_chr{chromosome}"
             commands.append(
-                run_command(
+                run_gemma(
+                    binary,
                     [
-                        str(binary),
                         "-bfile",
                         "tiny",
                         "-gk",
@@ -154,9 +155,9 @@ def generate_external(destination: Path, gemma: Path | str) -> None:
                     f"independent chromosome-{chromosome} K differs from GEMMA"
                 )
             commands.append(
-                run_command(
+                run_gemma(
+                    binary,
                     [
-                        str(binary),
                         "-bfile",
                         "tiny",
                         "-k",
@@ -182,7 +183,7 @@ def generate_external(destination: Path, gemma: Path | str) -> None:
         write_provenance(
             directory,
             schema_version=1,
-            executable=str(binary),
+            executable=GEMMA_COMMAND,
             executable_sha256=digest(binary),
             version=version,
             manifest=manifest,

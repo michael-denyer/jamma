@@ -190,6 +190,14 @@ repos:
         # passing the filtered file list.
         pass_filenames: false
         always_run: true
+      - id: no-home-paths
+        name: reject /Users/<name> and /home/<name> in tracked files
+        entry: scripts/check_home_paths.py
+        language: system
+        # A generated fixture of any type can carry the path, so the script
+        # scans every tracked file itself on every invocation.
+        pass_filenames: false
+        always_run: true
       - id: check-file-size-limits
         name: reject code files over 1000 lines
         entry: scripts/check_file_size_limits.py

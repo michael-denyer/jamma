@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "executable": "~/.local/bin/gemma",
+  "executable": "gemma",
   "executable_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
   "version": "GEMMA 0.98.5 (2021-08-25) by Xiang Zhou, Pjotr Prins and team (C) 2012-2021\n\n type ./gemma -h [num] for detailed help\n options: \n  1: quick guide\n  2: file I/O related\n  3: SNP QC\n  4: calculate relatedness matrix\n  5: perform eigen decomposition\n  6: perform variance component estimation\n  7: fit a linear model\n  8: fit a linear mixed model\n  9: fit a multivariate linear mixed model\n 10: fit a Bayesian sparse linear mixed model\n 11: obtain predicted values\n 12: calculate snp variance covariance\n 13: note\n 14: debug options\n\nThe GEMMA software is distributed under the GNU General Public v3\n   -license    show license information\n   see also http://www.xzlab.org/software.html, https://github.com/genetics-statistics\n",
   "manifest": {
@@ -63,7 +63,7 @@
   "commands": [
     {
       "argv": [
-        "~/.local/bin/gemma",
+        "gemma",
         "-bfile",
         "tiny",
         "-gk",
@@ -79,12 +79,12 @@
         "-o",
         "gemma_k_chr1"
       ],
-      "cwd": "tests/fixtures/mathematical_loco/loco-mode1-cold-warm",
+      "cwd": ".",
       "exit_code": 0
     },
     {
       "argv": [
-        "~/.local/bin/gemma",
+        "gemma",
         "-bfile",
         "tiny",
         "-k",
@@ -102,12 +102,12 @@
         "-o",
         "gemma_chr1"
       ],
-      "cwd": "tests/fixtures/mathematical_loco/loco-mode1-cold-warm",
+      "cwd": ".",
       "exit_code": 0
     },
     {
       "argv": [
-        "~/.local/bin/gemma",
+        "gemma",
         "-bfile",
         "tiny",
         "-gk",
@@ -123,12 +123,12 @@
         "-o",
         "gemma_k_chr2"
       ],
-      "cwd": "tests/fixtures/mathematical_loco/loco-mode1-cold-warm",
+      "cwd": ".",
       "exit_code": 0
     },
     {
       "argv": [
-        "~/.local/bin/gemma",
+        "gemma",
         "-bfile",
         "tiny",
         "-k",
@@ -146,12 +146,12 @@
         "-o",
         "gemma_chr2"
       ],
-      "cwd": "tests/fixtures/mathematical_loco/loco-mode1-cold-warm",
+      "cwd": ".",
       "exit_code": 0
     },
     {
       "argv": [
-        "~/.local/bin/gemma",
+        "gemma",
         "-bfile",
         "tiny",
         "-gk",
@@ -167,12 +167,12 @@
         "-o",
         "gemma_k_chr3"
       ],
-      "cwd": "tests/fixtures/mathematical_loco/loco-mode1-cold-warm",
+      "cwd": ".",
       "exit_code": 0
     },
     {
       "argv": [
-        "~/.local/bin/gemma",
+        "gemma",
         "-bfile",
         "tiny",
         "-k",
@@ -190,7 +190,7 @@
         "-o",
         "gemma_chr3"
       ],
-      "cwd": "tests/fixtures/mathematical_loco/loco-mode1-cold-warm",
+      "cwd": ".",
       "exit_code": 0
     }
   ],
@@ -198,22 +198,22 @@
   "files": {
     "chr1.ksnps.txt": "82197db24b60f77ae2b16f85423179002b5f8cffa1fa54648f478c7ba3ec09b4",
     "model.json": "7c4f3eddb8f241df49b0263bf4dd80b27137fd83f120db4d9c6fdbdc11d85cfc",
-    "gemma_k_chr3.log.txt": "faa75d31794b9099f4c9e8933448289d38848ebe1e26f2a44ac0922fd0a506f5",
+    "gemma_k_chr3.log.txt": "fc89810b9f9097effeff0a5636b24dd1023efb87eb8d51378fe516c48c78b8dc",
     "chr1.snps.txt": "0cc3bc3381e2b06ce620f8b7f4d395abe0e66946bba1cab8816d98057665839d",
     "gemma_k_chr1.stderr.txt": "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10",
-    "gemma_chr1.log.txt": "5be632f312e520e3d4dff441a9389368df9565e944749bbad7f09adb914701d3",
+    "gemma_chr1.log.txt": "b23a990cc475cca73ee9bbe88177f58cc97054218e5bf9ec2c71299fec65da04",
     "gemma_chr1.stdout.txt": "a549f816bdb0118f02c1a56700c55c2fa42c2a60222351e39d39c199c78e2c26",
     "tiny.fam": "19c688b13ca88b16d84e14f73b56aa1a7807fa4446a5818955a0e30d645be368",
-    "gemma_k_chr2.log.txt": "7c0f52f08810e5e8403caf58c34dfe3cdd6ca07b0974993f532c0c80750385ad",
-    "gemma_chr3.log.txt": "c9ae0f59b6d251f4502dabe1508e2e107743f8a12a3ba78a51087075695911c6",
+    "gemma_k_chr2.log.txt": "d18cefb9765739b1a07d0216f0484c01208821bd05d4963f6c7f647dc9f8a031",
+    "gemma_chr3.log.txt": "44efeb54fb484eb63125ab72157436d80e962f934199f1ba2eaf4122d7c739fd",
     "gemma_chr2.stderr.txt": "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6",
     "gemma_k_chr3.stderr.txt": "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10",
     "tiny.bed": "3fbc4e8663dab411cc566e3455d88bb4e54e82d72a2510aa0eba589256ced492",
     "gemma_chr1.assoc.txt": "3fb83c1649673e58629e1695653e5e03e8a5ecc05893f1b8178c0f5cff3cdcea",
     "gemma.assoc.txt": "adead928000cb352ed088fa0d7dbceb1b0d82bfcdad09f454d25d0a7c32dc84e",
     "gemma_k_chr2.stdout.txt": "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae",
-    "gemma_k_chr1.log.txt": "64e5516da902e43db864bba26e651ab40787e2c931542d8c682d044a7ff3db56",
-    "gemma_chr2.log.txt": "189617fa05e5796cf624bb1de680af3e76f7c5334e7d9310fe0b63c0b6ee4f6e",
+    "gemma_k_chr1.log.txt": "ee2eb16f61d72a2a161f5d4a1e4cc74ef53814818ab296cc6abf2b029f734817",
+    "gemma_chr2.log.txt": "b286bffe2ff6ff38585336f8ea1c81deb723092e3a5649ca034a03a364920d4a",
     "gemma_chr3.stdout.txt": "de6b7fc459e5c530c392972e08b4c57a1f6379e9f07bbd8474da5ce4ac024665",
     "gemma_k_chr2.cXX.txt": "9a300be307c680faac7469f336347b87bf08413b07ae886199d8572c4ef17709",
     "chr3.ksnps.txt": "33635866594e45f23668af80349ee5e5afaf77eb746822bcbf6f2152e77b739a",

@@ -45,6 +45,16 @@ def _cli_error(message: str) -> NoReturn:
     sys.exit(1)
 
 
+def _command_line() -> str:
+    """Return the invocation for the run log, naming the program ``jamma``.
+
+    ``sys.argv[0]`` is the resolved path of the entry script, or of
+    ``__main__.py`` under ``python -m jamma``: an install location, not
+    something the user typed.
+    """
+    return " ".join(["jamma", *sys.argv[1:]])
+
+
 def _int_list(value: str, flag: str) -> list[int]:
     """Parse a space- or comma-separated list of integers from a CLI flag."""
     try:
@@ -384,7 +394,7 @@ def _run_gk(config: PipelineConfig, mode: Literal[1, 2]) -> None:
     """Run kinship matrix computation (thin shell over compute_kinship)."""
     start_time = time.perf_counter()
     config.ensure_outdir()
-    command_line = " ".join(sys.argv)
+    command_line = _command_line()
 
     try:
         result = compute_kinship(config, mode)
@@ -446,7 +456,7 @@ def _run_lmm(config: PipelineConfig) -> None:
         logger.debug("Pipeline failed with traceback:", exc_info=True)
         _cli_error(str(e))
 
-    command_line = " ".join(sys.argv)
+    command_line = _command_line()
     params = {
         "n_samples": result.n_samples,
         "n_snps": result.n_snps_tested,

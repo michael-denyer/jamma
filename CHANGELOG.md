@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `Command Line Input` line of every `.log.txt` names the program as
+  `jamma`. It used to carry the path of the entry script, or of `__main__.py`
+  under `python -m jamma`, which put the virtualenv location, and usually the
+  home directory, into each log. The arguments are written as typed, so a path
+  passed as an argument still appears as given.
 - `scripts/mathematical_validation.py generate` runs GEMMA under the name
   `gemma`, whatever path `--gemma` gives. The GEMMA logs and the `executable`,
   `binary` and `argv` fields of `provenance.json` name the binary as `gemma`,
@@ -34,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/_gemma_fixture_cells.py` skips `tests/fixtures/mathematical_*`, so
   `scripts/generate_gemma_fixtures.sh` regenerates the same 20 cells now that
   those references record a `generation_cmd` that starts with `gemma`.
+
+### Fixed
+
+- `scripts/generate_gemma_fixtures.sh` run with a local GEMMA binary records a
+  command with no host path, as a docker run does. It starts the binary as
+  `gemma` and passes paths relative to the data root, so the
+  `Command Line Input` line of each log, and the `generation_cmd` that
+  `scripts/check_fixture_manifest.py --write` copies from it, name neither the
+  binary's directory nor the checkout. A docker run records the same command
+  with a `/data/` prefix on each path.
+  Before, a local regeneration wrote both absolute paths, and
+  `scripts/_gemma_fixture_cells.py` then dropped the fixture from the
+  generator's cell table without an error.
+  `tests/test_generate_gemma_fixtures.py` runs the script against a stand-in
+  binary and fails if a recorded command no longer maps back to its row.
 
 ## [8.2.3] - 2026-10-02
 

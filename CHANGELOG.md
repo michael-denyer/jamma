@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generator's cell table without an error.
   `tests/test_generate_gemma_fixtures.py` runs the script against a stand-in
   binary and fails if a recorded command no longer maps back to its row.
+- `scripts/generate_gemma_fixtures.sh` reads its cell table through
+  `uv run --project <checkout>`, so it uses the environment of the checkout
+  the script lives in. Before, `uv run` resolved the project from the caller's
+  working directory, and starting the script from another uv project created
+  a `.venv` there and, without `UV_NO_SYNC`, installed that project into it.
 
 ## [8.2.3] - 2026-10-02
 

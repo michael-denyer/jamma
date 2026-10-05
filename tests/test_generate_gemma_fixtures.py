@@ -101,3 +101,20 @@ def test_local_run_maps_back_to_the_rows_that_produced_it(tmp_path: Path) -> Non
             f.write(f'generation_cmd = "{by_prefix[prefix]}"\n\n')
 
     assert cells.cells_from_manifest(regenerated) == rows
+
+
+def test_listing_from_another_uv_project_leaves_it_untouched(tmp_path: Path) -> None:
+    """``uv run`` resolves its project from the working directory unless told."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "other"\nversion = "0"\nrequires-python = ">=3.11"\n'
+    )
+
+    subprocess.run(
+        ["bash", str(_SCRIPT_DIR / "generate_gemma_fixtures.sh"), "--list"],
+        check=True,
+        cwd=tmp_path,
+        env={**os.environ, "UV_NO_SYNC": "1"},
+    )
+
+    assert list(tmp_path.iterdir()) == [pyproject]

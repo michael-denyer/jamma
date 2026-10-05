@@ -89,7 +89,7 @@ done
 # gemma_loco_chr* fixtures, whose .log.txt entries carry no generation_cmd at
 # all; those are appended by the chromosome loop below instead.
 
-CELLS="$(uv run python3 "$PROJECT_ROOT/scripts/_gemma_fixture_cells.py" "$PROJECT_ROOT/tests/fixtures/MANIFEST.toml")"
+CELLS="$(uv run --project "$PROJECT_ROOT" python3 "$PROJECT_ROOT/scripts/_gemma_fixture_cells.py" "$PROJECT_ROOT/tests/fixtures/MANIFEST.toml")"
 
 # The LOCO rows share one shape, so they expand from a chromosome loop rather
 # than being typed out three times. They depend on the kinship and SNP-list

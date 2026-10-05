@@ -11,7 +11,7 @@
   },
   "gemma": {
     "version": "0.98.5",
-    "binary": "~/.local/bin/gemma",
+    "binary": "gemma",
     "binary_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
     "source_repository": "https://github.com/genetics-statistics/GEMMA",
     "source_revision": "c37b0445f820b682836a1d20009ce1817546493a"
@@ -29,7 +29,7 @@
   "files": {
     "covariates.txt": "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618",
     "gemma.assoc.txt": "713458545db2e277aea95bbac574828706ec8b6b8095bf721c22770404f5e6cb",
-    "gemma.log.txt": "489fd7210c1ccf2b42f32e87f7f267ac35a77c4330205ddd7f54b4332182c90a",
+    "gemma.log.txt": "1cea6b1d7e7e290a0c309e3ddf92ebff729b55988b0ddbd76d173588782b0482",
     "gemma_kinship.cXX.txt": "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b",
     "model.json": "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd",
     "tiny.bed": "e2441465f11c334720d09cb4c85398a6dd8714be2ea340c252d6d6d94d84652e",

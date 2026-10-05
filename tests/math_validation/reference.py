@@ -16,6 +16,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 GEMMA_VERSION = "0.98.5"
+# GEMMA copies argv[0] into the `Command Line Input` line of its log. The
+# references run it under this name and identify the binary by SHA-256, so
+# neither the log nor provenance.json names a directory on the generating host.
+GEMMA_COMMAND = "gemma"
 
 
 def digest(path: Path | str) -> str:
@@ -117,10 +121,13 @@ def write_plink(
         )
 
 
-def run_command(argv: list[str], directory: Path, name: str) -> dict:
+def run_command(
+    argv: list[str], directory: Path, name: str, *, executable: Path | None = None
+) -> dict:
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
     result = subprocess.run(
         argv,
+        executable=executable,
         cwd=directory,
         capture_output=True,
         text=True,
@@ -133,6 +140,16 @@ def run_command(argv: list[str], directory: Path, name: str) -> dict:
     if result.returncode:
         raise RuntimeError(f"{name} exited {result.returncode}; see {directory}")
     return {"argv": argv, "cwd": str(directory), "exit_code": result.returncode}
+
+
+def run_gemma(binary: Path, args: list[str], directory: Path, name: str) -> dict:
+    """Run GEMMA inside a reference directory and return a host-independent record.
+
+    The record gives the working directory as ``.``, relative to the
+    ``provenance.json`` that the caller writes into ``directory``.
+    """
+    command = run_command([GEMMA_COMMAND, *args], directory, name, executable=binary)
+    return {**command, "cwd": "."}
 
 
 def snapshot_files(directory: Path, *, exclude: frozenset[str] = frozenset()) -> dict:

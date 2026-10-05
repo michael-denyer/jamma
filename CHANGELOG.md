@@ -16,14 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The GEMMA reference fixtures in `tests/fixtures/mathematical_*` and
-  `tests/fixtures/kinship/mouse_hs1940.log.txt` name the binary that produced
-  them as `~/.local/bin/gemma` and `~/VSCode/GEMMA/.venv/bin/jamma` instead of
-  an absolute home directory. The change covers the `Command Line Input` line
-  of each log, the `binary`, `executable` and `argv` fields of each
-  `provenance.json`, and the SHA-256 digests in `provenance.json` and
-  `tests/fixtures/MANIFEST.toml` that cover those files. No numerical output
-  changed.
+- `scripts/mathematical_validation.py generate` runs GEMMA under the name
+  `gemma`, whatever path `--gemma` gives. The GEMMA logs and the `executable`,
+  `binary` and `argv` fields of `provenance.json` name the binary as `gemma`,
+  `provenance.json` gives the working directory as `.`, and the binary's
+  SHA-256 stays the identity. The generators recorded the resolved path
+  before, so a regenerated reference named a home directory.
+- The GEMMA reference fixtures in `tests/fixtures/mathematical_*` name the
+  binary that produced them as `gemma`, and
+  `tests/fixtures/kinship/mouse_hs1940.log.txt` names it as
+  `~/VSCode/GEMMA/.venv/bin/jamma`, instead of an absolute home directory. The
+  change covers the `Command Line Input` line of each log, the `binary`,
+  `executable`, `argv` and `cwd` fields of each `provenance.json`, the
+  `generation_cmd` entries in `tests/fixtures/MANIFEST.toml`, and the SHA-256
+  digests in `provenance.json` and `MANIFEST.toml` that cover those files. No
+  numerical output changed.
+- `scripts/_gemma_fixture_cells.py` skips `tests/fixtures/mathematical_*`, so
+  `scripts/generate_gemma_fixtures.sh` regenerates the same 20 cells now that
+  those references record a `generation_cmd` that starts with `gemma`.
 
 ## [8.2.3] - 2026-10-02
 

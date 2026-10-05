@@ -21,10 +21,11 @@ from tests.math_validation.fixtures import (
 )
 from tests.math_validation.oracle_io import write_oracle_assoc
 from tests.math_validation.reference import (
+    GEMMA_COMMAND,
     copy_reference,
     digest,
     gemma_binary,
-    run_command,
+    run_gemma,
     snapshot_files,
     validate_manifest,
     verify_reference_dir,
@@ -155,9 +156,9 @@ def generate_external(destination: Path, gemma: Path | str) -> None:
         directory = destination / case["id"]
         directory.mkdir()
         _write_plink(directory, arrays)
-        gk = run_command(
+        gk = run_gemma(
+            binary,
             [
-                str(binary),
                 "-bfile",
                 "tiny",
                 "-c",
@@ -182,9 +183,9 @@ def generate_external(destination: Path, gemma: Path | str) -> None:
         kinship = np.loadtxt(kinship_path)
         model = _selected_model(arrays, kinship, manifest["maf"], manifest["miss"])
         (directory / "model.json").write_text(json.dumps(model, indent=2) + "\n")
-        assoc = run_command(
+        assoc = run_gemma(
+            binary,
             [
-                str(binary),
                 "-bfile",
                 "tiny",
                 "-k",
@@ -208,7 +209,7 @@ def generate_external(destination: Path, gemma: Path | str) -> None:
         write_provenance(
             directory,
             schema_version=1,
-            executable=str(binary),
+            executable=GEMMA_COMMAND,
             executable_sha256=digest(binary),
             version=version,
             case=case,

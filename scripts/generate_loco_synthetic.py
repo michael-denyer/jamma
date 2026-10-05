@@ -48,6 +48,10 @@ SEED = 42
 
 OUTPUT_DIR = Path(__file__).parent.parent / "tests" / "fixtures" / "gemma_loco"
 
+# write_loco_kinship_fixtures imports from the tests package. Running this file
+# as a script puts scripts/ on sys.path, not the repository root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------

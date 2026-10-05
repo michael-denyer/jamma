@@ -60,6 +60,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   working directory, and starting the script from another uv project created
   a `.venv` there and, without `UV_NO_SYNC`, installed that project into it.
 
+- `scripts/generate_gemma_fixtures.sh` runs every cell. Two groups could not
+  run, and the first failure stopped a full regeneration part way.
+  The `gemma_lrt` command names `test` and `gemma_kinship.cXX.txt` with no
+  directory, because GEMMA was started inside `tests/fixtures/gemma_synthetic`
+  when the committed file was made. The cell table now carries a working
+  directory for each row. `scripts/_gemma_fixture_cells.py` sets it to the
+  fixture's directory for a command with no `/` in it, and both runners start
+  GEMMA there. The recorded command is unchanged.
+  The `gemma_loco_chr*` cells failed before GEMMA started.
+  `scripts/generate_loco_synthetic.py --loco-kinship` imports from the `tests`
+  package, which Python cannot find when the file runs as a script. The script
+  now puts the repository root on `sys.path`.
+  `--outroot` is documented as the data root. The generator reads its inputs
+  from that root as well as writing there, so a scratch root needs a copy of
+  `tests/fixtures`. The LOCO kinship step now reads its PLINK files from that
+  root too, where it read them from the repository before. `--help` prints the
+  `GEMMA_IMAGE` lines it used to cut off. No committed fixture changed.
+
 ## [8.2.3] - 2026-10-02
 
 ### Added

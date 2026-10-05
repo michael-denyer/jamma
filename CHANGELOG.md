@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `Command Line Input` line of every `.log.txt` names the program as
+  `jamma`. It used to carry the path of the entry script, or of `__main__.py`
+  under `python -m jamma`, which put the virtualenv location, and usually the
+  home directory, into each log. The arguments are written as typed, so a path
+  passed as an argument still appears as given.
+
 - The GEMMA reference fixtures in `tests/fixtures/mathematical_*` and
   `tests/fixtures/kinship/mouse_hs1940.log.txt` name the binary that produced
   them as `~/.local/bin/gemma` and `~/VSCode/GEMMA/.venv/bin/jamma` instead of

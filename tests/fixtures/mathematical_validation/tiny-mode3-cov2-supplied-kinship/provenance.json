@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "executable": "/Users/mdenyer/.local/bin/gemma",
+  "executable": "~/.local/bin/gemma",
   "executable_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
   "version": "GEMMA 0.98.5 (2021-08-25) by Xiang Zhou, Pjotr Prins and team (C) 2012-2021\n\n type ./gemma -h [num] for detailed help\n options: \n  1: quick guide\n  2: file I/O related\n  3: SNP QC\n  4: calculate relatedness matrix\n  5: perform eigen decomposition\n  6: perform variance component estimation\n  7: fit a linear model\n  8: fit a linear mixed model\n  9: fit a multivariate linear mixed model\n 10: fit a Bayesian sparse linear mixed model\n 11: obtain predicted values\n 12: calculate snp variance covariance\n 13: note\n 14: debug options\n\nThe GEMMA software is distributed under the GNU General Public v3\n   -license    show license information\n   see also http://www.xzlab.org/software.html, https://github.com/genetics-statistics\n",
   "command": {
     "argv": [
-      "/Users/mdenyer/.local/bin/gemma",
+      "~/.local/bin/gemma",
       "-bfile",
       "tiny",
       "-k",
@@ -76,7 +76,7 @@
     "kinship.txt": "1ec6af6033b815b9a66d69d8f4b4312a675d893be8e89f90118d993bef078cda",
     "gemma.stderr.txt": "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10",
     "tiny.bim": "718d27c943c7cecc646d35b1eb8b27aae7bb947a7cb832ab5b36614ca9da5bd8",
-    "gemma.log.txt": "a5a7bc5bcdb865225d8a787c53d35b534885153e82f47a8c1fc57c2582acce87",
+    "gemma.log.txt": "d20286c28f969810273e72c2b8f50a61da546a02b4d430eb01514a99c74b8ea1",
     "covariates.txt": "a755f36270f1d3d19575c7c420eed4981294c62ccd8392a465b2b228e4ba95dc"
   }
 }

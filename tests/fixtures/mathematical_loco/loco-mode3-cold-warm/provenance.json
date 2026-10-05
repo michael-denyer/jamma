@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "executable": "/Users/mdenyer/.local/bin/gemma",
+  "executable": "~/.local/bin/gemma",
   "executable_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
   "version": "GEMMA 0.98.5 (2021-08-25) by Xiang Zhou, Pjotr Prins and team (C) 2012-2021\n\n type ./gemma -h [num] for detailed help\n options: \n  1: quick guide\n  2: file I/O related\n  3: SNP QC\n  4: calculate relatedness matrix\n  5: perform eigen decomposition\n  6: perform variance component estimation\n  7: fit a linear model\n  8: fit a linear mixed model\n  9: fit a multivariate linear mixed model\n 10: fit a Bayesian sparse linear mixed model\n 11: obtain predicted values\n 12: calculate snp variance covariance\n 13: note\n 14: debug options\n\nThe GEMMA software is distributed under the GNU General Public v3\n   -license    show license information\n   see also http://www.xzlab.org/software.html, https://github.com/genetics-statistics\n",
   "manifest": {
@@ -63,7 +63,7 @@
   "commands": [
     {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-gk",
@@ -84,7 +84,7 @@
     },
     {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-k",
@@ -107,7 +107,7 @@
     },
     {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-gk",
@@ -128,7 +128,7 @@
     },
     {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-k",
@@ -151,7 +151,7 @@
     },
     {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-gk",
@@ -172,7 +172,7 @@
     },
     {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-k",
@@ -198,22 +198,22 @@
   "files": {
     "chr1.ksnps.txt": "82197db24b60f77ae2b16f85423179002b5f8cffa1fa54648f478c7ba3ec09b4",
     "model.json": "7c4f3eddb8f241df49b0263bf4dd80b27137fd83f120db4d9c6fdbdc11d85cfc",
-    "gemma_k_chr3.log.txt": "ad3648b8d6ae89f407d1b82d84c2f1b2ba1ef848d3ffd11e65f22f209399ce43",
+    "gemma_k_chr3.log.txt": "0b4e0e881fdf42fac38102a18befb903d86d4337bcf338ca7a4262d3680cb53c",
     "chr1.snps.txt": "0cc3bc3381e2b06ce620f8b7f4d395abe0e66946bba1cab8816d98057665839d",
     "gemma_k_chr1.stderr.txt": "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10",
-    "gemma_chr1.log.txt": "4c8de647d9f2dd4b997c7b02c34ea6a2704264dd3efb476fe512a474bed911d1",
+    "gemma_chr1.log.txt": "6cd383ff0fa63a4199992a1fa07997081bc3ff6090d97fb1719c167b8302dfa6",
     "gemma_chr1.stdout.txt": "a549f816bdb0118f02c1a56700c55c2fa42c2a60222351e39d39c199c78e2c26",
     "tiny.fam": "19c688b13ca88b16d84e14f73b56aa1a7807fa4446a5818955a0e30d645be368",
-    "gemma_k_chr2.log.txt": "205a6d519ce75b63d211c387c457fbf5312fe1cb9fd81cf6476e86e865744f09",
-    "gemma_chr3.log.txt": "c8f1fb8716ec47c863839865efb38adf3d52700d3a942fefa67a15b92b358dda",
+    "gemma_k_chr2.log.txt": "0a2a8983ea275838e5c69feb5378ad67d22d72b8ab5825a791f6181c11571735",
+    "gemma_chr3.log.txt": "657dd6e36ef272dcaad1de27676b2ba8c41fa73ecb81830b545781be4a37888d",
     "gemma_chr2.stderr.txt": "25bfaab1a41fd365e6149a761f21e7cf26bb08482de214e6f70677ae55bdbbe6",
     "gemma_k_chr3.stderr.txt": "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10",
     "tiny.bed": "3fbc4e8663dab411cc566e3455d88bb4e54e82d72a2510aa0eba589256ced492",
     "gemma_chr1.assoc.txt": "6e022d72d30cf051f760c01674fd4451da0761ba9768bf3b3bf5bd3e646bd814",
     "gemma.assoc.txt": "74993c521f25864ebb50a983d3c0de7bb5d1e01ee2545525dff7519ff5b802cc",
     "gemma_k_chr2.stdout.txt": "d30b3fb8a9b21f2d07ca4d6c827dbce0e965127381d46c2265bd3ccc5ed0b1ae",
-    "gemma_k_chr1.log.txt": "c6a53ffc02f39f9e5a0a497746061b68427c70c409b0b2f69b5f0d74202f582f",
-    "gemma_chr2.log.txt": "16846f91e883261ec49679b124aa9fb8b1a094a7ecb378685d2004b7c00a8b79",
+    "gemma_k_chr1.log.txt": "212533645826993380dc990768a0da16b8e41e3c618b38f7a5e5e8da9d89b9ed",
+    "gemma_chr2.log.txt": "c737985f0e970d22704910e3bec691daa0c7b2781a45f0a182cba542fad20192",
     "gemma_chr3.stdout.txt": "de6b7fc459e5c530c392972e08b4c57a1f6379e9f07bbd8474da5ce4ac024665",
     "gemma_k_chr2.cXX.txt": "9a300be307c680faac7469f336347b87bf08413b07ae886199d8572c4ef17709",
     "chr3.ksnps.txt": "33635866594e45f23668af80349ee5e5afaf77eb746822bcbf6f2152e77b739a",

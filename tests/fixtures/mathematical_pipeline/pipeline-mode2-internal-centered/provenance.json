@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "executable": "/Users/mdenyer/.local/bin/gemma",
+  "executable": "~/.local/bin/gemma",
   "executable_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
   "version": "GEMMA 0.98.5 (2021-08-25) by Xiang Zhou, Pjotr Prins and team (C) 2012-2021\n\n type ./gemma -h [num] for detailed help\n options: \n  1: quick guide\n  2: file I/O related\n  3: SNP QC\n  4: calculate relatedness matrix\n  5: perform eigen decomposition\n  6: perform variance component estimation\n  7: fit a linear model\n  8: fit a linear mixed model\n  9: fit a multivariate linear mixed model\n 10: fit a Bayesian sparse linear mixed model\n 11: obtain predicted values\n 12: calculate snp variance covariance\n 13: note\n 14: debug options\n\nThe GEMMA software is distributed under the GNU General Public v3\n   -license    show license information\n   see also http://www.xzlab.org/software.html, https://github.com/genetics-statistics\n",
   "case": {
@@ -58,7 +58,7 @@
   "commands": {
     "kinship": {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-c",
@@ -79,7 +79,7 @@
     },
     "association": {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-k",
@@ -111,10 +111,10 @@
     "gemma.assoc.txt": "99cc8a50bed3dd2e75d9d11b36e6e405f5c9bb5015e4152edaf48342ee16c679",
     "gemma.stdout.txt": "ddef8205381315cd9ba24179c7c8c489c1ad9760af406ae22171a2399efbd106",
     "gemma_kinship.stdout.txt": "e4366a34d2ad822344410edb417f67f1c3e5222ed3c974167fc091bfe9fd3d91",
-    "gemma_kinship.log.txt": "25c75b6ebc1661991f6e1e3cdc8e6d94f60cf1671eea8def84bd1c4a5d1b3453",
+    "gemma_kinship.log.txt": "5aea2917424214064c9bd65eaf135584151d4bbaee1af901390eeb31f39c8967",
     "gemma.stderr.txt": "518a5c56c62a6412c4768e1046c297433086281b9d764db4fad41cd27393af98",
     "tiny.bim": "ec0343d2d8d8dc656ca9ea914f52b80bc36805f317c5150f83729f663e07f3c2",
-    "gemma.log.txt": "8b4b14592f7624cb307f20d327168da270e62a2671ffe56b39fbe61a9f7df064",
+    "gemma.log.txt": "2b7277a7a9b9523c6dd1011cd5669ba8fa026784ac9bf8f4da3338283cd3f9f3",
     "covariates.txt": "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618"
   }
 }

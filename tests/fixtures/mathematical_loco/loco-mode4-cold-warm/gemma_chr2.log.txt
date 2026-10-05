@@ -8,7 +8,7 @@
 ##   threads        = 18
 ##   parallel type  = openmp
 ##
-## Command Line Input = /Users/mdenyer/.local/bin/gemma -bfile tiny -k gemma_k_chr2.cXX.txt -snps chr2.snps.txt -lmm 4 -maf 0 -miss 1 -outdir . -o gemma_chr2 
+## Command Line Input = ~/.local/bin/gemma -bfile tiny -k gemma_k_chr2.cXX.txt -snps chr2.snps.txt -lmm 4 -maf 0 -miss 1 -outdir . -o gemma_chr2 
 ##
 ## Date = Sat Sep  5 14:26:44 2026
 ##

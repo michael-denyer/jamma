@@ -3,7 +3,7 @@
   "case": "mode4-nonpositive-supplied",
   "gemma": {
     "version": "0.98.5",
-    "binary": "/Users/mdenyer/.local/bin/gemma",
+    "binary": "~/.local/bin/gemma",
     "binary_sha256": "27285988cc9817cc918da0e9e7bd9aa45dbdebfa370579fd04512fdd55c44f45",
     "source_repository": "https://github.com/genetics-statistics/GEMMA",
     "source_revision": "c37b0445f820b682836a1d20009ce1817546493a"
@@ -11,7 +11,7 @@
   "commands": {
     "kinship": {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-c",
@@ -32,7 +32,7 @@
     },
     "association": {
       "argv": [
-        "/Users/mdenyer/.local/bin/gemma",
+        "~/.local/bin/gemma",
         "-bfile",
         "tiny",
         "-k",
@@ -59,11 +59,11 @@
   "files": {
     "covariates.txt": "1e1c16ea36f8d98019742c9d2dd2216b19108281453fcf0df223cc9475bb1618",
     "gemma.assoc.txt": "3029dacfa193d9658fdfa058bb1d2cdf600194dea79b7ab7f353b12cefb5b450",
-    "gemma.log.txt": "32cdb466c431b0d7775dd0e74c7b15fbce171664469faadc24ae206e5474c090",
+    "gemma.log.txt": "cea379c99a086bd53f849eddeed31583be1f15e9a92bcaa2efee3e409fc90dc6",
     "gemma.stderr.txt": "708c1694f713850ff26bdec95936f54a4548cb33b44c7103ebe61396eda69452",
     "gemma.stdout.txt": "b945f8d8fdc20b154e69b95bf04f56e43e7fe9fb0156d9d84b31ae33f7009403",
     "gemma_kinship.cXX.txt": "3f3517bc362035fc8fbb5216c50fc82573133e80c25a0ba7b458cfa164944e9b",
-    "gemma_kinship.log.txt": "c55a1838fb8870c027927dbe4ba18429123df9fbea6ef3a8eaf0d014cfc1fa2e",
+    "gemma_kinship.log.txt": "e9ce9ef85bcafdc5e36420fb136eb45be5b9e544d50e89d4c3096129394b02cb",
     "gemma_kinship.stderr.txt": "ca5442222437c13833f3181e4f392036696a2a618318fcf03c642c2fa2d9fa10",
     "gemma_kinship.stdout.txt": "e4366a34d2ad822344410edb417f67f1c3e5222ed3c974167fc091bfe9fd3d91",
     "model.json": "e57ec016fe3fbf160c510c504ed456ea550fbca570a02657d439a0492da43ccd",

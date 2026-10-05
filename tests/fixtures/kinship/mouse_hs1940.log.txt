@@ -2,7 +2,7 @@
 ## JAMMA Version = 0.1.0
 ## Date = 2026-01-31T19:31:22.348032
 ##
-## Command Line Input = /Users/mdenyer/VSCode/GEMMA/.venv/bin/jamma -outdir tests/fixtures/kinship -o mouse_hs1940 gk -bfile legacy/example/mouse_hs1940
+## Command Line Input = ~/VSCode/GEMMA/.venv/bin/jamma -outdir tests/fixtures/kinship -o mouse_hs1940 gk -bfile legacy/example/mouse_hs1940
 ##
 ## Summary Statistics:
 ## n_samples = 1940

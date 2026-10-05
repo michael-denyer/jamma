@@ -8,7 +8,7 @@
 ##   threads        = 18
 ##   parallel type  = openmp
 ##
-## Command Line Input = /Users/mdenyer/.local/bin/gemma -bfile tiny -gk 1 -snps chr1.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr1 
+## Command Line Input = ~/.local/bin/gemma -bfile tiny -gk 1 -snps chr1.ksnps.txt -maf 0 -miss 1 -outdir . -o gemma_k_chr1 
 ##
 ## Date = Sat Sep  5 14:26:44 2026
 ##

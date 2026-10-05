@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The GEMMA reference fixtures in `tests/fixtures/mathematical_*` and
+  `tests/fixtures/kinship/mouse_hs1940.log.txt` name the binary that produced
+  them as `~/.local/bin/gemma` and `~/VSCode/GEMMA/.venv/bin/jamma` instead of
+  an absolute home directory. The change covers the `Command Line Input` line
+  of each log, the `binary`, `executable` and `argv` fields of each
+  `provenance.json`, and the SHA-256 digests in `provenance.json` and
+  `tests/fixtures/MANIFEST.toml` that cover those files. No numerical output
+  changed.
+
 ## [8.2.3] - 2026-10-02
 
 ### Added

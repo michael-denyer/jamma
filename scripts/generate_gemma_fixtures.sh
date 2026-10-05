@@ -13,6 +13,10 @@
 # ./output/, and the row is moved into place afterwards, matching how the
 # committed file was produced.
 #
+# The gemma_lrt row was run from inside tests/fixtures/gemma_synthetic: its
+# recorded command names `test` and `gemma_kinship.cXX.txt` with no directory.
+# The row's workdir column carries that directory.
+#
 # Provenance note: five committed outputs came from GEMMA 0.96 (gemma_lrt,
 # gemma_score, gemma_covariate, gemma_all, gemma_all_covar). 0.98.5 adds a
 # logl_H1 column, so four of them (all but gemma_score, whose Score-mode
@@ -29,7 +33,9 @@
 #   --dry-run              Print each GEMMA command without running it.
 #   --only <glob>          Run only cells whose name matches the glob.
 #   --gemma-path <path>    Use this GEMMA binary instead of docker or PATH.
-#   --outroot <dir>        Write under this root instead of the repository.
+#   --outroot <dir>        Use <dir> as the data root instead of the repository.
+#                          Inputs are read from <dir>/tests/fixtures and outputs
+#                          are written there, so copy tests/fixtures in first.
 #
 # Environment:
 #   GEMMA        Path to a local GEMMA binary.
@@ -53,7 +59,7 @@ while [ $# -gt 0 ]; do
         --only) ONLY="$2"; shift 2 ;;
         --gemma-path) GEMMA_BIN="$2"; shift 2 ;;
         --outroot) OUT_ROOT="$(cd "$2" && pwd)"; shift 2 ;;
-        -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -61,12 +67,17 @@ done
 # ─── The cell table ──────────────────────────────────────────────────────────
 #
 # Columns, pipe-separated:
-#   name | outdir (relative to the root) | prefix | GEMMA args
+#   name | outdir (relative to the root) | prefix | workdir | GEMMA args
+#
+# workdir is the directory GEMMA starts in, relative to the root: `.` for a row
+# whose paths start at the root, the row's own directory for a row whose
+# recorded command names bare files.
 #
 # %ROOT%/ expands to the prefix GEMMA needs to reach the data root: empty for a
 # local run, which starts GEMMA in that root so paths stay relative, and /data/
 # inside the container. %OUTDIR% expands to the row's output directory under
-# that root. A row whose args carry no -outdir leaves GEMMA writing to ./output.
+# that root. A row whose args carry no -outdir leaves GEMMA writing to ./output
+# under its workdir.
 #
 # The rows themselves come from tests/fixtures/MANIFEST.toml's generation_cmd
 # field on each fixture's .log.txt entry, so this table cannot drift from the
@@ -84,7 +95,7 @@ CELLS="$(uv run python3 "$PROJECT_ROOT/scripts/_gemma_fixture_cells.py" "$PROJEC
 # than being typed out three times. They depend on the kinship and SNP-list
 # files that generate_loco_synthetic.py --loco-kinship writes first.
 for CHR in 1 2 3; do
-    CELLS+=$'\n'"gemma_loco_chr${CHR}|tests/fixtures/gemma_loco|gemma_loco_chr${CHR}|-bfile %ROOT%/tests/fixtures/gemma_loco/test -k %ROOT%/tests/fixtures/gemma_loco/loco_chr${CHR}_kinship.cXX.txt -snps %ROOT%/tests/fixtures/gemma_loco/chr${CHR}_snps.txt -lmm 1 -o gemma_loco_chr${CHR} -outdir %OUTDIR%"
+    CELLS+=$'\n'"gemma_loco_chr${CHR}|tests/fixtures/gemma_loco|gemma_loco_chr${CHR}|.|-bfile %ROOT%/tests/fixtures/gemma_loco/test -k %ROOT%/tests/fixtures/gemma_loco/loco_chr${CHR}_kinship.cXX.txt -snps %ROOT%/tests/fixtures/gemma_loco/chr${CHR}_snps.txt -lmm 1 -o gemma_loco_chr${CHR} -outdir %OUTDIR%"
 done
 
 # ─── Selection and listing ───────────────────────────────────────────────────
@@ -102,7 +113,7 @@ selected_rows() {
 
 if [ "$LIST_ONLY" = true ]; then
     printf '%-26s %-32s %s\n' NAME OUTDIR ARGS
-    while IFS='|' read -r name outdir _prefix args; do
+    while IFS='|' read -r name outdir _prefix _workdir args; do
         printf '%-26s %-32s %s\n' "$name" "$outdir" "$args"
     done < <(selected_rows)
     exit 0
@@ -146,9 +157,12 @@ fi
 # local binary runs as `gemma` whatever its path, and the line names no host
 # directory. exec replaces the caller: call run_gemma in a subshell.
 run_gemma() {
+    local workdir="$1"
+    shift
     if [ "$RUNNER" = "docker" ]; then
-        docker run --rm --platform linux/amd64 -v "$OUT_ROOT:/data" "$GEMMA_IMAGE" gemma "$@"
+        docker run --rm --platform linux/amd64 -v "$OUT_ROOT:/data" -w "/data/$workdir" "$GEMMA_IMAGE" gemma "$@"
     else
+        cd "$OUT_ROOT/$workdir"
         exec -a gemma "$GEMMA_BIN" "$@"
     fi
 }
@@ -163,21 +177,22 @@ if loco_selected; then
     LOCO_DIR="$OUT_ROOT/tests/fixtures/gemma_loco"
     if [ "$DRY_RUN" = true ]; then
         echo "+ uv run python scripts/generate_loco_synthetic.py --loco-kinship" \
-            "$PROJECT_ROOT/tests/fixtures/gemma_loco/test $LOCO_DIR"
+            "$LOCO_DIR/test $LOCO_DIR"
     else
         echo "=== LOCO kinship (JAMMA, subtraction formula) ==="
         (cd "$PROJECT_ROOT" && uv run python scripts/generate_loco_synthetic.py \
-            --loco-kinship "$PROJECT_ROOT/tests/fixtures/gemma_loco/test" "$LOCO_DIR")
+            --loco-kinship "$LOCO_DIR/test" "$LOCO_DIR")
     fi
 fi
 
 # ─── Run the selected cells ──────────────────────────────────────────────────
 
-while IFS='|' read -r name outdir prefix args; do
+while IFS='|' read -r name outdir prefix workdir args; do
     echo ""
     echo "=== $name -> $outdir/$prefix ==="
 
     abs_outdir="$OUT_ROOT/$outdir"
+    abs_workdir="$OUT_ROOT/$workdir"
     mkdir -p "$abs_outdir"
 
     expanded="${args//%ROOT%\//$DATA_PREFIX}"
@@ -186,20 +201,20 @@ while IFS='|' read -r name outdir prefix args; do
 
     if [ "$DRY_RUN" = true ]; then
         if [ "$RUNNER" = "docker" ]; then
-            echo "+ docker run --rm --platform linux/amd64 -v $OUT_ROOT:/data $GEMMA_IMAGE gemma ${cell_args[*]}"
+            echo "+ docker run --rm --platform linux/amd64 -v $OUT_ROOT:/data -w /data/$workdir $GEMMA_IMAGE gemma ${cell_args[*]}"
         else
-            echo "+ (cd $OUT_ROOT && exec -a gemma $GEMMA_BIN ${cell_args[*]})"
+            echo "+ (cd $abs_workdir && exec -a gemma $GEMMA_BIN ${cell_args[*]})"
         fi
         continue
     fi
 
-    (cd "$OUT_ROOT" && run_gemma "${cell_args[@]}")
+    (run_gemma "$workdir" "${cell_args[@]}")
 
     # Rows without -outdir land in ./output; move them where they belong.
-    if [ -f "$OUT_ROOT/output/$prefix.assoc.txt" ]; then
-        mv "$OUT_ROOT/output/$prefix.assoc.txt" "$abs_outdir/"
-        mv "$OUT_ROOT/output/$prefix.log.txt" "$abs_outdir/"
-        rmdir "$OUT_ROOT/output" 2> /dev/null || true
+    if [ -f "$abs_workdir/output/$prefix.assoc.txt" ]; then
+        mv "$abs_workdir/output/$prefix.assoc.txt" "$abs_outdir/"
+        mv "$abs_workdir/output/$prefix.log.txt" "$abs_outdir/"
+        rmdir "$abs_workdir/output" 2> /dev/null || true
     fi
 done < <(selected_rows)
 

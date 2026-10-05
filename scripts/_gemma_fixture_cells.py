@@ -7,9 +7,12 @@ Every regenerable GEMMA-produced fixture records its provenance as a
 single source for that table, so the two cannot drift apart: reads each
 `generation_cmd`, rewrites its path-like arguments back into the `%ROOT%` /
 `%OUTDIR%` tokens generate_gemma_fixtures.sh expands, and prints one
-pipe-separated `name|outdir|prefix|args` line per fixture, in the same
-"name|outdir|prefix|args" shape the shell script's CELLS table used to carry
-by hand.
+pipe-separated `name|outdir|prefix|workdir|args` line per fixture.
+
+`workdir` is the directory GEMMA starts in, relative to the root. It is `.`
+unless the recorded command has no `/` anywhere: such a command names its
+files relative to the fixture's own directory, so that directory is the
+workdir and the arguments stay as recorded.
 
 Excluded, and left to the shell script's own logic:
   - Fixtures whose `generation_cmd` does not start with the literal `gemma `
@@ -44,9 +47,9 @@ def cells_from_manifest(manifest_path: Path) -> list[str]:
         manifest_path: Path to tests/fixtures/MANIFEST.toml.
 
     Returns:
-        Lines in `name|outdir|prefix|args` form, sorted by fixture path, with
-        `%ROOT%` and `%OUTDIR%` tokens restored in place of the literal paths
-        `generation_cmd` recorded.
+        Lines in `name|outdir|prefix|workdir|args` form, sorted by fixture
+        path, with `%ROOT%` and `%OUTDIR%` tokens restored in place of the
+        literal paths `generation_cmd` recorded.
     """
     with manifest_path.open("rb") as f:
         manifest = tomllib.load(f)
@@ -63,6 +66,7 @@ def cells_from_manifest(manifest_path: Path) -> list[str]:
         outdir = fixture_path.rsplit("/", 1)[0]
         tokens = shlex.split(cmd)[1:]  # drop the leading "gemma"
         prefix = tokens[tokens.index("-o") + 1]
+        workdir = "." if any("/" in tok for tok in tokens) else outdir
 
         rewritten = []
         for tok in tokens:
@@ -76,7 +80,8 @@ def cells_from_manifest(manifest_path: Path) -> list[str]:
                 tok = "%ROOT%/" + tok
             rewritten.append(tok)
 
-        lines.append(f"{prefix}|{outdir}|{prefix}|{' '.join(rewritten)}")
+        args = " ".join(rewritten)
+        lines.append(f"{prefix}|{outdir}|{prefix}|{workdir}|{args}")
     return lines
 
 

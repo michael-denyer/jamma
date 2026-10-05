@@ -25,6 +25,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import _gemma_fixture_cells as cells
 import pytest
@@ -39,46 +40,54 @@ _MANIFEST = _REPO_ROOT / "tests" / "fixtures" / "MANIFEST.toml"
 # runs from inside its fixture directory. The LOCO rows end in a digit and stay
 # out: they need the JAMMA kinship step first.
 _ONLY = "gemma_*[!0-9]"
-_ROWS_SELECTED = 7
 
-_ARGV_RECORDER_C = """
+# Records where it started and what it was called with. Like GEMMA, it writes
+# to ./output when the command names no -outdir.
+_GEMMA_STAND_IN_C = """
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
-    char cwd[4096];
+    char cwd[4096], path[4096];
+    const char *prefix = "", *kinds[] = {"assoc", "log"};
+    int has_outdir = 0;
     FILE *out = fopen(getenv("ARGV_RECORD"), "a");
     if (!out || !getcwd(cwd, sizeof cwd)) return 1;
-    fprintf(out, "%s\t", cwd);
-    for (int i = 0; i < argc; i++) fprintf(out, "%s%s", i ? " " : "", argv[i]);
+    fprintf(out, "%s\\t", cwd);
+    for (int i = 0; i < argc; i++) {
+        fprintf(out, "%s%s", i ? " " : "", argv[i]);
+        if (!strcmp(argv[i], "-o") && i + 1 < argc) prefix = argv[i + 1];
+        if (!strcmp(argv[i], "-outdir")) has_outdir = 1;
+    }
     fputc('\\n', out);
-    return fclose(out);
+    if (fclose(out)) return 1;
+    if (has_outdir) return 0;
+    mkdir("output", 0777);
+    for (int i = 0; i < 2; i++) {
+        snprintf(path, sizeof path, "output/%s.%s.txt", prefix, kinds[i]);
+        if (!(out = fopen(path, "w")) || fclose(out)) return 1;
+    }
+    return 0;
 }
 """
 
 
-def _selected_rows() -> list[str]:
-    rows = [
-        row
-        for row in cells.cells_from_manifest(_MANIFEST)
-        if fnmatch.fnmatchcase(row.split("|", 1)[0], _ONLY)
-    ]
-    assert len(rows) == _ROWS_SELECTED, f"{_ONLY!r} selects {rows}"
-    return rows
+class LocalRun(NamedTuple):
+    """One run of the generator's local runner, keyed by output prefix."""
+
+    outroot: Path
+    started_in: dict[str, Path]  # relative to outroot
+    command: dict[str, str]
 
 
 @pytest.fixture(scope="module")
-def local_run(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Path, str]]:
-    """Run the generator's local runner once.
-
-    Returns:
-        Per output prefix, the directory GEMMA started in, relative to the
-        data root, and the command it saw.
-    """
+def local_run(tmp_path_factory: pytest.TempPathFactory) -> LocalRun:
     tmp_path = tmp_path_factory.mktemp("local_run")
-    source = tmp_path / "argv_recorder.c"
-    source.write_text(_ARGV_RECORDER_C)
+    source = tmp_path / "gemma_stand_in.c"
+    source.write_text(_GEMMA_STAND_IN_C)
     binary = tmp_path / "gemma-0.98.5-stand-in"
     subprocess.run(["cc", "-o", str(binary), str(source)], check=True)
 
@@ -102,39 +111,60 @@ def local_run(tmp_path_factory: pytest.TempPathFactory) -> dict[str, tuple[Path,
         # that would re-sync the environment the suite is running in.
         env={**os.environ, "ARGV_RECORD": str(record), "UV_NO_SYNC": "1"},
     )
-    runs = {}
+    run = LocalRun(outroot, {}, {})
     for line in record.read_text().splitlines():
         cwd, command = line.split("\t")
         tokens = shlex.split(command)
         prefix = tokens[tokens.index("-o") + 1]
-        runs[prefix] = (Path(cwd).relative_to(outroot.resolve()), command)
-    return runs
+        run.started_in[prefix] = Path(cwd).relative_to(outroot.resolve())
+        run.command[prefix] = command
+    return run
 
 
 def test_local_run_maps_back_to_the_rows_that_produced_it(
-    local_run: dict[str, tuple[Path, str]], tmp_path: Path
+    local_run: LocalRun, tmp_path: Path
 ) -> None:
-    rows = _selected_rows()
-    assert len(local_run) == len(rows), local_run
+    rows = [
+        row
+        for row in cells.cells_from_manifest(_MANIFEST)
+        if fnmatch.fnmatchcase(row.split("|", 1)[0], _ONLY)
+    ]
+    assert len(rows) == 7, f"{_ONLY!r} no longer selects seven rows: {rows}"
+    assert len(local_run.command) == len(rows), local_run.command
 
     regenerated = tmp_path / "MANIFEST.toml"
     with regenerated.open("w") as f:
         for row in rows:
             _name, outdir, prefix, _workdir, _args = row.split("|")
             f.write(f'[file."{outdir}/{prefix}.log.txt"]\n')
-            f.write(f'generation_cmd = "{local_run[prefix][1]}"\n\n')
+            f.write(f'generation_cmd = "{local_run.command[prefix]}"\n\n')
 
     assert cells.cells_from_manifest(regenerated) == rows
 
 
 def test_a_command_with_bare_file_names_runs_in_its_fixture_directory(
-    local_run: dict[str, tuple[Path, str]],
+    local_run: LocalRun,
 ) -> None:
     """gemma_lrt's recorded command names `test`, not a path from the root."""
-    started_in = {prefix: cwd for prefix, (cwd, _command) in local_run.items()}
+    started_in = dict(local_run.started_in)
 
     assert started_in.pop("gemma_lrt") == Path("tests/fixtures/gemma_synthetic")
     assert set(started_in.values()) == {Path()}
+
+
+def test_output_left_in_dot_output_moves_beside_the_fixture(
+    local_run: LocalRun,
+) -> None:
+    """./output is under the directory GEMMA started in, not always the root."""
+    fixtures = local_run.outroot / "tests" / "fixtures"
+
+    for directory, prefix in (
+        ("gemma_synthetic", "gemma_lrt"),
+        ("gemma_covariate", "gemma_covariate"),
+    ):
+        for kind in ("assoc", "log"):
+            assert (fixtures / directory / f"{prefix}.{kind}.txt").is_file()
+    assert not list(local_run.outroot.rglob("output"))
 
 
 def test_loco_kinship_step_runs_as_a_script(tmp_path: Path) -> None:

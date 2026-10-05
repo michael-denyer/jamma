@@ -578,6 +578,59 @@ def _mock_pipeline_result(outdir: Path):
     )
 
 
+# sys.argv[0] as the console script and as ``python -m jamma`` leave it.
+_LAUNCHERS = ["venv/bin/jamma", "venv/lib/site-packages/jamma/__main__.py"]
+
+
+def _logged_command_line(log_path: Path) -> str:
+    """Return the value of the log's one Command Line Input line."""
+    prefix = "## Command Line Input = "
+    (line,) = [ln for ln in log_path.read_text().splitlines() if ln.startswith(prefix)]
+    return line.removeprefix(prefix)
+
+
+@pytest.mark.parametrize("launcher", _LAUNCHERS)
+def test_gk_log_names_the_program_not_its_install_path(
+    launcher: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The -gk log records ``jamma <args>``, whatever path launched it."""
+    args = ["-outdir", str(tmp_path), "-bfile", str(EXAMPLE_BFILE), "-gk", "1"]
+    monkeypatch.setattr("sys.argv", [str(tmp_path / launcher), *args])
+
+    result = runner.invoke(main, args)
+
+    assert result.exit_code == 0, result.output
+    logged = _logged_command_line(tmp_path / "result.log.txt")
+    assert logged == " ".join(["jamma", *args])
+
+
+@pytest.mark.parametrize("launcher", _LAUNCHERS)
+def test_lmm_log_names_the_program_not_its_install_path(
+    launcher: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The -lmm log records ``jamma <args>``, whatever path launched it."""
+    factory = FakePipelineRunnerFactory(result=_mock_pipeline_result(tmp_path))
+    monkeypatch.setattr("jamma.cli.PipelineRunner", factory)
+    args = [
+        "-outdir",
+        str(tmp_path),
+        "-bfile",
+        str(EXAMPLE_BFILE),
+        "-lmm",
+        "1",
+        "-k",
+        str(KINSHIP_FILE),
+        "--no-check-memory",
+    ]
+    monkeypatch.setattr("sys.argv", [str(tmp_path / launcher), *args])
+
+    result = runner.invoke(main, args)
+
+    assert result.exit_code == 0, result.output
+    logged = _logged_command_line(tmp_path / "result.log.txt")
+    assert logged == " ".join(["jamma", *args])
+
+
 @pytest.mark.slow
 def test_cli_gk_end_to_end(tmp_path: Path):
     """CLI -gk 1 computes kinship and writes output file."""

@@ -679,7 +679,7 @@ sanitizer workflow instead, which runs `tests/lmm_accel` under ASan.
 | **Build support** | `test_build_support_compile_and_link.py`, `test_build_support_openmp_detect.py`, `test_build_support_packaging.py`, `test_build_support_sanitizer_override.py`, `test_check_c_extension_freshness.py`, `test_check_compile_flag_literals.py`, `test_check_file_size_limits.py`, `test_check_quiet_flags.py`, `test_check_test_timeouts.py`, `test_check_doc_anchors.py`, `test_dockerfile_provenance.py`, `test_verify_compile_invocations_match.py`, `test_c_extensions_ci.py`, `test_c_include_order.py`, `test_c_lint_coverage.py`, `test_native.py` | Compile-flag and file-size invariants; OpenMP detection; wheel and container provenance; sanitizer flag injection; include order; cppcheck coverage; doc line anchors; runtime recompile |
 | **Fingerprint / sanitizer harness** | `test_fingerprint_harness.py`, `test_compare_fingerprints.py`, `test_sanitizer_sentinel.py`, `test_compile_accel_sentinel_injection.py`, `test_sanitizer_workflow_yaml.py`, `test_asan_suppressions.py` | The machinery behind `fingerprint.yml` and `sanitizers.yml`. These test the gates themselves, so a broken harness cannot go green by doing nothing |
 | **Validation / parity** | `test_validation.py`, `test_validation_assoc.py`, `test_validation_assoc_mode_schema.py`, `test_validate_runner_inputs.py`, `test_kinship_validation.py`, `test_demonstrate_equivalence.py` | GEMMA parity machinery; tolerance config; assoc file diff and schema-derived compared columns; the equivalence demonstration script |
-| **Suite meta** | `test_conftest_tier_gate.py`, `test_fixture_manifest.py`, `tests/fakes/test_fakes.py` | The mandatory-tier-marker lint (§1.6), the fixture manifest (§3.5), and the fakes' own contract tests |
+| **Suite meta** | `test_conftest_tier_gate.py`, `test_fixture_manifest.py`, `test_check_home_paths.py`, `tests/fakes/test_fakes.py` | The mandatory-tier-marker lint (§1.6), the fixture manifest and the home-directory lint (§3.5), and the fakes' own contract tests |
 | **Reference oracles** | `tests/reference/likelihood.py`, `tests/reference/stats.py`, `tests/reference/special.py` | GEMMA-literal scalar ports (CalcPPab, CalcPPPab, LogRL_dev2, alternative-model LogRL_f, CalcRLWald, CalcRLScore, CalcLRT, `f_sf`, `safe_sqrt`) and the scalar Cephes `betainc` and `chi2_sf`, all with no production caller; the batch and C paths are held to them |
 | **Numerics / utilities** | `test_special.py`, `test_schema.py`, `test_snp_filter.py`, `test_snp_filter_perf.py`, `test_snp_stats.py`, `test_genotype_snp_stats.py`, `test_categorical.py`, `test_missingness.py`, `test_weights.py`, `test_prepare_common.py`, `test_telemetry.py`, `test_progress.py`, `test_hypothesis.py` | Cephes betainc / chi2_sf; data-class schemas; SNP filtering and statistics; phenotype prep; progress bars |
 
@@ -760,6 +760,12 @@ from `.log.txt` headers, so the manifest also serves as a provenance record.
 Editing or adding a fixture without updating the manifest will fail the
 pre-commit gate with a `sha256 drift` message that points at the stale
 hash and tells you exactly which command to run.
+
+No tracked file may contain `/Users/<name>` or `/home/<name>`.
+[`scripts/check_home_paths.py`](../scripts/check_home_paths.py) scans every
+tracked file as the `no-home-paths` pre-commit hook, and
+[`tests/test_check_home_paths.py`](../tests/test_check_home_paths.py) runs
+the same scan in the suite.
 
 ### Independent flat-REML reference points
 

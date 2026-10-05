@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The `no-home-paths` pre-commit hook, `scripts/check_home_paths.py`, fails
+  when a tracked file contains `/Users/<name>` or `/home/<name>`. It scans
+  every tracked file, and `tests/test_check_home_paths.py` runs the same scan
+  in the suite. A line that carries `allow-home-path: <reason>` is skipped.
+
 ### Changed
 
 - The GEMMA reference fixtures in `tests/fixtures/mathematical_*` and

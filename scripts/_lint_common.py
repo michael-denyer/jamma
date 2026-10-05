@@ -144,7 +144,7 @@ def read_lines(path: Path, *, errors: str = "strict") -> list[str]:
 
 
 def read_batch(
-    paths: Iterable[Path], *, root: Path | None = None
+    paths: Iterable[Path], *, root: Path | None = None, errors: str = "strict"
 ) -> tuple[dict[Path, list[str]], list[str]]:
     """Read every path, collecting the failures instead of raising on the first.
 
@@ -156,6 +156,7 @@ def read_batch(
     Args:
         paths: Files to read, in the order they should be reported.
         root: Repository the paths are named relative to.
+        errors: Decode policy, as for `read_lines`.
 
     Returns:
         The lines of every file that could be read, keyed by path and in
@@ -165,7 +166,7 @@ def read_batch(
     unreadable: list[str] = []
     for path in paths:
         try:
-            lines_by_path[path] = read_lines(path)
+            lines_by_path[path] = read_lines(path, errors=errors)
         except LintReadError as exc:
             unreadable.append(exc.entry(root))
     return lines_by_path, unreadable

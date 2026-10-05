@@ -20,10 +20,11 @@ from tests.math_validation.evidence import (
 )
 from tests.math_validation.oracle_io import write_oracle_assoc
 from tests.math_validation.reference import (
+    GEMMA_COMMAND,
     copy_reference,
     digest,
     gemma_binary,
-    run_command,
+    run_gemma,
     snapshot_files,
     verify_reference_dir,
     write_provenance,
@@ -73,9 +74,9 @@ def _generate_positive_reference(destination: Path, gemma: Path | str) -> None:
     (destination / "weights.txt").write_text(
         "".join(f"{value:.17g}\n" for value in np.linspace(0.5, 2.0, 40))
     )
-    kinship_run = run_command(
+    kinship_run = run_gemma(
+        binary,
         [
-            str(binary),
             "-bfile",
             "tiny",
             "-c",
@@ -97,9 +98,9 @@ def _generate_positive_reference(destination: Path, gemma: Path | str) -> None:
     kinship = np.loadtxt(destination / "gemma_kinship.cXX.txt")
     model = _selected_model(arrays, kinship, 0.1, 0.1)
     (destination / "model.json").write_text(json.dumps(model, indent=2) + "\n")
-    association_run = run_command(
+    association_run = run_gemma(
+        binary,
         [
-            str(binary),
             "-bfile",
             "tiny",
             "-k",
@@ -128,7 +129,7 @@ def _generate_positive_reference(destination: Path, gemma: Path | str) -> None:
         case="mode4-missing-covariates",
         gemma={
             "version": "0.98.5",
-            "binary": str(binary),
+            "binary": GEMMA_COMMAND,
             "binary_sha256": digest(binary),
             "source_repository": "https://github.com/genetics-statistics/GEMMA",
             "source_revision": "c37b0445f820b682836a1d20009ce1817546493a",
@@ -147,10 +148,10 @@ def generate_nonpositive_reference(destination: Path, gemma: Path | str) -> None
     weights_path.write_text("".join(f"{value:.17g}\n" for value in weights))
     provenance_path = destination / "provenance.json"
     provenance = json.loads(provenance_path.read_text())
-    binary = Path(provenance["gemma"]["binary"])
-    association_run = run_command(
+    binary, _ = gemma_binary(gemma)
+    association_run = run_gemma(
+        binary,
         [
-            str(binary),
             "-bfile",
             "tiny",
             "-k",

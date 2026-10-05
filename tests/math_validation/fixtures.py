@@ -10,9 +10,10 @@ from pathlib import Path
 import numpy as np
 
 from tests.math_validation.reference import (
+    GEMMA_COMMAND,
     digest,
     gemma_binary,
-    run_command,
+    run_gemma,
     validate_manifest,
     verify_reference_dir,
     write_plink,
@@ -108,9 +109,9 @@ def generate_reference(manifest, destination, gemma):
     for case in manifest["cases"]:
         directory = destination / case["id"]
         materialize(case, directory)
-        command = run_command(
+        command = run_gemma(
+            binary,
             [
-                str(binary),
                 "-bfile",
                 "tiny",
                 "-k",
@@ -129,7 +130,7 @@ def generate_reference(manifest, destination, gemma):
         write_provenance(
             directory,
             schema_version=1,
-            executable=str(binary),
+            executable=GEMMA_COMMAND,
             executable_sha256=digest(binary),
             version=version,
             command=command,

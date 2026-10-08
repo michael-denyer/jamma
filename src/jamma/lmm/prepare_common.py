@@ -347,7 +347,7 @@ def _eigendecompose_or_reuse(
 
     Args:
         eigen_input: Kinship matrix or complete pre-computed eigenpairs.
-        show_progress: Whether to log memory usage.
+        show_progress: Whether to log memory usage and draw the progress bar.
         label: Label for memory logging (e.g. "lmm", "lmm_streaming").
         check_memory: If True (default), check available memory before
             eigendecomposition.
@@ -368,7 +368,7 @@ def _eigendecompose_or_reuse(
     # raw supplied kinship would otherwise give the wrong non-REML results.
     center_kinship(eigen_input.value)
     eigenvalues_np, U = eigendecompose_kinship(
-        eigen_input.value, check_memory=check_memory
+        eigen_input.value, check_memory=check_memory, show_progress=show_progress
     )
     # Release LAPACK DSYEVD workspace before LMM phase
     gc.collect()

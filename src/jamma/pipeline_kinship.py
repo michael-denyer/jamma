@@ -155,7 +155,10 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
     eigen_paths: tuple[Path, Path] | None = None
     if config.write_eigen:
         eigenvalues, eigenvectors = eigendecompose_kinship(
-            K, check_memory=config.check_memory, mem_budget=config.mem_budget
+            K,
+            check_memory=config.check_memory,
+            mem_budget=config.mem_budget,
+            show_progress=config.show_progress,
         )
         del K  # K may be overwritten by eigendecomp; prevent accidental reuse
         d_path, u_path = write_eigen_files(

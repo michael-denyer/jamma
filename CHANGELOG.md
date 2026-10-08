@@ -97,6 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root, or under `tests/fixtures/gemma_synthetic` for the `gemma_lrt` cell,
   and the run stopped with `No such file or directory`. The path is now
   resolved once, before the first cell. A bare name is still found on `PATH`.
+- `show_progress=False` now turns off the eigendecomposition progress bar.
+  `gwas()`, `-gk` with `-eigen`, and the batch runner called with a kinship
+  matrix each drew the `Eigendecomp NxN` bar whatever the setting, because
+  none of them passed it to `eigendecompose_kinship`. LOCO runs already
+  honoured it (#520).
 
 ## [8.2.3] - 2026-10-02
 

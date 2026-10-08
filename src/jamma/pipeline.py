@@ -577,6 +577,7 @@ class PipelineRunner:
                 check_memory=self.config.check_memory,
                 mem_budget=self.config.mem_budget,
                 eigen_plan=eigen_plan,
+                show_progress=self.config.show_progress,
             )
             if weights is not None:
                 # GEMMA -widv scales the eigenvector rows by sqrt(w) after

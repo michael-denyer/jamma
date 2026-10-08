@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the script lives in. Before, `uv run` resolved the project from the caller's
   working directory, and starting the script from another uv project created
   a `.venv` there and, without `UV_NO_SYNC`, installed that project into it.
+- Dependabot updates the action pins in `.github/actions/*/action.yml`. The
+  `github-actions` entry in `.github/dependabot.yml` lists
+  `/.github/actions/*` beside `/`. With `/` alone Dependabot reads
+  `.github/workflows` and a root `action.yml`, so the composite actions were
+  never scanned. `setup-jamma` had stayed on `astral-sh/setup-uv` v9.0.0 while
+  the workflows moved to v10.2.0, and it now pins v10.2.0 as they do.
+  `triage-issue` pins the `actions/github-script` v9.0.0 commit, and its
+  version comment now says v9.0.0 where it said v8.0.0.
 
 - `scripts/generate_gemma_fixtures.sh` runs every cell. Two groups could not
   run, and the first failure stopped a full regeneration part way.

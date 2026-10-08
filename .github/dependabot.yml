@@ -6,8 +6,13 @@ version: 2
 # other half is the SHA pinning in .github/workflows. Semver-major waits
 # longer because those land least often and hurt most.
 updates:
+  # "/" covers .github/workflows and a root action.yml only. The composite
+  # actions live one level down, in .github/actions/<name>/action.yml, so the
+  # glob lists each of those directories as well.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
     cooldown:

@@ -5,11 +5,11 @@
 # the matrix checks needs a mutation.
 
 # The two halves of timed_progress before its fix.
-mutation full update without checking that the worker finished
+mutation finish is clean without checking that the worker finished
 detects HonestCompletion
 only stdout-error
-- /\ Complete(Successful, Succeeded)
-+ /\ Complete(box \notin {"error", "base"}, Succeeded)
+- /\ Complete(Successful /\ ~cancelled, Succeeded /\ ~cancelled)
++ /\ Complete(box \notin {"error", "base"} /\ ~cancelled, Succeeded /\ ~cancelled)
 
 mutation finish redraws 100% on every exit
 detects HonestCompletion

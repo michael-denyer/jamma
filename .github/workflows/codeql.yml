@@ -68,7 +68,7 @@ jobs:
 
       # The c-cpp analysis runs in manual build mode: CodeQL traces the
       # actual compiler invocations, so we reproduce CI's two compile
-      # entry points exactly (see CLAUDE.md "_build_support" gotcha).
+      # entry points exactly (see AGENTS.md "Build system").
       # python uses build-mode: none and skips this block.
       - name: Set up JAMMA
         if: matrix.language == 'c-cpp'

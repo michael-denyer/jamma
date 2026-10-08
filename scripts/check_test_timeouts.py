@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Flag unjustified long ``@pytest.mark.timeout(N)`` values.
 
-CLAUDE.md sets ``--timeout=30`` as the default in ``pyproject.toml``
+The user-level CLAUDE.md sets ``--timeout=30`` as the default in ``pyproject.toml``
 addopts. Individual tests may legitimately need more (tier2 scale tests,
 benchmark warm-ups), but a timeout value above THRESHOLD_S without a
 visible justification usually means someone bumped it to paper over a

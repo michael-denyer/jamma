@@ -22,7 +22,7 @@
 set -eu
 
 MAID_VERSION="0.0.29"
-EXCLUDE=".venv/**,.planning/**,.beads/**,.claude/**,.code-review-graph/**,node_modules/**,dist/**,build/**,target/**,LICENSE.md,CLAUDE.md"
+EXCLUDE=".venv/**,.planning/**,.beads/**,.claude/**,.code-review-graph/**,node_modules/**,dist/**,build/**,target/**,LICENSE.md,CLAUDE.md,AGENTS.md"
 
 if [ "$#" -eq 0 ]; then
     TARGETS=(".")

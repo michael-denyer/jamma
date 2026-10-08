@@ -46,7 +46,7 @@ LMM_ACCEL_SOURCES: tuple[str, ...] = (
 # LAPACK sources require strict IEEE 754 (-O2 -fno-fast-math) — no unrolling,
 # no fast-math — to match vendor LAPACK's numerical guarantees. Relaxing the
 # split (e.g. moving eigh.c into BASELINE_SOURCES or loosening LAPACK_CFLAGS)
-# breaks JAMMA-vs-GEMMA validation tolerances documented in CLAUDE.md and
+# breaks JAMMA-vs-GEMMA validation tolerances documented in AGENTS.md and
 # docs/GEMMA_EQUIVALENCE.md — p-values, effect sizes, and eigenvalues all drift.
 LAPACK_SOURCES: tuple[str, ...] = ("eigh.c",)
 
@@ -69,7 +69,7 @@ BASE_CFLAGS: tuple[str, ...] = (
 # Do NOT relax to -O3/-ffast-math: vendor LAPACK (MKL / Accelerate) relies on
 # exact IEEE rounding for eigenvalue/eigenvector accuracy. A relaxed build
 # produces kinship/eigendecomp results that drift beyond JAMMA's validation
-# tolerances vs GEMMA (see CLAUDE.md validation tolerances table,
+# tolerances vs GEMMA (see AGENTS.md validation tolerances table,
 # docs/GEMMA_EQUIVALENCE.md).
 LAPACK_CFLAGS: tuple[str, ...] = (
     "-O2",

@@ -24,8 +24,9 @@
 # the gate with no ignore covering it.
 #
 # If a finding ever has to be ignored, add it here with the reason and the
-# narrow fix, rather than raising `--min-severity` again. Per CLAUDE.md
-# "CI/CD Hardening", defence-in-depth on workflow security is a stated goal.
+# narrow fix, rather than raising `--min-severity` again. Per the user-level
+# CLAUDE.md "CI/CD Hardening", defence-in-depth on workflow security is a
+# stated goal.
 #
 # The pedantic persona (`zizmor --persona=pedantic`) still reports
 # informational findings such as unnamed jobs. Those are deliberately not

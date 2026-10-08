@@ -29,7 +29,7 @@ Target files:
 
 Flag set (the ones we've actually seen duplicated, plus portability
 footguns like ``-march=native`` that MUST stay dev-only per
-CLAUDE.md):
+AGENTS.md):
   -O0 / -O1 / -O2 / -O3 / -ftree-vectorize / -fno-fast-math /
   -fno-math-errno / -fno-trapping-math / -fno-finite-math-only /
   -funroll-loops / -fopenmp / -march=native / -mtune=native /

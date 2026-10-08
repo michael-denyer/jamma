@@ -187,6 +187,17 @@ Treat a result as inconclusive when paired block deltas change sign. The
 eigendecomposition stage grows rapidly with sample count, so choose dimensions
 from the memory budget rather than copying the example blindly.
 
+The eigendecomposition time estimate in `src/jamma/estimates.py` has one
+power-law model per calibrated backend. To calibrate a backend, run the sweep
+alone on an idle machine and copy the printed coefficient and exponent:
+
+```bash
+uv run python scripts/bench_eigendecomp_scaling.py --rounds 3
+```
+
+The default sizes run from 4,000 to 20,000 samples and take about 40 minutes
+on one Apple M5 Pro core. The 20,000-sample solve needs about 13 GB.
+
 ## Publishing
 
 PyPI publishing uses GitHub trusted publishing (no API tokens needed locally).

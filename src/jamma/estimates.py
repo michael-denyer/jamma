@@ -7,6 +7,7 @@ Polynomial models fitted to v4.2.0 benchmarks on Azure E96ds_v6
 Models use n_k = n_samples / 1000 for numerical stability:
   - Kinship:    a*n_k² + b*n_k  (× m/m_ref × (cores_ref/cores)^0.7)
   - Eigendecomp: c * n_k^alpha  (× (cores_ref/cores)^0.7)  [power law]
+    (Apple Accelerate has its own c and alpha and no core term)
   - LMM:        a*n_k² + b*n_k  (× m/m_ref × (cores_ref/cores)^0.7)
 
 Core scaling uses exponent 0.7 (sub-linear) because BLAS operations are
@@ -76,6 +77,11 @@ def _blas_caveat() -> str:
     return f" [estimates calibrated to MKL — {backend} may differ]"
 
 
+def _eigen_on_accelerate() -> bool:
+    """Return whether jlinalg dispatches eigendecomposition to Apple Accelerate."""
+    return "ACCELERATE" in _blas_backend_name().upper()
+
+
 # Kinship: a*n_k^2 + b*n_k (SNP-normalized)
 # Weighted NNLS fit (weight=1/actual), no constant term.
 # Max error: +13.6% at 75k, most points within 3%.
@@ -93,6 +99,20 @@ _EIGEN_COEFF = 0.012007  # coefficient
 # silently recalibrate every eigendecomp estimate. refurb's FURB152 flags it
 # anyway, so it is silenced for this file in pyproject.toml.
 _EIGEN_ALPHA = 2.7152  # exponent
+
+# Eigendecomp on Apple Accelerate: c * n_k^alpha, no core term.
+# Accelerate's symmetric eigensolver runs on one core whatever the machine
+# has, so the core scaling above does not apply and the exponent sits near
+# the theoretical 3.0. Log-linear OLS fit to the medians of three rounds of
+# scripts/bench_eigendecomp_scaling.py on an Apple M5 Pro (DSYEVD):
+#   n=4k: 3.50s, 6k: 11.82s, 8k: 29.60s, 10k: 55.70s, 14k: 153.18s, 20k: 449.35s
+# Max error: -3.7% at 8k. The fit overshoots a 2k solve (0.33s) by 30%; that
+# point is left out, because the solve is over before the bar first polls.
+_EIGEN_ACCELERATE_COEFF = 0.053945  # coefficient
+_EIGEN_ACCELERATE_ALPHA = 3.0154  # exponent
+_EIGEN_ACCELERATE_CAVEAT = (
+    " [estimate calibrated on Apple M5 Pro — other chips may differ]"
+)
 
 # LMM: a*n_k^2 + b*n_k (SNP-normalized)
 # Weighted NNLS fit (weight=1/actual), no constant term.
@@ -169,10 +189,14 @@ def estimate_eigendecomp_seconds(
 ) -> float:
     """Estimate eigendecomposition wall time in seconds.
 
-    Power law model: c * n_k^alpha, scaled by core ratio.
+    Power law model: c * n_k^alpha, scaled by core ratio. On Apple Accelerate
+    a separate fit applies and ``n_cores`` has no effect, because that solver
+    runs on one core.
     """
-    n_cores = _resolve_cores(n_cores)
     n_k = n_samples / 1000
+    if _eigen_on_accelerate():
+        return _EIGEN_ACCELERATE_COEFF * n_k**_EIGEN_ACCELERATE_ALPHA
+    n_cores = _resolve_cores(n_cores)
     core_ratio = (_REF_CORES / n_cores) ** _CORE_SCALING_EXP
     return _EIGEN_COEFF * n_k**_EIGEN_ALPHA * core_ratio
 
@@ -183,8 +207,9 @@ def estimate_eigendecomp_time(
 ) -> str:
     """Estimate eigendecomposition wall time as a human-readable string.
 
-    Estimates are calibrated to MKL ILP64 on 48-core Xeon. A caveat is
-    appended when the active BLAS backend differs.
+    Estimates are calibrated to MKL ILP64 on 48-core Xeon, and to one Apple
+    chip on Accelerate. A caveat is appended when the active BLAS backend or
+    the chip may differ from the calibration.
 
     Args:
         n_samples: Number of samples.
@@ -194,7 +219,8 @@ def estimate_eigendecomp_time(
         Minimum estimate string like ">=1h 47m", with BLAS caveat if applicable.
     """
     duration = _format_duration(estimate_eigendecomp_seconds(n_samples, n_cores))
-    return f">={duration}{_blas_caveat()}"
+    caveat = _EIGEN_ACCELERATE_CAVEAT if _eigen_on_accelerate() else _blas_caveat()
+    return f">={duration}{caveat}"
 
 
 def estimate_lmm_seconds(

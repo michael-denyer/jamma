@@ -41,6 +41,7 @@ class FakeProgressBar:
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
         self.started = False
+        self.line_breaks = True
         self.update_calls: list[int] = []
         self.finished = False
         # Optional hook fired after each ``update()`` call. Set by tests
@@ -60,7 +61,7 @@ class FakeProgressBar:
         self.started = True
         return self
 
-    def update(self, value: int) -> None:
+    def update(self, value: int, force: bool = False) -> None:
         self.update_calls.append(value)
         if self.on_update is not None:
             self.on_update(value)

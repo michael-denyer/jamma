@@ -13,9 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when a tracked file contains `/Users/<name>` or `/home/<name>`. It scans
   every tracked file, and `tests/test_check_home_paths.py` runs the same scan
   in the suite. A line that carries `allow-home-path: <reason>` is skipped.
+- `scripts/bench_eigendecomp_scaling.py` times `jlinalg.eigh` across sample
+  counts and prints the power-law fit that a per-backend eigendecomposition
+  time estimate uses.
 
 ### Changed
 
+- The eigendecomposition time estimate has its own model on Apple Accelerate,
+  `0.053945 * n_k^3.0154` seconds with no core-count term, fitted on an Apple
+  M5 Pro from 4,000 to 20,000 samples. Accelerate runs the solve on one core,
+  so the MKL model with its core scaling was about 5.5 times short at 20,000
+  samples (81 s estimated, 449 s measured) and the progress bar sat at 99%
+  for most of the run. The `Estimated time` line on Accelerate now names the
+  chip it was calibrated on. Other backends keep the MKL model (#515).
 - The `Command Line Input` line of every `.log.txt` names the program as
   `jamma`. It used to carry the path of the entry script, or of `__main__.py`
   under `python -m jamma`, which put the virtualenv location, and usually the
@@ -42,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The elapsed time on the eigendecomposition progress bar keeps counting on
+  a terminal after the bar reaches 99%. It froze at the moment the bar got
+  there, because progressbar2 skips an update that does not advance the
+  value, so a run that outlasted its estimate looked stalled. Redirected
+  output is unchanged and gains no lines (#515).
 - The eigendecomposition progress bar prints its 100% line once when output
   is redirected to a file, `nohup` or CI. It printed the line twice, so a
   count of 100% lines in a log gave twice the number of decompositions.

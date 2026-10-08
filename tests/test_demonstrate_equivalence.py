@@ -1,7 +1,7 @@
 """Guard that the GEMMA equivalence report actually passes.
 
 docs/GEMMA_EQUIVALENCE.md presents ``scripts/demonstrate_equivalence.py`` as the
-empirical backing for the tolerance table in CLAUDE.md, but nothing ran it. It
+empirical backing for the tolerance table in AGENTS.md, but nothing ran it. It
 regressed in v4.1.0 and stayed red for four months: the script reused one
 kinship array across every section while ``eigendecompose_kinship`` consumes
 its input, so every section after the first ran on eigenvectors instead of a

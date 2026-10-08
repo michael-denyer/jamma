@@ -35,7 +35,8 @@ repos:
   # Workflow security audit. Catches privilege escalation paths, SHA-pin
   # drift across workflows, untrusted-input expansion in `run:`, and
   # pull_request_target misuse. Defence-in-depth for the SHA-pinned
-  # posture this repo already takes per CLAUDE.md "CI/CD Hardening".
+  # posture this repo already takes per the user-level CLAUDE.md
+  # "CI/CD Hardening".
   - repo: https://github.com/woodruffw/zizmor-pre-commit
     rev: v1.24.1
     hooks:
@@ -182,7 +183,7 @@ repos:
         files: ^tests/
         pass_filenames: false
       - id: no-quiet-flags  # allow-quiet: hook name documents the flags it bans
-        name: ban --quiet/-q/--silent and hook-skip flags (CLAUDE.md)  # allow-quiet
+        name: ban --quiet/-q/--silent and hook-skip flags (user-level CLAUDE.md)  # allow-quiet
         entry: scripts/check_quiet_flags.py
         language: system
         # Run repo-wide on every invocation (the script sweeps its own

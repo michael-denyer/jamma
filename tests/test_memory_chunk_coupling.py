@@ -4,7 +4,7 @@ These tests assert on observable outputs — estimated GB totals and whether
 the live preflight gate (``memory_preflight``) raises MemoryError — rather
 than on internal call counts of ``LmmChunkPlan.plan`` /
 ``lmm_extra_bytes_per_snp``. This
-follows CLAUDE.md: assert observable behavior, not delegation plumbing.
+follows AGENTS.md: assert observable behavior, not delegation plumbing.
 """
 
 from __future__ import annotations

@@ -178,7 +178,7 @@ def _rank_correlation(x: np.ndarray, y: np.ndarray) -> float:
     """Return Spearman's rho on ordinal ranks (ties ranked by position).
 
     Written over ``np.argsort`` so this script imports no scipy: installing
-    scipy overwrites the ILP64 numpy build (CLAUDE.md, "No scipy at runtime"),
+    scipy overwrites the ILP64 numpy build (AGENTS.md, "No scipy at runtime"),
     and the tier1 suite runs this script. ``-log10(p)`` inputs are continuous,
     so ordinal and average ranks agree for all practical purposes.
     """

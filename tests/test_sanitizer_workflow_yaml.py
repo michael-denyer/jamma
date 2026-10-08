@@ -82,7 +82,7 @@ def test_artifact_upload_runs_on_failure(workflow):
 
 
 def test_actions_pinned_to_sha(workflow):
-    """All ``uses:`` lines must be 40-char SHA, not @vN tag — CLAUDE.md.
+    """All ``uses:`` lines must be 40-char SHA, not @vN tag (user-level CLAUDE.md).
 
     A local composite action (``./.github/actions/...``) is exempt: it has
     no upstream ref to pin, it is this repo's own commit.

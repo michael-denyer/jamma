@@ -303,7 +303,7 @@ C_VS_NUMPY_RTOL = 1e-10
 # Except the MLE lambda. It is an argmin on a surface that is flat for
 # weak-signal SNPs, so the two golden-section implementations land 2.4e-5 to
 # 3.8e-5 apart while the p-value they feed still agrees to 1e-12. This is the
-# band CLAUDE.md records as lambda_rtol.
+# band AGENTS.md records as lambda_rtol.
 LAMBDA_MLE_RTOL = 5e-5
 
 

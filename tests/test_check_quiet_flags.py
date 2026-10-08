@@ -1,7 +1,7 @@
 """Tests for scripts/check_quiet_flags.py.
 
-The lint enforces CLAUDE.md's "No Quiet Flags Anywhere" rule and the
-hook-skip ban. Covers positive cases (flags must be caught), expected
+The lint enforces the user-level CLAUDE.md's "No Quiet Flags Anywhere" rule
+and the hook-skip ban. Covers positive cases (flags must be caught), expected
 negatives (documentation mentions, unrelated `-q` uses), and the
 ``# allow-quiet:`` escape hatch.
 """
@@ -62,8 +62,8 @@ def test_short_q_after_known_command_is_detected(tmp_path, cmd):
 
 def test_short_q_in_unrelated_context_is_not_flagged(tmp_path):
     """`-q` on a non-command line (not preceded by a known tool) is not
-    flagged — too noisy, and CLAUDE.md's concern is CI tool silencing,
-    not arbitrary `-q` strings."""
+    flagged — too noisy, and the user-level CLAUDE.md's concern is CI tool
+    silencing, not arbitrary `-q` strings."""
     result = _run(tmp_path, "foo.py", 'config = {"mode": "-q"}\n')
     assert result.returncode == 0, result.stderr
 

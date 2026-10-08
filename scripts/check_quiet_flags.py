@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ban ``--quiet``/``-q``/``--silent`` and hook-skip flags project-wide.
 
-CLAUDE.md rule "No Quiet Flags Anywhere": when a tool fails silently, you
+User-level CLAUDE.md rule "No Quiet Flags Anywhere": when a tool fails silently, you
 can't diagnose the problem — you just see exit code 1 with no output. This
 hook catches the same class of drift that `check_compile_flag_literals.py`
 catches for compile flags. Scope: CI workflows, shell scripts, pre-commit
@@ -181,8 +181,8 @@ def main(argv: list[str]) -> int:
     found = report(
         "Quiet / hook-skip flag drift detected:",
         violations,
-        f"{len(violations)} violation(s). CLAUDE.md bans --quiet/-q/"
-        "--silent project-wide: logs exist to be read. Hook-skip flags "
+        f"{len(violations)} violation(s). The user-level CLAUDE.md bans "
+        "--quiet/-q/--silent project-wide: logs exist to be read. Hook-skip flags "
         "(--no-verify, --no-gpg-sign, -c commit.gpgsign=false) need "
         "explicit user authorization. Add '# allow-quiet: <reason>' on "
         "the line for a documented exception.",

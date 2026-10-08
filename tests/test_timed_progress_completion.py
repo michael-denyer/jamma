@@ -56,6 +56,45 @@ def test_redirected_output_reports_completion_once(monkeypatch):
     assert redirected.getvalue().count("100%") == 1
 
 
+class _TerminalStream(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def _run_past_estimate() -> None:
+    # The work takes six times the estimate, so the bar spends most of its
+    # eight polls holding at 99%.
+    timed_progress(lambda: time.sleep(0.6), estimated_seconds=0.1, poll_interval=0.07)
+
+
+def test_terminal_keeps_redrawing_while_bar_holds_at_99_percent(monkeypatch):
+    terminal = _TerminalStream()
+    monkeypatch.setattr(progressbar.utils.streams, "original_stdout", terminal)
+
+    _run_past_estimate()
+
+    assert terminal.getvalue().count(" 99%") >= 3
+
+
+def test_redirected_output_gains_no_line_per_poll(monkeypatch):
+    redirected = io.StringIO()
+    monkeypatch.setattr(progressbar.utils.streams, "original_stdout", redirected)
+
+    _run_past_estimate()
+
+    assert len(redirected.getvalue().splitlines()) <= 4
+
+
+def test_terminal_in_line_break_mode_gains_no_line_per_poll(monkeypatch):
+    terminal = _TerminalStream()
+    monkeypatch.setattr(progressbar.utils.streams, "original_stdout", terminal)
+    monkeypatch.setenv("PROGRESSBAR_LINE_BREAKS", "1")
+
+    _run_past_estimate()
+
+    assert len(terminal.getvalue().splitlines()) <= 4
+
+
 def test_transient_stdout_failure_does_not_claim_completion_before_worker_returns(
     monkeypatch,
 ):

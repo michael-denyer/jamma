@@ -202,7 +202,11 @@ def timed_progress(
             # Cap at 99 so the bar never claims 100% before fn returns.
             pct = min(int(elapsed / max(estimated_seconds, 0.1) * n_ticks), n_ticks - 1)
             try:
-                bar.update(pct)
+                # progressbar2 skips an update that does not advance the
+                # value, which would freeze the elapsed clock once the bar
+                # holds at 99%. Forcing is limited to bars that redraw in
+                # place, because a line-break bar would gain a line per poll.
+                bar.update(pct, force=not bar.line_breaks)
             except OSError:
                 break  # stdout gone; stop updating but still wait for fn
     except KeyboardInterrupt:

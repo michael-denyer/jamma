@@ -2,11 +2,11 @@
 (* Copyright (c) 2026 Michael Denyer
    SPDX-License-Identifier: GPL-3.0-only
 
-   timed_progress, src/jamma/core/progress.py:138-223. Worker fn returns or
+   timed_progress, src/jamma/core/progress.py:138-227. Worker fn returns or
    raises at :187-190, publishes a result/error, notifies Event at :191-192,
    then exits. Consumer waits with a positive finite timeout at :200, polls
-   at :203-207, finishes at :211-213, joins at :217-219 and reports the
-   result/error at :221-223. Progressbar.finish default behavior is an
+   at :203-211, finishes at :215-217, joins at :221-223 and reports the
+   result/error at :225-227. Progressbar.finish default behavior is an
    implicit update(100), the only full update; dirty=True preserves value.
    Library Event/Thread operations are atomic contracts. There is no caller
    mutex. fn allocations/errors occur outside application locks. Python list

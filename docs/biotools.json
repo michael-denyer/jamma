@@ -4,7 +4,7 @@
   "description": "JAMMA (Highly-Accelerated Multi-method Mixed-Model Association) is an open-source Python and C implementation of GEMMA's core linear mixed-model workflows for genome-wide association studies (GWAS). It reads PLINK binary or BGEN v1.2 genotypes and supports kinship estimation, Wald, likelihood-ratio and score association tests, covariates, multiple phenotypes, and leave-one-chromosome-out (LOCO) analysis. JAMMA provides a command-line interface with familiar GEMMA flags, GEMMA-compatible association output, and a Python API. Native C kernels, parallel computation and reusable eigendecompositions support large analyses. Pre-flight memory checks and streamed output help manage memory use. Numerical validation against GEMMA is documented. JAMMA runs on Linux, macOS and Windows; large-cohort analyses require sufficient RAM and a suitable 64-bit BLAS configuration. Released under GPL-3.0-or-later.",
   "homepage": "https://github.com/michael-denyer/jamma",
   "biotoolsID": "jamma",
-  "version": ["8.2.3"],
+  "version": ["8.2.4"],
   "otherID": [
     {
       "type": "doi",

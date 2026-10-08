@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.4] - 2026-10-08
+
 ### Added
 
 - The `no-home-paths` pre-commit hook, `scripts/check_home_paths.py`, fails

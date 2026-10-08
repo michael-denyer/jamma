@@ -84,12 +84,21 @@ class LocalRun(NamedTuple):
 
 
 @pytest.fixture(scope="module")
-def local_run(tmp_path_factory: pytest.TempPathFactory) -> LocalRun:
-    tmp_path = tmp_path_factory.mktemp("local_run")
+def gemma_stand_in(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    tmp_path = tmp_path_factory.mktemp("gemma_stand_in")
     source = tmp_path / "gemma_stand_in.c"
     source.write_text(_GEMMA_STAND_IN_C)
     binary = tmp_path / "gemma-0.98.5-stand-in"
     subprocess.run(["cc", "-o", str(binary), str(source)], check=True)
+    return binary
+
+
+@pytest.fixture(scope="module")
+def local_run(
+    gemma_stand_in: Path, tmp_path_factory: pytest.TempPathFactory
+) -> LocalRun:
+    tmp_path = tmp_path_factory.mktemp("local_run")
+    binary = gemma_stand_in
 
     record = tmp_path / "argv.txt"
     outroot = tmp_path / "outroot"
@@ -165,6 +174,37 @@ def test_output_left_in_dot_output_moves_beside_the_fixture(
         for kind in ("assoc", "log"):
             assert (fixtures / directory / f"{prefix}.{kind}.txt").is_file()
     assert not list(local_run.outroot.rglob("output"))
+
+
+def test_a_gemma_path_relative_to_the_caller_still_runs(
+    gemma_stand_in: Path, tmp_path: Path
+) -> None:
+    """The generator changes directory before each row starts GEMMA."""
+    record = tmp_path / "argv.txt"
+    outroot = tmp_path / "outroot"
+    outroot.mkdir()
+
+    subprocess.run(
+        [
+            "bash",
+            str(_SCRIPT_DIR / "generate_gemma_fixtures.sh"),
+            "--gemma-path",
+            f"./{gemma_stand_in.name}",
+            "--only",
+            "gemma_[ls][rc]*",  # gemma_lrt and gemma_score: both workdir shapes
+            "--outroot",
+            str(outroot),
+        ],
+        check=True,
+        cwd=gemma_stand_in.parent,
+        env={**os.environ, "ARGV_RECORD": str(record), "UV_NO_SYNC": "1"},
+    )
+
+    started_in = sorted(
+        Path(line.split("\t")[0]).relative_to(outroot.resolve())
+        for line in record.read_text().splitlines()
+    )
+    assert started_in == [Path(), Path("tests/fixtures/gemma_synthetic")]
 
 
 def test_loco_kinship_step_runs_as_a_script(tmp_path: Path) -> None:

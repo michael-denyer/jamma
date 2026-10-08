@@ -125,6 +125,17 @@ if [ -z "$GEMMA_BIN" ] && command -v gemma &> /dev/null; then
     GEMMA_BIN="$(command -v gemma)"
 fi
 
+# run_gemma changes directory before it starts GEMMA, so a path relative to the
+# caller's directory is resolved here. A bare name stays a PATH lookup.
+case "$GEMMA_BIN" in
+    /*) ;;
+    */*)
+        # Its own assignment, so a missing directory stops the script here.
+        GEMMA_DIR="$(cd "$(dirname "$GEMMA_BIN")" && pwd)"
+        GEMMA_BIN="$GEMMA_DIR/$(basename "$GEMMA_BIN")"
+        ;;
+esac
+
 if [ -n "$GEMMA_BIN" ]; then
     RUNNER="local"
     DATA_PREFIX=""

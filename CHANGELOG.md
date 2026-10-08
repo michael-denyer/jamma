@@ -83,6 +83,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/fixtures`. The LOCO kinship step now reads its PLINK files from that
   root too, where it read them from the repository before. `--help` prints the
   `GEMMA_IMAGE` lines it used to cut off. No committed fixture changed.
+- `scripts/generate_gemma_fixtures.sh` accepts a `--gemma-path` or `GEMMA`
+  given relative to the caller's directory. The script changes directory
+  before it starts GEMMA, so a relative path was looked up under the data
+  root, or under `tests/fixtures/gemma_synthetic` for the `gemma_lrt` cell,
+  and the run stopped with `No such file or directory`. The path is now
+  resolved once, before the first cell. A bare name is still found on `PATH`.
 
 ## [8.2.3] - 2026-10-02
 

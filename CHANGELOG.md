@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The eigendecomposition progress bar prints its 100% line once when output
+  is redirected to a file, `nohup` or CI. It printed the line twice, so a
+  count of 100% lines in a log gave twice the number of decompositions.
+  `timed_progress` drew 100% itself and `finish()` then drew it again; a
+  terminal overwrote one with the other. `tla/TimedProgress.tla` drops the
+  separate final-update step to match (#514).
 - `scripts/generate_gemma_fixtures.sh` run with a local GEMMA binary records a
   command with no host path, as a docker run does. It starts the binary as
   `gemma` and passes paths relative to the data root, so the

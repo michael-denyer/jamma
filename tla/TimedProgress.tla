@@ -2,12 +2,12 @@
 (* Copyright (c) 2026 Michael Denyer
    SPDX-License-Identifier: GPL-3.0-only
 
-   timed_progress, src/jamma/core/progress.py:138-226. Worker fn returns or
+   timed_progress, src/jamma/core/progress.py:138-223. Worker fn returns or
    raises at :187-190, publishes a result/error, notifies Event at :191-192,
    then exits. Consumer waits with a positive finite timeout at :200, polls
-   at :203-207, performs final update at :208-210, finishes at :214-216, joins
-   at :220-222 and reports the result/error at :224-226. Progressbar.finish
-   default behavior is an implicit update(100); dirty=True preserves value.
+   at :203-207, finishes at :211-213, joins at :217-219 and reports the
+   result/error at :221-223. Progressbar.finish default behavior is an
+   implicit update(100), the only full update; dirty=True preserves value.
    Library Event/Thread operations are atomic contracts. There is no caller
    mutex. fn allocations/errors occur outside application locks. Python list
    allocation failure and Event/Thread internals are outside this abstraction.
@@ -20,10 +20,10 @@
    positive poll/join timeouts are assumptions. Consumer interruption choices
    have no fairness and deliberately allow abandonment of the daemon worker.
 
-   The full update is gated on done and a published result, and any other
-   finish is dirty. TimedProgress.mutations lists the bugs the properties
-   detect, including the ungated full update and the full redraw on any
-   finish. Resources are the output/error box and the worker; ownership
+   Finish is clean, and so draws 100%, only on done and a published result
+   with no cancellation; any other finish is dirty. TimedProgress.mutations
+   lists the bugs the properties detect, including the clean finish before
+   the worker is done and the full redraw on any finish. Resources are the output/error box and the worker; ownership
    transfers from worker to box to caller. Caller-retained exception tracebacks/results are permitted.
    Output modes include empty value, nonempty value, Exception and BaseException;
    values are abstract tags, so no numerical correctness is claimed. *)
@@ -59,15 +59,12 @@ WorkerExit == /\ wpc = "exit" /\ wpc' = "done" /\ workerExited' = TRUE
               /\ UNCHANGED <<pc, shown, outcome, shared>>
 Wait == /\ pc = "wait" /\ pc' = IF done THEN "check" ELSE "poll"
         /\ UNCHANGED <<shown, outcome, worker, shared>>
-Check == /\ pc = "check" /\ pc' = IF done THEN "full" ELSE "wait"
+Check == /\ pc = "check" /\ pc' = IF done THEN "finish" ELSE "wait"
          /\ UNCHANGED <<shown, outcome, worker, shared>>
 Poll == /\ pc = "poll"
-        /\ pc' = IF OutputFailure = "poll" THEN "full" ELSE "wait"
+        /\ pc' = IF OutputFailure = "poll" THEN "finish" ELSE "wait"
         /\ display' = IF OutputFailure = "poll" THEN display ELSE 99
         /\ UNCHANGED <<falseCompletion, outcome, worker, shared>>
-Full == /\ pc = "full" /\ pc' = "finish"
-        /\ Complete(Successful, Succeeded)
-        /\ UNCHANGED <<outcome, worker, shared>>
 Finish == /\ pc = "finish" /\ pc' = IF cancelled THEN "cancelled" ELSE "join"
           /\ Complete(Successful /\ ~cancelled, Succeeded /\ ~cancelled)
           /\ UNCHANGED <<outcome, worker, shared>>
@@ -79,15 +76,15 @@ Join == /\ pc = "join" /\ workerExited
         /\ UNCHANGED <<shown, cancelled, worker, box, done>>
 Cancel == /\ AllowInterrupt /\ cancelled' = TRUE /\ report' = "cancel"
           /\ UNCHANGED <<shown, worker, shared>>
-Interrupt == pc \in {"wait", "check", "poll", "full"} /\ pc' = "finish" /\ Cancel
+Interrupt == pc \in {"wait", "check", "poll"} /\ pc' = "finish" /\ Cancel
 InterruptJoin == pc = "join" /\ pc' = "cancelled" /\ Cancel
 Spurious == /\ pc = "wait" /\ pc' = "check"
             /\ UNCHANGED <<shown, outcome, worker, shared>>
 Worker == WorkerRun \/ Publish \/ Notify \/ WorkerExit
-Consumer == Wait \/ Check \/ Poll \/ Full \/ Finish \/ Join
+Consumer == Wait \/ Check \/ Poll \/ Finish \/ Join
 Next == Worker \/ Consumer \/ Interrupt \/ InterruptJoin \/ Spurious \/ UNCHANGED vars
 Spec == Init /\ [][Next]_vars /\ WF_vars(Worker) /\ WF_vars(Consumer)
-TypeOK == /\ pc \in {"wait", "check", "poll", "full", "finish", "join", "reported", "cancelled"}
+TypeOK == /\ pc \in {"wait", "check", "poll", "finish", "join", "reported", "cancelled"}
           /\ wpc \in {"run", "publish", "notify", "exit", "done"}
           /\ box \in {"none", "empty", "value", "error", "base"}
           /\ done \in BOOLEAN /\ workerExited \in BOOLEAN /\ cancelled \in BOOLEAN

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import threading
+import time
 
 import progressbar
 import pytest
@@ -35,6 +37,23 @@ def test_real_progressbar_does_not_claim_completion_on_worker_failure(
         timed_progress(fail, estimated_seconds=10, poll_interval=0.01)
 
     assert 100 not in updates
+
+
+def test_redirected_output_reports_completion_once(monkeypatch):
+    # progressbar2 swaps ``fd=sys.stdout`` for the stream it saved at import,
+    # so that saved stream is the one a redirected run writes to.
+    redirected = io.StringIO()
+    monkeypatch.setattr(progressbar.utils.streams, "original_stdout", redirected)
+
+    def work():
+        # Outlast progressbar2's 0.05 s redraw throttle, which would hide a
+        # second 100% draw made straight after the first frame.
+        time.sleep(0.2)
+        return "result"
+
+    assert timed_progress(work, estimated_seconds=60, poll_interval=0.05) == "result"
+
+    assert redirected.getvalue().count("100%") == 1
 
 
 def test_transient_stdout_failure_does_not_claim_completion_before_worker_returns(

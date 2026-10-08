@@ -8,17 +8,18 @@ omitted.
 
 | Target | Threads and shared state | Waits and wakeups | Terminal states and resources | Verdict |
 | --- | --- | --- | --- | --- |
-| `timed_progress`, `core/progress.py:138-226` | One consumer and one daemon worker; result/error boxes, Event, progress display | Consumer `done.wait` has a positive timeout; worker publishes then calls `done.set`; normal join polls for worker exit | Normal result/error reports follow join; consumer KeyboardInterrupt abandons joins; output ownership moves from worker to box to caller | False completion confirmed and fixed; 8 runs pass |
+| `timed_progress`, `core/progress.py:138-223` | One consumer and one daemon worker; result/error boxes, Event, progress display | Consumer `done.wait` has a positive timeout; worker publishes then calls `done.set`; normal join polls for worker exit | Normal result/error reports follow join; consumer KeyboardInterrupt abandons joins; output ownership moves from worker to box to caller | False completion confirmed and fixed; 8 runs pass |
 
 ## Confirmed false completion
 
-There were two paths to an incorrect 100% display:
+There were two paths to an incorrect 100% display. The code then made an
+explicit `bar.update(100)` call between the polling loop and `bar.finish()`:
 
 - A polling `bar.update` raised `OSError` at lines 205-207. The consumer left
-  the Event-wait loop and called `bar.update(100)` at lines 208-210 before the
+  the Event-wait loop and made the explicit `bar.update(100)` call before the
   still-running worker returned. It eventually joined, so the returned
   numerical value was unaffected.
-- The unconditional `bar.finish()` at line 216 implicitly forced a full
+- The unconditional `bar.finish()`, now at line 213, implicitly forced a full
   redraw on worker errors and consumer cancellation. The real library's
   `ProgressBar.finish(dirty=False)` invokes `update(max_value, force=True)`;
   its `dirty=True` option preserves the current percentage. The shared fake
@@ -26,16 +27,16 @@ There were two paths to an incorrect 100% display:
   the implicit redraw.
 
 The first counterexample maps to a consumer timeout at line 200, a polling
-stdout failure at line 205, the break at line 207 and premature full update
-at line 210, while the worker remains inside `fn()` at line 188. The mutation
-"full update without checking that the worker finished" in
+stdout failure at line 205, the break at line 207 and the premature explicit
+full update, while the worker remains inside `fn()` at line 188. The mutation
+"finish is clean without checking that the worker finished" in
 `tla/TimedProgress.mutations` restores this behavior, and TLC rejects it.
 
 For a failing worker, the trace is worker failure at line 188, publication in
 `exception` at line 190, notification at line 192, consumer wake at line 200,
-skipped explicit success update at line 208, then implicit full redraw from
-line 216. Consumer KeyboardInterrupt takes the same unclean-finish path at
-lines 211-216. The two "finish redraws 100%" mutations restore that finish,
+then implicit full redraw from line 213. Consumer KeyboardInterrupt takes the
+same unclean-finish path at lines 208-213. The two "finish redraws 100%"
+mutations restore that finish,
 and TLC rejects both. All
 three paths are reachable with the shipped single worker and normal 100-tick
 bar. No special queue capacity or unsupported caller is needed.
@@ -47,11 +48,15 @@ raised by the worker each recorded `[0, 100]`. A deterministic transient
 stdout failure, with the worker blocked on an Event, recorded two premature
 100 updates, one explicit and one from `finish`.
 
-The fix gates explicit 100% on `done.is_set()` and absence of worker error at
-line 208. It calls `finish(dirty=cancelled or not done.is_set() or
-bool(exception))` at line 216, so failed, interrupted or unfinished work
+The fix calls `finish(dirty=cancelled or not done.is_set() or
+bool(exception))` at line 213, so failed, interrupted or unfinished work
 preserves its current percentage. Normal join and worker error propagation
 remain intact. The fake's `finish` now accepts the real `dirty` argument.
+
+`finish` is the only call that draws 100%. The explicit `bar.update(100)` is
+gone: on success `finish` drew 100% a second time, which printed two 100%
+lines in redirected output. A seventh regression captures that output and
+counts one 100% line.
 
 A sixth real-library regression raises KeyboardInterrupt on the consumer's
 polling update. It proves that interruption returns while the worker is still
@@ -64,8 +69,7 @@ Ruff and targeted pyrefly passed for the regression file.
 
 `tla/TimedProgress.tla` has separate worker phases for executing `fn`,
 publishing the result/error box, setting the Event and exiting the thread.
-The consumer has Event-wait, timeout-poll, final-update, finish, join and
-report phases. Empty output, nonempty output, Exception and BaseException are
+The consumer has Event-wait, timeout-poll, finish, join and report phases. Empty output, nonempty output, Exception and BaseException are
 separate abstract outcomes. This preserves the distinction between callable
 completion, notification and actual worker exit.
 

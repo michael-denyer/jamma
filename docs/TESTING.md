@@ -884,7 +884,7 @@ mutation detected.
 | `tlc-matrix.sh` on `LocoWorkers.matrix` | `SUMMARY 15 of 15 runs passed, 20088 distinct states in total` |
 | `tlc-matrix.sh` on `MatrixWriter.matrix` | `SUMMARY 57 of 57 runs passed, 53473 distinct states in total` |
 | `tlc-matrix.sh` on `SpawnPool.matrix` | `SUMMARY 12 of 12 runs passed, 59367 distinct states in total` |
-| `tlc-matrix.sh` on `TimedProgress.matrix` | `SUMMARY 8 of 8 runs passed, 319 distinct states in total` |
+| `tlc-matrix.sh` on `TimedProgress.matrix` | `SUMMARY 8 of 8 runs passed, 288 distinct states in total` |
 | `lean-check.sh` on `lean` | `PASS <path>/lean: 24 declarations checked, no unfinished proof (sorry), no added axiom` |
 
 To run only the two-buffer chunk runs, which all pass, add the label filter

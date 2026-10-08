@@ -205,9 +205,6 @@ def timed_progress(
                 bar.update(pct)
             except OSError:
                 break  # stdout gone; stop updating but still wait for fn
-        if done.is_set() and not exception:
-            with contextlib.suppress(OSError):
-                bar.update(n_ticks)
     except KeyboardInterrupt:
         cancelled = True
         raise

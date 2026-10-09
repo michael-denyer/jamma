@@ -343,7 +343,6 @@ def run_single(
     if show_progress:
         logger.info(f"Performing LMM Association Test ({labels.banner})")
         logger.info(f"  Total individuals: {samples.valid_mask.shape[0]:,}")
-        logger.info(f"  Analyzed individuals: {samples.n_samples:,}")
         logger.info(f"  Total SNPs: {n_snps:,}")
         logger.info(f"  Lambda range: [{config.l_min:.2e}, {config.l_max:.2e}]")
 
@@ -356,8 +355,6 @@ def run_single(
         stats_block_size=spec.execution.stats_block_size,
         progress=spec.stats_progress,
     )
-    if show_progress:
-        logger.info(f"  Analyzed SNPs: {genotypes.n_filtered:,}")
 
     if genotypes.n_filtered == 0:
         logger.warning(

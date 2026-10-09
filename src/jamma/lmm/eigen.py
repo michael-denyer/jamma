@@ -36,6 +36,10 @@ _SAMPLED_SYMMETRY_THRESHOLD = 5_000
 # Symmetry check tolerance; matches LAPACK precision expectations.
 _SYMMETRY_ATOL = 1e-11
 
+# warnings.warn stacklevel that skips eigendecompose_kinship_in_scope and the
+# public eigendecompose_kinship wrapper above it.
+_CALLER_OF_EIGENDECOMPOSE_KINSHIP = 3
+
 
 def _check_symmetry_sampled(
     K: np.ndarray, n: int, *, atol: float = _SYMMETRY_ATOL
@@ -123,8 +127,8 @@ def eigendecompose_kinship(
 
     GEMMA behavior from EigenDecomp_Zeroed:
     - Eigenvalues with |value| < 1e-10 are set to 0
-    - Warning if >1 zero eigenvalue
-    - Warning if negative eigenvalues remain after thresholding
+    - Eigenvalues below -1e-10 are set to 0, with a warning
+    - Warning if >1 eigenvalue has |value| < 1e-10
 
     Uses jlinalg.eigh (vendor DSYEVD/DSYEVR dispatch, np.linalg.eigh fallback).
     K is consumed (overwritten as scratch) — callers must not reuse K.
@@ -309,7 +313,7 @@ def eigendecompose_kinship_in_scope(
         warnings.warn(
             f"Kinship matrix has {n_negative} negative eigenvalue(s). "
             "Zeroing them (matrix not positive semi-definite).",
-            stacklevel=2,
+            stacklevel=_CALLER_OF_EIGENDECOMPOSE_KINSHIP,
         )
         eigenvalues[eigenvalues < -threshold] = 0.0
 
@@ -321,7 +325,7 @@ def eigendecompose_kinship_in_scope(
         warnings.warn(
             f"Kinship matrix has {n_zero} eigenvalues close to zero. "
             "Matrix may be rank-deficient.",
-            stacklevel=2,
+            stacklevel=_CALLER_OF_EIGENDECOMPOSE_KINSHIP,
         )
 
     return eigenvalues, eigenvectors

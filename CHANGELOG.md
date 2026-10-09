@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `run_lmm_association_numpy` and `run_lmm_association_numpy_streaming` logged
+  the `Analyzed individuals` and `Analyzed SNPs` lines twice per run, once in
+  the banner and once before the chunk loop. Each line is now logged once,
+  before the chunk loop, as in a pipeline run.
+- The negative-eigenvalue and rank-deficiency warnings from
+  `eigendecompose_kinship` named a line inside `jamma/lmm/eigen.py` as their
+  source. They name the caller's line again.
+- The `eigendecompose_kinship` docstring said negative eigenvalues are left in
+  place with a warning. They are set to zero, as in GEMMA's
+  `EigenDecomp_Zeroed`.
+
 ## [8.2.4] - 2026-10-08
 
 ### Added

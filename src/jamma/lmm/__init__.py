@@ -16,10 +16,9 @@ Modules:
 - uab: Uab/Pab/Iab batch builders in full, split and SoA layouts
 - likelihood_numpy: Pure-NumPy batch REML/MLE and optimization
 - special: NumPy betainc_batch and chi2_sf_batch (no scipy)
-- results: Result building functions
+- assoc_output: Result rows, the incremental .assoc.txt writer, chunk sinks
 - eigen: Eigendecomposition with GEMMA-compatible thresholding
 - stats: the batch Wald/Score/LRT statistics
-- io: Result file I/O
 """
 
 from jamma.lmm.assoc_output import AssocResult

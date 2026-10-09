@@ -104,7 +104,7 @@ def parse_eigen_input(
     eigenvalues: np.ndarray | None,
     eigenvectors: np.ndarray | None,
 ) -> EigenInput:
-    """Normalize the legacy public eigen arguments into one complete value."""
+    """Normalize the public runners' eigen arguments into one complete value."""
     if (eigenvalues is None) != (eigenvectors is None):
         raise ValueError(
             "Must provide both eigenvalues and eigenvectors, or neither. "

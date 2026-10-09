@@ -16,8 +16,7 @@ def n_index(n_cvt: int) -> int:
 
     The one spelling of the formula. Lives in ``core`` rather than
     ``lmm.likelihood`` so the memory and chunk-sizing estimators can use it
-    without importing below ``core`` in the layering; ``lmm.likelihood``
-    re-exports it for its own callers and its Uab/Pab construction.
+    without importing below ``core`` in the layering.
     """
     return (n_cvt + 3) * (n_cvt + 2) // 2
 

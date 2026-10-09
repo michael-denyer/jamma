@@ -228,6 +228,7 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
             writer = stack.enter_context(
                 IncrementalAssocWriter(output_path, MODE_SPECS[config.lmm_mode])
             )
+        destination = all_results if writer is None else writer
 
         source = eigen_pairs_for(run, chromosomes, workers)
 
@@ -257,7 +258,7 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
                 ),
                 run.samples,
                 EigenPairs(eigenvalues_np, U),
-                all_results if writer is None else writer,
+                destination,
                 stats=source.snp_stats.take(chr_snp_indices),
             )
             chr_pve, chr_pve_se = chr_result.pve, chr_result.pve_se
@@ -295,10 +296,9 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
                 f"LOCO LMM Association completed in {elapsed:.2f}s{pve_str}{se_str}"
             )
 
-        n_tested = writer.count if writer is not None else len(all_results)
         return LmmRunResult(
-            associations=[] if output_path is not None else all_results,
-            n_tested=n_tested,
+            associations=all_results,
+            n_tested=len(all_results) if writer is None else writer.count,
             pve=first_chr_pve,
             pve_se=first_chr_pve_se,
         )

@@ -155,29 +155,7 @@ def eigen_pairs_for(
                 loco, list(chromosomes), key, eigen_dir=loco.eigen_dir
             )
             if cache is not None:
-                logger.info("LOCO workers: 0 (cached eigenpairs)")
-                if loco.kinship_output_dir is not None:
-                    logger.warning(
-                        "kinship_output_dir ignored when using cached eigen "
-                        "files (kinship is not computed)"
-                    )
-                pairs = _cached_eigen_pairs(
-                    cache,
-                    chromosomes,
-                    n_valid=len(rows),
-                    show_progress=config.show_progress,
-                )
-                stats = run.dataset.stats(
-                    None if all_samples_valid else rows,
-                    block_size=run.execution.stats_block_size,
-                    progress="LOCO: SNP statistics" if config.show_progress else None,
-                )
-                if stats.n_unexpected > 0:
-                    logger.warning(
-                        f"Genotype validation: {stats.n_unexpected} values outside "
-                        "expected range {0, 1, 2, NaN}"
-                    )
-                return EigenPairSource(pairs, lambda: stats)
+                return _cached_source(run, cache, chromosomes)
 
     logger.info(workers.describe())
     kinship_is_analysed = run.execution.resolved_kinship.n_samples == len(rows)
@@ -206,6 +184,43 @@ def eigen_pairs_for(
         workers=workers.workers,
     )
     return EigenPairSource(pairs, lambda: stream.snp_stats)
+
+
+def _cached_source(
+    run: LocoRun,
+    cache: dict[str, tuple[Path, Path]],
+    chromosomes: dict[str, np.ndarray],
+) -> EigenPairSource:
+    """Read eigenpairs from a validated cache and measure the SNP statistics.
+
+    No kinship stream runs on this path, so the statistics it would have
+    produced are measured from the dataset.
+    """
+    loco, config = run.loco, run.config
+    rows = run.analysed_rows
+    logger.info("LOCO workers: 0 (cached eigenpairs)")
+    if loco.kinship_output_dir is not None:
+        logger.warning(
+            "kinship_output_dir ignored when using cached eigen "
+            "files (kinship is not computed)"
+        )
+    pairs = _cached_eigen_pairs(
+        cache,
+        chromosomes,
+        n_valid=len(rows),
+        show_progress=config.show_progress,
+    )
+    stats = run.dataset.stats(
+        None if len(rows) == run.dataset.n_samples else rows,
+        block_size=run.execution.stats_block_size,
+        progress="LOCO: SNP statistics" if config.show_progress else None,
+    )
+    if stats.n_unexpected > 0:
+        logger.warning(
+            f"Genotype validation: {stats.n_unexpected} values outside "
+            "expected range {0, 1, 2, NaN}"
+        )
+    return EigenPairSource(pairs, lambda: stats)
 
 
 def _validated_eigen_cache(

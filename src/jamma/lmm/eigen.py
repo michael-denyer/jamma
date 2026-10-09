@@ -73,6 +73,19 @@ def _check_symmetry_sampled(
         )
 
 
+def _warn_if_asymmetric(K: np.ndarray) -> None:
+    """Warn about an asymmetric kinship, sampling rows once K is large."""
+    n_samples = K.shape[0]
+    if n_samples >= _SAMPLED_SYMMETRY_THRESHOLD:
+        _check_symmetry_sampled(K, n_samples, atol=_SYMMETRY_ATOL)
+    elif not np.allclose(K, K.T, atol=_SYMMETRY_ATOL, rtol=0):
+        logger.warning(
+            "Kinship matrix is not symmetric (max asymmetry: %.2e). "
+            "jlinalg.eigh will use lower triangle only.",
+            np.max(np.abs(K - K.T)),
+        )
+
+
 def plan_eigen_driver_for_machine(
     n_samples: int,
     available_gb: float,
@@ -188,16 +201,7 @@ def eigendecompose_kinship_in_scope(
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
         raise ValueError(f"Kinship matrix must be square, got shape {K.shape}")
 
-    # Symmetry check
-    if n_samples < _SAMPLED_SYMMETRY_THRESHOLD:
-        if not np.allclose(K, K.T, atol=_SYMMETRY_ATOL, rtol=0):
-            logger.warning(
-                "Kinship matrix is not symmetric (max asymmetry: %.2e). "
-                "jlinalg.eigh will use lower triangle only.",
-                np.max(np.abs(K - K.T)),
-            )
-    else:
-        _check_symmetry_sampled(K, n_samples, atol=_SYMMETRY_ATOL)
+    _warn_if_asymmetric(K)
 
     logger.info(f"Eigendecomposing kinship matrix ({n_samples:,} x {n_samples:,})")
     logger.debug(
@@ -306,29 +310,39 @@ def eigendecompose_kinship_in_scope(
     logger.info(f"Eigendecomposition completed in {elapsed:.2f} seconds")
     log_memory_snapshot(f"after_eigendecomp_{n_samples}samples")
 
-    # Threshold small eigenvalues (GEMMA EigenDecomp_Zeroed behavior)
-    abs_evals = np.abs(eigenvalues)
-    n_negative = int(np.sum(eigenvalues < -threshold))
+    n_negative, n_near_zero = _zero_small_eigenvalues(eigenvalues, threshold)
     if n_negative > 0:
         warnings.warn(
             f"Kinship matrix has {n_negative} negative eigenvalue(s). "
             "Zeroing them (matrix not positive semi-definite).",
             stacklevel=_CALLER_OF_EIGENDECOMPOSE_KINSHIP,
         )
-        eigenvalues[eigenvalues < -threshold] = 0.0
-
-    small_mask = abs_evals < threshold
-    n_zero = int(np.sum(small_mask))
-    eigenvalues[small_mask] = 0.0
-
-    if n_zero > 1:
+    if n_near_zero > 1:
         warnings.warn(
-            f"Kinship matrix has {n_zero} eigenvalues close to zero. "
+            f"Kinship matrix has {n_near_zero} eigenvalues close to zero. "
             "Matrix may be rank-deficient.",
             stacklevel=_CALLER_OF_EIGENDECOMPOSE_KINSHIP,
         )
 
     return eigenvalues, eigenvectors
+
+
+def _zero_small_eigenvalues(
+    eigenvalues: np.ndarray, threshold: float
+) -> tuple[int, int]:
+    """Zero small eigenvalues in place, as GEMMA's EigenDecomp_Zeroed does.
+
+    Every eigenvalue below ``-threshold`` or within ``threshold`` of zero
+    becomes 0.
+
+    Returns:
+        The count below ``-threshold`` and the count within ``threshold`` of
+        zero.
+    """
+    negative = eigenvalues < -threshold
+    near_zero = np.abs(eigenvalues) < threshold
+    eigenvalues[negative | near_zero] = 0.0
+    return int(np.sum(negative)), int(np.sum(near_zero))
 
 
 def center_kinship(K: np.ndarray) -> None:

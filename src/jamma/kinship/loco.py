@@ -325,7 +325,7 @@ def compute_loco_kinship_streaming(
             accumulation. When provided, each yielded K_loco has shape
             (n_valid, n_valid) where n_valid = len(valid_indices), eliminating
             the post-hoc np.ix_ copy. When None, K_loco has shape
-            (n_samples, n_samples) (default, backward-compatible).
+            (n_samples, n_samples) (default).
         mem_budget: User-set ceiling in GB, or None for no ceiling. A second
             capacity beside physical RAM: the batch planner sizes the
             chromosome batch against the smaller of the two, and the gate

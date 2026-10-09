@@ -15,9 +15,9 @@ import numpy as np
 SnpInfoRecord: TypeAlias = Mapping[str, str | int | float]
 """Caller-supplied SNP metadata row accepted by ``SnpMeta.from_dicts``.
 
-The public runners historically accept dictionaries with additional fields
-such as MAF. A read-only mapping preserves that compatibility while naming the
-value types consumed by ``SnpMeta``.
+The public batch runner accepts dictionaries with additional fields such as
+MAF. A read-only mapping admits them while naming the value types consumed by
+``SnpMeta``.
 """
 
 

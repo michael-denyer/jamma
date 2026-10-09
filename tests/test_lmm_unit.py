@@ -602,3 +602,13 @@ class TestEigenvalueZeroingBoundary:
             self._decompose(1e-12)
 
         assert not any("rank-deficient" in str(x.message) for x in w)
+
+    def test_eigenvalue_warnings_name_the_calling_line(self):
+        evals = np.array([-0.5, 1e-12, 1e-13] + [1.0] * 7, dtype=np.float64)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            eigendecompose_kinship(np.diag(evals), check_memory=False)
+
+        kinship_warnings = [x for x in w if "Kinship matrix has" in str(x.message)]
+        assert len(kinship_warnings) == 2
+        assert {x.filename for x in kinship_warnings} == {__file__}

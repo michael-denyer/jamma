@@ -188,7 +188,7 @@ jobs:
 
       - name: Upload sanitizer logs
         if: always()  # success AND failure
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: sanitizer-logs-${{ github.run_id }}
           path: sanitizer-run.log
@@ -196,7 +196,7 @@ jobs:
 
       - name: Upload native sanitizer log
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: native-sanitizer-log-${{ github.run_id }}
           path: native-sanitizer-run.log
@@ -331,7 +331,7 @@ jobs:
 
       - name: Upload sentinel logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: sentinel-logs-${{ github.run_id }}
           path: |

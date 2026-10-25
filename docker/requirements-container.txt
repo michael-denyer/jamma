@@ -8,18 +8,18 @@
 # JAMMA and the ILP64 NumPy wheel are installed separately (see the Dockerfile)
 # so this file can use the default PyPI index safely.
 
-mkl==2026.1.0
-onemkl-license==2026.1.0
-intel-openmp==2026.1.2
-intel-cmplr-lib-ur==2026.1.2
-umf==1.1.0
-tbb==2023.1.0
-tcmlib==1.5.0
+mkl==2026.2.0
+onemkl-license==2026.2.0
+intel-openmp==2026.2.0
+intel-cmplr-lib-ur==2026.2.0
+umf==1.2.0
+tbb==2023.2.0
+tcmlib==1.6.0
 bed-reader==1.1.0
 click==8.5.0
 loguru==0.7.3
 progressbar2==4.6.0
 psutil==7.2.2
-python-utils==4.0.1
+python-utils==4.1.2
 threadpoolctl==3.7.0
 typing-extensions==4.16.0

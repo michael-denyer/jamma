@@ -223,7 +223,7 @@ jobs:
 
       - name: Upload mathematical evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: math-validation-${{ matrix.name }}
           path: ${{ runner.temp }}/math-validation
@@ -379,7 +379,7 @@ jobs:
 
       - name: Upload forced NumPy evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: math-validation-forced-numpy
           path: ${{ runner.temp }}/math-validation
@@ -406,7 +406,7 @@ jobs:
         run: uv run python scripts/mathematical_mutations.py --output "$RUNNER_TEMP/mutations.json"
       - name: Upload mutation evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: mathematical-mutation-smoke
           path: ${{ runner.temp }}/mutations.json

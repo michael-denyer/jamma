@@ -14,7 +14,6 @@ def test_interrupt_during_cleanup_waits_for_background_rotation():
     # concurrent test workers must not receive the signal.
     script = textwrap.dedent(
         """
-        import os
         import signal
         import sys
         import threading
@@ -76,7 +75,9 @@ def test_interrupt_during_cleanup_waits_for_background_rotation():
                     waits = [f for f in frames if f.f_code.co_name in ('wait', 'join')]
                     if waits:
                         original_wait = waits[0]
-                        os.kill(os.getpid(), signal.SIGINT)
+                        # os.kill may land on this thread, leaving main
+                        # blocked in its wait with the handler never run.
+                        signal.pthread_kill(main, signal.SIGINT)
                         break
                 time.sleep(0.001)
             assert original_wait is not None

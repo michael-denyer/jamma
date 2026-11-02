@@ -5,12 +5,13 @@
 """
 
 import os
-import platform
+import subprocess
 
 import pytest
 
 import jamma.jlinalg as jlinalg
 from jamma._build_support.build_models import BASE_CFLAGS, JLINALG_SPEC, LAPACK_CFLAGS
+from jamma._build_support.find_compiler import find_c_compiler
 from jamma.jlinalg import (
     HAS_C_EXTENSION,
     HAS_OPENMP,
@@ -41,7 +42,23 @@ def test_isa_detection():
 def test_isa_reports_build_target_not_cpu():
     build_flags = (*BASE_CFLAGS, *LAPACK_CFLAGS, *JLINALG_SPEC.dev_extra_cflags)
     assert not [f for f in build_flags if f.startswith("-m")]
-    expected = {"arm64": "NEON", "aarch64": "NEON"}.get(platform.machine(), "generic")
+    # With no -m flag the target is the compiler's default, which is not
+    # always baseline: Ubuntu 26.04's cc defines __AVX2__ out of the box.
+    compiler = find_c_compiler()
+    assert compiler is not None
+    cc, cc_extra = compiler
+    macros = subprocess.run(
+        [cc, *cc_extra, *BASE_CFLAGS, "-dM", "-E", "-x", "c", os.devnull],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\n")
+    if "#define __AVX2__ 1" in macros:
+        expected = "AVX2"
+    elif "#define __ARM_NEON 1" in macros:
+        expected = "NEON"
+    else:
+        expected = "generic"
     assert jlinalg_isa == expected
 
 

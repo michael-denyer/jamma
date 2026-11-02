@@ -991,14 +991,14 @@ wheels = [
 
 [[package]]
 name = "python-utils"
-version = "4.1.2"
+version = "4.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/e2/ab07db6a13aa1902d7be280397a33433153aece322980d9da7f975383350/python_utils-4.1.2.tar.gz", hash = "sha256:40d692f75f676ad7040b0b64b76deebbaf7138d3fe240f67fee43b4a26098286", size = 79647, upload-time = "2026-10-13T08:37:36.466Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/e7/064880019d2f205b837e5c463eb472b36e220d380e5733e49911975f7072/python_utils-4.1.4.tar.gz", hash = "sha256:a8c01f8c0b5a113fa1ab663308bb8a4773afec3cc8f9e6baeb756ac97377f8ce", size = 80130, upload-time = "2026-10-21T01:07:07.458Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7b/88/b8d66d5accc57aad735ac813f67849ade52caf931e9844e75d1c342ed367/python_utils-4.1.2-py3-none-any.whl", hash = "sha256:90d8aeb1b4d43666f2fbef62d325f189fbe17b991934fd2c93550f6aef91478e", size = 49681, upload-time = "2026-10-13T08:37:35.102Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/97/4dfe369f4e1eed1f50e7cbfaf5ef5e1fa025e8fa29073290d77d7aea89b1/python_utils-4.1.4-py3-none-any.whl", hash = "sha256:009251f6182f872cd4a74225cdf3636f48ee4596532082bd367797c5924d92bf", size = 49838, upload-time = "2026-10-21T01:07:05.761Z" },
 ]
 
 [[package]]

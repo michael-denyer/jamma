@@ -14,7 +14,6 @@ def test_interrupt_during_cleanup_waits_for_background_rotation():
     # concurrent test workers must not receive the signal.
     script = textwrap.dedent(
         """
-        import os
         import signal
         import sys
         import threading
@@ -76,11 +75,19 @@ def test_interrupt_during_cleanup_waits_for_background_rotation():
                     waits = [f for f in frames if f.f_code.co_name in ('wait', 'join')]
                     if waits:
                         original_wait = waits[0]
-                        os.kill(os.getpid(), signal.SIGINT)
+                        # os.kill may land on this thread, leaving main
+                        # blocked in its wait with the handler never run.
+                        signal.pthread_kill(main, signal.SIGINT)
                         break
                 time.sleep(0.001)
             assert original_wait is not None
-            assert interrupted.wait(5)
+            # A signal landing after main's last pending-signal check but
+            # before it blocks in the lock acquire only sets CPython's flag,
+            # and main sleeps on. Re-send until the handler has run.
+            resend_deadline = time.monotonic() + 5
+            while not interrupted.wait(0.25):
+                assert time.monotonic() < resend_deadline
+                signal.pthread_kill(main, signal.SIGINT)
             # With the fix, cleanup retries its condition wait. With the
             # original executor, the driver escapes before rotation finishes.
             while time.monotonic() < deadline:

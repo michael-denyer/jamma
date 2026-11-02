@@ -1,7 +1,6 @@
 """Tests for progress bar lifecycle management."""
 
 import threading
-import time
 
 import pytest
 
@@ -163,20 +162,30 @@ class TestTimedProgress:
         assert all(v < 100 for v in bar.update_calls)
 
     def test_slow_fn_caps_at_99(self, fake_progressbar):
-        """Bar caps at 99% while fn is still running."""
+        """Bar caps at 99% while fn is still running.
+
+        The worker returns only after the polling loop has drawn two updates
+        at or past the cap, so the test does not depend on how many polls
+        fit inside a fixed sleep on a loaded runner.
+        """
+        at_cap: list[int] = []
+        held = threading.Event()
+
+        def record(value: int) -> None:
+            if value >= 99:
+                at_cap.append(value)
+                if len(at_cap) >= 2:
+                    held.set()
+
+        fake_progressbar.on_update = record
 
         def slow():
-            time.sleep(0.15)
+            assert held.wait(timeout=10.0), "bar never reached the 99% cap"
             return "done"
 
         result = timed_progress(slow, estimated_seconds=0.01, poll_interval=0.02)
         assert result == "done"
-
-        bar = fake_progressbar.last_bar
-        # At least one intermediate + one final update.
-        assert len(bar.update_calls) >= 2
-        # All intermediate updates capped at 99 (the final update is 100).
-        assert all(v <= 99 for v in bar.update_calls[:-1])
+        assert all(v <= 99 for v in fake_progressbar.last_bar.update_calls)
 
     def test_estimated_seconds_zero(self):
         """estimated_seconds=0 is handled gracefully (no ZeroDivisionError)."""

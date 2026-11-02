@@ -81,7 +81,13 @@ def test_interrupt_during_cleanup_waits_for_background_rotation():
                         break
                 time.sleep(0.001)
             assert original_wait is not None
-            assert interrupted.wait(5)
+            # A signal landing after main's last pending-signal check but
+            # before it blocks in the lock acquire only sets CPython's flag,
+            # and main sleeps on. Re-send until the handler has run.
+            resend_deadline = time.monotonic() + 5
+            while not interrupted.wait(0.25):
+                assert time.monotonic() < resend_deadline
+                signal.pthread_kill(main, signal.SIGINT)
             # With the fix, cleanup retries its condition wait. With the
             # original executor, the driver escapes before rotation finishes.
             while time.monotonic() < deadline:

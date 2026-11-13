@@ -151,9 +151,7 @@ def _price_plan(
     return ExecutableAssociationPlan(
         summary=ExecutionPlan(mode, "digest"),
         dispatch=dispatch,
-        conservative_chunks=LmmChunkPlan(
-            chunk, -(-n_snps // chunk), buffers, buffers > 1
-        ),
+        conservative_chunks=LmmChunkPlan(chunk, -(-n_snps // chunk), buffers > 1),
         n_samples=n,
         n_input_samples=n_input,
         n_snps_before_filter=n_snps,

@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -119,12 +120,12 @@ def test_chunk_plan_spot_rows(n_samples, n_snps, dispatch, budget, blas, expecte
 
 
 def test_narrow_only_decreases_width_and_only_switches_pipelining_off() -> None:
-    plan = LmmChunkPlan(chunk_size=765, n_chunks=16, n_buffers=2, use_pipeline=True)
+    plan = LmmChunkPlan(chunk_size=765, n_chunks=16, use_pipeline=True)
 
     assert plan.narrow(12_226) == plan
-    assert plan.narrow(5_000) == LmmChunkPlan(765, 7, 1, False)
-    assert plan.narrow(1) == LmmChunkPlan(1, 1, 1, False)
-    assert plan.narrow(0) == LmmChunkPlan(1, 0, 1, False)
+    assert plan.narrow(5_000) == LmmChunkPlan(765, 7, False)
+    assert plan.narrow(1) == LmmChunkPlan(1, 1, False)
+    assert plan.narrow(0) == LmmChunkPlan(1, 0, False)
     with pytest.raises(ValueError, match="n_filtered"):
         plan.narrow(-1)
 
@@ -132,3 +133,11 @@ def test_narrow_only_decreases_width_and_only_switches_pipelining_off() -> None:
 if __name__ == "__main__":
     table = plan_table()
     print(f"rows={len(table)} digest={plan_digest(table)}")
+
+
+def test_buffer_count_follows_pipelining_through_replace() -> None:
+    """A pipelined plan always rotates into two buffers, however it was built."""
+    plan = LmmChunkPlan(chunk_size=765, n_chunks=16, use_pipeline=True)
+
+    assert plan.n_buffers == 2
+    assert replace(plan, use_pipeline=False).n_buffers == 1

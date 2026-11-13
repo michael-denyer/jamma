@@ -339,7 +339,7 @@ def _priced_batch_quote_gb(
     """
     chunks = _plan(n_samples, n_snps, n_cvt, dispatch)
     if n_buffers is not None:
-        chunks = replace(chunks, n_buffers=n_buffers, use_pipeline=n_buffers > 1)
+        chunks = replace(chunks, use_pipeline=n_buffers > 1)
     plan = replace(
         association_price_plan(
             "batch",

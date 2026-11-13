@@ -30,9 +30,7 @@ def _workspace(dispatch: DispatchPath, n_cvt: int) -> WorkspaceSpec:
 def test_plan_is_frozen_and_tightening_returns_a_chunk_plan(
     dispatch: DispatchPath,
 ) -> None:
-    conservative = LmmChunkPlan(
-        100, 10, 2 if dispatch.is_native else 1, dispatch.is_native
-    )
+    conservative = LmmChunkPlan(100, 10, dispatch.is_native)
     plan = ExecutableAssociationPlan(
         summary=ExecutionPlan("batch", "test"),
         dispatch=dispatch,
@@ -65,9 +63,7 @@ def test_tightening_only_decreases_width_and_preserves_policy(
     plan = ExecutableAssociationPlan(
         summary=ExecutionPlan("streaming", "test"),
         dispatch=dispatch,
-        conservative_chunks=LmmChunkPlan(
-            100, 10, 2 if dispatch.is_native else 1, dispatch.is_native
-        ),
+        conservative_chunks=LmmChunkPlan(100, 10, dispatch.is_native),
         n_samples=1_000,
         n_input_samples=1_000,
         n_snps_before_filter=1_000,
@@ -82,11 +78,11 @@ def test_tightening_only_decreases_width_and_preserves_policy(
     # Tightening narrows geometry only; mode and dispatch stay on the plan.
     assert plan.summary.mode == "streaming"
     assert plan.dispatch is dispatch
-    assert tightened == LmmChunkPlan(100, 3, 1, False)
+    assert tightened == LmmChunkPlan(100, 3, False)
 
 
 def test_tightening_never_turns_pipeline_on() -> None:
-    conservative = LmmChunkPlan(100, 20, 1, False)
+    conservative = LmmChunkPlan(100, 20, False)
 
     tightened = conservative.narrow(1_500)
 
@@ -97,6 +93,6 @@ def test_tightening_never_turns_pipeline_on() -> None:
 
 
 def test_tightening_empty_plan_keeps_positive_width() -> None:
-    tightened = LmmChunkPlan(100, 10, 2, True).narrow(0)
+    tightened = LmmChunkPlan(100, 10, True).narrow(0)
 
-    assert tightened == LmmChunkPlan(1, 0, 1, False)
+    assert tightened == LmmChunkPlan(1, 0, False)

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `LmmChunkPlan.n_buffers` is a property derived from `use_pipeline`, not a
+  constructor field. A pipelined plan with one rotation buffer, which would let
+  the background rotation overwrite the chunk being computed, can no longer be
+  built. `LmmChunkPlan(chunk_size, n_chunks, use_pipeline)` replaces the
+  four-argument form.
+
 ### Fixed
 
 - Ctrl-C during LOCO association with `JAMMA_LOCO_WORKERS` above 1 waited

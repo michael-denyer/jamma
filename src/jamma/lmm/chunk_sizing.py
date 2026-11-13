@@ -146,15 +146,21 @@ class LmmChunkPlan:
     Attributes:
         chunk_size: SNPs per chunk.
         n_chunks: Number of chunks ``n_filtered`` splits into at that size.
-        n_buffers: Live chunk buffers the engine allocates (1 sequential, 2
-            pipelined).
         use_pipeline: Whether the run overlaps rotation and compute.
     """
 
     chunk_size: int
     n_chunks: int
-    n_buffers: int
     use_pipeline: bool
+
+    @property
+    def n_buffers(self) -> int:
+        """Live chunk buffers the engine allocates: 2 pipelined, 1 sequential.
+
+        Derived, not stored: the pipeline rotates chunk N+1 into one buffer
+        while chunk N is computed from the other.
+        """
+        return 2 if self.use_pipeline else 1
 
     @classmethod
     def plan(
@@ -263,7 +269,6 @@ class LmmChunkPlan:
         return cls(
             chunk_size=chunk_size,
             n_chunks=n_chunks,
-            n_buffers=2 if use_pipeline else 1,
             use_pipeline=use_pipeline,
         )
 
@@ -289,6 +294,5 @@ class LmmChunkPlan:
         return LmmChunkPlan(
             chunk_size=chunk_size,
             n_chunks=n_chunks,
-            n_buffers=2 if use_pipeline else 1,
             use_pipeline=use_pipeline,
         )

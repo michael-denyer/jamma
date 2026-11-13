@@ -152,7 +152,7 @@ def test_phenotype_group_is_bounded_by_live_native_workspaces(monkeypatch) -> No
     plan = ExecutableAssociationPlan(
         summary=ExecutionPlan("batch", "group pricing test"),
         dispatch=DispatchPath.FUSED,
-        conservative_chunks=LmmChunkPlan(1, 1, 1, False),
+        conservative_chunks=LmmChunkPlan(1, 1, False),
         n_samples=10,
         n_input_samples=10,
         n_snps_before_filter=1,
@@ -194,7 +194,7 @@ def test_phenotype_group_preserves_single_phenotype_chunk_width(monkeypatch) -> 
     plan = ExecutableAssociationPlan(
         summary=ExecutionPlan("batch", "group geometry test"),
         dispatch=DispatchPath.FUSED,
-        conservative_chunks=LmmChunkPlan(100, 1, 1, False),
+        conservative_chunks=LmmChunkPlan(100, 1, False),
         n_samples=10,
         n_input_samples=10,
         n_snps_before_filter=100,

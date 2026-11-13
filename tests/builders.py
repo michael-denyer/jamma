@@ -243,7 +243,7 @@ def association_price_plan(
         summary=ExecutionPlan(mode, "test"),
         dispatch=dispatch,
         conservative_chunks=LmmChunkPlan(
-            chunk_size, -(-n_snps // chunk_size), n_buffers, n_buffers > 1
+            chunk_size, -(-n_snps // chunk_size), n_buffers > 1
         ),
         n_samples=n_samples,
         n_input_samples=n_input,

@@ -1,5 +1,5 @@
 spec LocoWorkers.tla
-check INVARIANTS TypeOK Ownership DeliveryOrder EndOrder NoDeliveryAfterFailure ErrorOrder WindowBound ClosedClean SetupClean ScopeCoversSolve
+check INVARIANTS TypeOK Ownership DeliveryOrder EndOrder NoDeliveryAfterFailure ErrorOrder WindowBound ClosedClean SetupClean InterruptNeverJoins ScopeCoversSolve
 check PROPERTIES CallsReturn CloseReturns DrainEnds
 run workers=1 items=0 drain | Workers=1 Items=0 FailAt={} InputFailAt={} SetupFailure=0 Drain=TRUE Interrupt=FALSE
 run workers=1 items=1 drain | Workers=1 Items=1 FailAt={} InputFailAt={} SetupFailure=0 Drain=TRUE Interrupt=FALSE

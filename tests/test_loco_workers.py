@@ -7,6 +7,7 @@ Related LOCO test files:
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import signal
 import threading
@@ -257,6 +258,51 @@ def test_keyboard_interrupt_propagates_before_the_in_flight_solve_finishes():
         for worker in _eigen_worker_threads():
             worker.join(10)
     assert not helper.is_alive()
+    assert not _eigen_worker_threads()
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("interrupted", [True, False])
+def test_close_skips_the_join_only_while_a_keyboard_interrupt_unwinds(interrupted):
+    """Ctrl-C in the consumer's loop body closes the stream without a join.
+
+    ``run_lmm_loco`` closes the eigen stream from an ExitStack callback, so a
+    Ctrl-C that lands during association reaches the generator as GeneratorExit,
+    not KeyboardInterrupt. With two workers, chromosome 2's solve is still in
+    flight when chromosome 1 is yielded. A close while the interrupt unwinds
+    must return with that solve still running; a plain close must still join it.
+    The stream is the two-layer one ``run_lmm_loco`` consumes, so the interrupt
+    has to be recognised through the outer generator's ``closing`` as well.
+    """
+    release = threading.Event()
+    finished = threading.Event()
+
+    def solve(K: np.ndarray, **kwargs) -> tuple[np.ndarray, np.ndarray]:
+        n = len(K)
+        if n == _ORDER_BY_CHR["2"]:
+            try:
+                assert release.wait(5)
+            finally:
+                finished.set()
+        return np.zeros(n), np.eye(n)
+
+    pairs = _computed_pairs(workers=2, solve=solve)
+    try:
+        if interrupted:
+            with pytest.raises(KeyboardInterrupt), contextlib.ExitStack() as stack:
+                stack.callback(pairs.close)
+                assert next(pairs)[0] == "1"
+                raise KeyboardInterrupt
+            assert not finished.is_set(), "close joined the in-flight solve"
+        else:
+            assert next(pairs)[0] == "1"
+            threading.Timer(0.2, release.set).start()
+            pairs.close()
+            assert finished.is_set(), "close returned before joining the worker"
+    finally:
+        release.set()
+        for worker in _eigen_worker_threads():
+            worker.join(10)
     assert not _eigen_worker_threads()
 
 

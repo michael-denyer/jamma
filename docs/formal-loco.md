@@ -1,7 +1,7 @@
 # LOCO worker protocol verification
 
 The model checks the caller protocol of `solve_eigen_pairs` in
-`src/jamma/lmm/loco_workers.py:86-158`, including its closing wrapper in
+`src/jamma/lmm/loco_workers.py:96-174`, including its closing wrapper in
 `src/jamma/lmm/loco_eigen.py:405-422`. The target was selected by inspecting
 worker waits, pending Futures, shutdown and BLAS ownership before modelling.
 
@@ -51,8 +51,8 @@ contaminate subsequent tests.
 
 The fix enters BLAS before any worker starts, starts workers inside the
 existing `try/finally`, and joins only threads with an assigned thread identity.
-The current source locations are scope entry at line 134, startup at
-lines 136-137 and guarded join at lines 156-158. Normal cleanup therefore
+The current source locations are scope entry at line 145, startup at
+lines 147-148 and guarded join at lines 172-174. Normal cleanup therefore
 covers partial startup, while failure entering BLAS creates no live workers.
 
 ## Checked properties and assumptions
@@ -66,6 +66,8 @@ reported. Input-producer failures have no promise to drain earlier solves.
 `WindowBound` limits pool-owned items to the worker count. `ClosedClean`
 requires no live started workers or pool-owned resources after normal close.
 `SetupClean` rejects startup escaping with live workers.
+`InterruptNeverJoins` rejects a join after a Ctrl-C, through the `sigint` flag
+that both interrupt actions set.
 `ScopeCoversSolve` keeps BLAS active until normal worker completion.
 
 `CallsReturn` and `CloseReturns` check termination of active pulls and normal
@@ -92,12 +94,15 @@ creation, queue submission or a failure exit. Out-of-memory failures inside
 library bookkeeping are outside this model.
 
 Ownership is logical pool ownership, not a claim that Python maintains only
-one reference. Worker deletion of its settled Future and input at line 126
+one reference. Worker deletion of its settled Future and input at line 137
 is represented in settlement. The brief reference-release interval, exception
 traceback retention and caller-held output arrays are omitted; existing weak
 reference tests check the actual idle-worker release behavior. Intentional
 KeyboardInterrupt abandonment is a separate terminal state, so normal-close
-leak claims do not apply to it. Floating-point and eigendecomposition results
+leak claims do not apply to it. The interrupt can fire at `yield` as well as
+during a pull: a Ctrl-C in the caller's loop body reaches the generator as a
+close whose GeneratorExit has the KeyboardInterrupt in its exception context,
+and the code treats that close as an interrupt. Floating-point and eigendecomposition results
 are abstract successful outcomes. The model does not check numerical accuracy.
 
 The commands that recheck this model are in [TESTING.md](TESTING.md#4-formal-models). The deliberate bugs its checks must catch are listed in `tla/LocoWorkers.mutations`.

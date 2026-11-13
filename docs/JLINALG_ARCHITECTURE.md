@@ -252,7 +252,8 @@ The pre-commit hook `scripts/check_compile_flag_literals.py` bans bare
 `-O3`/`-fno-fast-math`/`-fopenmp` literals anywhere outside
 `_build_support/`. The dev-mode `-march=native` flag lives in
 `LMM_ACCEL_SPEC.dev_extra_cflags` in `build_models.py`, applied only on
-the dev rebuild path so it can never reach the portable wheel build. A second hook
+the explicit dev rebuild path so it can never reach the portable wheel build or
+the runtime rebuild that `_native.py` runs after an ABI mismatch. A second hook
 (`scripts/verify_compile_invocations_match.py`) enforces that the four
 compile entry points all import from `_build_support` rather than
 duplicating flag/source lists.

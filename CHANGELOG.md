@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The automatic rebuild of a stale or ABI-mismatched C extension compiled
+  `_lmm_accel` with `-march=native` into the installed package. In an install
+  shared across machines (an NFS venv, a cluster image), a host with a
+  different CPU could then load a library built for another one and crash with
+  an illegal instruction. The runtime rebuild now uses the portable wheel flags,
+  so `CFLAGS` applies and `-march=native` does not. `python -m
+  jamma.lmm._compile_accel` still builds for the current host.
 - Ctrl-C during LOCO association with `JAMMA_LOCO_WORKERS` above 1 waited
   for every eigendecomposition still in flight before the run stopped. The
   interrupt reached the eigen stream as a close from `run_lmm_loco`, which

@@ -63,10 +63,10 @@ def _patch_compile_extension(monkeypatch, fn):
 
 
 def _stub_compile(result):
-    """Build a fake ``compile_extension(spec, package_dir, report)``
+    """Build a fake ``compile_extension(spec, package_dir, report, *, dev_mode)``
     that ignores every argument and returns ``result``."""
 
-    def _fake(spec, package_dir, report):
+    def _fake(spec, package_dir, report, *, dev_mode):
         return result
 
     return _fake
@@ -97,7 +97,7 @@ def test_compiler_raises_returns_false_and_does_not_evict(monkeypatch):
     """
     sys_key = "jamma._fake_ext_raises"
 
-    def _raises(spec, package_dir, report):
+    def _raises(spec, package_dir, report, *, dev_mode):
         raise RuntimeError("fake failure")
 
     _patch_compile_extension(monkeypatch, _raises)
@@ -184,7 +184,7 @@ def test_build_warnings_reach_the_log_as_warnings(monkeypatch, capsys):
     sys_key = "jamma._fake_ext_retry"
     calls: list[str] = []
 
-    def _compile(spec, package_dir, report):
+    def _compile(spec, package_dir, report, *, dev_mode):
         calls.append(spec.output_stem)
         report.warn("OpenMP compilation failed, retrying without OpenMP")
         return True
@@ -237,7 +237,7 @@ def test_concurrent_recompiles_serialize(monkeypatch, tmp_path):
     intervals: list[tuple[int, int]] = []
     intervals_lock = threading.Lock()
 
-    def slow_compile(spec, package_dir, report):
+    def slow_compile(spec, package_dir, report, *, dev_mode):
         enter_ns = time.monotonic_ns()
         time.sleep(critical_sleep_s)
         exit_ns = time.monotonic_ns()
@@ -320,7 +320,7 @@ def test_concurrent_recompiles_fail_without_lock(monkeypatch, tmp_path):
     intervals: list[tuple[int, int]] = []
     intervals_lock = threading.Lock()
 
-    def slow_compile(spec, package_dir, report):
+    def slow_compile(spec, package_dir, report, *, dev_mode):
         enter_ns = time.monotonic_ns()
         time.sleep(critical_sleep_s)
         exit_ns = time.monotonic_ns()
@@ -451,7 +451,7 @@ def test_lock_skipped_when_sibling_recompiled(monkeypatch, tmp_path):
 
     compile_calls = [0]
 
-    def should_not_compile(spec, package_dir, report):
+    def should_not_compile(spec, package_dir, report, *, dev_mode):
         compile_calls[0] += 1
         return True
 
@@ -616,7 +616,7 @@ def test_recompile_builds_from_the_directory_holding_the_sources(
     spec = getattr(build_models, spec_name)
     seen: list[Path] = []
 
-    def _record(spec, package_dir, report):
+    def _record(spec, package_dir, report, *, dev_mode):
         seen.append(package_dir)
         return False
 
@@ -670,7 +670,8 @@ def test_rebuild_after_stale_abi_load_falls_back_and_asks_for_restart(
     monkeypatch.delitem(sys.modules, sys_key, raising=False)
     builds: list[str] = []
     _patch_compile_extension(
-        monkeypatch, lambda spec, package_dir, report: builds.append("x") or True
+        monkeypatch,
+        lambda spec, package_dir, report, *, dev_mode: builds.append("x") or True,
     )
     spec = _fake_spec(
         output_stem="_fake_ext_stale_abi", sys_module_key=sys_key, label="fake"
@@ -687,3 +688,43 @@ def test_rebuild_after_stale_abi_load_falls_back_and_asks_for_restart(
     err = capsys.readouterr().err
     assert "restart" in err
     assert err.count("ABI mismatch") == 1, "the stale module must not be re-validated"
+
+
+def test_runtime_rebuild_never_targets_the_build_host(monkeypatch, tmp_path):
+    """A rebuild after an ABI mismatch writes a .so that every host can load.
+
+    The rebuilt library lands in the installed package, which a shared venv
+    serves to every machine, so ``-march=native`` must never reach the
+    compiler. The real build runs against a stand-in compiler that records its
+    arguments and fails, so nothing is written into the package.
+    """
+    from jamma._build_support.build_execution import Toolchain
+    from jamma._build_support.build_models import LMM_ACCEL_SPEC
+
+    argv_log = tmp_path / "argv"
+    cc = tmp_path / "cc"
+    cc.write_text(f'#!/bin/sh\necho "$@" >> "{argv_log}"\nexit 1\n')
+    cc.chmod(0o755)
+    monkeypatch.setattr(
+        "jamma._build_support.compile_and_link.detect_toolchain",
+        lambda report, **_kwargs: Toolchain(
+            cc_cmd=str(cc),
+            cc_extra=(),
+            python_inc="",
+            numpy_inc="",
+            system="Linux",
+            omp_compile=(),
+            omp_link=(),
+        ),
+    )
+    monkeypatch.delenv("CFLAGS", raising=False)
+    # A loaded module skips the post-lock probe for a sibling's rebuild.
+    monkeypatch.setitem(
+        sys.modules, LMM_ACCEL_SPEC.sys_module_key, type(sys)("stale_accel")
+    )
+
+    assert auto_recompile_c_extension(LMM_ACCEL_SPEC) is False
+
+    commands = argv_log.read_text()
+    assert commands, "the stand-in compiler never ran"
+    assert "-march=native" not in commands

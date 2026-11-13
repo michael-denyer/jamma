@@ -88,8 +88,14 @@ def run_build(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def compile_extension(spec: BuildSpec, package_dir: Path, report: BuildReport) -> bool:
+def compile_extension(
+    spec: BuildSpec, package_dir: Path, report: BuildReport, *, dev_mode: bool
+) -> bool:
     """Detect the toolchain and drive ``run_build`` for one ``BuildSpec``.
+
+    ``dev_mode`` selects the flags (see ``resolve_flags``): True adds the
+    spec's host-specific ``dev_extra_cflags`` for an explicit developer build,
+    False keeps the portable wheel flags for a library other hosts may load.
 
     Proving the new ``.so`` loads, and evicting any stale module from
     ``sys.modules``, is left to the caller.
@@ -104,7 +110,7 @@ def compile_extension(spec: BuildSpec, package_dir: Path, report: BuildReport) -
         report.warn(f"ERROR: {spec.output_stem} compilation failed: {toolchain}")
         return False
 
-    result = run_build(spec, package_dir, toolchain, dev_mode=True, report=report)
+    result = run_build(spec, package_dir, toolchain, dev_mode=dev_mode, report=report)
     if not result.ok:
         report.warn(f"ERROR: {spec.output_stem} compilation failed: {result.error}")
         return False

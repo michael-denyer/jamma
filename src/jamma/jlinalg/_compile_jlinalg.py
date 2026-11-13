@@ -45,6 +45,7 @@ def compile_extension(verbose: bool = False) -> bool:
         JLINALG_SPEC,
         Path(__file__).parents[1],  # the installed jamma/ package directory
         BuildReport.to_stream(sys.stderr, verbose=verbose),
+        dev_mode=True,
     )
 
 

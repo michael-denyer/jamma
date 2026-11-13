@@ -95,3 +95,9 @@ detects EndOrder
 only workers=2 items=1 drain
 - /\ ended' = (Len(pending) = 0)
 + /\ ended' = TRUE
+
+mutation a close while a Ctrl-C unwinds the caller's loop body joins the workers
+detects InterruptNeverJoins
+only workers=2 items=3 caller
+- InterruptedClose == /\ Interrupt /\ cpc = "yield" /\ sigint' = TRUE /\ cpc' = "abandoning"
++ InterruptedClose == /\ Interrupt /\ cpc = "yield" /\ sigint' = TRUE /\ cpc' = "closing"

@@ -66,6 +66,8 @@ reported. Input-producer failures have no promise to drain earlier solves.
 `WindowBound` limits pool-owned items to the worker count. `ClosedClean`
 requires no live started workers or pool-owned resources after normal close.
 `SetupClean` rejects startup escaping with live workers.
+`InterruptNeverJoins` rejects a join after a Ctrl-C, through the `sigint` flag
+that both interrupt actions set.
 `ScopeCoversSolve` keeps BLAS active until normal worker completion.
 
 `CallsReturn` and `CloseReturns` check termination of active pulls and normal

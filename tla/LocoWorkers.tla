@@ -36,12 +36,12 @@ WorkerOwner(w) == "worker" \o ToString(w)
 Owners == {"unproduced", "queue", "future", "caller", "free"}
           \cup {WorkerOwner(w): w \in W}
 VARIABLES cpc, wpc, held, started, jobs, pending, submitted, current,
-          owner, outcome, delivered, error, ended, scope
+          owner, outcome, delivered, error, ended, scope, sigint
 workers == <<wpc, held>>
 items == <<jobs, owner, outcome>>
 window == <<pending, submitted, current>>
 results == <<delivered, error, ended>>
-vars == <<cpc, started, scope, workers, items, window, results>>
+vars == <<cpc, started, scope, workers, items, window, results, sigint>>
 \* The consumer's phase after each setup step, and where a setup failure goes.
 Setup == [first |-> "scope", afterScope |-> "starting", afterStart |-> "pull", onError |-> "closing"]
 Wake(ws) == [w \in W |-> IF ws[w] = "wait" THEN "ready" ELSE ws[w]]
@@ -55,23 +55,24 @@ Init == /\ cpc = "idle" /\ wpc = [w \in W |-> "new"]
         /\ owner = [i \in I |-> "unproduced"]
         /\ outcome = [i \in I |-> "none"]
         /\ delivered = <<>> /\ error = -1 /\ ended = FALSE /\ scope = FALSE
+        /\ sigint = FALSE
 \* The consumer moves to `to` and nothing else changes.
-Goto(to) == cpc' = to /\ UNCHANGED <<started, scope, workers, items, window, results>>
+Goto(to) == cpc' = to /\ UNCHANGED <<started, scope, workers, items, window, results, sigint>>
 \* The consumer records a failure before any item and moves to `to`.
 Fail(to) == /\ cpc' = to /\ error' = 0
-            /\ UNCHANGED <<started, scope, workers, items, window, delivered, ended>>
+            /\ UNCHANGED <<started, scope, workers, items, window, delivered, ended, sigint>>
 StartCall == cpc = "idle" /\ Goto(Setup.first)
 CloseUnstarted == cpc = "idle" /\ ~Drain /\ Goto("closed")
 StartWorker == /\ cpc = "starting" /\ started < Workers /\ ~StartFails
                /\ started' = started + 1
                /\ wpc' = [wpc EXCEPT ![started + 1] = "ready"]
-               /\ UNCHANGED <<cpc, scope, held, items, window, results>>
+               /\ UNCHANGED <<cpc, scope, held, items, window, results, sigint>>
 SetupError == /\ (cpc = "starting" /\ StartFails) \/ (cpc = "scope" /\ SetupFailure = 2)
               /\ Fail(Setup.onError)
 FinishStart == cpc = "starting" /\ started = Workers /\ Goto(Setup.afterStart)
 EnterScope == /\ cpc = "scope" /\ SetupFailure # 2
               /\ cpc' = Setup.afterScope /\ scope' = TRUE
-              /\ UNCHANGED <<started, workers, items, window, results>>
+              /\ UNCHANGED <<started, workers, items, window, results, sigint>>
 InputFailure == cpc = "pull" /\ submitted + 1 \in InputFailAt /\ Fail("closing")
 Submit == /\ cpc = "pull" /\ submitted < Items
           /\ submitted' = submitted + 1
@@ -81,14 +82,14 @@ Submit == /\ cpc = "pull" /\ submitted < Items
           /\ pending' = Append(pending, submitted + 1)
           /\ wpc' = Wake(wpc)
           /\ cpc' = IF Len(pending') = Workers THEN "pop" ELSE "pull"
-          /\ UNCHANGED <<held, started, current, results, scope>>
+          /\ UNCHANGED <<held, started, current, results, scope, sigint>>
 EndInput == /\ cpc = "pull" /\ submitted = Items
             /\ cpc' = IF Len(pending) > 0 THEN "pop" ELSE "closing"
             /\ ended' = (Len(pending) = 0)
-            /\ UNCHANGED <<started, scope, workers, items, window, delivered, error>>
+            /\ UNCHANGED <<started, scope, workers, items, window, delivered, error, sigint>>
 Pop == /\ cpc = "pop" /\ Len(pending) > 0 /\ cpc' = "await"
        /\ current' = Head(pending) /\ pending' = Tail(pending)
-       /\ UNCHANGED <<started, scope, workers, items, submitted, results>>
+       /\ UNCHANGED <<started, scope, workers, items, submitted, results, sigint>>
 Await == /\ cpc = "await"
          /\ cpc' = CASE Yields -> "yield"
                         [] outcome[current] = "err" -> "closing"
@@ -96,11 +97,18 @@ Await == /\ cpc = "await"
          /\ delivered' = IF Yields THEN Append(delivered, current) ELSE delivered
          /\ owner' = IF Yields THEN [owner EXCEPT ![current] = "caller"] ELSE owner
          /\ error' = IF outcome[current] = "err" THEN current ELSE error
-         /\ UNCHANGED <<started, scope, workers, jobs, outcome, window, ended>>
+         /\ UNCHANGED <<started, scope, workers, jobs, outcome, window, ended, sigint>>
 Resume == /\ cpc = "yield" /\ cpc' = "pull" /\ current' = 0
-          /\ UNCHANGED <<started, scope, workers, items, pending, submitted, results>>
+          /\ UNCHANGED <<started, scope, workers, items, pending, submitted, results, sigint>>
 Close == cpc = "yield" /\ ~Drain /\ Goto("closing")
-Interrupted == Interrupt /\ cpc \in {"pull", "await", "wait", "pop", "yield"} /\ Goto("abandoning")
+\* Ctrl-C raises KeyboardInterrupt inside the generator frame while it pulls or waits.
+Interrupted == /\ Interrupt /\ cpc \in {"pull", "await", "wait", "pop"}
+               /\ sigint' = TRUE /\ cpc' = "abandoning"
+               /\ UNCHANGED <<started, scope, workers, items, window, results>>
+\* Ctrl-C in the caller's loop body: the caller unwinds and closes the generator,
+\* whose GeneratorExit carries the KeyboardInterrupt as its context.
+InterruptedClose == /\ Interrupt /\ cpc = "yield" /\ sigint' = TRUE /\ cpc' = "abandoning"
+                    /\ UNCHANGED <<started, scope, workers, items, window, results>>
 Cleanup == /\ cpc \in {"closing", "abandoning"}
            /\ cpc' = IF cpc = "abandoning" THEN "abandoned" ELSE "joining"
            /\ jobs' = jobs \o [k \in 1..Workers |-> 0]
@@ -108,16 +116,16 @@ Cleanup == /\ cpc \in {"closing", "abandoning"}
            /\ outcome' = [i \in I |-> IF outcome[i] = "queued" THEN "cancelled"
                                      ELSE outcome[i]]
            /\ scope' = IF cpc = "abandoning" THEN FALSE ELSE scope
-           /\ UNCHANGED <<held, started, owner, window, results>>
+           /\ UNCHANGED <<held, started, owner, window, results, sigint>>
 Joined == /\ cpc = "joining" /\ WorkersDone
           /\ cpc' = "closed" /\ scope' = FALSE /\ pending' = <<>>
           /\ owner' = [i \in I |-> IF owner[i] \in {"future", "queue"} THEN "free" ELSE owner[i]]
-          /\ UNCHANGED <<started, workers, jobs, outcome, submitted, current, results>>
+          /\ UNCHANGED <<started, workers, jobs, outcome, submitted, current, results, sigint>>
 WorkerGet(w) ==
     /\ wpc[w] = "ready"
     /\ IF Len(jobs) = 0
        THEN /\ wpc' = [wpc EXCEPT ![w] = "wait"]
-            /\ UNCHANGED <<held, items>>
+            /\ UNCHANGED <<held, items, sigint>>
        ELSE LET j == Head(jobs) IN
             /\ jobs' = Tail(jobs)
             /\ held' = [held EXCEPT ![w] = j]
@@ -128,7 +136,7 @@ WorkerGet(w) ==
                          ELSE [owner EXCEPT ![j] = WorkerOwner(w)]
             /\ outcome' = IF j = 0 \/ outcome[j] = "cancelled"
                            THEN outcome ELSE [outcome EXCEPT ![j] = "running"]
-    /\ UNCHANGED <<cpc, started, scope, window, results>>
+    /\ UNCHANGED <<cpc, started, scope, window, results, sigint>>
 WorkerFinish(w) ==
     /\ wpc[w] \in {"solve", "discard"}
     /\ \E result \in {"ok", "err"}:
@@ -139,15 +147,16 @@ WorkerFinish(w) ==
                               IF wpc[w] = "discard" THEN "free" ELSE "future"]
     /\ wpc' = [wpc EXCEPT ![w] = "ready"] /\ held' = [held EXCEPT ![w] = 0]
     /\ cpc' = IF cpc = "wait" /\ current = held[w] THEN "await" ELSE cpc
-    /\ UNCHANGED <<started, scope, jobs, window, results>>
+    /\ UNCHANGED <<started, scope, jobs, window, results, sigint>>
 Spurious ==
     \/ cpc = "wait" /\ Goto("await")
     \/ /\ \E w \in W: /\ wpc[w] = "wait"
                          /\ wpc' = [wpc EXCEPT ![w] = "ready"]
-       /\ UNCHANGED <<cpc, started, scope, held, items, window, results>>
+       /\ UNCHANGED <<cpc, started, scope, held, items, window, results, sigint>>
 Internal == StartWorker \/ SetupError \/ FinishStart \/ EnterScope \/ InputFailure
             \/ Submit \/ EndInput \/ Pop \/ Await \/ Cleanup \/ Joined
 Next == StartCall \/ CloseUnstarted \/ Internal \/ Resume \/ Close \/ Interrupted
+        \/ InterruptedClose
         \/ (\E w \in W: WorkerGet(w) \/ WorkerFinish(w)) \/ Spurious
         \/ UNCHANGED vars
 Spec == Init /\ [][Next]_vars
@@ -164,6 +173,7 @@ TypeOK == /\ cpc \in {"idle", "starting", "scope", "pull", "pop", "await", "wait
           /\ current \in 0..Items /\ delivered \in Seq(I)
           /\ outcome \in [I -> {"none", "queued", "running", "ok", "err", "cancelled"}]
           /\ scope \in BOOLEAN /\ ended \in BOOLEAN /\ error \in -1..Items
+          /\ sigint \in BOOLEAN
 Ownership == /\ \A i \in I: (owner[i] = "queue") <=> (\E k \in 1..Len(jobs): jobs[k] = i)
              /\ \A w \in W: held[w] > 0 => owner[held[w]] = WorkerOwner(w)
              /\ \A j, k \in 1..Len(jobs): (jobs[j] # 0 /\ jobs[j] = jobs[k]) => j = k
@@ -177,6 +187,8 @@ ClosedClean == cpc = "closed" => /\ WorkersDone
                                     /\ \A i \in I: owner[i] \in {"unproduced", "caller", "free"}
                                     /\ ~scope
 SetupClean == cpc = "escaped" => started = 0
+\* A Ctrl-C never waits for a solve, wherever the consumer is when it lands.
+InterruptNeverJoins == sigint => cpc # "joining"
 ScopeCoversSolve == \A w \in W: wpc[w] = "solve" => scope \/ cpc = "abandoned"
 CallsReturn == (cpc \in {"starting", "scope", "pull", "pop", "await", "wait"})
                ~> (cpc \in {"yield", "closed", "abandoned"})

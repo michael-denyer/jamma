@@ -274,12 +274,14 @@ def test_close_skips_the_join_only_while_a_keyboard_interrupt_unwinds(interrupte
     The stream is the two-layer one ``run_lmm_loco`` consumes, so the interrupt
     has to be recognised through the outer generator's ``closing`` as well.
     """
+    entered = threading.Event()
     release = threading.Event()
     finished = threading.Event()
 
     def solve(K: np.ndarray, **kwargs) -> tuple[np.ndarray, np.ndarray]:
         n = len(K)
         if n == _ORDER_BY_CHR["2"]:
+            entered.set()
             try:
                 assert release.wait(5)
             finally:
@@ -292,10 +294,13 @@ def test_close_skips_the_join_only_while_a_keyboard_interrupt_unwinds(interrupte
             with pytest.raises(KeyboardInterrupt), contextlib.ExitStack() as stack:
                 stack.callback(pairs.close)
                 assert next(pairs)[0] == "1"
+                assert entered.wait(5), "chromosome 2 never started solving"
                 raise KeyboardInterrupt
             assert not finished.is_set(), "close joined the in-flight solve"
         else:
             assert next(pairs)[0] == "1"
+            # A close cancels a solve no worker has started, so wait for it.
+            assert entered.wait(5), "chromosome 2 never started solving"
             threading.Timer(0.2, release.set).start()
             pairs.close()
             assert finished.is_set(), "close returned before joining the worker"

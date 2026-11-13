@@ -2,7 +2,7 @@
 (* Copyright (c) 2026 Michael Denyer
    SPDX-License-Identifier: GPL-3.0-only
 
-   Caller protocol of solve_eigen_pairs, src/jamma/lmm/loco_workers.py:86-158,
+   Caller protocol of solve_eigen_pairs, src/jamma/lmm/loco_workers.py:96-174,
    and closing wrapper src/jamma/lmm/loco_eigen.py:405-422. Queue and Future
    critical sections are library-owned atomic actions, not a model of their
    locks or memory ordering. Queue waits have explicit worker pc="wait";
@@ -15,12 +15,12 @@
    are metadata; while solving the worker owns K, after settlement the Future
    owns the result, and after yield the caller owns it. External retained
    outputs and exception tracebacks are outside the pool's ownership claim.
-   Worker deletion of Future/K (:126) is part of settlement; its short Python
+   Worker deletion of Future/K (:137) is part of settlement; its short Python
    reference-release lag is omitted. Inputs and numerical solves terminate,
    unless the consumer intentionally abandons workers on KeyboardInterrupt.
    No user mutex is held during an allocation or exit. Internal SimpleQueue
    and Future allocation failure is not modelled. Setup failures at start
-   (:137) and scope entry (:134) are modelled, with cleanup covering both
+   (:148) and scope entry (:145) are modelled, with cleanup covering both
    phases. LocoWorkers.mutations lists the bugs the properties detect,
    including the setup order whose failures escaped cleanup.
 
@@ -100,7 +100,7 @@ Await == /\ cpc = "await"
 Resume == /\ cpc = "yield" /\ cpc' = "pull" /\ current' = 0
           /\ UNCHANGED <<started, scope, workers, items, pending, submitted, results>>
 Close == cpc = "yield" /\ ~Drain /\ Goto("closing")
-Interrupted == Interrupt /\ cpc \in {"pull", "await", "wait", "pop"} /\ Goto("abandoning")
+Interrupted == Interrupt /\ cpc \in {"pull", "await", "wait", "pop", "yield"} /\ Goto("abandoning")
 Cleanup == /\ cpc \in {"closing", "abandoning"}
            /\ cpc' = IF cpc = "abandoning" THEN "abandoned" ELSE "joining"
            /\ jobs' = jobs \o [k \in 1..Workers |-> 0]

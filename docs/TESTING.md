@@ -881,7 +881,7 @@ mutation detected.
 | --- | --- |
 | `tlc-matrix.sh` on `ChunkPipeline.matrix` | `SUMMARY 17 of 18 runs passed, 1158 distinct states in total`; the failing run is the one-buffer run, so the command exits 1 |
 | `tlc-matrix.sh` on `JoiningThreadPool.matrix` | `SUMMARY 36 of 36 runs passed, 712608 distinct states in total` |
-| `tlc-matrix.sh` on `LocoWorkers.matrix` | `SUMMARY 15 of 15 runs passed, 20088 distinct states in total` |
+| `tlc-matrix.sh` on `LocoWorkers.matrix` | `SUMMARY 15 of 15 runs passed, 21210 distinct states in total` |
 | `tlc-matrix.sh` on `MatrixWriter.matrix` | `SUMMARY 57 of 57 runs passed, 53473 distinct states in total` |
 | `tlc-matrix.sh` on `SpawnPool.matrix` | `SUMMARY 12 of 12 runs passed, 59367 distinct states in total` |
 | `tlc-matrix.sh` on `TimedProgress.matrix` | `SUMMARY 8 of 8 runs passed, 288 distinct states in total` |

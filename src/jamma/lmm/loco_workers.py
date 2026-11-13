@@ -83,6 +83,16 @@ def plan_loco_workers(
     return LocoWorkerPlan(workers, low, cores, consumer(workers), requested, n_chr)
 
 
+def _unwinds_keyboard_interrupt(exc: BaseException) -> bool:
+    """Return whether ``exc`` was raised while a KeyboardInterrupt was unwinding."""
+    context = exc.__context__
+    while context is not None:
+        if isinstance(context, KeyboardInterrupt):
+            return True
+        context = context.__context__
+    return False
+
+
 def solve_eigen_pairs(
     inputs: Iterable[tuple[str, np.ndarray]],
     solve: EigenSolver,
@@ -103,7 +113,8 @@ def solve_eigen_pairs(
     Workers are daemon threads rather than a ``ThreadPoolExecutor``: a
     ``KeyboardInterrupt`` on the consumer's thread propagates without joining
     a solve still inside LAPACK, so Ctrl-C ends the run as promptly as it
-    ends GEMMA. Every other exit joins the workers.
+    ends GEMMA. That holds when the interrupt lands in the consumer's loop
+    body too, where it arrives as a close. Every other exit joins the workers.
     """
 
     def solve_named(name: str, K: np.ndarray) -> EigenResult:
@@ -146,6 +157,11 @@ def solve_eigen_pairs(
                 yield pending.popleft().result()
         except KeyboardInterrupt:
             interrupted = True
+            raise
+        except GeneratorExit as exc:
+            # A Ctrl-C in the consumer's loop body arrives here as a close from
+            # its ExitStack or ``closing``, with the interrupt as the context.
+            interrupted = _unwinds_keyboard_interrupt(exc)
             raise
         finally:
             for future in pending:

@@ -15,5 +15,6 @@ if __name__ == "__main__":
         MATRIX_TEXT_SPEC,
         Path(__file__).parents[1],
         BuildReport.to_stream(sys.stdout, verbose=True),
+        dev_mode=True,
     )
     raise SystemExit(0 if built and load_proof(MATRIX_TEXT_SPEC) else 1)

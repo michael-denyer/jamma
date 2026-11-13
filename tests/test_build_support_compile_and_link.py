@@ -419,7 +419,9 @@ def test_compile_extension_reports_a_preflight_failure_once(monkeypatch, tmp_pat
     )
     warnings: list[str] = []
 
-    ok = compile_extension(_spec("absent.c"), tmp_path, _report(warnings))
+    ok = compile_extension(
+        _spec("absent.c"), tmp_path, _report(warnings), dev_mode=True
+    )
 
     assert ok is False
     assert len(warnings) == 1

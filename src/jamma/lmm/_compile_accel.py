@@ -51,6 +51,7 @@ def compile_extension(verbose: bool = False) -> bool:
         LMM_ACCEL_SPEC,
         Path(__file__).parents[1],  # the installed jamma/ package directory
         BuildReport.to_stream(sys.stdout, verbose=verbose),
+        dev_mode=True,
     )
 
 

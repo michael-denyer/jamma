@@ -174,6 +174,9 @@ def auto_recompile_c_extension(spec: BuildSpec) -> bool:
                 spec,
                 Path(__file__).parent,  # the installed jamma/ package dir
                 report,
+                # A shared install serves this .so to every host, so no
+                # -march=native: build it as portably as the wheel.
+                dev_mode=False,
             )
         except (OSError, subprocess.SubprocessError, RuntimeError) as e:
             # Narrow catch: genuine build-environment failures (missing compiler,

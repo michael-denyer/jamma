@@ -154,9 +154,9 @@ class BuildSpec:
     uses_openmp: bool = True
 
 
-# -march=native is dev-mode only and portable wheels must not carry it; it
-# lives in LMM_ACCEL_SPEC.dev_extra_cflags, applied only on the dev rebuild
-# path, never by hatch_build.py.
+# -march=native is host-specific, so portable builds must not carry it; it
+# lives in LMM_ACCEL_SPEC.dev_extra_cflags, which resolve_flags applies only
+# when dev_mode=True.
 LMM_ACCEL_SPEC = BuildSpec(
     package_parts=("lmm",),
     source_parts=(),

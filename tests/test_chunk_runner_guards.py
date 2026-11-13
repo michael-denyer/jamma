@@ -76,7 +76,7 @@ def test_association_logs_the_workspace_thread_cap_used_by_real_kernels(monkeypa
             ),
             config=config,
             dispatch=DispatchPath.FUSED,
-            chunks=LmmChunkPlan(2, 3, 2, True),
+            chunks=LmmChunkPlan(2, 3, True),
             workspace=workspace,
         )
     finally:
@@ -173,7 +173,7 @@ def _run_kwargs(**overrides):
         ),
         "config": config,
         "dispatch": DispatchPath.NUMPY_FALLBACK,
-        "chunks": LmmChunkPlan(5, 1, 1, False),
+        "chunks": LmmChunkPlan(5, 1, False),
         "workspace": _workspace(n_samples, config),
     }
     base.update(overrides)

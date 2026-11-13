@@ -1,7 +1,7 @@
 import Std.Tactic
 /-!
 Source: src/jamma/lmm/chunk_runner_numpy.py:304-305 and
-src/jamma/lmm/chunk_sizing.py:256-267,288-293.
+src/jamma/lmm/chunk_sizing.py:156-163.
 Python integers are unbounded. Counters are nonnegative and slot counts positive.
 The shipped overlapped pipeline uses two slots. This proves arithmetic only;
 TLA+ separately checks that the foreground relinquishes a slot before reuse.

@@ -4,8 +4,8 @@
 
    src/jamma/lmm/chunk_pipeline.py:98-186 and
    src/jamma/lmm/chunk_runner_numpy.py:266-372.
-   LmmChunkPlan enforces two buffers for pipelines (chunk_sizing.py:256-267,
-   288-293). Slots=1 intentionally checks the unsafe boundary beneath that policy.
+   LmmChunkPlan derives two buffers from use_pipeline (chunk_sizing.py:156-163),
+   so no plan pairs a pipeline with one buffer. Slots=1 checks the unsafe boundary.
 
    Foreground initial prepare, successor submit, compute and Future.result
    are separate steps. Background allocation and unlocked rotation are separate.

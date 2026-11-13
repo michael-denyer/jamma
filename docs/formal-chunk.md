@@ -3,7 +3,7 @@
 | Target | Threads, shared state and waits | Terminal states and resources | Verdict |
 | --- | --- | --- | --- |
 | `_overlapped_chunks` / `_drive_pipeline`, `chunk_pipeline.py:98-186`; `_ChunkEngine`, `chunk_runner_numpy.py:266-339` | Foreground and one background worker; chunk counter, reusable rotation buffers, current chunk and future. Foreground waits on Future.result; executor close waits for background callable completion. Future completion wakes its waiter. | Completed, failed or interrupted driver. Background rotation must end before process-wide BLAS restoration. Buffer leases belong to the current compute, in-flight prepare or future result, or are reusable. | Original interrupted cleanup failed; with the completion barrier every two-buffer configuration passes. The one-buffer boundary fails as expected. |
-| Buffer modulo and chunk geometry, `chunk_runner_numpy.py:304-305`, `chunk_sizing.py:256-267,288-293` | Sequential Python integer arithmetic; pipeline always receives two buffers from its plan. | Distinct slots for adjacent prepared chunks. | Arithmetic proof belongs to the separate Lean target; protocol model detects unsafe one-buffer use. |
+| Buffer modulo and chunk geometry, `chunk_runner_numpy.py:304-305`, `chunk_sizing.py:156-163` | Sequential Python integer arithmetic; a pipelined plan always has two buffers, derived from `use_pipeline`. | Distinct slots for adjacent prepared chunks. | Arithmetic proof belongs to the separate Lean target; protocol model detects unsafe one-buffer use. |
 
 The shipped pipeline has exactly one background worker and two rotation buffers.
 Two or three pipeline workers are outside this protocol's callers. The helper's

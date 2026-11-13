@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.5] - 2026-11-13
+
 ### Changed
 
 - `LmmChunkPlan.n_buffers` is a property derived from `use_pipeline`, not a

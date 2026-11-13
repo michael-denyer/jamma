@@ -105,7 +105,8 @@ def progress_iterator(
     output is visible in Databricks notebook cells (stderr may be buffered).
 
     The bar is finalized in a try/finally block so that early breaks or
-    exceptions from the caller don't leave terminal output corrupted.
+    exceptions from the caller don't leave terminal output corrupted. Only an
+    exhausted source draws the 100% line; an early exit keeps the last count.
 
     Args:
         iterable: Iterator to wrap.
@@ -127,12 +128,15 @@ def progress_iterator(
         initial_eta_seconds=initial_eta_seconds,
         poll_interval=poll_interval,
     )
+    exhausted = False
     try:
         for i, item in enumerate(iterable):
             yield item
             bar.update(i + 1)
+        exhausted = True
     finally:
-        bar.finish()
+        # A clean finish redraws at 100%, which only an exhausted source earns.
+        bar.finish(dirty=not exhausted)
 
 
 def timed_progress(

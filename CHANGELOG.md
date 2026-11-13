@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interrupt reached the eigen stream as a close from `run_lmm_loco`, which
   joined the workers. A close while a KeyboardInterrupt unwinds now leaves
   them, as an interrupt during an eigen pull already did.
+- `progress_iterator` drew a 100% line when its loop stopped early: on a
+  `break`, an exception in the loop body or the source, or Ctrl-C. Only an
+  exhausted source now finishes the bar at 100%; an early exit leaves it at the
+  last count, as `timed_progress` already did.
 - `run_lmm_association_numpy` and `run_lmm_association_numpy_streaming` logged
   the `Analyzed individuals` and `Analyzed SNPs` lines twice per run, once in
   the banner and once before the chunk loop. Each line is now logged once,

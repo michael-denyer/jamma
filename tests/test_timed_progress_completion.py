@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import threading
 import time
@@ -9,7 +10,7 @@ import time
 import progressbar
 import pytest
 
-from jamma.core.progress import timed_progress
+from jamma.core.progress import progress_iterator, timed_progress
 
 pytestmark = pytest.mark.tier0
 
@@ -168,3 +169,45 @@ def test_consumer_interrupt_does_not_render_completion_or_join_worker(monkeypatc
         for worker in workers:
             worker.join(5)
         assert all(not worker.is_alive() for worker in workers)
+
+
+def _source_fails():
+    yield 1
+    raise RuntimeError("source failed")
+
+
+@pytest.mark.parametrize("exit_kind", ["break", "caller_error", "source_error"])
+def test_real_progressbar_iterator_does_not_claim_completion_on_early_exit(
+    monkeypatch, exit_kind
+):
+    """An iteration that stops early leaves the bar where it stopped."""
+    updates: list[int | None] = []
+    real_bar = progressbar.ProgressBar
+
+    class RecordingBar(real_bar):
+        def update(self, value=None, force=False, **kwargs):
+            updates.append(value)
+            return super().update(value, force=force, **kwargs)
+
+    monkeypatch.setattr(progressbar, "ProgressBar", RecordingBar)
+    source = _source_fails() if exit_kind == "source_error" else iter(range(10))
+    error = ValueError if exit_kind == "caller_error" else RuntimeError
+
+    with contextlib.suppress(error):
+        for i, _ in enumerate(progress_iterator(source, total=10)):
+            if i == 2 and exit_kind == "break":
+                break
+            if i == 2 and exit_kind == "caller_error":
+                raise ValueError("caller failed")
+
+    assert updates, "the bar never drew"
+    assert 10 not in updates
+
+
+def test_real_progressbar_iterator_reports_completion_when_exhausted(monkeypatch):
+    redirected = io.StringIO()
+    monkeypatch.setattr(progressbar.utils.streams, "original_stdout", redirected)
+
+    assert list(progress_iterator(iter(range(3)), total=3)) == [0, 1, 2]
+
+    assert "100%" in redirected.getvalue()

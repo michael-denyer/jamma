@@ -147,11 +147,9 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
     npy_intp lda = PyArray_DIM(aA, 1);
     npy_intp ldb = PyArray_DIM(aB, 1);
 
-    {
-        Py_BEGIN_ALLOW_THREADS jlinalg_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa,
-                                                 transb);
-        Py_END_ALLOW_THREADS
-    }
+    PyThreadState *thread_state = PyEval_SaveThread();
+    jlinalg_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
+    PyEval_RestoreThread(thread_state);
 
     if (oOut != Py_None && (PyObject *)aC != oOut) {
         memcpy(PyArray_DATA((PyArrayObject *)oOut), pC, (size_t)PyArray_NBYTES(aC));

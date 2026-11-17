@@ -252,3 +252,23 @@ class TestEncodeCategoricalBasic:
         result_single = encode_categorical_covariates(covariates, cat_columns=[2])
 
         np.testing.assert_array_equal(result_dedup, result_single)
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("excluded_level", ["1", "2"])
+def test_single_observed_category_after_masking(tmp_path, excluded_level):
+    from jamma.pipeline_config import PipelineConfig
+    from jamma.pipeline_samples import load_analysed_samples
+    from tests.fixture_paths import SYNTHETIC
+
+    cov = tmp_path / "cov.txt"
+    cov.write_text(f"1\n1\n{excluded_level}\nNA\n")
+    pheno = tmp_path / "p.txt"
+    pheno.write_text("1\n2\nNA\n3\n")
+    config = PipelineConfig(
+        bfile=SYNTHETIC.bfile, phenotype_file=pheno, covariate_file=cov, cat_columns=[1]
+    )
+    samples = load_analysed_samples(config, 4)
+    np.testing.assert_array_equal(samples.valid_mask, [True, True, False, False])
+    assert samples.covariates is not None
+    np.testing.assert_array_equal(samples.covariates[samples.valid_mask], [[1], [1]])

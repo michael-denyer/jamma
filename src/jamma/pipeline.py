@@ -11,7 +11,7 @@ the flow and not the detail:
 - ``pipeline_banner.py`` — the two startup banners
 - ``pipeline_phenotype_loop.py`` — the per-phenotype loop and the runner calls
 - ``pipeline_kinship.py`` — the separate ``-gk`` program
-- ``pipeline_memory.py`` — the memory preflight gate for both modes
+- ``pipeline_memory.py`` — the standard association memory preflight
 
 Example:
     >>> from jamma.pipeline import PipelineConfig, PipelineRunner
@@ -30,7 +30,6 @@ import numpy as np
 from loguru import logger
 
 import jamma
-from jamma.core import memory
 from jamma.core.constants import Env
 from jamma.core.telemetry import BenchmarkRecord, append_benchmark_record
 from jamma.genotype.dataset import GenotypeDataset
@@ -62,7 +61,6 @@ from jamma.lmm.eigen_plan import EigenDriverPlan
 from jamma.lmm.genotype_source import SampleBasis
 from jamma.lmm.loco import LocoRun, run_loco
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG
-from jamma.lmm.loco_eigen import plan_loco_eigen_driver
 from jamma.lmm.prepare_common import AnalysedPhenotype
 from jamma.pipeline_banner import log_dataset_banner, log_pipeline_banner
 from jamma.pipeline_config import (
@@ -417,14 +415,16 @@ class PipelineRunner:
         plan = analysis.execution.summary
         logger.info(f"Execution plan: {plan.runner_name} ({plan.reason})")
         log_pipeline_banner(plan)
-        eigen_plan = memory_preflight(analysis, check_memory=self.config.check_memory)
 
         match analysis:
             case LocoAnalysisPlan():
                 phenotype_results, timing = self._associate_loco(
-                    analysis, samples, dataset, assoc_path, eigen_plan
+                    analysis, samples, dataset, assoc_path
                 )
             case StandardAnalysisPlan():
+                eigen_plan = memory_preflight(
+                    analysis, check_memory=self.config.check_memory
+                )
                 phenotype_results, timing = self._associate_standard(
                     analysis, samples, dataset, assoc_path, eigen_plan, t_start
                 )
@@ -482,7 +482,6 @@ class PipelineRunner:
         samples: AnalysedSamples,
         dataset: GenotypeDataset,
         assoc_path: Path,
-        eigen_plan: EigenDriverPlan | None,
     ) -> tuple[list[PhenotypeResult], PipelineTiming]:
         """Hand the single phenotype to the LOCO orchestrator.
 
@@ -501,9 +500,6 @@ class PipelineRunner:
             analysis.lmm,
             analysis.loco,
             execution,
-            eigen_plan
-            if eigen_plan is not None
-            else plan_loco_eigen_driver(execution, memory.available_ram_gb()),
         )
         loco = run_loco(run, assoc_path)
         phenotype = PhenotypeResult(
@@ -544,6 +540,7 @@ class PipelineRunner:
                 source.eigenvalue_file,
                 source.eigenvector_file,
                 n_samples=samples.basis.analyzed_sample_count,
+                sample_digest=dataset.samples.basis_digest(samples.basis.positions),
             )
             logger.info(
                 f"Loaded pre-computed eigendecomposition "
@@ -590,6 +587,7 @@ class PipelineRunner:
                     eigenvectors,
                     self.config.output_dir,
                     self.config.output_prefix,
+                    sample_digest=dataset.samples.basis_digest(samples.basis.positions),
                     legacy_text=self.config.legacy_text,
                 )
                 logger.info(f"Wrote eigenvalues to {d_path}")

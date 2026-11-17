@@ -743,3 +743,41 @@ class TestKinshipSidecarRecovery:
 
         assert npy_cache_valid(txt_path, npy_path)
         np.testing.assert_array_equal(np.load(npy_path), K)
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize(("dtype", "order"), [("f8", "F"), ("f4", "C")])
+def test_kinship_read_provides_solver_buffer(tmp_path, dtype, order):
+    path = tmp_path / "input.npy"
+    original = np.array([[1, 0.25], [0.25, 2]], dtype=dtype, order=order)
+    np.save(path, original)
+    matrix = read_kinship_matrix(path)
+    assert matrix.flags.c_contiguous
+    assert matrix.flags.writeable
+    assert matrix.dtype == np.float64
+    np.testing.assert_array_equal(matrix, original)
+    matrix[:] = 0
+    np.testing.assert_array_equal(np.load(path), original)
+
+
+@pytest.mark.tier0
+def test_kinship_read_checks_symmetry_with_bounded_scratch(tmp_path):
+    import tracemalloc
+
+    matrix = np.eye(2048)
+    path = tmp_path / "matrix.npy"
+    np.save(path, matrix)
+    tracemalloc.start()
+    try:
+        before = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        loaded = read_kinship_matrix(path)
+        peak = tracemalloc.get_traced_memory()[1] - before
+    finally:
+        tracemalloc.stop()
+    assert peak < matrix.nbytes * 1.25
+    np.testing.assert_array_equal(loaded, matrix)
+    matrix[-1, 0] = 0.1
+    np.save(path, matrix)
+    with pytest.raises(ValueError, match="symmetric"):
+        read_kinship_matrix(path)

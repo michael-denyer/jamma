@@ -125,7 +125,11 @@ JAMMA writes ordinary eigenpairs as immutable generation files, for example
 `result.generation.<id>.eigenD.npy` and
 `result.generation.<id>.eigenU.npy`. It writes both files before atomically
 publishing `result.eigen_manifest.json`, which selects the current complete
-pair. The Python result and CLI output report the actual generation paths.
+pair. New pipeline generations include a digest of the analysed row positions
+and ordered family and individual IDs. JAMMA checks this digest when reusing
+either generation paths or stable names. Older pairs and externally generated
+files carry no sample identity. Verify their row order before reuse.
+The Python result and CLI output report the actual generation paths.
 With `--legacy-text`, those reported `.txt` generation files are ordinary
 GEMMA-compatible text files and can be passed directly to GEMMA.
 

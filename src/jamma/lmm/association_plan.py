@@ -187,8 +187,15 @@ class ExecutableAssociationPlan:
             )
         return phase_gb
 
+    def cached_loco_peak_gb(self) -> float:
+        """Cache hits stream statistics before opening the first eigenvector matrix."""
+        return max(self._statistics_scratch_gb(), self._association_phase_gb())
+
     def _statistics_phase_gb(self) -> float:
-        """Peak of streaming pass 1, which reads SNP statistics with U live.
+        return array_gb(self.n_samples, self.n_samples) + self._statistics_scratch_gb()
+
+    def _statistics_scratch_gb(self) -> float:
+        """Working memory for pass 1 reads and the SNP statistics kernel.
 
         The blocks are ``stats_block_size`` wide over every input sample, and
         the read runs before the statistics. The NumPy statistics kernel's
@@ -201,7 +208,7 @@ class ExecutableAssociationPlan:
             self.n_input_samples, n, width
         )
         read_gb = array_gb(self.n_input_samples, width) + overhead_gb
-        return array_gb(n, n) + max(read_gb, block_working_set_gb(n, width))
+        return max(read_gb, block_working_set_gb(n, width))
 
     def _association_phase_gb(self) -> float:
         """Peak of the association pass at this chunk width and phenotype group.

@@ -25,7 +25,6 @@ Called from:
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import importlib
 import importlib.util
 import os
@@ -73,8 +72,7 @@ def _lock_path_for(sys_module_key: str) -> Path:
 def _file_lock(lock_path: Path) -> Iterator[None]:
     """Exclusive POSIX file lock, or proceed unlocked when locking is unavailable.
 
-    Uses ``fcntl.flock``. Windows is unreachable — both compile targets refuse
-    it — so there is no ``msvcrt`` path. On any ``OSError`` (read-only
+    Uses ``fcntl.flock`` where available. On any ``OSError`` (read-only
     site-packages, or a filesystem without flock such as some network mounts) it
     logs at debug and proceeds unlocked; the atomic ``os.replace`` in
     ``compile_and_link`` still stops readers from observing a partial ``.so``.
@@ -82,6 +80,12 @@ def _file_lock(lock_path: Path) -> Iterator[None]:
     matches how pip/uv handle their own lockfiles and avoids a TOCTOU between
     unlink and re-lock by a sibling process.
     """
+    try:
+        import fcntl
+    except ImportError:  # Windows has no POSIX advisory locks.
+        yield
+        return
+
     fd = None
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)

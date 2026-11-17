@@ -48,11 +48,18 @@ class AnalysedSamples:
 
 
 def load_covariates(config: PipelineConfig, n_samples: int) -> np.ndarray | None:
+    """Read covariates, encoding categorical levels over the supplied file."""
+    covariates = _read_covariates(config, n_samples)
+    if covariates is not None and config.cat_columns is not None:
+        return encode_categorical_covariates(covariates, config.cat_columns)
+    return covariates
+
+
+def _read_covariates(config: PipelineConfig, n_samples: int) -> np.ndarray | None:
     """Load and validate the covariate file.
 
     Args:
-        config: Pipeline configuration. Reads ``covariate_file`` and
-            ``cat_columns``.
+        config: Pipeline configuration supplying the covariate file.
         n_samples: Number of samples for row-count validation.
 
     Returns:
@@ -77,13 +84,6 @@ def load_covariates(config: PipelineConfig, n_samples: int) -> np.ndarray | None
         )
 
     logger.info(f"Loaded {covariates.shape[1]} covariates")
-
-    if config.cat_columns is not None:
-        covariates = encode_categorical_covariates(covariates, config.cat_columns)
-        logger.info(
-            f"Categorical encoding applied to columns {config.cat_columns}: "
-            f"expanded to {covariates.shape[1]} covariate columns"
-        )
 
     return covariates
 
@@ -148,7 +148,7 @@ def load_analysed_samples(config: PipelineConfig, n_samples: int) -> AnalysedSam
             all phenotype columns (per-column counts appear in the message
             for diagnosis).
     """
-    covariates = load_covariates(config, n_samples)
+    covariates = _read_covariates(config, n_samples)
     phenotypes = _phenotype_columns(config, n_samples)
     masks = [compute_valid_mask(pheno, covariates) for pheno in phenotypes.values()]
 
@@ -166,6 +166,11 @@ def load_analysed_samples(config: PipelineConfig, n_samples: int) -> AnalysedSam
         logger.warning(
             f"Sample mask intersection reduced valid samples: "
             f"per-phenotype counts {per_column_counts}, intersection {n_valid}"
+        )
+
+    if config.cat_columns is not None and covariates is not None:
+        covariates = encode_categorical_covariates(
+            covariates, config.cat_columns, valid_mask=valid_mask
         )
 
     return AnalysedSamples(

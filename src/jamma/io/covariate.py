@@ -98,7 +98,10 @@ def read_covariate_file(path: Path) -> tuple[np.ndarray, np.ndarray]:
 
 
 def encode_categorical_covariates(
-    covariates: np.ndarray, cat_columns: Sequence[int]
+    covariates: np.ndarray,
+    cat_columns: Sequence[int],
+    *,
+    valid_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """One-hot encode specified covariate columns as dummy variables.
 
@@ -115,6 +118,8 @@ def encode_categorical_covariates(
         covariates: (n_samples, n_cvt) float64 array from read_covariate_file.
         cat_columns: 1-indexed column indices to treat as categorical
             (e.g., [1, 3] means columns 1 and 3).
+        valid_mask: When supplied, choose levels over the analysed rows. This
+            mask already preserves missingness if a factor has no contrasts.
 
     Returns:
         Expanded covariate array with categorical columns replaced by dummies.
@@ -151,7 +156,8 @@ def encode_categorical_covariates(
             continue
 
         # Get sorted unique non-NaN values
-        non_nan_values = col_values[~np.isnan(col_values)]
+        analysed = col_values if valid_mask is None else col_values[valid_mask]
+        non_nan_values = analysed[~np.isnan(analysed)]
         unique_levels = np.sort(np.unique(non_nan_values))
 
         if len(unique_levels) > 20:
@@ -170,7 +176,7 @@ def encode_categorical_covariates(
             # missingness signal for pipeline sample filtering. Otherwise
             # remove the column entirely (it's constant, zero variance).
             nan_mask_col = np.isnan(col_values)
-            if np.any(nan_mask_col):
+            if valid_mask is None and np.any(nan_mask_col):
                 marker = np.zeros((n_samples, 1), dtype=np.float64)
                 marker[nan_mask_col, 0] = np.nan
                 blocks.append(marker)

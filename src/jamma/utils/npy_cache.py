@@ -88,7 +88,7 @@ def write_npy_cache(array: np.ndarray, npy_path: Path, *, source_mtime_ns: int) 
 
 
 def load_npy_cache(
-    npy_path: Path, *, mmap_mode: Literal["r"] | None = None
+    npy_path: Path, *, mmap_mode: Literal["r", "c"] | None = None
 ) -> np.ndarray | None:
     """Load a .npy sidecar, returning None when it cannot be used.
 
@@ -118,7 +118,7 @@ def read_array_artifact(
     what: str,
     parse_text: Callable[[Path], np.ndarray],
     check: Callable[[np.ndarray, Path], np.ndarray],
-    mmap_mode: Literal["r"] | None = None,
+    mmap_mode: Literal["r", "c"] | None = None,
 ) -> np.ndarray:
     """Read one array from .npy, its .npy sidecar, or GEMMA text.
 

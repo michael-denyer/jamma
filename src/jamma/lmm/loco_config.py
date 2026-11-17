@@ -114,7 +114,7 @@ class LocoRun:
         config: Numerical settings shared with every other runner.
         loco: LOCO-only settings.
         execution: The association plan, with its kinship shape resolved.
-        eigen_plan: The driver every chromosome's eigendecomposition runs.
+        eigen_plan: Optional driver override when the cache misses.
 
     Raises:
         ValueError: If ``execution`` resolves no kinship shape, or plans chunks
@@ -126,7 +126,7 @@ class LocoRun:
     config: LmmConfig
     loco: LocoConfig
     execution: ExecutableAssociationPlan
-    eigen_plan: EigenDriverPlan
+    eigen_plan: EigenDriverPlan | None = None
 
     def __post_init__(self) -> None:
         if self.execution.kinship is None:

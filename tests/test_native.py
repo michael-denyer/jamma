@@ -728,3 +728,16 @@ def test_runtime_rebuild_never_targets_the_build_host(monkeypatch, tmp_path):
     commands = argv_log.read_text()
     assert commands, "the stand-in compiler never ran"
     assert "-march=native" not in commands
+
+
+@pytest.mark.tier0
+def test_import_without_posix_locking():
+    import os
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [sys.executable, "-c", "import sys; sys.modules['fcntl'] = None; import jamma"],
+        env={**os.environ, "JAMMA_FORCE_NUMPY_FALLBACK": "1"},
+        check=True,
+    )

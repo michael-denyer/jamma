@@ -385,7 +385,7 @@ def compute_loco_kinship_streaming(
     logger.info(f"  Chromosomes: {len(unique_chrs)}")
     logger.info(f"  Chunk size: {chunk_size:,}")
 
-    retained = loco_retained_set(n_mat, n_samples, chunk_size)
+    retained = loco_retained_set(n_mat, n_samples, min(chunk_size, n_snps))
     if check_memory:
         memory.require(
             retained.while_consuming_gb + consumer_gb,

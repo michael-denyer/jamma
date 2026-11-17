@@ -678,11 +678,12 @@ def test_run_lmm_loco_gate_reserves_the_eigen_consumer():
     from jamma.kinship.loco import loco_retained_set
     from jamma.lmm.association_plan import DEFAULT_STATS_CHUNK
 
-    n_samples = GenotypeDataset.open_plink(_LOCO_BFILE).n_samples
+    dataset = GenotypeDataset.open_plink(_LOCO_BFILE)
+    n_samples = dataset.n_samples
     retained = loco_retained_set(
         n_samples,
         n_samples,
-        DEFAULT_STATS_CHUNK,
+        min(DEFAULT_STATS_CHUNK, dataset.n_variants),
     )
 
     with pytest.raises(MemoryError, match="LOCO working set"):

@@ -321,6 +321,31 @@ def test_numpy_fallback_is_independent_of_memory_order():
         np.testing.assert_array_equal(variances, expected[1], err_msg=name)
 
 
+def test_hard_call_mean_is_correctly_rounded_whatever_the_first_genotype():
+    """An allele count exactly at the MAF threshold must not round below it."""
+    from jamma.genotype.snp_filter import compute_snp_filter_mask
+    from jamma.jlinalg import _snp_stats
+
+    rng = np.random.default_rng(11)
+    data = rng.integers(0, 3, size=(1940, 40)).astype(np.float64)
+    data[0] = rng.integers(1, 3, size=40)  # a nonzero first genotype
+    data[::17, 3] = np.nan
+    boundary = np.zeros(100)
+    boundary[:10] = 1.0  # MAF exactly 0.05, first sample a het
+    valid = ~np.isnan(data)
+    expected = np.where(valid, data, 0).sum(axis=0) / valid.sum(axis=0)
+    for kernel in (compute_snp_stats_chunk, _snp_stats.compute_snp_stats_chunk):
+        means = np.empty(40)
+        kernel(data, means, np.empty(40, dtype=np.intp), np.empty(40))
+        np.testing.assert_array_equal(means, expected)
+
+        stats = np.empty(1), np.empty(1, dtype=np.intp), np.empty(1)
+        kernel(boundary.reshape(100, 1), *stats)
+        keep, _afs, mafs = compute_snp_filter_mask(*stats, 100, 0.05, 1.0)
+        assert mafs[0] == 0.05
+        assert keep[0]
+
+
 def test_constant_fractional_dosage_variance():
     from jamma.jlinalg import _snp_stats
 

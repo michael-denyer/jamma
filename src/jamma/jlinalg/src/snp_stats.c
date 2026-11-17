@@ -50,6 +50,7 @@ static void snp_stats_range(const snp_stats_task_t *t) {
     for (npy_intp j = t->j_start; j < t->j_end; j++) {
         double origin = 0.0;
         double sum = 0.0;
+        double shifted_sum = 0.0;
         double sum_sq = 0.0;
         npy_intp n_miss = 0;
         npy_intp n_valid = 0;
@@ -86,11 +87,15 @@ static void snp_stats_range(const snp_stats_task_t *t) {
                 n_miss++;
                 continue;
             }
-            /* A fixed shift keeps constant fractional dosages exactly zero
-             * and preserves variation smaller than the unshifted rounding error. */
+            /* The variance accumulates about a fixed shift, which keeps constant
+             * fractional dosages exactly zero and preserves variation smaller
+             * than the unshifted rounding error. The mean keeps the plain sum:
+             * adding the shift back rounds twice and can move an allele
+             * frequency sitting exactly on the MAF threshold below it. */
             if (n_valid == 0) origin = dval;
             double delta = dval - origin;
-            sum += delta;
+            sum += dval;
+            shifted_sum += delta;
             sum_sq += delta * delta;
             n_valid++;
         }
@@ -98,10 +103,10 @@ static void snp_stats_range(const snp_stats_task_t *t) {
         t->miss_counts[j] = n_miss;
 
         if (n_valid > 0) {
-            double mean = sum / (double)n_valid;
-            double var = sum_sq / (double)n_valid - mean * mean;
+            double shifted_mean = shifted_sum / (double)n_valid;
+            double var = sum_sq / (double)n_valid - shifted_mean * shifted_mean;
             if (var < 0.0) var = 0.0; /* E[X^2]-E[X]^2 cancellation guard */
-            t->means[j] = origin + mean;
+            t->means[j] = sum / (double)n_valid;
             t->variances[j] = var;
         } else {
             t->means[j] = 0.0;

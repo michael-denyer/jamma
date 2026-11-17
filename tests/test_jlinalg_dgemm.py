@@ -825,3 +825,18 @@ class TestDgemmOutParameter:
         with pytest.raises(ValueError, match="aligned"):
             dgemm(A, B, out=out)
         npt.assert_array_equal(out, sentinel)
+
+
+@pytest.mark.tier0
+@pytest.mark.parametrize("overlap", ["left", "right", "partial"])
+def test_dgemm_overlapping_output(overlap):
+    from jamma.jlinalg import dgemm
+
+    rng = np.random.default_rng(173)
+    storage = rng.normal(size=(13, 12))
+    a = storage[:12]
+    b = rng.normal(size=(12, 12))
+    out = {"left": a, "right": b, "partial": storage[1:]}[overlap]
+    expected = a @ b
+    assert dgemm(a, b, out=out) is out
+    np.testing.assert_allclose(out, expected, atol=1e-14)

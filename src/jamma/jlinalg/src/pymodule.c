@@ -17,6 +17,7 @@
 #define PY_SSIZE_T_CLEAN
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <Python.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <numpy/arrayobject.h>
@@ -44,6 +45,14 @@ static PyObject *LinAlgError = NULL;
  * directly (e.g. from C tests).
  * ---------------------------------------------------------------------------
  */
+/* All three BLAS buffers are contiguous by the time we compare them. */
+static int buffers_overlap(PyArrayObject *a, PyArrayObject *b) {
+    uintptr_t left = (uintptr_t)PyArray_DATA(a), right = (uintptr_t)PyArray_DATA(b);
+    if (PyArray_SIZE(a) == 0 || PyArray_SIZE(b) == 0) return 0;
+    return left <= right ? right - left < (uintptr_t)PyArray_NBYTES(a)
+                         : left - right < (uintptr_t)PyArray_NBYTES(b);
+}
+
 static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
     static char *kwlist[] = {"A", "B", "transa", "transb", "out", NULL};
     PyObject *oA, *oB;
@@ -119,9 +128,12 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
                          (Py_ssize_t)M, (Py_ssize_t)N);
             goto cleanup;
         }
-        Py_INCREF(oOut);
-        aC = out;
-    } else {
+        if (!buffers_overlap(out, aA) && !buffers_overlap(out, aB)) {
+            Py_INCREF(oOut);
+            aC = out;
+        }
+    }
+    if (!aC) {
         npy_intp dims[2] = {M, N};
         aC = (PyArrayObject *)PyArray_SimpleNew(2, dims, NPY_DOUBLE);
         if (!aC) goto cleanup;
@@ -135,10 +147,19 @@ static PyObject *py_dgemm(PyObject *self, PyObject *args, PyObject *kwargs) {
     npy_intp lda = PyArray_DIM(aA, 1);
     npy_intp ldb = PyArray_DIM(aB, 1);
 
-    Py_BEGIN_ALLOW_THREADS jlinalg_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa, transb);
-    Py_END_ALLOW_THREADS
+    {
+        Py_BEGIN_ALLOW_THREADS jlinalg_dgemm_ext(M, N, K_a, pA, lda, pB, ldb, pC, N, transa,
+                                                 transb);
+        Py_END_ALLOW_THREADS
+    }
 
+    if (oOut != Py_None && (PyObject *)aC != oOut) {
+        memcpy(PyArray_DATA((PyArrayObject *)oOut), pC, (size_t)PyArray_NBYTES(aC));
+        Py_DECREF(aC);
+        result = Py_NewRef(oOut);
+    } else {
         result = (PyObject *)aC;
+    }
 
 cleanup:
     Py_XDECREF(aA);

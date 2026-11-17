@@ -10,6 +10,8 @@ means; every capability a consumer might branch on derives from it.
 from __future__ import annotations
 
 import enum
+import hashlib
+import json
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import cached_property
@@ -100,6 +102,14 @@ class SampleTable:
 
     def __len__(self) -> int:
         return len(self.iid)
+
+    def basis_digest(self, rows: np.ndarray) -> str:
+        """Identify the ordered analysis rows, including repeated sample IDs."""
+        digest = hashlib.sha256()
+        for i in rows:
+            record = (int(i), str(self.fid[i]), str(self.iid[i]))
+            digest.update(json.dumps(record, separators=(",", ":")).encode("ascii"))
+        return digest.hexdigest()
 
 
 class GenotypeBlock:

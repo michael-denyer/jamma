@@ -137,6 +137,8 @@ def read_eigen_files(
     eigenD_path: Path,
     eigenU_path: Path,
     n_samples: int | None = None,
+    *,
+    sample_digest: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Read both eigenvalue and eigenvector files with cross-validation.
 
@@ -148,6 +150,7 @@ def read_eigen_files(
         eigenD_path: Path to eigenvalue file (.eigenD.npy or .eigenD.txt).
         eigenU_path: Path to eigenvector file (.eigenU.npy or .eigenU.txt).
         n_samples: Expected number of samples (optional validation).
+        sample_digest: Expected ordered analysis rows for a tagged generation.
 
     Returns:
         Tuple of (eigenvalues, eigenvectors).
@@ -173,6 +176,21 @@ def read_eigen_files(
         manifest = eigen_manifest_path(directory, prefix)
         if manifest.is_file():
             eigenD_path, eigenU_path = resolve_eigen_generation(directory, prefix)
+
+    identity = _member_generation(eigenD_path)
+    if sample_digest is not None:
+        generation = identity.rsplit(_GENERATION_MARK, 1)[1] if identity else ""
+        _, marker, recorded = generation.partition("-samples-")
+        if not marker:
+            logger.warning(
+                "Eigen files have no recorded sample basis. Verify that their "
+                "rows match the analysed samples in order."
+            )
+        elif recorded != sample_digest:
+            raise ValueError(
+                "Eigen files have a different sample basis after filtering. "
+                "Regenerate eigen files for these samples in this order."
+            )
 
     eigenvalues = _read_eigenvalues(eigenD_path)
     eigenvectors = _read_eigenvectors(eigenU_path)
@@ -210,10 +228,9 @@ def _member_generation(path: Path) -> str | None:
     """Return the full managed generation identity embedded in a member name."""
     if _GENERATION_MARK not in path.name:
         return None
-    for kind in (".eigenD.", ".eigenU."):
-        if kind in path.name:
-            identity, _separator, _suffix = path.name.partition(kind)
-            return identity
+    for kind in (".eigenD", ".eigenU"):
+        if path.stem.endswith(kind):
+            return path.stem.removesuffix(kind)
     return None
 
 
@@ -450,6 +467,7 @@ def write_eigen_files(
     prefix: str = "result",
     *,
     legacy_text: bool = False,
+    sample_digest: str | None = None,
 ) -> tuple[Path, Path]:
     """Write both eigenvalue and eigenvector files.
 
@@ -464,6 +482,7 @@ def write_eigen_files(
         eigenvectors: 2D array of eigenvectors.
         output_dir: Directory for output files.
         prefix: Filename prefix (default "result").
+        sample_digest: SHA-256 identity of the ordered analysis rows, if known.
         legacy_text: If True, write GEMMA text format + sidecars. Default False
             writes only binary .npy.
 
@@ -473,7 +492,16 @@ def write_eigen_files(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    generation = EigenGeneration(output_dir, prefix)
+    # Include the digest in the immutable identity so old generation paths
+    # keep their own sample basis after the stable manifest moves forward.
+    generation_id = uuid.uuid4().hex
+    if sample_digest is not None:
+        if len(sample_digest) != 64 or any(
+            c not in "0123456789abcdef" for c in sample_digest
+        ):
+            raise ValueError("sample_digest must be a SHA-256 hex digest")
+        generation_id += f"-samples-{sample_digest}"
+    generation = EigenGeneration(output_dir, prefix, generation_id)
     eigenD_path, eigenU_path = generation.write_member(
         WHOLE_GENOME, eigenvalues, eigenvectors, legacy_text=legacy_text
     )

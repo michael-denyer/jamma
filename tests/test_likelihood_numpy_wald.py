@@ -343,3 +343,13 @@ def test_scalar_vs_batch_reml_single_snp_lambda_and_logl_parity():
             "disagree beyond rtol=1e-10"
         ),
     )
+
+
+def test_negative_fitted_residual_invalidates_wald():
+    from jamma.lmm.pab import build_index_table
+
+    table = build_index_table(1)
+    pab = np.zeros((1, 3, table.n_index))
+    pab[0, 1, [table.idx_xx, table.idx_xy, table.idx_yy]] = [4.0, 8.0, 16.0]
+    pab[0, 2, table.idx_yy] = -np.finfo(float).eps
+    assert np.isnan(batch_calc_wald_stats_from_pab_numpy(1, pab, 100)).all()

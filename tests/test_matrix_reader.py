@@ -476,3 +476,11 @@ def test_zero_workers_rejected_like_the_writer(tmp_path: Path) -> None:
     np.savetxt(path, np.ones((600, 3)))
     with pytest.raises(ValueError, match="n_workers must be >= 1"):
         read_matrix_parallel(path, n_workers=0)
+
+
+@pytest.mark.parametrize("rows", [3, 600])
+def test_single_column_preserves_rows(tmp_path, rows):
+    values = np.arange(rows).reshape(rows, 1)
+    path = tmp_path / "column.txt"
+    np.savetxt(path, values)
+    np.testing.assert_array_equal(read_matrix_parallel(path, n_workers=2), values)

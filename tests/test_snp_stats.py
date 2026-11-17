@@ -319,3 +319,17 @@ def test_numpy_fallback_is_independent_of_memory_order():
         means, variances = stats_of(chunk)
         np.testing.assert_array_equal(means, expected[0], err_msg=name)
         np.testing.assert_array_equal(variances, expected[1], err_msg=name)
+
+
+def test_constant_fractional_dosage_variance():
+    from jamma.jlinalg import _snp_stats
+
+    values = np.full((100, 3), 20 / 255)
+    values[:7, 1] = np.nan
+    values[-1, 2] += 1e-9
+    for kernel in (compute_snp_stats_chunk, _snp_stats.compute_snp_stats_chunk):
+        means, misses, variances = np.empty(3), np.empty(3, dtype=np.intp), np.empty(3)
+        kernel(values, means, misses, variances)
+        np.testing.assert_array_equal(misses, [0, 7, 0])
+        np.testing.assert_array_equal(variances[:2], [0.0, 0.0])
+        np.testing.assert_allclose(variances[2], np.nanvar(values[:, 2]), rtol=1e-7)

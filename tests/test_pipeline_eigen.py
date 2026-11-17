@@ -101,3 +101,33 @@ class TestLMMEquivalence:
             rtol=1e-12,
             atol=1e-12,
         )
+
+
+@pytest.mark.tier1
+@pytest.mark.parametrize("stable", [False, True])
+def test_managed_eigen_refuses_different_analysed_rows(tmp_path, stable):
+    from dataclasses import replace
+
+    from tests.fixture_paths import SYNTHETIC
+    from tests.support import require_fixture
+
+    require_fixture(SYNTHETIC.bed, SYNTHETIC.bim, SYNTHETIC.fam)
+    phenotype = tmp_path / "p.txt"
+    values = np.arange(100, dtype=float)
+    np.savetxt(phenotype, np.where(values < 20, -9, values))
+    config = PipelineConfig(
+        bfile=SYNTHETIC.bfile,
+        phenotype_file=phenotype,
+        output_dir=tmp_path,
+        write_eigen=True,
+        show_progress=False,
+    )
+    PipelineRunner(config).run()
+    d, u = resolve_eigen_generation(tmp_path, config.output_prefix)
+    if stable:
+        d, u = (tmp_path / f"{config.output_prefix}.eigen{kind}.npy" for kind in "DU")
+    reuse = replace(config, eigenvalue_file=d, eigenvector_file=u, write_eigen=False)
+    assert PipelineRunner(reuse).run().n_samples == 80
+    np.savetxt(phenotype, np.where(values >= 80, -9, values))
+    with pytest.raises(ValueError, match="sample basis"):
+        PipelineRunner(reuse).run()

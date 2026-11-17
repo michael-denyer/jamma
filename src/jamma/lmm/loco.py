@@ -30,19 +30,12 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core import memory
-from jamma.core.threading import get_loco_worker_count, get_physical_core_count
 from jamma.genotype.dataset import GenotypeDataset
 from jamma.genotype.snp_filter import validate_snp_indices
 from jamma.lmm.assoc_output import AssocResult, IncrementalAssocWriter
 from jamma.lmm.association_plan import KinshipShape, plan_association
 from jamma.lmm.loco_config import DEFAULT_LOCO_CONFIG, LocoConfig, LocoRun
-from jamma.lmm.loco_eigen import (
-    eigen_pairs_for,
-    loco_retained_set_for,
-    plan_loco_eigen_driver,
-)
-from jamma.lmm.loco_workers import plan_loco_workers
+from jamma.lmm.loco_eigen import eigen_pairs_for
 from jamma.lmm.prepare_common import AnalysedPhenotype, EigenPairs
 from jamma.lmm.runner_numpy import (
     LOCO_LABELS,
@@ -138,7 +131,6 @@ def run_lmm_loco(
         config,
         loco,
         execution,
-        plan_loco_eigen_driver(execution, memory.available_ram_gb()),
     )
     return run_loco(run, output_path)
 
@@ -194,16 +186,6 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
         )
 
     execution = run.execution
-    workers = plan_loco_workers(
-        get_loco_worker_count(),
-        n_chr=len(unique_chrs),
-        cores=get_physical_core_count(),
-        retained=loco_retained_set_for(execution),
-        eigen_plan=run.eigen_plan,
-        available_gb=memory.available_ram_gb(),
-        budget_gb=config.mem_budget,
-        association_gb=execution.price(eigen=None).association_gb,
-    )
     # The chromosome loop owns progress output; a per-chromosome banner would
     # repeat once per chromosome.
     spec = LmmRunSpec(
@@ -230,7 +212,7 @@ def run_loco(run: LocoRun, output_path: Path | None) -> LmmRunResult:
             )
         destination = all_results if writer is None else writer
 
-        source = eigen_pairs_for(run, chromosomes, workers)
+        source = eigen_pairs_for(run, chromosomes)
 
         first_chr_pve: float | None = None
         first_chr_pve_se: float | None = None

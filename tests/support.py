@@ -111,9 +111,10 @@ def install_lint_script(script: Path, scripts_dir: Path) -> Path:
 def preflight(config, execution):  # type: ignore[no-untyped-def]
     """Run memory_preflight the way PipelineRunner.run does: from the resolved plan."""
     from jamma.pipeline_memory import memory_preflight
-    from jamma.pipeline_plan import resolve_analysis_plan
+    from jamma.pipeline_plan import StandardAnalysisPlan, resolve_analysis_plan
 
     analysis = resolve_analysis_plan(
         config, execution=execution, snps_indices=None, ksnps_indices=None
     )
+    assert isinstance(analysis, StandardAnalysisPlan)
     return memory_preflight(analysis, check_memory=config.check_memory)

@@ -12,8 +12,10 @@ import time
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 from loguru import logger
 
+from jamma.core import memory
 from jamma.io.snp_list import resolve_snp_list_file
 from jamma.kinship import (
     compute_kinship_streaming,
@@ -21,7 +23,7 @@ from jamma.kinship import (
     write_kinship_matrix,
     write_loco_kinship_matrices,
 )
-from jamma.lmm.eigen import eigendecompose_kinship
+from jamma.lmm.eigen import center_kinship, eigendecompose_kinship
 from jamma.lmm.eigen_io import write_eigen_files
 from jamma.pipeline_banner import log_dataset_banner
 from jamma.pipeline_config import KinshipResult, PipelineConfig
@@ -154,6 +156,17 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
 
     eigen_paths: tuple[Path, Path] | None = None
     if config.write_eigen:
+        if filter_samples is not None:
+            if config.check_memory:
+                memory.require(
+                    K.nbytes / 1e9
+                    + memory.array_gb(len(filter_samples), len(filter_samples)),
+                    memory.available_ram_gb(),
+                    "analysed kinship submatrix",
+                    budget_gb=config.mem_budget,
+                )
+            K = K[np.ix_(filter_samples, filter_samples)]
+        center_kinship(K)
         eigenvalues, eigenvectors = eigendecompose_kinship(
             K,
             check_memory=config.check_memory,
@@ -166,6 +179,7 @@ def compute_kinship(config: PipelineConfig, mode: Literal[1, 2]) -> KinshipResul
             eigenvectors,
             config.output_dir,
             config.output_prefix,
+            sample_digest=dataset.samples.basis_digest(samples.basis.positions),
             legacy_text=config.legacy_text,
         )
         eigen_paths = (d_path, u_path)

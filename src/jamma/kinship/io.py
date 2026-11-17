@@ -39,8 +39,12 @@ def _validate_kinship(K: np.ndarray, n_samples: int | None, source: str) -> None
             f"Kinship matrix dimension {K.shape[0]} does not match "
             f"expected n_samples={n_samples}"
         )
-    if not np.allclose(K, K.T, rtol=_SYMMETRY_RTOL):
-        raise ValueError("Kinship matrix is not symmetric")
+    # Compare both triangles with the same asymmetric relative tolerance as
+    # the full-array check. Limit temporary arrays to a few rows at a time.
+    for start in range(0, K.shape[0], 16):
+        rows = slice(start, start + 16)
+        if not np.allclose(K[rows], K.T[rows], rtol=_SYMMETRY_RTOL):
+            raise ValueError("Kinship matrix is not symmetric")
 
 
 def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
@@ -51,8 +55,8 @@ def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
     - .txt suffix: checks for .npy sibling at least as new; uses it if valid,
       otherwise falls back to text parsing and writes the sibling.
 
-    The matrix is always loaded eagerly and writable: the pipeline applies
-    individual weights to it in place.
+    Binary inputs are mapped copy-on-write. The solver receives writable,
+    C-contiguous float64 storage and can consume it without changing the file.
 
     Args:
         path: Path to kinship matrix file (.cXX.npy or .cXX.txt).
@@ -73,14 +77,14 @@ def read_kinship_matrix(path: Path, n_samples: int | None = None) -> np.ndarray:
                 "Consider binary kinship format for large cohorts."
             )
         # Load matrix - handles tab and space separated
-        return np.loadtxt(txt_path, dtype=np.float64)
+        return np.loadtxt(txt_path, dtype=np.float64, ndmin=2)
 
     def check(K: np.ndarray, source: Path) -> np.ndarray:
         _validate_kinship(K, n_samples, str(source))
-        return K
+        return np.asarray(K, dtype=np.float64, order="C")
 
     return read_array_artifact(
-        path, what="kinship matrix", parse_text=parse_text, check=check
+        path, what="kinship matrix", parse_text=parse_text, check=check, mmap_mode="c"
     )
 
 

@@ -384,7 +384,6 @@ class TestAssociateLoco:
             samples,
             cast("GenotypeDataset", None),
             tmp_path / "out.assoc.txt",
-            None,
         )
         return PipelineResult(
             phenotype_results=records,

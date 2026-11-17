@@ -103,7 +103,7 @@ def test_gk_loco_reserves_no_eigen_peak(tmp_path: Path) -> None:
     retained = loco_retained_set(
         ds.n_samples,
         ds.n_samples,
-        10_000,
+        min(10_000, ds.n_variants),
     )
     budget_gb = retained.while_consuming_gb + dsyevr_peak_gb(ds.n_samples) / 2
 
@@ -522,3 +522,25 @@ class TestEarlySampleFiltering:
             f"save_kinship must write full ({_N_SAMPLES}, {_N_SAMPLES}) "
             f"kinship for reuse, got {K_saved.shape}"
         )
+
+
+@pytest.mark.tier1
+def test_gk_eigen_uses_centered_analysed_submatrix(tmp_path):
+    require_fixture(SYNTHETIC.bed, SYNTHETIC.bim, SYNTHETIC.fam)
+    phenotype = tmp_path / "phenotype.txt"
+    np.savetxt(phenotype, np.r_[-9, np.arange(99)])
+    config = PipelineConfig(
+        bfile=BFILE,
+        phenotype_file=phenotype,
+        output_dir=tmp_path,
+        write_eigen=True,
+        show_progress=False,
+    )
+    result = compute_kinship(config, 1)
+    assert result.eigen_paths is not None
+    d, u = (np.load(path) for path in result.eigen_paths)
+    kinship = np.load(result.kinship_paths[0])
+    assert kinship.shape == (100, 100)
+    expected = kinship[1:, 1:].copy()
+    center_kinship(expected)
+    np.testing.assert_allclose((u * d) @ u.T, expected, atol=1e-10)

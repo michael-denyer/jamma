@@ -20,7 +20,12 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from jamma.core.threading import get_blas_thread_count
+from jamma.core import memory
+from jamma.core.threading import (
+    get_blas_thread_count,
+    get_loco_worker_count,
+    get_physical_core_count,
+)
 from jamma.genotype.snp_stats import SnpStats
 from jamma.kinship import compute_loco_kinship_streaming, write_kinship_matrix
 from jamma.kinship.loco import LocoRetainedSet, loco_retained_set
@@ -42,7 +47,7 @@ from jamma.lmm.eigen_cache import (
 from jamma.lmm.eigen_io import EigenGeneration, read_eigen_files
 from jamma.lmm.eigen_plan import EigenDriverPlan
 from jamma.lmm.loco_config import LocoConfig, LocoRun
-from jamma.lmm.loco_workers import LocoWorkerPlan, solve_eigen_pairs
+from jamma.lmm.loco_workers import plan_loco_workers, solve_eigen_pairs
 from jamma.lmm.schema import LmmConfig
 
 EigenPairs = Generator[tuple[str, np.ndarray, np.ndarray], None, None]
@@ -110,12 +115,12 @@ def loco_retained_set_for(execution: ExecutableAssociationPlan) -> LocoRetainedS
     return loco_retained_set(
         execution.resolved_kinship.n_samples,
         execution.n_input_samples,
-        DEFAULT_STATS_CHUNK,
+        min(DEFAULT_STATS_CHUNK, execution.n_snps_before_filter),
     )
 
 
 def eigen_pairs_for(
-    run: LocoRun, chromosomes: dict[str, np.ndarray], workers: LocoWorkerPlan
+    run: LocoRun, chromosomes: dict[str, np.ndarray]
 ) -> EigenPairSource:
     """Choose the eigenpair source for one LOCO run.
 
@@ -128,9 +133,6 @@ def eigen_pairs_for(
         run: The resolved run.
         chromosomes: chr_name -> global SNP indices, in the order the run
             iterates them. The indices only feed progress output.
-        workers: How many chromosomes decompose at once, from
-            ``plan_loco_workers``; its ``consumer_gb`` is what the kinship
-            streamer reserves for the eigen consumer.
     """
     loco, config = run.loco, run.config
     rows = run.analysed_rows
@@ -157,6 +159,27 @@ def eigen_pairs_for(
             if cache is not None:
                 return _cached_source(run, cache, chromosomes)
 
+    execution = run.execution
+    available_gb = memory.available_ram_gb()
+    eigen_plan = run.eigen_plan or plan_loco_eigen_driver(execution, available_gb)
+    retained = loco_retained_set_for(execution)
+    workers = plan_loco_workers(
+        get_loco_worker_count(),
+        n_chr=len(chromosomes),
+        cores=get_physical_core_count(),
+        retained=retained,
+        eigen_plan=eigen_plan,
+        available_gb=available_gb,
+        budget_gb=config.mem_budget,
+        association_gb=execution.price(eigen=None).association_gb,
+    )
+    if config.check_memory:
+        minimum = retained.while_consuming_gb + workers.consumer_gb
+        logger.info(
+            f"Memory estimate (numpy-loco): {minimum:.1f}GB minimum for the "
+            f"kinship stream and {eigen_plan.driver} workers, "
+            f"{available_gb:.1f}GB available"
+        )
     logger.info(workers.describe())
     kinship_is_analysed = run.execution.resolved_kinship.n_samples == len(rows)
     stream = compute_loco_kinship_streaming(
@@ -180,7 +203,7 @@ def eigen_pairs_for(
         config=config,
         loco=loco,
         cache_write=cache_write,
-        eigen_plan=run.eigen_plan,
+        eigen_plan=eigen_plan,
         workers=workers.workers,
     )
     return EigenPairSource(pairs, lambda: stream.snp_stats)
@@ -197,6 +220,19 @@ def _cached_source(
     produced are measured from the dataset.
     """
     loco, config = run.loco, run.config
+    if config.check_memory:
+        peak = run.execution.cached_loco_peak_gb()
+        available = memory.available_ram_gb()
+        logger.info(
+            f"Memory estimate (numpy-loco): {peak:.1f}GB for cached eigenpairs "
+            f"and association, {available:.1f}GB available"
+        )
+        memory.require(
+            peak,
+            available,
+            "cached LOCO association",
+            budget_gb=config.mem_budget,
+        )
     rows = run.analysed_rows
     logger.info("LOCO workers: 0 (cached eigenpairs)")
     if loco.kinship_output_dir is not None:

@@ -7,20 +7,17 @@ from loguru import logger
 from jamma.core import memory
 from jamma.lmm.eigen import plan_eigen_driver_for_machine
 from jamma.lmm.eigen_plan import EigenDriverPlan
-from jamma.lmm.loco_eigen import plan_loco_eigen_driver
 from jamma.pipeline_config import ProvidedEigen
-from jamma.pipeline_plan import AnalysisPlan, LocoAnalysisPlan
+from jamma.pipeline_plan import StandardAnalysisPlan
 
 __all__ = ["memory_preflight"]
 
 
 def _eigen_driver(
-    analysis: AnalysisPlan, available_gb: float
+    analysis: StandardAnalysisPlan, available_gb: float
 ) -> EigenDriverPlan | None:
     """Plan the decomposition the run will execute; None when eigenpairs are read."""
     execution = analysis.execution
-    if isinstance(analysis, LocoAnalysisPlan):
-        return plan_loco_eigen_driver(execution, available_gb)
     if isinstance(analysis.eigen_source, ProvidedEigen):
         return None
     return plan_eigen_driver_for_machine(
@@ -32,7 +29,7 @@ def _eigen_driver(
 
 
 def memory_preflight(
-    analysis: AnalysisPlan, *, check_memory: bool
+    analysis: StandardAnalysisPlan, *, check_memory: bool
 ) -> EigenDriverPlan | None:
     """Price and gate one plan; return the eigen driver acquisition executes."""
     execution = analysis.execution

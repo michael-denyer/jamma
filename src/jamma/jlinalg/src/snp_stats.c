@@ -48,6 +48,7 @@ typedef struct {
 
 static void snp_stats_range(const snp_stats_task_t *t) {
     for (npy_intp j = t->j_start; j < t->j_end; j++) {
+        double origin = 0.0;
         double sum = 0.0;
         double sum_sq = 0.0;
         npy_intp n_miss = 0;
@@ -85,8 +86,12 @@ static void snp_stats_range(const snp_stats_task_t *t) {
                 n_miss++;
                 continue;
             }
-            sum += dval;
-            sum_sq += dval * dval;
+            /* A fixed shift keeps constant fractional dosages exactly zero
+             * and preserves variation smaller than the unshifted rounding error. */
+            if (n_valid == 0) origin = dval;
+            double delta = dval - origin;
+            sum += delta;
+            sum_sq += delta * delta;
             n_valid++;
         }
 
@@ -96,7 +101,7 @@ static void snp_stats_range(const snp_stats_task_t *t) {
             double mean = sum / (double)n_valid;
             double var = sum_sq / (double)n_valid - mean * mean;
             if (var < 0.0) var = 0.0; /* E[X^2]-E[X]^2 cancellation guard */
-            t->means[j] = mean;
+            t->means[j] = origin + mean;
             t->variances[j] = var;
         } else {
             t->means[j] = 0.0;

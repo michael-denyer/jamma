@@ -64,8 +64,8 @@ def _parse_chunk_to_memmap(task: MatrixReadTask) -> None:
                 dtype=np.dtype(task.matrix.dtype),
                 delimiter=task.delimiter,
                 max_rows=task.row_count,
+                ndmin=2,
             )
-        chunk = np.atleast_2d(chunk)
         if chunk.shape[0] != task.row_count:
             raise RuntimeError(
                 f"Row count mismatch in chunk at byte offset {task.start_byte}: "
@@ -209,7 +209,7 @@ def read_matrix_parallel(
 
     if n_rows_approx < min_rows_for_parallel:
         logger.info(f"Reading {path.name} via np.loadtxt (small matrix)")
-        return np.atleast_2d(np.loadtxt(path, dtype=np.float64, delimiter=delimiter))
+        return np.loadtxt(path, dtype=np.float64, delimiter=delimiter, ndmin=2)
 
     if n_workers is None:
         n_workers = default_worker_count()

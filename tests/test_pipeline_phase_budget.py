@@ -241,3 +241,53 @@ def test_gk_eigen_budget_gates_eigendecomposition(tmp_path):
         compute_kinship(config, mode=1)
     assert (tmp_path / "result.cXX.npy").exists()
     assert not list(tmp_path.glob("*.eigenD.npy"))
+
+
+def test_short_loco_kinship_fits_actual_read_width(tmp_path):
+    from jamma.pipeline_kinship import compute_kinship
+    from tests.fixture_paths import LOCO
+    from tests.support import require_fixture
+
+    require_fixture(LOCO.bed, LOCO.bim, LOCO.fam)
+    config = PipelineConfig(
+        bfile=LOCO.bfile,
+        loco=True,
+        output_dir=tmp_path,
+        mem_budget=0.020,
+        show_progress=False,
+    )
+    assert len(compute_kinship(config, 1).kinship_paths) > 1
+
+
+def test_loco_cache_hit_fits_without_solve(tmp_path):
+    from dataclasses import replace
+
+    import numpy as np
+    from bed_reader import to_bed
+
+    from jamma.pipeline import PipelineRunner
+
+    rng = np.random.default_rng(943)
+    prefix = tmp_path / "study"
+    to_bed(
+        prefix.with_suffix(".bed"),
+        rng.integers(0, 3, (1000, 6)).astype(float),
+        properties={
+            "chromosome": ["1"] * 3 + ["2"] * 3,
+            "pheno": rng.normal(size=1000).astype(str).tolist(),
+        },
+    )
+    config = PipelineConfig(
+        bfile=prefix,
+        loco=True,
+        output_dir=tmp_path,
+        eigen_dir=tmp_path,
+        write_eigen=True,
+        lmm_mode=3,
+        show_progress=False,
+    )
+    assert PipelineRunner(config).run().n_snps_tested == 6
+    reuse = replace(config, write_eigen=False, mem_budget=0.014)
+    assert PipelineRunner(reuse).run().n_snps_tested == 6
+    with pytest.raises(MemoryError):
+        PipelineRunner(replace(reuse, maf=0.11)).run()

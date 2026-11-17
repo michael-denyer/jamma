@@ -24,10 +24,14 @@ def compute_snp_stats_chunk(
     missing = np.sum(is_nan, axis=0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        mean = np.nanmean(data, axis=0, dtype=np.float64)
-        # np.nanvar holds the deviations in the input dtype whatever dtype= says,
-        # so float32 genotypes would not get the C kernel's double accumulation.
-        squares = np.subtract(data, mean, dtype=np.float64)
+        # Subtract a representable dosage first: even the mean of identical
+        # floats can round away from the common value in an unshifted sum.
+        origin = np.nanmin(data, axis=0, initial=np.inf)
+        squares = np.subtract(data, origin, dtype=np.float64)
+        np.copyto(squares, 0.0, where=is_nan)
+        offset = squares.sum(axis=0) / (data.shape[0] - missing)
+        mean = origin + offset
+        squares -= offset
         np.copyto(squares, 0.0, where=is_nan)
         np.square(squares, out=squares)
         variance = squares.sum(axis=0) / (data.shape[0] - missing)

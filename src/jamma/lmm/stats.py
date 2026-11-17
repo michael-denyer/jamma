@@ -35,7 +35,9 @@ def _beta_se_from_pab(
     Returns:
         Tuple of (beta, se, is_valid) each shape (n_snps,).
     """
-    is_valid = P_XX > 0
+    # Match the native statistic when the fitted Schur complement lost
+    # positive semidefiniteness in a nearly exact fit.
+    is_valid = (P_XX > 0) & (Px_YY >= 0)
     safe_P_XX = np.where(is_valid, P_XX, 1.0)
 
     beta = np.where(is_valid, P_XY / safe_P_XX, np.nan)

@@ -9,7 +9,6 @@
 # so this file can use the default PyPI index safely.
 
 mkl==2026.2.0
-onemkl-license==2026.2.0
 intel-openmp==2026.2.0
 intel-cmplr-lib-ur==2026.2.0
 umf==1.2.0

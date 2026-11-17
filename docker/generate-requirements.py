@@ -26,18 +26,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "docker" / "requirements-container.txt"
 
-# Intel runtime wheels for MKL-backed ILP64 NumPy. Absent from uv.lock because
-# they are transitive dependencies of the ILP64 `numpy` wheel on the custom
-# index, not of the `numpy` on PyPI that uv resolves. `mkl` declares
-# `onemkl-license`, `intel-openmp`, and `tbb`; the rest follow from those.
+# Linux x86_64 runtime closure of the custom ILP64 NumPy wheel's MKL dependency.
+# Resolve against PyPI for the Python 3.12 Debian image when bumping MKL.
 MKL_PINS = (
-    "mkl==2026.1.0",
-    "onemkl-license==2026.1.0",
-    "intel-openmp==2026.1.2",
-    "intel-cmplr-lib-ur==2026.1.2",
-    "umf==1.1.0",
-    "tbb==2023.1.0",
-    "tcmlib==1.5.0",
+    "mkl==2026.2.0",
+    "intel-openmp==2026.2.0",
+    "intel-cmplr-lib-ur==2026.2.0",
+    "umf==1.2.0",
+    "tbb==2023.2.0",
+    "tcmlib==1.6.0",
 )
 
 # Installed separately from the ILP64 index, so it must not appear here.

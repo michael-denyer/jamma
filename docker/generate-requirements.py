@@ -29,7 +29,7 @@ TARGET = ROOT / "docker" / "requirements-container.txt"
 # Linux x86_64 runtime closure of the custom ILP64 NumPy wheel's MKL dependency.
 # Resolve against PyPI for the Python 3.12 Debian image when bumping MKL.
 MKL_PINS = (
-    "mkl==2026.2.0",
+    "mkl==2026.2.1",
     "intel-openmp==2026.2.0",
     "intel-cmplr-lib-ur==2026.2.0",
     "umf==1.2.0",

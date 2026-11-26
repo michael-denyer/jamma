@@ -298,3 +298,12 @@ dev = [
     "bgen>=1.10.3",
     "backports-zstd>=1.7.0 ; python_full_version < '3.14'",
 ]
+# The [build-system].requires pins other than numpy, so uv.lock records the
+# build backend's dependencies with their hashes. docker/generate-requirements.py
+# exports this group into docker/requirements-build.txt, which the image installs
+# with --require-hashes before building without isolation.
+# tests/test_dockerfile_provenance.py asserts these equal [build-system].requires.
+docker-build = [
+    "hatchling==1.33.0",
+    "hatch-fancy-pypi-readme==25.1.0",
+]

@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile"
 REQUIREMENTS = ROOT / "docker/requirements-container.txt"
 NUMPY_MKL_REQUIREMENTS = ROOT / "docker/requirements-numpy-mkl.txt"
-HASHED_REQUIREMENTS = (REQUIREMENTS, NUMPY_MKL_REQUIREMENTS)
+BUILD_REQUIREMENTS = ROOT / "docker/requirements-build.txt"
+HASHED_REQUIREMENTS = (REQUIREMENTS, NUMPY_MKL_REQUIREMENTS, BUILD_REQUIREMENTS)
 PYPROJECT = ROOT / "pyproject.toml"
 LOCKFILE = ROOT / "uv.lock"
 
@@ -51,9 +52,13 @@ def _image_numpy_pin() -> str:
     return pins["numpy"]
 
 
-def _build_backend_numpy_pin() -> str:
+def _build_system_pins() -> dict[str, str]:
     requires = tomllib.loads(PYPROJECT.read_text())["build-system"]["requires"]
-    pins = _pins("\n".join(requires))
+    return _pins("\n".join(requires))
+
+
+def _build_backend_numpy_pin() -> str:
+    pins = _build_system_pins()
     assert "numpy" in pins, "[build-system].requires must pin numpy exactly"
     return pins["numpy"]
 
@@ -85,25 +90,36 @@ def test_container_requirements_are_exactly_pinned_and_hashed(path):
         )
 
 
+def _pip_commands() -> list[str]:
+    """Return every `pip install` and `pip wheel` command, one per `&&` segment."""
+    source = DOCKERFILE.read_text().replace("\\\n", " ")
+    commands = [
+        segment.strip()
+        for line in source.splitlines()
+        for segment in line.split("&&")
+        if re.search(r"\bpip (?:install|wheel)\b", segment)
+    ]
+    assert commands, "the Dockerfile must install something"
+    return commands
+
+
 def test_image_installs_this_checkout_not_published_jamma():
     source = DOCKERFILE.read_text()
     assert "COPY pyproject.toml README.md hatch_build.py ./" in source
     assert "COPY src ./src" in source
-    assert "python -m pip install --no-cache-dir --no-deps ." in source
+    commands = _pip_commands()
+    assert any(
+        "pip wheel" in c and "--no-build-isolation" in c and c.endswith(" .")
+        for c in commands
+    ), "the image must build a wheel from this checkout"
+    assert any(c.endswith(" /tmp/dist/*.whl") for c in commands), (
+        "the image must install the wheel it built"
+    )
     assert not re.search(r"pip install[^\n]*\bjamma(?:[=<>!~]|\s|$)", source)
 
 
-def _install_lines() -> list[str]:
-    source = DOCKERFILE.read_text().replace("\\\n", " ")
-    lines = [
-        line for line in source.splitlines() if re.search(r"\bpip install\b", line)
-    ]
-    assert lines, "the Dockerfile must install something"
-    return lines
-
-
 def test_every_installed_package_is_pinned_or_this_checkout():
-    """Every install argument is a hashed requirements file or `.`.
+    """Every install argument is a hashed requirements file or this checkout.
 
     Keyed on the shape an unpinned input has, not on the spelling of inputs
     previously removed: a range, a bare name, a floating tag, and an exact pin
@@ -111,38 +127,60 @@ def test_every_installed_package_is_pinned_or_this_checkout():
     """
     allowed = re.compile(
         r"\."  # this checkout
-        r"|-r|/tmp/requirements-(?:container|numpy-mkl)\.txt"  # hashed pin files
+        r"|/tmp/dist/\*\.whl"  # the wheel built from this checkout
+        r"|-r|/tmp/requirements-(?:container|numpy-mkl|build)\.txt"  # hashed files
         r"|--[a-z-]+(?:=\S+)?"  # pip flags
         r"|https://\S+"  # --index-url value
-        r"|RUN|python|-m|pip|install"
+        r"|/tmp/build-backend|/tmp/dist"  # --target and --wheel-dir values
+        r"|PYTHONPATH=/tmp/build-backend"
+        r"|RUN|python|-m|pip|install|wheel"
     )
-    for line in _install_lines():
-        for token in line.split():
+    for command in _pip_commands():
+        for token in command.split():
             assert allowed.fullmatch(token), (
-                f"unpinned or unexpected install input {token!r} in: {line.strip()}"
+                f"unpinned or unexpected install input {token!r} in: {command}"
             )
 
 
 def test_every_download_is_hash_checked():
-    """Every install that fetches packages runs pip in hash-checking mode.
+    """Every pip command either checks hashes or cannot download at all.
 
-    Only the install of this checkout (`.`) is exempt: pip refuses
-    `--require-hashes` for a directory.
+    The checkout is built and installed with `--no-index`, since pip refuses
+    `--require-hashes` for a directory; its build backend comes from the hashed
+    `requirements-build.txt` instead of an isolated build environment.
     """
-    for line in _install_lines():
-        tokens = line.split()
-        if "." in tokens:
-            continue
-        assert "--require-hashes" in tokens, f"no --require-hashes in: {line.strip()}"
+    commands = _pip_commands()
+    for command in commands:
+        tokens = command.split()
+        assert "--require-hashes" in tokens or "--no-index" in tokens, (
+            f"neither --require-hashes nor --no-index in: {command}"
+        )
+    assert not any(
+        "pip wheel" in c and "--no-build-isolation" not in c for c in commands
+    ), "an isolated build downloads its backend without hash checks"
+
+
+def test_build_backend_pins_match_the_build_system():
+    """The hashed build backend is exactly [build-system].requires without numpy.
+
+    The docker-build dependency group is what uv.lock hashes, and
+    requirements-build.txt is exported from it, so all three must agree.
+    """
+    expected = {n: v for n, v in _build_system_pins().items() if n != "numpy"}
+    assert expected, "[build-system].requires must pin the build backend exactly"
+    group = tomllib.loads(PYPROJECT.read_text())["dependency-groups"]["docker-build"]
+    assert _pins("\n".join(group)) == expected
+    exported = _pins(BUILD_REQUIREMENTS.read_text())
+    assert {n: exported.get(n) for n in expected} == expected
 
 
 def test_dockerfile_numpy_matches_the_build_backend_pin():
-    """The image's numpy equals the pin the extensions compile against.
+    """The image's numpy equals the pin the published wheels compile against.
 
     The repo rule is that the wheel never builds against newer headers than it
-    runs on. Inside the image `pip install .` compiles under build isolation
-    against the pyproject-pinned PyPI numpy, while the runtime numpy is the
-    ILP64 wheel of the same version, so the two pins must agree.
+    runs on. The image builds without isolation against its own ILP64 numpy,
+    while wheels built elsewhere compile against the pyproject-pinned PyPI
+    numpy, so the two pins must agree for the image to match a published wheel.
     """
     assert _image_numpy_pin() == _build_backend_numpy_pin()
 

@@ -31,17 +31,20 @@ The build installs packages in strict order to preserve the ILP64 NumPy build:
    without dependency resolution
 2. Exact `numpy` and `mkl-service` wheels from the custom ILP64 index, pinned in
    `docker/requirements-numpy-mkl.txt`
-3. This checkout with `--no-deps`, which compiles its native extensions and
-   cannot be replaced by a separately published JAMMA release
+3. The build backend from `docker/requirements-build.txt`, into a separate
+   directory that never reaches the runtime image
+4. This checkout, built into a wheel without build isolation and installed with
+   `--no-deps`, which compiles its native extensions and cannot be replaced by a
+   separately published JAMMA release
 
 ILP64 is verified at build time with an assertion on the BLAS name; the build
 fails if LP64 NumPy is active. Base-image digests and every installed Python
 package version are pinned so rebuilding the same revision does not silently
-adopt a new runtime. Both requirements files also carry a sha256 for every pin,
+adopt a new runtime. Every requirements file also carries a sha256 for every pin,
 and pip installs them with `--require-hashes`, so a download that does not match
-its hash fails the build. The checkout install in step 3 is the exception: pip
-refuses `--require-hashes` for a directory, so the build backend it fetches under
-build isolation is not hash-checked.
+its hash fails the build. pip refuses `--require-hashes` for a directory, so step
+4 builds and installs with `--no-index` instead: it cannot download anything, and
+it builds without isolation so the backend from step 3 is the one it uses.
 
 **Refreshing the pins.** A pin with no refresh path accumulates unpatched CVEs, so
 each kind has one:
@@ -51,12 +54,13 @@ each kind has one:
 | The two `FROM` digests | Dependabot, `docker` ecosystem, weekly |
 | Runtime pins and hashes in `docker/requirements-container.txt` | `uv run python docker/generate-requirements.py` after any `uv.lock` change |
 | MKL pins in the same file | Dependabot, `pip` ecosystem on `/docker`, then copy the version and wheel hash into `MKL_PINS` in the generator; the versions must exist on the ILP64 index |
+| Build backend in `docker/requirements-build.txt` | Bump `[build-system].requires` and the `docker-build` dependency group in `pyproject.toml` together, run `uv lock`, then regenerate; a test asserts the three agree |
 | `numpy` and `mkl-service` in `docker/requirements-numpy-mkl.txt` | Bump `[build-system].requires` in `pyproject.toml` and `NUMPY_MKL_PINS` in the generator together, with the wheel hash from the ILP64 index, then regenerate; a test asserts the numpy versions match |
 
-Both requirements files are generated, so they are not hand-edited: the runtime half
-of `requirements-container.txt` from `uv.lock`, and the rest from the pins declared in
-`docker/generate-requirements.py`. `docker/generate-requirements.py --check` fails when
-either file is stale, and `tests/test_dockerfile_provenance.py` asserts the shared versions
+The requirements files are generated, so they are not hand-edited: the runtime half of
+`requirements-container.txt` and all of `requirements-build.txt` from `uv.lock`, and the
+rest from the pins declared in `docker/generate-requirements.py`.
+`docker/generate-requirements.py --check` fails when any file is stale, and `tests/test_dockerfile_provenance.py` asserts the shared versions
 match the lockfile, every entry has a sha256 hash, and every download is hash-checked.
 `.github/workflows/docker.yml` builds the image and smoke-runs it on any change to the
 Dockerfile, `docker/`, `pyproject.toml`, or `uv.lock`.

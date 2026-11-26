@@ -443,10 +443,13 @@ The Docker build installs dependencies in this order to preserve ILP64 NumPy:
    with dependency resolution disabled
 2. Exact `numpy` and `mkl-service` wheels from the custom ILP64 index, pinned in
    `docker/requirements-numpy-mkl.txt`
-3. The current checkout with `--no-deps`, preserving the selected NumPy and
-   ensuring the image corresponds to the source being built
+3. The build backend from `docker/requirements-build.txt`, kept out of the
+   runtime image
+4. The current checkout, built without isolation and installed with
+   `--no-deps --no-index`, preserving the selected NumPy and ensuring the image
+   corresponds to the source being built
 
-Both requirements files carry a sha256 for every pin, and pip installs them with
+Every requirements file carries a sha256 for every pin, and pip installs them with
 `--require-hashes`, so a download that does not match its hash fails the build.
 
 ILP64 is verified at build time by asserting `ilp64` appears in the BLAS name
